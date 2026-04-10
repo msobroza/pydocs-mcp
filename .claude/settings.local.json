@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:claude.ai)",
+      "Bash(glab auth:*)",
+      "Bash(gh auth:*)",
+      "Bash(brew install:*)"
+    ]
+  }
+}

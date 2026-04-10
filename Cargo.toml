@@ -1,0 +1,24 @@
+[package]
+name = "pydocs_mcp_native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Python bindings
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+# Fast regex
+regex = "1"
+
+# Fast directory walking (10x faster than Python's os.walk)
+walkdir = "2"
+
+# Fast hashing (3x faster than md5)
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# Parallel iteration
+rayon = "1"
