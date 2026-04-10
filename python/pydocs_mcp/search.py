@@ -14,7 +14,7 @@ def search_chunks(conn: sqlite3.Connection, query: str,
     if not words:
         return []
 
-    fts = " OR ".join(words)
+    fts = " OR ".join(f'"{w}"' for w in words)
     sql = ("SELECT c.pkg, c.heading, c.body, c.kind, rank "
            "FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid "
            "WHERE chunks_fts MATCH ?")
@@ -27,7 +27,10 @@ def search_chunks(conn: sqlite3.Connection, query: str,
     sql += " ORDER BY rank LIMIT ?"
     params.append(limit)
 
-    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    try:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    except sqlite3.OperationalError:
+        return []
 
 
 def search_symbols(conn: sqlite3.Connection, query: str,

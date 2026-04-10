@@ -34,6 +34,20 @@ def normalize(raw: str) -> str:
 
 
 def _parse_toml(path: Path) -> list[str]:
+    try:
+        import tomllib
+    except ImportError:
+        return _parse_toml_regex(path)
+
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+
+    raw_deps = data.get("project", {}).get("dependencies", [])
+    return [normalize(d) for d in raw_deps]
+
+
+def _parse_toml_regex(path: Path) -> list[str]:
+    """Fallback TOML parser for Python 3.10 (no tomllib)."""
     deps, inside = [], False
     for line in path.read_text("utf-8").splitlines():
         s = line.strip()

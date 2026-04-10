@@ -1,6 +1,7 @@
 """MCP server exposing search tools over indexed docs."""
 from __future__ import annotations
 
+import atexit
 import inspect
 import json
 import logging
@@ -25,6 +26,7 @@ def run(db_path: Path):
         sys.exit(1)
 
     conn = open_db(db_path)
+    atexit.register(conn.close)
     mcp = FastMCP("pydocs-mcp")
 
     @mcp.tool()
@@ -140,7 +142,11 @@ def run(db_path: Path):
             submodule: e.g. 'routing' → fastapi.routing
         """
         import importlib
-        target = normalize(package) + (f".{submodule}" if submodule else "")
+        pkg_name = normalize(package)
+        row = conn.execute("SELECT name FROM packages WHERE name=?", (pkg_name,)).fetchone()
+        if not row:
+            return f"'{package}' is not indexed. Use list_packages() to see available packages."
+        target = pkg_name + (f".{submodule}" if submodule else "")
         try:
             mod = importlib.import_module(target)
         except ImportError:
