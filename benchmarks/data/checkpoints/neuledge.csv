@@ -1,21 +1,21 @@
 question,package,source,elapsed_s,recall
-When should I use numpy.testing?,numpy,neuledge,0.027515999972820282,1.0
-How do I use Installing Requests and Supported Versions?,requests,neuledge,0.003527624998241663,0.0
-How do I use requests.hooks?,requests,neuledge,0.002226750017143786,1.0
-When should I use numpy.distutils.command?,numpy,neuledge,0.007077250047586858,1.0
-Show me an example of pandas.core.indexes.extension.,pandas,neuledge,0.005070082959719002,1.0
-What does numpy.lib.arraysetops do?,numpy,neuledge,0.003263500053435564,0.0
-What does Requests do?,requests,neuledge,0.0023342090426012874,1.0
-What does numpy.distutils.command.develop do?,numpy,neuledge,0.001844916958361864,1.0
-When should I use What is it??,pandas,neuledge,0.008128124987706542,1.0
-How do I use numpy. distributor init?,numpy,neuledge,0.0023287500953301787,1.0
-When should I use numpy.core. add newdocs scalars?,numpy,neuledge,0.002783540985547006,0.0
-When should I use pandas.util. tester?,pandas,neuledge,0.0021547909127548337,0.0
-What parameters does numpy.core.umath accept?,numpy,neuledge,0.003592833993025124,1.0
-How do I use pandas.core.array algos.datetimelike accumulations?,pandas,neuledge,0.0024370839819312096,0.0
-What parameters does pandas.core.window.rolling accept?,pandas,neuledge,0.002268292009830475,1.0
-Explain the numpy.linalg functionality.,numpy,neuledge,0.004812167026102543,1.0
-How do I use numpy.distutils.fcompiler.fujitsu?,numpy,neuledge,0.0024071659427136183,1.0
-How do I use numpy.lib.mixins?,numpy,neuledge,0.002628625021316111,1.0
-How do I use pandas.core.roperator?,pandas,neuledge,0.0019554999889805913,0.0
-What does numpy.lib.arraypad do?,numpy,neuledge,0.002280415967106819,0.0
+When should I use pandas.core.indexes.extension?,pandas,neuledge,0.015772541984915733,1.0
+How do I use pandas.core.ops?,pandas,neuledge,0.0026062079705297947,0.0
+How do I use Dependencies?,pandas,neuledge,0.010510958964005113,1.0
+When should I use pandas.core.construction?,pandas,neuledge,0.005206124973483384,1.0
+Show me an example of numpy. distributor init.,numpy,neuledge,0.00674070802051574,1.0
+What does numpy. pyinstaller.pyinstaller smoke do?,numpy,neuledge,0.007774916011840105,0.0
+What does numpy.lib.arraysetops do?,numpy,neuledge,0.003962624934501946,0.0
+What does numpy.lib.format do?,numpy,neuledge,0.0057023330591619015,1.0
+When should I use numpy.array api?,numpy,neuledge,0.0075905839912593365,1.0
+How do I use numpy.distutils.command?,numpy,neuledge,0.005136916064657271,1.0
+When should I use numpy.testing.overrides?,numpy,neuledge,0.005615249974653125,1.0
+When should I use numpy.core. add newdocs scalars?,numpy,neuledge,0.004351624986156821,0.0
+What parameters does pandas.core.config init accept?,pandas,neuledge,0.0019221670227125287,1.0
+How do I use numpy.dtypes?,numpy,neuledge,0.01500383298844099,1.0
+What parameters does requests.structures accept?,requests,neuledge,0.0025743329897522926,0.0
+Explain the pandas.core.series functionality.,pandas,neuledge,0.004298750078305602,1.0
+How do I use numpy. pyinstaller.hook numpy?,numpy,neuledge,0.006413292023353279,0.0
+How do I use numpy.core?,numpy,neuledge,0.006146917003206909,1.0
+How do I use Where to get it?,pandas,neuledge,0.007259541074745357,1.0
+What does pandas.io.formats.string do?,pandas,neuledge,0.005328709026798606,1.0

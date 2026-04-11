@@ -71,8 +71,8 @@ Benchmark run against packages: requests, pandas, numpy.
 
 | Metric | pyctx7-mcp | Neuledge Context | Context7 |
 |--------|-----------|-----------------|----------|
-| **Recall** | **1.000** | 0.650 | 0.550 |
-| **Latency (mean)** | **2.3 ms** | 4.5 ms | 1,321 ms |
+| **Recall** | **1.000** | 0.700 | 0.550 |
+| **Latency (mean)** | **2.9 ms** | 6.5 ms | 1,321 ms |
 | **Type** | Local (Python/Rust) | Local (Node.js) | Cloud API |
 | **Corpus** | Installed packages | GitHub repo docs | Curated cloud docs |
 | **Token budget** | ~2000 tokens | ~2000 tokens | ~5000 tokens |
@@ -84,9 +84,9 @@ pyctx7-mcp indexes locally. Context7 and Neuledge have no indexing step at query
 | Target | Time (s) | Chunks | Symbols |
 |--------|----------|--------|---------|
 | `__project__` | 0.004 | 8 | 5 |
-| `requests` | 0.061 | 72 | 99 |
-| `pandas` | 0.338 | 3,788 | 8,768 |
-| `numpy` | 0.137 | 1,941 | 2,814 |
+| `requests` | 0.063 | 72 | 99 |
+| `pandas` | 0.265 | 3,788 | 8,768 |
+| `numpy` | 0.120 | 1,941 | 2,814 |
 
 ### Why pyctx7-mcp Achieves 100% Recall
 
@@ -94,10 +94,10 @@ pyctx7-mcp indexes locally. Context7 and Neuledge have no indexing step at query
 - **Token-budget concatenation.** Top FTS5 results are concatenated within ~2000 tokens. The topic LIKE filter ensures the right chunks are included.
 - **Same fuzzy scoring.** All three systems use identical `rapidfuzz.partial_ratio` evaluation.
 
-### Why Neuledge Recall Is 65%
+### Why Neuledge Recall Is 70%
 
 1. **Different corpus.** Neuledge indexes GitHub repo docs (markdown), while ground truth comes from pyctx7's locally-indexed source code + docstrings. Some internal module names don't appear in GitHub docs.
-2. **`search_topic` helps.** Passing the heading as topic (e.g., `"numpy.lib._datasource"`) instead of natural language improved recall from 20% to 65%.
+2. **`search_topic` helps.** Passing the heading as topic (e.g., `"numpy.lib._datasource"`) instead of natural language improved recall from 20% to 70%.
 3. **~2000-token budget.** Neuledge internally caps results with a 50% relevance drop filter.
 
 ### Why Context7 Recall Is 55%
