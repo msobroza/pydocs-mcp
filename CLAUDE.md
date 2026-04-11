@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Model
+
+Always use **claude-opus-4-6** (`claude-opus-4-6`) for all tasks in this repository.
+
 ## Project Overview
 
 **pydocs-mcp** — A local Python documentation indexing and search MCP server with optional Rust acceleration. Indexes project source code + all installed dependencies into a searchable SQLite FTS5 database for AI coding assistants.
