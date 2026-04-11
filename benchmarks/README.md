@@ -155,8 +155,6 @@ run-benchmarks --load-context7 data/checkpoints/context7.csv \
 # 5. Results appear in data/results/
 ls data/results/
 # benchmark_results.csv  indexing_results.csv
-# indexing_times.png     search_latency_boxplot.png
-# recall_at_k.png        mrr_at_k.png
 ```
 
 **Requirements:** Python 3.10+, the parent `pydocs-mcp` package, and `requests`, `pandas`, `numpy` must be installed (they are the packages being indexed and benchmarked).
@@ -172,8 +170,6 @@ pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 | `pandas` | 0.280 | 3,788 | 8,768 |
 | `numpy` | 0.128 | 1,941 | 2,814 |
 
-![Indexing time per package](docs/images/indexing_times.png)
-
 ### Search Latency Comparison
 
 | Metric | pyctx7-mcp | Neuledge Context | Context7 |
@@ -182,8 +178,6 @@ pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 | **Median** | **2.56 ms** | 3.50 ms | 1,910 ms |
 
 Both local systems (pyctx7 and Neuledge) complete in ~2-5ms. Context7's cloud API takes ~1.3-1.9s due to two sequential HTTP round-trips (`resolve-library-id` + `query-docs`). pyctx7 is **~526x faster** than Context7 and **~2x faster** than Neuledge.
-
-![Search latency boxplot](docs/images/search_latency_boxplot.png)
 
 ### Retrieval Quality (Recall)
 
@@ -194,8 +188,6 @@ All three systems are measured with the **same methodology**: concatenate search
 | **pyctx7-mcp** | **0.950** | 19 / 20 |
 | Neuledge Context | 0.700 | 14 / 20 |
 | Context7 | 0.550 | 11 / 20 |
-
-![Recall comparison](docs/images/recall.png)
 
 ### How pyctx7-mcp Search Is Called
 
@@ -361,8 +353,6 @@ run-benchmarks --questions 20 \
 # 8. Results
 ls data/results/
 # benchmark_results.csv  indexing_results.csv
-# indexing_times.png  search_latency_boxplot.png
-# recall_at_k.png  mrr_at_k.png
 ```
 
 ## Running Tests

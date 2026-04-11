@@ -21,10 +21,6 @@ Output:
     data/results/indexing_results.csv    — per-package indexing timings
     data/checkpoints/context7.csv        — Context7 results checkpoint
     data/checkpoints/neuledge.csv        — Neuledge results checkpoint
-    data/results/indexing_times.png
-    data/results/search_latency_boxplot.png
-    data/results/recall_at_k.png
-    data/results/mrr_at_k.png
 """
 from __future__ import annotations
 
@@ -42,11 +38,6 @@ from benchmarks.dataset_gen import generate_dataset
 from benchmarks.search_bench import run_search_benchmark, to_dataframe
 from benchmarks.context7_bench import run_context7_benchmark
 from benchmarks.neuledge_bench import run_neuledge_benchmark
-from benchmarks.charts import (
-    plot_indexing_times,
-    plot_search_latency_boxplot,
-    plot_recall_bar,
-)
 from pydocs_mcp.db import open_db, rebuild_fts
 from pydocs_mcp.indexer import index_project, index_deps
 
@@ -200,11 +191,6 @@ def main() -> None:
     index_df.to_csv(out_dir / "indexing_results.csv", index=False)
     console.print(f"\n[green]CSV saved:[/green] {csv_path}")
 
-    # Generate charts
-    p1 = plot_indexing_times(index_df, out_dir)
-    p2 = plot_search_latency_boxplot(search_df, out_dir)
-    p3 = plot_recall_bar(search_df, out_dir)
-    console.print(f"[green]Charts:[/green] {p1.name}, {p2.name}, {p3.name}")
     console.rule("[bold green]Done")
 
 
