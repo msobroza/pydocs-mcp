@@ -123,7 +123,29 @@ For pyctx7-mcp, ground truth is the source chunk from which each question was de
 
 ## Benchmark Results (pyctx7-mcp vs Context7, 20 queries)
 
-Benchmark run against packages: requests, pandas, numpy. Context7 accessed via live API.
+Benchmark run against packages: requests, pandas, numpy. Context7 accessed via live API at `https://mcp.context7.com/mcp`.
+
+### How to Reproduce
+
+```bash
+# 1. Clone and install
+cd benchmarks
+pip install -e .
+
+# 2. Full comparison (requires network for Context7 API)
+run-benchmarks --questions 20
+
+# 3. Local-only (no network, pyctx7-mcp metrics only)
+run-benchmarks --questions 20 --skip-context7
+
+# 4. Results appear in data/results/
+ls data/results/
+# benchmark_results.csv  indexing_results.csv
+# indexing_times.png     search_latency_boxplot.png
+# recall_at_k.png        mrr_at_k.png
+```
+
+**Requirements:** Python 3.10+, the parent `pydocs-mcp` package, and `requests`, `pandas`, `numpy` must be installed (they are the packages being indexed and benchmarked).
 
 ### Indexing Time Per Package (pyctx7-mcp)
 
@@ -132,21 +154,20 @@ pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 | Target | Time (s) | Chunks | Symbols |
 |--------|----------|--------|---------|
 | `__project__` | 0.001 | 8 | 5 |
-| `requests` | 0.063 | 72 | 99 |
+| `requests` | 0.055 | 72 | 99 |
 | `pandas` | 0.566 | 3,787 | 8,777 |
-| `numpy` | 0.252 | 1,941 | 2,830 |
+| `numpy` | 0.253 | 1,941 | 2,830 |
 
 ![Indexing time per package](docs/images/indexing_times.png)
 
 ### Search Latency Comparison
 
-| Metric | pyctx7-mcp | Context7 |
-|--------|-----------|----------|
-| **Mean** | 4.62 ms | 102.34 ms |
-| **Median** | 4.01 ms | 87.81 ms |
-| **Speedup** | **~22x faster** | baseline |
+| Metric | pyctx7-mcp | Context7 | Speedup |
+|--------|-----------|----------|---------|
+| **Mean** | 4.58 ms | 2,353 ms | **~514x** |
+| **Median** | 4.08 ms | 2,206 ms | **~541x** |
 
-pyctx7-mcp is **~22x faster** than Context7 on median search latency. This is expected — pyctx7 queries a local SQLite FTS5 index, while Context7 makes HTTP round-trips to a cloud API.
+pyctx7-mcp is **~500x faster** than Context7. pyctx7 queries a local SQLite FTS5 index (~4ms), while Context7 makes two sequential HTTP round-trips to a cloud API: `resolve-library-id` + `query-docs` (~2.2s total).
 
 ![Search latency boxplot](docs/images/search_latency_boxplot.png)
 
@@ -155,21 +176,37 @@ pyctx7-mcp is **~22x faster** than Context7 on median search latency. This is ex
 | k | pyctx7 Recall@k | Context7 Recall@k | pyctx7 MRR@k | Context7 MRR@k |
 |---|----------------|-------------------|--------------|----------------|
 | 1 | 0.100 | 0.000 | 0.100 | 0.000 |
-| 3 | 0.200 | 0.000 | 0.133 | 0.000 |
-| 5 | 0.200 | 0.000 | 0.133 | 0.000 |
-| 10 | 0.250 | 0.000 | 0.139 | 0.000 |
-| 20 | 0.250 | 0.000 | 0.139 | 0.000 |
+| 3 | 0.150 | 0.000 | 0.117 | 0.000 |
+| 5 | 0.150 | 0.000 | 0.117 | 0.000 |
+| 10 | 0.150 | 0.000 | 0.117 | 0.000 |
+| 20 | 0.150 | 0.000 | 0.117 | 0.000 |
 
 ![Recall@k](docs/images/recall_at_k.png)
 
 ![MRR@k](docs/images/mrr_at_k.png)
 
+### Why Context7 Recall Is 0%
+
+Context7's recall is 0% due to a **fundamental text corpus mismatch**, not because Context7 fails to return relevant documentation. Here's what happens:
+
+1. **Ground truth comes from pyctx7's local index.** Each synthetic question is derived from a specific chunk in the pydocs-mcp SQLite database. The `expected_answer_snippet` is the first sentence of that chunk's body text — e.g., `"Merge DataFrame or named Series objects with a database-style join."`.
+
+2. **Context7 returns different text from a different source.** For the same query, Context7 returns its own curated documentation from GitHub/official docs — e.g., `"Perform inner, left, right, and outer joins on DataFrames using the merge method."`.
+
+3. **The relevance check is substring matching.** We check if the first 60 characters of the expected snippet appear in Context7's response. Since the two corpora use entirely different phrasing for the same concepts, this substring match almost never succeeds.
+
+**This is a known limitation of the benchmark.** A fair relevance comparison would require one of:
+- **Human annotation** — manually labeling which results are relevant
+- **LLM-based scoring** — using a language model to judge semantic equivalence
+- **Shared ground truth** — using a corpus both systems index identically
+
+The primary value of this benchmark is the **latency comparison**, which is apples-to-apples: both systems receive the same query and we measure wall-clock time to response.
+
 ### Analysis
 
-- **pyctx7-mcp wins on latency** — local FTS5 queries complete in ~4ms vs ~100ms for Context7's cloud API.
-- **pyctx7-mcp wins on recall** — it retrieves the ground-truth source chunk 10-25% of the time (depending on k). Context7 scores 0% because its text-overlap relevance check is stricter (the exact snippet from our local DB doesn't appear verbatim in Context7's curated docs).
-- **Context7's 0% is a measurement artifact**, not a real quality failure. Context7 returns curated, high-quality documentation, but our relevance scoring checks for exact substring matches from the pydocs-mcp chunk body — which is a different text source. A fair comparison would require human annotation or LLM-based relevance judgments.
-- **pyctx7-mcp's recall is modest** because synthetic questions are derived from chunk headings with template transforms, while FTS5 BM25 matches on body text. Real-world queries would likely score higher for both systems.
+- **pyctx7-mcp wins decisively on latency** — local FTS5 queries complete in ~4ms vs ~2.2s for Context7's cloud API (two sequential HTTP round-trips).
+- **pyctx7-mcp shows measurable recall** — it retrieves the ground-truth source chunk 10-15% of the time. This is modest because synthetic questions use heading-based templates while FTS5 BM25 matches on body text.
+- **Context7's relevance cannot be fairly measured with this setup** — the text-corpus mismatch makes substring-based relevance scoring inappropriate. Context7 does return relevant, high-quality documentation; it's just different text from a different source.
 
 ## Context7 API
 

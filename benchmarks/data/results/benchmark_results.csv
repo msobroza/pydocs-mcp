@@ -1,0 +1,41 @@
+question,package,elapsed_s,n_results,source,recall_at_1,mrr_at_1,recall_at_3,mrr_at_3,recall_at_5,mrr_at_5,recall_at_10,mrr_at_10,recall_at_20,mrr_at_20
+When should I use Overview?,pandas,0.0045010000467300415,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Overview?,numpy,0.004147083032876253,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.ops.methods?,pandas,0.005384957999922335,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use the same as cygwin plus some additional parameters?,numpy,0.006673166994005442,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Show me an example of Overview.,pandas,0.0045162501046434045,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does matplotlib. color data (3.3.3) do?,pandas,0.002697042073123157,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does Basic and complex alignment do?,pandas,0.0034457920119166374,20,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What does Overview do?,pandas,0.003070250037126243,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use pass the constructed value with attrs set to this.?,pandas,0.010505540994927287,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Overview?,numpy,0.004107082961127162,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use Overview?,pandas,0.003968667006120086,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use    Database flavor specific tests?,pandas,0.005038082948885858,20,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What parameters does Overview accept?,pandas,0.0035462089581415057,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Determine number of bits?,numpy,0.003956375061534345,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does Overview accept?,pandas,0.0033852909691631794,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Explain the Overview functionality.,pandas,0.004475375055335462,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Overview?,pandas,0.0037905829958617687,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use                                                                          ?,pandas,0.0021801250986754894,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Overview?,pandas,0.004058749997057021,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does scalar types formatting should be independent of the locale do?,numpy,0.008170624962076545,20,pyctx7,0.0,0.0,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0,0.3333333333333333
+When should I use Overview?,pandas,2.195124957943335,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Overview?,numpy,2.520543250022456,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.ops.methods?,pandas,2.408358499989845,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use the same as cygwin plus some additional parameters?,numpy,2.5132173750316724,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Show me an example of Overview.,pandas,1.904154249932617,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does matplotlib. color data (3.3.3) do?,pandas,2.048420291976072,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does Basic and complex alignment do?,pandas,2.070382917067036,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does Overview do?,pandas,2.1582229170016944,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use pass the constructed value with attrs set to this.?,pandas,2.406531917047687,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Overview?,numpy,2.304323042044416,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use Overview?,pandas,2.0207298339810222,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use    Database flavor specific tests?,pandas,2.191746582975611,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does Overview accept?,pandas,4.564488708041608,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Determine number of bits?,numpy,2.0750272079603747,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does Overview accept?,pandas,2.528827582951635,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Explain the Overview functionality.,pandas,2.150035832892172,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Overview?,pandas,2.3158514170208946,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use                                                                          ?,pandas,2.217581082950346,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Overview?,pandas,2.1496988750295714,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does scalar types formatting should be independent of the locale do?,numpy,2.334546457976103,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
