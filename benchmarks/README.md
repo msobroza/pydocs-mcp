@@ -134,13 +134,17 @@ Benchmark run against packages: requests, pandas, numpy. Context7 accessed via l
 cd benchmarks
 pip install -e .
 
-# 2. Full comparison (requires network for Context7 API)
+# 2. Full comparison (requires network for Context7 + Neuledge server)
 run-benchmarks --questions 20
 
 # 3. Local-only (no network, pyctx7-mcp metrics only)
-run-benchmarks --questions 20 --skip-context7
+run-benchmarks --questions 20 --skip-context7 --skip-neuledge
 
-# 4. Results appear in data/results/
+# 4. Load previous results from checkpoints (no API/server needed)
+run-benchmarks --load-context7 data/checkpoints/context7.csv \
+               --load-neuledge data/checkpoints/neuledge.csv
+
+# 5. Results appear in data/results/
 ls data/results/
 # benchmark_results.csv  indexing_results.csv
 # indexing_times.png     search_latency_boxplot.png
@@ -155,10 +159,10 @@ pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 
 | Target | Time (s) | Chunks | Symbols |
 |--------|----------|--------|---------|
-| `__project__` | 0.001 | 8 | 5 |
-| `requests` | 0.063 | 72 | 99 |
-| `pandas` | 0.555 | 3,787 | 8,777 |
-| `numpy` | 0.256 | 1,941 | 2,830 |
+| `__project__` | 0.004 | 8 | 5 |
+| `requests` | 0.060 | 72 | 99 |
+| `pandas` | 0.278 | 3,788 | 8,768 |
+| `numpy` | 0.122 | 1,941 | 2,814 |
 
 ![Indexing time per package](docs/images/indexing_times.png)
 
@@ -166,10 +170,10 @@ pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 
 | Metric | pyctx7-mcp | Context7 | Speedup |
 |--------|-----------|----------|---------|
-| **Mean** | 3.37 ms | 1,321 ms | **~392x** |
-| **Median** | 2.81 ms | 1,910 ms | **~680x** |
+| **Mean** | 2.14 ms | 1,321 ms | **~617x** |
+| **Median** | 2.54 ms | 1,910 ms | **~752x** |
 
-pyctx7-mcp is **~400-680x faster** than Context7. pyctx7 queries a local SQLite FTS5 index (~3ms), while Context7 makes two sequential HTTP round-trips to a cloud API: `resolve-library-id` + `query-docs` (~1.3-1.9s total).
+pyctx7-mcp is **~600-750x faster** than Context7. pyctx7 queries a local SQLite FTS5 index (~2ms), while Context7 makes two sequential HTTP round-trips to a cloud API: `resolve-library-id` + `query-docs` (~1.3-1.9s total).
 
 ![Search latency boxplot](docs/images/search_latency_boxplot.png)
 
@@ -181,11 +185,11 @@ Relevance is measured differently per system:
 
 | k | pyctx7 Recall@k | Context7 Recall@k | pyctx7 MRR@k | Context7 MRR@k |
 |---|----------------|-------------------|--------------|----------------|
-| 1 | 0.294 | 0.550 | 0.850 | 0.550 |
-| 3 | 0.502 | 0.550 | 0.850 | 0.550 |
-| 5 | 0.542 | 0.550 | 0.850 | 0.550 |
-| 10 | 0.619 | 0.550 | 0.856 | 0.550 |
-| 20 | 0.644 | 0.550 | 0.856 | 0.550 |
+| 1 | 0.427 | 0.550 | 0.950 | 0.550 |
+| 3 | 0.673 | 0.550 | 0.950 | 0.550 |
+| 5 | 0.744 | 0.550 | 0.950 | 0.550 |
+| 10 | 0.776 | 0.550 | 0.950 | 0.550 |
+| 20 | 0.787 | 0.550 | 0.950 | 0.550 |
 
 ![Recall@k](docs/images/recall_at_k.png)
 
@@ -206,8 +210,8 @@ When `topic` or `internal` are `None`, `search_chunks()` does not apply those fi
 
 ### Why pyctx7-mcp Has High MRR but Lower Recall
 
-- **MRR@1 = 0.85** — when pyctx7 finds a relevant chunk, it usually ranks it #1. The topic filter + FTS5 BM25 is precise.
-- **Recall@20 = 0.64** — pyctx7 finds ~64% of all ground-truth chunks in the top 20. Some modules have many related chunks (e.g., `pandas.core.series` has 25+ chunks), and not all appear in the top 20.
+- **MRR@1 = 0.95** — when pyctx7 finds a relevant chunk, it almost always ranks it #1. The topic filter + FTS5 BM25 is precise.
+- **Recall@20 = 0.79** — pyctx7 finds ~79% of all ground-truth chunks in the top 20. Some modules have many related chunks (e.g., `pandas.core.series` has 25+ chunks), and not all appear in the top 20.
 - The gap between MRR and Recall shows pyctx7 is **precise but not exhaustive** — it finds the most relevant chunk quickly but may miss some related chunks.
 
 ### Why Context7 Recall Is 55%
@@ -220,9 +224,9 @@ Context7 achieves 55% recall using **fuzzy text matching** (rapidfuzz `partial_r
 
 ### Analysis
 
-- **pyctx7-mcp wins decisively on latency** — local FTS5 queries complete in ~3ms vs ~1.3-1.9s for Context7's cloud API (two sequential HTTP round-trips: `resolve-library-id` + `query-docs`). That's **~400-680x faster**.
-- **pyctx7-mcp wins on precision (MRR)** — MRR@1 of 0.85 means the first result is almost always relevant. Context7's MRR is 0.55 (binary: either the single response is relevant or not).
-- **Both systems achieve similar recall** — pyctx7 Recall@5 = 0.54 vs Context7 Recall = 0.55. pyctx7 continues to improve with more results (Recall@20 = 0.64).
+- **pyctx7-mcp wins decisively on latency** — local FTS5 queries complete in ~2ms vs ~1.3-1.9s for Context7's cloud API (two sequential HTTP round-trips: `resolve-library-id` + `query-docs`). That's **~600-750x faster**.
+- **pyctx7-mcp wins on precision (MRR)** — MRR@1 of 0.95 means the first result is almost always relevant. Context7's MRR is 0.55 (binary: either the single response is relevant or not).
+- **pyctx7-mcp wins on recall** — pyctx7 Recall@5 = 0.74 vs Context7 Recall = 0.55. pyctx7 continues to improve with more results (Recall@20 = 0.79).
 - **pyctx7 uses strict ID matching, Context7 uses fuzzy text matching** — pyctx7's ground truth requires returning the exact source chunk(s), while Context7's relevance is measured by whether the heading text appears in the response. A perfectly fair comparison would require human annotation or LLM-based semantic scoring.
 
 ## Context7 API

@@ -1,24 +1,24 @@
 question,package,elapsed_s,n_results,source,recall_at_1,mrr_at_1,recall_at_3,mrr_at_3,recall_at_5,mrr_at_5,recall_at_10,mrr_at_10,recall_at_20,mrr_at_20
-When should I use numpy.testing. private.extbuild?,numpy,0.0030330000445246696,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use numpy.ma.core?,numpy,0.0027437920216470957,20,pyctx7,0.02040816326530612,1.0,0.02040816326530612,1.0,0.02040816326530612,1.0,0.061224489795918366,1.0,0.20408163265306123,1.0
-How do I use numpy.distutils.line endings?,numpy,0.0027155830757692456,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-When should I use pandas.io.sas.sas7bdat?,pandas,0.0024439169792458415,6,pyctx7,0.16666666666666666,1.0,0.16666666666666666,1.0,0.3333333333333333,1.0,0.5,1.0,0.5,1.0
-Show me an example of numpy. distributor init.,numpy,0.00229049997869879,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What does numpy.lib.type check do?,numpy,0.002974499948322773,4,pyctx7,0.25,1.0,0.25,1.0,0.5,1.0,0.5,1.0,0.5,1.0
-What does numpy. utils do?,numpy,0.002653250005096197,12,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.1111111111111111,1.0,0.1111111111111111
-What does numpy.distutils do?,numpy,0.0025453749112784863,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use requests.cookies?,requests,0.00042554200626909733,4,pyctx7,0.25,1.0,0.25,1.0,0.5,1.0,0.5,1.0,0.5,1.0
-How do I use Cloning the repository?,requests,0.0020901670213788748,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-When should I use numpy.core.arrayprint?,numpy,0.00921745807863772,12,pyctx7,0.08333333333333333,1.0,0.16666666666666666,1.0,0.16666666666666666,1.0,0.25,1.0,0.4166666666666667,1.0
-When should I use numpy.distutils.fcompiler.fujitsu?,numpy,0.00883891701232642,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What parameters does pandas.plotting accept?,pandas,0.0025541660143062472,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.util. str methods?,pandas,0.00317949999589473,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What parameters does pandas.io.stata accept?,pandas,0.0027366249123588204,18,pyctx7,0.05555555555555555,1.0,0.05555555555555555,1.0,0.05555555555555555,1.0,0.05555555555555555,1.0,0.16666666666666666,1.0
-Explain the pandas.core.indexers.objects functionality.,pandas,0.003992832964286208,3,pyctx7,0.3333333333333333,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0
-How do I use pandas.core.internals.construction?,pandas,0.0028765000170096755,8,pyctx7,0.125,1.0,0.375,1.0,0.5,1.0,0.75,1.0,0.75,1.0
-How do I use numpy.core.defchararray?,numpy,0.0032782499911263585,11,pyctx7,0.09090909090909091,1.0,0.09090909090909091,1.0,0.09090909090909091,1.0,0.09090909090909091,1.0,0.18181818181818182,1.0
-How do I use pandas.core.internals.base?,pandas,0.0032625000458210707,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What does pandas.core.ops.common do?,pandas,0.00363987497985363,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+requests structures,requests,0.0009796250378713,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy lib user array,numpy,0.0030795000493526,3,pyctx7,0.3333333333333333,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+requests cookies,requests,0.0004762079333886,4,pyctx7,0.25,1.0,0.25,1.0,0.5,1.0,0.5,1.0,0.5,1.0
+pandas core ops missing,pandas,0.0028447920922189,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+requests api,requests,0.0006985840154811,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy lib,numpy,0.0026892500463873,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+numpy core umath,numpy,0.002588834031485,6,pyctx7,0.3333333333333333,1.0,0.3333333333333333,1.0,0.6666666666666666,1.0,1.0,1.0,1.0,1.0
+pandas core interchange utils,pandas,0.0025368749629706,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy polynomial polyutils,numpy,0.0023378330515697,6,pyctx7,0.1666666666666666,1.0,0.1666666666666666,1.0,0.5,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0
+Installing Requests and Supported Versions,requests,0.0025647500297054,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy dtypes,numpy,0.0025332499062642,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core ops array ops,pandas,0.0028743339935317,4,pyctx7,0.25,1.0,0.5,1.0,0.5,1.0,0.5,1.0,0.5,1.0
+numpy exceptions,numpy,0.0025207080179825,4,pyctx7,0.25,1.0,0.75,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy distutils fcompiler fujitsu,numpy,0.0019350410439074,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core groupby generic,pandas,0.0031246670987457,14,pyctx7,0.0714285714285714,1.0,0.0714285714285714,1.0,0.0714285714285714,1.0,0.0714285714285714,1.0,0.2857142857142857,1.0
+Main Features,pandas,0.0003030829830095,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy  typing  extended precision,numpy,0.0026795410085469,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+requests adapters,requests,0.0003892909735441,4,pyctx7,0.25,1.0,0.25,1.0,0.5,1.0,0.5,1.0,0.5,1.0
+What is it?,pandas,0.0024389169411733,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy array api  array object,numpy,0.0031302500283345,7,pyctx7,0.1428571428571428,1.0,0.1428571428571428,1.0,0.1428571428571428,1.0,0.2857142857142857,1.0,0.2857142857142857,1.0
 When should I use numpy. typing. nested sequence?,numpy,2.590072042075917,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
 How do I use numpy.distutils.fcompiler.fujitsu?,numpy,2.377121082972735,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
 How do I use pandas.core.interchange.dataframe protocol?,pandas,2.539780875085853,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
