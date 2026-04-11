@@ -1,41 +1,41 @@
 question,package,elapsed_s,n_results,source,recall_at_1,mrr_at_1,recall_at_3,mrr_at_3,recall_at_5,mrr_at_5,recall_at_10,mrr_at_10,recall_at_20,mrr_at_20
-When should I use Overview?,pandas,0.0045010000467300415,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Overview?,numpy,0.004147083032876253,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.ops.methods?,pandas,0.005384957999922335,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use the same as cygwin plus some additional parameters?,numpy,0.006673166994005442,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Show me an example of Overview.,pandas,0.0045162501046434045,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does matplotlib. color data (3.3.3) do?,pandas,0.002697042073123157,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does Basic and complex alignment do?,pandas,0.0034457920119166374,20,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What does Overview do?,pandas,0.003070250037126243,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use pass the constructed value with attrs set to this.?,pandas,0.010505540994927287,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Overview?,numpy,0.004107082961127162,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use Overview?,pandas,0.003968667006120086,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use    Database flavor specific tests?,pandas,0.005038082948885858,20,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What parameters does Overview accept?,pandas,0.0035462089581415057,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Determine number of bits?,numpy,0.003956375061534345,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does Overview accept?,pandas,0.0033852909691631794,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Explain the Overview functionality.,pandas,0.004475375055335462,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Overview?,pandas,0.0037905829958617687,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use                                                                          ?,pandas,0.0021801250986754894,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Overview?,pandas,0.004058749997057021,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does scalar types formatting should be independent of the locale do?,numpy,0.008170624962076545,20,pyctx7,0.0,0.0,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0,0.3333333333333333
-When should I use Overview?,pandas,2.195124957943335,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Overview?,numpy,2.520543250022456,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.ops.methods?,pandas,2.408358499989845,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use the same as cygwin plus some additional parameters?,numpy,2.5132173750316724,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Show me an example of Overview.,pandas,1.904154249932617,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does matplotlib. color data (3.3.3) do?,pandas,2.048420291976072,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does Basic and complex alignment do?,pandas,2.070382917067036,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does Overview do?,pandas,2.1582229170016944,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use pass the constructed value with attrs set to this.?,pandas,2.406531917047687,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Overview?,numpy,2.304323042044416,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use Overview?,pandas,2.0207298339810222,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use    Database flavor specific tests?,pandas,2.191746582975611,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does Overview accept?,pandas,4.564488708041608,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Determine number of bits?,numpy,2.0750272079603747,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does Overview accept?,pandas,2.528827582951635,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Explain the Overview functionality.,pandas,2.150035832892172,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Overview?,pandas,2.3158514170208946,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use                                                                          ?,pandas,2.217581082950346,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Overview?,pandas,2.1496988750295714,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does scalar types formatting should be independent of the locale do?,numpy,2.334546457976103,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use numpy. typing. nested sequence?,numpy,0.005422041984274983,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.distutils.fcompiler.fujitsu?,numpy,0.0029457909986376762,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.interchange.dataframe protocol?,pandas,0.0036404579877853394,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use pandas.core.groupby.generic?,pandas,0.004539625020697713,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Show me an example of numpy.lib.type check.,numpy,0.004527082899585366,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does numpy.testing.overrides do?,numpy,0.0018176250159740448,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does numpy.distutils.exec command do?,numpy,0.0019075419986620545,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does numpy.polynomial.laguerre do?,numpy,0.0014953749487176538,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use pandas.core.arraylike?,pandas,0.0036595830461010337,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.lib. version?,numpy,0.0037662500981241465,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use requests.adapters?,requests,0.0020136249950155616,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use pandas.core. numba.kernels.sum ?,pandas,0.004530625068582594,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does numpy.ma.core accept?,numpy,0.002232207916676998,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.core. dtype?,numpy,0.0038905420806258917,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does requests.models accept?,requests,0.0016361670568585396,17,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.14285714285714285,0.14285714285714285,0.42857142857142855,0.14285714285714285
+Explain the pandas.plotting functionality.,pandas,0.00434295809827745,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use requests.hooks?,requests,0.002697165939025581,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.interchange.utils?,pandas,0.0033563340548425913,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.core. asarray?,numpy,0.0033853750210255384,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does pandas.core.arrays.sparse.scipy sparse do?,pandas,0.002214666921645403,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use numpy. typing. nested sequence?,numpy,2.590072042075917,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+How do I use numpy.distutils.fcompiler.fujitsu?,numpy,2.377121082972735,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+How do I use pandas.core.interchange.dataframe protocol?,pandas,2.539780875085853,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+When should I use pandas.core.groupby.generic?,pandas,2.0458765829680488,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+Show me an example of numpy.lib.type check.,numpy,1.9641006670426577,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What does numpy.testing.overrides do?,numpy,2.042370583047159,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What does numpy.distutils.exec command do?,numpy,1.9115741670830175,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What does numpy.polynomial.laguerre do?,numpy,1.908473665942438,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+When should I use pandas.core.arraylike?,pandas,1.9989489159779623,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+How do I use numpy.lib. version?,numpy,1.739088415983133,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+When should I use requests.adapters?,requests,1.946654916042462,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+When should I use pandas.core. numba.kernels.sum ?,pandas,2.3514364580623806,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does numpy.ma.core accept?,numpy,0.1371169580379501,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.core. dtype?,numpy,0.12871662492398173,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does requests.models accept?,requests,0.12503024993930012,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Explain the pandas.plotting functionality.,pandas,0.11253787507303059,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use requests.hooks?,requests,0.12234462494961917,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.interchange.utils?,pandas,0.11071020900271833,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.core. asarray?,numpy,0.13600220798980445,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does pandas.core.arrays.sparse.scipy sparse do?,pandas,0.12601470795925707,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
