@@ -42,8 +42,7 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 
 // ── Static regexes (compiled once) ──────────────────────────────────────
 
-static HEADING_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^#{1,4}\s+(.+)$").unwrap());
+static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^#{1,4}\s+(.+)$").unwrap());
 
 static DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -52,13 +51,11 @@ static DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-static DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap()
-});
+static DOC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap());
 
-static MOD_DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap()
-});
+static MOD_DOC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap());
 
 // ── 1. File Walker ───────────────────────────────────────────────────────
 //
