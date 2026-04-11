@@ -46,10 +46,6 @@ static DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap()
 });
 
-static MOD_DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap()
-});
-
 // ── 1. File Walker ───────────────────────────────────────────────────────
 //
 // Walks a directory tree and returns all .py file paths.
@@ -277,7 +273,7 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
 fn extract_module_doc(source: &str) -> String {
     let trimmed = source.trim_start();
 
-    MOD_DOC_RE
+    DOC_RE
         .captures(trimmed)
         .and_then(|cap| cap.get(1).or_else(|| cap.get(2)))
         .map(|m| {
