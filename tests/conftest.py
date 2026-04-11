@@ -5,8 +5,8 @@ from pydocs_mcp.db import open_db, rebuild_fts
 
 @pytest.fixture
 def conn(tmp_path):
-    """In-memory-ish SQLite DB seeded with known project + dep data."""
-    c = open_db(str(tmp_path / "test.db"))
+    """File-backed SQLite DB seeded with known project + dep data."""
+    c = open_db(tmp_path / "test.db")
 
     c.execute(
         "INSERT INTO packages (name, version, summary, homepage, requires, hash)"
@@ -62,4 +62,5 @@ def conn(tmp_path):
 
     c.commit()
     rebuild_fts(c)
-    return c
+    yield c
+    c.close()
