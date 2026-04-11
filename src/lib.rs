@@ -17,6 +17,16 @@ use std::sync::LazyLock;
 use walkdir::WalkDir;
 use xxhash_rust::xxh3::xxh3_64;
 
+// ---------------------------------------------------------------------------
+// Truncation limits — MUST stay synchronized with python/pydocs_mcp/constants.py
+// ---------------------------------------------------------------------------
+/// Max chars inspected after a def/class line to find a docstring.
+const DOCSTRING_LOOKAHEAD: usize = 500;
+/// Max chars stored for a single function or method docstring.
+const FUNC_DOCSTRING_MAX: usize = 3000;
+/// Max chars stored for a module-level docstring.
+const MODULE_DOCSTRING_MAX: usize = 5000;
+
 /// Truncate a UTF-8 string to at most `max_bytes` bytes without
 /// splitting a multi-byte character.
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
@@ -32,19 +42,20 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 
 // ── Static regexes (compiled once) ──────────────────────────────────────
 
-static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^#{1,4}\s+(.+)$").unwrap()
-});
+static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^#{1,4}\s+(.+)$").unwrap());
 
 static DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?m)^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:"#
-    ).unwrap()
+        r#"(?m)^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:"#,
+    )
+    .unwrap()
 });
 
-static DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap()
-});
+static DOC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap());
+
+static MOD_DOC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap());
 
 // ── 1. File Walker ───────────────────────────────────────────────────────
 //
@@ -54,9 +65,21 @@ static DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Directories we never want to enter.
 const SKIP_DIRS: &[&str] = &[
-    ".git", ".venv", "venv", "__pycache__", "node_modules",
-    ".tox", ".eggs", "build", "dist", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", "htmlcov", ".nox", "egg-info",
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    ".tox",
+    ".eggs",
+    "build",
+    "dist",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "htmlcov",
+    ".nox",
+    "egg-info",
 ];
 
 /// Walk `root` and return all .py file paths as sorted strings.
@@ -90,7 +113,6 @@ fn walk_py_files(root: &str) -> Vec<String> {
     result
 }
 
-
 // ── 2. File Hasher ───────────────────────────────────────────────────────
 //
 // Hashes a list of file paths + their modification times.
@@ -123,7 +145,6 @@ fn hash_files(paths: Vec<String>) -> String {
     let hash = xxh3_64(&data);
     format!("{:016x}", hash)
 }
-
 
 // ── 3. Text Chunker ──────────────────────────────────────────────────────
 //
@@ -186,12 +207,8 @@ fn chunk_text(text: &str, max_chars: usize) -> Vec<(String, String)> {
     flush(&current_heading, &mut current_body);
 
     // Convert to Python-friendly tuples.
-    results
-        .into_iter()
-        .map(|c| (c.heading, c.body))
-        .collect()
+    results.into_iter().map(|c| (c.heading, c.body)).collect()
 }
-
 
 // ── 4. Python Source Parser ──────────────────────────────────────────────
 //
@@ -209,11 +226,11 @@ struct Symbol {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
-    kind: String,       // "def", "async def", or "class"
+    kind: String, // "def", "async def", or "class"
     #[pyo3(get)]
-    signature: String,  // everything between parentheses
+    signature: String, // everything between parentheses
     #[pyo3(get)]
-    docstring: String,  // first triple-quoted string after definition
+    docstring: String, // first triple-quoted string after definition
 }
 
 /// Extract top-level functions and classes from Python source code.
@@ -239,7 +256,7 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
         // Find the docstring: look only at the first ~500 chars after the definition.
         let match_end = cap.get(0).unwrap().end();
         let rest_full = &source[match_end..];
-        let rest = safe_truncate(rest_full, 500);
+        let rest = safe_truncate(rest_full, DOCSTRING_LOOKAHEAD);
 
         let docstring = DOC_RE
             .captures(rest.trim_start())
@@ -249,7 +266,7 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
             })
             .map(|m| {
                 let s = m.as_str().trim();
-                safe_truncate(s, 3000)
+                safe_truncate(s, FUNC_DOCSTRING_MAX)
             })
             .unwrap_or("")
             .to_string();
@@ -265,7 +282,6 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
     symbols
 }
 
-
 /// Extract the module-level docstring from Python source.
 ///
 /// Returns the docstring or an empty string if none found.
@@ -273,16 +289,15 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
 fn extract_module_doc(source: &str) -> String {
     let trimmed = source.trim_start();
 
-    DOC_RE
+    MOD_DOC_RE
         .captures(trimmed)
         .and_then(|cap| cap.get(1).or_else(|| cap.get(2)))
         .map(|m| {
             let s = m.as_str().trim();
-            safe_truncate(s, 5000).to_string()
+            safe_truncate(s, MODULE_DOCSTRING_MAX).to_string()
         })
         .unwrap_or_default()
 }
-
 
 /// Read a file and return its contents. Returns empty string on error.
 /// This is faster than Python's open().read() for batch operations
@@ -291,7 +306,6 @@ fn extract_module_doc(source: &str) -> String {
 fn read_file(path: &str) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
-
 
 /// Read multiple files in parallel using Rayon.
 /// Returns a list of (path, content) tuples.
@@ -305,7 +319,6 @@ fn read_files_parallel(paths: Vec<String>) -> Vec<(String, String)> {
         })
         .collect()
 }
-
 
 // ── Module Registration ──────────────────────────────────────────────────
 

@@ -7,9 +7,10 @@ import sys
 from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE
-from pydocs_mcp.db import db_path_for, open_db, clear_all, rebuild_fts
+from pydocs_mcp.constants import SEARCH_BODY_CLI, SEARCH_DOC_CLI
+from pydocs_mcp.db import clear_all, db_path_for, open_db, rebuild_fts
 from pydocs_mcp.deps import resolve
-from pydocs_mcp.indexer import index_project, index_deps
+from pydocs_mcp.indexer import index_deps, index_project
 from pydocs_mcp.search import search_chunks, search_symbols
 from pydocs_mcp.server import run
 
@@ -98,12 +99,12 @@ def main():
             for r in search_chunks(conn, q, pkg=args.package):
                 print(f"\n{'─' * 60}")
                 print(f"[{r['kind']}] {r['pkg']} → {r['heading']}")
-                print(r["body"][:500])
+                print(r["body"][:SEARCH_BODY_CLI])
         else:
             for s in search_symbols(conn, q, pkg=args.package):
                 print(f"\n{'─' * 60}")
                 print(f"{s['kind']} {s['module']}.{s['name']}{s['signature']}")
-                print((s["doc"] or "—")[:300])
+                print((s["doc"] or "—")[:SEARCH_DOC_CLI])
 
 
 if __name__ == "__main__":

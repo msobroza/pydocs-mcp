@@ -1,0 +1,4 @@
+[project]
+name = "ml-demo"
+version = "0.1.0"
+dependencies = ["scikit-learn>=1.4", "vllm>=0.4", "langgraph>=0.2"]

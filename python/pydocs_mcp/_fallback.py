@@ -10,6 +10,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_mcp.constants import (
+    DOCSTRING_LOOKAHEAD,
+    FUNC_DOCSTRING_MAX,
+    MODULE_DOCSTRING_MAX,
+)
+
 SKIP_DIRS = {
     ".git", ".venv", "venv", "__pycache__", "node_modules",
     ".tox", ".eggs", "build", "dist", ".mypy_cache", ".pytest_cache",
@@ -79,7 +85,7 @@ class Symbol:
 def parse_py_file(source: str) -> list[Symbol]:
     """Extract top-level functions and classes using regex."""
     def_re = re.compile(
-        r'^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)',
+        r'^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:',
         re.MULTILINE,
     )
     doc_re = re.compile(r'(?s)(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
@@ -90,15 +96,12 @@ def parse_py_file(source: str) -> list[Symbol]:
         if name.startswith("_"):
             continue
 
-        # Look for docstring immediately after the definition.
-        rest = source[m.end():][:500].lstrip()
-        # Skip past the colon and any whitespace/newlines before the docstring.
-        if rest.startswith(":"):
-            rest = rest[1:].lstrip()
+        # Look for docstring immediately after the definition (colon consumed by regex).
+        rest = source[m.end():][:DOCSTRING_LOOKAHEAD].lstrip()
         docstring = ""
         doc_match = doc_re.match(rest)
         if doc_match:
-            docstring = (doc_match.group(1) or doc_match.group(2) or "").strip()[:3000]
+            docstring = (doc_match.group(1) or doc_match.group(2) or "").strip()[:FUNC_DOCSTRING_MAX]
 
         symbols.append(Symbol(name, kind, f"({sig.strip()})", docstring))
     return symbols
@@ -109,7 +112,7 @@ def extract_module_doc(source: str) -> str:
     doc_re = re.compile(r'(?s)^(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
     m = doc_re.match(source.lstrip())
     if m:
-        return (m.group(1) or m.group(2) or "").strip()[:5000]
+        return (m.group(1) or m.group(2) or "").strip()[:MODULE_DOCSTRING_MAX]
     return ""
 
 
