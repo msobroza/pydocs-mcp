@@ -50,6 +50,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--questions", type=int, default=30, help="Number of synthetic questions")
     p.add_argument("--skip-context7", action="store_true", help="Skip Context7 API calls")
     p.add_argument("--workers", type=int, default=2, help="Indexer worker threads")
+    p.add_argument(
+        "--no-rust", action="store_true",
+        help="Force pure-Python fallback for pyctx7-mcp (disable Rust acceleration).",
+    )
     return p
 
 
@@ -57,6 +61,14 @@ def main() -> None:
     args = _build_parser().parse_args()
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.no_rust:
+        from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
+        if RUST_AVAILABLE:
+            disable_rust()
+            console.print("[yellow]Rust disabled via --no-rust, using Python fallback[/yellow]")
+        else:
+            console.print("[dim]Rust extension not available, already using Python fallback[/dim]")
 
     console.rule("[bold blue]pyctx7-mcp vs Context7 Benchmark")
 
