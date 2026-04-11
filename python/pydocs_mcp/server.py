@@ -17,7 +17,7 @@ from pydocs_mcp.search import search_chunks, search_symbols
 
 log = logging.getLogger("pydocs-mcp")
 
-_SUBMODULE_RE = _re.compile(r'^[A-Za-z0-9_.]*$')
+_SUBMODULE_RE = _re.compile(r'^([A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*)?$')
 
 
 def _validate_submodule(submodule: str) -> bool:
