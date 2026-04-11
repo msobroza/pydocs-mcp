@@ -105,4 +105,7 @@ class TestFindDepFiles:
 
     def test_skips_node_modules_directory(self, project_tree):
         found = _find_dep_files(str(project_tree))
-        assert not any("node_modules" in p for p in found)
+        # Check path components, not substring, to avoid matching the tmp dir name
+        assert not any(
+            "node_modules" in p.split(os.sep) for p in found
+        )
