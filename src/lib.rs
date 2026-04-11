@@ -17,6 +17,16 @@ use std::sync::LazyLock;
 use walkdir::WalkDir;
 use xxhash_rust::xxh3::xxh3_64;
 
+// ---------------------------------------------------------------------------
+// Truncation limits — MUST stay synchronized with python/pydocs_mcp/constants.py
+// ---------------------------------------------------------------------------
+/// Max chars inspected after a def/class line to find a docstring.
+const DOCSTRING_LOOKAHEAD: usize = 500;
+/// Max chars stored for a single function or method docstring.
+const FUNC_DOCSTRING_MAX: usize = 3000;
+/// Max chars stored for a module-level docstring.
+const MODULE_DOCSTRING_MAX: usize = 5000;
+
 /// Truncate a UTF-8 string to at most `max_bytes` bytes without
 /// splitting a multi-byte character.
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
@@ -43,6 +53,10 @@ static DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap()
+});
+
+static MOD_DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap()
 });
 
@@ -239,7 +253,7 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
         // Find the docstring: look only at the first ~500 chars after the definition.
         let match_end = cap.get(0).unwrap().end();
         let rest_full = &source[match_end..];
-        let rest = safe_truncate(rest_full, 500);
+        let rest = safe_truncate(rest_full, DOCSTRING_LOOKAHEAD);
 
         let docstring = DOC_RE
             .captures(rest.trim_start())
@@ -249,7 +263,7 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
             })
             .map(|m| {
                 let s = m.as_str().trim();
-                safe_truncate(s, 3000)
+                safe_truncate(s, FUNC_DOCSTRING_MAX)
             })
             .unwrap_or("")
             .to_string();
@@ -273,12 +287,12 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
 fn extract_module_doc(source: &str) -> String {
     let trimmed = source.trim_start();
 
-    DOC_RE
+    MOD_DOC_RE
         .captures(trimmed)
         .and_then(|cap| cap.get(1).or_else(|| cap.get(2)))
         .map(|m| {
             let s = m.as_str().trim();
-            safe_truncate(s, 5000).to_string()
+            safe_truncate(s, MODULE_DOCSTRING_MAX).to_string()
         })
         .unwrap_or_default()
 }

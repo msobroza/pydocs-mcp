@@ -24,6 +24,19 @@ from pydocs_mcp._fast import (
     walk_py_files, hash_files, chunk_text,
     parse_py_file, extract_module_doc, read_files_parallel,
 )
+from pydocs_mcp.constants import (
+    CLASS_DOCSTRING_MAX,
+    CLASS_FULL_DOC_MAX,
+    CLASS_METHODS_MAX,
+    FUNC_DOCSTRING_MAX,
+    METHOD_SUMMARY_MAX,
+    MODULE_DOCSTRING_MAX,
+    PARAM_DEFAULT_MAX,
+    PARAMS_JSON_MAX,
+    REQUIREMENTS_PARSE_MAX,
+    RETURN_TYPE_MAX,
+    SIGNATURE_MAX,
+)
 from pydocs_mcp.db import clear_pkg, get_cached_hash
 from pydocs_mcp.deps import normalize
 
@@ -69,7 +82,7 @@ def _parse_source_files(
 
         doc = extract_module_doc(source)
         if len(doc) > 20:
-            chunk_rows.append((pkg, module, doc[:5000], f"{kind_prefix}_doc"))
+            chunk_rows.append((pkg, module, doc[:MODULE_DOCSTRING_MAX], f"{kind_prefix}_doc"))
 
         for sym in parse_py_file(source):
             sym_rows.append((
@@ -189,7 +202,7 @@ def _base_data(dist, name: str, version: str) -> dict:
         "summary": dist.metadata["Summary"] or "",
         "homepage": dist.metadata["Home-page"] or "",
         "requires": json.dumps(
-            [r.split(";")[0].strip() for r in (dist.requires or [])[:40]]
+            [r.split(";")[0].strip() for r in (dist.requires or [])[:REQUIREMENTS_PARSE_MAX]]
         ),
         "chunks": [], "symbols": [],
     }
@@ -294,7 +307,7 @@ def _collect_inspect(dist, depth: int) -> dict:
         try:
             mod = importlib.import_module(iname)
             if mod.__doc__ and len(mod.__doc__.strip()) > 30:
-                data["chunks"].append((name, name, mod.__doc__.strip()[:5000], "docstring"))
+                data["chunks"].append((name, name, mod.__doc__.strip()[:MODULE_DOCSTRING_MAX], "docstring"))
             data["symbols"] = _inspect_syms(mod, iname, name, max_depth=depth)
         except Exception as e:
             log.debug("Failed to import %s: %s", iname, e)
@@ -325,11 +338,11 @@ def _get_sig(obj) -> tuple[str, str, list[dict]]:
                 pass
         if p.default != inspect.Parameter.empty:
             try:
-                entry["default"] = repr(p.default)[:80]
+                entry["default"] = repr(p.default)[:PARAM_DEFAULT_MAX]
             except Exception:
                 pass
         params.append(entry)
-    return str(sig)[:400], ret[:200], params
+    return str(sig)[:SIGNATURE_MAX], ret[:RETURN_TYPE_MAX], params
 
 
 def _inspect_syms(mod, mod_name, owner, depth=0, max_depth=1) -> list[tuple]:
@@ -348,27 +361,27 @@ def _inspect_syms(mod, mod_name, owner, depth=0, max_depth=1) -> list[tuple]:
         try:
             if inspect.isfunction(obj) or inspect.isbuiltin(obj):
                 sig, ret, params = _get_sig(obj)
-                doc = (inspect.getdoc(obj) or "")[:3000]
+                doc = (inspect.getdoc(obj) or "")[:FUNC_DOCSTRING_MAX]
                 rows.append((owner, mod_name, name, "function",
-                             sig, ret, json.dumps(params)[:2000], doc))
+                             sig, ret, json.dumps(params)[:PARAMS_JSON_MAX], doc))
             elif inspect.isclass(obj):
                 sig, _, params = _get_sig(obj)
-                doc = (inspect.getdoc(obj) or "")[:2000]
+                doc = (inspect.getdoc(obj) or "")[:CLASS_DOCSTRING_MAX]
                 ms = []
                 try:
                     for mn, mo in inspect.getmembers(obj):
                         if mn.startswith("_") and mn != "__init__": continue
                         if not (inspect.isfunction(mo) or inspect.ismethod(mo)): continue
                         s, _, _ = _get_sig(mo)
-                        md = (inspect.getdoc(mo) or "").split("\n")[0][:120]
+                        md = (inspect.getdoc(mo) or "").split("\n")[0][:METHOD_SUMMARY_MAX]
                         ms.append(f"  .{mn}{s} -- {md}")
-                        if len(ms) >= 12: break
+                        if len(ms) >= CLASS_METHODS_MAX: break
                 except Exception:
                     pass
                 if ms:
                     doc += "\n\nMethods:\n" + "\n".join(ms)
                 rows.append((owner, mod_name, name, "class",
-                             sig, "", json.dumps(params)[:2000], doc[:5000]))
+                             sig, "", json.dumps(params)[:PARAMS_JSON_MAX], doc[:CLASS_FULL_DOC_MAX]))
         except Exception:
             continue
         if len(rows) > 120:

@@ -1,79 +1,99 @@
-"""Resolve project dependencies from pyproject.toml or requirements.txt."""
+"""Dependency resolution: find and parse all pyproject.toml and requirements files."""
 from __future__ import annotations
 
-import logging
+import os
 import re
-from pathlib import Path
 
-log = logging.getLogger("pydocs-mcp")
-
-
-def resolve(project_dir: Path) -> list[str]:
-    """Find and parse the dependency file. pyproject.toml has priority."""
-    toml = project_dir / "pyproject.toml"
-    if toml.exists():
-        deps = _parse_toml(toml)
-        if deps:
-            log.info("pyproject.toml → %d deps", len(deps))
-            return deps
-
-    for name in ("requirements.txt", "requirements/base.txt", "requirements/prod.txt"):
-        req = project_dir / name
-        if req.exists():
-            deps = _parse_requirements(req)
-            log.info("%s → %d deps", name, len(deps))
-            return deps
-
-    log.warning("No dependency file found in %s", project_dir)
-    return []
+# Directories that never contain meaningful project dependencies
+_SKIP_DIRS = frozenset({
+    ".git", ".venv", "venv", "__pycache__", "node_modules",
+    ".tox", ".eggs", "build", "dist", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", "htmlcov", ".nox",
+})
 
 
 def normalize(raw: str) -> str:
-    """Normalize a package name: strip version, lowercase, replace - with _."""
-    return re.split(r"[>=<!\[;]", raw, maxsplit=1)[0].strip().lower().replace("-", "_")
+    """Normalize a raw dependency string to a plain package name.
+
+    Examples: 'FastAPI>=0.100' -> 'fastapi', 'scikit-learn[ml]' -> 'scikit_learn'
+    """
+    name = re.split(r"[><=!;\[\s(]", raw)[0]
+    return name.strip().lower().replace("-", "_")
 
 
-def _parse_toml(path: Path) -> list[str]:
+def _find_dep_files(root: str) -> list[str]:
+    """Recursively find all pyproject.toml and requirements*.txt under root.
+
+    Prunes _SKIP_DIRS so virtualenvs and build artefacts are never descended into.
+    """
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune in-place so os.walk won't descend into skipped directories
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for fname in filenames:
+            if fname == "pyproject.toml" or (
+                fname.startswith("requirements") and fname.endswith(".txt")
+            ):
+                found.append(os.path.join(dirpath, fname))
+    return found
+
+
+def _parse_toml(path: str) -> list[str]:
+    """Extract dependency names from a pyproject.toml file path.
+
+    Returns normalised package names from [project] dependencies.
+    Falls back to regex when tomllib is unavailable (Python < 3.11).
+    """
     try:
-        import tomllib
-    except ImportError:
-        return _parse_toml_regex(path)
-
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
-
-    raw_deps = data.get("project", {}).get("dependencies", [])
-    return [normalize(d) for d in raw_deps]
-
-
-def _parse_toml_regex(path: Path) -> list[str]:
-    """Fallback TOML parser for Python 3.10 (no tomllib)."""
-    deps, inside = [], False
-    for line in path.read_text("utf-8").splitlines():
-        s = line.strip()
-        if re.match(r"^dependencies\s*=\s*\[", s):
-            inside = True
-            for m in re.finditer(r'"([^"]+)"', s):
-                deps.append(normalize(m.group(1)))
-            if s.endswith("]"):
-                return deps
-            continue
-        if inside:
-            if s.startswith("]"):
-                return deps
-            m = re.search(r'"([^"]+)"', s)
-            if m:
-                deps.append(normalize(m.group(1)))
-    return deps
+        import tomllib  # type: ignore[import]
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+        deps = data.get("project", {}).get("dependencies", [])
+        return [normalize(d) for d in deps if d.strip()]
+    except Exception:
+        pass
+    # Regex fallback for Python < 3.11
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+        m = re.search(r'\[project\].*?dependencies\s*=\s*\[(.*?)\]', text, re.S)
+        if not m:
+            return []
+        return [normalize(item) for item in re.findall(r'"([^"]+)"', m.group(1))]
+    except Exception:
+        return []
 
 
-def _parse_requirements(path: Path) -> list[str]:
-    deps = []
-    for line in path.read_text("utf-8").splitlines():
-        line = line.strip()
-        if not line or line[0] in ("#", "-"):
-            continue
-        name = re.split(r"[>=<!\[;#\s]", line, maxsplit=1)[0]
-        if name:
-            deps.append(normalize(name))
-    return deps
+def _parse_requirements(path: str) -> list[str]:
+    """Extract dependency names from a requirements*.txt file.
+
+    Skips blank lines, comments, and flag lines (-r, -c, -e).
+    """
+    result: list[str] = []
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("-"):
+                    continue
+                result.append(normalize(line))
+    except Exception:
+        pass
+    return result
+
+
+def resolve(project_dir: str) -> list[str]:
+    """Return sorted, deduplicated dependency names found anywhere under project_dir.
+
+    Scans all pyproject.toml and requirements*.txt in the entire directory tree,
+    skipping virtualenvs and build artefacts. Version specifiers and extras are stripped.
+    """
+    all_deps: set[str] = set()
+    for path in _find_dep_files(project_dir):
+        fname = os.path.basename(path)
+        if fname == "pyproject.toml":
+            all_deps.update(_parse_toml(path))
+        else:
+            all_deps.update(_parse_requirements(path))
+    all_deps.discard("")
+    return sorted(all_deps)
