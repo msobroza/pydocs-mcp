@@ -34,13 +34,19 @@ async def _bench_one(
     package: str,
     expected_snippet: str,
     heading: str,
+    search_topic: str,
 ) -> SearchResult:
-    """Run get_docs for one question, return timing row."""
+    """Run get_docs for one question, return timing row.
+
+    Uses search_topic (the heading, e.g. "numpy.lib._datasource") as the
+    Neuledge topic parameter. Neuledge docs recommend short API names
+    over full natural language questions.
+    """
     library = NEULEDGE_LIBRARY_MAP.get(package, package)
     t0 = time.perf_counter()
 
     try:
-        docs = await client.get_docs(library=library, topic=question)
+        docs = await client.get_docs(library=library, topic=search_topic)
     except NeuledgeError:
         elapsed = time.perf_counter() - t0
         return SearchResult(
@@ -83,6 +89,7 @@ async def _run_all(dataset: pd.DataFrame, base_url: str) -> list[SearchResult]:
                 package=str(row["package"]),
                 expected_snippet=str(row["expected_answer_snippet"]),
                 heading=str(row["source_chunk_heading"]),
+                search_topic=str(row.get("search_topic") or row["source_chunk_heading"]),
             )
             results.append(result)
     return results

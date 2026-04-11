@@ -1,44 +1,44 @@
 question,package,elapsed_s,n_results,source,recall_at_1,mrr_at_1,recall_at_3,mrr_at_3,recall_at_5,mrr_at_5,recall_at_10,mrr_at_10,recall_at_20,mrr_at_20
-numpy ma mrecords,numpy,0.0028765830211341,7,pyctx7,0.1428571428571428,1.0,0.2857142857142857,1.0,0.2857142857142857,1.0,0.5714285714285714,1.0,0.5714285714285714,1.0
-pandas core window doc,pandas,0.0028170410078018,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-numpy distutils fcompiler,numpy,0.0026025830302387,20,pyctx7,0.125,1.0,0.125,1.0,0.125,1.0,0.125,1.0,0.375,1.0
-numpy  globals,numpy,0.0021927499910816,3,pyctx7,0.3333333333333333,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-numpy f2py symbolic,numpy,0.0021482090232893,9,pyctx7,0.1111111111111111,1.0,0.1111111111111111,1.0,0.1111111111111111,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0
-numpy distutils mingw32ccompiler,numpy,0.0020517919911071,9,pyctx7,0.1111111111111111,1.0,0.2222222222222222,1.0,0.4444444444444444,1.0,0.8888888888888888,1.0,0.8888888888888888,1.0
-numpy  utils,numpy,0.0019189169397577,12,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.1111111111111111,1.0,0.1111111111111111
-pandas io formats excel,pandas,0.0025445410283282,6,pyctx7,0.1666666666666666,1.0,0.1666666666666666,1.0,0.1666666666666666,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0
-numpy lib,numpy,0.002750499988906,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What is it?,pandas,0.0025611250894144,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-pandas core array algos masked accumulations,pandas,0.0036582499742507,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-Requests,requests,0.0005698329769074,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.1428571428571428,0.0526315789473684
-pandas core groupby generic,pandas,0.0029701659223064,14,pyctx7,0.0714285714285714,1.0,0.0714285714285714,1.0,0.0714285714285714,1.0,0.0714285714285714,1.0,0.2857142857142857,1.0
-pandas core groupby numba ,pandas,0.0026262090541422,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-numpy core  machar,numpy,0.0026348340325057,4,pyctx7,0.25,1.0,0.5,1.0,0.75,1.0,0.75,1.0,0.75,1.0
-requests  internal utils,requests,0.0010335419792681,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-numpy core umath,numpy,0.002866290975362,6,pyctx7,0.3333333333333333,1.0,0.3333333333333333,1.0,0.6666666666666666,1.0,1.0,1.0,1.0,1.0
-Installing Requests and Supported Versions,requests,0.0021989169763401,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-numpy lib arraysetops,numpy,0.0022450000979006,6,pyctx7,0.1666666666666666,1.0,0.1666666666666666,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0
-numpy typing,numpy,0.0029853329760953,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use numpy.ma.mrecords?,numpy,0.0074205000419169,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.window.doc?,pandas,0.0049859160790219,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.distutils.fcompiler?,numpy,0.0054544999729841,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use numpy. globals?,numpy,0.0042722079670056,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Show me an example of numpy.f2py.symbolic.,numpy,0.0047587499720975,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy.distutils.mingw32ccompiler do?,numpy,0.0033151669194921,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy. utils do?,numpy,0.003576916991733,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does pandas.io.formats.excel do?,pandas,0.0035202919971197,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use numpy.lib?,numpy,0.0041560409590601,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use What is it??,pandas,0.0030770000303164,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-When should I use pandas.core.array algos.masked accumulations?,pandas,0.0031487080268561,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use Requests?,requests,0.0029013749444857,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What parameters does pandas.core.groupby.generic accept?,pandas,0.0022098750341683,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.groupby.numba ?,pandas,0.0018330829916521,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does numpy.core. machar accept?,numpy,0.002437041956,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Explain the requests. internal utils functionality.,requests,0.0015380000695586,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.core.umath?,numpy,0.0021508750505745,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Installing Requests and Supported Versions?,requests,0.0029255000408738,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.lib.arraysetops?,numpy,0.0018991249380633,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy.typing do?,numpy,0.0039957499830052,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core methods describe,pandas,0.0034647090360522,3,pyctx7,0.3333333333333333,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0
+Where to get it,pandas,0.0029568750178441,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core arraylike,pandas,0.0034043330233544,4,pyctx7,0.25,1.0,0.5,1.0,0.75,1.0,0.75,1.0,0.75,1.0
+numpy array api  array object,numpy,0.0052293329499661,7,pyctx7,0.1428571428571428,1.0,0.1428571428571428,1.0,0.1428571428571428,1.0,0.2857142857142857,1.0,0.2857142857142857,1.0
+numpy distutils line endings,numpy,0.0025670420145615,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core accessor,pandas,0.0023631249787285,3,pyctx7,0.3333333333333333,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core  numba kernels mean ,pandas,0.00265820894856,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+Background,pandas,0.00010308297351,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy lib arraypad,numpy,0.0024171250406652,7,pyctx7,0.1428571428571428,1.0,0.2857142857142857,1.0,0.2857142857142857,1.0,0.5714285714285714,1.0,0.5714285714285714,1.0
+pandas core groupby generic,pandas,0.003202624968253,14,pyctx7,0.0714285714285714,1.0,0.0714285714285714,1.0,0.0714285714285714,1.0,0.0714285714285714,1.0,0.2857142857142857,1.0
+Installing Requests and Supported Versions,requests,0.002387374988757,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy  pytesttester,numpy,0.0020621250150725,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core indexes frozen,pandas,0.0027651250129565,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas io sas sas xport,pandas,0.0024672918953001,3,pyctx7,0.3333333333333333,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0,0.6666666666666666,1.0
+numpy core  add newdocs,numpy,0.0032114590285345,20,pyctx7,0.0227272727272727,1.0,0.0454545454545454,1.0,0.0681818181818181,1.0,0.1363636363636363,1.0,0.2272727272727272,1.0
+numpy ma core,numpy,0.0026367909740656,20,pyctx7,0.0204081632653061,1.0,0.0204081632653061,1.0,0.0204081632653061,1.0,0.0612244897959183,1.0,0.2040816326530612,1.0
+numpy  globals,numpy,0.0025489580584689,3,pyctx7,0.3333333333333333,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+requests cookies,requests,0.0004025000380352,4,pyctx7,0.25,1.0,0.25,1.0,0.5,1.0,0.5,1.0,0.5,1.0
+requests sessions,requests,0.0001933749299496,7,pyctx7,0.1428571428571428,1.0,0.2857142857142857,1.0,0.4285714285714285,1.0,0.5714285714285714,1.0,0.5714285714285714,1.0
+numpy f2py symbolic,numpy,0.0021215419983491,9,pyctx7,0.1111111111111111,1.0,0.1111111111111111,1.0,0.1111111111111111,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0
+When should I use pandas.core.methods.describe?,pandas,0.0110476670088246,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use Where to get it?,pandas,0.008083541993983,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+How do I use pandas.core.arraylike?,pandas,0.0029582080896943,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use numpy.array api. array object?,numpy,0.0048301250208169,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+Show me an example of numpy.distutils.line endings.,numpy,0.0038473330205306,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does pandas.core.accessor do?,pandas,0.0027024999726563,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What does pandas.core. numba.kernels.mean  do?,pandas,0.002710000029765,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does Background do?,pandas,0.0026949580060318,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+When should I use numpy.lib.arraypad?,numpy,0.002949749934487,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.groupby.generic?,pandas,0.0028357919072732,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use Installing Requests and Supported Versions?,requests,0.0024148750817403,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use numpy. pytesttester?,numpy,0.0033744999673217,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What parameters does pandas.core.indexes.frozen accept?,pandas,0.0028710420010611,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+How do I use pandas.io.sas.sas xport?,pandas,0.0022168750874698,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What parameters does numpy.core. add newdocs accept?,numpy,0.0035250829532742,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+Explain the numpy.ma.core functionality.,numpy,0.0041027079569175,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+How do I use numpy. globals?,numpy,0.0024317500647157,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+How do I use requests.cookies?,requests,0.0018235840834677,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+How do I use requests.sessions?,requests,0.0019390829838812,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+What does numpy.f2py.symbolic do?,numpy,0.0024412500206381,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
 When should I use numpy. typing. nested sequence?,numpy,2.590072042075917,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
 How do I use numpy.distutils.fcompiler.fujitsu?,numpy,2.377121082972735,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
 How do I use pandas.core.interchange.dataframe protocol?,pandas,2.539780875085853,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0

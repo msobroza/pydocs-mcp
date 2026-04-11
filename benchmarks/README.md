@@ -178,10 +178,10 @@ pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 
 | Metric | pyctx7-mcp | Neuledge Context | Context7 |
 |--------|-----------|-----------------|----------|
-| **Mean** | **2.41 ms** | 3.48 ms | 1,321 ms |
-| **Median** | **2.58 ms** | 3.23 ms | 1,910 ms |
+| **Mean** | **2.46 ms** | 3.59 ms | 1,321 ms |
+| **Median** | **2.56 ms** | 2.85 ms | 1,910 ms |
 
-Both local systems (pyctx7 and Neuledge) complete in ~2-3ms. Context7's cloud API takes ~1.3-1.9s due to two sequential HTTP round-trips (`resolve-library-id` + `query-docs`). pyctx7 is **~550x faster** than Context7 and **~1.4x faster** than Neuledge.
+Both local systems (pyctx7 and Neuledge) complete in ~2-3ms. Context7's cloud API takes ~1.3-1.9s due to two sequential HTTP round-trips (`resolve-library-id` + `query-docs`). pyctx7 is **~537x faster** than Context7 and **~1.5x faster** than Neuledge.
 
 ![Search latency boxplot](docs/images/search_latency_boxplot.png)
 
@@ -193,11 +193,11 @@ Relevance is measured differently per system:
 
 | k | pyctx7 Recall@k | Neuledge Recall@k | Context7 Recall@k | pyctx7 MRR@k | Neuledge MRR@k | Context7 MRR@k |
 |---|----------------|------------------|-------------------|--------------|----------------|----------------|
-| 1 | 0.291 | 0.200 | 0.550 | 0.800 | 0.200 | 0.550 |
-| 3 | 0.449 | 0.200 | 0.550 | 0.800 | 0.200 | 0.550 |
-| 5 | 0.498 | 0.200 | 0.550 | 0.800 | 0.200 | 0.550 |
-| 10 | 0.620 | 0.200 | 0.550 | 0.806 | 0.200 | 0.550 |
-| 20 | 0.651 | 0.200 | 0.550 | 0.808 | 0.200 | 0.550 |
+| 1 | 0.374 | 0.600 | 0.550 | 1.000 | 0.600 | 0.550 |
+| 3 | 0.525 | 0.600 | 0.550 | 1.000 | 0.600 | 0.550 |
+| 5 | 0.636 | 0.600 | 0.550 | 1.000 | 0.600 | 0.550 |
+| 10 | 0.672 | 0.600 | 0.550 | 1.000 | 0.600 | 0.550 |
+| 20 | 0.703 | 0.600 | 0.550 | 1.000 | 0.600 | 0.550 |
 
 ![Recall@k](docs/images/recall_at_k.png)
 
@@ -216,19 +216,19 @@ The benchmark uses all `search_chunks()` parameters — the same way a real MCP 
 
 When `topic` or `internal` are `None`, `search_chunks()` does not apply those filters — it searches all chunks. The benchmark sets them because a real MCP client (e.g., an AI assistant) would know the package name and topic it's looking for.
 
-### Why pyctx7-mcp Has High MRR but Lower Recall
+### Why pyctx7-mcp Has Perfect MRR but Lower Recall
 
-- **MRR@1 = 0.80** — when pyctx7 finds a relevant chunk, it usually ranks it #1. The topic filter + FTS5 BM25 is precise.
-- **Recall@20 = 0.65** — pyctx7 finds ~65% of all ground-truth chunks in the top 20. Some modules have many related chunks (e.g., `pandas.core.series` has 25+ chunks), and not all appear in the top 20.
+- **MRR@1 = 1.00** — when pyctx7 finds a relevant chunk, it always ranks it #1. The topic LIKE filter + FTS5 BM25 is highly precise.
+- **Recall@20 = 0.70** — pyctx7 finds ~70% of all ground-truth chunks in the top 20. Some modules have many related chunks (e.g., `pandas.core.series` has 25+ chunks), and not all appear in the top 20.
 - The gap between MRR and Recall shows pyctx7 is **precise but not exhaustive** — it finds the most relevant chunk quickly but may miss some related chunks.
 
-### Why Neuledge Recall Is 20%
+### Why Neuledge Recall Is 60%
 
-Neuledge Context achieves 20% recall — lower than expected for a local FTS5 system:
+Neuledge Context achieves 60% recall — competitive with Context7:
 
-1. **Different corpus.** Neuledge indexes documentation from GitHub repos (markdown files), while pyctx7 indexes installed Python packages (source code + docstrings). The ground-truth headings are pyctx7's internal module names (e.g., `numpy.lib._datasource`), which may not appear in Neuledge's GitHub-sourced docs.
-2. **Single text blob.** Like Context7, Neuledge returns one combined response — recall is binary per query.
-3. **Fast local queries.** Despite lower recall, Neuledge's ~3.5ms latency shows the local FTS5 approach works well.
+1. **`search_topic` helps.** Passing the heading (e.g., `"numpy.lib._datasource"`) as the topic parameter matches Neuledge's recommended usage ("short API name or keyword"). Using the full natural-language question only achieved 20%.
+2. **Different corpus.** Neuledge indexes GitHub documentation (markdown files from the repo's `doc/` folder), while pyctx7 indexes installed Python packages (source code + docstrings). Despite this corpus difference, fuzzy matching finds overlapping content.
+3. **Single text blob.** Like Context7, Neuledge returns one combined response — recall is binary per query.
 
 ### Why Context7 Recall Is 55%
 
@@ -242,16 +242,17 @@ Context7 achieves 55% recall using **fuzzy text matching** (rapidfuzz `partial_r
 
 | Metric | pyctx7-mcp | Neuledge Context | Context7 |
 |--------|-----------|-----------------|----------|
-| **Latency** | **~2.4 ms** | ~3.5 ms | ~1,321 ms |
-| **Recall@5** | **0.498** | 0.200 | 0.550 |
-| **MRR@1** | **0.800** | 0.200 | 0.550 |
-| **Type** | Local (Python) | Local (Node.js) | Cloud API |
+| **Latency** | **~2.5 ms** | ~3.6 ms | ~1,321 ms |
+| **Recall@5** | **0.636** | 0.600 | 0.550 |
+| **MRR@1** | **1.000** | 0.600 | 0.550 |
+| **Recall@20** | **0.703** | 0.600 | 0.550 |
+| **Type** | Local (Python/Rust) | Local (Node.js) | Cloud API |
 | **Corpus** | Installed packages | GitHub repos | Curated cloud |
 
-- **pyctx7-mcp is the fastest** — ~2.4ms mean, ~1.4x faster than Neuledge (~3.5ms), ~550x faster than Context7 (~1.3s).
-- **pyctx7-mcp has the best precision (MRR)** — MRR@1 of 0.80 means the first result is usually the right one. Context7 and Neuledge return single blobs, making their MRR equivalent to their recall.
-- **Context7 leads on recall** — 55% vs pyctx7's 50% at k=5. However, pyctx7 improves with depth (65% at k=20) while Context7's recall is fixed (binary match).
-- **Neuledge has a corpus mismatch** — its GitHub-sourced docs use different headings than pyctx7's package-level module names, depressing its fuzzy match scores.
+- **pyctx7-mcp is the fastest** — ~2.5ms mean, ~1.5x faster than Neuledge (~3.6ms), ~537x faster than Context7 (~1.3s).
+- **pyctx7-mcp has perfect precision (MRR)** — MRR@1 of 1.00 means the first result is always relevant. Context7 and Neuledge return single blobs, so their MRR equals their recall.
+- **pyctx7-mcp leads on recall at k>=5** — 64% at k=5, growing to 70% at k=20. Neuledge (60%) and Context7 (55%) have fixed recall since they return single responses.
+- **All three local systems are competitive** — Neuledge and pyctx7 both achieve ~60%+ recall with sub-4ms latency. Context7 adds 55% recall but at ~537x the latency cost.
 - **All systems use different relevance scoring** — pyctx7 uses strict chunk ID matching, while Context7 and Neuledge use fuzzy text matching. A fair comparison would require human annotation or LLM-based semantic scoring.
 
 ## Rust vs Pure-Python Performance
