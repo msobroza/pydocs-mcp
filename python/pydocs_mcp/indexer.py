@@ -21,8 +21,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from pydocs_mcp._fast import (
-    walk_py_files, hash_files, chunk_text,
-    parse_py_file, extract_module_doc, read_files_parallel,
+    chunk_text,
+    extract_module_doc,
+    hash_files,
+    parse_py_file,
+    read_files_parallel,
+    walk_py_files,
 )
 from pydocs_mcp.constants import (
     CLASS_DOCSTRING_MAX,

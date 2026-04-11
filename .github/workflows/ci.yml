@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Python deps
+        run: pip install pytest pytest-cov ruff
+
+      - name: Lint
+        run: ruff check python/ tests/
+
+      - name: Test with coverage (pure Python, no Rust)
+        run: |
+          python -m pytest tests/ -v \
+            --ignore=tests/test_parity.py \
+            --cov=pydocs_mcp \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=45
+
+      - name: Upload coverage artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Create venv and install deps
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin pytest
+
+      - name: Rust format check
+        run: cargo fmt --check
+
+      - name: Rust lint
+        run: cargo clippy -- -D warnings
+
+      - name: Rust tests
+        run: cargo test
+
+      - name: Build with maturin + parity tests
+        run: |
+          source .venv/bin/activate
+          maturin develop --release
+          python -m pytest tests/test_parity.py -v
