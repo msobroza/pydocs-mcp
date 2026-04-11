@@ -42,14 +42,14 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 
 // ── Static regexes (compiled once) ──────────────────────────────────────
 
-static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^#{1,4}\s+(.+)$").unwrap()
-});
+static HEADING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^#{1,4}\s+(.+)$").unwrap());
 
 static DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?m)^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:"#
-    ).unwrap()
+        r#"(?m)^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:"#,
+    )
+    .unwrap()
 });
 
 static DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -68,9 +68,21 @@ static MOD_DOC_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Directories we never want to enter.
 const SKIP_DIRS: &[&str] = &[
-    ".git", ".venv", "venv", "__pycache__", "node_modules",
-    ".tox", ".eggs", "build", "dist", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", "htmlcov", ".nox", "egg-info",
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    ".tox",
+    ".eggs",
+    "build",
+    "dist",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "htmlcov",
+    ".nox",
+    "egg-info",
 ];
 
 /// Walk `root` and return all .py file paths as sorted strings.
@@ -104,7 +116,6 @@ fn walk_py_files(root: &str) -> Vec<String> {
     result
 }
 
-
 // ── 2. File Hasher ───────────────────────────────────────────────────────
 //
 // Hashes a list of file paths + their modification times.
@@ -137,7 +148,6 @@ fn hash_files(paths: Vec<String>) -> String {
     let hash = xxh3_64(&data);
     format!("{:016x}", hash)
 }
-
 
 // ── 3. Text Chunker ──────────────────────────────────────────────────────
 //
@@ -200,12 +210,8 @@ fn chunk_text(text: &str, max_chars: usize) -> Vec<(String, String)> {
     flush(&current_heading, &mut current_body);
 
     // Convert to Python-friendly tuples.
-    results
-        .into_iter()
-        .map(|c| (c.heading, c.body))
-        .collect()
+    results.into_iter().map(|c| (c.heading, c.body)).collect()
 }
-
 
 // ── 4. Python Source Parser ──────────────────────────────────────────────
 //
@@ -223,11 +229,11 @@ struct Symbol {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
-    kind: String,       // "def", "async def", or "class"
+    kind: String, // "def", "async def", or "class"
     #[pyo3(get)]
-    signature: String,  // everything between parentheses
+    signature: String, // everything between parentheses
     #[pyo3(get)]
-    docstring: String,  // first triple-quoted string after definition
+    docstring: String, // first triple-quoted string after definition
 }
 
 /// Extract top-level functions and classes from Python source code.
@@ -279,7 +285,6 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
     symbols
 }
 
-
 /// Extract the module-level docstring from Python source.
 ///
 /// Returns the docstring or an empty string if none found.
@@ -297,7 +302,6 @@ fn extract_module_doc(source: &str) -> String {
         .unwrap_or_default()
 }
 
-
 /// Read a file and return its contents. Returns empty string on error.
 /// This is faster than Python's open().read() for batch operations
 /// because it avoids Python's IO overhead.
@@ -305,7 +309,6 @@ fn extract_module_doc(source: &str) -> String {
 fn read_file(path: &str) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
-
 
 /// Read multiple files in parallel using Rayon.
 /// Returns a list of (path, content) tuples.
@@ -319,7 +322,6 @@ fn read_files_parallel(paths: Vec<String>) -> Vec<(String, String)> {
         })
         .collect()
 }
-
 
 // ── Module Registration ──────────────────────────────────────────────────
 
