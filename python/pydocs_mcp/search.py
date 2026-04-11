@@ -36,8 +36,11 @@ def search_chunks(conn: sqlite3.Connection, query: str,
 def search_symbols(conn: sqlite3.Connection, query: str,
                    pkg: str | None = None, limit: int = 15) -> list[dict]:
     """Search symbols by name or docstring content."""
-    pat = f"%{query.lower()}%"
-    sql = "SELECT * FROM symbols WHERE (lower(name) LIKE ? OR lower(doc) LIKE ?)"
+    # Escape LIKE special chars so user input is treated literally.
+    escaped = query.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pat = f"%{escaped}%"
+    sql = ("SELECT * FROM symbols WHERE "
+           "(lower(name) LIKE ? ESCAPE '\\' OR lower(doc) LIKE ? ESCAPE '\\')")
     params: list = [pat, pat]
 
     if pkg:
