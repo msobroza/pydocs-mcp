@@ -155,8 +155,8 @@ pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 |--------|----------|--------|---------|
 | `__project__` | 0.001 | 8 | 5 |
 | `requests` | 0.062 | 72 | 99 |
-| `pandas` | 0.570 | 3,787 | 8,777 |
-| `numpy` | 0.246 | 1,941 | 2,830 |
+| `pandas` | 0.741 | 3,787 | 8,777 |
+| `numpy` | 0.264 | 1,941 | 2,830 |
 
 ![Indexing time per package](docs/images/indexing_times.png)
 
@@ -164,10 +164,10 @@ pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 
 | Metric | pyctx7-mcp | Context7 | Speedup |
 |--------|-----------|----------|---------|
-| **Mean** | 3.20 ms | 1,321 ms | **~412x** |
-| **Median** | 3.37 ms | 1,910 ms | **~566x** |
+| **Mean** | 3.41 ms | 1,321 ms | **~387x** |
+| **Median** | 3.47 ms | 1,910 ms | **~550x** |
 
-pyctx7-mcp is **~400-500x faster** than Context7. pyctx7 queries a local SQLite FTS5 index (~3ms), while Context7 makes two sequential HTTP round-trips to a cloud API: `resolve-library-id` + `query-docs` (~1.3-1.9s total).
+pyctx7-mcp is **~400-550x faster** than Context7. pyctx7 queries a local SQLite FTS5 index (~3.4ms), while Context7 makes two sequential HTTP round-trips to a cloud API: `resolve-library-id` + `query-docs` (~1.3-1.9s total).
 
 ![Search latency boxplot](docs/images/search_latency_boxplot.png)
 

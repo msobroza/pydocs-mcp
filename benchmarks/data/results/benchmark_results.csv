@@ -1,41 +1,21 @@
 question,package,elapsed_s,n_results,source,recall_at_1,mrr_at_1,recall_at_3,mrr_at_3,recall_at_5,mrr_at_5,recall_at_10,mrr_at_10,recall_at_20,mrr_at_20
-When should I use numpy. typing. nested sequence?,numpy,0.005422041984274983,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.distutils.fcompiler.fujitsu?,numpy,0.0029457909986376762,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.interchange.dataframe protocol?,pandas,0.0036404579877853394,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use pandas.core.groupby.generic?,pandas,0.004539625020697713,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Show me an example of numpy.lib.type check.,numpy,0.004527082899585366,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy.testing.overrides do?,numpy,0.0018176250159740448,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy.distutils.exec command do?,numpy,0.0019075419986620545,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy.polynomial.laguerre do?,numpy,0.0014953749487176538,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use pandas.core.arraylike?,pandas,0.0036595830461010337,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.lib. version?,numpy,0.0037662500981241465,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use requests.adapters?,requests,0.0020136249950155616,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use pandas.core. numba.kernels.sum ?,pandas,0.004530625068582594,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does numpy.ma.core accept?,numpy,0.002232207916676998,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.core. dtype?,numpy,0.0038905420806258917,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does requests.models accept?,requests,0.0016361670568585396,17,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.14285714285714285,0.14285714285714285,0.42857142857142855,0.14285714285714285
-Explain the pandas.plotting functionality.,pandas,0.00434295809827745,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use requests.hooks?,requests,0.002697165939025581,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.interchange.utils?,pandas,0.0033563340548425913,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.core. asarray?,numpy,0.0033853750210255384,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does pandas.core.arrays.sparse.scipy sparse do?,pandas,0.002214666921645403,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use numpy. typing. nested sequence?,numpy,2.590072042075917,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use numpy.distutils.fcompiler.fujitsu?,numpy,2.377121082972735,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use pandas.core.interchange.dataframe protocol?,pandas,2.539780875085853,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-When should I use pandas.core.groupby.generic?,pandas,2.0458765829680488,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-Show me an example of numpy.lib.type check.,numpy,1.9641006670426577,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What does numpy.testing.overrides do?,numpy,2.042370583047159,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What does numpy.distutils.exec command do?,numpy,1.9115741670830175,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What does numpy.polynomial.laguerre do?,numpy,1.908473665942438,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-When should I use pandas.core.arraylike?,pandas,1.9989489159779623,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use numpy.lib. version?,numpy,1.739088415983133,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-When should I use requests.adapters?,requests,1.946654916042462,1,context7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-When should I use pandas.core. numba.kernels.sum ?,pandas,2.3514364580623806,1,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does numpy.ma.core accept?,numpy,0.1371169580379501,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.core. dtype?,numpy,0.12871662492398173,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does requests.models accept?,requests,0.12503024993930012,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Explain the pandas.plotting functionality.,pandas,0.11253787507303059,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use requests.hooks?,requests,0.12234462494961917,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.interchange.utils?,pandas,0.11071020900271833,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.core. asarray?,numpy,0.13600220798980445,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does pandas.core.arrays.sparse.scipy sparse do?,pandas,0.12601470795925707,0,context7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use numpy.typing.mypy plugin?,numpy,0.0036415000213310122,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.io.stata?,pandas,0.003338417038321495,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.ops.common?,pandas,0.003528582979924977,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use numpy. pyinstaller.hook numpy?,numpy,0.005134374951012433,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Show me an example of numpy. typing. nbit.,numpy,0.005417499924078584,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does numpy.linalg do?,numpy,0.00180358299985528,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does numpy.lib.format do?,numpy,0.0019072919385507703,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does pandas.io.formats.css do?,pandas,0.001733749988488853,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use numpy.core.overrides?,numpy,0.0034117079339921474,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.interchange.dataframe protocol?,pandas,0.00354179204441607,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use Installation from sources?,pandas,0.005153167061507702,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+When should I use requests.structures?,requests,0.0024449580814689398,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does pandas.io.parsers.readers accept?,pandas,0.0024674589512869716,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use pandas.core.arrays.base?,pandas,0.0035243750317022204,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What parameters does pandas.util. validators accept?,pandas,0.003098416025750339,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+Explain the pandas.core.ops.missing functionality.,pandas,0.004706165986135602,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.lib.user array?,numpy,0.004377707955427468,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.lib.stride tricks?,numpy,0.0029559589456766844,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+How do I use numpy.core. add newdocs scalars?,numpy,0.004208834026940167,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+What does numpy.ctypeslib do?,numpy,0.0017188750207424164,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
