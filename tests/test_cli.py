@@ -134,6 +134,48 @@ class TestApiCommand:
         assert "greet" in captured.out.lower() or "─" in captured.out
 
 
+class TestNoRustFlag:
+    def test_no_rust_forces_python_fallback(self, seeded_project, monkeypatch):
+        """--no-rust must disable Rust and use Python fallback for indexing."""
+        monkeypatch.chdir(seeded_project)
+        with patch("sys.argv", ["pydocs-mcp", "index", ".", "--no-rust"]):
+            from pydocs_mcp.__main__ import main
+            main()
+        import pydocs_mcp._fast as fast_mod
+        assert fast_mod.RUST_AVAILABLE is False
+
+    def test_no_rust_produces_same_output(self, seeded_project, monkeypatch):
+        """Indexing with --no-rust must produce the same chunks as default."""
+        monkeypatch.chdir(seeded_project)
+        import sqlite3
+        from pydocs_mcp.db import db_path_for
+
+        # Index with default engine
+        with patch("sys.argv", ["pydocs-mcp", "index", ".", "--force"]):
+            from pydocs_mcp.__main__ import main
+            main()
+        db = db_path_for(seeded_project)
+        conn = sqlite3.connect(str(db))
+        default_count = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
+        default_headings = {
+            r[0] for r in conn.execute("SELECT heading FROM chunks").fetchall()
+        }
+        conn.close()
+
+        # Index with --no-rust
+        with patch("sys.argv", ["pydocs-mcp", "index", ".", "--force", "--no-rust"]):
+            main()
+        conn = sqlite3.connect(str(db))
+        norust_count = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
+        norust_headings = {
+            r[0] for r in conn.execute("SELECT heading FROM chunks").fetchall()
+        }
+        conn.close()
+
+        assert default_count == norust_count
+        assert default_headings == norust_headings
+
+
 class TestServeCommand:
     def test_serve_indexes_then_starts_server(self, seeded_project):
         """Test that serve indexes and calls run() — we mock run() to avoid blocking."""

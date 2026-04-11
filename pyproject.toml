@@ -21,6 +21,7 @@ pydocs-mcp = "pydocs_mcp.__main__:main"
 features = ["pyo3/extension-module"]
 module-name = "pydocs_mcp._native"
 python-source = "python"
+compatibility = "manylinux2014"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

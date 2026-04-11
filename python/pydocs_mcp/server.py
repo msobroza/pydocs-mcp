@@ -17,13 +17,12 @@ from pydocs_mcp.constants import (
     PACKAGE_DOC_LINE_MAX,
     PACKAGE_DOC_MAX,
     REQUIREMENTS_DISPLAY,
-    SEARCH_BODY_DISPLAY,
     SEARCH_DOC_DISPLAY,
     SEARCH_RESULTS_MAX,
 )
 from pydocs_mcp.db import open_db
 from pydocs_mcp.deps import normalize
-from pydocs_mcp.search import search_chunks, search_symbols
+from pydocs_mcp.search import concat_context, search_chunks, search_symbols
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -127,11 +126,7 @@ def run(db_path: Path):
             conn.close()
         if not results:
             return "No matches found."
-        lines = []
-        for r in results:
-            icon = "\U0001f4c4" if "doc" in r["kind"] else "\U0001f9e9"
-            lines.append(f"{icon} **[{r['pkg']}]** {r['heading']} (`{r['kind']}`)\n{r['body'][:SEARCH_BODY_DISPLAY]}")
-        return "\n\n---\n\n".join(lines)
+        return concat_context(results)
 
     @mcp.tool()
     async def search_api(

@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from pydocs_mcp._fast import RUST_AVAILABLE
+from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.constants import SEARCH_BODY_CLI, SEARCH_DOC_CLI
 from pydocs_mcp.db import clear_all, db_path_for, open_db, rebuild_fts
 from pydocs_mcp.deps import resolve
@@ -25,6 +25,9 @@ def main():
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd")
 
+    _no_rust = dict(action="store_true",
+                    help="Force pure-Python fallback even if Rust extension is available.")
+
     for cmd, hlp in [("serve", "Index + start MCP"), ("index", "Index only")]:
         sp = sub.add_parser(cmd, help=hlp)
         sp.add_argument("project", nargs="?", default=".")
@@ -32,6 +35,7 @@ def main():
         sp.add_argument("--workers", type=int, default=4, help="Parallel workers")
         sp.add_argument("--force", action="store_true", help="Clear cache, re-index all")
         sp.add_argument("--skip-project", action="store_true", help="Skip project source")
+        sp.add_argument("--no-rust", **_no_rust)
         sp.add_argument(
             "--no-inspect", action="store_true",
             help="Don't import deps. Read .py files from site-packages instead. "
@@ -43,6 +47,7 @@ def main():
         sp.add_argument("terms", nargs="+")
         sp.add_argument("project", nargs="?", default=".")
         sp.add_argument("-p", "--package", help="Filter to one package")
+        sp.add_argument("--no-rust", **_no_rust)
 
     args = p.parse_args()
 
@@ -57,8 +62,11 @@ def main():
         p.print_help()
         return
 
-    engine = "Rust" if RUST_AVAILABLE else "Python"
-    log.info("Engine: %s", engine)
+    if getattr(args, "no_rust", False) and RUST_AVAILABLE:
+        disable_rust()
+        log.info("Engine: Python (Rust disabled via --no-rust)")
+    else:
+        log.info("Engine: %s", "Rust" if RUST_AVAILABLE else "Python")
 
     project = Path(getattr(args, "project", ".")).resolve()
     db_path = db_path_for(project)

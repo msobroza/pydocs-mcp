@@ -30,3 +30,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Benchmark outputs
+benchmarks/data/*.csv
+benchmarks/data/*.png

@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import sqlite3
 
+from pydocs_mcp.constants import CONTEXT_TOKEN_BUDGET
 from pydocs_mcp.deps import normalize
+
+# Approximate characters per token (conservative estimate for English text).
+_CHARS_PER_TOKEN = 4
 
 
 def search_chunks(
@@ -67,6 +71,38 @@ def search_chunks(
     except Exception:
         return []
     return [dict(r) for r in rows]
+
+
+def concat_context(hits: list[dict], max_tokens: int = CONTEXT_TOKEN_BUDGET) -> str:
+    """Concatenate chunk headings and bodies until the token budget is reached.
+
+    Produces a single text blob from ranked search results, similar to how
+    Neuledge Context and Context7 return documentation. The budget ensures
+    the response fits within LLM context windows.
+
+    Args:
+        hits: Ordered list of search result dicts (best first), each with
+              'heading' and 'body' keys.
+        max_tokens: Maximum tokens to include (default: CONTEXT_TOKEN_BUDGET).
+
+    Returns:
+        Concatenated text within the token budget.
+    """
+    max_chars = max_tokens * _CHARS_PER_TOKEN
+    parts: list[str] = []
+    total = 0
+    for h in hits:
+        heading = h.get("heading", "")
+        body = h.get("body", "")
+        chunk = f"## {heading}\n{body}\n"
+        if total + len(chunk) > max_chars:
+            remaining = max_chars - total
+            if remaining > 100:
+                parts.append(chunk[:remaining])
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return "\n".join(parts)
 
 
 def search_symbols(

@@ -83,34 +83,40 @@ const SKIP_DIRS: &[&str] = &[
 ];
 
 /// Walk `root` and return all .py file paths as sorted strings.
+///
+/// Releases the GIL during directory traversal so Python threads can run
+/// concurrently with the filesystem I/O.
 #[pyfunction]
-fn walk_py_files(root: &str) -> Vec<String> {
-    let root_path = Path::new(root);
+fn walk_py_files(py: Python<'_>, root: &str) -> Vec<String> {
+    let root = root.to_owned();
+    py.allow_threads(move || {
+        let root_path = Path::new(&root);
 
-    let mut result: Vec<String> = WalkDir::new(root_path)
-        .into_iter()
-        // Skip excluded directories early (before reading their contents).
-        .filter_entry(|entry| {
-            if entry.file_type().is_dir() {
-                let name = entry.file_name().to_string_lossy();
-                return !SKIP_DIRS.contains(&name.as_ref());
-            }
-            true
-        })
-        // Keep only .py files.
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            if entry.file_type().is_file() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("py") {
-                    return Some(path.to_string_lossy().into_owned());
+        let mut result: Vec<String> = WalkDir::new(root_path)
+            .into_iter()
+            // Skip excluded directories early (before reading their contents).
+            .filter_entry(|entry| {
+                if entry.file_type().is_dir() {
+                    let name = entry.file_name().to_string_lossy();
+                    return !SKIP_DIRS.contains(&name.as_ref());
                 }
-            }
-            None
-        })
-        .collect();
-    result.sort();
-    result
+                true
+            })
+            // Keep only .py files.
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                if entry.file_type().is_file() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("py") {
+                        return Some(path.to_string_lossy().into_owned());
+                    }
+                }
+                None
+            })
+            .collect();
+        result.sort();
+        result
+    })
 }
 
 // ── 2. File Hasher ───────────────────────────────────────────────────────
@@ -121,29 +127,33 @@ fn walk_py_files(root: &str) -> Vec<String> {
 
 /// Compute a single hash from file paths + mtimes.
 /// Useful to detect if any source file was added, removed, or modified.
+///
+/// Releases the GIL during filesystem metadata reads.
 #[pyfunction]
-fn hash_files(paths: Vec<String>) -> String {
-    // Build a single byte buffer with all path + mtime data.
-    let mut data = Vec::with_capacity(paths.len() * 64);
+fn hash_files(py: Python<'_>, paths: Vec<String>) -> String {
+    py.allow_threads(move || {
+        // Build a single byte buffer with all path + mtime data.
+        let mut data = Vec::with_capacity(paths.len() * 64);
 
-    for path_str in &paths {
-        data.extend_from_slice(path_str.as_bytes());
-        data.push(b':');
+        for path_str in &paths {
+            data.extend_from_slice(path_str.as_bytes());
+            data.push(b':');
 
-        // Read the modification time (if possible).
-        if let Ok(meta) = fs::metadata(path_str) {
-            if let Ok(mtime) = meta.modified() {
-                if let Ok(duration) = mtime.duration_since(std::time::UNIX_EPOCH) {
-                    data.extend_from_slice(&duration.as_nanos().to_le_bytes());
+            // Read the modification time (if possible).
+            if let Ok(meta) = fs::metadata(path_str) {
+                if let Ok(mtime) = meta.modified() {
+                    if let Ok(duration) = mtime.duration_since(std::time::UNIX_EPOCH) {
+                        data.extend_from_slice(&duration.as_nanos().to_le_bytes());
+                    }
                 }
             }
+            data.push(b'\n');
         }
-        data.push(b'\n');
-    }
 
-    // Hash everything at once with xxh3.
-    let hash = xxh3_64(&data);
-    format!("{:016x}", hash)
+        // Hash everything at once with xxh3.
+        let hash = xxh3_64(&data);
+        format!("{:016x}", hash)
+    })
 }
 
 // ── 3. Text Chunker ──────────────────────────────────────────────────────
@@ -309,15 +319,20 @@ fn read_file(path: &str) -> String {
 
 /// Read multiple files in parallel using Rayon.
 /// Returns a list of (path, content) tuples.
+///
+/// Releases the GIL so rayon's thread pool can read files in true parallel
+/// without contending for Python's global lock.
 #[pyfunction]
-fn read_files_parallel(paths: Vec<String>) -> Vec<(String, String)> {
-    paths
-        .par_iter()
-        .map(|p| {
-            let content = fs::read_to_string(p).unwrap_or_default();
-            (p.clone(), content)
-        })
-        .collect()
+fn read_files_parallel(py: Python<'_>, paths: Vec<String>) -> Vec<(String, String)> {
+    py.allow_threads(move || {
+        paths
+            .par_iter()
+            .map(|p| {
+                let content = fs::read_to_string(p).unwrap_or_default();
+                (p.clone(), content)
+            })
+            .collect()
+    })
 }
 
 // ── Module Registration ──────────────────────────────────────────────────
