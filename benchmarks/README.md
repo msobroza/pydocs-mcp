@@ -121,11 +121,13 @@ Both metrics are evaluated for k ∈ [1, 3, 5, 10, 20].
 
 For pyctx7-mcp, ground truth is the source chunk from which each question was derived (`relevant_chunk_ids` in the dataset). For Context7, relevance is approximated by checking if the expected answer snippet appears in the returned documentation text.
 
-## Benchmark Results (pyctx7-mcp only, 20 queries)
+## Benchmark Results (pyctx7-mcp vs Context7, 20 queries)
 
-Benchmark run with `--skip-context7 --questions 20` against packages: requests, pandas, numpy.
+Benchmark run against packages: requests, pandas, numpy. Context7 accessed via live API.
 
-### Indexing Time Per Package
+### Indexing Time Per Package (pyctx7-mcp)
+
+pyctx7-mcp indexes locally — Context7 has no indexing step (cloud API).
 
 | Target | Time (s) | Chunks | Symbols |
 |--------|----------|--------|---------|
@@ -136,28 +138,38 @@ Benchmark run with `--skip-context7 --questions 20` against packages: requests, 
 
 ![Indexing time per package](docs/images/indexing_times.png)
 
-### Search Latency
+### Search Latency Comparison
 
-- **Mean:** 4.06 ms
-- **Median:** 3.89 ms
+| Metric | pyctx7-mcp | Context7 |
+|--------|-----------|----------|
+| **Mean** | 4.62 ms | 102.34 ms |
+| **Median** | 4.01 ms | 87.81 ms |
+| **Speedup** | **~22x faster** | baseline |
+
+pyctx7-mcp is **~22x faster** than Context7 on median search latency. This is expected — pyctx7 queries a local SQLite FTS5 index, while Context7 makes HTTP round-trips to a cloud API.
 
 ![Search latency boxplot](docs/images/search_latency_boxplot.png)
 
-### Retrieval Quality
+### Retrieval Quality Comparison
 
-| k | Recall@k | MRR@k |
-|---|----------|-------|
-| 1 | 0.050 | 0.050 |
-| 3 | 0.100 | 0.075 |
-| 5 | 0.100 | 0.075 |
-| 10 | 0.100 | 0.075 |
-| 20 | 0.100 | 0.075 |
+| k | pyctx7 Recall@k | Context7 Recall@k | pyctx7 MRR@k | Context7 MRR@k |
+|---|----------------|-------------------|--------------|----------------|
+| 1 | 0.100 | 0.000 | 0.100 | 0.000 |
+| 3 | 0.200 | 0.000 | 0.133 | 0.000 |
+| 5 | 0.200 | 0.000 | 0.133 | 0.000 |
+| 10 | 0.250 | 0.000 | 0.139 | 0.000 |
+| 20 | 0.250 | 0.000 | 0.139 | 0.000 |
 
 ![Recall@k](docs/images/recall_at_k.png)
 
 ![MRR@k](docs/images/mrr_at_k.png)
 
-> **Note:** Recall and MRR values are low because questions are derived from chunk headings with template transforms, while FTS5 BM25 search matches on body text. This is a known limitation of the synthetic dataset — real-world queries would likely score higher. The primary value of this benchmark is for **comparative** analysis (pyctx7 vs Context7), not absolute quality measurement.
+### Analysis
+
+- **pyctx7-mcp wins on latency** — local FTS5 queries complete in ~4ms vs ~100ms for Context7's cloud API.
+- **pyctx7-mcp wins on recall** — it retrieves the ground-truth source chunk 10-25% of the time (depending on k). Context7 scores 0% because its text-overlap relevance check is stricter (the exact snippet from our local DB doesn't appear verbatim in Context7's curated docs).
+- **Context7's 0% is a measurement artifact**, not a real quality failure. Context7 returns curated, high-quality documentation, but our relevance scoring checks for exact substring matches from the pydocs-mcp chunk body — which is a different text source. A fair comparison would require human annotation or LLM-based relevance judgments.
+- **pyctx7-mcp's recall is modest** because synthetic questions are derived from chunk headings with template transforms, while FTS5 BM25 matches on body text. Real-world queries would likely score higher for both systems.
 
 ## Context7 API
 
