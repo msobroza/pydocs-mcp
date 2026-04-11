@@ -71,7 +71,7 @@ def search_chunks(
 
 
 def search_symbols(
-    conn,
+    conn: sqlite3.Connection,
     query: str,
     pkg: str | None = None,
     limit: int = 15,
