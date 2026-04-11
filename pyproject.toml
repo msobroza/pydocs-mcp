@@ -11,6 +11,9 @@ license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = ["mcp>=1.0"]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff"]
+
 [project.scripts]
 pydocs-mcp = "pydocs_mcp.__main__:main"
 
@@ -22,3 +25,15 @@ python-source = "python"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["python"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "E701"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F401", "F811", "F841", "E402", "I001"]
+"python/pydocs_mcp/_fast.py" = ["F401", "I001"]

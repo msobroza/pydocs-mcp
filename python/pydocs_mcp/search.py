@@ -1,7 +1,6 @@
 """Search functions: FTS5 for docs, LIKE for symbols."""
 from __future__ import annotations
 
-import re
 import sqlite3
 
 from pydocs_mcp.deps import normalize

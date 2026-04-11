@@ -8,9 +8,9 @@ from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE
 from pydocs_mcp.constants import SEARCH_BODY_CLI, SEARCH_DOC_CLI
-from pydocs_mcp.db import db_path_for, open_db, clear_all, rebuild_fts
+from pydocs_mcp.db import clear_all, db_path_for, open_db, rebuild_fts
 from pydocs_mcp.deps import resolve
-from pydocs_mcp.indexer import index_project, index_deps
+from pydocs_mcp.indexer import index_deps, index_project
 from pydocs_mcp.search import search_chunks, search_symbols
 from pydocs_mcp.server import run
 
