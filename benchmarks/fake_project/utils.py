@@ -1,10 +1,10 @@
 """Utility helpers for the fake analytics project."""
 import hashlib
 import statistics
-from typing import Iterable
+from typing import Generator, Iterable
 
 
-def batch(iterable: Iterable, size: int):
+def batch(iterable: Iterable, size: int) -> Generator[list, None, None]:
     """Yield successive chunks of *size* from *iterable*."""
     buf = []
     for item in iterable:
