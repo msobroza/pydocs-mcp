@@ -1,12 +1,12 @@
 """Benchmark pydocs-mcp search latency and result relevance.
 
 For each question in the dataset, we run search_chunks (FTS5 BM25),
-concatenate top results until a token budget is reached (~2000 tokens),
-and measure binary Recall and MRR via fuzzy matching — the same
-methodology used for Context7 and Neuledge.
+concatenate top results within a ~2000-token budget via concat_context(),
+and measure binary Recall via fuzzy matching — the same methodology
+used for Context7 and Neuledge.
 
-This makes the comparison apples-to-apples: all three systems produce
-a single text blob within a token budget, scored with rapidfuzz.
+All three systems produce a single text blob within a token budget,
+scored with rapidfuzz partial_ratio (longest common substring).
 """
 from __future__ import annotations
 
@@ -69,8 +69,6 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
         # Concatenate results within token budget (part of the response pipeline)
         response_text = concat_context(hits)
         elapsed = time.perf_counter() - t0
-
-        n_results = 1 if response_text.strip() else 0
 
         # Relevance via rapidfuzz (NOT counted in elapsed_s for fairness,
         # but the concat IS counted since it's part of building the response)
