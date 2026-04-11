@@ -13,7 +13,16 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 K_VALUES = [1, 3, 5, 10, 20]
-_SOURCE_COLORS = {"pyctx7": "#4C72B0", "context7": "#DD8452"}
+_SOURCE_COLORS = {
+    "pyctx7": "#4C72B0",
+    "context7": "#DD8452",
+    "neuledge": "#55A868",
+}
+_SOURCE_LABELS = {
+    "pyctx7": "pyctx7-mcp",
+    "context7": "Context7",
+    "neuledge": "Neuledge",
+}
 
 
 def plot_indexing_times(index_df: pd.DataFrame, out_dir: Path) -> Path:
@@ -41,7 +50,7 @@ def plot_indexing_times(index_df: pd.DataFrame, out_dir: Path) -> Path:
 
 
 def plot_search_latency_boxplot(search_df: pd.DataFrame, out_dir: Path) -> Path:
-    """Box plot of search latency distribution: pyctx7 vs Context7.
+    """Box plot of search latency distribution across all sources.
 
     Args:
         search_df: DataFrame with columns [elapsed_s, source].
@@ -50,16 +59,22 @@ def plot_search_latency_boxplot(search_df: pd.DataFrame, out_dir: Path) -> Path:
     Returns:
         Path to saved PNG.
     """
-    sources = ["pyctx7", "context7"]
+    sources = [s for s in ["pyctx7", "neuledge", "context7"] if s in search_df["source"].values]
     groups = [
         search_df.loc[search_df["source"] == src, "elapsed_s"].dropna().tolist()
         for src in sources
     ]
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.boxplot(groups, labels=["pyctx7-mcp", "Context7"], patch_artist=True,
-               boxprops=dict(facecolor="#4C72B0", alpha=0.7))
+    labels = [_SOURCE_LABELS.get(s, s) for s in sources]
+    colors = [_SOURCE_COLORS.get(s, "#999999") for s in sources]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bp = ax.boxplot(groups, labels=labels, patch_artist=True)
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
     ax.set_ylabel("Search latency (s)")
-    ax.set_title("Search latency: pyctx7-mcp vs Context7")
+    title = "Search latency: " + " vs ".join(labels)
+    ax.set_title(title)
     fig.tight_layout()
     out = out_dir / "search_latency_boxplot.png"
     fig.savefig(out, dpi=150)
@@ -78,13 +93,19 @@ def plot_recall_at_k(search_df: pd.DataFrame, out_dir: Path) -> Path:
         Path to saved PNG.
     """
     fig, ax = plt.subplots(figsize=(8, 5))
-    for src in search_df["source"].unique():
+    sources = [s for s in ["pyctx7", "neuledge", "context7"] if s in search_df["source"].values]
+    for src in sources:
         subset = search_df[search_df["source"] == src]
         means = [subset[f"recall_at_{k}"].mean() for k in K_VALUES]
-        ax.plot(K_VALUES, means, marker="o", label=src, color=_SOURCE_COLORS.get(src))
+        ax.plot(
+            K_VALUES, means, marker="o",
+            label=_SOURCE_LABELS.get(src, src),
+            color=_SOURCE_COLORS.get(src),
+        )
     ax.set_xlabel("k")
     ax.set_ylabel("Mean Recall@k")
-    ax.set_title("Recall@k: pyctx7-mcp vs Context7")
+    title = "Recall@k: " + " vs ".join(_SOURCE_LABELS.get(s, s) for s in sources)
+    ax.set_title(title)
     ax.set_xticks(K_VALUES)
     ax.set_ylim(0, 1.05)
     ax.legend()
@@ -106,13 +127,19 @@ def plot_mrr_at_k(search_df: pd.DataFrame, out_dir: Path) -> Path:
         Path to saved PNG.
     """
     fig, ax = plt.subplots(figsize=(8, 5))
-    for src in search_df["source"].unique():
+    sources = [s for s in ["pyctx7", "neuledge", "context7"] if s in search_df["source"].values]
+    for src in sources:
         subset = search_df[search_df["source"] == src]
         means = [subset[f"mrr_at_{k}"].mean() for k in K_VALUES]
-        ax.plot(K_VALUES, means, marker="s", label=src, color=_SOURCE_COLORS.get(src))
+        ax.plot(
+            K_VALUES, means, marker="s",
+            label=_SOURCE_LABELS.get(src, src),
+            color=_SOURCE_COLORS.get(src),
+        )
     ax.set_xlabel("k")
     ax.set_ylabel("Mean MRR@k")
-    ax.set_title("MRR@k: pyctx7-mcp vs Context7")
+    title = "MRR@k: " + " vs ".join(_SOURCE_LABELS.get(s, s) for s in sources)
+    ax.set_title(title)
     ax.set_xticks(K_VALUES)
     ax.set_ylim(0, 1.05)
     ax.legend()
