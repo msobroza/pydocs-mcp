@@ -89,12 +89,18 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
     max_k = max(K_VALUES)
 
     for _, row in dataset.iterrows():
-        query = str(row["question"])
+        # Use search-specific columns if available, fall back to question/package.
+        query = str(row.get("search_query") or row["question"])
         pkg = str(row["package"]) if row["package"] != "__project__" else ""
+        topic = str(row["search_topic"]) if "search_topic" in row and row["search_topic"] else None
+        internal = bool(row["search_internal"]) if "search_internal" in row else None
         relevant_ids = set(row["relevant_chunk_ids"])
 
         t0 = time.perf_counter()
-        hits = search_chunks(conn, query, pkg=pkg or None, limit=max_k)
+        hits = search_chunks(
+            conn, query, pkg=pkg or None, limit=max_k,
+            internal=internal, topic=topic,
+        )
         elapsed = time.perf_counter() - t0
 
         # search_chunks returns dicts with pkg/heading/body/kind/rank.

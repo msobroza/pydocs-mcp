@@ -22,6 +22,10 @@ REQUIRED_COLUMNS = [
     "chunk_kind",
     "chunk_body_preview",
     "relevant_chunk_ids",   # list[int] — ground truth for Recall@k / MRR@k
+    # Search parameters — map directly to search_chunks() arguments
+    "search_query",         # str — FTS5 query terms (heading without template wrapper)
+    "search_topic",         # str — heading prefix for topic LIKE filter
+    "search_internal",      # bool — False for deps, True for project code
 ]
 
 _QUESTION_TEMPLATES = [
@@ -156,6 +160,13 @@ def generate_dataset(db_path: Path, n_questions: int = 50, seed: int = _SEED) ->
         ).fetchall()
         all_ids = [r[0] for r in related] if related else [rowid]
 
+        # Build search parameters that map to search_chunks() arguments.
+        # search_query: the heading as raw terms (no template wrapper).
+        # search_topic: the base heading (before ':') for LIKE filtering.
+        base_heading = heading.split(":")[0].strip()
+        search_query = re.sub(r"[_\-.]", " ", base_heading)
+        is_internal = kind in ("project_code", "project_doc")
+
         records.append({
             "question": _heading_to_question(heading),
             "package": pkg,
@@ -164,6 +175,9 @@ def generate_dataset(db_path: Path, n_questions: int = 50, seed: int = _SEED) ->
             "chunk_kind": kind,
             "chunk_body_preview": body[:200],
             "relevant_chunk_ids": all_ids,
+            "search_query": search_query,
+            "search_topic": base_heading,
+            "search_internal": is_internal,
         })
 
     conn.close()

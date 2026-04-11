@@ -1,21 +1,21 @@
 question,package,elapsed_s,n_results,source,recall_at_1,mrr_at_1,recall_at_3,mrr_at_3,recall_at_5,mrr_at_5,recall_at_10,mrr_at_10,recall_at_20,mrr_at_20
-When should I use numpy.typing.mypy plugin?,numpy,0.0036415000213310122,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.io.stata?,pandas,0.003338417038321495,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.ops.common?,pandas,0.003528582979924977,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use numpy. pyinstaller.hook numpy?,numpy,0.005134374951012433,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Show me an example of numpy. typing. nbit.,numpy,0.005417499924078584,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy.linalg do?,numpy,0.00180358299985528,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy.lib.format do?,numpy,0.0019072919385507703,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does pandas.io.formats.css do?,pandas,0.001733749988488853,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use numpy.core.overrides?,numpy,0.0034117079339921474,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.interchange.dataframe protocol?,pandas,0.00354179204441607,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use Installation from sources?,pandas,0.005153167061507702,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use requests.structures?,requests,0.0024449580814689398,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does pandas.io.parsers.readers accept?,pandas,0.0024674589512869716,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.arrays.base?,pandas,0.0035243750317022204,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What parameters does pandas.util. validators accept?,pandas,0.003098416025750339,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-Explain the pandas.core.ops.missing functionality.,pandas,0.004706165986135602,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.lib.user array?,numpy,0.004377707955427468,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.lib.stride tricks?,numpy,0.0029559589456766844,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use numpy.core. add newdocs scalars?,numpy,0.004208834026940167,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does numpy.ctypeslib do?,numpy,0.0017188750207424164,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+numpy lib format,numpy,0.003003625082783401,8,pyctx7,0.125,1.0,0.125,1.0,0.25,1.0,0.625,1.0,0.625,1.0
+numpy testing  private extbuild,numpy,0.002829542034305632,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas io formats style,pandas,0.0025926249800249934,20,pyctx7,0.047619047619047616,1.0,0.047619047619047616,1.0,0.047619047619047616,1.0,0.047619047619047616,1.0,0.047619047619047616,1.0
+numpy lib  iotools,numpy,0.0024154590209946036,5,pyctx7,0.2,1.0,0.2,1.0,0.4,1.0,0.4,1.0,0.4,1.0
+numpy dtypes,numpy,0.002483709016814828,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+requests api,requests,0.0005814159521833062,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy core arrayprint,numpy,0.002426624996587634,12,pyctx7,0.08333333333333333,1.0,0.16666666666666666,1.0,0.16666666666666666,1.0,0.25,1.0,0.4166666666666667,1.0
+numpy typing,numpy,0.0025820420123636723,20,pyctx7,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+numpy distutils command build ext,numpy,0.002301250002346933,6,pyctx7,0.16666666666666666,1.0,0.16666666666666666,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0,0.3333333333333333,1.0
+requests structures,requests,0.0005123750306665897,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core ops array ops,pandas,0.0029473339673131704,4,pyctx7,0.25,1.0,0.5,1.0,0.5,1.0,0.5,1.0,0.5,1.0
+numpy distutils fcompiler fujitsu,numpy,0.002256207983009517,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+numpy core  dtype ctypes,numpy,0.0024925420293584466,3,pyctx7,0.3333333333333333,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas io sql,pandas,0.002247791038826108,13,pyctx7,0.07692307692307693,1.0,0.23076923076923078,1.0,0.3076923076923077,1.0,0.38461538461538464,1.0,0.38461538461538464,1.0
+numpy distutils fcompiler,numpy,0.0023534171050414443,20,pyctx7,0.125,1.0,0.125,1.0,0.125,1.0,0.125,1.0,0.375,1.0
+Supported Features & Best–Practices,requests,0.0006807080935686827,1,pyctx7,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core  numba kernels var ,pandas,0.0026109160389751196,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas io html,pandas,0.0021128749940544367,7,pyctx7,0.14285714285714285,1.0,0.14285714285714285,1.0,0.14285714285714285,1.0,0.42857142857142855,1.0,0.42857142857142855,1.0
+pandas core interchange utils,pandas,0.0026267910143360496,2,pyctx7,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
+pandas core frame,pandas,0.002879292005673051,20,pyctx7,0.019230769230769232,1.0,0.019230769230769232,1.0,0.019230769230769232,1.0,0.019230769230769232,1.0,0.019230769230769232,1.0
