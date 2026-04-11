@@ -53,7 +53,7 @@ def search_chunks(
     if topic:
         # Escape SQL LIKE wildcards so the topic is matched literally, not as a pattern
         escaped_topic = topic.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        where.append("c.heading LIKE ? ESCAPE '\\\\'")
+        where.append("c.heading LIKE ? ESCAPE '\\'")
         params.append(f"%{escaped_topic}%")
 
     params.append(limit)

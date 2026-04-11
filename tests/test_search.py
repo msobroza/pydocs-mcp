@@ -50,6 +50,7 @@ class TestSearchChunksInternal:
 class TestSearchChunksTopic:
     def test_topic_filters_by_heading(self, conn):
         results = search_chunks(conn, "fibonacci", topic="fibonacci")
+        assert len(results) > 0, "Expected at least one chunk with 'fibonacci' in heading"
         assert all("fibonacci" in r["heading"].lower() for r in results)
 
     def test_topic_empty_string_means_no_filter(self, conn):
