@@ -17,7 +17,6 @@ from pydocs_mcp.constants import (
     PACKAGE_DOC_LINE_MAX,
     PACKAGE_DOC_MAX,
     REQUIREMENTS_DISPLAY,
-    SEARCH_BODY_DISPLAY,
     SEARCH_DOC_DISPLAY,
     SEARCH_RESULTS_MAX,
 )
