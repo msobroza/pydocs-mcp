@@ -121,6 +121,44 @@ Both metrics are evaluated for k ∈ [1, 3, 5, 10, 20].
 
 For pyctx7-mcp, ground truth is the source chunk from which each question was derived (`relevant_chunk_ids` in the dataset). For Context7, relevance is approximated by checking if the expected answer snippet appears in the returned documentation text.
 
+## Benchmark Results (pyctx7-mcp only, 20 queries)
+
+Benchmark run with `--skip-context7 --questions 20` against packages: requests, pandas, numpy.
+
+### Indexing Time Per Package
+
+| Target | Time (s) | Chunks | Symbols |
+|--------|----------|--------|---------|
+| `__project__` | 0.001 | 8 | 5 |
+| `requests` | 0.063 | 72 | 99 |
+| `pandas` | 0.566 | 3,787 | 8,777 |
+| `numpy` | 0.252 | 1,941 | 2,830 |
+
+![Indexing time per package](docs/images/indexing_times.png)
+
+### Search Latency
+
+- **Mean:** 4.06 ms
+- **Median:** 3.89 ms
+
+![Search latency boxplot](docs/images/search_latency_boxplot.png)
+
+### Retrieval Quality
+
+| k | Recall@k | MRR@k |
+|---|----------|-------|
+| 1 | 0.050 | 0.050 |
+| 3 | 0.100 | 0.075 |
+| 5 | 0.100 | 0.075 |
+| 10 | 0.100 | 0.075 |
+| 20 | 0.100 | 0.075 |
+
+![Recall@k](docs/images/recall_at_k.png)
+
+![MRR@k](docs/images/mrr_at_k.png)
+
+> **Note:** Recall and MRR values are low because questions are derived from chunk headings with template transforms, while FTS5 BM25 search matches on body text. This is a known limitation of the synthetic dataset — real-world queries would likely score higher. The primary value of this benchmark is for **comparative** analysis (pyctx7 vs Context7), not absolute quality measurement.
+
 ## Context7 API
 
 Context7 is accessed at `https://mcp.context7.com/mcp` using the
