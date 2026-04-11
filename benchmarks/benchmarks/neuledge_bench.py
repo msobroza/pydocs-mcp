@@ -19,6 +19,14 @@ from benchmarks.search_bench import K_VALUES, SearchResult
 
 FUZZY_THRESHOLD = 60
 
+# Map pyctx7 package names to Neuledge Context library identifiers.
+# These must match the output of `context list` (name@version).
+NEULEDGE_LIBRARY_MAP: dict[str, str] = {
+    "requests": "requests@2.32.3",
+    "pandas": "pandas@2.2.2",
+    "numpy": "numpy@2.0.0",
+}
+
 
 async def _bench_one(
     client: NeuledgeClient,
@@ -28,10 +36,11 @@ async def _bench_one(
     heading: str,
 ) -> SearchResult:
     """Run get_docs for one question, return timing row."""
+    library = NEULEDGE_LIBRARY_MAP.get(package, package)
     t0 = time.perf_counter()
 
     try:
-        docs = await client.get_docs(library=package, topic=question)
+        docs = await client.get_docs(library=library, topic=question)
     except NeuledgeError:
         elapsed = time.perf_counter() - t0
         return SearchResult(
