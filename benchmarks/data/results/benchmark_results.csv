@@ -1,61 +1,61 @@
-question,package,elapsed_s,n_results,source,recall
-When should I use powerful Python data analysis toolkit?,pandas,0.0055988749954849,1,pyctx7,0.0
-How do I use numpy.core.records?,numpy,0.0029001659713685,1,pyctx7,1.0
-How do I use numpy. globals?,numpy,0.0021400840487331,1,pyctx7,1.0
-When should I use pandas. config.config?,pandas,0.0024057920090854,1,pyctx7,1.0
-Show me an example of numpy.core.overrides.,numpy,0.0026092919288203,1,pyctx7,1.0
-What does pandas. config.localization do?,pandas,0.002498917048797,1,pyctx7,1.0
-What does numpy.polynomial.laguerre do?,numpy,0.002274457947351,1,pyctx7,1.0
-What does numpy.ctypeslib do?,numpy,0.0021115420386195,1,pyctx7,1.0
-When should I use pandas.core.internals.array manager?,pandas,0.0031092920107766,1,pyctx7,1.0
-How do I use pandas.core. numba.kernels.min max ?,pandas,0.0029767089290544,1,pyctx7,1.0
-When should I use Requests?,requests,0.0006196670001372,1,pyctx7,1.0
-When should I use Dependencies?,pandas,0.0003719580126926,1,pyctx7,1.0
-What parameters does numpy.lib accept?,numpy,0.0028597909258678,1,pyctx7,1.0
-How do I use pandas.io.formats.format?,pandas,0.0025219999952241,1,pyctx7,1.0
-What parameters does numpy.distutils.command.build clib accept?,numpy,0.0023192910011857,1,pyctx7,1.0
-Explain the pandas.core.indexers.objects functionality.,pandas,0.0029977080412209,1,pyctx7,1.0
-How do I use numpy.polynomial?,numpy,0.0023182500153779,1,pyctx7,1.0
-How do I use numpy.core. asarray?,numpy,0.0024747080169618,1,pyctx7,1.0
-How do I use numpy.distutils. shell utils?,numpy,0.0027243749937042,1,pyctx7,1.0
-What does numpy.fft. pocketfft do?,numpy,0.0023187500191852,1,pyctx7,1.0
-When should I use powerful Python data analysis toolkit?,pandas,0.0262164580635726,1,neuledge,0.0
-How do I use numpy.core.records?,numpy,0.0153198749758303,1,neuledge,1.0
-How do I use numpy. globals?,numpy,0.0066660420270636,1,neuledge,1.0
-When should I use pandas. config.config?,pandas,0.0031708750175312,1,neuledge,1.0
-Show me an example of numpy.core.overrides.,numpy,0.0052763329586014,1,neuledge,1.0
-What does pandas. config.localization do?,pandas,0.0028906249208375,1,neuledge,0.0
-What does numpy.polynomial.laguerre do?,numpy,0.0028216659557074,1,neuledge,1.0
-What does numpy.ctypeslib do?,numpy,0.0039155000122264,1,neuledge,1.0
-When should I use pandas.core.internals.array manager?,pandas,0.0020628749625757,1,neuledge,0.0
-How do I use pandas.core. numba.kernels.min max ?,pandas,0.0018552499823272,1,neuledge,0.0
-When should I use Requests?,requests,0.0030740000074729,1,neuledge,1.0
-When should I use Dependencies?,pandas,0.0027277501067146,1,neuledge,1.0
-What parameters does numpy.lib accept?,numpy,0.0090958330547437,1,neuledge,1.0
-How do I use pandas.io.formats.format?,pandas,0.0028445419156923,1,neuledge,1.0
-What parameters does numpy.distutils.command.build clib accept?,numpy,0.0031737920362502,1,neuledge,0.0
-Explain the pandas.core.indexers.objects functionality.,pandas,0.0033019169932231,1,neuledge,1.0
-How do I use numpy.polynomial?,numpy,0.0044586249860003,1,neuledge,1.0
-How do I use numpy.core. asarray?,numpy,0.0029311659745872,1,neuledge,1.0
-How do I use numpy.distutils. shell utils?,numpy,0.0029479170916602,1,neuledge,0.0
-What does numpy.fft. pocketfft do?,numpy,0.0023199589923024,1,neuledge,1.0
-When should I use numpy. typing. nested sequence?,numpy,2.590072042075917,1,context7,1.0
-How do I use numpy.distutils.fcompiler.fujitsu?,numpy,2.377121082972735,1,context7,1.0
-How do I use pandas.core.interchange.dataframe protocol?,pandas,2.539780875085853,1,context7,1.0
-When should I use pandas.core.groupby.generic?,pandas,2.0458765829680488,1,context7,1.0
-Show me an example of numpy.lib.type check.,numpy,1.9641006670426575,1,context7,1.0
-What does numpy.testing.overrides do?,numpy,2.042370583047159,1,context7,1.0
-What does numpy.distutils.exec command do?,numpy,1.9115741670830173,1,context7,1.0
-What does numpy.polynomial.laguerre do?,numpy,1.908473665942438,1,context7,1.0
-When should I use pandas.core.arraylike?,pandas,1.9989489159779623,1,context7,1.0
-How do I use numpy.lib. version?,numpy,1.739088415983133,1,context7,1.0
-When should I use requests.adapters?,requests,1.946654916042462,1,context7,1.0
-When should I use pandas.core. numba.kernels.sum ?,pandas,2.351436458062381,1,context7,0.0
-What parameters does numpy.ma.core accept?,numpy,0.1371169580379501,0,context7,0.0
-How do I use numpy.core. dtype?,numpy,0.1287166249239817,0,context7,0.0
-What parameters does requests.models accept?,requests,0.1250302499393001,0,context7,0.0
-Explain the pandas.plotting functionality.,pandas,0.1125378750730305,0,context7,0.0
-How do I use requests.hooks?,requests,0.1223446249496191,0,context7,0.0
-How do I use pandas.core.interchange.utils?,pandas,0.1107102090027183,0,context7,0.0
-How do I use numpy.core. asarray?,numpy,0.1360022079898044,0,context7,0.0
-What does pandas.core.arrays.sparse.scipy sparse do?,pandas,0.126014707959257,0,context7,0.0
+question,package,source,elapsed_s,recall
+When should I use numpy.testing?,numpy,pyctx7,0.0031743750441819,1.0
+How do I use Installing Requests and Supported Versions?,requests,pyctx7,0.0022855419665575,1.0
+How do I use requests.hooks?,requests,pyctx7,0.0003833750961348,1.0
+When should I use numpy.distutils.command?,numpy,pyctx7,0.0021347920410335,1.0
+Show me an example of pandas.core.indexes.extension.,pandas,pyctx7,0.0029824170051142,1.0
+What does numpy.lib.arraysetops do?,numpy,pyctx7,0.0022407909855246,1.0
+What does Requests do?,requests,pyctx7,0.0004519160138443,1.0
+What does numpy.distutils.command.develop do?,numpy,pyctx7,0.0020529578905552,1.0
+When should I use What is it??,pandas,pyctx7,0.0024713749298825,1.0
+How do I use numpy. distributor init?,numpy,pyctx7,0.0021706249099224,1.0
+When should I use numpy.core. add newdocs scalars?,numpy,pyctx7,0.0025922500062733,1.0
+When should I use pandas.util. tester?,pandas,pyctx7,0.0023863340029492,1.0
+What parameters does numpy.core.umath accept?,numpy,pyctx7,0.0028063340578228,1.0
+How do I use pandas.core.array algos.datetimelike accumulations?,pandas,pyctx7,0.003051417064853,1.0
+What parameters does pandas.core.window.rolling accept?,pandas,pyctx7,0.0026424159295856,1.0
+Explain the numpy.linalg functionality.,numpy,pyctx7,0.0024655410088598,1.0
+How do I use numpy.distutils.fcompiler.fujitsu?,numpy,pyctx7,0.0023017080966383,1.0
+How do I use numpy.lib.mixins?,numpy,pyctx7,0.0024046660400927,1.0
+How do I use pandas.core.roperator?,pandas,pyctx7,0.002779750037007,1.0
+What does numpy.lib.arraypad do?,numpy,pyctx7,0.0022382499882951,1.0
+When should I use numpy.testing?,numpy,neuledge,0.0275159999728202,1.0
+How do I use Installing Requests and Supported Versions?,requests,neuledge,0.0035276249982416,0.0
+How do I use requests.hooks?,requests,neuledge,0.0022267500171437,1.0
+When should I use numpy.distutils.command?,numpy,neuledge,0.0070772500475868,1.0
+Show me an example of pandas.core.indexes.extension.,pandas,neuledge,0.005070082959719,1.0
+What does numpy.lib.arraysetops do?,numpy,neuledge,0.0032635000534355,0.0
+What does Requests do?,requests,neuledge,0.0023342090426012,1.0
+What does numpy.distutils.command.develop do?,numpy,neuledge,0.0018449169583618,1.0
+When should I use What is it??,pandas,neuledge,0.0081281249877065,1.0
+How do I use numpy. distributor init?,numpy,neuledge,0.0023287500953301,1.0
+When should I use numpy.core. add newdocs scalars?,numpy,neuledge,0.002783540985547,0.0
+When should I use pandas.util. tester?,pandas,neuledge,0.0021547909127548,0.0
+What parameters does numpy.core.umath accept?,numpy,neuledge,0.0035928339930251,1.0
+How do I use pandas.core.array algos.datetimelike accumulations?,pandas,neuledge,0.0024370839819312,0.0
+What parameters does pandas.core.window.rolling accept?,pandas,neuledge,0.0022682920098304,1.0
+Explain the numpy.linalg functionality.,numpy,neuledge,0.0048121670261025,1.0
+How do I use numpy.distutils.fcompiler.fujitsu?,numpy,neuledge,0.0024071659427136,1.0
+How do I use numpy.lib.mixins?,numpy,neuledge,0.0026286250213161,1.0
+How do I use pandas.core.roperator?,pandas,neuledge,0.0019554999889805,0.0
+What does numpy.lib.arraypad do?,numpy,neuledge,0.0022804159671068,0.0
+When should I use numpy. typing. nested sequence?,numpy,context7,2.590072042075917,1.0
+How do I use numpy.distutils.fcompiler.fujitsu?,numpy,context7,2.377121082972735,1.0
+How do I use pandas.core.interchange.dataframe protocol?,pandas,context7,2.539780875085853,1.0
+When should I use pandas.core.groupby.generic?,pandas,context7,2.0458765829680488,1.0
+Show me an example of numpy.lib.type check.,numpy,context7,1.9641006670426575,1.0
+What does numpy.testing.overrides do?,numpy,context7,2.042370583047159,1.0
+What does numpy.distutils.exec command do?,numpy,context7,1.9115741670830173,1.0
+What does numpy.polynomial.laguerre do?,numpy,context7,1.908473665942438,1.0
+When should I use pandas.core.arraylike?,pandas,context7,1.9989489159779623,1.0
+How do I use numpy.lib. version?,numpy,context7,1.739088415983133,1.0
+When should I use requests.adapters?,requests,context7,1.946654916042462,1.0
+When should I use pandas.core. numba.kernels.sum ?,pandas,context7,2.351436458062381,0.0
+What parameters does numpy.ma.core accept?,numpy,context7,0.1371169580379501,0.0
+How do I use numpy.core. dtype?,numpy,context7,0.1287166249239817,0.0
+What parameters does requests.models accept?,requests,context7,0.1250302499393001,0.0
+Explain the pandas.plotting functionality.,pandas,context7,0.1125378750730305,0.0
+How do I use requests.hooks?,requests,context7,0.1223446249496191,0.0
+How do I use pandas.core.interchange.utils?,pandas,context7,0.1107102090027183,0.0
+How do I use numpy.core. asarray?,numpy,context7,0.1360022079898044,0.0
+What does pandas.core.arrays.sparse.scipy sparse do?,pandas,context7,0.126014707959257,0.0

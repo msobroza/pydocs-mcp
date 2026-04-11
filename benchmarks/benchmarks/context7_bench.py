@@ -54,14 +54,12 @@ async def _bench_one(
         return SearchResult(
             question=question,
             package=package,
-            elapsed_s=elapsed,
-            n_results=0,
-            recall=0.0,
             source="context7",
+            elapsed_s=elapsed,
+            recall=0.0,
         )
 
     elapsed = time.perf_counter() - t0
-    n_results = 1 if docs.strip() else 0
 
     # Relevance via rapidfuzz partial_ratio (longest common substring).
     # This is NOT counted in elapsed_s.
@@ -73,10 +71,9 @@ async def _bench_one(
     return SearchResult(
         question=question,
         package=package,
-        elapsed_s=elapsed,
-        n_results=n_results,
-        recall=1.0 if found else 0.0,
         source="context7",
+        elapsed_s=elapsed,
+        recall=1.0 if found else 0.0,
     )
 
 

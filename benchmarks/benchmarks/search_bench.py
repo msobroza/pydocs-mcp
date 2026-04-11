@@ -36,10 +36,9 @@ class SearchResult:
     """Timing and relevance metrics for one search query."""
     question: str
     package: str
+    source: str
     elapsed_s: float
-    n_results: int
     recall: float = 0.0    # binary: 1.0 if relevant content found, else 0.0
-    source: str = "pyctx7"
 
 
 def _concat_with_budget(hits: list[dict], max_tokens: int = _MAX_TOKENS) -> str:
@@ -118,8 +117,8 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
         results.append(SearchResult(
             question=str(row["question"]),
             package=str(row["package"]),
+            source="pyctx7",
             elapsed_s=elapsed,
-            n_results=n_results,
             recall=1.0 if found else 0.0,
         ))
 
@@ -130,16 +129,15 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
 def to_dataframe(results: list[SearchResult]) -> pd.DataFrame:
     """Convert SearchResult list to a flat DataFrame.
 
-    Columns: question, package, elapsed_s, n_results, source, recall.
+    Columns: question, package, source, elapsed_s, recall.
     """
     records = []
     for r in results:
         records.append({
             "question": r.question,
             "package": r.package,
-            "elapsed_s": r.elapsed_s,
-            "n_results": r.n_results,
             "source": r.source,
+            "elapsed_s": r.elapsed_s,
             "recall": r.recall,
         })
     return pd.DataFrame(records)
