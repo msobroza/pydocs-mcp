@@ -20,12 +20,12 @@ def search_chunks(
     Args:
         query: Space-separated search terms; words are joined with OR for FTS5 matching.
         pkg: Restrict to a specific package name. '__project__' is matched literally.
-        internal: True → project source only; False → dependencies only; None → all.
+        internal: True \u2192 project source only; False \u2192 dependencies only; None \u2192 all.
         topic: If given, restricts results to chunks whose heading contains this string (LIKE).
         limit: Maximum number of results.
     """
     # If the query already uses FTS operators, pass it through directly.
-    # Otherwise split into words and join with OR for broad matching.
+    # Otherwise split into words, quote each for exact matching, and join with OR.
     _FTS_OPS = {"OR", "AND", "NOT"}
     tokens = query.split()
     if any(t in _FTS_OPS for t in tokens):
@@ -34,7 +34,7 @@ def search_chunks(
         words = [w for w in tokens if len(w) > 1]
         if not words:
             return []
-        fts_q = " OR ".join(words)
+        fts_q = " OR ".join(f'"{w}"' for w in words)
 
     # Build WHERE clauses and params incrementally
     where: list[str] = ["chunks_fts MATCH ?"]
@@ -82,12 +82,14 @@ def search_symbols(
     Args:
         query: Fragment to match against symbol name or docstring (case-insensitive LIKE).
         pkg: Restrict to a specific package name. '__project__' is matched literally.
-        internal: True → project source only; False → dependencies only; None → all.
+        internal: True \u2192 project symbols only; False \u2192 dependency symbols only; None \u2192 all.
         limit: Maximum number of results.
     """
-    pat = f"%{query}%"
+    # Escape LIKE special chars so user input is treated literally.
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pat = f"%{escaped}%"
 
-    where: list[str] = ["(name LIKE ? OR doc LIKE ?)"]
+    where: list[str] = ["(lower(name) LIKE ? ESCAPE '\\' OR lower(doc) LIKE ? ESCAPE '\\')"]
     params: list = [pat, pat]
 
     if pkg is not None:

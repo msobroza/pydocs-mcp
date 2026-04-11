@@ -1,5 +1,7 @@
 """Tests for internal/topic parameters on search_chunks and search_symbols."""
+import sqlite3
 import pytest
+from pydocs_mcp.db import open_db
 from pydocs_mcp.search import search_chunks, search_symbols
 
 
@@ -103,3 +105,46 @@ class TestSearchSymbolsInternal:
         # Contradictory: pkg='sqlalchemy' AND internal=True
         results = search_symbols(conn, "session", pkg="sqlalchemy", internal=True)
         assert results == []
+
+
+class TestSearchSymbolsLikeEscaping:
+    """Tests from main: verify that LIKE special chars are escaped properly."""
+
+    @pytest.fixture
+    def like_conn(self, tmp_path):
+        c = open_db(tmp_path / "like_test.db")
+        c.execute(
+            "INSERT INTO packages(name,version,summary,homepage,requires) VALUES(?,?,?,?,?)",
+            ("mypkg", "1.0", "test", "", "[]"),
+        )
+        c.execute(
+            "INSERT INTO symbols(pkg,module,kind,name,signature,doc,params,returns) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            ("mypkg", "mypkg.mod", "def", "get_value", "(x)", "Get value.", "[]", "int"),
+        )
+        c.execute(
+            "INSERT INTO symbols(pkg,module,kind,name,signature,doc,params,returns) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            ("mypkg", "mypkg.mod", "def", "unrelated", "()", "Unrelated function.", "[]", "None"),
+        )
+        c.commit()
+        return c
+
+    def test_search_symbols_percent_is_literal(self, like_conn):
+        """A query of '100%' should find nothing, not return every symbol."""
+        hits = search_symbols(like_conn, "100%")
+        names = [h["name"] for h in hits]
+        assert "unrelated" not in names, "% should not be treated as SQL wildcard"
+
+    def test_search_symbols_underscore_is_literal(self, like_conn):
+        """A query of '_' should not match everything via SQL _ wildcard."""
+        hits = search_symbols(like_conn, "_")
+        # Should not return 'unrelated' (which has no underscore in name or doc)
+        names = [h["name"] for h in hits]
+        assert "unrelated" not in names, "_ should not be treated as SQL wildcard"
+
+    def test_search_symbols_finds_literal_underscore(self, like_conn):
+        """A query of 'get_value' should find the symbol with that exact name."""
+        hits = search_symbols(like_conn, "get_value")
+        names = [h["name"] for h in hits]
+        assert "get_value" in names

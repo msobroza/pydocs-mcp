@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import pkgutil
+import re as _re
 import sqlite3
 import sys
 from pathlib import Path
@@ -26,6 +27,13 @@ from pydocs_mcp.deps import normalize
 from pydocs_mcp.search import search_chunks, search_symbols
 
 log = logging.getLogger("pydocs-mcp")
+
+_SUBMODULE_RE = _re.compile(r'^([A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*)?$')
+
+
+def _validate_submodule(submodule: str) -> bool:
+    """Return True if submodule is a safe dotted identifier (or empty)."""
+    return bool(_SUBMODULE_RE.match(submodule))
 
 
 def run(db_path: Path):
@@ -174,6 +182,8 @@ def run(db_path: Path):
         row = conn.execute("SELECT name FROM packages WHERE name=?", (pkg_name,)).fetchone()
         if not row:
             return f"'{package}' is not indexed. Use list_packages() to see available packages."
+        if submodule and not _validate_submodule(submodule):
+            return f"Invalid submodule '{submodule}'. Use only letters, digits, underscores, and dots."
         target = pkg_name + (f".{submodule}" if submodule else "")
         try:
             mod = importlib.import_module(target)
