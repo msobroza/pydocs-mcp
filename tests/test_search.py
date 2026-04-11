@@ -10,9 +10,9 @@ class TestSearchChunksInternal:
         assert len(results) > 0
 
     def test_internal_true_excludes_deps(self, conn):
-        # "get" only appears in requests dep chunks
+        # "get" only appears in requests dep chunks, so project-scoped search returns nothing
         results = search_chunks(conn, "get", internal=True)
-        assert all(r["pkg"] == "__project__" for r in results)
+        assert results == []
 
     def test_internal_false_returns_only_deps(self, conn):
         results = search_chunks(conn, "request", internal=False)
@@ -27,7 +27,8 @@ class TestSearchChunksInternal:
     def test_internal_none_returns_all(self, conn):
         results = search_chunks(conn, "session OR fibonacci", internal=None)
         pkgs = {r["pkg"] for r in results}
-        assert "__project__" in pkgs or "sqlalchemy" in pkgs
+        # Both packages must appear — none= means no scope filter
+        assert "__project__" in pkgs and "sqlalchemy" in pkgs
 
     def test_internal_default_unchanged(self, conn):
         """Calling without internal= must preserve existing all-packages behaviour."""

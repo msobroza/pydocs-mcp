@@ -18,6 +18,7 @@ def search_chunks(
     """BM25 full-text search over indexed chunks.
 
     Args:
+        query: Space-separated search terms; words are joined with OR for FTS5 matching.
         pkg: Restrict to a specific package name. '__project__' is matched literally.
         internal: True → project source only; False → dependencies only; None → all.
         topic: If given, restricts results to chunks whose heading contains this string (LIKE).
@@ -50,8 +51,10 @@ def search_chunks(
         where.append("c.pkg != '__project__'")
 
     if topic:
-        where.append("c.heading LIKE ?")
-        params.append(f"%{topic}%")
+        # Escape SQL LIKE wildcards so the topic is matched literally, not as a pattern
+        escaped_topic = topic.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        where.append("c.heading LIKE ? ESCAPE '\\\\'")
+        params.append(f"%{escaped_topic}%")
 
     params.append(limit)
     sql = (
