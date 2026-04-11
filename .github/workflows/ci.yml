@@ -31,7 +31,7 @@ jobs:
             --cov=pydocs_mcp \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
-            --cov-fail-under=45
+            --cov-fail-under=90
 
       - name: Upload coverage artifact
         if: matrix.python-version == '3.12'
