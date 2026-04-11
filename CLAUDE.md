@@ -35,6 +35,13 @@ pydocs-mcp -v serve .
 
 No test suite or linting configuration exists yet.
 
+```bash
+# Rust checks
+cargo fmt --check          # Format check
+cargo clippy               # Lint Rust code
+cargo test                 # Run Rust unit tests
+```
+
 ## Architecture
 
 ```
@@ -69,3 +76,69 @@ src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, par
 - DB has three main tables: `packages`, `chunks` (with FTS5 virtual table), `symbols`
 - FTS5 uses porter stemming + unicode61 tokenizer
 - The project code itself is indexed under the special package name `__project__`
+
+## Rust Guidelines (src/lib.rs)
+
+**PyO3 boundary pattern:** Keep the Rust/Python boundary thin. Do type conversion at the boundary, keep core logic in pure Rust. Minimize round-trips between Python and Rust types. Map Rust errors to Python exceptions via `PyResult`.
+
+**Coding standards:**
+- Run `cargo fmt` and `cargo clippy` before committing Rust changes
+- Prefer `&[T]` / `&str` over owned types in function parameters
+- Use `?` operator for error propagation, avoid `unwrap()` in production
+- Keep functions small and focused on a single responsibility
+- Use iterators over explicit loops for better performance and readability
+
+**Ownership and borrowing:**
+- Prefer borrowing (`&`) over cloning for performance
+- Keep mutable borrow scopes as small as possible
+- Use `Arc<Mutex<T>>` sparingly — only when truly needed for shared ownership
+
+**Concurrency (rayon):** The project uses rayon for parallel file reading. Avoid blocking operations in parallel iterators. Use `par_iter()` for CPU-bound batch work.
+
+**ABI3:** Consider enabling `pyo3/abi3-py310` feature in Cargo.toml to produce a single wheel per platform that works across Python 3.10+.
+
+## Packaging & Distribution
+
+**Maturin mixed layout:** Python sources live in `python/` directory, Rust in `src/`. Maturin places the compiled `.so`/`.pyd` alongside the Python files. The `module-name` in `[tool.maturin]` controls where the native module lands.
+
+**Fallback contract:** Every Rust function in `src/lib.rs` must have a matching pure Python implementation in `_fallback.py` with the same signature and behavior. The Python version serves as the reference implementation and test oracle.
+
+**Building wheels for distribution:**
+- Publish both wheels (per-platform) and sdist — users without Rust get the pure Python fallback from sdist
+- For Linux: build inside manylinux2014+ container or use `maturin build --zig` for cross-compilation
+- Use `PyO3/maturin-action` in GitHub Actions for CI wheel building across platforms
+
+## SOLID Principles
+
+**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `search.py` owns querying, `indexer.py` owns extraction. New features should follow this pattern. If a module gains a second reason to change, split it.
+
+**Open/Closed:** Extend behavior through new `kind` values in chunks/symbols tables rather than modifying existing indexing logic. New search strategies should be added as new functions in `search.py`, not by modifying existing ones.
+
+**Liskov Substitution:** The Rust/Python fallback is a substitution boundary — `_fallback.py` functions must be drop-in replacements for `_native` functions. Same inputs must produce same outputs. Never strengthen preconditions or weaken postconditions in either implementation.
+
+**Interface Segregation:** MCP tools in `server.py` each expose a focused interface. Keep tool parameters minimal and client-specific. Don't add parameters "just in case."
+
+**Dependency Inversion:** Core logic (`indexer.py`, `search.py`) should depend on abstractions (function signatures in `_fast.py`), not on whether Rust or Python is running. The `_fast.py` module is the abstraction layer — never import `_native` or `_fallback` directly from other modules.
+
+## Code Comments
+
+- **Explain WHY, not WHAT** — the code should be self-documenting for the "what"
+- Use `# WORKAROUND:` for temporary fixes with context on when to remove
+- Use `# Performance:` to explain non-obvious optimizations (e.g., why batch inserts, why FTS rebuild is deferred)
+- Use `# TODO:` with context for planned work
+- Write Python docstrings (`"""..."""`) for public functions — especially MCP tool handlers in `server.py` since these become user-facing tool descriptions
+- Write Rust doc comments (`///`) for `#[pyfunction]` exports since they document the API contract with Python
+- Don't comment obvious code; don't leave commented-out code without a reason
+
+## Async Patterns
+
+The MCP server (`server.py`) uses FastMCP which is async. Follow these patterns:
+
+- Use `async def` for all MCP tool handlers and server lifecycle functions
+- Use `await` consistently — never call async functions without awaiting
+- Use `asyncio.to_thread()` to offload blocking operations (SQLite queries, file I/O, indexing) from the async event loop
+- Never use `time.sleep()` in async context — use `asyncio.sleep()` instead
+- Keep async functions focused: do the I/O, return the result. Put business logic in sync helpers
+- For concurrent indexing tasks, prefer `asyncio.gather()` over sequential awaits
+- Handle timeouts with `asyncio.wait_for()` for operations that could hang (e.g., inspect-mode imports)
+- In Rust: the PyO3 functions are sync and CPU-bound — they should be called via `asyncio.to_thread()` from async Python code to avoid blocking the event loop
