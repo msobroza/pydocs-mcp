@@ -11,6 +11,16 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from pydocs_mcp.constants import (
+    LIVE_DOC_MAX,
+    LIVE_SIGNATURE_MAX,
+    PACKAGE_DOC_LINE_MAX,
+    PACKAGE_DOC_MAX,
+    REQUIREMENTS_DISPLAY,
+    SEARCH_BODY_DISPLAY,
+    SEARCH_DOC_DISPLAY,
+    SEARCH_RESULTS_MAX,
+)
 from pydocs_mcp.db import open_db
 from pydocs_mcp.deps import normalize
 from pydocs_mcp.search import search_chunks, search_symbols
@@ -59,7 +69,7 @@ def run(db_path: Path):
             parts.append(f"Homepage: {info['homepage']}")
         reqs = json.loads(info["requires"] or "[]")
         if reqs:
-            parts.append("Deps: " + ", ".join(reqs[:20]))
+            parts.append("Deps: " + ", ".join(reqs[:REQUIREMENTS_DISPLAY]))
 
         for r in conn.execute(
             "SELECT heading, body FROM chunks WHERE pkg=? ORDER BY id LIMIT 10",
@@ -74,11 +84,11 @@ def run(db_path: Path):
         if syms:
             parts.append("## API\n" + "\n".join(
                 f"- `{s['kind']} {s['name']}{s['signature']}` — "
-                f"{(s['doc'] or '').split(chr(10))[0][:120]}"
+                f"{(s['doc'] or '').split(chr(10))[0][:PACKAGE_DOC_LINE_MAX]}"
                 for s in syms
             ))
 
-        return "\n\n".join(parts)[:30_000]
+        return "\n\n".join(parts)[:PACKAGE_DOC_MAX]
 
     @mcp.tool()
     async def search_docs(
@@ -113,7 +123,7 @@ def run(db_path: Path):
         lines = []
         for r in results:
             icon = "\U0001f4c4" if "doc" in r["kind"] else "\U0001f9e9"
-            lines.append(f"{icon} **[{r['pkg']}]** {r['heading']} (`{r['kind']}`)\n{r['body'][:1500]}")
+            lines.append(f"{icon} **[{r['pkg']}]** {r['heading']} (`{r['kind']}`)\n{r['body'][:SEARCH_BODY_DISPLAY]}")
         return "\n\n---\n\n".join(lines)
 
     @mcp.tool()
@@ -144,10 +154,10 @@ def run(db_path: Path):
         if not results:
             return "No symbols found."
         lines = []
-        for r in results[:50]:
+        for r in results[:SEARCH_RESULTS_MAX]:
             sig = f"{r['name']}{r['signature']}" if r["signature"] else r["name"]
             ret = f" -> {r['returns']}" if r["returns"] else ""
-            doc = r["doc"][:500] if r["doc"] else ""
+            doc = r["doc"][:SEARCH_DOC_DISPLAY] if r["doc"] else ""
             lines.append(f"**`[{r['pkg']}] {r['module']}.{sig}{ret}`** ({r['kind']})\n{doc}")
         return "\n\n---\n\n".join(lines)
 
@@ -178,10 +188,10 @@ def run(db_path: Path):
                 if not (inspect.isfunction(obj) or inspect.isclass(obj)):
                     continue
                 try:
-                    sig = str(inspect.signature(obj))[:200]
+                    sig = str(inspect.signature(obj))[:LIVE_SIGNATURE_MAX]
                 except (ValueError, TypeError):
                     sig = "(...)"
-                doc = (inspect.getdoc(obj) or "").split("\n")[0][:150]
+                doc = (inspect.getdoc(obj) or "").split("\n")[0][:LIVE_DOC_MAX]
                 kind = "class" if inspect.isclass(obj) else "def"
                 items.append(f"{kind} {name}{sig}\n    {doc}")
                 if len(items) >= 50:
