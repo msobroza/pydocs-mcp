@@ -1,23 +1,34 @@
-"""Benchmark pydocs-mcp search latency and result relevance using Recall@k and MRR@k.
+"""Benchmark pydocs-mcp search latency and result relevance.
 
-For each question in the dataset, we run search_chunks (FTS5 BM25) and
-record wall-clock time plus Recall@k and MRR@k for k in K_VALUES.
+For each question in the dataset, we run search_chunks (FTS5 BM25),
+concatenate top results until a token budget is reached (~2000 tokens),
+and measure binary Recall and MRR via fuzzy matching — the same
+methodology used for Context7 and Neuledge.
 
-Recall@k = fraction of ground-truth chunks found in top-k results.
-MRR@k    = 1 / rank of first relevant result (0 if none in top-k).
+This makes the comparison apples-to-apples: all three systems produce
+a single text blob within a token budget, scored with rapidfuzz.
 """
 from __future__ import annotations
 
 import sqlite3
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+from rapidfuzz import fuzz
 
 from pydocs_mcp.search import search_chunks
 
-K_VALUES: list[int] = [1, 3, 5, 10, 20]
+# Internal token budget — matches Neuledge's hardcoded MAX_TOKENS.
+# Not exposed to callers; pyctx7 always returns ~2000 tokens of context.
+_MAX_TOKENS = 2000
+
+# Approximate tokens per character (conservative estimate for English text).
+_CHARS_PER_TOKEN = 4
+
+# Minimum rapidfuzz partial_ratio score to consider a match relevant.
+FUZZY_THRESHOLD = 60
 
 
 @dataclass
@@ -27,58 +38,49 @@ class SearchResult:
     package: str
     elapsed_s: float
     n_results: int
-    recall: dict[int, float] = field(default_factory=dict)   # k -> Recall@k
-    mrr: dict[int, float] = field(default_factory=dict)      # k -> MRR@k
+    recall: float = 0.0    # binary: 1.0 if relevant content found, else 0.0
     source: str = "pyctx7"
 
 
-def _compute_metrics(
-    result_ids: list[int],
-    relevant_ids: set[int],
-    k_values: list[int],
-) -> tuple[dict[int, float], dict[int, float]]:
-    """Compute Recall@k and MRR@k for each k in k_values.
+def _concat_with_budget(hits: list[dict], max_tokens: int = _MAX_TOKENS) -> str:
+    """Concatenate chunk bodies until the token budget is reached.
 
     Args:
-        result_ids: Ordered list of chunk rowids returned by search (best first).
-        relevant_ids: Set of ground-truth relevant chunk rowids.
-        k_values: List of k cutoffs to evaluate.
+        hits: Ordered list of search result dicts (best first).
+        max_tokens: Maximum tokens to include in the response.
 
     Returns:
-        (recall_at_k, mrr_at_k) — both dicts mapping k -> float.
+        Concatenated text within the token budget.
     """
-    if not relevant_ids:
-        return {k: 0.0 for k in k_values}, {k: 0.0 for k in k_values}
-
-    recall: dict[int, float] = {}
-    mrr: dict[int, float] = {}
-
-    first_hit_rank: int | None = None
-    for rank, rid in enumerate(result_ids, start=1):
-        if rid in relevant_ids and first_hit_rank is None:
-            first_hit_rank = rank
-
-    for k in k_values:
-        top_k = set(result_ids[:k])
-        hits = top_k & relevant_ids
-        recall[k] = len(hits) / len(relevant_ids)
-        if first_hit_rank is not None and first_hit_rank <= k:
-            mrr[k] = 1.0 / first_hit_rank
-        else:
-            mrr[k] = 0.0
-
-    return recall, mrr
+    max_chars = max_tokens * _CHARS_PER_TOKEN
+    parts: list[str] = []
+    total = 0
+    for h in hits:
+        heading = h.get("heading", "")
+        body = h.get("body", "")
+        chunk_text = f"## {heading}\n{body}\n"
+        if total + len(chunk_text) > max_chars:
+            # Add partial if we have room
+            remaining = max_chars - total
+            if remaining > 100:
+                parts.append(chunk_text[:remaining])
+            break
+        parts.append(chunk_text)
+        total += len(chunk_text)
+    return "\n".join(parts)
 
 
 def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchResult]:
     """Run search_chunks for each row in *dataset* against *db_path*.
 
-    The search function returns results ordered by BM25 rank.
-    We fetch the chunk rowids from the DB to match against ground truth.
+    Concatenates top results up to ~2000 tokens, then scores relevance
+    via fuzzy matching on heading + snippet (same as Context7/Neuledge).
 
     Args:
         db_path: pydocs-mcp SQLite database to query.
-        dataset: DataFrame with columns [question, package, relevant_chunk_ids].
+        dataset: DataFrame with columns [question, package, search_query,
+                 search_topic, search_internal, source_chunk_heading,
+                 expected_answer_snippet].
 
     Returns:
         List of SearchResult, one per dataset row.
@@ -86,43 +88,39 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     results = []
-    max_k = max(K_VALUES)
 
     for _, row in dataset.iterrows():
-        # Use search-specific columns if available, fall back to question/package.
         query = str(row.get("search_query") or row["question"])
         pkg = str(row["package"]) if row["package"] != "__project__" else ""
         topic = str(row["search_topic"]) if "search_topic" in row and row["search_topic"] else None
         internal = bool(row["search_internal"]) if "search_internal" in row else None
-        relevant_ids = set(row["relevant_chunk_ids"])
+        heading = str(row["source_chunk_heading"])
+        snippet = str(row["expected_answer_snippet"])
 
         t0 = time.perf_counter()
         hits = search_chunks(
-            conn, query, pkg=pkg or None, limit=max_k,
+            conn, query, pkg=pkg or None, limit=20,
             internal=internal, topic=topic,
         )
+        # Concatenate results within token budget (part of the response pipeline)
+        response_text = _concat_with_budget(hits)
         elapsed = time.perf_counter() - t0
 
-        # search_chunks returns dicts with pkg/heading/body/kind/rank.
-        # We need to resolve rowids: query DB for the matching chunks.
-        result_ids: list[int] = []
-        for h in hits:
-            id_row = conn.execute(
-                "SELECT rowid FROM chunks WHERE pkg=? AND heading=? LIMIT 1",
-                (h["pkg"], h["heading"]),
-            ).fetchone()
-            if id_row:
-                result_ids.append(id_row[0])
+        n_results = 1 if response_text.strip() else 0
 
-        recall, mrr = _compute_metrics(result_ids, relevant_ids, K_VALUES)
+        # Relevance via rapidfuzz (NOT counted in elapsed_s for fairness,
+        # but the concat IS counted since it's part of building the response)
+        response_lower = response_text.lower()
+        heading_score = fuzz.partial_ratio(heading.lower(), response_lower)
+        snippet_score = fuzz.partial_ratio(snippet.lower(), response_lower)
+        found = max(heading_score, snippet_score) >= FUZZY_THRESHOLD
 
         results.append(SearchResult(
-            question=query,
+            question=str(row["question"]),
             package=str(row["package"]),
             elapsed_s=elapsed,
-            n_results=len(hits),
-            recall=recall,
-            mrr=mrr,
+            n_results=n_results,
+            recall=1.0 if found else 0.0,
         ))
 
     conn.close()
@@ -130,22 +128,18 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
 
 
 def to_dataframe(results: list[SearchResult]) -> pd.DataFrame:
-    """Convert SearchResult list to a flat DataFrame with one column per k.
+    """Convert SearchResult list to a flat DataFrame.
 
-    Columns: question, package, elapsed_s, n_results, source,
-             recall_at_1, recall_at_3, ..., mrr_at_1, mrr_at_3, ...
+    Columns: question, package, elapsed_s, n_results, source, recall.
     """
     records = []
     for r in results:
-        row: dict = {
+        records.append({
             "question": r.question,
             "package": r.package,
             "elapsed_s": r.elapsed_s,
             "n_results": r.n_results,
             "source": r.source,
-        }
-        for k in K_VALUES:
-            row[f"recall_at_{k}"] = r.recall.get(k, 0.0)
-            row[f"mrr_at_{k}"] = r.mrr.get(k, 0.0)
-        records.append(row)
+            "recall": r.recall,
+        })
     return pd.DataFrame(records)

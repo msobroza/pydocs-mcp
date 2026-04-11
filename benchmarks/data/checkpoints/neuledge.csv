@@ -1,21 +1,21 @@
-question,package,elapsed_s,n_results,source,recall_at_1,mrr_at_1,recall_at_3,mrr_at_3,recall_at_5,mrr_at_5,recall_at_10,mrr_at_10,recall_at_20,mrr_at_20
-When should I use pandas.core.methods.describe?,pandas,0.011047667008824646,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use Where to get it?,pandas,0.00808354199398309,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use pandas.core.arraylike?,pandas,0.0029582080896943808,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use numpy.array api. array object?,numpy,0.004830125020816922,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-Show me an example of numpy.distutils.line endings.,numpy,0.003847333020530641,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does pandas.core.accessor do?,pandas,0.002702499972656369,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What does pandas.core. numba.kernels.mean  do?,pandas,0.0027100000297650695,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-What does Background do?,pandas,0.0026949580060318112,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-When should I use numpy.lib.arraypad?,numpy,0.002949749934487045,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-How do I use pandas.core.groupby.generic?,pandas,0.002835791907273233,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use Installing Requests and Supported Versions?,requests,0.0024148750817403197,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-When should I use numpy. pytesttester?,numpy,0.0033744999673217535,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What parameters does pandas.core.indexes.frozen accept?,pandas,0.0028710420010611415,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use pandas.io.sas.sas xport?,pandas,0.002216875087469816,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What parameters does numpy.core. add newdocs accept?,numpy,0.00352508295327425,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-Explain the numpy.ma.core functionality.,numpy,0.004102707956917584,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use numpy. globals?,numpy,0.002431750064715743,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use requests.cookies?,requests,0.001823584083467722,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-How do I use requests.sessions?,requests,0.0019390829838812351,1,neuledge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0
-What does numpy.f2py.symbolic do?,numpy,0.0024412500206381083,1,neuledge,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+question,package,elapsed_s,n_results,source,recall
+When should I use powerful Python data analysis toolkit?,pandas,0.026216458063572645,1,neuledge,0.0
+How do I use numpy.core.records?,numpy,0.015319874975830317,1,neuledge,1.0
+How do I use numpy. globals?,numpy,0.006666042027063668,1,neuledge,1.0
+When should I use pandas. config.config?,pandas,0.003170875017531216,1,neuledge,1.0
+Show me an example of numpy.core.overrides.,numpy,0.005276332958601415,1,neuledge,1.0
+What does pandas. config.localization do?,pandas,0.002890624920837581,1,neuledge,0.0
+What does numpy.polynomial.laguerre do?,numpy,0.002821665955707431,1,neuledge,1.0
+What does numpy.ctypeslib do?,numpy,0.003915500012226403,1,neuledge,1.0
+When should I use pandas.core.internals.array manager?,pandas,0.0020628749625757337,1,neuledge,0.0
+How do I use pandas.core. numba.kernels.min max ?,pandas,0.0018552499823272228,1,neuledge,0.0
+When should I use Requests?,requests,0.0030740000074729323,1,neuledge,1.0
+When should I use Dependencies?,pandas,0.002727750106714666,1,neuledge,1.0
+What parameters does numpy.lib accept?,numpy,0.009095833054743707,1,neuledge,1.0
+How do I use pandas.io.formats.format?,pandas,0.002844541915692389,1,neuledge,1.0
+What parameters does numpy.distutils.command.build clib accept?,numpy,0.0031737920362502337,1,neuledge,0.0
+Explain the pandas.core.indexers.objects functionality.,pandas,0.0033019169932231307,1,neuledge,1.0
+How do I use numpy.polynomial?,numpy,0.004458624986000359,1,neuledge,1.0
+How do I use numpy.core. asarray?,numpy,0.002931165974587202,1,neuledge,1.0
+How do I use numpy.distutils. shell utils?,numpy,0.0029479170916602015,1,neuledge,0.0
+What does numpy.fft. pocketfft do?,numpy,0.0023199589923024178,1,neuledge,1.0

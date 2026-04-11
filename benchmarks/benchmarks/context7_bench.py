@@ -20,7 +20,7 @@ import pandas as pd
 from rapidfuzz import fuzz
 
 from benchmarks.context7_client import Context7Client, Context7Error
-from benchmarks.search_bench import K_VALUES, SearchResult
+from benchmarks.search_bench import SearchResult
 
 # Minimum rapidfuzz partial_ratio score (0-100) to consider a match relevant.
 # partial_ratio uses longest common substring matching.
@@ -56,8 +56,7 @@ async def _bench_one(
             package=package,
             elapsed_s=elapsed,
             n_results=0,
-            recall={k: 0.0 for k in K_VALUES},
-            mrr={k: 0.0 for k in K_VALUES},
+            recall=0.0,
             source="context7",
         )
 
@@ -66,8 +65,6 @@ async def _bench_one(
 
     # Relevance via rapidfuzz partial_ratio (longest common substring).
     # This is NOT counted in elapsed_s.
-    # We check both the heading and the snippet — if either matches,
-    # the result is considered relevant.
     docs_lower = docs.lower()
     heading_score = fuzz.partial_ratio(heading.lower(), docs_lower)
     snippet_score = fuzz.partial_ratio(expected_snippet.lower(), docs_lower)
@@ -78,8 +75,7 @@ async def _bench_one(
         package=package,
         elapsed_s=elapsed,
         n_results=n_results,
-        recall={k: 1.0 if found else 0.0 for k in K_VALUES},
-        mrr={k: 1.0 if found else 0.0 for k in K_VALUES},
+        recall=1.0 if found else 0.0,
         source="context7",
     )
 

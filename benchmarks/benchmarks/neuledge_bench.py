@@ -15,7 +15,7 @@ import pandas as pd
 from rapidfuzz import fuzz
 
 from benchmarks.neuledge_client import NeuledgeClient, NeuledgeError
-from benchmarks.search_bench import K_VALUES, SearchResult
+from benchmarks.search_bench import SearchResult
 
 FUZZY_THRESHOLD = 60
 
@@ -54,8 +54,7 @@ async def _bench_one(
             package=package,
             elapsed_s=elapsed,
             n_results=0,
-            recall={k: 0.0 for k in K_VALUES},
-            mrr={k: 0.0 for k in K_VALUES},
+            recall=0.0,
             source="neuledge",
         )
 
@@ -73,8 +72,7 @@ async def _bench_one(
         package=package,
         elapsed_s=elapsed,
         n_results=n_results,
-        recall={k: 1.0 if found else 0.0 for k in K_VALUES},
-        mrr={k: 1.0 if found else 0.0 for k in K_VALUES},
+        recall=1.0 if found else 0.0,
         source="neuledge",
     )
 

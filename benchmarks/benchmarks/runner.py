@@ -45,8 +45,7 @@ from benchmarks.neuledge_bench import run_neuledge_benchmark
 from benchmarks.charts import (
     plot_indexing_times,
     plot_search_latency_boxplot,
-    plot_recall_at_k,
-    plot_mrr_at_k,
+    plot_recall_bar,
 )
 from pydocs_mcp.db import open_db, rebuild_fts
 from pydocs_mcp.indexer import index_project, index_deps
@@ -204,9 +203,8 @@ def main() -> None:
     # Generate charts
     p1 = plot_indexing_times(index_df, out_dir)
     p2 = plot_search_latency_boxplot(search_df, out_dir)
-    p3 = plot_recall_at_k(search_df, out_dir)
-    p4 = plot_mrr_at_k(search_df, out_dir)
-    console.print(f"[green]Charts:[/green] {p1.name}, {p2.name}, {p3.name}, {p4.name}")
+    p3 = plot_recall_bar(search_df, out_dir)
+    console.print(f"[green]Charts:[/green] {p1.name}, {p2.name}, {p3.name}")
     console.rule("[bold green]Done")
 
 
