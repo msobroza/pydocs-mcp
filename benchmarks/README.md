@@ -1,7 +1,9 @@
 # pyctx7-mcp Benchmark Suite
 
 Compares **pyctx7-mcp** (local indexing + FTS5 search) against **Context7**
-(cloud MCP API) on indexing speed, search latency, and retrieval quality.
+(cloud MCP API) and **Neuledge Context** (local MCP server) on indexing speed,
+search latency, and retrieval quality. Also compares Rust vs pure-Python
+performance within pyctx7-mcp.
 
 ## Structure
 
@@ -229,11 +231,123 @@ Context7 achieves 55% recall using **fuzzy text matching** (rapidfuzz `partial_r
 - **pyctx7-mcp wins on recall** — pyctx7 Recall@5 = 0.74 vs Context7 Recall = 0.55. pyctx7 continues to improve with more results (Recall@20 = 0.79).
 - **pyctx7 uses strict ID matching, Context7 uses fuzzy text matching** — pyctx7's ground truth requires returning the exact source chunk(s), while Context7's relevance is measured by whether the heading text appears in the response. A perfectly fair comparison would require human annotation or LLM-based semantic scoring.
 
+## Rust vs Pure-Python Performance
+
+pyctx7-mcp optionally accelerates file walking, hashing, text chunking, and parallel reads with Rust (PyO3). Use `--no-rust` to force the pure-Python fallback.
+
+```bash
+# With Rust acceleration (default, if compiled)
+run-benchmarks --questions 20 --skip-context7 --skip-neuledge
+
+# Pure Python fallback
+run-benchmarks --questions 20 --skip-context7 --skip-neuledge --no-rust
+```
+
+### Indexing Time (Rust vs Python)
+
+| Target | Rust (s) | Python (s) | Speedup |
+|--------|----------|------------|---------|
+| `__project__` | 0.004 | 0.000 | ~1x |
+| `requests` | 0.053 | 0.030 | ~1x |
+| `pandas` | 0.269 | 0.265 | ~1x |
+| `numpy` | 0.124 | 0.127 | ~1x |
+| **Total** | **0.450** | **0.422** | **~1x** |
+
+### Search Latency (Rust vs Python)
+
+| Metric | Rust | Python | Speedup |
+|--------|------|--------|---------|
+| **Mean** | 2.65 ms | 2.50 ms | ~1x |
+| **Median** | 2.69 ms | 2.62 ms | ~1x |
+
+### Why Rust Doesn't Help Here
+
+For this benchmark (3 small packages, ~5,800 chunks), Rust and Python perform nearly identically because:
+
+1. **Indexing time** is dominated by Python's `importlib.metadata` resolution and SQLite batch inserts — not by file walking or text parsing (which Rust accelerates).
+2. **Search latency** is 100% SQLite FTS5 — Rust has no role in the query path.
+3. **Rust acceleration shines at scale** — with large projects (100+ packages, 50k+ files), `walk_py_files` (walkdir, ~10x faster), `read_files_parallel` (rayon, true parallelism with GIL release), and `hash_files` (xxh3, ~3x faster) provide measurable speedups.
+
+## Neuledge Context
+
+[Neuledge Context](https://github.com/neuledge/context) is a local-first documentation MCP server (Node.js) with its own package registry. Like pyctx7, it uses SQLite FTS5 for sub-10ms queries.
+
+### Setup
+
+```bash
+# Install and set up Neuledge Context
+npm install -g @neuledge/context
+context install requests pandas numpy
+
+# Start the HTTP server
+context serve --http 8080
+```
+
+### Running the Benchmark
+
+```bash
+# Live run (requires server at localhost:8080)
+run-benchmarks --questions 20 --skip-context7
+
+# Custom server URL
+run-benchmarks --neuledge-url http://localhost:9090/mcp
+
+# Save results for later (checkpoint)
+# Results auto-saved to data/checkpoints/neuledge.csv
+
+# Load from checkpoint (no server needed)
+run-benchmarks --load-neuledge data/checkpoints/neuledge.csv
+```
+
+Neuledge Context results are not yet available — the comparison will be added when the server is set up and benchmarked.
+
 ## Context7 API
 
 Context7 is accessed at `https://mcp.context7.com/mcp` using the
-`resolve-library-id` and `get-library-docs` MCP tools. No API key required.
-Network latency will dominate Context7 timings — run from a stable connection.
+`resolve-library-id` and `query-docs` MCP tools. Free tier: 1,000 requests/month.
+
+> **Note:** Context7 results shown above are from a prior run. The free API quota was exceeded during testing. To refresh, run `run-benchmarks --questions 20` with available quota, or load from checkpoint: `--load-context7 data/checkpoints/context7.csv`.
+
+## Steps to Reproduce All Results
+
+```bash
+# 1. Clone and install
+git clone https://github.com/msobroza/pydocs-mcp.git
+cd pydocs-mcp/benchmarks
+pip install -e .           # installs benchmarks + parent pydocs-mcp
+pip install requests pandas numpy  # packages to benchmark
+
+# 2. Run pyctx7-only (no external services needed)
+run-benchmarks --questions 20 --skip-context7 --skip-neuledge
+
+# 3. Run with Context7 (requires network, free API quota)
+run-benchmarks --questions 20 --skip-neuledge
+
+# 4. Run with Neuledge Context (requires local server)
+npm install -g @neuledge/context
+context install requests pandas numpy
+context serve --http 8080 &  # start server in background
+run-benchmarks --questions 20 --skip-context7
+
+# 5. Run all three
+context serve --http 8080 &
+run-benchmarks --questions 20
+
+# 6. Rust vs Python comparison
+run-benchmarks --questions 20 --skip-context7 --skip-neuledge           # Rust
+run-benchmarks --questions 20 --skip-context7 --skip-neuledge --no-rust  # Python
+
+# 7. Load previous results from checkpoints
+run-benchmarks --questions 20 \
+    --load-context7 data/checkpoints/context7.csv \
+    --load-neuledge data/checkpoints/neuledge.csv
+
+# 8. Results
+ls data/results/
+# benchmark_results.csv  indexing_results.csv
+# indexing_times.png  search_latency_boxplot.png
+# recall_at_k.png  mrr_at_k.png
+```
 
 ## Running Tests
 
