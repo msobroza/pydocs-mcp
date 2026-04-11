@@ -8,7 +8,6 @@ import json
 import logging
 import pkgutil
 import re as _re
-import sqlite3
 import sys
 from pathlib import Path
 

@@ -85,7 +85,7 @@ class Symbol:
 def parse_py_file(source: str) -> list[Symbol]:
     """Extract top-level functions and classes using regex."""
     def_re = re.compile(
-        r'^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)',
+        r'^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:',
         re.MULTILINE,
     )
     doc_re = re.compile(r'(?s)(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
@@ -96,11 +96,8 @@ def parse_py_file(source: str) -> list[Symbol]:
         if name.startswith("_"):
             continue
 
-        # Look for docstring immediately after the definition.
+        # Look for docstring immediately after the definition (colon consumed by regex).
         rest = source[m.end():][:DOCSTRING_LOOKAHEAD].lstrip()
-        # Skip past the colon and any whitespace/newlines before the docstring.
-        if rest.startswith(":"):
-            rest = rest[1:].lstrip()
         docstring = ""
         doc_match = doc_re.match(rest)
         if doc_match:
