@@ -57,8 +57,9 @@ def clear_pkg(conn: sqlite3.Connection, name: str):
 
 def clear_all(conn: sqlite3.Connection):
     """Clear the entire database."""
-    for table in ("packages", "chunks", "symbols"):
-        conn.execute(f"DELETE FROM {table}")
+    conn.execute("DELETE FROM packages")
+    conn.execute("DELETE FROM chunks")
+    conn.execute("DELETE FROM symbols")
     conn.commit()
 
 

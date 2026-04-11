@@ -44,6 +44,7 @@ def hash_files(paths: list[str]) -> str:
 def chunk_text(text: str, max_chars: int = 4000) -> list[tuple[str, str]]:
     """Split text into (heading, body) tuples at heading boundaries."""
     heading, buf, results = "Overview", [], []
+    buf_len = 0
 
     def flush():
         body = "\n".join(buf).strip()
@@ -55,11 +56,14 @@ def chunk_text(text: str, max_chars: int = 4000) -> list[tuple[str, str]]:
         if m:
             flush()
             heading, buf = m.group(2).strip(), []
+            buf_len = 0
             continue
         buf.append(line)
-        if len("\n".join(buf)) > max_chars * 2:
+        buf_len += len(line) + 1
+        if buf_len > max_chars * 2:
             flush()
             buf = []
+            buf_len = 0
     flush()
     return results
 
@@ -86,10 +90,13 @@ def parse_py_file(source: str) -> list[Symbol]:
         if name.startswith("_"):
             continue
 
-        # Look for docstring right after the definition.
-        rest = source[m.end():]
+        # Look for docstring immediately after the definition.
+        rest = source[m.end():][:500].lstrip()
+        # Skip past the colon and any whitespace/newlines before the docstring.
+        if rest.startswith(":"):
+            rest = rest[1:].lstrip()
         docstring = ""
-        doc_match = doc_re.search(rest.lstrip())
+        doc_match = doc_re.match(rest)
         if doc_match:
             docstring = (doc_match.group(1) or doc_match.group(2) or "").strip()[:3000]
 

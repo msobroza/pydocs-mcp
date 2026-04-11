@@ -24,7 +24,7 @@ from pydocs_mcp._fast import (
     walk_py_files, hash_files, chunk_text,
     parse_py_file, extract_module_doc, read_files_parallel,
 )
-from pydocs_mcp.db import clear_pkg, get_cached_hash, rebuild_fts
+from pydocs_mcp.db import clear_pkg, get_cached_hash
 from pydocs_mcp.deps import normalize
 
 log = logging.getLogger("pydocs-mcp")
@@ -177,7 +177,6 @@ def index_deps(
                 stats["failed"] += 1
                 log.warning("  fail %s: %s", n, e)
 
-    rebuild_fts(conn)
     return stats
 
 
@@ -214,8 +213,8 @@ def _add_doc_files(dist, name: str, data: dict):
                 text = loc.read_text("utf-8", errors="ignore")
                 for h, b in chunk_text(text):
                     data["chunks"].append((name, h, b, "doc"))
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("Failed to read doc files for %s: %s", name, e)
 
 
 def _write_dep(conn: sqlite3.Connection, data: dict):
@@ -297,8 +296,8 @@ def _collect_inspect(dist, depth: int) -> dict:
             if mod.__doc__ and len(mod.__doc__.strip()) > 30:
                 data["chunks"].append((name, name, mod.__doc__.strip()[:5000], "docstring"))
             data["symbols"] = _inspect_syms(mod, iname, name, max_depth=depth)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Failed to import %s: %s", iname, e)
 
     return data
 
