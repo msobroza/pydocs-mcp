@@ -1,6 +1,7 @@
 """MCP server exposing search tools over indexed docs."""
 from __future__ import annotations
 
+import asyncio
 import atexit
 import inspect
 import json
@@ -80,58 +81,71 @@ def run(db_path: Path):
         return "\n\n".join(parts)[:30_000]
 
     @mcp.tool()
-    def search_docs(query: str, package: str = "") -> str:
-        """BM25 full-text search across docs + project code.
+    async def search_docs(
+        query: str,
+        package: str = "",
+        internal: bool | None = None,
+        topic: str = "",
+    ) -> str:
+        """Search documentation and source chunks with BM25 ranking.
 
         Args:
-            query: e.g. 'batch inference', 'authentication middleware'
-            package: optional filter ('__project__' for your code)
+            query: Search terms (space-separated words, OR logic).
+            package: Restrict to a specific package name. Leave empty for all packages.
+            internal: True → search only the project's own source; False → search only
+                dependency packages; omit (None) → search everything.
+            topic: If given, restrict to chunks whose heading contains this string.
         """
-        hits = search_chunks(conn, query, pkg=package or None)
-        if not hits:
-            return f"No results for '{query}'."
-
-        icon = {
-            "doc": "📄", "readme": "📖", "docstring": "💡",
-            "project_doc": "🏠", "project_code": "📝",
-        }
-        parts = [
-            f"{icon.get(h['kind'], '📋')} **{h['pkg']}** / {h['heading']}\n"
-            f"{h['body'][:1500]}"
-            for h in hits
-        ]
-        return f"{len(hits)} results:\n\n" + "\n\n---\n\n".join(parts)
+        conn = await asyncio.to_thread(open_db, db_path)
+        results = await asyncio.to_thread(
+            search_chunks,
+            conn,
+            query,
+            pkg=package.strip() or None,
+            internal=internal,
+            topic=topic.strip() or None,
+        )
+        conn.close()
+        if not results:
+            return "No matches found."
+        lines = []
+        for r in results:
+            icon = "\U0001f4c4" if "doc" in r["kind"] else "\U0001f9e9"
+            lines.append(f"{icon} **[{r['pkg']}]** {r['heading']} (`{r['kind']}`)\n{r['body'][:1500]}")
+        return "\n\n---\n\n".join(lines)
 
     @mcp.tool()
-    def search_api(query: str, package: str = "") -> str:
-        """Search functions/classes by name or description.
+    async def search_api(
+        query: str,
+        package: str = "",
+        internal: bool | None = None,
+    ) -> str:
+        """Search symbols (functions, classes) by name or docstring.
 
         Args:
-            query: e.g. 'Router', 'predict', 'DataLoader'
-            package: optional filter ('__project__' for your code)
+            query: Name fragment or docstring keyword to search for.
+            package: Restrict to a specific package name. Leave empty for all packages.
+            internal: True → project symbols only; False → dependency symbols only;
+                omit (None) → all symbols.
         """
-        hits = search_symbols(conn, query, pkg=package or None)
-        if not hits:
-            return f"No symbols matching '{query}'."
-
-        parts = []
-        for s in hits:
-            block = f"### {s['kind']} {s['module']}.{s['name']}{s['signature']}"
-            if s["returns"]:
-                block += f"\nReturns: `{s['returns']}`"
-            try:
-                params = json.loads(s["params"])
-                if params:
-                    block += "\nParams: " + ", ".join(
-                        f"`{p['name']}: {p.get('type', 'Any')}`" for p in params
-                    )
-            except (json.JSONDecodeError, TypeError):
-                pass
-            if s["doc"]:
-                block += f"\n\n{s['doc'][:1200]}"
-            parts.append(block)
-
-        return "\n\n---\n\n".join(parts)
+        conn = await asyncio.to_thread(open_db, db_path)
+        results = await asyncio.to_thread(
+            search_symbols,
+            conn,
+            query,
+            pkg=package.strip() or None,
+            internal=internal,
+        )
+        conn.close()
+        if not results:
+            return "No symbols found."
+        lines = []
+        for r in results[:50]:
+            sig = f"{r['name']}{r['signature']}" if r["signature"] else r["name"]
+            ret = f" -> {r['returns']}" if r["returns"] else ""
+            doc = r["doc"][:500] if r["doc"] else ""
+            lines.append(f"**`[{r['pkg']}] {r['module']}.{sig}{ret}`** ({r['kind']})\n{doc}")
+        return "\n\n---\n\n".join(lines)
 
     @mcp.tool()
     def inspect_module(package: str, submodule: str = "") -> str:
