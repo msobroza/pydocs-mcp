@@ -5,10 +5,9 @@ This avoids subprocess overhead and lets us capture structured results.
 """
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.db import open_db, rebuild_fts
