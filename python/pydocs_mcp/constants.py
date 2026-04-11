@@ -82,6 +82,10 @@ REQUIREMENTS_DISPLAY: int = 20
 SEARCH_RESULTS_MAX: int = 50
 """Max symbol results returned in search_api."""
 
+CONTEXT_TOKEN_BUDGET: int = 2000
+"""Max tokens returned by search_docs. Chunks are concatenated until this
+budget is reached. 1 token ~ 4 characters. Not exposed to MCP clients."""
+
 REQUIREMENTS_PARSE_MAX: int = 40
 """Max requirements parsed from package metadata."""
 

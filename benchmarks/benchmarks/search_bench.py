@@ -18,14 +18,7 @@ from pathlib import Path
 import pandas as pd
 from rapidfuzz import fuzz
 
-from pydocs_mcp.search import search_chunks
-
-# Internal token budget — matches Neuledge's hardcoded MAX_TOKENS.
-# Not exposed to callers; pyctx7 always returns ~2000 tokens of context.
-_MAX_TOKENS = 2000
-
-# Approximate tokens per character (conservative estimate for English text).
-_CHARS_PER_TOKEN = 4
+from pydocs_mcp.search import concat_context, search_chunks
 
 # Minimum rapidfuzz partial_ratio score to consider a match relevant.
 FUZZY_THRESHOLD = 60
@@ -39,34 +32,6 @@ class SearchResult:
     source: str
     elapsed_s: float
     recall: float = 0.0    # binary: 1.0 if relevant content found, else 0.0
-
-
-def _concat_with_budget(hits: list[dict], max_tokens: int = _MAX_TOKENS) -> str:
-    """Concatenate chunk bodies until the token budget is reached.
-
-    Args:
-        hits: Ordered list of search result dicts (best first).
-        max_tokens: Maximum tokens to include in the response.
-
-    Returns:
-        Concatenated text within the token budget.
-    """
-    max_chars = max_tokens * _CHARS_PER_TOKEN
-    parts: list[str] = []
-    total = 0
-    for h in hits:
-        heading = h.get("heading", "")
-        body = h.get("body", "")
-        chunk_text = f"## {heading}\n{body}\n"
-        if total + len(chunk_text) > max_chars:
-            # Add partial if we have room
-            remaining = max_chars - total
-            if remaining > 100:
-                parts.append(chunk_text[:remaining])
-            break
-        parts.append(chunk_text)
-        total += len(chunk_text)
-    return "\n".join(parts)
 
 
 def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchResult]:
@@ -102,7 +67,7 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
             internal=internal, topic=topic,
         )
         # Concatenate results within token budget (part of the response pipeline)
-        response_text = _concat_with_budget(hits)
+        response_text = concat_context(hits)
         elapsed = time.perf_counter() - t0
 
         n_results = 1 if response_text.strip() else 0
