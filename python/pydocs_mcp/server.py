@@ -97,15 +97,17 @@ def run(db_path: Path):
             topic: If given, restrict to chunks whose heading contains this string.
         """
         conn = await asyncio.to_thread(open_db, db_path)
-        results = await asyncio.to_thread(
-            search_chunks,
-            conn,
-            query,
-            pkg=package.strip() or None,
-            internal=internal,
-            topic=topic.strip() or None,
-        )
-        conn.close()
+        try:
+            results = await asyncio.to_thread(
+                search_chunks,
+                conn,
+                query,
+                pkg=package.strip() or None,
+                internal=internal,
+                topic=topic.strip() or None,
+            )
+        finally:
+            conn.close()
         if not results:
             return "No matches found."
         lines = []
@@ -129,14 +131,16 @@ def run(db_path: Path):
                 omit (None) → all symbols.
         """
         conn = await asyncio.to_thread(open_db, db_path)
-        results = await asyncio.to_thread(
-            search_symbols,
-            conn,
-            query,
-            pkg=package.strip() or None,
-            internal=internal,
-        )
-        conn.close()
+        try:
+            results = await asyncio.to_thread(
+                search_symbols,
+                conn,
+                query,
+                pkg=package.strip() or None,
+                internal=internal,
+            )
+        finally:
+            conn.close()
         if not results:
             return "No symbols found."
         lines = []
