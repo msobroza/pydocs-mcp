@@ -70,18 +70,45 @@ def search_chunks(
     return [dict(r) for r in rows]
 
 
-def search_symbols(conn: sqlite3.Connection, query: str,
-                   pkg: str | None = None, limit: int = 15) -> list[dict]:
-    """Search symbols by name or docstring content."""
-    pat = f"%{query.lower()}%"
-    sql = "SELECT * FROM symbols WHERE (lower(name) LIKE ? OR lower(doc) LIKE ?)"
+def search_symbols(
+    conn,
+    query: str,
+    pkg: str | None = None,
+    limit: int = 15,
+    internal: bool | None = None,
+) -> list[dict]:
+    """Symbol LIKE search on name and docstring.
+
+    Args:
+        query: Fragment to match against symbol name or docstring (case-insensitive LIKE).
+        pkg: Restrict to a specific package name. '__project__' is matched literally.
+        internal: True → project source only; False → dependencies only; None → all.
+        limit: Maximum number of results.
+    """
+    pat = f"%{query}%"
+
+    where: list[str] = ["(name LIKE ? OR doc LIKE ?)"]
     params: list = [pat, pat]
 
-    if pkg:
-        sql += " AND pkg=?"
-        params.append(normalize(pkg) if pkg != "__project__" else pkg)
+    if pkg is not None:
+        lit = pkg if pkg == "__project__" else normalize(pkg)
+        where.append("pkg = ?")
+        params.append(lit)
 
-    sql += " LIMIT ?"
+    if internal is True:
+        where.append("pkg = '__project__'")
+    elif internal is False:
+        where.append("pkg != '__project__'")
+
     params.append(limit)
-
-    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    sql = (
+        "SELECT pkg, module, name, kind, signature, returns, params, doc"
+        " FROM symbols"
+        f" WHERE {' AND '.join(where)}"
+        " LIMIT ?"
+    )
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]

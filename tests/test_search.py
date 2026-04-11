@@ -61,3 +61,45 @@ class TestSearchChunksTopic:
     def test_topic_no_match_returns_empty(self, conn):
         results = search_chunks(conn, "fibonacci", topic="nonexistent_heading_xyz")
         assert results == []
+
+
+class TestSearchSymbolsInternal:
+    def test_internal_true_returns_only_project(self, conn):
+        results = search_symbols(conn, "fibonacci", internal=True)
+        assert all(r["pkg"] == "__project__" for r in results)
+        assert len(results) > 0
+
+    def test_internal_true_excludes_deps(self, conn):
+        # "get" only appears in dep symbols
+        results = search_symbols(conn, "get", internal=True)
+        assert results == []
+
+    def test_internal_false_returns_only_deps(self, conn):
+        results = search_symbols(conn, "get", internal=False)
+        assert all(r["pkg"] != "__project__" for r in results)
+        assert len(results) > 0
+
+    def test_internal_false_excludes_project(self, conn):
+        results = search_symbols(conn, "fibonacci", internal=False)
+        assert results == []
+
+    def test_internal_none_returns_all(self, conn):
+        # Both project and dep symbols should be found
+        proj = search_symbols(conn, "fibonacci", internal=None)
+        dep = search_symbols(conn, "get", internal=None)
+        assert len(proj) > 0 and len(dep) > 0
+
+    def test_internal_default_unchanged(self, conn):
+        without = search_symbols(conn, "get")
+        with_none = search_symbols(conn, "get", internal=None)
+        assert without == with_none
+
+    def test_internal_false_with_pkg_filter(self, conn):
+        results = search_symbols(conn, "session", pkg="sqlalchemy", internal=False)
+        assert all(r["pkg"] == "sqlalchemy" for r in results)
+        assert len(results) > 0
+
+    def test_internal_true_with_pkg_filter_returns_empty(self, conn):
+        # Contradictory: pkg='sqlalchemy' AND internal=True
+        results = search_symbols(conn, "session", pkg="sqlalchemy", internal=True)
+        assert results == []
