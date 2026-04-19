@@ -8,7 +8,9 @@ round-trip through SQLite TEXT columns and JSON without glue code.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
+from typing import ClassVar
 
 
 class ChunkOrigin(StrEnum):
@@ -61,3 +63,22 @@ class ModuleMemberFilterField(StrEnum):
     MODULE  = "module"
     NAME    = "name"
     KIND    = "kind"
+
+
+@dataclass(frozen=True, slots=True)
+class Parameter:
+    name: str
+    annotation: str = ""
+    default: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Package:
+    kind: ClassVar[str] = "package"
+    name: str
+    version: str
+    summary: str
+    homepage: str
+    dependencies: tuple[str, ...]
+    content_hash: str
+    origin: PackageOrigin
