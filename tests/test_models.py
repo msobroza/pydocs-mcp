@@ -225,3 +225,20 @@ def test_search_response_is_frozen():
     r = SearchResponse(result=ChunkList(items=()), query=SearchQuery(terms="x"))
     with pytest.raises(Exception):
         r.duration_ms = 1.0
+
+
+def test_chunk_metadata_is_read_only():
+    c = Chunk(text="x", metadata={"origin": "foo"})
+    with pytest.raises(TypeError):
+        c.metadata["origin"] = "bar"
+
+
+def test_module_member_metadata_is_read_only():
+    m = ModuleMember(metadata={"name": "APIRouter"})
+    with pytest.raises(TypeError):
+        m.metadata["name"] = "Router"
+
+
+def test_search_query_strips_whitespace_around_terms():
+    q = SearchQuery(terms="  fastapi routing  ")
+    assert q.terms == "fastapi routing"

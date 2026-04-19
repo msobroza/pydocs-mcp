@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, ClassVar
 
 from pydantic import field_validator
@@ -104,6 +105,9 @@ class Chunk:
     retriever_name: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+
 
 @dataclass(frozen=True, slots=True)
 class ModuleMember:
@@ -117,6 +121,9 @@ class ModuleMember:
     relevance: float | None = None
     retriever_name: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +160,10 @@ class SearchQuery:
     @field_validator("terms")
     @classmethod
     def _terms_non_empty(cls, v: str) -> str:
-        if not v.strip():
+        stripped = v.strip()
+        if not stripped:
             raise ValueError("terms must be non-empty")
-        return v
+        return stripped
 
     @field_validator("max_results")
     @classmethod
@@ -167,6 +175,8 @@ class SearchQuery:
 
 @dataclass(frozen=True, slots=True)
 class SearchResponse:
+    """Pipeline-runner output: the typed result plus its originating query and
+    the measured duration. Used as the return type of use-case services."""
     result: PipelineResultItem
     query: SearchQuery
     duration_ms: float = 0.0
