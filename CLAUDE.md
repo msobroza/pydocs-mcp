@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Model
 
-Always use **claude-opus-4-6** (`claude-opus-4-6`) for all tasks in this repository.
+Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this repository.
 
 ## Project Overview
 
