@@ -162,9 +162,9 @@ fn hash_files(py: Python<'_>, paths: Vec<String>) -> String {
 // Each chunk is a (heading, body) tuple.
 // Chunks are capped at `max_chars` to fit in LLM context windows.
 
-/// A single chunk of text with its heading.
+/// A single chunk of text with its heading. Internal to split_into_chunks.
 #[derive(Clone)]
-struct Chunk {
+struct TextChunk {
     heading: String,
     body: String,
 }
@@ -179,7 +179,7 @@ struct Chunk {
 #[pyfunction]
 #[pyo3(signature = (text, max_chars=4000))]
 fn split_into_chunks(text: &str, max_chars: usize) -> Vec<(String, String)> {
-    let mut results: Vec<Chunk> = Vec::new();
+    let mut results: Vec<TextChunk> = Vec::new();
     let mut current_heading = "Overview".to_string();
     let mut current_body = String::new();
 
@@ -188,7 +188,7 @@ fn split_into_chunks(text: &str, max_chars: usize) -> Vec<(String, String)> {
         let trimmed = body.trim();
         if trimmed.len() > 30 {
             let capped = safe_truncate(trimmed, max_chars);
-            results.push(Chunk {
+            results.push(TextChunk {
                 heading: heading.to_string(),
                 body: capped.to_string(),
             });
@@ -236,7 +236,7 @@ struct ParsedMember {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
-    kind: String, // "def", "async def", or "class"
+    kind: String, // "def", "async def", or "class" — converted to MemberKind enum at the Python indexer boundary (sub-PR #1 Task 15)
     #[pyo3(get)]
     signature: String, // everything between parentheses
     #[pyo3(get)]
@@ -251,7 +251,7 @@ struct ParsedMember {
 /// Returns a list of ParsedMember objects.
 #[pyfunction]
 fn parse_py_file(source: &str) -> Vec<ParsedMember> {
-    let mut symbols = Vec::new();
+    let mut members = Vec::new();
 
     for cap in DEF_RE.captures_iter(source) {
         let kind = cap[1].to_string();
@@ -281,7 +281,7 @@ fn parse_py_file(source: &str) -> Vec<ParsedMember> {
             .unwrap_or("")
             .to_string();
 
-        symbols.push(ParsedMember {
+        members.push(ParsedMember {
             name,
             kind,
             signature,
@@ -289,7 +289,7 @@ fn parse_py_file(source: &str) -> Vec<ParsedMember> {
         });
     }
 
-    symbols
+    members
 }
 
 /// Extract the module-level docstring from Python source.

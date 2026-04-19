@@ -74,6 +74,8 @@ def split_into_chunks(text: str, max_chars: int = 4000) -> list[tuple[str, str]]
     return results
 
 
+# plain @dataclass (not frozen+slots) to mirror Rust #[pyclass] ParsedMember,
+# which exposes read-only getters but isn't truly frozen on the Python side.
 @dataclass
 class ParsedMember:
     name: str
@@ -88,9 +90,9 @@ def parse_py_file(source: str) -> list[ParsedMember]:
         r'^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:',
         re.MULTILINE,
     )
-    doc_re = re.compile(r'(?s)(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
+    doc_re = re.compile(r'(?s)^(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
 
-    symbols = []
+    members = []
     for m in def_re.finditer(source):
         kind, name, sig = m.group(1), m.group(2), m.group(3)
         if name.startswith("_"):
@@ -103,8 +105,8 @@ def parse_py_file(source: str) -> list[ParsedMember]:
         if doc_match:
             docstring = (doc_match.group(1) or doc_match.group(2) or "").strip()[:FUNC_DOCSTRING_MAX]
 
-        symbols.append(ParsedMember(name, kind, f"({sig.strip()})", docstring))
-    return symbols
+        members.append(ParsedMember(name, kind, f"({sig.strip()})", docstring))
+    return members
 
 
 def extract_module_doc(source: str) -> str:
