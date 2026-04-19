@@ -1,8 +1,11 @@
-"""MCP server exposing search tools over indexed docs."""
+"""MCP server exposing search tools over indexed docs.
+
+All 5 tools are async. Long-lived-conn tools use ConnectionProvider.acquire().
+search_docs / search_api run pre-built CodeRetrieverPipeline instances.
+"""
 from __future__ import annotations
 
 import asyncio
-import atexit
 import inspect
 import json
 import logging
@@ -17,12 +20,16 @@ from pydocs_mcp.constants import (
     PACKAGE_DOC_LINE_MAX,
     PACKAGE_DOC_MAX,
     REQUIREMENTS_DISPLAY,
-    SEARCH_DOC_DISPLAY,
-    SEARCH_RESULTS_MAX,
 )
-from pydocs_mcp.db import open_index_database
+from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.deps import normalize_package_name
-from pydocs_mcp.search import format_within_budget, retrieve_chunks, retrieve_module_members
+from pydocs_mcp.models import ChunkFilterField, ModuleMemberFilterField, SearchQuery, SearchScope
+from pydocs_mcp.retrieval.config import (
+    AppConfig,
+    build_chunk_pipeline_from_config,
+    build_member_pipeline_from_config,
+)
+from pydocs_mcp.retrieval.serialization import BuildContext
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -34,7 +41,16 @@ def _validate_submodule(submodule: str) -> bool:
     return bool(_SUBMODULE_RE.match(submodule))
 
 
-def run(db_path: Path):
+def _scope_from_internal(internal: bool | None) -> SearchScope:
+    """Tri-state conversion of the MCP `internal` flag to a SearchScope."""
+    if internal is True:
+        return SearchScope.PROJECT_ONLY
+    if internal is False:
+        return SearchScope.DEPENDENCIES_ONLY
+    return SearchScope.ALL
+
+
+def run(db_path: Path, config_path: Path | None = None):
     """Start the MCP server."""
     try:
         from mcp.server.fastmcp import FastMCP
@@ -42,58 +58,74 @@ def run(db_path: Path):
         log.error("Missing dependency: pip install mcp")
         sys.exit(1)
 
-    conn = open_index_database(db_path)
-    atexit.register(conn.close)
+    # Build provider + load config + build pipelines once at startup.
+    provider = build_connection_provider(db_path)
+    config = AppConfig.load(explicit_path=config_path)
+    context = BuildContext(connection_provider=provider)
+    chunk_pipeline = build_chunk_pipeline_from_config(config, context)
+    member_pipeline = build_member_pipeline_from_config(config, context)
+
     mcp = FastMCP("pydocs-mcp")
 
     @mcp.tool()
-    def list_packages() -> str:
+    async def list_packages() -> str:
         """List indexed packages. '__project__' = your source code."""
-        rows = conn.execute(
-            "SELECT name, version, summary FROM packages ORDER BY name"
-        ).fetchall()
+        async with provider.acquire() as connection:
+            rows = await asyncio.to_thread(
+                lambda: connection.execute(
+                    "SELECT name, version, summary FROM packages ORDER BY name"
+                ).fetchall()
+            )
         return "\n".join(
             f"- {r['name']} {r['version']} — {r['summary']}" for r in rows
         )
 
     @mcp.tool()
-    def get_package_doc(package: str) -> str:
+    async def get_package_doc(package: str) -> str:
         """Full docs for a package. Use '__project__' for your own code.
 
         Args:
             package: e.g. 'fastapi', 'vllm', '__project__'
         """
         pkg = "__project__" if package == "__project__" else normalize_package_name(package)
-        info = conn.execute(
-            "SELECT * FROM packages WHERE name=?", (pkg,)
-        ).fetchone()
-        if not info:
-            return f"'{package}' not found."
+        async with provider.acquire() as connection:
+            info = await asyncio.to_thread(
+                lambda: connection.execute(
+                    "SELECT * FROM packages WHERE name=?", (pkg,)
+                ).fetchone()
+            )
+            if not info:
+                return f"'{package}' not found."
 
-        parts = [f"# {info['name']} {info['version']}\n{info['summary']}"]
-        if info["homepage"]:
-            parts.append(f"Homepage: {info['homepage']}")
-        reqs = json.loads(info["dependencies"] or "[]")
-        if reqs:
-            parts.append("Deps: " + ", ".join(reqs[:REQUIREMENTS_DISPLAY]))
+            parts = [f"# {info['name']} {info['version']}\n{info['summary']}"]
+            if info["homepage"]:
+                parts.append(f"Homepage: {info['homepage']}")
+            deps = json.loads(info["dependencies"] or "[]")
+            if deps:
+                parts.append("Deps: " + ", ".join(deps[:REQUIREMENTS_DISPLAY]))
 
-        for r in conn.execute(
-            "SELECT title AS heading, text AS body FROM chunks WHERE package=? ORDER BY id LIMIT 10",
-            (pkg,),
-        ):
-            parts.append(f"## {r['heading']}\n{r['body']}")
+            chunks = await asyncio.to_thread(
+                lambda: connection.execute(
+                    "SELECT title, text FROM chunks WHERE package=? ORDER BY id LIMIT 10",
+                    (pkg,),
+                ).fetchall()
+            )
+            for r in chunks:
+                parts.append(f"## {r['title']}\n{r['text']}")
 
-        syms = conn.execute(
-            "SELECT kind, name, signature, docstring AS doc FROM module_members WHERE package=? LIMIT 30",
-            (pkg,),
-        ).fetchall()
-        if syms:
+            members = await asyncio.to_thread(
+                lambda: connection.execute(
+                    "SELECT kind, name, signature, docstring "
+                    "FROM module_members WHERE package=? LIMIT 30",
+                    (pkg,),
+                ).fetchall()
+            )
+        if members:
             parts.append("## API\n" + "\n".join(
                 f"- `{s['kind']} {s['name']}{s['signature']}` — "
-                f"{(s['doc'] or '').split(chr(10))[0][:PACKAGE_DOC_LINE_MAX]}"
-                for s in syms
+                f"{(s['docstring'] or '').split(chr(10))[0][:PACKAGE_DOC_LINE_MAX]}"
+                for s in members
             ))
-
         return "\n\n".join(parts)[:PACKAGE_DOC_MAX]
 
     @mcp.tool()
@@ -112,21 +144,22 @@ def run(db_path: Path):
                 dependency packages; omit (None) → search everything.
             topic: If given, restrict to chunks whose heading contains this string.
         """
-        conn = await asyncio.to_thread(open_index_database, db_path)
+        scope = _scope_from_internal(internal)
+        pre_filter: dict = {ChunkFilterField.SCOPE.value: scope.value}
+        if package.strip():
+            pre_filter[ChunkFilterField.PACKAGE.value] = package.strip()
+        if topic.strip():
+            pre_filter[ChunkFilterField.TITLE.value] = topic.strip()
+        search_query = SearchQuery(terms=query, pre_filter=pre_filter)
         try:
-            results = await asyncio.to_thread(
-                retrieve_chunks,
-                conn,
-                query,
-                pkg=package.strip() or None,
-                internal=internal,
-                topic=topic.strip() or None,
-            )
-        finally:
-            conn.close()
-        if not results:
+            state = await chunk_pipeline.run(search_query)
+        except Exception:
+            log.warning("search_docs failed", exc_info=True)
             return "No matches found."
-        return format_within_budget(results)
+        if state.result is None or not state.result.items:
+            return "No matches found."
+        # Final item is the composite formatted chunk
+        return state.result.items[0].text
 
     @mcp.tool()
     async def search_api(
@@ -142,29 +175,22 @@ def run(db_path: Path):
             internal: True → project symbols only; False → dependency symbols only;
                 omit (None) → all symbols.
         """
-        conn = await asyncio.to_thread(open_index_database, db_path)
+        scope = _scope_from_internal(internal)
+        pre_filter: dict = {ChunkFilterField.SCOPE.value: scope.value}
+        if package.strip():
+            pre_filter[ModuleMemberFilterField.PACKAGE.value] = package.strip()
+        search_query = SearchQuery(terms=query, pre_filter=pre_filter)
         try:
-            results = await asyncio.to_thread(
-                retrieve_module_members,
-                conn,
-                query,
-                pkg=package.strip() or None,
-                internal=internal,
-            )
-        finally:
-            conn.close()
-        if not results:
+            state = await member_pipeline.run(search_query)
+        except Exception:
+            log.warning("search_api failed", exc_info=True)
             return "No symbols found."
-        lines = []
-        for r in results[:SEARCH_RESULTS_MAX]:
-            sig = f"{r['name']}{r['signature']}" if r["signature"] else r["name"]
-            ret = f" -> {r['returns']}" if r["returns"] else ""
-            doc = r["doc"][:SEARCH_DOC_DISPLAY] if r["doc"] else ""
-            lines.append(f"**`[{r['pkg']}] {r['module']}.{sig}{ret}`** ({r['kind']})\n{doc}")
-        return "\n\n---\n\n".join(lines)
+        if state.result is None or not state.result.items:
+            return "No symbols found."
+        return state.result.items[0].text
 
     @mcp.tool()
-    def inspect_module(package: str, submodule: str = "") -> str:
+    async def inspect_module(package: str, submodule: str = "") -> str:
         """Live-import a module to show its current API.
 
         Args:
@@ -173,7 +199,12 @@ def run(db_path: Path):
         """
         import importlib
         pkg_name = normalize_package_name(package)
-        row = conn.execute("SELECT name FROM packages WHERE name=?", (pkg_name,)).fetchone()
+        async with provider.acquire() as connection:
+            row = await asyncio.to_thread(
+                lambda: connection.execute(
+                    "SELECT name FROM packages WHERE name=?", (pkg_name,)
+                ).fetchone()
+            )
         if not row:
             return f"'{package}' is not indexed. Use list_packages() to see available packages."
         if submodule and not _validate_submodule(submodule):
