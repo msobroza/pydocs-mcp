@@ -22,6 +22,7 @@ features = ["pyo3/extension-module"]
 module-name = "pydocs_mcp._native"
 python-source = "python"
 compatibility = "manylinux2014"
+include = ["python/pydocs_mcp/presets/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -45,3 +45,30 @@ def test_appconfig_cwd_local_file(tmp_path, monkeypatch):
 
     config = AppConfig.load()
     assert config.log_level == "error"
+
+
+import importlib.resources
+
+
+def test_preset_chunk_fts_loadable():
+    chunk_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("chunk_fts.yaml")
+    assert chunk_yaml.is_file()
+
+
+def test_preset_member_like_loadable():
+    member_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("member_like.yaml")
+    assert member_yaml.is_file()
+
+
+@pytest.mark.asyncio
+async def test_build_chunk_pipeline_from_config_defaults(tmp_path):
+    """No user config → built-in chunk_fts.yaml preset is loaded."""
+    from pydocs_mcp.retrieval.config import build_chunk_pipeline_from_config, AppConfig
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    config = AppConfig()  # defaults, chunk=None
+    ctx = BuildContext(connection_provider=PerCallConnectionProvider(tmp_path / "x.db"))
+    pipeline = build_chunk_pipeline_from_config(config, ctx)
+    assert pipeline.name == "fts_chunk"
+    assert len(pipeline.stages) == 6  # chunk_retrieval + 3 filters + limit + token_budget_formatter
