@@ -73,7 +73,7 @@ src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, par
 
 ## Key Technical Details
 
-- Python 3.10+ required, single runtime dependency: `mcp>=1.0`
+- Python 3.11+ required, single runtime dependency: `mcp>=1.0`
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
 - Entry point: `pydocs-mcp = "pydocs_mcp.__main__:main"`
