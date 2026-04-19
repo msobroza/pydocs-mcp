@@ -70,6 +70,7 @@ def retrieve_chunks(
         rows = connection.execute(sql, params).fetchall()
     except Exception:
         return []
+    # TODO(sub-PR #2): return ChunkList per spec §6.3 / AC #5 once typed retrievers land
     return [dict(r) for r in rows]
 
 
@@ -88,6 +89,7 @@ def format_within_budget(hits: list[dict], max_tokens: int = CONTEXT_TOKEN_BUDGE
     Returns:
         Concatenated text within the token budget.
     """
+    # TODO(sub-PR #2): accept ChunkList + read from .items[i].metadata once typed
     max_chars = max_tokens * _CHARS_PER_TOKEN
     parts: list[str] = []
     total = 0
@@ -149,4 +151,5 @@ def retrieve_module_members(
         rows = connection.execute(sql, params).fetchall()
     except Exception:
         return []
+    # TODO(sub-PR #2): return ChunkList per spec §6.3 / AC #5 once typed retrievers land
     return [dict(r) for r in rows]

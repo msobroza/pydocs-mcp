@@ -48,7 +48,7 @@ _DDL = """
     CREATE INDEX ix_module_members_name    ON module_members(name);
 """
 
-# Tables we know about — dropped on a version mismatch so legacy schemas
+# Tables we know about — dropped on a version mismatch so earlier schemas
 # (including the pre-v2 `symbols` table) are cleared before recreating.
 _KNOWN_TABLES = ("chunks_fts", "chunks", "module_members", "packages", "symbols")
 
