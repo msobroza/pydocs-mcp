@@ -22,6 +22,7 @@ from pydocs_mcp.models import (
     Parameter,
     PipelineResultItem,
     SearchQuery,
+    SearchResponse,
     SearchScope,
 )
 
@@ -204,3 +205,23 @@ def test_search_query_rejects_non_positive_max_results():
 def test_search_query_carries_pre_filter_dict():
     q = SearchQuery(terms="x", pre_filter={"package": "fastapi"})
     assert q.pre_filter == {"package": "fastapi"}
+
+
+def test_search_response_construction():
+    q = SearchQuery(terms="x")
+    cl = ChunkList(items=())
+    r = SearchResponse(result=cl, query=q, duration_ms=12.5)
+    assert r.result is cl
+    assert r.query is q
+    assert r.duration_ms == 12.5
+
+
+def test_search_response_default_duration():
+    r = SearchResponse(result=ModuleMemberList(items=()), query=SearchQuery(terms="x"))
+    assert r.duration_ms == 0.0
+
+
+def test_search_response_is_frozen():
+    r = SearchResponse(result=ChunkList(items=()), query=SearchQuery(terms="x"))
+    with pytest.raises(Exception):
+        r.duration_ms = 1.0

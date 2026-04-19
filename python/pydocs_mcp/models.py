@@ -163,3 +163,10 @@ class SearchQuery:
         if v <= 0:
             raise ValueError("max_results must be positive")
         return v
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResponse:
+    result: PipelineResultItem
+    query: SearchQuery
+    duration_ms: float = 0.0
