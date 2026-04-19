@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 
 from pydocs_mcp.constants import CONTEXT_TOKEN_BUDGET
-from pydocs_mcp.deps import normalize
+from pydocs_mcp.deps import normalize_package_name
 
 # Approximate characters per token (conservative estimate for English text).
 _CHARS_PER_TOKEN = 4
@@ -44,7 +44,7 @@ def search_chunks(
     params: list = [fts_q]
 
     if pkg is not None:
-        lit = pkg if pkg == "__project__" else normalize(pkg)
+        lit = pkg if pkg == "__project__" else normalize_package_name(pkg)
         where.append("c.package = ?")
         params.append(lit)
 
@@ -128,7 +128,7 @@ def search_symbols(
     params: list = [pat, pat]
 
     if pkg is not None:
-        lit = pkg if pkg == "__project__" else normalize(pkg)
+        lit = pkg if pkg == "__project__" else normalize_package_name(pkg)
         where.append("package = ?")
         params.append(lit)
 

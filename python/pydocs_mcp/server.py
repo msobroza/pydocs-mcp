@@ -21,7 +21,7 @@ from pydocs_mcp.constants import (
     SEARCH_RESULTS_MAX,
 )
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.deps import normalize
+from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.search import concat_context, search_chunks, search_symbols
 
 log = logging.getLogger("pydocs-mcp")
@@ -63,7 +63,7 @@ def run(db_path: Path):
         Args:
             package: e.g. 'fastapi', 'vllm', '__project__'
         """
-        pkg = "__project__" if package == "__project__" else normalize(package)
+        pkg = "__project__" if package == "__project__" else normalize_package_name(package)
         info = conn.execute(
             "SELECT * FROM packages WHERE name=?", (pkg,)
         ).fetchone()
@@ -172,7 +172,7 @@ def run(db_path: Path):
             submodule: e.g. 'routing' → fastapi.routing
         """
         import importlib
-        pkg_name = normalize(package)
+        pkg_name = normalize_package_name(package)
         row = conn.execute("SELECT name FROM packages WHERE name=?", (pkg_name,)).fetchone()
         if not row:
             return f"'{package}' is not indexed. Use list_packages() to see available packages."

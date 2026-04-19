@@ -14,7 +14,7 @@ from pydocs_mcp.db import (
     open_index_database,
     rebuild_fulltext_index,
 )
-from pydocs_mcp.deps import resolve
+from pydocs_mcp.deps import discover_declared_dependencies
 from pydocs_mcp.indexer import index_deps, index_project
 from pydocs_mcp.search import search_chunks, search_symbols
 from pydocs_mcp.server import run
@@ -88,7 +88,7 @@ def main():
             log.info("Project: %s", project)
             index_project(conn, project)
 
-        deps = resolve(project)
+        deps = discover_declared_dependencies(project)
         if deps:
             use_inspect = not args.no_inspect
             stats = index_deps(conn, deps, args.depth, args.workers, use_inspect)

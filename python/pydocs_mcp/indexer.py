@@ -42,7 +42,7 @@ from pydocs_mcp.constants import (
     SIGNATURE_MAX,
 )
 from pydocs_mcp.db import get_stored_content_hash, remove_package
-from pydocs_mcp.deps import normalize
+from pydocs_mcp.deps import normalize_package_name
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -148,7 +148,7 @@ def index_deps(
                      False = read .py files statically (faster, safer).
     """
     stats = {"indexed": 0, "cached": 0, "failed": 0}
-    lookup = {normalize(n) for n in dep_names}
+    lookup = {normalize_package_name(n) for n in dep_names}
 
     dists, seen = [], set()
     for dist in importlib.metadata.distributions():

@@ -12,7 +12,7 @@ _SKIP_DIRS = frozenset({
 })
 
 
-def normalize(raw: str) -> str:
+def normalize_package_name(raw: str) -> str:
     """Normalize a raw dependency string to a plain package name.
 
     Examples: 'FastAPI>=0.100' -> 'fastapi', 'scikit-learn[ml]' -> 'scikit_learn'
@@ -21,7 +21,7 @@ def normalize(raw: str) -> str:
     return name.strip().lower().replace("-", "_")
 
 
-def _find_dep_files(root: str) -> list[str]:
+def list_dependency_manifest_files(root: str) -> list[str]:
     """Recursively find all pyproject.toml and requirements*.txt under root.
 
     Prunes _SKIP_DIRS so virtualenvs and build artefacts are never descended into.
@@ -38,7 +38,7 @@ def _find_dep_files(root: str) -> list[str]:
     return found
 
 
-def _parse_toml(path: str) -> list[str]:
+def parse_pyproject_dependencies(path: str) -> list[str]:
     """Extract dependency names from a pyproject.toml file path.
 
     Returns normalised package names from [project] dependencies.
@@ -49,7 +49,7 @@ def _parse_toml(path: str) -> list[str]:
         with open(path, "rb") as f:
             data = tomllib.load(f)
         deps = data.get("project", {}).get("dependencies", [])
-        return [normalize(d) for d in deps if d.strip()]
+        return [normalize_package_name(d) for d in deps if d.strip()]
     except Exception:
         pass
     # Regex fallback for Python < 3.11
@@ -59,12 +59,12 @@ def _parse_toml(path: str) -> list[str]:
         m = re.search(r'\[project\].*?dependencies\s*=\s*\[(.*?)\]', text, re.S)
         if not m:
             return []
-        return [normalize(item) for item in re.findall(r'"([^"]+)"', m.group(1))]
+        return [normalize_package_name(item) for item in re.findall(r'"([^"]+)"', m.group(1))]
     except Exception:
         return []
 
 
-def _parse_requirements(path: str) -> list[str]:
+def parse_requirements_file(path: str) -> list[str]:
     """Extract dependency names from a requirements*.txt file.
 
     Skips blank lines, comments, and flag lines (-r, -c, -e).
@@ -76,24 +76,24 @@ def _parse_requirements(path: str) -> list[str]:
                 line = line.strip()
                 if not line or line.startswith("#") or line.startswith("-"):
                     continue
-                result.append(normalize(line))
+                result.append(normalize_package_name(line))
     except Exception:
         pass
     return result
 
 
-def resolve(project_dir: str) -> list[str]:
+def discover_declared_dependencies(project_dir: str) -> list[str]:
     """Return sorted, deduplicated dependency names found anywhere under project_dir.
 
     Scans all pyproject.toml and requirements*.txt in the entire directory tree,
     skipping virtualenvs and build artefacts. Version specifiers and extras are stripped.
     """
     all_deps: set[str] = set()
-    for path in _find_dep_files(project_dir):
+    for path in list_dependency_manifest_files(project_dir):
         fname = os.path.basename(path)
         if fname == "pyproject.toml":
-            all_deps.update(_parse_toml(path))
+            all_deps.update(parse_pyproject_dependencies(path))
         else:
-            all_deps.update(_parse_requirements(path))
+            all_deps.update(parse_requirements_file(path))
     all_deps.discard("")
     return sorted(all_deps)
