@@ -8,10 +8,12 @@ from __future__ import annotations
 import pytest
 
 from pydocs_mcp.models import (
+    Chunk,
     ChunkFilterField,
     ChunkOrigin,
     MemberKind,
     MetadataFilterFormat,
+    ModuleMember,
     ModuleMemberFilterField,
     Package,
     PackageOrigin,
@@ -93,3 +95,64 @@ def test_package_is_frozen():
     )
     with pytest.raises(Exception):
         pkg.name = "other"
+
+
+def test_chunk_default_metadata_empty():
+    c = Chunk(text="hello")
+    assert c.kind == "chunk"
+    assert c.text == "hello"
+    assert c.id is None
+    assert c.relevance is None
+    assert c.retriever_name is None
+    assert c.metadata == {}
+
+
+def test_chunk_with_metadata_and_retrieval_fields():
+    c = Chunk(
+        text="body",
+        id=7,
+        relevance=0.93,
+        retriever_name="fts5",
+        metadata={
+            "package": "fastapi",
+            "title": "Routing",
+            "origin": ChunkOrigin.DEPENDENCY_DOC_FILE.value,
+        },
+    )
+    assert c.id == 7
+    assert c.relevance == 0.93
+    assert c.retriever_name == "fts5"
+    assert c.metadata["origin"] == "dependency_doc_file"
+
+
+def test_chunk_is_frozen():
+    c = Chunk(text="x")
+    with pytest.raises(Exception):
+        c.text = "y"
+
+
+def test_module_member_default_metadata_empty():
+    m = ModuleMember()
+    assert m.kind == "module_member"
+    assert m.id is None
+    assert m.metadata == {}
+
+
+def test_module_member_with_metadata():
+    m = ModuleMember(
+        id=3,
+        relevance=0.7,
+        retriever_name="like",
+        metadata={
+            "package": "fastapi",
+            "module": "fastapi.routing",
+            "name": "APIRouter",
+            "kind": "class",
+            "signature": "(prefix: str = '')",
+            "docstring": "Group endpoints.",
+            "return_annotation": "",
+            "parameters": (),
+        },
+    )
+    assert m.metadata["name"] == "APIRouter"
+    assert m.metadata["kind"] == "class"

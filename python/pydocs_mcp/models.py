@@ -8,9 +8,10 @@ round-trip through SQLite TEXT columns and JSON without glue code.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import ClassVar
+from typing import Any, ClassVar
 
 
 class ChunkOrigin(StrEnum):
@@ -82,3 +83,34 @@ class Package:
     dependencies: tuple[str, ...]
     content_hash: str
     origin: PackageOrigin
+
+
+@dataclass(frozen=True, slots=True)
+class Chunk:
+    """Unit of retrieval. `text` is the primary payload; everything else
+    (package, title, origin, module) lives in metadata keyed by
+    ChunkFilterField.*.value. Composite chunks (formatter output) set
+    metadata['origin'] == ChunkOrigin.COMPOSITE_OUTPUT.value.
+
+    Retrieval-time fields (relevance, retriever_name) are None until a
+    retriever populates them."""
+    kind: ClassVar[str] = "chunk"
+    text: str
+    id: int | None = None
+    relevance: float | None = None
+    retriever_name: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleMember:
+    """A named Python API member (function, class, method). Fully generic —
+    all structural fields (name, module, package, kind, signature, docstring,
+    return_annotation, parameters) live in metadata. The Rust parser produces
+    a typed ParsedMember (see _fallback.py / src/lib.rs); the indexer
+    converts into this form at the boundary."""
+    kind: ClassVar[str] = "module_member"
+    id: int | None = None
+    relevance: float | None = None
+    retriever_name: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
