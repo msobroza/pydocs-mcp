@@ -53,18 +53,19 @@ _DDL = """
 _KNOWN_TABLES = ("chunks_fts", "chunks", "module_members", "packages", "symbols")
 
 
-def db_path_for(project_dir: Path) -> Path:
-    """Each project gets its own .db file based on its absolute path.
+def cache_path_for_project(project_dir: Path) -> Path:
+    """Return the per-project SQLite cache file path under ``CACHE_DIR``.
 
-    NOTE: Task 13 renames this to `cache_path_for_project`.
+    Each project gets its own ``.db`` file derived from its absolute path,
+    so multiple projects never share state.
     """
     slug = hashlib.md5(str(project_dir.resolve()).encode()).hexdigest()[:10]
     return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.db"
 
 
-def _drop_all_known_tables(conn: sqlite3.Connection) -> None:
+def _drop_all_known_tables(connection: sqlite3.Connection) -> None:
     for tbl in _KNOWN_TABLES:
-        conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+        connection.execute(f"DROP TABLE IF EXISTS {tbl}")
 
 
 def open_index_database(path: Path) -> sqlite3.Connection:
@@ -88,42 +89,34 @@ def open_index_database(path: Path) -> sqlite3.Connection:
     return conn
 
 
-# Thin shim; Task 13 deletes this once all callers migrate to open_index_database.
-def open_db(path: Path) -> sqlite3.Connection:
-    """(Deprecated) Alias for open_index_database. Task 13 removes this shim."""
-    return open_index_database(path)
+def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
+    """Remove all rows for a package across chunks, members, and packages."""
+    connection.execute("DELETE FROM chunks  WHERE package=?", (package_name,))
+    connection.execute("DELETE FROM module_members WHERE package=?", (package_name,))
+    connection.execute("DELETE FROM packages WHERE name=?", (package_name,))
 
 
-# TEMPORARY: old helpers with OLD column names kept alive until callers migrate.
-# These reference old columns (pkg, heading, body, hash, etc.) which NO LONGER
-# exist in v2 — so these functions are intentionally broken until Task 15–18
-# rewrites each caller to use the new schema. Tests that hit these functions
-# will fail until Task 19's mechanical test updates.
-
-def clear_pkg(conn: sqlite3.Connection, name: str):
-    """Remove all data for a package."""
-    conn.execute("DELETE FROM chunks  WHERE package=?", (name,))
-    conn.execute("DELETE FROM module_members WHERE package=?", (name,))
-    conn.execute("DELETE FROM packages WHERE name=?", (name,))
+def clear_all_packages(connection: sqlite3.Connection) -> None:
+    """Clear every indexed package: packages, chunks, and module members."""
+    connection.execute("DELETE FROM packages")
+    connection.execute("DELETE FROM chunks")
+    connection.execute("DELETE FROM module_members")
+    connection.commit()
 
 
-def clear_all(conn: sqlite3.Connection):
-    """Clear the entire database."""
-    conn.execute("DELETE FROM packages")
-    conn.execute("DELETE FROM chunks")
-    conn.execute("DELETE FROM module_members")
-    conn.commit()
+def rebuild_fulltext_index(connection: sqlite3.Connection) -> None:
+    """Rebuild the FTS5 index after bulk writes so new rows become searchable."""
+    connection.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+    connection.commit()
 
 
-def rebuild_fts(conn: sqlite3.Connection):
-    """Rebuild the FTS index after bulk writes."""
-    conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
-    conn.commit()
-
-
-def get_cached_hash(conn: sqlite3.Connection, name: str) -> str | None:
-    """Get the stored hash for a package, or None if not indexed."""
-    row = conn.execute("SELECT content_hash FROM packages WHERE name=?", (name,)).fetchone()
+def get_stored_content_hash(
+    connection: sqlite3.Connection, package_name: str
+) -> str | None:
+    """Return the stored content hash for a package, or ``None`` if not indexed."""
+    row = connection.execute(
+        "SELECT content_hash FROM packages WHERE name=?", (package_name,)
+    ).fetchone()
     return row["content_hash"] if row else None
 
 

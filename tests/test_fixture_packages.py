@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import open_db, rebuild_fts
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 from pydocs_mcp.indexer import _parse_source_files, _write_dep, index_project
 from pydocs_mcp.search import search_chunks, search_symbols
 
@@ -19,7 +19,7 @@ PACKAGES_DIR = FIXTURES_DIR / "packages"
 
 @pytest.fixture
 def db(tmp_path):
-    return open_db(tmp_path / "fixture_test.db")
+    return open_index_database(tmp_path / "fixture_test.db")
 
 
 def _index_fake_package(conn, pkg_name):
@@ -93,7 +93,7 @@ class TestSklearnFixture:
     def setup_sklearn(self, db):
         self.db = db
         _index_fake_package(db, "sklearn")
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_random_forest_in_chunks(self):
         # Classes without parens aren't captured by parse_py_file regex,
@@ -119,7 +119,7 @@ class TestVllmFixture:
     def setup_vllm(self, db):
         self.db = db
         _index_fake_package(db, "vllm")
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_sampling_params_in_chunks(self):
         results = search_chunks(self.db, "SamplingParams")
@@ -139,7 +139,7 @@ class TestLanggraphFixture:
     def setup_langgraph(self, db):
         self.db = db
         _index_fake_package(db, "langgraph")
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_state_graph_in_chunks(self):
         results = search_chunks(self.db, "StateGraph")
@@ -159,7 +159,7 @@ class TestCrossPackageSearch:
         index_project(db, FAKE_PROJECT)
         for pkg in ("sklearn", "vllm", "langgraph"):
             _index_fake_package(db, pkg)
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_internal_true_only_returns_project(self):
         results = search_symbols(self.db, "train", internal=True)
@@ -202,7 +202,7 @@ class TestCrossPackageSearch:
             ],
         }
         _write_dep(self.db, data)
-        rebuild_fts(self.db)
+        rebuild_fulltext_index(self.db)
 
         # Verify it's searchable
         pkg = self.db.execute("SELECT * FROM packages WHERE name='testlib'").fetchone()

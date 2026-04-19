@@ -1,7 +1,7 @@
 """Tests for internal/topic parameters on search_chunks and search_symbols."""
 import sqlite3
 import pytest
-from pydocs_mcp.db import open_db
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.search import search_chunks, search_symbols
 
 
@@ -112,7 +112,7 @@ class TestSearchSymbolsLikeEscaping:
 
     @pytest.fixture
     def like_conn(self, tmp_path):
-        c = open_db(tmp_path / "like_test.db")
+        c = open_index_database(tmp_path / "like_test.db")
         c.execute(
             "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
             ("mypkg", "1.0", "test", "", "[]", "h", "dependency"),

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import open_db, rebuild_fts
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 from pydocs_mcp.indexer import (
     _parse_source_files,
     _site_packages_root,
@@ -43,7 +43,7 @@ def project_dir(tmp_path):
 
 @pytest.fixture
 def db(tmp_path):
-    return open_db(tmp_path / "test.db")
+    return open_index_database(tmp_path / "test.db")
 
 
 class TestParseSourceFiles:
@@ -131,7 +131,7 @@ class TestIndexProject:
 
     def test_fts_searchable_after_index(self, db, project_dir):
         index_project(db, project_dir)
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
         rows = db.execute(
             "SELECT * FROM chunks_fts WHERE chunks_fts MATCH ?", ('"compute"',)
         ).fetchall()

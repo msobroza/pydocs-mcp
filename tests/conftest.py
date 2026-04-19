@@ -1,12 +1,12 @@
 """Shared pytest fixtures for pydocs-mcp tests."""
 import pytest
-from pydocs_mcp.db import open_db, rebuild_fts
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 
 
 @pytest.fixture
 def conn(tmp_path):
     """File-backed SQLite DB seeded with known project + dep data."""
-    c = open_db(tmp_path / "test.db")
+    c = open_index_database(tmp_path / "test.db")
 
     c.execute(
         "INSERT INTO packages (name, version, summary, homepage, dependencies, content_hash, origin)"
@@ -61,7 +61,7 @@ def conn(tmp_path):
     )
 
     c.commit()
-    rebuild_fts(c)
+    rebuild_fulltext_index(c)
     yield c
     c.close()
 
@@ -83,7 +83,7 @@ def integration_conn(tmp_path):
     langgraph) using the static parser (_parse_source_files), then rebuilds FTS.
     """
     db_path = tmp_path / "integration.db"
-    c = open_db(db_path)
+    c = open_index_database(db_path)
 
     # Index the fake project
     index_project(c, FAKE_PROJECT)
@@ -109,6 +109,6 @@ def integration_conn(tmp_path):
         )
 
     c.commit()
-    rebuild_fts(c)
+    rebuild_fulltext_index(c)
     yield c
     c.close()

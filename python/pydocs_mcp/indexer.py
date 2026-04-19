@@ -41,7 +41,7 @@ from pydocs_mcp.constants import (
     RETURN_TYPE_MAX,
     SIGNATURE_MAX,
 )
-from pydocs_mcp.db import clear_pkg, get_cached_hash
+from pydocs_mcp.db import get_stored_content_hash, remove_package
 from pydocs_mcp.deps import normalize
 
 log = logging.getLogger("pydocs-mcp")
@@ -108,11 +108,11 @@ def index_project(conn: sqlite3.Connection, root: Path):
     py_paths = walk_py_files(str(root))
     new_hash = hash_files(py_paths)
 
-    if get_cached_hash(conn, pkg) == new_hash:
+    if get_stored_content_hash(conn, pkg) == new_hash:
         log.info("Project: no changes (cached)")
         return
 
-    clear_pkg(conn, pkg)
+    remove_package(conn, pkg)
     conn.execute(
         "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
         (pkg, "local", f"Project: {root.name}", "", "[]", new_hash, "project"),
@@ -166,7 +166,7 @@ def index_deps(
         n = dist.metadata["Name"].lower().replace("-", "_")
         v = dist.metadata["Version"] or "?"
         h = hashlib.md5(f"{n}:{v}".encode()).hexdigest()[:12]
-        if get_cached_hash(conn, n) == h:
+        if get_stored_content_hash(conn, n) == h:
             stats["cached"] += 1
         else:
             work.append(dist)
@@ -235,7 +235,7 @@ def _add_doc_files(dist, name: str, data: dict):
 
 
 def _write_dep(conn: sqlite3.Connection, data: dict):
-    clear_pkg(conn, data["name"])
+    remove_package(conn, data["name"])
     conn.execute(
         "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
         (data["name"], data["version"], data["summary"],

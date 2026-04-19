@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pydocs_mcp.db import open_db, rebuild_fts
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 from pydocs_mcp.indexer import (
     _base_data,
     _add_doc_files,
@@ -423,7 +423,7 @@ class TestCollectInspect:
 class TestIndexDeps:
     @pytest.fixture
     def db(self, tmp_path):
-        return open_db(tmp_path / "test.db")
+        return open_index_database(tmp_path / "test.db")
 
     def test_index_deps_with_no_deps(self, db):
         stats = index_deps(db, [], depth=1, workers=1)

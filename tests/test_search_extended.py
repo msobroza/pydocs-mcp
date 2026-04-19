@@ -1,7 +1,7 @@
 """Extended tests for search.py — covers exception paths and edge cases."""
 import pytest
 
-from pydocs_mcp.db import open_db, rebuild_fts
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 from pydocs_mcp.search import search_chunks, search_symbols
 
 
@@ -18,7 +18,7 @@ class TestSearchChunksEdge:
 
     def test_exception_returns_empty(self, tmp_path):
         """Corrupt/missing FTS table returns empty list instead of crashing."""
-        c = open_db(tmp_path / "bad.db")
+        c = open_index_database(tmp_path / "bad.db")
         # Don't rebuild FTS, so the table exists but has no data matching
         c.execute(
             "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
@@ -34,7 +34,7 @@ class TestSearchChunksEdge:
 class TestSearchSymbolsEdge:
     def test_exception_returns_empty(self, tmp_path):
         """If the symbols table query somehow fails, return empty."""
-        c = open_db(tmp_path / "test.db")
+        c = open_index_database(tmp_path / "test.db")
         # Query on empty table
         result = search_symbols(c, "anything")
         assert result == []

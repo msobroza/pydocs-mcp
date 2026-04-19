@@ -5,18 +5,18 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.db import (
-    clear_all,
-    clear_pkg,
-    db_path_for,
-    get_cached_hash,
-    open_db,
-    rebuild_fts,
+    cache_path_for_project,
+    clear_all_packages,
+    get_stored_content_hash,
+    open_index_database,
+    rebuild_fulltext_index,
+    remove_package,
 )
 
 
 @pytest.fixture
 def db(tmp_path):
-    return open_db(tmp_path / "test.db")
+    return open_index_database(tmp_path / "test.db")
 
 
 @pytest.fixture
@@ -40,34 +40,34 @@ def db_with_package(db):
 
 class TestDbPathFor:
     def test_returns_path_under_cache_dir(self, tmp_path):
-        p = db_path_for(tmp_path)
+        p = cache_path_for_project(tmp_path)
         assert ".pydocs-mcp" in str(p)
 
     def test_deterministic(self, tmp_path):
-        assert db_path_for(tmp_path) == db_path_for(tmp_path)
+        assert cache_path_for_project(tmp_path) == cache_path_for_project(tmp_path)
 
     def test_different_projects_get_different_paths(self, tmp_path):
         a = tmp_path / "project_a"
         b = tmp_path / "project_b"
         a.mkdir()
         b.mkdir()
-        assert db_path_for(a) != db_path_for(b)
+        assert cache_path_for_project(a) != cache_path_for_project(b)
 
     def test_includes_project_name(self, tmp_path):
-        p = db_path_for(tmp_path)
+        p = cache_path_for_project(tmp_path)
         assert tmp_path.resolve().name in p.name
 
 
 class TestOpenDb:
     def test_creates_file(self, tmp_path):
         db_file = tmp_path / "test.db"
-        conn = open_db(db_file)
+        conn = open_index_database(db_file)
         assert db_file.exists()
         conn.close()
 
     def test_creates_parent_dirs(self, tmp_path):
         db_file = tmp_path / "sub" / "dir" / "test.db"
-        conn = open_db(db_file)
+        conn = open_index_database(db_file)
         assert db_file.exists()
         conn.close()
 
@@ -115,7 +115,7 @@ class TestOpenDb:
 
     def test_idempotent(self, tmp_path):
         db_file = tmp_path / "test.db"
-        conn1 = open_db(db_file)
+        conn1 = open_index_database(db_file)
         conn1.execute(
             "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) "
             "VALUES(?,?,?,?,?,?,?)",
@@ -124,7 +124,7 @@ class TestOpenDb:
         conn1.commit()
         conn1.close()
 
-        conn2 = open_db(db_file)
+        conn2 = open_index_database(db_file)
         row = conn2.execute("SELECT * FROM packages WHERE name='pkg1'").fetchone()
         assert row is not None
         assert row["version"] == "1.0"
@@ -133,21 +133,21 @@ class TestOpenDb:
 
 class TestClearPkg:
     def test_removes_target_package(self, db_with_package):
-        clear_pkg(db_with_package, "testpkg")
+        remove_package(db_with_package, "testpkg")
         db_with_package.commit()
         assert db_with_package.execute(
             "SELECT * FROM packages WHERE name='testpkg'"
         ).fetchone() is None
 
     def test_removes_chunks_for_package(self, db_with_package):
-        clear_pkg(db_with_package, "testpkg")
+        remove_package(db_with_package, "testpkg")
         db_with_package.commit()
         assert db_with_package.execute(
             "SELECT * FROM chunks WHERE package='testpkg'"
         ).fetchone() is None
 
     def test_removes_symbols_for_package(self, db_with_package):
-        clear_pkg(db_with_package, "testpkg")
+        remove_package(db_with_package, "testpkg")
         db_with_package.commit()
         assert db_with_package.execute(
             "SELECT * FROM module_members WHERE package='testpkg'"
@@ -160,7 +160,7 @@ class TestClearPkg:
             ("other", "1.0", "other pkg", "", "[]", "xyz", "dependency"),
         )
         db_with_package.commit()
-        clear_pkg(db_with_package, "testpkg")
+        remove_package(db_with_package, "testpkg")
         db_with_package.commit()
         assert db_with_package.execute(
             "SELECT * FROM packages WHERE name='other'"
@@ -169,7 +169,7 @@ class TestClearPkg:
 
 class TestClearAll:
     def test_clears_everything(self, db_with_package):
-        clear_all(db_with_package)
+        clear_all_packages(db_with_package)
         assert db_with_package.execute("SELECT count(*) FROM packages").fetchone()[0] == 0
         assert db_with_package.execute("SELECT count(*) FROM chunks").fetchone()[0] == 0
         assert db_with_package.execute("SELECT count(*) FROM module_members").fetchone()[0] == 0
@@ -177,14 +177,14 @@ class TestClearAll:
 
 class TestRebuildFts:
     def test_fts_search_works_after_rebuild(self, db_with_package):
-        rebuild_fts(db_with_package)
+        rebuild_fulltext_index(db_with_package)
         rows = db_with_package.execute(
             "SELECT * FROM chunks_fts WHERE chunks_fts MATCH ?", ('"overview"',)
         ).fetchall()
         assert len(rows) >= 1
 
     def test_rebuild_on_empty_db(self, db):
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_fts_reflects_new_data(self, db):
         db.execute(
@@ -192,7 +192,7 @@ class TestRebuildFts:
             ("pkg", "Title", "unique searchable content for testing purposes", "dependency_doc_file"),
         )
         db.commit()
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
         rows = db.execute(
             "SELECT * FROM chunks_fts WHERE chunks_fts MATCH ?", ('"searchable"',)
         ).fetchall()
@@ -201,7 +201,7 @@ class TestRebuildFts:
 
 class TestGetCachedHash:
     def test_returns_none_for_missing(self, db):
-        assert get_cached_hash(db, "nonexistent") is None
+        assert get_stored_content_hash(db, "nonexistent") is None
 
     def test_returns_hash_for_existing(self, db):
         db.execute(
@@ -210,7 +210,7 @@ class TestGetCachedHash:
             ("mypkg", "1.0", "", "", "[]", "abc123", "dependency"),
         )
         db.commit()
-        assert get_cached_hash(db, "mypkg") == "abc123"
+        assert get_stored_content_hash(db, "mypkg") == "abc123"
 
     def test_returns_none_when_hash_is_null(self, db):
         db.execute(
@@ -219,4 +219,4 @@ class TestGetCachedHash:
             ("mypkg", "1.0", "", "", "[]", None, "dependency"),
         )
         db.commit()
-        assert get_cached_hash(db, "mypkg") is None
+        assert get_stored_content_hash(db, "mypkg") is None

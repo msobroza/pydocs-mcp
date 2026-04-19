@@ -20,7 +20,7 @@ from pydocs_mcp.constants import (
     SEARCH_DOC_DISPLAY,
     SEARCH_RESULTS_MAX,
 )
-from pydocs_mcp.db import open_db
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.deps import normalize
 from pydocs_mcp.search import concat_context, search_chunks, search_symbols
 
@@ -42,7 +42,7 @@ def run(db_path: Path):
         log.error("Missing dependency: pip install mcp")
         sys.exit(1)
 
-    conn = open_db(db_path)
+    conn = open_index_database(db_path)
     atexit.register(conn.close)
     mcp = FastMCP("pydocs-mcp")
 
@@ -112,7 +112,7 @@ def run(db_path: Path):
                 dependency packages; omit (None) → search everything.
             topic: If given, restrict to chunks whose heading contains this string.
         """
-        conn = await asyncio.to_thread(open_db, db_path)
+        conn = await asyncio.to_thread(open_index_database, db_path)
         try:
             results = await asyncio.to_thread(
                 search_chunks,
@@ -142,7 +142,7 @@ def run(db_path: Path):
             internal: True → project symbols only; False → dependency symbols only;
                 omit (None) → all symbols.
         """
-        conn = await asyncio.to_thread(open_db, db_path)
+        conn = await asyncio.to_thread(open_index_database, db_path)
         try:
             results = await asyncio.to_thread(
                 search_symbols,

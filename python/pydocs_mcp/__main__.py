@@ -8,7 +8,12 @@ from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.constants import SEARCH_BODY_CLI, SEARCH_DOC_CLI
-from pydocs_mcp.db import clear_all, db_path_for, open_db, rebuild_fts
+from pydocs_mcp.db import (
+    cache_path_for_project,
+    clear_all_packages,
+    open_index_database,
+    rebuild_fulltext_index,
+)
 from pydocs_mcp.deps import resolve
 from pydocs_mcp.indexer import index_deps, index_project
 from pydocs_mcp.search import search_chunks, search_symbols
@@ -69,14 +74,14 @@ def main():
         log.info("Engine: %s", "Rust" if RUST_AVAILABLE else "Python")
 
     project = Path(getattr(args, "project", ".")).resolve()
-    db_path = db_path_for(project)
+    db_path = cache_path_for_project(project)
     log.debug("DB: %s", db_path)
 
     if args.cmd in ("serve", "index"):
-        conn = open_db(db_path)
+        conn = open_index_database(db_path)
 
         if args.force:
-            clear_all(conn)
+            clear_all_packages(conn)
             log.info("Cache cleared")
 
         if not args.skip_project:
@@ -93,14 +98,14 @@ def main():
                 db_path.stat().st_size / 1024,
             )
 
-        rebuild_fts(conn)
+        rebuild_fulltext_index(conn)
         conn.close()
 
         if args.cmd == "serve":
             run(db_path)
 
     elif args.cmd in ("query", "api"):
-        conn = open_db(db_path)
+        conn = open_index_database(db_path)
         q = " ".join(args.terms)
 
         if args.cmd == "query":

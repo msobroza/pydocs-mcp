@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pydocs_mcp.db import open_db, rebuild_fts
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 from pydocs_mcp.server import _validate_submodule
 
 
@@ -38,7 +38,7 @@ class FakeMCP:
 def server_tools(tmp_path):
     """Run server.run() with a FakeMCP to capture all tool closures."""
     db_path = tmp_path / "test.db"
-    conn = open_db(db_path)
+    conn = open_index_database(db_path)
 
     # Seed data
     conn.execute(
@@ -67,7 +67,7 @@ def server_tools(tmp_path):
         ("fastapi", "fastapi", "FastAPI", "class", "()", "", "[]", "Main app class"),
     )
     conn.commit()
-    rebuild_fts(conn)
+    rebuild_fulltext_index(conn)
     conn.close()
 
     fake_mcp = FakeMCP("test")
@@ -229,7 +229,7 @@ class TestInspectModule:
     def test_valid_stdlib_module(self, server_tools):
         """Test with a module that's guaranteed to be importable."""
         tools, db_path = server_tools
-        conn = open_db(db_path)
+        conn = open_index_database(db_path)
         conn.execute(
             "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
             ("json", "stdlib", "JSON encoder/decoder", "", "[]", "jjj", "dependency"),
@@ -241,7 +241,7 @@ class TestInspectModule:
 
     def test_submodule_inspection(self, server_tools):
         tools, db_path = server_tools
-        conn = open_db(db_path)
+        conn = open_index_database(db_path)
         conn.execute(
             "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
             ("os", "stdlib", "OS interface", "", "[]", "ooo", "dependency"),
@@ -254,7 +254,7 @@ class TestInspectModule:
     def test_package_with_submodules_listing(self, server_tools):
         """Test inspect_module on a package that has submodules but no direct API."""
         tools, db_path = server_tools
-        conn = open_db(db_path)
+        conn = open_index_database(db_path)
         conn.execute(
             "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
             ("email", "stdlib", "Email library", "", "[]", "eee", "dependency"),

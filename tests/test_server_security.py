@@ -5,8 +5,8 @@ from pathlib import Path
 
 def make_conn_with_package(tmp_path: Path, pkg_name: str) -> sqlite3.Connection:
     """Create a minimal DB with one indexed package for testing."""
-    from pydocs_mcp.db import open_db
-    conn = open_db(tmp_path / "test.db")
+    from pydocs_mcp.db import open_index_database
+    conn = open_index_database(tmp_path / "test.db")
     conn.execute(
         "INSERT INTO packages(name, version, summary, homepage, dependencies, content_hash, origin) VALUES (?,?,?,?,?,?,?)",
         (pkg_name, "1.0", "test pkg", "", "[]", "h", "dependency"),
@@ -18,9 +18,9 @@ def make_conn_with_package(tmp_path: Path, pkg_name: str) -> sqlite3.Connection:
 def test_inspect_module_rejects_path_traversal_submodule(tmp_path, monkeypatch):
     """submodule must not allow path traversal or arbitrary dotted paths beyond simple identifiers."""
     conn = make_conn_with_package(tmp_path, "fastapi")
-    # Patch open_db so run() uses our test conn
+    # Patch open_index_database so run() uses our test conn
     import pydocs_mcp.server as srv
-    monkeypatch.setattr(srv, "open_db", lambda _: conn)
+    monkeypatch.setattr(srv, "open_index_database", lambda _: conn)
 
     # We test the validation logic directly by calling the inner function.
     # Since tools are registered inside run(), extract the validation logic to a helper.
