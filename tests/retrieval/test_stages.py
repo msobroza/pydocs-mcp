@@ -123,3 +123,50 @@ async def test_limit_stage_default_eight():
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
     out = await LimitStage().run(state)
     assert len(out.result.items) == 8
+
+
+@pytest.mark.asyncio
+async def test_parallel_retrieval_stage_runs_branches_concurrently():
+    """Each inner stage sees the same input state. Their results are CONCATENATED."""
+    from pydocs_mcp.retrieval.stages import ParallelRetrievalStage
+
+    @dataclass(frozen=True, slots=True)
+    class _AppendA:
+        name: str = "append_a"
+        async def run(self, state):
+            existing = state.result.items if state.result else ()
+            return replace(state, result=ChunkList(items=existing + (Chunk(text="A"),)))
+
+    @dataclass(frozen=True, slots=True)
+    class _AppendB:
+        name: str = "append_b"
+        async def run(self, state):
+            existing = state.result.items if state.result else ()
+            return replace(state, result=ChunkList(items=existing + (Chunk(text="B"),)))
+
+    from dataclasses import replace
+    stage = ParallelRetrievalStage(stages=(_AppendA(), _AppendB()))
+    state = await stage.run(PipelineState(query=SearchQuery(terms="x")))
+    texts = [c.text for c in state.result.items]
+    # Both branch contributions should be present (order depends on gather)
+    assert set(texts) == {"A", "B"}
+
+
+@pytest.mark.asyncio
+async def test_reciprocal_rank_fusion_basic():
+    from pydocs_mcp.retrieval.stages import ReciprocalRankFusionStage
+
+    # 4 chunks, 2 duplicates — RRF sums 1/(k+rank) across duplicates
+    # The duplicate should rank higher than singletons
+    items = (
+        Chunk(text="a", id=1),
+        Chunk(text="b", id=2),
+        Chunk(text="a", id=1),  # duplicate of #1 at a lower initial position
+    )
+    state = PipelineState(query=SearchQuery(terms="x"), result=ChunkList(items=items))
+    out = await ReciprocalRankFusionStage(k=60).run(state)
+    # "a" (id=1) has 2 appearances; its RRF score is strictly higher than "b"'s single.
+    assert out.result.items[0].id == 1
+    # Duplicates deduplicated by id
+    ids = [c.id for c in out.result.items]
+    assert ids.count(1) == 1
