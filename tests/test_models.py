@@ -13,7 +13,9 @@ from pydocs_mcp.models import (
     MemberKind,
     MetadataFilterFormat,
     ModuleMemberFilterField,
+    Package,
     PackageOrigin,
+    Parameter,
     SearchScope,
 )
 
@@ -54,9 +56,6 @@ def test_enum_value_roundtrip(enum_cls, value):
     member = enum_cls(value)
     assert member.value == value
     assert str(member) == value
-
-
-from pydocs_mcp.models import Package, PackageOrigin, Parameter
 
 
 def test_parameter_defaults():
