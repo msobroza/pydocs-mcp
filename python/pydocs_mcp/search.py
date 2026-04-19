@@ -114,12 +114,12 @@ def retrieve_module_members(
     limit: int = 15,
     internal: bool | None = None,
 ) -> list[dict]:
-    """Symbol LIKE search on name and docstring.
+    """Module-member LIKE search on name and docstring.
 
     Args:
-        query: Fragment to match against symbol name or docstring (case-insensitive LIKE).
+        query: Fragment to match against member name or docstring (case-insensitive LIKE).
         pkg: Restrict to a specific package name. '__project__' is matched literally.
-        internal: True \u2192 project symbols only; False \u2192 dependency symbols only; None \u2192 all.
+        internal: True \u2192 project members only; False \u2192 dependency members only; None \u2192 all.
         limit: Maximum number of results.
     """
     # Escape LIKE special chars so user input is treated literally.
