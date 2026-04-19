@@ -3,10 +3,10 @@
 // Rust-accelerated functions for pydocs-mcp.
 //
 // This module provides 4 fast functions callable from Python:
-//   1. walk_py_files  — find all .py files, skipping venvs etc.
-//   2. hash_files     — hash file paths + mtimes (detects changes)
-//   3. chunk_text     — split markdown/rst into semantic chunks
-//   4. parse_py_file  — extract functions/classes from Python source
+//   1. walk_py_files       — find all .py files, skipping venvs etc.
+//   2. hash_files          — hash file paths + mtimes (detects changes)
+//   3. split_into_chunks   — split markdown/rst into semantic chunks
+//   4. parse_py_file       — extract functions/classes from Python source
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -178,7 +178,7 @@ struct Chunk {
 /// * `max_chars` — Maximum characters per chunk body (default: 4000)
 #[pyfunction]
 #[pyo3(signature = (text, max_chars=4000))]
-fn chunk_text(text: &str, max_chars: usize) -> Vec<(String, String)> {
+fn split_into_chunks(text: &str, max_chars: usize) -> Vec<(String, String)> {
     let mut results: Vec<Chunk> = Vec::new();
     let mut current_heading = "Overview".to_string();
     let mut current_body = String::new();
@@ -229,10 +229,10 @@ fn chunk_text(text: &str, max_chars: usize) -> Vec<(String, String)> {
 // For each function/class, we extract:
 //   - name, kind (def/async def/class), signature, docstring
 
-/// One extracted symbol (function or class).
+/// One extracted Python API member (function or class).
 #[pyclass]
 #[derive(Clone)]
-struct Symbol {
+struct ParsedMember {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
@@ -248,9 +248,9 @@ struct Symbol {
 /// This uses regex, not a full parser, so it's fast and fault-tolerant.
 /// Only extracts top-level definitions (no indentation before def/class).
 ///
-/// Returns a list of Symbol objects.
+/// Returns a list of ParsedMember objects.
 #[pyfunction]
-fn parse_py_file(source: &str) -> Vec<Symbol> {
+fn parse_py_file(source: &str) -> Vec<ParsedMember> {
     let mut symbols = Vec::new();
 
     for cap in DEF_RE.captures_iter(source) {
@@ -281,7 +281,7 @@ fn parse_py_file(source: &str) -> Vec<Symbol> {
             .unwrap_or("")
             .to_string();
 
-        symbols.push(Symbol {
+        symbols.push(ParsedMember {
             name,
             kind,
             signature,
@@ -342,11 +342,11 @@ fn read_files_parallel(py: Python<'_>, paths: Vec<String>) -> Vec<(String, Strin
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(walk_py_files, m)?)?;
     m.add_function(wrap_pyfunction!(hash_files, m)?)?;
-    m.add_function(wrap_pyfunction!(chunk_text, m)?)?;
+    m.add_function(wrap_pyfunction!(split_into_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(parse_py_file, m)?)?;
     m.add_function(wrap_pyfunction!(extract_module_doc, m)?)?;
     m.add_function(wrap_pyfunction!(read_file, m)?)?;
     m.add_function(wrap_pyfunction!(read_files_parallel, m)?)?;
-    m.add_class::<Symbol>()?;
+    m.add_class::<ParsedMember>()?;
     Ok(())
 }
