@@ -21,11 +21,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from pydocs_mcp._fast import (
-    split_into_chunks,
     extract_module_doc,
     hash_files,
     parse_py_file,
     read_files_parallel,
+    split_into_chunks,
     walk_py_files,
 )
 from pydocs_mcp.constants import (
