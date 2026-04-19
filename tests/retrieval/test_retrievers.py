@@ -77,3 +77,51 @@ async def test_like_member_retriever_returns_module_member_list(seeded_db: Path)
     m = result.items[0]
     assert m.metadata[ModuleMemberFilterField.NAME.value] == "APIRouter"
     assert m.retriever_name == "like_member"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_chunk_retriever_forwards_to_inner_pipeline(tmp_path):
+    """Adapter runs the inner pipeline and returns the ChunkList at state.result."""
+    from dataclasses import dataclass
+    from pydocs_mcp.models import Chunk
+    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
+    from pydocs_mcp.retrieval.retrievers import PipelineChunkRetriever
+
+    @dataclass(frozen=True, slots=True)
+    class _ReturnOneChunk:
+        name: str = "return_one"
+        async def run(self, state: PipelineState) -> PipelineState:
+            return PipelineState(
+                query=state.query,
+                result=ChunkList(items=(Chunk(text="payload"),)),
+            )
+
+    inner = CodeRetrieverPipeline(name="inner", stages=(_ReturnOneChunk(),))
+    adapter = PipelineChunkRetriever(pipeline=inner)
+    out = await adapter.retrieve(SearchQuery(terms="x"))
+    assert isinstance(out, ChunkList)
+    assert len(out.items) == 1
+    assert out.items[0].text == "payload"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_module_member_retriever_forwards():
+    from dataclasses import dataclass
+    from pydocs_mcp.models import ModuleMember
+    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
+    from pydocs_mcp.retrieval.retrievers import PipelineModuleMemberRetriever
+
+    @dataclass(frozen=True, slots=True)
+    class _ReturnOneMember:
+        name: str = "return_one"
+        async def run(self, state: PipelineState) -> PipelineState:
+            return PipelineState(
+                query=state.query,
+                result=ModuleMemberList(items=(ModuleMember(metadata={"name": "f"}),)),
+            )
+
+    inner = CodeRetrieverPipeline(name="inner", stages=(_ReturnOneMember(),))
+    adapter = PipelineModuleMemberRetriever(pipeline=inner)
+    out = await adapter.retrieve(SearchQuery(terms="x"))
+    assert isinstance(out, ModuleMemberList)
+    assert len(out.items) == 1

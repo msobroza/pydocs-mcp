@@ -20,6 +20,7 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.serialization import BuildContext, retriever_registry
 
 if TYPE_CHECKING:
+    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
     from pydocs_mcp.retrieval.protocols import ConnectionProvider
 
 
@@ -177,3 +178,49 @@ class LikeMemberRetriever:
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "LikeMemberRetriever":
         return cls(provider=context.connection_provider)
+
+
+@retriever_registry.register("pipeline_chunk")
+@dataclass(frozen=True, slots=True)
+class PipelineChunkRetriever:
+    """Adapter — exposes an inner pipeline that produces a ChunkList as a ChunkRetriever."""
+
+    pipeline: "CodeRetrieverPipeline"
+    name: str = "pipeline_chunk"
+
+    async def retrieve(self, query: SearchQuery) -> ChunkList:
+        state = await self.pipeline.run(query)
+        if isinstance(state.result, ChunkList):
+            return state.result
+        return ChunkList(items=())
+
+    def to_dict(self) -> dict:
+        return {"type": "pipeline_chunk", "pipeline": self.pipeline.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: dict, context: BuildContext) -> "PipelineChunkRetriever":
+        from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+        return cls(pipeline=CodeRetrieverPipeline.from_dict(data["pipeline"], context))
+
+
+@retriever_registry.register("pipeline_member")
+@dataclass(frozen=True, slots=True)
+class PipelineModuleMemberRetriever:
+    """Adapter — exposes an inner pipeline that produces a ModuleMemberList as a ModuleMemberRetriever."""
+
+    pipeline: "CodeRetrieverPipeline"
+    name: str = "pipeline_member"
+
+    async def retrieve(self, query: SearchQuery) -> ModuleMemberList:
+        state = await self.pipeline.run(query)
+        if isinstance(state.result, ModuleMemberList):
+            return state.result
+        return ModuleMemberList(items=())
+
+    def to_dict(self) -> dict:
+        return {"type": "pipeline_member", "pipeline": self.pipeline.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: dict, context: BuildContext) -> "PipelineModuleMemberRetriever":
+        from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+        return cls(pipeline=CodeRetrieverPipeline.from_dict(data["pipeline"], context))
