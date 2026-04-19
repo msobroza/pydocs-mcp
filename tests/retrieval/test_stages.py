@@ -170,3 +170,143 @@ async def test_reciprocal_rank_fusion_basic():
     # Duplicates deduplicated by id
     ids = [c.id for c in out.result.items]
     assert ids.count(1) == 1
+
+
+@pytest.mark.asyncio
+async def test_conditional_stage_runs_when_predicate_true():
+    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.stages import ConditionalStage
+
+    registry = PredicateRegistry()
+
+    @predicate("always", registry=registry)
+    def _true(state): return True
+
+    @dataclass(frozen=True, slots=True)
+    class _Sentinel:
+        name: str = "sentinel"
+        async def run(self, state):
+            return replace(state, result=ChunkList(items=(Chunk(text="fired"),)))
+
+    from dataclasses import replace
+    stage = ConditionalStage(stage=_Sentinel(), predicate_name="always", registry=registry)
+    out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
+    assert out.result.items[0].text == "fired"
+
+
+@pytest.mark.asyncio
+async def test_conditional_stage_skipped_when_predicate_false():
+    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.stages import ConditionalStage
+
+    registry = PredicateRegistry()
+
+    @predicate("never", registry=registry)
+    def _false(state): return False
+
+    @dataclass(frozen=True, slots=True)
+    class _Sentinel:
+        name: str = "sentinel"
+        async def run(self, state): raise AssertionError("should not run")
+
+    stage = ConditionalStage(stage=_Sentinel(), predicate_name="never", registry=registry)
+    out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
+    assert out.result is None  # state unchanged
+
+
+@pytest.mark.asyncio
+async def test_route_stage_first_match_wins():
+    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.stages import RouteCase, RouteStage
+
+    registry = PredicateRegistry()
+
+    @predicate("always", registry=registry)
+    def _t1(s): return True
+
+    @predicate("also_always", registry=registry)
+    def _t2(s): return True
+
+    @dataclass(frozen=True, slots=True)
+    class _Tag:
+        tag: str
+        name: str = "tag"
+        async def run(self, state):
+            return replace(state, result=ChunkList(items=(Chunk(text=self.tag),)))
+
+    from dataclasses import replace
+    stage = RouteStage(
+        routes=(
+            RouteCase(predicate_name="always", stage=_Tag("first")),
+            RouteCase(predicate_name="also_always", stage=_Tag("second")),
+        ),
+        registry=registry,
+    )
+    out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
+    assert out.result.items[0].text == "first"
+
+
+@pytest.mark.asyncio
+async def test_route_stage_falls_through_to_default():
+    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.stages import RouteCase, RouteStage
+
+    registry = PredicateRegistry()
+
+    @predicate("never", registry=registry)
+    def _f(s): return False
+
+    @dataclass(frozen=True, slots=True)
+    class _Tag:
+        tag: str
+        name: str = "tag"
+        async def run(self, state):
+            return replace(state, result=ChunkList(items=(Chunk(text=self.tag),)))
+
+    from dataclasses import replace
+    stage = RouteStage(
+        routes=(RouteCase(predicate_name="never", stage=_Tag("route")),),
+        default=_Tag("fallback"),
+        registry=registry,
+    )
+    out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
+    assert out.result.items[0].text == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_route_stage_no_match_no_default_is_noop():
+    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.stages import RouteStage
+
+    registry = PredicateRegistry()
+
+    @predicate("never", registry=registry)
+    def _f(s): return False
+
+    stage = RouteStage(routes=(), default=None, registry=registry)
+    out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
+    assert out.result is None
+
+
+@pytest.mark.asyncio
+async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
+    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.stages import SubPipelineStage
+
+    @dataclass(frozen=True, slots=True)
+    class _Tag:
+        tag: str
+        name: str = "tag"
+        async def run(self, state):
+            existing = state.result.items if state.result else ()
+            return replace(state, result=ChunkList(items=existing + (Chunk(text=self.tag),)))
+
+    from dataclasses import replace
+    nested = CodeRetrieverPipeline(name="n", stages=(_Tag("inner1"), _Tag("inner2")))
+    state = PipelineState(
+        query=SearchQuery(terms="x"),
+        result=ChunkList(items=(Chunk(text="pre"),)),  # incoming state is preserved
+    )
+    out = await SubPipelineStage(pipeline=nested).run(state)
+    texts = [c.text for c in out.result.items]
+    assert texts == ["pre", "inner1", "inner2"]  # state was threaded, not reset
