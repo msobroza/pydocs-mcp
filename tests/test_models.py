@@ -5,6 +5,8 @@ through SQLite TEXT columns, YAML, and JSON without glue code.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from pydocs_mcp.models import (
@@ -26,7 +28,16 @@ from pydocs_mcp.models import (
     SearchScope,
 )
 
-from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
+from pydocs_mcp.db import (
+    SCHEMA_VERSION,
+    _chunk_to_row,
+    _module_member_to_row,
+    _package_to_row,
+    _row_to_chunk,
+    _row_to_module_member,
+    _row_to_package,
+    open_index_database,
+)
 
 
 @pytest.mark.parametrize("enum_cls,value", [
@@ -272,3 +283,58 @@ def test_schema_version_upgrade_rebuilds(tmp_path):
     assert version == SCHEMA_VERSION
     assert "symbols" not in tables
     assert {"packages", "chunks", "module_members"}.issubset(tables)
+
+
+def test_chunk_row_roundtrip():
+    c = Chunk(
+        text="body",
+        id=1,
+        metadata={
+            ChunkFilterField.PACKAGE.value: "fastapi",
+            ChunkFilterField.TITLE.value: "Routing",
+            ChunkFilterField.ORIGIN.value: ChunkOrigin.DEPENDENCY_DOC_FILE.value,
+        },
+    )
+    row = _chunk_to_row(c)
+    c2 = _row_to_chunk(row)
+    assert c2.id == 1
+    assert c2.text == "body"
+    assert c2.metadata["package"] == "fastapi"
+    assert c2.metadata["title"] == "Routing"
+    assert c2.metadata["origin"] == "dependency_doc_file"
+
+
+def test_module_member_row_roundtrip():
+    m = ModuleMember(
+        id=5,
+        metadata={
+            ModuleMemberFilterField.PACKAGE.value: "fastapi",
+            ModuleMemberFilterField.MODULE.value: "fastapi.routing",
+            ModuleMemberFilterField.NAME.value: "APIRouter",
+            ModuleMemberFilterField.KIND.value: "class",
+            "signature": "(prefix: str = '')",
+            "docstring": "Groups endpoints.",
+            "return_annotation": "",
+            "parameters": (Parameter(name="prefix", default='""'),),
+        },
+    )
+    row = _module_member_to_row(m)
+    m2 = _row_to_module_member(row)
+    assert m2.id == 5
+    assert m2.metadata["name"] == "APIRouter"
+    assert m2.metadata["kind"] == "class"
+    ps = m2.metadata["parameters"]
+    assert len(ps) == 1
+    assert ps[0].name == "prefix"
+    assert ps[0].default == '""'
+
+
+def test_package_row_roundtrip():
+    pkg = Package(
+        name="fastapi", version="0.1", summary="", homepage="",
+        dependencies=("starlette",), content_hash="h",
+        origin=PackageOrigin.DEPENDENCY,
+    )
+    row = _package_to_row(pkg)
+    pkg2 = _row_to_package(row)
+    assert pkg2 == pkg
