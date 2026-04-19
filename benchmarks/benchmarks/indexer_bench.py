@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.db import open_db, rebuild_fts
-from pydocs_mcp.indexer import index_project, index_deps
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
+from pydocs_mcp.indexer import index_dependencies, index_project_source
 
 
 @dataclass
@@ -45,18 +45,18 @@ def run_indexing_benchmark(
 
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "bench.db"
-        conn = open_db(db_path)
+        conn = open_index_database(db_path)
 
         # --- Project ---
         t0 = time.perf_counter()
         try:
-            index_project(conn, project_root)
+            index_project_source(conn, project_root)
             elapsed = time.perf_counter() - t0
             chunks = conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE pkg='__project__'"
+                "SELECT COUNT(*) FROM chunks WHERE package='__project__'"
             ).fetchone()[0]
             symbols = conn.execute(
-                "SELECT COUNT(*) FROM symbols WHERE pkg='__project__'"
+                "SELECT COUNT(*) FROM module_members WHERE package='__project__'"
             ).fetchone()[0]
             results.append(IndexResult("__project__", elapsed, chunks, symbols))
         except Exception as exc:
@@ -66,7 +66,7 @@ def run_indexing_benchmark(
         for dep in dep_names:
             t0 = time.perf_counter()
             try:
-                index_deps(
+                index_dependencies(
                     conn, [dep],
                     depth=1, workers=1,
                     use_inspect=use_inspect,
@@ -74,16 +74,16 @@ def run_indexing_benchmark(
                 elapsed = time.perf_counter() - t0
                 norm = dep.lower().replace("-", "_")
                 chunks = conn.execute(
-                    "SELECT COUNT(*) FROM chunks WHERE pkg=?", (norm,)
+                    "SELECT COUNT(*) FROM chunks WHERE package=?", (norm,)
                 ).fetchone()[0]
                 symbols = conn.execute(
-                    "SELECT COUNT(*) FROM symbols WHERE pkg=?", (norm,)
+                    "SELECT COUNT(*) FROM module_members WHERE package=?", (norm,)
                 ).fetchone()[0]
                 results.append(IndexResult(dep, elapsed, chunks, symbols))
             except Exception as exc:
                 results.append(IndexResult(dep, time.perf_counter() - t0, error=str(exc)))
 
-        rebuild_fts(conn)
+        rebuild_fulltext_index(conn)
         conn.close()
 
     return results

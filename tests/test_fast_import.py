@@ -18,7 +18,7 @@ def test_fallback_path_when_native_unavailable():
         assert fast_mod.RUST_AVAILABLE is False
         # Functions should still work
         assert callable(fast_mod.walk_py_files)
-        assert callable(fast_mod.chunk_text)
+        assert callable(fast_mod.split_into_chunks)
         assert callable(fast_mod.parse_py_file)
 
     # Restore
@@ -47,8 +47,8 @@ def test_disable_rust_swaps_to_fallback():
         assert fast_mod.RUST_AVAILABLE is False
         # Every exported function must point to the fallback implementation
         for name in (
-            "walk_py_files", "hash_files", "chunk_text", "parse_py_file",
-            "extract_module_doc", "read_file", "read_files_parallel", "Symbol",
+            "walk_py_files", "hash_files", "split_into_chunks", "parse_py_file",
+            "extract_module_doc", "read_file", "read_files_parallel", "ParsedMember",
         ):
             assert getattr(fast_mod, name) is getattr(_fallback, name), (
                 f"{name} was not replaced by fallback"

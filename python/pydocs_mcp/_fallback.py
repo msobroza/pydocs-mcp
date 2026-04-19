@@ -47,7 +47,7 @@ def hash_files(paths: list[str]) -> str:
     return h.hexdigest()[:16]
 
 
-def chunk_text(text: str, max_chars: int = 4000) -> list[tuple[str, str]]:
+def split_into_chunks(text: str, max_chars: int = 4000) -> list[tuple[str, str]]:
     """Split text into (heading, body) tuples at heading boundaries."""
     heading, buf, results = "Overview", [], []
     buf_len = 0
@@ -74,23 +74,25 @@ def chunk_text(text: str, max_chars: int = 4000) -> list[tuple[str, str]]:
     return results
 
 
+# plain @dataclass (not frozen+slots) to mirror Rust #[pyclass] ParsedMember,
+# which exposes read-only getters but isn't truly frozen on the Python side.
 @dataclass
-class Symbol:
+class ParsedMember:
     name: str
     kind: str
     signature: str
     docstring: str
 
 
-def parse_py_file(source: str) -> list[Symbol]:
+def parse_py_file(source: str) -> list[ParsedMember]:
     """Extract top-level functions and classes using regex."""
     def_re = re.compile(
         r'^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:',
         re.MULTILINE,
     )
-    doc_re = re.compile(r'(?s)(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
+    doc_re = re.compile(r'(?s)^(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
 
-    symbols = []
+    members = []
     for m in def_re.finditer(source):
         kind, name, sig = m.group(1), m.group(2), m.group(3)
         if name.startswith("_"):
@@ -103,8 +105,8 @@ def parse_py_file(source: str) -> list[Symbol]:
         if doc_match:
             docstring = (doc_match.group(1) or doc_match.group(2) or "").strip()[:FUNC_DOCSTRING_MAX]
 
-        symbols.append(Symbol(name, kind, f"({sig.strip()})", docstring))
-    return symbols
+        members.append(ParsedMember(name, kind, f"({sig.strip()})", docstring))
+    return members
 
 
 def extract_module_doc(source: str) -> str:

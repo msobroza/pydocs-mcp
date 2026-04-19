@@ -4,7 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-from pydocs_mcp.deps import _parse_toml, _parse_requirements, normalize, resolve
+from pydocs_mcp.deps import (
+    discover_declared_dependencies,
+    normalize_package_name,
+    parse_pyproject_dependencies,
+    parse_requirements_file,
+)
 
 
 class TestParseTomlRegexFallback:
@@ -23,7 +28,7 @@ class TestParseTomlRegexFallback:
         # Force the regex fallback by making tomllib import fail
         with patch.dict("sys.modules", {"tomllib": None}):
             with patch("builtins.__import__", side_effect=_import_without_tomllib):
-                result = _parse_toml(str(toml_file))
+                result = parse_pyproject_dependencies(str(toml_file))
         assert "requests" in result
         assert "click" in result
 
@@ -34,19 +39,19 @@ class TestParseTomlRegexFallback:
         )
         with patch.dict("sys.modules", {"tomllib": None}):
             with patch("builtins.__import__", side_effect=_import_without_tomllib):
-                result = _parse_toml(str(toml_file))
+                result = parse_pyproject_dependencies(str(toml_file))
         assert result == []
 
     def test_regex_fallback_file_read_error(self):
         with patch.dict("sys.modules", {"tomllib": None}):
             with patch("builtins.__import__", side_effect=_import_without_tomllib):
-                result = _parse_toml("/nonexistent/path/pyproject.toml")
+                result = parse_pyproject_dependencies("/nonexistent/path/pyproject.toml")
         assert result == []
 
 
 class TestParseRequirementsEdge:
     def test_handles_file_not_found(self):
-        result = _parse_requirements("/nonexistent/requirements.txt")
+        result = parse_requirements_file("/nonexistent/requirements.txt")
         assert result == []
 
     def test_skips_flag_lines(self, tmp_path):
@@ -57,25 +62,25 @@ class TestParseRequirementsEdge:
             "-e ./local-pkg\n"
             "requests\n"
         )
-        result = _parse_requirements(str(req_file))
+        result = parse_requirements_file(str(req_file))
         assert result == ["requests"]
 
     def test_handles_empty_file(self, tmp_path):
         req_file = tmp_path / "requirements.txt"
         req_file.write_text("")
-        result = _parse_requirements(str(req_file))
+        result = parse_requirements_file(str(req_file))
         assert result == []
 
 
 class TestNormalizeEdge:
     def test_strips_extras(self):
-        assert normalize("package[extra1,extra2]") == "package"
+        assert normalize_package_name("package[extra1,extra2]") == "package"
 
     def test_strips_version_specifiers(self):
-        assert normalize("package>=1.0,<2.0") == "package"
+        assert normalize_package_name("package>=1.0,<2.0") == "package"
 
     def test_strips_semicolons(self):
-        assert normalize("package; python_version>='3.8'") == "package"
+        assert normalize_package_name("package; python_version>='3.8'") == "package"
 
 
 def _import_without_tomllib(name, *args, **kwargs):

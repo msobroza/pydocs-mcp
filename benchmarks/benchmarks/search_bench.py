@@ -1,7 +1,7 @@
 """Benchmark pydocs-mcp search latency and result relevance.
 
-For each question in the dataset, we run search_chunks (FTS5 BM25),
-concatenate top results within a ~2000-token budget via concat_context(),
+For each question in the dataset, we run retrieve_chunks (FTS5 BM25),
+concatenate top results within a ~2000-token budget via format_within_budget(),
 and measure binary Recall via fuzzy matching — the same methodology
 used for Context7 and Neuledge.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 from rapidfuzz import fuzz
 
-from pydocs_mcp.search import concat_context, search_chunks
+from pydocs_mcp.search import format_within_budget, retrieve_chunks
 
 # Minimum rapidfuzz partial_ratio score to consider a match relevant.
 FUZZY_THRESHOLD = 60
@@ -35,7 +35,7 @@ class SearchResult:
 
 
 def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchResult]:
-    """Run search_chunks for each row in *dataset* against *db_path*.
+    """Run retrieve_chunks for each row in *dataset* against *db_path*.
 
     Concatenates top results up to ~2000 tokens, then scores relevance
     via fuzzy matching on heading + snippet (same as Context7/Neuledge).
@@ -62,12 +62,12 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
         snippet = str(row["expected_answer_snippet"])
 
         t0 = time.perf_counter()
-        hits = search_chunks(
+        hits = retrieve_chunks(
             conn, query, pkg=pkg or None, limit=20,
             internal=internal, topic=topic,
         )
         # Concatenate results within token budget (part of the response pipeline)
-        response_text = concat_context(hits)
+        response_text = format_within_budget(hits)
         elapsed = time.perf_counter() - t0
 
         # Relevance via rapidfuzz (NOT counted in elapsed_s for fairness,

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pydocs_mcp.db import open_db, rebuild_fts
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 
 
 @pytest.fixture
@@ -37,25 +37,25 @@ class TestIndexCommand:
             from pydocs_mcp.__main__ import main
             main()
         # Verify DB was created
-        from pydocs_mcp.db import db_path_for
-        db_path = db_path_for(seeded_project)
+        from pydocs_mcp.db import cache_path_for_project
+        db_path = cache_path_for_project(seeded_project)
         assert db_path.exists()
 
     def test_index_with_force_flag(self, seeded_project):
         with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project), "--force"]):
             from pydocs_mcp.__main__ import main
             main()
-        from pydocs_mcp.db import db_path_for
-        db_path = db_path_for(seeded_project)
+        from pydocs_mcp.db import cache_path_for_project
+        db_path = cache_path_for_project(seeded_project)
         assert db_path.exists()
 
     def test_index_skip_project(self, seeded_project):
         with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project), "--skip-project"]):
             from pydocs_mcp.__main__ import main
             main()
-        from pydocs_mcp.db import db_path_for
-        db_path = db_path_for(seeded_project)
-        conn = open_db(db_path)
+        from pydocs_mcp.db import cache_path_for_project
+        db_path = cache_path_for_project(seeded_project)
+        conn = open_index_database(db_path)
         pkg = conn.execute("SELECT * FROM packages WHERE name='__project__'").fetchone()
         conn.close()
         assert pkg is None
@@ -148,17 +148,17 @@ class TestNoRustFlag:
         """Indexing with --no-rust must produce the same chunks as default."""
         monkeypatch.chdir(seeded_project)
         import sqlite3
-        from pydocs_mcp.db import db_path_for
+        from pydocs_mcp.db import cache_path_for_project
 
         # Index with default engine
         with patch("sys.argv", ["pydocs-mcp", "index", ".", "--force"]):
             from pydocs_mcp.__main__ import main
             main()
-        db = db_path_for(seeded_project)
+        db = cache_path_for_project(seeded_project)
         conn = sqlite3.connect(str(db))
         default_count = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
         default_headings = {
-            r[0] for r in conn.execute("SELECT heading FROM chunks").fetchall()
+            r[0] for r in conn.execute("SELECT title FROM chunks").fetchall()
         }
         conn.close()
 
@@ -168,7 +168,7 @@ class TestNoRustFlag:
         conn = sqlite3.connect(str(db))
         norust_count = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
         norust_headings = {
-            r[0] for r in conn.execute("SELECT heading FROM chunks").fetchall()
+            r[0] for r in conn.execute("SELECT title FROM chunks").fetchall()
         }
         conn.close()
 

@@ -7,6 +7,10 @@ __pycache__/
 dist/
 build/
 *.whl
+*.so
+.coverage
+coverage.xml
+uv.lock
 
 # Rust
 target/

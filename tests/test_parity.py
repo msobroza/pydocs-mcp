@@ -18,14 +18,14 @@ from pydocs_mcp import _fallback as py
 pytestmark = pytest.mark.skipif(not RUST_AVAILABLE, reason="Rust native module not compiled")
 
 
-class TestChunkTextParity:
+class TestSplitIntoChunksParity:
     def test_basic(self):
         text = "## Intro\n" + "Hello world. " * 20 + "\n## Part2\n" + "Goodbye. " * 20 + "\n"
-        assert rust.chunk_text(text) == py.chunk_text(text)
+        assert rust.split_into_chunks(text) == py.split_into_chunks(text)
 
     def test_unicode(self):
         text = "## Section\n" + "\u65e5\u672c\u8a9e\u30c6\u30b9\u30c8 " * 10 + "\n"
-        assert rust.chunk_text(text) == py.chunk_text(text)
+        assert rust.split_into_chunks(text) == py.split_into_chunks(text)
 
 
 class TestParsePyFileParity:

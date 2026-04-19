@@ -25,7 +25,7 @@ benchmarks/
 
 ## Setup
 
-Requires Python 3.10+ and the parent `pydocs-mcp` package.
+Requires Python 3.11+ and the parent `pydocs-mcp` package.
 
 ```bash
 cd benchmarks
