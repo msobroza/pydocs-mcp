@@ -59,8 +59,8 @@ IMPORT_ALIASES = {
 
 # ── Shared: parse .py files without importing ─────────────────────────────
 
-def _parse_source_files(
-    pkg: str,
+def _extract_from_source_files(
+    package_name: str,
     py_paths: list[str],
     root: str,
     kind_prefix: str = "project",
@@ -68,74 +68,74 @@ def _parse_source_files(
     """Parse .py files with Rust/regex parser. No imports needed.
 
     Used for both project source and deps in static mode.
-    Returns (chunk_rows, sym_rows) ready for executemany.
+    Returns (chunks, module_members) ready for executemany.
     """
     file_contents = read_files_parallel(py_paths)
-    chunk_rows: list[tuple] = []
-    sym_rows: list[tuple] = []
+    chunks: list[tuple] = []
+    module_members: list[tuple] = []
 
     for filepath, source in file_contents:
         if not source:
             continue
 
         try:
-            rel = os.path.relpath(filepath, root)
+            relative_path = os.path.relpath(filepath, root)
         except ValueError:
             continue
-        module = rel.replace(os.sep, ".").removesuffix(".py").replace(".__init__", "")
+        module = relative_path.replace(os.sep, ".").removesuffix(".py").replace(".__init__", "")
 
         doc = extract_module_doc(source)
         if len(doc) > 20:
-            chunk_rows.append((pkg, module, doc[:MODULE_DOCSTRING_MAX], f"{kind_prefix}_doc"))
+            chunks.append((package_name, module, doc[:MODULE_DOCSTRING_MAX], f"{kind_prefix}_doc"))
 
-        for sym in parse_py_file(source):
-            sym_rows.append((
-                pkg, module, sym.name, sym.kind,
-                sym.signature, "", "[]", sym.docstring,
+        for symbol in parse_py_file(source):
+            module_members.append((
+                package_name, module, symbol.name, symbol.kind,
+                symbol.signature, "", "[]", symbol.docstring,
             ))
 
         for heading, body in split_into_chunks(source):
-            chunk_rows.append((pkg, f"{module}:{heading}", body, f"{kind_prefix}_code"))
+            chunks.append((package_name, f"{module}:{heading}", body, f"{kind_prefix}_code"))
 
-    return chunk_rows, sym_rows
+    return chunks, module_members
 
 
 # ── Project source ────────────────────────────────────────────────────────
 
-def index_project(conn: sqlite3.Connection, root: Path):
+def index_project_source(connection: sqlite3.Connection, root: Path):
     """Index project .py files using Rust parser (or Python fallback)."""
-    pkg = "__project__"
+    package_name = "__project__"
     py_paths = walk_py_files(str(root))
     new_hash = hash_files(py_paths)
 
-    if get_stored_content_hash(conn, pkg) == new_hash:
+    if get_stored_content_hash(connection, package_name) == new_hash:
         log.info("Project: no changes (cached)")
         return
 
-    remove_package(conn, pkg)
-    conn.execute(
+    remove_package(connection, package_name)
+    connection.execute(
         "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-        (pkg, "local", f"Project: {root.name}", "", "[]", new_hash, "project"),
+        (package_name, "local", f"Project: {root.name}", "", "[]", new_hash, "project"),
     )
 
-    chunk_rows, sym_rows = _parse_source_files(pkg, py_paths, str(root))
+    chunks, module_members = _extract_from_source_files(package_name, py_paths, str(root))
 
-    conn.executemany(
-        "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)", chunk_rows,
+    connection.executemany(
+        "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)", chunks,
     )
-    conn.executemany(
+    connection.executemany(
         "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) "
-        "VALUES(?,?,?,?,?,?,?,?)", sym_rows,
+        "VALUES(?,?,?,?,?,?,?,?)", module_members,
     )
-    conn.commit()
+    connection.commit()
     log.info("Project: %d files -> %d chunks, %d symbols",
-             len(py_paths), len(chunk_rows), len(sym_rows))
+             len(py_paths), len(chunks), len(module_members))
 
 
 # ── Dependency indexing ───────────────────────────────────────────────────
 
-def index_deps(
-    conn: sqlite3.Connection,
+def index_dependencies(
+    connection: sqlite3.Connection,
     dep_names: list[str],
     depth: int = 1,
     workers: int = 4,
@@ -150,57 +150,57 @@ def index_deps(
     stats = {"indexed": 0, "cached": 0, "failed": 0}
     lookup = {normalize_package_name(n) for n in dep_names}
 
-    dists, seen = [], set()
+    installed_distributions, seen = [], set()
     for dist in importlib.metadata.distributions():
         raw = dist.metadata["Name"]
         if not raw:
             continue
-        n = raw.lower().replace("-", "_")
-        if n in seen or n not in lookup:
+        package_name = raw.lower().replace("-", "_")
+        if package_name in seen or package_name not in lookup:
             continue
-        seen.add(n)
-        dists.append(dist)
+        seen.add(package_name)
+        installed_distributions.append(dist)
 
-    work = []
-    for dist in dists:
-        n = dist.metadata["Name"].lower().replace("-", "_")
+    packages_to_index = []
+    for dist in installed_distributions:
+        package_name = dist.metadata["Name"].lower().replace("-", "_")
         v = dist.metadata["Version"] or "?"
-        h = hashlib.md5(f"{n}:{v}".encode()).hexdigest()[:12]
-        if get_stored_content_hash(conn, n) == h:
+        h = hashlib.md5(f"{package_name}:{v}".encode()).hexdigest()[:12]
+        if get_stored_content_hash(connection, package_name) == h:
             stats["cached"] += 1
         else:
-            work.append(dist)
+            packages_to_index.append(dist)
 
-    w = min(workers, len(work)) if work else 1
+    w = min(workers, len(packages_to_index)) if packages_to_index else 1
     mode = "inspect" if use_inspect else "static"
     log.info("Deps: %d to index, %d cached (%d workers, mode=%s)",
-             len(work), stats["cached"], w, mode)
+             len(packages_to_index), stats["cached"], w, mode)
 
-    collector = _collect_inspect if use_inspect else _collect_static
+    collector = _extract_by_import if use_inspect else _extract_from_static_sources
 
     with ThreadPoolExecutor(max_workers=w) as pool:
-        futures = {pool.submit(collector, d, depth): d for d in work}
+        futures = {pool.submit(collector, d, depth): d for d in packages_to_index}
         for fut in as_completed(futures):
             dist = futures[fut]
-            n = dist.metadata["Name"].lower().replace("-", "_")
+            package_name = dist.metadata["Name"].lower().replace("-", "_")
             try:
-                data = fut.result()
-                _write_dep(conn, data)
+                package_record = fut.result()
+                _persist_dependency(connection, package_record)
                 stats["indexed"] += 1
                 log.info("  ok %s %s (%d chunks, %d syms)",
-                         data["name"], data["version"],
-                         len(data["chunks"]), len(data["symbols"]))
+                         package_record["name"], package_record["version"],
+                         len(package_record["chunks"]), len(package_record["symbols"]))
             except Exception as e:
                 stats["failed"] += 1
-                log.warning("  fail %s: %s", n, e)
+                log.warning("  fail %s: %s", package_name, e)
 
     return stats
 
 
 # ── Shared dep helpers ────────────────────────────────────────────────────
 
-def _base_data(dist, name: str, version: str) -> dict:
-    data = {
+def _build_package_record(dist, name: str, version: str) -> dict:
+    package_record = {
         "name": name, "version": version,
         "hash": hashlib.md5(f"{name}:{version}".encode()).hexdigest()[:12],
         "summary": dist.metadata["Summary"] or "",
@@ -213,11 +213,11 @@ def _base_data(dist, name: str, version: str) -> dict:
     payload = dist.metadata.get_payload()
     if isinstance(payload, str) and len(payload.strip()) > 50:
         for h, b in split_into_chunks(payload.strip()):
-            data["chunks"].append((name, h, b, "readme"))
-    return data
+            package_record["chunks"].append((name, h, b, "readme"))
+    return package_record
 
 
-def _add_doc_files(dist, name: str, data: dict):
+def _append_doc_file_chunks(dist, name: str, package_record: dict):
     try:
         for f in (dist.files or []):
             fn = str(f).lower()
@@ -229,52 +229,52 @@ def _add_doc_files(dist, name: str, data: dict):
             if loc.exists() and loc.stat().st_size < 500_000:
                 text = loc.read_text("utf-8", errors="ignore")
                 for h, b in split_into_chunks(text):
-                    data["chunks"].append((name, h, b, "doc"))
+                    package_record["chunks"].append((name, h, b, "doc"))
     except Exception as e:
         log.debug("Failed to read doc files for %s: %s", name, e)
 
 
-def _write_dep(conn: sqlite3.Connection, data: dict):
-    remove_package(conn, data["name"])
-    conn.execute(
+def _persist_dependency(connection: sqlite3.Connection, package_record: dict):
+    remove_package(connection, package_record["name"])
+    connection.execute(
         "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-        (data["name"], data["version"], data["summary"],
-         data["homepage"], data["requires"], data["hash"], "dependency"),
+        (package_record["name"], package_record["version"], package_record["summary"],
+         package_record["homepage"], package_record["requires"], package_record["hash"], "dependency"),
     )
-    if data["chunks"]:
-        conn.executemany(
+    if package_record["chunks"]:
+        connection.executemany(
             "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
-            data["chunks"],
+            package_record["chunks"],
         )
-    if data["symbols"]:
-        conn.executemany(
+    if package_record["symbols"]:
+        connection.executemany(
             "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            data["symbols"],
+            package_record["symbols"],
         )
-    conn.commit()
+    connection.commit()
 
 
 # ── Static mode: read .py files, no imports ───────────────────────────────
 
-def _collect_static(dist, depth: int) -> dict:
+def _extract_from_static_sources(dist, depth: int) -> dict:
     """Read .py files from site-packages, parse with regex. No imports."""
     name = dist.metadata["Name"].lower().replace("-", "_")
     version = dist.metadata["Version"] or "?"
-    data = _base_data(dist, name, version)
-    _add_doc_files(dist, name, data)
+    package_record = _build_package_record(dist, name, version)
+    _append_doc_file_chunks(dist, name, package_record)
 
-    py_files = _dep_py_files(dist)
+    py_files = list_dependency_source_files(dist)
     if py_files:
-        root = _site_packages_root(py_files[0])
-        chunk_rows, sym_rows = _parse_source_files(name, py_files, root, "dep")
-        data["chunks"].extend(chunk_rows)
-        data["symbols"] = sym_rows
+        root = find_site_packages_root(py_files[0])
+        chunks, module_members = _extract_from_source_files(name, py_files, root, "dep")
+        package_record["chunks"].extend(chunks)
+        package_record["symbols"] = module_members
 
-    return data
+    return package_record
 
 
-def _dep_py_files(dist) -> list[str]:
+def list_dependency_source_files(dist) -> list[str]:
     """Find all .py files installed by a distribution."""
     result = []
     try:
@@ -289,7 +289,7 @@ def _dep_py_files(dist) -> list[str]:
     return result
 
 
-def _site_packages_root(any_file: str) -> str:
+def find_site_packages_root(any_file: str) -> str:
     """Walk up to find site-packages directory."""
     for parent in Path(any_file).parents:
         if parent.name in ("site-packages", "dist-packages"):
@@ -299,27 +299,27 @@ def _site_packages_root(any_file: str) -> str:
 
 # ── Inspect mode: import and use inspect ──────────────────────────────────
 
-def _collect_inspect(dist, depth: int) -> dict:
+def _extract_by_import(dist, depth: int) -> dict:
     """Import module, extract API via inspect.getmembers."""
     name = dist.metadata["Name"].lower().replace("-", "_")
     version = dist.metadata["Version"] or "?"
-    data = _base_data(dist, name, version)
-    _add_doc_files(dist, name, data)
+    package_record = _build_package_record(dist, name, version)
+    _append_doc_file_chunks(dist, name, package_record)
 
     if name not in SKIP_IMPORT:
         iname = IMPORT_ALIASES.get(name, name)
         try:
-            mod = importlib.import_module(iname)
-            if mod.__doc__ and len(mod.__doc__.strip()) > 30:
-                data["chunks"].append((name, name, mod.__doc__.strip()[:MODULE_DOCSTRING_MAX], "docstring"))
-            data["symbols"] = _inspect_syms(mod, iname, name, max_depth=depth)
+            module = importlib.import_module(iname)
+            if module.__doc__ and len(module.__doc__.strip()) > 30:
+                package_record["chunks"].append((name, name, module.__doc__.strip()[:MODULE_DOCSTRING_MAX], "docstring"))
+            package_record["symbols"] = _extract_members_by_import(module, iname, name, max_depth=depth)
         except Exception as e:
             log.debug("Failed to import %s: %s", iname, e)
 
-    return data
+    return package_record
 
 
-def _get_sig(obj) -> tuple[str, str, list[dict]]:
+def _extract_callable_signature(obj) -> tuple[str, str, list[dict]]:
     try:
         sig = inspect.signature(obj)
     except (ValueError, TypeError):
@@ -349,10 +349,10 @@ def _get_sig(obj) -> tuple[str, str, list[dict]]:
     return str(sig)[:SIGNATURE_MAX], ret[:RETURN_TYPE_MAX], params
 
 
-def _inspect_syms(mod, mod_name, owner, depth=0, max_depth=1) -> list[tuple]:
+def _extract_members_by_import(module, mod_name, owner, depth=0, max_depth=1) -> list[tuple]:
     rows, root = [], owner.replace("-", "_")
     try:
-        members = inspect.getmembers(mod)
+        members = inspect.getmembers(module)
     except Exception:
         return rows
 
@@ -364,26 +364,26 @@ def _inspect_syms(mod, mod_name, owner, depth=0, max_depth=1) -> list[tuple]:
             continue
         try:
             if inspect.isfunction(obj) or inspect.isbuiltin(obj):
-                sig, ret, params = _get_sig(obj)
+                sig, ret, params = _extract_callable_signature(obj)
                 doc = (inspect.getdoc(obj) or "")[:FUNC_DOCSTRING_MAX]
                 rows.append((owner, mod_name, name, "function",
                              sig, ret, json.dumps(params)[:PARAMS_JSON_MAX], doc))
             elif inspect.isclass(obj):
-                sig, _, params = _get_sig(obj)
+                sig, _, params = _extract_callable_signature(obj)
                 doc = (inspect.getdoc(obj) or "")[:CLASS_DOCSTRING_MAX]
-                ms = []
+                method_summaries = []
                 try:
-                    for mn, mo in inspect.getmembers(obj):
+                    for mn, member in inspect.getmembers(obj):
                         if mn.startswith("_") and mn != "__init__": continue
-                        if not (inspect.isfunction(mo) or inspect.ismethod(mo)): continue
-                        s, _, _ = _get_sig(mo)
-                        md = (inspect.getdoc(mo) or "").split("\n")[0][:METHOD_SUMMARY_MAX]
-                        ms.append(f"  .{mn}{s} -- {md}")
-                        if len(ms) >= CLASS_METHODS_MAX: break
+                        if not (inspect.isfunction(member) or inspect.ismethod(member)): continue
+                        s, _, _ = _extract_callable_signature(member)
+                        md = (inspect.getdoc(member) or "").split("\n")[0][:METHOD_SUMMARY_MAX]
+                        method_summaries.append(f"  .{mn}{s} -- {md}")
+                        if len(method_summaries) >= CLASS_METHODS_MAX: break
                 except Exception:
                     pass
-                if ms:
-                    doc += "\n\nMethods:\n" + "\n".join(ms)
+                if method_summaries:
+                    doc += "\n\nMethods:\n" + "\n".join(method_summaries)
                 rows.append((owner, mod_name, name, "class",
                              sig, "", json.dumps(params)[:PARAMS_JSON_MAX], doc[:CLASS_FULL_DOC_MAX]))
         except Exception:
@@ -391,13 +391,13 @@ def _inspect_syms(mod, mod_name, owner, depth=0, max_depth=1) -> list[tuple]:
         if len(rows) > 120:
             break
 
-    if depth < max_depth and hasattr(mod, "__path__"):
+    if depth < max_depth and hasattr(module, "__path__"):
         try:
-            for _, sn, _ in pkgutil.iter_modules(mod.__path__):
+            for _, sn, _ in pkgutil.iter_modules(module.__path__):
                 if sn.startswith("_"): continue
                 try:
                     sub = importlib.import_module(f"{mod_name}.{sn}")
-                    rows.extend(_inspect_syms(sub, f"{mod_name}.{sn}", owner, depth+1, max_depth))
+                    rows.extend(_extract_members_by_import(sub, f"{mod_name}.{sn}", owner, depth+1, max_depth))
                 except Exception:
                     pass
         except Exception:

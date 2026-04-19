@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
-from pydocs_mcp.indexer import _parse_source_files, _write_dep, index_project
+from pydocs_mcp.indexer import _extract_from_source_files, _persist_dependency, index_project_source
 from pydocs_mcp.search import search_chunks, search_symbols
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -26,7 +26,7 @@ def _index_fake_package(conn, pkg_name):
     """Index a fixture package into the database using static parsing."""
     pkg_dir = PACKAGES_DIR / pkg_name
     py_files = sorted(str(p) for p in pkg_dir.rglob("*.py"))
-    chunks, syms = _parse_source_files(pkg_name, py_files, str(pkg_dir), kind_prefix="dep")
+    chunks, syms = _extract_from_source_files(pkg_name, py_files, str(pkg_dir), kind_prefix="dep")
     conn.execute(
         "INSERT INTO packages(name, version, summary, homepage, dependencies, content_hash, origin) "
         "VALUES(?, ?, ?, '', '[]', ?, 'dependency')",
@@ -47,12 +47,12 @@ def _index_fake_package(conn, pkg_name):
 
 class TestFakeProjectIndexing:
     def test_indexes_fake_project_successfully(self, db):
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         pkg = db.execute("SELECT * FROM packages WHERE name='__project__'").fetchone()
         assert pkg is not None
 
     def test_extracts_project_symbols(self, db):
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         syms = db.execute(
             "SELECT * FROM module_members WHERE package='__project__'"
         ).fetchall()
@@ -60,14 +60,14 @@ class TestFakeProjectIndexing:
         assert "main" in names or "run_pipeline" in names or "train_model" in names
 
     def test_extracts_project_chunks(self, db):
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         chunks = db.execute(
             "SELECT * FROM chunks WHERE package='__project__'"
         ).fetchall()
         assert len(chunks) > 0
 
     def test_project_docstrings_captured(self, db):
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         docs = db.execute(
             "SELECT docstring FROM module_members WHERE package='__project__' AND docstring != ''"
         ).fetchall()
@@ -156,7 +156,7 @@ class TestCrossPackageSearch:
     @pytest.fixture(autouse=True)
     def setup_all(self, db):
         self.db = db
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         for pkg in ("sklearn", "vllm", "langgraph"):
             _index_fake_package(db, pkg)
         rebuild_fulltext_index(db)
@@ -180,7 +180,7 @@ class TestCrossPackageSearch:
         assert all(r["pkg"] == "sklearn" for r in results)
 
     def test_write_dep_with_fixture_data(self):
-        """Test _write_dep using data shaped like real fixture output."""
+        """Test _persist_dependency using data shaped like real fixture output."""
         data = {
             "name": "testlib",
             "version": "1.2.3",
@@ -201,7 +201,7 @@ class TestCrossPackageSearch:
                  "A machine learning pipeline that chains transformers and estimators."),
             ],
         }
-        _write_dep(self.db, data)
+        _persist_dependency(self.db, data)
         rebuild_fulltext_index(self.db)
 
         # Verify it's searchable

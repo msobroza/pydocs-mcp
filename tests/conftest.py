@@ -68,7 +68,7 @@ def conn(tmp_path):
 
 import os
 from pathlib import Path
-from pydocs_mcp.indexer import index_project, _parse_source_files
+from pydocs_mcp.indexer import index_project_source, _extract_from_source_files
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 FAKE_PROJECT = FIXTURES_DIR / "fake_project"
@@ -80,19 +80,19 @@ def integration_conn(tmp_path):
     """DB seeded by running the real indexer against fixture files.
 
     Indexes the fake_project source + the 3 package snapshots (sklearn, vllm,
-    langgraph) using the static parser (_parse_source_files), then rebuilds FTS.
+    langgraph) using the static parser (_extract_from_source_files), then rebuilds FTS.
     """
     db_path = tmp_path / "integration.db"
     c = open_index_database(db_path)
 
     # Index the fake project
-    index_project(c, FAKE_PROJECT)
+    index_project_source(c, FAKE_PROJECT)
 
     # Index each package snapshot as if it were an installed dep
     for pkg_name in ("sklearn", "vllm", "langgraph"):
         pkg_dir = PACKAGES_DIR / pkg_name
         py_files = sorted(str(p) for p in pkg_dir.rglob("*.py"))
-        chunks, syms = _parse_source_files(pkg_name, py_files, str(pkg_dir), kind_prefix="dep")
+        chunks, syms = _extract_from_source_files(pkg_name, py_files, str(pkg_dir), kind_prefix="dep")
         c.executemany(
             "INSERT INTO packages (name, version, summary, homepage, dependencies, content_hash, origin)"
             " VALUES (?, ?, ?, '', '[]', ?, 'dependency')",

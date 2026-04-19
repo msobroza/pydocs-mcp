@@ -15,7 +15,7 @@ from pydocs_mcp.db import (
     rebuild_fulltext_index,
 )
 from pydocs_mcp.deps import discover_declared_dependencies
-from pydocs_mcp.indexer import index_deps, index_project
+from pydocs_mcp.indexer import index_dependencies, index_project_source
 from pydocs_mcp.search import search_chunks, search_symbols
 from pydocs_mcp.server import run
 
@@ -86,12 +86,12 @@ def main():
 
         if not args.skip_project:
             log.info("Project: %s", project)
-            index_project(conn, project)
+            index_project_source(conn, project)
 
         deps = discover_declared_dependencies(project)
         if deps:
             use_inspect = not args.no_inspect
-            stats = index_deps(conn, deps, args.depth, args.workers, use_inspect)
+            stats = index_dependencies(conn, deps, args.depth, args.workers, use_inspect)
             log.info(
                 "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
                 stats["indexed"], stats["cached"], stats["failed"],
