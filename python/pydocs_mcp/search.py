@@ -10,8 +10,8 @@ from pydocs_mcp.deps import normalize_package_name
 _CHARS_PER_TOKEN = 4
 
 
-def search_chunks(
-    conn: sqlite3.Connection,
+def retrieve_chunks(
+    connection: sqlite3.Connection,
     query: str,
     pkg: str | None = None,
     limit: int = 8,
@@ -67,13 +67,13 @@ def search_chunks(
         " ORDER BY rank LIMIT ?"
     )
     try:
-        rows = conn.execute(sql, params).fetchall()
+        rows = connection.execute(sql, params).fetchall()
     except Exception:
         return []
     return [dict(r) for r in rows]
 
 
-def concat_context(hits: list[dict], max_tokens: int = CONTEXT_TOKEN_BUDGET) -> str:
+def format_within_budget(hits: list[dict], max_tokens: int = CONTEXT_TOKEN_BUDGET) -> str:
     """Concatenate chunk headings and bodies until the token budget is reached.
 
     Produces a single text blob from ranked search results, similar to how
@@ -105,8 +105,8 @@ def concat_context(hits: list[dict], max_tokens: int = CONTEXT_TOKEN_BUDGET) -> 
     return "\n".join(parts)
 
 
-def search_symbols(
-    conn: sqlite3.Connection,
+def retrieve_module_members(
+    connection: sqlite3.Connection,
     query: str,
     pkg: str | None = None,
     limit: int = 15,
@@ -146,7 +146,7 @@ def search_symbols(
         " LIMIT ?"
     )
     try:
-        rows = conn.execute(sql, params).fetchall()
+        rows = connection.execute(sql, params).fetchall()
     except Exception:
         return []
     return [dict(r) for r in rows]

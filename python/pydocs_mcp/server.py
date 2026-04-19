@@ -22,7 +22,7 @@ from pydocs_mcp.constants import (
 )
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.deps import normalize_package_name
-from pydocs_mcp.search import concat_context, search_chunks, search_symbols
+from pydocs_mcp.search import format_within_budget, retrieve_chunks, retrieve_module_members
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -115,7 +115,7 @@ def run(db_path: Path):
         conn = await asyncio.to_thread(open_index_database, db_path)
         try:
             results = await asyncio.to_thread(
-                search_chunks,
+                retrieve_chunks,
                 conn,
                 query,
                 pkg=package.strip() or None,
@@ -126,7 +126,7 @@ def run(db_path: Path):
             conn.close()
         if not results:
             return "No matches found."
-        return concat_context(results)
+        return format_within_budget(results)
 
     @mcp.tool()
     async def search_api(
@@ -145,7 +145,7 @@ def run(db_path: Path):
         conn = await asyncio.to_thread(open_index_database, db_path)
         try:
             results = await asyncio.to_thread(
-                search_symbols,
+                retrieve_module_members,
                 conn,
                 query,
                 pkg=package.strip() or None,

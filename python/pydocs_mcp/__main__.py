@@ -16,7 +16,7 @@ from pydocs_mcp.db import (
 )
 from pydocs_mcp.deps import discover_declared_dependencies
 from pydocs_mcp.indexer import index_dependencies, index_project_source
-from pydocs_mcp.search import search_chunks, search_symbols
+from pydocs_mcp.search import retrieve_chunks, retrieve_module_members
 from pydocs_mcp.server import run
 
 log = logging.getLogger("pydocs-mcp")
@@ -109,12 +109,12 @@ def main():
         q = " ".join(args.terms)
 
         if args.cmd == "query":
-            for r in search_chunks(conn, q, pkg=args.package):
+            for r in retrieve_chunks(conn, q, pkg=args.package):
                 print(f"\n{'─' * 60}")
                 print(f"[{r['kind']}] {r['pkg']} → {r['heading']}")
                 print(r["body"][:SEARCH_BODY_CLI])
         else:
-            for s in search_symbols(conn, q, pkg=args.package):
+            for s in retrieve_module_members(conn, q, pkg=args.package):
                 print(f"\n{'─' * 60}")
                 print(f"{s['kind']} {s['module']}.{s['name']}{s['signature']}")
                 print((s["doc"] or "—")[:SEARCH_DOC_CLI])

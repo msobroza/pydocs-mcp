@@ -10,7 +10,7 @@ import pytest
 
 from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 from pydocs_mcp.indexer import _extract_from_source_files, _persist_dependency, index_project_source
-from pydocs_mcp.search import search_chunks, search_symbols
+from pydocs_mcp.search import retrieve_chunks, retrieve_module_members
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 FAKE_PROJECT = FIXTURES_DIR / "fake_project"
@@ -98,19 +98,19 @@ class TestSklearnFixture:
     def test_random_forest_in_chunks(self):
         # Classes without parens aren't captured by parse_py_file regex,
         # but their text is indexed as chunks
-        results = search_chunks(self.db, "RandomForestClassifier")
+        results = retrieve_chunks(self.db, "RandomForestClassifier")
         assert any(r["pkg"] == "sklearn" for r in results)
 
     def test_gradient_boosting_in_chunks(self):
-        results = search_chunks(self.db, "Gradient Boosting")
+        results = retrieve_chunks(self.db, "Gradient Boosting")
         assert any(r["pkg"] == "sklearn" for r in results)
 
     def test_ensemble_methods(self):
-        results = search_chunks(self.db, "ensemble bagging boosting")
+        results = retrieve_chunks(self.db, "ensemble bagging boosting")
         assert len(results) > 0
 
     def test_predict_in_chunks(self):
-        results = search_chunks(self.db, "predict")
+        results = retrieve_chunks(self.db, "predict")
         assert any(r["pkg"] == "sklearn" for r in results)
 
 
@@ -122,15 +122,15 @@ class TestVllmFixture:
         rebuild_fulltext_index(db)
 
     def test_sampling_params_in_chunks(self):
-        results = search_chunks(self.db, "SamplingParams")
+        results = retrieve_chunks(self.db, "SamplingParams")
         assert any(r["pkg"] == "vllm" for r in results)
 
     def test_llm_serving_chunks(self):
-        results = search_chunks(self.db, "LLM serving")
+        results = retrieve_chunks(self.db, "LLM serving")
         assert len(results) > 0
 
     def test_temperature_in_docs(self):
-        results = search_chunks(self.db, "temperature")
+        results = retrieve_chunks(self.db, "temperature")
         assert any(r["pkg"] == "vllm" for r in results)
 
 
@@ -142,11 +142,11 @@ class TestLanggraphFixture:
         rebuild_fulltext_index(db)
 
     def test_state_graph_in_chunks(self):
-        results = search_chunks(self.db, "StateGraph")
+        results = retrieve_chunks(self.db, "StateGraph")
         assert any(r["pkg"] == "langgraph" for r in results)
 
     def test_conditional_edges(self):
-        results = search_chunks(self.db, "conditional edges")
+        results = retrieve_chunks(self.db, "conditional edges")
         assert len(results) > 0
 
 
@@ -162,21 +162,21 @@ class TestCrossPackageSearch:
         rebuild_fulltext_index(db)
 
     def test_internal_true_only_returns_project(self):
-        results = search_symbols(self.db, "train", internal=True)
+        results = retrieve_module_members(self.db, "train", internal=True)
         assert all(r["pkg"] == "__project__" for r in results)
 
     def test_internal_false_excludes_project(self):
-        results = search_symbols(self.db, "fit", internal=False)
+        results = retrieve_module_members(self.db, "fit", internal=False)
         assert all(r["pkg"] != "__project__" for r in results)
 
     def test_unscoped_search_returns_both(self):
         # "model" likely appears in both project and sklearn
-        results = search_chunks(self.db, "model")
+        results = retrieve_chunks(self.db, "model")
         pkgs = {r["pkg"] for r in results}
         assert len(pkgs) >= 1
 
     def test_package_filter_narrows_results(self):
-        results = search_symbols(self.db, "predict", pkg="sklearn")
+        results = retrieve_module_members(self.db, "predict", pkg="sklearn")
         assert all(r["pkg"] == "sklearn" for r in results)
 
     def test_write_dep_with_fixture_data(self):
@@ -209,8 +209,8 @@ class TestCrossPackageSearch:
         assert pkg is not None
         assert pkg["version"] == "1.2.3"
 
-        syms = search_symbols(self.db, "train", pkg="testlib")
+        syms = retrieve_module_members(self.db, "train", pkg="testlib")
         assert len(syms) >= 1
 
-        chunks = search_chunks(self.db, "batch inference", pkg="testlib")
+        chunks = retrieve_chunks(self.db, "batch inference", pkg="testlib")
         assert len(chunks) >= 1
