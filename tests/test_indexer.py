@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import open_db, rebuild_fts
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 from pydocs_mcp.indexer import (
-    _parse_source_files,
-    _site_packages_root,
-    _write_dep,
-    index_project,
+    _extract_from_source_files,
+    _persist_dependency,
+    find_site_packages_root,
+    index_project_source,
 )
 
 
@@ -43,19 +43,19 @@ def project_dir(tmp_path):
 
 @pytest.fixture
 def db(tmp_path):
-    return open_db(tmp_path / "test.db")
+    return open_index_database(tmp_path / "test.db")
 
 
 class TestParseSourceFiles:
     def test_extracts_chunks_and_symbols(self, project_dir):
         py_files = sorted(str(p) for p in project_dir.rglob("*.py"))
-        chunks, syms = _parse_source_files("mypkg", py_files, str(project_dir))
+        chunks, syms = _extract_from_source_files("mypkg", py_files, str(project_dir))
         assert len(chunks) > 0
         assert len(syms) > 0
 
     def test_symbol_names(self, project_dir):
         py_files = sorted(str(p) for p in project_dir.rglob("*.py"))
-        _, syms = _parse_source_files("mypkg", py_files, str(project_dir))
+        _, syms = _extract_from_source_files("mypkg", py_files, str(project_dir))
         names = {s[2] for s in syms}
         assert "compute" in names
         assert "Engine" in names
@@ -63,60 +63,60 @@ class TestParseSourceFiles:
 
     def test_skips_private_symbols(self, project_dir):
         py_files = sorted(str(p) for p in project_dir.rglob("*.py"))
-        _, syms = _parse_source_files("mypkg", py_files, str(project_dir))
+        _, syms = _extract_from_source_files("mypkg", py_files, str(project_dir))
         names = {s[2] for s in syms}
         assert "_private" not in names
 
     def test_extracts_module_docstrings(self, project_dir):
         py_files = sorted(str(p) for p in project_dir.rglob("*.py"))
-        chunks, _ = _parse_source_files("mypkg", py_files, str(project_dir))
+        chunks, _ = _extract_from_source_files("mypkg", py_files, str(project_dir))
         doc_chunks = [c for c in chunks if c[3] == "project_doc"]
         assert len(doc_chunks) > 0
 
     def test_empty_file_list(self):
-        chunks, syms = _parse_source_files("mypkg", [], ".")
+        chunks, syms = _extract_from_source_files("mypkg", [], ".")
         assert chunks == []
         assert syms == []
 
     def test_kind_prefix(self, project_dir):
         py_files = sorted(str(p) for p in project_dir.rglob("*.py"))
-        chunks, _ = _parse_source_files("mypkg", py_files, str(project_dir), "dep")
+        chunks, _ = _extract_from_source_files("mypkg", py_files, str(project_dir), "dep")
         kinds = {c[3] for c in chunks}
         assert all(k.startswith("dep") for k in kinds)
 
 
 class TestIndexProject:
     def test_indexes_project_files(self, db, project_dir):
-        index_project(db, project_dir)
+        index_project_source(db, project_dir)
         pkgs = db.execute("SELECT * FROM packages WHERE name='__project__'").fetchone()
         assert pkgs is not None
         assert pkgs["version"] == "local"
 
     def test_creates_chunks(self, db, project_dir):
-        index_project(db, project_dir)
+        index_project_source(db, project_dir)
         count = db.execute(
-            "SELECT count(*) FROM chunks WHERE pkg='__project__'"
+            "SELECT count(*) FROM chunks WHERE package='__project__'"
         ).fetchone()[0]
         assert count > 0
 
     def test_creates_symbols(self, db, project_dir):
-        index_project(db, project_dir)
+        index_project_source(db, project_dir)
         count = db.execute(
-            "SELECT count(*) FROM symbols WHERE pkg='__project__'"
+            "SELECT count(*) FROM module_members WHERE package='__project__'"
         ).fetchone()[0]
         assert count > 0
 
     def test_caching_skips_unchanged(self, db, project_dir):
-        index_project(db, project_dir)
+        index_project_source(db, project_dir)
         chunks_before = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
 
-        index_project(db, project_dir)
+        index_project_source(db, project_dir)
         chunks_after = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
         assert chunks_after == chunks_before
 
     def test_reindexes_after_file_change(self, db, project_dir):
-        index_project(db, project_dir)
-        syms_before = db.execute("SELECT count(*) FROM symbols").fetchone()[0]
+        index_project_source(db, project_dir)
+        syms_before = db.execute("SELECT count(*) FROM module_members").fetchone()[0]
 
         new_file = project_dir / "new_module.py"
         new_file.write_text(
@@ -125,13 +125,13 @@ class TestIndexProject:
             '    return x * 2\n'
         )
 
-        index_project(db, project_dir)
-        syms_after = db.execute("SELECT count(*) FROM symbols").fetchone()[0]
+        index_project_source(db, project_dir)
+        syms_after = db.execute("SELECT count(*) FROM module_members").fetchone()[0]
         assert syms_after > syms_before
 
     def test_fts_searchable_after_index(self, db, project_dir):
-        index_project(db, project_dir)
-        rebuild_fts(db)
+        index_project_source(db, project_dir)
+        rebuild_fulltext_index(db)
         rows = db.execute(
             "SELECT * FROM chunks_fts WHERE chunks_fts MATCH ?", ('"compute"',)
         ).fetchall()
@@ -148,7 +148,7 @@ class TestWriteDep:
             "chunks": [("fastapi", "Overview", "FastAPI is a modern web framework.", "readme")],
             "symbols": [("fastapi", "fastapi", "FastAPI", "class", "()", "", "[]", "Main app class.")],
         }
-        _write_dep(db, data)
+        _persist_dependency(db, data)
         pkg = db.execute("SELECT * FROM packages WHERE name='fastapi'").fetchone()
         assert pkg is not None
         assert pkg["version"] == "0.100"
@@ -163,8 +163,8 @@ class TestWriteDep:
             ],
             "symbols": [],
         }
-        _write_dep(db, data)
-        count = db.execute("SELECT count(*) FROM chunks WHERE pkg='mypkg'").fetchone()[0]
+        _persist_dependency(db, data)
+        count = db.execute("SELECT count(*) FROM chunks WHERE package='mypkg'").fetchone()[0]
         assert count == 2
 
     def test_writes_symbols(self, db):
@@ -174,8 +174,8 @@ class TestWriteDep:
             "chunks": [],
             "symbols": [("mypkg", "mypkg.core", "run", "def", "()", "None", "[]", "Run it.")],
         }
-        _write_dep(db, data)
-        sym = db.execute("SELECT * FROM symbols WHERE name='run'").fetchone()
+        _persist_dependency(db, data)
+        sym = db.execute("SELECT * FROM module_members WHERE name='run'").fetchone()
         assert sym is not None
         assert sym["kind"] == "def"
 
@@ -185,12 +185,12 @@ class TestWriteDep:
             "summary": "old", "homepage": "", "requires": "[]",
             "chunks": [], "symbols": [],
         }
-        _write_dep(db, data)
+        _persist_dependency(db, data)
 
         data["version"] = "2.0"
         data["summary"] = "new"
         data["hash"] = "h2"
-        _write_dep(db, data)
+        _persist_dependency(db, data)
 
         pkgs = db.execute("SELECT * FROM packages WHERE name='mypkg'").fetchall()
         assert len(pkgs) == 1
@@ -200,15 +200,15 @@ class TestWriteDep:
 class TestSitePackagesRoot:
     def test_finds_site_packages(self):
         path = "/usr/lib/python3.11/site-packages/requests/api.py"
-        assert _site_packages_root(path).endswith("site-packages")
+        assert find_site_packages_root(path).endswith("site-packages")
 
     def test_finds_dist_packages(self):
         path = "/usr/lib/python3/dist-packages/apt/package.py"
-        assert _site_packages_root(path).endswith("dist-packages")
+        assert find_site_packages_root(path).endswith("dist-packages")
 
     def test_fallback_for_unknown_layout(self, tmp_path):
         fake = tmp_path / "some" / "path" / "module.py"
         fake.parent.mkdir(parents=True)
         fake.touch()
-        root = _site_packages_root(str(fake))
+        root = find_site_packages_root(str(fake))
         assert root == str(tmp_path / "some")

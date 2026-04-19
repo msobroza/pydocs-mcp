@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import open_db, rebuild_fts
-from pydocs_mcp.indexer import _parse_source_files, _write_dep, index_project
-from pydocs_mcp.search import search_chunks, search_symbols
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
+from pydocs_mcp.indexer import _extract_from_source_files, _persist_dependency, index_project_source
+from pydocs_mcp.search import retrieve_chunks, retrieve_module_members
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 FAKE_PROJECT = FIXTURES_DIR / "fake_project"
@@ -19,26 +19,26 @@ PACKAGES_DIR = FIXTURES_DIR / "packages"
 
 @pytest.fixture
 def db(tmp_path):
-    return open_db(tmp_path / "fixture_test.db")
+    return open_index_database(tmp_path / "fixture_test.db")
 
 
 def _index_fake_package(conn, pkg_name):
     """Index a fixture package into the database using static parsing."""
     pkg_dir = PACKAGES_DIR / pkg_name
     py_files = sorted(str(p) for p in pkg_dir.rglob("*.py"))
-    chunks, syms = _parse_source_files(pkg_name, py_files, str(pkg_dir), kind_prefix="dep")
+    chunks, syms = _extract_from_source_files(pkg_name, py_files, str(pkg_dir), kind_prefix="dep")
     conn.execute(
-        "INSERT INTO packages(name, version, summary, homepage, requires, hash) "
-        "VALUES(?, ?, ?, '', '[]', ?)",
+        "INSERT INTO packages(name, version, summary, homepage, dependencies, content_hash, origin) "
+        "VALUES(?, ?, ?, '', '[]', ?, 'dependency')",
         (pkg_name, "0.0.0", f"{pkg_name} fixture", f"fixture_{pkg_name}"),
     )
     if chunks:
         conn.executemany(
-            "INSERT INTO chunks(pkg, heading, body, kind) VALUES(?, ?, ?, ?)", chunks,
+            "INSERT INTO chunks(package, title, text, origin) VALUES(?, ?, ?, ?)", chunks,
         )
     if syms:
         conn.executemany(
-            "INSERT INTO symbols(pkg, module, name, kind, signature, returns, params, doc) "
+            "INSERT INTO module_members(package, module, name, kind, signature, return_annotation, parameters, docstring) "
             "VALUES(?, ?, ?, ?, ?, ?, ?, ?)", syms,
         )
     conn.commit()
@@ -47,29 +47,29 @@ def _index_fake_package(conn, pkg_name):
 
 class TestFakeProjectIndexing:
     def test_indexes_fake_project_successfully(self, db):
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         pkg = db.execute("SELECT * FROM packages WHERE name='__project__'").fetchone()
         assert pkg is not None
 
     def test_extracts_project_symbols(self, db):
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         syms = db.execute(
-            "SELECT * FROM symbols WHERE pkg='__project__'"
+            "SELECT * FROM module_members WHERE package='__project__'"
         ).fetchall()
         names = {s["name"] for s in syms}
         assert "main" in names or "run_pipeline" in names or "train_model" in names
 
     def test_extracts_project_chunks(self, db):
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         chunks = db.execute(
-            "SELECT * FROM chunks WHERE pkg='__project__'"
+            "SELECT * FROM chunks WHERE package='__project__'"
         ).fetchall()
         assert len(chunks) > 0
 
     def test_project_docstrings_captured(self, db):
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         docs = db.execute(
-            "SELECT doc FROM symbols WHERE pkg='__project__' AND doc != ''"
+            "SELECT docstring FROM module_members WHERE package='__project__' AND docstring != ''"
         ).fetchall()
         assert len(docs) > 0
 
@@ -93,24 +93,24 @@ class TestSklearnFixture:
     def setup_sklearn(self, db):
         self.db = db
         _index_fake_package(db, "sklearn")
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_random_forest_in_chunks(self):
         # Classes without parens aren't captured by parse_py_file regex,
         # but their text is indexed as chunks
-        results = search_chunks(self.db, "RandomForestClassifier")
+        results = retrieve_chunks(self.db, "RandomForestClassifier")
         assert any(r["pkg"] == "sklearn" for r in results)
 
     def test_gradient_boosting_in_chunks(self):
-        results = search_chunks(self.db, "Gradient Boosting")
+        results = retrieve_chunks(self.db, "Gradient Boosting")
         assert any(r["pkg"] == "sklearn" for r in results)
 
     def test_ensemble_methods(self):
-        results = search_chunks(self.db, "ensemble bagging boosting")
+        results = retrieve_chunks(self.db, "ensemble bagging boosting")
         assert len(results) > 0
 
     def test_predict_in_chunks(self):
-        results = search_chunks(self.db, "predict")
+        results = retrieve_chunks(self.db, "predict")
         assert any(r["pkg"] == "sklearn" for r in results)
 
 
@@ -119,18 +119,18 @@ class TestVllmFixture:
     def setup_vllm(self, db):
         self.db = db
         _index_fake_package(db, "vllm")
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_sampling_params_in_chunks(self):
-        results = search_chunks(self.db, "SamplingParams")
+        results = retrieve_chunks(self.db, "SamplingParams")
         assert any(r["pkg"] == "vllm" for r in results)
 
     def test_llm_serving_chunks(self):
-        results = search_chunks(self.db, "LLM serving")
+        results = retrieve_chunks(self.db, "LLM serving")
         assert len(results) > 0
 
     def test_temperature_in_docs(self):
-        results = search_chunks(self.db, "temperature")
+        results = retrieve_chunks(self.db, "temperature")
         assert any(r["pkg"] == "vllm" for r in results)
 
 
@@ -139,14 +139,14 @@ class TestLanggraphFixture:
     def setup_langgraph(self, db):
         self.db = db
         _index_fake_package(db, "langgraph")
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_state_graph_in_chunks(self):
-        results = search_chunks(self.db, "StateGraph")
+        results = retrieve_chunks(self.db, "StateGraph")
         assert any(r["pkg"] == "langgraph" for r in results)
 
     def test_conditional_edges(self):
-        results = search_chunks(self.db, "conditional edges")
+        results = retrieve_chunks(self.db, "conditional edges")
         assert len(results) > 0
 
 
@@ -156,31 +156,31 @@ class TestCrossPackageSearch:
     @pytest.fixture(autouse=True)
     def setup_all(self, db):
         self.db = db
-        index_project(db, FAKE_PROJECT)
+        index_project_source(db, FAKE_PROJECT)
         for pkg in ("sklearn", "vllm", "langgraph"):
             _index_fake_package(db, pkg)
-        rebuild_fts(db)
+        rebuild_fulltext_index(db)
 
     def test_internal_true_only_returns_project(self):
-        results = search_symbols(self.db, "train", internal=True)
+        results = retrieve_module_members(self.db, "train", internal=True)
         assert all(r["pkg"] == "__project__" for r in results)
 
     def test_internal_false_excludes_project(self):
-        results = search_symbols(self.db, "fit", internal=False)
+        results = retrieve_module_members(self.db, "fit", internal=False)
         assert all(r["pkg"] != "__project__" for r in results)
 
     def test_unscoped_search_returns_both(self):
         # "model" likely appears in both project and sklearn
-        results = search_chunks(self.db, "model")
+        results = retrieve_chunks(self.db, "model")
         pkgs = {r["pkg"] for r in results}
         assert len(pkgs) >= 1
 
     def test_package_filter_narrows_results(self):
-        results = search_symbols(self.db, "predict", pkg="sklearn")
+        results = retrieve_module_members(self.db, "predict", pkg="sklearn")
         assert all(r["pkg"] == "sklearn" for r in results)
 
     def test_write_dep_with_fixture_data(self):
-        """Test _write_dep using data shaped like real fixture output."""
+        """Test _persist_dependency using data shaped like real fixture output."""
         data = {
             "name": "testlib",
             "version": "1.2.3",
@@ -201,16 +201,16 @@ class TestCrossPackageSearch:
                  "A machine learning pipeline that chains transformers and estimators."),
             ],
         }
-        _write_dep(self.db, data)
-        rebuild_fts(self.db)
+        _persist_dependency(self.db, data)
+        rebuild_fulltext_index(self.db)
 
         # Verify it's searchable
         pkg = self.db.execute("SELECT * FROM packages WHERE name='testlib'").fetchone()
         assert pkg is not None
         assert pkg["version"] == "1.2.3"
 
-        syms = search_symbols(self.db, "train", pkg="testlib")
+        syms = retrieve_module_members(self.db, "train", pkg="testlib")
         assert len(syms) >= 1
 
-        chunks = search_chunks(self.db, "batch inference", pkg="testlib")
+        chunks = retrieve_chunks(self.db, "batch inference", pkg="testlib")
         assert len(chunks) >= 1

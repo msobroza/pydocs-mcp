@@ -20,9 +20,9 @@ from pydocs_mcp.constants import (
     SEARCH_DOC_DISPLAY,
     SEARCH_RESULTS_MAX,
 )
-from pydocs_mcp.db import open_db
-from pydocs_mcp.deps import normalize
-from pydocs_mcp.search import concat_context, search_chunks, search_symbols
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.deps import normalize_package_name
+from pydocs_mcp.search import format_within_budget, retrieve_chunks, retrieve_module_members
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -42,7 +42,7 @@ def run(db_path: Path):
         log.error("Missing dependency: pip install mcp")
         sys.exit(1)
 
-    conn = open_db(db_path)
+    conn = open_index_database(db_path)
     atexit.register(conn.close)
     mcp = FastMCP("pydocs-mcp")
 
@@ -63,7 +63,7 @@ def run(db_path: Path):
         Args:
             package: e.g. 'fastapi', 'vllm', '__project__'
         """
-        pkg = "__project__" if package == "__project__" else normalize(package)
+        pkg = "__project__" if package == "__project__" else normalize_package_name(package)
         info = conn.execute(
             "SELECT * FROM packages WHERE name=?", (pkg,)
         ).fetchone()
@@ -73,18 +73,18 @@ def run(db_path: Path):
         parts = [f"# {info['name']} {info['version']}\n{info['summary']}"]
         if info["homepage"]:
             parts.append(f"Homepage: {info['homepage']}")
-        reqs = json.loads(info["requires"] or "[]")
+        reqs = json.loads(info["dependencies"] or "[]")
         if reqs:
             parts.append("Deps: " + ", ".join(reqs[:REQUIREMENTS_DISPLAY]))
 
         for r in conn.execute(
-            "SELECT heading, body FROM chunks WHERE pkg=? ORDER BY id LIMIT 10",
+            "SELECT title AS heading, text AS body FROM chunks WHERE package=? ORDER BY id LIMIT 10",
             (pkg,),
         ):
             parts.append(f"## {r['heading']}\n{r['body']}")
 
         syms = conn.execute(
-            "SELECT kind, name, signature, doc FROM symbols WHERE pkg=? LIMIT 30",
+            "SELECT kind, name, signature, docstring AS doc FROM module_members WHERE package=? LIMIT 30",
             (pkg,),
         ).fetchall()
         if syms:
@@ -112,10 +112,10 @@ def run(db_path: Path):
                 dependency packages; omit (None) → search everything.
             topic: If given, restrict to chunks whose heading contains this string.
         """
-        conn = await asyncio.to_thread(open_db, db_path)
+        conn = await asyncio.to_thread(open_index_database, db_path)
         try:
             results = await asyncio.to_thread(
-                search_chunks,
+                retrieve_chunks,
                 conn,
                 query,
                 pkg=package.strip() or None,
@@ -126,7 +126,7 @@ def run(db_path: Path):
             conn.close()
         if not results:
             return "No matches found."
-        return concat_context(results)
+        return format_within_budget(results)
 
     @mcp.tool()
     async def search_api(
@@ -142,10 +142,10 @@ def run(db_path: Path):
             internal: True → project symbols only; False → dependency symbols only;
                 omit (None) → all symbols.
         """
-        conn = await asyncio.to_thread(open_db, db_path)
+        conn = await asyncio.to_thread(open_index_database, db_path)
         try:
             results = await asyncio.to_thread(
-                search_symbols,
+                retrieve_module_members,
                 conn,
                 query,
                 pkg=package.strip() or None,
@@ -172,7 +172,7 @@ def run(db_path: Path):
             submodule: e.g. 'routing' → fastapi.routing
         """
         import importlib
-        pkg_name = normalize(package)
+        pkg_name = normalize_package_name(package)
         row = conn.execute("SELECT name FROM packages WHERE name=?", (pkg_name,)).fetchone()
         if not row:
             return f"'{package}' is not indexed. Use list_packages() to see available packages."

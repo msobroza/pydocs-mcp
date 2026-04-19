@@ -8,10 +8,15 @@ from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.constants import SEARCH_BODY_CLI, SEARCH_DOC_CLI
-from pydocs_mcp.db import clear_all, db_path_for, open_db, rebuild_fts
-from pydocs_mcp.deps import resolve
-from pydocs_mcp.indexer import index_deps, index_project
-from pydocs_mcp.search import search_chunks, search_symbols
+from pydocs_mcp.db import (
+    cache_path_for_project,
+    clear_all_packages,
+    open_index_database,
+    rebuild_fulltext_index,
+)
+from pydocs_mcp.deps import discover_declared_dependencies
+from pydocs_mcp.indexer import index_dependencies, index_project_source
+from pydocs_mcp.search import retrieve_chunks, retrieve_module_members
 from pydocs_mcp.server import run
 
 log = logging.getLogger("pydocs-mcp")
@@ -69,47 +74,47 @@ def main():
         log.info("Engine: %s", "Rust" if RUST_AVAILABLE else "Python")
 
     project = Path(getattr(args, "project", ".")).resolve()
-    db_path = db_path_for(project)
+    db_path = cache_path_for_project(project)
     log.debug("DB: %s", db_path)
 
     if args.cmd in ("serve", "index"):
-        conn = open_db(db_path)
+        conn = open_index_database(db_path)
 
         if args.force:
-            clear_all(conn)
+            clear_all_packages(conn)
             log.info("Cache cleared")
 
         if not args.skip_project:
             log.info("Project: %s", project)
-            index_project(conn, project)
+            index_project_source(conn, project)
 
-        deps = resolve(project)
+        deps = discover_declared_dependencies(project)
         if deps:
             use_inspect = not args.no_inspect
-            stats = index_deps(conn, deps, args.depth, args.workers, use_inspect)
+            stats = index_dependencies(conn, deps, args.depth, args.workers, use_inspect)
             log.info(
                 "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
                 stats["indexed"], stats["cached"], stats["failed"],
                 db_path.stat().st_size / 1024,
             )
 
-        rebuild_fts(conn)
+        rebuild_fulltext_index(conn)
         conn.close()
 
         if args.cmd == "serve":
             run(db_path)
 
     elif args.cmd in ("query", "api"):
-        conn = open_db(db_path)
+        conn = open_index_database(db_path)
         q = " ".join(args.terms)
 
         if args.cmd == "query":
-            for r in search_chunks(conn, q, pkg=args.package):
+            for r in retrieve_chunks(conn, q, pkg=args.package):
                 print(f"\n{'─' * 60}")
                 print(f"[{r['kind']}] {r['pkg']} → {r['heading']}")
                 print(r["body"][:SEARCH_BODY_CLI])
         else:
-            for s in search_symbols(conn, q, pkg=args.package):
+            for s in retrieve_module_members(conn, q, pkg=args.package):
                 print(f"\n{'─' * 60}")
                 print(f"{s['kind']} {s['module']}.{s['name']}{s['signature']}")
                 print((s["doc"] or "—")[:SEARCH_DOC_CLI])

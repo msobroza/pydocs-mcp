@@ -38,8 +38,8 @@ from benchmarks.dataset_gen import generate_dataset
 from benchmarks.search_bench import run_search_benchmark, to_dataframe
 from benchmarks.context7_bench import run_context7_benchmark
 from benchmarks.neuledge_bench import run_neuledge_benchmark
-from pydocs_mcp.db import open_db, rebuild_fts
-from pydocs_mcp.indexer import index_project, index_deps
+from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
+from pydocs_mcp.indexer import index_dependencies, index_project_source
 
 console = Console()
 
@@ -134,10 +134,10 @@ def main() -> None:
         # Phase 3: Build full search index (separate DB for search benchmark)
         console.print("[3/5] Building search index...")
         db_path = Path(tmp_root) / "bench_search.db"
-        conn = open_db(db_path)
-        index_project(conn, project_path)
-        index_deps(conn, FAKE_REQUIREMENTS, workers=args.workers, use_inspect=False)
-        rebuild_fts(conn)
+        conn = open_index_database(db_path)
+        index_project_source(conn, project_path)
+        index_dependencies(conn, FAKE_REQUIREMENTS, workers=args.workers, use_inspect=False)
+        rebuild_fulltext_index(conn)
         conn.close()
 
         # Phase 4: Synthetic dataset

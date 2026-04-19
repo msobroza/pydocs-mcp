@@ -96,3 +96,14 @@ Use `__project__` as the package name to search your own code.
 | **Total indexing** | **~2s** | **~0.5s** |
 
 Re-runs with no changes: <100ms (hash check only).
+
+## Cache
+
+Each project gets its own SQLite database at `~/.pydocs-mcp/{dirname}_{path_hash}.db`.
+The schema is versioned via `PRAGMA user_version`; opening a DB whose version doesn't
+match drops all tables and re-indexes from scratch. The cache is always rebuildable
+from source, so it's safe to delete at any time.
+
+**Downgrading:** if you install an older version of `pydocs-mcp` that uses a
+pre-v2 schema, delete `~/.pydocs-mcp/*.db` first — otherwise the older code
+will fail with "no such column: pkg" against the newer schema.
