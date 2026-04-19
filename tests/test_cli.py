@@ -158,7 +158,7 @@ class TestNoRustFlag:
         conn = sqlite3.connect(str(db))
         default_count = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
         default_headings = {
-            r[0] for r in conn.execute("SELECT heading FROM chunks").fetchall()
+            r[0] for r in conn.execute("SELECT title FROM chunks").fetchall()
         }
         conn.close()
 
@@ -168,7 +168,7 @@ class TestNoRustFlag:
         conn = sqlite3.connect(str(db))
         norust_count = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
         norust_headings = {
-            r[0] for r in conn.execute("SELECT heading FROM chunks").fetchall()
+            r[0] for r in conn.execute("SELECT title FROM chunks").fetchall()
         }
         conn.close()
 

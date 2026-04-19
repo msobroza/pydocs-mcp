@@ -95,14 +95,14 @@ class TestIndexProject:
     def test_creates_chunks(self, db, project_dir):
         index_project(db, project_dir)
         count = db.execute(
-            "SELECT count(*) FROM chunks WHERE pkg='__project__'"
+            "SELECT count(*) FROM chunks WHERE package='__project__'"
         ).fetchone()[0]
         assert count > 0
 
     def test_creates_symbols(self, db, project_dir):
         index_project(db, project_dir)
         count = db.execute(
-            "SELECT count(*) FROM symbols WHERE pkg='__project__'"
+            "SELECT count(*) FROM module_members WHERE package='__project__'"
         ).fetchone()[0]
         assert count > 0
 
@@ -116,7 +116,7 @@ class TestIndexProject:
 
     def test_reindexes_after_file_change(self, db, project_dir):
         index_project(db, project_dir)
-        syms_before = db.execute("SELECT count(*) FROM symbols").fetchone()[0]
+        syms_before = db.execute("SELECT count(*) FROM module_members").fetchone()[0]
 
         new_file = project_dir / "new_module.py"
         new_file.write_text(
@@ -126,7 +126,7 @@ class TestIndexProject:
         )
 
         index_project(db, project_dir)
-        syms_after = db.execute("SELECT count(*) FROM symbols").fetchone()[0]
+        syms_after = db.execute("SELECT count(*) FROM module_members").fetchone()[0]
         assert syms_after > syms_before
 
     def test_fts_searchable_after_index(self, db, project_dir):
@@ -164,7 +164,7 @@ class TestWriteDep:
             "symbols": [],
         }
         _write_dep(db, data)
-        count = db.execute("SELECT count(*) FROM chunks WHERE pkg='mypkg'").fetchone()[0]
+        count = db.execute("SELECT count(*) FROM chunks WHERE package='mypkg'").fetchone()[0]
         assert count == 2
 
     def test_writes_symbols(self, db):
@@ -175,7 +175,7 @@ class TestWriteDep:
             "symbols": [("mypkg", "mypkg.core", "run", "def", "()", "None", "[]", "Run it.")],
         }
         _write_dep(db, data)
-        sym = db.execute("SELECT * FROM symbols WHERE name='run'").fetchone()
+        sym = db.execute("SELECT * FROM module_members WHERE name='run'").fetchone()
         assert sym is not None
         assert sym["kind"] == "def"
 

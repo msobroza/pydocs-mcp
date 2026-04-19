@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from pydocs_mcp._fast import (
-    chunk_text,
+    split_into_chunks,
     extract_module_doc,
     hash_files,
     parse_py_file,
@@ -94,7 +94,7 @@ def _parse_source_files(
                 sym.signature, "", "[]", sym.docstring,
             ))
 
-        for heading, body in chunk_text(source):
+        for heading, body in split_into_chunks(source):
             chunk_rows.append((pkg, f"{module}:{heading}", body, f"{kind_prefix}_code"))
 
     return chunk_rows, sym_rows
@@ -114,17 +114,17 @@ def index_project(conn: sqlite3.Connection, root: Path):
 
     clear_pkg(conn, pkg)
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?)",
-        (pkg, "local", f"Project: {root.name}", "", "[]", new_hash),
+        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        (pkg, "local", f"Project: {root.name}", "", "[]", new_hash, "project"),
     )
 
     chunk_rows, sym_rows = _parse_source_files(pkg, py_paths, str(root))
 
     conn.executemany(
-        "INSERT INTO chunks(pkg,heading,body,kind) VALUES(?,?,?,?)", chunk_rows,
+        "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)", chunk_rows,
     )
     conn.executemany(
-        "INSERT INTO symbols(pkg,module,name,kind,signature,returns,params,doc) "
+        "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) "
         "VALUES(?,?,?,?,?,?,?,?)", sym_rows,
     )
     conn.commit()
@@ -212,7 +212,7 @@ def _base_data(dist, name: str, version: str) -> dict:
     }
     payload = dist.metadata.get_payload()
     if isinstance(payload, str) and len(payload.strip()) > 50:
-        for h, b in chunk_text(payload.strip()):
+        for h, b in split_into_chunks(payload.strip()):
             data["chunks"].append((name, h, b, "readme"))
     return data
 
@@ -228,7 +228,7 @@ def _add_doc_files(dist, name: str, data: dict):
             loc = f.locate()
             if loc.exists() and loc.stat().st_size < 500_000:
                 text = loc.read_text("utf-8", errors="ignore")
-                for h, b in chunk_text(text):
+                for h, b in split_into_chunks(text):
                     data["chunks"].append((name, h, b, "doc"))
     except Exception as e:
         log.debug("Failed to read doc files for %s: %s", name, e)
@@ -237,18 +237,18 @@ def _add_doc_files(dist, name: str, data: dict):
 def _write_dep(conn: sqlite3.Connection, data: dict):
     clear_pkg(conn, data["name"])
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?)",
+        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
         (data["name"], data["version"], data["summary"],
-         data["homepage"], data["requires"], data["hash"]),
+         data["homepage"], data["requires"], data["hash"], "dependency"),
     )
     if data["chunks"]:
         conn.executemany(
-            "INSERT INTO chunks(pkg,heading,body,kind) VALUES(?,?,?,?)",
+            "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
             data["chunks"],
         )
     if data["symbols"]:
         conn.executemany(
-            "INSERT INTO symbols(pkg,module,name,kind,signature,returns,params,doc) "
+            "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) "
             "VALUES(?,?,?,?,?,?,?,?)",
             data["symbols"],
         )

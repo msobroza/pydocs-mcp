@@ -73,18 +73,18 @@ def run(db_path: Path):
         parts = [f"# {info['name']} {info['version']}\n{info['summary']}"]
         if info["homepage"]:
             parts.append(f"Homepage: {info['homepage']}")
-        reqs = json.loads(info["requires"] or "[]")
+        reqs = json.loads(info["dependencies"] or "[]")
         if reqs:
             parts.append("Deps: " + ", ".join(reqs[:REQUIREMENTS_DISPLAY]))
 
         for r in conn.execute(
-            "SELECT heading, body FROM chunks WHERE pkg=? ORDER BY id LIMIT 10",
+            "SELECT title AS heading, text AS body FROM chunks WHERE package=? ORDER BY id LIMIT 10",
             (pkg,),
         ):
             parts.append(f"## {r['heading']}\n{r['body']}")
 
         syms = conn.execute(
-            "SELECT kind, name, signature, doc FROM symbols WHERE pkg=? LIMIT 30",
+            "SELECT kind, name, signature, docstring AS doc FROM module_members WHERE package=? LIMIT 30",
             (pkg,),
         ).fetchall()
         if syms:

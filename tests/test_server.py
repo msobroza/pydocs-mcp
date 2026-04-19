@@ -42,28 +42,28 @@ def server_tools(tmp_path):
 
     # Seed data
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?)",
-        ("__project__", "local", "Test project", "", "[]", "aaa"),
+        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        ("__project__", "local", "Test project", "", "[]", "aaa", "project"),
     )
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?)",
+        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
         ("fastapi", "0.100", "Web framework", "https://fastapi.example.com",
-         '["starlette", "pydantic"]', "bbb"),
+         '["starlette", "pydantic"]', "bbb", "dependency"),
     )
     conn.execute(
-        "INSERT INTO chunks(pkg,heading,body,kind) VALUES(?,?,?,?)",
-        ("__project__", "Overview", "Project overview with useful code", "project_doc"),
+        "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
+        ("__project__", "Overview", "Project overview with useful code", "project_module_doc"),
     )
     conn.execute(
-        "INSERT INTO chunks(pkg,heading,body,kind) VALUES(?,?,?,?)",
-        ("fastapi", "Getting Started", "FastAPI is a modern web framework for APIs", "readme"),
+        "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
+        ("fastapi", "Getting Started", "FastAPI is a modern web framework for APIs", "dependency_readme"),
     )
     conn.execute(
-        "INSERT INTO symbols(pkg,module,name,kind,signature,returns,params,doc) VALUES(?,?,?,?,?,?,?,?)",
-        ("__project__", "mymod", "compute", "def", "(x)", "int", "[]", "Compute things"),
+        "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) VALUES(?,?,?,?,?,?,?,?)",
+        ("__project__", "mymod", "compute", "function", "(x)", "int", "[]", "Compute things"),
     )
     conn.execute(
-        "INSERT INTO symbols(pkg,module,name,kind,signature,returns,params,doc) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) VALUES(?,?,?,?,?,?,?,?)",
         ("fastapi", "fastapi", "FastAPI", "class", "()", "", "[]", "Main app class"),
     )
     conn.commit()
@@ -231,8 +231,8 @@ class TestInspectModule:
         tools, db_path = server_tools
         conn = open_db(db_path)
         conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?)",
-            ("json", "stdlib", "JSON encoder/decoder", "", "[]", "jjj"),
+            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            ("json", "stdlib", "JSON encoder/decoder", "", "[]", "jjj", "dependency"),
         )
         conn.commit()
         conn.close()
@@ -243,8 +243,8 @@ class TestInspectModule:
         tools, db_path = server_tools
         conn = open_db(db_path)
         conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?)",
-            ("os", "stdlib", "OS interface", "", "[]", "ooo"),
+            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            ("os", "stdlib", "OS interface", "", "[]", "ooo", "dependency"),
         )
         conn.commit()
         conn.close()
@@ -256,8 +256,8 @@ class TestInspectModule:
         tools, db_path = server_tools
         conn = open_db(db_path)
         conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?)",
-            ("email", "stdlib", "Email library", "", "[]", "eee"),
+            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            ("email", "stdlib", "Email library", "", "[]", "eee", "dependency"),
         )
         conn.commit()
         conn.close()

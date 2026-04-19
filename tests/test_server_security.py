@@ -8,8 +8,8 @@ def make_conn_with_package(tmp_path: Path, pkg_name: str) -> sqlite3.Connection:
     from pydocs_mcp.db import open_db
     conn = open_db(tmp_path / "test.db")
     conn.execute(
-        "INSERT INTO packages(name, version, summary, homepage, requires) VALUES (?,?,?,?,?)",
-        (pkg_name, "1.0", "test pkg", "", "[]"),
+        "INSERT INTO packages(name, version, summary, homepage, dependencies, content_hash, origin) VALUES (?,?,?,?,?,?,?)",
+        (pkg_name, "1.0", "test pkg", "", "[]", "h", "dependency"),
     )
     conn.commit()
     return conn

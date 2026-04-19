@@ -21,8 +21,8 @@ class TestSearchChunksEdge:
         c = open_db(tmp_path / "bad.db")
         # Don't rebuild FTS, so the table exists but has no data matching
         c.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?)",
-            ("pkg", "1.0", "test", "", "[]", "h"),
+            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            ("pkg", "1.0", "test", "", "[]", "h", "dependency"),
         )
         c.commit()
         # Searching a term that doesn't exist just returns empty

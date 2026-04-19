@@ -28,17 +28,17 @@ def _index_fake_package(conn, pkg_name):
     py_files = sorted(str(p) for p in pkg_dir.rglob("*.py"))
     chunks, syms = _parse_source_files(pkg_name, py_files, str(pkg_dir), kind_prefix="dep")
     conn.execute(
-        "INSERT INTO packages(name, version, summary, homepage, requires, hash) "
-        "VALUES(?, ?, ?, '', '[]', ?)",
+        "INSERT INTO packages(name, version, summary, homepage, dependencies, content_hash, origin) "
+        "VALUES(?, ?, ?, '', '[]', ?, 'dependency')",
         (pkg_name, "0.0.0", f"{pkg_name} fixture", f"fixture_{pkg_name}"),
     )
     if chunks:
         conn.executemany(
-            "INSERT INTO chunks(pkg, heading, body, kind) VALUES(?, ?, ?, ?)", chunks,
+            "INSERT INTO chunks(package, title, text, origin) VALUES(?, ?, ?, ?)", chunks,
         )
     if syms:
         conn.executemany(
-            "INSERT INTO symbols(pkg, module, name, kind, signature, returns, params, doc) "
+            "INSERT INTO module_members(package, module, name, kind, signature, return_annotation, parameters, docstring) "
             "VALUES(?, ?, ?, ?, ?, ?, ?, ?)", syms,
         )
     conn.commit()
@@ -54,7 +54,7 @@ class TestFakeProjectIndexing:
     def test_extracts_project_symbols(self, db):
         index_project(db, FAKE_PROJECT)
         syms = db.execute(
-            "SELECT * FROM symbols WHERE pkg='__project__'"
+            "SELECT * FROM module_members WHERE package='__project__'"
         ).fetchall()
         names = {s["name"] for s in syms}
         assert "main" in names or "run_pipeline" in names or "train_model" in names
@@ -62,14 +62,14 @@ class TestFakeProjectIndexing:
     def test_extracts_project_chunks(self, db):
         index_project(db, FAKE_PROJECT)
         chunks = db.execute(
-            "SELECT * FROM chunks WHERE pkg='__project__'"
+            "SELECT * FROM chunks WHERE package='__project__'"
         ).fetchall()
         assert len(chunks) > 0
 
     def test_project_docstrings_captured(self, db):
         index_project(db, FAKE_PROJECT)
         docs = db.execute(
-            "SELECT doc FROM symbols WHERE pkg='__project__' AND doc != ''"
+            "SELECT docstring FROM module_members WHERE package='__project__' AND docstring != ''"
         ).fetchall()
         assert len(docs) > 0
 

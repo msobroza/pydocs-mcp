@@ -114,18 +114,18 @@ class TestSearchSymbolsLikeEscaping:
     def like_conn(self, tmp_path):
         c = open_db(tmp_path / "like_test.db")
         c.execute(
-            "INSERT INTO packages(name,version,summary,homepage,requires) VALUES(?,?,?,?,?)",
-            ("mypkg", "1.0", "test", "", "[]"),
+            "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
+            ("mypkg", "1.0", "test", "", "[]", "h", "dependency"),
         )
         c.execute(
-            "INSERT INTO symbols(pkg,module,kind,name,signature,doc,params,returns) "
+            "INSERT INTO module_members(package,module,kind,name,signature,docstring,parameters,return_annotation) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            ("mypkg", "mypkg.mod", "def", "get_value", "(x)", "Get value.", "[]", "int"),
+            ("mypkg", "mypkg.mod", "function", "get_value", "(x)", "Get value.", "[]", "int"),
         )
         c.execute(
-            "INSERT INTO symbols(pkg,module,kind,name,signature,doc,params,returns) "
+            "INSERT INTO module_members(package,module,kind,name,signature,docstring,parameters,return_annotation) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            ("mypkg", "mypkg.mod", "def", "unrelated", "()", "Unrelated function.", "[]", "None"),
+            ("mypkg", "mypkg.mod", "function", "unrelated", "()", "Unrelated function.", "[]", "None"),
         )
         c.commit()
         return c

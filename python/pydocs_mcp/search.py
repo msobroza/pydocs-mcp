@@ -45,23 +45,23 @@ def search_chunks(
 
     if pkg is not None:
         lit = pkg if pkg == "__project__" else normalize(pkg)
-        where.append("c.pkg = ?")
+        where.append("c.package = ?")
         params.append(lit)
 
     if internal is True:
-        where.append("c.pkg = '__project__'")
+        where.append("c.package = '__project__'")
     elif internal is False:
-        where.append("c.pkg != '__project__'")
+        where.append("c.package != '__project__'")
 
     if topic:
         # Escape SQL LIKE wildcards so the topic is matched literally, not as a pattern
         escaped_topic = topic.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        where.append("c.heading LIKE ? ESCAPE '\\'")
+        where.append("c.title LIKE ? ESCAPE '\\'")
         params.append(f"%{escaped_topic}%")
 
     params.append(limit)
     sql = (
-        "SELECT c.pkg, c.heading, c.body, c.kind, -m.rank AS rank"
+        "SELECT c.package AS pkg, c.title AS heading, c.text AS body, c.origin AS kind, -m.rank AS rank"
         " FROM chunks_fts m JOIN chunks c ON c.id = m.rowid"
         f" WHERE {' AND '.join(where)}"
         " ORDER BY rank LIMIT ?"
@@ -124,23 +124,24 @@ def search_symbols(
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     pat = f"%{escaped}%"
 
-    where: list[str] = ["(lower(name) LIKE ? ESCAPE '\\' OR lower(doc) LIKE ? ESCAPE '\\')"]
+    where: list[str] = ["(lower(name) LIKE ? ESCAPE '\\' OR lower(docstring) LIKE ? ESCAPE '\\')"]
     params: list = [pat, pat]
 
     if pkg is not None:
         lit = pkg if pkg == "__project__" else normalize(pkg)
-        where.append("pkg = ?")
+        where.append("package = ?")
         params.append(lit)
 
     if internal is True:
-        where.append("pkg = '__project__'")
+        where.append("package = '__project__'")
     elif internal is False:
-        where.append("pkg != '__project__'")
+        where.append("package != '__project__'")
 
     params.append(limit)
     sql = (
-        "SELECT pkg, module, name, kind, signature, returns, params, doc"
-        " FROM symbols"
+        "SELECT package AS pkg, module, name, kind, signature,"
+        " return_annotation AS returns, parameters AS params, docstring AS doc"
+        " FROM module_members"
         f" WHERE {' AND '.join(where)}"
         " LIMIT ?"
     )
