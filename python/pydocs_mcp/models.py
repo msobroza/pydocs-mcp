@@ -114,3 +114,18 @@ class ModuleMember:
     relevance: float | None = None
     retriever_name: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkList:
+    kind: ClassVar[str] = "chunk_list"
+    items: tuple[Chunk, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleMemberList:
+    kind: ClassVar[str] = "module_member_list"
+    items: tuple[ModuleMember, ...]
+
+
+PipelineResultItem = ChunkList | ModuleMemberList

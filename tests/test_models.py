@@ -10,14 +10,17 @@ import pytest
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
+    ChunkList,
     ChunkOrigin,
     MemberKind,
     MetadataFilterFormat,
     ModuleMember,
     ModuleMemberFilterField,
+    ModuleMemberList,
     Package,
     PackageOrigin,
     Parameter,
+    PipelineResultItem,
     SearchScope,
 )
 
@@ -156,3 +159,20 @@ def test_module_member_with_metadata():
     )
     assert m.metadata["name"] == "APIRouter"
     assert m.metadata["kind"] == "class"
+
+
+def test_chunk_list_carries_kind():
+    cl = ChunkList(items=(Chunk(text="a"), Chunk(text="b")))
+    assert cl.kind == "chunk_list"
+    assert len(cl.items) == 2
+
+
+def test_module_member_list_carries_kind():
+    ml = ModuleMemberList(items=(ModuleMember(), ModuleMember()))
+    assert ml.kind == "module_member_list"
+    assert len(ml.items) == 2
+
+
+def test_pipeline_result_item_is_union():
+    items: list[PipelineResultItem] = [ChunkList(items=()), ModuleMemberList(items=())]
+    assert len(items) == 2
