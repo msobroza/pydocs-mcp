@@ -2,7 +2,7 @@
 Try to import Rust-accelerated functions, fall back to pure Python.
 
 Usage anywhere in the project:
-    from pydocs_mcp._fast import walk_py_files, chunk_text, ...
+    from pydocs_mcp._fast import walk_py_files, split_into_chunks, ...
 """
 import logging
 
@@ -12,12 +12,12 @@ try:
     from pydocs_mcp._native import (  # type: ignore[import]
         walk_py_files,
         hash_files,
-        chunk_text,
+        split_into_chunks,
         parse_py_file,
         extract_module_doc,
         read_file,
         read_files_parallel,
-        Symbol,
+        ParsedMember,
     )
     RUST_AVAILABLE = True
     log.debug("Using Rust-accelerated functions")
@@ -26,12 +26,12 @@ except ImportError:
     from pydocs_mcp._fallback import (
         walk_py_files,
         hash_files,
-        chunk_text,
+        split_into_chunks,
         parse_py_file,
         extract_module_doc,
         read_file,
         read_files_parallel,
-        Symbol,
+        ParsedMember,
     )
     RUST_AVAILABLE = False
     log.debug("Rust extension not found, using Python fallback")
@@ -46,8 +46,8 @@ def disable_rust() -> None:
     import pydocs_mcp._fast as mod
     from pydocs_mcp import _fallback
     for name in (
-        "walk_py_files", "hash_files", "chunk_text", "parse_py_file",
-        "extract_module_doc", "read_file", "read_files_parallel", "Symbol",
+        "walk_py_files", "hash_files", "split_into_chunks", "parse_py_file",
+        "extract_module_doc", "read_file", "read_files_parallel", "ParsedMember",
     ):
         setattr(mod, name, getattr(_fallback, name))
     mod.RUST_AVAILABLE = False
