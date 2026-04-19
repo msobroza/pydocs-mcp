@@ -26,6 +26,8 @@ from pydocs_mcp.models import (
     SearchScope,
 )
 
+from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
+
 
 @pytest.mark.parametrize("enum_cls,value", [
     (ChunkOrigin, "project_module_doc"),
@@ -242,3 +244,31 @@ def test_module_member_metadata_is_read_only():
 def test_search_query_strips_whitespace_around_terms():
     q = SearchQuery(terms="  fastapi routing  ")
     assert q.terms == "fastapi routing"
+
+
+def test_schema_version_upgrade_rebuilds(tmp_path):
+    """A DB created with user_version=0 and stale tables is dropped and rebuilt
+    when opened by the current code."""
+    import sqlite3
+
+    db_file = tmp_path / "stale.db"
+    con = sqlite3.connect(db_file)
+    con.executescript("""
+        PRAGMA user_version = 0;
+        CREATE TABLE symbols (id INTEGER PRIMARY KEY, stale TEXT);
+        INSERT INTO symbols (stale) VALUES ('old');
+    """)
+    con.commit()
+    con.close()
+
+    con2 = open_index_database(db_file)
+    version = con2.execute("PRAGMA user_version").fetchone()[0]
+    tables = {
+        r[0]
+        for r in con2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    con2.close()
+
+    assert version == SCHEMA_VERSION
+    assert "symbols" not in tables
+    assert {"packages", "chunks", "module_members"}.issubset(tables)
