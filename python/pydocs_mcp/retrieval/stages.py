@@ -6,8 +6,10 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.models import (
+    Chunk,
     ChunkFilterField,
     ChunkList,
+    ChunkOrigin,
     ModuleMemberList,
     PipelineResultItem,
     SearchScope,
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
         ChunkRetriever,
         ModuleMemberRetriever,
         PipelineStage,
+        ResultFormatter,
     )
 
 
@@ -349,3 +352,54 @@ class SubPipelineStage:
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "SubPipelineStage":
         return cls(pipeline=CodeRetrieverPipeline.from_dict(data["pipeline"], context))
+
+
+# Formatter stage
+
+_CHARS_PER_TOKEN = 4
+
+
+@stage_registry.register("token_budget_formatter")
+@dataclass(frozen=True, slots=True)
+class TokenBudgetFormatterStage:
+    formatter: "ResultFormatter"
+    budget: int
+    name: str = "token_budget_formatter"
+
+    async def run(self, state: PipelineState) -> PipelineState:
+        if state.result is None or not state.result.items:
+            return state
+        max_chars = self.budget * _CHARS_PER_TOKEN
+        parts: list[str] = []
+        total = 0
+        for item in state.result.items:
+            rendered = self.formatter.format(item)
+            piece = f"{rendered}\n"
+            if total + len(piece) > max_chars:
+                remaining = max_chars - total
+                if remaining > 100:
+                    parts.append(piece[:remaining])
+                break
+            parts.append(piece)
+            total += len(piece)
+
+        composite_text = "\n".join(parts).rstrip()
+        composite = Chunk(
+            text=composite_text,
+            metadata={ChunkFilterField.ORIGIN.value: ChunkOrigin.COMPOSITE_OUTPUT.value},
+        )
+        return replace(state, result=ChunkList(items=(composite,)))
+
+    def to_dict(self) -> dict:
+        return {
+            "type": "token_budget_formatter",
+            "formatter": self.formatter.to_dict(),
+            "budget": self.budget,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, context: BuildContext) -> "TokenBudgetFormatterStage":
+        return cls(
+            formatter=context.formatter_registry.build(data["formatter"], context),
+            budget=data["budget"],
+        )

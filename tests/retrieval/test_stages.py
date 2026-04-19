@@ -9,6 +9,7 @@ from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
     ChunkList,
+    ChunkOrigin,
     ModuleMember,
     ModuleMemberFilterField,
     ModuleMemberList,
@@ -310,3 +311,58 @@ async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
     out = await SubPipelineStage(pipeline=nested).run(state)
     texts = [c.text for c in out.result.items]
     assert texts == ["pre", "inner1", "inner2"]  # state was threaded, not reset
+
+
+@pytest.mark.asyncio
+async def test_token_budget_formatter_stage_composite_output():
+    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
+    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+
+    payload = ChunkList(items=(
+        Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
+        Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
+    ))
+    state = PipelineState(query=SearchQuery(terms="x"), result=payload)
+    out = await TokenBudgetFormatterStage(
+        formatter=ChunkMarkdownFormatter(),
+        budget=10_000,
+    ).run(state)
+    # Result is a ChunkList of length 1 whose metadata origin is COMPOSITE_OUTPUT
+    assert isinstance(out.result, ChunkList)
+    assert len(out.result.items) == 1
+    composite = out.result.items[0]
+    assert composite.metadata[ChunkFilterField.ORIGIN.value] == ChunkOrigin.COMPOSITE_OUTPUT.value
+    assert "## A" in composite.text
+    assert "## B" in composite.text
+
+
+@pytest.mark.asyncio
+async def test_token_budget_formatter_respects_budget():
+    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
+    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+
+    # 100 chunks * ~10-byte render ≈ 1000 bytes. Budget = 50 tokens ≈ 200 bytes (cut early).
+    payload = ChunkList(items=tuple(
+        Chunk(text="x" * 20, metadata={ChunkFilterField.TITLE.value: f"T{i}"})
+        for i in range(100)
+    ))
+    state = PipelineState(query=SearchQuery(terms="x"), result=payload)
+    out = await TokenBudgetFormatterStage(
+        formatter=ChunkMarkdownFormatter(),
+        budget=50,
+    ).run(state)
+    composite = out.result.items[0]
+    assert len(composite.text) <= 50 * 4 + 200  # budget is bytes, 4 bytes/token, some slack
+
+
+@pytest.mark.asyncio
+async def test_token_budget_formatter_none_result_noop():
+    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
+    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+
+    state = PipelineState(query=SearchQuery(terms="x"), result=None)
+    out = await TokenBudgetFormatterStage(
+        formatter=ChunkMarkdownFormatter(),
+        budget=1000,
+    ).run(state)
+    assert out.result is None
