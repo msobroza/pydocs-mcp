@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, ClassVar
 
+from pydantic import field_validator
+from pydantic.dataclasses import dataclass as pyd_dataclass
+
 
 class ChunkOrigin(StrEnum):
     PROJECT_MODULE_DOC       = "project_module_doc"
@@ -129,3 +132,34 @@ class ModuleMemberList:
 
 
 PipelineResultItem = ChunkList | ModuleMemberList
+
+
+@pyd_dataclass(frozen=True, slots=True)
+class SearchQuery:
+    """Pydantic dataclass with construction-time validation.
+
+    NOTE: The canonical spec §5.2 also defines a `_validate_filter_syntax`
+    model-validator that validates pre_filter / post_filter against a
+    format_registry from pydocs_mcp.storage.filters. That module lands in
+    sub-PR #3; this validator is intentionally deferred until then.
+    """
+    terms: str
+    max_results: int = 8
+    pre_filter: Mapping[str, Any] | None = None
+    post_filter: Mapping[str, Any] | None = None
+    pre_filter_format: MetadataFilterFormat = MetadataFilterFormat.MULTIFIELD
+    post_filter_format: MetadataFilterFormat = MetadataFilterFormat.MULTIFIELD
+
+    @field_validator("terms")
+    @classmethod
+    def _terms_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("terms must be non-empty")
+        return v
+
+    @field_validator("max_results")
+    @classmethod
+    def _positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("max_results must be positive")
+        return v

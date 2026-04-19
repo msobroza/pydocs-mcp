@@ -21,6 +21,7 @@ from pydocs_mcp.models import (
     PackageOrigin,
     Parameter,
     PipelineResultItem,
+    SearchQuery,
     SearchScope,
 )
 
@@ -176,3 +177,30 @@ def test_module_member_list_carries_kind():
 def test_pipeline_result_item_is_union():
     items: list[PipelineResultItem] = [ChunkList(items=()), ModuleMemberList(items=())]
     assert len(items) == 2
+
+
+def test_search_query_defaults():
+    q = SearchQuery(terms="fastapi routing")
+    assert q.terms == "fastapi routing"
+    assert q.max_results == 8
+    assert q.pre_filter is None
+    assert q.post_filter is None
+    assert q.pre_filter_format is MetadataFilterFormat.MULTIFIELD
+    assert q.post_filter_format is MetadataFilterFormat.MULTIFIELD
+
+
+def test_search_query_rejects_empty_terms():
+    with pytest.raises(Exception):
+        SearchQuery(terms="   ")
+
+
+def test_search_query_rejects_non_positive_max_results():
+    with pytest.raises(Exception):
+        SearchQuery(terms="x", max_results=0)
+    with pytest.raises(Exception):
+        SearchQuery(terms="x", max_results=-1)
+
+
+def test_search_query_carries_pre_filter_dict():
+    q = SearchQuery(terms="x", pre_filter={"package": "fastapi"})
+    assert q.pre_filter == {"package": "fastapi"}
