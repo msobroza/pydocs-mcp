@@ -34,3 +34,6 @@ Thumbs.db
 # Benchmark outputs
 benchmarks/data/*.csv
 benchmarks/data/*.png
+
+# Claude Code — local settings, worktrees, session state
+.claude/
