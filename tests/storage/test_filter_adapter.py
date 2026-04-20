@@ -78,3 +78,32 @@ def test_filter_adapter_empty_all_matches_everything():
     where, params = adapter.adapt(All(clauses=()))
     assert where == "1 = 1"
     assert params == []
+
+
+def test_filter_adapter_emits_column_prefix():
+    """``column_prefix`` is prepended verbatim to every column reference.
+
+    Covers the ``chunks_fts JOIN chunks`` case where filters must emit
+    ``c.<col>`` to disambiguate the duplicated column names; regression
+    for the former ``_walk_with_prefix`` copy-of-_adapt helper.
+    """
+    adapter = SqliteFilterAdapter(
+        safe_columns=frozenset({"package", "title"}), column_prefix="c.",
+    )
+    where, params = adapter.adapt(FieldEq(field="package", value="x"))
+    assert where == "c.package = ?"
+    assert params == ["x"]
+
+    # LIKE escape survives the prefix.
+    where, params = adapter.adapt(FieldLike(field="title", substring="my_module"))
+    assert where == "c.title LIKE ? ESCAPE '\\'"
+    assert params == ["%my\\_module%"]
+
+    # IN with prefix.
+    where, params = adapter.adapt(FieldIn(field="package", values=("a", "b")))
+    assert where == "c.package IN (?, ?)"
+    assert params == ["a", "b"]
+
+    # Safe-column check still runs on the unprefixed name.
+    with pytest.raises(ValueError, match="not in safe_columns"):
+        adapter.adapt(FieldEq(field="bogus", value="x"))

@@ -206,9 +206,15 @@ class SqliteFilterAdapter:
     Gated by a ``safe_columns`` whitelist — any field not in the set raises
     ``ValueError`` before the column name is ever interpolated into SQL
     (spec §5.3, AC #7). ``Any_`` / ``Not`` are out of scope for sub-PR #3.
+
+    ``column_prefix`` is prepended verbatim to every column reference in the
+    emitted SQL (e.g. ``"c."`` for the ``chunks_fts JOIN chunks`` query used
+    by :class:`SqliteVectorStore`). The safe-column check always runs on the
+    raw/unprefixed name.
     """
 
     safe_columns: frozenset[str]
+    column_prefix: str = ""
 
     def adapt(self, filter: Filter) -> tuple[str, list]:
         return self._adapt(filter)
@@ -216,11 +222,11 @@ class SqliteFilterAdapter:
     def _adapt(self, f: Filter) -> tuple[str, list]:
         if isinstance(f, FieldEq):
             self._check(f.field)
-            return f"{f.field} = ?", [f.value]
+            return f"{self.column_prefix}{f.field} = ?", [f.value]
         if isinstance(f, FieldIn):
             self._check(f.field)
             placeholders = ", ".join(["?"] * len(f.values))
-            return f"{f.field} IN ({placeholders})", list(f.values)
+            return f"{self.column_prefix}{f.field} IN ({placeholders})", list(f.values)
         if isinstance(f, FieldLike):
             self._check(f.field)
             # Escape SQL LIKE metacharacters so a literal substring like
@@ -233,7 +239,7 @@ class SqliteFilterAdapter:
                 .replace("%", "\\%")
                 .replace("_", "\\_")
             )
-            return f"{f.field} LIKE ? ESCAPE '\\'", [f"%{escaped}%"]
+            return f"{self.column_prefix}{f.field} LIKE ? ESCAPE '\\'", [f"%{escaped}%"]
         if isinstance(f, All):
             # Empty ``All`` is the explicit "match everything" signal — used by
             # IndexingService.clear_all to bypass the NULL-missing LIKE hack.
@@ -480,11 +486,18 @@ class SqliteVectorStore:
 
     CRUD happens via :class:`SqliteChunkRepository`; this type only answers
     ``text_search`` (and, in future PRs, ``vector_search`` / ``hybrid_search``).
+
+    The default ``filter_adapter`` uses ``column_prefix="c."`` so filters
+    produce qualified SQL for the ``chunks_fts m JOIN chunks c ON c.id = m.rowid``
+    shape — ``chunks_fts`` shares column names with ``chunks`` and unqualified
+    references would be ambiguous.
     """
 
     provider: ConnectionProvider
     filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=_CHUNK_COLUMNS)
+        default_factory=lambda: SqliteFilterAdapter(
+            safe_columns=_CHUNK_COLUMNS, column_prefix="c.",
+        )
     )
     retriever_name: str = "bm25_chunk"
 
@@ -499,7 +512,7 @@ class SqliteVectorStore:
         # ValueError even when the query is empty.
         filter_sql, filter_params = "", []
         if tree is not None:
-            filter_sql, filter_params = self._adapt_for_join(tree)
+            filter_sql, filter_params = self.filter_adapter.adapt(tree)
 
         fulltext = _build_fts_match_query(query_terms)
         if fulltext is None:
@@ -537,48 +550,6 @@ class SqliteVectorStore:
                 )
             )
         return tuple(items)
-
-    def _adapt_for_join(self, tree: Filter) -> tuple[str, list]:
-        """Adapt a filter tree for the ``chunks_fts JOIN chunks`` query.
-
-        ``chunks_fts`` indexes ``title/text/package`` and ``chunks`` has the
-        same names, so unqualified columns are ambiguous. We run the adapter
-        to enforce the safe-columns gate and keep the param ordering intact,
-        then walk the tree again to emit ``c.<col>`` qualified SQL.
-        """
-        # Gate — raises ValueError for unsafe columns.
-        self.filter_adapter.adapt(tree)
-        return self._walk_with_prefix(tree, "c.")
-
-    def _walk_with_prefix(self, f: Filter, prefix: str) -> tuple[str, list]:
-        if isinstance(f, FieldEq):
-            return f"{prefix}{f.field} = ?", [f.value]
-        if isinstance(f, FieldIn):
-            placeholders = ", ".join(["?"] * len(f.values))
-            return f"{prefix}{f.field} IN ({placeholders})", list(f.values)
-        if isinstance(f, FieldLike):
-            # Mirror ``SqliteFilterAdapter._adapt``: escape LIKE metacharacters
-            # so literal substrings don't act as wildcards.
-            escaped = (
-                f.substring
-                .replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_")
-            )
-            return f"{prefix}{f.field} LIKE ? ESCAPE '\\'", [f"%{escaped}%"]
-        if isinstance(f, All):
-            if not f.clauses:
-                return "1 = 1", []
-            parts: list[str] = []
-            params: list = []
-            for c in f.clauses:
-                sub, sub_p = self._walk_with_prefix(c, prefix)
-                parts.append(f"({sub})")
-                params.extend(sub_p)
-            return " AND ".join(parts), params
-        raise NotImplementedError(
-            f"{type(f).__name__} not supported by SqliteVectorStore in sub-PR #3"
-        )
 
 
 # ── ModuleMember repository ──────────────────────────────────────────────
