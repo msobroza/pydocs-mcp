@@ -81,6 +81,49 @@ async def test_unit_of_work_rollbacks_on_exception(db_file):
     assert count == 0
 
 
+async def test_maybe_acquire_commits_non_uow_write(db_file):
+    """Outside a UoW, ``_maybe_acquire`` commits on success so the write
+    is visible to a fresh connection. Regression for the commit-fold that
+    replaced the ``if _sqlite_transaction.get() is None: conn.commit()``
+    gate previously duplicated across every repository write method.
+    """
+    provider = build_connection_provider(db_file)
+    async with _maybe_acquire(provider) as conn:
+        conn.execute(
+            "INSERT INTO packages (name, version, summary, homepage, "
+            "dependencies, content_hash, origin) VALUES (?,?,?,?,?,?,?)",
+            ("committed_pkg", "1.0", "", "", "[]", "h", "dependency"),
+        )
+
+    fresh = sqlite3.connect(str(db_file))
+    count = fresh.execute(
+        "SELECT COUNT(*) FROM packages WHERE name=?", ("committed_pkg",),
+    ).fetchone()[0]
+    fresh.close()
+    assert count == 1
+
+
+async def test_maybe_acquire_rollbacks_non_uow_write_on_exception(db_file):
+    """An exception inside ``_maybe_acquire`` (without ambient UoW) rolls
+    back the in-flight write — no partial state leaks out."""
+    provider = build_connection_provider(db_file)
+    with pytest.raises(RuntimeError, match="boom"):
+        async with _maybe_acquire(provider) as conn:
+            conn.execute(
+                "INSERT INTO packages (name, version, summary, homepage, "
+                "dependencies, content_hash, origin) VALUES (?,?,?,?,?,?,?)",
+                ("half_written", "1.0", "", "", "[]", "h", "dependency"),
+            )
+            raise RuntimeError("boom")
+
+    fresh = sqlite3.connect(str(db_file))
+    count = fresh.execute(
+        "SELECT COUNT(*) FROM packages WHERE name=?", ("half_written",),
+    ).fetchone()[0]
+    fresh.close()
+    assert count == 0
+
+
 async def test_unit_of_work_serializes_concurrent_repo_calls(db_file):
     """Two ``asyncio.gather``-ed repo calls inside one UoW must not race the
     shared sqlite3.Connection. The asyncio.Lock on SqliteUnitOfWork serialises

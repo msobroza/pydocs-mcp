@@ -45,7 +45,17 @@ _sqlite_transaction: ContextVar[tuple[sqlite3.Connection, asyncio.Lock] | None] 
 async def _maybe_acquire(
     provider: ConnectionProvider,
 ) -> AsyncIterator[sqlite3.Connection]:
-    """Reuse the ambient transaction's conn if set; otherwise acquire fresh via provider."""
+    """Reuse the ambient transaction's conn if set; otherwise acquire fresh via provider.
+
+    When there is no ambient :class:`SqliteUnitOfWork` the context manager
+    owns the commit/rollback lifecycle — successful exit commits, an
+    exception triggers a rollback before re-raising. Inside a UoW scope
+    the transaction is driven by :meth:`SqliteUnitOfWork.begin` and this
+    helper only yields the shared connection; commit/rollback there is
+    the UoW's responsibility. This folds the former
+    ``if _sqlite_transaction.get() is None: conn.commit()`` gate that was
+    duplicated across every repository write method.
+    """
     ambient = _sqlite_transaction.get()
     if ambient is not None:
         conn, lock = ambient
@@ -53,7 +63,13 @@ async def _maybe_acquire(
             yield conn
     else:
         async with provider.acquire() as conn:
-            yield conn
+            try:
+                yield conn
+            except BaseException:
+                await asyncio.to_thread(conn.rollback)
+                raise
+            else:
+                await asyncio.to_thread(conn.commit)
 
 
 @dataclass(slots=True)
@@ -306,10 +322,6 @@ class SqlitePackageRepository:
                 "content_hash=excluded.content_hash, origin=excluded.origin",
                 row,
             )
-            # Outside a UoW, writes must flush before the per-call connection
-            # closes; inside a UoW, the ambient transaction owns the commit.
-            if _sqlite_transaction.get() is None:
-                await asyncio.to_thread(conn.commit)
 
     async def get(self, name: str) -> Package | None:
         async with _maybe_acquire(self.provider) as conn:
@@ -348,10 +360,7 @@ class SqlitePackageRepository:
             cursor = await asyncio.to_thread(
                 conn.execute, f"DELETE FROM packages WHERE {where}", params
             )
-            rowcount = cursor.rowcount
-            if _sqlite_transaction.get() is None:
-                await asyncio.to_thread(conn.commit)
-            return rowcount
+            return cursor.rowcount
 
     async def count(self, filter: Filter | Mapping | None = None) -> int:
         tree = _resolve_filter(filter)
@@ -400,8 +409,6 @@ class SqliteChunkRepository:
                 "VALUES (:package, :title, :text, :origin)",
                 rows,
             )
-            if _sqlite_transaction.get() is None:
-                await asyncio.to_thread(conn.commit)
 
     async def list(
         self, filter: Filter | Mapping | None = None, limit: int | None = None,
@@ -431,10 +438,7 @@ class SqliteChunkRepository:
             cursor = await asyncio.to_thread(
                 conn.execute, f"DELETE FROM chunks WHERE {where}", params
             )
-            rowcount = cursor.rowcount
-            if _sqlite_transaction.get() is None:
-                await asyncio.to_thread(conn.commit)
-            return rowcount
+            return cursor.rowcount
 
     async def count(self, filter: Filter | Mapping | None = None) -> int:
         tree = _resolve_filter(filter)
@@ -456,10 +460,6 @@ class SqliteChunkRepository:
                 conn.execute,
                 "INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')",
             )
-            # Performance: commit outside a UoW so the rebuild is durable for
-            # downstream readers that open fresh connections.
-            if _sqlite_transaction.get() is None:
-                await asyncio.to_thread(conn.commit)
 
 
 # ── Vector store (FTS5 text search) ──────────────────────────────────────
@@ -582,8 +582,6 @@ class SqliteModuleMemberRepository:
                 ":return_annotation, :parameters, :docstring)",
                 rows,
             )
-            if _sqlite_transaction.get() is None:
-                await asyncio.to_thread(conn.commit)
 
     async def list(
         self, filter: Filter | Mapping | None = None, limit: int | None = None,
@@ -613,10 +611,7 @@ class SqliteModuleMemberRepository:
             cursor = await asyncio.to_thread(
                 conn.execute, f"DELETE FROM module_members WHERE {where}", params
             )
-            rowcount = cursor.rowcount
-            if _sqlite_transaction.get() is None:
-                await asyncio.to_thread(conn.commit)
-            return rowcount
+            return cursor.rowcount
 
     async def count(self, filter: Filter | Mapping | None = None) -> int:
         tree = _resolve_filter(filter)
