@@ -56,12 +56,13 @@ python/pydocs_mcp/
 ├── db.py          # SQLite schema, cache lifecycle, FTS rebuild
 ├── deps.py        # Dependency resolution (pyproject.toml, requirements.txt)
 ├── indexer.py     # Core indexing: inspect mode (live import) vs static mode (file read)
-├── search.py      # FTS5 BM25 chunk search + module-member LIKE queries
+├── retrieval/     # Async pipelines, retrievers, stages, registries, YAML config
+├── presets/       # Built-in pipeline YAML presets (chunk_fts, member_like)
 └── server.py      # FastMCP server exposing 5 tools to clients
 src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, parse, read)
 ```
 
-**Data flow:** CLI → deps.py resolves packages → indexer.py extracts docs/module members → db.py stores in SQLite → search.py queries via FTS5 → server.py exposes via MCP.
+**Data flow:** CLI → deps.py resolves packages → indexer.py extracts docs/module members → db.py stores in SQLite → retrieval/ runs the async `CodeRetrieverPipeline` (BM25 chunks + LIKE module-members) → server.py exposes via MCP.
 
 **Rust/Python duality:** `_fast.py` tries `from ._native import *`; on ImportError falls back to `_fallback.py`. All Rust functions have pure Python equivalents — the package works without Rust compiled.
 
@@ -74,6 +75,8 @@ src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, par
 ## Key Technical Details
 
 - Python 3.11+ required, single runtime dependency: `mcp>=1.0`
+- `pydantic-settings>=2.0` and `pyyaml>=6.0` runtime deps (YAML-driven pipeline config, added sub-PR #2)
+- `retrieval/` uses a uniform `PipelineStage` protocol + compound stages (`RouteStage`, `SubPipelineStage`) for composition
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
 - Entry point: `pydocs-mcp = "pydocs_mcp.__main__:main"`
@@ -114,15 +117,15 @@ src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, par
 
 ## SOLID Principles
 
-**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `search.py` owns querying, `indexer.py` owns extraction. New features should follow this pattern. If a module gains a second reason to change, split it.
+**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `retrieval/` owns querying (retrievers, stages, pipelines), `indexer.py` owns extraction. New features should follow this pattern. If a module gains a second reason to change, split it.
 
-**Open/Closed:** Extend behavior through new `kind` values in chunks/module_members tables rather than modifying existing indexing logic. New search strategies should be added as new functions in `search.py`, not by modifying existing ones.
+**Open/Closed:** Extend behavior through new `kind` values in chunks/module_members tables rather than modifying existing indexing logic. New search strategies should be added as new retrievers/stages registered in `retrieval/`, not by modifying existing ones.
 
 **Liskov Substitution:** The Rust/Python fallback is a substitution boundary — `_fallback.py` functions must be drop-in replacements for `_native` functions. Same inputs must produce same outputs. Never strengthen preconditions or weaken postconditions in either implementation.
 
 **Interface Segregation:** MCP tools in `server.py` each expose a focused interface. Keep tool parameters minimal and client-specific. Don't add parameters "just in case."
 
-**Dependency Inversion:** Core logic (`indexer.py`, `search.py`) should depend on abstractions (function signatures in `_fast.py`), not on whether Rust or Python is running. The `_fast.py` module is the abstraction layer — never import `_native` or `_fallback` directly from other modules.
+**Dependency Inversion:** Core logic (`indexer.py`, `retrieval/`) should depend on abstractions (function signatures in `_fast.py`, protocol classes in `retrieval/protocols.py`), not on whether Rust or Python is running. The `_fast.py` module is the abstraction layer — never import `_native` or `_fallback` directly from other modules.
 
 ## Code Comments
 
