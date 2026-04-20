@@ -61,6 +61,7 @@ class IndexProjectService:
         *,
         force: bool = False,
         include_project_source: bool = True,
+        workers: int = 1,
     ) -> IndexingStats:
         """Index a whole project + its declared dependencies (spec §5.3).
 
@@ -68,6 +69,13 @@ class IndexProjectService:
         summary without reading back from the index. Per spec §7, a failing
         dependency increments ``stats.failed`` but does not re-raise —
         see :meth:`_index_one_dependency`.
+
+        ``workers`` bounds the concurrency of the dependency loop. With
+        ``workers <= 1`` deps are processed serially (deterministic order —
+        preserved for tests and byte-parity). With ``workers > 1`` deps run
+        through an :class:`asyncio.Semaphore` + :func:`asyncio.gather`
+        — matches the pre-PR ``ThreadPoolExecutor`` behaviour driven by
+        the CLI ``--workers N`` flag.
         """
         stats = IndexingStats()
         try:
@@ -75,8 +83,21 @@ class IndexProjectService:
                 await self.indexing_service.clear_all()
             if include_project_source:
                 await self._index_project_source(project_dir, stats)
-            for dep_name in await self.dependency_resolver.resolve(project_dir):
-                await self._index_one_dependency(dep_name, stats)
+            deps = await self.dependency_resolver.resolve(project_dir)
+            if workers <= 1:
+                for dep_name in deps:
+                    await self._index_one_dependency(dep_name, stats)
+            else:
+                # Performance: bound concurrency so very large dep sets don't
+                # overwhelm importlib / site-packages I/O. Each task still
+                # swallows its own exceptions via ``_index_one_dependency``.
+                sem = asyncio.Semaphore(workers)
+
+                async def _bounded(dep_name: str) -> None:
+                    async with sem:
+                        await self._index_one_dependency(dep_name, stats)
+
+                await asyncio.gather(*[_bounded(d) for d in deps])
         finally:
             # Drop the module-level extraction cache so a subsequent call
             # re-walks the project / re-imports each dep. The cache exists

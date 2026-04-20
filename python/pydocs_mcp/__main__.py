@@ -139,6 +139,7 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
         project,
         force=args.force,
         include_project_source=not args.skip_project,
+        workers=args.workers,
     )
     await indexing_service.chunk_store.rebuild_index()
 

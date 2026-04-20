@@ -468,6 +468,104 @@ def test_adapter_classes_are_frozen_and_slotted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_index_project_workers_1_is_serial(tmp_path: Path) -> None:
+    """With ``workers=1`` deps run one-at-a-time in resolver order — the
+    deterministic path that tests and byte-parity depend on.
+    """
+    pkg_a, pkg_b = _pkg("a"), _pkg("b")
+    service, idx, _resolver, chunks_ex, _members = _make_service(
+        deps=("a", "b"),
+        dep_chunk_returns={
+            "a": ((_chunk("a", "T"),), pkg_a),
+            "b": ((_chunk("b", "T"),), pkg_b),
+        },
+        dep_member_returns={"a": (), "b": ()},
+    )
+
+    stats = await service.index_project(
+        tmp_path, include_project_source=False, workers=1,
+    )
+
+    # Order preserved because the serial branch iterates the resolver tuple.
+    assert chunks_ex.dep_calls == ["a", "b"]
+    assert stats.indexed == 2
+    assert [pkg.name for pkg, _, _ in idx.reindex_calls] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None:
+    """With ``workers>1`` multiple deps can enter extraction at the same
+    time. We prove it by having each extractor bump an observable
+    "in-flight" counter and assert that the max observed value is > 1.
+    """
+    import asyncio
+
+    pkg_a, pkg_b, pkg_c = _pkg("a"), _pkg("b"), _pkg("c")
+
+    # Custom chunk-extractor that blocks until released so we can force
+    # multiple tasks to be in extract_from_dependency simultaneously.
+    @dataclass
+    class ConcurrencyProbeExtractor:
+        in_flight: int = 0
+        max_in_flight: int = 0
+        gate: asyncio.Event = field(default_factory=asyncio.Event)
+        dep_returns: dict[str, Any] = field(default_factory=dict)
+        dep_calls: list[str] = field(default_factory=list)
+
+        async def extract_from_project(self, project_dir: Path):  # pragma: no cover
+            raise AssertionError("project extraction should be skipped in this test")
+
+        async def extract_from_dependency(
+            self, dep_name: str,
+        ) -> tuple[tuple[Chunk, ...], Package]:
+            self.dep_calls.append(dep_name)
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            # Yield once so all workers get a chance to enter before the
+            # first returns — otherwise a single fast path wins and we can't
+            # observe concurrency on a fast machine.
+            await asyncio.sleep(0)
+            try:
+                return self.dep_returns[dep_name]
+            finally:
+                self.in_flight -= 1
+
+    probe = ConcurrencyProbeExtractor(
+        dep_returns={
+            "a": ((_chunk("a", "T"),), pkg_a),
+            "b": ((_chunk("b", "T"),), pkg_b),
+            "c": ((_chunk("c", "T"),), pkg_c),
+        },
+    )
+
+    service, idx, _resolver, _chunks, _members = _make_service(
+        deps=("a", "b", "c"),
+        dep_member_returns={"a": (), "b": (), "c": ()},
+    )
+    # Swap in the concurrency-tracking chunk extractor.
+    service = IndexProjectService(
+        indexing_service=service.indexing_service,
+        dependency_resolver=service.dependency_resolver,
+        chunk_extractor=probe,
+        member_extractor=service.member_extractor,
+    )
+
+    stats = await service.index_project(
+        tmp_path, include_project_source=False, workers=3,
+    )
+
+    assert stats.indexed == 3
+    assert stats.failed == 0
+    # With a semaphore of 3, all three extractors should co-exist briefly.
+    assert probe.max_in_flight > 1, (
+        f"gather path did not run concurrently: max_in_flight={probe.max_in_flight}"
+    )
+    # All three reindex_package calls landed (order is non-deterministic
+    # under gather, so sort by name before asserting equality).
+    assert sorted(pkg.name for pkg, _, _ in idx.reindex_calls) == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
 async def test_dependency_resolver_adapter_wraps_deps_module(
     tmp_path: Path, monkeypatch
 ) -> None:
