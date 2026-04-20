@@ -86,7 +86,7 @@ class ModuleIntrospectionService:
                 items.append(f"{kind} {name}{sig}\n    {doc}")
                 if len(items) >= _MAX_MEMBERS:
                     break
-        except Exception:
+        except Exception:  # noqa: BLE001 -- AC #8 byte-parity: pre-PR server.py swallowed broadly so custom-DSL libs that raise unusual types during inspect.getmembers don't crash the handler
             pass
 
         if not items and hasattr(mod, "__path__"):
@@ -96,7 +96,7 @@ class ModuleIntrospectionService:
                     if not s.startswith("_")
                 ]
                 return f"# {target}\nSubmodules: {', '.join(subs)}"
-            except Exception:
+            except Exception:  # noqa: BLE001 -- AC #8 byte-parity: pre-PR server.py swallowed broadly on pkgutil.iter_modules failures
                 pass
 
         return (
