@@ -28,9 +28,8 @@
 - `__init__.py` — public re-exports
 - `protocols.py` — `Chunker`, `ChunkerSelector`, `FileDiscoverer` Protocols
 - `document_node.py` — `DocumentNode`, `NodeKind`, `STRUCTURAL_ONLY_KINDS`
-- `registry.py` — chunker name-to-class registry
 - `chunkers.py` — `AstPythonChunker`, `HeadingMarkdownChunker`, `NotebookChunker`
-- `selector.py` — `ExtensionChunkerSelector`
+- `selector.py` — `ExtensionChunkerSelector` + `build_selector(cfg)` factory
 - `discovery.py` — `ProjectFileDiscoverer`, `DependencyFileDiscoverer`
 - `members.py` — `AstMemberExtractor`, `InspectMemberExtractor`
 - `dependencies.py` — `StaticDependencyResolver`
@@ -38,6 +37,7 @@
 - `tree_flatten.py` — `flatten_to_chunks`
 - `package_tree.py` — `build_package_tree`
 - `config.py` — `ExtractionConfig`, `ChunkingConfig`, `MarkdownConfig`, `NotebookConfig`, `DiscoveryConfig`, `DiscoveryScopeConfig`, `MembersConfig`
+- `_dep_helpers.py` — `find_installed_distribution`, `find_site_packages_root`, `_extract_by_import` (pre-extracted from `indexer.py` to break Batch 2 → Task 27 circular dependency)
 
 **`python/pydocs_mcp/storage/` (additions):**
 - `sqlite_document_tree_store.py` — `SqliteDocumentTreeStore`
@@ -61,7 +61,6 @@
 - `test_tree_flatten.py`
 - `test_package_tree.py`
 - `test_config.py`
-- `test_registry.py`
 
 **Tests (`tests/storage/` additions):**
 - `test_document_tree_store.py`
@@ -98,6 +97,39 @@
 
 - `python/pydocs_mcp/indexer.py` — all logic migrates into `extraction/`
 - Legacy adapters in `python/pydocs_mcp/application/index_project_service.py` (the three `*Adapter` classes — replaced by strategy classes)
+
+---
+
+## Coupling conventions (read before starting Batch 2)
+
+**Invariant:** ``extraction/*`` NEVER imports from ``pydocs_mcp.indexer``, not even
+temporarily. ``indexer.py`` is being deleted — importing from it creates a
+fragile cross-batch dependency where Batch 2 works, Task 27 (delete indexer)
+breaks everything, and cleanup scattered across Batch 4.
+
+**Pattern:** Before Batch 2 starts, Task 10b pre-extracts the handful of helpers
+that both ``indexer.py`` and ``extraction/*`` need into
+``extraction/_dep_helpers.py`` (``find_installed_distribution``,
+``find_site_packages_root``, ``_extract_by_import``). Batch 2 tasks import from
+``extraction/_dep_helpers.py`` directly. Task 27 then deletes ``indexer.py`` in
+one atomic step with zero import patching.
+
+**Registry abolished.** We dropped the ``extraction/registry.py`` +
+module-level ``chunker_registry`` dict. The dict-lookup selector
+(``ExtensionChunkerSelector(chunkers: Mapping[str, Chunker])``) with its
+``build_selector(cfg)`` factory covers the same ground with fewer moving
+parts and no global state. If you're reading an older draft of this plan that
+mentions ``chunker_registry``, ignore it.
+
+**Selector is a pure dict.** All three chunkers take their config uniformly
+via ``__init__``. ``pick()`` is one ``dict[str, Chunker]`` lookup — no
+``if chunker_name == "heading_markdown": ...`` branches. Adding a chunker
+touches ``build_selector`` and adds one class; ``pick`` never changes.
+
+**Leaky internals accepted inside ``storage/``.** ``storage/sqlite_document_tree_store.py``
+imports ``_maybe_acquire`` from ``storage/sqlite.py``. Cross-file import within
+the same package is fine; we don't promote ``_maybe_acquire`` to public API
+because no cross-package caller needs it.
 
 ---
 
@@ -1912,7 +1944,110 @@ Expected test count delta: +5. Total: 573.
 
 ---
 
+## Task 10b — Pre-extract `indexer` helpers into `extraction/_dep_helpers.py`
+
+**Files:**
+- Create: `python/pydocs_mcp/extraction/_dep_helpers.py`
+- Create: `tests/extraction/test_dep_helpers.py`
+
+**Why:** Breaks the Batch 2 → Task 27 fragility. Batch 2 strategies need
+three helpers that currently live in ``indexer.py``; copying them here up
+front means extraction never imports from a module being deleted.
+
+- [ ] **Step 10b.1: Create `_dep_helpers.py`**
+
+```python
+"""Helpers pre-extracted from indexer.py so extraction never imports a
+module slated for deletion (see Coupling conventions at top of plan)."""
+from __future__ import annotations
+
+import importlib.metadata as md
+from pathlib import Path
+from typing import Any
+
+
+def find_installed_distribution(dep_name: str) -> md.Distribution | None:
+    """Locate an installed distribution by name (case-insensitive)."""
+    try:
+        return md.distribution(dep_name)
+    except md.PackageNotFoundError:
+        pass
+    normalized = dep_name.lower().replace("-", "_")
+    for dist in md.distributions():
+        name = (dist.metadata["Name"] or "").lower().replace("-", "_")
+        if name == normalized:
+            return dist
+    return None
+
+
+def find_site_packages_root(any_file: str) -> str:
+    """Walk up from a file path until we hit the site-packages directory."""
+    p = Path(any_file).resolve()
+    for parent in p.parents:
+        if parent.name == "site-packages":
+            return str(parent)
+    # Fallback: parent of the package directory
+    return str(p.parent.parent)
+
+
+def _extract_by_import(module_name: str, depth: int = 1) -> list[dict[str, Any]]:
+    """Live-import a module and return structured member records.
+
+    Called only from InspectMemberExtractor. Side-effectful (runs module
+    top-level code); callers must own the risk. Body moved verbatim from
+    pre-PR indexer.py — no behavior change.
+    """
+    # [Copy body from current indexer.py::_extract_by_import verbatim]
+    ...
+```
+
+- [ ] **Step 10b.2: Write smoke test**
+
+```python
+"""Smoke tests for pre-extracted dep helpers (Task 10b)."""
+from pydocs_mcp.extraction._dep_helpers import (
+    _extract_by_import, find_installed_distribution, find_site_packages_root,
+)
+
+
+def test_find_installed_distribution_pytest_is_findable():
+    dist = find_installed_distribution("pytest")
+    assert dist is not None
+    assert dist.metadata["Name"].lower().startswith("pytest")
+
+
+def test_find_installed_distribution_unknown_returns_none():
+    assert find_installed_distribution("nonexistent-xyz-pkg") is None
+
+
+def test_find_site_packages_root_walks_up():
+    import pytest as _p
+    root = find_site_packages_root(_p.__file__)
+    assert root.endswith("site-packages")
+```
+
+- [ ] **Step 10b.3: Run tests**
+
+Run: `pytest tests/extraction/test_dep_helpers.py -v`
+Expected: 3 passed.
+
+- [ ] **Step 10b.4: Commit**
+
+```bash
+git add python/pydocs_mcp/extraction/_dep_helpers.py tests/extraction/test_dep_helpers.py
+git commit -m "feat(extraction): pre-extract indexer dep helpers into _dep_helpers.py (breaks Batch 2 → Task 27 circular dep)"
+```
+
+Expected test count delta: +3. Total: 576.
+
+---
+
 # BATCH 2 — Concrete chunkers + selector + discovery + members (Tasks 11–20)
+
+**Coupling invariant for Batch 2:** Any task that currently sketches
+``from pydocs_mcp.indexer import ...`` MUST use
+``from pydocs_mcp.extraction._dep_helpers import ...`` instead. See Task 10b
+for the helper module.
 
 ---
 
@@ -2841,43 +2976,33 @@ Expected test count delta: +4. Total: 589.
 
 ---
 
-## Task 14 — `registry.py` + `ExtensionChunkerSelector`
+## Task 14 — `ExtensionChunkerSelector` + `build_selector` factory
 
 **Files:**
-- Create: `python/pydocs_mcp/extraction/registry.py`
 - Create: `python/pydocs_mcp/extraction/selector.py`
-- Create: `tests/extraction/test_registry.py`
 - Create: `tests/extraction/test_selector.py`
 
 Per spec §3 decision #3 + §10.3.
 
-- [ ] **Step 14.1: Write failing tests**
+**Coupling note:** NO `registry.py`. The earlier sketch had a module-level
+``chunker_registry: dict[str, type[Chunker]]`` keyed by string names
+(``"ast_python"`` etc.). We dropped it because:
+- It's redundant indirection — the dict-lookup selector keys on extension
+  directly, so no name→class lookup is needed.
+- Module-level mutable dicts are global state (testing hazard, monkey-patching
+  foot-gun, unclear ownership).
+- The string names duplicated the class names with zero added value.
 
-`tests/extraction/test_registry.py`:
+``build_selector(config)`` imports the three concrete chunker classes once
+and binds them to extensions. Open/Closed: new chunker = one new import +
+one new dict entry in this factory.
 
-```python
-"""Tests for chunker registry (spec §3 decision #3)."""
-from __future__ import annotations
-
-from pydocs_mcp.extraction.registry import chunker_registry
-
-
-def test_registry_includes_three_builtin_chunkers():
-    from pydocs_mcp.extraction.chunkers import (
-        AstPythonChunker,
-        HeadingMarkdownChunker,
-        NotebookChunker,
-    )
-
-    assert chunker_registry["ast_python"] is AstPythonChunker
-    assert chunker_registry["heading_markdown"] is HeadingMarkdownChunker
-    assert chunker_registry["notebook"] is NotebookChunker
-```
+- [ ] **Step 14.1: Write failing test**
 
 `tests/extraction/test_selector.py`:
 
 ```python
-"""Tests for ExtensionChunkerSelector (spec §10.3)."""
+"""Tests for ExtensionChunkerSelector + build_selector (spec §10.3)."""
 from __future__ import annotations
 
 import pytest
@@ -2888,50 +3013,64 @@ from pydocs_mcp.extraction.chunkers import (
     NotebookChunker,
 )
 from pydocs_mcp.extraction.config import ChunkingConfig
-from pydocs_mcp.extraction.selector import ExtensionChunkerSelector, ExtractionError
+from pydocs_mcp.extraction.selector import (
+    ExtensionChunkerSelector,
+    ExtractionError,
+    build_selector,
+)
 
 
-def test_selector_dispatches_by_extension():
-    sel = ExtensionChunkerSelector(ChunkingConfig())
+def test_build_selector_wires_three_extensions():
+    sel = build_selector(ChunkingConfig())
     assert isinstance(sel.pick("a.py"), AstPythonChunker)
     assert isinstance(sel.pick("a.md"), HeadingMarkdownChunker)
     assert isinstance(sel.pick("a.ipynb"), NotebookChunker)
 
 
-def test_selector_case_insensitive_extension():
-    sel = ExtensionChunkerSelector(ChunkingConfig())
+def test_selector_is_case_insensitive_on_extension():
+    sel = build_selector(ChunkingConfig())
     assert isinstance(sel.pick("A.PY"), AstPythonChunker)
 
 
 def test_selector_raises_on_unknown_extension():
-    sel = ExtensionChunkerSelector(ChunkingConfig())
+    sel = build_selector(ChunkingConfig())
     with pytest.raises(ExtractionError):
         sel.pick("script.sh")
+
+
+def test_build_selector_propagates_markdown_config():
+    cfg = ChunkingConfig()
+    cfg.markdown.max_heading_level = 6
+    sel = build_selector(cfg)
+    md = sel.pick("a.md")
+    assert isinstance(md, HeadingMarkdownChunker)
+    assert md.max_heading_level == 6
+
+
+def test_build_selector_propagates_notebook_config():
+    cfg = ChunkingConfig()
+    cfg.notebook.include_outputs = True
+    sel = build_selector(cfg)
+    nb = sel.pick("a.ipynb")
+    assert isinstance(nb, NotebookChunker)
+    assert nb.include_outputs is True
+
+
+def test_selector_accepts_arbitrary_mapping_of_chunkers():
+    """DIP — selector takes ``Mapping[str, Chunker]``, not concrete dict."""
+    custom = {".py": AstPythonChunker()}
+    sel = ExtensionChunkerSelector(chunkers=custom)
+    assert isinstance(sel.pick("x.py"), AstPythonChunker)
+    with pytest.raises(ExtractionError):
+        sel.pick("x.md")
 ```
 
 - [ ] **Step 14.2: Run tests to verify fail**
 
-Run: `pytest tests/extraction/test_registry.py tests/extraction/test_selector.py -v`
+Run: `pytest tests/extraction/test_selector.py -v`
 Expected: FAIL.
 
-- [ ] **Step 14.3: Implement `registry.py`**
-
-```python
-"""Chunker name-to-class registry (spec §3 decision #3)."""
-from __future__ import annotations
-
-from pydocs_mcp.extraction.chunkers import (
-    AstPythonChunker,
-    HeadingMarkdownChunker,
-    NotebookChunker,
-)
-from pydocs_mcp.extraction.protocols import Chunker
-
-chunker_registry: dict[str, type[Chunker]] = {
-    "ast_python":        AstPythonChunker,
-    "heading_markdown":  HeadingMarkdownChunker,
-    "notebook":          NotebookChunker,
-}
+- [ ] **Step 14.3: (removed — no registry.py)**
 ```
 
 - [ ] **Step 14.4: Implement `selector.py`**
@@ -2993,14 +3132,14 @@ def build_selector(cfg: ChunkingConfig) -> ExtensionChunkerSelector:
 
 - [ ] **Step 14.5: Run tests to verify pass**
 
-Run: `pytest tests/extraction/test_registry.py tests/extraction/test_selector.py -v`
+Run: `pytest tests/extraction/test_selector.py -v`
 Expected: 4 passed.
 
 - [ ] **Step 14.6: Commit**
 
 ```bash
-git add python/pydocs_mcp/extraction/registry.py python/pydocs_mcp/extraction/selector.py tests/extraction/test_registry.py tests/extraction/test_selector.py
-git commit -m "feat(extraction): ExtensionChunkerSelector + chunker_registry (spec §3 dec #3, §10.3)"
+git add python/pydocs_mcp/extraction/selector.py tests/extraction/test_selector.py
+git commit -m "feat(extraction): ExtensionChunkerSelector + build_selector factory (spec §3 dec #3, §10.3)"
 ```
 
 Expected test count delta: +4. Total: 593.
@@ -3218,20 +3357,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydocs_mcp._fast import parse_py_file, read_files_parallel, walk_py_files
+from pydocs_mcp.extraction._dep_helpers import (
+    find_installed_distribution,
+    find_site_packages_root,
+)
 from pydocs_mcp.models import ModuleMember, ModuleMemberFilterField
 
 log = logging.getLogger("pydocs-mcp")
-
-
-def _find_installed_distribution(dep_name: str):
-    from pydocs_mcp.deps import normalize_package_name
-
-    target = normalize_package_name(dep_name)
-    for dist in importlib.metadata.distributions():
-        raw = dist.metadata["Name"]
-        if raw and raw.lower().replace("-", "_") == target:
-            return dist
-    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -3255,19 +3387,28 @@ class AstMemberExtractor:
         return self._parse_paths("__project__", paths, str(project_dir))
 
     def _static_dep(self, dep_name: str) -> tuple[ModuleMember, ...]:
-        dist = _find_installed_distribution(dep_name)
+        dist = find_installed_distribution(dep_name)
         if dist is None:
             return ()
-        from pydocs_mcp.indexer import (
-            find_site_packages_root,
-            list_dependency_source_files,
-        )
         name = dist.metadata["Name"].lower().replace("-", "_")
-        py_files = list_dependency_source_files(dist)
+        py_files = _list_distribution_py_files(dist)
         if not py_files:
             return ()
         root = find_site_packages_root(py_files[0])
         return self._parse_paths(name, py_files, root)
+
+
+def _list_distribution_py_files(dist) -> list[str]:
+    """Return absolute paths of .py files shipped by a distribution.
+
+    Lives here (not in _dep_helpers) because it's single-use: only
+    AstMemberExtractor calls it. Keeps _dep_helpers minimal.
+    """
+    root = Path(dist.locate_file(""))
+    return [
+        str(root / f) for f in (dist.files or [])
+        if str(f).endswith(".py")
+    ]
 
     def _parse_paths(
         self, package: str, paths: list[str], root: str,
@@ -3317,8 +3458,8 @@ class InspectMemberExtractor:
 
     def _inspect_dep(self, dep_name: str) -> tuple[ModuleMember, ...]:
         try:
-            from pydocs_mcp.indexer import _extract_by_import
-            dist = _find_installed_distribution(dep_name)
+            from pydocs_mcp.extraction._dep_helpers import _extract_by_import
+            dist = find_installed_distribution(dep_name)
             if dist is None:
                 return ()
             record = _extract_by_import(dist, self.depth)
@@ -3535,7 +3676,10 @@ from pydocs_mcp.extraction.discovery import (
     ProjectFileDiscoverer,
 )
 from pydocs_mcp.extraction.document_node import DocumentNode
-from pydocs_mcp.extraction.members import _find_installed_distribution
+from pydocs_mcp.extraction._dep_helpers import (
+    find_installed_distribution,
+    find_site_packages_root,
+)
 from pydocs_mcp.extraction.selector import ExtensionChunkerSelector
 from pydocs_mcp.extraction.tree_flatten import flatten_to_chunks
 from pydocs_mcp.models import Chunk, Package, PackageOrigin
@@ -3579,13 +3723,12 @@ class StrategyChunkExtractor:
     def _do_dependency(
         self, dep_name: str,
     ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
-        dist = _find_installed_distribution(dep_name)
+        dist = find_installed_distribution(dep_name)
         if dist is None:
             raise LookupError(f"dependency {dep_name!r} is not installed")
         name = dist.metadata["Name"].lower().replace("-", "_")
         version = dist.metadata["Version"] or "?"
         paths = self.dependency_discoverer.list_files(dist)
-        from pydocs_mcp.indexer import find_site_packages_root
         root = Path(find_site_packages_root(paths[0])) if paths else Path(".")
         chunks, trees = self._extract_paths(paths, name, root)
         content_hash = hashlib.md5(f"{name}:{version}".encode()).hexdigest()[:12]
@@ -3873,8 +4016,11 @@ from pydocs_mcp.extraction.members import (
     InspectMemberExtractor,
 )
 from pydocs_mcp.extraction.package_tree import build_package_tree
-from pydocs_mcp.extraction.registry import chunker_registry
-from pydocs_mcp.extraction.selector import ExtensionChunkerSelector, ExtractionError
+from pydocs_mcp.extraction.selector import (
+    ExtensionChunkerSelector,
+    ExtractionError,
+    build_selector,
+)
 from pydocs_mcp.extraction.tree_flatten import flatten_to_chunks
 
 __all__ = [
@@ -3890,7 +4036,7 @@ __all__ = [
     "NodeKind", "NotebookChunker", "NotebookConfig",
     "ProjectFileDiscoverer",
     "StaticDependencyResolver", "StrategyChunkExtractor",
-    "build_package_tree", "chunker_registry", "flatten_to_chunks",
+    "build_package_tree", "build_selector", "flatten_to_chunks",
 ]
 ```
 
