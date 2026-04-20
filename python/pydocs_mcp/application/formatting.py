@@ -7,7 +7,8 @@ They are called from:
   composite ``Chunk`` with ``ChunkOrigin.COMPOSITE_OUTPUT`` origin.
 - MCP handler fallback paths in ``server.py`` — when the pipeline config
   omits the formatter stage, the handler renders the raw result itself.
-- CLI ``query`` / ``api`` subcommands in ``__main__.py`` — stdout rendering.
+- CLI ``query`` / ``api`` subcommands in ``__main__.py`` — stdout rendering
+  (via the composite chunk text produced by the formatter stage).
 
 Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
   - Each block is ``"## {title}\\n{body}\\n"`` with a SINGLE ``\\n`` between
@@ -37,9 +38,6 @@ _CHARS_PER_TOKEN = 4
 # Truncation gate: if fewer chars than this remain in the budget, we do NOT
 # emit a partial piece at all (the old ``format_within_budget`` behaviour).
 _TRUNCATION_MIN_REMAINDER = 100
-
-# CLI separator between blocks — matches pre-PR CLI output style.
-_CLI_SEPARATOR = "-" * 40
 
 
 def format_chunks_markdown_within_budget(
@@ -107,59 +105,3 @@ def format_members_markdown_within_budget(
         parts.append(piece)
         total += len(piece)
     return "\n".join(parts)
-
-
-def format_chunks_cli_stdout(chunks: tuple[Chunk, ...]) -> str:
-    """Render chunks for CLI stdout — one block per chunk with a dashed
-    separator line between blocks.
-
-    Output shape per block::
-
-        [pkg] module :: title
-        body
-        ----------------------------------------
-
-    Kept deliberately different from the markdown helper — CLI readers want
-    a plain-text separator, not a markdown heading. Returns an empty string
-    for an empty input (no trailing newline to avoid an empty line on stdout).
-    """
-    if not chunks:
-        return ""
-    lines: list[str] = []
-    for chunk in chunks:
-        md = chunk.metadata
-        pkg = md.get(ChunkFilterField.PACKAGE.value, "") or ""
-        module = md.get(ChunkFilterField.MODULE.value, "") or ""
-        title = md.get(ChunkFilterField.TITLE.value, "") or ""
-        lines.append(f"[{pkg}] {module} :: {title}")
-        lines.append(chunk.text or "")
-        lines.append(_CLI_SEPARATOR)
-    return "\n".join(lines) + "\n"
-
-
-def format_members_cli_stdout(members: tuple[ModuleMember, ...]) -> str:
-    """Render module members for CLI stdout — one block per member with a
-    dashed separator.
-
-    Output shape per member::
-
-        [pkg] module.name{signature} (kind)
-        docstring (omitted when empty)
-        ----------------------------------------
-    """
-    if not members:
-        return ""
-    lines: list[str] = []
-    for member in members:
-        md = member.metadata
-        pkg = md.get(ModuleMemberFilterField.PACKAGE.value, "") or ""
-        module = md.get(ModuleMemberFilterField.MODULE.value, "") or ""
-        name = md.get(ModuleMemberFilterField.NAME.value, "") or ""
-        kind = md.get(ModuleMemberFilterField.KIND.value, "") or ""
-        signature = md.get("signature", "") or ""
-        docstring = md.get("docstring", "") or ""
-        lines.append(f"[{pkg}] {module}.{name}{signature} ({kind})")
-        if docstring:
-            lines.append(docstring)
-        lines.append(_CLI_SEPARATOR)
-    return "\n".join(lines) + "\n"

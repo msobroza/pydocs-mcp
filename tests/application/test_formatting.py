@@ -8,9 +8,7 @@ regress the parity golden tests too.
 from __future__ import annotations
 
 from pydocs_mcp.application.formatting import (
-    format_chunks_cli_stdout,
     format_chunks_markdown_within_budget,
-    format_members_cli_stdout,
     format_members_markdown_within_budget,
 )
 from pydocs_mcp.models import (
@@ -195,88 +193,3 @@ def test_format_members_markdown_budget_truncation():
     )
     out = format_members_markdown_within_budget(members, budget_tokens=50)  # 200 chars
     assert len(out) <= 200 + 100
-
-
-# ---------- format_chunks_cli_stdout ----------
-
-
-def test_format_chunks_cli_basic():
-    """CLI stdout formatter — each chunk becomes header + body + separator,
-    line-joined; trailing newline after any non-empty content."""
-    chunks = (
-        Chunk(
-            text="body1",
-            metadata={
-                ChunkFilterField.PACKAGE.value: "fastapi",
-                ChunkFilterField.MODULE.value: "fastapi.routing",
-                ChunkFilterField.TITLE.value: "Routing",
-            },
-        ),
-    )
-    out = format_chunks_cli_stdout(chunks)
-    assert "[fastapi]" in out
-    assert "fastapi.routing" in out
-    assert "Routing" in out
-    assert "body1" in out
-    assert out.endswith("\n")
-
-
-def test_format_chunks_cli_empty_tuple_returns_empty_string():
-    assert format_chunks_cli_stdout(()) == ""
-
-
-def test_format_chunks_cli_multiple_chunks_separated():
-    chunks = (
-        Chunk(text="one", metadata={
-            ChunkFilterField.PACKAGE.value: "p",
-            ChunkFilterField.MODULE.value: "m",
-            ChunkFilterField.TITLE.value: "A",
-        }),
-        Chunk(text="two", metadata={
-            ChunkFilterField.PACKAGE.value: "p",
-            ChunkFilterField.MODULE.value: "m",
-            ChunkFilterField.TITLE.value: "B",
-        }),
-    )
-    out = format_chunks_cli_stdout(chunks)
-    assert "one" in out and "two" in out
-    # Separator (line of dashes) between blocks
-    assert "-" * 40 in out
-
-
-# ---------- format_members_cli_stdout ----------
-
-
-def test_format_members_cli_basic():
-    m = ModuleMember(metadata={
-        ModuleMemberFilterField.PACKAGE.value: "fastapi",
-        ModuleMemberFilterField.MODULE.value: "fastapi.routing",
-        ModuleMemberFilterField.NAME.value: "APIRouter",
-        ModuleMemberFilterField.KIND.value: "class",
-        "signature": "()",
-        "docstring": "Docs.",
-    })
-    out = format_members_cli_stdout((m,))
-    assert "[fastapi]" in out
-    assert "fastapi.routing.APIRouter" in out
-    assert "(class)" in out
-    assert "Docs." in out
-    assert out.endswith("\n")
-
-
-def test_format_members_cli_empty_tuple_returns_empty_string():
-    assert format_members_cli_stdout(()) == ""
-
-
-def test_format_members_cli_omits_docstring_line_when_missing():
-    """No docstring => no blank docstring line in the output."""
-    m = ModuleMember(metadata={
-        ModuleMemberFilterField.PACKAGE.value: "p",
-        ModuleMemberFilterField.MODULE.value: "m",
-        ModuleMemberFilterField.NAME.value: "f",
-        ModuleMemberFilterField.KIND.value: "function",
-        "signature": "()",
-    })
-    out = format_members_cli_stdout((m,))
-    assert "[p]" in out
-    assert "(function)" in out
