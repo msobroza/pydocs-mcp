@@ -20,7 +20,6 @@ from pydocs_mcp.constants import (
     PACKAGE_DOC_MAX,
     REQUIREMENTS_DISPLAY,
 )
-from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import ChunkFilterField, ModuleMemberFilterField, SearchQuery, SearchScope
 from pydocs_mcp.retrieval.config import (
@@ -28,7 +27,7 @@ from pydocs_mcp.retrieval.config import (
     build_chunk_pipeline_from_config,
     build_member_pipeline_from_config,
 )
-from pydocs_mcp.retrieval.serialization import BuildContext
+from pydocs_mcp.retrieval.wiring import build_retrieval_context
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -60,21 +59,14 @@ def run(db_path: Path, config_path: Path | None = None):
     # Build provider + load config + build pipelines + repositories once at startup.
     from pydocs_mcp.storage.sqlite import (
         SqliteChunkRepository,
-        SqliteModuleMemberRepository,
         SqlitePackageRepository,
-        SqliteVectorStore,
     )
-    provider = build_connection_provider(db_path)
     config = AppConfig.load(explicit_path=config_path)
+    context = build_retrieval_context(db_path, config)
+    provider = context.connection_provider
     package_repository = SqlitePackageRepository(provider=provider)
     chunk_repository = SqliteChunkRepository(provider=provider)
-    member_repository = SqliteModuleMemberRepository(provider=provider)
-    context = BuildContext(
-        connection_provider=provider,
-        vector_store=SqliteVectorStore(provider=provider),
-        module_member_store=member_repository,
-        app_config=config,
-    )
+    member_repository = context.module_member_store
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 
