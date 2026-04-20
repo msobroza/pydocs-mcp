@@ -23,7 +23,10 @@ from pydocs_mcp.constants import LIVE_DOC_MAX, LIVE_SIGNATURE_MAX
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.storage.protocols import PackageStore
 
-_SUBMODULE_RE = re.compile(r"^([A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*)?$")
+# Use \A...\Z (not ^...$) — Python's ``re`` treats ``$`` as matching before a
+# trailing ``\n`` by default, which lets ``"foo\n"`` slip past a naive anchor
+# and reach ``importlib.import_module`` downstream.
+_SUBMODULE_RE = re.compile(r"\A([A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*)?\Z")
 
 # Match the pre-PR server.py handler: cap inspection at 50 public members so
 # inspecting giant modules (e.g. ``numpy``) can't bloat the MCP response.

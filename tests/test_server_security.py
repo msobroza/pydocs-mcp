@@ -45,3 +45,30 @@ def test_validate_submodule_blocks_invalid_in_context(tmp_path):
     good_inputs = ["", "routing", "a.b.c", "test_module", "my_pkg.sub"]
     for good in good_inputs:
         assert _validate_submodule(good), f"Should accept: {repr(good)}"
+
+
+def test_validate_submodule_rejects_trailing_newline():
+    """``"foo\\n"`` must be rejected — otherwise Python's default ``$`` anchor
+    matches before the trailing newline and lets the value reach importlib.
+
+    Regression for a reviewer-surfaced bypass — the fix switches anchors from
+    ``^...$`` to ``\\A...\\Z``.
+    """
+    from pydocs_mcp.server import _validate_submodule
+    assert _validate_submodule("foo\n") is False
+
+
+def test_validate_submodule_rejects_embedded_newline():
+    """A newline in the middle of the value must also be rejected —
+    multi-line identifiers never resolve to real modules.
+    """
+    from pydocs_mcp.server import _validate_submodule
+    assert _validate_submodule("foo\nbar") is False
+
+
+def test_validate_submodule_rejects_trailing_spaces():
+    """Trailing whitespace is never valid — sanity check alongside the
+    newline-rejection fix.
+    """
+    from pydocs_mcp.server import _validate_submodule
+    assert _validate_submodule("foo ") is False
