@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from pydocs_mcp.constants import (
+    LIST_PACKAGES_MAX,
     LIVE_DOC_MAX,
     LIVE_SIGNATURE_MAX,
     PACKAGE_DOC_LINE_MAX,
@@ -82,7 +83,7 @@ def run(db_path: Path, config_path: Path | None = None):
     @mcp.tool()
     async def list_packages() -> str:
         """List indexed packages. '__project__' = your source code."""
-        packages = await package_repository.list()
+        packages = await package_repository.list(limit=LIST_PACKAGES_MAX)
         packages = sorted(packages, key=lambda p: p.name)
         return "\n".join(
             f"- {p.name} {p.version} — {p.summary}" for p in packages

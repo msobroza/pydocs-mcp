@@ -17,7 +17,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from pydocs_mcp.models import Chunk, ModuleMember, Package
+from pydocs_mcp.models import (
+    Chunk,
+    ChunkFilterField,
+    ModuleMember,
+    ModuleMemberFilterField,
+    Package,
+)
 from pydocs_mcp.storage.filters import All
 from pydocs_mcp.storage.protocols import (
     ChunkStore,
@@ -103,16 +109,25 @@ class IndexingService:
         chunks: tuple[Chunk, ...],
         module_members: tuple[ModuleMember, ...],
     ) -> None:
-        await self.chunk_store.delete(filter={"package": package.name})
-        await self.module_member_store.delete(filter={"package": package.name})
+        # Enum-typed filter keys — stringly-typed ``{"package": ...}`` drifted
+        # silently when a column renamed; ``ChunkFilterField`` / ``ModuleMemberFilterField``
+        # are the single source of truth the safe-columns whitelist also derives from.
+        # The ``packages`` table keys on ``name`` (not ``package``), so that
+        # one stays literal — no matching enum today (noted in /simplify report).
+        await self.chunk_store.delete(filter={ChunkFilterField.PACKAGE.value: package.name})
+        await self.module_member_store.delete(
+            filter={ModuleMemberFilterField.PACKAGE.value: package.name},
+        )
         await self.package_store.delete(filter={"name": package.name})
         await self.package_store.upsert(package)
         await self.chunk_store.upsert(chunks)
         await self.module_member_store.upsert_many(module_members)
 
     async def _do_remove(self, name: str) -> None:
-        await self.chunk_store.delete(filter={"package": name})
-        await self.module_member_store.delete(filter={"package": name})
+        await self.chunk_store.delete(filter={ChunkFilterField.PACKAGE.value: name})
+        await self.module_member_store.delete(
+            filter={ModuleMemberFilterField.PACKAGE.value: name},
+        )
         await self.package_store.delete(filter={"name": name})
 
     async def _do_clear_all(self) -> None:

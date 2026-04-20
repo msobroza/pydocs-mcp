@@ -79,6 +79,12 @@ LIVE_DOC_MAX: int = 150
 REQUIREMENTS_DISPLAY: int = 20
 """Max dependency names shown in get_package_doc output."""
 
+LIST_PACKAGES_MAX: int = 200
+"""Max packages returned by the ``list_packages`` MCP tool.
+
+Defensive cap so a badly-populated cache (or a future all-deps mode)
+cannot blow up the client's context window or stream size."""
+
 SEARCH_RESULTS_MAX: int = 50
 """Max symbol results returned in search_api."""
 
