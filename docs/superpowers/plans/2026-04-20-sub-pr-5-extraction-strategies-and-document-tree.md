@@ -2145,9 +2145,9 @@ def _extract_code_examples(
 class AstPythonChunker:
     """Chunker for .py files (spec §7.1).
 
-    Parses via ``ast.parse``; emits MODULE root, top-level FUNCTION,
-    CLASS (with METHOD children), IMPORT_BLOCK. Parse failure → single
-    MODULE node with full source as text.
+    SRP: ``build_tree`` is a 4-line delegation. Each private helper does one thing
+    (parse, build fallback, build children, build root). No single function
+    exceeds ~15 LOC.
     """
 
     def build_tree(
@@ -2158,69 +2158,83 @@ class AstPythonChunker:
         root: Path,
     ) -> DocumentNode:
         module = _module_from_path(path, root)
-        try:
-            tree = ast.parse(content)
-        except SyntaxError as exc:
-            log.warning("ast.parse failed on %s: %s — fallback to MODULE-only", path, exc)
-            return DocumentNode(
-                node_id=module, title=module, kind=NodeKind.MODULE,
-                source_path=str(Path(path).relative_to(root)) if Path(path).is_absolute() else path,
-                start_line=1, end_line=max(len(content.splitlines()), 1),
-                text=content,
-                content_hash=_content_hash(content, NodeKind.MODULE, module),
-            )
+        tree = _safe_parse(content, path)
+        if tree is None:
+            return _fallback_module_node(module, path, content, root)
+        return _module_node_from_ast(tree, module, path, content, root)
 
-        source_lines = content.splitlines()
-        source_path_rel = (
-            str(Path(path).relative_to(root)) if Path(path).is_absolute() else path
-        )
-        children: list[DocumentNode] = []
 
-        # Group consecutive Import/ImportFrom into a single IMPORT_BLOCK.
-        imports_buf: list = []
-        non_import_stmts: list = []
-        for stmt in tree.body:
-            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-                imports_buf.append(stmt)
-            else:
-                non_import_stmts.append(stmt)
+# --- helpers: each ≤ 15 LOC, single-purpose ---
 
-        if imports_buf:
-            start = imports_buf[0].lineno
-            end = imports_buf[-1].end_lineno or start
-            txt = _slice_lines(source_lines, start, end)
-            title = "imports"
-            qname = f"{module}.__imports__"
-            children.append(DocumentNode(
-                node_id=qname, title=title, kind=NodeKind.IMPORT_BLOCK,
-                source_path=source_path_rel,
-                start_line=start, end_line=end, text=txt,
-                content_hash=_content_hash(txt, NodeKind.IMPORT_BLOCK, title),
-                parent_id=module,
-            ))
+def _safe_parse(content: str, path: str) -> ast.Module | None:
+    try:
+        return ast.parse(content)
+    except SyntaxError as exc:
+        log.warning("ast.parse failed on %s: %s", path, exc)
+        return None
 
-        for stmt in non_import_stmts:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                children.append(_function_node(
-                    stmt, module, source_lines, source_path_rel, parent_id=module,
-                ))
-            elif isinstance(stmt, ast.ClassDef):
-                children.append(_class_node(
-                    stmt, module, source_lines, source_path_rel, parent_id=module,
-                ))
 
-        # MODULE direct text = module docstring (not whole file).
-        mod_doc = ast.get_docstring(tree) or ""
-        end_line = max(len(source_lines), 1)
-        return DocumentNode(
-            node_id=module, title=module, kind=NodeKind.MODULE,
-            source_path=source_path_rel,
-            start_line=1, end_line=end_line,
-            text=mod_doc,
-            content_hash=_content_hash(mod_doc, NodeKind.MODULE, module),
-            summary=_docstring_summary(mod_doc),
-            children=tuple(children),
-        )
+def _fallback_module_node(
+    module: str, path: str, content: str, root: Path,
+) -> DocumentNode:
+    return DocumentNode(
+        node_id=module, title=module, kind=NodeKind.MODULE,
+        source_path=_relpath(path, root),
+        start_line=1, end_line=max(len(content.splitlines()), 1),
+        text=content,
+        content_hash=_content_hash(content, NodeKind.MODULE, module),
+    )
+
+
+def _module_node_from_ast(
+    tree: ast.Module, module: str, path: str, content: str, root: Path,
+) -> DocumentNode:
+    lines = content.splitlines()
+    rel = _relpath(path, root)
+    children = _extract_module_children(tree, module, lines, rel)
+    mod_doc = ast.get_docstring(tree) or ""
+    return DocumentNode(
+        node_id=module, title=module, kind=NodeKind.MODULE,
+        source_path=rel, start_line=1, end_line=max(len(lines), 1),
+        text=mod_doc,                              # direct-text rule (spec §4.1.1)
+        content_hash=_content_hash(mod_doc, NodeKind.MODULE, module),
+        summary=_docstring_summary(mod_doc),
+        children=tuple(children),
+    )
+
+
+def _extract_module_children(
+    tree: ast.Module, module: str, lines: list[str], rel: str,
+) -> list[DocumentNode]:
+    children: list[DocumentNode] = []
+    imports = [s for s in tree.body if isinstance(s, (ast.Import, ast.ImportFrom))]
+    if imports:
+        children.append(_import_block_node(imports, module, lines, rel))
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            children.append(_function_node(stmt, module, lines, rel, parent_id=module))
+        elif isinstance(stmt, ast.ClassDef):
+            children.append(_class_node(stmt, module, lines, rel, parent_id=module))
+    return children
+
+
+def _import_block_node(
+    imports: list, module: str, lines: list[str], rel: str,
+) -> DocumentNode:
+    start = imports[0].lineno
+    end = imports[-1].end_lineno or start
+    txt = _slice_lines(lines, start, end)
+    qname = f"{module}.__imports__"
+    return DocumentNode(
+        node_id=qname, title="imports", kind=NodeKind.IMPORT_BLOCK,
+        source_path=rel, start_line=start, end_line=end, text=txt,
+        content_hash=_content_hash(txt, NodeKind.IMPORT_BLOCK, "imports"),
+        parent_id=module,
+    )
+
+
+def _relpath(path: str, root: Path) -> str:
+    return str(Path(path).relative_to(root)) if Path(path).is_absolute() else path
 
 
 def _function_node(
@@ -2929,9 +2943,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from collections.abc import Mapping
+from pathlib import Path
+
+from pydocs_mcp.extraction.chunkers import (
+    AstPythonChunker, HeadingMarkdownChunker, NotebookChunker,
+)
 from pydocs_mcp.extraction.config import ChunkingConfig
 from pydocs_mcp.extraction.protocols import Chunker
-from pydocs_mcp.extraction.registry import chunker_registry
 
 
 class ExtractionError(Exception):
@@ -2940,36 +2959,36 @@ class ExtractionError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ExtensionChunkerSelector:
-    """Concrete ChunkerSelector implementation.
-
-    Configuration lives in :class:`ChunkingConfig.by_extension`; strict-allowlist
-    validation already ran at config-load time, but ``pick()`` raises
-    :class:`ExtractionError` if a path with an unregistered extension somehow
-    reaches it (defense-in-depth per spec §10.3).
+    """Pure dict lookup keyed by extension. Open/Closed: adding a chunker does
+    NOT modify this class — only ``build_selector`` (the factory below).
     """
 
-    chunking_config: ChunkingConfig
+    chunkers: Mapping[str, Chunker]   # pre-built instances, keyed by ".py" / ".md" / ".ipynb"
 
     def pick(self, path: str) -> Chunker:
-        _, ext = os.path.splitext(path)
-        ext = ext.lower()
-        chunker_name = self.chunking_config.by_extension.get(ext)
-        if chunker_name is None:
-            raise ExtractionError(f"no chunker registered for extension {ext!r} (path={path!r})")
-        cls = chunker_registry.get(chunker_name)
-        if cls is None:
-            raise ExtractionError(f"chunker name {chunker_name!r} not in registry")
-        # Pass config-specific args to chunkers that need them
-        if chunker_name == "heading_markdown":
-            return cls(  # type: ignore[call-arg]
-                min_heading_level=self.chunking_config.markdown.min_heading_level,
-                max_heading_level=self.chunking_config.markdown.max_heading_level,
-            )
-        if chunker_name == "notebook":
-            return cls(  # type: ignore[call-arg]
-                include_outputs=self.chunking_config.notebook.include_outputs,
-            )
-        return cls()
+        ext = Path(path).suffix.lower()
+        try:
+            return self.chunkers[ext]
+        except KeyError as exc:
+            raise ExtractionError(
+                f"no chunker for extension {ext!r} (path={path!r})"
+            ) from exc
+
+
+def build_selector(cfg: ChunkingConfig) -> ExtensionChunkerSelector:
+    """Wire chunkers once at startup. All chunkers take config uniformly via
+    constructor → no runtime dispatch, no LSP violations.
+    """
+    return ExtensionChunkerSelector(chunkers={
+        ".py":    AstPythonChunker(),
+        ".md":    HeadingMarkdownChunker(
+            min_heading_level=cfg.markdown.min_heading_level,
+            max_heading_level=cfg.markdown.max_heading_level,
+        ),
+        ".ipynb": NotebookChunker(
+            include_outputs=cfg.notebook.include_outputs,
+        ),
+    })
 ```
 
 - [ ] **Step 14.5: Run tests to verify pass**
