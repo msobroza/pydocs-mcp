@@ -2,7 +2,7 @@
 import sqlite3
 import pytest
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.search import retrieve_chunks, retrieve_module_members
+from tests._retriever_helpers import retrieve_chunks, retrieve_module_members
 
 
 class TestSearchChunksInternal:

@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
-from pydocs_mcp.constants import SEARCH_BODY_CLI, SEARCH_DOC_CLI
 from pydocs_mcp.db import (
+    build_connection_provider,
     cache_path_for_project,
     clear_all_packages,
     open_index_database,
@@ -16,7 +16,6 @@ from pydocs_mcp.db import (
 )
 from pydocs_mcp.deps import discover_declared_dependencies
 from pydocs_mcp.indexer import index_dependencies, index_project_source
-from pydocs_mcp.search import retrieve_chunks, retrieve_module_members
 from pydocs_mcp.server import run
 
 log = logging.getLogger("pydocs-mcp")
@@ -28,6 +27,7 @@ def main():
         description="Local Python docs MCP server (optionally Rust-accelerated)",
     )
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--config", type=Path, help="Path to pydocs-mcp.yaml")
     sub = p.add_subparsers(dest="cmd")
 
     _no_rust = dict(action="store_true",
@@ -102,22 +102,36 @@ def main():
         conn.close()
 
         if args.cmd == "serve":
-            run(db_path)
+            run(db_path, config_path=getattr(args, "config", None))
 
     elif args.cmd in ("query", "api"):
-        conn = open_index_database(db_path)
-        q = " ".join(args.terms)
+        import asyncio
+
+        from pydocs_mcp.models import ChunkFilterField, SearchQuery
+        from pydocs_mcp.retrieval.config import (
+            AppConfig,
+            build_chunk_pipeline_from_config,
+            build_member_pipeline_from_config,
+        )
+        from pydocs_mcp.retrieval.serialization import BuildContext
+
+        config = AppConfig.load(explicit_path=getattr(args, "config", None))
+        provider = build_connection_provider(db_path)
+        context = BuildContext(connection_provider=provider)
+        terms = " ".join(args.terms)
+        pre_filter = (
+            {ChunkFilterField.PACKAGE.value: args.package} if args.package else None
+        )
+        search_query = SearchQuery(terms=terms, pre_filter=pre_filter)
 
         if args.cmd == "query":
-            for r in retrieve_chunks(conn, q, pkg=args.package):
-                print(f"\n{'─' * 60}")
-                print(f"[{r['kind']}] {r['pkg']} → {r['heading']}")
-                print(r["body"][:SEARCH_BODY_CLI])
+            pipeline = build_chunk_pipeline_from_config(config, context)
         else:
-            for s in retrieve_module_members(conn, q, pkg=args.package):
-                print(f"\n{'─' * 60}")
-                print(f"{s['kind']} {s['module']}.{s['name']}{s['signature']}")
-                print((s["doc"] or "—")[:SEARCH_DOC_CLI])
+            pipeline = build_member_pipeline_from_config(config, context)
+
+        state = asyncio.run(pipeline.run(search_query))
+        if state.result is not None and state.result.items:
+            print(state.result.items[0].text)
 
 
 if __name__ == "__main__":

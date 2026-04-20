@@ -220,3 +220,21 @@ class TestGetCachedHash:
         )
         db.commit()
         assert get_stored_content_hash(db, "mypkg") is None
+
+
+from pydocs_mcp.db import build_connection_provider
+
+
+async def test_build_connection_provider_opens_valid_db(tmp_path):
+    db_file = tmp_path / "factory.db"
+    conn = open_index_database(db_file)
+    conn.close()
+
+    provider = build_connection_provider(db_file)
+    import sqlite3
+    async with provider.acquire() as c:
+        assert c.row_factory is sqlite3.Row
+        tables = {r["name"] for r in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+    assert {"packages", "chunks", "module_members"}.issubset(tables)

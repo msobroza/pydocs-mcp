@@ -4,7 +4,7 @@ Uses stripped snapshots of sklearn, vllm, and langgraph indexed with the real
 parser, plus a fake project that references them.
 """
 import pytest
-from pydocs_mcp.search import retrieve_chunks, retrieve_module_members
+from tests._retriever_helpers import retrieve_chunks, retrieve_module_members
 
 
 # --- Project search: results should come from __project__ ---
