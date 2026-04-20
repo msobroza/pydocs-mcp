@@ -1,6 +1,7 @@
 """Filter tree + MultiFieldFormat + MetadataSchema + format_registry (spec §5.1)."""
 from __future__ import annotations
 
+import types
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -170,8 +171,33 @@ def _walk_fields(filter: Filter) -> frozenset[str]:
 
 
 # ── format_registry ─────────────────────────────────────────────────────
+#
+# The public ``format_registry`` is a read-only MappingProxy — tests that
+# monkeypatched the dict directly used to leak mutations across runs and
+# silently break unrelated tests depending on run order. New formats must
+# register via :func:`register_format` (future extension point for e.g.
+# ChromaDB, Qdrant, Elasticsearch backends).
 
 
-format_registry: dict[MetadataFilterFormat, FilterFormat] = {
+_format_registry_mut: dict[MetadataFilterFormat, FilterFormat] = {
     MetadataFilterFormat.MULTIFIELD: MultiFieldFormat(),
 }
+format_registry: Mapping[MetadataFilterFormat, FilterFormat] = types.MappingProxyType(
+    _format_registry_mut
+)
+
+
+def register_format(fmt: MetadataFilterFormat, impl: FilterFormat) -> None:
+    """Register a new :class:`FilterFormat` implementation.
+
+    Intended for future backends (ChromaDB, Qdrant, Elasticsearch). Tests
+    that need a temporary format should save/restore via this helper rather
+    than mutating the proxy.
+    """
+    _format_registry_mut[fmt] = impl
+
+
+def unregister_format(fmt: MetadataFilterFormat) -> None:
+    """Remove a previously-registered :class:`FilterFormat`. Mirror of
+    :func:`register_format` for test tear-down."""
+    _format_registry_mut.pop(fmt, None)

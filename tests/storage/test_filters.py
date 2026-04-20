@@ -110,6 +110,33 @@ def test_format_registry_has_multifield():
     assert fmt.format is MetadataFilterFormat.MULTIFIELD
 
 
+def test_format_registry_is_read_only_mapping_proxy():
+    """Direct mutation of ``format_registry`` must be blocked — callers
+    should use ``register_format`` / ``unregister_format`` instead.
+
+    This prevents monkeypatch-style tests from silently leaking a custom
+    format into later tests (order-dependent flakes)."""
+    import types
+
+    assert isinstance(format_registry, types.MappingProxyType)
+    with pytest.raises(TypeError):
+        format_registry[MetadataFilterFormat.CHROMADB] = MultiFieldFormat()  # type: ignore[index]
+
+
+def test_register_format_helper_adds_and_unregisters():
+    """``register_format`` is the supported extension point; rollback via
+    ``unregister_format`` keeps later tests isolated."""
+    from pydocs_mcp.storage.filters import register_format, unregister_format
+
+    assert MetadataFilterFormat.QDRANT not in format_registry
+    register_format(MetadataFilterFormat.QDRANT, MultiFieldFormat())
+    try:
+        assert MetadataFilterFormat.QDRANT in format_registry
+    finally:
+        unregister_format(MetadataFilterFormat.QDRANT)
+    assert MetadataFilterFormat.QDRANT not in format_registry
+
+
 def test_all_filter_composition():
     tree = All(clauses=(
         FieldEq(field="package", value="fastapi"),
