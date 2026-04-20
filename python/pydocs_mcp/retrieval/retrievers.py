@@ -17,6 +17,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, retriever_registry
 from pydocs_mcp.storage.filters import (
     All,
     FieldEq,
+    FieldIn,
     Filter,
     _walk_fields,
     format_registry,
@@ -31,21 +32,34 @@ if TYPE_CHECKING:
 _PROJECT = "__project__"
 
 
-def _split_scope(tree: Filter) -> tuple[Filter | None, SearchScope | None]:
+def _split_scope(tree: Filter) -> tuple[Filter | None, frozenset[SearchScope] | None]:
     """Extract the ``scope`` clause from a filter tree.
 
     ``scope`` is a semantic field — ``PROJECT_ONLY`` / ``DEPENDENCIES_ONLY``
     map to equality / inequality on ``package``, which the push-down SQL
     layer cannot express via the ``MultiFieldFormat`` alone. The retriever
-    strips ``scope`` out so the store sees only real columns, then re-applies
-    it in-process via :func:`_matches_scope`.
+    strips ``scope`` out so the store sees only real columns (the SQL layer
+    would otherwise raise "unsafe column" on ``scope``), then re-applies the
+    constraint in-process via :func:`_matches_scope`.
+
+    A bare ``FieldEq(scope=x)`` yields ``{x}``; a ``FieldIn(scope=[x,y])`` yields
+    ``{x,y}`` (the row is kept iff *any* of those scopes matches).
     """
+
+    def _scope_set(clause: Filter) -> frozenset[SearchScope] | None:
+        if isinstance(clause, FieldEq) and clause.field == ChunkFilterField.SCOPE.value:
+            return frozenset({SearchScope(clause.value)})
+        if isinstance(clause, FieldIn) and clause.field == ChunkFilterField.SCOPE.value:
+            return frozenset(SearchScope(v) for v in clause.values)
+        return None
+
     if isinstance(tree, All):
-        scope: SearchScope | None = None
+        scope: frozenset[SearchScope] | None = None
         kept: list[Filter] = []
         for clause in tree.clauses:
-            if isinstance(clause, FieldEq) and clause.field == ChunkFilterField.SCOPE.value:
-                scope = SearchScope(clause.value)
+            inner = _scope_set(clause)
+            if inner is not None:
+                scope = inner if scope is None else scope | inner
                 continue
             kept.append(clause)
         if scope is None:
@@ -53,17 +67,22 @@ def _split_scope(tree: Filter) -> tuple[Filter | None, SearchScope | None]:
         if not kept:
             return None, scope
         return All(clauses=tuple(kept)), scope
-    if isinstance(tree, FieldEq) and tree.field == ChunkFilterField.SCOPE.value:
-        return None, SearchScope(tree.value)
+    single = _scope_set(tree)
+    if single is not None:
+        return None, single
     return tree, None
 
 
-def _matches_scope(package: str, scope: SearchScope) -> bool:
-    if scope is SearchScope.PROJECT_ONLY:
-        return package == _PROJECT
-    if scope is SearchScope.DEPENDENCIES_ONLY:
-        return package != _PROJECT
-    return True
+def _matches_scope(package: str, scope: frozenset[SearchScope]) -> bool:
+    """Return True iff ``package`` matches *any* of the requested scopes."""
+    for s in scope:
+        if s is SearchScope.ALL:
+            return True
+        if s is SearchScope.PROJECT_ONLY and package == _PROJECT:
+            return True
+        if s is SearchScope.DEPENDENCIES_ONLY and package != _PROJECT:
+            return True
+    return False
 
 
 @retriever_registry.register("bm25_chunk")
@@ -85,7 +104,7 @@ class Bm25ChunkRetriever:
 
     async def retrieve(self, query: SearchQuery) -> ChunkList:
         tree: Filter | None = None
-        scope: SearchScope | None = None
+        scope: frozenset[SearchScope] | None = None
         if query.pre_filter is not None:
             tree = format_registry[query.pre_filter_format].parse(query.pre_filter)
             unknown = _walk_fields(tree) - self.allowed_fields
@@ -149,7 +168,7 @@ class LikeMemberRetriever:
 
     async def retrieve(self, query: SearchQuery) -> ModuleMemberList:
         tree: Filter | None = None
-        scope: SearchScope | None = None
+        scope: frozenset[SearchScope] | None = None
         if query.pre_filter is not None:
             tree = format_registry[query.pre_filter_format].parse(query.pre_filter)
             unknown = _walk_fields(tree) - self.allowed_fields

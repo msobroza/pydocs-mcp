@@ -209,3 +209,39 @@ async def test_pipeline_module_member_retriever_forwards():
     out = await adapter.retrieve(SearchQuery(terms="x"))
     assert isinstance(out, ModuleMemberList)
     assert len(out.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_scope_filter_accepts_field_in():
+    """``{"scope": {"in": [...]}}`` must be stripped from the pushed-down
+    filter tree just like the singleton ``{"scope": "x"}`` form — otherwise
+    the store's safe-column gate raises ``ValueError("column 'scope' not in
+    safe_columns")`` because ``scope`` is a semantic field, not a DB column.
+    """
+    store = _FakeTextSearchable(
+        rows=(
+            Chunk(
+                text="project body",
+                metadata={ChunkFilterField.PACKAGE.value: "__project__"},
+            ),
+            Chunk(
+                text="dep body",
+                metadata={ChunkFilterField.PACKAGE.value: "fastapi"},
+            ),
+        ),
+    )
+    retriever = Bm25ChunkRetriever(
+        store=store,
+        allowed_fields=frozenset({"package", "scope"}),
+    )
+
+    # Must not raise: scope gets split out of the filter tree.
+    result = await retriever.retrieve(SearchQuery(
+        terms="body",
+        pre_filter={"scope": {"in": ["project_only", "all"]}},
+    ))
+
+    # The store received filter=None (scope was popped off; no other clauses).
+    assert store.recorded[0]["filter"] is None
+    # Both rows match: ``all`` covers everything.
+    assert len(result.items) == 2
