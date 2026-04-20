@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import importlib.resources
+import os
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from pydocs_mcp.retrieval.config import AppConfig, PipelineRouteEntry
+from pydocs_mcp.retrieval.config import AppConfig, PipelineRouteEntry, _resolve_pipeline_path
 
 
 @pytest.fixture(autouse=True)
@@ -122,3 +123,56 @@ def test_preset_member_like_loadable():
 def test_preset_default_config_loadable():
     default_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("default_config.yaml")
     assert default_yaml.is_file()
+
+
+# ── pipeline_path allowlist ─────────────────────────────────────────────
+
+
+def test_pipeline_path_rejects_absolute_outside_allowed_roots(tmp_path):
+    """An absolute path that escapes the allowlist (e.g. ``/etc/shadow``)
+    must raise ValueError before any file read happens."""
+    outside = tmp_path / "evil.yaml"
+    outside.write_text("name: evil\nstages: []\n")
+    with pytest.raises(ValueError, match="pipeline_path must be inside"):
+        # No user-config path → only presets/ is allowed.
+        _resolve_pipeline_path(outside, user_config_path=None)
+
+
+def test_pipeline_path_rejects_symlink_traversal(tmp_path):
+    """A symlink inside the shipped presets/ dir that points outside the
+    allowlist must be rejected after resolve() follows it."""
+    # We simulate the attack by creating a user-config dir, a symlink inside
+    # it pointing outside the allowlist, and supplying the user_config_path
+    # so the user-config dir is part of allowed_roots.
+    user_cfg_dir = tmp_path / "cfg"
+    user_cfg_dir.mkdir()
+    user_cfg_file = user_cfg_dir / "pydocs-mcp.yaml"
+    user_cfg_file.write_text("log_level: info\n")
+
+    outside_target = tmp_path / "outside.yaml"
+    outside_target.write_text("name: bad\n")
+
+    link = user_cfg_dir / "bad.yaml"
+    os.symlink(outside_target, link)
+
+    with pytest.raises(ValueError, match="pipeline_path must be inside"):
+        _resolve_pipeline_path(Path("bad.yaml"), user_config_path=user_cfg_file)
+
+
+def test_pipeline_path_accepts_relative_inside_user_config(tmp_path):
+    """A relative path alongside the user config resolves successfully."""
+    user_cfg_dir = tmp_path / "cfg"
+    user_cfg_dir.mkdir()
+    user_cfg_file = user_cfg_dir / "pydocs-mcp.yaml"
+    user_cfg_file.write_text("log_level: info\n")
+    sibling = user_cfg_dir / "my_pipeline.yaml"
+    sibling.write_text("name: custom\nstages: []\n")
+    resolved = _resolve_pipeline_path(Path("my_pipeline.yaml"), user_config_path=user_cfg_file)
+    assert resolved == sibling.resolve()
+
+
+def test_pipeline_path_accepts_shipped_presets_relative(tmp_path):
+    """Back-compat: the bundled presets stay reachable via ``presets/foo.yaml``."""
+    # chunk_fts.yaml is shipped inside pydocs_mcp/presets/
+    resolved = _resolve_pipeline_path(Path("presets/chunk_fts.yaml"), user_config_path=None)
+    assert resolved.name == "chunk_fts.yaml"

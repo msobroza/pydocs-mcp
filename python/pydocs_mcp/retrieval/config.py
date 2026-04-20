@@ -90,6 +90,15 @@ class AppConfig(BaseSettings):
     log_level: str
     metadata_schemas: Mapping[str, tuple[str, ...]]
     pipelines: Mapping[str, HandlerConfig]
+    # Resolved user-config path captured at load time — powers the
+    # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
+    # next to an explicit ``--config`` file resolves, while paths outside
+    # the shipped presets + user-config directory are rejected. Populated
+    # by ``AppConfig.load`` via ``object.__setattr__`` (pydantic doesn't
+    # let us declare this as a normal field without round-tripping it
+    # through YAML).
+    #
+    # Read-only from the outside — treat it as private state.
 
     model_config = SettingsConfigDict(env_prefix="PYDOCS_", extra="ignore")
 
@@ -120,9 +129,19 @@ class AppConfig(BaseSettings):
         """
         token = _USER_CONFIG_PATH_OVERRIDE.set(explicit_path)
         try:
-            return cls()
+            resolved = _resolved_user_config_path()
+            instance = cls()
         finally:
             _USER_CONFIG_PATH_OVERRIDE.reset(token)
+        # Stash the resolved user-config path so downstream pipeline
+        # assembly can derive the security allowlist without re-reading
+        # the ContextVar (which gets reset above).
+        object.__setattr__(instance, "_effective_user_config_path", resolved)
+        return instance
+
+    def _user_config_path(self) -> Path | None:
+        """Return the user-config path captured at ``load`` time, if any."""
+        return getattr(self, "_effective_user_config_path", None)
 
 
 def _shipped_default_config_path() -> Path:
@@ -161,24 +180,87 @@ def _resolved_user_config_path() -> Path | None:
 def build_chunk_pipeline_from_config(
     config: AppConfig, context: BuildContext,
 ) -> CodeRetrieverPipeline:
-    return _build_handler_pipeline("chunk", config.pipelines["chunk"], context)
+    return _build_handler_pipeline(
+        "chunk", config.pipelines["chunk"], context, config._user_config_path(),
+    )
 
 
 def build_member_pipeline_from_config(
     config: AppConfig, context: BuildContext,
 ) -> CodeRetrieverPipeline:
-    return _build_handler_pipeline("member", config.pipelines["member"], context)
+    return _build_handler_pipeline(
+        "member", config.pipelines["member"], context, config._user_config_path(),
+    )
 
 
-def _resolve_pipeline_path(pipeline_path: Path) -> Path:
-    """Resolve a YAML ``pipeline_path`` against the shipped ``presets/`` dir
-    when it's relative. Absolute user paths are used as-is."""
+def _pipeline_path_allowed_roots(user_config_path: Path | None) -> tuple[Path, ...]:
+    """Return the directories a ``pipeline_path`` may resolve inside.
+
+    A YAML config is user-controlled input — unrestricted ``pipeline_path``
+    would happily load ``/etc/shadow`` (and surface the contents in the
+    subsequent YAML parse error). Keep the allowlist to:
+
+    1. The shipped ``pydocs_mcp/presets/`` directory (the baseline YAMLs).
+    2. The directory that contains the user's config file, if they supplied
+       one — so ``./my_pipeline.yaml`` next to ``pydocs-mcp.yaml`` works.
+    """
+    presets_dir = Path(str(importlib.resources.files("pydocs_mcp.presets"))).resolve()
+    roots = [presets_dir]
+    if user_config_path is not None:
+        roots.append(user_config_path.resolve().parent)
+    return tuple(roots)
+
+
+def _path_is_inside(candidate: Path, roots: tuple[Path, ...]) -> bool:
+    """Return True iff ``candidate`` (already resolved) sits inside any root."""
+    for root in roots:
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def _resolve_pipeline_path(
+    pipeline_path: Path, user_config_path: Path | None = None,
+) -> Path:
+    """Resolve a YAML ``pipeline_path`` against the user/shipped roots.
+
+    Relative paths are first tried under the user's config directory, then
+    under the shipped ``presets/`` dir. Absolute paths are accepted only if
+    they land inside the allowlist. Symlinks are resolved before the check
+    so a symlink planted inside ``presets/`` pointing at ``/etc/shadow`` is
+    rejected.
+    """
+    allowed_roots = _pipeline_path_allowed_roots(user_config_path)
+    presets_dir = Path(str(importlib.resources.files("pydocs_mcp.presets"))).resolve()
+
     if pipeline_path.is_absolute():
-        return pipeline_path
-    parts = pipeline_path.parts
-    if parts and parts[0] == "presets":
-        return Path(str(importlib.resources.files("pydocs_mcp").joinpath(str(pipeline_path))))
-    return pipeline_path
+        resolved = pipeline_path.resolve()
+    else:
+        parts = pipeline_path.parts
+        # Back-compat: ``presets/foo.yaml`` resolves under the shipped dir
+        # whether or not a user config is present.
+        if parts and parts[0] == "presets":
+            candidate = Path(str(importlib.resources.files("pydocs_mcp").joinpath(
+                str(pipeline_path)
+            ))).resolve()
+        else:
+            base = (
+                user_config_path.resolve().parent
+                if user_config_path is not None
+                else presets_dir
+            )
+            candidate = (base / pipeline_path).resolve()
+        resolved = candidate
+
+    if not _path_is_inside(resolved, allowed_roots):
+        raise ValueError(
+            f"pipeline_path must be inside one of {sorted(str(r) for r in allowed_roots)}; "
+            f"got {pipeline_path!s} (resolved to {resolved!s})"
+        )
+    return resolved
 
 
 def _load_preset_yaml(path: Path, context: BuildContext) -> CodeRetrieverPipeline:
@@ -188,12 +270,15 @@ def _load_preset_yaml(path: Path, context: BuildContext) -> CodeRetrieverPipelin
 
 
 def _build_handler_pipeline(
-    handler_name: str, handler_config: HandlerConfig, context: BuildContext,
+    handler_name: str,
+    handler_config: HandlerConfig,
+    context: BuildContext,
+    user_config_path: Path | None = None,
 ) -> CodeRetrieverPipeline:
     routes: list[RouteCase] = []
     default = None
     for entry in handler_config.routes:
-        resolved = _resolve_pipeline_path(entry.pipeline_path)
+        resolved = _resolve_pipeline_path(entry.pipeline_path, user_config_path)
         sub_pipeline = _load_preset_yaml(resolved, context)
         stage = SubPipelineStage(pipeline=sub_pipeline)
         # PipelineRouteEntry guarantees exactly-one-of, so we needn't re-validate
