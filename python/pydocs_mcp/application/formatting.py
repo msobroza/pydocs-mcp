@@ -30,8 +30,8 @@ from pydocs_mcp.models import (
 )
 
 # Approximate characters per token (conservative estimate for English text).
-# Kept in sync with ``retrieval.stages._CHARS_PER_TOKEN`` — both the helper
-# and the old ``search.format_within_budget`` use 4.
+# This module is the single source of truth for the ratio — ``TokenBudgetFormatterStage``
+# and the pre-sub-PR-2 ``search.format_within_budget`` both used the same value (4).
 _CHARS_PER_TOKEN = 4
 
 # Truncation gate: if fewer chars than this remain in the budget, we do NOT
