@@ -1,6 +1,7 @@
 """PackageLookupService — list + get_package_doc via stores (spec §5.1)."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from pydocs_mcp.models import (
@@ -39,12 +40,17 @@ class PackageLookupService:
             # Short-circuit so unknown names don't waste two extra store
             # round-trips producing empty lists.
             return None
-        chunks = await self.chunk_store.list(
-            filter={ChunkFilterField.PACKAGE.value: package_name},
-            limit=10,
-        )
-        members = await self.module_member_store.list(
-            filter={ModuleMemberFilterField.PACKAGE.value: package_name},
-            limit=30,
+        # Performance: the two list() calls target different tables and are
+        # fully independent, so issuing them concurrently halves the observed
+        # latency of a get_package_doc() call under async-capable backends.
+        chunks, members = await asyncio.gather(
+            self.chunk_store.list(
+                filter={ChunkFilterField.PACKAGE.value: package_name},
+                limit=10,
+            ),
+            self.module_member_store.list(
+                filter={ModuleMemberFilterField.PACKAGE.value: package_name},
+                limit=30,
+            ),
         )
         return PackageDoc(package=pkg, chunks=tuple(chunks), members=tuple(members))
