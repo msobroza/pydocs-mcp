@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol, Union, runtime_checkable
 
-
 # ── Filter tree ─────────────────────────────────────────────────────────
 
 Filter = Union["FieldEq", "FieldIn", "FieldLike", "All", "Any_", "Not"]

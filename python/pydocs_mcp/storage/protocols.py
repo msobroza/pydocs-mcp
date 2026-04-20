@@ -1,7 +1,6 @@
 """Storage Protocols — 8 @runtime_checkable contracts (spec §5.2, AC #3)."""
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
