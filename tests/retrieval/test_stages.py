@@ -1,4 +1,4 @@
-"""Tests for stage classes — Part 1 (retrieval + filters + limit)."""
+"""Tests for stage classes — Part 1 (retrieval + post-filter + limit)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,16 +14,13 @@ from pydocs_mcp.models import (
     ModuleMemberFilterField,
     ModuleMemberList,
     SearchQuery,
-    SearchScope,
 )
 from pydocs_mcp.retrieval.pipeline import PipelineState
 from pydocs_mcp.retrieval.stages import (
     ChunkRetrievalStage,
     LimitStage,
+    MetadataPostFilterStage,
     ModuleMemberRetrievalStage,
-    PackageFilterStage,
-    ScopeFilterStage,
-    TitleFilterStage,
 )
 
 
@@ -59,55 +56,41 @@ async def test_member_retrieval_stage_sets_result():
 
 
 @pytest.mark.asyncio
-async def test_package_filter_stage_keeps_matching_package():
+async def test_metadata_post_filter_stage_noop_when_post_filter_none():
+    payload = ChunkList(items=(Chunk(text="a"), Chunk(text="b")))
+    state = PipelineState(query=SearchQuery(terms="x"), result=payload)
+    out = await MetadataPostFilterStage().run(state)
+    assert len(out.result.items) == 2
+
+
+@pytest.mark.asyncio
+async def test_metadata_post_filter_stage_filters_chunks_by_eq():
     payload = ChunkList(items=(
-        Chunk(text="a", metadata={ChunkFilterField.PACKAGE.value: "keep"}),
-        Chunk(text="b", metadata={ChunkFilterField.PACKAGE.value: "drop"}),
+        Chunk(text="a", metadata={ChunkFilterField.PACKAGE.value: "fastapi"}),
+        Chunk(text="b", metadata={ChunkFilterField.PACKAGE.value: "django"}),
     ))
     state = PipelineState(
-        query=SearchQuery(terms="x", pre_filter={ChunkFilterField.PACKAGE.value: "keep"}),
+        query=SearchQuery(terms="x", post_filter={"package": "fastapi"}),
         result=payload,
     )
-    out = await PackageFilterStage().run(state)
+    out = await MetadataPostFilterStage().run(state)
     assert len(out.result.items) == 1
     assert out.result.items[0].text == "a"
 
 
 @pytest.mark.asyncio
-async def test_package_filter_stage_no_filter_is_noop():
-    payload = ChunkList(items=(Chunk(text="a"), Chunk(text="b")))
-    state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await PackageFilterStage().run(state)
-    assert len(out.result.items) == 2
-
-
-@pytest.mark.asyncio
-async def test_scope_filter_stage_project_only():
-    payload = ChunkList(items=(
-        Chunk(text="proj", metadata={ChunkFilterField.PACKAGE.value: "__project__"}),
-        Chunk(text="dep", metadata={ChunkFilterField.PACKAGE.value: "fastapi"}),
-    ))
-    state = PipelineState(
-        query=SearchQuery(terms="x", pre_filter={ChunkFilterField.SCOPE.value: SearchScope.PROJECT_ONLY.value}),
-        result=payload,
-    )
-    out = await ScopeFilterStage().run(state)
-    assert len(out.result.items) == 1
-    assert out.result.items[0].text == "proj"
-
-
-@pytest.mark.asyncio
-async def test_title_filter_stage_substring_match():
+async def test_metadata_post_filter_stage_filters_by_like():
     payload = ChunkList(items=(
         Chunk(text="a", metadata={ChunkFilterField.TITLE.value: "Routing"}),
         Chunk(text="b", metadata={ChunkFilterField.TITLE.value: "Middleware"}),
     ))
     state = PipelineState(
-        query=SearchQuery(terms="x", pre_filter={ChunkFilterField.TITLE.value: "rout"}),
+        query=SearchQuery(terms="x", post_filter={"title": {"like": "rout"}}),
         result=payload,
     )
-    out = await TitleFilterStage().run(state)
+    out = await MetadataPostFilterStage().run(state)
     assert len(out.result.items) == 1
+    assert out.result.items[0].text == "a"
 
 
 @pytest.mark.asyncio
