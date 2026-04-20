@@ -15,7 +15,9 @@ non-transactional backends or in tests with Protocol fakes).
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TypeVar
 
 from pydocs_mcp.models import (
     Chunk,
@@ -31,6 +33,8 @@ from pydocs_mcp.storage.protocols import (
     PackageStore,
     UnitOfWork,
 )
+
+T = TypeVar("T")
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +65,20 @@ class IndexingService:
                 "NOT atomic; partial reindex state can become visible on failure.",
             )
 
+    async def _in_uow(
+        self, coro_fn: Callable[..., Awaitable[T]], /, *args, **kwargs,
+    ) -> T:
+        """Run ``coro_fn`` inside a ``unit_of_work.begin()`` scope if configured.
+
+        Collapses the three identical ``if self.unit_of_work is not None: async with
+        self.unit_of_work.begin(): ... else: ...`` shims that used to wrap
+        ``_do_reindex`` / ``_do_remove`` / ``_do_clear_all`` into a single helper.
+        """
+        if self.unit_of_work is not None:
+            async with self.unit_of_work.begin():
+                return await coro_fn(*args, **kwargs)
+        return await coro_fn(*args, **kwargs)
+
     async def reindex_package(
         self,
         package: Package,
@@ -74,19 +92,11 @@ class IndexingService:
         a ``UnitOfWork`` is configured the whole sequence runs inside
         one transaction.
         """
-        if self.unit_of_work is not None:
-            async with self.unit_of_work.begin():
-                await self._do_reindex(package, chunks, module_members)
-        else:
-            await self._do_reindex(package, chunks, module_members)
+        await self._in_uow(self._do_reindex, package, chunks, module_members)
 
     async def remove_package(self, name: str) -> None:
         """Delete a package and every chunk / module-member it owns."""
-        if self.unit_of_work is not None:
-            async with self.unit_of_work.begin():
-                await self._do_remove(name)
-        else:
-            await self._do_remove(name)
+        await self._in_uow(self._do_remove, name)
 
     async def clear_all(self) -> None:
         """Wipe every row across all three entity stores.
@@ -97,11 +107,7 @@ class IndexingService:
         the delete semantics unconditional without adding a new
         ``delete_all()`` method to the store Protocols.
         """
-        if self.unit_of_work is not None:
-            async with self.unit_of_work.begin():
-                await self._do_clear_all()
-        else:
-            await self._do_clear_all()
+        await self._in_uow(self._do_clear_all)
 
     async def _do_reindex(
         self,
