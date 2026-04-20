@@ -552,3 +552,83 @@ class SqliteVectorStore:
         raise NotImplementedError(
             f"{type(f).__name__} not supported by SqliteVectorStore in sub-PR #3"
         )
+
+
+# ── ModuleMember repository ──────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class SqliteModuleMemberRepository:
+    """ModuleMemberStore backed by the 'module_members' SQLite table (spec §5.3).
+
+    Mirrors :class:`SqliteChunkRepository` but without FTS5 — ``module_members``
+    is queried via exact-match / LIKE on structured columns.
+    """
+
+    provider: ConnectionProvider
+    filter_adapter: SqliteFilterAdapter = field(
+        default_factory=lambda: SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
+    )
+
+    async def upsert_many(self, members: Iterable[ModuleMember]) -> None:
+        rows = [_module_member_to_row(m) for m in members]
+        if not rows:
+            return
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.executemany,
+                "INSERT INTO module_members "
+                "(package, module, name, kind, signature, return_annotation, "
+                "parameters, docstring) "
+                "VALUES (:package, :module, :name, :kind, :signature, "
+                ":return_annotation, :parameters, :docstring)",
+                rows,
+            )
+            if _sqlite_transaction.get() is None:
+                await asyncio.to_thread(conn.commit)
+
+    async def list(
+        self, filter: Filter | Mapping | None = None, limit: int | None = None,
+    ) -> list[ModuleMember]:
+        tree = _resolve_filter(filter)
+        where, params = "", []
+        if tree is not None:
+            where, params = self.filter_adapter.adapt(tree)
+        sql = "SELECT * FROM module_members"
+        if where:
+            sql += f" WHERE {where}"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchall()
+            )
+        return [_row_to_module_member(r) for r in rows]
+
+    async def delete(self, filter: Filter | Mapping) -> int:
+        tree = _resolve_filter(filter)
+        if tree is None:
+            raise ValueError("delete requires an explicit filter")
+        where, params = self.filter_adapter.adapt(tree)
+        async with _maybe_acquire(self.provider) as conn:
+            cursor = await asyncio.to_thread(
+                conn.execute, f"DELETE FROM module_members WHERE {where}", params
+            )
+            rowcount = cursor.rowcount
+            if _sqlite_transaction.get() is None:
+                await asyncio.to_thread(conn.commit)
+            return rowcount
+
+    async def count(self, filter: Filter | Mapping | None = None) -> int:
+        tree = _resolve_filter(filter)
+        sql = "SELECT COUNT(*) FROM module_members"
+        params: list = []
+        if tree is not None:
+            where, params = self.filter_adapter.adapt(tree)
+            sql += f" WHERE {where}"
+        async with _maybe_acquire(self.provider) as conn:
+            row = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchone()
+            )
+        return row[0]
