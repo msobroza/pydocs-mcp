@@ -1,6 +1,6 @@
 """Test-only adapter helpers — run the new async retrievers synchronously
-and return the legacy dict-shaped records so pre-retrieval behavioural
-tests keep exercising the same invariants after search.py removal.
+and return dict-shaped records so pre-retrieval behavioural tests keep
+exercising the same invariants after search.py removal.
 
 Usage:
     from tests._retriever_helpers import retrieve_chunks, retrieve_module_members
@@ -61,7 +61,7 @@ def retrieve_chunks(
 ) -> list[dict[str, Any]]:
     """Behavioural shim around ``Bm25ChunkRetriever`` + filter stages.
 
-    Returns a list of dicts using the legacy keys (``pkg``, ``heading``,
+    Returns a list of dicts using the historical keys (``pkg``, ``heading``,
     ``body``, ``kind``) so existing assertions continue to work.
     """
     path = _resolve_db_path(conn_or_path)
@@ -95,8 +95,9 @@ def retrieve_chunks(
         md = chunk.metadata
         chunk_pkg = md.get(ChunkFilterField.PACKAGE.value, "")
         chunk_title = md.get(ChunkFilterField.TITLE.value, "")
-        # Apply the same scope + title filters the legacy code applied at SQL
-        # layer — the retriever itself doesn't (those are separate stages).
+        # Apply the same scope + title filters the pre-retrieval code
+        # applied at SQL layer — the retriever itself doesn't (those are
+        # separate stages).
         if pkg is not None and chunk_pkg != pkg:
             continue
         if internal is True and chunk_pkg != "__project__":
@@ -125,7 +126,7 @@ def retrieve_module_members(
 ) -> list[dict[str, Any]]:
     """Behavioural shim around ``LikeMemberRetriever``.
 
-    Returns legacy-shaped dicts (``pkg``, ``module``, ``name``, ``kind``,
+    Returns historical-shaped dicts (``pkg``, ``module``, ``name``, ``kind``,
     ``signature``, ``returns``, ``params``, ``doc``).
     """
     path = _resolve_db_path(conn_or_path)
