@@ -26,6 +26,21 @@ from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 from tests._retriever_helpers import write_package_sync
 
 
+@pytest.fixture(autouse=True)
+def _clear_extractor_cache():
+    """Prevent indexer module-level extraction cache from leaking between tests.
+
+    The :mod:`pydocs_mcp.indexer` module keeps two dicts (``_project_cache``
+    and ``_dependency_cache``) that :class:`IndexProjectService` flushes at
+    the end of each ``index_project`` call. Tests that exercise
+    ``indexer.extract_*`` directly bypass that flush, so without this fixture
+    a previous test's extraction could satisfy the next test's cache lookup.
+    """
+    clear_extraction_cache()
+    yield
+    clear_extraction_cache()
+
+
 @pytest.fixture
 def conn(tmp_path):
     """File-backed SQLite DB seeded with known project + dep data."""
