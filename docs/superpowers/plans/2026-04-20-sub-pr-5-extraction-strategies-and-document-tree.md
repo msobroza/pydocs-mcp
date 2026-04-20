@@ -788,7 +788,22 @@ def test_discovery_config_project_and_dependency_scopes_independent():
     cfg = DiscoveryConfig()
     assert cfg.project.max_file_size_bytes == 500_000
     assert cfg.dependency.max_file_size_bytes == 500_000
-    assert ".git" in cfg.project.exclude_dirs
+
+
+def test_excluded_dirs_is_module_constant_not_config_field():
+    """Directory exclusions are hardcoded (not YAML-configurable) — see config.py.
+
+    Users must not be able to un-exclude .git / .venv / site-packages etc. via
+    config. That would leak secrets + balloon the FTS index + break inspect-mode
+    imports. Strict allowlist for extensions + strict blocklist for directories.
+    """
+    from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
+    assert isinstance(_EXCLUDED_DIRS, frozenset)
+    assert ".git" in _EXCLUDED_DIRS
+    assert ".venv" in _EXCLUDED_DIRS
+    assert "site-packages" in _EXCLUDED_DIRS
+    # DiscoveryScopeConfig must NOT expose exclude_dirs as a field
+    assert "exclude_dirs" not in DiscoveryScopeConfig.model_fields
 
 
 def test_members_config_defaults():
@@ -812,12 +827,30 @@ Slot into :class:`pydocs_mcp.retrieval.config.AppConfig` via the
 
 Strict allowlist of extensions (spec §3 decision #5 + AC #5, #6): Pydantic
 validators reject any attempt to index unsupported file types via YAML.
+
+Directory exclusions are a HARDCODED module constant (``_EXCLUDED_DIRS``) —
+NOT a Pydantic field and NOT YAML-overridable. Rationale: an un-excluded
+``.git`` / ``.venv`` / ``site-packages`` leaks secrets into the FTS index,
+balloons storage, and makes inspect-mode imports recurse into vendored deps.
+Users must not be able to shoot themselves in the foot via YAML.
 """
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset({".py", ".md", ".ipynb"})
+
+# Hardcoded directory blocklist — walked-past in both project and dependency
+# discovery. Non-overridable by design (see module docstring).
+_EXCLUDED_DIRS: frozenset[str] = frozenset({
+    ".git", ".hg", ".svn",
+    ".venv", "venv", ".env",
+    "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".tox", ".nox", ".eggs", "egg-info",
+    "node_modules", "build", "dist", "target",
+    "htmlcov", ".coverage", ".cache",
+    "site-packages",
+})
 
 
 class MarkdownConfig(BaseModel):
@@ -860,13 +893,9 @@ class DiscoveryScopeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include_extensions: list[str] = [".py", ".md", ".ipynb"]
-    exclude_dirs: list[str] = [
-        ".git", ".venv", "venv", "__pycache__", "node_modules",
-        ".tox", ".eggs", "build", "dist", "target",
-        ".mypy_cache", ".pytest_cache", ".ruff_cache", "htmlcov", ".nox",
-        "site-packages",
-    ]
     max_file_size_bytes: int = 500_000
+    # NOTE: no `exclude_dirs` field — directory blocklist lives in
+    # `_EXCLUDED_DIRS` above and is non-overridable by design.
 
     @field_validator("include_extensions")
     @classmethod
@@ -1002,37 +1031,15 @@ extraction:
     notebook:
       include_outputs: false
   discovery:
+    # Directory exclusions are hardcoded (_EXCLUDED_DIRS in config.py) — not
+    # YAML-configurable. Users cannot un-exclude .git / .venv / site-packages /
+    # etc. Extension allowlist IS narrowable via include_extensions, not
+    # expandable (Pydantic rejects unknown extensions).
     project:
       include_extensions: [".py", ".md", ".ipynb"]
-      exclude_dirs:
-        - .git
-        - .venv
-        - venv
-        - __pycache__
-        - node_modules
-        - .tox
-        - .eggs
-        - build
-        - dist
-        - target
-        - .mypy_cache
-        - .pytest_cache
-        - .ruff_cache
-        - htmlcov
-        - .nox
-        - site-packages
       max_file_size_bytes: 500000
     dependency:
       include_extensions: [".py", ".md", ".ipynb"]
-      exclude_dirs:
-        - .git
-        - __pycache__
-        - .mypy_cache
-        - .pytest_cache
-        - .ruff_cache
-        - build
-        - dist
-        - egg-info
       max_file_size_bytes: 500000
   members:
     inspect_depth: 1
@@ -3050,20 +3057,24 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.extraction.config import DiscoveryScopeConfig
+from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, DiscoveryScopeConfig
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectFileDiscoverer:
-    """Walk a project directory, returning files matching the scope config."""
+    """Walk a project directory, returning files matching the scope config.
+
+    Directory exclusions come from the hardcoded ``_EXCLUDED_DIRS`` constant
+    in ``extraction.config`` — NOT from ``self.scope``. Users can narrow
+    file extensions via YAML but cannot un-exclude directories.
+    """
 
     scope: DiscoveryScopeConfig
 
     def list_files(self, project_dir: Path) -> list[str]:
         result: list[str] = []
-        exclude = set(self.scope.exclude_dirs)
         for dirpath, dirnames, filenames in os.walk(project_dir):
-            dirnames[:] = [d for d in dirnames if d not in exclude]
+            dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS]
             for name in filenames:
                 _, ext = os.path.splitext(name)
                 if ext.lower() not in self.scope.include_extensions:
