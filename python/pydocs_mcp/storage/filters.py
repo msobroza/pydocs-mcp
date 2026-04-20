@@ -85,11 +85,33 @@ class MultiFieldFormat:
                     f"Use the filter_tree format instead."
                 )
             if isinstance(value, Mapping):
-                for op in value:
+                # An op-mapping encodes exactly one operator. Multi-op dicts
+                # silently drop everything after the first iterated key, and
+                # an empty dict crashes ``parse`` at ``next(iter(...))`` —
+                # both are caller bugs, fail fast.
+                if len(value) == 0:
+                    raise ValueError(
+                        f"empty op-mapping for field {key!r}; "
+                        f"expected exactly one of {sorted(_VALID_OPS)}"
+                    )
+                if len(value) != 1:
+                    raise ValueError(
+                        f"each op-mapping must have exactly one operator; "
+                        f"got {len(value)} for field {key!r}"
+                    )
+                for op, op_val in value.items():
                     if op not in _VALID_OPS:
                         raise ValueError(
                             f"unknown operator {op!r} for field {key!r}; "
                             f"known: {sorted(_VALID_OPS)}"
+                        )
+                    # ``in`` must carry a list/tuple — a scalar string would
+                    # otherwise iterate character-by-character and silently
+                    # turn ``{"in": "abc"}`` into three separate values.
+                    if op == "in" and not isinstance(op_val, (list, tuple)):
+                        raise ValueError(
+                            f"operator 'in' for field {key!r} requires a list or tuple; "
+                            f"got {type(op_val).__name__}"
                         )
 
     def parse(self, native: Any) -> Filter:

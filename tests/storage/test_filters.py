@@ -64,6 +64,29 @@ def test_multifield_format_rejects_unknown_operator():
         fmt.validate({"package": {"regex": ".*"}})
 
 
+def test_multifield_rejects_multi_op_value():
+    """An op-mapping with two operators silently drops one on parse —
+    reject it during validation so callers see the typo immediately."""
+    fmt = MultiFieldFormat()
+    with pytest.raises(ValueError, match="exactly one operator"):
+        fmt.validate({"package": {"eq": "x", "like": "y"}})
+
+
+def test_multifield_rejects_empty_op_mapping():
+    """An empty op-mapping would crash ``parse`` at ``next(iter(...))``."""
+    fmt = MultiFieldFormat()
+    with pytest.raises(ValueError, match="empty op-mapping"):
+        fmt.validate({"package": {}})
+
+
+def test_multifield_rejects_scalar_in_op():
+    """``{"in": "abc"}`` would iterate the string as characters —
+    force callers to pass a list/tuple explicitly."""
+    fmt = MultiFieldFormat()
+    with pytest.raises(ValueError, match="requires a list or tuple"):
+        fmt.validate({"package": {"in": "abc"}})
+
+
 def test_multifield_format_rejects_non_mapping():
     fmt = MultiFieldFormat()
     with pytest.raises(ValueError, match="mapping"):
