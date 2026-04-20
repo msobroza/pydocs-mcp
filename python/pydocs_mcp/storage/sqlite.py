@@ -283,6 +283,10 @@ class SqlitePackageRepository:
                 "content_hash=excluded.content_hash, origin=excluded.origin",
                 row,
             )
+            # Outside a UoW, writes must flush before the per-call connection
+            # closes; inside a UoW, the ambient transaction owns the commit.
+            if _sqlite_transaction.get() is None:
+                await asyncio.to_thread(conn.commit)
 
     async def get(self, name: str) -> Package | None:
         async with _maybe_acquire(self.provider) as conn:
@@ -321,7 +325,10 @@ class SqlitePackageRepository:
             cursor = await asyncio.to_thread(
                 conn.execute, f"DELETE FROM packages WHERE {where}", params
             )
-            return cursor.rowcount
+            rowcount = cursor.rowcount
+            if _sqlite_transaction.get() is None:
+                await asyncio.to_thread(conn.commit)
+            return rowcount
 
     async def count(self, filter: Filter | Mapping | None = None) -> int:
         tree = _resolve_filter(filter)
@@ -335,3 +342,213 @@ class SqlitePackageRepository:
                 lambda: conn.execute(sql, params).fetchone()
             )
         return row[0]
+
+
+# ── Chunk repository ─────────────────────────────────────────────────────
+
+
+# FTS5 reserves these tokens as boolean operators — unquoted query terms may
+# use them directly. Any other word is OR-joined and double-quoted so that
+# punctuation / hyphenation in user terms does not crash the parser.
+_FTS_OPS = frozenset({"OR", "AND", "NOT"})
+
+
+@dataclass(frozen=True, slots=True)
+class SqliteChunkRepository:
+    """ChunkStore backed by the 'chunks' SQLite table (spec §5.3, AC #9).
+
+    CRUD only — text retrieval lives in ``SqliteVectorStore``. ``rebuild_index``
+    refreshes the ``chunks_fts`` content-backed virtual table after bulk writes.
+    """
+
+    provider: ConnectionProvider
+    filter_adapter: SqliteFilterAdapter = field(
+        default_factory=lambda: SqliteFilterAdapter(safe_columns=_CHUNK_COLUMNS)
+    )
+
+    async def upsert(self, chunks: Iterable[Chunk]) -> None:
+        rows = [_chunk_to_row(c) for c in chunks]
+        if not rows:
+            return
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.executemany,
+                "INSERT INTO chunks (package, title, text, origin) "
+                "VALUES (:package, :title, :text, :origin)",
+                rows,
+            )
+            if _sqlite_transaction.get() is None:
+                await asyncio.to_thread(conn.commit)
+
+    async def list(
+        self, filter: Filter | Mapping | None = None, limit: int | None = None,
+    ) -> list[Chunk]:
+        tree = _resolve_filter(filter)
+        where, params = "", []
+        if tree is not None:
+            where, params = self.filter_adapter.adapt(tree)
+        sql = "SELECT * FROM chunks"
+        if where:
+            sql += f" WHERE {where}"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchall()
+            )
+        return [_row_to_chunk(r) for r in rows]
+
+    async def delete(self, filter: Filter | Mapping) -> int:
+        tree = _resolve_filter(filter)
+        if tree is None:
+            raise ValueError("delete requires an explicit filter")
+        where, params = self.filter_adapter.adapt(tree)
+        async with _maybe_acquire(self.provider) as conn:
+            cursor = await asyncio.to_thread(
+                conn.execute, f"DELETE FROM chunks WHERE {where}", params
+            )
+            rowcount = cursor.rowcount
+            if _sqlite_transaction.get() is None:
+                await asyncio.to_thread(conn.commit)
+            return rowcount
+
+    async def count(self, filter: Filter | Mapping | None = None) -> int:
+        tree = _resolve_filter(filter)
+        sql = "SELECT COUNT(*) FROM chunks"
+        params: list = []
+        if tree is not None:
+            where, params = self.filter_adapter.adapt(tree)
+            sql += f" WHERE {where}"
+        async with _maybe_acquire(self.provider) as conn:
+            row = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchone()
+            )
+        return row[0]
+
+    async def rebuild_index(self) -> None:
+        """Rebuild the chunks_fts virtual table so newly-inserted rows are searchable."""
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.execute,
+                "INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')",
+            )
+            # Performance: commit outside a UoW so the rebuild is durable for
+            # downstream readers that open fresh connections.
+            if _sqlite_transaction.get() is None:
+                await asyncio.to_thread(conn.commit)
+
+
+# ── Vector store (FTS5 text search) ──────────────────────────────────────
+
+
+def _build_fts_match_query(terms: str) -> str | None:
+    """Shape raw user terms into an FTS5 MATCH expression.
+
+    Mirrors the Bm25ChunkRetriever logic in sub-PR #2 so behaviour stays
+    byte-identical. Returns ``None`` when no usable token survives filtering.
+    """
+    tokens = terms.split()
+    if any(t in _FTS_OPS for t in tokens):
+        return terms
+    words = [w for w in tokens if len(w) > 1]
+    if not words:
+        return None
+    return " OR ".join(f'"{w}"' for w in words)
+
+
+@dataclass(frozen=True, slots=True)
+class SqliteVectorStore:
+    """Retrieval-only service over ``chunks_fts`` (spec §5.3, AC #9).
+
+    CRUD happens via :class:`SqliteChunkRepository`; this type only answers
+    ``text_search`` (and, in future PRs, ``vector_search`` / ``hybrid_search``).
+    """
+
+    provider: ConnectionProvider
+    filter_adapter: SqliteFilterAdapter = field(
+        default_factory=lambda: SqliteFilterAdapter(safe_columns=_CHUNK_COLUMNS)
+    )
+    retriever_name: str = "bm25_chunk"
+
+    async def text_search(
+        self,
+        query_terms: str,
+        limit: int,
+        filter: Filter | Mapping | None = None,
+    ) -> tuple[Chunk, ...]:
+        tree = _resolve_filter(filter)
+        # Validate/adapt filter before touching FTS — a bad column must raise
+        # ValueError even when the query is empty.
+        filter_sql, filter_params = "", []
+        if tree is not None:
+            filter_sql, filter_params = self._adapt_for_join(tree)
+
+        fulltext = _build_fts_match_query(query_terms)
+        if fulltext is None:
+            return ()
+
+        where_parts = ["chunks_fts MATCH ?"]
+        params: list = [fulltext]
+        if filter_sql:
+            where_parts.append(filter_sql)
+            params.extend(filter_params)
+        params.append(limit)
+
+        sql = (
+            "SELECT c.id, c.package, c.title, c.text, c.origin, -m.rank AS rank "
+            "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
+            f"WHERE {' AND '.join(where_parts)} "
+            "ORDER BY rank LIMIT ?"
+        )
+
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchall()
+            )
+
+        items: list[Chunk] = []
+        for row in rows:
+            base = _row_to_chunk(row)
+            items.append(
+                Chunk(
+                    text=base.text,
+                    id=base.id,
+                    relevance=float(row["rank"]),
+                    retriever_name=self.retriever_name,
+                    metadata=dict(base.metadata),
+                )
+            )
+        return tuple(items)
+
+    def _adapt_for_join(self, tree: Filter) -> tuple[str, list]:
+        """Adapt a filter tree for the ``chunks_fts JOIN chunks`` query.
+
+        ``chunks_fts`` indexes ``title/text/package`` and ``chunks`` has the
+        same names, so unqualified columns are ambiguous. We run the adapter
+        to enforce the safe-columns gate and keep the param ordering intact,
+        then walk the tree again to emit ``c.<col>`` qualified SQL.
+        """
+        # Gate — raises ValueError for unsafe columns.
+        self.filter_adapter.adapt(tree)
+        return self._walk_with_prefix(tree, "c.")
+
+    def _walk_with_prefix(self, f: Filter, prefix: str) -> tuple[str, list]:
+        if isinstance(f, FieldEq):
+            return f"{prefix}{f.field} = ?", [f.value]
+        if isinstance(f, FieldIn):
+            placeholders = ", ".join(["?"] * len(f.values))
+            return f"{prefix}{f.field} IN ({placeholders})", list(f.values)
+        if isinstance(f, FieldLike):
+            return f"{prefix}{f.field} LIKE ?", [f"%{f.substring}%"]
+        if isinstance(f, All):
+            parts: list[str] = []
+            params: list = []
+            for c in f.clauses:
+                sub, sub_p = self._walk_with_prefix(c, prefix)
+                parts.append(f"({sub})")
+                params.extend(sub_p)
+            return " AND ".join(parts), params
+        raise NotImplementedError(
+            f"{type(f).__name__} not supported by SqliteVectorStore in sub-PR #3"
+        )
