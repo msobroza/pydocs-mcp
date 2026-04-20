@@ -316,7 +316,10 @@ async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
 @pytest.mark.asyncio
 async def test_token_budget_formatter_stage_composite_output():
     from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
-    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+    from pydocs_mcp.retrieval.stages import (
+        COMPOSITE_TITLE_SENTINEL,
+        TokenBudgetFormatterStage,
+    )
 
     payload = ChunkList(items=(
         Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
@@ -332,8 +335,43 @@ async def test_token_budget_formatter_stage_composite_output():
     assert len(out.result.items) == 1
     composite = out.result.items[0]
     assert composite.metadata[ChunkFilterField.ORIGIN.value] == ChunkOrigin.COMPOSITE_OUTPUT.value
+    assert composite.metadata[ChunkFilterField.TITLE.value] == COMPOSITE_TITLE_SENTINEL
     assert "## A" in composite.text
     assert "## B" in composite.text
+
+
+@pytest.mark.asyncio
+async def test_metadata_post_filter_bypasses_composite_sentinel():
+    """AC #34 — composite chunks skip the title post-filter."""
+    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
+    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.stages import (
+        MetadataPostFilterStage,
+        TokenBudgetFormatterStage,
+    )
+
+    payload = ChunkList(items=(
+        Chunk(text="Section A body", metadata={ChunkFilterField.TITLE.value: "Routing"}),
+        Chunk(text="Section B body", metadata={ChunkFilterField.TITLE.value: "Middleware"}),
+    ))
+    # post_filter restricts title to "Routing" — without the sentinel bypass
+    # the composite chunk (title="_composite") would be dropped.
+    query = SearchQuery(terms="x", post_filter={"title": {"like": "Routing"}})
+    pipeline = CodeRetrieverPipeline(
+        name="p",
+        stages=(
+            TokenBudgetFormatterStage(
+                formatter=ChunkMarkdownFormatter(),
+                budget=10_000,
+            ),
+            MetadataPostFilterStage(),
+        ),
+    )
+    state = PipelineState(query=query, result=payload)
+    for stage in pipeline.stages:
+        state = await stage.run(state)
+    assert isinstance(state.result, ChunkList)
+    assert len(state.result.items) == 1  # Composite is NOT dropped
 
 
 @pytest.mark.asyncio

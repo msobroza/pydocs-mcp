@@ -34,6 +34,12 @@ if TYPE_CHECKING:
     )
 
 
+# Sentinel title on composite formatter output. ``MetadataPostFilterStage``
+# bypasses title-based filters when it sees this marker so downstream
+# post-filters never drop the budgeted answer chunk (AC #34).
+COMPOSITE_TITLE_SENTINEL = "_composite"
+
+
 # Retrieval stages
 
 
@@ -95,7 +101,13 @@ class MetadataPostFilterStage:
         if state.result is None:
             return state
         tree = format_registry[state.query.post_filter_format].parse(state.query.post_filter)
-        kept = tuple(item for item in state.result.items if _evaluate(tree, item))
+
+        def _keep(item) -> bool:
+            if _is_composite(item):
+                return True
+            return _evaluate(tree, item)
+
+        kept = tuple(item for item in state.result.items if _keep(item))
         if isinstance(state.result, ChunkList):
             return replace(state, result=ChunkList(items=kept))
         return replace(state, result=ModuleMemberList(items=kept))
@@ -119,6 +131,12 @@ def _evaluate(f: Filter, item) -> bool:
         v = _field_value(item, f.field) or ""
         return f.substring.lower() in str(v).lower()
     raise NotImplementedError(f"evaluator: {type(f).__name__}")
+
+
+def _is_composite(item) -> bool:
+    if not hasattr(item, "metadata"):
+        return False
+    return item.metadata.get(ChunkFilterField.TITLE.value) == COMPOSITE_TITLE_SENTINEL
 
 
 def _field_value(item, field_name: str):
@@ -389,7 +407,10 @@ class TokenBudgetFormatterStage:
         composite_text = "\n".join(parts)
         composite = Chunk(
             text=composite_text,
-            metadata={ChunkFilterField.ORIGIN.value: ChunkOrigin.COMPOSITE_OUTPUT.value},
+            metadata={
+                ChunkFilterField.ORIGIN.value: ChunkOrigin.COMPOSITE_OUTPUT.value,
+                ChunkFilterField.TITLE.value: COMPOSITE_TITLE_SENTINEL,
+            },
         )
         return replace(state, result=ChunkList(items=(composite,)))
 
