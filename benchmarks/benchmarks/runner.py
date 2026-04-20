@@ -25,21 +25,23 @@ Output:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import dataclasses
 import tempfile
 from pathlib import Path
 
 import pandas as pd
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.indexer import index_dependencies, index_project_source
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 from rich.console import Console
 
-from benchmarks.fake_project import generate_fake_project, FAKE_REQUIREMENTS
-from benchmarks.indexer_bench import run_indexing_benchmark
-from benchmarks.dataset_gen import generate_dataset
-from benchmarks.search_bench import run_search_benchmark, to_dataframe
 from benchmarks.context7_bench import run_context7_benchmark
+from benchmarks.dataset_gen import generate_dataset
+from benchmarks.fake_project import FAKE_REQUIREMENTS, generate_fake_project
+from benchmarks.indexer_bench import run_indexing_benchmark
 from benchmarks.neuledge_bench import run_neuledge_benchmark
-from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
-from pydocs_mcp.indexer import index_dependencies, index_project_source
+from benchmarks.search_bench import run_search_benchmark, to_dataframe
 
 console = Console()
 
@@ -134,11 +136,21 @@ def main() -> None:
         # Phase 3: Build full search index (separate DB for search benchmark)
         console.print("[3/5] Building search index...")
         db_path = Path(tmp_root) / "bench_search.db"
-        conn = open_index_database(db_path)
-        index_project_source(conn, project_path)
-        index_dependencies(conn, FAKE_REQUIREMENTS, workers=args.workers, use_inspect=False)
-        rebuild_fulltext_index(conn)
-        conn.close()
+        # Ensure schema exists before repositories issue queries.
+        open_index_database(db_path).close()
+
+        async def _build_search_index() -> None:
+            """Mirror __main__._run_indexing_phase so one asyncio.run wraps the
+            whole indexing phase and sub-loops share the same event loop."""
+            service = build_sqlite_indexing_service(db_path)
+            await index_project_source(service, project_path)
+            await index_dependencies(
+                service, FAKE_REQUIREMENTS,
+                workers=args.workers, use_inspect=False,
+            )
+            await service.chunk_store.rebuild_index()
+
+        asyncio.run(_build_search_index())
 
         # Phase 4: Synthetic dataset
         console.print("[4/5] Generating synthetic question dataset...")

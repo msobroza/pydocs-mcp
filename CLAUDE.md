@@ -53,16 +53,18 @@ python/pydocs_mcp/
 ├── __main__.py    # CLI entry (argparse), orchestrates pipeline
 ├── _fast.py       # Imports Rust native module or falls back to Python
 ├── _fallback.py   # Pure Python implementations of all Rust functions
-├── db.py          # SQLite schema, cache lifecycle, FTS rebuild
+├── db.py          # SQLite schema + cache lifecycle + FTS rebuild (no row mappers)
 ├── deps.py        # Dependency resolution (pyproject.toml, requirements.txt)
-├── indexer.py     # Core indexing: inspect mode (live import) vs static mode (file read)
+├── indexer.py     # Core indexing: inspect mode (live import) vs static mode (file read) — writes via IndexingService
+├── application/   # Use-case services (IndexingService) on Protocol-only deps
+├── storage/       # Filter tree, Protocols, SQLite repositories + VectorStore + UnitOfWork
 ├── retrieval/     # Async pipelines, retrievers, stages, registries, YAML config
 ├── presets/       # Built-in pipeline YAML presets (chunk_fts, member_like)
 └── server.py      # FastMCP server exposing 5 tools to clients
 src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, parse, read)
 ```
 
-**Data flow:** CLI → deps.py resolves packages → indexer.py extracts docs/module members → db.py stores in SQLite → retrieval/ runs the async `CodeRetrieverPipeline` (BM25 chunks + LIKE module-members) → server.py exposes via MCP.
+**Data flow:** CLI → deps.py resolves packages → indexer.py extracts docs/module members → `application.IndexingService.reindex_package` atomically writes through `storage.SqlitePackageRepository` / `SqliteChunkRepository` / `SqliteModuleMemberRepository` under a `SqliteUnitOfWork` → retrieval/ runs the async `CodeRetrieverPipeline` (BM25 chunks via `SqliteVectorStore` + LIKE module-members via `SqliteModuleMemberRepository`) → server.py exposes via MCP.
 
 **Rust/Python duality:** `_fast.py` tries `from ._native import *`; on ImportError falls back to `_fallback.py`. All Rust functions have pure Python equivalents — the package works without Rust compiled.
 
@@ -117,7 +119,7 @@ src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, par
 
 ## SOLID Principles
 
-**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `retrieval/` owns querying (retrievers, stages, pipelines), `indexer.py` owns extraction. New features should follow this pattern. If a module gains a second reason to change, split it.
+**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `storage/` owns persistence (repositories, filter adapter, UoW, VectorStore), `application/` owns write-side use cases (IndexingService), `retrieval/` owns querying (retrievers, stages, pipelines), `indexer.py` owns extraction. New features should follow this pattern. If a module gains a second reason to change, split it.
 
 **Open/Closed:** Extend behavior through new `kind` values in chunks/module_members tables rather than modifying existing indexing logic. New search strategies should be added as new retrievers/stages registered in `retrieval/`, not by modifying existing ones.
 
@@ -125,7 +127,7 @@ src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, par
 
 **Interface Segregation:** MCP tools in `server.py` each expose a focused interface. Keep tool parameters minimal and client-specific. Don't add parameters "just in case."
 
-**Dependency Inversion:** Core logic (`indexer.py`, `retrieval/`) should depend on abstractions (function signatures in `_fast.py`, protocol classes in `retrieval/protocols.py`), not on whether Rust or Python is running. The `_fast.py` module is the abstraction layer — never import `_native` or `_fallback` directly from other modules.
+**Dependency Inversion:** Core logic (`indexer.py`, `retrieval/`, `application/`) depends on abstractions — `_fast.py` hides the Rust/Python choice and `storage/protocols.py` + `retrieval/protocols.py` define the backend contracts. `application.IndexingService` depends only on `ChunkStore` / `PackageStore` / `ModuleMemberStore` / `UnitOfWork` Protocols so swapping SQLite for Postgres/DuckDB later is a pure adapter change. Never import `_native` or `_fallback` directly from other modules.
 
 ## Code Comments
 

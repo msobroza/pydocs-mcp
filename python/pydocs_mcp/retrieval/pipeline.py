@@ -25,6 +25,12 @@ class PipelineState:
     duration_ms: float = 0.0
 
 
+# Stops a malicious / recursive YAML from blowing the Python stack when
+# ``SubPipelineStage`` chains nest deeply. 32 levels is already far more
+# than any legitimate pipeline the project ships.
+_MAX_PIPELINE_DEPTH = 32
+
+
 @dataclass(frozen=True, slots=True)
 class CodeRetrieverPipeline:
     """Linear async pipeline of PipelineStages; runs them in order."""
@@ -42,11 +48,21 @@ class CodeRetrieverPipeline:
         return {"name": self.name, "stages": [s.to_dict() for s in self.stages]}
 
     @classmethod
-    def from_dict(cls, data: dict, context: "BuildContext") -> "CodeRetrieverPipeline":
+    def from_dict(
+        cls,
+        data: dict,
+        context: "BuildContext",
+        _depth: int = 0,
+    ) -> "CodeRetrieverPipeline":
+        if _depth > _MAX_PIPELINE_DEPTH:
+            raise ValueError(
+                f"pipeline nesting exceeds max depth of {_MAX_PIPELINE_DEPTH}"
+            )
         return cls(
             name=data["name"],
             stages=tuple(
-                context.stage_registry.build(s, context) for s in data["stages"]
+                context.stage_registry.build(s, context, _depth=_depth)
+                for s in data["stages"]
             ),
         )
 

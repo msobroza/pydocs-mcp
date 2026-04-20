@@ -1,4 +1,4 @@
-"""Pipeline stages — spec §5.6 (12 classes)."""
+"""Pipeline stages — spec §5.6 / §5.8."""
 from __future__ import annotations
 
 import asyncio
@@ -11,12 +11,18 @@ from pydocs_mcp.models import (
     ChunkList,
     ChunkOrigin,
     ModuleMemberList,
-    PipelineResultItem,
-    SearchScope,
 )
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
 from pydocs_mcp.retrieval.predicates import default_predicate_registry
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.storage.filters import (
+    All,
+    FieldEq,
+    FieldIn,
+    FieldLike,
+    Filter,
+    format_registry,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.predicates import PredicateRegistry
@@ -26,6 +32,12 @@ if TYPE_CHECKING:
         PipelineStage,
         ResultFormatter,
     )
+
+
+# Sentinel title on composite formatter output. ``MetadataPostFilterStage``
+# bypasses title-based filters when it sees this marker so downstream
+# post-filters never drop the budgeted answer chunk (AC #34).
+COMPOSITE_TITLE_SENTINEL = "_composite"
 
 
 # Retrieval stages
@@ -70,84 +82,68 @@ class ModuleMemberRetrievalStage:
 # Filter stages
 
 
-def _filter_result_items(result: PipelineResultItem | None, predicate) -> PipelineResultItem | None:
-    if result is None:
-        return None
-    if isinstance(result, ChunkList):
-        return ChunkList(items=tuple(item for item in result.items if predicate(item)))
-    # ModuleMemberList
-    return ModuleMemberList(items=tuple(item for item in result.items if predicate(item)))
-
-
-@stage_registry.register("package_filter")
+@stage_registry.register("metadata_post_filter")
 @dataclass(frozen=True, slots=True)
-class PackageFilterStage:
-    name: str = "package_filter"
+class MetadataPostFilterStage:
+    """Apply ``SearchQuery.post_filter`` to the in-memory result after retrieval.
+
+    The filter is parsed via ``format_registry[state.query.post_filter_format]``,
+    so the same ``{field: value}`` / ``{field: {op: value}}`` shapes accepted by
+    retrievers are accepted here — only the evaluation happens on already-fetched
+    items instead of being pushed down into SQL (spec §5.8, AC #13).
+    """
+
+    name: str = "metadata_post_filter"
 
     async def run(self, state: PipelineState) -> PipelineState:
-        target = (state.query.pre_filter or {}).get(ChunkFilterField.PACKAGE.value)
-        if not target:
+        if state.query.post_filter is None:
             return state
-        def keep(item):
-            return item.metadata.get(ChunkFilterField.PACKAGE.value) == target
-        return replace(state, result=_filter_result_items(state.result, keep))
+        if state.result is None:
+            return state
+        tree = format_registry[state.query.post_filter_format].parse(state.query.post_filter)
+
+        def _keep(item) -> bool:
+            if _is_composite(item):
+                return True
+            return _evaluate(tree, item)
+
+        kept = tuple(item for item in state.result.items if _keep(item))
+        if isinstance(state.result, ChunkList):
+            return replace(state, result=ChunkList(items=kept))
+        return replace(state, result=ModuleMemberList(items=kept))
 
     def to_dict(self) -> dict:
-        return {"type": "package_filter"}
+        return {"type": "metadata_post_filter"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "PackageFilterStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "MetadataPostFilterStage":
         return cls()
 
 
-@stage_registry.register("scope_filter")
-@dataclass(frozen=True, slots=True)
-class ScopeFilterStage:
-    name: str = "scope_filter"
-
-    async def run(self, state: PipelineState) -> PipelineState:
-        raw = (state.query.pre_filter or {}).get(ChunkFilterField.SCOPE.value)
-        if raw is None:
-            return state
-        scope = SearchScope(raw)
-        def keep(item):
-            package = item.metadata.get(ChunkFilterField.PACKAGE.value, "")
-            if scope is SearchScope.PROJECT_ONLY:
-                return package == "__project__"
-            if scope is SearchScope.DEPENDENCIES_ONLY:
-                return package != "__project__"
-            return True
-        return replace(state, result=_filter_result_items(state.result, keep))
-
-    def to_dict(self) -> dict:
-        return {"type": "scope_filter"}
-
-    @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ScopeFilterStage":
-        return cls()
+def _evaluate(f: Filter, item) -> bool:
+    if isinstance(f, All):
+        return all(_evaluate(c, item) for c in f.clauses)
+    if isinstance(f, FieldEq):
+        return _field_value(item, f.field) == f.value
+    if isinstance(f, FieldIn):
+        return _field_value(item, f.field) in f.values
+    if isinstance(f, FieldLike):
+        v = _field_value(item, f.field) or ""
+        return f.substring.lower() in str(v).lower()
+    raise NotImplementedError(f"evaluator: {type(f).__name__}")
 
 
-@stage_registry.register("title_filter")
-@dataclass(frozen=True, slots=True)
-class TitleFilterStage:
-    name: str = "title_filter"
+def _is_composite(item) -> bool:
+    if not hasattr(item, "metadata"):
+        return False
+    return item.metadata.get(ChunkFilterField.TITLE.value) == COMPOSITE_TITLE_SENTINEL
 
-    async def run(self, state: PipelineState) -> PipelineState:
-        target = (state.query.pre_filter or {}).get(ChunkFilterField.TITLE.value)
-        if not target:
-            return state
-        pattern = str(target).lower()
-        def keep(item):
-            title = (item.metadata.get(ChunkFilterField.TITLE.value, "") or "").lower()
-            return pattern in title
-        return replace(state, result=_filter_result_items(state.result, keep))
 
-    def to_dict(self) -> dict:
-        return {"type": "title_filter"}
-
-    @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "TitleFilterStage":
-        return cls()
+def _field_value(item, field_name: str):
+    # For Chunk/ModuleMember, every useful metadata key lives in ``metadata``.
+    if hasattr(item, "metadata"):
+        return item.metadata.get(field_name)
+    return None
 
 
 @stage_registry.register("limit")
@@ -242,13 +238,15 @@ class ReciprocalRankFusionStage:
     async def run(self, state: PipelineState) -> PipelineState:
         if state.result is None or not state.result.items:
             return state
-        # Score by 1/(k+rank), keyed by item id (fall back to id(item))
+        # Score by 1/(k+rank), keyed by item id (fall back to id(item)).
+        # First-seen wins on the stored representative so retriever_name /
+        # relevance from the earliest branch survives the merge (AC #33).
         scores: dict = {}
         items_by_key: dict = {}
         for rank, item in enumerate(state.result.items):
             key = item.id if item.id is not None else id(item)
             scores[key] = scores.get(key, 0.0) + 1.0 / (self.k + rank)
-            items_by_key[key] = item
+            items_by_key.setdefault(key, item)
 
         # Rebuild ordered result, stable by score desc
         sorted_keys = sorted(scores.keys(), key=lambda k_: scores[k_], reverse=True)
@@ -364,8 +362,17 @@ class SubPipelineStage:
         return {"type": "sub_pipeline", "pipeline": self.pipeline.to_dict()}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "SubPipelineStage":
-        return cls(pipeline=CodeRetrieverPipeline.from_dict(data["pipeline"], context))
+    def from_dict(
+        cls,
+        data: dict,
+        context: BuildContext,
+        _depth: int = 0,
+    ) -> "SubPipelineStage":
+        return cls(
+            pipeline=CodeRetrieverPipeline.from_dict(
+                data["pipeline"], context, _depth=_depth + 1,
+            )
+        )
 
 
 # Formatter stage
@@ -400,7 +407,10 @@ class TokenBudgetFormatterStage:
         composite_text = "\n".join(parts)
         composite = Chunk(
             text=composite_text,
-            metadata={ChunkFilterField.ORIGIN.value: ChunkOrigin.COMPOSITE_OUTPUT.value},
+            metadata={
+                ChunkFilterField.ORIGIN.value: ChunkOrigin.COMPOSITE_OUTPUT.value,
+                ChunkFilterField.TITLE.value: COMPOSITE_TITLE_SENTINEL,
+            },
         )
         return replace(state, result=ChunkList(items=(composite,)))
 

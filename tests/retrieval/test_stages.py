@@ -1,4 +1,4 @@
-"""Tests for stage classes — Part 1 (retrieval + filters + limit)."""
+"""Tests for stage classes — Part 1 (retrieval + post-filter + limit)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,16 +14,13 @@ from pydocs_mcp.models import (
     ModuleMemberFilterField,
     ModuleMemberList,
     SearchQuery,
-    SearchScope,
 )
 from pydocs_mcp.retrieval.pipeline import PipelineState
 from pydocs_mcp.retrieval.stages import (
     ChunkRetrievalStage,
     LimitStage,
+    MetadataPostFilterStage,
     ModuleMemberRetrievalStage,
-    PackageFilterStage,
-    ScopeFilterStage,
-    TitleFilterStage,
 )
 
 
@@ -59,55 +56,41 @@ async def test_member_retrieval_stage_sets_result():
 
 
 @pytest.mark.asyncio
-async def test_package_filter_stage_keeps_matching_package():
+async def test_metadata_post_filter_stage_noop_when_post_filter_none():
+    payload = ChunkList(items=(Chunk(text="a"), Chunk(text="b")))
+    state = PipelineState(query=SearchQuery(terms="x"), result=payload)
+    out = await MetadataPostFilterStage().run(state)
+    assert len(out.result.items) == 2
+
+
+@pytest.mark.asyncio
+async def test_metadata_post_filter_stage_filters_chunks_by_eq():
     payload = ChunkList(items=(
-        Chunk(text="a", metadata={ChunkFilterField.PACKAGE.value: "keep"}),
-        Chunk(text="b", metadata={ChunkFilterField.PACKAGE.value: "drop"}),
+        Chunk(text="a", metadata={ChunkFilterField.PACKAGE.value: "fastapi"}),
+        Chunk(text="b", metadata={ChunkFilterField.PACKAGE.value: "django"}),
     ))
     state = PipelineState(
-        query=SearchQuery(terms="x", pre_filter={ChunkFilterField.PACKAGE.value: "keep"}),
+        query=SearchQuery(terms="x", post_filter={"package": "fastapi"}),
         result=payload,
     )
-    out = await PackageFilterStage().run(state)
+    out = await MetadataPostFilterStage().run(state)
     assert len(out.result.items) == 1
     assert out.result.items[0].text == "a"
 
 
 @pytest.mark.asyncio
-async def test_package_filter_stage_no_filter_is_noop():
-    payload = ChunkList(items=(Chunk(text="a"), Chunk(text="b")))
-    state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await PackageFilterStage().run(state)
-    assert len(out.result.items) == 2
-
-
-@pytest.mark.asyncio
-async def test_scope_filter_stage_project_only():
-    payload = ChunkList(items=(
-        Chunk(text="proj", metadata={ChunkFilterField.PACKAGE.value: "__project__"}),
-        Chunk(text="dep", metadata={ChunkFilterField.PACKAGE.value: "fastapi"}),
-    ))
-    state = PipelineState(
-        query=SearchQuery(terms="x", pre_filter={ChunkFilterField.SCOPE.value: SearchScope.PROJECT_ONLY.value}),
-        result=payload,
-    )
-    out = await ScopeFilterStage().run(state)
-    assert len(out.result.items) == 1
-    assert out.result.items[0].text == "proj"
-
-
-@pytest.mark.asyncio
-async def test_title_filter_stage_substring_match():
+async def test_metadata_post_filter_stage_filters_by_like():
     payload = ChunkList(items=(
         Chunk(text="a", metadata={ChunkFilterField.TITLE.value: "Routing"}),
         Chunk(text="b", metadata={ChunkFilterField.TITLE.value: "Middleware"}),
     ))
     state = PipelineState(
-        query=SearchQuery(terms="x", pre_filter={ChunkFilterField.TITLE.value: "rout"}),
+        query=SearchQuery(terms="x", post_filter={"title": {"like": "rout"}}),
         result=payload,
     )
-    out = await TitleFilterStage().run(state)
+    out = await MetadataPostFilterStage().run(state)
     assert len(out.result.items) == 1
+    assert out.result.items[0].text == "a"
 
 
 @pytest.mark.asyncio
@@ -171,6 +154,23 @@ async def test_reciprocal_rank_fusion_basic():
     # Duplicates deduplicated by id
     ids = [c.id for c in out.result.items]
     assert ids.count(1) == 1
+
+
+@pytest.mark.asyncio
+async def test_reciprocal_rank_fusion_preserves_first_seen_metadata():
+    """AC #33 — duplicates keep the first branch's retriever_name / relevance."""
+    from pydocs_mcp.retrieval.stages import ReciprocalRankFusionStage
+
+    items = (
+        Chunk(text="a", id=1, retriever_name="first", relevance=0.9),
+        Chunk(text="a", id=1, retriever_name="second", relevance=0.1),
+    )
+    state = PipelineState(query=SearchQuery(terms="x"), result=ChunkList(items=items))
+    out = await ReciprocalRankFusionStage(k=60).run(state)
+    assert len(out.result.items) == 1
+    # First-seen wins the representative — setdefault, not assignment.
+    assert out.result.items[0].retriever_name == "first"
+    assert out.result.items[0].relevance == 0.9
 
 
 @pytest.mark.asyncio
@@ -316,7 +316,10 @@ async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
 @pytest.mark.asyncio
 async def test_token_budget_formatter_stage_composite_output():
     from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
-    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+    from pydocs_mcp.retrieval.stages import (
+        COMPOSITE_TITLE_SENTINEL,
+        TokenBudgetFormatterStage,
+    )
 
     payload = ChunkList(items=(
         Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
@@ -332,8 +335,43 @@ async def test_token_budget_formatter_stage_composite_output():
     assert len(out.result.items) == 1
     composite = out.result.items[0]
     assert composite.metadata[ChunkFilterField.ORIGIN.value] == ChunkOrigin.COMPOSITE_OUTPUT.value
+    assert composite.metadata[ChunkFilterField.TITLE.value] == COMPOSITE_TITLE_SENTINEL
     assert "## A" in composite.text
     assert "## B" in composite.text
+
+
+@pytest.mark.asyncio
+async def test_metadata_post_filter_bypasses_composite_sentinel():
+    """AC #34 — composite chunks skip the title post-filter."""
+    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
+    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.stages import (
+        MetadataPostFilterStage,
+        TokenBudgetFormatterStage,
+    )
+
+    payload = ChunkList(items=(
+        Chunk(text="Section A body", metadata={ChunkFilterField.TITLE.value: "Routing"}),
+        Chunk(text="Section B body", metadata={ChunkFilterField.TITLE.value: "Middleware"}),
+    ))
+    # post_filter restricts title to "Routing" — without the sentinel bypass
+    # the composite chunk (title="_composite") would be dropped.
+    query = SearchQuery(terms="x", post_filter={"title": {"like": "Routing"}})
+    pipeline = CodeRetrieverPipeline(
+        name="p",
+        stages=(
+            TokenBudgetFormatterStage(
+                formatter=ChunkMarkdownFormatter(),
+                budget=10_000,
+            ),
+            MetadataPostFilterStage(),
+        ),
+    )
+    state = PipelineState(query=query, result=payload)
+    for stage in pipeline.stages:
+        state = await stage.run(state)
+    assert isinstance(state.result, ChunkList)
+    assert len(state.result.items) == 1  # Composite is NOT dropped
 
 
 @pytest.mark.asyncio

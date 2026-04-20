@@ -1,9 +1,10 @@
-name: like_member
+name: member_like
 stages:
   - type: module_member_retrieval
-    retriever: {type: like_member}
-  - type: package_filter
-  - type: scope_filter
+    retriever:
+      type: like_member
+      schema_name: member
+  - type: metadata_post_filter
   - type: limit
     max_results: 15
   - type: token_budget_formatter

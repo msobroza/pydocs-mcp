@@ -5,9 +5,7 @@ search_docs / search_api run pre-built CodeRetrieverPipeline instances.
 """
 from __future__ import annotations
 
-import asyncio
 import inspect
-import json
 import logging
 import pkgutil
 import re as _re
@@ -15,13 +13,13 @@ import sys
 from pathlib import Path
 
 from pydocs_mcp.constants import (
+    LIST_PACKAGES_MAX,
     LIVE_DOC_MAX,
     LIVE_SIGNATURE_MAX,
     PACKAGE_DOC_LINE_MAX,
     PACKAGE_DOC_MAX,
     REQUIREMENTS_DISPLAY,
 )
-from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import ChunkFilterField, ModuleMemberFilterField, SearchQuery, SearchScope
 from pydocs_mcp.retrieval.config import (
@@ -29,7 +27,7 @@ from pydocs_mcp.retrieval.config import (
     build_chunk_pipeline_from_config,
     build_member_pipeline_from_config,
 )
-from pydocs_mcp.retrieval.serialization import BuildContext
+from pydocs_mcp.retrieval.wiring import build_retrieval_context
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -58,10 +56,17 @@ def run(db_path: Path, config_path: Path | None = None):
         log.error("Missing dependency: pip install mcp")
         sys.exit(1)
 
-    # Build provider + load config + build pipelines once at startup.
-    provider = build_connection_provider(db_path)
+    # Build provider + load config + build pipelines + repositories once at startup.
+    from pydocs_mcp.storage.sqlite import (
+        SqliteChunkRepository,
+        SqlitePackageRepository,
+    )
     config = AppConfig.load(explicit_path=config_path)
-    context = BuildContext(connection_provider=provider)
+    context = build_retrieval_context(db_path, config)
+    provider = context.connection_provider
+    package_repository = SqlitePackageRepository(provider=provider)
+    chunk_repository = SqliteChunkRepository(provider=provider)
+    member_repository = context.module_member_store
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 
@@ -70,14 +75,10 @@ def run(db_path: Path, config_path: Path | None = None):
     @mcp.tool()
     async def list_packages() -> str:
         """List indexed packages. '__project__' = your source code."""
-        async with provider.acquire() as connection:
-            rows = await asyncio.to_thread(
-                lambda: connection.execute(
-                    "SELECT name, version, summary FROM packages ORDER BY name"
-                ).fetchall()
-            )
+        packages = await package_repository.list(limit=LIST_PACKAGES_MAX)
+        packages = sorted(packages, key=lambda p: p.name)
         return "\n".join(
-            f"- {r['name']} {r['version']} — {r['summary']}" for r in rows
+            f"- {p.name} {p.version} — {p.summary}" for p in packages
         )
 
     @mcp.tool()
@@ -88,44 +89,39 @@ def run(db_path: Path, config_path: Path | None = None):
             package: e.g. 'fastapi', 'vllm', '__project__'
         """
         pkg = "__project__" if package == "__project__" else normalize_package_name(package)
-        async with provider.acquire() as connection:
-            info = await asyncio.to_thread(
-                lambda: connection.execute(
-                    "SELECT * FROM packages WHERE name=?", (pkg,)
-                ).fetchone()
-            )
-            if not info:
-                return f"'{package}' not found."
+        info = await package_repository.get(pkg)
+        if info is None:
+            return f"'{package}' not found."
 
-            parts = [f"# {info['name']} {info['version']}\n{info['summary']}"]
-            if info["homepage"]:
-                parts.append(f"Homepage: {info['homepage']}")
-            deps = json.loads(info["dependencies"] or "[]")
-            if deps:
-                parts.append("Deps: " + ", ".join(deps[:REQUIREMENTS_DISPLAY]))
-
-            chunks = await asyncio.to_thread(
-                lambda: connection.execute(
-                    "SELECT title, text FROM chunks WHERE package=? ORDER BY id LIMIT 10",
-                    (pkg,),
-                ).fetchall()
+        parts = [f"# {info.name} {info.version}\n{info.summary}"]
+        if info.homepage:
+            parts.append(f"Homepage: {info.homepage}")
+        if info.dependencies:
+            parts.append(
+                "Deps: " + ", ".join(info.dependencies[:REQUIREMENTS_DISPLAY])
             )
-            for r in chunks:
-                parts.append(f"## {r['title']}\n{r['text']}")
 
-            members = await asyncio.to_thread(
-                lambda: connection.execute(
-                    "SELECT kind, name, signature, docstring "
-                    "FROM module_members WHERE package=? LIMIT 30",
-                    (pkg,),
-                ).fetchall()
-            )
+        chunks = await chunk_repository.list(
+            filter={ChunkFilterField.PACKAGE.value: pkg}, limit=10,
+        )
+        for c in chunks:
+            title = c.metadata.get(ChunkFilterField.TITLE.value, "")
+            parts.append(f"## {title}\n{c.text}")
+
+        members = await member_repository.list(
+            filter={ModuleMemberFilterField.PACKAGE.value: pkg}, limit=30,
+        )
         if members:
-            parts.append("## API\n" + "\n".join(
-                f"- `{s['kind']} {s['name']}{s['signature']}` — "
-                f"{(s['docstring'] or '').split(chr(10))[0][:PACKAGE_DOC_LINE_MAX]}"
-                for s in members
-            ))
+            rendered = []
+            for m in members:
+                md = m.metadata
+                kind = md.get(ModuleMemberFilterField.KIND.value, "")
+                name = md.get(ModuleMemberFilterField.NAME.value, "")
+                signature = md.get("signature", "")
+                docstring = str(md.get("docstring", "") or "")
+                first_line = docstring.split("\n")[0][:PACKAGE_DOC_LINE_MAX]
+                rendered.append(f"- `{kind} {name}{signature}` — {first_line}")
+            parts.append("## API\n" + "\n".join(rendered))
         return "\n\n".join(parts)[:PACKAGE_DOC_MAX]
 
     @mcp.tool()
@@ -147,7 +143,13 @@ def run(db_path: Path, config_path: Path | None = None):
         scope = _scope_from_internal(internal)
         pre_filter: dict = {ChunkFilterField.SCOPE.value: scope.value}
         if package.strip():
-            pre_filter[ChunkFilterField.PACKAGE.value] = package.strip()
+            pkg = package.strip()
+            # PyPI names like "Flask-Login" are stored as "flask_login" in the DB.
+            # Normalise user input so search does not silently miss hyphenated
+            # or mixed-case packages. "__project__" is a sentinel — leave intact.
+            if pkg != "__project__":
+                pkg = normalize_package_name(pkg)
+            pre_filter[ChunkFilterField.PACKAGE.value] = pkg
         if topic.strip():
             pre_filter[ChunkFilterField.TITLE.value] = topic.strip()
         search_query = SearchQuery(terms=query, pre_filter=pre_filter)
@@ -178,7 +180,10 @@ def run(db_path: Path, config_path: Path | None = None):
         scope = _scope_from_internal(internal)
         pre_filter: dict = {ChunkFilterField.SCOPE.value: scope.value}
         if package.strip():
-            pre_filter[ModuleMemberFilterField.PACKAGE.value] = package.strip()
+            pkg = package.strip()
+            if pkg != "__project__":
+                pkg = normalize_package_name(pkg)
+            pre_filter[ModuleMemberFilterField.PACKAGE.value] = pkg
         search_query = SearchQuery(terms=query, pre_filter=pre_filter)
         try:
             state = await member_pipeline.run(search_query)
@@ -199,13 +204,8 @@ def run(db_path: Path, config_path: Path | None = None):
         """
         import importlib
         pkg_name = normalize_package_name(package)
-        async with provider.acquire() as connection:
-            row = await asyncio.to_thread(
-                lambda: connection.execute(
-                    "SELECT name FROM packages WHERE name=?", (pkg_name,)
-                ).fetchone()
-            )
-        if not row:
+        existing = await package_repository.get(pkg_name)
+        if existing is None:
             return f"'{package}' is not indexed. Use list_packages() to see available packages."
         if submodule and not _validate_submodule(submodule):
             return f"Invalid submodule '{submodule}'. Use only letters, digits, underscores, and dots."

@@ -8,19 +8,32 @@ byte-diff against main, because the DB content is per-run.
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
 
 from pydocs_mcp.db import build_connection_provider, open_index_database
-from pydocs_mcp.models import ChunkFilterField, ChunkOrigin, SearchQuery
+from pydocs_mcp.models import SearchQuery
 from pydocs_mcp.retrieval.config import (
     AppConfig,
     build_chunk_pipeline_from_config,
     build_member_pipeline_from_config,
 )
 from pydocs_mcp.retrieval.serialization import BuildContext
+from pydocs_mcp.storage.sqlite import (
+    SqliteModuleMemberRepository,
+    SqliteVectorStore,
+)
+
+
+def _build_context(provider, config: AppConfig) -> BuildContext:
+    """Wire the full BuildContext the way server.py will at startup."""
+    return BuildContext(
+        connection_provider=provider,
+        vector_store=SqliteVectorStore(provider=provider),
+        module_member_store=SqliteModuleMemberRepository(provider=provider),
+        app_config=config,
+    )
 
 
 @pytest.fixture
@@ -53,8 +66,8 @@ async def test_chunk_composite_output_shape(seeded_db: Path):
     """Composite chunk text starts with `## {title}\\n{body}` (single newline)
     per the byte-parity contract with pre-PR format_within_budget output."""
     provider = build_connection_provider(seeded_db)
-    config = AppConfig()  # defaults → chunk_fts.yaml
-    ctx = BuildContext(connection_provider=provider)
+    config = AppConfig.load()
+    ctx = _build_context(provider, config)
     pipeline = build_chunk_pipeline_from_config(config, ctx)
 
     state = await pipeline.run(SearchQuery(terms="APIRouter"))
@@ -82,8 +95,8 @@ async def test_chunk_composite_preserves_trailing_newline(seeded_db: Path):
     """TokenBudgetFormatterStage must not rstrip() the trailing newline —
     old format_within_budget preserved it."""
     provider = build_connection_provider(seeded_db)
-    config = AppConfig()
-    ctx = BuildContext(connection_provider=provider)
+    config = AppConfig.load()
+    ctx = _build_context(provider, config)
     pipeline = build_chunk_pipeline_from_config(config, ctx)
 
     state = await pipeline.run(SearchQuery(terms="APIRouter"))
@@ -97,8 +110,8 @@ async def test_chunk_composite_preserves_trailing_newline(seeded_db: Path):
 async def test_member_composite_output_shape(seeded_db: Path):
     """Composite module-member text follows **[pkg] mod.name(sig)** (kind)\\ndocstring shape."""
     provider = build_connection_provider(seeded_db)
-    config = AppConfig()
-    ctx = BuildContext(connection_provider=provider)
+    config = AppConfig.load()
+    ctx = _build_context(provider, config)
     pipeline = build_member_pipeline_from_config(config, ctx)
 
     state = await pipeline.run(SearchQuery(terms="APIRouter"))

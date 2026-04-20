@@ -14,7 +14,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar
 
-from pydantic import field_validator
+from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pyd_dataclass
 
 
@@ -141,14 +141,17 @@ class ModuleMemberList:
 PipelineResultItem = ChunkList | ModuleMemberList
 
 
-@pyd_dataclass(frozen=True, slots=True)
+@pyd_dataclass(frozen=True, slots=True, config=ConfigDict(extra="forbid"))
 class SearchQuery:
     """Pydantic dataclass with construction-time validation.
 
-    NOTE: The canonical spec §5.2 also defines a `_validate_filter_syntax`
-    model-validator that validates pre_filter / post_filter against a
-    format_registry from pydocs_mcp.storage.filters. That module lands in
-    sub-PR #3; this validator is intentionally deferred until then.
+    `pre_filter` and `post_filter` are native mappings in the format
+    named by `pre_filter_format` / `post_filter_format`. Syntax is
+    validated at construction time against
+    `pydocs_mcp.storage.filters.format_registry` (spec §5.5, AC #12).
+    The filter-registry import is deferred inside the validator body so
+    that `storage.filters` — which does not import from `models.py` —
+    can keep importing safely.
     """
     terms: str
     max_results: int = 8
@@ -171,6 +174,22 @@ class SearchQuery:
         if v <= 0:
             raise ValueError("max_results must be positive")
         return v
+
+    @model_validator(mode="after")
+    def _validate_filter_syntax(self) -> "SearchQuery":
+        # Lazy import to avoid any risk of a circular import at module load:
+        # storage.filters does not import from models, but keeping the import
+        # inside the validator body is the cleanest way to keep the direction
+        # of dependency one-way (models ← storage.filters).
+        from pydocs_mcp.storage.filters import format_registry
+
+        for raw_filter, fmt in (
+            (self.pre_filter, self.pre_filter_format),
+            (self.post_filter, self.post_filter_format),
+        ):
+            if raw_filter is not None:
+                format_registry[fmt].validate(raw_filter)
+        return self
 
 
 @dataclass(frozen=True, slots=True)

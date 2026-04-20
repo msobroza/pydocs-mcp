@@ -183,6 +183,47 @@ class TestSearchDocs:
         result = _arun(tools["search_docs"]("overview", topic="Overview"))
         assert "overview" in result.lower() or "No matches" in result
 
+    def test_search_docs_normalizes_flask_login_style_package_name(self, tmp_path):
+        """User-facing ``Flask-Login`` must resolve to the DB-stored ``flask_login``.
+
+        Regression for an adversarial finding where the normalisation call
+        was dropped during the repository migration, causing hyphenated
+        PyPI names to silently miss all rows.
+        """
+        db_path = tmp_path / "flask.db"
+        conn = open_index_database(db_path)
+        conn.execute(
+            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            ("flask_login", "0.6", "Flask login", "", "[]", "h", "dependency"),
+        )
+        conn.execute(
+            "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
+            ("flask_login", "Sessions", "login_user handles the login session for Flask apps", "dependency_readme"),
+        )
+        conn.commit()
+        rebuild_fulltext_index(conn)
+        conn.close()
+
+        fake_mcp = FakeMCP("test")
+        fake_mcp_module = MagicMock()
+        fake_mcp_module.FastMCP = lambda name: fake_mcp
+
+        with patch.dict(
+            sys.modules,
+            {
+                "mcp": MagicMock(),
+                "mcp.server": MagicMock(),
+                "mcp.server.fastmcp": fake_mcp_module,
+            },
+        ):
+            from pydocs_mcp.server import run
+            run(db_path)
+
+        # User types the PyPI name; server must normalise to flask_login.
+        result = _arun(fake_mcp.tools["search_docs"]("login", package="Flask-Login"))
+        assert "login_user" in result or "Sessions" in result
+        assert "No matches" not in result
+
 
 class TestSearchApi:
     def test_returns_matching_symbols(self, server_tools):
