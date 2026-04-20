@@ -10,7 +10,6 @@ from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.db import (
     build_connection_provider,
     cache_path_for_project,
-    clear_all_packages,
     open_index_database,
     rebuild_fulltext_index,
 )
@@ -81,8 +80,31 @@ def main():
         conn = open_index_database(db_path)
 
         if args.force:
-            clear_all_packages(conn)
+            import asyncio
+
+            from pydocs_mcp.application.indexing_service import IndexingService
+            from pydocs_mcp.storage.sqlite import (
+                SqliteChunkRepository,
+                SqliteModuleMemberRepository,
+                SqlitePackageRepository,
+                SqliteUnitOfWork,
+            )
+
+            # Close the plain connection first so the async UoW transaction
+            # doesn't deadlock with our own WAL writer.
+            conn.close()
+
+            provider = build_connection_provider(db_path)
+            indexing_service = IndexingService(
+                package_store=SqlitePackageRepository(provider=provider),
+                chunk_store=SqliteChunkRepository(provider=provider),
+                module_member_store=SqliteModuleMemberRepository(provider=provider),
+                unit_of_work=SqliteUnitOfWork(provider=provider),
+            )
+            asyncio.run(indexing_service.clear_all())
             log.info("Cache cleared")
+
+            conn = open_index_database(db_path)
 
         if not args.skip_project:
             log.info("Project: %s", project)
