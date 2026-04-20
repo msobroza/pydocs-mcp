@@ -25,14 +25,22 @@ from pydocs_mcp.application.module_introspection_service import (
     ModuleIntrospectionService,
 )
 from pydocs_mcp.application.package_lookup_service import PackageLookupService
+from pydocs_mcp.application.protocols import (
+    ChunkExtractor,
+    DependencyResolver,
+    MemberExtractor,
+)
 from pydocs_mcp.application.search_api_service import SearchApiService
 from pydocs_mcp.application.search_docs_service import SearchDocsService
 
 __all__ = (
+    "ChunkExtractor",
     "ChunkExtractorAdapter",
+    "DependencyResolver",
     "DependencyResolverAdapter",
     "IndexProjectService",
     "IndexingService",
+    "MemberExtractor",
     "MemberExtractorAdapter",
     "ModuleIntrospectionService",
     "PackageLookupService",
