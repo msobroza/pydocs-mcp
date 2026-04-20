@@ -24,7 +24,6 @@ from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
 from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.retrieval.stages import RouteCase, RouteStage, SubPipelineStage
 
-
 # ── Tunable user-config path override ───────────────────────────────────
 #
 # ``AppConfig.load(explicit_path=...)`` sets this ambient override so the

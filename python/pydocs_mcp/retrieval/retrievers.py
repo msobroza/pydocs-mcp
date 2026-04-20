@@ -5,19 +5,65 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.models import (
+    ChunkFilterField,
     ChunkList,
     ModuleMember,
     ModuleMemberFilterField,
     ModuleMemberList,
     SearchQuery,
+    SearchScope,
 )
 from pydocs_mcp.retrieval.serialization import BuildContext, retriever_registry
-from pydocs_mcp.storage.filters import Filter, _walk_fields, format_registry
+from pydocs_mcp.storage.filters import (
+    All,
+    FieldEq,
+    Filter,
+    _walk_fields,
+    format_registry,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
     from pydocs_mcp.storage.protocols import TextSearchable
     from pydocs_mcp.storage.sqlite import SqliteModuleMemberRepository
+
+
+_PROJECT = "__project__"
+
+
+def _split_scope(tree: Filter) -> tuple[Filter | None, SearchScope | None]:
+    """Extract the ``scope`` clause from a filter tree.
+
+    ``scope`` is a semantic field — ``PROJECT_ONLY`` / ``DEPENDENCIES_ONLY``
+    map to equality / inequality on ``package``, which the push-down SQL
+    layer cannot express via the ``MultiFieldFormat`` alone. The retriever
+    strips ``scope`` out so the store sees only real columns, then re-applies
+    it in-process via :func:`_matches_scope`.
+    """
+    if isinstance(tree, All):
+        scope: SearchScope | None = None
+        kept: list[Filter] = []
+        for clause in tree.clauses:
+            if isinstance(clause, FieldEq) and clause.field == ChunkFilterField.SCOPE.value:
+                scope = SearchScope(clause.value)
+                continue
+            kept.append(clause)
+        if scope is None:
+            return tree, None
+        if not kept:
+            return None, scope
+        return All(clauses=tuple(kept)), scope
+    if isinstance(tree, FieldEq) and tree.field == ChunkFilterField.SCOPE.value:
+        return None, SearchScope(tree.value)
+    return tree, None
+
+
+def _matches_scope(package: str, scope: SearchScope) -> bool:
+    if scope is SearchScope.PROJECT_ONLY:
+        return package == _PROJECT
+    if scope is SearchScope.DEPENDENCIES_ONLY:
+        return package != _PROJECT
+    return True
 
 
 @retriever_registry.register("bm25_chunk")
@@ -39,6 +85,7 @@ class Bm25ChunkRetriever:
 
     async def retrieve(self, query: SearchQuery) -> ChunkList:
         tree: Filter | None = None
+        scope: SearchScope | None = None
         if query.pre_filter is not None:
             tree = format_registry[query.pre_filter_format].parse(query.pre_filter)
             unknown = _walk_fields(tree) - self.allowed_fields
@@ -47,11 +94,17 @@ class Bm25ChunkRetriever:
                     f"filter references unknown fields {sorted(unknown)}; "
                     f"retriever allows {sorted(self.allowed_fields)}"
                 )
+            tree, scope = _split_scope(tree)
         results = await self.store.text_search(
             query_terms=query.terms,
             limit=query.max_results,
             filter=tree,
         )
+        if scope is not None:
+            results = tuple(
+                r for r in results
+                if _matches_scope(r.metadata.get(ChunkFilterField.PACKAGE.value, ""), scope)
+            )
         return ChunkList(items=tuple(results))
 
     def to_dict(self) -> dict:
@@ -96,6 +149,7 @@ class LikeMemberRetriever:
 
     async def retrieve(self, query: SearchQuery) -> ModuleMemberList:
         tree: Filter | None = None
+        scope: SearchScope | None = None
         if query.pre_filter is not None:
             tree = format_registry[query.pre_filter_format].parse(query.pre_filter)
             unknown = _walk_fields(tree) - self.allowed_fields
@@ -104,10 +158,14 @@ class LikeMemberRetriever:
                     f"filter references unknown fields {sorted(unknown)}; "
                     f"retriever allows {sorted(self.allowed_fields)}"
                 )
+            tree, scope = _split_scope(tree)
         rows = await self.store.list(filter=tree, limit=query.max_results)
         needle = query.terms.lower()
         items: list[ModuleMember] = []
         for member in rows:
+            member_pkg = str(member.metadata.get(ModuleMemberFilterField.PACKAGE.value, ""))
+            if scope is not None and not _matches_scope(member_pkg, scope):
+                continue
             name_value = str(member.metadata.get(ModuleMemberFilterField.NAME.value, "")).lower()
             doc_value = str(member.metadata.get("docstring", "")).lower()
             if needle in name_value or needle in doc_value:

@@ -59,9 +59,18 @@ def run(db_path: Path, config_path: Path | None = None):
         sys.exit(1)
 
     # Build provider + load config + build pipelines once at startup.
+    from pydocs_mcp.storage.sqlite import (
+        SqliteModuleMemberRepository,
+        SqliteVectorStore,
+    )
     provider = build_connection_provider(db_path)
     config = AppConfig.load(explicit_path=config_path)
-    context = BuildContext(connection_provider=provider)
+    context = BuildContext(
+        connection_provider=provider,
+        vector_store=SqliteVectorStore(provider=provider),
+        module_member_store=SqliteModuleMemberRepository(provider=provider),
+        app_config=config,
+    )
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 

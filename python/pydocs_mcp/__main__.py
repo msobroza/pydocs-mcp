@@ -114,10 +114,19 @@ def main():
             build_member_pipeline_from_config,
         )
         from pydocs_mcp.retrieval.serialization import BuildContext
+        from pydocs_mcp.storage.sqlite import (
+            SqliteModuleMemberRepository,
+            SqliteVectorStore,
+        )
 
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
         provider = build_connection_provider(db_path)
-        context = BuildContext(connection_provider=provider)
+        context = BuildContext(
+            connection_provider=provider,
+            vector_store=SqliteVectorStore(provider=provider),
+            module_member_store=SqliteModuleMemberRepository(provider=provider),
+            app_config=config,
+        )
         terms = " ".join(args.terms)
         pre_filter = (
             {ChunkFilterField.PACKAGE.value: args.package} if args.package else None

@@ -24,7 +24,7 @@ def test_appconfig_loads_shipped_defaults_absent_user_file():
     shipped ``presets/default_config.yaml`` baseline layer (spec §5.9, AC #14)."""
     config = AppConfig.load()
     assert config.metadata_schemas["chunk"] == ("package", "scope", "origin", "title", "module")
-    assert config.metadata_schemas["member"] == ("package", "module", "name", "kind")
+    assert config.metadata_schemas["member"] == ("package", "scope", "module", "name", "kind")
     assert config.log_level == "info"
     # Pipelines default to the shipped routes
     assert "chunk" in config.pipelines
@@ -44,7 +44,7 @@ def test_appconfig_user_yaml_overlays_shipped_baseline(tmp_path):
         "package", "scope", "origin", "title", "module", "language",
     )
     # The member schema stays at the shipped default
-    assert config.metadata_schemas["member"] == ("package", "module", "name", "kind")
+    assert config.metadata_schemas["member"] == ("package", "scope", "module", "name", "kind")
 
 
 def test_appconfig_env_var_overrides_yaml(monkeypatch, tmp_path):
