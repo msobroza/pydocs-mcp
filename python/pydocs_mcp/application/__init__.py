@@ -33,7 +33,7 @@ from pydocs_mcp.application.protocols import (
 from pydocs_mcp.application.search_api_service import SearchApiService
 from pydocs_mcp.application.search_docs_service import SearchDocsService
 
-__all__ = (
+__all__ = [
     "ChunkExtractor",
     "ChunkExtractorAdapter",
     "DependencyResolver",
@@ -46,4 +46,4 @@ __all__ = (
     "PackageLookupService",
     "SearchApiService",
     "SearchDocsService",
-)
+]
