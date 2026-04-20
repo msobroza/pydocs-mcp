@@ -31,8 +31,12 @@ from pydocs_mcp.storage.filters import (
     format_registry,
 )
 
-# Ambient transaction connection — set by SqliteUnitOfWork.begin, read by _maybe_acquire.
-_sqlite_transaction: ContextVar[sqlite3.Connection | None] = ContextVar(
+# Ambient transaction state — set by SqliteUnitOfWork.begin, read by _maybe_acquire.
+# The lock serialises concurrent repo calls that share the ambient connection —
+# ``asyncio.gather(repo.a.upsert(...), repo.b.upsert(...))`` inside a UoW
+# would otherwise race two worker threads on the same sqlite3.Connection
+# (undefined behaviour: interleaved SQL / corrupted transaction state).
+_sqlite_transaction: ContextVar[tuple[sqlite3.Connection, asyncio.Lock] | None] = ContextVar(
     "_sqlite_transaction", default=None,
 )
 
@@ -44,23 +48,32 @@ async def _maybe_acquire(
     """Reuse the ambient transaction's conn if set; otherwise acquire fresh via provider."""
     ambient = _sqlite_transaction.get()
     if ambient is not None:
-        yield ambient
+        conn, lock = ambient
+        async with lock:
+            yield conn
     else:
         async with provider.acquire() as conn:
             yield conn
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class SqliteUnitOfWork:
-    """Atomic transaction scope spanning multiple repository operations (spec §5.3)."""
+    """Atomic transaction scope spanning multiple repository operations (spec §5.3).
+
+    Holds an ``asyncio.Lock`` that ``_maybe_acquire`` reuses to serialise
+    concurrent repository calls issued inside the same ``begin()`` scope.
+    The dataclass is mutable so the lock can live on the instance (a frozen
+    dataclass wouldn't let ``asyncio.Lock`` be stored via ``default_factory``).
+    """
 
     provider: ConnectionProvider
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     @asynccontextmanager
     async def begin(self) -> AsyncIterator[None]:
         async with self.provider.acquire() as conn:
             await asyncio.to_thread(conn.execute, "BEGIN")
-            token = _sqlite_transaction.set(conn)
+            token = _sqlite_transaction.set((conn, self._lock))
             try:
                 yield
             except BaseException:

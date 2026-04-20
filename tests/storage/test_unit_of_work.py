@@ -27,10 +27,13 @@ async def test_maybe_acquire_without_ambient_opens_fresh(db_file):
 
 
 async def test_maybe_acquire_reuses_ambient(db_file):
+    import asyncio as _asyncio
+
     provider = build_connection_provider(db_file)
-    # Pretend a UoW has installed an ambient conn
+    # Pretend a UoW has installed an ambient (conn, lock) pair
     real = sqlite3.connect(str(db_file))
-    token = _sqlite_transaction.set(real)
+    lock = _asyncio.Lock()
+    token = _sqlite_transaction.set((real, lock))
     try:
         async with _maybe_acquire(provider) as conn:
             assert conn is real
@@ -76,3 +79,46 @@ async def test_unit_of_work_rollbacks_on_exception(db_file):
     count = fresh.execute("SELECT COUNT(*) FROM packages WHERE name=?", ("rolled_back",)).fetchone()[0]
     fresh.close()
     assert count == 0
+
+
+async def test_unit_of_work_serializes_concurrent_repo_calls(db_file):
+    """Two ``asyncio.gather``-ed repo calls inside one UoW must not race the
+    shared sqlite3.Connection. The asyncio.Lock on SqliteUnitOfWork serialises
+    them — both succeed and neither raises.
+
+    sqlite3.Connection is not thread-safe for concurrent statement execution;
+    two ``to_thread`` calls sharing the same conn would otherwise produce UB
+    (interleaved SQL, corrupted transaction, or explicit errors depending on
+    the CPython build flags).
+    """
+    import asyncio as _asyncio
+
+    from pydocs_mcp.models import Chunk, ChunkFilterField
+    from pydocs_mcp.storage.sqlite import SqliteChunkRepository
+
+    provider = build_connection_provider(db_file)
+    uow = SqliteUnitOfWork(provider=provider)
+    repo = SqliteChunkRepository(provider=provider)
+
+    def _chunk(title: str) -> Chunk:
+        return Chunk(
+            text="body " + title,
+            metadata={
+                ChunkFilterField.PACKAGE.value: "p",
+                ChunkFilterField.TITLE.value: title,
+                ChunkFilterField.ORIGIN.value: "readme",
+            },
+        )
+
+    async with uow.begin():
+        await _asyncio.gather(
+            repo.upsert([_chunk("a"), _chunk("b")]),
+            repo.upsert([_chunk("c"), _chunk("d")]),
+        )
+
+    fresh = sqlite3.connect(str(db_file))
+    titles = {
+        r[0] for r in fresh.execute("SELECT title FROM chunks").fetchall()
+    }
+    fresh.close()
+    assert titles == {"a", "b", "c", "d"}
