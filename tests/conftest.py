@@ -4,9 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import (
-    build_connection_provider,
     open_index_database,
     rebuild_fulltext_index,
 )
@@ -19,12 +17,7 @@ from pydocs_mcp.models import (
     Package,
     PackageOrigin,
 )
-from pydocs_mcp.storage.sqlite import (
-    SqliteChunkRepository,
-    SqliteModuleMemberRepository,
-    SqlitePackageRepository,
-    SqliteUnitOfWork,
-)
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 from tests._retriever_helpers import write_package_sync
 
 
@@ -156,13 +149,7 @@ def integration_conn(tmp_path):
     db_path = tmp_path / "integration.db"
     open_index_database(db_path).close()
 
-    provider = build_connection_provider(db_path)
-    service = IndexingService(
-        package_store=SqlitePackageRepository(provider=provider),
-        chunk_store=SqliteChunkRepository(provider=provider),
-        module_member_store=SqliteModuleMemberRepository(provider=provider),
-        unit_of_work=SqliteUnitOfWork(provider=provider),
-    )
+    service = build_sqlite_indexing_service(db_path)
 
     # Index the fake project via the production code path.
     asyncio.run(index_project_source(service, FAKE_PROJECT))

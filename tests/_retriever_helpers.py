@@ -32,12 +32,10 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.retrievers import Bm25ChunkRetriever, LikeMemberRetriever
 from pydocs_mcp.storage.sqlite import (
-    SqliteChunkRepository,
     SqliteModuleMemberRepository,
-    SqlitePackageRepository,
-    SqliteUnitOfWork,
     SqliteVectorStore,
 )
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 
 # Allowlist mirrors the shipped default_config.yaml metadata_schemas so the
 # retrievers accept the same fields production does, without requiring the
@@ -70,14 +68,7 @@ def _run(coro):
 
 def _make_indexing_service(conn_or_path) -> IndexingService:
     """Helper — build a transactional IndexingService wired to ``conn_or_path``'s DB."""
-    path = _resolve_db_path(conn_or_path)
-    provider = build_connection_provider(path)
-    return IndexingService(
-        package_store=SqlitePackageRepository(provider=provider),
-        chunk_store=SqliteChunkRepository(provider=provider),
-        module_member_store=SqliteModuleMemberRepository(provider=provider),
-        unit_of_work=SqliteUnitOfWork(provider=provider),
-    )
+    return build_sqlite_indexing_service(_resolve_db_path(conn_or_path))
 
 
 def write_package_sync(

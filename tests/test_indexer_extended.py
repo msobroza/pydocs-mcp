@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pydocs_mcp.application.indexing_service import IndexingService
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.indexer import (
     _append_doc_file_chunks,
     _build_package_record,
@@ -28,22 +28,11 @@ from pydocs_mcp.models import (
     ChunkFilterField,
     ModuleMemberFilterField,
 )
-from pydocs_mcp.storage.sqlite import (
-    SqliteChunkRepository,
-    SqliteModuleMemberRepository,
-    SqlitePackageRepository,
-    SqliteUnitOfWork,
-)
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 
 
 def _make_service(db_path: Path) -> IndexingService:
-    provider = build_connection_provider(db_path)
-    return IndexingService(
-        package_store=SqlitePackageRepository(provider=provider),
-        chunk_store=SqliteChunkRepository(provider=provider),
-        module_member_store=SqliteModuleMemberRepository(provider=provider),
-        unit_of_work=SqliteUnitOfWork(provider=provider),
-    )
+    return build_sqlite_indexing_service(db_path)
 
 
 # -- Helpers for creating mock distributions --

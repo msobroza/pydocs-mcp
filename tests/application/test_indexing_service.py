@@ -305,13 +305,8 @@ async def test_indexing_service_clear_all_also_removes_null_package_rows(tmp_pat
     NULL package values. Seeding a row with ``package=NULL`` via raw SQL
     and then calling ``clear_all`` must leave the table empty.
     """
-    from pydocs_mcp.db import build_connection_provider, open_index_database
-    from pydocs_mcp.storage.sqlite import (
-        SqliteChunkRepository,
-        SqliteModuleMemberRepository,
-        SqlitePackageRepository,
-        SqliteUnitOfWork,
-    )
+    from pydocs_mcp.db import open_index_database
+    from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 
     db_path = tmp_path / "clear.db"
     conn = open_index_database(db_path)
@@ -331,13 +326,7 @@ async def test_indexing_service_clear_all_also_removes_null_package_rows(tmp_pat
     conn.commit()
     conn.close()
 
-    provider = build_connection_provider(db_path)
-    service = IndexingService(
-        package_store=SqlitePackageRepository(provider=provider),
-        chunk_store=SqliteChunkRepository(provider=provider),
-        module_member_store=SqliteModuleMemberRepository(provider=provider),
-        unit_of_work=SqliteUnitOfWork(provider=provider),
-    )
+    service = build_sqlite_indexing_service(db_path)
 
     await service.clear_all()
 

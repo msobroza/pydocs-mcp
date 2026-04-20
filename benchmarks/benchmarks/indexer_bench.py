@@ -12,15 +12,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.application.indexing_service import IndexingService
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.indexer import index_dependencies, index_project_source
-from pydocs_mcp.storage.sqlite import (
-    SqliteChunkRepository,
-    SqliteModuleMemberRepository,
-    SqlitePackageRepository,
-    SqliteUnitOfWork,
-)
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 
 
 @dataclass
@@ -31,24 +25,6 @@ class IndexResult:
     chunks: int = 0
     symbols: int = 0
     error: str = ""
-
-
-def _build_indexing_service(db_path: Path) -> tuple[IndexingService, SqliteChunkRepository]:
-    """Construct the canonical IndexingService stack for *db_path*.
-
-    Mirrors the wiring in ``pydocs_mcp.__main__`` so benchmark timings stay
-    representative of what a real CLI invocation measures. Returns the chunk
-    repository too because callers need it to trigger the FTS rebuild.
-    """
-    provider = build_connection_provider(db_path)
-    chunk_repo = SqliteChunkRepository(provider=provider)
-    service = IndexingService(
-        package_store=SqlitePackageRepository(provider=provider),
-        chunk_store=chunk_repo,
-        module_member_store=SqliteModuleMemberRepository(provider=provider),
-        unit_of_work=SqliteUnitOfWork(provider=provider),
-    )
-    return service, chunk_repo
 
 
 async def _run_indexing_async(
@@ -64,7 +40,7 @@ async def _run_indexing_async(
     CLI does in ``__main__._run_indexing_phase``.
     """
     results: list[IndexResult] = []
-    service, chunk_repo = _build_indexing_service(db_path)
+    service = build_sqlite_indexing_service(db_path)
 
     # --- Project ---
     t0 = time.perf_counter()
@@ -104,7 +80,7 @@ async def _run_indexing_async(
         except Exception as exc:
             results.append(IndexResult(dep, time.perf_counter() - t0, error=str(exc)))
 
-    await chunk_repo.rebuild_index()
+    await service.chunk_store.rebuild_index()
     return results
 
 

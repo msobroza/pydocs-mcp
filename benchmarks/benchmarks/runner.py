@@ -31,15 +31,9 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
-from pydocs_mcp.application.indexing_service import IndexingService
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.indexer import index_dependencies, index_project_source
-from pydocs_mcp.storage.sqlite import (
-    SqliteChunkRepository,
-    SqliteModuleMemberRepository,
-    SqlitePackageRepository,
-    SqliteUnitOfWork,
-)
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 from rich.console import Console
 
 from benchmarks.context7_bench import run_context7_benchmark
@@ -148,20 +142,13 @@ def main() -> None:
         async def _build_search_index() -> None:
             """Mirror __main__._run_indexing_phase so one asyncio.run wraps the
             whole indexing phase and sub-loops share the same event loop."""
-            provider = build_connection_provider(db_path)
-            chunk_repo = SqliteChunkRepository(provider=provider)
-            service = IndexingService(
-                package_store=SqlitePackageRepository(provider=provider),
-                chunk_store=chunk_repo,
-                module_member_store=SqliteModuleMemberRepository(provider=provider),
-                unit_of_work=SqliteUnitOfWork(provider=provider),
-            )
+            service = build_sqlite_indexing_service(db_path)
             await index_project_source(service, project_path)
             await index_dependencies(
                 service, FAKE_REQUIREMENTS,
                 workers=args.workers, use_inspect=False,
             )
-            await chunk_repo.rebuild_index()
+            await service.chunk_store.rebuild_index()
 
         asyncio.run(_build_search_index())
 

@@ -10,7 +10,6 @@ import pytest
 
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import (
-    build_connection_provider,
     open_index_database,
     rebuild_fulltext_index,
 )
@@ -25,12 +24,7 @@ from pydocs_mcp.models import (
     ModuleMember,
     ModuleMemberFilterField,
 )
-from pydocs_mcp.storage.sqlite import (
-    SqliteChunkRepository,
-    SqliteModuleMemberRepository,
-    SqlitePackageRepository,
-    SqliteUnitOfWork,
-)
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 from tests._retriever_helpers import (
     retrieve_chunks,
     retrieve_module_members,
@@ -43,13 +37,7 @@ PACKAGES_DIR = FIXTURES_DIR / "packages"
 
 
 def _make_service(db_path: Path) -> IndexingService:
-    provider = build_connection_provider(db_path)
-    return IndexingService(
-        package_store=SqlitePackageRepository(provider=provider),
-        chunk_store=SqliteChunkRepository(provider=provider),
-        module_member_store=SqliteModuleMemberRepository(provider=provider),
-        unit_of_work=SqliteUnitOfWork(provider=provider),
-    )
+    return build_sqlite_indexing_service(db_path)
 
 
 @pytest.fixture

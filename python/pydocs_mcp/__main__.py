@@ -8,7 +8,6 @@ from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.db import (
-    build_connection_provider,
     cache_path_for_project,
     open_index_database,
 )
@@ -78,25 +77,12 @@ def main():
     if args.cmd in ("serve", "index"):
         import asyncio
 
-        from pydocs_mcp.application.indexing_service import IndexingService
-        from pydocs_mcp.storage.sqlite import (
-            SqliteChunkRepository,
-            SqliteModuleMemberRepository,
-            SqlitePackageRepository,
-            SqliteUnitOfWork,
-        )
+        from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 
         # Ensure the schema exists before repositories issue queries.
         open_index_database(db_path).close()
 
-        provider = build_connection_provider(db_path)
-        chunk_repository = SqliteChunkRepository(provider=provider)
-        indexing_service = IndexingService(
-            package_store=SqlitePackageRepository(provider=provider),
-            chunk_store=chunk_repository,
-            module_member_store=SqliteModuleMemberRepository(provider=provider),
-            unit_of_work=SqliteUnitOfWork(provider=provider),
-        )
+        indexing_service = build_sqlite_indexing_service(db_path)
 
         async def _run_indexing_phase() -> None:
             if args.force:
@@ -119,7 +105,7 @@ def main():
                     db_path.stat().st_size / 1024,
                 )
 
-            await chunk_repository.rebuild_index()
+            await indexing_service.chunk_store.rebuild_index()
 
         # Single asyncio.run boundary — sub-loops inside the async indexer
         # all share this one loop, so _maybe_acquire's ambient ContextVar
