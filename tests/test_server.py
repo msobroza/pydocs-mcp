@@ -12,8 +12,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pydocs_mcp.application.module_introspection_service import _validate_submodule
 from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
-from pydocs_mcp.server import _scope_from_internal, _validate_submodule
+from pydocs_mcp.server import _scope_from_internal
 from pydocs_mcp.models import SearchScope
 
 

@@ -24,7 +24,7 @@ def test_inspect_module_rejects_path_traversal_submodule(tmp_path):
 
     # We test the validation logic directly by calling the inner function.
     # Since tools are registered inside run(), extract the validation logic to a helper.
-    from pydocs_mcp.server import _validate_submodule
+    from pydocs_mcp.application.module_introspection_service import _validate_submodule
     assert _validate_submodule("") is True          # empty = ok (no submodule)
     assert _validate_submodule("routing") is True   # simple identifier = ok
     assert _validate_submodule("a.b.c") is True     # dotted = ok
@@ -35,7 +35,7 @@ def test_inspect_module_rejects_path_traversal_submodule(tmp_path):
 
 def test_validate_submodule_blocks_invalid_in_context(tmp_path):
     """The _validate_submodule helper correctly blocks known-bad inputs."""
-    from pydocs_mcp.server import _validate_submodule
+    from pydocs_mcp.application.module_introspection_service import _validate_submodule
     # Adversarial inputs that could cause issues via importlib
     bad_inputs = ["../evil", "a;drop", "a b", "a\x00b", "-evil", "evil-", ".routing", "routing.", "a..b"]
     for bad in bad_inputs:
@@ -54,7 +54,7 @@ def test_validate_submodule_rejects_trailing_newline():
     Regression for a reviewer-surfaced bypass — the fix switches anchors from
     ``^...$`` to ``\\A...\\Z``.
     """
-    from pydocs_mcp.server import _validate_submodule
+    from pydocs_mcp.application.module_introspection_service import _validate_submodule
     assert _validate_submodule("foo\n") is False
 
 
@@ -62,7 +62,7 @@ def test_validate_submodule_rejects_embedded_newline():
     """A newline in the middle of the value must also be rejected —
     multi-line identifiers never resolve to real modules.
     """
-    from pydocs_mcp.server import _validate_submodule
+    from pydocs_mcp.application.module_introspection_service import _validate_submodule
     assert _validate_submodule("foo\nbar") is False
 
 
@@ -70,5 +70,5 @@ def test_validate_submodule_rejects_trailing_spaces():
     """Trailing whitespace is never valid — sanity check alongside the
     newline-rejection fix.
     """
-    from pydocs_mcp.server import _validate_submodule
+    from pydocs_mcp.application.module_introspection_service import _validate_submodule
     assert _validate_submodule("foo ") is False

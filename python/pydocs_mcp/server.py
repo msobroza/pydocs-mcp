@@ -15,9 +15,6 @@ import logging
 import sys
 from pathlib import Path
 
-from pydocs_mcp.application.module_introspection_service import (
-    _validate_submodule,  # noqa: F401 — re-exported for tests/security-sensitive callers
-)
 from pydocs_mcp.constants import (
     LIST_PACKAGES_MAX,
     PACKAGE_DOC_LINE_MAX,
