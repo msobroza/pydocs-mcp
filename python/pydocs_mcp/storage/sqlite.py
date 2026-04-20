@@ -220,8 +220,22 @@ class SqliteFilterAdapter:
             return f"{f.field} IN ({placeholders})", list(f.values)
         if isinstance(f, FieldLike):
             self._check(f.field)
-            return f"{f.field} LIKE ?", [f"%{f.substring}%"]
+            # Escape SQL LIKE metacharacters so a literal substring like
+            # ``my_module`` only matches ``my_module`` and not ``myXmodule``.
+            # Backslash goes first so later replacements can introduce their
+            # own escape prefix without being double-escaped.
+            escaped = (
+                f.substring
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            return f"{f.field} LIKE ? ESCAPE '\\'", [f"%{escaped}%"]
         if isinstance(f, All):
+            # Empty ``All`` is the explicit "match everything" signal — used by
+            # IndexingService.clear_all to bypass the NULL-missing LIKE hack.
+            if not f.clauses:
+                return "1 = 1", []
             parts: list[str] = []
             params: list = []
             for c in f.clauses:
@@ -540,8 +554,18 @@ class SqliteVectorStore:
             placeholders = ", ".join(["?"] * len(f.values))
             return f"{prefix}{f.field} IN ({placeholders})", list(f.values)
         if isinstance(f, FieldLike):
-            return f"{prefix}{f.field} LIKE ?", [f"%{f.substring}%"]
+            # Mirror ``SqliteFilterAdapter._adapt``: escape LIKE metacharacters
+            # so literal substrings don't act as wildcards.
+            escaped = (
+                f.substring
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            return f"{prefix}{f.field} LIKE ? ESCAPE '\\'", [f"%{escaped}%"]
         if isinstance(f, All):
+            if not f.clauses:
+                return "1 = 1", []
             parts: list[str] = []
             params: list = []
             for c in f.clauses:

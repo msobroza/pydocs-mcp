@@ -43,3 +43,38 @@ def test_adapter_rejects_unsafe_column():
     adapter = SqliteFilterAdapter(safe_columns=frozenset({"package"}))
     with pytest.raises(ValueError, match="not in safe_columns"):
         adapter.adapt(FieldEq(field="foo_bar; DROP TABLE", value="x"))
+
+
+def test_filter_adapter_escapes_like_metacharacters():
+    """Literal ``%`` / ``_`` / backslash in a LIKE substring must not act
+    as SQL wildcards — the adapter escapes them and emits ``ESCAPE '\\'``.
+
+    Regression: ``my_module`` previously matched ``myXmodule`` because
+    ``_`` is a wildcard in ``LIKE``.
+    """
+    import sqlite3
+
+    adapter = SqliteFilterAdapter(safe_columns=frozenset({"title"}))
+    where, params = adapter.adapt(FieldLike(field="title", substring="my_module"))
+    assert "ESCAPE '\\'" in where
+    assert params == ["%my\\_module%"]
+
+    # And the escape actually takes effect inside SQLite.
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t(title TEXT)")
+    conn.executemany(
+        "INSERT INTO t(title) VALUES(?)",
+        [("my_module",), ("myXmodule",)],
+    )
+    rows = conn.execute(f"SELECT title FROM t WHERE {where}", params).fetchall()
+    titles = {r[0] for r in rows}
+    assert titles == {"my_module"}
+    conn.close()
+
+
+def test_filter_adapter_empty_all_matches_everything():
+    """``All(clauses=())`` compiles to ``1 = 1`` — the match-all sentinel."""
+    adapter = SqliteFilterAdapter(safe_columns=frozenset({"package"}))
+    where, params = adapter.adapt(All(clauses=()))
+    assert where == "1 = 1"
+    assert params == []

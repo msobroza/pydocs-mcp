@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pydocs_mcp.models import Chunk, ModuleMember, Package
+from pydocs_mcp.storage.filters import All
 from pydocs_mcp.storage.protocols import (
     ChunkStore,
     ModuleMemberStore,
@@ -67,9 +68,11 @@ class IndexingService:
     async def clear_all(self) -> None:
         """Wipe every row across all three entity stores.
 
-        Uses a ``LIKE '%'`` filter — matches every non-null package
-        name — to avoid enlarging the Protocol surface with a
-        ``delete_all()`` primitive.
+        Uses ``All(clauses=())`` — an empty conjunction that the
+        ``SqliteFilterAdapter`` translates to ``1 = 1``. That form matches
+        NULL columns too, unlike the previous ``LIKE '%'`` hack, and keeps
+        the delete semantics unconditional without adding a new
+        ``delete_all()`` method to the store Protocols.
         """
         if self.unit_of_work is not None:
             async with self.unit_of_work.begin():
@@ -96,6 +99,7 @@ class IndexingService:
         await self.package_store.delete(filter={"name": name})
 
     async def _do_clear_all(self) -> None:
-        await self.chunk_store.delete(filter={"package": {"like": "%"}})
-        await self.module_member_store.delete(filter={"package": {"like": "%"}})
-        await self.package_store.delete(filter={"name": {"like": "%"}})
+        match_all: All = All(clauses=())
+        await self.chunk_store.delete(filter=match_all)
+        await self.module_member_store.delete(filter=match_all)
+        await self.package_store.delete(filter=match_all)

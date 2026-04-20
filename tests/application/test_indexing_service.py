@@ -15,7 +15,7 @@ import pytest
 
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
-from pydocs_mcp.storage.filters import Filter
+from pydocs_mcp.storage.filters import All, Filter
 
 
 # ── Protocol fakes (in-memory, no SQLite) ─────────────────────────────────
@@ -52,6 +52,10 @@ class FakePackageStore:
 
     async def delete(self, filter: Filter | Mapping) -> int:
         self.calls.append(_Call("delete", dict(filter) if isinstance(filter, Mapping) else filter))
+        if isinstance(filter, All) and not filter.clauses:
+            removed = len(self.by_name)
+            self.by_name.clear()
+            return removed
         if isinstance(filter, Mapping):
             name = filter.get("name")
             if isinstance(name, str):
@@ -86,6 +90,10 @@ class FakeChunkStore:
 
     async def delete(self, filter: Filter | Mapping) -> int:
         self.calls.append(_Call("delete", dict(filter) if isinstance(filter, Mapping) else filter))
+        if isinstance(filter, All) and not filter.clauses:
+            removed = len(self.rows)
+            self.rows.clear()
+            return removed
         if isinstance(filter, Mapping):
             pkg = filter.get("package")
             if isinstance(pkg, str):
@@ -124,6 +132,10 @@ class FakeModuleMemberStore:
 
     async def delete(self, filter: Filter | Mapping) -> int:
         self.calls.append(_Call("delete", dict(filter) if isinstance(filter, Mapping) else filter))
+        if isinstance(filter, All) and not filter.clauses:
+            removed = len(self.rows)
+            self.rows.clear()
+            return removed
         if isinstance(filter, Mapping):
             pkg = filter.get("package")
             if isinstance(pkg, str):
@@ -264,7 +276,7 @@ async def test_remove_package_deletes_all_three_stores():
 
 @pytest.mark.asyncio
 async def test_clear_all_cascades_through_fakes():
-    """`clear_all` wipes every row across all three stores via a LIKE '%' filter."""
+    """`clear_all` wipes every row across all three stores via an empty-All filter."""
     ps = FakePackageStore()
     ps.by_name["fastapi"] = _pkg("fastapi")
     ps.by_name["starlette"] = _pkg("starlette")
@@ -280,10 +292,62 @@ async def test_clear_all_cascades_through_fakes():
     assert cs.rows == []
     assert ms.rows == []
 
-    # The filter shape is the LIKE '%' pattern described in the spec note.
-    assert cs.calls[-1].payload == {"package": {"like": "%"}}
-    assert ms.calls[-1].payload == {"package": {"like": "%"}}
-    assert ps.calls[-1].payload == {"name": {"like": "%"}}
+    # The filter is ``All(clauses=())`` — an unconditional match that the
+    # SqliteFilterAdapter translates to ``1 = 1`` (covers NULL rows too).
+    assert cs.calls[-1].payload == All(clauses=())
+    assert ms.calls[-1].payload == All(clauses=())
+    assert ps.calls[-1].payload == All(clauses=())
+
+
+@pytest.mark.asyncio
+async def test_indexing_service_clear_all_also_removes_null_package_rows(tmp_path):
+    """Regression: ``clear_all`` previously used ``LIKE '%'`` which skips
+    NULL package values. Seeding a row with ``package=NULL`` via raw SQL
+    and then calling ``clear_all`` must leave the table empty.
+    """
+    from pydocs_mcp.db import build_connection_provider, open_index_database
+    from pydocs_mcp.storage.sqlite import (
+        SqliteChunkRepository,
+        SqliteModuleMemberRepository,
+        SqlitePackageRepository,
+        SqliteUnitOfWork,
+    )
+
+    db_path = tmp_path / "clear.db"
+    conn = open_index_database(db_path)
+    conn.execute(
+        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        ("normal", "1.0", "", "", "[]", "h", "dependency"),
+    )
+    conn.execute(
+        "INSERT INTO chunks(package, title, text, origin) VALUES(?,?,?,?)",
+        ("normal", "t", "body", "dep_doc"),
+    )
+    # A NULL-package row simulates a schema drift / partially-written fixture.
+    conn.execute(
+        "INSERT INTO chunks(package, title, text, origin) VALUES(NULL, ?, ?, ?)",
+        ("orphan", "orphan body", "dep_doc"),
+    )
+    conn.commit()
+    conn.close()
+
+    provider = build_connection_provider(db_path)
+    service = IndexingService(
+        package_store=SqlitePackageRepository(provider=provider),
+        chunk_store=SqliteChunkRepository(provider=provider),
+        module_member_store=SqliteModuleMemberRepository(provider=provider),
+        unit_of_work=SqliteUnitOfWork(provider=provider),
+    )
+
+    await service.clear_all()
+
+    conn = open_index_database(db_path)
+    pkg_count = conn.execute("SELECT COUNT(*) FROM packages").fetchone()[0]
+    chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    conn.close()
+    assert pkg_count == 0
+    # Both the normal row and the NULL-package row must be gone.
+    assert chunk_count == 0
 
 
 def test_indexing_service_accepts_fake_stores_only():
