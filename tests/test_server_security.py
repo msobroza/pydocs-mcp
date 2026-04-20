@@ -15,12 +15,12 @@ def make_conn_with_package(tmp_path: Path, pkg_name: str) -> sqlite3.Connection:
     return conn
 
 
-def test_inspect_module_rejects_path_traversal_submodule(tmp_path, monkeypatch):
+def test_inspect_module_rejects_path_traversal_submodule(tmp_path):
     """submodule must not allow path traversal or arbitrary dotted paths beyond simple identifiers."""
+    # Ensure a seeded conn exists on disk — the validator itself is pure, but we
+    # keep the fixture so the test remains representative of the usage context.
     conn = make_conn_with_package(tmp_path, "fastapi")
-    # Patch open_index_database so run() uses our test conn
-    import pydocs_mcp.server as srv
-    monkeypatch.setattr(srv, "open_index_database", lambda _: conn)
+    conn.close()
 
     # We test the validation logic directly by calling the inner function.
     # Since tools are registered inside run(), extract the validation logic to a helper.

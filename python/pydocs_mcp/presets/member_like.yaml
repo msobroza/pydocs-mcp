@@ -1,0 +1,11 @@
+name: like_member
+stages:
+  - type: module_member_retrieval
+    retriever: {type: like_member}
+  - type: package_filter
+  - type: scope_filter
+  - type: limit
+    max_results: 15
+  - type: token_budget_formatter
+    formatter: {type: member_markdown}
+    budget: 2000

@@ -1,0 +1,12 @@
+name: fts_chunk
+stages:
+  - type: chunk_retrieval
+    retriever: {type: bm25_chunk}
+  - type: package_filter
+  - type: scope_filter
+  - type: title_filter
+  - type: limit
+    max_results: 8
+  - type: token_budget_formatter
+    formatter: {type: chunk_markdown}
+    budget: 2000

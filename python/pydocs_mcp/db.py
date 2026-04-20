@@ -239,3 +239,11 @@ def _row_to_package(row) -> Package:
         content_hash=_get("content_hash") or "",
         origin=PackageOrigin(_get("origin") or PackageOrigin.DEPENDENCY.value),
     )
+
+
+from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider  # noqa: E402
+
+
+def build_connection_provider(cache_path: Path):
+    """Factory — returns the default ConnectionProvider for a given DB path."""
+    return PerCallConnectionProvider(cache_path=cache_path)

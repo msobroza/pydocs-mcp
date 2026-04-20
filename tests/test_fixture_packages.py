@@ -10,7 +10,7 @@ import pytest
 
 from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
 from pydocs_mcp.indexer import _extract_from_source_files, _persist_dependency, index_project_source
-from pydocs_mcp.search import retrieve_chunks, retrieve_module_members
+from tests._retriever_helpers import retrieve_chunks, retrieve_module_members
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 FAKE_PROJECT = FIXTURES_DIR / "fake_project"
