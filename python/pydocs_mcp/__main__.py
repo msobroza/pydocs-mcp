@@ -106,6 +106,7 @@ def main():
 
     elif args.cmd in ("query", "api"):
         import asyncio
+
         from pydocs_mcp.models import ChunkFilterField, SearchQuery
         from pydocs_mcp.retrieval.config import (
             AppConfig,
