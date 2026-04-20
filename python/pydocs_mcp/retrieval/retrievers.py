@@ -1,182 +1,146 @@
-"""Concrete retrievers — replace the retrieval half of the deleted search.py."""
+"""Concrete retrievers — consume storage Protocols via BuildContext (spec §5.7)."""
 from __future__ import annotations
 
-import asyncio
-import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
-    Chunk,
-    ChunkFilterField,
     ChunkList,
     ModuleMember,
     ModuleMemberFilterField,
     ModuleMemberList,
     SearchQuery,
-    SearchScope,
 )
 from pydocs_mcp.retrieval.serialization import BuildContext, retriever_registry
-from pydocs_mcp.storage.sqlite import _row_to_chunk, _row_to_module_member
+from pydocs_mcp.storage.filters import Filter, _walk_fields, format_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
-    from pydocs_mcp.retrieval.protocols import ConnectionProvider
-
-
-def _apply_scope(where: list[str], scope: SearchScope, column: str) -> None:
-    if scope is SearchScope.PROJECT_ONLY:
-        where.append(f"{column} = '__project__'")
-    elif scope is SearchScope.DEPENDENCIES_ONLY:
-        where.append(f"{column} != '__project__'")
+    from pydocs_mcp.storage.protocols import TextSearchable
+    from pydocs_mcp.storage.sqlite import SqliteModuleMemberRepository
 
 
 @retriever_registry.register("bm25_chunk")
 @dataclass(frozen=True, slots=True)
 class Bm25ChunkRetriever:
-    """BM25 FTS5 retriever over the `chunks` table."""
+    """BM25 retriever — delegates text search to a ``TextSearchable`` store.
 
-    provider: "ConnectionProvider"
+    ``pre_filter`` is parsed through the configured ``MetadataFilterFormat``
+    and validated against ``allowed_fields`` (sourced from
+    ``AppConfig.metadata_schemas[schema_name]``). The resolved Filter tree is
+    pushed down to ``store.text_search(filter=...)`` for backend-side
+    enforcement — no post-retrieval pruning happens here (spec §5.7).
+    """
+
+    store: "TextSearchable"
+    allowed_fields: frozenset[str]
     name: str = "bm25_chunk"
+    schema_name: str = "chunk"
 
     async def retrieve(self, query: SearchQuery) -> ChunkList:
-        return await asyncio.to_thread(self._retrieve_sync, query)
-
-    def _retrieve_sync(self, query: SearchQuery) -> ChunkList:
-        fts_ops = {"OR", "AND", "NOT"}
-        tokens = query.terms.split()
-        if any(t in fts_ops for t in tokens):
-            fulltext = query.terms
-        else:
-            words = [w for w in tokens if len(w) > 1]
-            if not words:
-                return ChunkList(items=())
-            fulltext = " OR ".join(f'"{w}"' for w in words)
-
-        where = ["chunks_fts MATCH ?"]
-        params: list = [fulltext]
-
-        pf = query.pre_filter or {}
-        package = pf.get(ChunkFilterField.PACKAGE.value)
-        if package is not None:
-            literal = package if package == "__project__" else normalize_package_name(package)
-            where.append("c.package = ?")
-            params.append(literal)
-
-        scope_value = pf.get(ChunkFilterField.SCOPE.value)
-        if scope_value is not None:
-            _apply_scope(where, SearchScope(scope_value), "c.package")
-
-        params.append(query.max_results)
-        sql = (
-            "SELECT c.id, c.package, c.title, c.text, c.origin, -m.rank AS rank "
-            "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
-            f"WHERE {' AND '.join(where)} "
-            "ORDER BY rank LIMIT ?"
-        )
-
-        # Synchronous open inside the worker thread
-        conn = sqlite3.connect(str(self.provider.cache_path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute(sql, params).fetchall()
-        except sqlite3.DatabaseError:
-            return ChunkList(items=())
-        finally:
-            conn.close()
-
-        items: list[Chunk] = []
-        for row in rows:
-            chunk = _row_to_chunk(row)
-            items.append(
-                Chunk(
-                    text=chunk.text,
-                    id=chunk.id,
-                    relevance=float(row["rank"]),
-                    retriever_name=self.name,
-                    metadata=dict(chunk.metadata),  # unwrap MappingProxy for re-wrapping
+        tree: Filter | None = None
+        if query.pre_filter is not None:
+            tree = format_registry[query.pre_filter_format].parse(query.pre_filter)
+            unknown = _walk_fields(tree) - self.allowed_fields
+            if unknown:
+                raise ValueError(
+                    f"filter references unknown fields {sorted(unknown)}; "
+                    f"retriever allows {sorted(self.allowed_fields)}"
                 )
-            )
-        return ChunkList(items=tuple(items))
+        results = await self.store.text_search(
+            query_terms=query.terms,
+            limit=query.max_results,
+            filter=tree,
+        )
+        return ChunkList(items=tuple(results))
 
     def to_dict(self) -> dict:
-        return {"type": "bm25_chunk"}
+        return {"type": "bm25_chunk", "schema_name": self.schema_name}
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "Bm25ChunkRetriever":
-        return cls(provider=context.connection_provider)
+        schema_name = data.get("schema_name", "chunk")
+        app_config = context.app_config
+        if app_config is None:
+            raise ValueError(
+                "Bm25ChunkRetriever requires BuildContext.app_config; "
+                "provide AppConfig at server/CLI startup."
+            )
+        vector_store = context.vector_store
+        if vector_store is None:
+            raise ValueError(
+                "Bm25ChunkRetriever requires BuildContext.vector_store; "
+                "provide SqliteVectorStore at server/CLI startup."
+            )
+        allowed = frozenset(app_config.metadata_schemas[schema_name])
+        return cls(store=vector_store, allowed_fields=allowed, schema_name=schema_name)
 
 
 @retriever_registry.register("like_member")
 @dataclass(frozen=True, slots=True)
 class LikeMemberRetriever:
-    """LIKE retriever over `module_members.name` / `docstring`."""
+    """LIKE-based retriever over ``module_members``.
 
-    provider: "ConnectionProvider"
+    ``pre_filter`` (e.g. ``{"package": "fastapi"}``) is parsed via
+    ``format_registry`` and pushed down to ``store.list(filter=...)`` — the
+    safe-column allowlist on :class:`SqliteModuleMemberRepository` rejects
+    unknown columns before SQL is emitted. ``query.terms`` then filters the
+    returned rows against ``name`` / ``docstring`` substrings in-process,
+    since ``ModuleMemberStore`` offers no text-search contract yet (spec §5.7).
+    """
+
+    store: "SqliteModuleMemberRepository"
+    allowed_fields: frozenset[str]
     name: str = "like_member"
+    schema_name: str = "member"
 
     async def retrieve(self, query: SearchQuery) -> ModuleMemberList:
-        return await asyncio.to_thread(self._retrieve_sync, query)
-
-    def _retrieve_sync(self, query: SearchQuery) -> ModuleMemberList:
-        escaped = (query.terms
-                   .replace("\\", "\\\\")
-                   .replace("%", "\\%")
-                   .replace("_", "\\_"))
-        pat = f"%{escaped}%"
-
-        where = ["(lower(name) LIKE ? ESCAPE '\\' OR lower(docstring) LIKE ? ESCAPE '\\')"]
-        params: list = [pat, pat]
-
-        pf = query.pre_filter or {}
-        package = pf.get(ModuleMemberFilterField.PACKAGE.value)
-        if package is not None:
-            literal = package if package == "__project__" else normalize_package_name(package)
-            where.append("package = ?")
-            params.append(literal)
-
-        scope_value = pf.get(ChunkFilterField.SCOPE.value)
-        if scope_value is not None:
-            _apply_scope(where, SearchScope(scope_value), "package")
-
-        params.append(query.max_results)
-        sql = (
-            "SELECT id, package, module, name, kind, signature, "
-            "return_annotation, parameters, docstring "
-            "FROM module_members "
-            f"WHERE {' AND '.join(where)} "
-            "LIMIT ?"
-        )
-
-        conn = sqlite3.connect(str(self.provider.cache_path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute(sql, params).fetchall()
-        except sqlite3.DatabaseError:
-            return ModuleMemberList(items=())
-        finally:
-            conn.close()
-
-        items: list[ModuleMember] = []
-        for row in rows:
-            member = _row_to_module_member(row)
-            items.append(
-                ModuleMember(
-                    id=member.id,
-                    relevance=None,
-                    retriever_name=self.name,
-                    metadata=dict(member.metadata),
+        tree: Filter | None = None
+        if query.pre_filter is not None:
+            tree = format_registry[query.pre_filter_format].parse(query.pre_filter)
+            unknown = _walk_fields(tree) - self.allowed_fields
+            if unknown:
+                raise ValueError(
+                    f"filter references unknown fields {sorted(unknown)}; "
+                    f"retriever allows {sorted(self.allowed_fields)}"
                 )
-            )
+        rows = await self.store.list(filter=tree, limit=query.max_results)
+        needle = query.terms.lower()
+        items: list[ModuleMember] = []
+        for member in rows:
+            name_value = str(member.metadata.get(ModuleMemberFilterField.NAME.value, "")).lower()
+            doc_value = str(member.metadata.get("docstring", "")).lower()
+            if needle in name_value or needle in doc_value:
+                items.append(
+                    ModuleMember(
+                        id=member.id,
+                        relevance=None,
+                        retriever_name=self.name,
+                        metadata=dict(member.metadata),
+                    )
+                )
         return ModuleMemberList(items=tuple(items))
 
     def to_dict(self) -> dict:
-        return {"type": "like_member"}
+        return {"type": "like_member", "schema_name": self.schema_name}
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "LikeMemberRetriever":
-        return cls(provider=context.connection_provider)
+        schema_name = data.get("schema_name", "member")
+        app_config = context.app_config
+        if app_config is None:
+            raise ValueError(
+                "LikeMemberRetriever requires BuildContext.app_config; "
+                "provide AppConfig at server/CLI startup."
+            )
+        module_member_repo = context.module_member_store
+        if module_member_repo is None:
+            raise ValueError(
+                "LikeMemberRetriever requires BuildContext.module_member_store; "
+                "provide SqliteModuleMemberRepository at server/CLI startup."
+            )
+        allowed = frozenset(app_config.metadata_schemas[schema_name])
+        return cls(store=module_member_repo, allowed_fields=allowed, schema_name=schema_name)
 
 
 @retriever_registry.register("pipeline_chunk")

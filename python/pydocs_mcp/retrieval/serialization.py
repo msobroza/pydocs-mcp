@@ -6,8 +6,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
+    from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.predicates import PredicateRegistry
     from pydocs_mcp.retrieval.protocols import ConnectionProvider
+    from pydocs_mcp.storage.sqlite import (
+        SqliteModuleMemberRepository,
+        SqliteVectorStore,
+    )
 
 
 C = TypeVar("C")
@@ -55,8 +60,20 @@ def _default_predicate_registry():
 
 @dataclass(frozen=True, slots=True)
 class BuildContext:
+    """Carries ambient dependencies used by ``from_dict`` decoders.
+
+    ``vector_store`` / ``module_member_store`` / ``app_config`` are optional at
+    the type level so isolated unit tests can instantiate a minimal context,
+    but ``from_dict`` decoders that need them raise ``ValueError`` when the
+    store or config is missing. Production wiring in ``server.py`` /
+    ``__main__.py`` provides all three at startup (spec §5.7, AC #15).
+    """
+
     connection_provider: "ConnectionProvider"
     predicate_registry: "PredicateRegistry" = field(default_factory=_default_predicate_registry)
     stage_registry: ComponentRegistry = field(default_factory=lambda: stage_registry)
     retriever_registry: ComponentRegistry = field(default_factory=lambda: retriever_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
+    vector_store: "SqliteVectorStore | None" = None
+    module_member_store: "SqliteModuleMemberRepository | None" = None
+    app_config: "AppConfig | None" = None
