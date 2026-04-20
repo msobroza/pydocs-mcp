@@ -9,6 +9,8 @@
 
 **⚠️ Zero rework of sub-PR #5:** sub-PR #5 ships the `qualified_name` field on every `DocumentNode`. Sub-PR #5b consumes those IDs when resolving edges. `IndexingService` already has a plugin point (`tree_store: DocumentTreeStore`); sub-PR #5b adds a parallel plugin point (`reference_store: ReferenceStore | None = None`). Where `None` is passed, no references are extracted — feature toggles off cleanly.
 
+**⚠️ Sub-PR #6 supersedes the MCP tool design in §8.2.** Reference-graph queries flow through sub-PR #6's `lookup(target=..., show="callers"|"callees"|"inherits")` tool, NOT as dedicated `get_callers` / `get_callees` / `get_references_to` MCP tools. `ReferenceService` (from §8.1) remains — it backs `LookupService` in #6. See §8.2 and AC #14 for the superseded items.
+
 ---
 
 ## 1. Goal
@@ -166,27 +168,17 @@ class ReferenceService:
         return await asyncio.to_thread(self._store.find_by_name, name, kind_enum)
 ```
 
-### 8.2 New MCP tools
+### 8.2 MCP exposure — handled in sub-PR #6
 
-```python
-@mcp.tool()
-async def get_callers(package: str, node_id: str) -> list[dict]:
-    """Return all nodes in `package` that call the given node_id."""
-    refs = await reference_service.callers(package, node_id)
-    return [asdict(r) for r in refs]
+**⚠️ Superseded by sub-PR #6.** The `ReferenceService` defined in §8.1 of this spec remains unchanged and ships here. However, reference-graph queries are exposed to MCP clients via sub-PR #6's unified `lookup` tool — **not** as dedicated `get_callers` / `get_callees` / `get_references_to` MCP tools.
 
-@mcp.tool()
-async def get_callees(package: str, node_id: str) -> list[dict]:
-    """Return all nodes the given node_id calls (direct callees only, no transitive)."""
-    refs = await reference_service.callees(package, node_id)
-    return [asdict(r) for r in refs]
+Under #6:
+- `lookup(target="pkg.X.y", show="callers")` → equivalent to the planned `get_callers`.
+- `lookup(target="pkg.X.y", show="callees")` → equivalent to the planned `get_callees`.
+- `lookup(target="pkg.X", show="inherits")` → reads `Chunk.extra_metadata["inherits_from"]` + INHERITS edges.
+- `get_references_to(name)` — textual-target lookup across packages — is **dropped as an MCP tool** in #6. If needed later, it can be added as a `search(kind="refs")` variant.
 
-@mcp.tool()
-async def get_references_to(name: str, kind: str | None = None) -> list[dict]:
-    """Find every reference targeting the textual `name` (useful for external / unresolved targets)."""
-    refs = await reference_service.find_by_name(name, kind)
-    return [asdict(r) for r in refs]
-```
+`ReferenceService` backs sub-PR #6's `LookupService` via constructor injection. No other changes to this spec's service design.
 
 ## 9. Sub-PR #5 amendments (minimal)
 
@@ -227,7 +219,7 @@ Both are **purely additive** — callers that don't pass the new args see zero b
 | 11 | `get_callees("pydocs-mcp", "pydocs_mcp.extraction.chunkers.AstPythonChunker.build_tree")` returns its direct callees (e.g., `ast.parse`, `ast.walk`, etc., as unresolved stdlib refs). |
 | 12 | `get_references_to("BaseRetriever", kind="inherits")` returns every class whose `INHERITS` edge targets `BaseRetriever`, resolved or not. |
 | 13 | Re-indexing after an edit to one file updates only that file's references (delete + re-insert WHERE from_package=X AND from_node_id=LIKE 'prefix%'); unaffected packages' refs untouched. |
-| 14 | No changes to existing MCP surface shipped by #5 (7 MCP tools: `search_docs`, `search_api`, `introspect`, `lookup`, `index`, `get_document_tree`, `get_package_tree`) + the `pydocs-mcp tree` CLI subcommand. Byte-identical golden fixture. Sub-PR #5b adds 3 new MCP tools on top, never modifies the existing ones. |
+| 14 | **Superseded by sub-PR #6.** Reference-graph queries flow through `lookup(..., show="callers"|"callees"|"inherits")`, not dedicated `get_callers` / `get_callees` / `get_references_to` MCP tools. This sub-PR ships `ReferenceService` + storage; #6 exposes them. |
 
 ## 11. Risks
 

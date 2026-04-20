@@ -9,6 +9,8 @@
 
 **⚠️ Sub-PR #4 Protocol amendment:** `ChunkExtractor.extract_from_project()` / `extract_from_dependency()` return type changes from `list[Chunk]` to `tuple[list[Chunk], list[DocumentNode]]` so trees flow up for persistence. Since sub-PR #4 is spec'd but not implemented, this is a pre-merge amendment — no real migration.
 
+**⚠️ Sub-PR #6 supersedes the MCP tool design in §13.** Tree retrieval is exposed via sub-PR #6's `lookup(target=..., show="tree")`, NOT as dedicated `get_document_tree` / `get_package_tree` MCP tools. `DocumentTreeService` (from §12) remains — it backs `LookupService` in #6. CLI tree browsing lives under `pydocs-mcp lookup`, not `pydocs-mcp tree`. See §13.1 and AC #2-#3 for the superseded items.
+
 ---
 
 ## 1. Goal
@@ -516,70 +518,16 @@ Receives `DocumentTreeStore` via DI; passes it through to `IndexingService.reind
 
 ## 13. MCP + CLI surface
 
-### 13.1 New MCP tools (`server.py`)
+### 13.1 MCP exposure — handled in sub-PR #6
 
-```python
-@mcp.tool()
-async def get_document_tree(package: str, module: str) -> dict:
-    """Return the structural tree of one module in PageIndex-style JSON."""
-    try:
-        tree = await document_tree_service.get_tree(package, module)
-        return tree.to_pageindex_json()
-    except NotFoundError as e:
-        return {"error": str(e)}
+**⚠️ Superseded by sub-PR #6.** The `DocumentTreeService` Protocol + implementation defined in §12 of this spec remain unchanged and ship here. However, tree retrieval is exposed to MCP clients via sub-PR #6's unified `lookup(target=..., show="tree")` tool — **not** as dedicated `get_document_tree` / `get_package_tree` MCP tools.
 
+Under #6:
+- `lookup(target="pkg.mod")` → returns this module's tree (equivalent to the planned `get_document_tree`).
+- `lookup(target="pkg", show="tree")` → returns the full package arborescence (equivalent to the planned `get_package_tree`).
+- `pydocs-mcp lookup pkg.mod` → CLI subcommand rendering the tree as indented text.
 
-@mcp.tool()
-async def get_package_tree(package: str) -> dict:
-    """Return the full package arborescence: subpackages → modules → classes → methods."""
-    try:
-        tree = await document_tree_service.get_package_tree(package)
-        return tree.to_pageindex_json()
-    except NotFoundError as e:
-        return {"error": str(e)}
-
-
-```
-
-### 13.2 New CLI subcommand (`__main__.py`)
-
-One `tree` subcommand with optional module suffix:
-
-```
-pydocs-mcp tree <package>                  # full package arborescence
-pydocs-mcp tree <package>/<module>         # just one module
-```
-
-Pretty-prints as indented text. Example — package level:
-
-```
-package  requests
-├── auth                                          (MODULE)
-│   ├── class HTTPBasicAuth
-│   └── class HTTPDigestAuth
-├── sessions                                      (MODULE)
-│   └── class Session
-│       ├── def __init__
-│       ├── def request
-│       └── def close
-└── adapters                                      (SUBPACKAGE)
-    ├── http                                      (MODULE)
-    │   └── class HTTPAdapter
-    └── urllib3                                   (MODULE)
-        └── class Urllib3Adapter
-```
-
-Example — module level:
-
-```
-module  pydocs_mcp.server
-├── imports
-├── class MCPServer  [summary: "Main FastMCP server."]
-│   ├── def __init__
-│   ├── def start
-│   └── def shutdown
-└── def main
-```
+The `DocumentTreeService` backs sub-PR #6's `LookupService` via constructor injection. No other changes to this spec's service design.
 
 ## 14. Composition root (startup wiring in `server.py`)
 
@@ -624,8 +572,8 @@ document_tree_service = DocumentTreeService(tree_store)
 | # | Criterion |
 |---|---|
 | 1 | `IndexProjectService` public signature unchanged; existing 5 MCP tools (`search`, `search_api`, `introspect`, `lookup`, `index`) pass byte-identical golden fixture. |
-| 2 | `get_document_tree(package, module)` is a new sixth MCP tool returning PageIndex-style JSON. |
-| 3 | `pydocs-mcp tree <pkg>/<mod>` CLI subcommand prints an indented tree to stdout. |
+| 2 | **Superseded by sub-PR #6.** Tree retrieval is exposed via `lookup(target="pkg.mod")`, not a dedicated `get_document_tree` MCP tool. This sub-PR ships `DocumentTreeService` that backs it. |
+| 3 | **Superseded by sub-PR #6.** CLI exposes tree via `pydocs-mcp lookup pkg.mod`, not `pydocs-mcp tree`. |
 | 4 | Indexing a project with `README.md`, `docs/tutorial.md`, `scripts/build.py`, `notebooks/demo.ipynb` produces: chunks via the correct chunker per extension; one `DocumentNode` tree per file stored in `document_trees`. |
 | 5 | Test: YAML setting `extraction.discovery.project.include_extensions: [".txt"]` fails startup with Pydantic ValidationError citing the allowlist. |
 | 6 | Test: YAML setting `extraction.chunking.by_extension: {".yaml": "my_yaml"}` fails startup with Pydantic ValidationError. |
