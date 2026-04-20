@@ -5,6 +5,7 @@ import importlib.resources
 import os
 from collections.abc import Mapping
 from contextvars import ContextVar
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,20 @@ from pydocs_mcp.retrieval.stages import RouteCase, RouteStage, SubPipelineStage
 # callers (tests in particular) don't clobber each other.
 _USER_CONFIG_PATH_OVERRIDE: ContextVar[Path | None] = ContextVar(
     "_USER_CONFIG_PATH_OVERRIDE", default=None,
+)
+
+# Cached resolution of the user-config path for the current ``AppConfig.load``
+# call. ``settings_customise_sources`` and ``load`` both used to invoke
+# :func:`_resolved_user_config_path` (which touches env + cwd + home); the
+# ContextVar lets us resolve once in ``load`` and reuse inside the pydantic
+# source hook without re-running the lookup chain.
+#
+# The default is the ``_UNSET`` sentinel (not ``None``) because ``None`` is a
+# legitimate resolved value ("no user config found"). Without the sentinel we
+# couldn't tell "not cached yet" from "resolved to None".
+_UNSET: object = object()
+_RESOLVED_USER_CONFIG_PATH: ContextVar[Path | None | object] = ContextVar(
+    "_RESOLVED_USER_CONFIG_PATH", default=_UNSET,
 )
 
 
@@ -113,7 +128,10 @@ class AppConfig(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         shipped_path = _shipped_default_config_path()
         shipped_source = YamlConfigSettingsSource(settings_cls, yaml_file=shipped_path)
-        user_path = _resolved_user_config_path()
+        # Reuse the path ``load`` already resolved when available — avoids
+        # re-running the env/cwd/home lookup chain on every ``AppConfig.load``.
+        cached = _RESOLVED_USER_CONFIG_PATH.get()
+        user_path = cached if cached is not _UNSET else _resolved_user_config_path()
         sources: list[PydanticBaseSettingsSource] = [init_settings, env_settings]
         if user_path is not None and user_path.exists():
             sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=user_path))
@@ -128,10 +146,12 @@ class AppConfig(BaseSettings):
         the shipped baseline always applies underneath.
         """
         token = _USER_CONFIG_PATH_OVERRIDE.set(explicit_path)
+        resolved: Path | None = _resolved_user_config_path()
+        resolved_token = _RESOLVED_USER_CONFIG_PATH.set(resolved)
         try:
-            resolved = _resolved_user_config_path()
             instance = cls()
         finally:
+            _RESOLVED_USER_CONFIG_PATH.reset(resolved_token)
             _USER_CONFIG_PATH_OVERRIDE.reset(token)
         # Stash the resolved user-config path so downstream pipeline
         # assembly can derive the security allowlist without re-reading
@@ -144,9 +164,25 @@ class AppConfig(BaseSettings):
         return getattr(self, "_effective_user_config_path", None)
 
 
+@cache
 def _shipped_default_config_path() -> Path:
-    """Path to the package-shipped baseline YAML (spec §5.9)."""
+    """Path to the package-shipped baseline YAML (spec §5.9).
+
+    Cached: ``importlib.resources.files`` + ``joinpath`` + ``Path(str(...))``
+    runs on every ``AppConfig.load`` call otherwise. The shipped presets
+    directory never changes at runtime, so the lookup is safely memoisable.
+    """
     return Path(str(importlib.resources.files("pydocs_mcp.presets").joinpath("default_config.yaml")))
+
+
+@cache
+def _shipped_presets_dir() -> Path:
+    """Resolved path to the ``pydocs_mcp/presets/`` directory (spec §5.9).
+
+    Cached for the same reason as :func:`_shipped_default_config_path` —
+    the pipeline-path allowlist recomputes this on every YAML load.
+    """
+    return Path(str(importlib.resources.files("pydocs_mcp.presets"))).resolve()
 
 
 def _resolved_user_config_path() -> Path | None:
@@ -204,8 +240,7 @@ def _pipeline_path_allowed_roots(user_config_path: Path | None) -> tuple[Path, .
     2. The directory that contains the user's config file, if they supplied
        one — so ``./my_pipeline.yaml`` next to ``pydocs-mcp.yaml`` works.
     """
-    presets_dir = Path(str(importlib.resources.files("pydocs_mcp.presets"))).resolve()
-    roots = [presets_dir]
+    roots = [_shipped_presets_dir()]
     if user_config_path is not None:
         roots.append(user_config_path.resolve().parent)
     return tuple(roots)
@@ -234,7 +269,7 @@ def _resolve_pipeline_path(
     rejected.
     """
     allowed_roots = _pipeline_path_allowed_roots(user_config_path)
-    presets_dir = Path(str(importlib.resources.files("pydocs_mcp.presets"))).resolve()
+    presets_dir = _shipped_presets_dir()
 
     if pipeline_path.is_absolute():
         resolved = pipeline_path.resolve()
