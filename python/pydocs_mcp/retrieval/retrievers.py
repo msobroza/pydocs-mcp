@@ -6,7 +6,6 @@ import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.db import _row_to_chunk, _row_to_module_member
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
     Chunk,
@@ -19,6 +18,7 @@ from pydocs_mcp.models import (
     SearchScope,
 )
 from pydocs_mcp.retrieval.serialization import BuildContext, retriever_registry
+from pydocs_mcp.storage.sqlite import _row_to_chunk, _row_to_module_member
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline

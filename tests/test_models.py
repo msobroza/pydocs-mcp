@@ -30,13 +30,15 @@ from pydocs_mcp.models import (
 
 from pydocs_mcp.db import (
     SCHEMA_VERSION,
+    open_index_database,
+)
+from pydocs_mcp.storage.sqlite import (
     _chunk_to_row,
     _module_member_to_row,
     _package_to_row,
     _row_to_chunk,
     _row_to_module_member,
     _row_to_package,
-    open_index_database,
 )
 
 
