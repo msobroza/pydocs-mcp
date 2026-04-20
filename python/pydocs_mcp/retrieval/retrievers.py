@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -75,13 +76,12 @@ class Bm25ChunkRetriever:
             "ORDER BY rank LIMIT ?"
         )
 
-        import sqlite3
         # Synchronous open inside the worker thread
         conn = sqlite3.connect(str(self.provider.cache_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(sql, params).fetchall()
-        except Exception:
+        except sqlite3.DatabaseError:
             return ChunkList(items=())
         finally:
             conn.close()
@@ -149,12 +149,11 @@ class LikeMemberRetriever:
             "LIMIT ?"
         )
 
-        import sqlite3
         conn = sqlite3.connect(str(self.provider.cache_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(sql, params).fetchall()
-        except Exception:
+        except sqlite3.DatabaseError:
             return ModuleMemberList(items=())
         finally:
             conn.close()
