@@ -369,3 +369,20 @@ def test_package_row_roundtrip():
     row = _package_to_row(pkg)
     pkg2 = _row_to_package(row)
     assert pkg2 == pkg
+
+
+def test_row_to_chunk_raises_on_missing_column():
+    """Row mappers must NOT silently swallow missing columns — a schema
+    drift should surface as a ``KeyError`` so callers notice, instead of
+    returning a ``Chunk`` with ``None`` / empty-string columns filled in.
+    """
+    import pytest
+    # Dict intentionally missing the ``package`` column — simulates schema drift.
+    bad_row = {
+        "id": 1,
+        "title": "t",
+        "text": "body",
+        "origin": "readme",
+    }
+    with pytest.raises(KeyError):
+        _row_to_chunk(bad_row)

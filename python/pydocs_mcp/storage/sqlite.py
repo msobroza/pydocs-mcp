@@ -98,25 +98,25 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
 
 
 def _row_to_chunk(row) -> Chunk:
-    def _get(key: str):
-        # row may be a sqlite3.Row or a plain dict; both support __getitem__
-        try:
-            return row[key]
-        except (KeyError, IndexError):
-            return None
+    """Convert a ``sqlite3.Row`` (or dict) to a ``Chunk`` domain model.
 
+    Accesses each column directly: a ``KeyError`` from a missing column is
+    the correct signal that the schema has drifted (repositories always
+    ``SELECT *`` or explicit columns matching the schema), and silently
+    returning ``None`` would mask the drift.
+    """
     metadata: dict[str, object] = {}
     for key in (
         ChunkFilterField.PACKAGE.value,
         ChunkFilterField.TITLE.value,
         ChunkFilterField.ORIGIN.value,
     ):
-        value = _get(key)
+        value = row[key]
         if value:
             metadata[key] = value
     return Chunk(
-        text=_get("text") or "",
-        id=_get("id"),
+        text=row["text"] or "",
+        id=row["id"],
         metadata=metadata,
     )
 
@@ -147,13 +147,8 @@ def _module_member_to_row(m: ModuleMember) -> dict[str, object]:
 
 
 def _row_to_module_member(row) -> ModuleMember:
-    def _get(key: str):
-        try:
-            return row[key]
-        except (KeyError, IndexError):
-            return None
-
-    raw_params = json.loads(_get("parameters") or "[]")
+    """Convert a ``sqlite3.Row`` (or dict) to a ``ModuleMember`` domain model."""
+    raw_params = json.loads(row["parameters"] or "[]")
     params = tuple(
         Parameter(
             name=p["name"],
@@ -163,16 +158,16 @@ def _row_to_module_member(row) -> ModuleMember:
         for p in raw_params
     )
     metadata = {
-        ModuleMemberFilterField.PACKAGE.value: _get("package") or "",
-        ModuleMemberFilterField.MODULE.value:  _get("module") or "",
-        ModuleMemberFilterField.NAME.value:    _get("name") or "",
-        ModuleMemberFilterField.KIND.value:    _get("kind") or "",
-        "signature":         _get("signature") or "",
-        "return_annotation": _get("return_annotation") or "",
+        ModuleMemberFilterField.PACKAGE.value: row["package"] or "",
+        ModuleMemberFilterField.MODULE.value:  row["module"] or "",
+        ModuleMemberFilterField.NAME.value:    row["name"] or "",
+        ModuleMemberFilterField.KIND.value:    row["kind"] or "",
+        "signature":         row["signature"] or "",
+        "return_annotation": row["return_annotation"] or "",
         "parameters":        params,
-        "docstring":         _get("docstring") or "",
+        "docstring":         row["docstring"] or "",
     }
-    return ModuleMember(id=_get("id"), metadata=metadata)
+    return ModuleMember(id=row["id"], metadata=metadata)
 
 
 # ── Package ↔ row ────────────────────────────────────────────────────────
@@ -189,20 +184,15 @@ def _package_to_row(pkg: Package) -> dict[str, object]:
 
 
 def _row_to_package(row) -> Package:
-    def _get(key: str):
-        try:
-            return row[key]
-        except (KeyError, IndexError):
-            return None
-
+    """Convert a ``sqlite3.Row`` (or dict) to a ``Package`` domain model."""
     return Package(
-        name=_get("name") or "",
-        version=_get("version") or "",
-        summary=_get("summary") or "",
-        homepage=_get("homepage") or "",
-        dependencies=tuple(json.loads(_get("dependencies") or "[]")),
-        content_hash=_get("content_hash") or "",
-        origin=PackageOrigin(_get("origin") or PackageOrigin.DEPENDENCY.value),
+        name=row["name"] or "",
+        version=row["version"] or "",
+        summary=row["summary"] or "",
+        homepage=row["homepage"] or "",
+        dependencies=tuple(json.loads(row["dependencies"] or "[]")),
+        content_hash=row["content_hash"] or "",
+        origin=PackageOrigin(row["origin"] or PackageOrigin.DEPENDENCY.value),
     )
 
 
