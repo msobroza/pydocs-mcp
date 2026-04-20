@@ -23,12 +23,17 @@ class ComponentRegistry(Generic[C]):
 
     def __init__(self) -> None:
         self._types: dict[str, type[C]] = {}
+        # Cache the "should we forward _depth?" decision per registered class so
+        # ``build`` doesn't re-introspect every single call (decoders run in
+        # hot recursive paths for nested SubPipelineStage graphs).
+        self._forwards_depth: dict[str, bool] = {}
 
     def register(self, type_name: str):
         def decorator(cls: type[C]) -> type[C]:
             if type_name in self._types:
                 raise ValueError(f"component {type_name!r} already registered")
             self._types[type_name] = cls
+            self._forwards_depth[type_name] = _from_dict_accepts_depth(cls)
             return cls
         return decorator
 
@@ -44,19 +49,39 @@ class ComponentRegistry(Generic[C]):
         from_dict = cls.from_dict
         # Only stages need the depth counter — retrievers / formatters do not
         # re-enter ``CodeRetrieverPipeline.from_dict``. Forward ``_depth`` when
-        # the callee accepts it so nested ``SubPipelineStage`` decoding sees
-        # the accumulated depth.
-        import inspect as _inspect
-        try:
-            sig = _inspect.signature(from_dict)
-        except (TypeError, ValueError):
-            return from_dict(data, context)
-        if "_depth" in sig.parameters:
+        # the callee accepts it (explicitly or via ``**kwargs``) so nested
+        # ``SubPipelineStage`` decoding sees the accumulated depth.
+        if self._forwards_depth.get(type_name, False):
             return from_dict(data, context, _depth=_depth)
         return from_dict(data, context)
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._types))
+
+
+def _from_dict_accepts_depth(cls: type) -> bool:
+    """Return True iff ``cls.from_dict`` accepts a ``_depth`` keyword.
+
+    Recognises both the explicit-parameter form ``def from_dict(..., _depth=0)``
+    and the catch-all form ``def from_dict(..., **kwargs)`` — the latter used
+    to silently drop ``_depth`` even though ``**kwargs`` would accept it,
+    which defeated the recursion guard for user-defined stages.
+    """
+    import inspect as _inspect
+
+    from_dict = getattr(cls, "from_dict", None)
+    if from_dict is None:
+        return False
+    try:
+        sig = _inspect.signature(from_dict)
+    except (TypeError, ValueError):
+        return False
+    for param in sig.parameters.values():
+        if param.name == "_depth":
+            return True
+        if param.kind is _inspect.Parameter.VAR_KEYWORD:
+            return True
+    return False
 
 
 stage_registry: ComponentRegistry = ComponentRegistry()

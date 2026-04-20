@@ -86,6 +86,31 @@ def test_build_context_defaults(tmp_path):
     assert ctx.predicate_registry is not None
 
 
+def test_registry_build_forwards_depth_to_var_keyword_from_dict(tmp_path):
+    """A stage whose ``from_dict`` uses ``**kwargs`` must still receive
+    ``_depth`` — otherwise the recursion guard for nested SubPipelineStage
+    decoding silently resets to 0 (AC #31 regression).
+    """
+    registry: ComponentRegistry = ComponentRegistry()
+    captured: dict = {}
+
+    @registry.register("kwargs_stage")
+    @dataclass(frozen=True, slots=True)
+    class KwargsStage:
+        name: str = "kwargs_stage"
+
+        def to_dict(self): return {"type": "kwargs_stage"}
+
+        @classmethod
+        def from_dict(cls, d, ctx, **kwargs):
+            # Capture what the registry forwarded so the test can assert it.
+            captured.update(kwargs)
+            return cls()
+
+    registry.build({"type": "kwargs_stage"}, _ctx(tmp_path), _depth=3)
+    assert captured.get("_depth") == 3
+
+
 def test_bare_retrieval_import_populates_registries():
     """AC #30 — bare ``import pydocs_mcp.retrieval`` fires the decorators."""
     import pydocs_mcp.retrieval  # noqa: F401
