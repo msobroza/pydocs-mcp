@@ -98,25 +98,33 @@ def main():
             unit_of_work=SqliteUnitOfWork(provider=provider),
         )
 
-        if args.force:
-            asyncio.run(indexing_service.clear_all())
-            log.info("Cache cleared")
+        async def _run_indexing_phase() -> None:
+            if args.force:
+                await indexing_service.clear_all()
+                log.info("Cache cleared")
 
-        if not args.skip_project:
-            log.info("Project: %s", project)
-            index_project_source(indexing_service, project)
+            if not args.skip_project:
+                log.info("Project: %s", project)
+                await index_project_source(indexing_service, project)
 
-        deps = discover_declared_dependencies(project)
-        if deps:
-            use_inspect = not args.no_inspect
-            stats = index_dependencies(indexing_service, deps, args.depth, args.workers, use_inspect)
-            log.info(
-                "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
-                stats["indexed"], stats["cached"], stats["failed"],
-                db_path.stat().st_size / 1024,
-            )
+            deps = discover_declared_dependencies(project)
+            if deps:
+                use_inspect = not args.no_inspect
+                stats = await index_dependencies(
+                    indexing_service, deps, args.depth, args.workers, use_inspect,
+                )
+                log.info(
+                    "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
+                    stats["indexed"], stats["cached"], stats["failed"],
+                    db_path.stat().st_size / 1024,
+                )
 
-        asyncio.run(chunk_repository.rebuild_index())
+            await chunk_repository.rebuild_index()
+
+        # Single asyncio.run boundary — sub-loops inside the async indexer
+        # all share this one loop, so _maybe_acquire's ambient ContextVar
+        # remains valid across awaits.
+        asyncio.run(_run_indexing_phase())
 
         if args.cmd == "serve":
             run(db_path, config_path=getattr(args, "config", None))

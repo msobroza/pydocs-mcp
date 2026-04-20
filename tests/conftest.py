@@ -1,4 +1,5 @@
 """Shared pytest fixtures for pydocs-mcp tests."""
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -164,7 +165,7 @@ def integration_conn(tmp_path):
     )
 
     # Index the fake project via the production code path.
-    index_project_source(service, FAKE_PROJECT)
+    asyncio.run(index_project_source(service, FAKE_PROJECT))
 
     # Index each package snapshot as if it were an installed dep.
     for pkg_name in ("sklearn", "vllm", "langgraph"):

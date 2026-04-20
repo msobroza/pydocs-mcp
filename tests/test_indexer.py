@@ -120,7 +120,7 @@ class TestParseSourceFiles:
 
 class TestIndexProject:
     def test_indexes_project_files(self, db_path, project_dir):
-        index_project_source(_indexing_service(db_path), project_dir)
+        asyncio.run(index_project_source(_indexing_service(db_path), project_dir))
         conn = open_index_database(db_path)
         pkgs = conn.execute("SELECT * FROM packages WHERE name='__project__'").fetchone()
         conn.close()
@@ -128,7 +128,7 @@ class TestIndexProject:
         assert pkgs["version"] == "local"
 
     def test_creates_chunks(self, db_path, project_dir):
-        index_project_source(_indexing_service(db_path), project_dir)
+        asyncio.run(index_project_source(_indexing_service(db_path), project_dir))
         conn = open_index_database(db_path)
         count = conn.execute(
             "SELECT count(*) FROM chunks WHERE package='__project__'"
@@ -137,7 +137,7 @@ class TestIndexProject:
         assert count > 0
 
     def test_creates_symbols(self, db_path, project_dir):
-        index_project_source(_indexing_service(db_path), project_dir)
+        asyncio.run(index_project_source(_indexing_service(db_path), project_dir))
         conn = open_index_database(db_path)
         count = conn.execute(
             "SELECT count(*) FROM module_members WHERE package='__project__'"
@@ -147,12 +147,12 @@ class TestIndexProject:
 
     def test_caching_skips_unchanged(self, db_path, project_dir):
         service = _indexing_service(db_path)
-        index_project_source(service, project_dir)
+        asyncio.run(index_project_source(service, project_dir))
         conn = open_index_database(db_path)
         chunks_before = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
         conn.close()
 
-        index_project_source(service, project_dir)
+        asyncio.run(index_project_source(service, project_dir))
         conn = open_index_database(db_path)
         chunks_after = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
         conn.close()
@@ -160,7 +160,7 @@ class TestIndexProject:
 
     def test_reindexes_after_file_change(self, db_path, project_dir):
         service = _indexing_service(db_path)
-        index_project_source(service, project_dir)
+        asyncio.run(index_project_source(service, project_dir))
         conn = open_index_database(db_path)
         syms_before = conn.execute("SELECT count(*) FROM module_members").fetchone()[0]
         conn.close()
@@ -172,14 +172,14 @@ class TestIndexProject:
             '    return x * 2\n'
         )
 
-        index_project_source(service, project_dir)
+        asyncio.run(index_project_source(service, project_dir))
         conn = open_index_database(db_path)
         syms_after = conn.execute("SELECT count(*) FROM module_members").fetchone()[0]
         conn.close()
         assert syms_after > syms_before
 
     def test_fts_searchable_after_index(self, db_path, project_dir):
-        index_project_source(_indexing_service(db_path), project_dir)
+        asyncio.run(index_project_source(_indexing_service(db_path), project_dir))
         conn = open_index_database(db_path)
         rebuild_fulltext_index(conn)
         rows = conn.execute(

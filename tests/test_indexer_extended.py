@@ -4,6 +4,7 @@ Targets: _build_package_record, _append_doc_file_chunks, list_dependency_source_
 _extract_from_static_sources, _extract_by_import, _extract_callable_signature,
 _extract_members_by_import, index_dependencies.
 """
+import asyncio
 import hashlib
 import types
 from pathlib import Path
@@ -450,27 +451,27 @@ class TestIndexDeps:
         return _make_service(path)
 
     def test_index_deps_with_no_deps(self, service):
-        stats = index_dependencies(service, [], depth=1, workers=1)
+        stats = asyncio.run(index_dependencies(service, [], depth=1, workers=1))
         assert stats["indexed"] == 0
         assert stats["cached"] == 0
         assert stats["failed"] == 0
 
     def test_index_deps_caches_on_second_run(self, service):
         # Use json (always available)
-        stats1 = index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=True)
-        stats2 = index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=True)
+        stats1 = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=True))
+        stats2 = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=True))
         # Second run should find it cached (if it was indexed first time)
         if stats1["indexed"] > 0:
             assert stats2["cached"] > 0
 
     def test_index_deps_static_mode(self, service):
         # Static mode reads .py files without importing
-        stats = index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=False)
+        stats = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=False))
         assert isinstance(stats, dict)
         assert "indexed" in stats
 
     def test_index_deps_handles_missing_package(self, service):
-        stats = index_dependencies(service, ["totally_fake_package_xyz"], depth=1, workers=1)
+        stats = asyncio.run(index_dependencies(service, ["totally_fake_package_xyz"], depth=1, workers=1))
         # Package not installed, so nothing to index
         assert stats["indexed"] == 0
 
@@ -483,7 +484,7 @@ class TestIndexDeps:
             return [mock_dist]
 
         with patch("pydocs_mcp.indexer.importlib.metadata.distributions", fake_distributions):
-            stats = index_dependencies(service, ["fakepkg"], depth=0, workers=1, use_inspect=True)
+            stats = asyncio.run(index_dependencies(service, ["fakepkg"], depth=0, workers=1, use_inspect=True))
 
         assert stats["indexed"] + stats["failed"] >= 1
 
@@ -492,7 +493,7 @@ class TestIndexDeps:
         mock_dist.files = None
 
         with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]):
-            stats = index_dependencies(service, ["staticpkg"], depth=0, workers=1, use_inspect=False)
+            stats = asyncio.run(index_dependencies(service, ["staticpkg"], depth=0, workers=1, use_inspect=False))
 
         assert stats["indexed"] + stats["failed"] >= 1
 
@@ -506,7 +507,7 @@ class TestIndexDeps:
 
         with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]), \
              patch("pydocs_mcp.indexer._extract_by_import", failing_collector):
-            stats = index_dependencies(service, ["failpkg"], depth=0, workers=1, use_inspect=True)
+            stats = asyncio.run(index_dependencies(service, ["failpkg"], depth=0, workers=1, use_inspect=True))
 
         assert stats["failed"] >= 1
 
@@ -517,6 +518,6 @@ class TestIndexDeps:
         mock_dist.metadata.__getitem__ = lambda self, k: None if k == "Name" else ""
 
         with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]):
-            stats = index_dependencies(service, [""], depth=0, workers=1)
+            stats = asyncio.run(index_dependencies(service, [""], depth=0, workers=1))
 
         assert stats["indexed"] == 0
