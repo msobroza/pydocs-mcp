@@ -366,3 +366,35 @@ async def test_token_budget_formatter_none_result_noop():
         budget=1000,
     ).run(state)
     assert out.result is None
+
+
+@pytest.mark.asyncio
+async def test_parallel_retrieval_stage_preserves_filtered_branches():
+    """A branch that filters must still contribute its kept items, even if initial items drop."""
+    from dataclasses import replace
+    from pydocs_mcp.retrieval.stages import ParallelRetrievalStage
+
+    @dataclass(frozen=True, slots=True)
+    class _FilterAndTag:
+        tag: str
+        name: str = "filter_tag"
+        async def run(self, state):
+            # Drops 1 item, adds 1 — positional slice at start=len(initial) fails to capture
+            existing = state.result.items if state.result else ()
+            kept = existing[:-1] if existing else ()  # drop last initial item
+            new = Chunk(text=self.tag, id=999)
+            return replace(state, result=ChunkList(items=kept + (new,)))
+
+    state = PipelineState(
+        query=SearchQuery(terms="x"),
+        result=ChunkList(items=(Chunk(text="pre", id=1), Chunk(text="drop", id=2))),
+    )
+    stage = ParallelRetrievalStage(stages=(_FilterAndTag(tag="A"), _FilterAndTag(tag="B")))
+    out = await stage.run(state)
+    ids = {c.id for c in out.result.items}
+    # Both branches' new items (id=999) must be present; initial id=1 preserved;
+    # dedup by id means only ONE copy of id=999 is in the accumulator.
+    assert 1 in ids
+    assert 999 in ids
+    # Each branch contributed a new item with id=999 — deduped to a single entry
+    assert sum(1 for c in out.result.items if c.id == 999) == 1

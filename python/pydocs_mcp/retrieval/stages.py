@@ -187,23 +187,37 @@ class ParallelRetrievalStage:
     async def run(self, state: PipelineState) -> PipelineState:
         # Each inner stage sees the SAME input state independently; results concatenate.
         results = await asyncio.gather(*(s.run(state) for s in self.stages))
-        # Concatenate the new items from each branch onto the initial state.result
+
         initial_items: tuple = ()
         if state.result is not None:
             initial_items = state.result.items
 
-        accumulated_items: list = list(initial_items)
         first_type = type(state.result) if state.result is not None else None
+
+        # Track items by their identity (id field if set, else Python id() fallback).
+        # Branches may filter or reorder; we dedupe by content-key, not position.
+        seen_keys: set = set()
+        accumulated_items: list = []
+
+        def _key(item):
+            return item.id if item.id is not None else id(item)
+
+        for item in initial_items:
+            k = _key(item)
+            if k not in seen_keys:
+                seen_keys.add(k)
+                accumulated_items.append(item)
 
         for branch_state in results:
             if branch_state.result is None:
                 continue
-            branch_type = type(branch_state.result)
-            # Skip items that are already in accumulated_items (branch inherited the input)
-            new_items = branch_state.result.items[len(initial_items):]
-            accumulated_items.extend(new_items)
             if first_type is None:
-                first_type = branch_type
+                first_type = type(branch_state.result)
+            for item in branch_state.result.items:
+                k = _key(item)
+                if k not in seen_keys:
+                    seen_keys.add(k)
+                    accumulated_items.append(item)
 
         if first_type is ChunkList:
             return replace(state, result=ChunkList(items=tuple(accumulated_items)))
