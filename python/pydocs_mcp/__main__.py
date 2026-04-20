@@ -8,11 +8,8 @@ from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.db import (
-    build_connection_provider,
     cache_path_for_project,
-    clear_all_packages,
     open_index_database,
-    rebuild_fulltext_index,
 )
 from pydocs_mcp.deps import discover_declared_dependencies
 from pydocs_mcp.indexer import index_dependencies, index_project_source
@@ -78,28 +75,42 @@ def main():
     log.debug("DB: %s", db_path)
 
     if args.cmd in ("serve", "index"):
-        conn = open_index_database(db_path)
+        import asyncio
 
-        if args.force:
-            clear_all_packages(conn)
-            log.info("Cache cleared")
+        from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 
-        if not args.skip_project:
-            log.info("Project: %s", project)
-            index_project_source(conn, project)
+        # Ensure the schema exists before repositories issue queries.
+        open_index_database(db_path).close()
 
-        deps = discover_declared_dependencies(project)
-        if deps:
-            use_inspect = not args.no_inspect
-            stats = index_dependencies(conn, deps, args.depth, args.workers, use_inspect)
-            log.info(
-                "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
-                stats["indexed"], stats["cached"], stats["failed"],
-                db_path.stat().st_size / 1024,
-            )
+        indexing_service = build_sqlite_indexing_service(db_path)
 
-        rebuild_fulltext_index(conn)
-        conn.close()
+        async def _run_indexing_phase() -> None:
+            if args.force:
+                await indexing_service.clear_all()
+                log.info("Cache cleared")
+
+            if not args.skip_project:
+                log.info("Project: %s", project)
+                await index_project_source(indexing_service, project)
+
+            deps = discover_declared_dependencies(project)
+            if deps:
+                use_inspect = not args.no_inspect
+                stats = await index_dependencies(
+                    indexing_service, deps, args.depth, args.workers, use_inspect,
+                )
+                log.info(
+                    "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
+                    stats["indexed"], stats["cached"], stats["failed"],
+                    db_path.stat().st_size / 1024,
+                )
+
+            await indexing_service.chunk_store.rebuild_index()
+
+        # Single asyncio.run boundary — sub-loops inside the async indexer
+        # all share this one loop, so _maybe_acquire's ambient ContextVar
+        # remains valid across awaits.
+        asyncio.run(_run_indexing_phase())
 
         if args.cmd == "serve":
             run(db_path, config_path=getattr(args, "config", None))
@@ -107,21 +118,26 @@ def main():
     elif args.cmd in ("query", "api"):
         import asyncio
 
+        from pydocs_mcp.deps import normalize_package_name
         from pydocs_mcp.models import ChunkFilterField, SearchQuery
         from pydocs_mcp.retrieval.config import (
             AppConfig,
             build_chunk_pipeline_from_config,
             build_member_pipeline_from_config,
         )
-        from pydocs_mcp.retrieval.serialization import BuildContext
+        from pydocs_mcp.retrieval.wiring import build_retrieval_context
 
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
-        provider = build_connection_provider(db_path)
-        context = BuildContext(connection_provider=provider)
+        context = build_retrieval_context(db_path, config)
         terms = " ".join(args.terms)
-        pre_filter = (
-            {ChunkFilterField.PACKAGE.value: args.package} if args.package else None
-        )
+        pre_filter: dict | None = None
+        if args.package:
+            pkg = args.package
+            # Mirror server.py: PyPI names get normalised to the DB's
+            # underscore/lowercase form so "Flask-Login" resolves to "flask_login".
+            if pkg != "__project__":
+                pkg = normalize_package_name(pkg)
+            pre_filter = {ChunkFilterField.PACKAGE.value: pkg}
         search_query = SearchQuery(terms=terms, pre_filter=pre_filter)
 
         if args.cmd == "query":

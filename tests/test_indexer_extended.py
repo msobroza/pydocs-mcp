@@ -4,16 +4,16 @@ Targets: _build_package_record, _append_doc_file_chunks, list_dependency_source_
 _extract_from_static_sources, _extract_by_import, _extract_callable_signature,
 _extract_members_by_import, index_dependencies.
 """
+import asyncio
 import hashlib
-import inspect
-import json
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
+from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.indexer import (
     _append_doc_file_chunks,
     _build_package_record,
@@ -24,6 +24,15 @@ from pydocs_mcp.indexer import (
     index_dependencies,
     list_dependency_source_files,
 )
+from pydocs_mcp.models import (
+    ChunkFilterField,
+    ModuleMemberFilterField,
+)
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+
+
+def _make_service(db_path: Path) -> IndexingService:
+    return build_sqlite_indexing_service(db_path)
 
 
 # -- Helpers for creating mock distributions --
@@ -69,9 +78,9 @@ class TestGetSig:
         assert "y" in sig
         assert ret == "bool"
         assert len(params) == 2
-        assert params[0]["name"] == "x"
-        assert params[1]["name"] == "y"
-        assert params[1]["default"] == "'hello'"
+        assert params[0].name == "x"
+        assert params[1].name == "y"
+        assert params[1].default == "'hello'"
 
     def test_function_no_annotations(self):
         def bar(a, b):
@@ -79,7 +88,7 @@ class TestGetSig:
         sig, ret, params = _extract_callable_signature(bar)
         assert "a" in sig
         assert len(params) == 2
-        assert "type" not in params[0]
+        assert params[0].annotation == ""
 
     def test_skips_self_and_cls(self):
         class MyClass:
@@ -89,9 +98,9 @@ class TestGetSig:
             def clsmethod(cls, y: str):
                 pass
         sig, _, params = _extract_callable_signature(MyClass.method)
-        assert all(p["name"] != "self" for p in params)
+        assert all(p.name != "self" for p in params)
         sig2, _, params2 = _extract_callable_signature(MyClass.clsmethod)
-        assert all(p["name"] != "cls" for p in params2)
+        assert all(p.name != "cls" for p in params2)
 
     def test_no_signature_returns_empty(self):
         # Built-in with no inspectable signature
@@ -123,7 +132,7 @@ class TestInspectSyms:
 
         rows = _extract_members_by_import(mod, "testmod", "testmod")
         assert len(rows) >= 1
-        names = [r[2] for r in rows]
+        names = [r.metadata[ModuleMemberFilterField.NAME.value] for r in rows]
         assert "public_func" in names
 
     def test_skips_private_names(self):
@@ -136,7 +145,7 @@ class TestInspectSyms:
         mod._private = _private
 
         rows = _extract_members_by_import(mod, "testmod", "testmod")
-        names = [r[2] for r in rows]
+        names = [r.metadata[ModuleMemberFilterField.NAME.value] for r in rows]
         assert "_private" not in names
 
     def test_extracts_classes(self):
@@ -152,7 +161,7 @@ class TestInspectSyms:
         mod.MyClass = MyClass
 
         rows = _extract_members_by_import(mod, "testmod", "testmod")
-        names = [r[2] for r in rows]
+        names = [r.metadata[ModuleMemberFilterField.NAME.value] for r in rows]
         assert "MyClass" in names
 
     def test_skips_foreign_symbols(self):
@@ -165,7 +174,7 @@ class TestInspectSyms:
         mod.foreign = foreign
 
         rows = _extract_members_by_import(mod, "testmod", "testmod")
-        names = [r[2] for r in rows]
+        names = [r.metadata[ModuleMemberFilterField.NAME.value] for r in rows]
         assert "foreign" not in names
 
     def test_depth_recursion(self):
@@ -206,7 +215,7 @@ class TestBaseData:
     def test_includes_requires(self):
         dist = make_mock_dist(requires=["dep1>=1.0", "dep2; python_version >= '3.8'"])
         data = _build_package_record(dist, "testpkg", "1.0")
-        reqs = json.loads(data["requires"])
+        reqs = data["requires"]
         assert "dep1>=1.0" in reqs
         assert "dep2" in reqs
 
@@ -219,7 +228,10 @@ class TestBaseData:
     def test_short_payload_ignored(self):
         dist = make_mock_dist(payload="Short.")
         data = _build_package_record(dist, "testpkg", "1.0")
-        readme_chunks = [c for c in data["chunks"] if c[3] == "readme"]
+        readme_chunks = [
+            c for c in data["chunks"]
+            if c.metadata.get(ChunkFilterField.ORIGIN.value) == "readme"
+        ]
         assert len(readme_chunks) == 0
 
     def test_non_string_payload_ignored(self):
@@ -239,7 +251,7 @@ class TestAddDocFiles:
         data = {"chunks": []}
         _append_doc_file_chunks(dist, "testpkg", data)
         assert len(data["chunks"]) > 0
-        assert data["chunks"][0][3] == "doc"
+        assert data["chunks"][0].metadata.get(ChunkFilterField.ORIGIN.value) == "doc"
 
     def test_skips_non_doc_files(self):
         files = [make_mock_file("testpkg/setup.py", content="# setup")]
@@ -422,35 +434,37 @@ class TestCollectInspect:
 
 class TestIndexDeps:
     @pytest.fixture
-    def db(self, tmp_path):
-        return open_index_database(tmp_path / "test.db")
+    def service(self, tmp_path):
+        path = tmp_path / "test.db"
+        open_index_database(path).close()
+        return _make_service(path)
 
-    def test_index_deps_with_no_deps(self, db):
-        stats = index_dependencies(db, [], depth=1, workers=1)
+    def test_index_deps_with_no_deps(self, service):
+        stats = asyncio.run(index_dependencies(service, [], depth=1, workers=1))
         assert stats["indexed"] == 0
         assert stats["cached"] == 0
         assert stats["failed"] == 0
 
-    def test_index_deps_caches_on_second_run(self, db):
+    def test_index_deps_caches_on_second_run(self, service):
         # Use json (always available)
-        stats1 = index_dependencies(db, ["json"], depth=0, workers=1, use_inspect=True)
-        stats2 = index_dependencies(db, ["json"], depth=0, workers=1, use_inspect=True)
+        stats1 = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=True))
+        stats2 = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=True))
         # Second run should find it cached (if it was indexed first time)
         if stats1["indexed"] > 0:
             assert stats2["cached"] > 0
 
-    def test_index_deps_static_mode(self, db):
+    def test_index_deps_static_mode(self, service):
         # Static mode reads .py files without importing
-        stats = index_dependencies(db, ["json"], depth=0, workers=1, use_inspect=False)
+        stats = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=False))
         assert isinstance(stats, dict)
         assert "indexed" in stats
 
-    def test_index_deps_handles_missing_package(self, db):
-        stats = index_dependencies(db, ["totally_fake_package_xyz"], depth=1, workers=1)
+    def test_index_deps_handles_missing_package(self, service):
+        stats = asyncio.run(index_dependencies(service, ["totally_fake_package_xyz"], depth=1, workers=1))
         # Package not installed, so nothing to index
         assert stats["indexed"] == 0
 
-    def test_index_deps_with_mock_distribution(self, db):
+    def test_index_deps_with_mock_distribution(self, service):
         """Test index_dependencies with a mocked distribution to cover the inner loop."""
         mock_dist = make_mock_dist(name="fakepkg", version="1.0", summary="Fake")
         mock_dist.files = None
@@ -459,20 +473,20 @@ class TestIndexDeps:
             return [mock_dist]
 
         with patch("pydocs_mcp.indexer.importlib.metadata.distributions", fake_distributions):
-            stats = index_dependencies(db, ["fakepkg"], depth=0, workers=1, use_inspect=True)
+            stats = asyncio.run(index_dependencies(service, ["fakepkg"], depth=0, workers=1, use_inspect=True))
 
         assert stats["indexed"] + stats["failed"] >= 1
 
-    def test_index_deps_static_with_mock(self, db):
+    def test_index_deps_static_with_mock(self, service):
         mock_dist = make_mock_dist(name="staticpkg", version="2.0")
         mock_dist.files = None
 
         with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]):
-            stats = index_dependencies(db, ["staticpkg"], depth=0, workers=1, use_inspect=False)
+            stats = asyncio.run(index_dependencies(service, ["staticpkg"], depth=0, workers=1, use_inspect=False))
 
         assert stats["indexed"] + stats["failed"] >= 1
 
-    def test_index_deps_failed_collector(self, db):
+    def test_index_deps_failed_collector(self, service):
         """Test that a failing collector increments the failed counter."""
         mock_dist = make_mock_dist(name="failpkg", version="1.0")
         mock_dist.files = None
@@ -482,17 +496,17 @@ class TestIndexDeps:
 
         with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]), \
              patch("pydocs_mcp.indexer._extract_by_import", failing_collector):
-            stats = index_dependencies(db, ["failpkg"], depth=0, workers=1, use_inspect=True)
+            stats = asyncio.run(index_dependencies(service, ["failpkg"], depth=0, workers=1, use_inspect=True))
 
         assert stats["failed"] >= 1
 
-    def test_index_deps_skips_null_name(self, db):
+    def test_index_deps_skips_null_name(self, service):
         """Distributions with no Name metadata should be skipped."""
         mock_dist = make_mock_dist(name="", version="1.0")
         # Override __getitem__ to return None for Name
         mock_dist.metadata.__getitem__ = lambda self, k: None if k == "Name" else ""
 
         with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]):
-            stats = index_dependencies(db, [""], depth=0, workers=1)
+            stats = asyncio.run(index_dependencies(service, [""], depth=0, workers=1))
 
         assert stats["indexed"] == 0

@@ -50,3 +50,51 @@ async def test_pipeline_empty_stages_is_noop():
     state = await pipeline.run(SearchQuery(terms="x"))
     assert state.query.terms == "x"
     assert state.result is None
+
+
+def test_from_dict_rejects_excessive_nesting(tmp_path):
+    """AC #31 — from_dict enforces _MAX_PIPELINE_DEPTH."""
+    from pydocs_mcp.retrieval.pipeline import (
+        PerCallConnectionProvider,
+        _MAX_PIPELINE_DEPTH,
+    )
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    # Build a pipeline dict that recursively nests SubPipelineStage one
+    # level beyond the allowed depth.
+    def _leaf() -> dict:
+        return {"name": "leaf", "stages": []}
+
+    def _wrap(inner: dict) -> dict:
+        return {
+            "name": "wrap",
+            "stages": [{"type": "sub_pipeline", "pipeline": inner}],
+        }
+
+    data = _leaf()
+    for _ in range(_MAX_PIPELINE_DEPTH + 1):
+        data = _wrap(data)
+
+    context = BuildContext(
+        connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "x.db"),
+    )
+    with pytest.raises(ValueError, match="max depth"):
+        CodeRetrieverPipeline.from_dict(data, context)
+
+
+def test_from_dict_accepts_shallow_nesting(tmp_path):
+    """Shallow nesting well under the depth cap must still succeed."""
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    inner = {"name": "inner", "stages": []}
+    data = {
+        "name": "outer",
+        "stages": [{"type": "sub_pipeline", "pipeline": inner}],
+    }
+    context = BuildContext(
+        connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "x.db"),
+    )
+    pipeline = CodeRetrieverPipeline.from_dict(data, context)
+    assert pipeline.name == "outer"
+    assert len(pipeline.stages) == 1

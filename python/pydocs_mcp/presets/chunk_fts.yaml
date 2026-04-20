@@ -1,10 +1,10 @@
-name: fts_chunk
+name: chunk_fts
 stages:
   - type: chunk_retrieval
-    retriever: {type: bm25_chunk}
-  - type: package_filter
-  - type: scope_filter
-  - type: title_filter
+    retriever:
+      type: bm25_chunk
+      schema_name: chunk
+  - type: metadata_post_filter
   - type: limit
     max_results: 8
   - type: token_budget_formatter

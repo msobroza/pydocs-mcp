@@ -1,0 +1,16 @@
+# Shipped defaults — loaded as the lowest-priority AppConfig layer (spec §5.9).
+# User pydocs-mcp.yaml overrides any key; env vars override YAML; CLI flags win.
+cache_dir: ~/.pydocs-mcp
+log_level: info
+
+metadata_schemas:
+  chunk:  [package, scope, origin, title, module]
+  member: [package, scope, module, name, kind]
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: presets/chunk_fts.yaml
+  member:
+    - default: true
+      pipeline_path: presets/member_like.yaml

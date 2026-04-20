@@ -1,89 +1,175 @@
-"""Tests for concrete retrievers against fixture DB."""
+"""Tests for concrete retrievers against store Protocol fakes."""
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import build_connection_provider, open_index_database
 from pydocs_mcp.models import (
+    Chunk,
     ChunkFilterField,
     ChunkList,
+    ModuleMember,
     ModuleMemberFilterField,
     ModuleMemberList,
     SearchQuery,
 )
 from pydocs_mcp.retrieval.retrievers import Bm25ChunkRetriever, LikeMemberRetriever
+from pydocs_mcp.storage.filters import Filter
 
 
-@pytest.fixture
-def seeded_db(tmp_path: Path):
-    db_file = tmp_path / "seed.db"
-    conn = open_index_database(db_file)
-    conn.execute(
-        "INSERT INTO chunks (package, title, text, origin) VALUES (?,?,?,?)",
-        ("fastapi", "Routing", "Use APIRouter to group related endpoints.", "dependency_doc_file"),
-    )
-    conn.execute(
-        "INSERT INTO chunks (package, title, text, origin) VALUES (?,?,?,?)",
-        ("__project__", "README", "Project overview", "project_module_doc"),
-    )
-    conn.execute(
-        "INSERT INTO module_members "
-        "(package, module, name, kind, signature, return_annotation, parameters, docstring) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        ("fastapi", "fastapi.routing", "APIRouter", "class",
-         "(prefix: str = '')", "", json.dumps([]), "Groups endpoints."),
-    )
-    conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
-    conn.commit()
-    conn.close()
-    return db_file
+# ── Protocol fakes ──────────────────────────────────────────────────────
+
+
+@dataclass
+class _FakeTextSearchable:
+    """Minimal TextSearchable that records arguments and returns seeded rows."""
+    rows: tuple[Chunk, ...] = ()
+    recorded: list[dict] = field(default_factory=list)
+
+    async def text_search(
+        self,
+        query_terms: str,
+        limit: int,
+        filter: Filter | Mapping | None = None,
+    ) -> tuple[Chunk, ...]:
+        self.recorded.append({"query_terms": query_terms, "limit": limit, "filter": filter})
+        return self.rows
+
+
+@dataclass
+class _FakeModuleMemberStore:
+    """Minimal ModuleMemberStore used by LikeMemberRetriever tests."""
+    rows: tuple[ModuleMember, ...] = ()
+    recorded: list[dict] = field(default_factory=list)
+
+    async def list(
+        self,
+        filter: Filter | Mapping | None = None,
+        limit: int | None = None,
+    ) -> list[ModuleMember]:
+        self.recorded.append({"filter": filter, "limit": limit})
+        return list(self.rows)
+
+
+# ── Bm25ChunkRetriever ──────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_bm25_chunk_retriever_returns_chunk_list(seeded_db: Path):
-    provider = build_connection_provider(seeded_db)
-    r = Bm25ChunkRetriever(provider=provider)
-    result = await r.retrieve(SearchQuery(terms="APIRouter"))
+async def test_bm25_chunk_retriever_wraps_store_rows_in_chunk_list():
+    store = _FakeTextSearchable(
+        rows=(
+            Chunk(
+                text="body",
+                id=7,
+                relevance=3.14,
+                retriever_name="bm25_chunk",
+                metadata={ChunkFilterField.PACKAGE.value: "fastapi"},
+            ),
+        ),
+    )
+    retriever = Bm25ChunkRetriever(
+        store=store, allowed_fields=frozenset({"package", "scope", "title"})
+    )
+    result = await retriever.retrieve(SearchQuery(terms="APIRouter"))
     assert isinstance(result, ChunkList)
-    assert len(result.items) >= 1
-    first = result.items[0]
-    assert first.metadata[ChunkFilterField.PACKAGE.value] == "fastapi"
-    assert first.retriever_name == "bm25_chunk"
-    assert first.relevance is not None
+    assert len(result.items) == 1
+    assert store.recorded[0]["query_terms"] == "APIRouter"
+    assert store.recorded[0]["filter"] is None
 
 
 @pytest.mark.asyncio
-async def test_bm25_chunk_retriever_respects_package_filter(seeded_db: Path):
-    provider = build_connection_provider(seeded_db)
-    r = Bm25ChunkRetriever(provider=provider)
-    result = await r.retrieve(SearchQuery(
-        terms="Project",
-        pre_filter={ChunkFilterField.PACKAGE.value: "__project__"},
+async def test_bm25_chunk_retriever_pushes_parsed_pre_filter_to_store():
+    store = _FakeTextSearchable()
+    retriever = Bm25ChunkRetriever(
+        store=store, allowed_fields=frozenset({"package", "scope"})
+    )
+    await retriever.retrieve(SearchQuery(
+        terms="x",
+        pre_filter={"package": "fastapi"},
     ))
-    for chunk in result.items:
-        assert chunk.metadata[ChunkFilterField.PACKAGE.value] == "__project__"
+    tree = store.recorded[0]["filter"]
+    assert tree is not None  # a Filter tree, not the raw dict
 
 
 @pytest.mark.asyncio
-async def test_like_member_retriever_returns_module_member_list(seeded_db: Path):
-    provider = build_connection_provider(seeded_db)
-    r = LikeMemberRetriever(provider=provider)
-    result = await r.retrieve(SearchQuery(terms="APIRouter"))
+async def test_bm25_chunk_retriever_rejects_filter_fields_outside_allowlist():
+    store = _FakeTextSearchable()
+    retriever = Bm25ChunkRetriever(
+        store=store, allowed_fields=frozenset({"package"})
+    )
+    with pytest.raises(ValueError, match="unknown fields"):
+        await retriever.retrieve(SearchQuery(
+            terms="x",
+            pre_filter={"title": {"like": "Routing"}},
+        ))
+
+
+# ── LikeMemberRetriever ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_like_member_retriever_filters_rows_by_terms_substring():
+    store = _FakeModuleMemberStore(rows=(
+        ModuleMember(id=1, metadata={
+            ModuleMemberFilterField.NAME.value: "APIRouter",
+            "docstring": "Groups endpoints.",
+        }),
+        ModuleMember(id=2, metadata={
+            ModuleMemberFilterField.NAME.value: "Middleware",
+            "docstring": "Unrelated.",
+        }),
+    ))
+    retriever = LikeMemberRetriever(
+        store=store, allowed_fields=frozenset({"package", "module", "name", "kind"})
+    )
+    result = await retriever.retrieve(SearchQuery(terms="APIRouter"))
     assert isinstance(result, ModuleMemberList)
-    assert len(result.items) >= 1
-    m = result.items[0]
-    assert m.metadata[ModuleMemberFilterField.NAME.value] == "APIRouter"
-    assert m.retriever_name == "like_member"
+    assert len(result.items) == 1
+    assert result.items[0].retriever_name == "like_member"
+    assert result.items[0].metadata[ModuleMemberFilterField.NAME.value] == "APIRouter"
+
+
+@pytest.mark.asyncio
+async def test_like_member_retriever_pushes_pre_filter_to_store_list():
+    store = _FakeModuleMemberStore(rows=(
+        ModuleMember(id=1, metadata={
+            ModuleMemberFilterField.NAME.value: "APIRouter",
+            "docstring": "",
+        }),
+    ))
+    retriever = LikeMemberRetriever(
+        store=store, allowed_fields=frozenset({"package", "module", "name", "kind"})
+    )
+    await retriever.retrieve(SearchQuery(
+        terms="APIRouter",
+        pre_filter={"package": "fastapi"},
+    ))
+    assert store.recorded[0]["filter"] is not None
+    assert store.recorded[0]["limit"] == 8
+
+
+@pytest.mark.asyncio
+async def test_like_member_retriever_rejects_filter_fields_outside_allowlist():
+    store = _FakeModuleMemberStore()
+    retriever = LikeMemberRetriever(
+        store=store, allowed_fields=frozenset({"package", "module"})
+    )
+    with pytest.raises(ValueError, match="unknown fields"):
+        await retriever.retrieve(SearchQuery(
+            terms="x",
+            pre_filter={"kind": "class"},
+        ))
+
+
+# ── Pipeline adapter retrievers ─────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_pipeline_chunk_retriever_forwards_to_inner_pipeline(tmp_path):
     """Adapter runs the inner pipeline and returns the ChunkList at state.result."""
-    from dataclasses import dataclass
-    from pydocs_mcp.models import Chunk
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
     from pydocs_mcp.retrieval.retrievers import PipelineChunkRetriever
 
@@ -106,8 +192,6 @@ async def test_pipeline_chunk_retriever_forwards_to_inner_pipeline(tmp_path):
 
 @pytest.mark.asyncio
 async def test_pipeline_module_member_retriever_forwards():
-    from dataclasses import dataclass
-    from pydocs_mcp.models import ModuleMember
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
     from pydocs_mcp.retrieval.retrievers import PipelineModuleMemberRetriever
 
@@ -125,3 +209,39 @@ async def test_pipeline_module_member_retriever_forwards():
     out = await adapter.retrieve(SearchQuery(terms="x"))
     assert isinstance(out, ModuleMemberList)
     assert len(out.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_scope_filter_accepts_field_in():
+    """``{"scope": {"in": [...]}}`` must be stripped from the pushed-down
+    filter tree just like the singleton ``{"scope": "x"}`` form — otherwise
+    the store's safe-column gate raises ``ValueError("column 'scope' not in
+    safe_columns")`` because ``scope`` is a semantic field, not a DB column.
+    """
+    store = _FakeTextSearchable(
+        rows=(
+            Chunk(
+                text="project body",
+                metadata={ChunkFilterField.PACKAGE.value: "__project__"},
+            ),
+            Chunk(
+                text="dep body",
+                metadata={ChunkFilterField.PACKAGE.value: "fastapi"},
+            ),
+        ),
+    )
+    retriever = Bm25ChunkRetriever(
+        store=store,
+        allowed_fields=frozenset({"package", "scope"}),
+    )
+
+    # Must not raise: scope gets split out of the filter tree.
+    result = await retriever.retrieve(SearchQuery(
+        terms="body",
+        pre_filter={"scope": {"in": ["project_only", "all"]}},
+    ))
+
+    # The store received filter=None (scope was popped off; no other clauses).
+    assert store.recorded[0]["filter"] is None
+    # Both rows match: ``all`` covers everything.
+    assert len(result.items) == 2

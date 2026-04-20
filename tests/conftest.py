@@ -1,74 +1,138 @@
 """Shared pytest fixtures for pydocs-mcp tests."""
+import asyncio
+from pathlib import Path
+
 import pytest
-from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
+
+from pydocs_mcp.db import (
+    open_index_database,
+    rebuild_fulltext_index,
+)
+from pydocs_mcp.indexer import _extract_from_source_files, index_project_source
+from pydocs_mcp.models import (
+    Chunk,
+    ChunkFilterField,
+    ModuleMember,
+    ModuleMemberFilterField,
+    Package,
+    PackageOrigin,
+)
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+from tests._retriever_helpers import write_package_sync
 
 
 @pytest.fixture
 def conn(tmp_path):
     """File-backed SQLite DB seeded with known project + dep data."""
-    c = open_index_database(tmp_path / "test.db")
+    db_path = tmp_path / "test.db"
+    # open_index_database materialises the schema; close it afterwards so
+    # the IndexingService below can attach via its own connection factory.
+    c = open_index_database(db_path)
+    c.close()
 
-    c.execute(
-        "INSERT INTO packages (name, version, summary, homepage, dependencies, content_hash, origin)"
-        " VALUES ('__project__', '0.1', 'Test project', '', '[]', 'aaa', 'project')"
-    )
-    c.execute(
-        "INSERT INTO packages (name, version, summary, homepage, dependencies, content_hash, origin)"
-        " VALUES ('requests', '2.28', 'HTTP library', '', '[]', 'bbb', 'dependency')"
-    )
-    c.execute(
-        "INSERT INTO packages (name, version, summary, homepage, dependencies, content_hash, origin)"
-        " VALUES ('sqlalchemy', '2.0', 'Database toolkit', '', '[]', 'ccc', 'dependency')"
-    )
-
-    # Project chunks
-    c.execute(
-        "INSERT INTO chunks (package, title, text, origin)"
-        " VALUES ('__project__', 'fibonacci', 'Compute the fibonacci sequence for n', 'project_code_section')"
-    )
-    c.execute(
-        "INSERT INTO chunks (package, title, text, origin)"
-        " VALUES ('__project__', 'README', 'Project overview and fibonacci examples', 'project_module_doc')"
-    )
-
-    # Dep chunks
-    c.execute(
-        "INSERT INTO chunks (package, title, text, origin)"
-        " VALUES ('requests', 'get', 'Send HTTP GET request to a URL', 'dependency_code_section')"
-    )
-    c.execute(
-        "INSERT INTO chunks (package, title, text, origin)"
-        " VALUES ('sqlalchemy', 'Session', 'Database session for ORM queries', 'dependency_doc_file')"
-    )
-
-    # Project symbols
-    c.execute(
-        "INSERT INTO module_members (package, module, name, kind, signature, return_annotation, parameters, docstring)"
-        " VALUES ('__project__', 'myapp.utils', 'fibonacci', 'function', '(n: int)', 'int', '[]',"
-        " 'Return nth fibonacci number')"
-    )
-
-    # Dep symbols
-    c.execute(
-        "INSERT INTO module_members (package, module, name, kind, signature, return_annotation, parameters, docstring)"
-        " VALUES ('requests', 'requests.api', 'get', 'function', '(url, **kwargs)', 'Response', '[]',"
-        " 'Send GET request')"
-    )
-    c.execute(
-        "INSERT INTO module_members (package, module, name, kind, signature, return_annotation, parameters, docstring)"
-        " VALUES ('sqlalchemy', 'sqlalchemy.orm', 'Session', 'class', '()', 'None', '[]',"
-        " 'ORM session class')"
+    write_package_sync(
+        db_path,
+        name="__project__", version="0.1", summary="Test project",
+        content_hash="aaa", origin=PackageOrigin.PROJECT,
+        chunks=(
+            Chunk(
+                text="Compute the fibonacci sequence for n",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "__project__",
+                    ChunkFilterField.TITLE.value: "fibonacci",
+                    ChunkFilterField.ORIGIN.value: "project_code_section",
+                },
+            ),
+            Chunk(
+                text="Project overview and fibonacci examples",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "__project__",
+                    ChunkFilterField.TITLE.value: "README",
+                    ChunkFilterField.ORIGIN.value: "project_module_doc",
+                },
+            ),
+        ),
+        module_members=(
+            ModuleMember(
+                metadata={
+                    ModuleMemberFilterField.PACKAGE.value: "__project__",
+                    ModuleMemberFilterField.MODULE.value: "myapp.utils",
+                    ModuleMemberFilterField.NAME.value: "fibonacci",
+                    ModuleMemberFilterField.KIND.value: "function",
+                    "signature": "(n: int)",
+                    "return_annotation": "int",
+                    "parameters": (),
+                    "docstring": "Return nth fibonacci number",
+                }
+            ),
+        ),
     )
 
-    c.commit()
+    write_package_sync(
+        db_path,
+        name="requests", version="2.28", summary="HTTP library",
+        content_hash="bbb",
+        chunks=(
+            Chunk(
+                text="Send HTTP GET request to a URL",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "requests",
+                    ChunkFilterField.TITLE.value: "get",
+                    ChunkFilterField.ORIGIN.value: "dependency_code_section",
+                },
+            ),
+        ),
+        module_members=(
+            ModuleMember(
+                metadata={
+                    ModuleMemberFilterField.PACKAGE.value: "requests",
+                    ModuleMemberFilterField.MODULE.value: "requests.api",
+                    ModuleMemberFilterField.NAME.value: "get",
+                    ModuleMemberFilterField.KIND.value: "function",
+                    "signature": "(url, **kwargs)",
+                    "return_annotation": "Response",
+                    "parameters": (),
+                    "docstring": "Send GET request",
+                }
+            ),
+        ),
+    )
+
+    write_package_sync(
+        db_path,
+        name="sqlalchemy", version="2.0", summary="Database toolkit",
+        content_hash="ccc",
+        chunks=(
+            Chunk(
+                text="Database session for ORM queries",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "sqlalchemy",
+                    ChunkFilterField.TITLE.value: "Session",
+                    ChunkFilterField.ORIGIN.value: "dependency_doc_file",
+                },
+            ),
+        ),
+        module_members=(
+            ModuleMember(
+                metadata={
+                    ModuleMemberFilterField.PACKAGE.value: "sqlalchemy",
+                    ModuleMemberFilterField.MODULE.value: "sqlalchemy.orm",
+                    ModuleMemberFilterField.NAME.value: "Session",
+                    ModuleMemberFilterField.KIND.value: "class",
+                    "signature": "()",
+                    "return_annotation": "None",
+                    "parameters": (),
+                    "docstring": "ORM session class",
+                }
+            ),
+        ),
+    )
+
+    c = open_index_database(db_path)
     rebuild_fulltext_index(c)
     yield c
     c.close()
 
-
-import os
-from pathlib import Path
-from pydocs_mcp.indexer import index_project_source, _extract_from_source_files
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 FAKE_PROJECT = FIXTURES_DIR / "fake_project"
@@ -83,32 +147,31 @@ def integration_conn(tmp_path):
     langgraph) using the static parser (_extract_from_source_files), then rebuilds FTS.
     """
     db_path = tmp_path / "integration.db"
-    c = open_index_database(db_path)
+    open_index_database(db_path).close()
 
-    # Index the fake project
-    index_project_source(c, FAKE_PROJECT)
+    service = build_sqlite_indexing_service(db_path)
 
-    # Index each package snapshot as if it were an installed dep
+    # Index the fake project via the production code path.
+    asyncio.run(index_project_source(service, FAKE_PROJECT))
+
+    # Index each package snapshot as if it were an installed dep.
     for pkg_name in ("sklearn", "vllm", "langgraph"):
         pkg_dir = PACKAGES_DIR / pkg_name
         py_files = sorted(str(p) for p in pkg_dir.rglob("*.py"))
-        chunks, syms = _extract_from_source_files(pkg_name, py_files, str(pkg_dir), kind_prefix="dep")
-        c.executemany(
-            "INSERT INTO packages (name, version, summary, homepage, dependencies, content_hash, origin)"
-            " VALUES (?, ?, ?, '', '[]', ?, 'dependency')",
-            [(pkg_name, "0.0.0", f"{pkg_name} fixture", f"fixture_{pkg_name}")],
+        chunks, syms = _extract_from_source_files(
+            pkg_name, py_files, str(pkg_dir), kind_prefix="dep",
         )
-        c.executemany(
-            "INSERT INTO chunks (package, title, text, origin) VALUES (?, ?, ?, ?)",
-            chunks,
-        )
-        c.executemany(
-            "INSERT INTO module_members (package, module, name, kind, signature, return_annotation, parameters, docstring)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            syms,
+        write_package_sync(
+            db_path,
+            name=pkg_name,
+            version="0.0.0",
+            summary=f"{pkg_name} fixture",
+            content_hash=f"fixture_{pkg_name}",
+            chunks=tuple(chunks),
+            module_members=tuple(syms),
         )
 
-    c.commit()
+    c = open_index_database(db_path)
     rebuild_fulltext_index(c)
     yield c
     c.close()

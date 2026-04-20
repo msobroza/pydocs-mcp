@@ -18,14 +18,30 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import (
+    Chunk,
     ChunkFilterField,
+    ModuleMember,
     ModuleMemberFilterField,
+    Package,
+    PackageOrigin,
     SearchQuery,
     SearchScope,
 )
 from pydocs_mcp.retrieval.retrievers import Bm25ChunkRetriever, LikeMemberRetriever
+from pydocs_mcp.storage.sqlite import (
+    SqliteModuleMemberRepository,
+    SqliteVectorStore,
+)
+from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+
+# Allowlist mirrors the shipped default_config.yaml metadata_schemas so the
+# retrievers accept the same fields production does, without requiring the
+# helpers to load AppConfig themselves.
+_CHUNK_ALLOWED_FIELDS = frozenset({"package", "scope", "origin", "title", "module"})
+_MEMBER_ALLOWED_FIELDS = frozenset({"package", "module", "name", "kind"})
 
 
 def _resolve_db_path(conn_or_path) -> Path:
@@ -50,6 +66,46 @@ def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
+def _make_indexing_service(conn_or_path) -> IndexingService:
+    """Helper — build a transactional IndexingService wired to ``conn_or_path``'s DB."""
+    return build_sqlite_indexing_service(_resolve_db_path(conn_or_path))
+
+
+def write_package_sync(
+    conn_or_path,
+    *,
+    name: str,
+    version: str,
+    summary: str = "",
+    homepage: str = "",
+    dependencies: tuple[str, ...] = (),
+    content_hash: str = "",
+    origin: PackageOrigin = PackageOrigin.DEPENDENCY,
+    chunks: tuple[Chunk, ...] = (),
+    module_members: tuple[ModuleMember, ...] = (),
+) -> None:
+    """Sync wrapper over ``IndexingService.reindex_package`` for fixture setup.
+
+    Commits via a fresh event loop so synchronous seeded-connection fixtures
+    keep working without awaiting anything themselves.
+    """
+    service = _make_indexing_service(conn_or_path)
+    pkg = Package(
+        name=name,
+        version=version,
+        summary=summary,
+        homepage=homepage,
+        dependencies=dependencies,
+        content_hash=content_hash,
+        origin=origin,
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(service.reindex_package(pkg, chunks, module_members))
+    finally:
+        loop.close()
+
+
 def retrieve_chunks(
     conn_or_path,
     query: str,
@@ -59,23 +115,23 @@ def retrieve_chunks(
     internal: bool | None = None,
     topic: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Behavioural shim around ``Bm25ChunkRetriever`` + filter stages.
+    """Behavioural shim around ``Bm25ChunkRetriever`` over the vector store.
 
     Returns a list of dicts using the historical keys (``pkg``, ``heading``,
-    ``body``, ``kind``) so existing assertions continue to work.
+    ``body``, ``kind``) so existing assertions continue to work. Scope / title
+    post-filters are applied here so the shim preserves the pre-refactor
+    semantics while the production pipeline uses store-side push-down.
     """
     path = _resolve_db_path(conn_or_path)
     provider = build_connection_provider(path)
 
+    # Only push the single-equality package filter into the retriever —
+    # SearchScope is encoded as either "__project__" or a NOT-equals clause in
+    # SQL, which the multifield format can't express. We apply scope + topic
+    # post-hoc on the returned items below.
     pre_filter: dict[str, Any] = {}
     if pkg is not None:
         pre_filter[ChunkFilterField.PACKAGE.value] = pkg
-    if internal is True:
-        pre_filter[ChunkFilterField.SCOPE.value] = SearchScope.PROJECT_ONLY.value
-    elif internal is False:
-        pre_filter[ChunkFilterField.SCOPE.value] = SearchScope.DEPENDENCIES_ONLY.value
-    if topic:
-        pre_filter[ChunkFilterField.TITLE.value] = topic
 
     search_query = SearchQuery(
         terms=query,
@@ -83,7 +139,8 @@ def retrieve_chunks(
         max_results=limit,
     )
 
-    retriever = Bm25ChunkRetriever(provider=provider)
+    store = SqliteVectorStore(provider=provider)
+    retriever = Bm25ChunkRetriever(store=store, allowed_fields=_CHUNK_ALLOWED_FIELDS)
     loop = asyncio.new_event_loop()
     try:
         result = loop.run_until_complete(retriever.retrieve(search_query))
@@ -95,9 +152,6 @@ def retrieve_chunks(
         md = chunk.metadata
         chunk_pkg = md.get(ChunkFilterField.PACKAGE.value, "")
         chunk_title = md.get(ChunkFilterField.TITLE.value, "")
-        # Apply the same scope + title filters the pre-retrieval code
-        # applied at SQL layer — the retriever itself doesn't (those are
-        # separate stages).
         if pkg is not None and chunk_pkg != pkg:
             continue
         if internal is True and chunk_pkg != "__project__":
@@ -135,10 +189,8 @@ def retrieve_module_members(
     pre_filter: dict[str, Any] = {}
     if pkg is not None:
         pre_filter[ModuleMemberFilterField.PACKAGE.value] = pkg
-    if internal is True:
-        pre_filter[ChunkFilterField.SCOPE.value] = SearchScope.PROJECT_ONLY.value
-    elif internal is False:
-        pre_filter[ChunkFilterField.SCOPE.value] = SearchScope.DEPENDENCIES_ONLY.value
+    # SearchScope is filtered in Python below — multifield push-down only
+    # supports equality on allowed columns, no NOT-equals.
 
     search_query = SearchQuery(
         terms=query,
@@ -146,7 +198,8 @@ def retrieve_module_members(
         max_results=limit,
     )
 
-    retriever = LikeMemberRetriever(provider=provider)
+    store = SqliteModuleMemberRepository(provider=provider)
+    retriever = LikeMemberRetriever(store=store, allowed_fields=_MEMBER_ALLOWED_FIELDS)
     loop = asyncio.new_event_loop()
     try:
         result = loop.run_until_complete(retriever.retrieve(search_query))

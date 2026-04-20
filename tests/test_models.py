@@ -30,13 +30,15 @@ from pydocs_mcp.models import (
 
 from pydocs_mcp.db import (
     SCHEMA_VERSION,
+    open_index_database,
+)
+from pydocs_mcp.storage.sqlite import (
     _chunk_to_row,
     _module_member_to_row,
     _package_to_row,
     _row_to_chunk,
     _row_to_module_member,
     _row_to_package,
-    open_index_database,
 )
 
 
@@ -220,6 +222,35 @@ def test_search_query_carries_pre_filter_dict():
     assert q.pre_filter == {"package": "fastapi"}
 
 
+def test_search_query_rejects_legacy_package_filter_field():
+    """The old `package_filter` field was removed — pydantic must reject it."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SearchQuery(terms="x", package_filter="fastapi")  # type: ignore[call-arg]
+
+
+def test_search_query_pre_filter_roundtrip():
+    """Construct with a mapping and read it straight back."""
+    payload = {
+        "package": "fastapi",
+        "scope": "project_only",
+        "title": {"like": "routing"},
+    }
+    q = SearchQuery(terms="x", pre_filter=payload, post_filter={"origin": "dependency_doc_file"})
+    assert q.pre_filter == payload
+    assert q.post_filter == {"origin": "dependency_doc_file"}
+
+
+def test_search_query_model_validator_rejects_boolean_ops():
+    """The model validator delegates to `MultiFieldFormat.validate` — which
+    rejects `$and` / `$or` (use the filter_tree format instead)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SearchQuery(terms="x", pre_filter={"$and": [{"package": "fastapi"}]})
+
+
 def test_search_response_construction():
     q = SearchQuery(terms="x")
     cl = ChunkList(items=())
@@ -338,3 +369,20 @@ def test_package_row_roundtrip():
     row = _package_to_row(pkg)
     pkg2 = _row_to_package(row)
     assert pkg2 == pkg
+
+
+def test_row_to_chunk_raises_on_missing_column():
+    """Row mappers must NOT silently swallow missing columns — a schema
+    drift should surface as a ``KeyError`` so callers notice, instead of
+    returning a ``Chunk`` with ``None`` / empty-string columns filled in.
+    """
+    import pytest
+    # Dict intentionally missing the ``package`` column — simulates schema drift.
+    bad_row = {
+        "id": 1,
+        "title": "t",
+        "text": "body",
+        "origin": "readme",
+    }
+    with pytest.raises(KeyError):
+        _row_to_chunk(bad_row)

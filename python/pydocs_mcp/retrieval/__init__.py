@@ -2,7 +2,19 @@
 
 Public API surface. Concrete class re-exports live in submodules; users
 typically construct pipelines inline, or load them from YAML via config.py.
+
+Importing this package eagerly loads ``stages``, ``retrievers``,
+``formatters`` and ``predicates`` so their ``@registry.register`` decorators
+fire and the shared registries are populated (spec AC #30).
 """
+from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401, E402
+from pydocs_mcp.retrieval import predicates as _predicates  # noqa: F401, E402
+from pydocs_mcp.retrieval import retrievers as _retrievers  # noqa: F401, E402
+
+# Side-effect imports — populate the stage/retriever/formatter/predicate
+# registries at package import time so bare ``import pydocs_mcp.retrieval``
+# is a sufficient precondition for config-driven pipeline assembly.
+from pydocs_mcp.retrieval import stages as _stages  # noqa: F401, E402
 from pydocs_mcp.retrieval.pipeline import (
     CodeRetrieverPipeline,
     PerCallConnectionProvider,
