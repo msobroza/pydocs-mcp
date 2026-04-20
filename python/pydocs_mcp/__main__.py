@@ -124,6 +124,7 @@ def main():
     elif args.cmd in ("query", "api"):
         import asyncio
 
+        from pydocs_mcp.deps import normalize_package_name
         from pydocs_mcp.models import ChunkFilterField, SearchQuery
         from pydocs_mcp.retrieval.config import (
             AppConfig,
@@ -145,9 +146,14 @@ def main():
             app_config=config,
         )
         terms = " ".join(args.terms)
-        pre_filter = (
-            {ChunkFilterField.PACKAGE.value: args.package} if args.package else None
-        )
+        pre_filter: dict | None = None
+        if args.package:
+            pkg = args.package
+            # Mirror server.py: PyPI names get normalised to the DB's
+            # underscore/lowercase form so "Flask-Login" resolves to "flask_login".
+            if pkg != "__project__":
+                pkg = normalize_package_name(pkg)
+            pre_filter = {ChunkFilterField.PACKAGE.value: pkg}
         search_query = SearchQuery(terms=terms, pre_filter=pre_filter)
 
         if args.cmd == "query":

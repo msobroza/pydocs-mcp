@@ -150,7 +150,13 @@ def run(db_path: Path, config_path: Path | None = None):
         scope = _scope_from_internal(internal)
         pre_filter: dict = {ChunkFilterField.SCOPE.value: scope.value}
         if package.strip():
-            pre_filter[ChunkFilterField.PACKAGE.value] = package.strip()
+            pkg = package.strip()
+            # PyPI names like "Flask-Login" are stored as "flask_login" in the DB.
+            # Normalise user input so search does not silently miss hyphenated
+            # or mixed-case packages. "__project__" is a sentinel — leave intact.
+            if pkg != "__project__":
+                pkg = normalize_package_name(pkg)
+            pre_filter[ChunkFilterField.PACKAGE.value] = pkg
         if topic.strip():
             pre_filter[ChunkFilterField.TITLE.value] = topic.strip()
         search_query = SearchQuery(terms=query, pre_filter=pre_filter)
@@ -181,7 +187,10 @@ def run(db_path: Path, config_path: Path | None = None):
         scope = _scope_from_internal(internal)
         pre_filter: dict = {ChunkFilterField.SCOPE.value: scope.value}
         if package.strip():
-            pre_filter[ModuleMemberFilterField.PACKAGE.value] = package.strip()
+            pkg = package.strip()
+            if pkg != "__project__":
+                pkg = normalize_package_name(pkg)
+            pre_filter[ModuleMemberFilterField.PACKAGE.value] = pkg
         search_query = SearchQuery(terms=query, pre_filter=pre_filter)
         try:
             state = await member_pipeline.run(search_query)
