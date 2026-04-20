@@ -18,8 +18,9 @@ from pydocs_mcp.storage.filters import (
     All,
     FieldEq,
     FieldIn,
+    FieldSpec,
     Filter,
-    _walk_fields,
+    MetadataSchema,
     format_registry,
 )
 
@@ -85,6 +86,15 @@ def _matches_scope(package: str, scope: frozenset[SearchScope]) -> bool:
     return False
 
 
+def _schema_from_fields(fields: frozenset[str]) -> MetadataSchema:
+    """Build a :class:`MetadataSchema` from a flat allowlist of field names.
+
+    Retrievers only know the field names (via ``AppConfig.metadata_schemas``),
+    not per-field operator sets — default to whatever :class:`FieldSpec` does.
+    """
+    return MetadataSchema(fields=tuple(FieldSpec(name=f) for f in sorted(fields)))
+
+
 @retriever_registry.register("bm25_chunk")
 @dataclass(frozen=True, slots=True)
 class Bm25ChunkRetriever:
@@ -107,12 +117,7 @@ class Bm25ChunkRetriever:
         scope: frozenset[SearchScope] | None = None
         if query.pre_filter is not None:
             tree = format_registry[query.pre_filter_format].parse(query.pre_filter)
-            unknown = _walk_fields(tree) - self.allowed_fields
-            if unknown:
-                raise ValueError(
-                    f"filter references unknown fields {sorted(unknown)}; "
-                    f"retriever allows {sorted(self.allowed_fields)}"
-                )
+            _schema_from_fields(self.allowed_fields).validate(tree)
             tree, scope = _split_scope(tree)
         results = await self.store.text_search(
             query_terms=query.terms,
@@ -171,12 +176,7 @@ class LikeMemberRetriever:
         scope: frozenset[SearchScope] | None = None
         if query.pre_filter is not None:
             tree = format_registry[query.pre_filter_format].parse(query.pre_filter)
-            unknown = _walk_fields(tree) - self.allowed_fields
-            if unknown:
-                raise ValueError(
-                    f"filter references unknown fields {sorted(unknown)}; "
-                    f"retriever allows {sorted(self.allowed_fields)}"
-                )
+            _schema_from_fields(self.allowed_fields).validate(tree)
             tree, scope = _split_scope(tree)
         rows = await self.store.list(filter=tree, limit=query.max_results)
         needle = query.terms.lower()
