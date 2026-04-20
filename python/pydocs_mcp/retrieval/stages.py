@@ -5,6 +5,10 @@ import asyncio
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.application.formatting import (
+    format_chunks_markdown_within_budget,
+    format_members_markdown_within_budget,
+)
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -377,12 +381,25 @@ class SubPipelineStage:
 
 # Formatter stage
 
-_CHARS_PER_TOKEN = 4
-
 
 @stage_registry.register("token_budget_formatter")
 @dataclass(frozen=True, slots=True)
 class TokenBudgetFormatterStage:
+    """Render the retrieval result as a single composite ``Chunk`` whose text
+    is the markdown-formatted concatenation within ``budget`` tokens.
+
+    Rendering is delegated to
+    :func:`pydocs_mcp.application.formatting.format_chunks_markdown_within_budget`
+    and :func:`~pydocs_mcp.application.formatting.format_members_markdown_within_budget`
+    — the same helpers that MCP / CLI fallback paths use, so the output is
+    byte-identical across call sites (AC #6 single-source-of-truth; AC #21
+    byte-parity with pre-sub-PR-2 ``format_within_budget``).
+
+    The ``formatter`` field is retained for YAML round-trip compatibility and
+    back-pressure on the public dataclass shape; the actual rendering no
+    longer calls it directly.
+    """
+
     formatter: "ResultFormatter"
     budget: int
     name: str = "token_budget_formatter"
@@ -390,21 +407,14 @@ class TokenBudgetFormatterStage:
     async def run(self, state: PipelineState) -> PipelineState:
         if state.result is None or not state.result.items:
             return state
-        max_chars = self.budget * _CHARS_PER_TOKEN
-        parts: list[str] = []
-        total = 0
-        for item in state.result.items:
-            rendered = self.formatter.format(item)
-            piece = f"{rendered}\n"
-            if total + len(piece) > max_chars:
-                remaining = max_chars - total
-                if remaining > 100:
-                    parts.append(piece[:remaining])
-                break
-            parts.append(piece)
-            total += len(piece)
-
-        composite_text = "\n".join(parts)
+        if isinstance(state.result, ChunkList):
+            composite_text = format_chunks_markdown_within_budget(
+                state.result.items, self.budget,
+            )
+        else:
+            composite_text = format_members_markdown_within_budget(
+                state.result.items, self.budget,
+            )
         composite = Chunk(
             text=composite_text,
             metadata={

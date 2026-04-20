@@ -31,8 +31,12 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+from pydocs_mcp.application import (
+    ChunkExtractorAdapter,
+    IndexProjectService,
+    MemberExtractorAdapter,
+)
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.indexer import index_dependencies, index_project_source
 from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 from rich.console import Console
 
@@ -140,14 +144,18 @@ def main() -> None:
         open_index_database(db_path).close()
 
         async def _build_search_index() -> None:
-            """Mirror __main__._run_indexing_phase so one asyncio.run wraps the
-            whole indexing phase and sub-loops share the same event loop."""
+            """Mirror __main__._cmd_index so one asyncio.run wraps the whole
+            indexing phase via :class:`IndexProjectService`."""
+            from benchmarks.indexer_bench import _FixedListResolver
+
             service = build_sqlite_indexing_service(db_path)
-            await index_project_source(service, project_path)
-            await index_dependencies(
-                service, FAKE_REQUIREMENTS,
-                workers=args.workers, use_inspect=False,
+            orch = IndexProjectService(
+                indexing_service=service,
+                dependency_resolver=_FixedListResolver(FAKE_REQUIREMENTS),
+                chunk_extractor=ChunkExtractorAdapter(use_inspect=False, depth=1),
+                member_extractor=MemberExtractorAdapter(use_inspect=False, depth=1),
             )
+            await orch.index_project(project_path, include_project_source=True)
             await service.chunk_store.rebuild_index()
 
         asyncio.run(_build_search_index())

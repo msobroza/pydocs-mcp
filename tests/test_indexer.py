@@ -11,17 +11,64 @@ from pydocs_mcp.db import (
 )
 from pydocs_mcp.indexer import (
     _extract_from_source_files,
-    _persist_dependency,
+    clear_extraction_cache,
+    extract_project_chunks,
+    extract_project_members,
     find_site_packages_root,
-    index_project_source,
 )
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
     ModuleMember,
     ModuleMemberFilterField,
+    Package,
+    PackageOrigin,
 )
 from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+
+
+async def _index_project_source(service: IndexingService, root: Path) -> None:
+    """Convenience: extract chunks + members and reindex the project package.
+
+    Mirrors the pre-refactor ``index_project_source`` so existing tests
+    keep their assertion shape (do a single call, expect the DB rows to
+    exist). :class:`pydocs_mcp.application.IndexProjectService` carries the
+    equivalent logic for the production code path.
+
+    Clears the module-level extraction cache FIRST so calls to this helper
+    re-walk the project directory — the cache is only safe to reuse within a
+    single ``IndexProjectService.index_project`` invocation.
+    """
+    clear_extraction_cache()
+    chunks, pkg = await extract_project_chunks(root)
+    existing = await service.package_store.get(pkg.name)
+    if existing is not None and existing.content_hash == pkg.content_hash:
+        return  # Hash match — preserve the pre-refactor cache-skip behaviour.
+    members = await extract_project_members(root)
+    await service.reindex_package(pkg, chunks, members)
+
+
+async def _persist_dependency(service: IndexingService, data: dict) -> None:
+    """Convenience: build a Package from a dict record and reindex it.
+
+    Mirrors the pre-refactor ``indexer._persist_dependency`` so the existing
+    ``TestWriteDep`` assertions still exercise the package/chunks/members
+    write path through :class:`IndexingService`.
+    """
+    pkg = Package(
+        name=data["name"],
+        version=data["version"],
+        summary=data["summary"],
+        homepage=data["homepage"],
+        dependencies=data["requires"],
+        content_hash=data["hash"],
+        origin=PackageOrigin.DEPENDENCY,
+    )
+    await service.reindex_package(
+        package=pkg,
+        chunks=tuple(data["chunks"]),
+        module_members=tuple(data["symbols"]),
+    )
 
 
 def _indexing_service(db_path: Path) -> IndexingService:
@@ -108,7 +155,7 @@ class TestParseSourceFiles:
 
 class TestIndexProject:
     def test_indexes_project_files(self, db_path, project_dir):
-        asyncio.run(index_project_source(_indexing_service(db_path), project_dir))
+        asyncio.run(_index_project_source(_indexing_service(db_path), project_dir))
         conn = open_index_database(db_path)
         pkgs = conn.execute("SELECT * FROM packages WHERE name='__project__'").fetchone()
         conn.close()
@@ -116,7 +163,7 @@ class TestIndexProject:
         assert pkgs["version"] == "local"
 
     def test_creates_chunks(self, db_path, project_dir):
-        asyncio.run(index_project_source(_indexing_service(db_path), project_dir))
+        asyncio.run(_index_project_source(_indexing_service(db_path), project_dir))
         conn = open_index_database(db_path)
         count = conn.execute(
             "SELECT count(*) FROM chunks WHERE package='__project__'"
@@ -125,7 +172,7 @@ class TestIndexProject:
         assert count > 0
 
     def test_creates_symbols(self, db_path, project_dir):
-        asyncio.run(index_project_source(_indexing_service(db_path), project_dir))
+        asyncio.run(_index_project_source(_indexing_service(db_path), project_dir))
         conn = open_index_database(db_path)
         count = conn.execute(
             "SELECT count(*) FROM module_members WHERE package='__project__'"
@@ -135,12 +182,12 @@ class TestIndexProject:
 
     def test_caching_skips_unchanged(self, db_path, project_dir):
         service = _indexing_service(db_path)
-        asyncio.run(index_project_source(service, project_dir))
+        asyncio.run(_index_project_source(service, project_dir))
         conn = open_index_database(db_path)
         chunks_before = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
         conn.close()
 
-        asyncio.run(index_project_source(service, project_dir))
+        asyncio.run(_index_project_source(service, project_dir))
         conn = open_index_database(db_path)
         chunks_after = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
         conn.close()
@@ -148,7 +195,7 @@ class TestIndexProject:
 
     def test_reindexes_after_file_change(self, db_path, project_dir):
         service = _indexing_service(db_path)
-        asyncio.run(index_project_source(service, project_dir))
+        asyncio.run(_index_project_source(service, project_dir))
         conn = open_index_database(db_path)
         syms_before = conn.execute("SELECT count(*) FROM module_members").fetchone()[0]
         conn.close()
@@ -160,14 +207,14 @@ class TestIndexProject:
             '    return x * 2\n'
         )
 
-        asyncio.run(index_project_source(service, project_dir))
+        asyncio.run(_index_project_source(service, project_dir))
         conn = open_index_database(db_path)
         syms_after = conn.execute("SELECT count(*) FROM module_members").fetchone()[0]
         conn.close()
         assert syms_after > syms_before
 
     def test_fts_searchable_after_index(self, db_path, project_dir):
-        asyncio.run(index_project_source(_indexing_service(db_path), project_dir))
+        asyncio.run(_index_project_source(_indexing_service(db_path), project_dir))
         conn = open_index_database(db_path)
         rebuild_fulltext_index(conn)
         rows = conn.execute(

@@ -199,3 +199,27 @@ class SearchResponse:
     result: PipelineResultItem
     query: SearchQuery
     duration_ms: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class PackageDoc:
+    """Groups the three query results for get_package_doc one-shot retrieval
+    (spec §5.1). Consumed by :class:`PackageLookupService` in the application
+    layer; keeping chunks/members as tuples makes the whole value object
+    hashable-ish and safe to pass across async boundaries."""
+    kind: ClassVar[str] = "package_doc"
+    package: Package
+    chunks: tuple[Chunk, ...]
+    members: tuple[ModuleMember, ...]
+
+
+@dataclass(slots=True)
+class IndexingStats:
+    """Mutable accumulator for :meth:`IndexProjectService.index_project`
+    (spec §5.3). Deliberately NOT frozen — the service mutates these counters
+    while iterating over packages. `slots=True` still guards against typos
+    (e.g. ``stats.indexxed += 1``) by rejecting unknown attributes."""
+    project_indexed: bool = False
+    indexed: int = 0
+    cached: int = 0
+    failed: int = 0

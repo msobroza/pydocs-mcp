@@ -2,7 +2,7 @@
 
 Targets: _build_package_record, _append_doc_file_chunks, list_dependency_source_files,
 _extract_from_static_sources, _extract_by_import, _extract_callable_signature,
-_extract_members_by_import, index_dependencies.
+_extract_members_by_import, :class:`IndexProjectService` dep handling.
 """
 import asyncio
 import hashlib
@@ -12,6 +12,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pydocs_mcp.application import (
+    ChunkExtractorAdapter,
+    IndexProjectService,
+    MemberExtractorAdapter,
+)
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.indexer import (
@@ -21,7 +26,7 @@ from pydocs_mcp.indexer import (
     _extract_callable_signature,
     _extract_from_static_sources,
     _extract_members_by_import,
-    index_dependencies,
+    clear_extraction_cache,
     list_dependency_source_files,
 )
 from pydocs_mcp.models import (
@@ -430,83 +435,147 @@ class TestCollectInspect:
         assert data["name"] == "pyyaml"
 
 
-# -- index_dependencies tests --
+# -- IndexProjectService dep indexing tests (replaces the old index_dependencies path) --
+
+
+class _ListResolver:
+    """Minimal ``DependencyResolver`` fake that returns a fixed list of names."""
+
+    def __init__(self, names: list[str]) -> None:
+        self._names = tuple(names)
+
+    async def resolve(self, project_dir: Path) -> tuple[str, ...]:
+        return self._names
+
 
 class TestIndexDeps:
+    @pytest.fixture(autouse=True)
+    def _isolate_cache(self):
+        # The module-level extraction cache leaks between tests otherwise —
+        # earlier tests mock ``importlib.metadata.distributions`` via patch,
+        # which leaves the cache populated with Mock-wrapped records.
+        clear_extraction_cache()
+        yield
+        clear_extraction_cache()
+
     @pytest.fixture
     def service(self, tmp_path):
         path = tmp_path / "test.db"
         open_index_database(path).close()
         return _make_service(path)
 
-    def test_index_deps_with_no_deps(self, service):
-        stats = asyncio.run(index_dependencies(service, [], depth=1, workers=1))
-        assert stats["indexed"] == 0
-        assert stats["cached"] == 0
-        assert stats["failed"] == 0
+    def _orchestrator(
+        self, service: IndexingService, deps: list[str], *, use_inspect: bool = True,
+        depth: int = 1,
+    ) -> IndexProjectService:
+        return IndexProjectService(
+            indexing_service=service,
+            dependency_resolver=_ListResolver(deps),
+            chunk_extractor=ChunkExtractorAdapter(use_inspect=use_inspect, depth=depth),
+            member_extractor=MemberExtractorAdapter(use_inspect=use_inspect, depth=depth),
+        )
 
-    def test_index_deps_caches_on_second_run(self, service):
+    def test_index_deps_with_no_deps(self, service, tmp_path):
+        orch = self._orchestrator(service, [])
+        stats = asyncio.run(orch.index_project(
+            tmp_path, include_project_source=False,
+        ))
+        assert stats.indexed == 0
+        assert stats.cached == 0
+        assert stats.failed == 0
+
+    def test_index_deps_caches_on_second_run(self, service, tmp_path):
         # Use json (always available)
-        stats1 = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=True))
-        stats2 = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=True))
-        # Second run should find it cached (if it was indexed first time)
-        if stats1["indexed"] > 0:
-            assert stats2["cached"] > 0
+        orch = self._orchestrator(service, ["json"], use_inspect=True, depth=0)
+        stats1 = asyncio.run(orch.index_project(
+            tmp_path, include_project_source=False,
+        ))
+        stats2 = asyncio.run(orch.index_project(
+            tmp_path, include_project_source=False,
+        ))
+        # Second run should find it cached (if it was indexed first time).
+        if stats1.indexed > 0:
+            assert stats2.cached > 0
 
-    def test_index_deps_static_mode(self, service):
-        # Static mode reads .py files without importing
-        stats = asyncio.run(index_dependencies(service, ["json"], depth=0, workers=1, use_inspect=False))
-        assert isinstance(stats, dict)
-        assert "indexed" in stats
+    def test_index_deps_static_mode(self, service, tmp_path):
+        # Static mode reads .py files without importing.
+        orch = self._orchestrator(service, ["json"], use_inspect=False, depth=0)
+        stats = asyncio.run(orch.index_project(
+            tmp_path, include_project_source=False,
+        ))
+        # No assertion on indexed count — whether ``json`` has .py files
+        # depends on the runtime; the shape-only check guards against
+        # regressions that would surface as a stats-field rename.
+        assert stats.indexed >= 0
+        assert stats.failed >= 0
 
-    def test_index_deps_handles_missing_package(self, service):
-        stats = asyncio.run(index_dependencies(service, ["totally_fake_package_xyz"], depth=1, workers=1))
-        # Package not installed, so nothing to index
-        assert stats["indexed"] == 0
+    def test_index_deps_handles_missing_package(self, service, tmp_path):
+        orch = self._orchestrator(service, ["totally_fake_package_xyz"])
+        stats = asyncio.run(orch.index_project(
+            tmp_path, include_project_source=False,
+        ))
+        # Package not installed — the ``LookupError`` from the extractor
+        # is swallowed as a ``failed`` by :meth:`_index_one_dependency`.
+        assert stats.indexed == 0
+        assert stats.failed == 1
 
-    def test_index_deps_with_mock_distribution(self, service):
-        """Test index_dependencies with a mocked distribution to cover the inner loop."""
+    def test_index_deps_with_mock_distribution(self, service, tmp_path):
         mock_dist = make_mock_dist(name="fakepkg", version="1.0", summary="Fake")
         mock_dist.files = None
 
-        def fake_distributions():
-            return [mock_dist]
+        with patch("pydocs_mcp.indexer.importlib.metadata.distributions",
+                   return_value=[mock_dist]):
+            orch = self._orchestrator(service, ["fakepkg"], use_inspect=True, depth=0)
+            stats = asyncio.run(orch.index_project(
+                tmp_path, include_project_source=False,
+            ))
 
-        with patch("pydocs_mcp.indexer.importlib.metadata.distributions", fake_distributions):
-            stats = asyncio.run(index_dependencies(service, ["fakepkg"], depth=0, workers=1, use_inspect=True))
+        assert stats.indexed + stats.failed >= 1
 
-        assert stats["indexed"] + stats["failed"] >= 1
-
-    def test_index_deps_static_with_mock(self, service):
+    def test_index_deps_static_with_mock(self, service, tmp_path):
         mock_dist = make_mock_dist(name="staticpkg", version="2.0")
         mock_dist.files = None
 
-        with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]):
-            stats = asyncio.run(index_dependencies(service, ["staticpkg"], depth=0, workers=1, use_inspect=False))
+        with patch("pydocs_mcp.indexer.importlib.metadata.distributions",
+                   return_value=[mock_dist]):
+            orch = self._orchestrator(service, ["staticpkg"], use_inspect=False, depth=0)
+            stats = asyncio.run(orch.index_project(
+                tmp_path, include_project_source=False,
+            ))
 
-        assert stats["indexed"] + stats["failed"] >= 1
+        assert stats.indexed + stats.failed >= 1
 
-    def test_index_deps_failed_collector(self, service):
-        """Test that a failing collector increments the failed counter."""
+    def test_index_deps_failed_collector(self, service, tmp_path):
+        """A failing collector path bumps the ``failed`` counter."""
         mock_dist = make_mock_dist(name="failpkg", version="1.0")
         mock_dist.files = None
 
         def failing_collector(dist, depth):
             raise RuntimeError("Collector failed")
 
-        with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]), \
+        with patch("pydocs_mcp.indexer.importlib.metadata.distributions",
+                   return_value=[mock_dist]), \
              patch("pydocs_mcp.indexer._extract_by_import", failing_collector):
-            stats = asyncio.run(index_dependencies(service, ["failpkg"], depth=0, workers=1, use_inspect=True))
+            orch = self._orchestrator(service, ["failpkg"], use_inspect=True, depth=0)
+            stats = asyncio.run(orch.index_project(
+                tmp_path, include_project_source=False,
+            ))
 
-        assert stats["failed"] >= 1
+        assert stats.failed >= 1
 
-    def test_index_deps_skips_null_name(self, service):
-        """Distributions with no Name metadata should be skipped."""
+    def test_index_deps_skips_null_name(self, service, tmp_path):
+        """Distributions with no Name metadata are skipped by the resolver."""
         mock_dist = make_mock_dist(name="", version="1.0")
-        # Override __getitem__ to return None for Name
         mock_dist.metadata.__getitem__ = lambda self, k: None if k == "Name" else ""
 
-        with patch("pydocs_mcp.indexer.importlib.metadata.distributions", return_value=[mock_dist]):
-            stats = asyncio.run(index_dependencies(service, [""], depth=0, workers=1))
+        with patch("pydocs_mcp.indexer.importlib.metadata.distributions",
+                   return_value=[mock_dist]):
+            orch = self._orchestrator(service, [""], use_inspect=True, depth=0)
+            # An empty dep-name string isn't a real package, so the
+            # extractor raises ``LookupError`` → stats.failed += 1 via
+            # :meth:`IndexProjectService._index_one_dependency`.
+            stats = asyncio.run(orch.index_project(
+                tmp_path, include_project_source=False,
+            ))
 
-        assert stats["indexed"] == 0
+        assert stats.indexed == 0
