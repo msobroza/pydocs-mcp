@@ -14,12 +14,14 @@ from pydocs_mcp.models import (
     ChunkFilterField,
     ChunkList,
     ChunkOrigin,
+    IndexingStats,
     MemberKind,
     MetadataFilterFormat,
     ModuleMember,
     ModuleMemberFilterField,
     ModuleMemberList,
     Package,
+    PackageDoc,
     PackageOrigin,
     Parameter,
     PipelineResultItem,
@@ -386,3 +388,110 @@ def test_row_to_chunk_raises_on_missing_column():
     }
     with pytest.raises(KeyError):
         _row_to_chunk(bad_row)
+
+
+# ---------------------------------------------------------------------------
+# PackageDoc (spec §5.1) — frozen value object carrying the 3 query results
+# consumed by PackageLookupService.get_package_doc in sub-PR #4.
+# ---------------------------------------------------------------------------
+
+def _sample_package() -> Package:
+    return Package(
+        name="fastapi",
+        version="0.104.1",
+        summary="Web framework.",
+        homepage="https://fastapi.tiangolo.com",
+        dependencies=("starlette>=0.27",),
+        content_hash="abc123",
+        origin=PackageOrigin.DEPENDENCY,
+    )
+
+
+def test_package_doc_kind():
+    assert PackageDoc.kind == "package_doc"
+
+
+def test_package_doc_construction():
+    pkg = _sample_package()
+    chunks = (Chunk(text="hello"),)
+    members = (ModuleMember(metadata={"name": "APIRouter"}),)
+    doc = PackageDoc(package=pkg, chunks=chunks, members=members)
+    assert doc.package is pkg
+    assert doc.chunks == chunks
+    assert doc.members == members
+
+
+def test_package_doc_holds_tuples():
+    """`chunks` and `members` must be tuples (immutable containers) so the
+    whole dataclass stays a true value object."""
+    doc = PackageDoc(
+        package=_sample_package(),
+        chunks=(Chunk(text="a"), Chunk(text="b")),
+        members=(ModuleMember(), ModuleMember()),
+    )
+    assert isinstance(doc.chunks, tuple)
+    assert isinstance(doc.members, tuple)
+    assert len(doc.chunks) == 2
+    assert len(doc.members) == 2
+
+
+def test_package_doc_frozen():
+    """PackageDoc is frozen — attempting to mutate any field raises."""
+    from dataclasses import FrozenInstanceError
+
+    doc = PackageDoc(package=_sample_package(), chunks=(), members=())
+    with pytest.raises(FrozenInstanceError):
+        doc.chunks = (Chunk(text="x"),)  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        doc.package = _sample_package()  # type: ignore[misc]
+
+
+def test_package_doc_empty_collections():
+    """A package with no chunks / members is a valid document."""
+    doc = PackageDoc(package=_sample_package(), chunks=(), members=())
+    assert doc.chunks == ()
+    assert doc.members == ()
+
+
+# ---------------------------------------------------------------------------
+# IndexingStats (spec §5.3) — mutable accumulator for IndexProjectService.
+# ---------------------------------------------------------------------------
+
+def test_indexing_stats_defaults():
+    """Fresh stats start at zero / False so callers can increment freely."""
+    stats = IndexingStats()
+    assert stats.project_indexed is False
+    assert stats.indexed == 0
+    assert stats.cached == 0
+    assert stats.failed == 0
+
+
+def test_indexing_stats_mutable():
+    """IndexingStats is `slots=True` but NOT `frozen=True` — fields must
+    update in place so IndexProjectService can accumulate counters."""
+    stats = IndexingStats()
+    stats.indexed += 1
+    stats.cached += 2
+    stats.failed += 3
+    stats.project_indexed = True
+    assert stats.indexed == 1
+    assert stats.cached == 2
+    assert stats.failed == 3
+    assert stats.project_indexed is True
+
+
+def test_indexing_stats_slots_rejects_unknown_attr():
+    """`slots=True` disallows setting attributes outside the declared set —
+    this guards against typos like `stats.indexxed += 1`."""
+    stats = IndexingStats()
+    with pytest.raises(AttributeError):
+        stats.unknown_field = 1  # type: ignore[attr-defined]
+
+
+def test_indexing_stats_construct_with_values():
+    """All fields are writable via the constructor (no defaults enforced)."""
+    stats = IndexingStats(project_indexed=True, indexed=5, cached=10, failed=2)
+    assert stats.project_indexed is True
+    assert stats.indexed == 5
+    assert stats.cached == 10
+    assert stats.failed == 2

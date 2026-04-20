@@ -1,13 +1,15 @@
-"""Indexing logic: project source + installed deps.
+"""Extraction-only helpers for project source + installed deps (spec §8, AC #17).
 
 Two modes for deps:
-  --no-inspect (static): reads .py from site-packages, same parser as project
-  default (inspect): imports modules, uses inspect.getmembers
+  static (``use_inspect=False``): read .py from site-packages, same parser as project.
+  inspect (``use_inspect=True``):  import modules, use ``inspect.getmembers``.
 
-Static mode is faster, safer (no side-effects), and fully parallelizable.
+Static mode is faster, safer (no side-effects), and fully parallelisable.
 
-Writes flow through :class:`pydocs_mcp.application.indexing_service.IndexingService`
-— the indexer never touches SQLite directly (spec §6.4, AC #19).
+This module is intentionally thin: the public surface is a set of ``extract_*``
+coroutines that return ``(chunks, package)`` or ``members``. All orchestration —
+iteration over deps, cache checks, stats accumulation, ``IndexingService``
+writes — lives in :class:`pydocs_mcp.application.IndexProjectService`.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import json
 import logging
 import os
 import pkgutil
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp._fast import (
@@ -31,7 +33,6 @@ from pydocs_mcp._fast import (
     split_into_chunks,
     walk_py_files,
 )
-from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.constants import (
     CLASS_DOCSTRING_MAX,
     CLASS_FULL_DOC_MAX,
@@ -67,6 +68,47 @@ IMPORT_ALIASES = {
     "pyyaml": "yaml", "beautifulsoup4": "bs4", "opencv-python": "cv2",
     "opencv-python-headless": "cv2", "attrs": "attr",
 }
+
+# ──────────────────────────────────────────────────────────────────────────
+# Extraction cache (scoped to a single ``IndexProjectService.index_project``)
+# ──────────────────────────────────────────────────────────────────────────
+#
+# ``ChunkExtractorAdapter`` and ``MemberExtractorAdapter`` run the SAME
+# expensive extraction (walk + Rust/regex parse for static; ``inspect``
+# for imports). Without a cache, calling chunks-then-members would walk
+# the whole tree twice.
+#
+# The cache keys on the resolved ``Path``/``dep_name`` so a single call to
+# ``IndexProjectService.index_project`` shares work between the two
+# adapters. It is explicitly cleared at the end of the service call via
+# :func:`clear_extraction_cache` so successive runs see fresh data.
+@dataclass(frozen=True, slots=True)
+class _ProjectExtractionRecord:
+    chunks: tuple[Chunk, ...]
+    members: tuple[ModuleMember, ...]
+    package: Package
+
+
+@dataclass(frozen=True, slots=True)
+class _DependencyExtractionRecord:
+    chunks: tuple[Chunk, ...]
+    members: tuple[ModuleMember, ...]
+    package: Package
+
+
+_project_cache: dict[str, _ProjectExtractionRecord] = {}
+_dependency_cache: dict[tuple[str, bool, int], _DependencyExtractionRecord] = {}
+
+
+def clear_extraction_cache() -> None:
+    """Drop the module-level project/dep extraction cache.
+
+    Called by :class:`IndexProjectService.index_project` at the end of a
+    run so a subsequent indexing pass re-extracts from scratch (the whole
+    point of running the indexer is to pick up edits).
+    """
+    _project_cache.clear()
+    _dependency_cache.clear()
 
 
 # ── Shared: parse .py files without importing ─────────────────────────────
@@ -142,31 +184,25 @@ def _extract_from_source_files(
 
 # ── Project source ────────────────────────────────────────────────────────
 
-async def _project_already_cached(
-    indexing_service: IndexingService, package_name: str, new_hash: str,
-) -> bool:
-    existing = await indexing_service.package_store.get(package_name)
-    return existing is not None and existing.content_hash == new_hash
+def _extract_project_record(root: Path) -> _ProjectExtractionRecord:
+    """Synchronously walk + hash + parse ``root``, returning the full record.
 
-
-async def index_project_source(indexing_service: IndexingService, root: Path) -> None:
-    """Index project .py files using Rust parser (or Python fallback).
-
-    Async-native: the caller owns the event loop so a single ``asyncio.run``
-    in ``__main__`` wraps the whole indexing phase instead of each call
-    spinning up a fresh loop (and so the function is usable from a live
-    async context in library-embedded scenarios).
+    Shared by :func:`extract_project_chunks` and :func:`extract_project_members`
+    via ``_project_cache`` — the two coroutines run back-to-back in
+    :class:`IndexProjectService.index_project`, so the cache means the walk
+    runs once per service call.
     """
+    cache_key = str(root)
+    cached = _project_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     package_name = "__project__"
     py_paths = walk_py_files(str(root))
     new_hash = hash_files(py_paths)
-
-    if await _project_already_cached(indexing_service, package_name, new_hash):
-        log.info("Project: no changes (cached)")
-        return
-
-    chunks, module_members = _extract_from_source_files(package_name, py_paths, str(root))
-
+    chunks_list, members_list = _extract_from_source_files(
+        package_name, py_paths, str(root),
+    )
     package = Package(
         name=package_name,
         version="local",
@@ -176,102 +212,35 @@ async def index_project_source(indexing_service: IndexingService, root: Path) ->
         content_hash=new_hash,
         origin=PackageOrigin.PROJECT,
     )
-    await indexing_service.reindex_package(
+    record = _ProjectExtractionRecord(
+        chunks=tuple(chunks_list),
+        members=tuple(members_list),
         package=package,
-        chunks=tuple(chunks),
-        module_members=tuple(module_members),
     )
-    log.info("Project: %d files -> %d chunks, %d symbols",
-             len(py_paths), len(chunks), len(module_members))
+    _project_cache[cache_key] = record
+    return record
 
 
-# ── Dependency indexing ───────────────────────────────────────────────────
+async def extract_project_chunks(
+    project_dir: Path,
+) -> tuple[tuple[Chunk, ...], Package]:
+    """Return (chunks, package) for the project under ``project_dir``.
 
-async def index_dependencies(
-    indexing_service: IndexingService,
-    dep_names: list[str],
-    depth: int = 1,
-    workers: int = 4,
-    use_inspect: bool = True,
-) -> dict:
-    """Index installed dependencies.
-
-    Args:
-        use_inspect: True = import + inspect (richer but slower).
-                     False = read .py files statically (faster, safer).
-
-    Async-native: the caller owns the event loop so the CLI can wrap the
-    whole indexing phase in a single ``asyncio.run``. CPU-bound collector
-    work still runs on a ThreadPoolExecutor via ``loop.run_in_executor``.
+    The underlying ``walk_py_files`` + ``hash_files`` + parse is CPU-bound,
+    so we run it on a worker thread via ``asyncio.to_thread`` to keep the
+    event loop responsive.
     """
-    stats = {"indexed": 0, "cached": 0, "failed": 0}
-    lookup = {normalize_package_name(n) for n in dep_names}
-
-    installed_distributions, seen = [], set()
-    for dist in importlib.metadata.distributions():
-        raw = dist.metadata["Name"]
-        if not raw:
-            continue
-        package_name = raw.lower().replace("-", "_")
-        if package_name in seen or package_name not in lookup:
-            continue
-        seen.add(package_name)
-        installed_distributions.append(dist)
-
-    packages_to_index = []
-    for dist in installed_distributions:
-        package_name = dist.metadata["Name"].lower().replace("-", "_")
-        v = dist.metadata["Version"] or "?"
-        h = hashlib.md5(f"{package_name}:{v}".encode()).hexdigest()[:12]
-        existing = await indexing_service.package_store.get(package_name)
-        if existing is not None and existing.content_hash == h:
-            stats["cached"] += 1
-        else:
-            packages_to_index.append(dist)
-
-    w = min(workers, len(packages_to_index)) if packages_to_index else 1
-    mode = "inspect" if use_inspect else "static"
-    log.info("Deps: %d to index, %d cached (%d workers, mode=%s)",
-             len(packages_to_index), stats["cached"], w, mode)
-
-    collector = _extract_by_import if use_inspect else _extract_from_static_sources
-
-    loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor(max_workers=w) as pool:
-        # Performance: run collector calls on the pool but await them via
-        # ``run_in_executor`` so persist (which needs the event loop) can
-        # interleave with still-running collectors.
-        async def _index_one(dist) -> tuple[str, bool, dict | None]:
-            pn = dist.metadata["Name"].lower().replace("-", "_")
-            try:
-                package_record = await loop.run_in_executor(pool, collector, dist, depth)
-            except Exception as e:
-                log.warning("  fail %s: %s", pn, e)
-                return pn, False, None
-            try:
-                await _persist_dependency(indexing_service, package_record)
-            except Exception as e:
-                log.warning("  fail %s: %s", pn, e)
-                return pn, False, None
-            return pn, True, package_record
-
-        results = await asyncio.gather(
-            *[_index_one(d) for d in packages_to_index],
-            return_exceptions=False,
-        )
-        for _pn, ok, record in results:
-            if ok and record is not None:
-                stats["indexed"] += 1
-                log.info("  ok %s %s (%d chunks, %d syms)",
-                         record["name"], record["version"],
-                         len(record["chunks"]), len(record["symbols"]))
-            else:
-                stats["failed"] += 1
-
-    return stats
+    record = await asyncio.to_thread(_extract_project_record, project_dir)
+    return record.chunks, record.package
 
 
-# ── Shared dep helpers ────────────────────────────────────────────────────
+async def extract_project_members(project_dir: Path) -> tuple[ModuleMember, ...]:
+    """Return the module-member tuple for the project under ``project_dir``."""
+    record = await asyncio.to_thread(_extract_project_record, project_dir)
+    return record.members
+
+
+# ── Dependency helpers ────────────────────────────────────────────────────
 
 def _build_package_record(dist, name: str, version: str) -> dict:
     package_record = {
@@ -326,10 +295,8 @@ def _append_doc_file_chunks(dist, name: str, package_record: dict):
         log.debug("Failed to read doc files for %s: %s", name, e)
 
 
-async def _persist_dependency(
-    indexing_service: IndexingService, package_record: dict,
-) -> None:
-    package = Package(
+def _package_from_record(package_record: dict) -> Package:
+    return Package(
         name=package_record["name"],
         version=package_record["version"],
         summary=package_record["summary"],
@@ -338,11 +305,85 @@ async def _persist_dependency(
         content_hash=package_record["hash"],
         origin=PackageOrigin.DEPENDENCY,
     )
-    await indexing_service.reindex_package(
-        package=package,
+
+
+def _find_installed_distribution(dep_name: str):
+    """Locate the installed ``importlib.metadata`` distribution for *dep_name*.
+
+    Returns ``None`` if no matching distribution is installed — the service
+    treats that as a non-fatal skip rather than a hard failure, because
+    declared-but-not-installed deps are common during local development.
+    """
+    target = normalize_package_name(dep_name)
+    for dist in importlib.metadata.distributions():
+        raw = dist.metadata["Name"]
+        if not raw:
+            continue
+        if raw.lower().replace("-", "_") == target:
+            return dist
+    return None
+
+
+def _extract_dependency_record(
+    dep_name: str, use_inspect: bool = False, depth: int = 1,
+) -> _DependencyExtractionRecord | None:
+    """Extract the full record for ``dep_name``, or ``None`` if not installed.
+
+    Shared by :func:`extract_dependency_chunks` and
+    :func:`extract_dependency_members` via ``_dependency_cache``.
+    """
+    cache_key = (normalize_package_name(dep_name), use_inspect, depth)
+    cached = _dependency_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    dist = _find_installed_distribution(dep_name)
+    if dist is None:
+        return None
+
+    collector = _extract_by_import if use_inspect else _extract_from_static_sources
+    package_record = collector(dist, depth)
+    record = _DependencyExtractionRecord(
         chunks=tuple(package_record["chunks"]),
-        module_members=tuple(package_record["symbols"]),
+        members=tuple(package_record["symbols"]),
+        package=_package_from_record(package_record),
     )
+    _dependency_cache[cache_key] = record
+    return record
+
+
+async def extract_dependency_chunks(
+    dep_name: str, use_inspect: bool = False, depth: int = 1,
+) -> tuple[tuple[Chunk, ...], Package]:
+    """Return (chunks, package) for an installed dependency.
+
+    Raises :class:`LookupError` when the dep is declared but not installed —
+    callers (typically :class:`IndexProjectService`) translate that into a
+    failed-counter bump so one missing dep does not abort the pass.
+    """
+    record = await asyncio.to_thread(
+        _extract_dependency_record, dep_name, use_inspect, depth,
+    )
+    if record is None:
+        raise LookupError(f"dependency {dep_name!r} is not installed")
+    return record.chunks, record.package
+
+
+async def extract_dependency_members(
+    dep_name: str, use_inspect: bool = False, depth: int = 1,
+) -> tuple[ModuleMember, ...]:
+    """Return the module-member tuple for an installed dependency.
+
+    Raises :class:`LookupError` when the dep is declared but not installed —
+    matches :func:`extract_dependency_chunks` so callers can catch either
+    function's failure the same way.
+    """
+    record = await asyncio.to_thread(
+        _extract_dependency_record, dep_name, use_inspect, depth,
+    )
+    if record is None:
+        raise LookupError(f"dependency {dep_name!r} is not installed")
+    return record.members
 
 
 # ── Static mode: read .py files, no imports ───────────────────────────────

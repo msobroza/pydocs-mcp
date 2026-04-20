@@ -178,8 +178,13 @@ class TestNoRustFlag:
 
 class TestServeCommand:
     def test_serve_indexes_then_starts_server(self, seeded_project):
-        """Test that serve indexes and calls run() — we mock run() to avoid blocking."""
-        with patch("pydocs_mcp.__main__.run") as mock_run:
+        """Test that serve indexes and calls run() — we mock run() to avoid blocking.
+
+        The handler defers the ``pydocs_mcp.server`` import to its call
+        path, so patching happens at the source module rather than the
+        pre-refactor ``pydocs_mcp.__main__.run`` attribute.
+        """
+        with patch("pydocs_mcp.server.run") as mock_run:
             with patch("sys.argv", ["pydocs-mcp", "serve", str(seeded_project)]):
                 from pydocs_mcp.__main__ import main
                 main()
