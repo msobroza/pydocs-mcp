@@ -93,10 +93,10 @@ def write_package_sync(
     chunks: tuple[Chunk, ...] = (),
     module_members: tuple[ModuleMember, ...] = (),
 ) -> None:
-    """Sync wrapper over ``IndexingService.reindex_package`` for legacy tests.
+    """Sync wrapper over ``IndexingService.reindex_package`` for fixture setup.
 
-    Commits via a fresh event loop so the seeded connection fixture keeps
-    working without awaiting anything.
+    Commits via a fresh event loop so synchronous seeded-connection fixtures
+    keep working without awaiting anything themselves.
     """
     service = _make_indexing_service(conn_or_path)
     pkg = Package(
