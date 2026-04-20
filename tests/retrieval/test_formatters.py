@@ -22,13 +22,13 @@ def test_chunk_markdown_formatter_renders_title_and_text():
         text="body text",
         metadata={ChunkFilterField.TITLE.value: "Hello"},
     )
-    assert f.format(c) == "## Hello\n\nbody text"
+    assert f.format(c) == "## Hello\nbody text"
 
 
 def test_chunk_markdown_formatter_empty_title_ok():
     f = ChunkMarkdownFormatter()
     c = Chunk(text="body")
-    assert f.format(c) == "## \n\nbody"
+    assert f.format(c) == "## \nbody"
 
 
 def test_member_markdown_formatter_renders_fields():

@@ -15,7 +15,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, formatter_registry
 @formatter_registry.register("chunk_markdown")
 @dataclass(frozen=True, slots=True)
 class ChunkMarkdownFormatter:
-    """Renders a Chunk as `## {title}\n\n{text}`."""
+    """Renders a Chunk as `## {title}\n{text}` (single newline — AC #21/#29 byte parity)."""
 
     name: str = "chunk_markdown"
 
@@ -27,7 +27,7 @@ class ChunkMarkdownFormatter:
             body = result.text or ""
         else:  # defensive — but not expected per registry dispatch
             body = ""
-        return f"## {title}\n\n{body}"
+        return f"## {title}\n{body}"
 
     def to_dict(self) -> dict:
         return {"type": "chunk_markdown"}

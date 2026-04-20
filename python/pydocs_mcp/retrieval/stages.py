@@ -397,7 +397,7 @@ class TokenBudgetFormatterStage:
             parts.append(piece)
             total += len(piece)
 
-        composite_text = "\n".join(parts).rstrip()
+        composite_text = "\n".join(parts)
         composite = Chunk(
             text=composite_text,
             metadata={ChunkFilterField.ORIGIN.value: ChunkOrigin.COMPOSITE_OUTPUT.value},
