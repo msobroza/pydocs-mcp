@@ -1,4 +1,4 @@
-"""IndexProjectService — write-side bootstrap orchestrator (spec §5.1).
+"""IndexProjectService — write-side bootstrap orchestrator (spec §5.1, §5.3).
 
 Wraps :class:`IndexingService` + three extractor Protocols
 (:class:`DependencyResolver` / :class:`ChunkExtractor` / :class:`MemberExtractor`
@@ -6,13 +6,12 @@ from :mod:`pydocs_mcp.application.protocols`). Sub-PR #5 replaces the adapters
 with strategy-based implementations without touching this service — the
 orchestrator depends only on the Protocols.
 
-The three ``*Adapter`` classes at the bottom of the file are thin wrappers over
-today's ``deps.py`` / ``indexer.py`` helpers. Task 12 reshapes ``indexer.py``
-so each adapter body becomes a single ``asyncio.to_thread`` line; for now the
-chunk- and member-extractor adapters raise ``NotImplementedError`` because
-the target split-extraction functions do not yet exist in ``indexer.py``
-(they're scheduled for Task 12). The adapter classes ship now so downstream
-wiring (Task 10 ``server.py`` rewrite) can reference them by name.
+Hash-based cache skipping lives here, not in the extractors. Each extract
+call returns a fresh :class:`~pydocs_mcp.models.Package` with its
+``content_hash`` populated; the service compares that against whatever
+the underlying :class:`PackageStore` already has and skips the 3-table
+delete-then-upsert when nothing changed, bumping :attr:`IndexingStats.cached`
+instead of :attr:`~IndexingStats.indexed`.
 """
 from __future__ import annotations
 
@@ -41,9 +40,14 @@ class IndexProjectService:
     1. When ``force=True``, wipe every row via ``IndexingService.clear_all``.
     2. When ``include_project_source=True`` (the default), extract chunks +
        module-members for the project under ``project_dir`` and reindex the
-       virtual ``__project__`` package.
+       virtual ``__project__`` package — skipping when the package hash
+       already matches (counts as "cached" via ``stats.project_indexed``
+       staying ``False``).
     3. For every dependency returned by the resolver, call
        :meth:`_index_one_dependency` — a single failure never aborts the pass.
+    4. Finally, drop the module-level extraction cache so the next call
+       re-extracts from scratch (this is the whole point of re-running the
+       indexer — to pick up edits).
     """
 
     indexing_service: IndexingService
@@ -66,16 +70,42 @@ class IndexProjectService:
         see :meth:`_index_one_dependency`.
         """
         stats = IndexingStats()
-        if force:
-            await self.indexing_service.clear_all()
-        if include_project_source:
-            chunks, pkg = await self.chunk_extractor.extract_from_project(project_dir)
-            members = await self.member_extractor.extract_from_project(project_dir)
-            await self.indexing_service.reindex_package(pkg, chunks, members)
-            stats.project_indexed = True
-        for dep_name in await self.dependency_resolver.resolve(project_dir):
-            await self._index_one_dependency(dep_name, stats)
+        try:
+            if force:
+                await self.indexing_service.clear_all()
+            if include_project_source:
+                await self._index_project_source(project_dir, stats)
+            for dep_name in await self.dependency_resolver.resolve(project_dir):
+                await self._index_one_dependency(dep_name, stats)
+        finally:
+            # Drop the module-level extraction cache so a subsequent call
+            # re-walks the project / re-imports each dep. The cache exists
+            # purely to share work between the chunk- and member-extractor
+            # halves within ONE ``index_project`` call.
+            _clear_extractor_cache()
         return stats
+
+    async def _index_project_source(
+        self, project_dir: Path, stats: IndexingStats,
+    ) -> None:
+        """Extract + (maybe) reindex the virtual ``__project__`` package.
+
+        When the newly-computed content_hash matches the existing row we skip
+        the delete-then-upsert entirely — leaves ``stats.project_indexed``
+        as ``False`` which callers read as "nothing changed".
+        """
+        chunks, pkg = await self.chunk_extractor.extract_from_project(project_dir)
+        existing = await self.indexing_service.package_store.get(pkg.name)
+        if existing is not None and existing.content_hash == pkg.content_hash:
+            log.info("Project: no changes (cached)")
+            return
+        members = await self.member_extractor.extract_from_project(project_dir)
+        await self.indexing_service.reindex_package(pkg, chunks, members)
+        stats.project_indexed = True
+        log.info(
+            "Project: %d chunks, %d symbols",
+            len(chunks), len(members),
+        )
 
     async def _index_one_dependency(
         self, dep_name: str, stats: IndexingStats,
@@ -89,14 +119,30 @@ class IndexProjectService:
         """
         try:
             chunks, pkg = await self.chunk_extractor.extract_from_dependency(dep_name)
+            existing = await self.indexing_service.package_store.get(pkg.name)
+            if existing is not None and existing.content_hash == pkg.content_hash:
+                stats.cached += 1
+                return
             members = await self.member_extractor.extract_from_dependency(dep_name)
             await self.indexing_service.reindex_package(pkg, chunks, members)
             stats.indexed += 1
+            log.info("  ok %s %s (%d chunks, %d syms)",
+                     pkg.name, pkg.version, len(chunks), len(members))
         except Exception as e:  # noqa: BLE001 -- spec §7 allowlist
             # NARROW-EXCEPT EXCEPTION: see method docstring. The failure is
             # observable through the log line + the counter, never silenced.
             log.warning("  fail %s: %s", dep_name, e)
             stats.failed += 1
+
+
+def _clear_extractor_cache() -> None:
+    """Deferred import so ``application.*`` stays free of ``indexer`` at
+    module-load time — keeps the Sub-PR #5 swap to a strategy module a
+    pure adapter change.
+    """
+    from pydocs_mcp import indexer
+
+    indexer.clear_extraction_cache()
 
 
 # ── Adapters (spec §5.2) ───────────────────────────────────────────────────
@@ -123,54 +169,62 @@ class DependencyResolverAdapter:
 
 @dataclass(frozen=True, slots=True)
 class ChunkExtractorAdapter:
-    """Thin wrapper over ``indexer.py`` chunk-extraction helpers.
+    """Thin wrapper over ``indexer.extract_*_chunks`` (spec §8, AC #17).
 
-    The target functions ``extract_project_chunks`` /
-    ``extract_dependency_chunks`` do not yet exist in ``indexer.py`` — Task 12
-    splits today's ``index_project_source`` / ``index_dependencies`` into
-    extraction + persist halves. Until then these methods raise
-    :class:`NotImplementedError`; the adapter class itself still ships so
-    Task 10 (``server.py`` rewrite) can wire it by name.
+    ``use_inspect`` toggles between live-import mode (``True``) and static
+    file-read mode (``False``). ``depth`` bounds recursive submodule
+    traversal in inspect mode. The defaults mirror ``__main__``'s CLI
+    defaults (``--no-inspect`` OFF, ``--depth 1``).
     """
+
+    use_inspect: bool = True
+    depth: int = 1
 
     async def extract_from_project(
         self, project_dir: Path,
     ) -> tuple[tuple[Chunk, ...], Package]:
-        raise NotImplementedError(
-            "ChunkExtractorAdapter.extract_from_project is wired in Task 12 "
-            "when indexer.extract_project_chunks lands.",
-        )
+        # Deferred import: the service-adapter split means the service
+        # imports this module at load time, but the heavy ``indexer``
+        # module (Rust bindings, importlib traversal) is only needed
+        # inside the adapter's call path.
+        from pydocs_mcp import indexer
+
+        return await indexer.extract_project_chunks(project_dir)
 
     async def extract_from_dependency(
         self, dep_name: str,
     ) -> tuple[tuple[Chunk, ...], Package]:
-        raise NotImplementedError(
-            "ChunkExtractorAdapter.extract_from_dependency is wired in Task 12 "
-            "when indexer.extract_dependency_chunks lands.",
+        from pydocs_mcp import indexer
+
+        return await indexer.extract_dependency_chunks(
+            dep_name, use_inspect=self.use_inspect, depth=self.depth,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class MemberExtractorAdapter:
-    """Thin wrapper over ``indexer.py`` member-extraction helpers.
+    """Thin wrapper over ``indexer.extract_*_members`` (spec §8, AC #17).
 
-    Same story as :class:`ChunkExtractorAdapter` — target functions land in
-    Task 12. The class ships with raising stubs so callers (Task 10 wiring)
-    can reference it today.
+    Shares ``use_inspect`` / ``depth`` with :class:`ChunkExtractorAdapter`;
+    the two adapters typically operate in lockstep so the service's back-
+    to-back chunks-then-members calls hit the same cached extraction.
     """
+
+    use_inspect: bool = True
+    depth: int = 1
 
     async def extract_from_project(
         self, project_dir: Path,
     ) -> tuple[ModuleMember, ...]:
-        raise NotImplementedError(
-            "MemberExtractorAdapter.extract_from_project is wired in Task 12 "
-            "when indexer.extract_project_members lands.",
-        )
+        from pydocs_mcp import indexer
+
+        return await indexer.extract_project_members(project_dir)
 
     async def extract_from_dependency(
         self, dep_name: str,
     ) -> tuple[ModuleMember, ...]:
-        raise NotImplementedError(
-            "MemberExtractorAdapter.extract_from_dependency is wired in Task 12 "
-            "when indexer.extract_dependency_members lands.",
+        from pydocs_mcp import indexer
+
+        return await indexer.extract_dependency_members(
+            dep_name, use_inspect=self.use_inspect, depth=self.depth,
         )

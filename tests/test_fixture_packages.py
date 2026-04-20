@@ -15,16 +15,53 @@ from pydocs_mcp.db import (
 )
 from pydocs_mcp.indexer import (
     _extract_from_source_files,
-    _persist_dependency,
-    index_project_source,
+    clear_extraction_cache,
+    extract_project_chunks,
+    extract_project_members,
 )
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
     ModuleMember,
     ModuleMemberFilterField,
+    Package,
+    PackageOrigin,
 )
 from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+
+
+async def _index_project_source(service: IndexingService, root: Path) -> None:
+    """Convenience: extract chunks+members and reindex the project package.
+
+    Clears the module-level extraction cache FIRST so each test run re-walks
+    the project directory instead of hitting a stale cached record.
+    """
+    clear_extraction_cache()
+    chunks, pkg = await extract_project_chunks(root)
+    existing = await service.package_store.get(pkg.name)
+    if existing is not None and existing.content_hash == pkg.content_hash:
+        return
+    members = await extract_project_members(root)
+    await service.reindex_package(pkg, chunks, members)
+
+
+async def _persist_dependency(service: IndexingService, data: dict) -> None:
+    """Build a Package from a dict record and reindex it (mirrors the old
+    ``indexer._persist_dependency``)."""
+    pkg = Package(
+        name=data["name"],
+        version=data["version"],
+        summary=data["summary"],
+        homepage=data["homepage"],
+        dependencies=data["requires"],
+        content_hash=data["hash"],
+        origin=PackageOrigin.DEPENDENCY,
+    )
+    await service.reindex_package(
+        package=pkg,
+        chunks=tuple(data["chunks"]),
+        module_members=tuple(data["symbols"]),
+    )
 from tests._retriever_helpers import (
     retrieve_chunks,
     retrieve_module_members,
@@ -88,14 +125,14 @@ def _index_fake_package(conn, pkg_name):
 
 class TestFakeProjectIndexing:
     def test_indexes_fake_project_successfully(self, db_path):
-        asyncio.run(index_project_source(_make_service(db_path), FAKE_PROJECT))
+        asyncio.run(_index_project_source(_make_service(db_path), FAKE_PROJECT))
         c = open_index_database(db_path)
         pkg = c.execute("SELECT * FROM packages WHERE name='__project__'").fetchone()
         c.close()
         assert pkg is not None
 
     def test_extracts_project_symbols(self, db_path):
-        asyncio.run(index_project_source(_make_service(db_path), FAKE_PROJECT))
+        asyncio.run(_index_project_source(_make_service(db_path), FAKE_PROJECT))
         c = open_index_database(db_path)
         syms = c.execute(
             "SELECT * FROM module_members WHERE package='__project__'"
@@ -105,7 +142,7 @@ class TestFakeProjectIndexing:
         assert "main" in names or "run_pipeline" in names or "train_model" in names
 
     def test_extracts_project_chunks(self, db_path):
-        asyncio.run(index_project_source(_make_service(db_path), FAKE_PROJECT))
+        asyncio.run(_index_project_source(_make_service(db_path), FAKE_PROJECT))
         c = open_index_database(db_path)
         chunks = c.execute(
             "SELECT * FROM chunks WHERE package='__project__'"
@@ -114,7 +151,7 @@ class TestFakeProjectIndexing:
         assert len(chunks) > 0
 
     def test_project_docstrings_captured(self, db_path):
-        asyncio.run(index_project_source(_make_service(db_path), FAKE_PROJECT))
+        asyncio.run(_index_project_source(_make_service(db_path), FAKE_PROJECT))
         c = open_index_database(db_path)
         docs = c.execute(
             "SELECT docstring FROM module_members WHERE package='__project__' AND docstring != ''"
@@ -207,7 +244,7 @@ class TestCrossPackageSearch:
         self.db = db
         self.path = _db_path(db)
         db.close()
-        asyncio.run(index_project_source(_make_service(self.path), FAKE_PROJECT))
+        asyncio.run(_index_project_source(_make_service(self.path), FAKE_PROJECT))
         self.db = open_index_database(self.path)
         for pkg in ("sklearn", "vllm", "langgraph"):
             _index_fake_package(self.db, pkg)

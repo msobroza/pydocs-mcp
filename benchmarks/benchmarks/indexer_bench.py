@@ -12,9 +12,27 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_mcp.application import (
+    ChunkExtractorAdapter,
+    IndexProjectService,
+    MemberExtractorAdapter,
+)
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.indexer import index_dependencies, index_project_source
 from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+
+
+class _FixedListResolver:
+    """DependencyResolver fake that returns the benchmark's dep list.
+
+    The benchmark drives per-dep timing by calling ``index_project`` once
+    per dep, so we build a new orchestrator (and resolver) per iteration.
+    """
+
+    def __init__(self, names: list[str]) -> None:
+        self._names = tuple(names)
+
+    async def resolve(self, project_dir: Path) -> tuple[str, ...]:
+        return self._names
 
 
 @dataclass
@@ -45,7 +63,15 @@ async def _run_indexing_async(
     # --- Project ---
     t0 = time.perf_counter()
     try:
-        await index_project_source(service, project_root)
+        project_orch = IndexProjectService(
+            indexing_service=service,
+            dependency_resolver=_FixedListResolver([]),
+            chunk_extractor=ChunkExtractorAdapter(use_inspect=use_inspect, depth=1),
+            member_extractor=MemberExtractorAdapter(use_inspect=use_inspect, depth=1),
+        )
+        await project_orch.index_project(
+            project_root, include_project_source=True,
+        )
         elapsed = time.perf_counter() - t0
         with sqlite3.connect(db_path) as conn:
             chunks = conn.execute(
@@ -62,10 +88,14 @@ async def _run_indexing_async(
     for dep in dep_names:
         t0 = time.perf_counter()
         try:
-            await index_dependencies(
-                service, [dep],
-                depth=1, workers=1,
-                use_inspect=use_inspect,
+            dep_orch = IndexProjectService(
+                indexing_service=service,
+                dependency_resolver=_FixedListResolver([dep]),
+                chunk_extractor=ChunkExtractorAdapter(use_inspect=use_inspect, depth=1),
+                member_extractor=MemberExtractorAdapter(use_inspect=use_inspect, depth=1),
+            )
+            await dep_orch.index_project(
+                project_root, include_project_source=False,
             )
             elapsed = time.perf_counter() - t0
             norm = dep.lower().replace("-", "_")

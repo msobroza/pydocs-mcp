@@ -73,13 +73,30 @@ def _member(package: str, name: str) -> ModuleMember:
 
 
 @dataclass
+class FakePackageStore:
+    """Minimal PackageStore fake: ``get`` returns whatever the test seeded
+    via ``known_packages``; defaults to ``None`` (not cached).
+
+    Exists so :class:`IndexProjectService` can call ``package_store.get`` on
+    the hash-cache check path without the full ``SqlitePackageRepository``
+    surface — mirrors the pattern in test_indexing_service.py.
+    """
+
+    known_packages: dict[str, Package] = field(default_factory=dict)
+
+    async def get(self, name: str) -> Package | None:
+        return self.known_packages.get(name)
+
+
+@dataclass
 class FakeIndexingService:
     """Stands in for application.IndexingService — records the call sequence.
 
-    We don't inherit or reference the real class; the fake only needs the two
+    We don't inherit or reference the real class; the fake only needs the
     methods IndexProjectService actually invokes (``clear_all`` +
-    ``reindex_package``). That keeps the write-bootstrap test isolated from
-    the persistence-layer mechanics covered in test_indexing_service.py.
+    ``reindex_package`` + ``package_store.get`` via the store attribute).
+    That keeps the write-bootstrap test isolated from the persistence-layer
+    mechanics covered in test_indexing_service.py.
     """
 
     cleared: bool = False
@@ -87,6 +104,7 @@ class FakeIndexingService:
     reindex_calls: list[tuple[Package, tuple[Chunk, ...], tuple[ModuleMember, ...]]] = (
         field(default_factory=list)
     )
+    package_store: FakePackageStore = field(default_factory=FakePackageStore)
     _call_counter: int = 0
 
     async def clear_all(self) -> None:

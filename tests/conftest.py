@@ -8,7 +8,12 @@ from pydocs_mcp.db import (
     open_index_database,
     rebuild_fulltext_index,
 )
-from pydocs_mcp.indexer import _extract_from_source_files, index_project_source
+from pydocs_mcp.indexer import (
+    _extract_from_source_files,
+    clear_extraction_cache,
+    extract_project_chunks,
+    extract_project_members,
+)
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -151,8 +156,17 @@ def integration_conn(tmp_path):
 
     service = build_sqlite_indexing_service(db_path)
 
-    # Index the fake project via the production code path.
-    asyncio.run(index_project_source(service, FAKE_PROJECT))
+    # Index the fake project directly via the extraction functions so the
+    # fixture doesn't also try to resolve the fake_project's declared
+    # (not-installed) deps — matches what :class:`IndexProjectService`
+    # does for the ``__project__`` package without the dep loop.
+    async def _index_project_only() -> None:
+        clear_extraction_cache()
+        chunks, pkg = await extract_project_chunks(FAKE_PROJECT)
+        members = await extract_project_members(FAKE_PROJECT)
+        await service.reindex_package(pkg, chunks, members)
+
+    asyncio.run(_index_project_only())
 
     # Index each package snapshot as if it were an installed dep.
     for pkg_name in ("sklearn", "vllm", "langgraph"):
