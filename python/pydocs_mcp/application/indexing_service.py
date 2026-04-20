@@ -14,6 +14,7 @@ non-transactional backends or in tests with Protocol fakes).
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from pydocs_mcp.models import Chunk, ModuleMember, Package
@@ -24,6 +25,8 @@ from pydocs_mcp.storage.protocols import (
     PackageStore,
     UnitOfWork,
 )
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +40,20 @@ class IndexingService:
     chunk_store: ChunkStore
     module_member_store: ModuleMemberStore
     unit_of_work: UnitOfWork | None = None
+
+    def __post_init__(self) -> None:
+        # Warn when the service is constructed without a UoW — ``_do_reindex``
+        # runs delete-then-upsert, and without a transaction boundary a
+        # mid-sequence crash can leave the package row wiped but chunks /
+        # members only partially re-inserted. Safe for tests with Protocol
+        # fakes (no persistence, no partial-visibility risk), but dangerous
+        # against a real backend. Dataclass frozen=True still permits
+        # __post_init__ — it just blocks ``self.x = y`` on declared fields.
+        if self.unit_of_work is None:
+            log.warning(
+                "IndexingService constructed without UnitOfWork — writes are "
+                "NOT atomic; partial reindex state can become visible on failure.",
+            )
 
     async def reindex_package(
         self,

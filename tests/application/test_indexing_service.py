@@ -350,6 +350,32 @@ async def test_indexing_service_clear_all_also_removes_null_package_rows(tmp_pat
     assert chunk_count == 0
 
 
+def test_indexing_service_without_uow_logs_warning(caplog):
+    """Constructing without a UoW must emit a warning — callers should be
+    aware that writes are non-atomic in that mode."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="pydocs_mcp.application.indexing_service"):
+        IndexingService(
+            package_store=FakePackageStore(),
+            chunk_store=FakeChunkStore(),
+            module_member_store=FakeModuleMemberStore(),
+        )
+    assert any("NOT atomic" in r.message for r in caplog.records)
+
+
+def test_indexing_service_with_uow_does_not_warn(caplog):
+    """Constructing with a UoW is the intended happy path — no warning."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="pydocs_mcp.application.indexing_service"):
+        IndexingService(
+            package_store=FakePackageStore(),
+            chunk_store=FakeChunkStore(),
+            module_member_store=FakeModuleMemberStore(),
+            unit_of_work=FakeUnitOfWork(),
+        )
+    assert not any("NOT atomic" in r.message for r in caplog.records)
+
+
 def test_indexing_service_accepts_fake_stores_only():
     """Constructing the service from plain Protocol fakes type-checks fine.
 
