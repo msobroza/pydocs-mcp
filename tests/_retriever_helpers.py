@@ -18,16 +18,24 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import (
+    Chunk,
     ChunkFilterField,
+    ModuleMember,
     ModuleMemberFilterField,
+    Package,
+    PackageOrigin,
     SearchQuery,
     SearchScope,
 )
 from pydocs_mcp.retrieval.retrievers import Bm25ChunkRetriever, LikeMemberRetriever
 from pydocs_mcp.storage.sqlite import (
+    SqliteChunkRepository,
     SqliteModuleMemberRepository,
+    SqlitePackageRepository,
+    SqliteUnitOfWork,
     SqliteVectorStore,
 )
 
@@ -58,6 +66,53 @@ def _resolve_db_path(conn_or_path) -> Path:
 
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
+
+
+def _make_indexing_service(conn_or_path) -> IndexingService:
+    """Helper — build a transactional IndexingService wired to ``conn_or_path``'s DB."""
+    path = _resolve_db_path(conn_or_path)
+    provider = build_connection_provider(path)
+    return IndexingService(
+        package_store=SqlitePackageRepository(provider=provider),
+        chunk_store=SqliteChunkRepository(provider=provider),
+        module_member_store=SqliteModuleMemberRepository(provider=provider),
+        unit_of_work=SqliteUnitOfWork(provider=provider),
+    )
+
+
+def write_package_sync(
+    conn_or_path,
+    *,
+    name: str,
+    version: str,
+    summary: str = "",
+    homepage: str = "",
+    dependencies: tuple[str, ...] = (),
+    content_hash: str = "",
+    origin: PackageOrigin = PackageOrigin.DEPENDENCY,
+    chunks: tuple[Chunk, ...] = (),
+    module_members: tuple[ModuleMember, ...] = (),
+) -> None:
+    """Sync wrapper over ``IndexingService.reindex_package`` for legacy tests.
+
+    Commits via a fresh event loop so the seeded connection fixture keeps
+    working without awaiting anything.
+    """
+    service = _make_indexing_service(conn_or_path)
+    pkg = Package(
+        name=name,
+        version=version,
+        summary=summary,
+        homepage=homepage,
+        dependencies=dependencies,
+        content_hash=content_hash,
+        origin=origin,
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(service.reindex_package(pkg, chunks, module_members))
+    finally:
+        loop.close()
 
 
 def retrieve_chunks(

@@ -11,7 +11,6 @@ from pydocs_mcp.db import (
     build_connection_provider,
     cache_path_for_project,
     open_index_database,
-    rebuild_fulltext_index,
 )
 from pydocs_mcp.deps import discover_declared_dependencies
 from pydocs_mcp.indexer import index_dependencies, index_project_source
@@ -77,51 +76,47 @@ def main():
     log.debug("DB: %s", db_path)
 
     if args.cmd in ("serve", "index"):
-        conn = open_index_database(db_path)
+        import asyncio
+
+        from pydocs_mcp.application.indexing_service import IndexingService
+        from pydocs_mcp.storage.sqlite import (
+            SqliteChunkRepository,
+            SqliteModuleMemberRepository,
+            SqlitePackageRepository,
+            SqliteUnitOfWork,
+        )
+
+        # Ensure the schema exists before repositories issue queries.
+        open_index_database(db_path).close()
+
+        provider = build_connection_provider(db_path)
+        chunk_repository = SqliteChunkRepository(provider=provider)
+        indexing_service = IndexingService(
+            package_store=SqlitePackageRepository(provider=provider),
+            chunk_store=chunk_repository,
+            module_member_store=SqliteModuleMemberRepository(provider=provider),
+            unit_of_work=SqliteUnitOfWork(provider=provider),
+        )
 
         if args.force:
-            import asyncio
-
-            from pydocs_mcp.application.indexing_service import IndexingService
-            from pydocs_mcp.storage.sqlite import (
-                SqliteChunkRepository,
-                SqliteModuleMemberRepository,
-                SqlitePackageRepository,
-                SqliteUnitOfWork,
-            )
-
-            # Close the plain connection first so the async UoW transaction
-            # doesn't deadlock with our own WAL writer.
-            conn.close()
-
-            provider = build_connection_provider(db_path)
-            indexing_service = IndexingService(
-                package_store=SqlitePackageRepository(provider=provider),
-                chunk_store=SqliteChunkRepository(provider=provider),
-                module_member_store=SqliteModuleMemberRepository(provider=provider),
-                unit_of_work=SqliteUnitOfWork(provider=provider),
-            )
             asyncio.run(indexing_service.clear_all())
             log.info("Cache cleared")
 
-            conn = open_index_database(db_path)
-
         if not args.skip_project:
             log.info("Project: %s", project)
-            index_project_source(conn, project)
+            index_project_source(indexing_service, project)
 
         deps = discover_declared_dependencies(project)
         if deps:
             use_inspect = not args.no_inspect
-            stats = index_dependencies(conn, deps, args.depth, args.workers, use_inspect)
+            stats = index_dependencies(indexing_service, deps, args.depth, args.workers, use_inspect)
             log.info(
                 "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
                 stats["indexed"], stats["cached"], stats["failed"],
                 db_path.stat().st_size / 1024,
             )
 
-        rebuild_fulltext_index(conn)
-        conn.close()
+        asyncio.run(chunk_repository.rebuild_index())
 
         if args.cmd == "serve":
             run(db_path, config_path=getattr(args, "config", None))

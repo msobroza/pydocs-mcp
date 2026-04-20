@@ -5,9 +5,13 @@ Two modes for deps:
   default (inspect): imports modules, uses inspect.getmembers
 
 Static mode is faster, safer (no side-effects), and fully parallelizable.
+
+Writes flow through :class:`pydocs_mcp.application.indexing_service.IndexingService`
+— the indexer never touches SQLite directly (spec §6.4, AC #19).
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib
 import importlib.metadata
@@ -16,7 +20,6 @@ import json
 import logging
 import os
 import pkgutil
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -28,6 +31,7 @@ from pydocs_mcp._fast import (
     split_into_chunks,
     walk_py_files,
 )
+from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.constants import (
     CLASS_DOCSTRING_MAX,
     CLASS_FULL_DOC_MAX,
@@ -41,8 +45,16 @@ from pydocs_mcp.constants import (
     RETURN_TYPE_MAX,
     SIGNATURE_MAX,
 )
-from pydocs_mcp.db import get_stored_content_hash, remove_package
 from pydocs_mcp.deps import normalize_package_name
+from pydocs_mcp.models import (
+    Chunk,
+    ChunkFilterField,
+    ModuleMember,
+    ModuleMemberFilterField,
+    Package,
+    PackageOrigin,
+    Parameter,
+)
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -64,15 +76,15 @@ def _extract_from_source_files(
     py_paths: list[str],
     root: str,
     kind_prefix: str = "project",
-) -> tuple[list[tuple], list[tuple]]:
+) -> tuple[list[Chunk], list[ModuleMember]]:
     """Parse .py files with Rust/regex parser. No imports needed.
 
     Used for both project source and deps in static mode.
-    Returns (chunks, module_members) ready for executemany.
+    Returns (chunks, module_members) as typed domain models.
     """
     file_contents = read_files_parallel(py_paths)
-    chunks: list[tuple] = []
-    module_members: list[tuple] = []
+    chunks: list[Chunk] = []
+    module_members: list[ModuleMember] = []
 
     for filepath, source in file_contents:
         if not source:
@@ -86,48 +98,85 @@ def _extract_from_source_files(
 
         doc = extract_module_doc(source)
         if len(doc) > 20:
-            chunks.append((package_name, module, doc[:MODULE_DOCSTRING_MAX], f"{kind_prefix}_doc"))
+            chunks.append(
+                Chunk(
+                    text=doc[:MODULE_DOCSTRING_MAX],
+                    metadata={
+                        ChunkFilterField.PACKAGE.value: package_name,
+                        ChunkFilterField.TITLE.value: module,
+                        ChunkFilterField.ORIGIN.value: f"{kind_prefix}_doc",
+                    },
+                )
+            )
 
         for symbol in parse_py_file(source):
-            module_members.append((
-                package_name, module, symbol.name, symbol.kind,
-                symbol.signature, "", "[]", symbol.docstring,
-            ))
+            module_members.append(
+                ModuleMember(
+                    metadata={
+                        ModuleMemberFilterField.PACKAGE.value: package_name,
+                        ModuleMemberFilterField.MODULE.value: module,
+                        ModuleMemberFilterField.NAME.value: symbol.name,
+                        ModuleMemberFilterField.KIND.value: symbol.kind,
+                        "signature": symbol.signature,
+                        "return_annotation": "",
+                        "parameters": (),
+                        "docstring": symbol.docstring,
+                    }
+                )
+            )
 
         for heading, body in split_into_chunks(source):
-            chunks.append((package_name, f"{module}:{heading}", body, f"{kind_prefix}_code"))
+            chunks.append(
+                Chunk(
+                    text=body,
+                    metadata={
+                        ChunkFilterField.PACKAGE.value: package_name,
+                        ChunkFilterField.TITLE.value: f"{module}:{heading}",
+                        ChunkFilterField.ORIGIN.value: f"{kind_prefix}_code",
+                    },
+                )
+            )
 
     return chunks, module_members
 
 
 # ── Project source ────────────────────────────────────────────────────────
 
-def index_project_source(connection: sqlite3.Connection, root: Path):
+async def _project_already_cached(
+    indexing_service: IndexingService, package_name: str, new_hash: str,
+) -> bool:
+    existing = await indexing_service.package_store.get(package_name)
+    return existing is not None and existing.content_hash == new_hash
+
+
+def index_project_source(indexing_service: IndexingService, root: Path):
     """Index project .py files using Rust parser (or Python fallback)."""
     package_name = "__project__"
     py_paths = walk_py_files(str(root))
     new_hash = hash_files(py_paths)
 
-    if get_stored_content_hash(connection, package_name) == new_hash:
+    if asyncio.run(_project_already_cached(indexing_service, package_name, new_hash)):
         log.info("Project: no changes (cached)")
         return
 
-    remove_package(connection, package_name)
-    connection.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-        (package_name, "local", f"Project: {root.name}", "", "[]", new_hash, "project"),
-    )
-
     chunks, module_members = _extract_from_source_files(package_name, py_paths, str(root))
 
-    connection.executemany(
-        "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)", chunks,
+    package = Package(
+        name=package_name,
+        version="local",
+        summary=f"Project: {root.name}",
+        homepage="",
+        dependencies=(),
+        content_hash=new_hash,
+        origin=PackageOrigin.PROJECT,
     )
-    connection.executemany(
-        "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) "
-        "VALUES(?,?,?,?,?,?,?,?)", module_members,
+    asyncio.run(
+        indexing_service.reindex_package(
+            package=package,
+            chunks=tuple(chunks),
+            module_members=tuple(module_members),
+        )
     )
-    connection.commit()
     log.info("Project: %d files -> %d chunks, %d symbols",
              len(py_paths), len(chunks), len(module_members))
 
@@ -135,7 +184,7 @@ def index_project_source(connection: sqlite3.Connection, root: Path):
 # ── Dependency indexing ───────────────────────────────────────────────────
 
 def index_dependencies(
-    connection: sqlite3.Connection,
+    indexing_service: IndexingService,
     dep_names: list[str],
     depth: int = 1,
     workers: int = 4,
@@ -166,7 +215,8 @@ def index_dependencies(
         package_name = dist.metadata["Name"].lower().replace("-", "_")
         v = dist.metadata["Version"] or "?"
         h = hashlib.md5(f"{package_name}:{v}".encode()).hexdigest()[:12]
-        if get_stored_content_hash(connection, package_name) == h:
+        existing = asyncio.run(indexing_service.package_store.get(package_name))
+        if existing is not None and existing.content_hash == h:
             stats["cached"] += 1
         else:
             packages_to_index.append(dist)
@@ -185,7 +235,7 @@ def index_dependencies(
             package_name = dist.metadata["Name"].lower().replace("-", "_")
             try:
                 package_record = fut.result()
-                _persist_dependency(connection, package_record)
+                asyncio.run(_persist_dependency(indexing_service, package_record))
                 stats["indexed"] += 1
                 log.info("  ok %s %s (%d chunks, %d syms)",
                          package_record["name"], package_record["version"],
@@ -205,15 +255,24 @@ def _build_package_record(dist, name: str, version: str) -> dict:
         "hash": hashlib.md5(f"{name}:{version}".encode()).hexdigest()[:12],
         "summary": dist.metadata["Summary"] or "",
         "homepage": dist.metadata["Home-page"] or "",
-        "requires": json.dumps(
-            [r.split(";")[0].strip() for r in (dist.requires or [])[:REQUIREMENTS_PARSE_MAX]]
+        "requires": tuple(
+            r.split(";")[0].strip() for r in (dist.requires or [])[:REQUIREMENTS_PARSE_MAX]
         ),
         "chunks": [], "symbols": [],
     }
     payload = dist.metadata.get_payload()
     if isinstance(payload, str) and len(payload.strip()) > 50:
-        for h, b in split_into_chunks(payload.strip()):
-            package_record["chunks"].append((name, h, b, "readme"))
+        for heading, body in split_into_chunks(payload.strip()):
+            package_record["chunks"].append(
+                Chunk(
+                    text=body,
+                    metadata={
+                        ChunkFilterField.PACKAGE.value: name,
+                        ChunkFilterField.TITLE.value: heading,
+                        ChunkFilterField.ORIGIN.value: "readme",
+                    },
+                )
+            )
     return package_record
 
 
@@ -228,31 +287,38 @@ def _append_doc_file_chunks(dist, name: str, package_record: dict):
             loc = f.locate()
             if loc.exists() and loc.stat().st_size < 500_000:
                 text = loc.read_text("utf-8", errors="ignore")
-                for h, b in split_into_chunks(text):
-                    package_record["chunks"].append((name, h, b, "doc"))
+                for heading, body in split_into_chunks(text):
+                    package_record["chunks"].append(
+                        Chunk(
+                            text=body,
+                            metadata={
+                                ChunkFilterField.PACKAGE.value: name,
+                                ChunkFilterField.TITLE.value: heading,
+                                ChunkFilterField.ORIGIN.value: "doc",
+                            },
+                        )
+                    )
     except Exception as e:
         log.debug("Failed to read doc files for %s: %s", name, e)
 
 
-def _persist_dependency(connection: sqlite3.Connection, package_record: dict):
-    remove_package(connection, package_record["name"])
-    connection.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-        (package_record["name"], package_record["version"], package_record["summary"],
-         package_record["homepage"], package_record["requires"], package_record["hash"], "dependency"),
+async def _persist_dependency(
+    indexing_service: IndexingService, package_record: dict,
+) -> None:
+    package = Package(
+        name=package_record["name"],
+        version=package_record["version"],
+        summary=package_record["summary"],
+        homepage=package_record["homepage"],
+        dependencies=package_record["requires"],
+        content_hash=package_record["hash"],
+        origin=PackageOrigin.DEPENDENCY,
     )
-    if package_record["chunks"]:
-        connection.executemany(
-            "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
-            package_record["chunks"],
-        )
-    if package_record["symbols"]:
-        connection.executemany(
-            "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            package_record["symbols"],
-        )
-    connection.commit()
+    await indexing_service.reindex_package(
+        package=package,
+        chunks=tuple(package_record["chunks"]),
+        module_members=tuple(package_record["symbols"]),
+    )
 
 
 # ── Static mode: read .py files, no imports ───────────────────────────────
@@ -311,7 +377,16 @@ def _extract_by_import(dist, depth: int) -> dict:
         try:
             module = importlib.import_module(iname)
             if module.__doc__ and len(module.__doc__.strip()) > 30:
-                package_record["chunks"].append((name, name, module.__doc__.strip()[:MODULE_DOCSTRING_MAX], "docstring"))
+                package_record["chunks"].append(
+                    Chunk(
+                        text=module.__doc__.strip()[:MODULE_DOCSTRING_MAX],
+                        metadata={
+                            ChunkFilterField.PACKAGE.value: name,
+                            ChunkFilterField.TITLE.value: name,
+                            ChunkFilterField.ORIGIN.value: "docstring",
+                        },
+                    )
+                )
             package_record["symbols"] = _extract_members_by_import(module, iname, name, max_depth=depth)
         except Exception as e:
             log.debug("Failed to import %s: %s", iname, e)
@@ -319,7 +394,7 @@ def _extract_by_import(dist, depth: int) -> dict:
     return package_record
 
 
-def _extract_callable_signature(obj) -> tuple[str, str, list[dict]]:
+def _extract_callable_signature(obj) -> tuple[str, str, list[Parameter]]:
     try:
         sig = inspect.signature(obj)
     except (ValueError, TypeError):
@@ -330,27 +405,48 @@ def _extract_callable_signature(obj) -> tuple[str, str, list[dict]]:
             ret = getattr(sig.return_annotation, "__name__", str(sig.return_annotation))
         except Exception:
             pass
-    params = []
+    params: list[Parameter] = []
     for pn, p in sig.parameters.items():
         if pn in ("self", "cls"):
             continue
-        entry: dict = {"name": pn}
+        annotation = ""
         if p.annotation != inspect.Parameter.empty:
             try:
-                entry["type"] = getattr(p.annotation, "__name__", str(p.annotation))
+                annotation = getattr(p.annotation, "__name__", str(p.annotation))
             except Exception:
                 pass
+        default_value = ""
         if p.default != inspect.Parameter.empty:
             try:
-                entry["default"] = repr(p.default)[:PARAM_DEFAULT_MAX]
+                default_value = repr(p.default)[:PARAM_DEFAULT_MAX]
             except Exception:
                 pass
-        params.append(entry)
+        params.append(Parameter(name=pn, annotation=annotation, default=default_value))
     return str(sig)[:SIGNATURE_MAX], ret[:RETURN_TYPE_MAX], params
 
 
-def _extract_members_by_import(module, mod_name, owner, depth=0, max_depth=1) -> list[tuple]:
-    rows, root = [], owner.replace("-", "_")
+def _parameters_payload_size(parameters: list[Parameter]) -> int:
+    serialised = json.dumps(
+        [{"name": p.name, "annotation": p.annotation, "default": p.default} for p in parameters]
+    )
+    return len(serialised)
+
+
+def _truncate_parameters(parameters: list[Parameter]) -> tuple[Parameter, ...]:
+    """Drop trailing Parameters until the JSON payload fits PARAMS_JSON_MAX bytes.
+
+    Keeps the contract the old implementation had when it stored a trimmed JSON
+    string: mild truncation under huge signatures, no crash.
+    """
+    trimmed = list(parameters)
+    while trimmed and _parameters_payload_size(trimmed) > PARAMS_JSON_MAX:
+        trimmed.pop()
+    return tuple(trimmed)
+
+
+def _extract_members_by_import(module, mod_name, owner, depth=0, max_depth=1) -> list[ModuleMember]:
+    rows: list[ModuleMember] = []
+    root = owner.replace("-", "_")
     try:
         members = inspect.getmembers(module)
     except Exception:
@@ -366,8 +462,20 @@ def _extract_members_by_import(module, mod_name, owner, depth=0, max_depth=1) ->
             if inspect.isfunction(obj) or inspect.isbuiltin(obj):
                 sig, ret, params = _extract_callable_signature(obj)
                 doc = (inspect.getdoc(obj) or "")[:FUNC_DOCSTRING_MAX]
-                rows.append((owner, mod_name, name, "function",
-                             sig, ret, json.dumps(params)[:PARAMS_JSON_MAX], doc))
+                rows.append(
+                    ModuleMember(
+                        metadata={
+                            ModuleMemberFilterField.PACKAGE.value: owner,
+                            ModuleMemberFilterField.MODULE.value: mod_name,
+                            ModuleMemberFilterField.NAME.value: name,
+                            ModuleMemberFilterField.KIND.value: "function",
+                            "signature": sig,
+                            "return_annotation": ret,
+                            "parameters": _truncate_parameters(params),
+                            "docstring": doc,
+                        }
+                    )
+                )
             elif inspect.isclass(obj):
                 sig, _, params = _extract_callable_signature(obj)
                 doc = (inspect.getdoc(obj) or "")[:CLASS_DOCSTRING_MAX]
@@ -384,8 +492,20 @@ def _extract_members_by_import(module, mod_name, owner, depth=0, max_depth=1) ->
                     pass
                 if method_summaries:
                     doc += "\n\nMethods:\n" + "\n".join(method_summaries)
-                rows.append((owner, mod_name, name, "class",
-                             sig, "", json.dumps(params)[:PARAMS_JSON_MAX], doc[:CLASS_FULL_DOC_MAX]))
+                rows.append(
+                    ModuleMember(
+                        metadata={
+                            ModuleMemberFilterField.PACKAGE.value: owner,
+                            ModuleMemberFilterField.MODULE.value: mod_name,
+                            ModuleMemberFilterField.NAME.value: name,
+                            ModuleMemberFilterField.KIND.value: "class",
+                            "signature": sig,
+                            "return_annotation": "",
+                            "parameters": _truncate_parameters(params),
+                            "docstring": doc[:CLASS_FULL_DOC_MAX],
+                        }
+                    )
+                )
         except Exception:
             continue
         if len(rows) > 120:
