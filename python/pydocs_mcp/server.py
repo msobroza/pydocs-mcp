@@ -182,7 +182,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             )
         except Exception:
             log.warning("list_packages failed", exc_info=True)
-            return "No packages found."
+            return "Error listing packages."
 
     @mcp.tool()
     async def get_package_doc(package: str) -> str:
@@ -198,8 +198,10 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
                 return f"'{package}' not found."
             return _render_package_doc(doc)
         except Exception:
+            # Distinguish "storage raised" from "no matching row" so operators
+            # reading tool output can tell an indexing gap apart from a bug.
             log.warning("get_package_doc failed", exc_info=True)
-            return f"'{package}' not found."
+            return f"Error retrieving '{package}'."
 
     @mcp.tool()
     async def search_docs(
