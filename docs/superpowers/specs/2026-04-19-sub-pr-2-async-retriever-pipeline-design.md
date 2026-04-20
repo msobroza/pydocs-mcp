@@ -850,7 +850,10 @@ Large but reviewable. Natural split if needed is **#2a** (protocols + pipeline +
 18. Concrete formatters `ChunkMarkdownFormatter`, `ModuleMemberMarkdownFormatter` implement `ResultFormatter`; both registered with `formatter_registry`.
 19. **Full `to_dict` / `from_dict` round-trip** passes for every stage (including `RouteStage`, `SubPipelineStage`), every retriever, every formatter, and a full `CodeRetrieverPipeline`. Default-valued fields absent from output.
 20. `AppConfig.load()` resolves config path with this precedence: explicit `--config` > `PYDOCS_CONFIG_PATH` env var > `./pydocs-mcp.yaml` > `~/.config/pydocs-mcp/config.yaml` > absent (returns `AppConfig()` with `chunk=None`, `member=None`).
-21. When no config file is present (and neither env nor CLI flag supplied), `search_docs` and `search_api` produce strings byte-identical to `main`'s pre-PR output on the same fixture. Golden test.
+21. When no config file is present (and neither env nor CLI flag supplied), `search_docs` and `search_api` produce strings byte-identical to `main`'s pre-PR output on the same fixture. Golden test locked in `tests/retrieval/test_parity_golden.py`. **Byte-parity contract (explicitly enforced):**
+    - `ChunkMarkdownFormatter.format(chunk)` MUST emit `## {title}\n{body}` — exactly one `\n` between heading and body, NOT `\n\n`. Any future formatter change that alters whitespace is a breaking change and MUST bump the preset YAML format version.
+    - `TokenBudgetFormatterStage.run(state)` MUST NOT call `.rstrip()` (or any equivalent trailing-whitespace strip) on the composite output text. The trailing `\n` after the last joined piece is load-bearing for downstream consumers comparing bytes or running line-anchored regex.
+    - The parity test MUST cover both the single-newline-between-heading-and-body invariant AND the preserved-trailing-newline invariant. Regression of either fails the test.
 22. When a `pydocs-mcp.yaml` references the shipped `chunk_fts.yaml` and `member_like.yaml` presets with single `default` routes, output is byte-identical to the no-config case. Golden test.
 23. When a `pydocs-mcp.yaml` references a conditional route, the predicate decides which sub-pipeline runs; verified with a fake predicate + fixture.
 24. Config-loading error modes are covered by acceptance tests:
@@ -860,7 +863,11 @@ Large but reviewable. Natural split if needed is **#2a** (protocols + pipeline +
     - Unregistered predicate name → `KeyError` listing registered predicates.
     - Invalid route entry (neither `predicate` nor `default`) → `ValueError`.
 25. The word `legacy` does not appear in any source file added or modified by this PR.
-26. No `try/except Exception: return []`-style blanket swallow lives in any retriever or stage in this PR. Blanket catches are confined to the outermost MCP handlers (`server.py`) and the CLI top-level (`__main__.py`).
+26. **No blanket-swallow contract (explicitly enforced):** No `try/except Exception: return ...`-style catch lives in any retriever, stage, or the `CodeRetrieverPipeline.run()` method. Blanket catches are confined to the outermost MCP handlers (`server.py`) and the CLI top-level (`__main__.py`). **Specific narrowing rules:**
+    - Concrete retrievers (`Bm25ChunkRetriever._retrieve_sync`, `LikeMemberRetriever._retrieve_sync`, and any future `*Retriever` that talks to SQLite) MUST narrow their `except` to `sqlite3.DatabaseError` (which covers `OperationalError`, `IntegrityError`, `DataError`, `NotSupportedError`, `InterfaceError`, and `ProgrammingError`). Programming errors (`TypeError`, `AttributeError`, `KeyError` in internal logic) MUST propagate. `SystemExit`/`KeyboardInterrupt` MUST NOT be intercepted.
+    - Stages (`ChunkRetrievalStage`, `ModuleMemberRetrievalStage`, `PackageFilterStage`, `ScopeFilterStage`, `TitleFilterStage`, `LimitStage`, `ParallelRetrievalStage`, `ReciprocalRankFusionStage`, `ConditionalStage`, `RouteStage`, `SubPipelineStage`, `TokenBudgetFormatterStage`) MUST propagate exceptions unchanged. Future `TryStage` (sub-PR #7) is the opt-in mechanism for per-stage error tolerance.
+    - `CodeRetrieverPipeline.run()` MUST NOT wrap the inner stage-iteration loop in any `try/except`. Full propagation to the caller (MCP handler or CLI `asyncio.run`) is required.
+    - Grep invariant for CI: `rg -n 'except Exception' python/pydocs_mcp/retrieval/` MUST return zero matches in any file under `python/pydocs_mcp/retrieval/` EXCEPT if the caught exception is re-raised unchanged or the except body is `raise`.
 27. `server.py` after this PR:
     - All 5 MCP tools `async def`.
     - Tool signatures (names, params, types, docstrings, return-string shape) byte-identical to `main`.
@@ -868,9 +875,15 @@ Large but reviewable. Natural split if needed is **#2a** (protocols + pipeline +
     - `list_packages` / `get_package_doc` / `inspect_module` use `async with provider.acquire() as connection` + `asyncio.to_thread`.
     - No module-level long-lived `sqlite3.Connection`.
 28. `__main__.py`: top-level `--config PATH` flag accepted; `query` / `api` CLI subcommands build a throwaway pipeline inline with output textually identical to `main`.
-29. Behavior parity: for the golden fixture repo indexed under sub-PR #1, every MCP tool and every CLI subcommand produces byte-identical output before and after sub-PR #2 when no config file is present.
+29. Behavior parity: for the golden fixture repo indexed under sub-PR #1, every MCP tool and every CLI subcommand produces byte-identical output before and after sub-PR #2 when no config file is present. See AC #21 for the specific formatter/stage byte-parity contract that enforces this. A regression of AC #21 automatically regresses AC #29.
 30. `tests/retrieval/` subtree exists as listed in §8, contributes ≥ ~90% statement coverage for new code.
 31. `pyproject.toml` advertises `requires-python=">=3.11"` (unchanged from sub-PR #1). Deps added: `pydantic-settings>=2.0`, `pyyaml>=6.0`. Rust side unchanged.
+32. **`ParallelRetrievalStage` content-keyed dedup (explicitly enforced):** `ParallelRetrievalStage.run()` MUST dedup branch outputs by content key, not by positional slice. The positional form (`branch_state.result.items[len(initial_items):]`) is BANNED — any branch that filters, reorders, or partially drops items would silently lose legitimate outputs with that approach. **Required implementation:**
+    - Compute a key per item: `item.id` if it is not `None`, else `id(item)` (Python identity fallback).
+    - Maintain a `seen_keys: set` while iterating initial items (if any) followed by each branch's full `result.items`. An item is appended to the accumulator only when its key is not yet in `seen_keys`. Keys that have been appended are added to `seen_keys`.
+    - The first-seen wins: if a key appears in both the initial state and a branch, only the initial copy is kept. Between branches, first branch contribution wins. This preserves stable ordering across reruns with the same input.
+    - Result type dispatch: the accumulator is wrapped in `ChunkList` if the first non-None `state.result` or branch result was a `ChunkList`, else `ModuleMemberList`. Mixed result types across branches are NOT supported in this PR.
+    - A regression test (`test_parallel_retrieval_stage_preserves_filtered_branches` in `tests/retrieval/test_stages.py`) MUST assert that a branch which drops one initial item and adds one new item still contributes its new item to the accumulator, and that a new item shared between two branches is deduped to a single entry.
 
 ---
 
