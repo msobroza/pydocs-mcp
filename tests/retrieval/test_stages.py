@@ -157,6 +157,23 @@ async def test_reciprocal_rank_fusion_basic():
 
 
 @pytest.mark.asyncio
+async def test_reciprocal_rank_fusion_preserves_first_seen_metadata():
+    """AC #33 — duplicates keep the first branch's retriever_name / relevance."""
+    from pydocs_mcp.retrieval.stages import ReciprocalRankFusionStage
+
+    items = (
+        Chunk(text="a", id=1, retriever_name="first", relevance=0.9),
+        Chunk(text="a", id=1, retriever_name="second", relevance=0.1),
+    )
+    state = PipelineState(query=SearchQuery(terms="x"), result=ChunkList(items=items))
+    out = await ReciprocalRankFusionStage(k=60).run(state)
+    assert len(out.result.items) == 1
+    # First-seen wins the representative — setdefault, not assignment.
+    assert out.result.items[0].retriever_name == "first"
+    assert out.result.items[0].relevance == 0.9
+
+
+@pytest.mark.asyncio
 async def test_conditional_stage_runs_when_predicate_true():
     from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import ConditionalStage

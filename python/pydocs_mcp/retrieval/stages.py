@@ -220,13 +220,15 @@ class ReciprocalRankFusionStage:
     async def run(self, state: PipelineState) -> PipelineState:
         if state.result is None or not state.result.items:
             return state
-        # Score by 1/(k+rank), keyed by item id (fall back to id(item))
+        # Score by 1/(k+rank), keyed by item id (fall back to id(item)).
+        # First-seen wins on the stored representative so retriever_name /
+        # relevance from the earliest branch survives the merge (AC #33).
         scores: dict = {}
         items_by_key: dict = {}
         for rank, item in enumerate(state.result.items):
             key = item.id if item.id is not None else id(item)
             scores[key] = scores.get(key, 0.0) + 1.0 / (self.k + rank)
-            items_by_key[key] = item
+            items_by_key.setdefault(key, item)
 
         # Rebuild ordered result, stable by score desc
         sorted_keys = sorted(scores.keys(), key=lambda k_: scores[k_], reverse=True)
