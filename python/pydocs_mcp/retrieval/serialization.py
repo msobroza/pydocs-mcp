@@ -32,7 +32,7 @@ class ComponentRegistry(Generic[C]):
             return cls
         return decorator
 
-    def build(self, data: Mapping, context: "BuildContext") -> C:
+    def build(self, data: Mapping, context: "BuildContext", _depth: int = 0) -> C:
         type_name = data["type"]
         try:
             cls = self._types[type_name]
@@ -41,7 +41,19 @@ class ComponentRegistry(Generic[C]):
                 f"unknown component type {type_name!r}; "
                 f"known: {sorted(self._types)}"
             ) from e
-        return cls.from_dict(data, context)
+        from_dict = cls.from_dict
+        # Only stages need the depth counter — retrievers / formatters do not
+        # re-enter ``CodeRetrieverPipeline.from_dict``. Forward ``_depth`` when
+        # the callee accepts it so nested ``SubPipelineStage`` decoding sees
+        # the accumulated depth.
+        import inspect as _inspect
+        try:
+            sig = _inspect.signature(from_dict)
+        except (TypeError, ValueError):
+            return from_dict(data, context)
+        if "_depth" in sig.parameters:
+            return from_dict(data, context, _depth=_depth)
+        return from_dict(data, context)
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._types))
