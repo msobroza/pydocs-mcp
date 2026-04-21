@@ -23,11 +23,19 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 """
 from __future__ import annotations
 
+from pydocs_mcp.constants import (
+    LIST_PACKAGES_MAX,
+    PACKAGE_DOC_LINE_MAX,
+    PACKAGE_DOC_MAX,
+    REQUIREMENTS_DISPLAY,
+)
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
     ModuleMember,
     ModuleMemberFilterField,
+    Package,
+    PackageDoc,
 )
 
 # Approximate characters per token (conservative estimate for English text).
@@ -72,6 +80,49 @@ def format_chunks_markdown_within_budget(
         parts.append(piece)
         total += len(piece)
     return "\n".join(parts)
+
+
+def format_packages_list(packages: tuple[Package, ...]) -> str:
+    """Render a sorted bullet list ``- name version — summary``.
+
+    Byte-parity with pre-#6 ``server.py::list_packages`` (sub-PR #4 §5.1).
+    Cap at ``LIST_PACKAGES_MAX`` packages.
+    """
+    sorted_pkgs = sorted(packages[:LIST_PACKAGES_MAX], key=lambda p: p.name)
+    return "\n".join(
+        f"- {p.name} {p.version} — {p.summary}" for p in sorted_pkgs
+    )
+
+
+def format_package_doc(doc: PackageDoc) -> str:
+    """Render a ``PackageDoc`` as the pre-#6 ``get_package_doc`` markdown.
+
+    Byte-parity with sub-PR #4 ``server.py::_render_package_doc`` (AC #6):
+    blocks joined with ``"\\n\\n"``, capped at ``PACKAGE_DOC_MAX`` chars.
+    """
+    pkg = doc.package
+    parts = [f"# {pkg.name} {pkg.version}\n{pkg.summary}"]
+    if pkg.homepage:
+        parts.append(f"Homepage: {pkg.homepage}")
+    if pkg.dependencies:
+        parts.append("Deps: " + ", ".join(pkg.dependencies[:REQUIREMENTS_DISPLAY]))
+
+    for c in doc.chunks:
+        title = c.metadata.get(ChunkFilterField.TITLE.value, "")
+        parts.append(f"## {title}\n{c.text}")
+
+    if doc.members:
+        rendered: list[str] = []
+        for m in doc.members:
+            md = m.metadata
+            kind = md.get(ModuleMemberFilterField.KIND.value, "")
+            name = md.get(ModuleMemberFilterField.NAME.value, "")
+            signature = md.get("signature", "")
+            docstring = str(md.get("docstring", "") or "")
+            first_line = docstring.split("\n")[0][:PACKAGE_DOC_LINE_MAX]
+            rendered.append(f"- `{kind} {name}{signature}` — {first_line}")
+        parts.append("## API\n" + "\n".join(rendered))
+    return "\n\n".join(parts)[:PACKAGE_DOC_MAX]
 
 
 def format_members_markdown_within_budget(
