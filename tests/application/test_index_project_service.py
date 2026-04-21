@@ -98,13 +98,23 @@ class FakeIndexingService:
     ``reindex_package`` + ``package_store.get`` via the store attribute).
     That keeps the write-bootstrap test isolated from the persistence-layer
     mechanics covered in test_indexing_service.py.
+
+    Task 32: the real ``IndexingService.reindex_package`` now accepts the
+    ``trees`` keyword per the spec §13.3 canonical composite; the fake
+    widens to match so assertions about tree propagation ride on the same
+    recorded shape.
     """
 
     cleared: bool = False
     clear_call_order: int | None = None
-    reindex_calls: list[tuple[Package, tuple[Chunk, ...], tuple[ModuleMember, ...]]] = (
-        field(default_factory=list)
-    )
+    reindex_calls: list[
+        tuple[
+            Package,
+            tuple[Chunk, ...],
+            tuple[ModuleMember, ...],
+            tuple[DocumentNode, ...],
+        ]
+    ] = field(default_factory=list)
     package_store: FakePackageStore = field(default_factory=FakePackageStore)
     _call_counter: int = 0
 
@@ -118,9 +128,10 @@ class FakeIndexingService:
         package: Package,
         chunks: tuple[Chunk, ...],
         module_members: tuple[ModuleMember, ...],
+        trees: tuple[DocumentNode, ...] = (),
     ) -> None:
         self._call_counter += 1
-        self.reindex_calls.append((package, chunks, module_members))
+        self.reindex_calls.append((package, chunks, module_members, tuple(trees)))
 
 
 @dataclass
@@ -320,7 +331,7 @@ async def test_index_project_resolves_and_indexes_each_dep(tmp_path: Path) -> No
     assert members_ex.dep_calls == ["a", "b"]
     # Three reindexes total: project + each dep.
     assert len(idx.reindex_calls) == 3
-    reindexed_names = [pkg.name for pkg, _, _ in idx.reindex_calls]
+    reindexed_names = [pkg.name for pkg, _, _, _ in idx.reindex_calls]
     assert reindexed_names == ["__project__", "a", "b"]
     # IndexingStats reflects the two successful deps + the project flag.
     assert stats.project_indexed is True
@@ -393,7 +404,7 @@ async def test_index_one_dependency_success_increments_indexed(
     assert stats.indexed == 1
     assert stats.failed == 0
     assert len(idx.reindex_calls) == 1
-    reindexed_pkg, reindexed_chunks, reindexed_members = idx.reindex_calls[0]
+    reindexed_pkg, reindexed_chunks, reindexed_members, _trees = idx.reindex_calls[0]
     assert reindexed_pkg is pkg
     assert len(reindexed_chunks) == 1
     assert len(reindexed_members) == 1
@@ -457,21 +468,21 @@ def test_index_project_service_is_frozen_and_slotted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_index_project_drops_trees_until_tree_store_arrives(
+async def test_index_project_forwards_trees_to_reindex_package(
     tmp_path: Path,
 ) -> None:
-    """Spec §5 amendment: ``ChunkExtractor`` returns 3-tuple
-    ``(chunks, trees, package)``. ``IndexingService.reindex_package`` does
-    not consume ``trees`` yet (Task 23 widens that signature), so the
-    service drops them — and the 2-arg ``reindex_package`` contract the
-    fake records still matches.
+    """Spec §5 + §13.3: ``ChunkExtractor`` returns 3-tuple
+    ``(chunks, trees, package)``; :class:`IndexProjectService` forwards
+    ``trees`` to :meth:`IndexingService.reindex_package` so the wired
+    ``DocumentTreeStore`` persists them (Task 32 closed the gap Task 23
+    opened). Both project + dep branches must forward.
 
-    This test exercises the unpacking path for both the project branch
+    This test exercises the forwarding path for both the project branch
     (uses ``project_trees`` on the fake) and the dep branch (uses a
     raw 3-tuple in ``dep_returns``).
     """
     # Build a DocumentNode stub so the tree input is non-empty and we
-    # prove the service really is dropping it, not just ignoring ().
+    # prove the service really is passing it through.
     from pydocs_mcp.extraction.document_node import NodeKind
 
     tree = DocumentNode(
@@ -502,13 +513,18 @@ async def test_index_project_drops_trees_until_tree_store_arrives(
     # Both extractions ran.
     assert chunks_ex.project_calls == [tmp_path]
     assert chunks_ex.dep_calls == ["fastapi"]
-    # And each produced a reindex_package call with chunks + members only —
-    # the FakeIndexingService records a 3-tuple (pkg, chunks, members);
-    # ``trees`` never appears because Task 23 hasn't widened the signature.
+    # Each produced a reindex_package call AND trees rode through to the
+    # store — Task 32's end-to-end invariant. The FakeIndexingService
+    # records (pkg, chunks, members, trees); all four assertions hold.
     assert len(idx.reindex_calls) == 2
-    for _pkg_arg, chunks_arg, members_arg in idx.reindex_calls:
+    for _pkg_arg, chunks_arg, members_arg, trees_arg in idx.reindex_calls:
         assert all(isinstance(c, Chunk) for c in chunks_arg)
         assert all(isinstance(m, ModuleMember) for m in members_arg)
+        assert trees_arg == (tree,), (
+            "IndexProjectService must forward the extractor's trees to "
+            "IndexingService.reindex_package — the DocumentTreeStore "
+            "round-trip depends on this wiring."
+        )
     assert stats.project_indexed is True
     assert stats.indexed == 1
 
@@ -535,7 +551,7 @@ async def test_index_project_workers_1_is_serial(tmp_path: Path) -> None:
     # Order preserved because the serial branch iterates the resolver tuple.
     assert chunks_ex.dep_calls == ["a", "b"]
     assert stats.indexed == 2
-    assert [pkg.name for pkg, _, _ in idx.reindex_calls] == ["a", "b"]
+    assert [pkg.name for pkg, _, _, _ in idx.reindex_calls] == ["a", "b"]
 
 
 @pytest.mark.asyncio
@@ -609,6 +625,6 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
     )
     # All three reindex_package calls landed (order is non-deterministic
     # under gather, so sort by name before asserting equality).
-    assert sorted(pkg.name for pkg, _, _ in idx.reindex_calls) == ["a", "b", "c"]
+    assert sorted(pkg.name for pkg, _, _, _ in idx.reindex_calls) == ["a", "b", "c"]
 
 
