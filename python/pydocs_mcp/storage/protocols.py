@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydocs_mcp.models import Chunk, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
+
+if TYPE_CHECKING:
+    from pydocs_mcp.extraction.document_node import DocumentNode
 
 
 @runtime_checkable
@@ -86,3 +89,37 @@ class FilterAdapter(Protocol):
 
 class UnitOfWork(Protocol):
     async def begin(self) -> AsyncIterator[None]: ...
+
+
+@runtime_checkable
+class DocumentTreeStore(Protocol):
+    """Storage boundary for DocumentNode trees (spec §12.2).
+
+    Persists per-module ``DocumentNode`` trees emitted by extraction so
+    ``get_document_tree`` / ``get_package_tree`` queries can serve them
+    directly. All methods are async to stay consistent with the rest of
+    the storage surface (sub-PR #3 convention); SQLite I/O inside
+    implementations wraps ``asyncio.to_thread``.
+
+    ``save_many`` takes a ``package`` kwarg explicitly rather than
+    introspecting each tree — the store does not own identity derivation;
+    the caller (``IndexingService.reindex_package``) already knows which
+    package is being written and must be the single source of truth for
+    that mapping.
+    """
+
+    async def save_many(
+        self,
+        trees: Sequence[DocumentNode],
+        *,
+        package: str,
+        uow: UnitOfWork | None = None,
+    ) -> None: ...
+
+    async def load(self, package: str, module: str) -> DocumentNode | None: ...
+
+    async def load_all_in_package(self, package: str) -> dict[str, DocumentNode]: ...
+
+    async def delete_for_package(
+        self, package: str, *, uow: UnitOfWork | None = None,
+    ) -> None: ...
