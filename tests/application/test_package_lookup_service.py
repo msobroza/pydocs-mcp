@@ -233,3 +233,53 @@ def test_service_is_frozen_slotted_dataclass() -> None:
     with pytest.raises((AttributeError, Exception)):
         svc.package_store = None  # type: ignore[misc]
     assert not hasattr(svc, "__dict__")
+
+
+# ── Sub-PR #6 additions ───────────────────────────────────────────────────
+
+
+def test_filter_field_scope_parity() -> None:
+    """AC #25 — SCOPE key must match across the two field enums so a single
+    SearchQuery.pre_filter works in the unified pipeline."""
+    assert ChunkFilterField.PACKAGE.value == ModuleMemberFilterField.PACKAGE.value == "package"
+    assert ChunkFilterField.SCOPE.value == ModuleMemberFilterField.SCOPE.value == "scope"
+
+
+@pytest.mark.asyncio
+async def test_find_module_returns_true_when_chunk_exists() -> None:
+    svc, _, _, _ = _service(
+        packages={"fastapi": _pkg("fastapi")},
+        chunks=[_chunk("fastapi", "routing")],
+    )
+    assert await svc.find_module("fastapi", "fastapi.routing") is True
+
+
+@pytest.mark.asyncio
+async def test_find_module_returns_false_when_no_chunks() -> None:
+    svc, _, _, _ = _service(packages={"fastapi": _pkg("fastapi")})
+    assert await svc.find_module("fastapi", "fastapi.routing") is False
+
+
+@pytest.mark.asyncio
+async def test_find_module_passes_correct_filter() -> None:
+    svc, _, chunk_store, _ = _service(
+        packages={"fastapi": _pkg("fastapi")},
+        chunks=[_chunk("fastapi", "routing")],
+    )
+    await svc.find_module("fastapi", "fastapi.routing")
+    assert chunk_store.last_list_kwargs["filter"] == {
+        ChunkFilterField.PACKAGE.value: "fastapi",
+        ChunkFilterField.MODULE.value: "fastapi.routing",
+    }
+    assert chunk_store.last_list_kwargs["limit"] == 1
+
+
+@pytest.mark.asyncio
+async def test_find_module_returns_false_on_empty_args_without_hitting_store() -> None:
+    svc, _, chunk_store, _ = _service(
+        packages={"fastapi": _pkg("fastapi")},
+        chunks=[_chunk("fastapi", "routing")],
+    )
+    assert await svc.find_module("", "fastapi.routing") is False
+    assert await svc.find_module("fastapi", "") is False
+    assert chunk_store.list_call_count == 0

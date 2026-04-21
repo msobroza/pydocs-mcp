@@ -68,6 +68,7 @@ class ModuleMemberFilterField(StrEnum):
     MODULE  = "module"
     NAME    = "name"
     KIND    = "kind"
+    SCOPE   = "scope"   # added by sub-PR #6 — matches ChunkFilterField.SCOPE for unified queries
 
 
 @dataclass(frozen=True, slots=True)
