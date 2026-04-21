@@ -127,9 +127,7 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     phase so sub-loops (async SQLite writes, ``to_thread`` extractions)
     shared the same context.
 
-    Sub-PR #5: the sub-PR #4 legacy adapters
-    (``ChunkExtractorAdapter``/``MemberExtractorAdapter``/``DependencyResolverAdapter``)
-    are replaced by the strategy-based classes from :mod:`pydocs_mcp.extraction`:
+    Wires the strategy-based classes from :mod:`pydocs_mcp.extraction`:
     :class:`PipelineChunkExtractor` (driven by the YAML ingestion pipeline),
     :class:`InspectMemberExtractor` (with :class:`AstMemberExtractor` fallback)
     or plain :class:`AstMemberExtractor` for ``--no-inspect``, and
