@@ -26,13 +26,15 @@ class ChunkOrigin(StrEnum):
     DEPENDENCY_README        = "dependency_readme"
     DEPENDENCY_MODULE_DOC    = "dependency_module_doc"
     COMPOSITE_OUTPUT         = "composite_output"
-    # sub-PR #5 §4.5: origins emitted by DocumentNode extraction strategies.
-    # Tagged on Chunk.metadata["origin"] at insertion so retrievers / filters
-    # can route on "where in the tree did this come from?".
-    AST_PYTHON               = "ast_python"
-    HEADING_MARKDOWN         = "heading_markdown"
-    NOTEBOOK                 = "notebook"
-    CODE_EXAMPLE             = "code_example"
+    # sub-PR #5 §4.2: origins emitted by DocumentNode extraction strategies.
+    # Tagged on Chunk.metadata["origin"] so retrievers / filters can route on
+    # "where in the tree did this come from?". CODE_EXAMPLE nodes inherit the
+    # origin of their parent (PYTHON_DEF or MARKDOWN_SECTION) — the NodeKind
+    # carries the "is this a code example" distinction.
+    PYTHON_DEF               = "python_def"
+    MARKDOWN_SECTION         = "markdown_section"
+    NOTEBOOK_MARKDOWN_CELL   = "notebook_markdown_cell"
+    NOTEBOOK_CODE_CELL       = "notebook_code_cell"
 
 
 class MemberKind(StrEnum):
