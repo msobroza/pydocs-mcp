@@ -19,7 +19,6 @@ import importlib.metadata
 import logging
 from pathlib import Path
 
-from pydocs_mcp._fast import split_into_chunks
 from pydocs_mcp.constants import MODULE_DOCSTRING_MAX
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import Chunk, ChunkFilterField
@@ -109,15 +108,10 @@ def _extract_by_import(dist, depth: int) -> dict:
     return package_record
 
 
-# ``split_into_chunks`` is re-exported so tests can stub it if needed, but also
-# to avoid an unused-import warning on the ``_fast`` import above. It stays
-# imported at module level (not lazily) because ``_build_package_record`` /
-# ``_append_doc_file_chunks`` — once rehomed here in Task 29 — will use it.
 __all__ = (
     "IMPORT_ALIASES",
     "SKIP_IMPORT",
     "find_installed_distribution",
     "find_site_packages_root",
     "_extract_by_import",
-    "split_into_chunks",
 )

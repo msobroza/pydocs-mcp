@@ -106,6 +106,10 @@ def test_module_surface_matches_all() -> None:
     assert "find_installed_distribution" in _dep_helpers.__all__
     assert "find_site_packages_root" in _dep_helpers.__all__
     assert "_extract_by_import" in _dep_helpers.__all__
+    # SKIP_IMPORT + IMPORT_ALIASES need to be accessible to strategies so they
+    # can decide whether to attempt a live import.
+    assert "SKIP_IMPORT" in _dep_helpers.__all__
+    assert "IMPORT_ALIASES" in _dep_helpers.__all__
 
 
 def test_constants_re_exported() -> None:
