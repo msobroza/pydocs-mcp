@@ -220,6 +220,7 @@ Both are **purely additive** — callers that don't pass the new args see zero b
 | 12 | `get_references_to("BaseRetriever", kind="inherits")` returns every class whose `INHERITS` edge targets `BaseRetriever`, resolved or not. |
 | 13 | Re-indexing after an edit to one file updates only that file's references (delete + re-insert WHERE from_package=X AND from_node_id=LIKE 'prefix%'); unaffected packages' refs untouched. |
 | 14 | **Superseded by sub-PR #6.** Reference-graph queries flow through `lookup(..., show="callers"|"callees"|"inherits")`, not dedicated `get_callers` / `get_callees` / `get_references_to` MCP tools. This sub-PR ships `ReferenceService` + storage; #6 exposes them. |
+| 14a | **(Added by sub-PR #6.)** `application/__init__.py` explicitly re-exports `ReferenceService` so `from pydocs_mcp.application import ReferenceService` resolves — enabling #6's `LookupService` wiring to pick it up without a hard import. |
 
 ## 11. Risks
 
