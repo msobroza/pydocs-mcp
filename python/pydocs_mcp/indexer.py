@@ -145,6 +145,7 @@ def _extract_from_source_files(
                     text=doc[:MODULE_DOCSTRING_MAX],
                     metadata={
                         ChunkFilterField.PACKAGE.value: package_name,
+                        ChunkFilterField.MODULE.value: module,
                         ChunkFilterField.TITLE.value: module,
                         ChunkFilterField.ORIGIN.value: f"{kind_prefix}_doc",
                     },
@@ -173,6 +174,7 @@ def _extract_from_source_files(
                     text=body,
                     metadata={
                         ChunkFilterField.PACKAGE.value: package_name,
+                        ChunkFilterField.MODULE.value: module,
                         ChunkFilterField.TITLE.value: f"{module}:{heading}",
                         ChunkFilterField.ORIGIN.value: f"{kind_prefix}_code",
                     },

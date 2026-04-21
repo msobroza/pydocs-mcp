@@ -280,3 +280,52 @@ async def test_find_module_returns_false_on_empty_args_without_hitting_store() -
     assert await svc.find_module("", "fastapi.routing") is False
     assert await svc.find_module("fastapi", "") is False
     assert chunk_store.list_call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_find_module_end_to_end_against_real_sqlite(tmp_path) -> None:
+    """Drive ``find_module`` through the real ``SqliteChunkRepository`` to
+    catch schema / row-mapping drift (reviewer Critical #1: chunks.module
+    write path was silently missing before this fix)."""
+    from pydocs_mcp.db import open_index_database
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+    from pydocs_mcp.storage.sqlite import (
+        SqliteChunkRepository,
+        SqliteModuleMemberRepository,
+        SqlitePackageRepository,
+    )
+
+    db_path = tmp_path / "e2e.db"
+    open_index_database(db_path).close()
+    provider = PerCallConnectionProvider(db_path)
+
+    chunk_store = SqliteChunkRepository(provider=provider)
+    # Seed one chunk with explicit module metadata.
+    await chunk_store.upsert(
+        [
+            Chunk(
+                text="routing body",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "fastapi",
+                    ChunkFilterField.MODULE.value: "fastapi.routing",
+                    ChunkFilterField.TITLE.value: "APIRouter",
+                    ChunkFilterField.ORIGIN.value: "dependency_code",
+                },
+            )
+        ]
+    )
+
+    svc = PackageLookupService(
+        package_store=SqlitePackageRepository(provider=provider),
+        chunk_store=chunk_store,
+        module_member_store=SqliteModuleMemberRepository(provider=provider),
+    )
+
+    assert await svc.find_module("fastapi", "fastapi.routing") is True
+    assert await svc.find_module("fastapi", "fastapi.nonexistent") is False
+    # Also verify the round-trip: list returns the module column populated.
+    chunks = await chunk_store.list(
+        filter={ChunkFilterField.PACKAGE.value: "fastapi"}, limit=10,
+    )
+    assert len(chunks) == 1
+    assert chunks[0].metadata.get(ChunkFilterField.MODULE.value) == "fastapi.routing"

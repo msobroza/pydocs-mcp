@@ -107,6 +107,7 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
     return {
         "id": c.id,
         "package": md.get(ChunkFilterField.PACKAGE.value, ""),
+        "module":  md.get(ChunkFilterField.MODULE.value, ""),
         "title":   md.get(ChunkFilterField.TITLE.value, ""),
         "text":    c.text,
         "origin":  md.get(ChunkFilterField.ORIGIN.value, ""),
@@ -124,6 +125,7 @@ def _row_to_chunk(row) -> Chunk:
     metadata: dict[str, object] = {}
     for key in (
         ChunkFilterField.PACKAGE.value,
+        ChunkFilterField.MODULE.value,
         ChunkFilterField.TITLE.value,
         ChunkFilterField.ORIGIN.value,
     ):
@@ -405,8 +407,8 @@ class SqliteChunkRepository:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
                 conn.executemany,
-                "INSERT INTO chunks (package, title, text, origin) "
-                "VALUES (:package, :title, :text, :origin)",
+                "INSERT INTO chunks (package, module, title, text, origin) "
+                "VALUES (:package, :module, :title, :text, :origin)",
                 rows,
             )
 
@@ -526,7 +528,7 @@ class SqliteVectorStore:
         params.append(limit)
 
         sql = (
-            "SELECT c.id, c.package, c.title, c.text, c.origin, -m.rank AS rank "
+            "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, -m.rank AS rank "
             "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
             f"WHERE {' AND '.join(where_parts)} "
             "ORDER BY rank LIMIT ?"
