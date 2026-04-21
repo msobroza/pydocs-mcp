@@ -55,16 +55,16 @@ python/pydocs_mcp/
 ├── _fallback.py   # Pure Python implementations of all Rust functions
 ├── db.py          # SQLite schema + cache lifecycle + FTS rebuild (no row mappers)
 ├── deps.py        # Dependency resolution (pyproject.toml, requirements.txt)
-├── indexer.py     # Extraction only (async extract_* fns); bootstrap orchestration lives in IndexProjectService
+├── extraction/    # Strategy-based extraction — chunkers, member extractors, ingestion pipeline, DocumentNode trees
 ├── application/   # Use-case services — IndexingService + IndexProjectService + PackageLookupService + SearchDocsService + SearchApiService + ModuleIntrospectionService + shared formatting helpers
 ├── storage/       # Filter tree, Protocols, SQLite repositories + VectorStore + UnitOfWork
 ├── retrieval/     # Async pipelines, retrievers, stages, registries, YAML config
 ├── presets/       # Built-in pipeline YAML presets (chunk_fts, member_like)
-└── server.py      # 5 thin MCP handlers (≤25 LOC each) over services
-src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, parse, read)
+└── server.py      # MCP handlers over services
+src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
 ```
 
-**Data flow:** CLI / MCP server → services (`PackageLookupService` / `SearchDocsService` / `SearchApiService` / `ModuleIntrospectionService` for queries; `IndexProjectService.index_project` for writes) → `application.IndexingService` writes through `storage.SqlitePackageRepository` / `SqliteChunkRepository` / `SqliteModuleMemberRepository` under a `SqliteUnitOfWork` → retrieval/ runs the async `CodeRetrieverPipeline` (BM25 chunks via `SqliteVectorStore` + LIKE module-members via `SqliteModuleMemberRepository`) → server.py / __main__.py render via `application/formatting` helpers → client.
+**Data flow:** CLI / MCP server → services (`PackageLookupService` / `SearchDocsService` / `SearchApiService` / `ModuleIntrospectionService` for queries; `IndexProjectService.index_project` for writes) → `application.IndexingService` writes through `storage.SqlitePackageRepository` / `SqliteChunkRepository` / `SqliteModuleMemberRepository` under a `SqliteUnitOfWork` → `extraction.PipelineChunkExtractor` + `AstMemberExtractor` / `InspectMemberExtractor` feed write-side extraction; retrieval/ runs the async `CodeRetrieverPipeline` (BM25 chunks via `SqliteVectorStore` + LIKE module-members via `SqliteModuleMemberRepository`) → server.py / __main__.py render via `application/formatting` helpers → client.
 
 **Rust/Python duality:** `_fast.py` tries `from ._native import *`; on ImportError falls back to `_fallback.py`. All Rust functions have pure Python equivalents — the package works without Rust compiled.
 
@@ -119,7 +119,7 @@ src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, par
 
 ## SOLID Principles
 
-**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `storage/` owns persistence (repositories, filter adapter, UoW, VectorStore), `application/` owns both write-side (`IndexingService`, `IndexProjectService`) AND read-side (`PackageLookupService`, `SearchDocsService`, `SearchApiService`, `ModuleIntrospectionService`) use-case services, `retrieval/` owns the pipeline machinery (retrievers, stages, pipelines), `indexer.py` owns extraction. `application/formatting.py` is the single source of truth for rendering — stages, MCP handlers, and CLI all delegate to it. New features should follow this pattern. If a module gains a second reason to change, split it.
+**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `storage/` owns persistence (repositories, filter adapter, UoW, VectorStore), `application/` owns both write-side (`IndexingService`, `IndexProjectService`) AND read-side (`PackageLookupService`, `SearchDocsService`, `SearchApiService`, `ModuleIntrospectionService`) use-case services, `retrieval/` owns the pipeline machinery (retrievers, stages, pipelines), `extraction/` owns the write-side ingestion pipeline, chunkers, member extractors, and DocumentNode trees. `application/formatting.py` is the single source of truth for rendering — stages, MCP handlers, and CLI all delegate to it. New features should follow this pattern. If a module gains a second reason to change, split it.
 
 **Open/Closed:** Extend behavior through new `kind` values in chunks/module_members tables rather than modifying existing indexing logic. New search strategies should be added as new retrievers/stages registered in `retrieval/`, not by modifying existing ones.
 
@@ -127,7 +127,7 @@ src/lib.rs         # Rust acceleration: 7 PyO3 functions (walk, hash, chunk, par
 
 **Interface Segregation:** MCP tools in `server.py` each expose a focused interface. Keep tool parameters minimal and client-specific. Don't add parameters "just in case."
 
-**Dependency Inversion:** Core logic (`indexer.py`, `retrieval/`, `application/`) depends on abstractions — `_fast.py` hides the Rust/Python choice and `storage/protocols.py` + `application/protocols.py` + `retrieval/protocols.py` define the backend contracts. Services depend only on Protocols from those three modules, never on concrete `Sqlite*` types. Adapters in `application/index_project_service.py` (`ChunkExtractorAdapter` / `MemberExtractorAdapter` / `DependencyResolverAdapter`) wrap today's `indexer.py` extraction; sub-PR #5 can replace them with strategy-based implementations without touching the services. Swapping SQLite for Postgres/DuckDB later is a pure adapter change. Never import `_native` or `_fallback` directly from other modules.
+**Dependency Inversion:** Core logic (`extraction/`, `retrieval/`, `application/`) depends on abstractions — `_fast.py` hides the Rust/Python choice and `storage/protocols.py` + `application/protocols.py` + `retrieval/protocols.py` define the backend contracts. Services depend only on Protocols from those three modules, never on concrete `Sqlite*` types. `IndexProjectService` composes with the strategy classes from `extraction/` (`PipelineChunkExtractor` / `AstMemberExtractor` / `InspectMemberExtractor` / `StaticDependencyResolver`) — the service knows only the Protocol shape, so swapping chunkers, member extractors, or the resolver is a pure strategy change. Swapping SQLite for Postgres/DuckDB later is a pure adapter change. Never import `_native` or `_fallback` directly from other modules.
 
 ## Code Comments
 
