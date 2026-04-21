@@ -6,6 +6,7 @@ golden-fixture suite in tests/test_mcp_surface.py.
 """
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -248,3 +249,96 @@ async def test_show_inherits_on_class_reads_from_node_metadata(
     )
     assert "BaseAuth" in out
     assert "Mixin" in out
+
+
+@pytest.mark.asyncio
+async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
+    package_lookup_mock: MagicMock,
+) -> None:
+    fake_node = MagicMock()
+    fake_node.kind = "class"
+    fake_node.extra_metadata = {"inherits_from": []}
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    out = await svc.lookup(
+        LookupInput(target="fastapi.routing.X", show="inherits")
+    )
+    assert "no base classes" in out
+
+
+@pytest.mark.asyncio
+async def test_show_callers_with_ref_svc_renders_refs(
+    package_lookup_mock: MagicMock,
+) -> None:
+    fake_node = MagicMock()
+    fake_node.node_id = "fastapi.routing.X.y"
+    fake_node.kind = "method"
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    # Reference-like structural duck
+    ref = MagicMock()
+    ref.from_node_id = "caller.mod.a"
+    ref.to_name = "fastapi.routing.X.y"
+    ref.kind = "call"
+    ref_svc = MagicMock()
+    ref_svc.callers = AsyncMock(return_value=[ref])
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
+    )
+    out = await svc.lookup(
+        LookupInput(target="fastapi.routing.X.y", show="callers")
+    )
+    assert "caller.mod.a" in out
+    assert "fastapi.routing.X.y" in out
+    ref_svc.callers.assert_awaited_once_with("fastapi", "fastapi.routing.X.y")
+
+
+@pytest.mark.asyncio
+async def test_show_callees_with_ref_svc_invokes_callees_method(
+    package_lookup_mock: MagicMock,
+) -> None:
+    fake_node = MagicMock()
+    fake_node.node_id = "fastapi.routing.X.y"
+    fake_node.kind = "method"
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    ref_svc = MagicMock()
+    ref_svc.callees = AsyncMock(return_value=[])
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
+    )
+    out = await svc.lookup(
+        LookupInput(target="fastapi.routing.X.y", show="callees")
+    )
+    assert out == "(no references)"
+    ref_svc.callees.assert_awaited_once_with("fastapi", "fastapi.routing.X.y")
+
+
+@pytest.mark.asyncio
+async def test_show_tree_on_symbol_returns_node_json(
+    package_lookup_mock: MagicMock,
+) -> None:
+    fake_node = MagicMock()
+    fake_node.kind = "class"
+    fake_node.to_pageindex_json = MagicMock(
+        return_value={"title": "APIRouter", "nodes": [{"title": "include_router"}]}
+    )
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    out = await svc.lookup(
+        LookupInput(target="fastapi.routing.APIRouter", show="tree")
+    )
+    assert "APIRouter" in out
+    assert "include_router" in out
