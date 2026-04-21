@@ -8,11 +8,10 @@ from pydocs_mcp.db import (
     open_index_database,
     rebuild_fulltext_index,
 )
-from pydocs_mcp.indexer import (
-    _extract_from_source_files,
-    clear_extraction_cache,
-    extract_project_chunks,
-    extract_project_members,
+from pydocs_mcp.extraction import (
+    AstMemberExtractor,
+    PipelineChunkExtractor,
+    build_ingestion_pipeline,
 )
 from pydocs_mcp.models import (
     Chunk,
@@ -22,23 +21,9 @@ from pydocs_mcp.models import (
     Package,
     PackageOrigin,
 )
+from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 from tests._retriever_helpers import write_package_sync
-
-
-@pytest.fixture(autouse=True)
-def _clear_extractor_cache():
-    """Prevent indexer module-level extraction cache from leaking between tests.
-
-    The :mod:`pydocs_mcp.indexer` module keeps two dicts (``_project_cache``
-    and ``_dependency_cache``) that :class:`IndexProjectService` flushes at
-    the end of each ``index_project`` call. Tests that exercise
-    ``indexer.extract_*`` directly bypass that flush, so without this fixture
-    a previous test's extraction could satisfy the next test's cache lookup.
-    """
-    clear_extraction_cache()
-    yield
-    clear_extraction_cache()
 
 
 @pytest.fixture
@@ -159,46 +144,109 @@ FAKE_PROJECT = FIXTURES_DIR / "fake_project"
 PACKAGES_DIR = FIXTURES_DIR / "packages"
 
 
+async def _extract_tree_as_project(
+    root: Path,
+) -> tuple[tuple[Chunk, ...], tuple[ModuleMember, ...], Package]:
+    """Extract chunks + members from *root* via the production ingestion pipeline.
+
+    Both the fake project and the vendored fixture packages live on disk
+    (not installed as distributions), so we route them through the
+    :class:`PipelineChunkExtractor` project path — which uses file discovery
+    instead of ``importlib.metadata``. The caller overrides the returned
+    :class:`Package` for fixture-dep cases.
+    """
+    config = AppConfig.load()
+    pipeline = build_ingestion_pipeline(config)
+    chunk_extractor = PipelineChunkExtractor(pipeline=pipeline)
+    chunks, _trees, pkg = await chunk_extractor.extract_from_project(root)
+    members = await AstMemberExtractor().extract_from_project(root)
+    return chunks, members, pkg
+
+
+def _rewrite_chunk_package(chunks: tuple[Chunk, ...], new_package: str) -> tuple[Chunk, ...]:
+    """Clone each :class:`Chunk` with its PACKAGE metadata key rewritten.
+
+    Used for the fixture-dep override path: chunks are extracted via the
+    PROJECT target (fixture packages aren't installed) so PackageBuildStage
+    stamps ``__project__``; we re-stamp the real dep name before insertion.
+    """
+    rewritten: list[Chunk] = []
+    for c in chunks:
+        md = dict(c.metadata)
+        md[ChunkFilterField.PACKAGE.value] = new_package
+        rewritten.append(
+            Chunk(
+                text=c.text,
+                id=c.id,
+                relevance=c.relevance,
+                retriever_name=c.retriever_name,
+                metadata=md,
+            )
+        )
+    return tuple(rewritten)
+
+
+def _rewrite_member_package(
+    members: tuple[ModuleMember, ...], new_package: str,
+) -> tuple[ModuleMember, ...]:
+    """Clone each :class:`ModuleMember` with its PACKAGE metadata key rewritten.
+
+    See :func:`_rewrite_chunk_package` for rationale.
+    """
+    rewritten: list[ModuleMember] = []
+    for m in members:
+        md = dict(m.metadata)
+        md[ModuleMemberFilterField.PACKAGE.value] = new_package
+        rewritten.append(
+            ModuleMember(
+                id=m.id,
+                relevance=m.relevance,
+                retriever_name=m.retriever_name,
+                metadata=md,
+            )
+        )
+    return tuple(rewritten)
+
+
 @pytest.fixture
 def integration_conn(tmp_path):
-    """DB seeded by running the real indexer against fixture files.
+    """DB seeded by running the ingestion pipeline against fixture files.
 
-    Indexes the fake_project source + the 3 package snapshots (sklearn, vllm,
-    langgraph) using the static parser (_extract_from_source_files), then rebuilds FTS.
+    Indexes the fake_project source + the 3 vendored fixture packages
+    (sklearn, vllm, langgraph) via :class:`PipelineChunkExtractor` +
+    :class:`AstMemberExtractor` — the production code path. Fixture
+    packages aren't installed, so they flow through the PROJECT branch
+    of the pipeline and the caller override-stamps the real package
+    name on chunks, members, and the ``Package`` row.
     """
     db_path = tmp_path / "integration.db"
     open_index_database(db_path).close()
 
     service = build_sqlite_indexing_service(db_path)
 
-    # Index the fake project directly via the extraction functions so the
-    # fixture doesn't also try to resolve the fake_project's declared
-    # (not-installed) deps — matches what :class:`IndexProjectService`
-    # does for the ``__project__`` package without the dep loop.
-    async def _index_project_only() -> None:
-        clear_extraction_cache()
-        chunks, pkg = await extract_project_chunks(FAKE_PROJECT)
-        members = await extract_project_members(FAKE_PROJECT)
+    async def _seed() -> None:
+        # -- Fake project: real __project__ name, no rewrite needed. --
+        chunks, members, pkg = await _extract_tree_as_project(FAKE_PROJECT)
         await service.reindex_package(pkg, chunks, members)
 
-    asyncio.run(_index_project_only())
+        # -- Vendored fixture packages: re-stamp with the dep name. --
+        for pkg_name in ("sklearn", "vllm", "langgraph"):
+            pkg_dir = PACKAGES_DIR / pkg_name
+            raw_chunks, raw_members, _ = await _extract_tree_as_project(pkg_dir)
+            chunks = _rewrite_chunk_package(raw_chunks, pkg_name)
+            members = _rewrite_member_package(raw_members, pkg_name)
+            override = Package(
+                name=pkg_name,
+                version="0.0.0",
+                summary=f"{pkg_name} fixture",
+                homepage="",
+                dependencies=(),
+                content_hash=f"fixture_{pkg_name}",
+                origin=PackageOrigin.DEPENDENCY,
+            )
+            await service.reindex_package(override, chunks, members)
 
-    # Index each package snapshot as if it were an installed dep.
-    for pkg_name in ("sklearn", "vllm", "langgraph"):
-        pkg_dir = PACKAGES_DIR / pkg_name
-        py_files = sorted(str(p) for p in pkg_dir.rglob("*.py"))
-        chunks, syms = _extract_from_source_files(
-            pkg_name, py_files, str(pkg_dir), kind_prefix="dep",
-        )
-        write_package_sync(
-            db_path,
-            name=pkg_name,
-            version="0.0.0",
-            summary=f"{pkg_name} fixture",
-            content_hash=f"fixture_{pkg_name}",
-            chunks=tuple(chunks),
-            module_members=tuple(syms),
-        )
+    asyncio.run(_seed())
 
     c = open_index_database(db_path)
     rebuild_fulltext_index(c)

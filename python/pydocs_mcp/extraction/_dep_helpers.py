@@ -1,10 +1,11 @@
 """Helpers for dependency discovery + inspect-mode symbol collection.
 
-``extraction/*`` must never take a hard dependency on ``pydocs_mcp.indexer``
-(the module sub-PR #5 deletes), so all inspect-mode symbol collection lives
-here instead. Only :class:`InspectMemberExtractor` consumes the output — the
-function returns only ``symbols`` (no chunks, no package record), since
-chunk extraction in sub-PR #5 flows through the ingestion pipeline.
+Owns the inspect-mode symbol collection path used by
+:class:`~pydocs_mcp.extraction.members.InspectMemberExtractor`. Returns only
+``symbols`` (no chunks, no package record) — chunk extraction flows through
+the :class:`~pydocs_mcp.extraction.pipeline.IngestionPipeline`, and package
+metadata is synthesized by
+:class:`~pydocs_mcp.extraction.stages.PackageBuildStage`.
 """
 from __future__ import annotations
 

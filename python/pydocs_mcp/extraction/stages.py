@@ -228,12 +228,12 @@ class ContentHashStage:
 class PackageBuildStage:
     """Fills ``state.package`` — branches on ``state.target_kind``.
 
-    PROJECT path produces the canonical ``Package(name="__project__", ...)``
-    that today's ``indexer.py`` builds. DEPENDENCY path walks
-    ``importlib.metadata.Distribution`` metadata — a missing distribution
-    raises :class:`LookupError` so the service layer can translate into a
-    non-fatal skip one level up (declared-but-not-installed deps are common
-    during local development; the stage keeps its contract honest by raising).
+    PROJECT path produces the canonical ``Package(name="__project__", ...)``.
+    DEPENDENCY path walks ``importlib.metadata.Distribution`` metadata — a
+    missing distribution raises :class:`LookupError` so the service layer
+    can translate into a non-fatal skip one level up (declared-but-not-installed
+    deps are common during local development; the stage keeps its contract
+    honest by raising).
     """
 
     name: str = "package_build"

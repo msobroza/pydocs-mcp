@@ -1,13 +1,14 @@
 """Application-layer Protocols — extraction + dependency resolution.
 
-Sub-PR #4 ships thin adapters wrapping today's deps.py / indexer.py functions.
-Sub-PR #5 replaces them with strategy-based implementations without touching
-IndexProjectService or any other consumer.
+Concrete implementations live in :mod:`pydocs_mcp.extraction`
+(:class:`PipelineChunkExtractor` / :class:`AstMemberExtractor` /
+:class:`InspectMemberExtractor` / :class:`StaticDependencyResolver`). The
+service depends only on these Protocols; swapping extractors is a pure
+adapter change.
 
-Sub-PR #5 amendment (spec §5, AC #19): ``ChunkExtractor`` now returns a
-3-tuple ``(chunks, trees, package)`` so the pipeline can surface the
-``DocumentNode`` forest alongside the flat chunks. Sub-PR #4 adapters
-return ``trees=()`` — Task 22 wires the first real tree producer.
+``ChunkExtractor`` returns a 3-tuple ``(chunks, trees, package)`` (spec §5,
+AC #19) so the pipeline can surface the ``DocumentNode`` forest alongside
+the flat chunks.
 """
 from __future__ import annotations
 
