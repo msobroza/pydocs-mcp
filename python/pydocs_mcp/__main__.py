@@ -59,12 +59,37 @@ def _build_parser() -> argparse.ArgumentParser:
                  "Faster, safer, no side-effects. Uses the same parser as project source.",
         )
 
-    for cmd, hlp in [("query", "Search docs"), ("api", "Search symbols")]:
-        sp = sub.add_parser(cmd, help=hlp)
-        sp.add_argument("terms", nargs="+")
-        sp.add_argument("project", nargs="?", default=".")
-        sp.add_argument("-p", "--package", help="Filter to one package")
-        sp.add_argument("--no-rust", **_no_rust)
+    # sub-PR #6: replace query/api with 2 tools matching the MCP surface.
+    sp_search = sub.add_parser("search", help="Full-text search over indexed docs/code")
+    sp_search.add_argument("query", help="Search terms (space-separated)")
+    sp_search.add_argument(
+        "--kind", choices=["docs", "api", "any"], default="any",
+        help="Which index to search (default: any = both)",
+    )
+    sp_search.add_argument(
+        "-p", "--package", default="", help="Restrict to one package",
+    )
+    sp_search.add_argument(
+        "--scope", choices=["project", "deps", "all"], default="all",
+    )
+    sp_search.add_argument("--limit", type=int, default=10)
+    sp_search.add_argument("--project-dir", dest="project", default=".")
+    sp_search.add_argument("--no-rust", **_no_rust)
+
+    sp_lookup = sub.add_parser(
+        "lookup", help="Navigate to a specific named target (package, module, class, method)",
+    )
+    sp_lookup.add_argument(
+        "target", nargs="?", default="",
+        help="Dotted path; empty = list all indexed packages",
+    )
+    sp_lookup.add_argument(
+        "--show",
+        choices=["default", "tree", "callers", "callees", "inherits"],
+        default="default",
+    )
+    sp_lookup.add_argument("--project-dir", dest="project", default=".")
+    sp_lookup.add_argument("--no-rust", **_no_rust)
 
     return p
 
@@ -173,52 +198,75 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         return 1
 
 
-def _cmd_query(args: argparse.Namespace) -> int:
+def _cmd_search(args: argparse.Namespace) -> int:
+    """Mirrors the MCP ``search`` tool: Pydantic input + same pipelines +
+    same rendering. kind='any' runs chunks and members in parallel (§8)."""
     try:
-        from pydocs_mcp.application import SearchDocsService
-        from pydocs_mcp.models import SearchQuery
+        from pydocs_mcp.application import (
+            SearchApiService,
+            SearchDocsService,
+            SearchInput,
+        )
         from pydocs_mcp.retrieval.config import (
             AppConfig,
             build_chunk_pipeline_from_config,
+            build_member_pipeline_from_config,
         )
         from pydocs_mcp.retrieval.wiring import build_retrieval_context
+        from pydocs_mcp.server import _do_search
 
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
         context = build_retrieval_context(db_path, config)
-        pipeline = build_chunk_pipeline_from_config(config, context)
-        service = SearchDocsService(chunk_pipeline=pipeline)
+        docs_svc = SearchDocsService(
+            chunk_pipeline=build_chunk_pipeline_from_config(config, context),
+        )
+        api_svc = SearchApiService(
+            member_pipeline=build_member_pipeline_from_config(config, context),
+        )
 
-        pre_filter = _pre_filter_from_package(args.package)
-        search_query = SearchQuery(terms=" ".join(args.terms), pre_filter=pre_filter)
-        response = asyncio.run(service.search(search_query))
-        _print_search_response(response)
+        payload = SearchInput(
+            query=args.query,
+            kind=args.kind,
+            package=args.package,
+            scope=args.scope,
+            limit=args.limit,
+        )
+        print(asyncio.run(_do_search(payload, docs_svc, api_svc)))
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI top-level (AC #16)
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
 
-def _cmd_api(args: argparse.Namespace) -> int:
+def _cmd_lookup(args: argparse.Namespace) -> int:
+    """Mirrors the MCP ``lookup`` tool — same LookupService dispatch."""
     try:
-        from pydocs_mcp.application import SearchApiService
-        from pydocs_mcp.models import SearchQuery
-        from pydocs_mcp.retrieval.config import (
-            AppConfig,
-            build_member_pipeline_from_config,
+        from pydocs_mcp.application import (
+            LookupInput,
+            LookupService,
+            PackageLookupService,
         )
+        from pydocs_mcp.retrieval.config import AppConfig
         from pydocs_mcp.retrieval.wiring import build_retrieval_context
+        from pydocs_mcp.storage.sqlite import (
+            SqliteChunkRepository,
+            SqlitePackageRepository,
+        )
 
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
         context = build_retrieval_context(db_path, config)
-        pipeline = build_member_pipeline_from_config(config, context)
-        service = SearchApiService(member_pipeline=pipeline)
+        provider = context.connection_provider
+        package_lookup = PackageLookupService(
+            package_store=SqlitePackageRepository(provider=provider),
+            chunk_store=SqliteChunkRepository(provider=provider),
+            module_member_store=context.module_member_store,
+        )
+        svc = LookupService(package_lookup=package_lookup)  # tree/ref svc optional
 
-        pre_filter = _pre_filter_from_package(args.package)
-        search_query = SearchQuery(terms=" ".join(args.terms), pre_filter=pre_filter)
-        response = asyncio.run(service.search(search_query))
-        _print_search_response(response)
+        payload = LookupInput(target=args.target, show=args.show)
+        print(asyncio.run(svc.lookup(payload)))
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI top-level (AC #16)
         print(f"Error: {exc}", file=sys.stderr)
@@ -255,10 +303,10 @@ def _print_search_response(response) -> None:
 
 
 _CMD_TABLE = {
-    "serve": _cmd_serve,
-    "index": _cmd_index,
-    "query": _cmd_query,
-    "api":   _cmd_api,
+    "serve":  _cmd_serve,
+    "index":  _cmd_index,
+    "search": _cmd_search,
+    "lookup": _cmd_lookup,
 }
 
 
