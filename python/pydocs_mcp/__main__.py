@@ -19,9 +19,13 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.db import cache_path_for_project, open_index_database
+
+if TYPE_CHECKING:
+    from pydocs_mcp.extraction.document_node import DocumentNode
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -308,7 +312,7 @@ def _cmd_tree(args: argparse.Namespace) -> int:
         return 1
 
 
-def _format_tree_ascii(node) -> str:
+def _format_tree_ascii(node: "DocumentNode") -> str:
     """Render a :class:`DocumentNode` as indented Unicode tree text.
 
     Deterministic pre-order walk: root on its own line, each descendant
@@ -320,13 +324,12 @@ def _format_tree_ascii(node) -> str:
     return "\n".join(lines)
 
 
-def _tree_label(node) -> str:
-    kind = node.kind.value.upper() if hasattr(node.kind, "value") else str(node.kind)
-    return f"{node.qualified_name} ({kind})"
+def _tree_label(node: "DocumentNode") -> str:
+    return f"{node.qualified_name} ({node.kind.value.upper()})"
 
 
 def _append_subtree(
-    children, *, prefix: str, lines: list[str],
+    children: tuple["DocumentNode", ...], *, prefix: str, lines: list[str],
 ) -> None:
     """Recursive helper for :func:`_format_tree_ascii`."""
     for index, child in enumerate(children):

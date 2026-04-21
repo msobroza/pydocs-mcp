@@ -293,3 +293,20 @@ class TestTreeCommand:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "tree" in captured.out.lower()
+
+    def test_cmd_tree_uses_unicode_glyphs(
+        self, seeded_tree_db, capsys, monkeypatch,
+    ):
+        """Regression guard on the rendering format (spec §14.2)."""
+        monkeypatch.chdir(seeded_tree_db)
+        with patch("sys.argv", ["pydocs-mcp", "tree", "demo"]):
+            from pydocs_mcp.__main__ import main
+            exit_code = main()
+        captured = capsys.readouterr()
+        assert exit_code == 0
+        # At least one last-child and one middle-child connector appear.
+        assert "└── " in captured.out
+        assert "├── " in captured.out
+        # Node kind labels are part of the rendered text.
+        assert "(PACKAGE)" in captured.out
+        assert "(MODULE)" in captured.out
