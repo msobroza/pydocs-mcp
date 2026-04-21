@@ -146,7 +146,8 @@ def _extract_module_children(
 
 
 def _import_block_node(
-    imports: list, module: str, lines: list[str], rel: str,
+    imports: list[ast.Import | ast.ImportFrom],
+    module: str, lines: list[str], rel: str,
 ) -> DocumentNode:
     """Coalesce all top-level imports into one IMPORT_BLOCK."""
     start = imports[0].lineno
@@ -168,7 +169,8 @@ def _import_block_node(
 
 
 def _function_node(
-    stmt, module: str, lines: list[str], rel: str,
+    stmt: ast.FunctionDef | ast.AsyncFunctionDef,
+    module: str, lines: list[str], rel: str,
     *, parent_id: str, kind: NodeKind,
 ) -> DocumentNode:
     """Shared FUNCTION / METHOD builder. ``kind`` + ``parent_id`` make
