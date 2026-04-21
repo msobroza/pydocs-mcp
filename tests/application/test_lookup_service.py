@@ -134,3 +134,117 @@ async def test_longest_indexed_module_returns_none_when_nothing_matches(
         "fastapi", ["fastapi", "nonexistent", "foo"]
     )
     assert module is None
+
+
+# ── Module-level + symbol-level dispatch ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_module_lookup_without_tree_svc_raises_service_unavailable(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """A multi-segment target but no tree_svc wired: no way to render the tree."""
+    package_lookup_mock.find_module = AsyncMock(return_value=True)
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=None)
+
+    with pytest.raises(ServiceUnavailableError):
+        await svc.lookup(LookupInput(target="fastapi.routing"))
+
+
+@pytest.mark.asyncio
+async def test_module_lookup_with_tree_svc_returns_rendered_tree(
+    package_lookup_mock: MagicMock,
+) -> None:
+    fake_tree = MagicMock()
+    fake_tree.to_pageindex_json = MagicMock(
+        return_value={"title": "routing", "nodes": []}
+    )
+    tree_svc = MagicMock()
+    tree_svc.get_tree = AsyncMock(return_value=fake_tree)
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    out = await svc.lookup(LookupInput(target="fastapi.routing"))
+    assert "routing" in out
+
+
+def _tree_svc_for_module(module_path: str, tree: Any) -> MagicMock:
+    """Build a tree_svc mock that resolves only one exact module path."""
+    svc = MagicMock()
+
+    async def _get_tree(package: str, module: str) -> Any:
+        return tree if module == module_path else None
+
+    svc.get_tree = _get_tree
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_symbol_lookup_not_found_when_module_resolves_but_symbol_missing(
+    package_lookup_mock: MagicMock,
+) -> None:
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=None)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    with pytest.raises(NotFoundError):
+        await svc.lookup(LookupInput(target="fastapi.routing.NoSuchClass"))
+
+
+@pytest.mark.asyncio
+async def test_show_callers_without_ref_svc_raises_service_unavailable(
+    package_lookup_mock: MagicMock,
+) -> None:
+    fake_node = MagicMock()
+    fake_node.kind = "method"
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=None,
+    )
+    with pytest.raises(ServiceUnavailableError):
+        await svc.lookup(
+            LookupInput(target="fastapi.routing.X", show="callers")
+        )
+
+
+@pytest.mark.asyncio
+async def test_show_inherits_on_non_class_raises_invalid_argument(
+    package_lookup_mock: MagicMock,
+) -> None:
+    fake_node = MagicMock()
+    fake_node.kind = "method"  # not a class
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    with pytest.raises(InvalidArgumentError) as exc:
+        await svc.lookup(
+            LookupInput(target="fastapi.routing.X.y", show="inherits")
+        )
+    assert "class" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_show_inherits_on_class_reads_from_node_metadata(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """Degraded mode — no ref_svc but inherits still works via tree node metadata."""
+    fake_node = MagicMock()
+    fake_node.kind = "class"
+    fake_node.extra_metadata = {"inherits_from": ["BaseAuth", "Mixin"]}
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=None,
+    )
+    out = await svc.lookup(
+        LookupInput(target="fastapi.routing.X", show="inherits")
+    )
+    assert "BaseAuth" in out
+    assert "Mixin" in out

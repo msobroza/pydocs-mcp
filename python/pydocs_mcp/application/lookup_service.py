@@ -63,16 +63,88 @@ class LookupService:
         if len(parts) == 1:
             return await self._package_lookup(package, show)
 
-        # Module / symbol routing implemented in later tasks.
-        raise NotFoundError(
-            f"target '{target}' not yet resolvable (module/symbol routing in later task)"
-        )
+        # 3. Resolve longest module prefix
+        module = await self._longest_indexed_module(package, parts)
+        if module is None:
+            raise NotFoundError(
+                f"no module matching '{target}' found under '{package}'"
+            )
+
+        symbol_path = parts[len(module.split(".")):]
+
+        # 4. Module-only target (nothing left after the module prefix)
+        if not symbol_path:
+            return await self._module_lookup(package, module, show)
+
+        # 5. Symbol lookup
+        return await self._symbol_lookup(package, module, target, show)
 
     async def _package_lookup(self, package: str, show: str) -> str:
         doc = await self.package_lookup.get_package_doc(package)
         if doc is None:
             raise NotFoundError(f"package '{package}' not indexed")
         return format_package_doc(doc)
+
+    async def _module_lookup(self, package: str, module: str, show: str) -> str:
+        if self.tree_svc is None:
+            raise ServiceUnavailableError(
+                f"module tree for '{module}' unavailable — enable via sub-PR #5"
+            )
+        tree = await self.tree_svc.get_tree(package, module)
+        if tree is None:
+            raise NotFoundError(f"no tree stored for '{package}.{module}'")
+        return json.dumps(tree.to_pageindex_json(), indent=2)
+
+    async def _symbol_lookup(
+        self, package: str, module: str, target: str, show: str,
+    ) -> str:
+        if self.tree_svc is None:
+            raise ServiceUnavailableError(
+                f"symbol tree for '{target}' unavailable — enable via sub-PR #5"
+            )
+        tree = await self.tree_svc.get_tree(package, module)
+        if tree is None:
+            raise NotFoundError(f"no tree for '{package}.{module}'")
+        node = tree.find_node_by_qualified_name(target)
+        if node is None:
+            raise NotFoundError(f"'{target}' not found in {module}")
+
+        if show in ("default", "tree"):
+            return json.dumps(node.to_pageindex_json(), indent=2)
+
+        if show == "callers":
+            if self.ref_svc is None:
+                raise ServiceUnavailableError(
+                    "reference graph not indexed — enable via sub-PR #5b"
+                )
+            refs = await self.ref_svc.callers(package, node.node_id)
+            return self._render_refs(refs)
+
+        if show == "callees":
+            if self.ref_svc is None:
+                raise ServiceUnavailableError(
+                    "reference graph not indexed — enable via sub-PR #5b"
+                )
+            refs = await self.ref_svc.callees(package, node.node_id)
+            return self._render_refs(refs)
+
+        if show == "inherits":
+            if getattr(node, "kind", "") != "class":
+                raise InvalidArgumentError(
+                    f"show='inherits' only applies to CLASS nodes, got {node.kind}"
+                )
+            inherits = node.extra_metadata.get("inherits_from", [])
+            return "\n".join(f"- {base}" for base in inherits) or "(no base classes)"
+
+        raise InvalidArgumentError(f"unknown show value: {show}")
+
+    @staticmethod
+    def _render_refs(refs: Any) -> str:
+        if not refs:
+            return "(no references)"
+        return "\n".join(
+            f"- {r.from_node_id} → {r.to_name} ({r.kind})" for r in refs
+        )
 
     async def _longest_indexed_module(
         self, package: str, parts: list[str]
