@@ -15,9 +15,9 @@ non-transactional backends or in tests with Protocol fakes).
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydocs_mcp.models import (
     Chunk,
@@ -29,10 +29,14 @@ from pydocs_mcp.models import (
 from pydocs_mcp.storage.filters import All
 from pydocs_mcp.storage.protocols import (
     ChunkStore,
+    DocumentTreeStore,
     ModuleMemberStore,
     PackageStore,
     UnitOfWork,
 )
+
+if TYPE_CHECKING:
+    from pydocs_mcp.extraction.document_node import DocumentNode
 
 T = TypeVar("T")
 
@@ -50,6 +54,10 @@ class IndexingService:
     chunk_store: ChunkStore
     module_member_store: ModuleMemberStore
     unit_of_work: UnitOfWork | None = None
+    # Sub-PR #5 addition — optional DocumentTreeStore for persisting
+    # DocumentNode trees alongside chunks. When None, ``trees`` parameter
+    # of ``reindex_package`` is accepted but silently dropped (backward compat).
+    tree_store: DocumentTreeStore | None = None
 
     def __post_init__(self) -> None:
         # Warn when the service is constructed without a UoW — ``_do_reindex``
@@ -84,15 +92,22 @@ class IndexingService:
         package: Package,
         chunks: tuple[Chunk, ...],
         module_members: tuple[ModuleMember, ...],
+        trees: Sequence["DocumentNode"] = (),
+        references: Sequence[Any] = (),
     ) -> None:
-        """Replace every row for ``package.name`` atomically.
+        """Replace every row for ``package.name`` atomically (spec §13.3).
 
-        Deletes the package row and every chunk / module-member tagged
-        with the same package name, then upserts the new fixture. When
-        a ``UnitOfWork`` is configured the whole sequence runs inside
+        Canonical composite: delete + upsert for each of packages / chunks /
+        module_members; optionally persist ``trees`` via ``tree_store`` when
+        configured. ``references`` is accepted as a seam for sub-PR #5b
+        (cross-node reference graph); sub-PR #5 ignores them.
+
+        When a ``UnitOfWork`` is configured the whole sequence runs inside
         one transaction.
         """
-        await self._in_uow(self._do_reindex, package, chunks, module_members)
+        await self._in_uow(
+            self._do_reindex, package, chunks, module_members, trees, references,
+        )
 
     async def remove_package(self, name: str) -> None:
         """Delete a package and every chunk / module-member it owns."""
@@ -114,19 +129,27 @@ class IndexingService:
         package: Package,
         chunks: tuple[Chunk, ...],
         module_members: tuple[ModuleMember, ...],
+        trees: Sequence["DocumentNode"] = (),
+        references: Sequence[Any] = (),  # noqa: ARG002 -- sub-PR #5b seam
     ) -> None:
         # Enum-typed filter keys — stringly-typed ``{"package": ...}`` drifted
         # silently when a column renamed; ``ChunkFilterField`` / ``ModuleMemberFilterField``
         # are the single source of truth the safe-columns whitelist also derives from.
         # The ``packages`` table keys on ``name`` (not ``package``), so that
-        # one stays literal — no matching enum today (noted in /simplify report).
+        # one stays literal — no matching enum today.
         await self.chunk_store.delete(filter={ChunkFilterField.PACKAGE.value: package.name})
         await self.module_member_store.delete(
             filter={ModuleMemberFilterField.PACKAGE.value: package.name},
         )
         await self.package_store.delete(filter={"name": package.name})
+        # Canonical order (spec §13.3): package → chunks → trees → members.
+        # Tree persistence happens between chunks and members so FK-like
+        # post-conditions line up if a future schema adds them.
         await self.package_store.upsert(package)
         await self.chunk_store.upsert(chunks)
+        if self.tree_store is not None and trees:
+            await self.tree_store.delete_for_package(package.name)
+            await self.tree_store.save_many(tuple(trees), package=package.name)
         await self.module_member_store.upsert_many(module_members)
 
     async def _do_remove(self, name: str) -> None:
