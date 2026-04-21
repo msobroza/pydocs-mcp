@@ -15,6 +15,7 @@ from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.storage.sqlite import (
     SqliteChunkRepository,
+    SqliteDocumentTreeStore,
     SqliteModuleMemberRepository,
     SqlitePackageRepository,
     SqliteUnitOfWork,
@@ -27,6 +28,9 @@ def build_sqlite_indexing_service(db_path: Path) -> IndexingService:
     Callers that need the chunk repository directly (e.g. to trigger
     ``rebuild_index`` after a bulk load) can reach it via
     ``service.chunk_store`` — the ``ChunkStore`` protocol exposes it.
+
+    Sub-PR #5: also wires :class:`SqliteDocumentTreeStore` so the
+    ``trees`` payload passed to ``reindex_package`` is persisted.
     """
     provider = build_connection_provider(db_path)
     return IndexingService(
@@ -34,4 +38,5 @@ def build_sqlite_indexing_service(db_path: Path) -> IndexingService:
         chunk_store=SqliteChunkRepository(provider=provider),
         module_member_store=SqliteModuleMemberRepository(provider=provider),
         unit_of_work=SqliteUnitOfWork(provider=provider),
+        tree_store=SqliteDocumentTreeStore(provider=provider),
     )

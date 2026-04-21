@@ -108,13 +108,24 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     the pre-PR pattern where one event loop wrapped the whole indexing
     phase so sub-loops (async SQLite writes, ``to_thread`` extractions)
     shared the same context.
+
+    Sub-PR #5: the sub-PR #4 legacy adapters
+    (``ChunkExtractorAdapter``/``MemberExtractorAdapter``/``DependencyResolverAdapter``)
+    are replaced by the strategy-based classes from :mod:`pydocs_mcp.extraction`:
+    :class:`PipelineChunkExtractor` (driven by the YAML ingestion pipeline),
+    :class:`InspectMemberExtractor` (with :class:`AstMemberExtractor` fallback)
+    or plain :class:`AstMemberExtractor` for ``--no-inspect``, and
+    :class:`StaticDependencyResolver`.
     """
-    from pydocs_mcp.application import (
-        ChunkExtractorAdapter,
-        DependencyResolverAdapter,
-        IndexProjectService,
-        MemberExtractorAdapter,
+    from pydocs_mcp.application import IndexProjectService
+    from pydocs_mcp.extraction import (
+        AstMemberExtractor,
+        InspectMemberExtractor,
+        PipelineChunkExtractor,
+        StaticDependencyResolver,
+        build_ingestion_pipeline,
     )
+    from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 
     # Ensure the schema exists before repositories issue queries.
@@ -125,11 +136,26 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     mode = "inspect" if use_inspect else "static"
     log.info("Project: %s (mode=%s)", project, mode)
 
+    # Sub-PR #5: build THE ingestion pipeline once and share it across
+    # project + dependency extraction. ``AppConfig.load`` honours the
+    # optional ``--config`` override the CLI already passes to search /
+    # serve so ingestion pipeline overrides (spec §7.3) stay consistent
+    # with the rest of the config.
+    config = AppConfig.load(explicit_path=getattr(args, "config", None))
+    ingestion_pipeline = build_ingestion_pipeline(config)
+    chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
+
+    ast_member = AstMemberExtractor()
+    member_extractor = (
+        InspectMemberExtractor(static_fallback=ast_member, depth=args.depth)
+        if use_inspect else ast_member
+    )
+
     orchestrator = IndexProjectService(
         indexing_service=indexing_service,
-        dependency_resolver=DependencyResolverAdapter(),
-        chunk_extractor=ChunkExtractorAdapter(use_inspect=use_inspect, depth=args.depth),
-        member_extractor=MemberExtractorAdapter(use_inspect=use_inspect, depth=args.depth),
+        dependency_resolver=StaticDependencyResolver(),
+        chunk_extractor=chunk_extractor,
+        member_extractor=member_extractor,
     )
 
     if args.force:
