@@ -1,27 +1,22 @@
-"""Pre-extracted indexer helpers for dependency discovery + inspect-mode extraction.
+"""Helpers for dependency discovery + inspect-mode symbol collection.
 
-Why pre-extracted (plan §Coupling conventions, Task 12 rationale): sub-PR #5
-Batch 2 introduces extraction strategies (``AstMemberExtractor``,
-``InspectMemberExtractor``, ``DependencyFileDiscoverer``) that need these three
-helpers. Living under ``pydocs_mcp.indexer`` would force ``extraction/*`` to
-import from ``indexer`` — the very module sub-PR #5 ultimately replaces — so
-we copy the helpers verbatim here *before* any Batch 2 consumer arrives. This
-breaks the ``extraction/* -> pydocs_mcp.indexer`` import edge so that Task 29
-can delete ``indexer.py`` cleanly.
-
-The originals still live in ``indexer.py`` during the transition period; both
-copies stay in sync until Task 29 deletes the old module.
+``extraction/*`` must never take a hard dependency on ``pydocs_mcp.indexer``
+(the module sub-PR #5 deletes), so all inspect-mode symbol collection lives
+here instead. Only :class:`InspectMemberExtractor` consumes the output — the
+function returns only ``symbols`` (no chunks, no package record), since
+chunk extraction in sub-PR #5 flows through the ingestion pipeline.
 """
 from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import inspect
 import logging
+import pkgutil
 from pathlib import Path
 
-from pydocs_mcp.constants import MODULE_DOCSTRING_MAX
 from pydocs_mcp.deps import normalize_package_name
-from pydocs_mcp.models import Chunk, ChunkFilterField
+from pydocs_mcp.models import ModuleMember, ModuleMemberFilterField
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -61,51 +56,90 @@ def find_site_packages_root(any_file: str) -> str:
     return str(Path(any_file).parent.parent)
 
 
-def _extract_by_import(dist, depth: int) -> dict:
-    """Import module, extract API via inspect.getmembers.
+def _extract_by_import(dist, depth: int = 1) -> dict:
+    """Live-import a distribution's modules and collect ModuleMember symbols.
 
-    Deferred imports for ``_build_package_record`` / ``_append_doc_file_chunks``
-    / ``_extract_members_by_import`` — those three helpers still live in
-    ``pydocs_mcp.indexer`` during the Batch 2 transition; Task 29 rehomes them
-    here. Keeping the imports local avoids paying the circular-import cost at
-    module load time and matches the plan's Task 12 "pure copy; no behavioral
-    change" directive.
+    Returns ``{"symbols": tuple[ModuleMember, ...]}`` — the shape
+    :class:`InspectMemberExtractor` consumes. The extractor only reads
+    ``record["symbols"]``; chunk extraction in sub-PR #5 flows through the
+    ingestion pipeline, not this helper.
+
+    Side-effectful (runs module top-level code). Callers must own the risk —
+    :class:`InspectMemberExtractor` falls back to :class:`AstMemberExtractor`
+    when an import raises.
     """
-    # Deferred imports: see docstring. These three helpers rehome to this
-    # module in Task 29 along with the rest of indexer.py's body.
-    from pydocs_mcp.indexer import (
-        _append_doc_file_chunks,
-        _build_package_record,
-        _extract_members_by_import,
-    )
+    pkg_name = normalize_package_name(dist.metadata["Name"])
+    if pkg_name in SKIP_IMPORT:
+        return {"symbols": ()}
 
-    name = dist.metadata["Name"].lower().replace("-", "_")
-    version = dist.metadata["Version"] or "?"
-    package_record = _build_package_record(dist, name, version)
-    _append_doc_file_chunks(dist, name, package_record)
+    import_name = IMPORT_ALIASES.get(pkg_name, pkg_name)
+    try:
+        mod = importlib.import_module(import_name)
+    except Exception:  # noqa: BLE001 -- spec §9.2: live-import fallback allowlist
+        return {"symbols": ()}
 
-    if name not in SKIP_IMPORT:
-        iname = IMPORT_ALIASES.get(name, name)
+    symbols: list[ModuleMember] = []
+    _collect_symbols(mod, pkg_name, import_name, symbols, depth)
+    return {"symbols": tuple(symbols)}
+
+
+def _collect_symbols(
+    mod,
+    pkg_name: str,
+    module_path: str,
+    symbols: list[ModuleMember],
+    remaining_depth: int,
+) -> None:
+    """Recurse into submodules; collect function + class signatures.
+
+    ``remaining_depth == 1`` means root module only; ``2`` adds one level of
+    submodules, and so on. ``pkg_name`` is the normalized (PEP 503) package
+    key stamped on every :class:`ModuleMember`; ``module_path`` is the full
+    dotted path used for recursion + metadata.
+    """
+    try:
+        members = inspect.getmembers(mod)
+    except Exception:  # noqa: BLE001 -- defensive; getmembers can raise on exotic modules
+        return
+
+    for name, obj in members:
+        if name.startswith("_"):
+            continue
+        if inspect.isfunction(obj) or inspect.isclass(obj):
+            try:
+                sig = str(inspect.signature(obj))
+            except (ValueError, TypeError):
+                sig = "(...)"
+            kind = "class" if inspect.isclass(obj) else "function"
+            symbols.append(ModuleMember(metadata={
+                ModuleMemberFilterField.PACKAGE.value: pkg_name,
+                ModuleMemberFilterField.MODULE.value: module_path,
+                ModuleMemberFilterField.NAME.value: name,
+                ModuleMemberFilterField.KIND.value: kind,
+                "signature": sig,
+                "return_annotation": "",
+                "parameters": (),
+                "docstring": inspect.getdoc(obj) or "",
+            }))
+
+    if remaining_depth <= 1 or not hasattr(mod, "__path__"):
+        return
+
+    try:
+        submodules = list(pkgutil.iter_modules(mod.__path__))
+    except Exception:  # noqa: BLE001 -- iter_modules can blow up on namespace packages
+        return
+
+    for _finder, subname, _ispkg in submodules:
+        if subname.startswith("_"):
+            continue
+        full_name = f"{module_path}.{subname}"
         try:
-            module = importlib.import_module(iname)
-            if module.__doc__ and len(module.__doc__.strip()) > 30:
-                package_record["chunks"].append(
-                    Chunk(
-                        text=module.__doc__.strip()[:MODULE_DOCSTRING_MAX],
-                        metadata={
-                            ChunkFilterField.PACKAGE.value: name,
-                            ChunkFilterField.TITLE.value: name,
-                            ChunkFilterField.ORIGIN.value: "docstring",
-                        },
-                    )
-                )
-            package_record["symbols"] = _extract_members_by_import(
-                module, iname, name, max_depth=depth,
-            )
-        except Exception as e:
-            log.debug("Failed to import %s: %s", iname, e)
-
-    return package_record
+            submod = importlib.import_module(full_name)
+        except Exception:  # noqa: BLE001 -- per-submodule failure is non-fatal
+            log.debug("submodule import failed: %s", full_name)
+            continue
+        _collect_symbols(submod, pkg_name, full_name, symbols, remaining_depth - 1)
 
 
 __all__ = (
