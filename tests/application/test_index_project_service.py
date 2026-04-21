@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from pydocs_mcp.application.index_project_service import IndexProjectService
+from pydocs_mcp.extraction.document_node import DocumentNode
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -138,32 +139,43 @@ class FakeDependencyResolver:
 class FakeChunkExtractor:
     """Protocol fake for application.protocols.ChunkExtractor.
 
-    ``dep_returns`` maps dep-name → either the extractor return value or an
+    Spec §5 amendment: the Protocol returns a 3-tuple
+    ``(chunks, trees, package)``. Test fixtures pass ``(chunks, pkg)`` and
+    the fake wraps them with an empty ``trees=()`` — Task 22 replaces this
+    with a real tree emitter.
+
+    ``dep_returns`` maps dep-name → either the extractor return value
+    (2-tuple OR 3-tuple; both accepted for test-terseness) or an
     ``Exception`` instance; when the entry is an exception we raise it so
     tests can exercise the _index_one_dependency failure path.
     """
 
     project_chunks: tuple[Chunk, ...] = ()
     project_package: Package | None = None
+    project_trees: tuple[DocumentNode, ...] = ()
     dep_returns: dict[str, Any] = field(default_factory=dict)
     project_calls: list[Path] = field(default_factory=list)
     dep_calls: list[str] = field(default_factory=list)
 
     async def extract_from_project(
         self, project_dir: Path,
-    ) -> tuple[tuple[Chunk, ...], Package]:
+    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
         self.project_calls.append(project_dir)
         assert self.project_package is not None, "Configure project_package first"
-        return (self.project_chunks, self.project_package)
+        return (self.project_chunks, self.project_trees, self.project_package)
 
     async def extract_from_dependency(
         self, dep_name: str,
-    ) -> tuple[tuple[Chunk, ...], Package]:
+    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
         self.dep_calls.append(dep_name)
         entry = self.dep_returns.get(dep_name)
         if isinstance(entry, BaseException):
             raise entry
         assert entry is not None, f"No chunk-extractor result configured for {dep_name}"
+        # Back-compat: accept a bare 2-tuple (chunks, pkg) and widen it.
+        if len(entry) == 2:
+            chunks, pkg = entry
+            return chunks, (), pkg
         return entry
 
 
@@ -468,6 +480,104 @@ def test_adapter_classes_are_frozen_and_slotted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_index_project_drops_trees_until_tree_store_arrives(
+    tmp_path: Path,
+) -> None:
+    """Spec §5 amendment: ``ChunkExtractor`` returns 3-tuple
+    ``(chunks, trees, package)``. ``IndexingService.reindex_package`` does
+    not consume ``trees`` yet (Task 23 widens that signature), so the
+    service drops them — and the 2-arg ``reindex_package`` contract the
+    fake records still matches.
+
+    This test exercises the unpacking path for both the project branch
+    (uses ``project_trees`` on the fake) and the dep branch (uses a
+    raw 3-tuple in ``dep_returns``).
+    """
+    # Build a DocumentNode stub so the tree input is non-empty and we
+    # prove the service really is dropping it, not just ignoring ().
+    from pydocs_mcp.extraction.document_node import NodeKind
+
+    tree = DocumentNode(
+        node_id="pkg.mod",
+        qualified_name="pkg.mod",
+        title="mod",
+        kind=NodeKind.MODULE,
+        source_path="pkg/mod.py",
+        start_line=1,
+        end_line=10,
+        text="...",
+        content_hash="h",
+    )
+    project_pkg = _pkg("__project__")
+    dep_pkg = _pkg("fastapi")
+    service, idx, _resolver, chunks_ex, _members = _make_service(
+        deps=("fastapi",),
+        project_pkg=project_pkg,
+        dep_chunk_returns={
+            "fastapi": ((_chunk("fastapi", "T"),), (tree,), dep_pkg),
+        },
+        dep_member_returns={"fastapi": ()},
+    )
+    chunks_ex.project_trees = (tree,)
+
+    stats = await service.index_project(tmp_path)
+
+    # Both extractions ran.
+    assert chunks_ex.project_calls == [tmp_path]
+    assert chunks_ex.dep_calls == ["fastapi"]
+    # And each produced a reindex_package call with chunks + members only —
+    # the FakeIndexingService records a 3-tuple (pkg, chunks, members);
+    # ``trees`` never appears because Task 23 hasn't widened the signature.
+    assert len(idx.reindex_calls) == 2
+    for _pkg_arg, chunks_arg, members_arg in idx.reindex_calls:
+        assert all(isinstance(c, Chunk) for c in chunks_arg)
+        assert all(isinstance(m, ModuleMember) for m in members_arg)
+    assert stats.project_indexed is True
+    assert stats.indexed == 1
+
+
+@pytest.mark.asyncio
+async def test_chunk_extractor_adapter_returns_3_tuple(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """``ChunkExtractorAdapter`` wraps today's ``indexer.extract_*_chunks``
+    (which still returns the 2-tuple ``(chunks, pkg)``) and widens to the
+    spec §5 3-tuple with an empty ``trees=()`` until Task 22 delivers a
+    real tree emitter.
+    """
+    from pydocs_mcp.application.index_project_service import ChunkExtractorAdapter
+    from pydocs_mcp import indexer as indexer_module
+
+    pkg = _pkg("__project__")
+    chunks = (_chunk("__project__", "T"),)
+
+    async def fake_project(project_dir):
+        return chunks, pkg
+
+    async def fake_dep(dep_name, *, use_inspect, depth):
+        return chunks, _pkg(dep_name)
+
+    monkeypatch.setattr(indexer_module, "extract_project_chunks", fake_project)
+    monkeypatch.setattr(indexer_module, "extract_dependency_chunks", fake_dep)
+
+    adapter = ChunkExtractorAdapter()
+    proj_result = await adapter.extract_from_project(tmp_path)
+    dep_result = await adapter.extract_from_dependency("httpx")
+
+    # Shape: exactly three elements (chunks, trees, package).
+    assert len(proj_result) == 3
+    assert len(dep_result) == 3
+    proj_chunks, proj_trees, proj_pkg = proj_result
+    assert proj_chunks is chunks
+    assert proj_trees == ()
+    assert proj_pkg is pkg
+    # And for the dep path.
+    _dep_chunks, dep_trees, dep_pkg = dep_result
+    assert dep_trees == ()
+    assert dep_pkg.name == "httpx"
+
+
+@pytest.mark.asyncio
 async def test_index_project_workers_1_is_serial(tmp_path: Path) -> None:
     """With ``workers=1`` deps run one-at-a-time in resolver order — the
     deterministic path that tests and byte-parity depend on.
@@ -517,7 +627,7 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
 
         async def extract_from_dependency(
             self, dep_name: str,
-        ) -> tuple[tuple[Chunk, ...], Package]:
+        ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
             self.dep_calls.append(dep_name)
             self.in_flight += 1
             self.max_in_flight = max(self.max_in_flight, self.in_flight)
@@ -526,7 +636,8 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
             # observe concurrency on a fast machine.
             await asyncio.sleep(0)
             try:
-                return self.dep_returns[dep_name]
+                chunks, pkg = self.dep_returns[dep_name]
+                return chunks, (), pkg
             finally:
                 self.in_flight -= 1
 

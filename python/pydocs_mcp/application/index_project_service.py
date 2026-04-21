@@ -26,6 +26,7 @@ from pydocs_mcp.application.protocols import (
     DependencyResolver,
     MemberExtractor,
 )
+from pydocs_mcp.extraction.document_node import DocumentNode
 from pydocs_mcp.models import Chunk, IndexingStats, ModuleMember, Package
 
 log = logging.getLogger("pydocs-mcp")
@@ -114,8 +115,12 @@ class IndexProjectService:
         When the newly-computed content_hash matches the existing row we skip
         the delete-then-upsert entirely — leaves ``stats.project_indexed``
         as ``False`` which callers read as "nothing changed".
+
+        ``trees`` is part of the extractor's 3-tuple return (spec §5) but
+        :meth:`IndexingService.reindex_package` does not consume it yet —
+        Task 23 widens that signature. For now we drop it.
         """
-        chunks, pkg = await self.chunk_extractor.extract_from_project(project_dir)
+        chunks, _trees, pkg = await self.chunk_extractor.extract_from_project(project_dir)
         existing = await self.indexing_service.package_store.get(pkg.name)
         if existing is not None and existing.content_hash == pkg.content_hash:
             log.info("Project: no changes (cached)")
@@ -139,7 +144,7 @@ class IndexProjectService:
         ``failed`` counter; it does NOT swallow silently.
         """
         try:
-            chunks, pkg = await self.chunk_extractor.extract_from_dependency(dep_name)
+            chunks, _trees, pkg = await self.chunk_extractor.extract_from_dependency(dep_name)
             existing = await self.indexing_service.package_store.get(pkg.name)
             if existing is not None and existing.content_hash == pkg.content_hash:
                 stats.cached += 1
@@ -196,6 +201,11 @@ class ChunkExtractorAdapter:
     file-read mode (``False``). ``depth`` bounds recursive submodule
     traversal in inspect mode. The defaults mirror ``__main__``'s CLI
     defaults (``--no-inspect`` OFF, ``--depth 1``).
+
+    The adapter returns ``trees=()`` to satisfy the spec §5 3-tuple
+    Protocol — today's ``indexer.extract_*_chunks`` does not build a
+    :class:`DocumentNode` forest. Task 22 replaces this adapter with
+    ``PipelineChunkExtractor`` which emits real trees.
     """
 
     use_inspect: bool = True
@@ -203,23 +213,25 @@ class ChunkExtractorAdapter:
 
     async def extract_from_project(
         self, project_dir: Path,
-    ) -> tuple[tuple[Chunk, ...], Package]:
+    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
         # Deferred import: the service-adapter split means the service
         # imports this module at load time, but the heavy ``indexer``
         # module (Rust bindings, importlib traversal) is only needed
         # inside the adapter's call path.
         from pydocs_mcp import indexer
 
-        return await indexer.extract_project_chunks(project_dir)
+        chunks, pkg = await indexer.extract_project_chunks(project_dir)
+        return chunks, (), pkg
 
     async def extract_from_dependency(
         self, dep_name: str,
-    ) -> tuple[tuple[Chunk, ...], Package]:
+    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
         from pydocs_mcp import indexer
 
-        return await indexer.extract_dependency_chunks(
+        chunks, pkg = await indexer.extract_dependency_chunks(
             dep_name, use_inspect=self.use_inspect, depth=self.depth,
         )
+        return chunks, (), pkg
 
 
 @dataclass(frozen=True, slots=True)
