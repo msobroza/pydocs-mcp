@@ -173,7 +173,7 @@ async def test_inspect_unknown_package_returns_error_string(wired_services):
     """
     result = await wired_services["inspect"].inspect("nonexistent_xyz")
     assert "not indexed" in result
-    assert "list_packages" in result
+    assert "lookup" in result
 
 
 @pytest.mark.asyncio

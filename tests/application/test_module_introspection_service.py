@@ -76,7 +76,7 @@ async def test_inspect_unindexed_package() -> None:
 
     assert result == (
         "'ghost' is not indexed. "
-        "Use list_packages() to see available packages."
+        "Use lookup(target='') to see available packages."
     )
     assert store.get_call_count == 1
 

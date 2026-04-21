@@ -55,7 +55,7 @@ class ModuleIntrospectionService:
         if await self.package_store.get(pkg_name) is None:
             return (
                 f"'{package}' is not indexed. "
-                "Use list_packages() to see available packages."
+                "Use lookup(target='') to see available packages."
             )
         if submodule and not _validate_submodule(submodule):
             return (
