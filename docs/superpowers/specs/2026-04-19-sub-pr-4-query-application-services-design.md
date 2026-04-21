@@ -7,6 +7,8 @@
 
 **⚠️ Canonical data model:** this spec uses the canonical data model defined in **sub-PR #1 §5**. Any reader confusion about `Chunk`, `ModuleMember`, `ChunkList`, `ModuleMemberList`, `PipelineResultItem`, `SearchResponse`, `ChunkFilterField`, `ModuleMemberFilterField`, `ChunkOrigin`, `MetadataFilterFormat` should be resolved by consulting sub-PR #1 §5 first.
 
+**⚠️ Post-merge amendment (added by sub-PR #6):** `PackageLookupService` gains a new method `find_module(package: str, module: str) → bool` — returns `True` iff at least one indexed `Chunk` has that `(package, module)` metadata. Implementation: `SELECT 1 FROM chunks WHERE package = ? AND module = ? LIMIT 1` via the `ChunkStore`. Backward-compatible — no existing caller breaks. Used by sub-PR #6's `LookupService._longest_indexed_module` to resolve dotted-path targets when `tree_svc` (from #5) is unavailable. See §5.1 for the method signature addition.
+
 ---
 
 ## 1. Goal
@@ -141,6 +143,18 @@ class PackageLookupService:
             limit=30,
         )
         return PackageDoc(package=pkg, chunks=chunks, members=members)
+
+    # Added by sub-PR #6 (post-merge amendment, see top-matter banner):
+    async def find_module(self, package: str, module: str) -> bool:
+        """True iff at least one indexed Chunk exists for this (package, module)."""
+        chunks = await self.chunk_store.list(
+            filter={
+                ChunkFilterField.PACKAGE.value: package,
+                ChunkFilterField.MODULE.value: module,
+            },
+            limit=1,
+        )
+        return len(chunks) > 0
 ```
 
 Returns a `PackageDoc` value object (new in this PR — groups the three query results for one handler's convenience):
@@ -668,6 +682,7 @@ Preference is one PR — the services share wiring and test scaffolding.
 18. `pyproject.toml` declares no new runtime dependencies.
 19. No new Pydantic usage at the MCP boundary — MCP tool arguments remain plain Python types (`str`, `bool | None`). Pydantic enters only at `SearchQuery` construction inside the handler (from sub-PR #3).
 20. Behavior parity: end-to-end smoke test produces the same MCP outputs and same CLI outputs on the golden fixture as `main`.
+21. **(Post-merge amendment, sub-PR #6):** `PackageLookupService.find_module(package, module)` returns `True` when at least one `Chunk` exists for that `(package, module)`, `False` otherwise. Implemented via `ChunkStore.list(filter=..., limit=1)` — no new Protocol method on `ChunkStore`. Test: indexed module returns True; unindexed returns False; empty-string args return False.
 
 ---
 

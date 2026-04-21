@@ -571,7 +571,7 @@ document_tree_service = DocumentTreeService(tree_store)
 
 | # | Criterion |
 |---|---|
-| 1 | `IndexProjectService` public signature unchanged; existing 5 MCP tools (`search`, `search_api`, `introspect`, `lookup`, `index`) pass byte-identical golden fixture. |
+| 1 | `IndexProjectService` public signature unchanged; existing 5 MCP tools from sub-PR #4 (`list_packages`, `get_package_doc`, `search_docs`, `search_api`, `inspect_module`) pass byte-identical golden fixture. Note: sub-PR #6 then consolidates this surface to 2 tools — this AC verifies parity AT the moment #5 merges, not post-#6. |
 | 2 | **Superseded by sub-PR #6.** Tree retrieval is exposed via `lookup(target="pkg.mod")`, not a dedicated `get_document_tree` MCP tool. This sub-PR ships `DocumentTreeService` that backs it. |
 | 3 | **Superseded by sub-PR #6.** CLI exposes tree via `pydocs-mcp lookup pkg.mod`, not `pydocs-mcp tree`. |
 | 4 | Indexing a project with `README.md`, `docs/tutorial.md`, `scripts/build.py`, `notebooks/demo.ipynb` produces: chunks via the correct chunker per extension; one `DocumentNode` tree per file stored in `document_trees`. |

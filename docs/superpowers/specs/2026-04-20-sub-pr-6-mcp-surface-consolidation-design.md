@@ -5,6 +5,8 @@
 **Depends on:** sub-PR #4 (merged — `PackageLookupService` / `SearchDocsService` / `SearchApiService` / `ModuleIntrospectionService`). Optionally consumes sub-PR #5 (`DocumentTreeService`) and sub-PR #5b (`ReferenceService`) when they land; no hard blocker.
 **Follows-on:** sub-PR #6b (query-parser DSL), sub-PR #7 (error-tolerance primitives).
 
+**⚠️ Sub-PR #4 Protocol amendment (post-merge, additive):** `PackageLookupService.find_module(package: str, module: str) → bool` added — returns `True` iff at least one indexed `Chunk` exists for that `(package, module)`. New method, ~10 LOC, backward-compatible. Used by `LookupService._longest_indexed_module` to resolve dotted-path targets without requiring sub-PR #5's `DocumentTreeService`. See §6.4.
+
 > ## ⚠️ BREAKING CHANGE — read first
 >
 > **MCP tool surface reduced from 5 tools to 2.** Removed: `list_packages`, `get_package_doc`, `search_docs`, `search_api`, `inspect_module`. Added: `search`, `lookup`.
@@ -117,7 +119,7 @@ For keyword/topic search, use search.
 | `get_package_tree(pkg)` (planned #5) | `lookup(target="pkg", show="tree")` |
 | `get_callers(pkg, node_id)` (planned #5b) | `lookup(target="pkg.X.y", show="callers")` |
 | `get_callees(pkg, node_id)` (planned #5b) | `lookup(target="pkg.X.y", show="callees")` |
-| `get_references_to(name)` (planned #5b) | Absorbed (as `search(kind="refs")` variant if needed) or dropped — see §4.6. |
+| `get_references_to(name)` (planned #5b) | **Dropped as MCP tool in #6.** `ReferenceService.find_by_name` stays in the codebase (unused-from-MCP) until a future PR reinstates it; see §4.6. |
 
 ### 4.3 Pydantic input models
 
@@ -128,7 +130,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 _PACKAGE_RE = re.compile(r"^(?:[a-zA-Z0-9][a-zA-Z0-9._-]*|__project__)$")
-_TARGET_RE = re.compile(r"^(?:[a-zA-Z0-9_][a-zA-Z0-9_.]*)?$")
+_TARGET_RE = re.compile(r"^(?:[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)?$")  # empty or dotted-identifier chain; rejects `foo..bar`, `foo.`, starting digit
 
 
 class SearchInput(BaseModel):
@@ -227,7 +229,7 @@ Rule: **NO blanket `try/except Exception: return "No matches found."` patterns r
 | `NotFoundError` | `-32000` Server error | Target not indexed |
 | `ServiceUnavailableError` | `-32000` Server error | Backend bug / missing optional service |
 
-FastMCP maps uncaught exceptions to `-32000` by default; typed subclasses get their error `.message` surfaced in the `data` field.
+FastMCP (`mcp>=1.0`) maps uncaught exceptions to `-32000` by default and surfaces Pydantic `ValidationError` via its own path (code `-32602`). Per-subclass error-code discrimination for the `MCPToolError` hierarchy is **not guaranteed by FastMCP's current API** — implementation must verify during the planning / coding phase whether FastMCP exposes hooks for custom error codes, or if the plan needs to map each `MCPToolError` subclass to an MCP response shape manually (e.g., by catching in a middleware and re-raising with the desired code). Fallback: all `MCPToolError` subclasses surface as `-32000` with the exception's `str(exc)` in `data.message`, differentiating via message text. The acceptance criteria (#12–#17) name codes expected under either strategy; if FastMCP doesn't discriminate, the test suite asserts message content instead.
 
 ## 6. `LookupService` — target dispatch
 
@@ -250,8 +252,10 @@ class LookupService:
         self._refs = ref_svc
 ```
 
-When `tree_svc is None`, `show="tree"` on any target raises `ServiceUnavailableError`.
-When `ref_svc is None`, `show="callers"` / `"callees"` / `"inherits"` raise `ServiceUnavailableError` (note: `inherits` can degrade to reading `Chunk.extra_metadata["inherits_from"]` if available, sidestepping `ref_svc` — see §6.5).
+**Degraded-mode policy (authoritative — §6.5 implements):**
+- `tree_svc is None` → `show="tree"` raises `ServiceUnavailableError`.
+- `ref_svc is None` → `show="callers"` / `show="callees"` raise `ServiceUnavailableError`.
+- `show="inherits"` **does NOT require `ref_svc`**; it reads `DocumentNode.extra_metadata["inherits_from"]` via `tree_svc`. Only raises `ServiceUnavailableError` when BOTH `tree_svc` AND `ref_svc` are `None`. See §6.5.
 
 ### 6.3 Dispatch algorithm
 
@@ -291,23 +295,29 @@ async def lookup(self, payload: LookupInput) -> str:
 
 ```python
 async def _longest_indexed_module(self, package: str, parts: list[str]) -> str | None:
-    # Walk from longest-prefix to shortest, checking document_trees for a matching row.
+    # Walk from longest-prefix to shortest, checking module-existence.
     for i in range(len(parts), 0, -1):
         candidate = ".".join(parts[:i])
+        # Prefer document_trees lookup when sub-PR #5 is wired (sees newly-extracted modules).
         if self._tree is not None:
             tree = await self._tree.get_tree(package, candidate)
             if tree is not None:
                 return candidate
-        # Fallback: check package_store for existence of the module path
-        # (sub-PR #4's PackageLookupService doesn't currently expose this — may need a new method).
+        # Fallback (works pre-#5 too): probe the chunks table via PackageLookupService.find_module.
+        if await self._package.find_module(package, candidate):
+            return candidate
     return None
 ```
 
-Disambiguates `pkg.FooBar` — `FooBar` could be a module file OR a class inside `pkg.__init__.py`. We prefer the module interpretation when a tree row exists; else fall back to class-lookup.
+Disambiguates `pkg.FooBar` — `FooBar` could be a module file OR a class inside `pkg.__init__.py`. We prefer the module interpretation when a tree row exists OR chunks reference that module path; else fall back to class-lookup.
+
+**Sub-PR #4 Protocol amendment** (post-merge, additive): `PackageLookupService.find_module(package: str, module: str) → bool` returns `True` iff at least one indexed `Chunk` exists with that exact `(package, module)` metadata. Implementation: `SELECT 1 FROM chunks WHERE package = ? AND module = ? LIMIT 1`. New method, ~10 LOC. Backward-compatible — no caller of #4 breaks.
 
 ### 6.5 Degraded-mode behavior for `show="inherits"`
 
-When `ref_svc is None`, `lookup(target="pkg.X", show="inherits")` reads `Chunk.extra_metadata["inherits_from"]` directly (from sub-PR #5 — which persists it independently of the ref graph). Returns the textual base-class names without cross-referencing the index.
+When `ref_svc is None`, `lookup(target="pkg.X", show="inherits")` reads the target class's **`DocumentNode.extra_metadata["inherits_from"]`** directly — the tree node carries the same `inherits_from` list that is mirrored into `Chunk.extra_metadata` (per sub-PR #5 §4.4). No `ChunkStore` dependency required; `LookupService` already has `tree_svc` wired for the target-resolution path. When `tree_svc` is ALSO `None`, `show="inherits"` raises `ServiceUnavailableError`.
+
+**`show="inherits"` on non-class targets:** raises `InvalidArgumentError` — "inherits only applies to CLASS nodes, got {kind}". The tool description (§4.1) documents this constraint.
 
 This is deliberate: inheritance metadata is small and useful standalone; we don't want users to lose it just because #5b isn't merged yet.
 
@@ -322,7 +332,10 @@ from pydocs_mcp.application import (
     SearchApiService,     # from #4
 )
 
-# Optional services — present only if their sub-PR has landed
+# Optional services — present only if their sub-PR has landed.
+# Each import is guarded because #5 / #5b may not be merged yet at #6's ship time.
+# Note: sub-PR #5 / #5b specs must explicitly export their service from `application/__init__.py`
+# for this to resolve — added to their respective ACs as part of #6's amendments.
 try:
     from pydocs_mcp.application import DocumentTreeService  # from #5
     tree_svc = DocumentTreeService(tree_store) if tree_store is not None else None
@@ -393,6 +406,10 @@ async def _do_search(payload: SearchInput) -> str:
 
 `_build_search_query` centralizes the `SearchQuery` construction that sub-PR #4 split across `_build_chunk_query` + `_build_member_query` (one unified helper now; `scope` semantics the same).
 
+**Filter-field unification for `kind="any"`:** A single `SearchQuery.pre_filter` drives both `Bm25ChunkRetriever` and `LikeMemberRetriever`. This works because per sub-PR #1 §5 canonical data model, `ChunkFilterField.PACKAGE.value == ModuleMemberFilterField.PACKAGE.value == "package"` and `ChunkFilterField.SCOPE.value == ModuleMemberFilterField.SCOPE.value == "scope"` — the filter-key strings are deliberately shared across the two field enums. The only divergence (`ChunkFilterField.TITLE` vs `ModuleMemberFilterField.NAME`) doesn't apply to `kind="any"` queries, which are driven by `query` + `package` + `scope` only (no topic/name filter).
+
+If sub-PR #1 §5's canonical enums ever drift apart on those shared keys, the `unified_search.yaml` preset breaks. **Invariant to preserve:** `ChunkFilterField.PACKAGE/SCOPE` values match their `ModuleMemberFilterField` counterparts. Added as an invariant check in acceptance (see AC #25 below).
+
 ## 10. File map
 
 | File | Action |
@@ -403,8 +420,10 @@ async def _do_search(payload: SearchInput) -> str:
 | `python/pydocs_mcp/application/lookup_service.py` | NEW — `LookupService` + dispatch. ~150 LOC. |
 | `python/pydocs_mcp/application/__init__.py` | Export `LookupService`, `SearchInput`, `LookupInput`, `MCPToolError` subclasses. |
 | `python/pydocs_mcp/presets/unified_search.yaml` | NEW preset. ~15 LOC. |
-| `python/pydocs_mcp/__main__.py` | CLI subcommands: remove `query`, `api`; add `search`, `lookup`. Preserve `index`, `serve`. |
+| `python/pydocs_mcp/retrieval/config.py` | Add `build_unified_pipeline_from_config(config, context)` factory — mirrors existing `build_chunk_pipeline_from_config` / `build_member_pipeline_from_config` shape. ~20 LOC. |
+| `python/pydocs_mcp/__main__.py` | CLI subcommands: remove `query`, `api`; add `search`, `lookup` with argparse flags `--kind`, `--package`, `--scope`, `--limit` (search) and `--show` (lookup). Preserve `index`, `serve`. |
 | `tests/test_mcp_surface.py` | NEW — golden-fixture success paths + typed-error failure paths. ~300 LOC. |
+| `tests/test_server.py` (if exists pre-#6) | **Delete or rewrite** — pre-#6 handler tests no longer applicable; replaced by `test_mcp_surface.py`. |
 
 **Total delta:** ~850 LOC.
 
@@ -434,6 +453,9 @@ Removals in #5:
 - §13.2 dedicated `pydocs-mcp tree` CLI subcommand (superseded by `lookup`).
 - AC #2 (MCP tool `get_document_tree` exists), AC #3 (`pydocs-mcp tree` CLI subcommand).
 
+Additions to #5 ACs:
+- New AC: `application/__init__.py` explicitly re-exports `DocumentTreeService` so `from pydocs_mcp.application import DocumentTreeService` resolves at #6's wiring time.
+
 Untouched in #5:
 - All extraction / chunker / `DocumentNode` / `document_trees` table work.
 - `DocumentTreeService` in `application/`.
@@ -448,9 +470,32 @@ Removals in #5b:
 - §8.2 `@mcp.tool() get_callers` / `get_callees` / `get_references_to` definitions.
 - AC #14 MCP tool count constraint.
 
+Additions to #5b ACs:
+- New AC: `application/__init__.py` explicitly re-exports `ReferenceService` so `from pydocs_mcp.application import ReferenceService` resolves at #6's wiring time.
+
 Untouched in #5b:
 - `ReferenceKind`, `NodeReference`, `ReferenceStore`, `ReferenceCollector`, `ReferenceResolver`, `ReferenceService`.
 - `node_references` table.
+
+## 13b. Amendments to sub-PR #4 spec
+
+Sub-PR #4 is already **merged to main** — amendments here are post-merge additive edits (sub-PR #4 spec file + codebase).
+
+Forward-pointer added to #4's top matter:
+
+> **Note (added by sub-PR #6):** `PackageLookupService` gains a new method `find_module(package: str, module: str) → bool` — returns `True` iff at least one indexed `Chunk` has that `(package, module)` metadata. Implementation: `SELECT 1 FROM chunks WHERE package = ? AND module = ? LIMIT 1`. Backward-compatible — no existing caller breaks. Used by sub-PR #6's `LookupService._longest_indexed_module` to resolve dotted-path targets when `tree_svc` is unavailable.
+
+Additions to #4:
+- In §5.1 (`PackageLookupService` class), add `find_module(package, module) -> bool` with the implementation note above.
+- Add AC: `find_module("requests", "requests.auth")` returns `True` when chunks exist for that module; `False` otherwise.
+- `application/__init__.py` re-exports unchanged (no new class — only a method added).
+
+Untouched in #4:
+- Existing services (`SearchDocsService`, `SearchApiService`, `ModuleIntrospectionService`).
+- Existing Protocols + adapters.
+- All other ACs.
+
+**Implementation note:** this spec edit to #4 is part of #6's PR. Sub-PR #4's spec file gets a commit in the same #6 changeset, alongside the new `find_module` code in `application/package_lookup_service.py`.
 
 ## 14. Acceptance criteria
 
@@ -477,9 +522,13 @@ Untouched in #5b:
 | 19 | Zero `try/except Exception: return "..."` patterns remain in `server.py` handlers. Enforced via ruff/grep in CI. |
 | 20 | `LookupService` test coverage: each dispatch branch (empty target, package-only, module-only, symbol-only, each `show` variant, degraded-mode for missing services) has ≥1 test. |
 | 21 | CLI: `pydocs-mcp search "x"` and `pydocs-mcp lookup "pkg.mod.X"` work and print the same rendered output as their MCP tool counterparts. |
-| 22 | Sub-PR #5 spec has its §13.1 / §13.2 / AC #2 / AC #3 struck; forward-pointer added to its §1. |
-| 23 | Sub-PR #5b spec has its §8.2 / AC #14 struck; forward-pointer added to its §1. |
+| 22 | Sub-PR #5 spec carries a forward-pointer to #6 in its §1 top-matter; AC #2 and AC #3 are rewritten to say "Superseded by sub-PR #6"; §13.1 section body replaced with a forward-pointer (content moved to #6). |
+| 23 | Sub-PR #5b spec carries a forward-pointer to #6 in its §1 top-matter; AC #14 is rewritten to say "Superseded by sub-PR #6"; §8.2 section body replaced with a forward-pointer (content moved to #6). |
 | 24 | Tool descriptions in `server.py` use the production copy from §4.1 verbatim — no paraphrasing at implementation time. |
+| 25 | Invariant check: `ChunkFilterField.PACKAGE.value == ModuleMemberFilterField.PACKAGE.value` and `ChunkFilterField.SCOPE.value == ModuleMemberFilterField.SCOPE.value`. Unit test asserts equality so the unified `SearchQuery` → dual-retriever dispatch stays sound. |
+| 26 | `PackageLookupService.find_module(package, module)` returns True for an indexed `(pkg, mod)` and False otherwise. Added to sub-PR #4's service (post-merge, additive). ~10 LOC. Used by `LookupService._longest_indexed_module`. |
+| 27 | Sub-PR #4 spec file (`2026-04-19-sub-pr-4-query-application-services-design.md`) is amended in this PR: §5.1 `PackageLookupService` gains `find_module` method definition; top-matter gets a "post-merge amendment" banner; corresponding AC added. Diff committed alongside the new `find_module` code. |
+| 28 | Sub-PR #5 spec file is amended to add an AC requiring `application/__init__.py` to re-export `DocumentTreeService`. Sub-PR #5b spec file similarly amended for `ReferenceService`. Both are edits within this PR's changeset. |
 
 ## 15. Risks
 
