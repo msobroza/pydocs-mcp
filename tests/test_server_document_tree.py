@@ -161,3 +161,33 @@ class TestGetDocumentTree:
         result = _arun(tools["get_document_tree"]("mypkg", "mypkg.mymod"))
         assert "Error" in result
         assert "mypkg" in result and "mypkg.mymod" in result
+
+    def test_normalizes_pypi_package_name(self, tmp_path):
+        """User-facing ``Flask-Login`` must resolve to the DB-stored ``flask_login``.
+
+        Mirrors the normalisation already honoured by ``get_package_doc``.
+        """
+        db_path = tmp_path / "flask.db"
+        open_index_database(db_path).close()
+        tree = _module_tree("flask_login.login", text="body\n")
+        _arun(_seed_tree(db_path, "flask_login", tree))
+
+        fake_mcp = FakeMCP("test")
+        fake_mcp_module = MagicMock()
+        fake_mcp_module.FastMCP = lambda name: fake_mcp
+        with patch.dict(
+            sys.modules,
+            {
+                "mcp": MagicMock(),
+                "mcp.server": MagicMock(),
+                "mcp.server.fastmcp": fake_mcp_module,
+            },
+        ):
+            from pydocs_mcp.server import run
+            run(db_path)
+
+        result = _arun(
+            fake_mcp.tools["get_document_tree"]("Flask-Login", "flask_login.login"),
+        )
+        data = json.loads(result)
+        assert data["qualified_name"] == "flask_login.login"

@@ -322,6 +322,8 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
 
         Args:
             package: Package name (e.g. 'requests', '__project__').
+                PyPI names with hyphens (``Flask-Login``) are normalised to the
+                DB-stored form (``flask_login``) — mirrors ``get_package_doc``.
             module: Dotted module path within the package.
 
         Returns:
@@ -329,7 +331,8 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             readable error message if the tree is missing or retrieval fails.
         """
         try:
-            tree = await document_tree_svc.get_tree(package, module)
+            pkg_name = _normalize_pkg_filter_value(package)
+            tree = await document_tree_svc.get_tree(pkg_name, module)
             return _serialize_tree_to_json(tree)
         except NotFoundError:
             return f"No tree for '{package}/{module}'."
@@ -348,6 +351,8 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
 
         Args:
             package: Package name (e.g. 'requests', '__project__').
+                PyPI names with hyphens (``Flask-Login``) are normalised to
+                the DB-stored form (``flask_login``).
 
         Returns:
             Indented JSON of the PACKAGE root with SUBPACKAGE/MODULE
@@ -355,10 +360,15 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             for this package.
         """
         try:
-            modules = await document_tree_svc.list_package_modules(package)
+            pkg_name = _normalize_pkg_filter_value(package)
+            modules = await document_tree_svc.list_package_modules(pkg_name)
             if not modules:
                 return f"No indexed trees for package '{package}'."
-            root = build_package_tree(package, modules)
+            # Use the normalised name as the root — build_package_tree's
+            # output keys the root at the package prefix used to store the
+            # modules, so feeding the raw PyPI form would break the path
+            # trie's prefix matching.
+            root = build_package_tree(pkg_name, modules)
             return _serialize_tree_to_json(root)
         except Exception:  # noqa: BLE001 -- MCP boundary: return user-readable error
             log.warning("get_package_tree failed", exc_info=True)

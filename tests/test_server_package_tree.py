@@ -157,3 +157,19 @@ class TestGetPackageTree:
         result = _arun(tools["get_package_tree"]("mypkg"))
         assert "Error" in result
         assert "mypkg" in result
+
+    def test_normalizes_pypi_package_name(self, tmp_path):
+        """User-facing ``Flask-Login`` must resolve to the DB-stored ``flask_login``."""
+        db_path = tmp_path / "flask.db"
+        open_index_database(db_path).close()
+        _arun(_seed_tree(db_path, "flask_login", _module_tree("flask_login.login")))
+        tools = _boot_server(db_path)
+
+        result = _arun(tools["get_package_tree"]("Flask-Login"))
+        data = json.loads(result)
+        # Root must use the normalised name so build_package_tree's trie
+        # prefix-match finds the stored modules under ``flask_login``.
+        assert data["kind"] == "package"
+        assert data["qualified_name"] == "flask_login"
+        assert len(data["children"]) == 1
+        assert data["children"][0]["qualified_name"] == "flask_login.login"
