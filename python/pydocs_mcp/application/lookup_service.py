@@ -73,3 +73,20 @@ class LookupService:
         if doc is None:
             raise NotFoundError(f"package '{package}' not indexed")
         return format_package_doc(doc)
+
+    async def _longest_indexed_module(
+        self, package: str, parts: list[str]
+    ) -> str | None:
+        """Walk longest-prefix-first; return the longest dotted path that is
+        an indexed module. Prefers ``tree_svc.get_tree`` when wired; falls
+        back to ``PackageLookupService.find_module`` otherwise (spec §6.4).
+        """
+        for i in range(len(parts), 0, -1):
+            candidate = ".".join(parts[:i])
+            if self.tree_svc is not None:
+                tree = await self.tree_svc.get_tree(package, candidate)
+                if tree is not None:
+                    return candidate
+            if await self.package_lookup.find_module(package, candidate):
+                return candidate
+        return None
