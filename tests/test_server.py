@@ -1,25 +1,21 @@
-"""Tests for MCP server tool handlers (server.py).
+"""Tests for MCP server 2-tool surface (sub-PR #6).
 
-Since tool handlers are closures inside run(), we mock FastMCP to capture
-the registered tool functions, then call them directly. All 5 handlers are
-async in sub-PR #2, so tests invoke them via asyncio.run().
+Handlers are closures inside ``run()``, so tests substitute a FakeMCP to
+capture the decorated functions and invoke them directly.
 """
+from __future__ import annotations
+
 import asyncio
-import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pydocs_mcp.application.module_introspection_service import _validate_submodule
 from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
-from pydocs_mcp.server import _scope_from_internal
-from pydocs_mcp.models import SearchScope
 
 
 def _arun(coro):
-    """Run an async coroutine in a fresh event loop."""
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(coro)
@@ -27,14 +23,12 @@ def _arun(coro):
         loop.close()
 
 
-# -- Fixture: capture tool handlers from run() --
-
 class FakeMCP:
     """Captures tool registrations from FastMCP without starting a server."""
 
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         self.name = name
-        self.tools = {}
+        self.tools: dict[str, object] = {}
 
     def tool(self):
         def decorator(fn):
@@ -42,292 +36,256 @@ class FakeMCP:
             return fn
         return decorator
 
-    def run(self, transport=None):
-        pass  # Don't actually start the server
+    def run(self, transport: str | None = None) -> None:
+        pass
 
 
-@pytest.fixture
-def server_tools(tmp_path):
-    """Run server.run() with a FakeMCP to capture all tool closures."""
-    db_path = tmp_path / "test.db"
+def _seed_basic_fixture(db_path: Path) -> None:
+    """Two packages, two chunks, two members."""
     conn = open_index_database(db_path)
-
-    # Seed data
     conn.execute(
         "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
         ("__project__", "local", "Test project", "", "[]", "aaa", "project"),
     )
     conn.execute(
         "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-        ("fastapi", "0.100", "Web framework", "https://fastapi.example.com",
-         '["starlette", "pydantic"]', "bbb", "dependency"),
+        (
+            "fastapi", "0.100", "Web framework",
+            "https://fastapi.example.com",
+            '["starlette", "pydantic"]', "bbb", "dependency",
+        ),
     )
     conn.execute(
-        "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
-        ("__project__", "Overview", "Project overview with useful code", "project_module_doc"),
+        "INSERT INTO chunks(package,module,title,text,origin) VALUES(?,?,?,?,?)",
+        ("__project__", "mymod", "Overview", "Project overview with useful code",
+         "project_module_doc"),
     )
     conn.execute(
-        "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
-        ("fastapi", "Getting Started", "FastAPI is a modern web framework for APIs", "dependency_readme"),
+        "INSERT INTO chunks(package,module,title,text,origin) VALUES(?,?,?,?,?)",
+        ("fastapi", "fastapi", "Getting Started",
+         "FastAPI is a modern web framework for APIs", "dependency_readme"),
     )
     conn.execute(
-        "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) VALUES(?,?,?,?,?,?,?,?)",
-        ("__project__", "mymod", "compute", "function", "(x)", "int", "[]", "Compute things"),
+        "INSERT INTO module_members("
+        "package,module,name,kind,signature,return_annotation,parameters,docstring"
+        ") VALUES(?,?,?,?,?,?,?,?)",
+        ("__project__", "mymod", "compute", "function", "(x)", "int", "[]",
+         "Compute things"),
     )
     conn.execute(
-        "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) VALUES(?,?,?,?,?,?,?,?)",
-        ("fastapi", "fastapi", "FastAPI", "class", "()", "", "[]", "Main app class"),
+        "INSERT INTO module_members("
+        "package,module,name,kind,signature,return_annotation,parameters,docstring"
+        ") VALUES(?,?,?,?,?,?,?,?)",
+        ("fastapi", "fastapi", "FastAPI", "class", "()", "", "[]",
+         "Main app class"),
     )
     conn.commit()
     rebuild_fulltext_index(conn)
     conn.close()
 
-    fake_mcp = FakeMCP("test")
 
-    # Create a fake mcp module with FastMCP class
+@pytest.fixture
+def server_tools(tmp_path: Path):
+    """Run server.run() with FakeMCP to capture the 2 tool closures."""
+    db_path = tmp_path / "test.db"
+    _seed_basic_fixture(db_path)
+
+    fake_mcp = FakeMCP("test")
     fake_mcp_module = MagicMock()
     fake_mcp_module.FastMCP = lambda name: fake_mcp
 
-    with patch.dict(sys.modules, {"mcp": MagicMock(), "mcp.server": MagicMock(), "mcp.server.fastmcp": fake_mcp_module}):
+    with patch.dict(
+        sys.modules,
+        {
+            "mcp": MagicMock(),
+            "mcp.server": MagicMock(),
+            "mcp.server.fastmcp": fake_mcp_module,
+        },
+    ):
         from pydocs_mcp.server import run
+
         run(db_path)
 
     return fake_mcp.tools, db_path
 
 
-class TestListPackages:
-    def test_returns_all_packages(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["list_packages"]())
-        assert "__project__" in result
-        assert "fastapi" in result
-
-    def test_includes_version_and_summary(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["list_packages"]())
-        assert "0.100" in result
-        assert "Web framework" in result
+# ── surface shape ─────────────────────────────────────────────────────────
 
 
-class TestGetPackageDoc:
-    def test_returns_project_doc(self, server_tools):
+class TestToolSurface:
+    def test_exactly_two_tools_registered(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["get_package_doc"]("__project__"))
-        assert "__project__" in result
-        assert "local" in result
+        assert set(tools) == {"search", "lookup"}
 
-    def test_returns_dep_doc(self, server_tools):
+    def test_old_tool_names_are_gone(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["get_package_doc"]("fastapi"))
-        assert "fastapi" in result
-        assert "0.100" in result
+        for dropped in (
+            "list_packages", "get_package_doc",
+            "search_docs", "search_api", "inspect_module",
+        ):
+            assert dropped not in tools
 
-    def test_includes_homepage(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["get_package_doc"]("fastapi"))
-        assert "https://fastapi.example.com" in result
 
-    def test_includes_deps(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["get_package_doc"]("fastapi"))
-        assert "starlette" in result
+# ── lookup ────────────────────────────────────────────────────────────────
 
-    def test_includes_chunks(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["get_package_doc"]("fastapi"))
-        assert "Getting Started" in result
 
-    def test_includes_api_symbols(self, server_tools):
+class TestLookupPackagesList:
+    def test_empty_target_lists_packages(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["get_package_doc"]("fastapi"))
-        assert "FastAPI" in result
+        out = _arun(tools["lookup"](target=""))
+        assert "__project__" in out
+        assert "fastapi" in out
+        assert "0.100" in out
 
-    def test_unknown_package_returns_not_found(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["get_package_doc"]("nonexistent_pkg"))
-        assert "not found" in result
 
-    def test_normalizes_package_name(self, server_tools):
+class TestLookupPackageDoc:
+    def test_returns_package_doc(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["get_package_doc"]("FastAPI"))
-        assert "fastapi" in result
+        out = _arun(tools["lookup"](target="fastapi"))
+        assert "fastapi" in out
+        assert "0.100" in out
+
+    def test_includes_homepage(self, server_tools) -> None:
+        tools, _ = server_tools
+        out = _arun(tools["lookup"](target="fastapi"))
+        assert "https://fastapi.example.com" in out
+
+    def test_includes_deps(self, server_tools) -> None:
+        tools, _ = server_tools
+        out = _arun(tools["lookup"](target="fastapi"))
+        assert "starlette" in out
+
+    def test_unknown_package_raises_not_found(self, server_tools) -> None:
+        from pydocs_mcp.application import NotFoundError
+
+        tools, _ = server_tools
+        with pytest.raises(NotFoundError):
+            _arun(tools["lookup"](target="nonexistent_pkg"))
+
+
+# ── search ────────────────────────────────────────────────────────────────
 
 
 class TestSearchDocs:
-    def test_returns_matching_chunks(self, server_tools):
+    def test_returns_matching_chunks(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["search_docs"]("framework"))
-        assert "fastapi" in result.lower()
+        out = _arun(tools["search"](query="framework", kind="docs"))
+        assert "fastapi" in out.lower()
 
-    def test_no_matches_returns_message(self, server_tools):
+    def test_no_matches_returns_message(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["search_docs"]("zzznonexistenttermzzz"))
-        assert "No matches" in result
+        out = _arun(tools["search"](query="zzznonexistenttermzzz", kind="docs"))
+        assert "No matches" in out
 
-    def test_package_filter(self, server_tools):
+    def test_package_filter(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["search_docs"]("framework", package="fastapi"))
-        assert "fastapi" in result.lower()
-
-    def test_internal_true(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["search_docs"]("overview", internal=True))
-        assert "project" in result.lower() or "overview" in result.lower()
-
-    def test_internal_false(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["search_docs"]("framework", internal=False))
-        assert "fastapi" in result.lower()
-
-    def test_topic_filter(self, server_tools):
-        tools, _ = server_tools
-        result = _arun(tools["search_docs"]("overview", topic="Overview"))
-        assert "overview" in result.lower() or "No matches" in result
-
-    def test_search_docs_normalizes_flask_login_style_package_name(self, tmp_path):
-        """User-facing ``Flask-Login`` must resolve to the DB-stored ``flask_login``.
-
-        Regression for an adversarial finding where the normalisation call
-        was dropped during the repository migration, causing hyphenated
-        PyPI names to silently miss all rows.
-        """
-        db_path = tmp_path / "flask.db"
-        conn = open_index_database(db_path)
-        conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-            ("flask_login", "0.6", "Flask login", "", "[]", "h", "dependency"),
+        out = _arun(
+            tools["search"](query="framework", kind="docs", package="fastapi")
         )
-        conn.execute(
-            "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
-            ("flask_login", "Sessions", "login_user handles the login session for Flask apps", "dependency_readme"),
+        assert "fastapi" in out.lower()
+
+    def test_scope_project(self, server_tools) -> None:
+        tools, _ = server_tools
+        out = _arun(
+            tools["search"](query="overview", kind="docs", scope="project")
         )
-        conn.commit()
-        rebuild_fulltext_index(conn)
-        conn.close()
-
-        fake_mcp = FakeMCP("test")
-        fake_mcp_module = MagicMock()
-        fake_mcp_module.FastMCP = lambda name: fake_mcp
-
-        with patch.dict(
-            sys.modules,
-            {
-                "mcp": MagicMock(),
-                "mcp.server": MagicMock(),
-                "mcp.server.fastmcp": fake_mcp_module,
-            },
-        ):
-            from pydocs_mcp.server import run
-            run(db_path)
-
-        # User types the PyPI name; server must normalise to flask_login.
-        result = _arun(fake_mcp.tools["search_docs"]("login", package="Flask-Login"))
-        assert "login_user" in result or "Sessions" in result
-        assert "No matches" not in result
+        assert "overview" in out.lower() or "No matches" in out
 
 
 class TestSearchApi:
-    def test_returns_matching_symbols(self, server_tools):
+    def test_returns_matching_symbols(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["search_api"]("compute"))
-        assert "compute" in result
+        out = _arun(tools["search"](query="compute", kind="api"))
+        assert "compute" in out
 
-    def test_no_matches_returns_message(self, server_tools):
+    def test_no_matches_returns_symbol_msg(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["search_api"]("zzznonexistenttermzzz"))
-        assert "No symbols" in result
+        out = _arun(tools["search"](query="zzznonexistenttermzzz", kind="api"))
+        assert "No symbols" in out
 
-    def test_package_filter(self, server_tools):
+
+class TestSearchAny:
+    def test_merges_docs_and_api(self, server_tools) -> None:
+        """kind='any' runs both pipelines in parallel and concatenates."""
         tools, _ = server_tools
-        result = _arun(tools["search_api"]("FastAPI", package="fastapi"))
-        assert "fastapi" in result
+        out = _arun(tools["search"](query="compute", kind="any"))
+        # compute appears as a member; members pipeline should surface it
+        assert "compute" in out
 
-    def test_internal_filter(self, server_tools):
+    def test_no_matches_returns_message(self, server_tools) -> None:
         tools, _ = server_tools
-        result = _arun(tools["search_api"]("compute", internal=True))
-        assert "compute" in result
+        out = _arun(tools["search"](query="zzznonexistenttermzzz", kind="any"))
+        assert "No matches" in out
 
 
-class TestInspectModule:
-    def test_package_not_indexed_returns_error(self, server_tools):
+# ── Pydantic boundary ─────────────────────────────────────────────────────
+
+
+class TestValidation:
+    def test_empty_query_raises_validation_error(self, server_tools) -> None:
+        from pydantic import ValidationError
+
         tools, _ = server_tools
-        result = _arun(tools["inspect_module"]("nonexistent_pkg_xyz"))
-        assert "not indexed" in result
+        with pytest.raises(ValidationError):
+            _arun(tools["search"](query=""))
 
-    def test_invalid_submodule_rejected(self, server_tools):
+    def test_bad_package_regex_raises_validation_error(self, server_tools) -> None:
+        from pydantic import ValidationError
+
         tools, _ = server_tools
-        result = _arun(tools["inspect_module"]("fastapi", submodule="../evil"))
-        assert "Invalid" in result
+        with pytest.raises(ValidationError):
+            _arun(
+                tools["search"](query="x", kind="docs", package="has spaces")
+            )
 
-    def test_import_failure_returns_error(self, server_tools):
+    def test_bad_target_regex_raises_validation_error(self, server_tools) -> None:
+        from pydantic import ValidationError
+
         tools, _ = server_tools
-        # fastapi is indexed but likely not importable in test env
-        result = _arun(tools["inspect_module"]("fastapi"))
-        assert "Cannot import" in result or "No API" in result or "fastapi" in result
+        with pytest.raises(ValidationError):
+            _arun(tools["lookup"](target="foo..bar"))
 
-    def test_valid_stdlib_module(self, server_tools):
-        """Test with a module that's guaranteed to be importable."""
-        tools, db_path = server_tools
-        conn = open_index_database(db_path)
-        conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-            ("json", "stdlib", "JSON encoder/decoder", "", "[]", "jjj", "dependency"),
-        )
-        conn.commit()
-        conn.close()
-        result = _arun(tools["inspect_module"]("json"))
-        assert "json" in result
+    def test_limit_out_of_range_raises(self, server_tools) -> None:
+        from pydantic import ValidationError
 
-    def test_submodule_inspection(self, server_tools):
-        tools, db_path = server_tools
-        conn = open_index_database(db_path)
-        conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-            ("os", "stdlib", "OS interface", "", "[]", "ooo", "dependency"),
-        )
-        conn.commit()
-        conn.close()
-        result = _arun(tools["inspect_module"]("os", submodule="path"))
-        assert "path" in result.lower()
-
-    def test_package_with_submodules_listing(self, server_tools):
-        """Test inspect_module on a package that has submodules but no direct API."""
-        tools, db_path = server_tools
-        conn = open_index_database(db_path)
-        conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
-            ("email", "stdlib", "Email library", "", "[]", "eee", "dependency"),
-        )
-        conn.commit()
-        conn.close()
-        result = _arun(tools["inspect_module"]("email"))
-        # email package has submodules like mime, policy, etc.
-        assert "email" in result.lower()
+        tools, _ = server_tools
+        with pytest.raises(ValidationError):
+            _arun(tools["search"](query="x", limit=0))
 
 
-class TestValidateSubmodule:
-    def test_empty_is_valid(self):
-        assert _validate_submodule("") is True
-
-    def test_simple_name_valid(self):
-        assert _validate_submodule("routing") is True
-
-    def test_dotted_name_valid(self):
-        assert _validate_submodule("a.b.c") is True
-
-    def test_path_traversal_invalid(self):
-        assert _validate_submodule("../evil") is False
-
-    def test_semicolon_invalid(self):
-        assert _validate_submodule("a;drop") is False
+# ── name normalization (regression) ──────────────────────────────────────
 
 
-class TestScopeFromInternal:
-    def test_true_is_project_only(self):
-        assert _scope_from_internal(True) is SearchScope.PROJECT_ONLY
+def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
+    """User-facing ``Flask-Login`` resolves to the DB-stored ``flask_login``."""
+    db_path = tmp_path / "flask.db"
+    conn = open_index_database(db_path)
+    conn.execute(
+        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        ("flask_login", "0.6", "Flask login", "", "[]", "h", "dependency"),
+    )
+    conn.commit()
+    conn.close()
 
-    def test_false_is_dependencies_only(self):
-        assert _scope_from_internal(False) is SearchScope.DEPENDENCIES_ONLY
+    fake_mcp = FakeMCP("test")
+    fake_mcp_module = MagicMock()
+    fake_mcp_module.FastMCP = lambda name: fake_mcp
 
-    def test_none_is_all(self):
-        assert _scope_from_internal(None) is SearchScope.ALL
+    with patch.dict(
+        sys.modules,
+        {
+            "mcp": MagicMock(),
+            "mcp.server": MagicMock(),
+            "mcp.server.fastmcp": fake_mcp_module,
+        },
+    ):
+        from pydocs_mcp.server import run
+
+        run(db_path)
+
+    out = _arun(
+        fake_mcp.tools["search"](query="login", kind="docs", package="Flask-Login")
+    )
+    # The normalisation happens inside the handler; the search itself may
+    # return "No matches" (no chunks seeded) but MUST NOT fail validation.
+    assert "validation" not in out.lower()

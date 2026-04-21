@@ -11,7 +11,7 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3  # v3 (sub-PR #6): chunks gains `module` column for LookupService._longest_indexed_module
 
 _DDL = """
     CREATE TABLE packages (
@@ -20,6 +20,7 @@ _DDL = """
     );
     CREATE TABLE chunks (
         id INTEGER PRIMARY KEY, package TEXT,
+        module TEXT DEFAULT '',
         title TEXT, text TEXT, origin TEXT
     );
     CREATE VIRTUAL TABLE chunks_fts USING fts5(
@@ -33,6 +34,7 @@ _DDL = """
         return_annotation TEXT, parameters TEXT, docstring TEXT
     );
     CREATE INDEX ix_chunks_package         ON chunks(package);
+    CREATE INDEX ix_chunks_module          ON chunks(module);
     CREATE INDEX ix_module_members_package ON module_members(package);
     CREATE INDEX ix_module_members_name    ON module_members(name);
 """

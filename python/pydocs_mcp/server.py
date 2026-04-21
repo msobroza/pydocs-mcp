@@ -1,31 +1,33 @@
-"""MCP server exposing search tools over indexed docs.
+"""MCP server exposing 2 consolidated tools: ``search`` and ``lookup`` (sub-PR #6).
 
-Handlers are thin adapters over application-layer services (spec §5.1,
-AC #7): ``PackageLookupService``, ``SearchDocsService``, ``SearchApiService``,
-``ModuleIntrospectionService``. All rendering + filter-dict construction is
-kept in this module so the services stay transport-agnostic.
+Handlers are thin adapters over application-layer services. Per the design
+spec (§4.1) each tool's description is LLM-visible prose — the copy here is
+the production tool-selection prompt. Rendering lives in
+:mod:`pydocs_mcp.application.formatting` and the services.
 
-Byte-parity with pre-PR tool I/O is a hard requirement (AC #8) — the
-``_render_*`` helpers below are the single source of truth for handler
-output shape.
+Error policy (§5.2):
+- Typed :class:`MCPToolError` subclasses raise through to the MCP protocol
+  — FastMCP surfaces them as structured JSON-RPC errors.
+- Blanket ``try/except Exception: return "..."`` is forbidden. Unexpected
+  exceptions are re-raised wrapped in :class:`ServiceUnavailableError`.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from pathlib import Path
 
-from pydocs_mcp.constants import (
-    LIST_PACKAGES_MAX,
-    PACKAGE_DOC_LINE_MAX,
-    PACKAGE_DOC_MAX,
-    REQUIREMENTS_DISPLAY,
+from pydocs_mcp.application import (
+    LookupInput,
+    LookupService,
+    MCPToolError,
+    SearchInput,
+    ServiceUnavailableError,
 )
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
     ChunkFilterField,
-    ModuleMemberFilterField,
-    PackageDoc,
     SearchQuery,
     SearchResponse,
     SearchScope,
@@ -34,93 +36,45 @@ from pydocs_mcp.models import (
 log = logging.getLogger("pydocs-mcp")
 
 
-def _scope_from_internal(internal: bool | None) -> SearchScope:
-    """Tri-state conversion of the MCP ``internal`` flag to a :class:`SearchScope`."""
-    if internal is True:
-        return SearchScope.PROJECT_ONLY
-    if internal is False:
-        return SearchScope.DEPENDENCIES_ONLY
-    return SearchScope.ALL
+# ── helpers ───────────────────────────────────────────────────────────────
+
+
+def _scope_from_string(scope: str) -> SearchScope:
+    """Map SearchInput.scope literal to the SearchScope enum."""
+    return {
+        "project": SearchScope.PROJECT_ONLY,
+        "deps": SearchScope.DEPENDENCIES_ONLY,
+        "all": SearchScope.ALL,
+    }[scope]
 
 
 def _normalize_pkg_filter_value(package: str) -> str:
-    """Normalise a user-supplied package name for DB-side filter matching.
-
-    PyPI names like ``Flask-Login`` are stored as ``flask_login`` in the DB.
-    ``__project__`` is a sentinel — leave intact.
-    """
+    """PyPI names like 'Flask-Login' are stored as 'flask_login' in the DB.
+    ``__project__`` is a sentinel — leave intact."""
     pkg = package.strip()
     return pkg if pkg == "__project__" else normalize_package_name(pkg)
 
 
-def _build_chunk_query(
-    query: str, package: str, internal: bool | None, topic: str,
-) -> SearchQuery:
-    pre_filter: dict = {ChunkFilterField.SCOPE.value: _scope_from_internal(internal).value}
-    if package.strip():
-        pre_filter[ChunkFilterField.PACKAGE.value] = _normalize_pkg_filter_value(package)
-    if topic.strip():
-        pre_filter[ChunkFilterField.TITLE.value] = topic.strip()
-    return SearchQuery(terms=query, pre_filter=pre_filter)
+def _build_search_query(payload: SearchInput) -> SearchQuery:
+    """One SearchQuery shape works for chunks, members, or both — the
+    filter-key strings overlap across ChunkFilterField and
+    ModuleMemberFilterField (invariant checked by AC #25)."""
+    pre_filter: dict = {ChunkFilterField.SCOPE.value: _scope_from_string(payload.scope).value}
+    if payload.package:
+        pre_filter[ChunkFilterField.PACKAGE.value] = _normalize_pkg_filter_value(payload.package)
+    return SearchQuery(terms=payload.query, pre_filter=pre_filter)
 
 
-def _build_member_query(
-    query: str, package: str, internal: bool | None,
-) -> SearchQuery:
-    pre_filter: dict = {ChunkFilterField.SCOPE.value: _scope_from_internal(internal).value}
-    if package.strip():
-        pre_filter[ModuleMemberFilterField.PACKAGE.value] = _normalize_pkg_filter_value(package)
-    return SearchQuery(terms=query, pre_filter=pre_filter)
-
-
-def _render_search_response_chunks(response: SearchResponse) -> str:
-    """Render the :class:`SearchDocsService` response. The pipeline's
-    :class:`TokenBudgetFormatterStage` wraps the final output as a single
-    composite chunk, so ``items[0].text`` is the formatted body."""
+def _render_search_response(response: SearchResponse, empty_msg: str) -> str:
+    """The pipeline's TokenBudgetFormatterStage wraps the final output as a
+    single composite chunk, so ``items[0].text`` is the formatted body."""
     result = response.result
     if result is None or not result.items:
-        return "No matches found."
+        return empty_msg
     return result.items[0].text
 
 
-def _render_search_response_members(response: SearchResponse) -> str:
-    """Render the :class:`SearchApiService` response — same composite-chunk
-    contract as :func:`_render_search_response_chunks`."""
-    result = response.result
-    if result is None or not result.items:
-        return "No symbols found."
-    return result.items[0].text
-
-
-def _render_package_doc(doc: PackageDoc) -> str:
-    """Rebuild the pre-PR ``get_package_doc`` return string from a typed doc.
-
-    Byte-parity contract (AC #8): blocks are joined with ``"\\n\\n"`` and the
-    whole payload is truncated to :data:`PACKAGE_DOC_MAX` characters.
-    """
-    pkg = doc.package
-    parts = [f"# {pkg.name} {pkg.version}\n{pkg.summary}"]
-    if pkg.homepage:
-        parts.append(f"Homepage: {pkg.homepage}")
-    if pkg.dependencies:
-        parts.append("Deps: " + ", ".join(pkg.dependencies[:REQUIREMENTS_DISPLAY]))
-
-    for c in doc.chunks:
-        title = c.metadata.get(ChunkFilterField.TITLE.value, "")
-        parts.append(f"## {title}\n{c.text}")
-
-    if doc.members:
-        rendered: list[str] = []
-        for m in doc.members:
-            md = m.metadata
-            kind = md.get(ModuleMemberFilterField.KIND.value, "")
-            name = md.get(ModuleMemberFilterField.NAME.value, "")
-            signature = md.get("signature", "")
-            docstring = str(md.get("docstring", "") or "")
-            first_line = docstring.split("\n")[0][:PACKAGE_DOC_LINE_MAX]
-            rendered.append(f"- `{kind} {name}{signature}` — {first_line}")
-        parts.append("## API\n" + "\n".join(rendered))
-    return "\n\n".join(parts)[:PACKAGE_DOC_MAX]
+# ── server ────────────────────────────────────────────────────────────────
 
 
 def run(db_path: Path, config_path: Path | None = None) -> None:
@@ -132,7 +86,6 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         sys.exit(1)
 
     from pydocs_mcp.application import (
-        ModuleIntrospectionService,
         PackageLookupService,
         SearchApiService,
         SearchDocsService,
@@ -164,106 +117,126 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     )
     search_docs_svc = SearchDocsService(chunk_pipeline=chunk_pipeline)
     search_api_svc = SearchApiService(member_pipeline=member_pipeline)
-    inspect_svc = ModuleIntrospectionService(package_store=package_store)
+
+    # Optional services — wired if sub-PR #5 / #5b have landed. Absence is
+    # surfaced to the user as ServiceUnavailableError from LookupService, not
+    # as an import error at server start.
+    tree_svc = None
+    ref_svc = None
+    try:
+        from pydocs_mcp.application import DocumentTreeService  # type: ignore[attr-defined]
+        # Instantiation deferred until sub-PR #5 lands its tree_store wiring.
+    except ImportError:
+        pass
+    try:
+        from pydocs_mcp.application import ReferenceService  # type: ignore[attr-defined]
+    except ImportError:
+        pass
+
+    lookup_svc = LookupService(
+        package_lookup=package_lookup,
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
+    )
 
     mcp = FastMCP("pydocs-mcp")
 
     @mcp.tool()
-    async def list_packages() -> str:
-        """List indexed packages. '__project__' = your source code."""
-        try:
-            packages = await package_lookup.list_packages()
-            sorted_pkgs = sorted(packages[:LIST_PACKAGES_MAX], key=lambda p: p.name)
-            return "\n".join(
-                f"- {p.name} {p.version} — {p.summary}" for p in sorted_pkgs
-            )
-        except Exception:
-            log.warning("list_packages failed", exc_info=True)
-            return "Error listing packages."
-
-    @mcp.tool()
-    async def get_package_doc(package: str) -> str:
-        """Full docs for a package. Use '__project__' for your own code.
-
-        Args:
-            package: e.g. 'fastapi', 'vllm', '__project__'
-        """
-        try:
-            pkg_name = _normalize_pkg_filter_value(package)
-            doc = await package_lookup.get_package_doc(pkg_name)
-            if doc is None:
-                return f"'{package}' not found."
-            return _render_package_doc(doc)
-        except Exception:
-            # Distinguish "storage raised" from "no matching row" so operators
-            # reading tool output can tell an indexing gap apart from a bug.
-            log.warning("get_package_doc failed", exc_info=True)
-            return f"Error retrieving '{package}'."
-
-    @mcp.tool()
-    async def search_docs(
+    async def search(
         query: str,
+        kind: str = "any",
         package: str = "",
-        internal: bool | None = None,
-        topic: str = "",
+        scope: str = "all",
+        limit: int = 10,
     ) -> str:
-        """Search documentation and source chunks with BM25 ranking.
+        """Full-text search over indexed docs and code (BM25 ranked).
 
-        Args:
-            query: Search terms (space-separated words, OR logic).
-            package: Restrict to a specific package name. Leave empty for all packages.
-            internal: True → search only the project's own source; False → search only
-                dependency packages; omit (None) → search everything.
-            topic: If given, restrict to chunks whose heading contains this string.
+        Use when the user describes a topic or keyword, not a specific target.
+
+        Params:
+          query:   search terms (space-separated)
+          kind:    "docs" (prose/README) | "api" (functions/classes) | "any" (default)
+          package: restrict to one package (e.g. "fastapi"); "" = all; "__project__" = your code
+          scope:   "project" | "deps" | "all" (default)
+          limit:   1–1000, default 10
+
+        Examples:
+          search(query="batch inference", kind="docs")
+          search(query="HTTPBasicAuth", kind="api")
+          search(query="retry logic", package="requests")
+          search(query="parser", scope="project")
+
+        For a specific known target (package, module, class, method), use lookup.
         """
+        payload = SearchInput(
+            query=query, kind=kind, package=package, scope=scope, limit=limit,
+        )
         try:
-            response = await search_docs_svc.search(
-                _build_chunk_query(query, package, internal, topic),
-            )
-            return _render_search_response_chunks(response)
-        except Exception:
-            log.warning("search_docs failed", exc_info=True)
-            return "No matches found."
+            return await _do_search(payload, search_docs_svc, search_api_svc)
+        except MCPToolError:
+            raise
+        except Exception as e:
+            log.exception("search failed unexpectedly")
+            raise ServiceUnavailableError(f"search failed: {e}") from e
 
     @mcp.tool()
-    async def search_api(
-        query: str,
-        package: str = "",
-        internal: bool | None = None,
-    ) -> str:
-        """Search symbols (functions, classes) by name or docstring.
+    async def lookup(target: str = "", show: str = "default") -> str:
+        """Navigate to a specific named package/module/symbol; show its info or references.
 
-        Args:
-            query: Name fragment or docstring keyword to search for.
-            package: Restrict to a specific package name. Leave empty for all packages.
-            internal: True → project symbols only; False → dependency symbols only;
-                omit (None) → all symbols.
+        Use when the user names an exact target.
+
+        Params:
+          target: dotted path
+            ""                                          → list all indexed packages
+            "fastapi"                                   → package overview + deps
+            "fastapi.routing"                           → module tree
+            "fastapi.routing.APIRouter"                 → class + children
+            "fastapi.routing.APIRouter.include_router"  → method details
+          show: "default" | "tree" (full subtree)
+                | "callers" (who calls this)
+                | "callees" (what this calls)
+                | "inherits" (base classes)
+
+        Examples:
+          lookup(target="")
+          lookup(target="fastapi.routing.APIRouter")
+          lookup(target="fastapi.routing.APIRouter.include_router", show="callers")
+          lookup(target="requests.auth.HTTPBasicAuth", show="inherits")
+
+        For keyword/topic search, use search.
         """
+        payload = LookupInput(target=target, show=show)
         try:
-            response = await search_api_svc.search(
-                _build_member_query(query, package, internal),
-            )
-            return _render_search_response_members(response)
-        except Exception:
-            log.warning("search_api failed", exc_info=True)
-            return "No symbols found."
-
-    @mcp.tool()
-    async def inspect_module(package: str, submodule: str = "") -> str:
-        """Live-import a module to show its current API.
-
-        Args:
-            package: e.g. 'fastapi'
-            submodule: e.g. 'routing' → fastapi.routing
-        """
-        try:
-            return await inspect_svc.inspect(package, submodule)
-        except Exception:
-            log.warning("inspect_module failed", exc_info=True)
-            return (
-                f"'{package}' is not indexed. "
-                "Use list_packages() to see available packages."
-            )
+            return await lookup_svc.lookup(payload)
+        except MCPToolError:
+            raise
+        except Exception as e:
+            log.exception("lookup failed unexpectedly")
+            raise ServiceUnavailableError(f"lookup failed: {e}") from e
 
     log.info("MCP ready (db: %s)", db_path)
     mcp.run(transport="stdio")
+
+
+async def _do_search(
+    payload: SearchInput,
+    search_docs_svc: "SearchDocsService",
+    search_api_svc: "SearchApiService",
+) -> str:
+    """Dispatch search by kind; returns rendered markdown."""
+    query = _build_search_query(payload)
+    if payload.kind == "docs":
+        response = await search_docs_svc.search(query)
+        return _render_search_response(response, empty_msg="No matches found.")
+    if payload.kind == "api":
+        response = await search_api_svc.search(query)
+        return _render_search_response(response, empty_msg="No symbols found.")
+    # kind == "any" — run both pipelines concurrently, concatenate rendered outputs (§8).
+    chunk_resp, member_resp = await asyncio.gather(
+        search_docs_svc.search(query),
+        search_api_svc.search(query),
+    )
+    chunk_text = _render_search_response(chunk_resp, empty_msg="")
+    member_text = _render_search_response(member_resp, empty_msg="")
+    parts = [p for p in (chunk_text, member_text) if p]
+    return "\n\n".join(parts) if parts else "No matches found."
