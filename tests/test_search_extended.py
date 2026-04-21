@@ -21,7 +21,7 @@ class TestSearchChunksEdge:
         c = open_index_database(tmp_path / "bad.db")
         # Don't rebuild FTS, so the table exists but has no data matching
         c.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
             ("pkg", "1.0", "test", "", "[]", "h", "dependency"),
         )
         c.commit()

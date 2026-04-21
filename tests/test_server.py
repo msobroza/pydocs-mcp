@@ -54,11 +54,11 @@ def server_tools(tmp_path):
 
     # Seed data
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         ("__project__", "local", "Test project", "", "[]", "aaa", "project"),
     )
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         ("fastapi", "0.100", "Web framework", "https://fastapi.example.com",
          '["starlette", "pydantic"]', "bbb", "dependency"),
     )
@@ -194,7 +194,7 @@ class TestSearchDocs:
         db_path = tmp_path / "flask.db"
         conn = open_index_database(db_path)
         conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
             ("flask_login", "0.6", "Flask login", "", "[]", "h", "dependency"),
         )
         conn.execute(
@@ -270,7 +270,7 @@ class TestInspectModule:
         tools, db_path = server_tools
         conn = open_index_database(db_path)
         conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
             ("json", "stdlib", "JSON encoder/decoder", "", "[]", "jjj", "dependency"),
         )
         conn.commit()
@@ -282,7 +282,7 @@ class TestInspectModule:
         tools, db_path = server_tools
         conn = open_index_database(db_path)
         conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
             ("os", "stdlib", "OS interface", "", "[]", "ooo", "dependency"),
         )
         conn.commit()
@@ -295,7 +295,7 @@ class TestInspectModule:
         tools, db_path = server_tools
         conn = open_index_database(db_path)
         conn.execute(
-            "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
             ("email", "stdlib", "Email library", "", "[]", "eee", "dependency"),
         )
         conn.commit()

@@ -11,16 +11,18 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _DDL = """
     CREATE TABLE packages (
         name TEXT PRIMARY KEY, version TEXT, summary TEXT,
-        homepage TEXT, dependencies TEXT, content_hash TEXT, origin TEXT
+        homepage TEXT, dependencies TEXT, content_hash TEXT, origin TEXT,
+        local_path TEXT
     );
     CREATE TABLE chunks (
         id INTEGER PRIMARY KEY, package TEXT,
-        title TEXT, text TEXT, origin TEXT
+        title TEXT, text TEXT, origin TEXT,
+        content_hash TEXT
     );
     CREATE VIRTUAL TABLE chunks_fts USING fts5(
         title, text, package,
@@ -32,14 +34,26 @@ _DDL = """
         name TEXT, kind TEXT, signature TEXT,
         return_annotation TEXT, parameters TEXT, docstring TEXT
     );
+    CREATE TABLE document_trees (
+        package TEXT NOT NULL,
+        module TEXT NOT NULL,
+        tree_json TEXT NOT NULL,
+        content_hash TEXT,
+        updated_at REAL,
+        PRIMARY KEY (package, module)
+    );
     CREATE INDEX ix_chunks_package         ON chunks(package);
     CREATE INDEX ix_module_members_package ON module_members(package);
     CREATE INDEX ix_module_members_name    ON module_members(name);
+    CREATE INDEX idx_trees_package         ON document_trees(package);
 """
 
 # Tables we know about — dropped on a version mismatch so earlier schemas
 # (including the pre-v2 `symbols` table) are cleared before recreating.
-_KNOWN_TABLES = ("chunks_fts", "chunks", "module_members", "packages", "symbols")
+_KNOWN_TABLES = (
+    "chunks_fts", "chunks", "module_members", "packages", "symbols",
+    "document_trees",
+)
 
 
 def cache_path_for_project(project_dir: Path) -> Path:
@@ -57,11 +71,48 @@ def _drop_all_known_tables(connection: sqlite3.Connection) -> None:
         connection.execute(f"DROP TABLE IF EXISTS {tbl}")
 
 
-def open_index_database(path: Path) -> sqlite3.Connection:
-    """Open (or create) the database, rebuilding if PRAGMA user_version differs.
+def _try_add_column(conn: sqlite3.Connection, table: str, column_ddl: str) -> None:
+    """ALTER TABLE ADD COLUMN that tolerates the column already existing.
 
-    A mismatch drops every known table (including the pre-v2 `symbols` table)
-    and recreates the schema from the current DDL.
+    Used by the soft v2→v3 migration. SQLite raises ``OperationalError``
+    with ``duplicate column name`` when the column is already present;
+    we swallow that case so the migration is idempotent. Any other
+    ``OperationalError`` propagates (real schema damage).
+    """
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_ddl}")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Soft-migrate a v2 database to v3 in place.
+
+    Preserves existing rows in ``packages``, ``chunks``, ``module_members``,
+    and ``chunks_fts``. Adds the new ``document_trees`` table and the two
+    new columns (``chunks.content_hash``, ``packages.local_path``) without
+    rewriting unchanged data.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS document_trees ("
+        "package TEXT NOT NULL, module TEXT NOT NULL, tree_json TEXT NOT NULL, "
+        "content_hash TEXT, updated_at REAL, PRIMARY KEY (package, module))"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trees_package ON document_trees(package)"
+    )
+    _try_add_column(conn, "chunks", "content_hash TEXT")
+    _try_add_column(conn, "packages", "local_path TEXT")
+
+
+def open_index_database(path: Path) -> sqlite3.Connection:
+    """Open (or create) the database, migrating or rebuilding per user_version.
+
+    - v3 already: no-op.
+    - v2 → v3: soft migration (CREATE document_trees + ALTER two columns);
+      rows in ``packages`` / ``chunks`` / ``module_members`` survive.
+    - Any other mismatch: drop every known table and recreate from current DDL.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -71,8 +122,11 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current != SCHEMA_VERSION:
-        _drop_all_known_tables(conn)
-        conn.executescript(_DDL)
+        if current == 2:
+            _migrate_v2_to_v3(conn)
+        else:
+            _drop_all_known_tables(conn)
+            conn.executescript(_DDL)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
     return conn
