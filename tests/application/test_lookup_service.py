@@ -84,3 +84,53 @@ async def test_lookup_unknown_package_raises_not_found(
     with pytest.raises(NotFoundError) as exc:
         await svc.lookup(LookupInput(target="nonexistent"))
     assert "nonexistent" in str(exc.value)
+
+
+# ── _longest_indexed_module — tree_svc wiring ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_longest_indexed_module_prefers_tree_when_wired(
+    package_lookup_mock: MagicMock,
+) -> None:
+    tree_svc = MagicMock()
+
+    async def _get_tree(package: str, module: str) -> Any:
+        return object() if module == "fastapi.routing" else None
+
+    tree_svc.get_tree = _get_tree
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    module = await svc._longest_indexed_module(
+        "fastapi", ["fastapi", "routing", "APIRouter", "include_router"]
+    )
+    assert module == "fastapi.routing"
+
+
+@pytest.mark.asyncio
+async def test_longest_indexed_module_falls_back_to_find_module(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """When tree_svc is None, fall back to PackageLookupService.find_module."""
+
+    async def _find(package: str, module: str) -> bool:
+        return module == "fastapi.routing"
+
+    package_lookup_mock.find_module = AsyncMock(side_effect=_find)
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=None)
+    module = await svc._longest_indexed_module(
+        "fastapi", ["fastapi", "routing", "APIRouter"]
+    )
+    assert module == "fastapi.routing"
+
+
+@pytest.mark.asyncio
+async def test_longest_indexed_module_returns_none_when_nothing_matches(
+    package_lookup_mock: MagicMock,
+) -> None:
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=None)
+    module = await svc._longest_indexed_module(
+        "fastapi", ["fastapi", "nonexistent", "foo"]
+    )
+    assert module is None
