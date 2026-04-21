@@ -52,6 +52,13 @@ from pydocs_mcp.storage.sqlite import (
     (ChunkOrigin, "dependency_readme"),
     (ChunkOrigin, "dependency_module_doc"),
     (ChunkOrigin, "composite_output"),
+    # sub-PR #5 §4.5: tree-derived chunk origins used by DocumentNode
+    # extraction strategies (AST, Markdown headings, notebooks, embedded
+    # code examples). Consumed by tasks 13+ to tag chunks at insertion.
+    (ChunkOrigin, "ast_python"),
+    (ChunkOrigin, "heading_markdown"),
+    (ChunkOrigin, "notebook"),
+    (ChunkOrigin, "code_example"),
     (MemberKind, "function"),
     (MemberKind, "class"),
     (MemberKind, "method"),
@@ -70,6 +77,11 @@ from pydocs_mcp.storage.sqlite import (
     (ChunkFilterField, "origin"),
     (ChunkFilterField, "module"),
     (ChunkFilterField, "scope"),
+    # sub-PR #5 §4.5: filter keys for reference-graph / deduplication
+    # queries — source_path lets consumers select by file, content_hash
+    # lets them deduplicate tree-derived chunks across re-indexes.
+    (ChunkFilterField, "source_path"),
+    (ChunkFilterField, "content_hash"),
     (ModuleMemberFilterField, "package"),
     (ModuleMemberFilterField, "module"),
     (ModuleMemberFilterField, "name"),

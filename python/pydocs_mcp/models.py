@@ -26,6 +26,13 @@ class ChunkOrigin(StrEnum):
     DEPENDENCY_README        = "dependency_readme"
     DEPENDENCY_MODULE_DOC    = "dependency_module_doc"
     COMPOSITE_OUTPUT         = "composite_output"
+    # sub-PR #5 §4.5: origins emitted by DocumentNode extraction strategies.
+    # Tagged on Chunk.metadata["origin"] at insertion so retrievers / filters
+    # can route on "where in the tree did this come from?".
+    AST_PYTHON               = "ast_python"
+    HEADING_MARKDOWN         = "heading_markdown"
+    NOTEBOOK                 = "notebook"
+    CODE_EXAMPLE             = "code_example"
 
 
 class MemberKind(StrEnum):
@@ -61,6 +68,11 @@ class ChunkFilterField(StrEnum):
     ORIGIN  = "origin"
     MODULE  = "module"
     SCOPE   = "scope"
+    # sub-PR #5 §4.5: filter keys for tree-derived chunks — SOURCE_PATH
+    # selects by the originating file (reference-graph lookups), CONTENT_HASH
+    # deduplicates identical chunks across re-indexes.
+    SOURCE_PATH  = "source_path"
+    CONTENT_HASH = "content_hash"
 
 
 class ModuleMemberFilterField(StrEnum):
