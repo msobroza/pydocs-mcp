@@ -16,6 +16,7 @@ from pydocs_mcp.application.protocols import (
     DependencyResolver,
     MemberExtractor,
 )
+from pydocs_mcp.extraction.document_node import DocumentNode
 from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
 
 
@@ -44,16 +45,18 @@ def test_dependency_resolver_runtime_checkable() -> None:
 
 
 def test_chunk_extractor_runtime_checkable() -> None:
+    """Protocol amendment (spec §5, AC #19): the 3-tuple return shape
+    ``(chunks, trees, package)`` conforms; ``trees`` may be empty."""
     class Fake:
         async def extract_from_project(
             self, project_dir: Path,
-        ) -> tuple[tuple[Chunk, ...], Package]:
-            return ((), _pkg("__project__"))
+        ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
+            return ((), (), _pkg("__project__"))
 
         async def extract_from_dependency(
             self, dep_name: str,
-        ) -> tuple[tuple[Chunk, ...], Package]:
-            return ((), _pkg(dep_name))
+        ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
+            return ((), (), _pkg(dep_name))
 
     assert isinstance(Fake(), ChunkExtractor)
 
