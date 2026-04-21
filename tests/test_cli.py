@@ -76,9 +76,10 @@ class TestIndexCommand:
             main()
 
 
-class TestQueryCommand:
-    def test_query_runs_and_prints_results(self, seeded_project, capsys, monkeypatch):
-        """Index then query — uses monkeypatch to change cwd so project='.' resolves correctly."""
+class TestSearchCommand:
+    """Sub-PR #6: `query` → `search --kind=docs`, `api` → `search --kind=api`."""
+
+    def test_search_docs_runs_and_prints_results(self, seeded_project, capsys, monkeypatch):
         (seeded_project / "app.py").write_text(
             'def hello():\n    """Say hello to the world with a greeting message."""\n    return "hi"\n'
         )
@@ -86,41 +87,45 @@ class TestQueryCommand:
         with patch("sys.argv", ["pydocs-mcp", "index", "."]):
             from pydocs_mcp.__main__ import main
             main()
-        with patch("sys.argv", ["pydocs-mcp", "query", "hello"]):
+        with patch("sys.argv", ["pydocs-mcp", "search", "hello", "--kind=docs"]):
             main()
         captured = capsys.readouterr()
         assert "hello" in captured.out.lower() or "─" in captured.out
 
-    def test_query_with_package_filter(self, seeded_project, capsys, monkeypatch):
+    def test_search_docs_with_package_filter(self, seeded_project, capsys, monkeypatch):
         monkeypatch.chdir(seeded_project)
         with patch("sys.argv", ["pydocs-mcp", "index", "."]):
             from pydocs_mcp.__main__ import main
             main()
-        with patch("sys.argv", ["pydocs-mcp", "query", "hello", "-p", "__project__"]):
+        with patch(
+            "sys.argv",
+            ["pydocs-mcp", "search", "hello", "--kind=docs", "-p", "__project__"],
+        ):
             main()
 
-
-class TestApiCommand:
-    def test_api_runs_and_prints_results(self, seeded_project, capsys, monkeypatch):
+    def test_search_api_runs_and_prints_results(self, seeded_project, capsys, monkeypatch):
         monkeypatch.chdir(seeded_project)
         with patch("sys.argv", ["pydocs-mcp", "index", "."]):
             from pydocs_mcp.__main__ import main
             main()
-        with patch("sys.argv", ["pydocs-mcp", "api", "hello"]):
+        with patch("sys.argv", ["pydocs-mcp", "search", "hello", "--kind=api"]):
             main()
         captured = capsys.readouterr()
         assert "hello" in captured.out.lower() or "─" in captured.out
 
-    def test_api_with_package_filter(self, seeded_project, capsys, monkeypatch):
+    def test_search_api_with_package_filter(self, seeded_project, capsys, monkeypatch):
         monkeypatch.chdir(seeded_project)
         with patch("sys.argv", ["pydocs-mcp", "index", "."]):
             from pydocs_mcp.__main__ import main
             main()
-        with patch("sys.argv", ["pydocs-mcp", "api", "hello", "-p", "__project__"]):
+        with patch(
+            "sys.argv",
+            ["pydocs-mcp", "search", "hello", "--kind=api", "-p", "__project__"],
+        ):
             main()
 
-    def test_api_prints_symbol_details(self, seeded_project, capsys, monkeypatch):
-        """Ensure api command covers the symbol printing path."""
+    def test_search_api_prints_symbol_details(self, seeded_project, capsys, monkeypatch):
+        """Ensure --kind=api covers the symbol printing path."""
         (seeded_project / "app.py").write_text(
             'def greet(name: str) -> str:\n    """Greet a person by name."""\n    return f"Hello {name}"\n'
         )
@@ -128,7 +133,7 @@ class TestApiCommand:
         with patch("sys.argv", ["pydocs-mcp", "index", "."]):
             from pydocs_mcp.__main__ import main
             main()
-        with patch("sys.argv", ["pydocs-mcp", "api", "greet"]):
+        with patch("sys.argv", ["pydocs-mcp", "search", "greet", "--kind=api"]):
             main()
         captured = capsys.readouterr()
         assert "greet" in captured.out.lower() or "─" in captured.out
