@@ -52,13 +52,13 @@ from pydocs_mcp.storage.sqlite import (
     (ChunkOrigin, "dependency_readme"),
     (ChunkOrigin, "dependency_module_doc"),
     (ChunkOrigin, "composite_output"),
-    # sub-PR #5 §4.5: tree-derived chunk origins used by DocumentNode
-    # extraction strategies (AST, Markdown headings, notebooks, embedded
-    # code examples). Consumed by tasks 13+ to tag chunks at insertion.
-    (ChunkOrigin, "ast_python"),
-    (ChunkOrigin, "heading_markdown"),
-    (ChunkOrigin, "notebook"),
-    (ChunkOrigin, "code_example"),
+    # sub-PR #5 §4.2: tree-derived chunk origins emitted by DocumentNode
+    # extraction strategies (AST defs, Markdown sections, notebook cells).
+    # CODE_EXAMPLE chunks inherit parent origin (python_def or markdown_section).
+    (ChunkOrigin, "python_def"),
+    (ChunkOrigin, "markdown_section"),
+    (ChunkOrigin, "notebook_markdown_cell"),
+    (ChunkOrigin, "notebook_code_cell"),
     (MemberKind, "function"),
     (MemberKind, "class"),
     (MemberKind, "method"),
