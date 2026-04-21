@@ -47,33 +47,6 @@ def hash_files(paths: list[str]) -> str:
     return h.hexdigest()[:16]
 
 
-def split_into_chunks(text: str, max_chars: int = 4000) -> list[tuple[str, str]]:
-    """Split text into (heading, body) tuples at heading boundaries."""
-    heading, buf, results = "Overview", [], []
-    buf_len = 0
-
-    def flush():
-        body = "\n".join(buf).strip()
-        if len(body) > 30:
-            results.append((heading, body[:max_chars]))
-
-    for line in text.splitlines():
-        m = re.match(r"^(#{1,4})\s+(.+)", line)
-        if m:
-            flush()
-            heading, buf = m.group(2).strip(), []
-            buf_len = 0
-            continue
-        buf.append(line)
-        buf_len += len(line) + 1
-        if buf_len > max_chars * 2:
-            flush()
-            buf = []
-            buf_len = 0
-    flush()
-    return results
-
-
 # plain @dataclass (not frozen+slots) to mirror Rust #[pyclass] ParsedMember,
 # which exposes read-only getters but isn't truly frozen on the Python side.
 @dataclass
