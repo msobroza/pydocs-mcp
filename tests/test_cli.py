@@ -189,3 +189,107 @@ class TestServeCommand:
                 from pydocs_mcp.__main__ import main
                 main()
             mock_run.assert_called_once()
+
+
+class TestTreeCommand:
+    """Tests for the ``pydocs-mcp tree`` subcommand (sub-PR #5 Task 28)."""
+
+    @pytest.fixture
+    def seeded_tree_db(self, seeded_project):
+        """Seed the project DB with a few DocumentNode trees, return project path."""
+        import asyncio as _asyncio
+
+        from pydocs_mcp.db import build_connection_provider, cache_path_for_project
+        from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
+        from pydocs_mcp.storage.sqlite import SqliteDocumentTreeStore
+
+        db_path = cache_path_for_project(seeded_project)
+        # Ensure schema.
+        open_index_database(db_path).close()
+        provider = build_connection_provider(db_path)
+        store = SqliteDocumentTreeStore(provider=provider)
+
+        def _mod(name: str) -> DocumentNode:
+            return DocumentNode(
+                node_id=name,
+                qualified_name=name,
+                title=name.rsplit(".", 1)[-1],
+                kind=NodeKind.MODULE,
+                source_path=f"{name.replace('.', '/')}.py",
+                start_line=1,
+                end_line=10,
+                text="",
+                content_hash=f"h-{name}",
+            )
+
+        trees = [
+            _mod("demo.adapters"),
+            _mod("demo.sessions"),
+            _mod("demo.auth.basic"),
+        ]
+        _asyncio.run(store.save_many(trees, package="demo"))
+        return seeded_project
+
+    def test_cmd_tree_package_prints_arborescence(
+        self, seeded_tree_db, capsys, monkeypatch,
+    ):
+        monkeypatch.chdir(seeded_tree_db)
+        with patch("sys.argv", ["pydocs-mcp", "tree", "demo"]):
+            from pydocs_mcp.__main__ import main
+            exit_code = main()
+        captured = capsys.readouterr()
+        assert exit_code == 0
+        # Root + all three module paths show up in the arborescence.
+        assert "demo" in captured.out
+        assert "adapters" in captured.out
+        assert "sessions" in captured.out
+        assert "basic" in captured.out
+
+    def test_cmd_tree_package_and_module_prints_module_tree(
+        self, seeded_tree_db, capsys, monkeypatch,
+    ):
+        monkeypatch.chdir(seeded_tree_db)
+        with patch("sys.argv", ["pydocs-mcp", "tree", "demo", "demo.adapters"]):
+            from pydocs_mcp.__main__ import main
+            exit_code = main()
+        captured = capsys.readouterr()
+        assert exit_code == 0
+        assert "demo.adapters" in captured.out
+        # A sibling module that shouldn't appear in a single-module view.
+        assert "sessions" not in captured.out
+
+    def test_cmd_tree_unknown_package_returns_error_and_exit_one(
+        self, seeded_tree_db, capsys, monkeypatch,
+    ):
+        monkeypatch.chdir(seeded_tree_db)
+        with patch("sys.argv", ["pydocs-mcp", "tree", "ghost"]):
+            from pydocs_mcp.__main__ import main
+            exit_code = main()
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert exit_code == 1
+        assert "ghost" in combined
+        # Either the friendly "No trees" message or a generic "Error:" is fine.
+        assert "No trees" in combined or "Error" in combined
+
+    def test_cmd_tree_unknown_module_prints_not_found_error(
+        self, seeded_tree_db, capsys, monkeypatch,
+    ):
+        monkeypatch.chdir(seeded_tree_db)
+        with patch("sys.argv", ["pydocs-mcp", "tree", "demo", "demo.missing"]):
+            from pydocs_mcp.__main__ import main
+            exit_code = main()
+        captured = capsys.readouterr()
+        assert exit_code == 1
+        assert "Error:" in captured.err
+        assert "demo.missing" in captured.err
+
+    def test_cmd_tree_help_does_not_crash(self, capsys):
+        with patch("sys.argv", ["pydocs-mcp", "tree", "--help"]):
+            from pydocs_mcp.__main__ import main
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+        # argparse --help exits 0
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "tree" in captured.out.lower()

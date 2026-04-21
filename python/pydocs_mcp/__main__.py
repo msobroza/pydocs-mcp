@@ -66,6 +66,20 @@ def _build_parser() -> argparse.ArgumentParser:
         sp.add_argument("-p", "--package", help="Filter to one package")
         sp.add_argument("--no-rust", **_no_rust)
 
+    # ``tree`` — Task 28, spec §14.2. Pretty-prints the DocumentNode
+    # arborescence for a package (or a single module within it) from the
+    # cached SQLite ``document_trees`` table. ``project`` is a flag (not a
+    # positional) so it can't be confused with the optional ``module``
+    # arg — argparse can't disambiguate two nargs="?" positionals.
+    tp = sub.add_parser("tree", help="Print DocumentNode arborescence")
+    tp.add_argument("package", help="Package name (e.g. 'requests', '__project__')")
+    tp.add_argument(
+        "module", nargs="?", default=None,
+        help="Optional module name — omit to print the full package tree",
+    )
+    tp.add_argument("--project", default=".", help="Project dir (defaults to cwd)")
+    tp.add_argument("--no-rust", **_no_rust)
+
     return p
 
 
@@ -251,6 +265,80 @@ def _cmd_api(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_tree(args: argparse.Namespace) -> int:
+    try:
+        from pydocs_mcp.application import DocumentTreeService, NotFoundError
+        from pydocs_mcp.db import build_connection_provider
+        from pydocs_mcp.deps import normalize_package_name
+        from pydocs_mcp.extraction import build_package_tree
+        from pydocs_mcp.storage.sqlite import SqliteDocumentTreeStore
+
+        _project, db_path = _project_and_db(args)
+        # Ensure the schema exists so an un-indexed project gives a clean
+        # "No trees" miss instead of a confusing OperationalError.
+        open_index_database(db_path).close()
+
+        provider = build_connection_provider(db_path)
+        tree_store = SqliteDocumentTreeStore(provider=provider)
+        service = DocumentTreeService(tree_store=tree_store)
+
+        # Normalise PyPI names (``Flask-Login`` → ``flask_login``) so the CLI
+        # matches the DB's stored form — mirrors the MCP tools' behaviour.
+        raw_pkg = args.package
+        pkg = raw_pkg if raw_pkg == "__project__" else normalize_package_name(raw_pkg)
+
+        if args.module:
+            try:
+                tree = asyncio.run(service.get_tree(pkg, args.module))
+            except NotFoundError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            print(_format_tree_ascii(tree))
+            return 0
+
+        modules = asyncio.run(service.list_package_modules(pkg))
+        if not modules:
+            print(f"No trees indexed for package '{raw_pkg}'.", file=sys.stderr)
+            return 1
+        root = build_package_tree(pkg, modules)
+        print(_format_tree_ascii(root))
+        return 0
+    except Exception as exc:  # noqa: BLE001 -- CLI top-level (AC #16)
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _format_tree_ascii(node) -> str:
+    """Render a :class:`DocumentNode` as indented Unicode tree text.
+
+    Deterministic pre-order walk: root on its own line, each descendant
+    drawn with ``├──`` / ``└──`` connectors and ``│   `` / ``    ``
+    indentation — matches spec §14.2 and the familiar ``tree`` command.
+    """
+    lines: list[str] = [_tree_label(node)]
+    _append_subtree(node.children, prefix="", lines=lines)
+    return "\n".join(lines)
+
+
+def _tree_label(node) -> str:
+    kind = node.kind.value.upper() if hasattr(node.kind, "value") else str(node.kind)
+    return f"{node.qualified_name} ({kind})"
+
+
+def _append_subtree(
+    children, *, prefix: str, lines: list[str],
+) -> None:
+    """Recursive helper for :func:`_format_tree_ascii`."""
+    for index, child in enumerate(children):
+        is_last = index == len(children) - 1
+        connector = "└── " if is_last else "├── "
+        lines.append(f"{prefix}{connector}{_tree_label(child)}")
+        # "│   " keeps the vertical guide for siblings still to come;
+        # "    " drops it once we've drawn the last child at this level.
+        extension = "    " if is_last else "│   "
+        _append_subtree(child.children, prefix=prefix + extension, lines=lines)
+
+
 def _pre_filter_from_package(package: str | None) -> dict | None:
     """Build the MULTIFIELD pre_filter dict for ``-p/--package``.
 
@@ -285,6 +373,7 @@ _CMD_TABLE = {
     "index": _cmd_index,
     "query": _cmd_query,
     "api":   _cmd_api,
+    "tree":  _cmd_tree,
 }
 
 
