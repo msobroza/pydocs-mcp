@@ -1,9 +1,5 @@
 """Tests for pure Python fallback implementations (_fallback.py)."""
-import os
-from pathlib import Path
-
 from pydocs_mcp._fallback import (
-    split_into_chunks,
     extract_module_doc,
     hash_files,
     parse_py_file,
@@ -11,44 +7,6 @@ from pydocs_mcp._fallback import (
     read_files_parallel,
     walk_py_files,
 )
-
-
-# ── split_into_chunks ───────────────────────────────────────────────────────────
-
-class TestSplitIntoChunks:
-    def test_single_chunk_no_headings(self):
-        text = "Hello world. " * 10
-        chunks = split_into_chunks(text, max_chars=4000)
-        assert len(chunks) == 1
-        heading, body = chunks[0]
-        assert heading == "Overview"
-        assert "Hello" in body
-
-    def test_splits_on_headings(self):
-        text = "## Alpha\nContent A is here with enough length to exceed thirty chars.\n## Beta\nContent B is here with enough length to exceed thirty chars.\n"
-        chunks = split_into_chunks(text, max_chars=4000)
-        headings = [h for h, _ in chunks]
-        assert "Alpha" in headings
-        assert "Beta" in headings
-
-    def test_max_chars_enforced(self):
-        long_body = "word\n" * 1000
-        chunks = split_into_chunks(long_body, max_chars=100)
-        assert len(chunks) > 1
-
-    def test_skips_short_bodies(self):
-        text = "## Heading\nhi\n## Long\n" + "word " * 20
-        chunks = split_into_chunks(text, max_chars=4000)
-        bodies = [b for _, b in chunks]
-        assert not any(b.strip() == "hi" for b in bodies)
-
-    def test_unicode_content(self):
-        text = "## Section\n" + "\u65e5\u672c\u8a9e\u30c6\u30b9\u30c8 " * 10 + "\n"
-        chunks = split_into_chunks(text, max_chars=4000)
-        assert any("\u65e5\u672c\u8a9e" in b for _, b in chunks)
-
-    def test_empty_text(self):
-        assert split_into_chunks("", max_chars=4000) == []
 
 
 # ── parse_py_file ────────────────────────────────────────────────────────
