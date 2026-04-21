@@ -311,7 +311,7 @@ async def test_indexing_service_clear_all_also_removes_null_package_rows(tmp_pat
     db_path = tmp_path / "clear.db"
     conn = open_index_database(db_path)
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         ("normal", "1.0", "", "", "[]", "h", "dependency"),
     )
     conn.execute(

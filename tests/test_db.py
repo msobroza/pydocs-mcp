@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.db import (
+    SCHEMA_VERSION,
     cache_path_for_project,
     clear_all_packages,
     get_stored_content_hash,
@@ -238,3 +239,116 @@ async def test_build_connection_provider_opens_valid_db(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table'"
         )}
     assert {"packages", "chunks", "module_members"}.issubset(tables)
+
+
+class TestSchemaV3:
+    """Schema v3: document_trees table + chunks.content_hash + packages.local_path."""
+
+    def test_fresh_db_is_v3(self, tmp_path):
+        conn = open_index_database(tmp_path / "v3.db")
+        try:
+            assert SCHEMA_VERSION == 3
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        finally:
+            conn.close()
+
+    def test_document_trees_primary_key_enforced(self, db):
+        db.execute(
+            "INSERT INTO document_trees(package, module, tree_json) VALUES(?,?,?)",
+            ("pkg", "pkg.mod", "{}"),
+        )
+        db.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(
+                "INSERT INTO document_trees(package, module, tree_json) VALUES(?,?,?)",
+                ("pkg", "pkg.mod", "{}"),
+            )
+            db.commit()
+
+    def test_chunks_has_content_hash_column(self, db):
+        cols = {r["name"] for r in db.execute("PRAGMA table_info(chunks)").fetchall()}
+        assert "content_hash" in cols
+
+    def test_packages_has_local_path_column(self, db):
+        cols = {r["name"] for r in db.execute("PRAGMA table_info(packages)").fetchall()}
+        assert "local_path" in cols
+
+    def test_v2_to_v3_migration_preserves_rows(self, tmp_path):
+        """A pre-existing v2 DB keeps its packages/chunks/module_members rows
+        when upgraded in place — the migration adds columns/tables without
+        rewriting unchanged data."""
+        db_file = tmp_path / "legacy.db"
+
+        # Hand-build a v2 DB: create the v2 tables directly, set user_version = 2.
+        legacy = sqlite3.connect(str(db_file))
+        legacy.executescript(
+            """
+            CREATE TABLE packages (
+                name TEXT PRIMARY KEY, version TEXT, summary TEXT,
+                homepage TEXT, dependencies TEXT, content_hash TEXT, origin TEXT
+            );
+            CREATE TABLE chunks (
+                id INTEGER PRIMARY KEY, package TEXT,
+                title TEXT, text TEXT, origin TEXT
+            );
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                title, text, package,
+                content=chunks, content_rowid=id,
+                tokenize='porter unicode61'
+            );
+            CREATE TABLE module_members (
+                id INTEGER PRIMARY KEY, package TEXT, module TEXT,
+                name TEXT, kind TEXT, signature TEXT,
+                return_annotation TEXT, parameters TEXT, docstring TEXT
+            );
+            """
+        )
+        legacy.execute("PRAGMA user_version = 2")
+        legacy.execute(
+            "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) "
+            "VALUES(?,?,?,?,?,?,?)",
+            ("legacy_pkg", "1.0", "legacy", "", "[]", "h1", "dependency"),
+        )
+        legacy.execute(
+            "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
+            ("legacy_pkg", "Title", "legacy body", "dependency_doc_file"),
+        )
+        legacy.commit()
+        legacy.close()
+
+        # Reopen via the real entry point — should soft-migrate to v3.
+        migrated = open_index_database(db_file)
+        try:
+            assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
+
+            # Old rows must survive.
+            pkg = migrated.execute(
+                "SELECT name, version FROM packages WHERE name=?", ("legacy_pkg",),
+            ).fetchone()
+            assert pkg is not None
+            assert pkg["version"] == "1.0"
+
+            chunk = migrated.execute(
+                "SELECT title, text FROM chunks WHERE package=?", ("legacy_pkg",),
+            ).fetchone()
+            assert chunk is not None
+            assert chunk["title"] == "Title"
+
+            # New columns must be queryable (NULL for rows written pre-migration).
+            pkg_local = migrated.execute(
+                "SELECT local_path FROM packages WHERE name=?", ("legacy_pkg",),
+            ).fetchone()
+            assert pkg_local["local_path"] is None
+
+            chunk_hash = migrated.execute(
+                "SELECT content_hash FROM chunks WHERE package=?", ("legacy_pkg",),
+            ).fetchone()
+            assert chunk_hash["content_hash"] is None
+
+            # New table must exist.
+            row = migrated.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='document_trees'"
+            ).fetchone()
+            assert row is not None
+        finally:
+            migrated.close()
