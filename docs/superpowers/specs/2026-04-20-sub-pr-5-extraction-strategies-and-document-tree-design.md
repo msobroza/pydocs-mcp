@@ -594,6 +594,7 @@ document_tree_service = DocumentTreeService(tree_store)
 | 16 | `get_document_tree("pydocs-mcp", "server")` returns JSON whose `nodes` array matches the tree observed after indexing. |
 | 17 | Persisting a tree > 500 KB truncates children beyond depth 20 and logs a warning; `load()` returns the truncated tree without error. |
 | 18 | `Chunk.extra_metadata` on every new chunk contains `source_path`, `content_hash`, `node_id`, `parent_node_id`, `kind`, `start_line`, `end_line`, `qualified_name`, `docstring`, `signature`. `ChunkFilterField.SOURCE_PATH` + `ChunkFilterField.CONTENT_HASH` are usable in `MetadataFilter`. |
+| 18a | **(Added by sub-PR #6.)** `application/__init__.py` explicitly re-exports `DocumentTreeService` so `from pydocs_mcp.application import DocumentTreeService` resolves — enabling #6's `LookupService` wiring to pick it up without a hard import. |
 | 18b | `packages.local_path` is populated for the `__project__` package with the absolute project root; NULL for dependencies. |
 | 18c | Test: re-indexing a project with no file changes skips all write I/O via content_hash matching; only `packages.hash` lookup runs. Duration < 200ms for a ~5000-chunk project. |
 | 18d | Test: editing a single method's body triggers re-chunking of only that method's node; sibling methods and classes keep their existing `chunks` rows (verified by row id stability). |
