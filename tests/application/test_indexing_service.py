@@ -391,3 +391,116 @@ def test_indexing_service_accepts_fake_stores_only():
         module_member_store=FakeModuleMemberStore(),
     )
     assert service2.unit_of_work is None
+
+
+# ── Task 23 — DocumentTreeStore integration ──────────────────────────────
+
+
+@dataclass
+class FakeDocumentTreeStore:
+    """Structurally satisfies DocumentTreeStore — async methods only."""
+
+    calls: list[_Call] = field(default_factory=list)
+    by_package: dict[str, list] = field(default_factory=dict)
+
+    async def save_many(
+        self, trees, *, package, uow=None,
+    ) -> None:
+        materialised = tuple(trees)
+        self.calls.append(_Call("save_many", (package, materialised)))
+        self.by_package.setdefault(package, []).extend(materialised)
+
+    async def load(self, package, module):
+        return None  # not exercised here
+
+    async def load_all_in_package(self, package):
+        return {}
+
+    async def delete_for_package(self, package, *, uow=None) -> None:
+        self.calls.append(_Call("delete_for_package", package))
+        self.by_package.pop(package, None)
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_without_tree_store_accepts_trees_param():
+    """With no tree_store configured, trees kwarg is silently dropped (backward compat)."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms,
+    )
+    pkg = _pkg("fastapi")
+    # Passing a non-empty trees tuple must not raise.
+    await service.reindex_package(pkg, (), (), trees=("fake-tree",))
+    # No tree_store calls because none configured.
+    # (Verified indirectly: other stores still called normally.)
+    assert [c.method for c in cs.calls] == ["delete", "upsert"]
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_with_tree_store_delegates_save_many():
+    """With a tree_store + non-empty trees, delete_for_package + save_many are called."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    ts = FakeDocumentTreeStore()
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms, tree_store=ts,
+    )
+    pkg = _pkg("fastapi")
+    fake_trees = ("tree-1", "tree-2")
+
+    await service.reindex_package(pkg, (), (), trees=fake_trees)
+
+    methods = [c.method for c in ts.calls]
+    assert methods == ["delete_for_package", "save_many"]
+    assert ts.calls[0].payload == "fastapi"
+    pkg_name, saved_trees = ts.calls[1].payload
+    assert pkg_name == "fastapi"
+    assert saved_trees == fake_trees
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_with_tree_store_but_empty_trees_skips():
+    """Empty trees tuple → tree_store methods NOT called (no point deleting nothing)."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    ts = FakeDocumentTreeStore()
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms, tree_store=ts,
+    )
+    pkg = _pkg("fastapi")
+    await service.reindex_package(pkg, (), (), trees=())
+    assert ts.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_accepts_references_placeholder_for_sub_pr_5b():
+    """references kwarg is accepted (sub-PR #5b seam) but ignored in #5."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms,
+    )
+    pkg = _pkg("fastapi")
+    # Non-empty references tuple — must not raise; currently no-op.
+    await service.reindex_package(pkg, (), (), references=("fake-ref",))
+    # Core stores still called normally.
+    assert [c.method for c in cs.calls] == ["delete", "upsert"]
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_canonical_order_chunks_then_trees_then_members():
+    """Spec §13.3 canonical order: package → chunks → trees → members."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    ts = FakeDocumentTreeStore()
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms, tree_store=ts,
+    )
+    pkg = _pkg("fastapi")
+    chunk = _chunk("fastapi", "A")
+    member = _member("fastapi", "X")
+    fake_trees = ("tree-1",)
+
+    await service.reindex_package(pkg, (chunk,), (member,), trees=fake_trees)
+
+    # chunks.upsert must land BEFORE tree_store.save_many, which must land
+    # BEFORE module_member_store.upsert_many.
+    assert any(c.method == "upsert" for c in cs.calls)
+    assert any(c.method == "save_many" for c in ts.calls)
+    assert any(c.method == "upsert_many" for c in ms.calls)
