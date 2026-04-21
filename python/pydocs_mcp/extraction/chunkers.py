@@ -277,13 +277,13 @@ def _extract_code_examples(
     return examples
 
 
-def _module_from_path(path: str, root: Path) -> str:
-    """Convert a ``.py`` path to a dotted module name.
+def _relative_module_parts(path: str, root: Path) -> tuple[list[str], Path]:
+    """Return ``(parts_without_suffix, Path(path))`` relative to ``root``.
 
-    Strips suffix, drops a trailing ``__init__``, joins ``/`` → ``.`` —
-    matches Python's import machinery. If ``path`` isn't under ``root``
-    (tests using fake paths, vendored files, etc.), falls back to the
-    basename stem.
+    Shared by :func:`_module_from_path` (.py) and :func:`_module_from_doc_path`
+    (.md / .ipynb) — only the post-processing (``__init__`` stripping) differs.
+    Paths outside ``root`` fall back to the basename stem so tests using
+    fake paths and vendored files still produce a stable module id.
     """
     p = Path(path)
     root_abs = root.resolve() if root.is_absolute() else Path.cwd() / root
@@ -291,7 +291,16 @@ def _module_from_path(path: str, root: Path) -> str:
         rel = p.resolve().relative_to(root_abs)
     except ValueError:
         rel = Path(p.name)
-    parts = list(rel.with_suffix("").parts)
+    return list(rel.with_suffix("").parts), p
+
+
+def _module_from_path(path: str, root: Path) -> str:
+    """Convert a ``.py`` path to a dotted module name.
+
+    Strips suffix, drops a trailing ``__init__``, joins ``/`` → ``.`` —
+    matches Python's import machinery.
+    """
+    parts, p = _relative_module_parts(path, root)
     if parts and parts[-1] == "__init__":
         parts.pop()
     return ".".join(parts) or p.stem
@@ -385,15 +394,10 @@ class HeadingMarkdownChunker:
 
 def _module_from_doc_path(path: str, root: Path) -> str:
     """Doc-file module id = relative path with ``/`` → ``.`` and the final
-    suffix (``.md`` / ``.ipynb``) stripped. Paths outside ``root`` fall
-    back to the basename stem."""
-    p = Path(path)
-    root_abs = root.resolve() if root.is_absolute() else Path.cwd() / root
-    try:
-        rel = p.resolve().relative_to(root_abs)
-    except ValueError:
-        rel = Path(p.name)
-    parts = list(rel.with_suffix("").parts)
+    suffix (``.md`` / ``.ipynb``) stripped. Unlike :func:`_module_from_path`
+    this does NOT special-case ``__init__`` — ``.md`` / ``.ipynb`` files
+    have no Python package semantics."""
+    parts, p = _relative_module_parts(path, root)
     return ".".join(parts) or p.stem
 
 
