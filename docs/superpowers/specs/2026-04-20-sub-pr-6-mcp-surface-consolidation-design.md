@@ -44,7 +44,7 @@ Consolidate the MCP surface from 5 (→ 10 after #5/#5b land) separate tools int
 | 4 | **`inspect_module` dropped — no replacement** | Live-import is a distinct operation from indexed lookup; not worth conflating. Can be re-added later if wanted. |
 | 5 | **Tool descriptions are LLM-first: concise, concrete examples, cross-references** | Tool selection is prompt engineering; descriptions ARE the prompt. Every word counts. |
 | 6 | **Enforce format, not arbitrary length.** Protocol-safety caps set 2-3 orders of magnitude above expected use | Avoids false-positive rejections while still protecting against runaway clients. |
-| 7 | **`kind="any"` uses a dedicated `unified_search.yaml` preset pipeline** with internal RRF fusion | Correctly leverages sub-PR #2's `ParallelRetrievalStage` + `ReciprocalRankFusionStage`. Handler never stitches pre-rendered outputs. |
+| 7 | **`kind="any"` uses handler-level `asyncio.gather` over chunk + member pipelines** (revised during Task 7 implementation — see §8) | `ParallelRetrievalStage + TokenBudgetFormatterStage` can't cleanly merge mixed `ChunkList` / `ModuleMemberList`; parallel dispatch at the handler level is equivalent and simpler. Future `MixedResultMerge` stage could absorb this later. |
 | 8 | **Typed exception hierarchy: 3 classes** (`InvalidArgumentError`, `NotFoundError`, `ServiceUnavailableError`) under `MCPToolError` | Minimal taxonomy matching JSON-RPC error codes. Not over-engineered. |
 | 9 | **`search` empty-result = success, `lookup` missing-target = error** | Semantic difference: search is probabilistic; lookup asserts a specific target. Mapping to protocol matches user intent. |
 | 10 | **Soft dependencies on #5 and #5b services** (option B from brainstorm) | `LookupService` accepts `tree_svc: DocumentTreeService | None = None` and `ref_svc: ReferenceService | None = None`. When `None`, the corresponding `show` values raise `ServiceUnavailableError`. #6 ships whenever its own code is ready — features light up progressively. |
@@ -355,26 +355,28 @@ lookup_svc = LookupService(
 )
 
 # Unified search pipeline (NEW — presets/unified_search.yaml)
-unified_pipeline = build_unified_pipeline_from_config(config, context)
+# kind="any" uses asyncio.gather over chunk + member pipelines — no unified pipeline (§8).
 ```
 
-## 8. `unified_search.yaml` preset
+## 8. `kind="any"` — parallel-dispatch in the handler
 
-New file: `python/pydocs_mcp/presets/unified_search.yaml`:
+**Revised during Task 7 implementation.** Sub-PR #2's `ParallelRetrievalStage + TokenBudgetFormatterStage` cannot cleanly merge `ChunkList` + `ModuleMemberList` into a single pipeline: `ParallelRetrievalStage` wraps the mixed output as whichever type came first, and `TokenBudgetFormatterStage` then branches by `isinstance` — formatting `ModuleMember` items as if they were `Chunk` items. A unified RRF-merged pipeline needs a type-aware merge stage that doesn't exist yet.
 
-```yaml
-name: unified_search
-description: Merges BM25 chunk results and LIKE module-member results via RRF.
-stages:
-  - type: ParallelRetrievalStage
-    retrievers:
-      - type: Bm25ChunkRetriever
-      - type: LikeMemberRetriever
-  - type: ReciprocalRankFusionStage
-  - type: TokenBudgetFormatterStage
+**Implementation:** `kind="any"` is handled at the **handler level** via `asyncio.gather` over the existing chunk and member pipelines, concatenating their rendered outputs. Wall-clock latency ≈ `max(chunk_latency, member_latency)` — parallel dispatch, not sum. **No new YAML preset**; no new pipeline builder.
+
+```python
+# server.py — inside the search handler, kind="any" branch:
+chunk_resp, member_resp = await asyncio.gather(
+    search_docs_svc.search(query),
+    search_api_svc.search(query),
+)
+chunk_text = _render_search_response(chunk_resp, empty_msg="")
+member_text = _render_search_response(member_resp, empty_msg="")
+parts = [p for p in (chunk_text, member_text) if p]
+return "\n\n".join(parts) if parts else "No matches found."
 ```
 
-Uses existing stages from sub-PR #2. Zero new stages, zero new retrievers. The `search(kind="any")` handler invokes this pipeline; `kind="docs"` uses the existing chunk pipeline; `kind="api"` uses the existing member pipeline.
+**Future enhancement:** a `MixedResultMerge` stage (RRF-style, type-aware) would let `kind="any"` delegate to one pipeline. Not blocking #6.
 
 ## 9. `search` handler implementation
 
@@ -400,15 +402,21 @@ async def _do_search(payload: SearchInput) -> str:
             response = await search_api_svc.search(query)
             return _render_search_response(response, empty_msg="No symbols found.")
         case "any":
-            response = await unified_pipeline.run(query)
-            return _render_search_response(response, empty_msg="No matches found.")
+            chunk_resp, member_resp = await asyncio.gather(
+                search_docs_svc.search(query),
+                search_api_svc.search(query),
+            )
+            chunk_text = _render_search_response(chunk_resp, empty_msg="")
+            member_text = _render_search_response(member_resp, empty_msg="")
+            parts = [p for p in (chunk_text, member_text) if p]
+            return "\n\n".join(parts) if parts else "No matches found."
 ```
 
 `_build_search_query` centralizes the `SearchQuery` construction that sub-PR #4 split across `_build_chunk_query` + `_build_member_query` (one unified helper now; `scope` semantics the same).
 
 **Filter-field unification for `kind="any"`:** A single `SearchQuery.pre_filter` drives both `Bm25ChunkRetriever` and `LikeMemberRetriever`. This works because per sub-PR #1 §5 canonical data model, `ChunkFilterField.PACKAGE.value == ModuleMemberFilterField.PACKAGE.value == "package"` and `ChunkFilterField.SCOPE.value == ModuleMemberFilterField.SCOPE.value == "scope"` — the filter-key strings are deliberately shared across the two field enums. The only divergence (`ChunkFilterField.TITLE` vs `ModuleMemberFilterField.NAME`) doesn't apply to `kind="any"` queries, which are driven by `query` + `package` + `scope` only (no topic/name filter).
 
-If sub-PR #1 §5's canonical enums ever drift apart on those shared keys, the `unified_search.yaml` preset breaks. **Invariant to preserve:** `ChunkFilterField.PACKAGE/SCOPE` values match their `ModuleMemberFilterField` counterparts. Added as an invariant check in acceptance (see AC #25 below).
+If sub-PR #1 §5's canonical enums ever drift apart on those shared keys, the single-SearchQuery approach breaks. **Invariant to preserve:** `ChunkFilterField.PACKAGE/SCOPE` values match their `ModuleMemberFilterField` counterparts. Added as an invariant check in acceptance (see AC #25 below).
 
 ## 10. File map
 
@@ -419,8 +427,8 @@ If sub-PR #1 §5's canonical enums ever drift apart on those shared keys, the `u
 | `python/pydocs_mcp/application/mcp_errors.py` | NEW — exception hierarchy. ~30 LOC. |
 | `python/pydocs_mcp/application/lookup_service.py` | NEW — `LookupService` + dispatch. ~150 LOC. |
 | `python/pydocs_mcp/application/__init__.py` | Export `LookupService`, `SearchInput`, `LookupInput`, `MCPToolError` subclasses. |
-| `python/pydocs_mcp/presets/unified_search.yaml` | NEW preset. ~15 LOC. |
-| `python/pydocs_mcp/retrieval/config.py` | Add `build_unified_pipeline_from_config(config, context)` factory — mirrors existing `build_chunk_pipeline_from_config` / `build_member_pipeline_from_config` shape. ~20 LOC. |
+| ~~`python/pydocs_mcp/presets/unified_search.yaml`~~ | Dropped during Task 7 — see §8. |
+| ~~`python/pydocs_mcp/retrieval/config.py`~~ | No new builder — handler uses `asyncio.gather` directly. |
 | `python/pydocs_mcp/__main__.py` | CLI subcommands: remove `query`, `api`; add `search`, `lookup` with argparse flags `--kind`, `--package`, `--scope`, `--limit` (search) and `--show` (lookup). Preserve `index`, `serve`. |
 | `tests/test_mcp_surface.py` | NEW — golden-fixture success paths + typed-error failure paths. ~300 LOC. |
 | `tests/test_server.py` (if exists pre-#6) | **Delete or rewrite** — pre-#6 handler tests no longer applicable; replaced by `test_mcp_surface.py`. |
@@ -504,7 +512,7 @@ Untouched in #4:
 | 1 | `server.py` exposes exactly **2** `@mcp.tool()` handlers: `search`, `lookup`. |
 | 2 | `search(query="batch inference", kind="docs")` returns byte-identical output to pre-#6 `search_docs("batch inference")` (golden fixture). |
 | 3 | `search(query="HTTPBasicAuth", kind="api")` returns byte-identical output to pre-#6 `search_api("HTTPBasicAuth")`. |
-| 4 | `search(query="parser", kind="any")` executes the `unified_search.yaml` pipeline once and returns RRF-merged chunks + members. Total latency ≈ max(chunk_latency, member_latency), not sum. |
+| 4 | `search(query="parser", kind="any")` runs chunk and member pipelines via `asyncio.gather` and concatenates their rendered outputs. Wall-clock latency ≈ max(chunk_latency, member_latency), not sum. |
 | 5 | `lookup(target="")` returns the packages list (byte-identical to pre-#6 `list_packages()`). |
 | 6 | `lookup(target="fastapi")` returns the package doc (byte-identical to pre-#6 `get_package_doc("fastapi")`). |
 | 7 | With `tree_svc` wired: `lookup(target="fastapi.routing")` returns the module tree as rendered text. |
@@ -540,7 +548,7 @@ Untouched in #4:
 | `inspect_module` users lose functionality with no replacement | Medium | Acknowledged. Can be re-added as a new `live_inspect` tool later if demand surfaces. Not this PR. |
 | CLI subcommand rename breaks user scripts | Medium | Documented in CHANGELOG + PR body. Users fix their scripts once. |
 | `lookup` degraded mode (missing optional services) confuses users | Low | Error message in `ServiceUnavailableError` names the missing sub-PR ("reference graph not indexed; enable via sub-PR #5b"). Users know how to fix. |
-| `unified_search.yaml` preset ships untested | Low | AC #4 covers it with golden-fixture + latency assertions. |
+| Handler-level `asyncio.gather` in `kind="any"` loses the single-pipeline RRF-merge that was planned | Low | Revised in §8 — mixed-type merge via `ParallelRetrievalStage` is broken today. Parallel dispatch + concat is equivalent for the user and simpler. Future `MixedResultMerge` stage can absorb this. |
 | Forward-pointers in #5/#5b go stale if they're amended after #6 merges | Low | Both specs have "drift notice" conventions (established in sub-PRs #1-#4). Reviewers check on each merge. |
 
 ## 16. Out of scope (reaffirmed)
