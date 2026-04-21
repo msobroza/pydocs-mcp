@@ -456,29 +456,6 @@ def test_index_project_service_is_frozen_and_slotted() -> None:
         service.bogus = 1  # type: ignore[attr-defined]
 
 
-def test_adapter_classes_are_frozen_and_slotted() -> None:
-    """The three adapters ship as frozen + slotted dataclasses.
-
-    Their bodies will be wired to real ``indexer.py`` / ``deps.py`` helpers
-    in later tasks (Task 12 reshapes indexer.py) — for now we smoke-test
-    only that each class exists with the expected shape.
-    """
-    from pydocs_mcp.application.index_project_service import (
-        ChunkExtractorAdapter,
-        DependencyResolverAdapter,
-        MemberExtractorAdapter,
-    )
-
-    for cls in (
-        DependencyResolverAdapter,
-        ChunkExtractorAdapter,
-        MemberExtractorAdapter,
-    ):
-        inst = cls()
-        with pytest.raises((AttributeError, TypeError)):
-            inst.bogus = 1  # type: ignore[attr-defined]
-
-
 @pytest.mark.asyncio
 async def test_index_project_drops_trees_until_tree_store_arrives(
     tmp_path: Path,
@@ -534,47 +511,6 @@ async def test_index_project_drops_trees_until_tree_store_arrives(
         assert all(isinstance(m, ModuleMember) for m in members_arg)
     assert stats.project_indexed is True
     assert stats.indexed == 1
-
-
-@pytest.mark.asyncio
-async def test_chunk_extractor_adapter_returns_3_tuple(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """``ChunkExtractorAdapter`` wraps today's ``indexer.extract_*_chunks``
-    (which still returns the 2-tuple ``(chunks, pkg)``) and widens to the
-    spec §5 3-tuple with an empty ``trees=()`` until Task 22 delivers a
-    real tree emitter.
-    """
-    from pydocs_mcp.application.index_project_service import ChunkExtractorAdapter
-    from pydocs_mcp import indexer as indexer_module
-
-    pkg = _pkg("__project__")
-    chunks = (_chunk("__project__", "T"),)
-
-    async def fake_project(project_dir):
-        return chunks, pkg
-
-    async def fake_dep(dep_name, *, use_inspect, depth):
-        return chunks, _pkg(dep_name)
-
-    monkeypatch.setattr(indexer_module, "extract_project_chunks", fake_project)
-    monkeypatch.setattr(indexer_module, "extract_dependency_chunks", fake_dep)
-
-    adapter = ChunkExtractorAdapter()
-    proj_result = await adapter.extract_from_project(tmp_path)
-    dep_result = await adapter.extract_from_dependency("httpx")
-
-    # Shape: exactly three elements (chunks, trees, package).
-    assert len(proj_result) == 3
-    assert len(dep_result) == 3
-    proj_chunks, proj_trees, proj_pkg = proj_result
-    assert proj_chunks is chunks
-    assert proj_trees == ()
-    assert proj_pkg is pkg
-    # And for the dep path.
-    _dep_chunks, dep_trees, dep_pkg = dep_result
-    assert dep_trees == ()
-    assert dep_pkg.name == "httpx"
 
 
 @pytest.mark.asyncio
@@ -676,30 +612,3 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
     assert sorted(pkg.name for pkg, _, _ in idx.reindex_calls) == ["a", "b", "c"]
 
 
-@pytest.mark.asyncio
-async def test_dependency_resolver_adapter_wraps_deps_module(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """``DependencyResolverAdapter.resolve`` returns a tuple from
-    ``deps.discover_declared_dependencies`` — proves the adapter does type
-    conversion (list → tuple) and runs the blocking call via
-    ``asyncio.to_thread``.
-    """
-    from pydocs_mcp.application.index_project_service import (
-        DependencyResolverAdapter,
-    )
-    from pydocs_mcp import deps as deps_module
-
-    recorded: list[str] = []
-
-    def fake_discover(root: str) -> list[str]:
-        recorded.append(root)
-        return ["fastapi", "httpx"]
-
-    monkeypatch.setattr(deps_module, "discover_declared_dependencies", fake_discover)
-    adapter = DependencyResolverAdapter()
-    result = await adapter.resolve(tmp_path)
-
-    assert result == ("fastapi", "httpx")
-    assert isinstance(result, tuple)
-    assert recorded == [str(tmp_path)]

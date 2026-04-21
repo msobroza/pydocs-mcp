@@ -12,13 +12,36 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.application import (
-    ChunkExtractorAdapter,
-    IndexProjectService,
-    MemberExtractorAdapter,
-)
+from pydocs_mcp.application import IndexProjectService
 from pydocs_mcp.db import open_index_database
+from pydocs_mcp.extraction import (
+    AstMemberExtractor,
+    InspectMemberExtractor,
+    PipelineChunkExtractor,
+    build_ingestion_pipeline,
+)
+from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+
+
+def _build_extractors(use_inspect: bool, depth: int = 1):
+    """Return ``(chunk_extractor, member_extractor)`` wired from sub-PR #5
+    strategy classes — mirrors :func:`pydocs_mcp.__main__._run_indexing`.
+
+    The ingestion pipeline is constructed from the default :class:`AppConfig`
+    (no override path); the benchmark doesn't need YAML overrides but we
+    still flow through ``build_ingestion_pipeline`` so the wiring matches
+    the CLI path exactly and any spec change lands here automatically.
+    """
+    config = AppConfig.load()
+    ingestion_pipeline = build_ingestion_pipeline(config)
+    chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
+    ast_member = AstMemberExtractor()
+    member_extractor = (
+        InspectMemberExtractor(static_fallback=ast_member, depth=depth)
+        if use_inspect else ast_member
+    )
+    return chunk_extractor, member_extractor
 
 
 class _FixedListResolver:
@@ -60,14 +83,16 @@ async def _run_indexing_async(
     results: list[IndexResult] = []
     service = build_sqlite_indexing_service(db_path)
 
+    chunk_extractor, member_extractor = _build_extractors(use_inspect)
+
     # --- Project ---
     t0 = time.perf_counter()
     try:
         project_orch = IndexProjectService(
             indexing_service=service,
             dependency_resolver=_FixedListResolver([]),
-            chunk_extractor=ChunkExtractorAdapter(use_inspect=use_inspect, depth=1),
-            member_extractor=MemberExtractorAdapter(use_inspect=use_inspect, depth=1),
+            chunk_extractor=chunk_extractor,
+            member_extractor=member_extractor,
         )
         await project_orch.index_project(
             project_root, include_project_source=True,
@@ -91,8 +116,8 @@ async def _run_indexing_async(
             dep_orch = IndexProjectService(
                 indexing_service=service,
                 dependency_resolver=_FixedListResolver([dep]),
-                chunk_extractor=ChunkExtractorAdapter(use_inspect=use_inspect, depth=1),
-                member_extractor=MemberExtractorAdapter(use_inspect=use_inspect, depth=1),
+                chunk_extractor=chunk_extractor,
+                member_extractor=member_extractor,
             )
             await dep_orch.index_project(
                 project_root, include_project_source=False,
