@@ -14,6 +14,10 @@ directly by their consumers.
 """
 from __future__ import annotations
 
+from pydocs_mcp.application.document_tree_service import (
+    DocumentTreeService,
+    NotFoundError,
+)
 from pydocs_mcp.application.index_project_service import (
     ChunkExtractorAdapter,
     DependencyResolverAdapter,
@@ -38,11 +42,13 @@ __all__ = [
     "ChunkExtractorAdapter",
     "DependencyResolver",
     "DependencyResolverAdapter",
+    "DocumentTreeService",
     "IndexProjectService",
     "IndexingService",
     "MemberExtractor",
     "MemberExtractorAdapter",
     "ModuleIntrospectionService",
+    "NotFoundError",
     "PackageLookupService",
     "SearchApiService",
     "SearchDocsService",
