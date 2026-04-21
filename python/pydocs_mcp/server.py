@@ -2,18 +2,24 @@
 
 Handlers are thin adapters over application-layer services (spec §5.1,
 AC #7): ``PackageLookupService``, ``SearchDocsService``, ``SearchApiService``,
-``ModuleIntrospectionService``. All rendering + filter-dict construction is
-kept in this module so the services stay transport-agnostic.
+``ModuleIntrospectionService``, ``DocumentTreeService``. All rendering +
+filter-dict construction is kept in this module so the services stay
+transport-agnostic.
 
 Byte-parity with pre-PR tool I/O is a hard requirement (AC #8) — the
 ``_render_*`` helpers below are the single source of truth for handler
 output shape.
+
+Sub-PR #5 adds two new tree-exposure handlers (spec §13.1, §13.2, §16 AC #2):
+``get_document_tree(package, module)`` and ``get_package_tree(package)``.
 """
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.constants import (
     LIST_PACKAGES_MAX,
@@ -30,6 +36,9 @@ from pydocs_mcp.models import (
     SearchResponse,
     SearchScope,
 )
+
+if TYPE_CHECKING:
+    from pydocs_mcp.extraction.document_node import DocumentNode
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -92,6 +101,42 @@ def _render_search_response_members(response: SearchResponse) -> str:
     return result.items[0].text
 
 
+def _node_to_dict(node: "DocumentNode") -> dict[str, Any]:
+    """Convert a :class:`DocumentNode` to a plain dict tree for JSON.
+
+    Kept handler-local (not promoted to ``extraction/``) so the MCP
+    transport layer owns its own serialization shape — the storage
+    layer's private ``_serialize_tree_to_json`` happens to share this
+    schema today, but the two use-sites are free to diverge without
+    forcing a cross-module refactor.
+    """
+    return {
+        "node_id":        node.node_id,
+        "qualified_name": node.qualified_name,
+        "title":          node.title,
+        "kind":           node.kind.value,
+        "source_path":    node.source_path,
+        "start_line":     node.start_line,
+        "end_line":       node.end_line,
+        "text":           node.text,
+        "content_hash":   node.content_hash,
+        "summary":        node.summary,
+        "extra_metadata": dict(node.extra_metadata),
+        "parent_id":      node.parent_id,
+        "children":       [_node_to_dict(c) for c in node.children],
+    }
+
+
+def _serialize_tree_to_json(node: "DocumentNode") -> str:
+    """Render a ``DocumentNode`` tree as pretty JSON for MCP output.
+
+    Uses 2-space indentation so clients rendering the string in a
+    terminal get a human-readable view; the storage layer's compact
+    serialization is intentionally NOT reused here (different audience).
+    """
+    return json.dumps(_node_to_dict(node), indent=2)
+
+
 def _render_package_doc(doc: PackageDoc) -> str:
     """Rebuild the pre-PR ``get_package_doc`` return string from a typed doc.
 
@@ -132,7 +177,9 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         sys.exit(1)
 
     from pydocs_mcp.application import (
+        DocumentTreeService,
         ModuleIntrospectionService,
+        NotFoundError,
         PackageLookupService,
         SearchApiService,
         SearchDocsService,
@@ -145,6 +192,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     from pydocs_mcp.retrieval.wiring import build_retrieval_context
     from pydocs_mcp.storage.sqlite import (
         SqliteChunkRepository,
+        SqliteDocumentTreeStore,
         SqlitePackageRepository,
     )
 
@@ -154,6 +202,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     package_store = SqlitePackageRepository(provider=provider)
     chunk_store = SqliteChunkRepository(provider=provider)
     member_store = context.module_member_store
+    tree_store = SqliteDocumentTreeStore(provider=provider)
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 
@@ -165,6 +214,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     search_docs_svc = SearchDocsService(chunk_pipeline=chunk_pipeline)
     search_api_svc = SearchApiService(member_pipeline=member_pipeline)
     inspect_svc = ModuleIntrospectionService(package_store=package_store)
+    document_tree_svc = DocumentTreeService(tree_store=tree_store)
 
     mcp = FastMCP("pydocs-mcp")
 
@@ -264,6 +314,27 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
                 f"'{package}' is not indexed. "
                 "Use list_packages() to see available packages."
             )
+
+    @mcp.tool()
+    async def get_document_tree(package: str, module: str) -> str:
+        """Return the DocumentNode tree for (package, module) as JSON (spec §13.1).
+
+        Args:
+            package: Package name (e.g. 'requests', '__project__').
+            module: Dotted module path within the package.
+
+        Returns:
+            Indented JSON of the module's DocumentNode tree, or a user-
+            readable error message if the tree is missing or retrieval fails.
+        """
+        try:
+            tree = await document_tree_svc.get_tree(package, module)
+            return _serialize_tree_to_json(tree)
+        except NotFoundError:
+            return f"No tree for '{package}/{module}'."
+        except Exception:  # noqa: BLE001 -- MCP boundary: return user-readable error
+            log.warning("get_document_tree failed", exc_info=True)
+            return f"Error retrieving tree for '{package}/{module}'."
 
     log.info("MCP ready (db: %s)", db_path)
     mcp.run(transport="stdio")
