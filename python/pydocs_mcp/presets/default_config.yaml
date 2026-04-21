@@ -14,3 +14,30 @@ pipelines:
   member:
     - default: true
       pipeline_path: presets/member_like.yaml
+
+extraction:
+  # Directory blocklist is hardcoded in extraction/config.py::_EXCLUDED_DIRS —
+  # not configurable via YAML by design (security: un-excluded .git/.venv/
+  # site-packages would leak secrets). Extension allowlist IS narrowable.
+  chunking:
+    by_extension:
+      ".py": ast_python
+      ".md": heading_markdown
+      ".ipynb": notebook
+    markdown:
+      min_heading_level: 1
+      max_heading_level: 3
+    notebook:
+      include_outputs: false
+  discovery:
+    project:
+      include_extensions: [".py", ".md", ".ipynb"]
+      max_file_size_bytes: 500000
+    dependency:
+      include_extensions: [".py", ".md", ".ipynb"]
+      max_file_size_bytes: 500000
+  members:
+    inspect_depth: 1
+    members_per_module_cap: 120
+  ingestion:
+    pipeline_path: null

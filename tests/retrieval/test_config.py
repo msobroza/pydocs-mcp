@@ -176,3 +176,58 @@ def test_pipeline_path_accepts_shipped_presets_relative(tmp_path):
     # chunk_fts.yaml is shipped inside pydocs_mcp/presets/
     resolved = _resolve_pipeline_path(Path("presets/chunk_fts.yaml"), user_config_path=None)
     assert resolved.name == "chunk_fts.yaml"
+
+
+# ── Sub-PR #5 Task 7 — ExtractionConfig slotting (spec §11) ────────────────
+
+
+def test_appconfig_includes_extraction_defaults():
+    """``AppConfig.load()`` surfaces the shipped ``extraction:`` block —
+    every sub-section populated with its Pydantic-default values."""
+    from pydocs_mcp.extraction.config import ExtractionConfig
+
+    config = AppConfig.load()
+    assert isinstance(config.extraction, ExtractionConfig)
+    # Shipped YAML drives these, not the Pydantic defaults — the two
+    # should agree, but we assert on the YAML values to catch drift
+    # between code and YAML.
+    assert config.extraction.chunking.by_extension == {
+        ".py": "ast_python",
+        ".md": "heading_markdown",
+        ".ipynb": "notebook",
+    }
+    assert config.extraction.chunking.markdown.max_heading_level == 3
+    assert config.extraction.chunking.notebook.include_outputs is False
+    assert config.extraction.discovery.project.include_extensions == [
+        ".py", ".md", ".ipynb",
+    ]
+    assert config.extraction.discovery.project.max_file_size_bytes == 500_000
+    assert config.extraction.discovery.dependency.max_file_size_bytes == 500_000
+    assert config.extraction.members.inspect_depth == 1
+    assert config.extraction.members.members_per_module_cap == 120
+    assert config.extraction.ingestion.pipeline_path is None
+
+
+def test_appconfig_extraction_yaml_round_trips(tmp_path):
+    """User YAML overrides partial extraction settings; unmentioned keys
+    keep their shipped defaults — proves ``extraction:`` participates in
+    the usual YAML-overlay semantics."""
+    user_file = tmp_path / "pydocs-mcp.yaml"
+    user_file.write_text(
+        "extraction:\n"
+        "  chunking:\n"
+        "    markdown:\n"
+        "      max_heading_level: 6\n"
+        "  members:\n"
+        "    inspect_depth: 3\n"
+    )
+    config = AppConfig.load(explicit_path=user_file)
+    # Overridden:
+    assert config.extraction.chunking.markdown.max_heading_level == 6
+    assert config.extraction.members.inspect_depth == 3
+    # Untouched — still at shipped defaults.
+    assert config.extraction.chunking.markdown.min_heading_level == 1
+    assert config.extraction.discovery.project.include_extensions == [
+        ".py", ".md", ".ipynb",
+    ]
+    assert config.extraction.members.members_per_module_cap == 120
