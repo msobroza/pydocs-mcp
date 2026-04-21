@@ -307,8 +307,11 @@ async def test_inspect_dependency_missing_returns_empty(
 
 def test_ast_member_extractor_is_frozen_slotted() -> None:
     extractor = AstMemberExtractor()
-    with pytest.raises(AttributeError):
-        extractor.members_per_module_cap = 999  # type: ignore[misc]
+    # Empty frozen+slots dataclasses raise TypeError (super(type, obj) path)
+    # or AttributeError depending on field count. Accept both — the invariant
+    # is "assignment must fail".
+    with pytest.raises((AttributeError, TypeError)):
+        extractor.foo = 999  # type: ignore[misc]
     assert not hasattr(extractor, "__dict__")
 
 

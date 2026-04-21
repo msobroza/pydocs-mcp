@@ -37,9 +37,12 @@ class AstMemberExtractor:
 
     Safe on untrusted dependencies — never executes package code. Used for
     both project source and the static path for dependencies.
-    """
 
-    members_per_module_cap: int = 120
+    No per-module cap lives on this class: :class:`~pydocs_mcp.extraction.config.MembersConfig`
+    exposes ``members_per_module_cap`` but enforcement is the ingestion pipeline's
+    responsibility (downstream stage, out of scope for Task 18). The extractor
+    emits every member it parses; upstream code truncates.
+    """
 
     async def extract_from_project(
         self, project_dir: Path,
