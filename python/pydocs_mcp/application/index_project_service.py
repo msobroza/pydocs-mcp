@@ -2,9 +2,11 @@
 
 Wraps :class:`IndexingService` + three extractor Protocols
 (:class:`DependencyResolver` / :class:`ChunkExtractor` / :class:`MemberExtractor`
-from :mod:`pydocs_mcp.application.protocols`). Sub-PR #5 replaces the adapters
-with strategy-based implementations without touching this service — the
-orchestrator depends only on the Protocols.
+from :mod:`pydocs_mcp.application.protocols`). Sub-PR #5 wires the strategy
+classes from :mod:`pydocs_mcp.extraction` (:class:`PipelineChunkExtractor`,
+:class:`AstMemberExtractor` / :class:`InspectMemberExtractor`,
+:class:`StaticDependencyResolver`); the orchestrator depends only on the
+Protocols.
 
 Hash-based cache skipping lives here, not in the extractors. Each extract
 call returns a fresh :class:`~pydocs_mcp.models.Package` with its
@@ -26,8 +28,6 @@ from pydocs_mcp.application.protocols import (
     DependencyResolver,
     MemberExtractor,
 )
-from pydocs_mcp.extraction.document_node import DocumentNode
-from pydocs_mcp.models import Chunk, IndexingStats, ModuleMember, Package
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -46,9 +46,6 @@ class IndexProjectService:
        staying ``False``).
     3. For every dependency returned by the resolver, call
        :meth:`_index_one_dependency` — a single failure never aborts the pass.
-    4. Finally, drop the module-level extraction cache so the next call
-       re-extracts from scratch (this is the whole point of re-running the
-       indexer — to pick up edits).
     """
 
     indexing_service: IndexingService
@@ -63,7 +60,7 @@ class IndexProjectService:
         force: bool = False,
         include_project_source: bool = True,
         workers: int = 1,
-    ) -> IndexingStats:
+    ) -> "IndexingStats":
         """Index a whole project + its declared dependencies (spec §5.3).
 
         Returns a fresh :class:`IndexingStats` so callers can render a
@@ -78,37 +75,34 @@ class IndexProjectService:
         — matches the pre-PR ``ThreadPoolExecutor`` behaviour driven by
         the CLI ``--workers N`` flag.
         """
+        # Deferred import keeps ``models`` out of this module's top-level
+        # namespace — callers already import ``IndexingStats`` directly.
+        from pydocs_mcp.models import IndexingStats
+
         stats = IndexingStats()
-        try:
-            if force:
-                await self.indexing_service.clear_all()
-            if include_project_source:
-                await self._index_project_source(project_dir, stats)
-            deps = await self.dependency_resolver.resolve(project_dir)
-            if workers <= 1:
-                for dep_name in deps:
+        if force:
+            await self.indexing_service.clear_all()
+        if include_project_source:
+            await self._index_project_source(project_dir, stats)
+        deps = await self.dependency_resolver.resolve(project_dir)
+        if workers <= 1:
+            for dep_name in deps:
+                await self._index_one_dependency(dep_name, stats)
+        else:
+            # Performance: bound concurrency so very large dep sets don't
+            # overwhelm importlib / site-packages I/O. Each task still
+            # swallows its own exceptions via ``_index_one_dependency``.
+            sem = asyncio.Semaphore(workers)
+
+            async def _bounded(dep_name: str) -> None:
+                async with sem:
                     await self._index_one_dependency(dep_name, stats)
-            else:
-                # Performance: bound concurrency so very large dep sets don't
-                # overwhelm importlib / site-packages I/O. Each task still
-                # swallows its own exceptions via ``_index_one_dependency``.
-                sem = asyncio.Semaphore(workers)
 
-                async def _bounded(dep_name: str) -> None:
-                    async with sem:
-                        await self._index_one_dependency(dep_name, stats)
-
-                await asyncio.gather(*[_bounded(d) for d in deps])
-        finally:
-            # Drop the module-level extraction cache so a subsequent call
-            # re-walks the project / re-imports each dep. The cache exists
-            # purely to share work between the chunk- and member-extractor
-            # halves within ONE ``index_project`` call.
-            _clear_extractor_cache()
+            await asyncio.gather(*[_bounded(d) for d in deps])
         return stats
 
     async def _index_project_source(
-        self, project_dir: Path, stats: IndexingStats,
+        self, project_dir: Path, stats: "IndexingStats",
     ) -> None:
         """Extract + (maybe) reindex the virtual ``__project__`` package.
 
@@ -134,7 +128,7 @@ class IndexProjectService:
         )
 
     async def _index_one_dependency(
-        self, dep_name: str, stats: IndexingStats,
+        self, dep_name: str, stats: "IndexingStats",
     ) -> None:
         """Extract + reindex a single dependency, swallowing its failure.
 
@@ -159,105 +153,3 @@ class IndexProjectService:
             # observable through the log line + the counter, never silenced.
             log.warning("  fail %s: %s", dep_name, e)
             stats.failed += 1
-
-
-def _clear_extractor_cache() -> None:
-    """Deferred import so ``application.*`` stays free of ``indexer`` at
-    module-load time — keeps the Sub-PR #5 swap to a strategy module a
-    pure adapter change.
-    """
-    from pydocs_mcp import indexer
-
-    indexer.clear_extraction_cache()
-
-
-# ── Adapters (spec §5.2) ───────────────────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class DependencyResolverAdapter:
-    """Thin wrapper over :func:`pydocs_mcp.deps.discover_declared_dependencies`.
-
-    Runs the blocking filesystem walk on a thread via ``asyncio.to_thread``
-    so the orchestrator can stay on the event loop.
-    """
-
-    async def resolve(self, project_dir: Path) -> tuple[str, ...]:
-        # Deferred import keeps ``application.*`` free of transitive module
-        # state from ``deps.py`` — matches the adapter pattern used by the
-        # retrieval wiring module.
-        from pydocs_mcp import deps as deps_module
-
-        return await asyncio.to_thread(
-            lambda: tuple(deps_module.discover_declared_dependencies(str(project_dir)))
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class ChunkExtractorAdapter:
-    """Thin wrapper over ``indexer.extract_*_chunks`` (spec §8, AC #17).
-
-    ``use_inspect`` toggles between live-import mode (``True``) and static
-    file-read mode (``False``). ``depth`` bounds recursive submodule
-    traversal in inspect mode. The defaults mirror ``__main__``'s CLI
-    defaults (``--no-inspect`` OFF, ``--depth 1``).
-
-    The adapter returns ``trees=()`` to satisfy the spec §5 3-tuple
-    Protocol — today's ``indexer.extract_*_chunks`` does not build a
-    :class:`DocumentNode` forest. Task 22 replaces this adapter with
-    ``PipelineChunkExtractor`` which emits real trees.
-    """
-
-    use_inspect: bool = True
-    depth: int = 1
-
-    async def extract_from_project(
-        self, project_dir: Path,
-    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
-        # Deferred import: the service-adapter split means the service
-        # imports this module at load time, but the heavy ``indexer``
-        # module (Rust bindings, importlib traversal) is only needed
-        # inside the adapter's call path.
-        from pydocs_mcp import indexer
-
-        chunks, pkg = await indexer.extract_project_chunks(project_dir)
-        return chunks, (), pkg
-
-    async def extract_from_dependency(
-        self, dep_name: str,
-    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
-        from pydocs_mcp import indexer
-
-        chunks, pkg = await indexer.extract_dependency_chunks(
-            dep_name, use_inspect=self.use_inspect, depth=self.depth,
-        )
-        return chunks, (), pkg
-
-
-@dataclass(frozen=True, slots=True)
-class MemberExtractorAdapter:
-    """Thin wrapper over ``indexer.extract_*_members`` (spec §8, AC #17).
-
-    Shares ``use_inspect`` / ``depth`` with :class:`ChunkExtractorAdapter`;
-    the two adapters typically operate in lockstep so the service's back-
-    to-back chunks-then-members calls hit the same cached extraction.
-    """
-
-    use_inspect: bool = True
-    depth: int = 1
-
-    async def extract_from_project(
-        self, project_dir: Path,
-    ) -> tuple[ModuleMember, ...]:
-        from pydocs_mcp import indexer
-
-        return await indexer.extract_project_members(project_dir)
-
-    async def extract_from_dependency(
-        self, dep_name: str,
-    ) -> tuple[ModuleMember, ...]:
-        from pydocs_mcp import indexer
-
-        return await indexer.extract_dependency_members(
-            dep_name, use_inspect=self.use_inspect, depth=self.depth,
-        )
