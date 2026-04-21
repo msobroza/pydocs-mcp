@@ -61,7 +61,10 @@ class LookupService:
 
         # 2. Single segment → package overview
         if len(parts) == 1:
-            return await self._package_lookup(package, show)
+            doc = await self.package_lookup.get_package_doc(package)
+            if doc is None:
+                raise NotFoundError(f"package '{package}' not indexed")
+            return format_package_doc(doc)
 
         # 3. Resolve longest module prefix
         module = await self._longest_indexed_module(package, parts)
@@ -72,20 +75,14 @@ class LookupService:
 
         symbol_path = parts[len(module.split(".")):]
 
-        # 4. Module-only target (nothing left after the module prefix)
+        # 4. Module-only target
         if not symbol_path:
-            return await self._module_lookup(package, module, show)
+            return await self._module_lookup(package, module)
 
         # 5. Symbol lookup
         return await self._symbol_lookup(package, module, target, show)
 
-    async def _package_lookup(self, package: str, show: str) -> str:
-        doc = await self.package_lookup.get_package_doc(package)
-        if doc is None:
-            raise NotFoundError(f"package '{package}' not indexed")
-        return format_package_doc(doc)
-
-    async def _module_lookup(self, package: str, module: str, show: str) -> str:
+    async def _module_lookup(self, package: str, module: str) -> str:
         if self.tree_svc is None:
             raise ServiceUnavailableError(
                 f"module tree for '{module}' unavailable — enable via sub-PR #5"
@@ -112,29 +109,23 @@ class LookupService:
         if show in ("default", "tree"):
             return json.dumps(node.to_pageindex_json(), indent=2)
 
-        if show == "callers":
+        if show in ("callers", "callees"):
             if self.ref_svc is None:
                 raise ServiceUnavailableError(
                     "reference graph not indexed — enable via sub-PR #5b"
                 )
-            refs = await self.ref_svc.callers(package, node.node_id)
-            return self._render_refs(refs)
-
-        if show == "callees":
-            if self.ref_svc is None:
-                raise ServiceUnavailableError(
-                    "reference graph not indexed — enable via sub-PR #5b"
-                )
-            refs = await self.ref_svc.callees(package, node.node_id)
-            return self._render_refs(refs)
+            fetch = self.ref_svc.callers if show == "callers" else self.ref_svc.callees
+            return self._render_refs(await fetch(package, node.node_id))
 
         if show == "inherits":
-            if getattr(node, "kind", "") != "class":
+            if node.kind != "class":
                 raise InvalidArgumentError(
                     f"show='inherits' only applies to CLASS nodes, got {node.kind}"
                 )
             inherits = node.extra_metadata.get("inherits_from", [])
-            return "\n".join(f"- {base}" for base in inherits) or "(no base classes)"
+            if not inherits:
+                return "(no base classes)"
+            return "\n".join(f"- {base}" for base in inherits)
 
         raise InvalidArgumentError(f"unknown show value: {show}")
 
