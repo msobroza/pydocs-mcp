@@ -10,13 +10,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     YamlConfigSettingsSource,
 )
+
+from pydocs_mcp.extraction.config import ExtractionConfig
 
 # Side-effect imports: populate stage/retriever/formatter registries via decorators.
 from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401
@@ -105,6 +107,11 @@ class AppConfig(BaseSettings):
     log_level: str
     metadata_schemas: Mapping[str, tuple[str, ...]]
     pipelines: Mapping[str, HandlerConfig]
+    # Sub-PR #5: extraction-pipeline settings — chunker registry, discovery
+    # scope, member caps, ingestion pipeline override. Defaults are shipped
+    # in ``presets/default_config.yaml`` so user YAMLs need only override
+    # the keys they care about.
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside
