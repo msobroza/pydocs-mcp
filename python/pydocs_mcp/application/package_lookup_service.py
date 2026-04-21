@@ -54,3 +54,21 @@ class PackageLookupService:
             ),
         )
         return PackageDoc(package=pkg, chunks=tuple(chunks), members=tuple(members))
+
+    async def find_module(self, package: str, module: str) -> bool:
+        """Return True iff at least one indexed Chunk exists for (package, module).
+
+        Added by sub-PR #6 — used by LookupService._longest_indexed_module to
+        resolve dotted-path targets when tree_svc (from #5) is unavailable.
+        Empty arguments short-circuit to False without querying the store.
+        """
+        if not package or not module:
+            return False
+        chunks = await self.chunk_store.list(
+            filter={
+                ChunkFilterField.PACKAGE.value: package,
+                ChunkFilterField.MODULE.value: module,
+            },
+            limit=1,
+        )
+        return len(chunks) > 0
