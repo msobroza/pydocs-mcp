@@ -235,9 +235,6 @@ def test_service_is_frozen_slotted_dataclass() -> None:
     assert not hasattr(svc, "__dict__")
 
 
-# ── Sub-PR #6 additions ───────────────────────────────────────────────────
-
-
 def test_filter_field_scope_parity() -> None:
     """AC #25 — SCOPE key must match across the two field enums so a single
     SearchQuery.pre_filter works in the unified pipeline."""

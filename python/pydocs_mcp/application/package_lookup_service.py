@@ -71,4 +71,4 @@ class PackageLookupService:
             },
             limit=1,
         )
-        return len(chunks) > 0
+        return bool(chunks)
