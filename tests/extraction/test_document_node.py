@@ -117,8 +117,7 @@ def test_document_node_qualified_name_first_class_field():
     # Must NOT live in extra_metadata.
     assert "qualified_name" not in node.extra_metadata
     # Must be a declared dataclass field (slots guarantee this too, but pin it).
-    field_names = {f.name for f in node.__dataclass_fields__.values()}
-    assert "qualified_name" in field_names
+    assert "qualified_name" in set(node.__dataclass_fields__)
 
 
 def test_document_node_nested_children_immutable():
@@ -167,7 +166,14 @@ def test_document_node_nested_children_immutable():
 
 
 def test_document_node_extra_metadata_optional_mapping():
-    """Passing a dict for extra_metadata is stored and typed as Mapping."""
+    """Passing a dict for extra_metadata is stored and typed as Mapping.
+
+    The field is annotated ``Mapping[str, Any]`` (read-only protocol) — a
+    plain ``dict`` satisfies it and is stored as-is. Pin both the Mapping
+    shape and the round-trip identity so future refactors (e.g., wrapping
+    in ``MappingProxyType`` at construction time) don't silently break
+    callers relying on either aspect.
+    """
     meta = {"inherits_from": ["Base"], "docstring": "doc."}
     node = _make_node(
         kind=NodeKind.CLASS,
@@ -178,3 +184,6 @@ def test_document_node_extra_metadata_optional_mapping():
     assert isinstance(node.extra_metadata, Mapping)
     assert node.extra_metadata["inherits_from"] == ["Base"]
     assert node.extra_metadata["docstring"] == "doc."
+    # Round-trip: value is stored unchanged (equality, not identity — a
+    # future wrapping pass may still satisfy the equality contract).
+    assert dict(node.extra_metadata) == meta

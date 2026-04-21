@@ -68,4 +68,6 @@ class DocumentNode:
     summary:         str                 = ""
     extra_metadata:  Mapping[str, Any]   = field(default_factory=dict)
     parent_id:       str | None          = None
-    children:        tuple["DocumentNode", ...] = ()
+    # Self-reference is stringified by `from __future__ import annotations`;
+    # no explicit quotes needed.
+    children:        tuple[DocumentNode, ...] = ()
