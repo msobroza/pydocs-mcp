@@ -16,6 +16,7 @@ from pydocs_mcp.storage.filters import (
 )
 from pydocs_mcp.storage.protocols import (
     ChunkStore,
+    DocumentTreeStore,
     FilterAdapter,
     HybridSearchable,
     ModuleMemberStore,
@@ -26,6 +27,7 @@ from pydocs_mcp.storage.protocols import (
 )
 from pydocs_mcp.storage.sqlite import (
     SqliteChunkRepository,
+    SqliteDocumentTreeStore,
     SqliteFilterAdapter,
     SqliteModuleMemberRepository,
     SqlitePackageRepository,
@@ -34,11 +36,12 @@ from pydocs_mcp.storage.sqlite import (
 )
 
 __all__ = [
-    "All", "Any_", "ChunkStore", "FieldEq", "FieldIn", "FieldLike", "FieldSpec",
-    "Filter", "FilterAdapter", "FilterFormat", "HybridSearchable",
-    "MetadataFilterFormat", "MetadataSchema", "ModuleMemberStore",
-    "MultiFieldFormat", "Not", "PackageStore", "SqliteChunkRepository",
-    "SqliteFilterAdapter", "SqliteModuleMemberRepository",
-    "SqlitePackageRepository", "SqliteUnitOfWork", "SqliteVectorStore",
+    "All", "Any_", "ChunkStore", "DocumentTreeStore", "FieldEq", "FieldIn",
+    "FieldLike", "FieldSpec", "Filter", "FilterAdapter", "FilterFormat",
+    "HybridSearchable", "MetadataFilterFormat", "MetadataSchema",
+    "ModuleMemberStore", "MultiFieldFormat", "Not", "PackageStore",
+    "SqliteChunkRepository", "SqliteDocumentTreeStore", "SqliteFilterAdapter",
+    "SqliteModuleMemberRepository", "SqlitePackageRepository",
+    "SqliteUnitOfWork", "SqliteVectorStore",
     "TextSearchable", "UnitOfWork", "VectorSearchable", "format_registry",
 ]
