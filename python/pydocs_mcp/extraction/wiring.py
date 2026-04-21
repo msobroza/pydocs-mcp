@@ -16,12 +16,17 @@ first stage lookup.
 """
 from __future__ import annotations
 
+import importlib.resources
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
 
-# Side-effect import — registers the 6 ingestion stages via decorators.
+# Side-effect import — registers the 6 ingestion stages via decorators. Python's
+# sys.modules cache means re-entering this module's own package during the
+# partial load of ``extraction/__init__.py`` is safe: the submodule finishes
+# loading before control returns, and the registry is populated.
 from pydocs_mcp.extraction import stages as _stages  # noqa: F401
 from pydocs_mcp.extraction.pipeline import IngestionPipeline
 from pydocs_mcp.extraction.serialization import stage_registry
@@ -30,7 +35,17 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
 
-_DEFAULT_INGESTION_PRESET = Path(__file__).resolve().parent.parent / "presets" / "ingestion.yaml"
+@cache
+def _default_ingestion_preset() -> Path:
+    """Resolve the bundled ``presets/ingestion.yaml`` via ``importlib.resources``.
+
+    Using ``importlib.resources`` (rather than ``__file__`` arithmetic) keeps
+    the lookup correct under zipimport / installed wheels where
+    ``Path(__file__).parent`` may not map cleanly to on-disk layout. Cached
+    for the same reason ``retrieval.config._shipped_default_config_path``
+    caches — the shipped presets directory never changes at runtime.
+    """
+    return Path(str(importlib.resources.files("pydocs_mcp.presets").joinpath("ingestion.yaml")))
 
 
 def load_ingestion_pipeline(
@@ -66,7 +81,7 @@ def build_ingestion_pipeline(cfg: "AppConfig") -> IngestionPipeline:
     ``_shipped_presets_dir`` and always passes the allowlist.
     """
     override = cfg.extraction.ingestion.pipeline_path
-    path = override if override is not None else _DEFAULT_INGESTION_PRESET
+    path = override if override is not None else _default_ingestion_preset()
     return load_ingestion_pipeline(Path(path), cfg)
 
 

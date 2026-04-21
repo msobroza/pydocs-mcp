@@ -47,8 +47,11 @@ from pydocs_mcp.retrieval.config import AppConfig
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-_PRESETS_DIR = Path(__file__).resolve().parent.parent.parent / "python" / "pydocs_mcp" / "presets"
-_BUNDLED_INGESTION = _PRESETS_DIR / "ingestion.yaml"
+import importlib.resources
+
+_BUNDLED_INGESTION = Path(str(
+    importlib.resources.files("pydocs_mcp.presets").joinpath("ingestion.yaml"),
+))
 
 
 def _app_config() -> AppConfig:
@@ -85,17 +88,21 @@ def test_load_ingestion_pipeline_rejects_arbitrary_path(tmp_path: Path) -> None:
         load_ingestion_pipeline(stray, cfg)
 
 
-def test_load_ingestion_pipeline_missing_stages_key_raises(tmp_path: Path, monkeypatch) -> None:
-    """A YAML without a ``stages`` key is a malformed pipeline spec."""
-    # Place the bad YAML INSIDE the shipped presets dir so the allowlist
-    # accepts it and we genuinely hit the stages-key validation.
-    bad = _PRESETS_DIR / "__test_bad_ingestion.yaml"
+def test_load_ingestion_pipeline_missing_stages_key_raises(tmp_path: Path) -> None:
+    """A YAML without a ``stages`` key is a malformed pipeline spec.
+
+    We put both the user config file and the bad pipeline YAML in ``tmp_path``
+    so the allowlist accepts the pipeline path (its parent is the user-config
+    directory) and we genuinely reach the stages-key validation instead of
+    tripping the allowlist first.
+    """
+    user_cfg = tmp_path / "pydocs-mcp.yaml"
+    user_cfg.write_text("log_level: INFO\n", encoding="utf-8")
+    bad = tmp_path / "bad-ingestion.yaml"
     bad.write_text("name: bad\n", encoding="utf-8")
-    try:
-        with pytest.raises(ValueError, match="invalid ingestion pipeline YAML"):
-            load_ingestion_pipeline(bad, _app_config())
-    finally:
-        bad.unlink()
+    cfg = AppConfig.load(explicit_path=user_cfg)
+    with pytest.raises(ValueError, match="invalid ingestion pipeline YAML"):
+        load_ingestion_pipeline(bad, cfg)
 
 
 # ── build_ingestion_pipeline ───────────────────────────────────────────────
@@ -109,24 +116,21 @@ def test_build_ingestion_pipeline_uses_bundled_preset_when_config_none() -> None
     assert len(pipeline.stages) == 6
 
 
-def test_build_ingestion_pipeline_uses_custom_path_when_provided() -> None:
-    """Custom path inside the allowlist (shipped presets dir) is honoured."""
-    cfg = _app_config()
-    # Must live inside an allowed root — the shipped presets dir is the
-    # simplest option that doesn't need a user-config file.
-    custom = _PRESETS_DIR / "__test_custom_ingestion.yaml"
+def test_build_ingestion_pipeline_uses_custom_path_when_provided(tmp_path: Path) -> None:
+    """Custom path next to the user config (allowlisted directory) is honoured."""
+    user_cfg = tmp_path / "pydocs-mcp.yaml"
+    user_cfg.write_text("log_level: INFO\n", encoding="utf-8")
+    custom = tmp_path / "custom-ingestion.yaml"
     custom.write_text(
         "name: custom\nstages:\n  - {type: file_discovery}\n  - {type: file_read}\n",
         encoding="utf-8",
     )
-    try:
-        cfg.extraction.ingestion.pipeline_path = custom
-        pipeline = build_ingestion_pipeline(cfg)
-        assert len(pipeline.stages) == 2
-        assert isinstance(pipeline.stages[0], FileDiscoveryStage)
-        assert isinstance(pipeline.stages[1], FileReadStage)
-    finally:
-        custom.unlink()
+    cfg = AppConfig.load(explicit_path=user_cfg)
+    cfg.extraction.ingestion.pipeline_path = custom
+    pipeline = build_ingestion_pipeline(cfg)
+    assert len(pipeline.stages) == 2
+    assert isinstance(pipeline.stages[0], FileDiscoveryStage)
+    assert isinstance(pipeline.stages[1], FileReadStage)
 
 
 # ── PipelineChunkExtractor ─────────────────────────────────────────────────
