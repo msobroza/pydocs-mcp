@@ -21,6 +21,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.protocols import (
@@ -28,6 +29,9 @@ from pydocs_mcp.application.protocols import (
     DependencyResolver,
     MemberExtractor,
 )
+
+if TYPE_CHECKING:
+    from pydocs_mcp.models import IndexingStats
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -60,7 +64,7 @@ class IndexProjectService:
         force: bool = False,
         include_project_source: bool = True,
         workers: int = 1,
-    ) -> "IndexingStats":
+    ) -> IndexingStats:
         """Index a whole project + its declared dependencies (spec §5.3).
 
         Returns a fresh :class:`IndexingStats` so callers can render a
@@ -102,7 +106,7 @@ class IndexProjectService:
         return stats
 
     async def _index_project_source(
-        self, project_dir: Path, stats: "IndexingStats",
+        self, project_dir: Path, stats: IndexingStats,
     ) -> None:
         """Extract + (maybe) reindex the virtual ``__project__`` package.
 
@@ -128,7 +132,7 @@ class IndexProjectService:
         )
 
     async def _index_one_dependency(
-        self, dep_name: str, stats: "IndexingStats",
+        self, dep_name: str, stats: IndexingStats,
     ) -> None:
         """Extract + reindex a single dependency, swallowing its failure.
 
