@@ -21,6 +21,14 @@ from pydocs_mcp.application.index_project_service import (
     MemberExtractorAdapter,
 )
 from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.application.lookup_service import LookupService
+from pydocs_mcp.application.mcp_errors import (
+    InvalidArgumentError,
+    MCPToolError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
+from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
 from pydocs_mcp.application.module_introspection_service import (
     ModuleIntrospectionService,
 )
@@ -40,10 +48,17 @@ __all__ = [
     "DependencyResolverAdapter",
     "IndexProjectService",
     "IndexingService",
+    "InvalidArgumentError",
+    "LookupInput",
+    "LookupService",
+    "MCPToolError",
     "MemberExtractor",
     "MemberExtractorAdapter",
     "ModuleIntrospectionService",
+    "NotFoundError",
     "PackageLookupService",
     "SearchApiService",
     "SearchDocsService",
+    "SearchInput",
+    "ServiceUnavailableError",
 ]

@@ -33,3 +33,21 @@ def test_exceptions_raise_and_catch_as_base() -> None:
         raise NotFoundError("missing")
     with pytest.raises(MCPToolError):
         raise ServiceUnavailableError("backend down")
+
+
+def test_new_application_exports_are_importable() -> None:
+    """Sub-PR #6 §10 + AC #28 — application package re-exports everything
+    ``server.py`` and the CLI need from one import path."""
+    from pydocs_mcp.application import (
+        InvalidArgumentError,
+        LookupInput,
+        LookupService,
+        MCPToolError,
+        NotFoundError,
+        SearchInput,
+        ServiceUnavailableError,
+    )
+    assert all([
+        InvalidArgumentError, LookupInput, LookupService, MCPToolError,
+        NotFoundError, SearchInput, ServiceUnavailableError,
+    ])
