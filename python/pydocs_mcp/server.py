@@ -184,6 +184,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         SearchApiService,
         SearchDocsService,
     )
+    from pydocs_mcp.extraction import build_package_tree
     from pydocs_mcp.retrieval.config import (
         AppConfig,
         build_chunk_pipeline_from_config,
@@ -335,6 +336,33 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         except Exception:  # noqa: BLE001 -- MCP boundary: return user-readable error
             log.warning("get_document_tree failed", exc_info=True)
             return f"Error retrieving tree for '{package}/{module}'."
+
+    @mcp.tool()
+    async def get_package_tree(package: str) -> str:
+        """Return the package arborescence as JSON (spec §13.2).
+
+        Walks every MODULE :class:`DocumentNode` stored for ``package`` and
+        folds them into a PACKAGE root via :func:`build_package_tree` — dotted
+        module names become a path trie with synthetic SUBPACKAGE nodes at
+        each intermediate level.
+
+        Args:
+            package: Package name (e.g. 'requests', '__project__').
+
+        Returns:
+            Indented JSON of the PACKAGE root with SUBPACKAGE/MODULE
+            children, or a user-readable message if no trees are indexed
+            for this package.
+        """
+        try:
+            modules = await document_tree_svc.list_package_modules(package)
+            if not modules:
+                return f"No indexed trees for package '{package}'."
+            root = build_package_tree(package, modules)
+            return _serialize_tree_to_json(root)
+        except Exception:  # noqa: BLE001 -- MCP boundary: return user-readable error
+            log.warning("get_package_tree failed", exc_info=True)
+            return f"Error retrieving package tree for '{package}'."
 
     log.info("MCP ready (db: %s)", db_path)
     mcp.run(transport="stdio")
