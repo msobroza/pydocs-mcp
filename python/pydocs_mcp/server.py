@@ -25,6 +25,7 @@ from pydocs_mcp.application import (
     MCPToolError,
     SearchInput,
     ServiceUnavailableError,
+    TreeService,
 )
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
@@ -105,6 +106,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     from pydocs_mcp.retrieval.wiring import build_retrieval_context
     from pydocs_mcp.storage.sqlite import (
         SqliteChunkRepository,
+        SqliteDocumentTreeStore,
         SqlitePackageRepository,
     )
 
@@ -125,13 +127,15 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
     search_api_svc = ApiSearch(member_pipeline=member_pipeline)
 
-    # Optional services — TreeService (sub-PR #5) and ReferenceService
-    # (sub-PR #5b) are intentionally left at None here; instantiation lands
-    # in a follow-up commit that wires SqliteDocumentTreeStore + the YAML
-    # config flag. LookupService surfaces absence as ServiceUnavailableError
-    # to MCP clients rather than failing server startup.
-    tree_svc = None
-    ref_svc = None
+    # TreeService (sub-PR #5) — wired from the same SqliteDocumentTreeStore
+    # that IndexingService writes through, so multi-segment ``lookup`` targets
+    # resolve against persisted DocumentNode trees. ReferenceService (sub-PR
+    # #5b) ships later; LookupService surfaces its absence as
+    # ServiceUnavailableError to MCP clients instead of failing startup.
+    tree_svc = TreeService(
+        tree_store=SqliteDocumentTreeStore(provider=provider),
+    )
+    ref_svc = None  # reserved for sub-PR #5b
 
     lookup_svc = LookupService(
         package_lookup=package_lookup,

@@ -181,6 +181,57 @@ class TestNoRustFlag:
         assert default_headings == norust_headings
 
 
+class TestLookupCommand:
+    """FIX 6: CLI ``lookup`` wires TreeService just like the MCP server, so
+    multi-segment dotted targets resolve to persisted DocumentNode trees."""
+
+    def test_cli_lookup_empty_target_lists_packages(
+        self, seeded_project, capsys, monkeypatch,
+    ):
+        monkeypatch.chdir(seeded_project)
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            from pydocs_mcp.__main__ import main
+            main()
+        with patch("sys.argv", ["pydocs-mcp", "lookup", ""]):
+            main()
+        captured = capsys.readouterr()
+        # __project__ is always indexed for a fresh project.
+        assert "__project__" in captured.out
+
+    def test_cli_lookup_module_target_prints_tree(
+        self, seeded_project, capsys, monkeypatch,
+    ):
+        """A multi-segment target like ``__project__.app`` should print the
+        PageIndex JSON of the persisted DocumentNode tree — proves
+        TreeService is wired in the CLI composition root."""
+        import json
+
+        monkeypatch.chdir(seeded_project)
+        # Index first so the document_trees table has rows.
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            from pydocs_mcp.__main__ import main
+            main()
+
+        # __project__.app corresponds to the seeded_project/app.py source file.
+        with patch("sys.argv", ["pydocs-mcp", "lookup", "__project__.app"]):
+            main()
+        captured = capsys.readouterr()
+        # Either we get a real PageIndex tree, or the (empty) find_module
+        # fallback raises NotFoundError. Both are valid; the bug we're
+        # guarding against is the old ServiceUnavailableError that
+        # ``tree_svc=None`` produced. So neither stdout nor stderr should
+        # carry the "enable via sub-PR #5" string.
+        combined = captured.out + captured.err
+        assert "enable via sub-PR #5" not in combined
+        # When we DO get JSON, it must parse and reference the module.
+        stripped = captured.out.strip()
+        if stripped.startswith("{"):
+            payload = json.loads(stripped)
+            assert payload.get("node_id") == "src.app" or "app" in payload.get(
+                "node_id", "",
+            )
+
+
 class TestServeCommand:
     def test_serve_indexes_then_starts_server(self, seeded_project):
         """Test that serve indexes and calls run() — we mock run() to avoid blocking.

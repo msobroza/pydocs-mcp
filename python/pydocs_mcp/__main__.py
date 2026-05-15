@@ -270,11 +270,13 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
             LookupInput,
             LookupService,
             PackageLookup,
+            TreeService,
         )
         from pydocs_mcp.retrieval.config import AppConfig
         from pydocs_mcp.retrieval.wiring import build_retrieval_context
         from pydocs_mcp.storage.sqlite import (
             SqliteChunkRepository,
+            SqliteDocumentTreeStore,
             SqlitePackageRepository,
         )
 
@@ -287,7 +289,16 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
             chunk_store=SqliteChunkRepository(provider=provider),
             module_member_store=context.module_member_store,
         )
-        svc = LookupService(package_lookup=package_lookup)  # tree/ref svc optional
+        # Wire TreeService against the same SqliteDocumentTreeStore that
+        # IndexingService writes to — multi-segment ``lookup`` targets
+        # (e.g. ``fastapi.routing``) resolve to persisted DocumentNode trees.
+        tree_svc = TreeService(
+            tree_store=SqliteDocumentTreeStore(provider=provider),
+        )
+        svc = LookupService(
+            package_lookup=package_lookup,
+            tree_svc=tree_svc,
+        )
 
         payload = LookupInput(target=args.target, show=args.show)
         print(asyncio.run(svc.lookup(payload)))
