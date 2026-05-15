@@ -17,6 +17,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.application import (
     LookupInput,
@@ -32,6 +33,12 @@ from pydocs_mcp.models import (
     SearchResponse,
     SearchScope,
 )
+
+if TYPE_CHECKING:
+    # `_do_search` is a module-level function but the services it takes are
+    # constructed inside ``run()``. Import here for the type annotations
+    # without paying the cost at server start.
+    from pydocs_mcp.application import ApiSearch, DocsSearch
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -90,7 +97,6 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         DocsSearch,
         PackageLookup,
     )
-    from pydocs_mcp.extraction import build_package_tree
     from pydocs_mcp.retrieval.config import (
         AppConfig,
         build_chunk_pipeline_from_config,
@@ -119,20 +125,13 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
     search_api_svc = ApiSearch(member_pipeline=member_pipeline)
 
-    # Optional services — wired if sub-PR #5 / #5b have landed. Absence is
-    # surfaced to the user as ServiceUnavailableError from LookupService, not
-    # as an import error at server start.
+    # Optional services — TreeService (sub-PR #5) and ReferenceService
+    # (sub-PR #5b) are intentionally left at None here; instantiation lands
+    # in a follow-up commit that wires SqliteDocumentTreeStore + the YAML
+    # config flag. LookupService surfaces absence as ServiceUnavailableError
+    # to MCP clients rather than failing server startup.
     tree_svc = None
     ref_svc = None
-    try:
-        from pydocs_mcp.application import TreeService  # type: ignore[attr-defined]
-        # Instantiation deferred until sub-PR #5 lands its tree_store wiring.
-    except ImportError:
-        pass
-    try:
-        from pydocs_mcp.application import ReferenceService  # type: ignore[attr-defined]
-    except ImportError:
-        pass
 
     lookup_svc = LookupService(
         package_lookup=package_lookup,
