@@ -14,7 +14,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, formatter_registry
 
 @formatter_registry.register("chunk_markdown")
 @dataclass(frozen=True, slots=True)
-class ChunkMarkdownFormatter:
+class ChunkFormatter:
     """Renders a Chunk as `## {title}\n{text}` (single newline — AC #21/#29 byte parity)."""
 
     name: str = "chunk_markdown"
@@ -33,13 +33,13 @@ class ChunkMarkdownFormatter:
         return {"type": "chunk_markdown"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ChunkMarkdownFormatter":
+    def from_dict(cls, data: dict, context: BuildContext) -> "ChunkFormatter":
         return cls()
 
 
 @formatter_registry.register("member_markdown")
 @dataclass(frozen=True, slots=True)
-class ModuleMemberMarkdownFormatter:
+class ModuleMemberFormatter:
     """Renders a ModuleMember as `**[{package}] {module}.{name}{signature}** ({kind})\n{docstring}`."""
 
     name: str = "member_markdown"
@@ -61,5 +61,5 @@ class ModuleMemberMarkdownFormatter:
         return {"type": "member_markdown"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ModuleMemberMarkdownFormatter":
+    def from_dict(cls, data: dict, context: BuildContext) -> "ModuleMemberFormatter":
         return cls()
