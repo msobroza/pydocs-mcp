@@ -404,7 +404,7 @@ def test_row_to_chunk_raises_on_missing_column():
 
 # ---------------------------------------------------------------------------
 # PackageDoc (spec §5.1) — frozen value object carrying the 3 query results
-# consumed by PackageLookupService.get_package_doc in sub-PR #4.
+# consumed by PackageLookup.get_package_doc in sub-PR #4.
 # ---------------------------------------------------------------------------
 
 def _sample_package() -> Package:

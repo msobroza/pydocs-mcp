@@ -219,7 +219,7 @@ class SearchResponse:
 @dataclass(frozen=True, slots=True)
 class PackageDoc:
     """Groups the three query results for get_package_doc one-shot retrieval
-    (spec §5.1). Consumed by :class:`PackageLookupService` in the application
+    (spec §5.1). Consumed by :class:`PackageLookup` in the application
     layer; keeping chunks/members as tuples makes the whole value object
     hashable-ish and safe to pass across async boundaries."""
     kind: ClassVar[str] = "package_doc"

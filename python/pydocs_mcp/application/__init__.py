@@ -30,7 +30,7 @@ from pydocs_mcp.application.mcp_errors import (
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
 from pydocs_mcp.application.module_inspector import ModuleInspector
-from pydocs_mcp.application.package_lookup_service import PackageLookupService
+from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.protocols import (
     ChunkExtractor,
     DependencyResolver,
@@ -52,7 +52,7 @@ __all__ = [
     "MemberExtractor",
     "ModuleInspector",
     "NotFoundError",
-    "PackageLookupService",
+    "PackageLookup",
     "SearchApiService",
     "SearchDocsService",
     "SearchInput",

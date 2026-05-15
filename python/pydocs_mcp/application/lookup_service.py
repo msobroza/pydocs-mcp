@@ -2,7 +2,7 @@
 
 Routes a single ``LookupInput.target`` string (empty / package /
 package.module / package.module.symbol) to the right backing service:
-``PackageLookupService`` for package metadata, ``DocumentTreeService``
+``PackageLookup`` for package metadata, ``DocumentTreeService``
 (optional, sub-PR #5) for file structure, ``ReferenceService``
 (optional, sub-PR #5b) for the call graph.
 
@@ -27,7 +27,7 @@ from pydocs_mcp.application.mcp_errors import (
     ServiceUnavailableError,
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput
-from pydocs_mcp.application.package_lookup_service import PackageLookupService
+from pydocs_mcp.application.package_lookup import PackageLookup
 
 if TYPE_CHECKING:
     # Avoid hard imports — these services may be absent pre-#5 / pre-#5b.
@@ -43,7 +43,7 @@ class LookupService:
     See spec §6.2 for the degraded-mode policy.
     """
 
-    package_lookup: PackageLookupService
+    package_lookup: PackageLookup
     tree_svc: "DocumentTreeService | None" = None
     ref_svc: "ReferenceService | None" = None
 
@@ -142,7 +142,7 @@ class LookupService:
     ) -> str | None:
         """Walk longest-prefix-first; return the longest dotted path that is
         an indexed module. Prefers ``tree_svc.get_tree`` when wired; falls
-        back to ``PackageLookupService.find_module`` otherwise (spec §6.4).
+        back to ``PackageLookup.find_module`` otherwise (spec §6.4).
         """
         for i in range(len(parts), 0, -1):
             candidate = ".".join(parts[:i])

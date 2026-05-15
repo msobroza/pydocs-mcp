@@ -1,4 +1,4 @@
-"""PackageLookupService — list + get_package_doc via stores (spec §5.1)."""
+"""PackageLookup — list + get_package_doc via stores (spec §5.1)."""
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +18,7 @@ from pydocs_mcp.storage.protocols import (
 
 
 @dataclass(frozen=True, slots=True)
-class PackageLookupService:
+class PackageLookup:
     """Composes the three domain stores into a read-only package view.
 
     ``list_packages`` returns up to 200 packages — enough to populate an MCP

@@ -28,7 +28,7 @@ import pytest
 
 from pydocs_mcp.application import (
     ModuleInspector,
-    PackageLookupService,
+    PackageLookup,
     SearchApiService,
     SearchDocsService,
 )
@@ -81,7 +81,7 @@ def wired_services(integration_conn):
     member_pipeline = build_member_pipeline_from_config(config, context)
 
     return {
-        "package_lookup": PackageLookupService(
+        "package_lookup": PackageLookup(
             package_store=package_store,
             chunk_store=chunk_store,
             module_member_store=member_store,
@@ -94,7 +94,7 @@ def wired_services(integration_conn):
 
 @pytest.mark.asyncio
 async def test_package_lookup_list_returns_real_packages(wired_services):
-    """PackageLookupService.list_packages returns the seeded fixture packages."""
+    """PackageLookup.list_packages returns the seeded fixture packages."""
     packages = await wired_services["package_lookup"].list_packages()
 
     assert len(packages) >= 1

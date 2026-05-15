@@ -269,7 +269,7 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
         from pydocs_mcp.application import (
             LookupInput,
             LookupService,
-            PackageLookupService,
+            PackageLookup,
         )
         from pydocs_mcp.retrieval.config import AppConfig
         from pydocs_mcp.retrieval.wiring import build_retrieval_context
@@ -282,7 +282,7 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
         context = build_retrieval_context(db_path, config)
         provider = context.connection_provider
-        package_lookup = PackageLookupService(
+        package_lookup = PackageLookup(
             package_store=SqlitePackageRepository(provider=provider),
             chunk_store=SqliteChunkRepository(provider=provider),
             module_member_store=context.module_member_store,

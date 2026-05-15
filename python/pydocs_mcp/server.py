@@ -86,7 +86,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         sys.exit(1)
 
     from pydocs_mcp.application import (
-        PackageLookupService,
+        PackageLookup,
         SearchApiService,
         SearchDocsService,
     )
@@ -111,7 +111,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 
-    package_lookup = PackageLookupService(
+    package_lookup = PackageLookup(
         package_store=package_store,
         chunk_store=chunk_store,
         module_member_store=member_store,

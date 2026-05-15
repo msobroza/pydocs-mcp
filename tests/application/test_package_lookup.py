@@ -1,4 +1,4 @@
-"""Tests for PackageLookupService — list_packages + get_package_doc (spec §5.1).
+"""Tests for PackageLookup — list_packages + get_package_doc (spec §5.1).
 
 Uses in-memory fakes local to this file (per Task 5 plan; shared conftest
 fixtures land in Task 14). The fakes rely on structural duck typing — the
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pydocs_mcp.application.package_lookup_service import PackageLookupService
+from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -141,11 +141,11 @@ def _service(
     packages: dict[str, Package] | None = None,
     chunks: list[Chunk] | None = None,
     members: list[ModuleMember] | None = None,
-) -> tuple[PackageLookupService, FakePackageStore, FakeChunkStore, FakeModuleMemberStore]:
+) -> tuple[PackageLookup, FakePackageStore, FakeChunkStore, FakeModuleMemberStore]:
     pkg_store = FakePackageStore(packages=dict(packages or {}))
     chunk_store = FakeChunkStore(chunks=list(chunks or []))
     member_store = FakeModuleMemberStore(members=list(members or []))
-    svc = PackageLookupService(
+    svc = PackageLookup(
         package_store=pkg_store,
         chunk_store=chunk_store,
         module_member_store=member_store,
@@ -315,7 +315,7 @@ async def test_find_module_end_to_end_against_real_sqlite(tmp_path) -> None:
         ]
     )
 
-    svc = PackageLookupService(
+    svc = PackageLookup(
         package_store=SqlitePackageRepository(provider=provider),
         chunk_store=chunk_store,
         module_member_store=SqliteModuleMemberRepository(provider=provider),

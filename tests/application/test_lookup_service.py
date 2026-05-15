@@ -112,7 +112,7 @@ async def test_longest_indexed_module_prefers_tree_when_wired(
 async def test_longest_indexed_module_falls_back_to_find_module(
     package_lookup_mock: MagicMock,
 ) -> None:
-    """When tree_svc is None, fall back to PackageLookupService.find_module."""
+    """When tree_svc is None, fall back to PackageLookup.find_module."""
 
     async def _find(package: str, module: str) -> bool:
         return module == "fastapi.routing"
