@@ -27,10 +27,10 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.application import (
+    DocsSearch,
     ModuleInspector,
     PackageLookup,
     SearchApiService,
-    SearchDocsService,
 )
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import (
@@ -86,7 +86,7 @@ def wired_services(integration_conn):
             chunk_store=chunk_store,
             module_member_store=member_store,
         ),
-        "search_docs": SearchDocsService(chunk_pipeline=chunk_pipeline),
+        "search_docs": DocsSearch(chunk_pipeline=chunk_pipeline),
         "search_api": SearchApiService(member_pipeline=member_pipeline),
         "inspect": ModuleInspector(package_store=package_store),
     }
@@ -126,7 +126,7 @@ async def test_package_lookup_get_unknown_returns_none(wired_services):
 
 @pytest.mark.asyncio
 async def test_search_docs_returns_chunklist(wired_services):
-    """SearchDocsService.search drives the real pipeline and returns ChunkList."""
+    """DocsSearch.search drives the real pipeline and returns ChunkList."""
     response = await wired_services["search_docs"].search(
         SearchQuery(terms="pipeline"),
     )

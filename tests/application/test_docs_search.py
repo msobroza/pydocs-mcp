@@ -1,4 +1,4 @@
-"""Tests for SearchDocsService — thin wrapper around chunk_pipeline.run (spec §5.1).
+"""Tests for DocsSearch — thin wrapper around chunk_pipeline.run (spec §5.1).
 
 These tests use a minimal fake pipeline that structurally mimics
 CodeRetrieverPipeline's .run() coroutine. No SQLite, no real stages — the
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from pydocs_mcp.application.search_docs_service import SearchDocsService
+from pydocs_mcp.application.docs_search import DocsSearch
 from pydocs_mcp.models import Chunk, ChunkList, SearchQuery, SearchResponse
 from pydocs_mcp.retrieval.pipeline import PipelineState
 
@@ -56,7 +56,7 @@ async def test_search_returns_response_with_chunk_list() -> None:
         )
     )
     state = PipelineState(query=query, result=chunks, duration_ms=4.2)
-    service = SearchDocsService(chunk_pipeline=FakeChunkPipeline(state=state))
+    service = DocsSearch(chunk_pipeline=FakeChunkPipeline(state=state))
 
     response = await service.search(query)
 
@@ -70,7 +70,7 @@ async def test_search_returns_response_with_chunk_list() -> None:
 async def test_search_empty_result_defaults_to_empty_chunk_list() -> None:
     query = SearchQuery(terms="no match")
     state = PipelineState(query=query, result=None, duration_ms=1.0)
-    service = SearchDocsService(chunk_pipeline=FakeChunkPipeline(state=state))
+    service = DocsSearch(chunk_pipeline=FakeChunkPipeline(state=state))
 
     response = await service.search(query)
 
@@ -84,7 +84,7 @@ async def test_search_threads_duration_ms_from_state() -> None:
     query = SearchQuery(terms="timing")
     chunks = ChunkList(items=(Chunk(text="hit", id=1),))
     state = PipelineState(query=query, result=chunks, duration_ms=12.5)
-    service = SearchDocsService(chunk_pipeline=FakeChunkPipeline(state=state))
+    service = DocsSearch(chunk_pipeline=FakeChunkPipeline(state=state))
 
     response = await service.search(query)
 
@@ -94,7 +94,7 @@ async def test_search_threads_duration_ms_from_state() -> None:
 @pytest.mark.asyncio
 async def test_search_propagates_pipeline_exception() -> None:
     query = SearchQuery(terms="boom")
-    service = SearchDocsService(
+    service = DocsSearch(
         chunk_pipeline=RaisingPipeline(exc=RuntimeError("pipeline failed"))
     )
 
@@ -103,7 +103,7 @@ async def test_search_propagates_pipeline_exception() -> None:
 
 
 def test_service_is_frozen_slotted_dataclass() -> None:
-    service = SearchDocsService(
+    service = DocsSearch(
         chunk_pipeline=FakeChunkPipeline(
             state=PipelineState(query=SearchQuery(terms="x"))
         )

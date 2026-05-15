@@ -15,6 +15,7 @@ byte-level output but are imported directly by their consumers.
 """
 from __future__ import annotations
 
+from pydocs_mcp.application.docs_search import DocsSearch
 from pydocs_mcp.application.document_tree_service import (
     DocumentTreeService,
     NotFoundError,
@@ -37,11 +38,11 @@ from pydocs_mcp.application.protocols import (
     MemberExtractor,
 )
 from pydocs_mcp.application.search_api_service import SearchApiService
-from pydocs_mcp.application.search_docs_service import SearchDocsService
 
 __all__ = [
     "ChunkExtractor",
     "DependencyResolver",
+    "DocsSearch",
     "DocumentTreeService",
     "IndexingService",
     "InvalidArgumentError",
@@ -54,7 +55,6 @@ __all__ = [
     "PackageLookup",
     "ProjectIndexer",
     "SearchApiService",
-    "SearchDocsService",
     "SearchInput",
     "ServiceUnavailableError",
 ]

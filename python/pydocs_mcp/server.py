@@ -86,9 +86,9 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         sys.exit(1)
 
     from pydocs_mcp.application import (
+        DocsSearch,
         PackageLookup,
         SearchApiService,
-        SearchDocsService,
     )
     from pydocs_mcp.extraction import build_package_tree
     from pydocs_mcp.retrieval.config import (
@@ -116,7 +116,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         chunk_store=chunk_store,
         module_member_store=member_store,
     )
-    search_docs_svc = SearchDocsService(chunk_pipeline=chunk_pipeline)
+    search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
     search_api_svc = SearchApiService(member_pipeline=member_pipeline)
 
     # Optional services — wired if sub-PR #5 / #5b have landed. Absence is
@@ -229,7 +229,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
 
 async def _do_search(
     payload: SearchInput,
-    search_docs_svc: "SearchDocsService",
+    search_docs_svc: "DocsSearch",
     search_api_svc: "SearchApiService",
 ) -> str:
     """Dispatch search by kind; returns rendered markdown."""

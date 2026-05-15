@@ -4,7 +4,7 @@ Each subcommand is a thin wrapper over the application-layer services
 (spec §5.6, AC #9, #16):
 
 * ``serve`` / ``index`` route through :class:`ProjectIndexer`.
-* ``query`` / ``api`` route through :class:`SearchDocsService` /
+* ``query`` / ``api`` route through :class:`DocsSearch` /
   :class:`SearchApiService`, rendering the top composite chunk's text.
 
 Every ``_cmd_*`` wraps its body in ``try / except Exception`` so an
@@ -227,8 +227,8 @@ def _cmd_search(args: argparse.Namespace) -> int:
     same rendering. kind='any' runs chunks and members in parallel (§8)."""
     try:
         from pydocs_mcp.application import (
+            DocsSearch,
             SearchApiService,
-            SearchDocsService,
             SearchInput,
         )
         from pydocs_mcp.retrieval.config import (
@@ -242,7 +242,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
         context = build_retrieval_context(db_path, config)
-        docs_svc = SearchDocsService(
+        docs_svc = DocsSearch(
             chunk_pipeline=build_chunk_pipeline_from_config(config, context),
         )
         api_svc = SearchApiService(

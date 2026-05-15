@@ -11,7 +11,7 @@ from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
 class SearchApiService:
     """Runs the module-member retrieval pipeline and wraps its state as a SearchResponse.
 
-    Mirrors :class:`SearchDocsService` but for the module-member pipeline: the
+    Mirrors :class:`DocsSearch` but for the module-member pipeline: the
     class is deliberately thin and substitutes an empty ``ModuleMemberList``
     when the pipeline returns no result.
     """
