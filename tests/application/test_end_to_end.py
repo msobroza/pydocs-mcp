@@ -27,10 +27,10 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.application import (
+    ApiSearch,
     DocsSearch,
     ModuleInspector,
     PackageLookup,
-    SearchApiService,
 )
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import (
@@ -87,7 +87,7 @@ def wired_services(integration_conn):
             module_member_store=member_store,
         ),
         "search_docs": DocsSearch(chunk_pipeline=chunk_pipeline),
-        "search_api": SearchApiService(member_pipeline=member_pipeline),
+        "search_api": ApiSearch(member_pipeline=member_pipeline),
         "inspect": ModuleInspector(package_store=package_store),
     }
 
@@ -140,13 +140,13 @@ async def test_search_docs_returns_chunklist(wired_services):
 
 @pytest.mark.asyncio
 async def test_search_api_returns_composite_response(wired_services):
-    """SearchApiService.search drives the real member pipeline.
+    """ApiSearch.search drives the real member pipeline.
 
     The pipeline's final stage (``TokenBudgetFormatterStage``) wraps the
     member-search output into a single composite ``ChunkList`` entry so the
     CLI / MCP consumer can print it verbatim — same shape the parity golden
     (``tests/retrieval/test_parity_golden.py``) pins. The empty-result
-    fallback in :class:`SearchApiService` is a ``ModuleMemberList``; we only
+    fallback in :class:`ApiSearch` is a ``ModuleMemberList``; we only
     assert on the filled case here (which integration_conn guarantees has
     ``train_model`` as a ``__project__`` symbol).
     """
@@ -155,7 +155,7 @@ async def test_search_api_returns_composite_response(wired_services):
     )
 
     # Non-empty result → composite ChunkList (matches the parity golden).
-    # Empty result → ModuleMemberList from the SearchApiService fallback.
+    # Empty result → ModuleMemberList from the ApiSearch fallback.
     assert isinstance(response.result, (ChunkList, ModuleMemberList))
     assert response.query.terms == "train_model"
     # integration_conn does index train_model; the pipeline should produce

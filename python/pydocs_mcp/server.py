@@ -86,9 +86,9 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         sys.exit(1)
 
     from pydocs_mcp.application import (
+        ApiSearch,
         DocsSearch,
         PackageLookup,
-        SearchApiService,
     )
     from pydocs_mcp.extraction import build_package_tree
     from pydocs_mcp.retrieval.config import (
@@ -117,7 +117,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         module_member_store=member_store,
     )
     search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
-    search_api_svc = SearchApiService(member_pipeline=member_pipeline)
+    search_api_svc = ApiSearch(member_pipeline=member_pipeline)
 
     # Optional services — wired if sub-PR #5 / #5b have landed. Absence is
     # surfaced to the user as ServiceUnavailableError from LookupService, not
@@ -230,7 +230,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
 async def _do_search(
     payload: SearchInput,
     search_docs_svc: "DocsSearch",
-    search_api_svc: "SearchApiService",
+    search_api_svc: "ApiSearch",
 ) -> str:
     """Dispatch search by kind; returns rendered markdown."""
     query = _build_search_query(payload)

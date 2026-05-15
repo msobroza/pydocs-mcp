@@ -1,4 +1,4 @@
-"""Tests for SearchApiService — thin wrapper around member_pipeline.run (spec §5.1).
+"""Tests for ApiSearch — thin wrapper around member_pipeline.run (spec §5.1).
 
 These tests use a minimal fake pipeline that structurally mimics
 CodeRetrieverPipeline's .run() coroutine. No SQLite, no real stages — the
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from pydocs_mcp.application.search_api_service import SearchApiService
+from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.models import (
     MemberKind,
     ModuleMember,
@@ -70,7 +70,7 @@ async def test_search_returns_response_with_module_member_list() -> None:
     query = SearchQuery(terms="predict", max_results=5)
     members = ModuleMemberList(items=(_member("predict"), _member("predict_batch")))
     state = PipelineState(query=query, result=members, duration_ms=3.3)
-    service = SearchApiService(member_pipeline=FakeMemberPipeline(state=state))
+    service = ApiSearch(member_pipeline=FakeMemberPipeline(state=state))
 
     response = await service.search(query)
 
@@ -84,7 +84,7 @@ async def test_search_returns_response_with_module_member_list() -> None:
 async def test_search_empty_result_defaults_to_empty_member_list() -> None:
     query = SearchQuery(terms="no match")
     state = PipelineState(query=query, result=None, duration_ms=0.5)
-    service = SearchApiService(member_pipeline=FakeMemberPipeline(state=state))
+    service = ApiSearch(member_pipeline=FakeMemberPipeline(state=state))
 
     response = await service.search(query)
 
@@ -98,7 +98,7 @@ async def test_search_threads_duration_ms_from_state() -> None:
     query = SearchQuery(terms="timing")
     members = ModuleMemberList(items=(_member("f"),))
     state = PipelineState(query=query, result=members, duration_ms=12.5)
-    service = SearchApiService(member_pipeline=FakeMemberPipeline(state=state))
+    service = ApiSearch(member_pipeline=FakeMemberPipeline(state=state))
 
     response = await service.search(query)
 
@@ -108,7 +108,7 @@ async def test_search_threads_duration_ms_from_state() -> None:
 @pytest.mark.asyncio
 async def test_search_propagates_pipeline_exception() -> None:
     query = SearchQuery(terms="boom")
-    service = SearchApiService(
+    service = ApiSearch(
         member_pipeline=RaisingPipeline(exc=RuntimeError("pipeline failed"))
     )
 
@@ -117,7 +117,7 @@ async def test_search_propagates_pipeline_exception() -> None:
 
 
 def test_service_is_frozen_slotted_dataclass() -> None:
-    service = SearchApiService(
+    service = ApiSearch(
         member_pipeline=FakeMemberPipeline(
             state=PipelineState(query=SearchQuery(terms="x"))
         )
