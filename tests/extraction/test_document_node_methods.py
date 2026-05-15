@@ -4,7 +4,8 @@ Pins spec §4.3 serialization contract used by LookupService:
 - ``to_pageindex_json`` renames ``start_line`` → ``start_index``,
   ``end_line`` → ``end_index``, emits ``kind`` as a string (not the enum),
   and recurses through ``children`` under the key ``nodes``.
-- ``find_node_by_qualified_name`` walks pre-order, returns the first match,
+- ``find_node_by_qualified_name`` walks BFS (level-order), returns the first
+  match (shallowest wins; left-to-right tie-break among siblings),
   is iterative (no recursion-limit hit on a 1000-deep tree), and returns
   ``None`` on miss.
 """
@@ -156,22 +157,45 @@ def test_find_node_by_qualified_name_returns_none_on_miss():
     assert parent.find_node_by_qualified_name("pkg.mod.bogus") is None
 
 
-def test_find_node_by_qualified_name_preorder_returns_first_match():
-    """Two nodes share a qualified_name; pre-order must return the leftmost."""
-    duplicate_a = _make_node(
-        node_id="dup#1",
+def test_find_node_by_qualified_name_bfs_returns_first_match_in_level_order():
+    """BFS: shallower duplicates win over deeper ones.
+
+    Tree shape (root has two children, one of which has a grandchild with the
+    same qualified_name as the root's other child)::
+
+        root
+        ├── shallow_dup  (qualified_name="pkg.dup")  ← BFS visits THIS first
+        └── branch
+            └── deep_dup     (qualified_name="pkg.dup")
+
+    DFS / pre-order would return ``shallow_dup`` too, but only when it's
+    declared first. Swap the order of ``root``'s children and DFS picks
+    ``deep_dup`` (deeper but earlier in pre-order); BFS still picks the
+    shallow one. The test below puts ``branch`` first so that any DFS
+    implementation would return ``deep_dup`` — proving the contract is BFS.
+    """
+    deep_dup = _make_node(
+        node_id="deep#dup",
         qualified_name="pkg.dup",
         kind=NodeKind.FUNCTION,
     )
-    duplicate_b = _make_node(
-        node_id="dup#2",
+    branch = _make_node(
+        node_id="branch",
+        qualified_name="pkg.branch",
+        kind=NodeKind.CLASS,
+        children=(deep_dup,),
+    )
+    shallow_dup = _make_node(
+        node_id="shallow#dup",
         qualified_name="pkg.dup",
         kind=NodeKind.FUNCTION,
     )
-    root = _make_node(children=(duplicate_a, duplicate_b))
+    # branch FIRST so DFS would dive into it and return deep_dup; BFS sees
+    # shallow_dup first because it sits one level closer to the root.
+    root = _make_node(children=(branch, shallow_dup))
     found = root.find_node_by_qualified_name("pkg.dup")
-    assert found is duplicate_a
-    assert found.node_id == "dup#1"
+    assert found is shallow_dup
+    assert found.node_id == "shallow#dup"
 
 
 def test_find_node_by_qualified_name_handles_1000_deep_tree_iteratively():

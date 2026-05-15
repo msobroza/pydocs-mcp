@@ -91,6 +91,29 @@ async def test_load_unknown_module_returns_none(db_file):
     assert await store.load("nopkg", "nomod") is None
 
 
+async def test_exists_returns_true_after_save(db_file):
+    """``exists`` answers from a SELECT 1 row — no JSON parse, no
+    DocumentNode allocation. Used by LookupService's dotted-prefix probe
+    so the lookup walk doesn't pay deserialization for each candidate.
+    """
+    provider = build_connection_provider(db_file)
+    store = SqliteDocumentTreeStore(provider=provider)
+
+    await store.save_many([_module_tree("pkg.mod")], package="pkg")
+
+    assert await store.exists("pkg", "pkg.mod") is True
+
+
+async def test_exists_returns_false_when_module_absent(db_file):
+    provider = build_connection_provider(db_file)
+    store = SqliteDocumentTreeStore(provider=provider)
+
+    await store.save_many([_module_tree("pkg.mod")], package="pkg")
+
+    assert await store.exists("pkg", "pkg.other") is False
+    assert await store.exists("other", "pkg.mod") is False
+
+
 async def test_load_all_in_package_returns_dict_keyed_by_module(db_file):
     provider = build_connection_provider(db_file)
     store = SqliteDocumentTreeStore(provider=provider)

@@ -264,41 +264,19 @@ def _cmd_search(args: argparse.Namespace) -> int:
 
 
 def _cmd_lookup(args: argparse.Namespace) -> int:
-    """Mirrors the MCP ``lookup`` tool — same LookupService dispatch."""
+    """Mirrors the MCP ``lookup`` tool — same LookupService dispatch.
+
+    Delegates wiring to :func:`build_sqlite_lookup_service` so the CLI and
+    the MCP server can never drift on which stores back ``lookup``.
+    """
     try:
-        from pydocs_mcp.application import (
-            LookupInput,
-            LookupService,
-            PackageLookup,
-            TreeService,
-        )
+        from pydocs_mcp.application import LookupInput
         from pydocs_mcp.retrieval.config import AppConfig
-        from pydocs_mcp.retrieval.wiring import build_retrieval_context
-        from pydocs_mcp.storage.sqlite import (
-            SqliteChunkRepository,
-            SqliteDocumentTreeStore,
-            SqlitePackageRepository,
-        )
+        from pydocs_mcp.storage.wiring import build_sqlite_lookup_service
 
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
-        context = build_retrieval_context(db_path, config)
-        provider = context.connection_provider
-        package_lookup = PackageLookup(
-            package_store=SqlitePackageRepository(provider=provider),
-            chunk_store=SqliteChunkRepository(provider=provider),
-            module_member_store=context.module_member_store,
-        )
-        # Wire TreeService against the same SqliteDocumentTreeStore that
-        # IndexingService writes to — multi-segment ``lookup`` targets
-        # (e.g. ``fastapi.routing``) resolve to persisted DocumentNode trees.
-        tree_svc = TreeService(
-            tree_store=SqliteDocumentTreeStore(provider=provider),
-        )
-        svc = LookupService(
-            package_lookup=package_lookup,
-            tree_svc=tree_svc,
-        )
+        svc = build_sqlite_lookup_service(db_path, config=config)
 
         payload = LookupInput(target=args.target, show=args.show)
         print(asyncio.run(svc.lookup(payload)))

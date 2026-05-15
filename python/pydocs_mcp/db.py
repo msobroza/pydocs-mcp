@@ -76,10 +76,10 @@ def _drop_all_known_tables(connection: sqlite3.Connection) -> None:
 def _try_add_column(conn: sqlite3.Connection, table: str, column_ddl: str) -> None:
     """ALTER TABLE ADD COLUMN that tolerates the column already existing.
 
-    Used by the soft v2→v3 migration. SQLite raises ``OperationalError``
-    with ``duplicate column name`` when the column is already present;
-    we swallow that case so the migration is idempotent. Any other
-    ``OperationalError`` propagates (real schema damage).
+    Used by the idempotent v3 additions sweep. SQLite raises
+    ``OperationalError`` with ``duplicate column name`` when the column is
+    already present; we swallow that case so the sweep is safe to re-run.
+    Any other ``OperationalError`` propagates (real schema damage).
     """
     try:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_ddl}")
@@ -88,13 +88,15 @@ def _try_add_column(conn: sqlite3.Connection, table: str, column_ddl: str) -> No
             raise
 
 
-def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
-    """Soft-migrate a v2 database to v3 in place.
+def _apply_v3_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply every additive change that makes up the v3 shape.
 
-    Preserves existing rows in ``packages``, ``chunks``, ``module_members``,
-    and ``chunks_fts``. Adds the new ``document_trees`` table and the two
-    new columns (``chunks.content_hash``, ``packages.local_path``) without
-    rewriting unchanged data.
+    Adds the ``document_trees`` table, its index, and the new columns
+    (``chunks.module``, ``chunks.content_hash``, ``packages.local_path``).
+    Every operation tolerates pre-existing state — ``CREATE ... IF NOT
+    EXISTS`` for the table/index, ``_try_add_column`` swallowing duplicate-
+    column errors for ALTERs. Used both as the v2→v3 forward migration
+    and as a v3-on-open repair sweep.
     """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS document_trees ("
@@ -112,14 +114,12 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
-    - v3 already: run the additive v3 sweep anyway. The migration is
-      idempotent (``CREATE TABLE IF NOT EXISTS`` + ``_try_add_column``
-      swallowing duplicate-column errors), and this guards against the
-      cross-PR rebase artefact where ``main`` and ``sub-PR #5`` both
-      stamped ``user_version = 3`` with different shapes — opening such a
-      v3-stamped-but-#5-missing DB used to leave ``document_trees`` and
-      the new columns absent forever. Cost is one PRAGMA + a handful of
-      no-op ALTERs per open, not measurable.
+    - v3 already: re-run the additive v3 sweep anyway. The user_version
+      stamp doesn't guarantee the current shape — drift can leave a v3-
+      stamped DB missing ``document_trees`` or the new columns. The sweep
+      is idempotent (``CREATE TABLE IF NOT EXISTS`` + ``_try_add_column``
+      swallowing duplicate-column errors), so re-running on every v3 open
+      repairs drift at the cost of one PRAGMA + a handful of no-op ALTERs.
     - v2 → v3: soft migration (CREATE document_trees + ALTER two columns);
       rows in ``packages`` / ``chunks`` / ``module_members`` survive.
     - Any other mismatch: drop every known table and recreate from current DDL.
@@ -132,9 +132,9 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        _migrate_v2_to_v3(conn)
+        _apply_v3_additions(conn)
     elif current == 2:
-        _migrate_v2_to_v3(conn)
+        _apply_v3_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     else:
         _drop_all_known_tables(conn)

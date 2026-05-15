@@ -416,6 +416,9 @@ class FakeDocumentTreeStore:
     async def load_all_in_package(self, package):
         return {}
 
+    async def exists(self, package, module):
+        return False  # not exercised here (write-side tests only)
+
     async def delete_for_package(self, package, *, uow=None) -> None:
         self.calls.append(_Call("delete_for_package", package))
         self.by_package.pop(package, None)

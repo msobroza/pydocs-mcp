@@ -8,10 +8,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from pydocs_mcp.application.tree_service import (
-    NotFoundError,
-    TreeService,
-)
+from pydocs_mcp.application.tree_service import TreeService
 from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
 
 
@@ -48,6 +45,9 @@ class _FakeTreeStore:
             if pkg == package
         }
 
+    async def exists(self, package: str, module: str) -> bool:
+        return (package, module) in self.by_key
+
     async def delete_for_package(self, package, *, uow=None):
         raise NotImplementedError("read-side tests don't exercise writes")
 
@@ -78,35 +78,24 @@ async def test_get_tree_missing_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_get_tree_or_raise_missing_raises_not_found_error():
-    """``get_tree_or_raise`` is for callers with no fallback path."""
-    service = TreeService(tree_store=_FakeTreeStore())
-
-    with pytest.raises(NotFoundError) as exc_info:
-        await service.get_tree_or_raise("unknown", "unknown.missing")
-
-    assert "unknown" in str(exc_info.value)
-    assert "unknown.missing" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_get_tree_or_raise_hit_returns_node():
+async def test_exists_returns_true_when_tree_present():
+    """``exists`` is the cheap delegate over ``DocumentTreeStore.exists`` —
+    no JSON parse, no DocumentNode allocation. Used by
+    ``LookupService._longest_indexed_module`` so the dotted-prefix walk
+    doesn't deserialize every candidate.
+    """
     tree = _module_tree("requests.adapters")
     store = _FakeTreeStore(by_key={("requests", "requests.adapters"): tree})
     service = TreeService(tree_store=store)
 
-    result = await service.get_tree_or_raise("requests", "requests.adapters")
-
-    assert result is tree
+    assert await service.exists("requests", "requests.adapters") is True
 
 
 @pytest.mark.asyncio
-async def test_not_found_error_is_lookup_error_subclass():
-    """Callers that except-match LookupError shouldn't need to know the subclass."""
+async def test_exists_returns_false_when_tree_missing():
     service = TreeService(tree_store=_FakeTreeStore())
 
-    with pytest.raises(LookupError):
-        await service.get_tree_or_raise("x", "y")
+    assert await service.exists("ghost", "ghost.missing") is False
 
 
 @pytest.mark.asyncio

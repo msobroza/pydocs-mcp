@@ -704,6 +704,23 @@ class SqliteDocumentTreeStore:
             )
         return {r["module"]: _deserialize_tree_from_json(r["tree_json"]) for r in rows}
 
+    async def exists(self, package: str, module: str) -> bool:
+        """Cheap existence check — no JSON parse, no DocumentNode allocation.
+
+        Used by ``LookupService._longest_indexed_module`` to probe dotted-
+        prefix candidates without paying the full deserialization cost; the
+        downstream ``_module_lookup`` / ``_symbol_lookup`` paths still call
+        ``load`` once on the winning candidate.
+        """
+        async with _maybe_acquire(self.provider) as conn:
+            row = await asyncio.to_thread(
+                lambda: conn.execute(
+                    "SELECT 1 FROM document_trees WHERE package=? AND module=? LIMIT 1",
+                    (package, module),
+                ).fetchone()
+            )
+        return row is not None
+
     async def delete_for_package(
         self, package: str, *, uow: UnitOfWork | None = None,
     ) -> None:

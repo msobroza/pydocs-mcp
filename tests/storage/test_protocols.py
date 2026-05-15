@@ -26,7 +26,7 @@ def test_protocol_imports():
 
 
 def test_document_tree_store_is_runtime_checkable():
-    """A duck-typed class implementing the four methods must satisfy
+    """A duck-typed class implementing every method must satisfy
     ``isinstance(obj, DocumentTreeStore)``."""
 
     class FakeStore:
@@ -39,6 +39,9 @@ def test_document_tree_store_is_runtime_checkable():
         async def load_all_in_package(self, package):
             return {}
 
+        async def exists(self, package, module):
+            return False
+
         async def delete_for_package(self, package, *, uow=None):
             return None
 
@@ -46,13 +49,13 @@ def test_document_tree_store_is_runtime_checkable():
 
 
 def test_document_tree_store_rejects_non_conforming():
-    """A class missing any of the four methods must NOT satisfy isinstance."""
+    """A class missing any of the required methods must NOT satisfy isinstance."""
 
     class MissingLoad:
         async def save_many(self, trees, *, package, uow=None):
             return None
 
-        # missing `load`, `load_all_in_package`, `delete_for_package`
+        # missing `load`, `load_all_in_package`, `exists`, `delete_for_package`
 
     assert not isinstance(MissingLoad(), DocumentTreeStore)
 

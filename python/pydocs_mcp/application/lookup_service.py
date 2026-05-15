@@ -141,14 +141,18 @@ class LookupService:
         self, package: str, parts: list[str]
     ) -> str | None:
         """Walk longest-prefix-first; return the longest dotted path that is
-        an indexed module. Prefers ``tree_svc.get_tree`` when wired; falls
+        an indexed module. Prefers ``tree_svc.exists`` when wired; falls
         back to ``PackageLookup.find_module`` otherwise (spec §6.4).
+
+        ``exists`` is a cheap row probe — no JSON parse — so the dotted-
+        prefix walk doesn't pay full deserialization for each candidate.
+        ``_module_lookup`` / ``_symbol_lookup`` reload the winner via
+        ``get_tree``; the duplicate fetch is one extra parse, not N.
         """
         for i in range(len(parts), 0, -1):
             candidate = ".".join(parts[:i])
             if self.tree_svc is not None:
-                tree = await self.tree_svc.get_tree(package, candidate)
-                if tree is not None:
+                if await self.tree_svc.exists(package, candidate):
                     return candidate
             if await self.package_lookup.find_module(package, candidate):
                 return candidate

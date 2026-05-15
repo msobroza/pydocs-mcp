@@ -94,12 +94,14 @@ async def test_lookup_unknown_package_raises_not_found(
 async def test_longest_indexed_module_prefers_tree_when_wired(
     package_lookup_mock: MagicMock,
 ) -> None:
+    """``_longest_indexed_module`` probes ``tree_svc.exists`` — the cheap row
+    check — instead of deserializing each candidate via ``get_tree``."""
     tree_svc = MagicMock()
 
-    async def _get_tree(package: str, module: str) -> Any:
-        return object() if module == "fastapi.routing" else None
+    async def _exists(package: str, module: str) -> bool:
+        return module == "fastapi.routing"
 
-    tree_svc.get_tree = _get_tree
+    tree_svc.exists = _exists
 
     svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
     module = await svc._longest_indexed_module(
@@ -161,6 +163,7 @@ async def test_module_lookup_with_tree_svc_returns_rendered_tree(
         return_value={"title": "routing", "nodes": []}
     )
     tree_svc = MagicMock()
+    tree_svc.exists = AsyncMock(return_value=True)
     tree_svc.get_tree = AsyncMock(return_value=fake_tree)
 
     svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
@@ -169,12 +172,21 @@ async def test_module_lookup_with_tree_svc_returns_rendered_tree(
 
 
 def _tree_svc_for_module(module_path: str, tree: Any) -> MagicMock:
-    """Build a tree_svc mock that resolves only one exact module path."""
+    """Build a tree_svc mock that resolves only one exact module path.
+
+    ``_longest_indexed_module`` calls ``exists`` (cheap probe); the winning
+    candidate then flows into ``_module_lookup`` / ``_symbol_lookup`` which
+    call ``get_tree`` once. Mock both to keep the dispatch path realistic.
+    """
     svc = MagicMock()
+
+    async def _exists(package: str, module: str) -> bool:
+        return module == module_path
 
     async def _get_tree(package: str, module: str) -> Any:
         return tree if module == module_path else None
 
+    svc.exists = _exists
     svc.get_tree = _get_tree
     return svc
 

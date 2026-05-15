@@ -93,20 +93,20 @@ class DocumentNode:
         }
 
     def find_node_by_qualified_name(self, target: str) -> "DocumentNode | None":
-        """Pre-order BFS search for the first node with ``qualified_name == target``.
+        """BFS search for first node whose qualified_name matches.
 
-        Iterative + explicit stack rather than recursion: avoids
-        ``RecursionError`` on deeply nested subpackage trees (1000+ levels)
-        where Python's default 1000-frame limit would trip. Returns the
-        FIRST match in pre-order traversal (root, then children left-to-right),
-        which matches the natural reading order for nested code.
+        Iterative + ``collections.deque`` for O(1) popleft — avoids both
+        Python's recursion limit (deep subpackage chains) and the O(n²)
+        behavior of ``list.pop(0)``. Returns the shallowest match
+        (level-order); siblings tie-break left-to-right.
         """
+        from collections import deque
         if self.qualified_name == target:
             return self
-        stack: list[DocumentNode] = list(self.children)
-        while stack:
-            node = stack.pop(0)
+        queue: deque[DocumentNode] = deque(self.children)
+        while queue:
+            node = queue.popleft()
             if node.qualified_name == target:
                 return node
-            stack.extend(node.children)
+            queue.extend(node.children)
         return None

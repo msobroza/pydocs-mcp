@@ -16,14 +16,6 @@ if TYPE_CHECKING:
     from pydocs_mcp.extraction.document_node import DocumentNode
 
 
-class NotFoundError(LookupError):
-    """Raised when no tree exists for the requested (package, module) key.
-
-    Subclass of LookupError so callers that don't care about the exact
-    type can still except-match idiomatically.
-    """
-
-
 @dataclass(frozen=True, slots=True)
 class TreeService:
     """Fetches DocumentNode trees from a DocumentTreeStore.
@@ -39,25 +31,22 @@ class TreeService:
     ) -> "DocumentNode | None":
         """Return the tree for ``(package, module)`` or ``None`` on miss.
 
-        Mirrors :class:`DocumentTreeStore.load`'s contract. Callers that
-        need a typed exception use :meth:`get_tree_or_raise`; the
-        None-on-miss form is what ``LookupService._longest_indexed_module``
-        iterates over while probing dotted-prefix candidates.
+        Mirrors :class:`DocumentTreeStore.load`'s contract; callers that
+        want a typed exception can wrap themselves. The None-on-miss form
+        is what ``LookupService._longest_indexed_module`` iterates over
+        while probing dotted-prefix candidates.
         """
         return await self.tree_store.load(package, module)
 
-    async def get_tree_or_raise(
-        self, package: str, module: str,
-    ) -> "DocumentNode":
-        """Same as :meth:`get_tree` but raises ``NotFoundError`` on miss.
+    async def exists(self, package: str, module: str) -> bool:
+        """Return whether a tree row exists for ``(package, module)``.
 
-        Use when the caller has no fallback path and wants a clean MCP
-        error message instead of branching on ``None``.
+        Cheap probe — no JSON parse, no ``DocumentNode`` allocation. Used
+        by ``LookupService._longest_indexed_module`` so the dotted-prefix
+        walk doesn't deserialize candidates it'll discard; the winning
+        candidate still goes through ``get_tree`` once downstream.
         """
-        tree = await self.get_tree(package, module)
-        if tree is None:
-            raise NotFoundError(f"no document tree for {package}/{module}")
-        return tree
+        return await self.tree_store.exists(package, module)
 
     async def list_package_modules(
         self, package: str,
@@ -65,7 +54,7 @@ class TreeService:
         """Return dict module → DocumentNode for every module in a package.
 
         Empty dict if the package has no indexed trees — caller decides
-        whether to treat that as NotFoundError (e.g. ``get_package_tree``
-        wants to raise on empty; ``tree`` CLI may want to print "no trees").
+        how to surface that (e.g. ``get_package_tree`` may raise; ``tree``
+        CLI may print "no trees").
         """
         return await self.tree_store.load_all_in_package(package)
