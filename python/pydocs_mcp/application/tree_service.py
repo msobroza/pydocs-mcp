@@ -34,13 +34,27 @@ class TreeService:
 
     tree_store: DocumentTreeStore
 
-    async def get_tree(self, package: str, module: str) -> "DocumentNode":
-        """Return the tree for ``(package, module)`` or raise NotFoundError.
+    async def get_tree(
+        self, package: str, module: str,
+    ) -> "DocumentNode | None":
+        """Return the tree for ``(package, module)`` or ``None`` on miss.
 
-        The store's ``load`` returns None on miss; we translate to a
-        typed exception so MCP handlers can map to a clean error message.
+        Mirrors :class:`DocumentTreeStore.load`'s contract. Callers that
+        need a typed exception use :meth:`get_tree_or_raise`; the
+        None-on-miss form is what ``LookupService._longest_indexed_module``
+        iterates over while probing dotted-prefix candidates.
         """
-        tree = await self.tree_store.load(package, module)
+        return await self.tree_store.load(package, module)
+
+    async def get_tree_or_raise(
+        self, package: str, module: str,
+    ) -> "DocumentNode":
+        """Same as :meth:`get_tree` but raises ``NotFoundError`` on miss.
+
+        Use when the caller has no fallback path and wants a clean MCP
+        error message instead of branching on ``None``.
+        """
+        tree = await self.get_tree(package, module)
         if tree is None:
             raise NotFoundError(f"no document tree for {package}/{module}")
         return tree

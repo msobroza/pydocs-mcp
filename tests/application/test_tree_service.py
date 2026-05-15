@@ -64,14 +64,40 @@ async def test_get_tree_returns_document_node():
 
 
 @pytest.mark.asyncio
-async def test_get_tree_missing_raises_not_found():
+async def test_get_tree_missing_returns_none():
+    """``get_tree`` mirrors the store's ``load`` contract — None on miss.
+
+    This is what ``LookupService._longest_indexed_module`` relies on while
+    probing dotted-prefix candidates (it can't except-match per call).
+    """
+    service = TreeService(tree_store=_FakeTreeStore())
+
+    result = await service.get_tree("unknown", "unknown.missing")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_tree_or_raise_missing_raises_not_found_error():
+    """``get_tree_or_raise`` is for callers with no fallback path."""
     service = TreeService(tree_store=_FakeTreeStore())
 
     with pytest.raises(NotFoundError) as exc_info:
-        await service.get_tree("unknown", "unknown.missing")
+        await service.get_tree_or_raise("unknown", "unknown.missing")
 
     assert "unknown" in str(exc_info.value)
     assert "unknown.missing" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_tree_or_raise_hit_returns_node():
+    tree = _module_tree("requests.adapters")
+    store = _FakeTreeStore(by_key={("requests", "requests.adapters"): tree})
+    service = TreeService(tree_store=store)
+
+    result = await service.get_tree_or_raise("requests", "requests.adapters")
+
+    assert result is tree
 
 
 @pytest.mark.asyncio
@@ -80,7 +106,7 @@ async def test_not_found_error_is_lookup_error_subclass():
     service = TreeService(tree_store=_FakeTreeStore())
 
     with pytest.raises(LookupError):
-        await service.get_tree("x", "y")
+        await service.get_tree_or_raise("x", "y")
 
 
 @pytest.mark.asyncio
