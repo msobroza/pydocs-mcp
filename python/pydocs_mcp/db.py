@@ -112,7 +112,14 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
-    - v3 already: no-op.
+    - v3 already: run the additive v3 sweep anyway. The migration is
+      idempotent (``CREATE TABLE IF NOT EXISTS`` + ``_try_add_column``
+      swallowing duplicate-column errors), and this guards against the
+      cross-PR rebase artefact where ``main`` and ``sub-PR #5`` both
+      stamped ``user_version = 3`` with different shapes — opening such a
+      v3-stamped-but-#5-missing DB used to leave ``document_trees`` and
+      the new columns absent forever. Cost is one PRAGMA + a handful of
+      no-op ALTERs per open, not measurable.
     - v2 → v3: soft migration (CREATE document_trees + ALTER two columns);
       rows in ``packages`` / ``chunks`` / ``module_members`` survive.
     - Any other mismatch: drop every known table and recreate from current DDL.
@@ -124,12 +131,14 @@ def open_index_database(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
-    if current != SCHEMA_VERSION:
-        if current == 2:
-            _migrate_v2_to_v3(conn)
-        else:
-            _drop_all_known_tables(conn)
-            conn.executescript(_DDL)
+    if current == SCHEMA_VERSION:
+        _migrate_v2_to_v3(conn)
+    elif current == 2:
+        _migrate_v2_to_v3(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    else:
+        _drop_all_known_tables(conn)
+        conn.executescript(_DDL)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
     return conn

@@ -352,3 +352,89 @@ class TestSchemaV3:
             assert row is not None
         finally:
             migrated.close()
+
+    def test_v3_main_shape_db_gets_document_trees_and_columns_on_open(
+        self, tmp_path,
+    ):
+        """A v3-stamped DB written by an earlier code-line that lacked
+        document_trees + content_hash + local_path (rebase artefact between
+        sub-PR #5 and sub-PR #6) must gain them on the next open without
+        losing existing rows. The migration is idempotent and rerun on
+        every v3 open."""
+        db = tmp_path / "main_v3.db"
+        raw = sqlite3.connect(str(db))
+        raw.executescript(
+            """
+            CREATE TABLE packages (
+                name TEXT PRIMARY KEY, version TEXT, summary TEXT,
+                homepage TEXT, dependencies TEXT, content_hash TEXT, origin TEXT
+            );
+            CREATE TABLE chunks (
+                id INTEGER PRIMARY KEY, package TEXT, module TEXT DEFAULT '',
+                title TEXT, text TEXT, origin TEXT
+            );
+            CREATE TABLE module_members (
+                id INTEGER PRIMARY KEY, package TEXT, module TEXT,
+                name TEXT, kind TEXT, signature TEXT,
+                return_annotation TEXT, parameters TEXT, docstring TEXT
+            );
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                title, text, package, content=chunks, content_rowid=id,
+                tokenize='porter unicode61'
+            );
+            PRAGMA user_version = 3;
+            """
+        )
+        raw.execute(
+            "INSERT INTO packages "
+            "(name, version, summary, homepage, dependencies, content_hash, origin)"
+            " VALUES ('preserved', '1.0', '', '', '[]', 'h', 'dependency')"
+        )
+        raw.commit()
+        raw.close()
+
+        conn = open_index_database(db)
+        try:
+            # New table exists.
+            assert conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='document_trees'"
+            ).fetchone() is not None
+            # New columns exist.
+            chunk_cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(chunks)"
+            ).fetchall()}
+            assert "content_hash" in chunk_cols
+            pkg_cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(packages)"
+            ).fetchall()}
+            assert "local_path" in pkg_cols
+            # Existing row preserved.
+            row = conn.execute(
+                "SELECT name FROM packages WHERE name='preserved'"
+            ).fetchone()
+            assert row is not None
+        finally:
+            conn.close()
+
+    def test_v3_open_open_open_is_idempotent(self, tmp_path):
+        """Opening a v3 DB multiple times must not duplicate columns or
+        schemas — ``_try_add_column`` swallows duplicate-column errors and
+        ``CREATE TABLE IF NOT EXISTS`` is a no-op when the table is present."""
+        db = tmp_path / "idempotent.db"
+        for _ in range(3):
+            conn = open_index_database(db)
+            conn.close()
+
+        conn = open_index_database(db)
+        try:
+            chunk_cols = [r[1] for r in conn.execute(
+                "PRAGMA table_info(chunks)"
+            ).fetchall()]
+            assert chunk_cols.count("content_hash") == 1
+            pkg_cols = [r[1] for r in conn.execute(
+                "PRAGMA table_info(packages)"
+            ).fetchall()]
+            assert pkg_cols.count("local_path") == 1
+        finally:
+            conn.close()
