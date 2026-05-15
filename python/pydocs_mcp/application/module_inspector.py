@@ -1,8 +1,8 @@
-"""ModuleIntrospectionService — live importlib + inspect (spec §5.1).
+"""ModuleInspector — live importlib + inspect (spec §5.1).
 
 Factored out of ``server.py::inspect_module`` so the MCP handler is a thin
-adapter over a Protocol-only service. The live-import + ``inspect`` logic is
-CPU-bound and synchronous — we offload it to a worker thread via
+adapter over a Protocol-only collaborator. The live-import + ``inspect`` logic
+is CPU-bound and synchronous — we offload it to a worker thread via
 ``asyncio.to_thread`` so the FastMCP event loop is never blocked while an
 ``__init__.py`` side-effect-imports half a framework.
 
@@ -39,13 +39,13 @@ def _validate_submodule(submodule: str) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
-class ModuleIntrospectionService:
+class ModuleInspector:
     """Live-import a package/submodule and render its public API.
 
-    Depends only on ``PackageStore`` — the service first checks the indexed
-    package exists (so we never import arbitrary modules the user didn't
-    previously index), then delegates to ``asyncio.to_thread`` for the
-    synchronous ``importlib`` + ``inspect`` work.
+    Depends only on ``PackageStore`` — first checks the indexed package
+    exists (so we never import arbitrary modules the user didn't previously
+    index), then delegates to ``asyncio.to_thread`` for the synchronous
+    ``importlib`` + ``inspect`` work.
     """
 
     package_store: PackageStore

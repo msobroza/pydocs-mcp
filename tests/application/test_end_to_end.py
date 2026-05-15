@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.application import (
-    ModuleIntrospectionService,
+    ModuleInspector,
     PackageLookupService,
     SearchApiService,
     SearchDocsService,
@@ -88,7 +88,7 @@ def wired_services(integration_conn):
         ),
         "search_docs": SearchDocsService(chunk_pipeline=chunk_pipeline),
         "search_api": SearchApiService(member_pipeline=member_pipeline),
-        "inspect": ModuleIntrospectionService(package_store=package_store),
+        "inspect": ModuleInspector(package_store=package_store),
     }
 
 
@@ -165,7 +165,7 @@ async def test_search_api_returns_composite_response(wired_services):
 
 @pytest.mark.asyncio
 async def test_inspect_unknown_package_returns_error_string(wired_services):
-    """ModuleIntrospectionService.inspect short-circuits on unindexed packages.
+    """ModuleInspector.inspect short-circuits on unindexed packages.
 
     Byte-parity AC #8 preserves the pre-PR error message; locking it in at
     the end-to-end seam catches any drift in the normalize/lookup/fallthrough

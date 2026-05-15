@@ -1,8 +1,8 @@
-"""Tests for ModuleIntrospectionService — live importlib + inspect (spec §5.1).
+"""Tests for ModuleInspector — live importlib + inspect (spec §5.1).
 
 Uses a local in-memory ``FakePackageStore`` (same pattern as Tasks 3–5). The
-service only touches the ``PackageStore`` Protocol plus the standard library,
-so we exercise introspection against real stdlib modules (``json``,
+inspector only touches the ``PackageStore`` Protocol plus the standard
+library, so we exercise introspection against real stdlib modules (``json``,
 ``asyncio``) — that keeps the tests hermetic while guaranteeing we exercise
 the genuine ``importlib`` + ``inspect`` path.
 """
@@ -14,9 +14,7 @@ from typing import Any
 
 import pytest
 
-from pydocs_mcp.application.module_introspection_service import (
-    ModuleIntrospectionService,
-)
+from pydocs_mcp.application.module_inspector import ModuleInspector
 from pydocs_mcp.models import Package, PackageOrigin
 
 
@@ -58,10 +56,10 @@ class FakePackageStore:
 
 
 def _service(packages: dict[str, Package] | None = None) -> tuple[
-    ModuleIntrospectionService, FakePackageStore,
+    ModuleInspector, FakePackageStore,
 ]:
     store = FakePackageStore(packages=dict(packages or {}))
-    svc = ModuleIntrospectionService(package_store=store)
+    svc = ModuleInspector(package_store=store)
     return svc, store
 
 

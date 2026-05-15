@@ -29,9 +29,7 @@ from pydocs_mcp.application.mcp_errors import (
     ServiceUnavailableError,
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
-from pydocs_mcp.application.module_introspection_service import (
-    ModuleIntrospectionService,
-)
+from pydocs_mcp.application.module_inspector import ModuleInspector
 from pydocs_mcp.application.package_lookup_service import PackageLookupService
 from pydocs_mcp.application.protocols import (
     ChunkExtractor,
@@ -52,7 +50,7 @@ __all__ = [
     "LookupService",
     "MCPToolError",
     "MemberExtractor",
-    "ModuleIntrospectionService",
+    "ModuleInspector",
     "NotFoundError",
     "PackageLookupService",
     "SearchApiService",
