@@ -367,7 +367,7 @@ async def test_package_build_project_branch(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_package_build_dependency_missing_raises_lookup_error() -> None:
     """DEPENDENCY target where the distribution isn't installed → LookupError.
-    The IndexProjectService catches this one level up as a non-fatal skip, but
+    The ProjectIndexer catches this one level up as a non-fatal skip, but
     the stage itself surfaces the failure rather than silently returning None."""
     stage = PackageBuildStage()
     state = IngestionState(

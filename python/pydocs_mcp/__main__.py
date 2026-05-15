@@ -3,7 +3,7 @@
 Each subcommand is a thin wrapper over the application-layer services
 (spec §5.6, AC #9, #16):
 
-* ``serve`` / ``index`` route through :class:`IndexProjectService`.
+* ``serve`` / ``index`` route through :class:`ProjectIndexer`.
 * ``query`` / ``api`` route through :class:`SearchDocsService` /
   :class:`SearchApiService`, rendering the top composite chunk's text.
 
@@ -126,7 +126,7 @@ def _project_and_db(args: argparse.Namespace) -> tuple[Path, Path]:
 
 
 async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) -> None:
-    """Run :class:`IndexProjectService` end-to-end for ``index`` / ``serve``.
+    """Run :class:`ProjectIndexer` end-to-end for ``index`` / ``serve``.
 
     Kept as a module-level coroutine so both ``_cmd_index`` and
     ``_cmd_serve`` can drive it through a single ``asyncio.run`` — mirrors
@@ -140,7 +140,7 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     or plain :class:`AstMemberExtractor` for ``--no-inspect``, and
     :class:`StaticDependencyResolver`.
     """
-    from pydocs_mcp.application import IndexProjectService
+    from pydocs_mcp.application import ProjectIndexer
     from pydocs_mcp.extraction import (
         AstMemberExtractor,
         InspectMemberExtractor,
@@ -174,7 +174,7 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
         if use_inspect else ast_member
     )
 
-    orchestrator = IndexProjectService(
+    orchestrator = ProjectIndexer(
         indexing_service=indexing_service,
         dependency_resolver=StaticDependencyResolver(),
         chunk_extractor=chunk_extractor,

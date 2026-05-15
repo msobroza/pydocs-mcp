@@ -2,7 +2,7 @@
 
 Sub-PR #4 ships thin adapters wrapping today's deps.py / indexer.py functions.
 Sub-PR #5 replaces them with strategy-based implementations without touching
-IndexProjectService or any other consumer.
+ProjectIndexer or any other consumer.
 
 Sub-PR #5 amendment (spec §5, AC #19): ``ChunkExtractor`` now returns a
 3-tuple ``(chunks, trees, package)`` so the pipeline can surface the

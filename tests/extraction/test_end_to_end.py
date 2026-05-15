@@ -1,10 +1,10 @@
-"""End-to-end integration: IngestionPipeline → IndexProjectService →
+"""End-to-end integration: IngestionPipeline → ProjectIndexer →
 DocumentTreeStore → get_document_tree (spec §16 AC #12).
 
 This file proves the full sub-PR #5 write path actually roundtrips: a real
 ``IngestionPipeline`` (built from the shipped ``presets/ingestion.yaml``)
 runs against a tiny on-disk fixture project, the resulting 3-tuple
-``(chunks, trees, package)`` flows through :class:`IndexProjectService`
+``(chunks, trees, package)`` flows through :class:`ProjectIndexer`
 into :class:`IndexingService.reindex_package`, which persists trees via
 :class:`SqliteDocumentTreeStore` (wired now by
 :func:`build_sqlite_indexing_service`). We then re-open the DB and use
@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.application.document_tree_service import DocumentTreeService
-from pydocs_mcp.application.index_project_service import IndexProjectService
+from pydocs_mcp.application.project_indexer import ProjectIndexer
 from pydocs_mcp.db import build_connection_provider, open_index_database
 from pydocs_mcp.extraction import (
     AstMemberExtractor,
@@ -103,8 +103,8 @@ def db_path(tmp_path: Path) -> Path:
     return p
 
 
-def _build_service(db_path: Path) -> IndexProjectService:
-    """Wire the production-shape ``IndexProjectService`` over *db_path*.
+def _build_service(db_path: Path) -> ProjectIndexer:
+    """Wire the production-shape ``ProjectIndexer`` over *db_path*.
 
     Uses :func:`build_sqlite_indexing_service` (which now wires
     ``tree_store=SqliteDocumentTreeStore``) + the real
@@ -113,7 +113,7 @@ def _build_service(db_path: Path) -> IndexProjectService:
     """
     indexing = build_sqlite_indexing_service(db_path)
     pipeline = build_ingestion_pipeline(AppConfig.load())
-    return IndexProjectService(
+    return ProjectIndexer(
         indexing_service=indexing,
         dependency_resolver=StaticDependencyResolver(),
         chunk_extractor=PipelineChunkExtractor(pipeline=pipeline),
@@ -134,7 +134,7 @@ async def _run_indexing(fixture_project: Path, db_path: Path) -> None:
         # StaticDependencyResolver will resolve pyproject's (empty) deps; a
         # real dep list would have crossed into site-packages. By writing
         # pyproject.toml without declared deps we keep the test fully
-        # hermetic without touching IndexProjectService's public API.
+        # hermetic without touching ProjectIndexer's public API.
         workers=1,
     )
 

@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.application import IndexProjectService
+from pydocs_mcp.application import ProjectIndexer
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.extraction import (
     AstMemberExtractor,
@@ -88,7 +88,7 @@ async def _run_indexing_async(
     # --- Project ---
     t0 = time.perf_counter()
     try:
-        project_orch = IndexProjectService(
+        project_orch = ProjectIndexer(
             indexing_service=service,
             dependency_resolver=_FixedListResolver([]),
             chunk_extractor=chunk_extractor,
@@ -113,7 +113,7 @@ async def _run_indexing_async(
     for dep in dep_names:
         t0 = time.perf_counter()
         try:
-            dep_orch = IndexProjectService(
+            dep_orch = ProjectIndexer(
                 indexing_service=service,
                 dependency_resolver=_FixedListResolver([dep]),
                 chunk_extractor=chunk_extractor,

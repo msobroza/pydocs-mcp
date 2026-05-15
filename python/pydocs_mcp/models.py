@@ -230,7 +230,7 @@ class PackageDoc:
 
 @dataclass(slots=True)
 class IndexingStats:
-    """Mutable accumulator for :meth:`IndexProjectService.index_project`
+    """Mutable accumulator for :meth:`ProjectIndexer.index_project`
     (spec §5.3). Deliberately NOT frozen — the service mutates these counters
     while iterating over packages. `slots=True` still guards against typos
     (e.g. ``stats.indexxed += 1``) by rejecting unknown attributes."""

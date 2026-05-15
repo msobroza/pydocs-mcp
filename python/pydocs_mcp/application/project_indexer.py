@@ -1,4 +1,4 @@
-"""IndexProjectService — write-side bootstrap orchestrator (spec §5.1, §5.3).
+"""ProjectIndexer — write-side bootstrap orchestrator (spec §5.1, §5.3).
 
 Wraps :class:`IndexingService` + three extractor Protocols
 (:class:`DependencyResolver` / :class:`ChunkExtractor` / :class:`MemberExtractor`
@@ -10,7 +10,7 @@ Protocols.
 
 Hash-based cache skipping lives here, not in the extractors. Each extract
 call returns a fresh :class:`~pydocs_mcp.models.Package` with its
-``content_hash`` populated; the service compares that against whatever
+``content_hash`` populated; the orchestrator compares that against whatever
 the underlying :class:`PackageStore` already has and skips the 3-table
 delete-then-upsert when nothing changed, bumping :attr:`IndexingStats.cached`
 instead of :attr:`~IndexingStats.indexed`.
@@ -37,7 +37,7 @@ log = logging.getLogger("pydocs-mcp")
 
 
 @dataclass(frozen=True, slots=True)
-class IndexProjectService:
+class ProjectIndexer:
     """Coordinates project + dependency indexing, returning fresh stats.
 
     Flow per :meth:`index_project`:

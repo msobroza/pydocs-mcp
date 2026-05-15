@@ -466,7 +466,7 @@ def test_package_doc_empty_collections():
 
 
 # ---------------------------------------------------------------------------
-# IndexingStats (spec §5.3) — mutable accumulator for IndexProjectService.
+# IndexingStats (spec §5.3) — mutable accumulator for ProjectIndexer.
 # ---------------------------------------------------------------------------
 
 def test_indexing_stats_defaults():
@@ -480,7 +480,7 @@ def test_indexing_stats_defaults():
 
 def test_indexing_stats_mutable():
     """IndexingStats is `slots=True` but NOT `frozen=True` — fields must
-    update in place so IndexProjectService can accumulate counters."""
+    update in place so ProjectIndexer can accumulate counters."""
     stats = IndexingStats()
     stats.indexed += 1
     stats.cached += 2

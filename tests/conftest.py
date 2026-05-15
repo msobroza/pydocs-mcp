@@ -197,7 +197,7 @@ def integration_conn(tmp_path):
 
     Indexes the fake_project source + the 3 package snapshots (sklearn, vllm,
     langgraph) using PipelineChunkExtractor + AstMemberExtractor, then rebuilds
-    FTS. Mirrors what IndexProjectService does for ``__project__`` without
+    FTS. Mirrors what ProjectIndexer does for ``__project__`` without
     resolving the fixture project's declared (uninstalled) deps.
     """
     db_path = tmp_path / "integration.db"

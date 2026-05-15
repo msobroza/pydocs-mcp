@@ -1,6 +1,6 @@
-"""Tests for IndexProjectService — write-side bootstrap orchestrator (spec §5.1).
+"""Tests for ProjectIndexer — write-side bootstrap orchestrator (spec §5.1).
 
-IndexProjectService depends only on Protocols:
+ProjectIndexer depends only on Protocols:
 - ``IndexingService`` (already tested with Protocol fakes in test_indexing_service.py)
 - ``DependencyResolver`` / ``ChunkExtractor`` / ``MemberExtractor`` (from
   ``application.protocols``, ``@runtime_checkable``)
@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from pydocs_mcp.application.index_project_service import IndexProjectService
+from pydocs_mcp.application.project_indexer import ProjectIndexer
 from pydocs_mcp.extraction.document_node import DocumentNode
 from pydocs_mcp.models import (
     Chunk,
@@ -78,7 +78,7 @@ class FakePackageStore:
     """Minimal PackageStore fake: ``get`` returns whatever the test seeded
     via ``known_packages``; defaults to ``None`` (not cached).
 
-    Exists so :class:`IndexProjectService` can call ``package_store.get`` on
+    Exists so :class:`ProjectIndexer` can call ``package_store.get`` on
     the hash-cache check path without the full ``SqlitePackageRepository``
     surface — mirrors the pattern in test_indexing_service.py.
     """
@@ -94,7 +94,7 @@ class FakeIndexingService:
     """Stands in for application.IndexingService — records the call sequence.
 
     We don't inherit or reference the real class; the fake only needs the
-    methods IndexProjectService actually invokes (``clear_all`` +
+    methods ProjectIndexer actually invokes (``clear_all`` +
     ``reindex_package`` + ``package_store.get`` via the store attribute).
     That keeps the write-bootstrap test isolated from the persistence-layer
     mechanics covered in test_indexing_service.py.
@@ -226,7 +226,7 @@ def _make_service(
     dep_chunk_returns: dict[str, Any] | None = None,
     dep_member_returns: dict[str, Any] | None = None,
 ) -> tuple[
-    IndexProjectService,
+    ProjectIndexer,
     FakeIndexingService,
     FakeDependencyResolver,
     FakeChunkExtractor,
@@ -243,7 +243,7 @@ def _make_service(
         project_members=project_members,
         dep_returns=dep_member_returns or {},
     )
-    service = IndexProjectService(
+    service = ProjectIndexer(
         indexing_service=idx,
         dependency_resolver=resolver,
         chunk_extractor=chunks_ex,
@@ -443,7 +443,7 @@ async def test_index_project_returns_fresh_stats_each_call(tmp_path: Path) -> No
     assert b.indexed == 1
 
 
-def test_index_project_service_is_frozen_and_slotted() -> None:
+def test_project_indexer_is_frozen_and_slotted() -> None:
     """Frozen + slots — matches the SOLID pattern shared by the other
     application services (spec §5.1). Prevents silent attribute typos
     and silent field rebinds.
@@ -472,7 +472,7 @@ async def test_index_project_forwards_trees_to_reindex_package(
     tmp_path: Path,
 ) -> None:
     """Spec §5 + §13.3: ``ChunkExtractor`` returns 3-tuple
-    ``(chunks, trees, package)``; :class:`IndexProjectService` forwards
+    ``(chunks, trees, package)``; :class:`ProjectIndexer` forwards
     ``trees`` to :meth:`IndexingService.reindex_package` so the wired
     ``DocumentTreeStore`` persists them (Task 32 closed the gap Task 23
     opened). Both project + dep branches must forward.
@@ -521,7 +521,7 @@ async def test_index_project_forwards_trees_to_reindex_package(
         assert all(isinstance(c, Chunk) for c in chunks_arg)
         assert all(isinstance(m, ModuleMember) for m in members_arg)
         assert trees_arg == (tree,), (
-            "IndexProjectService must forward the extractor's trees to "
+            "ProjectIndexer must forward the extractor's trees to "
             "IndexingService.reindex_package — the DocumentTreeStore "
             "round-trip depends on this wiring."
         )
@@ -606,7 +606,7 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
         dep_member_returns={"a": (), "b": (), "c": ()},
     )
     # Swap in the concurrency-tracking chunk extractor.
-    service = IndexProjectService(
+    service = ProjectIndexer(
         indexing_service=service.indexing_service,
         dependency_resolver=service.dependency_resolver,
         chunk_extractor=probe,

@@ -4,7 +4,7 @@ Thin orchestration objects composed from Protocol-only constructor
 arguments — ``PackageStore`` / ``ChunkStore`` / ``ModuleMemberStore`` on
 the storage side, ``CodeRetrieverPipeline`` on the retrieval side.
 
-Write-side bootstrap (:class:`IndexProjectService`) composes with the
+Write-side bootstrap (:class:`ProjectIndexer`) composes with the
 strategy classes from :mod:`pydocs_mcp.extraction`
 (:class:`PipelineChunkExtractor` / :class:`AstMemberExtractor` /
 :class:`InspectMemberExtractor` / :class:`StaticDependencyResolver`). The
@@ -19,7 +19,6 @@ from pydocs_mcp.application.document_tree_service import (
     DocumentTreeService,
     NotFoundError,
 )
-from pydocs_mcp.application.index_project_service import IndexProjectService
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import (
@@ -31,6 +30,7 @@ from pydocs_mcp.application.mcp_errors import (
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
 from pydocs_mcp.application.module_inspector import ModuleInspector
 from pydocs_mcp.application.package_lookup import PackageLookup
+from pydocs_mcp.application.project_indexer import ProjectIndexer
 from pydocs_mcp.application.protocols import (
     ChunkExtractor,
     DependencyResolver,
@@ -43,7 +43,6 @@ __all__ = [
     "ChunkExtractor",
     "DependencyResolver",
     "DocumentTreeService",
-    "IndexProjectService",
     "IndexingService",
     "InvalidArgumentError",
     "LookupInput",
@@ -53,6 +52,7 @@ __all__ = [
     "ModuleInspector",
     "NotFoundError",
     "PackageLookup",
+    "ProjectIndexer",
     "SearchApiService",
     "SearchDocsService",
     "SearchInput",

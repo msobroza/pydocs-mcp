@@ -60,7 +60,7 @@ class DependencyFileDiscoverer:
 
     Returns ``(paths, site_packages_root)``; a missing distribution
     (declared-but-not-installed) returns ``([], Path("."))`` — the
-    :class:`~pydocs_mcp.application.IndexProjectService` treats that as a
+    :class:`~pydocs_mcp.application.ProjectIndexer` treats that as a
     non-fatal skip. Applies the same extension + size + directory-blocklist
     filters as :class:`ProjectFileDiscoverer`, because a wheel can ship
     bundled ``.git/`` / ``__pycache__`` / ``node_modules`` directories and

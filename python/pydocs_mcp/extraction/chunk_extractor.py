@@ -5,7 +5,7 @@ Implements the sub-PR #4 :class:`~pydocs_mcp.application.protocols.ChunkExtracto
 the SAME pipeline; differentiation happens via
 :class:`~pydocs_mcp.extraction.pipeline.TargetKind` on the initial state, and
 the stages themselves branch internally. That keeps
-``IndexProjectService`` from having to pick between two extractor
+``ProjectIndexer`` from having to pick between two extractor
 implementations based on project-vs-dependency.
 """
 from __future__ import annotations

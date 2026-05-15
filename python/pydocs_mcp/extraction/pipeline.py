@@ -3,7 +3,7 @@
 A 6-stage pipeline composed via decorator-registered stages. A SINGLE
 pipeline handles both project and dependency modes — ``FileDiscoveryStage``
 and ``PackageBuildStage`` branch on :attr:`IngestionState.target_kind`.
-That keeps ``__main__.py`` / ``IndexProjectService`` from having two
+That keeps ``__main__.py`` / ``ProjectIndexer`` from having two
 near-duplicate write paths (spec §7.1).
 
 Sub-PR #5b RESERVES the :attr:`IngestionState.references` field for
