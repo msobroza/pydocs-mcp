@@ -44,11 +44,11 @@ def _seed_basic_fixture(db_path: Path) -> None:
     """Two packages, two chunks, two members."""
     conn = open_index_database(db_path)
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         ("__project__", "local", "Test project", "", "[]", "aaa", "project"),
     )
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         (
             "fastapi", "0.100", "Web framework",
             "https://fastapi.example.com",
@@ -261,7 +261,7 @@ def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
     db_path = tmp_path / "flask.db"
     conn = open_index_database(db_path)
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         ("flask_login", "0.6", "Flask login", "", "[]", "h", "dependency"),
     )
     conn.commit()

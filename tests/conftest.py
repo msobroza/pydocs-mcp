@@ -1,4 +1,9 @@
-"""Shared pytest fixtures for pydocs-mcp tests."""
+"""Shared pytest fixtures for pydocs-mcp tests.
+
+Post sub-PR #5 + #6 rebase: indexer.py has been deleted; extraction logic
+now lives in the ``extraction/`` subpackage. Fixtures here use the new
+``PipelineChunkExtractor`` + ``AstMemberExtractor`` strategy classes.
+"""
 import asyncio
 from pathlib import Path
 
@@ -8,11 +13,12 @@ from pydocs_mcp.db import (
     open_index_database,
     rebuild_fulltext_index,
 )
-from pydocs_mcp.indexer import (
-    _extract_from_source_files,
-    clear_extraction_cache,
-    extract_project_chunks,
-    extract_project_members,
+from pydocs_mcp.extraction import (
+    AstMemberExtractor,
+    AstPythonChunker,
+    PipelineChunkExtractor,
+    build_ingestion_pipeline,
+    flatten_to_chunks,
 )
 from pydocs_mcp.models import (
     Chunk,
@@ -22,31 +28,15 @@ from pydocs_mcp.models import (
     Package,
     PackageOrigin,
 )
+from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
 from tests._retriever_helpers import write_package_sync
-
-
-@pytest.fixture(autouse=True)
-def _clear_extractor_cache():
-    """Prevent indexer module-level extraction cache from leaking between tests.
-
-    The :mod:`pydocs_mcp.indexer` module keeps two dicts (``_project_cache``
-    and ``_dependency_cache``) that :class:`IndexProjectService` flushes at
-    the end of each ``index_project`` call. Tests that exercise
-    ``indexer.extract_*`` directly bypass that flush, so without this fixture
-    a previous test's extraction could satisfy the next test's cache lookup.
-    """
-    clear_extraction_cache()
-    yield
-    clear_extraction_cache()
 
 
 @pytest.fixture
 def conn(tmp_path):
     """File-backed SQLite DB seeded with known project + dep data."""
     db_path = tmp_path / "test.db"
-    # open_index_database materialises the schema; close it afterwards so
-    # the IndexingService below can attach via its own connection factory.
     c = open_index_database(db_path)
     c.close()
 
@@ -159,45 +149,86 @@ FAKE_PROJECT = FIXTURES_DIR / "fake_project"
 PACKAGES_DIR = FIXTURES_DIR / "packages"
 
 
+def _extract_package_fixture(name: str, pkg_dir: Path) -> tuple[tuple[Chunk, ...], tuple[ModuleMember, ...]]:
+    """Static-parse a fixture package directory into (chunks, members).
+
+    Uses AstPythonChunker directly on every .py file under pkg_dir; mirrors
+    what extraction.discovery would do for a dependency, but without going
+    through importlib.metadata (fixture packages aren't installed).
+    """
+    chunker = AstPythonChunker()
+    chunks_acc: list[Chunk] = []
+    members_acc: list[ModuleMember] = []
+    for py_file in sorted(pkg_dir.rglob("*.py")):
+        try:
+            source = py_file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        tree = chunker.build_tree(str(py_file), source, name, pkg_dir)
+        chunks_acc.extend(flatten_to_chunks(tree, package=name))
+        # Extract member symbols via AST walk on top-level + class methods.
+        import ast
+        try:
+            ast_tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        rel = py_file.relative_to(pkg_dir)
+        module = ".".join(rel.with_suffix("").parts).removesuffix(".__init__")
+        for stmt in ast_tree.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                kind = "class" if isinstance(stmt, ast.ClassDef) else "function"
+                doc = ast.get_docstring(stmt) or ""
+                members_acc.append(ModuleMember(metadata={
+                    ModuleMemberFilterField.PACKAGE.value: name,
+                    ModuleMemberFilterField.MODULE.value: module,
+                    ModuleMemberFilterField.NAME.value: stmt.name,
+                    ModuleMemberFilterField.KIND.value: kind,
+                    "signature": "",
+                    "return_annotation": "",
+                    "parameters": (),
+                    "docstring": doc,
+                }))
+    return tuple(chunks_acc), tuple(members_acc)
+
+
 @pytest.fixture
 def integration_conn(tmp_path):
-    """DB seeded by running the real indexer against fixture files.
+    """DB seeded by running the real extraction pipeline against fixture files.
 
     Indexes the fake_project source + the 3 package snapshots (sklearn, vllm,
-    langgraph) using the static parser (_extract_from_source_files), then rebuilds FTS.
+    langgraph) using PipelineChunkExtractor + AstMemberExtractor, then rebuilds
+    FTS. Mirrors what IndexProjectService does for ``__project__`` without
+    resolving the fixture project's declared (uninstalled) deps.
     """
     db_path = tmp_path / "integration.db"
     open_index_database(db_path).close()
 
     service = build_sqlite_indexing_service(db_path)
 
-    # Index the fake project directly via the extraction functions so the
-    # fixture doesn't also try to resolve the fake_project's declared
-    # (not-installed) deps — matches what :class:`IndexProjectService`
-    # does for the ``__project__`` package without the dep loop.
     async def _index_project_only() -> None:
-        clear_extraction_cache()
-        chunks, pkg = await extract_project_chunks(FAKE_PROJECT)
-        members = await extract_project_members(FAKE_PROJECT)
+        pipeline = build_ingestion_pipeline(AppConfig())
+        extractor = PipelineChunkExtractor(pipeline=pipeline)
+        members_extractor = AstMemberExtractor()
+        chunks, _trees, pkg = await extractor.extract_from_project(FAKE_PROJECT)
+        members = await members_extractor.extract_from_project(FAKE_PROJECT)
         await service.reindex_package(pkg, chunks, members)
 
     asyncio.run(_index_project_only())
 
-    # Index each package snapshot as if it were an installed dep.
+    # Index each package snapshot as if it were an installed dep — using
+    # _extract_package_fixture so we don't need importlib.metadata on the
+    # fixture dirs (they aren't installed in the test environment).
     for pkg_name in ("sklearn", "vllm", "langgraph"):
         pkg_dir = PACKAGES_DIR / pkg_name
-        py_files = sorted(str(p) for p in pkg_dir.rglob("*.py"))
-        chunks, syms = _extract_from_source_files(
-            pkg_name, py_files, str(pkg_dir), kind_prefix="dep",
-        )
+        chunks, members = _extract_package_fixture(pkg_name, pkg_dir)
         write_package_sync(
             db_path,
             name=pkg_name,
             version="0.0.0",
             summary=f"{pkg_name} fixture",
             content_hash=f"fixture_{pkg_name}",
-            chunks=tuple(chunks),
-            module_members=tuple(syms),
+            chunks=chunks,
+            module_members=members,
         )
 
     c = open_index_database(db_path)
