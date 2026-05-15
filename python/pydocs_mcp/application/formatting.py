@@ -3,7 +3,7 @@
 These helpers are the canonical rendering code for pydocs-mcp search output.
 They are called from:
 
-- ``retrieval.stages.TokenBudgetFormatterStage`` — wraps result as a
+- ``retrieval.stages.TokenBudgetStage`` — wraps result as a
   composite ``Chunk`` with ``ChunkOrigin.COMPOSITE_OUTPUT`` origin.
 - MCP handler fallback paths in ``server.py`` — when the pipeline config
   omits the formatter stage, the handler renders the raw result itself.
@@ -39,7 +39,7 @@ from pydocs_mcp.models import (
 )
 
 # Approximate characters per token (conservative estimate for English text).
-# This module is the single source of truth for the ratio — ``TokenBudgetFormatterStage``
+# This module is the single source of truth for the ratio — ``TokenBudgetStage``
 # and the pre-sub-PR-2 ``search.format_within_budget`` both used the same value (4).
 _CHARS_PER_TOKEN = 4
 

@@ -318,7 +318,7 @@ async def test_token_budget_formatter_stage_composite_output():
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
     from pydocs_mcp.retrieval.stages import (
         COMPOSITE_TITLE_SENTINEL,
-        TokenBudgetFormatterStage,
+        TokenBudgetStage,
     )
 
     payload = ChunkList(items=(
@@ -326,7 +326,7 @@ async def test_token_budget_formatter_stage_composite_output():
         Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
     ))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await TokenBudgetFormatterStage(
+    out = await TokenBudgetStage(
         formatter=ChunkFormatter(),
         budget=10_000,
     ).run(state)
@@ -347,7 +347,7 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
     from pydocs_mcp.retrieval.stages import (
         MetadataPostFilterStage,
-        TokenBudgetFormatterStage,
+        TokenBudgetStage,
     )
 
     payload = ChunkList(items=(
@@ -360,7 +360,7 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
     pipeline = CodeRetrieverPipeline(
         name="p",
         stages=(
-            TokenBudgetFormatterStage(
+            TokenBudgetStage(
                 formatter=ChunkFormatter(),
                 budget=10_000,
             ),
@@ -377,7 +377,7 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
 @pytest.mark.asyncio
 async def test_token_budget_formatter_respects_budget():
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
-    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+    from pydocs_mcp.retrieval.stages import TokenBudgetStage
 
     # 100 chunks * ~10-byte render ≈ 1000 bytes. Budget = 50 tokens ≈ 200 bytes (cut early).
     payload = ChunkList(items=tuple(
@@ -385,7 +385,7 @@ async def test_token_budget_formatter_respects_budget():
         for i in range(100)
     ))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await TokenBudgetFormatterStage(
+    out = await TokenBudgetStage(
         formatter=ChunkFormatter(),
         budget=50,
     ).run(state)
@@ -396,10 +396,10 @@ async def test_token_budget_formatter_respects_budget():
 @pytest.mark.asyncio
 async def test_token_budget_formatter_none_result_noop():
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
-    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+    from pydocs_mcp.retrieval.stages import TokenBudgetStage
 
     state = PipelineState(query=SearchQuery(terms="x"), result=None)
-    out = await TokenBudgetFormatterStage(
+    out = await TokenBudgetStage(
         formatter=ChunkFormatter(),
         budget=1000,
     ).run(state)

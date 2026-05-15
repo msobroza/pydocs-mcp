@@ -384,7 +384,7 @@ class SubPipelineStage:
 
 @stage_registry.register("token_budget_formatter")
 @dataclass(frozen=True, slots=True)
-class TokenBudgetFormatterStage:
+class TokenBudgetStage:
     """Render the retrieval result as a single composite ``Chunk`` whose text
     is the markdown-formatted concatenation within ``budget`` tokens.
 
@@ -432,7 +432,7 @@ class TokenBudgetFormatterStage:
         }
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "TokenBudgetFormatterStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "TokenBudgetStage":
         return cls(
             formatter=context.formatter_registry.build(data["formatter"], context),
             budget=data["budget"],
