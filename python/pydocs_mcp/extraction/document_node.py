@@ -71,3 +71,42 @@ class DocumentNode:
     # Self-reference is stringified by `from __future__ import annotations`;
     # no explicit quotes needed.
     children:        tuple[DocumentNode, ...] = ()
+
+    def to_pageindex_json(self) -> dict[str, Any]:
+        """Serialize as PageIndex-style JSON dict (spec §4.3).
+
+        Recursive over children. Field renames per spec: ``start_line`` →
+        ``start_index``, ``end_line`` → ``end_index``. ``kind`` is emitted
+        as its string value (``NodeKind.value``) so consumers don't need to
+        know the enum. ``nodes`` holds recursive children. Used by
+        ``LookupService`` for the ``lookup`` MCP tool response shape.
+        """
+        return {
+            "title": self.title,
+            "node_id": self.node_id,
+            "kind": self.kind.value,
+            "source_path": self.source_path,
+            "start_index": self.start_line,
+            "end_index": self.end_line,
+            "summary": self.summary,
+            "nodes": [child.to_pageindex_json() for child in self.children],
+        }
+
+    def find_node_by_qualified_name(self, target: str) -> "DocumentNode | None":
+        """Pre-order BFS search for the first node with ``qualified_name == target``.
+
+        Iterative + explicit stack rather than recursion: avoids
+        ``RecursionError`` on deeply nested subpackage trees (1000+ levels)
+        where Python's default 1000-frame limit would trip. Returns the
+        FIRST match in pre-order traversal (root, then children left-to-right),
+        which matches the natural reading order for nested code.
+        """
+        if self.qualified_name == target:
+            return self
+        stack: list[DocumentNode] = list(self.children)
+        while stack:
+            node = stack.pop(0)
+            if node.qualified_name == target:
+                return node
+            stack.extend(node.children)
+        return None
