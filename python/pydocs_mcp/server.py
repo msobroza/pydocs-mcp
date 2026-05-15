@@ -125,7 +125,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     tree_svc = None
     ref_svc = None
     try:
-        from pydocs_mcp.application import DocumentTreeService  # type: ignore[attr-defined]
+        from pydocs_mcp.application import TreeService  # type: ignore[attr-defined]
         # Instantiation deferred until sub-PR #5 lands its tree_store wiring.
     except ImportError:
         pass
@@ -215,12 +215,12 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             log.exception("lookup failed unexpectedly")
             raise ServiceUnavailableError(f"lookup failed: {e}") from e
 
-    # TODO(sub-PR #5b/follow-up): wire DocumentTreeService + build_package_tree
+    # TODO(sub-PR #5b/follow-up): wire TreeService + build_package_tree
     # into ``lookup(kind="tree")`` dispatch so the tree arborescence is reachable
     # via the unified 2-tool MCP surface. Standalone ``get_document_tree`` /
     # ``get_package_tree`` handlers were removed during the rebase onto #6's
     # consolidated MCP surface; the underlying services
-    # (``DocumentTreeService``, ``build_package_tree``, ``flatten_to_chunks``)
+    # (``TreeService``, ``build_package_tree``, ``flatten_to_chunks``)
     # remain available for the integration.
 
     log.info("MCP ready (db: %s)", db_path)

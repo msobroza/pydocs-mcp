@@ -1,4 +1,4 @@
-"""Tests for DocumentTreeService (Task 27 — sub-PR #5, spec §13.1).
+"""Tests for TreeService (Task 27 — sub-PR #5, spec §13.1).
 
 Uses in-memory DocumentTreeStore fake — no SQLite, no real persistence.
 """
@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from pydocs_mcp.application.document_tree_service import (
-    DocumentTreeService,
+from pydocs_mcp.application.tree_service import (
     NotFoundError,
+    TreeService,
 )
 from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
 
@@ -56,7 +56,7 @@ class _FakeTreeStore:
 async def test_get_tree_returns_document_node():
     tree = _module_tree("requests.adapters")
     store = _FakeTreeStore(by_key={("requests", "requests.adapters"): tree})
-    service = DocumentTreeService(tree_store=store)
+    service = TreeService(tree_store=store)
 
     result = await service.get_tree("requests", "requests.adapters")
 
@@ -65,7 +65,7 @@ async def test_get_tree_returns_document_node():
 
 @pytest.mark.asyncio
 async def test_get_tree_missing_raises_not_found():
-    service = DocumentTreeService(tree_store=_FakeTreeStore())
+    service = TreeService(tree_store=_FakeTreeStore())
 
     with pytest.raises(NotFoundError) as exc_info:
         await service.get_tree("unknown", "unknown.missing")
@@ -77,7 +77,7 @@ async def test_get_tree_missing_raises_not_found():
 @pytest.mark.asyncio
 async def test_not_found_error_is_lookup_error_subclass():
     """Callers that except-match LookupError shouldn't need to know the subclass."""
-    service = DocumentTreeService(tree_store=_FakeTreeStore())
+    service = TreeService(tree_store=_FakeTreeStore())
 
     with pytest.raises(LookupError):
         await service.get_tree("x", "y")
@@ -92,7 +92,7 @@ async def test_list_package_modules_returns_dict():
         ("requests", "requests.sessions"): s,
         ("flask", "flask.app"): _module_tree("flask.app"),
     })
-    service = DocumentTreeService(tree_store=store)
+    service = TreeService(tree_store=store)
 
     result = await service.list_package_modules("requests")
 
@@ -103,7 +103,7 @@ async def test_list_package_modules_returns_dict():
 
 @pytest.mark.asyncio
 async def test_list_package_modules_unknown_package_returns_empty_dict():
-    service = DocumentTreeService(tree_store=_FakeTreeStore())
+    service = TreeService(tree_store=_FakeTreeStore())
 
     result = await service.list_package_modules("ghost")
 
@@ -114,7 +114,7 @@ def test_service_is_frozen_and_slotted():
     """Typo-guard: frozen + slots means rebinding / unknown attrs fail fast."""
     import dataclasses
 
-    service = DocumentTreeService(tree_store=_FakeTreeStore())
+    service = TreeService(tree_store=_FakeTreeStore())
     # Frozen — rebinding raises FrozenInstanceError.
     with pytest.raises(dataclasses.FrozenInstanceError):
         service.tree_store = _FakeTreeStore()  # type: ignore[misc]

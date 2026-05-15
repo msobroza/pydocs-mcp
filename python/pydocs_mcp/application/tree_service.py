@@ -1,4 +1,4 @@
-"""DocumentTreeService — query-side wrapper over DocumentTreeStore (spec §13.1).
+"""TreeService — query-side wrapper over DocumentTreeStore (spec §13.1).
 
 Used by the ``get_document_tree`` MCP handler (Task 25) and the
 ``pydocs-mcp tree`` CLI (Task 28) to fetch a previously-stored tree by
@@ -25,7 +25,7 @@ class NotFoundError(LookupError):
 
 
 @dataclass(frozen=True, slots=True)
-class DocumentTreeService:
+class TreeService:
     """Fetches DocumentNode trees from a DocumentTreeStore.
 
     frozen+slots for immutable value semantics + typo guard — matches the

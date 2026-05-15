@@ -17,10 +17,6 @@ from __future__ import annotations
 
 from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.docs_search import DocsSearch
-from pydocs_mcp.application.document_tree_service import (
-    DocumentTreeService,
-    NotFoundError,
-)
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import (
@@ -38,13 +34,13 @@ from pydocs_mcp.application.protocols import (
     DependencyResolver,
     MemberExtractor,
 )
+from pydocs_mcp.application.tree_service import TreeService
 
 __all__ = [
     "ApiSearch",
     "ChunkExtractor",
     "DependencyResolver",
     "DocsSearch",
-    "DocumentTreeService",
     "IndexingService",
     "InvalidArgumentError",
     "LookupInput",
@@ -57,4 +53,5 @@ __all__ = [
     "ProjectIndexer",
     "SearchInput",
     "ServiceUnavailableError",
+    "TreeService",
 ]

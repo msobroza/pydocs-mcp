@@ -2,7 +2,7 @@
 
 Routes a single ``LookupInput.target`` string (empty / package /
 package.module / package.module.symbol) to the right backing service:
-``PackageLookup`` for package metadata, ``DocumentTreeService``
+``PackageLookup`` for package metadata, ``TreeService``
 (optional, sub-PR #5) for file structure, ``ReferenceService``
 (optional, sub-PR #5b) for the call graph.
 
@@ -31,8 +31,8 @@ from pydocs_mcp.application.package_lookup import PackageLookup
 
 if TYPE_CHECKING:
     # Avoid hard imports — these services may be absent pre-#5 / pre-#5b.
-    from pydocs_mcp.application.document_tree_service import DocumentTreeService
     from pydocs_mcp.application.reference_service import ReferenceService
+    from pydocs_mcp.application.tree_service import TreeService
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +44,7 @@ class LookupService:
     """
 
     package_lookup: PackageLookup
-    tree_svc: "DocumentTreeService | None" = None
+    tree_svc: "TreeService | None" = None
     ref_svc: "ReferenceService | None" = None
 
     async def lookup(self, payload: LookupInput) -> str:

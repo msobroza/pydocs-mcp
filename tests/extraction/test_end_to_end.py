@@ -8,7 +8,7 @@ runs against a tiny on-disk fixture project, the resulting 3-tuple
 into :class:`IndexingService.reindex_package`, which persists trees via
 :class:`SqliteDocumentTreeStore` (wired now by
 :func:`build_sqlite_indexing_service`). We then re-open the DB and use
-:class:`DocumentTreeService` — the read side used by the
+:class:`TreeService` — the read side used by the
 ``get_document_tree`` MCP handler — to pull the same trees back out.
 
 Difference from ``tests/application/test_end_to_end.py`` (service
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.application.document_tree_service import DocumentTreeService
+from pydocs_mcp.application.tree_service import TreeService
 from pydocs_mcp.application.project_indexer import ProjectIndexer
 from pydocs_mcp.db import build_connection_provider, open_index_database
 from pydocs_mcp.extraction import (
@@ -284,10 +284,10 @@ async def test_e2e_markdown_file_produces_module_tree_with_heading_children(
 
 
 @pytest.mark.asyncio
-async def test_e2e_get_document_tree_service_returns_saved_tree(
+async def test_e2e_get_tree_service_returns_saved_tree(
     fixture_project: Path, db_path: Path,
 ) -> None:
-    """DocumentTreeService.get_tree — the read path used by get_document_tree MCP.
+    """TreeService.get_tree — the read path used by get_document_tree MCP.
 
     Saves via the pipeline, retrieves via the service that backs the MCP
     handler, and verifies the retrieved tree is a DocumentNode with the
@@ -297,7 +297,7 @@ async def test_e2e_get_document_tree_service_returns_saved_tree(
     await _run_indexing(fixture_project, db_path)
 
     tree_store = SqliteDocumentTreeStore(provider=build_connection_provider(db_path))
-    service = DocumentTreeService(tree_store=tree_store)
+    service = TreeService(tree_store=tree_store)
 
     tree = await service.get_tree("__project__", "src.app")
     assert isinstance(tree, DocumentNode)
