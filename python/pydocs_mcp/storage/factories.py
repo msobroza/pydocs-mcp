@@ -1,8 +1,8 @@
-"""Canonical SQLite wiring factories for the indexing + lookup services.
+"""Canonical SQLite factories for the indexing + lookup services.
 
 The MCP CLI (``__main__.py``), the MCP server (``server.py``), the
 benchmark suite, and the test suite all construct the same repository
-stack around a shared ``ConnectionProvider``. Keeping the wiring in one
+stack around a shared ``ConnectionProvider``. Keeping the composition in one
 place means a change to the backend dependencies (e.g. swapping in a
 different ``ChunkStore`` implementation) fans out through a single
 factory instead of N copies.
@@ -54,7 +54,7 @@ def build_sqlite_lookup_service(
 
     Mirrors :func:`build_sqlite_indexing_service`. The CLI ``lookup``
     subcommand and the MCP server both delegate here for the lookup
-    wiring so a change to the dependency list fans out through one
+    composition so a change to the dependency list fans out through one
     factory. ``ref_svc`` (sub-PR #5b) defaults to None — LookupService
     surfaces its absence to clients as ``ServiceUnavailableError`` for
     the modes that need it (callers/callees).
@@ -63,7 +63,7 @@ def build_sqlite_lookup_service(
     from pydocs_mcp.application.package_lookup import PackageLookup
     from pydocs_mcp.application.tree_service import TreeService
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.retrieval.wiring import build_retrieval_context
+    from pydocs_mcp.retrieval.factories import build_retrieval_context
 
     cfg = config or AppConfig.load()
     context = build_retrieval_context(db_path, cfg)

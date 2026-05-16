@@ -149,7 +149,7 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
         build_ingestion_pipeline,
     )
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+    from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 
     # Ensure the schema exists before repositories issue queries.
     open_index_database(db_path).close()
@@ -236,7 +236,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
             build_chunk_pipeline_from_config,
             build_member_pipeline_from_config,
         )
-        from pydocs_mcp.retrieval.wiring import build_retrieval_context
+        from pydocs_mcp.retrieval.factories import build_retrieval_context
         from pydocs_mcp.server import _do_search
 
         _project, db_path = _project_and_db(args)
@@ -272,7 +272,7 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
     try:
         from pydocs_mcp.application import LookupInput
         from pydocs_mcp.retrieval.config import AppConfig
-        from pydocs_mcp.storage.wiring import build_sqlite_lookup_service
+        from pydocs_mcp.storage.factories import build_sqlite_lookup_service
 
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))

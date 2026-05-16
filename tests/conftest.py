@@ -29,7 +29,7 @@ from pydocs_mcp.models import (
     PackageOrigin,
 )
 from pydocs_mcp.retrieval.config import AppConfig
-from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 from tests._retriever_helpers import write_package_sync
 
 

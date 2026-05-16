@@ -306,7 +306,7 @@ async def test_indexing_service_clear_all_also_removes_null_package_rows(tmp_pat
     and then calling ``clear_all`` must leave the table empty.
     """
     from pydocs_mcp.db import open_index_database
-    from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+    from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 
     db_path = tmp_path / "clear.db"
     conn = open_index_database(db_path)

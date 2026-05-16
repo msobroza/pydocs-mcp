@@ -45,7 +45,7 @@ from pydocs_mcp.retrieval.config import (
     build_chunk_pipeline_from_config,
     build_member_pipeline_from_config,
 )
-from pydocs_mcp.retrieval.wiring import build_retrieval_context
+from pydocs_mcp.retrieval.factories import build_retrieval_context
 from pydocs_mcp.storage.sqlite import (
     SqliteChunkRepository,
     SqliteModuleMemberRepository,

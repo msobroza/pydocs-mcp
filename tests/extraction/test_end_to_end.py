@@ -39,7 +39,7 @@ from pydocs_mcp.storage.sqlite import (
     SqliteDocumentTreeStore,
     SqliteModuleMemberRepository,
 )
-from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────

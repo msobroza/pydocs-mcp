@@ -55,7 +55,7 @@ from pydocs_mcp.extraction.stages import (
     PackageBuildStage,
 )
 from pydocs_mcp.extraction.tree_flatten import flatten_to_chunks
-from pydocs_mcp.extraction.wiring import (
+from pydocs_mcp.extraction.factories import (
     build_ingestion_pipeline,
     load_ingestion_pipeline,
 )

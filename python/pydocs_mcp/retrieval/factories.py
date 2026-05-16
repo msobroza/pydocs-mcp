@@ -1,10 +1,10 @@
-"""Canonical wiring factories for retrieval-time dependencies.
+"""Canonical factories for retrieval-time dependencies.
 
 Both the MCP server (``server.py``) and the CLI query/api subcommands
 (``__main__.py``) construct the same ``BuildContext``: a SQLite
 ``ConnectionProvider``, a ``SqliteVectorStore``, a
 ``SqliteModuleMemberRepository``, and an ``AppConfig``. This module
-exposes a single factory they both call so the retrieval-side wiring
+exposes a single factory they both call so the retrieval-side composition
 lives in one place and cannot drift between the two entry points.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pydocs_mcp.storage.sqlite import (
 
 
 def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
-    """Canonical wiring for retrieval-time :class:`BuildContext`.
+    """Canonical factory for retrieval-time :class:`BuildContext`.
 
     Used by both ``server.py`` startup and the CLI ``query`` / ``api``
     subcommands. Callers that also need the raw repositories can
