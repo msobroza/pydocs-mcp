@@ -149,8 +149,11 @@ def test_cell_qualified_name_format(tmp_path: Path) -> None:
         path="notebooks/demo.ipynb",
         root=tmp_path,
     )
-    assert root.children[0].qualified_name == "notebooks.demo#cell-0"
-    assert root.children[1].qualified_name == "notebooks.demo#cell-1"
+    # F20: notebook qualified_names keep '.ipynb' suffix so a sibling
+    # 'notebooks/demo.py' or 'notebooks/demo.md' doesn't collide on the
+    # DocumentTreeStore (package, module) PK.
+    assert root.children[0].qualified_name == "notebooks.demo.ipynb#cell-0"
+    assert root.children[1].qualified_name == "notebooks.demo.ipynb#cell-1"
 
 
 # -- 11. cell_count + cell_index metadata ------------------------------------

@@ -172,8 +172,10 @@ def test_heading_qualified_name_format(tmp_path: Path) -> None:
     src = "# My Title\nBody.\n"
     root = _build(src, path="docs/guide.md", root=tmp_path)
     heading = next(c for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING)
-    # module id: "docs.guide"; slug: "my-title".
-    assert heading.qualified_name == "docs.guide#my-title"
+    # F20: doc-file qualified_names keep the extension as a trailing
+    # dotted segment so .md / .ipynb / .py with the same stem don't
+    # collide on the DocumentTreeStore (package, module) PK.
+    assert heading.qualified_name == "docs.guide.md#my-title"
 
 
 # -- 13. Heading level recorded in extra_metadata -----------------------------
@@ -238,3 +240,17 @@ def test_shell_style_comments_in_bash_fence_not_treated_as_headings(
     root = _build(src, root=tmp_path)
     titles = [c.title for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
     assert titles == ["Setup"]
+
+
+# -- 15. PK collision avoidance with .py / .ipynb siblings (F20) --------------
+
+def test_doc_path_module_id_keeps_extension_to_avoid_pk_collision(
+    tmp_path: Path,
+) -> None:
+    """F20: ``pkg/foo.py``, ``pkg/foo.md``, ``pkg/foo.ipynb`` all yield
+    a MODULE root that's eventually written to ``document_trees`` keyed
+    by ``(package, qualified_name)``. Pre-fix, all three produced
+    ``pkg.foo`` and the PK collided — only the last writer's tree
+    survived. Doc-file module ids now carry their extension."""
+    md_root = _build("# H\n", path="pkg/foo.md", root=tmp_path)
+    assert md_root.qualified_name == "pkg.foo.md"

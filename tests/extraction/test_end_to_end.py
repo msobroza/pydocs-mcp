@@ -265,10 +265,12 @@ async def test_e2e_markdown_file_produces_module_tree_with_heading_children(
     store = SqliteDocumentTreeStore(provider=build_connection_provider(db_path))
     trees = await store.load_all_in_package("__project__")
 
-    # README.md has no directory prefix — module id is just "README".
-    readme = trees.get("README")
+    # F20: doc-file module ids keep their extension as a trailing dotted
+    # segment so .py / .md / .ipynb with the same stem don't collide on
+    # the DocumentTreeStore (package, module) PK.
+    readme = trees.get("README.md")
     assert readme is not None, (
-        f"expected 'README' module tree in persisted trees; got keys {list(trees)}"
+        f"expected 'README.md' module tree in persisted trees; got keys {list(trees)}"
     )
     assert readme.kind is NodeKind.MODULE
 

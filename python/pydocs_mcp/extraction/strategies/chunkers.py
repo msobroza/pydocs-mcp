@@ -437,12 +437,24 @@ class HeadingMarkdownChunker:
 
 
 def _module_from_doc_path(path: str, root: Path) -> str:
-    """Doc-file module id = relative path with ``/`` → ``.`` and the final
-    suffix (``.md`` / ``.ipynb``) stripped. Unlike :func:`_module_from_path`
-    this does NOT special-case ``__init__`` — ``.md`` / ``.ipynb`` files
-    have no Python package semantics."""
+    """Doc-file module id = relative path with ``/`` → ``.``, suffix preserved
+    as a trailing dotted segment.
+
+    Pre-fix this stripped the suffix entirely, which made ``pkg/foo.md`` and
+    ``pkg/foo.ipynb`` produce the same module name (``pkg.foo``) — the SAME
+    name that ``pkg/foo.py`` produces. DocumentTreeStore PK is
+    ``(package, module)`` so all three writes collided and the last writer
+    won, silently dropping the other two trees.
+
+    Keeping the suffix in the qualified_name (``pkg.foo.md``, ``pkg.foo.ipynb``)
+    makes the identity per-file unique while staying human-readable.
+    Python module lookups still find ``pkg/foo.py`` under ``pkg.foo``; doc /
+    notebook lookups use the suffixed name. ``.py`` paths keep their bare
+    dotted name via :func:`_module_from_path`."""
     parts, p = _relative_module_parts(path, root)
-    return ".".join(parts) or p.stem
+    base = ".".join(parts) or p.stem
+    suffix = p.suffix.lstrip(".").lower()
+    return f"{base}.{suffix}" if suffix else base
 
 
 def _parse_md_headings(
