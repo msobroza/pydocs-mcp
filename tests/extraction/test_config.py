@@ -140,3 +140,36 @@ def test_ingestion_pipeline_path_optional():
     assert cfg.pipeline_path is None
     override = IngestionConfig(pipeline_path="./my_ingestion.yaml")
     assert override.pipeline_path.name == "my_ingestion.yaml"
+
+
+# -- A3: ge=1 validators on MembersConfig ---------------------------
+
+def test_members_per_module_cap_zero_rejected():
+    """A3: cap=0 fires on iter 0 and zeros the entire symbol index
+    silently. Pydantic ge=1 must fail loud at YAML load time."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        MembersConfig(members_per_module_cap=0)
+
+
+def test_members_per_module_cap_negative_rejected():
+    """Same guard for negative values (Pydantic int cast accepts them
+    silently otherwise)."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        MembersConfig(members_per_module_cap=-5)
+
+
+def test_inspect_depth_zero_rejected():
+    """A3: depth=0 means "no traversal" — index returns 0 symbols for
+    every dep. Reject at load time."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        MembersConfig(inspect_depth=0)
+
+
+def test_members_config_defaults_still_valid():
+    """Sanity: ge=1 mustn't reject the shipped defaults (1 + 120)."""
+    cfg = MembersConfig()
+    assert cfg.inspect_depth == 1
+    assert cfg.members_per_module_cap == 120
