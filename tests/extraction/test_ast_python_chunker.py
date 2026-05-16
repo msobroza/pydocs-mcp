@@ -1,4 +1,4 @@
-"""Unit tests for :class:`AstPythonChunker` (Task 14 — sub-PR #5, spec §8.1).
+"""Unit tests for :class:`AstPythonChunker` (sub-PR #5, spec §8.1).
 
 Covers:
 - ``ast.parse`` success → MODULE → FUNCTION / CLASS / IMPORT_BLOCK tree.

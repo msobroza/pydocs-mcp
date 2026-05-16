@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 stage_registry: "ComponentRegistry[IngestionStage]" = ComponentRegistry()
 """Decorator-populated registry for ``@stage_registry.register('type_name')``.
 
-Populated by side-effect import of ``extraction.stages`` (Task 11) — the
+Populated by side-effect import of ``extraction.pipeline.stages`` — the
 six concrete :class:`IngestionStage` classes each carry the decorator at
 module scope so importing the module registers them.
 """

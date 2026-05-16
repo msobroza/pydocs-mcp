@@ -1,4 +1,4 @@
-"""Unit tests for ``extraction/discovery.py`` (Task 17 — sub-PR #5, spec §5, §11.1).
+"""Unit tests for ``extraction/strategies/discovery.py`` (sub-PR #5, spec §5, §11.1).
 
 Pins:
 - ``ProjectFileDiscoverer`` walks an ``os.walk`` tree; returns sorted paths with

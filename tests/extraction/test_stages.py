@@ -1,4 +1,4 @@
-"""Unit tests for ``extraction/stages.py`` (Task 20 — sub-PR #5, spec §7.2).
+"""Unit tests for ``extraction/pipeline/stages.py`` (sub-PR #5, spec §7.2).
 
 Pins the 6-stage behavior:
 - Each stage is registered via ``@stage_registry.register("<type>")`` — all

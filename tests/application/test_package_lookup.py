@@ -1,7 +1,6 @@
 """Tests for PackageLookup — list_packages + get_package_doc (spec §5.1).
 
-Uses in-memory fakes local to this file (per Task 5 plan; shared conftest
-fixtures land in Task 14). The fakes rely on structural duck typing — the
+Uses in-memory fakes local to this file. The fakes rely on structural duck typing — the
 Protocols in ``storage/protocols.py`` are ``runtime_checkable`` and the
 service only calls ``list`` / ``get``, so we implement just what's needed
 plus a few capture fields to let the tests assert call arguments.

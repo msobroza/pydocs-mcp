@@ -1,4 +1,4 @@
-"""Unit tests for ``extraction/factories.py`` + ``extraction/chunk_extractor.py`` (Task 22).
+"""Unit tests for ``extraction/factories.py`` + ``extraction/pipeline/chunk_extractor.py``.
 
 Pins spec §7.3 + §7.4 + AC #33 + AC #19:
 - ``load_ingestion_pipeline`` builds a 6-stage ``IngestionPipeline`` from the

@@ -1,9 +1,9 @@
 """TreeService — query-side wrapper over DocumentTreeStore (spec §13.1).
 
-Used by the ``get_document_tree`` MCP handler (Task 25) and the
-``pydocs-mcp tree`` CLI (Task 28) to fetch a previously-stored tree by
-``(package, module)``. Depends only on the :class:`DocumentTreeStore`
-Protocol — keeps the application layer backend-agnostic (AC #10).
+Used by :class:`LookupService` (and the MCP ``lookup`` tool) to fetch a
+previously-stored tree by ``(package, module)``. Depends only on the
+:class:`DocumentTreeStore` Protocol — keeps the application layer
+backend-agnostic (AC #10).
 """
 from __future__ import annotations
 

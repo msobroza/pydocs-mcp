@@ -1,4 +1,4 @@
-"""Unit tests for :class:`NotebookChunker` (Task 16 — sub-PR #5, spec §8.3).
+"""Unit tests for :class:`NotebookChunker` (sub-PR #5, spec §8.3).
 
 Covers:
 - Empty cells list → MODULE with no children + ``cell_count == 0``.

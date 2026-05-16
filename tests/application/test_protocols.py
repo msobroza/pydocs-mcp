@@ -1,4 +1,4 @@
-"""Smoke test for application-layer Protocols (Task 1 — sub-PR #4).
+"""Smoke test for application-layer Protocols (sub-PR #&).
 
 Covers:
 - Imports resolve.

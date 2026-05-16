@@ -1,4 +1,4 @@
-"""Unit tests for ``build_package_tree`` (Task 21 — sub-PR #5, spec §12.2).
+"""Unit tests for ``build_package_tree`` (sub-PR #5, spec §12.2).
 
 Pins the module-path trie assembly rules:
 - Root is always NodeKind.PACKAGE with ``package`` as its qualified_name.

@@ -1,4 +1,4 @@
-"""Unit tests for ``extraction/members.py`` (Task 18 — sub-PR #5, spec §9).
+"""Unit tests for ``extraction/strategies/members.py`` (sub-PR #5, spec §9).
 
 Pins:
 - ``AstMemberExtractor`` parses .py files via ``parse_py_file`` (Rust or fallback)

@@ -40,7 +40,7 @@ class AstMemberExtractor:
 
     No per-module cap lives on this class: :class:`~pydocs_mcp.extraction.config.MembersConfig`
     exposes ``members_per_module_cap`` but enforcement is the ingestion pipeline's
-    responsibility (downstream stage, out of scope for Task 18). The extractor
+    responsibility (downstream stage, out of scope). The extractor
     emits every member it parses; upstream code truncates.
     """
 

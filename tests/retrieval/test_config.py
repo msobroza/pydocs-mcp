@@ -178,7 +178,7 @@ def test_pipeline_path_accepts_shipped_pipelines_relative(tmp_path):
     assert resolved.name == "chunk_search.yaml"
 
 
-# ── Sub-PR #5 Task 7 — ExtractionConfig slotting (spec §11) ────────────────
+# ── Sub-PR #5 — ExtractionConfig slotting (spec §11) ────────────────
 
 
 def test_appconfig_includes_extraction_defaults():

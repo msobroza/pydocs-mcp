@@ -1,4 +1,4 @@
-"""Unit tests for DocumentNode + NodeKind + STRUCTURAL_ONLY_KINDS (Task 2 — sub-PR #5).
+"""Unit tests for DocumentNode + NodeKind + STRUCTURAL_ONLY_KINDS (sub-PR #5).
 
 Pins spec §4.2-§4.4 invariants:
 - 11 NodeKind values with lowercase ``.value`` strings.

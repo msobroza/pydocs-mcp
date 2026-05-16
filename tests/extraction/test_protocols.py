@@ -1,4 +1,4 @@
-"""Smoke tests for extraction Protocols (Task 1 — sub-PR #5)."""
+"""Smoke tests for extraction Protocols (sub-PR #5)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +11,7 @@ from pydocs_mcp.extraction.protocols import (
 
 
 class _FakeDocumentNode:
-    """Stand-in — real DocumentNode lands in Task 2."""
+    """Stand-in for DocumentNode — Protocol-shape only."""
 
 
 def test_chunker_runtime_checkable_accepts_build_tree_method():
@@ -30,12 +30,12 @@ def test_chunker_rejects_class_without_build_tree():
 
 
 def test_chunker_conforming_instance_exposes_from_config_classmethod():
-    """Plan Task 1 contract: ``from_config(cfg)`` classmethod MUST exist.
+    """Plan contract: ``from_config(cfg)`` classmethod MUST exist.
 
     ``@runtime_checkable`` can't enforce this (PEP 544 method-presence
-    only), so we assert it explicitly as a guardrail. Tasks 14-16 ship
-    chunkers that satisfy this; this test pins it so a 4th chunker can't
-    silently skip it.
+    only), so we assert it explicitly as a guardrail. The shipped chunkers
+    (AstPythonChunker, HeadingMarkdownChunker, NotebookChunker) all satisfy
+    this; this test pins it so a 4th chunker can't silently skip it.
     """
     class _ConformingChunker:
         def build_tree(self, path, content, package, root):

@@ -1,4 +1,4 @@
-"""Unit tests for ``extraction/dependencies.py`` (Task 19 — sub-PR #5, spec §10).
+"""Unit tests for ``extraction/strategies/dependencies.py`` (sub-PR #5, spec §10).
 
 Pins:
 - ``StaticDependencyResolver`` wraps ``deps.discover_declared_dependencies``

@@ -1,4 +1,4 @@
-"""Unit tests for :class:`HeadingMarkdownChunker` (Task 15 — sub-PR #5, spec §8.2).
+"""Unit tests for :class:`HeadingMarkdownChunker` (sub-PR #5, spec §8.2).
 
 Covers:
 - No heading-in-range → single MODULE node carrying full content as text.

@@ -1,4 +1,4 @@
-"""Tests for SqliteDocumentTreeStore (spec §12.2, Task 10)."""
+"""Tests for SqliteDocumentTreeStore (spec §12.2)."""
 from __future__ import annotations
 
 import pytest

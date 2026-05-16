@@ -393,7 +393,7 @@ def test_indexing_service_accepts_fake_stores_only():
     assert service2.unit_of_work is None
 
 
-# ── Task 23 — DocumentTreeStore integration ──────────────────────────────
+# ── DocumentTreeStore integration ──────────────────────────────
 
 
 @dataclass

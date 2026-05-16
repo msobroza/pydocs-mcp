@@ -17,7 +17,7 @@ Two Protocols define the boundary between extraction and its consumers:
 
 Sub-PR #5 ships three concrete :class:`Chunker`\\s (``AstPythonChunker``,
 ``HeadingMarkdownChunker``, ``NotebookChunker``) and two concrete
-discoverers in ``extraction/discovery.py``.
+discoverers in ``extraction/strategies/discovery.py``.
 
 The dict-lookup selector (``chunker_registry`` in
 ``extraction/serialization.py``) is the registered-chunker dispatch. No

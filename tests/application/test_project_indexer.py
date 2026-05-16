@@ -6,10 +6,9 @@ ProjectIndexer depends only on Protocols:
   ``application.protocols``, ``@runtime_checkable``)
 
 These tests use in-memory fakes that structurally satisfy each Protocol — no
-real ``indexer.py`` imports, no SQLite, no network. Task 12 will reshape
-``indexer.py`` so the concrete ``*Adapter`` classes defined alongside the
-service can wire to ``extract_*`` functions; the service itself is backend
-and adapter agnostic.
+real extraction imports, no SQLite, no network. The concrete strategy classes
+in ``extraction/strategies/`` and ``extraction/pipeline/`` wire to the
+``extract_*`` Protocols; the service itself is backend and adapter agnostic.
 """
 from __future__ import annotations
 
@@ -99,10 +98,9 @@ class FakeIndexingService:
     That keeps the write-bootstrap test isolated from the persistence-layer
     mechanics covered in test_indexing_service.py.
 
-    Task 32: the real ``IndexingService.reindex_package`` now accepts the
-    ``trees`` keyword per the spec §13.3 canonical composite; the fake
-    widens to match so assertions about tree propagation ride on the same
-    recorded shape.
+    The real ``IndexingService.reindex_package`` accepts the ``trees``
+    keyword per spec §13.3's canonical composite; the fake widens to match
+    so assertions about tree propagation ride on the same recorded shape.
     """
 
     cleared: bool = False
@@ -152,8 +150,8 @@ class FakeChunkExtractor:
 
     Spec §5 amendment: the Protocol returns a 3-tuple
     ``(chunks, trees, package)``. Test fixtures pass ``(chunks, pkg)`` and
-    the fake wraps them with an empty ``trees=()`` — Task 22 replaces this
-    with a real tree emitter.
+    the fake wraps them with an empty ``trees=()``; real strategies emit
+    actual trees.
 
     ``dep_returns`` maps dep-name → either the extractor return value
     (2-tuple OR 3-tuple; both accepted for test-terseness) or an
@@ -474,8 +472,8 @@ async def test_index_project_forwards_trees_to_reindex_package(
     """Spec §5 + §13.3: ``ChunkExtractor`` returns 3-tuple
     ``(chunks, trees, package)``; :class:`ProjectIndexer` forwards
     ``trees`` to :meth:`IndexingService.reindex_package` so the wired
-    ``DocumentTreeStore`` persists them (Task 32 closed the gap Task 23
-    opened). Both project + dep branches must forward.
+    ``DocumentTreeStore`` persists them. Both project + dep branches must
+    forward.
 
     This test exercises the forwarding path for both the project branch
     (uses ``project_trees`` on the fake) and the dep branch (uses a
@@ -514,7 +512,7 @@ async def test_index_project_forwards_trees_to_reindex_package(
     assert chunks_ex.project_calls == [tmp_path]
     assert chunks_ex.dep_calls == ["fastapi"]
     # Each produced a reindex_package call AND trees rode through to the
-    # store — Task 32's end-to-end invariant. The FakeIndexingService
+    # store — end-to-end invariant. The FakeIndexingService
     # records (pkg, chunks, members, trees); all four assertions hold.
     assert len(idx.reindex_calls) == 2
     for _pkg_arg, chunks_arg, members_arg, trees_arg in idx.reindex_calls:

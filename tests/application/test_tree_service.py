@@ -1,4 +1,4 @@
-"""Tests for TreeService (Task 27 — sub-PR #5, spec §13.1).
+"""Tests for TreeService (sub-PR #5, spec §13.1).
 
 Uses in-memory DocumentTreeStore fake — no SQLite, no real persistence.
 """

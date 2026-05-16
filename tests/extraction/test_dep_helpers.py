@@ -1,4 +1,4 @@
-"""Unit tests for ``extraction/_dep_helpers.py`` (Task 12 — sub-PR #5).
+"""Unit tests for ``extraction/strategies/_dep_helpers.py`` (sub-PR #5).
 
 Pins:
 - ``find_installed_distribution`` resolves installed packages + returns None
@@ -95,7 +95,7 @@ def test_find_site_packages_root_uses_pytest_for_smoke() -> None:
 
 def test_extract_by_import_is_callable() -> None:
     """_extract_by_import is exported and callable. Smoke-only — deeper
-    behavior is exercised by InspectMemberExtractor tests in Task 20."""
+    behavior is exercised by InspectMemberExtractor tests."""
     assert callable(_dep_helpers._extract_by_import)
 
 

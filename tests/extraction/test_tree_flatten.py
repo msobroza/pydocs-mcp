@@ -1,4 +1,4 @@
-"""Unit tests for ``extraction/tree_flatten.py`` (Task 13 — sub-PR #5).
+"""Unit tests for ``extraction/model/tree_flatten.py`` (sub-PR #5).
 
 Pins the direct-text rule (spec §4.1.1) and required metadata keys (§4.4):
 - STRUCTURAL_ONLY_KINDS (PACKAGE / SUBPACKAGE) never emit, even with text

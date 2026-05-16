@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset({".py", ".md", ".ipynb"})
 """File extensions the extraction pipeline is built to handle. Narrowing is
 allowed via YAML; adding a new extension requires registering a matching
-:class:`~pydocs_mcp.extraction.protocols.Chunker` (Task 14+) AND amending
+:class:`~pydocs_mcp.extraction.protocols.Chunker` AND amending
 this allowlist — can't be done via YAML alone."""
 
 
@@ -39,7 +39,7 @@ decision #6b). NOT exposed as a YAML field; trying to set
 
 
 class MarkdownConfig(BaseModel):
-    """Heading-depth bounds for :class:`HeadingMarkdownChunker` (Task 15)."""
+    """Heading-depth bounds for :class:`HeadingMarkdownChunker`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -48,7 +48,7 @@ class MarkdownConfig(BaseModel):
 
 
 class NotebookConfig(BaseModel):
-    """Options for :class:`NotebookChunker` (Task 16)."""
+    """Options for :class:`NotebookChunker`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -132,7 +132,7 @@ class MembersConfig(BaseModel):
 class IngestionConfig(BaseModel):
     """Ingestion-pipeline YAML override.
 
-    Default ``None`` → the shipped ``pipelines/ingestion.yaml`` (Task 13).
+    Default ``None`` → the shipped ``pipelines/ingestion.yaml``.
     User override resolves via the sub-PR #2 path allowlist (AC #33)
     — candidates must live inside the shipped pipelines directory or the
     directory holding the user's config file; symlinks resolve before the
@@ -147,7 +147,7 @@ class IngestionConfig(BaseModel):
 class ExtractionConfig(BaseModel):
     """Root extraction config — slots into :class:`AppConfig` via
     ``extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)``
-    (Task 7).
+   .
     """
 
     model_config = ConfigDict(extra="forbid")
