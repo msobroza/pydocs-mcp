@@ -17,7 +17,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, DiscoveryScopeConfig
+from pydocs_mcp.extraction.config import (
+    _EXCLUDED_DIRS, DiscoveryScopeConfig, path_under_excluded,
+)
 from pydocs_mcp.extraction.strategies._dep_helpers import (
     find_installed_distribution,
     find_site_packages_root,
@@ -104,12 +106,15 @@ def _within_size_budget(path: str, max_bytes: int) -> bool:
 
 
 def _in_excluded_dir(relpath: str) -> bool:
-    """True iff any path component of ``relpath`` is a blocklisted directory.
+    """True iff any path component of ``relpath`` is blocklisted.
 
-    Guards against dependency wheels that ship vestigial ``.git`` or
-    ``__pycache__`` directories (rare but real — spec §11.1 rationale).
+    Delegates to :func:`pydocs_mcp.extraction.config.path_under_excluded`
+    so this module + ``strategies/members.py`` enforce the same policy
+    with the same splitting rules (M2). Guards against dependency wheels
+    that ship vestigial ``.git`` or ``__pycache__`` directories (rare
+    but real — spec §11.1).
     """
-    return any(part in _EXCLUDED_DIRS for part in Path(relpath).parts)
+    return path_under_excluded(relpath)
 
 
 __all__ = (
