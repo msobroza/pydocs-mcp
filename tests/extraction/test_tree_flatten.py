@@ -412,6 +412,69 @@ def test_class_and_method_nested_in_module_inherit_module_ancestor() -> None:
     assert by_kind[NodeKind.METHOD.value].metadata[ChunkFilterField.MODULE.value] == "pkg.mod"
 
 
+def test_import_block_inherits_module_ancestor_for_chunks_module() -> None:
+    """IMPORT_BLOCK is the FIRST child a Python chunker emits under MODULE.
+    Its ``qualified_name`` is the synthetic ``pkg.mod.__imports__`` — must
+    NOT leak into ``chunks.module``; the module ancestor wins (F1)."""
+    import_block = _node(
+        kind=NodeKind.IMPORT_BLOCK,
+        node_id="pkg.mod.__imports__",
+        qualified_name="pkg.mod.__imports__",
+        title="imports",
+        text="import os\nimport sys",
+        extra_metadata={},
+    )
+    module = _node(
+        kind=NodeKind.MODULE,
+        node_id="pkg.mod",
+        qualified_name="pkg.mod",
+        title="pkg.mod",
+        text="",
+        children=(import_block,),
+    )
+    chunks = flatten_to_chunks(module, "pkg")
+    [ib_chunk] = chunks  # module has empty text → only import_block emits
+    assert ib_chunk.metadata[ChunkFilterField.MODULE.value] == "pkg.mod"
+
+
+def test_code_example_under_function_inherits_module_ancestor() -> None:
+    """CODE_EXAMPLE is a GRANDCHILD of MODULE (under FUNCTION/METHOD/
+    CLASS/MARKDOWN_HEADING). The recursion must thread current_module
+    through the intermediate parent so the code-example chunk's
+    ``chunks.module`` is the module path, NOT the parent's
+    qualified_name (F1)."""
+    code_ex = _node(
+        kind=NodeKind.CODE_EXAMPLE,
+        node_id="pkg.mod.foo.ex0",
+        qualified_name="pkg.mod.foo.ex0",
+        title="example",
+        text="print('hi')",
+        extra_metadata={},
+    )
+    func = _node(
+        kind=NodeKind.FUNCTION,
+        node_id="pkg.mod.foo",
+        qualified_name="pkg.mod.foo",
+        title="foo",
+        text="def foo(): pass",
+        children=(code_ex,),
+        extra_metadata={},
+    )
+    module = _node(
+        kind=NodeKind.MODULE,
+        node_id="pkg.mod",
+        qualified_name="pkg.mod",
+        title="pkg.mod",
+        text="doc",
+        children=(func,),
+    )
+    chunks = flatten_to_chunks(module, "pkg")
+    by_kind = {c.metadata["kind"]: c for c in chunks}
+    assert by_kind[NodeKind.CODE_EXAMPLE.value].metadata[
+        ChunkFilterField.MODULE.value
+    ] == "pkg.mod"
+
+
 def test_explicit_extra_metadata_module_still_wins_under_module_ancestor() -> None:
     """Precedence: an explicit ``extra_metadata['module']`` on a child
     node beats the tracked MODULE ancestor. Lets inspect-mode chunkers
