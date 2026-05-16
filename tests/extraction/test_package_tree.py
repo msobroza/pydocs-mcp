@@ -150,3 +150,37 @@ def test_children_are_tuple_immutable() -> None:
     root2 = build_package_tree("pkg", trees)
     assert isinstance(root2.children, tuple)
     assert isinstance(root2.children[0].children, tuple)
+
+def test_project_root_admits_modules_without_project_prefix() -> None:
+    """F6: project chunkers produce qualified_names like 'myapp.utils'
+    (NO '__project__.' prefix because __project__ is a virtual sentinel,
+    not a path segment). Pre-fix, build_package_tree('__project__', ...)
+    dropped every module on the floor because none startswith
+    '__project__.'. The virtual-root path admits any first segment."""
+    trees = {
+        "myapp":          _module("myapp"),
+        "myapp.utils":    _module("myapp.utils"),
+        "tests.test_foo": _module("tests.test_foo"),
+    }
+    root = build_package_tree("__project__", trees)
+    assert root.kind is NodeKind.PACKAGE
+    assert root.qualified_name == "__project__"
+    assert root.extra_metadata["module_count"] == 3
+    # Children: SUBPACKAGE myapp (contains MODULE myapp + MODULE myapp.utils)
+    # and SUBPACKAGE tests (contains MODULE tests.test_foo).
+    by_title = {c.title: c for c in root.children}
+    assert set(by_title) == {"myapp", "tests"}
+    assert by_title["myapp"].kind in (NodeKind.SUBPACKAGE, NodeKind.MODULE)
+    assert by_title["tests"].kind is NodeKind.SUBPACKAGE
+
+
+def test_project_root_with_single_module_emits_module_leaf() -> None:
+    """F6 edge case: only one project module → SUBPACKAGE collapses to the
+    bare MODULE leaf (matches the standard prefix path's behaviour)."""
+    trees = {"loner": _module("loner")}
+    root = build_package_tree("__project__", trees)
+    assert len(root.children) == 1
+    [child] = root.children
+    assert child.kind is NodeKind.MODULE
+    assert child.qualified_name == "loner"
+

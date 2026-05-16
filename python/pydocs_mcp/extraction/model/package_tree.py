@@ -41,8 +41,17 @@ def build_package_tree(
     the distribution's import name, or ``"__project__"`` for the project itself).
     ``trees`` maps dotted module names to the MODULE ``DocumentNode`` produced
     by the per-file chunker.
+
+    ``__project__`` special case: project chunkers produce qualified_names
+    like ``"myapp.utils"`` or ``"tests.foo"`` — they do NOT prefix
+    ``__project__`` because ``__project__`` is a virtual sentinel, not a
+    real path segment. Without a special case the prefix-filter inside
+    ``_build_tree_nodes`` would drop every project module on the floor.
+    Passing ``current_prefix=""`` makes the trie root accept any first
+    segment, which is the desired semantics for the project root.
     """
-    children = _build_tree_nodes(trees, current_prefix=package)
+    initial_prefix = "" if package == "__project__" else package
+    children = _build_tree_nodes(trees, current_prefix=initial_prefix)
     return DocumentNode(
         node_id=package,
         qualified_name=package,
@@ -63,7 +72,12 @@ def _build_tree_nodes(
     *,
     current_prefix: str,
 ) -> list[DocumentNode]:
-    """Recursive trie walk. ``current_prefix`` is the dotted path so far."""
+    """Recursive trie walk. ``current_prefix`` is the dotted path so far.
+
+    ``current_prefix=""`` is the "virtual root" mode used for project trees
+    (``__project__``) where module names don't share a single common
+    prefix — every module is admitted and grouped by its OWN first segment.
+    """
     # Group modules by the next path segment after current_prefix. A module
     # at exactly current_prefix becomes a leaf at this level (key ""); deeper
     # dotted names group under the next segment, which either becomes a
@@ -71,16 +85,23 @@ def _build_tree_nodes(
     # at exactly next_prefix).
     by_next_segment: defaultdict[str, dict[str, DocumentNode]] = defaultdict(dict)
     for module_name, node in trees.items():
-        if module_name != current_prefix and not module_name.startswith(
-            current_prefix + ".",
-        ):
-            continue
-        if module_name == current_prefix:
-            by_next_segment[""][module_name] = node
-        else:
+        if current_prefix:
+            # Standard prefix-based admission.
+            if module_name != current_prefix and not module_name.startswith(
+                current_prefix + ".",
+            ):
+                continue
+            if module_name == current_prefix:
+                by_next_segment[""][module_name] = node
+                continue
             rest = module_name[len(current_prefix) + 1:]
-            next_seg = rest.split(".", 1)[0]
-            by_next_segment[next_seg][module_name] = node
+        else:
+            # Virtual-root mode: admit every module, key by its own first
+            # segment — empty module_name would be ill-formed input so we
+            # skip the "rest == ''" branch entirely.
+            rest = module_name
+        next_seg = rest.split(".", 1)[0]
+        by_next_segment[next_seg][module_name] = node
 
     children: list[DocumentNode] = []
     for seg, seg_modules in sorted(by_next_segment.items()):
@@ -89,7 +110,7 @@ def _build_tree_nodes(
             for _name, node in seg_modules.items():
                 children.append(node)
             continue
-        next_prefix = f"{current_prefix}.{seg}"
+        next_prefix = f"{current_prefix}.{seg}" if current_prefix else seg
         # Pure leaf: next_prefix itself is present AND it's the only descendant
         # under this segment — no __init__-plus-submodule case.
         if next_prefix in seg_modules and len(seg_modules) == 1:
