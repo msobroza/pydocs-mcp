@@ -349,3 +349,43 @@ def test_scattered_imports_children_in_source_order(tmp_path: Path) -> None:
         NodeKind.FUNCTION.value,
         NodeKind.IMPORT_BLOCK.value,
     ]
+
+
+def test_scattered_imports_three_runs(tmp_path: Path) -> None:
+    """T1: F22 only pinned the 2-run case. Three runs catches a regression
+    where suffix_counter wraps or doesn't increment past 1."""
+    src = (
+        "import a\n"                # line 1 — run1
+        "\n"
+        "x = 1\n"                   # line 3 — non-import
+        "import b\n"                # line 4 — run2
+        "\n"
+        "y = 2\n"                   # line 6 — non-import
+        "import c\n"                # line 7 — run3
+    )
+    root = _build(src, root=tmp_path)
+    blocks = [c for c in root.children if c.kind == NodeKind.IMPORT_BLOCK]
+    assert len(blocks) == 3
+    # Each block carries exactly one import line.
+    assert [b.text.strip() for b in blocks] == ["import a", "import b", "import c"]
+    # All three node_ids must be distinct so DocumentTreeStore PK
+    # doesn't collide.
+    ids = [b.node_id for b in blocks]
+    assert len(set(ids)) == 3
+    # Suffix scheme: first block keeps the bare __imports__ id; second
+    # and third use __imports__1, __imports__2 (1-indexed past zero).
+    assert ids[0].endswith(".__imports__")
+    assert ids[1].endswith(".__imports__1")
+    assert ids[2].endswith(".__imports__2")
+
+
+def test_imports_only_file_one_block(tmp_path: Path) -> None:
+    """T1: imports-only file (no other top-level code) — single
+    contiguous run, ONE block, no def/class siblings."""
+    src = "import os\nimport sys\nfrom pathlib import Path\n"
+    root = _build(src, root=tmp_path)
+    blocks = [c for c in root.children if c.kind == NodeKind.IMPORT_BLOCK]
+    assert len(blocks) == 1
+    # No def or class children to compete with.
+    non_imports = [c for c in root.children if c.kind != NodeKind.IMPORT_BLOCK]
+    assert non_imports == []
