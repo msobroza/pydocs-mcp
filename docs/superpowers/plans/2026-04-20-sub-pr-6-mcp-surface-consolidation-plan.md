@@ -1,3 +1,9 @@
+---
+status: implemented
+shipped-in: direct-to-main (no PR; commits c85bf60..893c92b)
+last-reviewed: 2026-05-16
+---
+
 # Sub-PR #6 — MCP Surface Consolidation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

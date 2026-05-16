@@ -1,3 +1,9 @@
+---
+status: implemented
+shipped-in: PR #3
+last-reviewed: 2026-05-16
+---
+
 # Benchmarks Comparison Subproject Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

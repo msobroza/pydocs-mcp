@@ -1,3 +1,9 @@
+---
+status: implemented
+shipped-in: direct-to-main (no PR; commits c85bf60..893c92b)
+last-reviewed: 2026-05-16
+---
+
 # Sub-PR #6 — MCP surface consolidation + Pydantic at boundary
 
 **Status:** Approved via brainstorm 2026-04-20.

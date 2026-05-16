@@ -1,3 +1,9 @@
+---
+status: implemented
+shipped-in: PR #13
+last-reviewed: 2026-05-16
+---
+
 # Sub-PR #1 — Naming sweep + domain models foundation
 
 **Status:** Approved (2026-04-19) — ready for implementation planning in a later session

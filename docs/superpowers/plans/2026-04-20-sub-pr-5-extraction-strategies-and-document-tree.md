@@ -1,3 +1,9 @@
+---
+status: implemented
+shipped-in: PR #17
+last-reviewed: 2026-05-16
+---
+
 # Sub-PR #5 — Extraction Strategies + DocumentNode Tree + IngestionPipeline Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development`. Each task carries its own 5-review gate (see §"Per-task review flow"). Implementers read the spec for full details; this plan is the sequencing + commit map.
