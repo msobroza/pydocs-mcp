@@ -30,6 +30,20 @@ from pydocs_mcp.models import ModuleMember, ModuleMemberFilterField
 log = logging.getLogger("pydocs-mcp")
 
 
+def _path_under_excluded(filepath: str, excluded: frozenset[str]) -> bool:
+    """True iff any path component of ``filepath`` is in ``excluded``.
+
+    Bridges ``walk_py_files``'s hardcoded SKIP_DIRS to the canonical
+    Python-side ``_EXCLUDED_DIRS`` policy without changing the Rust /
+    fallback API. Splitting on both ``os.sep`` and ``"/"`` covers
+    Rust output (always ``/`` regardless of platform) and Python
+    fallback output (platform-native). Cheap — sets give O(1) lookup
+    per component.
+    """
+    parts = filepath.replace("\\", "/").split("/")
+    return any(part in excluded for part in parts)
+
+
 @dataclass(frozen=True, slots=True)
 class AstMemberExtractor:
     """Static AST parsing via the Rust ``parse_py_file`` (with Python fallback).
@@ -73,7 +87,17 @@ class AstMemberExtractor:
 
     def _parse_dir(self, root: Path, package: str) -> tuple[ModuleMember, ...]:
         from pydocs_mcp._fast import walk_py_files
-        py_files = walk_py_files(str(root))
+        from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
+
+        # walk_py_files (both the Rust impl and the Python fallback) has its
+        # own hardcoded SKIP_DIRS that doesn't track the canonical Python-side
+        # ``_EXCLUDED_DIRS`` policy. They diverge on .hg / .svn / target /
+        # site-packages / .coverage / .cache. Post-filter here so the
+        # member side sees the SAME exclusion set as the chunker side —
+        # without this, a checked-in ``vendor/site-packages`` directory
+        # leaks into the symbol index even though chunker discovery skips it.
+        candidates = walk_py_files(str(root))
+        py_files = [p for p in candidates if not _path_under_excluded(p, _EXCLUDED_DIRS)]
         return self._parse_files(package, py_files, root)
 
     def _parse_files(

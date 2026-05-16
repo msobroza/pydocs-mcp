@@ -390,3 +390,51 @@ def test_dep_helpers_truncate_under_limit_unchanged() -> None:
     from pydocs_mcp.extraction.strategies._dep_helpers import _truncate
     assert _truncate("short", 100) == "short"
     assert _truncate("", 100) == ""
+
+
+# -- F14 — Member-side project walk aligned with _EXCLUDED_DIRS ---------------
+
+
+@pytest.mark.asyncio
+async def test_ast_project_skips_excluded_dirs_post_walk(tmp_path: Path) -> None:
+    """F14: walk_py_files (Rust + Python fallback) has its own hardcoded
+    SKIP_DIRS that's narrower than ``_EXCLUDED_DIRS``. The member-side
+    walk used to pick up files from dirs the chunker policy excludes —
+    most notably checked-in 'site-packages' / 'target' / '.hg'.
+    Post-filter check enforces the canonical exclusion."""
+    # Layout: real project module + a directory that's in _EXCLUDED_DIRS
+    # but NOT in walk_py_files's SKIP_DIRS (so the post-filter is the
+    # only thing keeping it out).
+    (tmp_path / "src.py").write_text("def kept(): pass\n")
+    vendored = tmp_path / "site-packages" / "leaky"
+    vendored.mkdir(parents=True)
+    (vendored / "__init__.py").write_text("def leaked(): pass\n")
+    other_vendored = tmp_path / "target" / "build_pkg"
+    other_vendored.mkdir(parents=True)
+    (other_vendored / "__init__.py").write_text("def target_leaked(): pass\n")
+
+    extractor = AstMemberExtractor()
+    members = await extractor.extract_from_project(tmp_path)
+    names = {m.metadata[ModuleMemberFilterField.NAME.value] for m in members}
+
+    assert "kept" in names, "real project module must be picked up"
+    assert "leaked" not in names, (
+        "site-packages content leaked into member index — F14 regression"
+    )
+    assert "target_leaked" not in names, (
+        "target/ content leaked into member index — F14 regression"
+    )
+
+
+def test_path_under_excluded_helper_unit() -> None:
+    """Unit test the bridge helper directly so the matching logic is
+    pinned independently of file-system fixtures."""
+    from pydocs_mcp.extraction.strategies.members import _path_under_excluded
+
+    excluded = frozenset({"site-packages", ".hg"})
+    assert _path_under_excluded("repo/src/main.py", excluded) is False
+    assert _path_under_excluded("repo/site-packages/x.py", excluded) is True
+    # Rust always emits forward slashes; helper must handle that too.
+    assert _path_under_excluded("repo/.hg/foo.py", excluded) is True
+    # Backslashes from Windows fallback also normalised.
+    assert _path_under_excluded("repo\\site-packages\\x.py", excluded) is True
