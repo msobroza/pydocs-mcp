@@ -14,12 +14,12 @@ Pins the module-path trie assembly rules:
 """
 from __future__ import annotations
 
-from pydocs_mcp.extraction.model.document_node import (
+from pydocs_mcp.extraction.model import (
     STRUCTURAL_ONLY_KINDS,
     DocumentNode,
     NodeKind,
 )
-from pydocs_mcp.extraction.model.package_tree import build_package_tree
+from pydocs_mcp.extraction.model import build_package_tree
 
 
 def _module(name: str) -> DocumentNode:

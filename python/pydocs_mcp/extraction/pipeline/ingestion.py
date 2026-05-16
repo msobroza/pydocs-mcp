@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from pydocs_mcp.extraction.model.document_node import DocumentNode
+    from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.models import Chunk, Package
 
 

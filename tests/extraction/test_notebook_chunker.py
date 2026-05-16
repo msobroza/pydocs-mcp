@@ -19,7 +19,7 @@ from pathlib import Path
 
 from pydocs_mcp.extraction.strategies.chunkers import NotebookChunker
 from pydocs_mcp.extraction.config import ChunkingConfig, NotebookConfig
-from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import chunker_registry
 
 

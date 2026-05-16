@@ -16,7 +16,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from pydocs_mcp.extraction.model.document_node import (
+from pydocs_mcp.extraction.model import (
     STRUCTURAL_ONLY_KINDS,
     DocumentNode,
     NodeKind,

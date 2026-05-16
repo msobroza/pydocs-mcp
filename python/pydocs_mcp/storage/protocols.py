@@ -8,7 +8,7 @@ from pydocs_mcp.models import Chunk, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
 
 if TYPE_CHECKING:
-    from pydocs_mcp.extraction.model.document_node import DocumentNode
+    from pydocs_mcp.extraction.model import DocumentNode
 
 
 @runtime_checkable

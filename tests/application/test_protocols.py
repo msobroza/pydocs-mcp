@@ -16,7 +16,7 @@ from pydocs_mcp.application.protocols import (
     DependencyResolver,
     MemberExtractor,
 )
-from pydocs_mcp.extraction.model.document_node import DocumentNode
+from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
 
 

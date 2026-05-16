@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from pydocs_mcp.storage.protocols import DocumentTreeStore
 
 if TYPE_CHECKING:
-    from pydocs_mcp.extraction.model.document_node import DocumentNode
+    from pydocs_mcp.extraction.model import DocumentNode
 
 
 @dataclass(frozen=True, slots=True)

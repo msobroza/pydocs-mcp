@@ -12,8 +12,8 @@ Pins the direct-text rule (spec §4.1.1) and required metadata keys (§4.4):
 """
 from __future__ import annotations
 
-from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
-from pydocs_mcp.extraction.model.tree_flatten import flatten_to_chunks
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import flatten_to_chunks
 from pydocs_mcp.models import ChunkFilterField, ChunkOrigin
 
 

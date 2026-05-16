@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from pydocs_mcp.db import build_connection_provider, open_index_database
-from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.storage.protocols import DocumentTreeStore
 from pydocs_mcp.storage.sqlite import SqliteDocumentTreeStore
 

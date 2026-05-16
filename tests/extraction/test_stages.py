@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.extraction.config import ChunkingConfig, ExtractionConfig
-from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.pipeline import IngestionState, TargetKind
 from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
 from pydocs_mcp.extraction.pipeline.stages import (

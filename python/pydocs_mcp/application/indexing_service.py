@@ -36,7 +36,7 @@ from pydocs_mcp.storage.protocols import (
 )
 
 if TYPE_CHECKING:
-    from pydocs_mcp.extraction.model.document_node import DocumentNode
+    from pydocs_mcp.extraction.model import DocumentNode
 
 T = TypeVar("T")
 

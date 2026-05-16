@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
     from pydocs_mcp.retrieval.protocols import ConnectionProvider
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
     from pydocs_mcp.storage.sqlite import (
         SqliteModuleMemberRepository,
         SqliteVectorStore,

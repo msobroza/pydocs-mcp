@@ -29,13 +29,13 @@ from pydocs_mcp.storage.filters import (
 )
 
 if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
     from pydocs_mcp.retrieval.protocols import (
         ChunkRetriever,
         ModuleMemberRetriever,
         PipelineStage,
         ResultFormatter,
     )
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
 
 
 # Sentinel title on composite formatter output. ``MetadataPostFilterStage``

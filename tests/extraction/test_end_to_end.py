@@ -31,7 +31,7 @@ from pydocs_mcp.extraction import (
     StaticDependencyResolver,
     build_ingestion_pipeline,
 )
-from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import ChunkFilterField, ModuleMemberFilterField
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.storage.sqlite import (

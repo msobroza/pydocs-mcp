@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from pydocs_mcp.application.project_indexer import ProjectIndexer
-from pydocs_mcp.extraction.model.document_node import DocumentNode
+from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -483,7 +483,7 @@ async def test_index_project_forwards_trees_to_reindex_package(
     """
     # Build a DocumentNode stub so the tree input is non-empty and we
     # prove the service really is passing it through.
-    from pydocs_mcp.extraction.model.document_node import NodeKind
+    from pydocs_mcp.extraction.model import NodeKind
 
     tree = DocumentNode(
         node_id="pkg.mod",

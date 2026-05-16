@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.deps import normalize_package_name
-from pydocs_mcp.extraction.model.document_node import DocumentNode
+from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.extraction.pipeline.ingestion import (
     IngestionPipeline,
     IngestionState,

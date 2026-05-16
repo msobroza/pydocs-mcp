@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.extraction.config import ChunkingConfig
-from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import _register_chunker
 
 log = logging.getLogger("pydocs-mcp")
