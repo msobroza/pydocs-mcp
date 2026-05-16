@@ -22,7 +22,7 @@ def _clean_config_env(monkeypatch, tmp_path):
 
 def test_appconfig_loads_shipped_defaults_absent_user_file():
     """With no user YAML and no env overrides, every value comes from the
-    shipped ``presets/default_config.yaml`` baseline layer (spec §5.9, AC #14)."""
+    shipped ``defaults/default_config.yaml`` baseline layer (spec §5.9, AC #14)."""
     config = AppConfig.load()
     assert config.metadata_schemas["chunk"] == ("package", "scope", "origin", "title", "module")
     assert config.metadata_schemas["member"] == ("package", "scope", "module", "name", "kind")
@@ -88,40 +88,40 @@ def test_appconfig_cwd_local_file(tmp_path, monkeypatch):
 
 
 def test_pipeline_route_entry_predicate_only_is_valid():
-    PipelineRouteEntry(predicate="always", pipeline_path=Path("presets/x.yaml"))
+    PipelineRouteEntry(predicate="always", pipeline_path=Path("pipelines/x.yaml"))
 
 
 def test_pipeline_route_entry_default_only_is_valid():
-    PipelineRouteEntry(default=True, pipeline_path=Path("presets/x.yaml"))
+    PipelineRouteEntry(default=True, pipeline_path=Path("pipelines/x.yaml"))
 
 
 def test_pipeline_route_entry_rejects_both_predicate_and_default():
     with pytest.raises(ValidationError, match="exactly one of predicate or default"):
         PipelineRouteEntry(
-            predicate="always", default=True, pipeline_path=Path("presets/x.yaml"),
+            predicate="always", default=True, pipeline_path=Path("pipelines/x.yaml"),
         )
 
 
 def test_pipeline_route_entry_rejects_neither_predicate_nor_default():
     with pytest.raises(ValidationError, match="exactly one of predicate or default"):
-        PipelineRouteEntry(pipeline_path=Path("presets/x.yaml"))
+        PipelineRouteEntry(pipeline_path=Path("pipelines/x.yaml"))
 
 
 # ── Shipped preset resource sanity ──────────────────────────────────────
 
 
-def test_preset_chunk_fts_loadable():
-    chunk_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("chunk_fts.yaml")
+def test_pipeline_chunk_search_loadable():
+    chunk_yaml = importlib.resources.files("pydocs_mcp.pipelines").joinpath("chunk_search.yaml")
     assert chunk_yaml.is_file()
 
 
-def test_preset_member_like_loadable():
-    member_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("member_like.yaml")
+def test_pipeline_member_search_loadable():
+    member_yaml = importlib.resources.files("pydocs_mcp.pipelines").joinpath("member_search.yaml")
     assert member_yaml.is_file()
 
 
-def test_preset_default_config_loadable():
-    default_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("default_config.yaml")
+def test_default_config_loadable():
+    default_yaml = importlib.resources.files("pydocs_mcp.defaults").joinpath("default_config.yaml")
     assert default_yaml.is_file()
 
 
@@ -134,12 +134,12 @@ def test_pipeline_path_rejects_absolute_outside_allowed_roots(tmp_path):
     outside = tmp_path / "evil.yaml"
     outside.write_text("name: evil\nstages: []\n")
     with pytest.raises(ValueError, match="pipeline_path must be inside"):
-        # No user-config path → only presets/ is allowed.
+        # No user-config path → only pipelines/ is allowed.
         _resolve_pipeline_path(outside, user_config_path=None)
 
 
 def test_pipeline_path_rejects_symlink_traversal(tmp_path):
-    """A symlink inside the shipped presets/ dir that points outside the
+    """A symlink inside the shipped pipelines/ dir that points outside the
     allowlist must be rejected after resolve() follows it."""
     # We simulate the attack by creating a user-config dir, a symlink inside
     # it pointing outside the allowlist, and supplying the user_config_path
@@ -171,11 +171,11 @@ def test_pipeline_path_accepts_relative_inside_user_config(tmp_path):
     assert resolved == sibling.resolve()
 
 
-def test_pipeline_path_accepts_shipped_presets_relative(tmp_path):
-    """Back-compat: the bundled presets stay reachable via ``presets/foo.yaml``."""
-    # chunk_fts.yaml is shipped inside pydocs_mcp/presets/
-    resolved = _resolve_pipeline_path(Path("presets/chunk_fts.yaml"), user_config_path=None)
-    assert resolved.name == "chunk_fts.yaml"
+def test_pipeline_path_accepts_shipped_pipelines_relative(tmp_path):
+    """The bundled pipelines stay reachable via ``pipelines/foo.yaml``."""
+    # chunk_search.yaml is shipped inside pydocs_mcp/pipelines/
+    resolved = _resolve_pipeline_path(Path("pipelines/chunk_search.yaml"), user_config_path=None)
+    assert resolved.name == "chunk_search.yaml"
 
 
 # ── Sub-PR #5 Task 7 — ExtractionConfig slotting (spec §11) ────────────────

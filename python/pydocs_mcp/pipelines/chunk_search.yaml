@@ -1,4 +1,4 @@
-name: chunk_fts
+name: chunk_search
 stages:
   - type: chunk_retrieval
     retriever:

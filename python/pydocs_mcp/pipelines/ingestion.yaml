@@ -3,7 +3,7 @@
 # SINGLE pipeline handles both project and dependency modes; file_discovery
 # and package_build branch on state.target_kind internally. Override via
 # extraction.ingestion.pipeline_path in your pydocs-mcp config YAML —
-# user-provided paths must resolve inside the shipped presets dir or next
+# user-provided paths must resolve inside the shipped pipelines dir or next
 # to the config file (sub-PR #2 path allowlist, AC #33).
 name: ingestion
 stages:

@@ -1,8 +1,8 @@
-"""Unit tests for ``extraction/wiring.py`` + ``extraction/chunk_extractor.py`` (Task 22).
+"""Unit tests for ``extraction/factories.py`` + ``extraction/chunk_extractor.py`` (Task 22).
 
 Pins spec §7.3 + §7.4 + AC #33 + AC #19:
 - ``load_ingestion_pipeline`` builds a 6-stage ``IngestionPipeline`` from the
-  shipped ``presets/ingestion.yaml``.
+  shipped ``pipelines/ingestion.yaml``.
 - Paths outside the allowlist raise ``ValueError`` — the same allowlist logic
   as sub-PR #2 retrieval pipelines (reused via
   ``retrieval.config._resolve_pipeline_path``).
@@ -50,7 +50,7 @@ from pydocs_mcp.retrieval.config import AppConfig
 import importlib.resources
 
 _BUNDLED_INGESTION = Path(str(
-    importlib.resources.files("pydocs_mcp.presets").joinpath("ingestion.yaml"),
+    importlib.resources.files("pydocs_mcp.pipelines").joinpath("ingestion.yaml"),
 ))
 
 
@@ -77,10 +77,10 @@ def test_load_ingestion_pipeline_success() -> None:
 
 
 def test_load_ingestion_pipeline_rejects_arbitrary_path(tmp_path: Path) -> None:
-    """A YAML that's neither inside shipped presets/ nor next to the user
+    """A YAML that's neither inside shipped pipelines/ nor next to the user
     config must be rejected — reuses the retrieval AC #33 allowlist."""
     cfg = _app_config()
-    # tmp_path is outside both the shipped presets dir and the (None) user
+    # tmp_path is outside both the shipped pipelines dir and the (None) user
     # config dir, so _resolve_pipeline_path raises ValueError.
     stray = tmp_path / "ingestion.yaml"
     stray.write_text("name: x\nstages: []\n", encoding="utf-8")

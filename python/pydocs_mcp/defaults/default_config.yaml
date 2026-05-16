@@ -10,10 +10,10 @@ metadata_schemas:
 pipelines:
   chunk:
     - default: true
-      pipeline_path: presets/chunk_fts.yaml
+      pipeline_path: pipelines/chunk_search.yaml
   member:
     - default: true
-      pipeline_path: presets/member_like.yaml
+      pipeline_path: pipelines/member_search.yaml
 
 extraction:
   # Directory blocklist is hardcoded in extraction/config.py::_EXCLUDED_DIRS —

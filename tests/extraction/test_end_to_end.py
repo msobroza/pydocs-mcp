@@ -2,7 +2,7 @@
 DocumentTreeStore → get_document_tree (spec §16 AC #12).
 
 This file proves the full sub-PR #5 write path actually roundtrips: a real
-``IngestionPipeline`` (built from the shipped ``presets/ingestion.yaml``)
+``IngestionPipeline`` (built from the shipped ``pipelines/ingestion.yaml``)
 runs against a tiny on-disk fixture project, the resulting 3-tuple
 ``(chunks, trees, package)`` flows through :class:`ProjectIndexer`
 into :class:`IndexingService.reindex_package`, which persists trees via

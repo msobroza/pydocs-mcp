@@ -59,7 +59,8 @@ python/pydocs_mcp/
 ├── application/   # Use-case services — IndexingService + IndexProjectService + PackageLookupService + SearchDocsService + SearchApiService + ModuleIntrospectionService + shared formatting helpers
 ├── storage/       # Filter tree, Protocols, SQLite repositories + VectorStore + UnitOfWork
 ├── retrieval/     # Async pipelines, retrievers, stages, registries, YAML config
-├── presets/       # Built-in pipeline YAML presets (chunk_fts, member_like)
+├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
+├── pipelines/     # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
 └── server.py      # MCP handlers over services
 src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
 ```

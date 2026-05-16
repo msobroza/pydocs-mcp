@@ -132,9 +132,9 @@ class MembersConfig(BaseModel):
 class IngestionConfig(BaseModel):
     """Ingestion-pipeline YAML override.
 
-    Default ``None`` → the shipped ``presets/ingestion.yaml`` (Task 13).
+    Default ``None`` → the shipped ``pipelines/ingestion.yaml`` (Task 13).
     User override resolves via the sub-PR #2 path allowlist (AC #33)
-    — candidates must live inside the shipped presets directory or the
+    — candidates must live inside the shipped pipelines directory or the
     directory holding the user's config file; symlinks resolve before the
     check.
     """

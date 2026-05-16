@@ -1,12 +1,12 @@
 """Load and build :class:`IngestionPipeline` from YAML (spec §7.3).
 
 Single YAML file → single pipeline instance. The shipped
-``presets/ingestion.yaml`` is the default; users override via
+``pipelines/ingestion.yaml`` is the default; users override via
 ``extraction.ingestion.pipeline_path`` in their config YAML. Path
 candidates resolve through the SAME sub-PR #2 allowlist that retrieval's
-``pipeline_path`` uses (AC #33, spec §5.9): shipped ``presets/`` directory
+``pipeline_path`` uses (AC #33, spec §5.9): shipped ``pipelines/`` directory
 or the user's config directory — symlinks resolve BEFORE the check, so a
-symlink planted inside ``presets/`` pointing at ``/etc/shadow`` is
+symlink planted inside ``pipelines/`` pointing at ``/etc/shadow`` is
 rejected.
 
 Side-effect import of ``extraction.stages`` populates :data:`stage_registry`
@@ -36,16 +36,16 @@ if TYPE_CHECKING:
 
 
 @cache
-def _default_ingestion_preset() -> Path:
-    """Resolve the bundled ``presets/ingestion.yaml`` via ``importlib.resources``.
+def _default_ingestion_pipeline_path() -> Path:
+    """Resolve the bundled ``pipelines/ingestion.yaml`` via ``importlib.resources``.
 
     Using ``importlib.resources`` (rather than ``__file__`` arithmetic) keeps
     the lookup correct under zipimport / installed wheels where
     ``Path(__file__).parent`` may not map cleanly to on-disk layout. Cached
     for the same reason ``retrieval.config._shipped_default_config_path``
-    caches — the shipped presets directory never changes at runtime.
+    caches — the shipped pipelines directory never changes at runtime.
     """
-    return Path(str(importlib.resources.files("pydocs_mcp.presets").joinpath("ingestion.yaml")))
+    return Path(str(importlib.resources.files("pydocs_mcp.pipelines").joinpath("ingestion.yaml")))
 
 
 def load_ingestion_pipeline(
@@ -77,11 +77,11 @@ def build_ingestion_pipeline(cfg: "AppConfig") -> IngestionPipeline:
 
     Uses ``cfg.extraction.ingestion.pipeline_path`` if set (allowlist
     enforced); otherwise falls back to the bundled
-    ``presets/ingestion.yaml``. The bundled default stays inside
-    ``_shipped_presets_dir`` and always passes the allowlist.
+    ``pipelines/ingestion.yaml``. The bundled default stays inside
+    ``_shipped_pipelines_dir`` and always passes the allowlist.
     """
     override = cfg.extraction.ingestion.pipeline_path
-    path = override if override is not None else _default_ingestion_preset()
+    path = override if override is not None else _default_ingestion_pipeline_path()
     return load_ingestion_pipeline(Path(path), cfg)
 
 

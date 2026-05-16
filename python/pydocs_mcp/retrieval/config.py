@@ -97,7 +97,7 @@ class HandlerConfig(BaseModel):
 class AppConfig(BaseSettings):
     """Runtime configuration.
 
-    All defaults ship via ``presets/default_config.yaml`` — there are no
+    All defaults ship via ``defaults/default_config.yaml`` — there are no
     Python-level defaults on YAML-backed fields (spec §5.9, AC #14). The
     source layering (shipped baseline → user YAML → env → init) is wired
     in ``settings_customise_sources``.
@@ -109,13 +109,13 @@ class AppConfig(BaseSettings):
     pipelines: Mapping[str, HandlerConfig]
     # Sub-PR #5: extraction-pipeline settings — chunker registry, discovery
     # scope, member caps, ingestion pipeline override. Defaults are shipped
-    # in ``presets/default_config.yaml`` so user YAMLs need only override
+    # in ``defaults/default_config.yaml`` so user YAMLs need only override
     # the keys they care about.
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside
-    # the shipped presets + user-config directory are rejected. Populated
+    # the shipped pipelines + user-config directory are rejected. Populated
     # by ``AppConfig.load`` via ``object.__setattr__`` (pydantic doesn't
     # let us declare this as a normal field without round-tripping it
     # through YAML).
@@ -176,20 +176,20 @@ def _shipped_default_config_path() -> Path:
     """Path to the package-shipped baseline YAML (spec §5.9).
 
     Cached: ``importlib.resources.files`` + ``joinpath`` + ``Path(str(...))``
-    runs on every ``AppConfig.load`` call otherwise. The shipped presets
+    runs on every ``AppConfig.load`` call otherwise. The shipped defaults
     directory never changes at runtime, so the lookup is safely memoisable.
     """
-    return Path(str(importlib.resources.files("pydocs_mcp.presets").joinpath("default_config.yaml")))
+    return Path(str(importlib.resources.files("pydocs_mcp.defaults").joinpath("default_config.yaml")))
 
 
 @cache
-def _shipped_presets_dir() -> Path:
-    """Resolved path to the ``pydocs_mcp/presets/`` directory (spec §5.9).
+def _shipped_pipelines_dir() -> Path:
+    """Resolved path to the ``pydocs_mcp/pipelines/`` directory (spec §5.9).
 
     Cached for the same reason as :func:`_shipped_default_config_path` —
     the pipeline-path allowlist recomputes this on every YAML load.
     """
-    return Path(str(importlib.resources.files("pydocs_mcp.presets"))).resolve()
+    return Path(str(importlib.resources.files("pydocs_mcp.pipelines"))).resolve()
 
 
 def _resolved_user_config_path() -> Path | None:
@@ -243,11 +243,11 @@ def _pipeline_path_allowed_roots(user_config_path: Path | None) -> tuple[Path, .
     would happily load ``/etc/shadow`` (and surface the contents in the
     subsequent YAML parse error). Keep the allowlist to:
 
-    1. The shipped ``pydocs_mcp/presets/`` directory (the baseline YAMLs).
+    1. The shipped ``pydocs_mcp/pipelines/`` directory (the baseline YAMLs).
     2. The directory that contains the user's config file, if they supplied
        one — so ``./my_pipeline.yaml`` next to ``pydocs-mcp.yaml`` works.
     """
-    roots = [_shipped_presets_dir()]
+    roots = [_shipped_pipelines_dir()]
     if user_config_path is not None:
         roots.append(user_config_path.resolve().parent)
     return tuple(roots)
@@ -270,21 +270,22 @@ def _resolve_pipeline_path(
     """Resolve a YAML ``pipeline_path`` against the user/shipped roots.
 
     Relative paths are first tried under the user's config directory, then
-    under the shipped ``presets/`` dir. Absolute paths are accepted only if
+    under the shipped ``pipelines/`` dir. Absolute paths are accepted only if
     they land inside the allowlist. Symlinks are resolved before the check
-    so a symlink planted inside ``presets/`` pointing at ``/etc/shadow`` is
+    so a symlink planted inside ``pipelines/`` pointing at ``/etc/shadow`` is
     rejected.
     """
     allowed_roots = _pipeline_path_allowed_roots(user_config_path)
-    presets_dir = _shipped_presets_dir()
+    pipelines_dir = _shipped_pipelines_dir()
 
     if pipeline_path.is_absolute():
         resolved = pipeline_path.resolve()
     else:
         parts = pipeline_path.parts
-        # Back-compat: ``presets/foo.yaml`` resolves under the shipped dir
-        # whether or not a user config is present.
-        if parts and parts[0] == "presets":
+        # ``pipelines/foo.yaml`` resolves under the shipped dir whether or
+        # not a user config is present — lets default_config.yaml reference
+        # bundled YAMLs without knowing the package install path.
+        if parts and parts[0] == "pipelines":
             candidate = Path(str(importlib.resources.files("pydocs_mcp").joinpath(
                 str(pipeline_path)
             ))).resolve()
@@ -292,7 +293,7 @@ def _resolve_pipeline_path(
             base = (
                 user_config_path.resolve().parent
                 if user_config_path is not None
-                else presets_dir
+                else pipelines_dir
             )
             candidate = (base / pipeline_path).resolve()
         resolved = candidate

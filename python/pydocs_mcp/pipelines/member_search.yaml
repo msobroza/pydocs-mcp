@@ -1,4 +1,4 @@
-name: member_like
+name: member_search
 stages:
   - type: module_member_retrieval
     retriever:
