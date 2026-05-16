@@ -177,18 +177,20 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
     ast_member = AstMemberExtractor()
-    members_cap = config.extraction.members.members_per_module_cap
+    members_cfg = config.extraction.members
     # CLI flag wins over YAML; YAML wins over hard-coded fallback. This
     # mirrors the pattern for every other tunable knob — undocumented
     # defaults at the wiring layer become silent traps.
     inspect_depth = (
         args.depth if args.depth is not None
-        else config.extraction.members.inspect_depth
+        else members_cfg.inspect_depth
     )
     member_extractor = (
         InspectMemberExtractor(
             static_fallback=ast_member, depth=inspect_depth,
-            members_per_module_cap=members_cap,
+            members_per_module_cap=members_cfg.members_per_module_cap,
+            signature_max_chars=members_cfg.signature_max_chars,
+            docstring_max_chars=members_cfg.docstring_max_chars,
         )
         if use_inspect else ast_member
     )

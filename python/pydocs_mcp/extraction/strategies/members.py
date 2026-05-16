@@ -156,6 +156,8 @@ class InspectMemberExtractor:
     static_fallback: AstMemberExtractor
     depth: int = 1
     members_per_module_cap: int = 120
+    signature_max_chars: int = 200
+    docstring_max_chars: int = 1024
 
     async def extract_from_project(
         self, project_dir: Path,
@@ -178,6 +180,8 @@ class InspectMemberExtractor:
             record = _extract_by_import(
                 dist, self.depth,
                 members_per_module_cap=self.members_per_module_cap,
+                signature_max_chars=self.signature_max_chars,
+                docstring_max_chars=self.docstring_max_chars,
             )
             symbols = record.get("symbols", ())
             return tuple(symbols)

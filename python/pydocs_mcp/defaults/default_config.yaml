@@ -37,7 +37,12 @@ extraction:
       include_extensions: [".py", ".md", ".ipynb"]
       max_file_size_bytes: 500000
   members:
+    # Per-module symbol cap + per-field truncation. Increase if you
+    # index huge dependencies (large ML libs); decrease to bound FTS
+    # row size. All ge=1 — config-time validation rejects 0/negative.
     inspect_depth: 1
     members_per_module_cap: 120
+    signature_max_chars: 200
+    docstring_max_chars: 1024
   ingestion:
     pipeline_path: null

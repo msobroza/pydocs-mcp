@@ -30,16 +30,22 @@ IMPORT_ALIASES = {
     "opencv-python-headless": "cv2", "attrs": "attr",
 }
 
-# Per-member text truncation limits. The pre-refactor inspect path trimmed
-# both signature and docstring before persisting; without these, a
-# pathological module (e.g. an ML library with 10KB-docstring helper
-# functions) bloats FTS rows and slows queries. See /ultrareview F12.
-MAX_SIGNATURE_CHARS: int = 200
-MAX_DOCSTRING_CHARS: int = 1024
-# Per-module member cap. Defaults to MembersConfig.members_per_module_cap
-# (120) but callers should pass the configured value through; the
-# constant is the back-stop / unit-test default.
+# Per-member text truncation + cap defaults. The pre-refactor inspect
+# path trimmed both signature and docstring before persisting; without
+# these, a pathological module (ML library with 10KB-docstring helpers)
+# bloats FTS rows and slows queries. /ultrareview F12 caught this.
+# These are the BACK-STOP defaults — production callers should plumb
+# the YAML-configured ``MembersConfig.{signature,docstring}_max_chars``
+# values through (M1 follow-up), defaulting only when none is wired.
+DEFAULT_SIGNATURE_MAX_CHARS: int = 200
+DEFAULT_DOCSTRING_MAX_CHARS: int = 1024
 DEFAULT_MEMBERS_PER_MODULE_CAP: int = 120
+
+# Back-compat aliases — early call sites referenced the constants by
+# their old MAX_* names. Keep aliases for one release so out-of-tree
+# tooling doesn't break on the rename.
+MAX_SIGNATURE_CHARS = DEFAULT_SIGNATURE_MAX_CHARS
+MAX_DOCSTRING_CHARS = DEFAULT_DOCSTRING_MAX_CHARS
 
 
 def find_installed_distribution(dep_name: str):
@@ -72,6 +78,8 @@ def _extract_by_import(
     depth: int = 1,
     *,
     members_per_module_cap: int = DEFAULT_MEMBERS_PER_MODULE_CAP,
+    signature_max_chars: int = DEFAULT_SIGNATURE_MAX_CHARS,
+    docstring_max_chars: int = DEFAULT_DOCSTRING_MAX_CHARS,
 ) -> dict:
     """Live-import a distribution's modules and collect ModuleMember symbols.
 
@@ -103,6 +111,8 @@ def _extract_by_import(
     _collect_symbols(
         mod, pkg_name, import_name, symbols, depth,
         members_per_module_cap=members_per_module_cap,
+        signature_max_chars=signature_max_chars,
+        docstring_max_chars=docstring_max_chars,
     )
     return {"symbols": tuple(symbols)}
 
@@ -115,6 +125,8 @@ def _collect_symbols(
     remaining_depth: int,
     *,
     members_per_module_cap: int = DEFAULT_MEMBERS_PER_MODULE_CAP,
+    signature_max_chars: int = DEFAULT_SIGNATURE_MAX_CHARS,
+    docstring_max_chars: int = DEFAULT_DOCSTRING_MAX_CHARS,
 ) -> None:
     """Recurse into submodules; collect function + class signatures.
 
@@ -150,10 +162,10 @@ def _collect_symbols(
                 ModuleMemberFilterField.MODULE.value: module_path,
                 ModuleMemberFilterField.NAME.value: name,
                 ModuleMemberFilterField.KIND.value: kind,
-                "signature": _truncate(sig, MAX_SIGNATURE_CHARS),
+                "signature": _truncate(sig, signature_max_chars),
                 "return_annotation": "",
                 "parameters": (),
-                "docstring": _truncate(inspect.getdoc(obj) or "", MAX_DOCSTRING_CHARS),
+                "docstring": _truncate(inspect.getdoc(obj) or "", docstring_max_chars),
             }))
             collected_in_this_module += 1
 
@@ -177,6 +189,8 @@ def _collect_symbols(
         _collect_symbols(
             submod, pkg_name, full_name, symbols, remaining_depth - 1,
             members_per_module_cap=members_per_module_cap,
+            signature_max_chars=signature_max_chars,
+            docstring_max_chars=docstring_max_chars,
         )
 
 

@@ -173,3 +173,21 @@ def test_members_config_defaults_still_valid():
     cfg = MembersConfig()
     assert cfg.inspect_depth == 1
     assert cfg.members_per_module_cap == 120
+
+
+def test_signature_and_docstring_max_chars_tunable():
+    """M1: signature_max_chars and docstring_max_chars are YAML-tunable
+    peers of members_per_module_cap. Pin the defaults + override path."""
+    cfg = MembersConfig()
+    assert cfg.signature_max_chars == 200
+    assert cfg.docstring_max_chars == 1024
+    override = MembersConfig(signature_max_chars=500, docstring_max_chars=4096)
+    assert override.signature_max_chars == 500
+    assert override.docstring_max_chars == 4096
+
+
+def test_signature_max_chars_zero_rejected():
+    """Same ge=1 floor as the cap — sig=0 truncates to a single ellipsis."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        MembersConfig(signature_max_chars=0)

@@ -124,17 +124,25 @@ class DiscoveryConfig(BaseModel):
 class MembersConfig(BaseModel):
     """Tunables for :class:`InspectMemberExtractor` / :class:`AstMemberExtractor`.
 
-    Both integer fields guard against silent zero-out: ``ge=1`` rejects
+    Integer fields guard against silent zero-out: ``ge=1`` rejects
     ``inspect_depth: 0`` (no submodule traversal — would index nothing
     deeper than the root) and ``members_per_module_cap: 0`` (cap fires
-    on iter 0 → zero symbols collected per module). Validation runs at
-    YAML load time so a fat-fingered config fails loud, not silent.
+    on iter 0 → zero symbols collected per module).
+
+    Per-field truncation limits (``signature_max_chars`` /
+    ``docstring_max_chars``) are peers of ``members_per_module_cap`` in
+    bounding row size — without YAML access they were dead constants.
+    Defaults match the pre-YAML constants in
+    :mod:`pydocs_mcp.extraction.strategies._dep_helpers`. Validation
+    runs at YAML load time so a fat-fingered config fails loud.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     inspect_depth: int = Field(default=1, ge=1)
     members_per_module_cap: int = Field(default=120, ge=1)
+    signature_max_chars: int = Field(default=200, ge=1)
+    docstring_max_chars: int = Field(default=1024, ge=1)
 
 
 class IngestionConfig(BaseModel):
