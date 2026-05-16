@@ -438,3 +438,61 @@ def test_path_under_excluded_helper_unit() -> None:
     assert _path_under_excluded("repo/.hg/foo.py", excluded) is True
     # Backslashes from Windows fallback also normalised.
     assert _path_under_excluded("repo\\site-packages\\x.py", excluded) is True
+
+
+# -- T3: F14 full _EXCLUDED_DIRS + case sensitivity coverage ------------------
+
+
+def test_path_under_excluded_covers_full_excluded_dirs_set() -> None:
+    """T3: F14's existing test exercised only 'site-packages' + 'target'.
+    Parametrise the full set so adding/removing an entry in
+    _EXCLUDED_DIRS flips this test, not a stale subset."""
+    from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, path_under_excluded
+
+    # Every blocklisted name must be detected as a path component.
+    for excluded_name in _EXCLUDED_DIRS:
+        path = f"repo/{excluded_name}/file.py"
+        assert path_under_excluded(path), (
+            f"_EXCLUDED_DIRS entry {excluded_name!r} not detected by "
+            f"path_under_excluded — drift between policy + enforcer"
+        )
+
+    # Non-blocklisted names must NOT match (no substring false-positive).
+    assert not path_under_excluded("repo/src/main.py")
+    assert not path_under_excluded("repo/my_eggs_pkg/x.py"), (
+        "substring false-positive: 'my_eggs_pkg' contains 'eggs' but "
+        "isn't an excluded dir — only exact path-component matches count"
+    )
+
+
+def test_path_under_excluded_is_case_sensitive_by_design() -> None:
+    """T3: pinning the documented case-sensitivity contract. Pre-fix,
+    Windows-style 'Site-Packages' (mixed case) WOULD evade the filter
+    because the frozenset has lowercase 'site-packages' only. We
+    decided NOT to lowercase (the user's filesystem owns case;
+    inventing a case match could mask real different-cased dirs).
+    Document via test so the trade-off is explicit if someone
+    reconsiders."""
+    from pydocs_mcp.extraction.config import path_under_excluded
+
+    # Lowercase canonical form: excluded.
+    assert path_under_excluded("repo/site-packages/x.py")
+    # Mixed-case variant: NOT excluded (by design — see above).
+    assert not path_under_excluded("repo/Site-Packages/x.py")
+    assert not path_under_excluded("repo/.HG/foo.py")
+
+
+def test_path_under_excluded_egg_info_as_component_not_substring() -> None:
+    """T3: real PyPI dists often have 'mypkg.egg-info/' (with stem-dot
+    prefix). The whole component 'mypkg.egg-info' is NOT the bare
+    'egg-info' — it shouldn't match. But 'foo/egg-info/x.py' (the
+    bare 'egg-info' component) SHOULD match."""
+    from pydocs_mcp.extraction.config import path_under_excluded
+
+    assert path_under_excluded("foo/egg-info/x.py"), (
+        "bare 'egg-info' path component must be excluded"
+    )
+    assert not path_under_excluded("foo/mypkg.egg-info/x.py"), (
+        "'mypkg.egg-info' is a different component from 'egg-info' — "
+        "substring match would over-exclude real PyPI dist metadata dirs"
+    )
