@@ -3,9 +3,9 @@
 Each subcommand is a thin wrapper over the application-layer services
 (spec §5.6, AC #9, #16):
 
-* ``serve`` / ``index`` route through :class:`IndexProjectService`.
-* ``query`` / ``api`` route through :class:`SearchDocsService` /
-  :class:`SearchApiService`, rendering the top composite chunk's text.
+* ``serve`` / ``index`` route through :class:`ProjectIndexer`.
+* ``query`` / ``api`` route through :class:`DocsSearch` /
+  :class:`ApiSearch`, rendering the top composite chunk's text.
 
 Every ``_cmd_*`` wraps its body in ``try / except Exception`` so an
 uncaught failure produces ``Error: <msg>`` on stderr and a non-zero
@@ -48,7 +48,15 @@ def _build_parser() -> argparse.ArgumentParser:
     for cmd, hlp in [("serve", "Index + start MCP"), ("index", "Index only")]:
         sp = sub.add_parser(cmd, help=hlp)
         sp.add_argument("project", nargs="?", default=".")
-        sp.add_argument("--depth", type=int, default=1, help="Submodule scan depth")
+        # default=None so the YAML-configured inspect_depth wins when the
+        # flag is absent (without this, argparse's hard-coded default
+        # silently shadows ``extraction.members.inspect_depth``, mirroring
+        # the F11 dead-config defect /ultrareview just removed for
+        # by_extension).
+        sp.add_argument(
+            "--depth", type=int, default=None,
+            help="Submodule scan depth (default: YAML extraction.members.inspect_depth)",
+        )
         sp.add_argument("--workers", type=int, default=4, help="Parallel workers")
         sp.add_argument("--force", action="store_true", help="Clear cache, re-index all")
         sp.add_argument("--skip-project", action="store_true", help="Skip project source")
@@ -126,21 +134,30 @@ def _project_and_db(args: argparse.Namespace) -> tuple[Path, Path]:
 
 
 async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) -> None:
-    """Run :class:`IndexProjectService` end-to-end for ``index`` / ``serve``.
+    """Run :class:`ProjectIndexer` end-to-end for ``index`` / ``serve``.
 
     Kept as a module-level coroutine so both ``_cmd_index`` and
     ``_cmd_serve`` can drive it through a single ``asyncio.run`` — mirrors
     the pre-PR pattern where one event loop wrapped the whole indexing
     phase so sub-loops (async SQLite writes, ``to_thread`` extractions)
     shared the same context.
+
+    Wires the strategy-based classes from :mod:`pydocs_mcp.extraction`:
+    :class:`PipelineChunkExtractor` (driven by the YAML ingestion pipeline),
+    :class:`InspectMemberExtractor` (with :class:`AstMemberExtractor` fallback)
+    or plain :class:`AstMemberExtractor` for ``--no-inspect``, and
+    :class:`StaticDependencyResolver`.
     """
-    from pydocs_mcp.application import (
-        ChunkExtractorAdapter,
-        DependencyResolverAdapter,
-        IndexProjectService,
-        MemberExtractorAdapter,
+    from pydocs_mcp.application import ProjectIndexer
+    from pydocs_mcp.extraction import (
+        AstMemberExtractor,
+        InspectMemberExtractor,
+        PipelineChunkExtractor,
+        StaticDependencyResolver,
+        build_ingestion_pipeline,
     )
-    from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 
     # Ensure the schema exists before repositories issue queries.
     open_index_database(db_path).close()
@@ -150,11 +167,39 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     mode = "inspect" if use_inspect else "static"
     log.info("Project: %s (mode=%s)", project, mode)
 
-    orchestrator = IndexProjectService(
+    # Sub-PR #5: build THE ingestion pipeline once and share it across
+    # project + dependency extraction. ``AppConfig.load`` honours the
+    # optional ``--config`` override the CLI already passes to search /
+    # serve so ingestion pipeline overrides (spec §7.3) stay consistent
+    # with the rest of the config.
+    config = AppConfig.load(explicit_path=getattr(args, "config", None))
+    ingestion_pipeline = build_ingestion_pipeline(config)
+    chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
+
+    ast_member = AstMemberExtractor()
+    members_cfg = config.extraction.members
+    # CLI flag wins over YAML; YAML wins over hard-coded fallback. This
+    # mirrors the pattern for every other tunable knob — undocumented
+    # defaults at the wiring layer become silent traps.
+    inspect_depth = (
+        args.depth if args.depth is not None
+        else members_cfg.inspect_depth
+    )
+    member_extractor = (
+        InspectMemberExtractor(
+            static_fallback=ast_member, depth=inspect_depth,
+            members_per_module_cap=members_cfg.members_per_module_cap,
+            signature_max_chars=members_cfg.signature_max_chars,
+            docstring_max_chars=members_cfg.docstring_max_chars,
+        )
+        if use_inspect else ast_member
+    )
+
+    orchestrator = ProjectIndexer(
         indexing_service=indexing_service,
-        dependency_resolver=DependencyResolverAdapter(),
-        chunk_extractor=ChunkExtractorAdapter(use_inspect=use_inspect, depth=args.depth),
-        member_extractor=MemberExtractorAdapter(use_inspect=use_inspect, depth=args.depth),
+        dependency_resolver=StaticDependencyResolver(),
+        chunk_extractor=chunk_extractor,
+        member_extractor=member_extractor,
     )
 
     if args.force:
@@ -203,8 +248,8 @@ def _cmd_search(args: argparse.Namespace) -> int:
     same rendering. kind='any' runs chunks and members in parallel (§8)."""
     try:
         from pydocs_mcp.application import (
-            SearchApiService,
-            SearchDocsService,
+            ApiSearch,
+            DocsSearch,
             SearchInput,
         )
         from pydocs_mcp.retrieval.config import (
@@ -212,16 +257,16 @@ def _cmd_search(args: argparse.Namespace) -> int:
             build_chunk_pipeline_from_config,
             build_member_pipeline_from_config,
         )
-        from pydocs_mcp.retrieval.wiring import build_retrieval_context
+        from pydocs_mcp.retrieval.factories import build_retrieval_context
         from pydocs_mcp.server import _do_search
 
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
         context = build_retrieval_context(db_path, config)
-        docs_svc = SearchDocsService(
+        docs_svc = DocsSearch(
             chunk_pipeline=build_chunk_pipeline_from_config(config, context),
         )
-        api_svc = SearchApiService(
+        api_svc = ApiSearch(
             member_pipeline=build_member_pipeline_from_config(config, context),
         )
 
@@ -240,30 +285,19 @@ def _cmd_search(args: argparse.Namespace) -> int:
 
 
 def _cmd_lookup(args: argparse.Namespace) -> int:
-    """Mirrors the MCP ``lookup`` tool — same LookupService dispatch."""
+    """Mirrors the MCP ``lookup`` tool — same LookupService dispatch.
+
+    Delegates wiring to :func:`build_sqlite_lookup_service` so the CLI and
+    the MCP server can never drift on which stores back ``lookup``.
+    """
     try:
-        from pydocs_mcp.application import (
-            LookupInput,
-            LookupService,
-            PackageLookupService,
-        )
+        from pydocs_mcp.application import LookupInput
         from pydocs_mcp.retrieval.config import AppConfig
-        from pydocs_mcp.retrieval.wiring import build_retrieval_context
-        from pydocs_mcp.storage.sqlite import (
-            SqliteChunkRepository,
-            SqlitePackageRepository,
-        )
+        from pydocs_mcp.storage.factories import build_sqlite_lookup_service
 
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
-        context = build_retrieval_context(db_path, config)
-        provider = context.connection_provider
-        package_lookup = PackageLookupService(
-            package_store=SqlitePackageRepository(provider=provider),
-            chunk_store=SqliteChunkRepository(provider=provider),
-            module_member_store=context.module_member_store,
-        )
-        svc = LookupService(package_lookup=package_lookup)  # tree/ref svc optional
+        svc = build_sqlite_lookup_service(db_path, config=config)
 
         payload = LookupInput(target=args.target, show=args.show)
         print(asyncio.run(svc.lookup(payload)))
@@ -291,7 +325,7 @@ def _pre_filter_from_package(package: str | None) -> dict | None:
 
 def _print_search_response(response) -> None:
     """Preserve the pre-PR CLI behaviour: print the top composite chunk's
-    text (the ``TokenBudgetFormatterStage`` output) or nothing when empty.
+    text (the ``TokenBudgetStage`` output) or nothing when empty.
     """
     result = response.result
     if result is None or not result.items:

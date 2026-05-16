@@ -31,13 +31,9 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
-from pydocs_mcp.application import (
-    ChunkExtractorAdapter,
-    IndexProjectService,
-    MemberExtractorAdapter,
-)
+from pydocs_mcp.application import ProjectIndexer
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 from rich.console import Console
 
 from benchmarks.context7_bench import run_context7_benchmark
@@ -145,15 +141,16 @@ def main() -> None:
 
         async def _build_search_index() -> None:
             """Mirror __main__._cmd_index so one asyncio.run wraps the whole
-            indexing phase via :class:`IndexProjectService`."""
-            from benchmarks.indexer_bench import _FixedListResolver
+            indexing phase via :class:`ProjectIndexer`."""
+            from benchmarks.indexer_bench import _FixedListResolver, _build_extractors
 
             service = build_sqlite_indexing_service(db_path)
-            orch = IndexProjectService(
+            chunk_extractor, member_extractor = _build_extractors(use_inspect=False)
+            orch = ProjectIndexer(
                 indexing_service=service,
                 dependency_resolver=_FixedListResolver(FAKE_REQUIREMENTS),
-                chunk_extractor=ChunkExtractorAdapter(use_inspect=False, depth=1),
-                member_extractor=MemberExtractorAdapter(use_inspect=False, depth=1),
+                chunk_extractor=chunk_extractor,
+                member_extractor=member_extractor,
             )
             await orch.index_project(project_path, include_project_source=True)
             await service.chunk_store.rebuild_index()

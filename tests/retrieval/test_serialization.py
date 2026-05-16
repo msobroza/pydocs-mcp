@@ -119,7 +119,7 @@ def test_bare_retrieval_import_populates_registries():
         retriever_registry,
         stage_registry,
     )
-    from pydocs_mcp.retrieval.predicates import default_predicate_registry
+    from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
 
     assert len(stage_registry.names()) >= 10
     assert len(retriever_registry.names()) >= 4

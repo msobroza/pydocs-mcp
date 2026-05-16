@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 
 
 def _arun(coro):
@@ -44,11 +45,11 @@ def _seed_basic_fixture(db_path: Path) -> None:
     """Two packages, two chunks, two members."""
     conn = open_index_database(db_path)
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         ("__project__", "local", "Test project", "", "[]", "aaa", "project"),
     )
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         (
             "fastapi", "0.100", "Web framework",
             "https://fastapi.example.com",
@@ -84,12 +85,8 @@ def _seed_basic_fixture(db_path: Path) -> None:
     conn.close()
 
 
-@pytest.fixture
-def server_tools(tmp_path: Path):
-    """Run server.run() with FakeMCP to capture the 2 tool closures."""
-    db_path = tmp_path / "test.db"
-    _seed_basic_fixture(db_path)
-
+def _run_server_capture_tools(db_path: Path):
+    """Boot ``server.run`` with FakeMCP injected so we can call handlers."""
     fake_mcp = FakeMCP("test")
     fake_mcp_module = MagicMock()
     fake_mcp_module.FastMCP = lambda name: fake_mcp
@@ -106,7 +103,76 @@ def server_tools(tmp_path: Path):
 
         run(db_path)
 
-    return fake_mcp.tools, db_path
+    return fake_mcp.tools
+
+
+@pytest.fixture
+def server_tools(tmp_path: Path):
+    """Run server.run() with FakeMCP to capture the 2 tool closures."""
+    db_path = tmp_path / "test.db"
+    _seed_basic_fixture(db_path)
+    return _run_server_capture_tools(db_path), db_path
+
+
+def _seed_tree_for_fastapi(db_path: Path) -> DocumentNode:
+    """Persist a small fastapi.routing tree so TreeService.get_tree hits.
+
+    Uses ``SqliteDocumentTreeStore.save_many`` directly — same write path as
+    the production indexer — so we exercise the full read/write contract.
+    """
+    from pydocs_mcp.db import build_connection_provider
+    from pydocs_mcp.storage.sqlite import SqliteDocumentTreeStore
+
+    method = DocumentNode(
+        node_id="fastapi.routing.APIRouter.include_router",
+        qualified_name="fastapi.routing.APIRouter.include_router",
+        title="def include_router",
+        kind=NodeKind.METHOD,
+        source_path="fastapi/routing.py",
+        start_line=20,
+        end_line=30,
+        text="def include_router(...): ...",
+        content_hash="h-method",
+    )
+    cls = DocumentNode(
+        node_id="fastapi.routing.APIRouter",
+        qualified_name="fastapi.routing.APIRouter",
+        title="class APIRouter",
+        kind=NodeKind.CLASS,
+        source_path="fastapi/routing.py",
+        start_line=10,
+        end_line=40,
+        text="class APIRouter: ...",
+        content_hash="h-class",
+        children=(method,),
+    )
+    root = DocumentNode(
+        node_id="fastapi.routing",
+        qualified_name="fastapi.routing",
+        title="fastapi.routing",
+        kind=NodeKind.MODULE,
+        source_path="fastapi/routing.py",
+        start_line=1,
+        end_line=50,
+        text="",
+        content_hash="h-mod",
+        children=(cls,),
+    )
+
+    provider = build_connection_provider(db_path)
+    store = SqliteDocumentTreeStore(provider=provider)
+    asyncio.run(store.save_many([root], package="fastapi"))
+    return root
+
+
+@pytest.fixture
+def server_tools_with_tree(tmp_path: Path):
+    """Same seed as ``server_tools`` plus one persisted DocumentNode tree
+    for ``fastapi.routing`` so multi-segment lookup has something to find."""
+    db_path = tmp_path / "test_tree.db"
+    _seed_basic_fixture(db_path)
+    _seed_tree_for_fastapi(db_path)
+    return _run_server_capture_tools(db_path), db_path
 
 
 # ── surface shape ─────────────────────────────────────────────────────────
@@ -161,6 +227,52 @@ class TestLookupPackageDoc:
         tools, _ = server_tools
         with pytest.raises(NotFoundError):
             _arun(tools["lookup"](target="nonexistent_pkg"))
+
+
+class TestLookupWithTreeService:
+    """FIX 6: TreeService now wired into the composition root — multi-segment
+    lookup targets resolve against persisted DocumentNode trees instead of
+    raising ``ServiceUnavailableError``."""
+
+    def test_lookup_module_target_returns_tree_json(self, server_tools_with_tree) -> None:
+        """target='fastapi.routing' returns PageIndex-style JSON for the tree."""
+        import json
+
+        tools, _ = server_tools_with_tree
+        out = _arun(tools["lookup"](target="fastapi.routing"))
+        payload = json.loads(out)
+        assert payload["node_id"] == "fastapi.routing"
+        assert payload["kind"] == "module"
+        # Child class included recursively.
+        child_ids = [n["node_id"] for n in payload["nodes"]]
+        assert "fastapi.routing.APIRouter" in child_ids
+
+    def test_lookup_module_target_unknown_falls_through_to_find_module(
+        self, server_tools_with_tree,
+    ) -> None:
+        """Unknown dotted target with no matching tree raises NotFoundError
+        (not ServiceUnavailableError) — proves the tree_svc fallback path
+        runs PackageLookup.find_module before giving up."""
+        from pydocs_mcp.application import NotFoundError
+
+        tools, _ = server_tools_with_tree
+        with pytest.raises(NotFoundError):
+            _arun(tools["lookup"](target="fastapi.does_not_exist"))
+
+    def test_lookup_symbol_target_returns_node_json(
+        self, server_tools_with_tree,
+    ) -> None:
+        """target='fastapi.routing.APIRouter' resolves through the tree to
+        the CLASS node and emits its PageIndex JSON, including the child method."""
+        import json
+
+        tools, _ = server_tools_with_tree
+        out = _arun(tools["lookup"](target="fastapi.routing.APIRouter"))
+        payload = json.loads(out)
+        assert payload["node_id"] == "fastapi.routing.APIRouter"
+        assert payload["kind"] == "class"
+        method_ids = [n["node_id"] for n in payload["nodes"]]
+        assert "fastapi.routing.APIRouter.include_router" in method_ids
 
 
 # ── search ────────────────────────────────────────────────────────────────
@@ -261,7 +373,7 @@ def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
     db_path = tmp_path / "flask.db"
     conn = open_index_database(db_path)
     conn.execute(
-        "INSERT INTO packages VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         ("flask_login", "0.6", "Flask login", "", "[]", "h", "dependency"),
     )
     conn.commit()

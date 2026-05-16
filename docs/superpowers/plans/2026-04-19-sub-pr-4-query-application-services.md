@@ -1,3 +1,9 @@
+---
+status: implemented
+shipped-in: PR #16
+last-reviewed: 2026-05-16
+---
+
 # Sub-PR #4 — Query Application Services + Thin MCP/CLI Handlers Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.

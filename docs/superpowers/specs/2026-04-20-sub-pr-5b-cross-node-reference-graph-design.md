@@ -1,3 +1,9 @@
+---
+status: working-draft
+shipped-in: deferred
+last-reviewed: 2026-05-16
+---
+
 # Sub-PR #5b — Cross-node reference graph
 
 **Status:** Approved via brainstorm 2026-04-20 (split from sub-PR #5).

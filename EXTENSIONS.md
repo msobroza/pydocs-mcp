@@ -86,7 +86,7 @@ Every primitive uses **registry + decorator**. One class + one `@register("name"
 | New formatter (`JsonFormatter`, `CompactMarkdownFormatter`, `CitationFormatter`, `XmlFormatter`, ...) | `@formatter_registry.register("name")` |
 | New conditional predicate (`is_code_like_query`, `has_high_relevance`, `feature_flag_enabled`, ...) | `@predicate("name")` decorator |
 | New fusion algorithm (`WeightedSumFusionStage`, `DistributionBasedScoreFusionStage`, `BordaCountFusionStage`) | `@stage_registry.register("name")` |
-| New pipeline preset | YAML file under `python/pydocs_mcp/presets/` or a user path; referenced from `pydocs-mcp.yaml` |
+| New pipeline blueprint | YAML file under `python/pydocs_mcp/pipelines/` or a user path; referenced from `pydocs-mcp.yaml` |
 
 ## D. Configuration
 
@@ -120,7 +120,7 @@ Every primitive uses **registry + decorator**. One class + one `@register("name"
 | Extension | LOC | Files touched | Existing code changes |
 |---|:---:|:---:|---|
 | New pipeline stage | ~30 | 1 new class | None |
-| New predicate | ~3 | Existing `predicates.py` | None |
+| New predicate | ~3 | Existing `route_predicates.py` | None |
 | New formatter | ~30 | 1 new class | None |
 | New retriever | ~60 | 1 new class | None |
 | New pipeline preset (YAML) | ~20 | 1 new YAML file | None |

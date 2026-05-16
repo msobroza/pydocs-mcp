@@ -35,7 +35,7 @@ from pydocs_mcp.storage.sqlite import (
     SqliteModuleMemberRepository,
     SqliteVectorStore,
 )
-from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 
 # Allowlist mirrors the shipped default_config.yaml metadata_schemas so the
 # retrievers accept the same fields production does, without requiring the
