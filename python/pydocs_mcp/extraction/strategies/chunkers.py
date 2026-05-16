@@ -130,12 +130,19 @@ def _module_node_from_ast(
 def _extract_module_children(
     tree: ast.Module, module: str, lines: list[str], rel: str,
 ) -> list[DocumentNode]:
-    """IMPORT_BLOCK (if any imports) + one FUNCTION / CLASS per top-level
-    def / class. Preserves source order of functions and classes."""
+    """One IMPORT_BLOCK per contiguous import run, then FUNCTION / CLASS
+    nodes in source order. Imports interleaved with code (e.g. a lazy
+    import inside an ``if TYPE_CHECKING:`` block, or a runtime import
+    after a constant) appear as their own block so the span doesn't
+    sweep in non-import code between them.
+    """
     children: list[DocumentNode] = []
-    imports = [s for s in tree.body if isinstance(s, (ast.Import, ast.ImportFrom))]
-    if imports:
-        children.append(_import_block_node(imports, module, lines, rel))
+    suffix_counter = 0
+    for run in _consecutive_import_runs(tree.body):
+        children.append(_import_block_node(
+            run, module, lines, rel, suffix=suffix_counter,
+        ))
+        suffix_counter += 1
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             children.append(_function_node(
@@ -147,19 +154,55 @@ def _extract_module_children(
     return children
 
 
+def _consecutive_import_runs(
+    body: list[ast.stmt],
+) -> list[list[ast.Import | ast.ImportFrom]]:
+    """Group top-level Import/ImportFrom nodes into contiguous runs.
+
+    ``body`` is the ordered list of top-level statements from ``ast.parse``.
+    A run is a maximal sequence of adjacent import statements (no
+    non-import statements between them in source order). Returning
+    multiple runs preserves the user's intent — lazy / conditional
+    imports separated by code stay separate IMPORT_BLOCK nodes so each
+    block's ``text`` is exactly its own ``import ...`` lines.
+    """
+    runs: list[list[ast.Import | ast.ImportFrom]] = []
+    current: list[ast.Import | ast.ImportFrom] = []
+    for stmt in body:
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            current.append(stmt)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    return runs
+
+
 def _import_block_node(
     imports: list[ast.Import | ast.ImportFrom],
     module: str, lines: list[str], rel: str,
+    *, suffix: int = 0,
 ) -> DocumentNode:
-    """Coalesce all top-level imports into one IMPORT_BLOCK."""
+    """One IMPORT_BLOCK from a single contiguous import run.
+
+    ``suffix`` disambiguates the synthetic ``qualified_name`` when a
+    module has multiple import runs — they each need a unique node_id
+    so DocumentTreeStore doesn't collide on the (package, module) PK.
+    The first block keeps ``module.__imports__`` for backward shape
+    compatibility with single-block files.
+    """
     start = imports[0].lineno
     end = imports[-1].end_lineno or start
     txt = _slice_lines(lines, start, end)
-    qname = f"{module}.__imports__"
+    qname = (
+        f"{module}.__imports__" if suffix == 0
+        else f"{module}.__imports__{suffix}"
+    )
     return DocumentNode(
         node_id=qname,
         qualified_name=qname,
-        title="imports",
+        title="imports" if suffix == 0 else f"imports@{start}",
         kind=NodeKind.IMPORT_BLOCK,
         source_path=rel,
         start_line=start,

@@ -83,6 +83,40 @@ def test_imports_grouped_into_import_block(tmp_path: Path) -> None:
     assert imp.end_line == 2
 
 
+def test_scattered_imports_split_into_separate_import_blocks(tmp_path: Path) -> None:
+    """F22: imports separated by non-import code produce one IMPORT_BLOCK
+    per contiguous run, NOT one block spanning the gap. Pre-fix, the
+    single block's text swallowed the constant + the function body
+    between the two import runs."""
+    src = (
+        "import os\n"            # line 1 — first run
+        "import sys\n"           # line 2 — first run
+        "\n"
+        "CONST = 42\n"           # line 4 — non-import
+        "\n"
+        "def helper():\n"        # lines 6-7 — non-import
+        "    return CONST\n"
+        "\n"
+        "import json\n"          # line 9 — second run (lazy)
+        "from typing import Any\n"  # line 10 — second run
+    )
+    root = _build(src, root=tmp_path)
+    blocks = [c for c in root.children if c.kind == NodeKind.IMPORT_BLOCK]
+    assert len(blocks) == 2, (
+        f"expected 2 IMPORT_BLOCK runs, got {len(blocks)} — scattered imports "
+        f"got coalesced again"
+    )
+    # First run: lines 1-2, both stdlib imports, no swallowed code.
+    assert blocks[0].text.splitlines() == ["import os", "import sys"]
+    # Second run: lines 9-10, no swallowed CONST/helper.
+    assert blocks[1].text.splitlines() == [
+        "import json", "from typing import Any",
+    ]
+    # Synthetic ids must be unique so DocumentTreeStore doesn't collide on
+    # them in any future per-node persistence path.
+    assert blocks[0].node_id != blocks[1].node_id
+
+
 # ── 4. Class with methods → CLASS + METHOD children, direct text stops ────
 
 def test_class_with_methods_has_method_children_and_split_text(tmp_path: Path) -> None:
