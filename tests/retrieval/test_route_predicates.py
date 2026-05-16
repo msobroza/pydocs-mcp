@@ -5,7 +5,7 @@ import pytest
 
 from pydocs_mcp.models import Chunk, ChunkFilterField, ChunkList, SearchQuery, SearchScope
 from pydocs_mcp.retrieval.pipeline import PipelineState
-from pydocs_mcp.retrieval.post_filters import (
+from pydocs_mcp.retrieval.route_predicates import (
     PredicateRegistry,
     default_predicate_registry,
     predicate,

@@ -175,7 +175,7 @@ async def test_reciprocal_rank_fusion_preserves_first_seen_metadata():
 
 @pytest.mark.asyncio
 async def test_conditional_stage_runs_when_predicate_true():
-    from pydocs_mcp.retrieval.post_filters import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import ConditionalStage
 
     registry = PredicateRegistry()
@@ -197,7 +197,7 @@ async def test_conditional_stage_runs_when_predicate_true():
 
 @pytest.mark.asyncio
 async def test_conditional_stage_skipped_when_predicate_false():
-    from pydocs_mcp.retrieval.post_filters import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import ConditionalStage
 
     registry = PredicateRegistry()
@@ -217,7 +217,7 @@ async def test_conditional_stage_skipped_when_predicate_false():
 
 @pytest.mark.asyncio
 async def test_route_stage_first_match_wins():
-    from pydocs_mcp.retrieval.post_filters import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import RouteCase, RouteStage
 
     registry = PredicateRegistry()
@@ -249,7 +249,7 @@ async def test_route_stage_first_match_wins():
 
 @pytest.mark.asyncio
 async def test_route_stage_falls_through_to_default():
-    from pydocs_mcp.retrieval.post_filters import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import RouteCase, RouteStage
 
     registry = PredicateRegistry()
@@ -276,7 +276,7 @@ async def test_route_stage_falls_through_to_default():
 
 @pytest.mark.asyncio
 async def test_route_stage_no_match_no_default_is_noop():
-    from pydocs_mcp.retrieval.post_filters import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import RouteStage
 
     registry = PredicateRegistry()
