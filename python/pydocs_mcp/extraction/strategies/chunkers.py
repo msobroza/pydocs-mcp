@@ -35,10 +35,20 @@ from pydocs_mcp.extraction.serialization import _register_chunker
 log = logging.getLogger("pydocs-mcp")
 
 
-# Triple-backtick fenced blocks inside docstrings. Captures language tag
-# (group 1) and body (group 2). Non-greedy DOTALL so consecutive blocks
-# don't merge.
-_FENCED_RE = re.compile(r"```(\w*)\n(.*?)\n```", re.DOTALL)
+# CommonMark §4.5 fenced code blocks. Pre-fix this only matched
+# triple-backtick fences with ``\w*`` info strings — phantom headings
+# slipped through 4+ backtick fences (required when body contains
+# triple-backticks), tilde fences (``~~~python``), and hyphenated lang
+# tags like ``c++`` or ``text/plain``. Adversarial review F16 catch.
+#
+# Opener length ≥ 3, closer must MATCH the opener exactly (kind +
+# length) via the ``fence`` backreference. The info string accepts any
+# non-newline char. Named groups so call sites read structurally
+# (``lang`` / ``body``) instead of positional ``group(1)`` / ``group(2)``.
+_FENCED_RE = re.compile(
+    r"^(?P<fence>`{3,}|~{3,})(?P<lang>[^\n]*)\n(?P<body>.*?)\n(?P=fence)",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 @_register_chunker(".py")
@@ -302,8 +312,8 @@ def _extract_code_examples(
         return []
     examples: list[DocumentNode] = []
     for i, match in enumerate(_FENCED_RE.finditer(docstring), start=1):
-        lang = match.group(1) or ""
-        code = match.group(2)
+        lang = (match.group("lang") or "").strip()
+        code = match.group("body")
         qname = f"{parent_qname}.__example_{i}__"
         examples.append(DocumentNode(
             node_id=qname,
@@ -565,8 +575,8 @@ def _extract_md_fenced_examples(
     last = 0
     for i, m in enumerate(_FENCED_RE.finditer(raw_text), start=1):
         cleaned_parts.append(raw_text[last : m.start()])
-        lang = m.group(1) or ""
-        code = m.group(2)
+        lang = (m.group("lang") or "").strip()
+        code = m.group("body")
         qname = f"{parent_qname}.__example_{i}__"
         examples.append(DocumentNode(
             node_id=qname,

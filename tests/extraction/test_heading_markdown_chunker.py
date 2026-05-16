@@ -254,3 +254,83 @@ def test_doc_path_module_id_keeps_extension_to_avoid_pk_collision(
     survived. Doc-file module ids now carry their extension."""
     md_root = _build("# H\n", path="pkg/foo.md", root=tmp_path)
     assert md_root.qualified_name == "pkg.foo.md"
+
+
+# -- 16. A4: CommonMark-faithful fence scanner (broader F16) ------------------
+
+def test_four_backtick_fence_masks_inner_hashes(tmp_path: Path) -> None:
+    """A4: CommonMark §4.5 requires 4+ backticks when body contains
+    triple-backticks. The old 3-backtick-only regex missed this case
+    and the # comment inside leaked as a phantom heading."""
+    src = (
+        "# Real\n"
+        "Intro.\n"
+        "\n"
+        "````markdown\n"
+        "# This is markdown-inside-markdown, not a heading\n"
+        "```python\n"
+        "x = 1\n"
+        "```\n"
+        "````\n"
+    )
+    root = _build(src, root=tmp_path)
+    titles = [c.title for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    assert titles == ["Real"]
+
+
+def test_tilde_fence_masks_inner_hashes(tmp_path: Path) -> None:
+    """A4: CommonMark §4.5 also accepts tilde fences. ``~~~python`` with
+    a ``# comment`` inside used to leak through F16's backtick-only
+    regex."""
+    src = (
+        "# Real\n"
+        "Intro.\n"
+        "\n"
+        "~~~python\n"
+        "# python comment\n"
+        "x = 1\n"
+        "~~~\n"
+    )
+    root = _build(src, root=tmp_path)
+    titles = [c.title for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    assert titles == ["Real"]
+
+
+def test_hyphenated_lang_tag_fence_masks_inner_hashes(tmp_path: Path) -> None:
+    """A4: ``\\w*`` rejected hyphens / plus signs. ``\\`\\`\\`c++`` and
+    ``\\`\\`\\`text/plain`` blocks now match. Pin a c++ example."""
+    src = (
+        "# Real\n"
+        "Code:\n"
+        "\n"
+        "```c++\n"
+        "// #define is not a heading either\n"
+        "#include <foo>\n"
+        "```\n"
+    )
+    root = _build(src, root=tmp_path)
+    titles = [c.title for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    assert titles == ["Real"]
+
+
+def test_fence_kind_mismatch_does_not_close(tmp_path: Path) -> None:
+    """A4: a tilde opener is NOT closed by a backtick row. The
+    backreference enforces same-kind. This documents the contract so
+    a future regex 'simplification' that drops the backreference
+    breaks the build."""
+    # ``~~~`` opens; the body contains ``\`\`\`\`` which is NOT a tilde
+    # closer. The match should extend to the next ``~~~`` line. With
+    # the strict backreference, any heading-line between the backticks
+    # stays masked (still inside the tilde block).
+    src = (
+        "# Real\n"
+        "\n"
+        "~~~\n"
+        "```\n"
+        "# not a heading — still inside tilde fence\n"
+        "```\n"
+        "~~~\n"
+    )
+    root = _build(src, root=tmp_path)
+    titles = [c.title for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    assert titles == ["Real"]
