@@ -18,7 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.extraction.config import (
-    _EXCLUDED_DIRS, DiscoveryScopeConfig, path_under_excluded,
+    _EXCLUDED_DIRS,
+    DiscoveryScopeConfig,
+    path_under_excluded,
 )
 from pydocs_mcp.extraction.strategies._dep_helpers import (
     find_installed_distribution,
