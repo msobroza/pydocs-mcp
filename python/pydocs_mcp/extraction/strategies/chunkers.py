@@ -1,7 +1,8 @@
 """Concrete :class:`~pydocs_mcp.extraction.protocols.Chunker` strategies.
 
-Ships one chunker per supported file extension; Tasks 15 and 16 will append
-``HeadingMarkdownChunker`` (``.md``) and ``NotebookChunker`` (``.ipynb``).
+Ships one chunker per supported file extension: :class:`AstPythonChunker`
+(``.py``), :class:`HeadingMarkdownChunker` (``.md``), and
+:class:`NotebookChunker` (``.ipynb``).
 
 All chunkers:
 - Are decorated with ``@_register_chunker(ext)`` so

@@ -136,7 +136,7 @@ def test_file_discovery_from_dict_builds_both_discoverers() -> None:
     is lazy; both are wired at build time."""
     stage = FileDiscoveryStage.from_dict({"type": "file_discovery"}, _ctx())
 
-    # Concrete types from extraction.discovery — must have a discover() method.
+    # Concrete types from extraction.strategies.discovery — must have a discover() method.
     assert hasattr(stage.project_discoverer, "discover")
     assert hasattr(stage.dep_discoverer, "discover")
 

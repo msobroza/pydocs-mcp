@@ -153,8 +153,8 @@ def _extract_package_fixture(name: str, pkg_dir: Path) -> tuple[tuple[Chunk, ...
     """Static-parse a fixture package directory into (chunks, members).
 
     Uses AstPythonChunker directly on every .py file under pkg_dir; mirrors
-    what extraction.discovery would do for a dependency, but without going
-    through importlib.metadata (fixture packages aren't installed).
+    what extraction.strategies.discovery would do for a dependency, but
+    without going through importlib.metadata (fixture packages aren't installed).
     """
     chunker = AstPythonChunker()
     chunks_acc: list[Chunk] = []

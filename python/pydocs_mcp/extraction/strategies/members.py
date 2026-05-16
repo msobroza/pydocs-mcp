@@ -7,10 +7,9 @@ source to AST (spec §9.2 — we never import the project-under-test) and uses
 ``importlib.import_module`` for dependencies with an AST fallback on any
 exception.
 
-Imports live in :mod:`pydocs_mcp.extraction.strategies._dep_helpers` (NOT in
-:mod:`pydocs_mcp.indexer`) — the ``extraction/*`` package must never take a
-hard dependency on the module sub-PR #5 ultimately deletes (plan §Coupling
-conventions, spec §3b).
+Imports live in :mod:`pydocs_mcp.extraction.strategies._dep_helpers` — the
+``extraction/*`` package stays self-contained and never depends on legacy
+modules (plan §Coupling conventions, spec §3b).
 """
 from __future__ import annotations
 

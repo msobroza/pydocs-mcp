@@ -226,7 +226,7 @@ class PackageBuildStage:
     """Fills ``state.package`` — branches on ``state.target_kind``.
 
     PROJECT path produces the canonical ``Package(name="__project__", ...)``
-    that today's ``indexer.py`` builds. DEPENDENCY path walks
+    consumed by :class:`ProjectIndexer`. DEPENDENCY path walks
     ``importlib.metadata.Distribution`` metadata — a missing distribution
     raises :class:`LookupError` so the service layer can translate into a
     non-fatal skip one level up (declared-but-not-installed deps are common

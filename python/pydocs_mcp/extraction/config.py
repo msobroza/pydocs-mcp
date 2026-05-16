@@ -146,8 +146,7 @@ class IngestionConfig(BaseModel):
 
 class ExtractionConfig(BaseModel):
     """Root extraction config — slots into :class:`AppConfig` via
-    ``extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)``
-   .
+    ``extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)``.
     """
 
     model_config = ConfigDict(extra="forbid")

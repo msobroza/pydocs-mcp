@@ -55,9 +55,9 @@ class PipelineChunkExtractor:
         state = await self.pipeline.run(IngestionState(
             target=dep_name,
             target_kind=TargetKind.DEPENDENCY,
-            # Normalise once here (mirrors indexer.py / PackageBuildStage) so
-            # chunks + trees share the canonical module prefix before the
-            # package metadata is synthesized.
+            # Normalise once here (mirrors PackageBuildStage) so chunks +
+            # trees share the canonical module prefix before the package
+            # metadata is synthesized.
             package_name=normalize_package_name(dep_name),
         ))
         if state.package is None:
