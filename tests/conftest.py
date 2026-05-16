@@ -209,9 +209,9 @@ def integration_conn(tmp_path):
         pipeline = build_ingestion_pipeline(AppConfig())
         extractor = PipelineChunkExtractor(pipeline=pipeline)
         members_extractor = AstMemberExtractor()
-        chunks, _trees, pkg = await extractor.extract_from_project(FAKE_PROJECT)
+        result = await extractor.extract_from_project(FAKE_PROJECT)
         members = await members_extractor.extract_from_project(FAKE_PROJECT)
-        await service.reindex_package(pkg, chunks, members)
+        await service.reindex_package(result.package, result.chunks, members)
 
     asyncio.run(_index_project_only())
 

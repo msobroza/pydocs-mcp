@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from pydocs_mcp.application.project_indexer import ProjectIndexer
+from pydocs_mcp.application.protocols import ExtractionResult
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import (
     Chunk,
@@ -168,24 +169,36 @@ class FakeChunkExtractor:
 
     async def extract_from_project(
         self, project_dir: Path,
-    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
+    ) -> ExtractionResult:
         self.project_calls.append(project_dir)
         assert self.project_package is not None, "Configure project_package first"
-        return (self.project_chunks, self.project_trees, self.project_package)
+        return ExtractionResult(
+            chunks=self.project_chunks,
+            trees=self.project_trees,
+            package=self.project_package,
+        )
 
     async def extract_from_dependency(
         self, dep_name: str,
-    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
+    ) -> ExtractionResult:
         self.dep_calls.append(dep_name)
         entry = self.dep_returns.get(dep_name)
         if isinstance(entry, BaseException):
             raise entry
         assert entry is not None, f"No chunk-extractor result configured for {dep_name}"
-        # Back-compat: accept a bare 2-tuple (chunks, pkg) and widen it.
-        if len(entry) == 2:
-            chunks, pkg = entry
-            return chunks, (), pkg
-        return entry
+        # Tests can configure dep_returns with any of three shapes:
+        # - an ExtractionResult (preferred for new tests);
+        # - a 3-tuple ``(chunks, trees, pkg)`` (matches the older
+        #   destructuring convention);
+        # - a bare 2-tuple ``(chunks, pkg)`` (no trees needed).
+        # Widen the tuples here so the test surface stays terse.
+        if isinstance(entry, ExtractionResult):
+            return entry
+        if len(entry) == 3:
+            chunks, trees, pkg = entry
+            return ExtractionResult(chunks=chunks, trees=trees, package=pkg)
+        chunks, pkg = entry
+        return ExtractionResult(chunks=chunks, trees=(), package=pkg)
 
 
 @dataclass
@@ -577,7 +590,7 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
 
         async def extract_from_dependency(
             self, dep_name: str,
-        ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
+        ) -> ExtractionResult:
             self.dep_calls.append(dep_name)
             self.in_flight += 1
             self.max_in_flight = max(self.max_in_flight, self.in_flight)
@@ -587,7 +600,7 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
             await asyncio.sleep(0)
             try:
                 chunks, pkg = self.dep_returns[dep_name]
-                return chunks, (), pkg
+                return ExtractionResult(chunks=chunks, trees=(), package=pkg)
             finally:
                 self.in_flight -= 1
 

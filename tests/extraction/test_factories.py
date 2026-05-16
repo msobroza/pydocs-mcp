@@ -169,10 +169,10 @@ async def test_pipeline_chunk_extractor_extract_from_project(tmp_path: Path) -> 
         chunks=(), trees=(), package=pkg,
     ))
     extractor = PipelineChunkExtractor(pipeline=fake)  # type: ignore[arg-type]
-    chunks, trees, package = await extractor.extract_from_project(tmp_path)
-    assert chunks == ()
-    assert trees == ()
-    assert package is pkg
+    result = await extractor.extract_from_project(tmp_path)
+    assert result.chunks == ()
+    assert result.trees == ()
+    assert result.package is pkg
 
 
 @pytest.mark.asyncio
@@ -189,8 +189,8 @@ async def test_pipeline_chunk_extractor_extract_from_dependency() -> None:
             return replace(state, package=pkg)
 
     extractor = PipelineChunkExtractor(pipeline=_CaptureFake())  # type: ignore[arg-type]
-    _chunks, _trees, package = await extractor.extract_from_dependency("My-Dep")
-    assert package is pkg
+    result = await extractor.extract_from_dependency("My-Dep")
+    assert result.package is pkg
     assert captured["in"].target == "My-Dep"
     assert captured["in"].target_kind is TargetKind.DEPENDENCY
     # ``normalize_package_name`` lowercases + swaps '-' for '_'.

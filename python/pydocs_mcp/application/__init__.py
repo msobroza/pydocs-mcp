@@ -32,6 +32,7 @@ from pydocs_mcp.application.project_indexer import ProjectIndexer
 from pydocs_mcp.application.protocols import (
     ChunkExtractor,
     DependencyResolver,
+    ExtractionResult,
     MemberExtractor,
 )
 from pydocs_mcp.application.tree_service import TreeService
@@ -41,6 +42,7 @@ __all__ = [
     "ChunkExtractor",
     "DependencyResolver",
     "DocsSearch",
+    "ExtractionResult",
     "IndexingService",
     "InvalidArgumentError",
     "LookupInput",

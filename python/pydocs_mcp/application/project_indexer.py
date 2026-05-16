@@ -114,23 +114,27 @@ class ProjectIndexer:
         the delete-then-upsert entirely — leaves ``stats.project_indexed``
         as ``False`` which callers read as "nothing changed".
 
-        ``trees`` is part of the extractor's 3-tuple return (spec §5) and
-        flows straight through to :meth:`IndexingService.reindex_package`,
-        which persists them via its wired ``tree_store`` (the MCP
-        ``get_document_tree`` / ``get_package_tree`` read side depends on
-        this round-trip, spec §13.1-§13.2, AC #12).
+        ``trees`` is part of the :class:`ExtractionResult` return (spec
+        §5) and flows straight through to
+        :meth:`IndexingService.reindex_package`, which persists them via
+        its wired ``tree_store`` (the MCP ``get_document_tree`` /
+        ``get_package_tree`` read side depends on this round-trip, spec
+        §13.1-§13.2, AC #12).
         """
-        chunks, trees, pkg = await self.chunk_extractor.extract_from_project(project_dir)
+        result = await self.chunk_extractor.extract_from_project(project_dir)
+        pkg = result.package
         existing = await self.indexing_service.package_store.get(pkg.name)
         if existing is not None and existing.content_hash == pkg.content_hash:
             log.info("Project: no changes (cached)")
             return
         members = await self.member_extractor.extract_from_project(project_dir)
-        await self.indexing_service.reindex_package(pkg, chunks, members, trees=trees)
+        await self.indexing_service.reindex_package(
+            pkg, result.chunks, members, trees=result.trees,
+        )
         stats.project_indexed = True
         log.info(
             "Project: %d chunks, %d symbols, %d trees",
-            len(chunks), len(members), len(trees),
+            len(result.chunks), len(members), len(result.trees),
         )
 
     async def _index_one_dependency(
@@ -144,16 +148,20 @@ class ProjectIndexer:
         ``failed`` counter; it does NOT swallow silently.
         """
         try:
-            chunks, trees, pkg = await self.chunk_extractor.extract_from_dependency(dep_name)
+            result = await self.chunk_extractor.extract_from_dependency(dep_name)
+            pkg = result.package
             existing = await self.indexing_service.package_store.get(pkg.name)
             if existing is not None and existing.content_hash == pkg.content_hash:
                 stats.cached += 1
                 return
             members = await self.member_extractor.extract_from_dependency(dep_name)
-            await self.indexing_service.reindex_package(pkg, chunks, members, trees=trees)
+            await self.indexing_service.reindex_package(
+                pkg, result.chunks, members, trees=result.trees,
+            )
             stats.indexed += 1
             log.info("  ok %s %s (%d chunks, %d syms, %d trees)",
-                     pkg.name, pkg.version, len(chunks), len(members), len(trees))
+                     pkg.name, pkg.version,
+                     len(result.chunks), len(members), len(result.trees))
         except Exception as e:  # noqa: BLE001 -- spec §7 allowlist
             # NARROW-EXCEPT EXCEPTION: see method docstring. The failure is
             # observable through the log line + the counter, never silenced.

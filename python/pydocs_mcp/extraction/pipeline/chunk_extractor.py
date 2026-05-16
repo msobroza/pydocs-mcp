@@ -1,8 +1,8 @@
 """PipelineChunkExtractor — single :class:`IngestionPipeline` for both modes (spec §7.4).
 
 Implements the sub-PR #4 :class:`~pydocs_mcp.application.protocols.ChunkExtractor`
-3-tuple Protocol (``chunks, trees, package``). Both entry points delegate to
-the SAME pipeline; differentiation happens via
+Protocol — both entry points return an :class:`ExtractionResult`. Both
+delegate to the SAME pipeline; differentiation happens via
 :class:`~pydocs_mcp.extraction.pipeline.TargetKind` on the initial state, and
 the stages themselves branch internally. That keeps
 ``ProjectIndexer`` from having to pick between two extractor
@@ -13,14 +13,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_mcp.application.protocols import ExtractionResult
 from pydocs_mcp.deps import normalize_package_name
-from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.extraction.pipeline.ingestion import (
     IngestionPipeline,
     IngestionState,
     TargetKind,
 )
-from pydocs_mcp.models import Chunk, Package
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +35,7 @@ class PipelineChunkExtractor:
 
     async def extract_from_project(
         self, project_dir: Path,
-    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
+    ) -> ExtractionResult:
         return self._unwrap(await self.pipeline.run(IngestionState(
             target=project_dir,
             target_kind=TargetKind.PROJECT,
@@ -45,7 +44,7 @@ class PipelineChunkExtractor:
 
     async def extract_from_dependency(
         self, dep_name: str,
-    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
+    ) -> ExtractionResult:
         return self._unwrap(await self.pipeline.run(IngestionState(
             target=dep_name,
             target_kind=TargetKind.DEPENDENCY,
@@ -56,15 +55,17 @@ class PipelineChunkExtractor:
         )))
 
     @staticmethod
-    def _unwrap(
-        state: IngestionState,
-    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
+    def _unwrap(state: IngestionState) -> ExtractionResult:
         if state.package is None:
             raise RuntimeError(
                 "ingestion pipeline did not populate state.package "
                 "(missing package_build stage?)",
             )
-        return state.chunks, state.trees, state.package
+        return ExtractionResult(
+            chunks=state.chunks,
+            trees=state.trees,
+            package=state.package,
+        )
 
 
 __all__ = ("PipelineChunkExtractor",)
