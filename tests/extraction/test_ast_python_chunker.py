@@ -319,3 +319,33 @@ def test_empty_file_yields_module_only(tmp_path: Path) -> None:
     root = _build("", root=tmp_path)
     assert root.kind == NodeKind.MODULE
     assert root.children == ()
+
+
+def test_scattered_imports_children_in_source_order(tmp_path: Path) -> None:
+    """A5: when a second import run lives below a def, children must
+    still be in source-line order. Pre-fix, _extract_module_children
+    appended ALL import blocks first then iterated body for defs —
+    the second import run got hoisted above the def it follows in
+    source."""
+    src = (
+        "import os\n"            # line 1 — run1
+        "\n"
+        "def helper():\n"        # line 3 — def
+        "    return 1\n"
+        "\n"
+        "import json\n"          # line 6 — run2 (BELOW the def)
+    )
+    root = _build(src, root=tmp_path)
+    # Filter to top-level structural children only — start_lines must
+    # be monotone non-decreasing.
+    lines = [c.start_line for c in root.children]
+    assert lines == sorted(lines), (
+        f"children out of source order: {[(c.kind.value, c.start_line) for c in root.children]}"
+    )
+    # Concretely: import_block@1, function@3, import_block@6.
+    kinds = [c.kind.value for c in root.children]
+    assert kinds == [
+        NodeKind.IMPORT_BLOCK.value,
+        NodeKind.FUNCTION.value,
+        NodeKind.IMPORT_BLOCK.value,
+    ]

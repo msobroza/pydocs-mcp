@@ -140,11 +140,12 @@ def _module_node_from_ast(
 def _extract_module_children(
     tree: ast.Module, module: str, lines: list[str], rel: str,
 ) -> list[DocumentNode]:
-    """One IMPORT_BLOCK per contiguous import run, then FUNCTION / CLASS
-    nodes in source order. Imports interleaved with code (e.g. a lazy
-    import inside an ``if TYPE_CHECKING:`` block, or a runtime import
-    after a constant) appear as their own block so the span doesn't
-    sweep in non-import code between them.
+    """One IMPORT_BLOCK per contiguous import run + one FUNCTION / CLASS
+    per top-level def. Returned in source order: scattered imports
+    (e.g. lazy/runtime/TYPE_CHECKING imports) appear at their actual
+    line positions instead of being hoisted to the front by the
+    two-pass collection. Downstream consumers (tree-flatten, lookup
+    navigation) rely on line-sorted children.
     """
     children: list[DocumentNode] = []
     suffix_counter = 0
@@ -161,6 +162,13 @@ def _extract_module_children(
             ))
         elif isinstance(stmt, ast.ClassDef):
             children.append(_class_node(stmt, module, lines, rel))
+    # Two-pass collection above produces import blocks first, then
+    # defs — out of source order when a second import run lives below
+    # a def. Stable sort by ``start_line`` restores intuitive ordering
+    # without re-walking the AST. Stable so equal-line ties (rare —
+    # multiple decorated defs on adjacent lines) preserve relative AST
+    # order.
+    children.sort(key=lambda n: n.start_line)
     return children
 
 
