@@ -120,10 +120,18 @@ class InspectMemberExtractor:
     we never import the project-under-test. ``extract_from_dependency``
     tries ``importlib.import_module`` via ``_extract_by_import``; any
     exception triggers a fallback to the AST extractor with a debug log.
+
+    ``members_per_module_cap`` is the inline DoS guard restored from
+    pre-refactor enforcement (/ultrareview F4) — a single huge module
+    can't dump 10K+ symbols into FTS. Defaults to the constant in
+    ``_dep_helpers`` so unit tests instantiating the extractor without a
+    cap kwarg still inherit the production default; CLI wiring passes
+    the YAML-configured value.
     """
 
     static_fallback: AstMemberExtractor
     depth: int = 1
+    members_per_module_cap: int = 120
 
     async def extract_from_project(
         self, project_dir: Path,
@@ -143,7 +151,10 @@ class InspectMemberExtractor:
             # would also find nothing). Matches spec §9 "non-fatal skip".
             return ()
         try:
-            record = _extract_by_import(dist, self.depth)
+            record = _extract_by_import(
+                dist, self.depth,
+                members_per_module_cap=self.members_per_module_cap,
+            )
             symbols = record.get("symbols", ())
             return tuple(symbols)
         except Exception as exc:  # noqa: BLE001 -- spec §9.2 fallback allowlist

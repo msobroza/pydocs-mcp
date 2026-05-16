@@ -169,8 +169,12 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
     ast_member = AstMemberExtractor()
+    members_cap = config.extraction.members.members_per_module_cap
     member_extractor = (
-        InspectMemberExtractor(static_fallback=ast_member, depth=args.depth)
+        InspectMemberExtractor(
+            static_fallback=ast_member, depth=args.depth,
+            members_per_module_cap=members_cap,
+        )
         if use_inspect else ast_member
     )
 

@@ -237,7 +237,7 @@ async def test_inspect_dependency_falls_back_to_ast_on_import_error(
         lambda p: str(sp),
     )
 
-    def _boom(_dist, _depth):
+    def _boom(_dist, _depth, **_kwargs):
         raise RuntimeError("simulated import failure")
 
     monkeypatch.setattr(
@@ -277,7 +277,7 @@ async def test_inspect_dependency_uses_live_import_when_available(
     )
     monkeypatch.setattr(
         "pydocs_mcp.extraction.strategies.members._extract_by_import",
-        lambda _dist, _depth: {"symbols": fake_members},
+        lambda _dist, _depth, **_kwargs: {"symbols": fake_members},
     )
 
     inspect_extractor = InspectMemberExtractor(
@@ -327,3 +327,66 @@ def test_inspect_extractor_composes_ast_fallback() -> None:
     ast = AstMemberExtractor()
     inspect_mode = InspectMemberExtractor(static_fallback=ast)
     assert inspect_mode.static_fallback is ast
+
+
+# -- F4 + F12 — InspectMemberExtractor cap + truncation -----------------------
+
+
+def test_dep_helpers_collect_symbols_enforces_per_module_cap() -> None:
+    """F4: pre-refactor the inspect path capped members per module at 120
+    to bound FTS bloat; the refactor lost this enforcement. Direct
+    unit-test against _collect_symbols so any future regression
+    instantly fails."""
+    from types import ModuleType
+    from pydocs_mcp.extraction.strategies._dep_helpers import _collect_symbols
+
+    mod = ModuleType("hugemod")
+    # Pump >cap public functions onto the synthetic module so the
+    # collected count exceeds the limit if the cap is dropped.
+    for i in range(50):
+        def _f(_=i):  # noqa: ARG001 -- closure capture by default arg
+            pass
+        _f.__name__ = f"fn{i}"
+        setattr(mod, f"fn{i}", _f)
+
+    symbols: list = []
+    _collect_symbols(
+        mod, "hugemod", "hugemod", symbols, remaining_depth=1,
+        members_per_module_cap=10,  # tighter cap so the assertion is unambiguous
+    )
+    assert len(symbols) == 10, (
+        f"members_per_module_cap=10 not honoured — got {len(symbols)} symbols"
+    )
+
+
+def test_dep_helpers_truncate_signature_to_max_chars() -> None:
+    """F12: pre-refactor the inspect path truncated long signatures
+    before persisting; the refactor dropped that. Confirm the
+    MAX_SIGNATURE_CHARS limit is applied with an ellipsis marker."""
+    from pydocs_mcp.extraction.strategies._dep_helpers import (
+        MAX_SIGNATURE_CHARS, _truncate,
+    )
+    raw = "(" + ", ".join(f"arg{i}: int = 0" for i in range(50)) + ")"
+    assert len(raw) > MAX_SIGNATURE_CHARS
+    capped = _truncate(raw, MAX_SIGNATURE_CHARS)
+    assert len(capped) == MAX_SIGNATURE_CHARS
+    assert capped.endswith("…")
+
+
+def test_dep_helpers_truncate_docstring_to_max_chars() -> None:
+    """F12 (docstring branch): docstrings get the same treatment."""
+    from pydocs_mcp.extraction.strategies._dep_helpers import (
+        MAX_DOCSTRING_CHARS, _truncate,
+    )
+    raw = "Docstring line.\n" * 200  # >> 1024 chars
+    assert len(raw) > MAX_DOCSTRING_CHARS
+    capped = _truncate(raw, MAX_DOCSTRING_CHARS)
+    assert len(capped) == MAX_DOCSTRING_CHARS
+    assert capped.endswith("…")
+
+
+def test_dep_helpers_truncate_under_limit_unchanged() -> None:
+    """Short strings pass through identically (no ellipsis appended)."""
+    from pydocs_mcp.extraction.strategies._dep_helpers import _truncate
+    assert _truncate("short", 100) == "short"
+    assert _truncate("", 100) == ""
