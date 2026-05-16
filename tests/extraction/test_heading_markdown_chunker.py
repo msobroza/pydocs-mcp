@@ -334,3 +334,45 @@ def test_fence_kind_mismatch_does_not_close(tmp_path: Path) -> None:
     root = _build(src, root=tmp_path)
     titles = [c.title for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
     assert titles == ["Real"]
+
+
+# -- T2: F20 end-to-end PK-collision pinning ----------------------------------
+
+def test_doc_path_module_ids_pairwise_distinct_for_same_stem(
+    tmp_path: Path,
+) -> None:
+    """T2: F20's existing test asserts qualified_name == 'pkg.foo.md'
+    but never actually runs all three chunkers (.py / .md / .ipynb)
+    on a shared stem to confirm distinctness. A revert that re-
+    introduces the bug at the persistence layer (e.g. sanitising the
+    suffix away) would pass the existing test. This pins the actual
+    invariant: same stem → three distinct module identities."""
+    from pydocs_mcp.extraction.strategies.chunkers import (
+        AstPythonChunker, NotebookChunker,
+    )
+    import json
+
+    py_root = AstPythonChunker().build_tree(
+        path=str(tmp_path / "pkg" / "foo.py"),
+        content="def x(): pass\n",
+        package="pkg",
+        root=tmp_path,
+    )
+    md_root = _build("# Heading\nbody\n", path="pkg/foo.md", root=tmp_path)
+    notebook = json.dumps({
+        "cells": [{"cell_type": "markdown", "source": "# Title"}],
+        "metadata": {"kernelspec": {"name": "python3"}},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    })
+    ipynb_root = NotebookChunker().build_tree(
+        path=str(tmp_path / "pkg" / "foo.ipynb"),
+        content=notebook,
+        package="pkg",
+        root=tmp_path,
+    )
+    ids = {py_root.qualified_name, md_root.qualified_name, ipynb_root.qualified_name}
+    assert ids == {"pkg.foo", "pkg.foo.md", "pkg.foo.ipynb"}, (
+        f"F20 PK-collision regression — same-stem siblings produced "
+        f"non-distinct module ids: {ids}"
+    )
