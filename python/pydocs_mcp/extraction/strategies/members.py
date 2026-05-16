@@ -30,18 +30,13 @@ from pydocs_mcp.models import ModuleMember, ModuleMemberFilterField
 log = logging.getLogger("pydocs-mcp")
 
 
-def _path_under_excluded(filepath: str, excluded: frozenset[str]) -> bool:
-    """True iff any path component of ``filepath`` is in ``excluded``.
-
-    Bridges ``walk_py_files``'s hardcoded SKIP_DIRS to the canonical
-    Python-side ``_EXCLUDED_DIRS`` policy without changing the Rust /
-    fallback API. Splitting on both ``os.sep`` and ``"/"`` covers
-    Rust output (always ``/`` regardless of platform) and Python
-    fallback output (platform-native). Cheap — sets give O(1) lookup
-    per component.
-    """
-    parts = filepath.replace("\\", "/").split("/")
-    return any(part in excluded for part in parts)
+# Back-compat alias — the canonical implementation lives in
+# extraction/config.py next to _EXCLUDED_DIRS. Kept as a local name
+# so existing imports + tests don't break; new code should import
+# ``path_under_excluded`` directly from extraction.config.
+from pydocs_mcp.extraction.config import (  # noqa: E402
+    path_under_excluded as _path_under_excluded,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,17 +82,17 @@ class AstMemberExtractor:
 
     def _parse_dir(self, root: Path, package: str) -> tuple[ModuleMember, ...]:
         from pydocs_mcp._fast import walk_py_files
-        from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
 
         # walk_py_files (both the Rust impl and the Python fallback) has its
         # own hardcoded SKIP_DIRS that doesn't track the canonical Python-side
         # ``_EXCLUDED_DIRS`` policy. They diverge on .hg / .svn / target /
-        # site-packages / .coverage / .cache. Post-filter here so the
-        # member side sees the SAME exclusion set as the chunker side —
-        # without this, a checked-in ``vendor/site-packages`` directory
-        # leaks into the symbol index even though chunker discovery skips it.
+        # site-packages / .coverage / .cache. Post-filter via the canonical
+        # helper so the member side sees the SAME exclusion set as the
+        # chunker side — without this, a checked-in ``vendor/site-packages``
+        # directory leaks into the symbol index even though chunker
+        # discovery skips it.
         candidates = walk_py_files(str(root))
-        py_files = [p for p in candidates if not _path_under_excluded(p, _EXCLUDED_DIRS)]
+        py_files = [p for p in candidates if not _path_under_excluded(p)]
         return self._parse_files(package, py_files, root)
 
     def _parse_files(

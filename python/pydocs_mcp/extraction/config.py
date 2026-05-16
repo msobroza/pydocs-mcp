@@ -45,6 +45,28 @@ decision #6b). NOT exposed as a YAML field; trying to set
 ``extra="forbid"`` at load time (spec AC #6b)."""
 
 
+def path_under_excluded(
+    filepath: str, excluded: frozenset[str] = _EXCLUDED_DIRS,
+) -> bool:
+    """True iff any path component of ``filepath`` is in ``excluded``.
+
+    Canonical helper used by every file-discovery path:
+    - :func:`pydocs_mcp.extraction.strategies.discovery._in_excluded_dir`
+      wraps it for the dependency-file walk.
+    - :class:`pydocs_mcp.extraction.strategies.members.AstMemberExtractor`
+      uses it to post-filter ``walk_py_files`` output against the
+      canonical policy.
+
+    Path splitting normalises backslashes to forward slashes BEFORE
+    splitting on ``/``, so Rust output (always forward slashes regardless
+    of platform) and Python output (platform-native separators) both
+    flow through the same component-membership check. Cheap — frozenset
+    lookup is O(1) per component.
+    """
+    parts = filepath.replace("\\", "/").split("/")
+    return any(part in excluded for part in parts)
+
+
 class MarkdownConfig(BaseModel):
     """Heading-depth bounds for :class:`HeadingMarkdownChunker`."""
 
