@@ -731,6 +731,12 @@ class SqliteDocumentTreeStore:
                 (package,),
             )
 
+    async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.execute, "DELETE FROM document_trees",
+            )
+
 
 def _serialize_tree_to_json(node: DocumentNode) -> str:
     """Serialise a ``DocumentNode`` tree to compact JSON for storage."""

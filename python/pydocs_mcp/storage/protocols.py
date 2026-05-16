@@ -125,3 +125,13 @@ class DocumentTreeStore(Protocol):
     async def delete_for_package(
         self, package: str, *, uow: UnitOfWork | None = None,
     ) -> None: ...
+
+    async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
+        """Drop every row across all packages.
+
+        Used by :meth:`IndexingService.clear_all` so the trees table tracks
+        the destructive sweep of the other entity stores — otherwise stale
+        trees survive ``clear_all`` and ``LookupService.get_tree`` serves
+        cached payloads for re-indexed packages.
+        """
+        ...

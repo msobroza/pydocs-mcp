@@ -423,6 +423,66 @@ class FakeDocumentTreeStore:
         self.calls.append(_Call("delete_for_package", package))
         self.by_package.pop(package, None)
 
+    async def delete_all(self, *, uow=None) -> None:
+        self.calls.append(_Call("delete_all", None))
+        self.by_package.clear()
+
+
+@pytest.mark.asyncio
+async def test_remove_package_clears_document_trees():
+    """remove_package must call tree_store.delete_for_package — without
+    this, stale trees survive a re-index and LookupService.get_tree
+    returns the pre-reindex payload (F5b from /ultrareview)."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    ts = FakeDocumentTreeStore()
+    ts.by_package["fastapi"] = ["tree-fastapi"]
+    ts.by_package["other"] = ["tree-other"]
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms, tree_store=ts,
+    )
+    await service.remove_package("fastapi")
+    # The target package's trees gone; cross-package isolation holds.
+    assert "fastapi" not in ts.by_package
+    assert ts.by_package["other"] == ["tree-other"]
+    assert any(c.method == "delete_for_package" and c.payload == "fastapi" for c in ts.calls)
+
+
+@pytest.mark.asyncio
+async def test_remove_package_without_tree_store_does_not_crash():
+    """Backward-compat: services constructed pre-#5 had no tree_store; the
+    new tree-cleanup branch must no-op rather than raise."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms,
+    )
+    await service.remove_package("fastapi")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_clear_all_drops_every_document_tree():
+    """clear_all must call tree_store.delete_all — without this, the trees
+    table accumulates orphan rows across destructive sweeps (F5b)."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    ts = FakeDocumentTreeStore()
+    ts.by_package["a"] = ["t1"]
+    ts.by_package["b"] = ["t2"]
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms, tree_store=ts,
+    )
+    await service.clear_all()
+    assert ts.by_package == {}
+    assert any(c.method == "delete_all" for c in ts.calls)
+
+
+@pytest.mark.asyncio
+async def test_clear_all_without_tree_store_does_not_crash():
+    """Same backward-compat as remove_package."""
+    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
+    service = IndexingService(
+        package_store=ps, chunk_store=cs, module_member_store=ms,
+    )
+    await service.clear_all()  # must not raise
+
 
 @pytest.mark.asyncio
 async def test_reindex_package_without_tree_store_accepts_trees_param():

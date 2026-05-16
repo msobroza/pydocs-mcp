@@ -157,10 +157,20 @@ class IndexingService:
         await self.module_member_store.delete(
             filter={ModuleMemberFilterField.PACKAGE.value: name},
         )
+        # Sub-PR #5 §12.2: trees are per-package state too. Without this
+        # delete a stale tree survives a re-index and ``LookupService.get_tree``
+        # returns the pre-reindex payload.
+        if self.tree_store is not None:
+            await self.tree_store.delete_for_package(name)
         await self.package_store.delete(filter={"name": name})
 
     async def _do_clear_all(self) -> None:
         match_all: All = All(clauses=())
         await self.chunk_store.delete(filter=match_all)
         await self.module_member_store.delete(filter=match_all)
+        # Match the destructive sweep across all entity stores — see
+        # _do_remove rationale; without this, document_trees rows accumulate
+        # indefinitely across clear_all cycles.
+        if self.tree_store is not None:
+            await self.tree_store.delete_all()
         await self.package_store.delete(filter=match_all)

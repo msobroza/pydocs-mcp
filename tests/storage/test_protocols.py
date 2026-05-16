@@ -45,6 +45,9 @@ def test_document_tree_store_is_runtime_checkable():
         async def delete_for_package(self, package, *, uow=None):
             return None
 
+        async def delete_all(self, *, uow=None):
+            return None
+
     assert isinstance(FakeStore(), DocumentTreeStore)
 
 
