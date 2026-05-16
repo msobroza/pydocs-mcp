@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.retrieval.predicates import PredicateRegistry
+    from pydocs_mcp.retrieval.post_filters import PredicateRegistry
     from pydocs_mcp.retrieval.protocols import ConnectionProvider
     from pydocs_mcp.storage.sqlite import (
         SqliteModuleMemberRepository,
@@ -90,8 +90,8 @@ formatter_registry: ComponentRegistry = ComponentRegistry()
 
 
 def _default_predicate_registry():
-    """Lazy import to avoid circular dep — predicates module imports from here."""
-    from pydocs_mcp.retrieval.predicates import default_predicate_registry
+    """Lazy import to avoid circular dep — post_filters module imports from here."""
+    from pydocs_mcp.retrieval.post_filters import default_predicate_registry
     return default_predicate_registry
 
 

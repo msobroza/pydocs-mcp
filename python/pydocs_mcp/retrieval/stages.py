@@ -17,7 +17,7 @@ from pydocs_mcp.models import (
     ModuleMemberList,
 )
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
-from pydocs_mcp.retrieval.predicates import default_predicate_registry
+from pydocs_mcp.retrieval.post_filters import default_predicate_registry
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 from pydocs_mcp.storage.filters import (
     All,
@@ -29,7 +29,7 @@ from pydocs_mcp.storage.filters import (
 )
 
 if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.predicates import PredicateRegistry
+    from pydocs_mcp.retrieval.post_filters import PredicateRegistry
     from pydocs_mcp.retrieval.protocols import (
         ChunkRetriever,
         ModuleMemberRetriever,
