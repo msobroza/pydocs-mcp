@@ -37,29 +37,28 @@ class PipelineChunkExtractor:
     async def extract_from_project(
         self, project_dir: Path,
     ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
-        state = await self.pipeline.run(IngestionState(
+        return self._unwrap(await self.pipeline.run(IngestionState(
             target=project_dir,
             target_kind=TargetKind.PROJECT,
             package_name="__project__",
-        ))
-        if state.package is None:
-            raise RuntimeError(
-                "ingestion pipeline did not populate state.package "
-                "(missing package_build stage?)",
-            )
-        return state.chunks, state.trees, state.package
+        )))
 
     async def extract_from_dependency(
         self, dep_name: str,
     ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
-        state = await self.pipeline.run(IngestionState(
+        return self._unwrap(await self.pipeline.run(IngestionState(
             target=dep_name,
             target_kind=TargetKind.DEPENDENCY,
             # Normalise once here (mirrors PackageBuildStage) so chunks +
             # trees share the canonical module prefix before the package
             # metadata is synthesized.
             package_name=normalize_package_name(dep_name),
-        ))
+        )))
+
+    @staticmethod
+    def _unwrap(
+        state: IngestionState,
+    ) -> tuple[tuple[Chunk, ...], tuple[DocumentNode, ...], Package]:
         if state.package is None:
             raise RuntimeError(
                 "ingestion pipeline did not populate state.package "

@@ -291,13 +291,22 @@ def _resolve_pipeline_path(
                 f"member_like.yaml → member_search.yaml). Update your "
                 f"pydocs-mcp.yaml accordingly."
             )
-        # ``pipelines/foo.yaml`` resolves under the shipped dir whether or
-        # not a user config is present — lets default_config.yaml reference
-        # bundled YAMLs without knowing the package install path.
+        # ``pipelines/foo.yaml`` uses search-path semantics: user-dir wins
+        # when the file is present locally (so a user can override the shipped
+        # pipeline by dropping their own ``pipelines/chunk_search.yaml`` next
+        # to their config), otherwise falls back to the shipped dir. This
+        # lets ``default_config.yaml`` reference bundled YAMLs without
+        # knowing the install path AND lets users override them.
         if parts and parts[0] == "pipelines":
-            candidate = Path(str(importlib.resources.files("pydocs_mcp").joinpath(
-                str(pipeline_path)
-            ))).resolve()
+            user_local = None
+            if user_config_path is not None:
+                user_local = (user_config_path.resolve().parent / pipeline_path).resolve()
+            if user_local is not None and user_local.exists():
+                candidate = user_local
+            else:
+                candidate = Path(str(importlib.resources.files("pydocs_mcp").joinpath(
+                    str(pipeline_path)
+                ))).resolve()
         else:
             base = (
                 user_config_path.resolve().parent

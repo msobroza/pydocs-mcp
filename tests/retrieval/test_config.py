@@ -178,6 +178,38 @@ def test_pipeline_path_accepts_shipped_pipelines_relative(tmp_path):
     assert resolved.name == "chunk_search.yaml"
 
 
+def test_pipeline_path_user_local_pipelines_overrides_shipped(tmp_path):
+    """Search-path semantics: when the user has a local ``./pipelines/foo.yaml``
+    next to their config, it overrides the shipped one with the same name."""
+    user_cfg_dir = tmp_path / "cfg"
+    user_cfg_dir.mkdir()
+    user_cfg_file = user_cfg_dir / "pydocs-mcp.yaml"
+    user_cfg_file.write_text("log_level: info\n")
+    local_pipelines = user_cfg_dir / "pipelines"
+    local_pipelines.mkdir()
+    local_override = local_pipelines / "chunk_search.yaml"
+    local_override.write_text("name: custom\nstages: []\n")
+    resolved = _resolve_pipeline_path(
+        Path("pipelines/chunk_search.yaml"), user_config_path=user_cfg_file,
+    )
+    assert resolved == local_override.resolve()
+
+
+def test_pipeline_path_falls_back_to_shipped_when_user_local_missing(tmp_path):
+    """If the user has a pydocs-mcp.yaml but no local ``./pipelines/`` dir,
+    ``pipelines/foo.yaml`` still resolves to the shipped bundle (no regression)."""
+    user_cfg_dir = tmp_path / "cfg"
+    user_cfg_dir.mkdir()
+    user_cfg_file = user_cfg_dir / "pydocs-mcp.yaml"
+    user_cfg_file.write_text("log_level: info\n")
+    # No local pipelines/ subdir — falls through to shipped
+    resolved = _resolve_pipeline_path(
+        Path("pipelines/chunk_search.yaml"), user_config_path=user_cfg_file,
+    )
+    assert resolved.name == "chunk_search.yaml"
+    assert "pydocs_mcp/pipelines" in str(resolved)
+
+
 def test_pipeline_path_legacy_presets_prefix_raises_migration_error(tmp_path):
     """A legacy ``presets/chunk_fts.yaml`` path (pre-rename) raises a clear
     ValueError pointing at the new convention, not a confusing FileNotFoundError."""
