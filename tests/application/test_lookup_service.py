@@ -104,10 +104,13 @@ async def test_longest_indexed_module_prefers_tree_when_wired(
     tree_svc.exists = _exists
 
     svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
-    module = await svc._longest_indexed_module(
+    match = await svc._longest_indexed_module(
         "fastapi", ["fastapi", "routing", "APIRouter", "include_router"]
     )
-    assert module == "fastapi.routing"
+    # Returns (module_id, parts_consumed). A1 lookup-UX fix needs the
+    # consumed count so caller can slice symbol_path correctly when the
+    # matched module carries a synthetic .md/.ipynb suffix.
+    assert match == ("fastapi.routing", 2)
 
 
 @pytest.mark.asyncio
@@ -122,10 +125,10 @@ async def test_longest_indexed_module_falls_back_to_find_module(
     package_lookup_mock.find_module = AsyncMock(side_effect=_find)
 
     svc = LookupService(package_lookup=package_lookup_mock, tree_svc=None)
-    module = await svc._longest_indexed_module(
+    match = await svc._longest_indexed_module(
         "fastapi", ["fastapi", "routing", "APIRouter"]
     )
-    assert module == "fastapi.routing"
+    assert match == ("fastapi.routing", 2)
 
 
 @pytest.mark.asyncio
@@ -133,10 +136,53 @@ async def test_longest_indexed_module_returns_none_when_nothing_matches(
     package_lookup_mock: MagicMock,
 ) -> None:
     svc = LookupService(package_lookup=package_lookup_mock, tree_svc=None)
-    module = await svc._longest_indexed_module(
+    match = await svc._longest_indexed_module(
         "fastapi", ["fastapi", "nonexistent", "foo"]
     )
-    assert module is None
+    assert match is None
+
+
+@pytest.mark.asyncio
+async def test_longest_indexed_module_resolves_markdown_via_suffix_probe(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """A1: lookup('pkg.foo') must resolve to a stored 'pkg.foo.md' tree.
+    F20 added the .md/.ipynb suffix to doc-file module ids; without
+    this fallback probe, every markdown / notebook document becomes
+    unreachable via lookup.
+
+    Consumed count must reflect the user's INPUT prefix length (2),
+    not the matched module's segment count (3) — the synthetic suffix
+    segment isn't in the user's input, so a downstream symbol_path
+    slice must use the input-consumed count."""
+    tree_svc = MagicMock()
+
+    async def _exists(package: str, module: str) -> bool:
+        return module == "docs.guide.md"
+
+    tree_svc.exists = _exists
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    match = await svc._longest_indexed_module("__project__", ["docs", "guide"])
+    assert match == ("docs.guide.md", 2)
+
+
+@pytest.mark.asyncio
+async def test_longest_indexed_module_python_wins_over_markdown(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """A1: when both pkg.foo (Python) and pkg.foo.md exist, the bare
+    Python name wins — variant order is ('', '.md', '.ipynb') so the
+    bare probe fires first. Matches user intent: typing pkg.foo wants
+    the code module, not the sidecar doc."""
+    tree_svc = MagicMock()
+
+    async def _exists(package: str, module: str) -> bool:
+        return module in {"pkg.foo", "pkg.foo.md"}
+
+    tree_svc.exists = _exists
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    match = await svc._longest_indexed_module("pkg", ["pkg", "foo"])
+    assert match == ("pkg.foo", 2)
 
 
 # ── Module-level + symbol-level dispatch ─────────────────────────────────
