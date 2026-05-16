@@ -395,37 +395,12 @@ def test_indexing_service_accepts_fake_stores_only():
 
 # ── DocumentTreeStore integration ──────────────────────────────
 
-
-@dataclass
-class FakeDocumentTreeStore:
-    """Structurally satisfies DocumentTreeStore — async methods only."""
-
-    calls: list[_Call] = field(default_factory=list)
-    by_package: dict[str, list] = field(default_factory=dict)
-
-    async def save_many(
-        self, trees, *, package, uow=None,
-    ) -> None:
-        materialised = tuple(trees)
-        self.calls.append(_Call("save_many", (package, materialised)))
-        self.by_package.setdefault(package, []).extend(materialised)
-
-    async def load(self, package, module):
-        return None  # not exercised here
-
-    async def load_all_in_package(self, package):
-        return {}
-
-    async def exists(self, package, module):
-        return False  # not exercised here (write-side tests only)
-
-    async def delete_for_package(self, package, *, uow=None) -> None:
-        self.calls.append(_Call("delete_for_package", package))
-        self.by_package.pop(package, None)
-
-    async def delete_all(self, *, uow=None) -> None:
-        self.calls.append(_Call("delete_all", None))
-        self.by_package.clear()
+# FakeDocumentTreeStore was inlined here AND duplicated as a nested
+# class in tests/storage/test_protocols.py. M2 promotes the shared
+# fake to tests/_fakes.py so a new Protocol method only needs adding
+# in one place. The alias keeps existing tests working without the
+# import-everywhere churn.
+from tests._fakes import InMemoryDocumentTreeStore as FakeDocumentTreeStore  # noqa: E402
 
 
 @pytest.mark.asyncio
