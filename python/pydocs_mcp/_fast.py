@@ -2,7 +2,7 @@
 Try to import Rust-accelerated functions, fall back to pure Python.
 
 Usage anywhere in the project:
-    from pydocs_mcp._fast import walk_py_files, split_into_chunks, ...
+    from pydocs_mcp._fast import walk_py_files, parse_py_file, ...
 """
 import logging
 
@@ -12,7 +12,6 @@ try:
     from pydocs_mcp._native import (  # type: ignore[import]
         walk_py_files,
         hash_files,
-        split_into_chunks,
         parse_py_file,
         extract_module_doc,
         read_file,
@@ -26,7 +25,6 @@ except ImportError:
     from pydocs_mcp._fallback import (
         walk_py_files,
         hash_files,
-        split_into_chunks,
         parse_py_file,
         extract_module_doc,
         read_file,
@@ -46,7 +44,7 @@ def disable_rust() -> None:
     import pydocs_mcp._fast as mod
     from pydocs_mcp import _fallback
     for name in (
-        "walk_py_files", "hash_files", "split_into_chunks", "parse_py_file",
+        "walk_py_files", "hash_files", "parse_py_file",
         "extract_module_doc", "read_file", "read_files_parallel", "ParsedMember",
     ):
         setattr(mod, name, getattr(_fallback, name))

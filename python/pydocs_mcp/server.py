@@ -17,6 +17,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.application import (
     LookupInput,
@@ -24,6 +25,7 @@ from pydocs_mcp.application import (
     MCPToolError,
     SearchInput,
     ServiceUnavailableError,
+    TreeService,
 )
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
@@ -32,6 +34,12 @@ from pydocs_mcp.models import (
     SearchResponse,
     SearchScope,
 )
+
+if TYPE_CHECKING:
+    # `_do_search` is a module-level function but the services it takes are
+    # constructed inside ``run()``. Import here for the type annotations
+    # without paying the cost at server start.
+    from pydocs_mcp.application import ApiSearch, DocsSearch
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -66,7 +74,7 @@ def _build_search_query(payload: SearchInput) -> SearchQuery:
 
 
 def _render_search_response(response: SearchResponse, empty_msg: str) -> str:
-    """The pipeline's TokenBudgetFormatterStage wraps the final output as a
+    """The pipeline's TokenBudgetStage wraps the final output as a
     single composite chunk, so ``items[0].text`` is the formatted body."""
     result = response.result
     if result is None or not result.items:
@@ -86,18 +94,19 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         sys.exit(1)
 
     from pydocs_mcp.application import (
-        PackageLookupService,
-        SearchApiService,
-        SearchDocsService,
+        ApiSearch,
+        DocsSearch,
+        PackageLookup,
     )
     from pydocs_mcp.retrieval.config import (
         AppConfig,
         build_chunk_pipeline_from_config,
         build_member_pipeline_from_config,
     )
-    from pydocs_mcp.retrieval.wiring import build_retrieval_context
+    from pydocs_mcp.retrieval.factories import build_retrieval_context
     from pydocs_mcp.storage.sqlite import (
         SqliteChunkRepository,
+        SqliteDocumentTreeStore,
         SqlitePackageRepository,
     )
 
@@ -110,28 +119,23 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 
-    package_lookup = PackageLookupService(
+    package_lookup = PackageLookup(
         package_store=package_store,
         chunk_store=chunk_store,
         module_member_store=member_store,
     )
-    search_docs_svc = SearchDocsService(chunk_pipeline=chunk_pipeline)
-    search_api_svc = SearchApiService(member_pipeline=member_pipeline)
+    search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
+    search_api_svc = ApiSearch(member_pipeline=member_pipeline)
 
-    # Optional services — wired if sub-PR #5 / #5b have landed. Absence is
-    # surfaced to the user as ServiceUnavailableError from LookupService, not
-    # as an import error at server start.
-    tree_svc = None
-    ref_svc = None
-    try:
-        from pydocs_mcp.application import DocumentTreeService  # type: ignore[attr-defined]
-        # Instantiation deferred until sub-PR #5 lands its tree_store wiring.
-    except ImportError:
-        pass
-    try:
-        from pydocs_mcp.application import ReferenceService  # type: ignore[attr-defined]
-    except ImportError:
-        pass
+    # TreeService (sub-PR #5) — wired from the same SqliteDocumentTreeStore
+    # that IndexingService writes through, so multi-segment ``lookup`` targets
+    # resolve against persisted DocumentNode trees. ReferenceService (sub-PR
+    # #5b) ships later; LookupService surfaces its absence as
+    # ServiceUnavailableError to MCP clients instead of failing startup.
+    tree_svc = TreeService(
+        tree_store=SqliteDocumentTreeStore(provider=provider),
+    )
+    ref_svc = None  # reserved for sub-PR #5b
 
     lookup_svc = LookupService(
         package_lookup=package_lookup,
@@ -214,14 +218,22 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             log.exception("lookup failed unexpectedly")
             raise ServiceUnavailableError(f"lookup failed: {e}") from e
 
+    # TODO(sub-PR #5b/follow-up): wire TreeService + build_package_tree
+    # into ``lookup(kind="tree")`` dispatch so the tree arborescence is reachable
+    # via the unified 2-tool MCP surface. Standalone ``get_document_tree`` /
+    # ``get_package_tree`` handlers were removed during the rebase onto #6's
+    # consolidated MCP surface; the underlying services
+    # (``TreeService``, ``build_package_tree``, ``flatten_to_chunks``)
+    # remain available for the integration.
+
     log.info("MCP ready (db: %s)", db_path)
     mcp.run(transport="stdio")
 
 
 async def _do_search(
     payload: SearchInput,
-    search_docs_svc: "SearchDocsService",
-    search_api_svc: "SearchApiService",
+    search_docs_svc: "DocsSearch",
+    search_api_svc: "ApiSearch",
 ) -> str:
     """Dispatch search by kind; returns rendered markdown."""
     query = _build_search_query(payload)

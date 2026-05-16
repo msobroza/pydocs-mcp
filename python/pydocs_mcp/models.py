@@ -26,6 +26,15 @@ class ChunkOrigin(StrEnum):
     DEPENDENCY_README        = "dependency_readme"
     DEPENDENCY_MODULE_DOC    = "dependency_module_doc"
     COMPOSITE_OUTPUT         = "composite_output"
+    # sub-PR #5 §4.2: origins emitted by DocumentNode extraction strategies.
+    # Tagged on Chunk.metadata["origin"] so retrievers / filters can route on
+    # "where in the tree did this come from?". CODE_EXAMPLE nodes inherit the
+    # origin of their parent (PYTHON_DEF or MARKDOWN_SECTION) — the NodeKind
+    # carries the "is this a code example" distinction.
+    PYTHON_DEF               = "python_def"
+    MARKDOWN_SECTION         = "markdown_section"
+    NOTEBOOK_MARKDOWN_CELL   = "notebook_markdown_cell"
+    NOTEBOOK_CODE_CELL       = "notebook_code_cell"
 
 
 class MemberKind(StrEnum):
@@ -61,6 +70,11 @@ class ChunkFilterField(StrEnum):
     ORIGIN  = "origin"
     MODULE  = "module"
     SCOPE   = "scope"
+    # sub-PR #5 §4.5: filter keys for tree-derived chunks — SOURCE_PATH
+    # selects by the originating file (reference-graph lookups), CONTENT_HASH
+    # deduplicates identical chunks across re-indexes.
+    SOURCE_PATH  = "source_path"
+    CONTENT_HASH = "content_hash"
 
 
 class ModuleMemberFilterField(StrEnum):
@@ -205,7 +219,7 @@ class SearchResponse:
 @dataclass(frozen=True, slots=True)
 class PackageDoc:
     """Groups the three query results for get_package_doc one-shot retrieval
-    (spec §5.1). Consumed by :class:`PackageLookupService` in the application
+    (spec §5.1). Consumed by :class:`PackageLookup` in the application
     layer; keeping chunks/members as tuples makes the whole value object
     hashable-ish and safe to pass across async boundaries."""
     kind: ClassVar[str] = "package_doc"
@@ -216,7 +230,7 @@ class PackageDoc:
 
 @dataclass(slots=True)
 class IndexingStats:
-    """Mutable accumulator for :meth:`IndexProjectService.index_project`
+    """Mutable accumulator for :meth:`ProjectIndexer.index_project`
     (spec §5.3). Deliberately NOT frozen — the service mutates these counters
     while iterating over packages. `slots=True` still guards against typos
     (e.g. ``stats.indexxed += 1``) by rejecting unknown attributes."""

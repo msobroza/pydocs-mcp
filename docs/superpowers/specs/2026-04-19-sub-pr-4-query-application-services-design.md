@@ -1,3 +1,9 @@
+---
+status: implemented
+shipped-in: PR #16
+last-reviewed: 2026-05-16
+---
+
 # Sub-PR #4 — Query-side + write-side Application Services; thin MCP handlers
 
 **Status:** Approved (2026-04-19) — ready for implementation planning in a later session

@@ -22,7 +22,7 @@ def _clean_config_env(monkeypatch, tmp_path):
 
 def test_appconfig_loads_shipped_defaults_absent_user_file():
     """With no user YAML and no env overrides, every value comes from the
-    shipped ``presets/default_config.yaml`` baseline layer (spec §5.9, AC #14)."""
+    shipped ``defaults/default_config.yaml`` baseline layer (spec §5.9, AC #14)."""
     config = AppConfig.load()
     assert config.metadata_schemas["chunk"] == ("package", "scope", "origin", "title", "module")
     assert config.metadata_schemas["member"] == ("package", "scope", "module", "name", "kind")
@@ -88,40 +88,40 @@ def test_appconfig_cwd_local_file(tmp_path, monkeypatch):
 
 
 def test_pipeline_route_entry_predicate_only_is_valid():
-    PipelineRouteEntry(predicate="always", pipeline_path=Path("presets/x.yaml"))
+    PipelineRouteEntry(predicate="always", pipeline_path=Path("pipelines/x.yaml"))
 
 
 def test_pipeline_route_entry_default_only_is_valid():
-    PipelineRouteEntry(default=True, pipeline_path=Path("presets/x.yaml"))
+    PipelineRouteEntry(default=True, pipeline_path=Path("pipelines/x.yaml"))
 
 
 def test_pipeline_route_entry_rejects_both_predicate_and_default():
     with pytest.raises(ValidationError, match="exactly one of predicate or default"):
         PipelineRouteEntry(
-            predicate="always", default=True, pipeline_path=Path("presets/x.yaml"),
+            predicate="always", default=True, pipeline_path=Path("pipelines/x.yaml"),
         )
 
 
 def test_pipeline_route_entry_rejects_neither_predicate_nor_default():
     with pytest.raises(ValidationError, match="exactly one of predicate or default"):
-        PipelineRouteEntry(pipeline_path=Path("presets/x.yaml"))
+        PipelineRouteEntry(pipeline_path=Path("pipelines/x.yaml"))
 
 
 # ── Shipped preset resource sanity ──────────────────────────────────────
 
 
-def test_preset_chunk_fts_loadable():
-    chunk_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("chunk_fts.yaml")
+def test_pipeline_chunk_search_loadable():
+    chunk_yaml = importlib.resources.files("pydocs_mcp.pipelines").joinpath("chunk_search.yaml")
     assert chunk_yaml.is_file()
 
 
-def test_preset_member_like_loadable():
-    member_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("member_like.yaml")
+def test_pipeline_member_search_loadable():
+    member_yaml = importlib.resources.files("pydocs_mcp.pipelines").joinpath("member_search.yaml")
     assert member_yaml.is_file()
 
 
-def test_preset_default_config_loadable():
-    default_yaml = importlib.resources.files("pydocs_mcp.presets").joinpath("default_config.yaml")
+def test_default_config_loadable():
+    default_yaml = importlib.resources.files("pydocs_mcp.defaults").joinpath("default_config.yaml")
     assert default_yaml.is_file()
 
 
@@ -134,12 +134,12 @@ def test_pipeline_path_rejects_absolute_outside_allowed_roots(tmp_path):
     outside = tmp_path / "evil.yaml"
     outside.write_text("name: evil\nstages: []\n")
     with pytest.raises(ValueError, match="pipeline_path must be inside"):
-        # No user-config path → only presets/ is allowed.
+        # No user-config path → only pipelines/ is allowed.
         _resolve_pipeline_path(outside, user_config_path=None)
 
 
 def test_pipeline_path_rejects_symlink_traversal(tmp_path):
-    """A symlink inside the shipped presets/ dir that points outside the
+    """A symlink inside the shipped pipelines/ dir that points outside the
     allowlist must be rejected after resolve() follows it."""
     # We simulate the attack by creating a user-config dir, a symlink inside
     # it pointing outside the allowlist, and supplying the user_config_path
@@ -171,8 +171,102 @@ def test_pipeline_path_accepts_relative_inside_user_config(tmp_path):
     assert resolved == sibling.resolve()
 
 
-def test_pipeline_path_accepts_shipped_presets_relative(tmp_path):
-    """Back-compat: the bundled presets stay reachable via ``presets/foo.yaml``."""
-    # chunk_fts.yaml is shipped inside pydocs_mcp/presets/
-    resolved = _resolve_pipeline_path(Path("presets/chunk_fts.yaml"), user_config_path=None)
-    assert resolved.name == "chunk_fts.yaml"
+def test_pipeline_path_accepts_shipped_pipelines_relative(tmp_path):
+    """The bundled pipelines stay reachable via ``pipelines/foo.yaml``."""
+    # chunk_search.yaml is shipped inside pydocs_mcp/pipelines/
+    resolved = _resolve_pipeline_path(Path("pipelines/chunk_search.yaml"), user_config_path=None)
+    assert resolved.name == "chunk_search.yaml"
+
+
+def test_pipeline_path_user_local_pipelines_overrides_shipped(tmp_path):
+    """Search-path semantics: when the user has a local ``./pipelines/foo.yaml``
+    next to their config, it overrides the shipped one with the same name."""
+    user_cfg_dir = tmp_path / "cfg"
+    user_cfg_dir.mkdir()
+    user_cfg_file = user_cfg_dir / "pydocs-mcp.yaml"
+    user_cfg_file.write_text("log_level: info\n")
+    local_pipelines = user_cfg_dir / "pipelines"
+    local_pipelines.mkdir()
+    local_override = local_pipelines / "chunk_search.yaml"
+    local_override.write_text("name: custom\nstages: []\n")
+    resolved = _resolve_pipeline_path(
+        Path("pipelines/chunk_search.yaml"), user_config_path=user_cfg_file,
+    )
+    assert resolved == local_override.resolve()
+
+
+def test_pipeline_path_falls_back_to_shipped_when_user_local_missing(tmp_path):
+    """If the user has a pydocs-mcp.yaml but no local ``./pipelines/`` dir,
+    ``pipelines/foo.yaml`` still resolves to the shipped bundle (no regression)."""
+    user_cfg_dir = tmp_path / "cfg"
+    user_cfg_dir.mkdir()
+    user_cfg_file = user_cfg_dir / "pydocs-mcp.yaml"
+    user_cfg_file.write_text("log_level: info\n")
+    # No local pipelines/ subdir — falls through to shipped
+    resolved = _resolve_pipeline_path(
+        Path("pipelines/chunk_search.yaml"), user_config_path=user_cfg_file,
+    )
+    assert resolved.name == "chunk_search.yaml"
+    assert "pydocs_mcp/pipelines" in str(resolved)
+
+
+def test_pipeline_path_legacy_presets_prefix_raises_migration_error(tmp_path):
+    """A legacy ``presets/chunk_fts.yaml`` path (pre-rename) raises a clear
+    ValueError pointing at the new convention, not a confusing FileNotFoundError."""
+    with pytest.raises(ValueError, match="presets/.*renamed to 'pipelines/'"):
+        _resolve_pipeline_path(Path("presets/chunk_fts.yaml"), user_config_path=None)
+
+
+# ── Sub-PR #5 — ExtractionConfig slotting (spec §11) ────────────────
+
+
+def test_appconfig_includes_extraction_defaults():
+    """``AppConfig.load()`` surfaces the shipped ``extraction:`` block —
+    every sub-section populated with its Pydantic-default values."""
+    from pydocs_mcp.extraction.config import ExtractionConfig
+
+    config = AppConfig.load()
+    assert isinstance(config.extraction, ExtractionConfig)
+    # Shipped YAML drives these, not the Pydantic defaults — the two
+    # should agree, but we assert on the YAML values to catch drift
+    # between code and YAML.
+    # F11: chunker selection is decorator-driven (chunker_registry); the
+    # legacy ``by_extension`` dict was dead config and got removed. The
+    # shipped YAML must NOT declare it (Pydantic extra='forbid' would
+    # reject the merged config).
+    assert not hasattr(config.extraction.chunking, "by_extension")
+    assert config.extraction.chunking.markdown.max_heading_level == 3
+    assert config.extraction.chunking.notebook.include_outputs is False
+    assert config.extraction.discovery.project.include_extensions == [
+        ".py", ".md", ".ipynb",
+    ]
+    assert config.extraction.discovery.project.max_file_size_bytes == 500_000
+    assert config.extraction.discovery.dependency.max_file_size_bytes == 500_000
+    assert config.extraction.members.inspect_depth == 1
+    assert config.extraction.members.members_per_module_cap == 120
+    assert config.extraction.ingestion.pipeline_path is None
+
+
+def test_appconfig_extraction_yaml_round_trips(tmp_path):
+    """User YAML overrides partial extraction settings; unmentioned keys
+    keep their shipped defaults — proves ``extraction:`` participates in
+    the usual YAML-overlay semantics."""
+    user_file = tmp_path / "pydocs-mcp.yaml"
+    user_file.write_text(
+        "extraction:\n"
+        "  chunking:\n"
+        "    markdown:\n"
+        "      max_heading_level: 6\n"
+        "  members:\n"
+        "    inspect_depth: 3\n"
+    )
+    config = AppConfig.load(explicit_path=user_file)
+    # Overridden:
+    assert config.extraction.chunking.markdown.max_heading_level == 6
+    assert config.extraction.members.inspect_depth == 3
+    # Untouched — still at shipped defaults.
+    assert config.extraction.chunking.markdown.min_heading_level == 1
+    assert config.extraction.discovery.project.include_extensions == [
+        ".py", ".md", ".ipynb",
+    ]
+    assert config.extraction.members.members_per_module_cap == 120

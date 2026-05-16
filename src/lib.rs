@@ -2,11 +2,13 @@
 //
 // Rust-accelerated functions for pydocs-mcp.
 //
-// This module provides 4 fast functions callable from Python:
-//   1. walk_py_files       — find all .py files, skipping venvs etc.
-//   2. hash_files          — hash file paths + mtimes (detects changes)
-//   3. split_into_chunks   — split markdown/rst into semantic chunks
-//   4. parse_py_file       — extract functions/classes from Python source
+// Exported functions:
+//   - walk_py_files       — find all .py files, skipping venvs etc.
+//   - hash_files          — hash file paths + mtimes (detects changes)
+//   - parse_py_file       — extract functions/classes from Python source
+//   - extract_module_doc  — pull the module-level docstring
+//   - read_file           — read a single file
+//   - read_files_parallel — read many files in parallel via rayon
 
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -41,8 +43,6 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 }
 
 // ── Static regexes (compiled once) ──────────────────────────────────────
-
-static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^#{1,4}\s+(.+)$").unwrap());
 
 static DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -156,71 +156,7 @@ fn hash_files(py: Python<'_>, paths: Vec<String>) -> String {
     })
 }
 
-// ── 3. Text Chunker ──────────────────────────────────────────────────────
-//
-// Splits text (markdown, rst, or code) into chunks at heading boundaries.
-// Each chunk is a (heading, body) tuple.
-// Chunks are capped at `max_chars` to fit in LLM context windows.
-
-/// A single chunk of text with its heading. Internal to split_into_chunks.
-#[derive(Clone)]
-struct TextChunk {
-    heading: String,
-    body: String,
-}
-
-/// Split text into semantic chunks at markdown heading boundaries.
-///
-/// Returns a list of (heading, body) tuples.
-///
-/// # Arguments
-/// * `text`      — The full text to split
-/// * `max_chars` — Maximum characters per chunk body (default: 4000)
-#[pyfunction]
-#[pyo3(signature = (text, max_chars=4000))]
-fn split_into_chunks(text: &str, max_chars: usize) -> Vec<(String, String)> {
-    let mut results: Vec<TextChunk> = Vec::new();
-    let mut current_heading = "Overview".to_string();
-    let mut current_body = String::new();
-
-    // Helper: save the current chunk if it has content.
-    let mut flush = |heading: &str, body: &mut String| {
-        let trimmed = body.trim();
-        if trimmed.len() > 30 {
-            let capped = safe_truncate(trimmed, max_chars);
-            results.push(TextChunk {
-                heading: heading.to_string(),
-                body: capped.to_string(),
-            });
-        }
-        body.clear();
-    };
-
-    for line in text.lines() {
-        // Check if this line is a heading.
-        if let Some(cap) = HEADING_RE.captures(line) {
-            flush(&current_heading, &mut current_body);
-            current_heading = cap[1].trim().to_string();
-            continue;
-        }
-
-        current_body.push_str(line);
-        current_body.push('\n');
-
-        // Split if chunk is getting too large.
-        if current_body.len() > max_chars * 2 {
-            flush(&current_heading, &mut current_body);
-        }
-    }
-
-    // Don't forget the last chunk.
-    flush(&current_heading, &mut current_body);
-
-    // Convert to Python-friendly tuples.
-    results.into_iter().map(|c| (c.heading, c.body)).collect()
-}
-
-// ── 4. Python Source Parser ──────────────────────────────────────────────
+// ── 3. Python Source Parser ──────────────────────────────────────────────
 //
 // Extracts function/class definitions from Python source code using regex.
 // This is NOT a full AST parser, but it's ~5x faster than Python's ast.parse
@@ -342,7 +278,6 @@ fn read_files_parallel(py: Python<'_>, paths: Vec<String>) -> Vec<(String, Strin
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(walk_py_files, m)?)?;
     m.add_function(wrap_pyfunction!(hash_files, m)?)?;
-    m.add_function(wrap_pyfunction!(split_into_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(parse_py_file, m)?)?;
     m.add_function(wrap_pyfunction!(extract_module_doc, m)?)?;
     m.add_function(wrap_pyfunction!(read_file, m)?)?;

@@ -24,6 +24,15 @@ jobs:
       - name: Lint
         run: ruff check python/ tests/
 
+      - name: Smoke-test out-of-tree pydocs_mcp imports
+        # benchmarks/ is not under tests/, so a rename to an internal
+        # pydocs_mcp module (e.g. storage/wiring.py -> storage/factories.py)
+        # silently breaks it. AST-level scan resolves every `pydocs_mcp.*`
+        # import declared by the three benchmark entry files, *without*
+        # executing their top-level code (pandas/httpx/rich aren't installed
+        # in this job). Catches stale module paths + missing attributes.
+        run: python scripts/smoke_check_benchmark_imports.py
+
       - name: Test with coverage (pure Python, no Rust)
         run: |
           python -m pytest tests/ -v \

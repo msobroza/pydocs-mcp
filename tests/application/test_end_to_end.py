@@ -27,10 +27,10 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.application import (
-    ModuleIntrospectionService,
-    PackageLookupService,
-    SearchApiService,
-    SearchDocsService,
+    ApiSearch,
+    DocsSearch,
+    ModuleInspector,
+    PackageLookup,
 )
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import (
@@ -45,7 +45,7 @@ from pydocs_mcp.retrieval.config import (
     build_chunk_pipeline_from_config,
     build_member_pipeline_from_config,
 )
-from pydocs_mcp.retrieval.wiring import build_retrieval_context
+from pydocs_mcp.retrieval.factories import build_retrieval_context
 from pydocs_mcp.storage.sqlite import (
     SqliteChunkRepository,
     SqliteModuleMemberRepository,
@@ -81,20 +81,20 @@ def wired_services(integration_conn):
     member_pipeline = build_member_pipeline_from_config(config, context)
 
     return {
-        "package_lookup": PackageLookupService(
+        "package_lookup": PackageLookup(
             package_store=package_store,
             chunk_store=chunk_store,
             module_member_store=member_store,
         ),
-        "search_docs": SearchDocsService(chunk_pipeline=chunk_pipeline),
-        "search_api": SearchApiService(member_pipeline=member_pipeline),
-        "inspect": ModuleIntrospectionService(package_store=package_store),
+        "search_docs": DocsSearch(chunk_pipeline=chunk_pipeline),
+        "search_api": ApiSearch(member_pipeline=member_pipeline),
+        "inspect": ModuleInspector(package_store=package_store),
     }
 
 
 @pytest.mark.asyncio
 async def test_package_lookup_list_returns_real_packages(wired_services):
-    """PackageLookupService.list_packages returns the seeded fixture packages."""
+    """PackageLookup.list_packages returns the seeded fixture packages."""
     packages = await wired_services["package_lookup"].list_packages()
 
     assert len(packages) >= 1
@@ -126,7 +126,7 @@ async def test_package_lookup_get_unknown_returns_none(wired_services):
 
 @pytest.mark.asyncio
 async def test_search_docs_returns_chunklist(wired_services):
-    """SearchDocsService.search drives the real pipeline and returns ChunkList."""
+    """DocsSearch.search drives the real pipeline and returns ChunkList."""
     response = await wired_services["search_docs"].search(
         SearchQuery(terms="pipeline"),
     )
@@ -140,13 +140,13 @@ async def test_search_docs_returns_chunklist(wired_services):
 
 @pytest.mark.asyncio
 async def test_search_api_returns_composite_response(wired_services):
-    """SearchApiService.search drives the real member pipeline.
+    """ApiSearch.search drives the real member pipeline.
 
-    The pipeline's final stage (``TokenBudgetFormatterStage``) wraps the
+    The pipeline's final stage (``TokenBudgetStage``) wraps the
     member-search output into a single composite ``ChunkList`` entry so the
     CLI / MCP consumer can print it verbatim — same shape the parity golden
     (``tests/retrieval/test_parity_golden.py``) pins. The empty-result
-    fallback in :class:`SearchApiService` is a ``ModuleMemberList``; we only
+    fallback in :class:`ApiSearch` is a ``ModuleMemberList``; we only
     assert on the filled case here (which integration_conn guarantees has
     ``train_model`` as a ``__project__`` symbol).
     """
@@ -155,7 +155,7 @@ async def test_search_api_returns_composite_response(wired_services):
     )
 
     # Non-empty result → composite ChunkList (matches the parity golden).
-    # Empty result → ModuleMemberList from the SearchApiService fallback.
+    # Empty result → ModuleMemberList from the ApiSearch fallback.
     assert isinstance(response.result, (ChunkList, ModuleMemberList))
     assert response.query.terms == "train_model"
     # integration_conn does index train_model; the pipeline should produce
@@ -165,7 +165,7 @@ async def test_search_api_returns_composite_response(wired_services):
 
 @pytest.mark.asyncio
 async def test_inspect_unknown_package_returns_error_string(wired_services):
-    """ModuleIntrospectionService.inspect short-circuits on unindexed packages.
+    """ModuleInspector.inspect short-circuits on unindexed packages.
 
     Byte-parity AC #8 preserves the pre-PR error message; locking it in at
     the end-to-end seam catches any drift in the normalize/lookup/fallthrough

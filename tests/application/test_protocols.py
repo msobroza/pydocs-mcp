@@ -1,4 +1,4 @@
-"""Smoke test for application-layer Protocols (Task 1 — sub-PR #4).
+"""Smoke test for application-layer Protocols (sub-PR #&).
 
 Covers:
 - Imports resolve.
@@ -14,9 +14,10 @@ from pathlib import Path
 from pydocs_mcp.application.protocols import (
     ChunkExtractor,
     DependencyResolver,
+    ExtractionResult,
     MemberExtractor,
 )
-from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
+from pydocs_mcp.models import ModuleMember, Package, PackageOrigin
 
 
 def _pkg(name: str = "x") -> Package:
@@ -44,16 +45,14 @@ def test_dependency_resolver_runtime_checkable() -> None:
 
 
 def test_chunk_extractor_runtime_checkable() -> None:
+    """Protocol amendment (spec §5, AC #19): an :class:`ExtractionResult`
+    return shape conforms; ``trees`` may be empty."""
     class Fake:
-        async def extract_from_project(
-            self, project_dir: Path,
-        ) -> tuple[tuple[Chunk, ...], Package]:
-            return ((), _pkg("__project__"))
+        async def extract_from_project(self, project_dir: Path) -> ExtractionResult:
+            return ExtractionResult(chunks=(), trees=(), package=_pkg("__project__"))
 
-        async def extract_from_dependency(
-            self, dep_name: str,
-        ) -> tuple[tuple[Chunk, ...], Package]:
-            return ((), _pkg(dep_name))
+        async def extract_from_dependency(self, dep_name: str) -> ExtractionResult:
+            return ExtractionResult(chunks=(), trees=(), package=_pkg(dep_name))
 
     assert isinstance(Fake(), ChunkExtractor)
 

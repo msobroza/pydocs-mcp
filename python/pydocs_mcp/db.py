@@ -11,17 +11,19 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 3  # v3 (sub-PR #6): chunks gains `module` column for LookupService._longest_indexed_module
+SCHEMA_VERSION = 3  # v3 unifies sub-PR #5 (document_trees + content_hash + local_path) and sub-PR #6 (chunks.module)
 
 _DDL = """
     CREATE TABLE packages (
         name TEXT PRIMARY KEY, version TEXT, summary TEXT,
-        homepage TEXT, dependencies TEXT, content_hash TEXT, origin TEXT
+        homepage TEXT, dependencies TEXT, content_hash TEXT, origin TEXT,
+        local_path TEXT
     );
     CREATE TABLE chunks (
         id INTEGER PRIMARY KEY, package TEXT,
         module TEXT DEFAULT '',
-        title TEXT, text TEXT, origin TEXT
+        title TEXT, text TEXT, origin TEXT,
+        content_hash TEXT
     );
     CREATE VIRTUAL TABLE chunks_fts USING fts5(
         title, text, package,
@@ -33,15 +35,27 @@ _DDL = """
         name TEXT, kind TEXT, signature TEXT,
         return_annotation TEXT, parameters TEXT, docstring TEXT
     );
+    CREATE TABLE document_trees (
+        package TEXT NOT NULL,
+        module TEXT NOT NULL,
+        tree_json TEXT NOT NULL,
+        content_hash TEXT,
+        updated_at REAL,
+        PRIMARY KEY (package, module)
+    );
     CREATE INDEX ix_chunks_package         ON chunks(package);
     CREATE INDEX ix_chunks_module          ON chunks(module);
     CREATE INDEX ix_module_members_package ON module_members(package);
     CREATE INDEX ix_module_members_name    ON module_members(name);
+    CREATE INDEX idx_trees_package         ON document_trees(package);
 """
 
 # Tables we know about — dropped on a version mismatch so earlier schemas
 # (including the pre-v2 `symbols` table) are cleared before recreating.
-_KNOWN_TABLES = ("chunks_fts", "chunks", "module_members", "packages", "symbols")
+_KNOWN_TABLES = (
+    "chunks_fts", "chunks", "module_members", "packages", "symbols",
+    "document_trees",
+)
 
 
 def cache_path_for_project(project_dir: Path) -> Path:
@@ -59,11 +73,63 @@ def _drop_all_known_tables(connection: sqlite3.Connection) -> None:
         connection.execute(f"DROP TABLE IF EXISTS {tbl}")
 
 
-def open_index_database(path: Path) -> sqlite3.Connection:
-    """Open (or create) the database, rebuilding if PRAGMA user_version differs.
+def _try_add_column(conn: sqlite3.Connection, table: str, column_ddl: str) -> None:
+    """ALTER TABLE ADD COLUMN that tolerates the column already existing.
 
-    A mismatch drops every known table (including the pre-v2 `symbols` table)
-    and recreates the schema from the current DDL.
+    Used by the idempotent v3 additions sweep. SQLite raises
+    ``OperationalError`` with ``duplicate column name`` when the column is
+    already present; we swallow that case so the sweep is safe to re-run.
+    Any other ``OperationalError`` propagates (real schema damage).
+    """
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_ddl}")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _apply_v3_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply every additive change that makes up the v3 shape.
+
+    Adds the ``document_trees`` table, its index, and the new columns
+    (``chunks.module``, ``chunks.content_hash``, ``packages.local_path``).
+    Every operation tolerates pre-existing state — ``CREATE ... IF NOT
+    EXISTS`` for the table/index, ``_try_add_column`` swallowing duplicate-
+    column errors for ALTERs. Used both as the v2→v3 forward migration
+    and as a v3-on-open repair sweep.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS document_trees ("
+        "package TEXT NOT NULL, module TEXT NOT NULL, tree_json TEXT NOT NULL, "
+        "content_hash TEXT, updated_at REAL, PRIMARY KEY (package, module))"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trees_package ON document_trees(package)"
+    )
+    _try_add_column(conn, "chunks", "module TEXT DEFAULT ''")
+    _try_add_column(conn, "chunks", "content_hash TEXT")
+    _try_add_column(conn, "packages", "local_path TEXT")
+    # The fresh-DB DDL also creates ix_chunks_module on the new ``chunks.module``
+    # column. v2->v3 in-place migration adds the column via _try_add_column but
+    # previously omitted the index — queries that filter chunks by module on a
+    # migrated DB hit a full table scan until the next fresh rebuild.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_chunks_module ON chunks(module)"
+    )
+
+
+def open_index_database(path: Path) -> sqlite3.Connection:
+    """Open (or create) the database, migrating or rebuilding per user_version.
+
+    - v3 already: re-run the additive v3 sweep anyway. The user_version
+      stamp doesn't guarantee the current shape — drift can leave a v3-
+      stamped DB missing ``document_trees`` or the new columns. The sweep
+      is idempotent (``CREATE TABLE IF NOT EXISTS`` + ``_try_add_column``
+      swallowing duplicate-column errors), so re-running on every v3 open
+      repairs drift at the cost of one PRAGMA + a handful of no-op ALTERs.
+    - v2 → v3: soft migration (CREATE document_trees + ALTER two columns);
+      rows in ``packages`` / ``chunks`` / ``module_members`` survive.
+    - Any other mismatch: drop every known table and recreate from current DDL.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -72,7 +138,12 @@ def open_index_database(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
-    if current != SCHEMA_VERSION:
+    if current == SCHEMA_VERSION:
+        _apply_v3_additions(conn)
+    elif current == 2:
+        _apply_v3_additions(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    else:
         _drop_all_known_tables(conn)
         conn.executescript(_DDL)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -81,17 +152,29 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
 
 def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
-    """Remove all rows for a package across chunks, members, and packages."""
+    """Remove all rows for a package across chunks, members, trees, and packages.
+
+    ``document_trees`` is part of the v3 schema (sub-PR #5) and must be
+    cleared alongside the other per-package tables — otherwise stale trees
+    survive a re-index and ``LookupService.get_tree(package, module)``
+    returns an outdated payload.
+    """
     connection.execute("DELETE FROM chunks  WHERE package=?", (package_name,))
     connection.execute("DELETE FROM module_members WHERE package=?", (package_name,))
+    connection.execute("DELETE FROM document_trees WHERE package=?", (package_name,))
     connection.execute("DELETE FROM packages WHERE name=?", (package_name,))
 
 
 def clear_all_packages(connection: sqlite3.Connection) -> None:
-    """Clear every indexed package: packages, chunks, and module members."""
+    """Clear every indexed package: packages, chunks, members, and trees.
+
+    See :func:`remove_package` — ``document_trees`` must be cleared too or
+    a fresh re-index reads stale tree rows for the deleted packages.
+    """
     connection.execute("DELETE FROM packages")
     connection.execute("DELETE FROM chunks")
     connection.execute("DELETE FROM module_members")
+    connection.execute("DELETE FROM document_trees")
     connection.commit()
 
 

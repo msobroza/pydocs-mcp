@@ -1,3 +1,9 @@
+---
+status: implemented
+shipped-in: PR #17
+last-reviewed: 2026-05-16
+---
+
 # Sub-PR #5 — Extraction strategies + `DocumentNode` tree
 
 **Status:** Approved via brainstorm 2026-04-20.

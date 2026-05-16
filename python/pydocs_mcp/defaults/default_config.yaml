@@ -1,0 +1,48 @@
+# Shipped defaults — loaded as the lowest-priority AppConfig layer (spec §5.9).
+# User pydocs-mcp.yaml overrides any key; env vars override YAML; CLI flags win.
+cache_dir: ~/.pydocs-mcp
+log_level: info
+
+metadata_schemas:
+  chunk:  [package, scope, origin, title, module]
+  member: [package, scope, module, name, kind]
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/chunk_search.yaml
+  member:
+    - default: true
+      pipeline_path: pipelines/member_search.yaml
+
+extraction:
+  # Directory blocklist is hardcoded in extraction/config.py::_EXCLUDED_DIRS —
+  # not configurable via YAML by design (security: un-excluded .git/.venv/
+  # site-packages would leak secrets). Extension allowlist IS narrowable.
+  chunking:
+    # Chunker selection is decorator-driven (see chunker_registry); the
+    # by_extension YAML field was dead config and got removed
+    # (/ultrareview F11). Adding a new extension means registering a
+    # new chunker, not editing this file.
+    markdown:
+      min_heading_level: 1
+      max_heading_level: 3
+    notebook:
+      include_outputs: false
+  discovery:
+    project:
+      include_extensions: [".py", ".md", ".ipynb"]
+      max_file_size_bytes: 500000
+    dependency:
+      include_extensions: [".py", ".md", ".ipynb"]
+      max_file_size_bytes: 500000
+  members:
+    # Per-module symbol cap + per-field truncation. Increase if you
+    # index huge dependencies (large ML libs); decrease to bound FTS
+    # row size. All ge=1 — config-time validation rejects 0/negative.
+    inspect_depth: 1
+    members_per_module_cap: 120
+    signature_max_chars: 200
+    docstring_max_chars: 1024
+  ingestion:
+    pipeline_path: null

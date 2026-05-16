@@ -52,6 +52,13 @@ from pydocs_mcp.storage.sqlite import (
     (ChunkOrigin, "dependency_readme"),
     (ChunkOrigin, "dependency_module_doc"),
     (ChunkOrigin, "composite_output"),
+    # sub-PR #5 §4.2: tree-derived chunk origins emitted by DocumentNode
+    # extraction strategies (AST defs, Markdown sections, notebook cells).
+    # CODE_EXAMPLE chunks inherit parent origin (python_def or markdown_section).
+    (ChunkOrigin, "python_def"),
+    (ChunkOrigin, "markdown_section"),
+    (ChunkOrigin, "notebook_markdown_cell"),
+    (ChunkOrigin, "notebook_code_cell"),
     (MemberKind, "function"),
     (MemberKind, "class"),
     (MemberKind, "method"),
@@ -70,6 +77,11 @@ from pydocs_mcp.storage.sqlite import (
     (ChunkFilterField, "origin"),
     (ChunkFilterField, "module"),
     (ChunkFilterField, "scope"),
+    # sub-PR #5 §4.5: filter keys for reference-graph / deduplication
+    # queries — source_path lets consumers select by file, content_hash
+    # lets them deduplicate tree-derived chunks across re-indexes.
+    (ChunkFilterField, "source_path"),
+    (ChunkFilterField, "content_hash"),
     (ModuleMemberFilterField, "package"),
     (ModuleMemberFilterField, "module"),
     (ModuleMemberFilterField, "name"),
@@ -392,7 +404,7 @@ def test_row_to_chunk_raises_on_missing_column():
 
 # ---------------------------------------------------------------------------
 # PackageDoc (spec §5.1) — frozen value object carrying the 3 query results
-# consumed by PackageLookupService.get_package_doc in sub-PR #4.
+# consumed by PackageLookup.get_package_doc in sub-PR #4.
 # ---------------------------------------------------------------------------
 
 def _sample_package() -> Package:
@@ -454,7 +466,7 @@ def test_package_doc_empty_collections():
 
 
 # ---------------------------------------------------------------------------
-# IndexingStats (spec §5.3) — mutable accumulator for IndexProjectService.
+# IndexingStats (spec §5.3) — mutable accumulator for ProjectIndexer.
 # ---------------------------------------------------------------------------
 
 def test_indexing_stats_defaults():
@@ -468,7 +480,7 @@ def test_indexing_stats_defaults():
 
 def test_indexing_stats_mutable():
     """IndexingStats is `slots=True` but NOT `frozen=True` — fields must
-    update in place so IndexProjectService can accumulate counters."""
+    update in place so ProjectIndexer can accumulate counters."""
     stats = IndexingStats()
     stats.indexed += 1
     stats.cached += 2

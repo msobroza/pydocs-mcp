@@ -17,7 +17,7 @@ from pydocs_mcp.models import (
     ModuleMemberList,
 )
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
-from pydocs_mcp.retrieval.predicates import default_predicate_registry
+from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 from pydocs_mcp.storage.filters import (
     All,
@@ -29,13 +29,13 @@ from pydocs_mcp.storage.filters import (
 )
 
 if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.predicates import PredicateRegistry
     from pydocs_mcp.retrieval.protocols import (
         ChunkRetriever,
         ModuleMemberRetriever,
         PipelineStage,
         ResultFormatter,
     )
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
 
 
 # Sentinel title on composite formatter output. ``MetadataPostFilterStage``
@@ -384,7 +384,7 @@ class SubPipelineStage:
 
 @stage_registry.register("token_budget_formatter")
 @dataclass(frozen=True, slots=True)
-class TokenBudgetFormatterStage:
+class TokenBudgetStage:
     """Render the retrieval result as a single composite ``Chunk`` whose text
     is the markdown-formatted concatenation within ``budget`` tokens.
 
@@ -432,7 +432,7 @@ class TokenBudgetFormatterStage:
         }
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "TokenBudgetFormatterStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "TokenBudgetStage":
         return cls(
             formatter=context.formatter_registry.build(data["formatter"], context),
             budget=data["budget"],

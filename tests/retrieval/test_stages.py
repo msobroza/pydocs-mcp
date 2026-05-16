@@ -175,7 +175,7 @@ async def test_reciprocal_rank_fusion_preserves_first_seen_metadata():
 
 @pytest.mark.asyncio
 async def test_conditional_stage_runs_when_predicate_true():
-    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import ConditionalStage
 
     registry = PredicateRegistry()
@@ -197,7 +197,7 @@ async def test_conditional_stage_runs_when_predicate_true():
 
 @pytest.mark.asyncio
 async def test_conditional_stage_skipped_when_predicate_false():
-    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import ConditionalStage
 
     registry = PredicateRegistry()
@@ -217,7 +217,7 @@ async def test_conditional_stage_skipped_when_predicate_false():
 
 @pytest.mark.asyncio
 async def test_route_stage_first_match_wins():
-    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import RouteCase, RouteStage
 
     registry = PredicateRegistry()
@@ -249,7 +249,7 @@ async def test_route_stage_first_match_wins():
 
 @pytest.mark.asyncio
 async def test_route_stage_falls_through_to_default():
-    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import RouteCase, RouteStage
 
     registry = PredicateRegistry()
@@ -276,7 +276,7 @@ async def test_route_stage_falls_through_to_default():
 
 @pytest.mark.asyncio
 async def test_route_stage_no_match_no_default_is_noop():
-    from pydocs_mcp.retrieval.predicates import PredicateRegistry, predicate
+    from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
     from pydocs_mcp.retrieval.stages import RouteStage
 
     registry = PredicateRegistry()
@@ -315,10 +315,10 @@ async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
 
 @pytest.mark.asyncio
 async def test_token_budget_formatter_stage_composite_output():
-    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
+    from pydocs_mcp.retrieval.formatters import ChunkFormatter
     from pydocs_mcp.retrieval.stages import (
         COMPOSITE_TITLE_SENTINEL,
-        TokenBudgetFormatterStage,
+        TokenBudgetStage,
     )
 
     payload = ChunkList(items=(
@@ -326,8 +326,8 @@ async def test_token_budget_formatter_stage_composite_output():
         Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
     ))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await TokenBudgetFormatterStage(
-        formatter=ChunkMarkdownFormatter(),
+    out = await TokenBudgetStage(
+        formatter=ChunkFormatter(),
         budget=10_000,
     ).run(state)
     # Result is a ChunkList of length 1 whose metadata origin is COMPOSITE_OUTPUT
@@ -343,11 +343,11 @@ async def test_token_budget_formatter_stage_composite_output():
 @pytest.mark.asyncio
 async def test_metadata_post_filter_bypasses_composite_sentinel():
     """AC #34 — composite chunks skip the title post-filter."""
-    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
+    from pydocs_mcp.retrieval.formatters import ChunkFormatter
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
     from pydocs_mcp.retrieval.stages import (
         MetadataPostFilterStage,
-        TokenBudgetFormatterStage,
+        TokenBudgetStage,
     )
 
     payload = ChunkList(items=(
@@ -360,8 +360,8 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
     pipeline = CodeRetrieverPipeline(
         name="p",
         stages=(
-            TokenBudgetFormatterStage(
-                formatter=ChunkMarkdownFormatter(),
+            TokenBudgetStage(
+                formatter=ChunkFormatter(),
                 budget=10_000,
             ),
             MetadataPostFilterStage(),
@@ -376,8 +376,8 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
 
 @pytest.mark.asyncio
 async def test_token_budget_formatter_respects_budget():
-    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
-    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+    from pydocs_mcp.retrieval.formatters import ChunkFormatter
+    from pydocs_mcp.retrieval.stages import TokenBudgetStage
 
     # 100 chunks * ~10-byte render ≈ 1000 bytes. Budget = 50 tokens ≈ 200 bytes (cut early).
     payload = ChunkList(items=tuple(
@@ -385,8 +385,8 @@ async def test_token_budget_formatter_respects_budget():
         for i in range(100)
     ))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await TokenBudgetFormatterStage(
-        formatter=ChunkMarkdownFormatter(),
+    out = await TokenBudgetStage(
+        formatter=ChunkFormatter(),
         budget=50,
     ).run(state)
     composite = out.result.items[0]
@@ -395,12 +395,12 @@ async def test_token_budget_formatter_respects_budget():
 
 @pytest.mark.asyncio
 async def test_token_budget_formatter_none_result_noop():
-    from pydocs_mcp.retrieval.formatters import ChunkMarkdownFormatter
-    from pydocs_mcp.retrieval.stages import TokenBudgetFormatterStage
+    from pydocs_mcp.retrieval.formatters import ChunkFormatter
+    from pydocs_mcp.retrieval.stages import TokenBudgetStage
 
     state = PipelineState(query=SearchQuery(terms="x"), result=None)
-    out = await TokenBudgetFormatterStage(
-        formatter=ChunkMarkdownFormatter(),
+    out = await TokenBudgetStage(
+        formatter=ChunkFormatter(),
         budget=1000,
     ).run(state)
     assert out.result is None

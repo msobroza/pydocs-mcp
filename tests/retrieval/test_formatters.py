@@ -1,4 +1,4 @@
-"""Tests for ChunkMarkdownFormatter + ModuleMemberMarkdownFormatter."""
+"""Tests for ChunkFormatter + ModuleMemberFormatter."""
 from __future__ import annotations
 
 from pydocs_mcp.models import (
@@ -9,15 +9,15 @@ from pydocs_mcp.models import (
     ModuleMemberFilterField,
 )
 from pydocs_mcp.retrieval.formatters import (
-    ChunkMarkdownFormatter,
-    ModuleMemberMarkdownFormatter,
+    ChunkFormatter,
+    ModuleMemberFormatter,
 )
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.serialization import BuildContext, formatter_registry
 
 
 def test_chunk_markdown_formatter_renders_title_and_text():
-    f = ChunkMarkdownFormatter()
+    f = ChunkFormatter()
     c = Chunk(
         text="body text",
         metadata={ChunkFilterField.TITLE.value: "Hello"},
@@ -26,13 +26,13 @@ def test_chunk_markdown_formatter_renders_title_and_text():
 
 
 def test_chunk_markdown_formatter_empty_title_ok():
-    f = ChunkMarkdownFormatter()
+    f = ChunkFormatter()
     c = Chunk(text="body")
     assert f.format(c) == "## \nbody"
 
 
 def test_member_markdown_formatter_renders_fields():
-    f = ModuleMemberMarkdownFormatter()
+    f = ModuleMemberFormatter()
     m = ModuleMember(metadata={
         ModuleMemberFilterField.PACKAGE.value: "fastapi",
         ModuleMemberFilterField.MODULE.value: "fastapi.routing",
@@ -50,7 +50,7 @@ def test_member_markdown_formatter_renders_fields():
 
 
 def test_formatter_to_dict_from_dict_roundtrip(tmp_path):
-    for cls in (ChunkMarkdownFormatter, ModuleMemberMarkdownFormatter):
+    for cls in (ChunkFormatter, ModuleMemberFormatter):
         instance = cls()
         d = instance.to_dict()
         ctx = BuildContext(

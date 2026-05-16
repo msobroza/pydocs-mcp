@@ -40,7 +40,7 @@ def run_search_benchmark(db_path: Path, dataset: pd.DataFrame) -> list[SearchRes
     """Run the default chunk pipeline for each row in *dataset* against *db_path*.
 
     The pipeline concatenates top results up to ~2000 tokens (via the shipped
-    ``chunk_fts`` preset), then we score relevance via fuzzy matching on
+    ``chunk_search`` pipeline), then we score relevance via fuzzy matching on
     heading + snippet (same as Context7/Neuledge).
 
     Args:
