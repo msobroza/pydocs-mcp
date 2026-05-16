@@ -450,13 +450,33 @@ def _parse_md_headings(
 ) -> list[dict]:
     """Scan ``content`` for ``#``-style headings within ``[min, max]``.
 
+    Lines inside triple-backtick fenced code blocks are SKIPPED — a
+    line like ``# this is a Python comment`` inside ```` ```python ````
+    is code, not a heading. Pre-fix, the regex matched both and
+    polluted the tree with phantom level-1 headings drawn from code
+    comments.
+
     Returns one dict per in-range heading with keys:
     - ``level`` (1–6)
     - ``title`` (heading text, ``#``s stripped)
     - ``line`` (1-indexed source line of the heading marker)
     """
+    fenced_ranges = [
+        (m.start(), m.end()) for m in _FENCED_RE.finditer(content)
+    ]
+
+    def _in_fence(pos: int) -> bool:
+        # Fences don't overlap (Markdown rules), so a linear scan is
+        # fine — files with >100 fences are rare.
+        for start, end in fenced_ranges:
+            if start <= pos < end:
+                return True
+        return False
+
     headings: list[dict] = []
     for m in _HEADING_RE.finditer(content):
+        if _in_fence(m.start()):
+            continue
         level = len(m.group(1))
         if level < min_level or level > max_level:
             continue

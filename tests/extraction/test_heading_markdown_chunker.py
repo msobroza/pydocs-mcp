@@ -185,3 +185,56 @@ def test_heading_level_recorded(tmp_path: Path) -> None:
     h3 = next(c for c in root.children if c.title == "Level 3")
     assert h2.extra_metadata["level"] == 2
     assert h3.extra_metadata["level"] == 3
+
+
+# -- 14. Fenced-block masking (F16) -------------------------------------------
+
+def test_python_style_comments_inside_fenced_block_not_treated_as_headings(
+    tmp_path: Path,
+) -> None:
+    """F16: a ``#``-prefixed comment line INSIDE a ```python fenced block
+    must NOT be parsed as a Markdown heading. Pre-fix, the regex matched
+    every line that started with ``#``, polluting the tree with phantom
+    headings drawn from code comments.
+    """
+    src = (
+        "# Real Heading\n"
+        "Intro.\n"
+        "\n"
+        "```python\n"
+        "# This is a Python comment, not a heading\n"
+        "# Another comment\n"
+        "def foo():\n"
+        "    pass\n"
+        "```\n"
+        "\n"
+        "## Another Real Heading\n"
+        "Tail.\n"
+    )
+    root = _build(src, root=tmp_path)
+    headings = [c for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    titles = [h.title for h in headings]
+    assert titles == ["Real Heading", "Another Real Heading"], (
+        f"phantom heading detected — expected only real headings, got {titles}"
+    )
+
+
+def test_shell_style_comments_in_bash_fence_not_treated_as_headings(
+    tmp_path: Path,
+) -> None:
+    """Same as Python — covers ``bash`` / ``sh`` code blocks where ``#``
+    is a comment. Ensures the fix isn't language-specific."""
+    src = (
+        "# Setup\n"
+        "Run these:\n"
+        "\n"
+        "```bash\n"
+        "# install deps\n"
+        "pip install x\n"
+        "# run tests\n"
+        "pytest\n"
+        "```\n"
+    )
+    root = _build(src, root=tmp_path)
+    titles = [c.title for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    assert titles == ["Setup"]
