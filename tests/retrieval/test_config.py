@@ -178,6 +178,13 @@ def test_pipeline_path_accepts_shipped_pipelines_relative(tmp_path):
     assert resolved.name == "chunk_search.yaml"
 
 
+def test_pipeline_path_legacy_presets_prefix_raises_migration_error(tmp_path):
+    """A legacy ``presets/chunk_fts.yaml`` path (pre-rename) raises a clear
+    ValueError pointing at the new convention, not a confusing FileNotFoundError."""
+    with pytest.raises(ValueError, match="presets/.*renamed to 'pipelines/'"):
+        _resolve_pipeline_path(Path("presets/chunk_fts.yaml"), user_config_path=None)
+
+
 # ── Sub-PR #5 — ExtractionConfig slotting (spec §11) ────────────────
 
 

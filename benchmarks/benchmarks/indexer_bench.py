@@ -21,7 +21,7 @@ from pydocs_mcp.extraction import (
     build_ingestion_pipeline,
 )
 from pydocs_mcp.retrieval.config import AppConfig
-from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 
 
 def _build_extractors(use_inspect: bool, depth: int = 1):

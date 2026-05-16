@@ -282,6 +282,15 @@ def _resolve_pipeline_path(
         resolved = pipeline_path.resolve()
     else:
         parts = pipeline_path.parts
+        # ``presets/...`` is the pre-refactor convention; give a clear
+        # migration error rather than a confusing FileNotFoundError.
+        if parts and parts[0] == "presets":
+            raise ValueError(
+                f"pipeline_path={pipeline_path!s}: the 'presets/' prefix was "
+                f"renamed to 'pipelines/' (chunk_fts.yaml → chunk_search.yaml, "
+                f"member_like.yaml → member_search.yaml). Update your "
+                f"pydocs-mcp.yaml accordingly."
+            )
         # ``pipelines/foo.yaml`` resolves under the shipped dir whether or
         # not a user config is present — lets default_config.yaml reference
         # bundled YAMLs without knowing the package install path.

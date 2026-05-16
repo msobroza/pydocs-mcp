@@ -33,7 +33,7 @@ from pathlib import Path
 import pandas as pd
 from pydocs_mcp.application import ProjectIndexer
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.storage.wiring import build_sqlite_indexing_service
+from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 from rich.console import Console
 
 from benchmarks.context7_bench import run_context7_benchmark
