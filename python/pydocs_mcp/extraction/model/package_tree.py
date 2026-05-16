@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping
 
-from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
 
 
 def build_package_tree(

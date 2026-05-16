@@ -17,7 +17,7 @@ under a FUNCTION is PYTHON_DEF; under a MARKDOWN_HEADING it's MARKDOWN_SECTION.
 """
 from __future__ import annotations
 
-from pydocs_mcp.extraction.document_node import (
+from pydocs_mcp.extraction.model.document_node import (
     STRUCTURAL_ONLY_KINDS,
     DocumentNode,
     NodeKind,

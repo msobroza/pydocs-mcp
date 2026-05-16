@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,

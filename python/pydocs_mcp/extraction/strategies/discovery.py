@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.extraction._dep_helpers import (
+from pydocs_mcp.extraction.strategies._dep_helpers import (
     find_installed_distribution,
     find_site_packages_root,
 )

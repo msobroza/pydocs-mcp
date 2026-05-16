@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.extraction.members import (
+from pydocs_mcp.extraction.strategies.members import (
     AstMemberExtractor,
     InspectMemberExtractor,
 )
@@ -125,11 +125,11 @@ async def test_ast_dependency_extraction_yields_members(
 
     dist = _FakeDist(site_packages=sp, rel_files=("foo/__init__.py",))
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.members.find_installed_distribution",
         lambda name: dist,
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_site_packages_root",
+        "pydocs_mcp.extraction.strategies.members.find_site_packages_root",
         lambda p: str(sp),
     )
 
@@ -149,7 +149,7 @@ async def test_ast_dependency_missing_returns_empty(
 ) -> None:
     """Declared-but-not-installed dep → empty tuple, never raises."""
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.members.find_installed_distribution",
         lambda name: None,
     )
     extractor = AstMemberExtractor()
@@ -164,7 +164,7 @@ async def test_ast_dependency_no_py_files_returns_empty(
     """A dist whose files are .so / .md only → empty tuple (no py to parse)."""
     dist = _FakeDist(site_packages=tmp_path, rel_files=("foo/ext.so",))
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.members.find_installed_distribution",
         lambda name: dist,
     )
     extractor = AstMemberExtractor()
@@ -182,11 +182,11 @@ async def test_ast_dependency_normalizes_hyphens_to_underscores(
     (sp / "some_pkg" / "__init__.py").write_text("def api(): pass\n")
     dist = _FakeDist(site_packages=sp, rel_files=("some_pkg/__init__.py",))
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.members.find_installed_distribution",
         lambda name: dist,
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_site_packages_root",
+        "pydocs_mcp.extraction.strategies.members.find_site_packages_root",
         lambda p: str(sp),
     )
 
@@ -229,11 +229,11 @@ async def test_inspect_dependency_falls_back_to_ast_on_import_error(
     dist = _FakeDist(site_packages=sp, rel_files=("foo/__init__.py",))
 
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.members.find_installed_distribution",
         lambda name: dist,
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_site_packages_root",
+        "pydocs_mcp.extraction.strategies.members.find_site_packages_root",
         lambda p: str(sp),
     )
 
@@ -241,7 +241,7 @@ async def test_inspect_dependency_falls_back_to_ast_on_import_error(
         raise RuntimeError("simulated import failure")
 
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members._extract_by_import", _boom,
+        "pydocs_mcp.extraction.strategies.members._extract_by_import", _boom,
     )
 
     ast_extractor = AstMemberExtractor()
@@ -272,11 +272,11 @@ async def test_inspect_dependency_uses_live_import_when_available(
         pass
 
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.members.find_installed_distribution",
         lambda name: _Dist(),
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members._extract_by_import",
+        "pydocs_mcp.extraction.strategies.members._extract_by_import",
         lambda _dist, _depth: {"symbols": fake_members},
     )
 
@@ -293,7 +293,7 @@ async def test_inspect_dependency_missing_returns_empty(
 ) -> None:
     """No installed distribution → empty tuple (no exception, no fallback run)."""
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.members.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.members.find_installed_distribution",
         lambda name: None,
     )
     inspect_extractor = InspectMemberExtractor(

@@ -37,7 +37,7 @@ chunker_registry: dict[str, type["Chunker"]] = {}
 
 Keys are lowercased file extensions with a leading dot (``".py"``, ``".md"``,
 ``".ipynb"``). Values are the :class:`Chunker` class itself, not an
-instance — the :class:`~pydocs_mcp.extraction.stages.ChunkingStage`
+instance — the :class:`~pydocs_mcp.extraction.pipeline.stages.ChunkingStage`
 calls ``cls.from_config(cfg)`` to construct a cached instance per
 extension.
 """

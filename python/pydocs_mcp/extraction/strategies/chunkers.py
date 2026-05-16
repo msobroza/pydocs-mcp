@@ -8,7 +8,7 @@ All chunkers:
   :data:`~pydocs_mcp.extraction.serialization.chunker_registry` is populated
   at import time (spec §7.5).
 - Provide a ``from_config(cfg: ChunkingConfig) -> Self`` classmethod so the
-  :class:`~pydocs_mcp.extraction.stages.ChunkingStage` can build instances
+  :class:`~pydocs_mcp.extraction.pipeline.stages.ChunkingStage` can build instances
   uniformly (spec §8 preamble).
 
 Direct-text rule (spec §4.1.1): each node's ``.text`` contains ONLY prose
@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.extraction.config import ChunkingConfig
-from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import _register_chunker
 
 log = logging.getLogger("pydocs-mcp")

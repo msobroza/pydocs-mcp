@@ -11,7 +11,7 @@ Pins spec §4.3 serialization contract used by LookupService:
 """
 from __future__ import annotations
 
-from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
 
 
 def _make_node(**overrides) -> DocumentNode:

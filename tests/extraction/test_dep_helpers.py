@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.extraction import _dep_helpers
+from pydocs_mcp.extraction.strategies import _dep_helpers
 
 
 # ── find_installed_distribution ───────────────────────────────────────────

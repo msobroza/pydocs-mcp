@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.extraction.dependencies import StaticDependencyResolver
+from pydocs_mcp.extraction.strategies.dependencies import StaticDependencyResolver
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from pydocs_mcp.extraction.document_node import DocumentNode
+from pydocs_mcp.extraction.model.document_node import DocumentNode
 from pydocs_mcp.models import Chunk, ModuleMember, Package
 
 

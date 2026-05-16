@@ -55,7 +55,10 @@ python/pydocs_mcp/
 ├── _fallback.py   # Pure Python implementations of all Rust functions
 ├── db.py          # SQLite schema + cache lifecycle + FTS rebuild (no row mappers)
 ├── deps.py        # Dependency resolution (pyproject.toml, requirements.txt)
-├── extraction/    # Strategy-based extraction — chunkers, member extractors, ingestion pipeline, DocumentNode trees
+├── extraction/    # Strategy-based extraction (subdivided):
+│   ├── strategies/  #   chunkers, members, discovery, dependencies
+│   ├── pipeline/    #   IngestionPipeline, stages, PipelineChunkExtractor
+│   └── model/       #   DocumentNode, NodeKind, tree helpers
 ├── application/   # Use-case services — IndexingService + IndexProjectService + PackageLookupService + SearchDocsService + SearchApiService + ModuleIntrospectionService + shared formatting helpers
 ├── storage/       # Filter tree, Protocols, SQLite repositories + VectorStore + UnitOfWork
 ├── retrieval/     # Async pipelines, retrievers, stages, registries, YAML config

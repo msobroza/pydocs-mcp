@@ -22,7 +22,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from pydocs_mcp.extraction.config import DiscoveryScopeConfig
-from pydocs_mcp.extraction.discovery import (
+from pydocs_mcp.extraction.strategies.discovery import (
     DependencyFileDiscoverer,
     ProjectFileDiscoverer,
 )
@@ -177,11 +177,11 @@ def test_dependency_lists_dist_files_filters_by_extension(
         "foo/secret.env",  # excluded by default allowlist
     ))
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.discovery.find_installed_distribution",
         lambda name: dist,
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_site_packages_root",
+        "pydocs_mcp.extraction.strategies.discovery.find_site_packages_root",
         lambda p: str(tmp_path / "site-packages"),
     )
 
@@ -206,11 +206,11 @@ def test_dependency_excludes_files_under_blocklisted_dirs(
         "foo/node_modules/pkg.py",
     ))
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.discovery.find_installed_distribution",
         lambda name: dist,
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_site_packages_root",
+        "pydocs_mcp.extraction.strategies.discovery.find_site_packages_root",
         lambda p: str(tmp_path / "site-packages"),
     )
 
@@ -229,11 +229,11 @@ def test_dependency_respects_max_file_size_bytes(
     huge = tmp_path / "site-packages" / "foo" / "huge.py"
     huge.write_text("x" * 600_000)
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.discovery.find_installed_distribution",
         lambda name: dist,
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_site_packages_root",
+        "pydocs_mcp.extraction.strategies.discovery.find_site_packages_root",
         lambda p: str(tmp_path / "site-packages"),
     )
 
@@ -252,11 +252,11 @@ def test_dependency_paths_sorted(
         "foo/z.py", "foo/a.py", "foo/m.py",
     ))
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.discovery.find_installed_distribution",
         lambda name: dist,
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_site_packages_root",
+        "pydocs_mcp.extraction.strategies.discovery.find_site_packages_root",
         lambda p: str(tmp_path / "site-packages"),
     )
 
@@ -273,7 +273,7 @@ def test_dependency_empty_files_returns_default_root(
     (Exercises the ``paths[0]`` guard in DependencyFileDiscoverer.)"""
     dist = _FakeDist(site_packages=tmp_path, rel_files=())
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.discovery.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies.discovery.find_installed_distribution",
         lambda name: dist,
     )
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())

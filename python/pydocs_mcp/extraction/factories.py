@@ -27,7 +27,7 @@ import yaml
 # sys.modules cache means re-entering this module's own package during the
 # partial load of ``extraction/__init__.py`` is safe: the submodule finishes
 # loading before control returns, and the registry is populated.
-from pydocs_mcp.extraction import stages as _stages  # noqa: F401
+from pydocs_mcp.extraction.pipeline import stages as _stages  # noqa: F401
 from pydocs_mcp.extraction.pipeline import IngestionPipeline
 from pydocs_mcp.extraction.serialization import stage_registry
 

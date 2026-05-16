@@ -20,18 +20,18 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydocs_mcp.extraction import (
+from pydocs_mcp.extraction.strategies import (
     chunkers as _chunkers,  # noqa: F401 — side-effect registration of Chunkers in chunker_registry
 )
-from pydocs_mcp.extraction.document_node import DocumentNode
-from pydocs_mcp.extraction.pipeline import IngestionState, TargetKind
+from pydocs_mcp.extraction.model.document_node import DocumentNode
+from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
 from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
-from pydocs_mcp.extraction.tree_flatten import flatten_to_chunks
+from pydocs_mcp.extraction.model.tree_flatten import flatten_to_chunks
 from pydocs_mcp.models import Chunk, Package, PackageOrigin
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.config import ChunkingConfig
-    from pydocs_mcp.extraction.discovery import (
+    from pydocs_mcp.extraction.strategies.discovery import (
         DependencyFileDiscoverer,
         ProjectFileDiscoverer,
     )
@@ -68,7 +68,7 @@ class FileDiscoveryStage:
         # Deferred import avoids importing concrete discoverers at registry
         # construction time — keeps the registry decode path free of
         # side-effect-heavy filesystem-aware modules.
-        from pydocs_mcp.extraction.discovery import (
+        from pydocs_mcp.extraction.strategies.discovery import (
             DependencyFileDiscoverer,
             ProjectFileDiscoverer,
         )
@@ -167,7 +167,7 @@ class FlattenStage:
     """Fills ``state.chunks`` by walking each tree via ``flatten_to_chunks``.
 
     Thin wrapper — the walking / direct-text rule lives in
-    :mod:`pydocs_mcp.extraction.tree_flatten`; this stage just concatenates
+    :mod:`pydocs_mcp.extraction.model.tree_flatten`; this stage just concatenates
     per-tree results in pipeline order.
     """
 
@@ -263,7 +263,7 @@ class PackageBuildStage:
         # Deferred imports keep the heavy importlib.metadata machinery out of
         # module-load-time for callers that never hit the dep branch.
         from pydocs_mcp.deps import normalize_package_name
-        from pydocs_mcp.extraction._dep_helpers import (
+        from pydocs_mcp.extraction.strategies._dep_helpers import (
             find_installed_distribution,
         )
         dep_name = str(state.target)

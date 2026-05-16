@@ -7,7 +7,7 @@ source to AST (spec §9.2 — we never import the project-under-test) and uses
 ``importlib.import_module`` for dependencies with an AST fallback on any
 exception.
 
-Imports live in :mod:`pydocs_mcp.extraction._dep_helpers` (NOT in
+Imports live in :mod:`pydocs_mcp.extraction.strategies._dep_helpers` (NOT in
 :mod:`pydocs_mcp.indexer`) — the ``extraction/*`` package must never take a
 hard dependency on the module sub-PR #5 ultimately deletes (plan §Coupling
 conventions, spec §3b).
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.deps import normalize_package_name
-from pydocs_mcp.extraction._dep_helpers import (
+from pydocs_mcp.extraction.strategies._dep_helpers import (
     _extract_by_import,
     find_installed_distribution,
     find_site_packages_root,

@@ -21,10 +21,10 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.extraction.config import ChunkingConfig, ExtractionConfig
-from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
 from pydocs_mcp.extraction.pipeline import IngestionState, TargetKind
 from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
-from pydocs_mcp.extraction.stages import (
+from pydocs_mcp.extraction.pipeline.stages import (
     ChunkingStage,
     ContentHashStage,
     FileDiscoveryStage,
@@ -404,7 +404,7 @@ async def test_package_build_dependency_branch_with_fake_dist(
             self.requires = ("baz>=1.0",)
 
     monkeypatch.setattr(
-        "pydocs_mcp.extraction._dep_helpers.find_installed_distribution",
+        "pydocs_mcp.extraction.strategies._dep_helpers.find_installed_distribution",
         lambda name: _FakeDist(),
     )
 

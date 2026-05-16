@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydocs_mcp.extraction.chunkers import HeadingMarkdownChunker
+from pydocs_mcp.extraction.strategies.chunkers import HeadingMarkdownChunker
 from pydocs_mcp.extraction.config import ChunkingConfig, MarkdownConfig
-from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import chunker_registry
 
 

@@ -1,63 +1,54 @@
 """Extraction subpackage — strategy-based chunking + DocumentNode trees (sub-PR #5).
 
-Public API:
+Structure:
+- ``protocols.py``      — Protocol definitions (Chunker, ChunkExtractor, etc.)
+- ``config.py``         — ExtractionConfig pydantic models + ``_EXCLUDED_DIRS`` policy
+- ``factories.py``      — ``build_ingestion_pipeline`` / ``load_ingestion_pipeline``
+- ``serialization.py``  — ``stage_registry``, ``chunker_registry`` (YAML wiring)
+- ``model/``            — DocumentNode + NodeKind + tree helpers (domain types)
+- ``pipeline/``         — IngestionPipeline + stages + PipelineChunkExtractor
+- ``strategies/``       — chunkers, member extractors, discovery, dependencies
 
-- Protocols: :class:`Chunker`, :class:`ProjectFileDiscoverer`,
-  :class:`DependencyFileDiscoverer` (imported lazily via ``protocols`` submodule).
-- Domain: :class:`DocumentNode` + :class:`NodeKind` + :data:`STRUCTURAL_ONLY_KINDS`.
-- Chunkers: :class:`AstPythonChunker`, :class:`HeadingMarkdownChunker`,
-  :class:`NotebookChunker`.
-- Discovery: concrete :class:`ProjectFileDiscoverer` / :class:`DependencyFileDiscoverer`
-  wrappers (share the Protocol names — disambiguate via qualified import if needed).
-- Member extractors: :class:`AstMemberExtractor`, :class:`InspectMemberExtractor`.
-- Dependency resolution: :class:`StaticDependencyResolver`.
-- Pipeline: :class:`IngestionPipeline`, :class:`IngestionState`,
-  :class:`IngestionStage`, :class:`TargetKind`.
-- Stages: :class:`FileDiscoveryStage`, :class:`FileReadStage`,
-  :class:`ChunkingStage`, :class:`FlattenStage`, :class:`ContentHashStage`,
-  :class:`PackageBuildStage`.
-- Assembly: :func:`build_package_tree`, :func:`flatten_to_chunks`.
-- Wiring: :func:`build_ingestion_pipeline`, :func:`load_ingestion_pipeline`.
-- Consumer: :class:`PipelineChunkExtractor`.
-- Registries: :data:`stage_registry`, :data:`chunker_registry`.
+This module re-exports the public API surface from the subpackages so
+external callers can keep doing ``from pydocs_mcp.extraction import X``.
+For new code, prefer the subpackage form
+(``from pydocs_mcp.extraction.model import DocumentNode``) which matches
+the file layout 1:1.
 """
-from pydocs_mcp.extraction.chunk_extractor import PipelineChunkExtractor
-from pydocs_mcp.extraction.chunkers import (
-    AstPythonChunker,
-    HeadingMarkdownChunker,
-    NotebookChunker,
+from pydocs_mcp.extraction.factories import (
+    build_ingestion_pipeline,
+    load_ingestion_pipeline,
 )
-from pydocs_mcp.extraction.dependencies import StaticDependencyResolver
-from pydocs_mcp.extraction.discovery import (
-    DependencyFileDiscoverer,
-    ProjectFileDiscoverer,
-)
-from pydocs_mcp.extraction.document_node import (
+from pydocs_mcp.extraction.model import (
     STRUCTURAL_ONLY_KINDS,
     DocumentNode,
     NodeKind,
+    build_package_tree,
+    flatten_to_chunks,
 )
-from pydocs_mcp.extraction.members import AstMemberExtractor, InspectMemberExtractor
-from pydocs_mcp.extraction.package_tree import build_package_tree
 from pydocs_mcp.extraction.pipeline import (
-    IngestionPipeline,
-    IngestionStage,
-    IngestionState,
-    TargetKind,
-)
-from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
-from pydocs_mcp.extraction.stages import (
     ChunkingStage,
     ContentHashStage,
     FileDiscoveryStage,
     FileReadStage,
     FlattenStage,
+    IngestionPipeline,
+    IngestionStage,
+    IngestionState,
     PackageBuildStage,
+    PipelineChunkExtractor,
+    TargetKind,
 )
-from pydocs_mcp.extraction.tree_flatten import flatten_to_chunks
-from pydocs_mcp.extraction.factories import (
-    build_ingestion_pipeline,
-    load_ingestion_pipeline,
+from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
+from pydocs_mcp.extraction.strategies import (
+    AstMemberExtractor,
+    AstPythonChunker,
+    DependencyFileDiscoverer,
+    HeadingMarkdownChunker,
+    InspectMemberExtractor,
+    NotebookChunker,
+    ProjectFileDiscoverer,
+    StaticDependencyResolver,
 )
 
 __all__ = [

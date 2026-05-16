@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from pydocs_mcp.application.tree_service import TreeService
-from pydocs_mcp.extraction.document_node import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
 
 
 def _module_tree(module: str) -> DocumentNode:

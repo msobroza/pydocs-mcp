@@ -23,13 +23,13 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.extraction.chunk_extractor import PipelineChunkExtractor
+from pydocs_mcp.extraction.pipeline.chunk_extractor import PipelineChunkExtractor
 from pydocs_mcp.extraction.pipeline import (
     IngestionPipeline,
     IngestionState,
     TargetKind,
 )
-from pydocs_mcp.extraction.stages import (
+from pydocs_mcp.extraction.pipeline.stages import (
     ChunkingStage,
     ContentHashStage,
     FileDiscoveryStage,
