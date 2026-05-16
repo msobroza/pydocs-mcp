@@ -9,7 +9,7 @@ or the user's config directory — symlinks resolve BEFORE the check, so a
 symlink planted inside ``pipelines/`` pointing at ``/etc/shadow`` is
 rejected.
 
-Side-effect import of ``extraction.stages`` populates :data:`stage_registry`
+Side-effect import of ``extraction.pipeline.stages`` populates :data:`stage_registry`
 via the six ``@stage_registry.register(...)`` decorators; without that
 import :func:`load_ingestion_pipeline` would raise ``KeyError`` on the
 first stage lookup.
@@ -23,12 +23,13 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from pydocs_mcp.extraction.pipeline import IngestionPipeline
+
 # Side-effect import — registers the 6 ingestion stages via decorators. Python's
 # sys.modules cache means re-entering this module's own package during the
 # partial load of ``extraction/__init__.py`` is safe: the submodule finishes
 # loading before control returns, and the registry is populated.
 from pydocs_mcp.extraction.pipeline import stages as _stages  # noqa: F401
-from pydocs_mcp.extraction.pipeline import IngestionPipeline
 from pydocs_mcp.extraction.serialization import stage_registry
 
 if TYPE_CHECKING:

@@ -20,13 +20,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydocs_mcp.extraction.model.document_node import DocumentNode
+from pydocs_mcp.extraction.model.tree_flatten import flatten_to_chunks
+from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
+from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
 from pydocs_mcp.extraction.strategies import (
     chunkers as _chunkers,  # noqa: F401 — side-effect registration of Chunkers in chunker_registry
 )
-from pydocs_mcp.extraction.model.document_node import DocumentNode
-from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
-from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
-from pydocs_mcp.extraction.model.tree_flatten import flatten_to_chunks
 from pydocs_mcp.models import Chunk, Package, PackageOrigin
 
 if TYPE_CHECKING:

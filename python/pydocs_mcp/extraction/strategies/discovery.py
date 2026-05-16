@@ -17,11 +17,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, DiscoveryScopeConfig
 from pydocs_mcp.extraction.strategies._dep_helpers import (
     find_installed_distribution,
     find_site_packages_root,
 )
-from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, DiscoveryScopeConfig
 
 
 @dataclass(frozen=True, slots=True)

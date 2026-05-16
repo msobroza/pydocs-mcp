@@ -29,7 +29,7 @@ class PipelineChunkExtractor:
 
     The pipeline is passed in (dependency-injection) so tests can substitute a
     fake without touching YAML loading; production wiring constructs one via
-    :func:`~pydocs_mcp.extraction.wiring.build_ingestion_pipeline`.
+    :func:`~pydocs_mcp.extraction.factories.build_ingestion_pipeline`.
     """
 
     pipeline: IngestionPipeline
