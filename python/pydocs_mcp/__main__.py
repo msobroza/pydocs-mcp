@@ -48,7 +48,15 @@ def _build_parser() -> argparse.ArgumentParser:
     for cmd, hlp in [("serve", "Index + start MCP"), ("index", "Index only")]:
         sp = sub.add_parser(cmd, help=hlp)
         sp.add_argument("project", nargs="?", default=".")
-        sp.add_argument("--depth", type=int, default=1, help="Submodule scan depth")
+        # default=None so the YAML-configured inspect_depth wins when the
+        # flag is absent (without this, argparse's hard-coded default
+        # silently shadows ``extraction.members.inspect_depth``, mirroring
+        # the F11 dead-config defect /ultrareview just removed for
+        # by_extension).
+        sp.add_argument(
+            "--depth", type=int, default=None,
+            help="Submodule scan depth (default: YAML extraction.members.inspect_depth)",
+        )
         sp.add_argument("--workers", type=int, default=4, help="Parallel workers")
         sp.add_argument("--force", action="store_true", help="Clear cache, re-index all")
         sp.add_argument("--skip-project", action="store_true", help="Skip project source")
@@ -170,9 +178,16 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
 
     ast_member = AstMemberExtractor()
     members_cap = config.extraction.members.members_per_module_cap
+    # CLI flag wins over YAML; YAML wins over hard-coded fallback. This
+    # mirrors the pattern for every other tunable knob — undocumented
+    # defaults at the wiring layer become silent traps.
+    inspect_depth = (
+        args.depth if args.depth is not None
+        else config.extraction.members.inspect_depth
+    )
     member_extractor = (
         InspectMemberExtractor(
-            static_fallback=ast_member, depth=args.depth,
+            static_fallback=ast_member, depth=inspect_depth,
             members_per_module_cap=members_cap,
         )
         if use_inspect else ast_member
