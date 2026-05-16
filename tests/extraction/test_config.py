@@ -34,11 +34,10 @@ from pydocs_mcp.extraction.config import (
 def test_extraction_config_defaults_load():
     """Bare :class:`ExtractionConfig` builds with shipped defaults."""
     cfg = ExtractionConfig()
-    assert cfg.chunking.by_extension == {
-        ".py": "ast_python",
-        ".md": "heading_markdown",
-        ".ipynb": "notebook",
-    }
+    # F11: by_extension was dead config (ChunkingStage dispatches via
+    # chunker_registry decorator, never read the YAML field). The
+    # field is gone; chunker selection is decorator-driven only.
+    assert not hasattr(cfg.chunking, "by_extension")
     assert cfg.chunking.markdown.min_heading_level == 1
     assert cfg.chunking.markdown.max_heading_level == 3
     assert cfg.chunking.notebook.include_outputs is False
@@ -93,10 +92,11 @@ def test_include_extensions_widen_rejected():
         DiscoveryScopeConfig(include_extensions=[".py", ".rst"])
 
 
-def test_by_extension_widen_rejected():
-    """``ChunkingConfig.by_extension`` shares the same allowlist guard —
-    spec AC #6."""
-    with pytest.raises(ValidationError, match="unsupported extensions"):
+def test_chunking_config_rejects_legacy_by_extension_key():
+    """F11: the dead ``by_extension`` field was removed. A user YAML
+    that still sets it must trip ``extra='forbid'`` so the typo /
+    pre-fix config gets flagged rather than silently ignored."""
+    with pytest.raises(ValidationError):
         ChunkingConfig(by_extension={".yaml": "my_yaml"})
 
 

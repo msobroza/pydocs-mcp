@@ -1,7 +1,14 @@
 """ExtractionConfig Pydantic models + hardcoded ``_EXCLUDED_DIRS`` (spec §11.1).
 
+Chunker selection is decorator-driven (see
+:data:`~pydocs_mcp.extraction.serialization.chunker_registry`); there is
+no YAML knob to override the per-extension chunker. The earlier
+``ChunkingConfig.by_extension`` field was never read by ChunkingStage
+and got dropped (/ultrareview F11).
+
+
 Policy (decision #6b): the **extension allowlist** is narrowable via YAML
-(``include_extensions`` / ``by_extension``); the **directory blocklist** is
+(``include_extensions``); the **directory blocklist** is
 HARDCODED in :data:`_EXCLUDED_DIRS` (not YAML-overridable) because
 un-excluded ``.git`` / ``.venv`` / ``site-packages`` would leak secrets,
 balloon the FTS index, and break inspect-mode imports. Users can narrow the
@@ -56,30 +63,24 @@ class NotebookConfig(BaseModel):
 
 
 class ChunkingConfig(BaseModel):
-    """Per-extension chunker selection + chunker-specific tunables."""
+    """Per-chunker tunables (markdown heading bounds, notebook outputs).
+
+    Chunker selection lives in the
+    :data:`~pydocs_mcp.extraction.serialization.chunker_registry` —
+    chunkers decorate themselves with ``@_register_chunker(ext)`` and
+    :class:`~pydocs_mcp.extraction.pipeline.stages.ChunkingStage` looks
+    up ``chunker_registry[ext]`` per file. There is intentionally NO
+    YAML-level chunker override: a previous ``by_extension`` field was
+    declared but never read by ChunkingStage (/ultrareview F11) — it
+    was dead config that misled readers into thinking the dispatch
+    table was data-driven. Adding a new extension requires registering
+    a chunker via the decorator, not editing YAML.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    by_extension: dict[str, str] = Field(
-        default_factory=lambda: {
-            ".py": "ast_python",
-            ".md": "heading_markdown",
-            ".ipynb": "notebook",
-        }
-    )
     markdown: MarkdownConfig = Field(default_factory=MarkdownConfig)
     notebook: NotebookConfig = Field(default_factory=NotebookConfig)
-
-    @field_validator("by_extension")
-    @classmethod
-    def _enforce_allowlist(cls, v: dict[str, str]) -> dict[str, str]:
-        bad = set(v) - ALLOWED_EXTENSIONS
-        if bad:
-            raise ValueError(
-                f"extraction.chunking.by_extension: unsupported extensions "
-                f"{sorted(bad)}; must be subset of {sorted(ALLOWED_EXTENSIONS)}"
-            )
-        return v
 
 
 class DiscoveryScopeConfig(BaseModel):

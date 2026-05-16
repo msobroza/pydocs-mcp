@@ -230,11 +230,11 @@ def test_appconfig_includes_extraction_defaults():
     # Shipped YAML drives these, not the Pydantic defaults — the two
     # should agree, but we assert on the YAML values to catch drift
     # between code and YAML.
-    assert config.extraction.chunking.by_extension == {
-        ".py": "ast_python",
-        ".md": "heading_markdown",
-        ".ipynb": "notebook",
-    }
+    # F11: chunker selection is decorator-driven (chunker_registry); the
+    # legacy ``by_extension`` dict was dead config and got removed. The
+    # shipped YAML must NOT declare it (Pydantic extra='forbid' would
+    # reject the merged config).
+    assert not hasattr(config.extraction.chunking, "by_extension")
     assert config.extraction.chunking.markdown.max_heading_level == 3
     assert config.extraction.chunking.notebook.include_outputs is False
     assert config.extraction.discovery.project.include_extensions == [
