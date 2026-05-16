@@ -41,7 +41,7 @@ _KIND_TO_ORIGIN: dict[NodeKind, ChunkOrigin] = {
 def flatten_to_chunks(node: DocumentNode, package: str) -> list[Chunk]:
     """DocumentNode tree -> list of FTS-ready Chunks (direct-text rule, spec §4.1.1)."""
     chunks: list[Chunk] = []
-    _visit(node, package, chunks, parent_origin=None)
+    _visit(node, package, chunks, parent_origin=None, current_module=None)
     return chunks
 
 
@@ -50,15 +50,25 @@ def _visit(
     package: str,
     acc: list[Chunk],
     parent_origin: ChunkOrigin | None,
+    current_module: str | None,
 ) -> None:
+    # Entering a MODULE / notebook root: it becomes the module context for
+    # this subtree. Descendants (CLASS, FUNCTION, CODE_EXAMPLE, etc.) emit
+    # chunks keyed by THIS module's qualified_name, not their own — without
+    # this, a CLASS chunk's ``chunks.module`` ended up as
+    # ``pkg.mod.MyClass`` instead of ``pkg.mod`` whenever the chunker
+    # didn't set ``extra_metadata['module']`` explicitly.
+    if node.kind == NodeKind.MODULE:
+        current_module = node.qualified_name
+
     origin = _origin_for_node(node, parent_origin)
     if _should_emit(node):
-        acc.append(_node_to_chunk(node, package, origin))
+        acc.append(_node_to_chunk(node, package, origin, current_module))
     # Children inherit this node's resolved origin — matters for CODE_EXAMPLE,
     # which is always nested under a MODULE / FUNCTION / CLASS / METHOD /
     # MARKDOWN_HEADING / notebook cell.
     for child in node.children:
-        _visit(child, package, acc, parent_origin=origin)
+        _visit(child, package, acc, parent_origin=origin, current_module=current_module)
 
 
 def _should_emit(node: DocumentNode) -> bool:
@@ -77,7 +87,10 @@ def _origin_for_node(
 
 
 def _node_to_chunk(
-    node: DocumentNode, package: str, origin: ChunkOrigin | None,
+    node: DocumentNode,
+    package: str,
+    origin: ChunkOrigin | None,
+    current_module: str | None,
 ) -> Chunk:
     metadata: dict[str, object] = {
         ChunkFilterField.PACKAGE.value:      package,
@@ -95,13 +108,22 @@ def _node_to_chunk(
     }
     if origin is not None:
         metadata[ChunkFilterField.ORIGIN.value] = origin.value
-    # Module key — prefer explicit extra_metadata["module"] (strategies set this
-    # for nested members so FTS filters still group under the dotted module
-    # path), fall back to qualified_name.
-    module = (
+    # Module key — three-tier precedence:
+    # 1. Explicit ``extra_metadata['module']`` set by the chunker (strategies
+    #    set this on nested members so an inspect-mode override can be picked
+    #    up).
+    # 2. The MODULE ancestor's ``qualified_name`` tracked through recursion
+    #    — this is the right module for any node BELOW a MODULE root
+    #    (CLASS, FUNCTION, METHOD, CODE_EXAMPLE, MARKDOWN_HEADING).
+    # 3. The node's own ``qualified_name`` — only reached for orphan trees
+    #    where this node IS the root and isn't a MODULE (rare; preserves
+    #    pre-fix behavior for trees that bypass the MODULE wrapper).
+    explicit_module = (
         node.extra_metadata.get("module") if node.extra_metadata else None
     )
-    metadata[ChunkFilterField.MODULE.value] = module or node.qualified_name
+    metadata[ChunkFilterField.MODULE.value] = (
+        explicit_module or current_module or node.qualified_name
+    )
     # Merge remaining extra_metadata keys without clobbering required keys.
     for k, v in (node.extra_metadata or {}).items():
         metadata.setdefault(k, v)

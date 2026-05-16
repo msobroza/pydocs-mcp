@@ -353,7 +353,10 @@ def test_module_key_prefers_extra_metadata_module_over_qualified_name() -> None:
     assert md[ChunkFilterField.MODULE.value] == "pkg.mod"
 
 
-def test_module_key_falls_back_to_qualified_name_when_missing() -> None:
+def test_module_key_falls_back_to_qualified_name_when_orphan_node() -> None:
+    """No MODULE ancestor + no ``extra_metadata['module']``: last-resort
+    fallback to the node's own qualified_name (orphan trees that bypass
+    the MODULE wrapper — rare; mostly notebook code-cell roots)."""
     node = _node(
         kind=NodeKind.FUNCTION,
         node_id="pkg.mod.Cls.meth",
@@ -364,6 +367,75 @@ def test_module_key_falls_back_to_qualified_name_when_missing() -> None:
     )
     md = flatten_to_chunks(node, "pkg")[0].metadata
     assert md[ChunkFilterField.MODULE.value] == "pkg.mod.Cls.meth"
+
+
+def test_class_and_method_nested_in_module_inherit_module_ancestor() -> None:
+    """CLASS / METHOD nested under a MODULE node MUST take the module's
+    qualified_name for ``chunks.module``, NOT their own qualified_name.
+
+    Pre-fix: a CLASS without ``extra_metadata['module']`` fell back to
+    its own ``qualified_name = 'pkg.mod.Cls'``, polluting the column
+    that retrieval filters use to group results by module. This pins
+    the module-ancestor walk done by ``flatten_to_chunks``.
+    """
+    method = _node(
+        kind=NodeKind.METHOD,
+        node_id="pkg.mod.Cls.m",
+        qualified_name="pkg.mod.Cls.m",
+        title="m",
+        text="def m(self): pass",
+        extra_metadata={},  # no explicit module — must inherit from ancestor
+    )
+    cls = _node(
+        kind=NodeKind.CLASS,
+        node_id="pkg.mod.Cls",
+        qualified_name="pkg.mod.Cls",
+        title="Cls",
+        text="class Cls: ...",
+        children=(method,),
+        extra_metadata={},  # no explicit module — must inherit from ancestor
+    )
+    module = _node(
+        kind=NodeKind.MODULE,
+        node_id="pkg.mod",
+        qualified_name="pkg.mod",
+        title="pkg.mod",
+        text="Module doc.",
+        children=(cls,),
+    )
+
+    chunks = flatten_to_chunks(module, "pkg")
+    by_kind = {c.metadata["kind"]: c for c in chunks}
+    # All three chunks emit; module ancestor 'pkg.mod' wins for every one.
+    assert by_kind[NodeKind.MODULE.value].metadata[ChunkFilterField.MODULE.value] == "pkg.mod"
+    assert by_kind[NodeKind.CLASS.value].metadata[ChunkFilterField.MODULE.value] == "pkg.mod"
+    assert by_kind[NodeKind.METHOD.value].metadata[ChunkFilterField.MODULE.value] == "pkg.mod"
+
+
+def test_explicit_extra_metadata_module_still_wins_under_module_ancestor() -> None:
+    """Precedence: an explicit ``extra_metadata['module']`` on a child
+    node beats the tracked MODULE ancestor. Lets inspect-mode chunkers
+    override the ancestor path when the live module differs from the
+    file's static qualified_name (rare; reserved for re-export cases)."""
+    method = _node(
+        kind=NodeKind.METHOD,
+        node_id="pkg.mod.Cls.m",
+        qualified_name="pkg.mod.Cls.m",
+        title="m",
+        text="def m(self): pass",
+        extra_metadata={"module": "pkg.reexported"},
+    )
+    module = _node(
+        kind=NodeKind.MODULE,
+        node_id="pkg.mod",
+        qualified_name="pkg.mod",
+        title="pkg.mod",
+        text="",
+        children=(method,),
+    )
+    chunks = flatten_to_chunks(module, "pkg")
+    [meth_chunk] = chunks
+    assert meth_chunk.metadata[ChunkFilterField.MODULE.value] == "pkg.reexported"
 
 
 # ── edge: empty tree / leaf skipping ──────────────────────────────────────

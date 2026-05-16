@@ -109,6 +109,13 @@ def _apply_v3_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "chunks", "module TEXT DEFAULT ''")
     _try_add_column(conn, "chunks", "content_hash TEXT")
     _try_add_column(conn, "packages", "local_path TEXT")
+    # The fresh-DB DDL also creates ix_chunks_module on the new ``chunks.module``
+    # column. v2->v3 in-place migration adds the column via _try_add_column but
+    # previously omitted the index — queries that filter chunks by module on a
+    # migrated DB hit a full table scan until the next fresh rebuild.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_chunks_module ON chunks(module)"
+    )
 
 
 def open_index_database(path: Path) -> sqlite3.Connection:
@@ -145,17 +152,29 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
 
 def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
-    """Remove all rows for a package across chunks, members, and packages."""
+    """Remove all rows for a package across chunks, members, trees, and packages.
+
+    ``document_trees`` is part of the v3 schema (sub-PR #5) and must be
+    cleared alongside the other per-package tables — otherwise stale trees
+    survive a re-index and ``LookupService.get_tree(package, module)``
+    returns an outdated payload.
+    """
     connection.execute("DELETE FROM chunks  WHERE package=?", (package_name,))
     connection.execute("DELETE FROM module_members WHERE package=?", (package_name,))
+    connection.execute("DELETE FROM document_trees WHERE package=?", (package_name,))
     connection.execute("DELETE FROM packages WHERE name=?", (package_name,))
 
 
 def clear_all_packages(connection: sqlite3.Connection) -> None:
-    """Clear every indexed package: packages, chunks, and module members."""
+    """Clear every indexed package: packages, chunks, members, and trees.
+
+    See :func:`remove_package` — ``document_trees`` must be cleared too or
+    a fresh re-index reads stale tree rows for the deleted packages.
+    """
     connection.execute("DELETE FROM packages")
     connection.execute("DELETE FROM chunks")
     connection.execute("DELETE FROM module_members")
+    connection.execute("DELETE FROM document_trees")
     connection.commit()
 
 

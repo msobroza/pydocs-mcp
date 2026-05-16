@@ -167,13 +167,59 @@ class TestClearPkg:
             "SELECT * FROM packages WHERE name='other'"
         ).fetchone() is not None
 
+    def test_removes_document_trees_for_package(self, db_with_package):
+        """remove_package must clear document_trees rows for that package —
+        without this, stale trees survive a re-index and LookupService
+        returns outdated payloads (sub-PR #5 §12.2)."""
+        db_with_package.execute(
+            "INSERT INTO document_trees(package, module, tree_json) VALUES(?,?,?)",
+            ("testpkg", "testpkg.mod", "{}"),
+        )
+        db_with_package.commit()
+        remove_package(db_with_package, "testpkg")
+        db_with_package.commit()
+        assert db_with_package.execute(
+            "SELECT * FROM document_trees WHERE package='testpkg'"
+        ).fetchone() is None
+
+    def test_leaves_other_packages_document_trees(self, db_with_package):
+        """Cross-package isolation: remove_package('testpkg') leaves other
+        packages' tree rows intact."""
+        db_with_package.execute(
+            "INSERT INTO document_trees(package, module, tree_json) VALUES(?,?,?)",
+            ("other", "other.mod", "{}"),
+        )
+        db_with_package.execute(
+            "INSERT INTO document_trees(package, module, tree_json) VALUES(?,?,?)",
+            ("testpkg", "testpkg.mod", "{}"),
+        )
+        db_with_package.commit()
+        remove_package(db_with_package, "testpkg")
+        db_with_package.commit()
+        assert db_with_package.execute(
+            "SELECT * FROM document_trees WHERE package='other'"
+        ).fetchone() is not None
+
 
 class TestClearAll:
     def test_clears_everything(self, db_with_package):
+        # Seed a tree row so the assertion below is meaningful — without
+        # this, document_trees count is already 0 from fixture setup.
+        db_with_package.execute(
+            "INSERT INTO document_trees(package, module, tree_json) VALUES(?,?,?)",
+            ("testpkg", "testpkg.mod", "{}"),
+        )
+        db_with_package.commit()
         clear_all_packages(db_with_package)
         assert db_with_package.execute("SELECT count(*) FROM packages").fetchone()[0] == 0
         assert db_with_package.execute("SELECT count(*) FROM chunks").fetchone()[0] == 0
         assert db_with_package.execute("SELECT count(*) FROM module_members").fetchone()[0] == 0
+        # document_trees must be cleared too (sub-PR #5 §12.2) — otherwise
+        # a fresh re-index reads stale tree payloads for the cleared
+        # packages.
+        assert db_with_package.execute(
+            "SELECT count(*) FROM document_trees"
+        ).fetchone()[0] == 0
 
 
 class TestRebuildFts:
@@ -350,6 +396,18 @@ class TestSchemaV3:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='document_trees'"
             ).fetchone()
             assert row is not None
+            # Migration MUST also create ``ix_chunks_module`` — the
+            # fresh-DB DDL has it, so without an explicit add here a
+            # migrated DB would scan chunks for every module filter
+            # until the next destructive rebuild.
+            idx = migrated.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='index' AND name='ix_chunks_module'"
+            ).fetchone()
+            assert idx is not None, (
+                "v2->v3 migration must create ix_chunks_module so module "
+                "filter queries don't full-scan the chunks table"
+            )
         finally:
             migrated.close()
 
