@@ -27,7 +27,6 @@ inject a shared audit list at construction time.
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -252,9 +251,9 @@ class FakeUnitOfWork:
     repository attributes are only valid inside ``async with uow:`` and
     raise :class:`UnitOfWorkNotEnteredError` outside; ``__aexit__``
     triggers ``rolled_back`` if the body exited without calling
-    ``commit()`` (or if an exception escaped). ``begin()`` is the
-    pre-#5a back-compat shim, matching SqliteUnitOfWork's
-    ``@asynccontextmanager`` shape.
+    ``commit()`` (or if an exception escaped). Sub-PR #5a-2 dropped
+    the pre-#5a ``begin()`` shim — callers go through ``async with
+    uow:`` exclusively.
 
     Repo accessors (``packages`` / ``chunks`` / ``module_members`` /
     ``trees``) are stored as real instance attributes (rather than
@@ -316,12 +315,6 @@ class FakeUnitOfWork:
 
     async def rollback(self) -> None:
         self.rolled_back = True
-
-    @asynccontextmanager
-    async def begin(self):
-        async with self:
-            yield
-            await self.commit()
 
 
 # ── Service-test factory ─────────────────────────────────────────────────

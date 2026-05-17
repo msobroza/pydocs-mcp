@@ -1,7 +1,7 @@
 """Storage Protocols — 9 @runtime_checkable contracts (spec §5.2, AC #3)."""
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydocs_mcp.models import Chunk, ModuleMember, Package
@@ -95,9 +95,9 @@ class UnitOfWork(Protocol):
     share one SQLite connection. Outside the context they raise
     :class:`~pydocs_mcp.storage.errors.UnitOfWorkNotEnteredError`.
     Explicit ``commit()`` persists; safety-net ``rollback`` on
-    exception or no-commit. ``begin()`` is the pre-#5a back-compat
-    method — services that haven't migrated to ``async with`` still
-    use it. SqliteUnitOfWork (Task 2) implements both shapes.
+    exception or no-commit. Sub-PR #5a-2 drops the pre-#5a ``begin()``
+    back-compat method — ``IndexingService`` and every other caller now
+    use ``async with uow:`` directly.
     """
 
     packages: PackageStore
@@ -110,9 +110,6 @@ class UnitOfWork(Protocol):
 
     async def commit(self) -> None: ...
     async def rollback(self) -> None: ...
-
-    # Back-compat shim for pre-#5a callers.
-    async def begin(self) -> AsyncIterator[None]: ...
 
 
 @runtime_checkable
