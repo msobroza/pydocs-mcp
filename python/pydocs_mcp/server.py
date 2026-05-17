@@ -104,37 +104,28 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         build_member_pipeline_from_config,
     )
     from pydocs_mcp.retrieval.factories import build_retrieval_context
-    from pydocs_mcp.storage.sqlite import (
-        SqliteChunkRepository,
-        SqliteDocumentTreeStore,
-        SqlitePackageRepository,
-    )
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
     config = AppConfig.load(explicit_path=config_path)
     context = build_retrieval_context(db_path, config)
-    provider = context.connection_provider
-    package_store = SqlitePackageRepository(provider=provider)
-    chunk_store = SqliteChunkRepository(provider=provider)
-    member_store = context.module_member_store
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 
-    package_lookup = PackageLookup(
-        package_store=package_store,
-        chunk_store=chunk_store,
-        module_member_store=member_store,
-    )
+    # One UoW factory for every read-side service. Post-#5a-2 services all
+    # share this — no more inline SqliteChunkRepository / SqlitePackageRepository
+    # / SqliteDocumentTreeStore wiring.
+    uow_factory = build_sqlite_uow_factory(db_path)
+
+    package_lookup = PackageLookup(uow_factory=uow_factory)
     search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
     search_api_svc = ApiSearch(member_pipeline=member_pipeline)
 
-    # TreeService (sub-PR #5) — wired from the same SqliteDocumentTreeStore
-    # that IndexingService writes through, so multi-segment ``lookup`` targets
-    # resolve against persisted DocumentNode trees. ReferenceService (sub-PR
-    # #5b) ships later; LookupService surfaces its absence as
+    # TreeService (sub-PR #5) — same uow_factory backs the tree reads, so
+    # multi-segment ``lookup`` targets resolve against persisted
+    # DocumentNode trees written by ``IndexingService``. ReferenceService
+    # (sub-PR #5b) ships later; LookupService surfaces its absence as
     # ServiceUnavailableError to MCP clients instead of failing startup.
-    tree_svc = TreeService(
-        tree_store=SqliteDocumentTreeStore(provider=provider),
-    )
+    tree_svc = TreeService(uow_factory=uow_factory)
     ref_svc = None  # reserved for sub-PR #5b
 
     lookup_svc = LookupService(
