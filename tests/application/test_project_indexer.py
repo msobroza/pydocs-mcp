@@ -30,6 +30,7 @@ from pydocs_mcp.models import (
     Package,
     PackageOrigin,
 )
+from tests._fakes import InMemoryPackageStore, make_fake_uow_factory
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -74,35 +75,8 @@ def _member(package: str, name: str) -> ModuleMember:
 
 
 @dataclass
-class FakePackageStore:
-    """Minimal PackageStore fake: ``get`` returns whatever the test seeded
-    via ``known_packages``; defaults to ``None`` (not cached).
-
-    Exists so :class:`ProjectIndexer` can call ``package_store.get`` on
-    the hash-cache check path without the full ``SqlitePackageRepository``
-    surface — mirrors the pattern in test_indexing_service.py.
-    """
-
-    known_packages: dict[str, Package] = field(default_factory=dict)
-
-    async def get(self, name: str) -> Package | None:
-        return self.known_packages.get(name)
-
-
-@dataclass
 class FakeIndexingService:
-    """Stands in for application.IndexingService — records the call sequence.
-
-    We don't inherit or reference the real class; the fake only needs the
-    methods ProjectIndexer actually invokes (``clear_all`` +
-    ``reindex_package`` + ``package_store.get`` via the store attribute).
-    That keeps the write-bootstrap test isolated from the persistence-layer
-    mechanics covered in test_indexing_service.py.
-
-    The real ``IndexingService.reindex_package`` accepts the ``trees``
-    keyword per spec §13.3's canonical composite; the fake widens to match
-    so assertions about tree propagation ride on the same recorded shape.
-    """
+    """Stands in for application.IndexingService — records the call sequence."""
 
     cleared: bool = False
     clear_call_order: int | None = None
@@ -114,7 +88,6 @@ class FakeIndexingService:
             tuple[DocumentNode, ...],
         ]
     ] = field(default_factory=list)
-    package_store: FakePackageStore = field(default_factory=FakePackageStore)
     _call_counter: int = 0
 
     async def clear_all(self) -> None:
@@ -128,6 +101,7 @@ class FakeIndexingService:
         chunks: tuple[Chunk, ...],
         module_members: tuple[ModuleMember, ...],
         trees: tuple[DocumentNode, ...] = (),
+        references: tuple = (),  # spec §3.1 — accept the #5b seam
     ) -> None:
         self._call_counter += 1
         self.reindex_calls.append((package, chunks, module_members, tuple(trees)))
@@ -236,12 +210,14 @@ def _make_service(
     project_members: tuple[ModuleMember, ...] = (),
     dep_chunk_returns: dict[str, Any] | None = None,
     dep_member_returns: dict[str, Any] | None = None,
+    cached_packages: dict[str, Package] | None = None,
 ) -> tuple[
     ProjectIndexer,
     FakeIndexingService,
     FakeDependencyResolver,
     FakeChunkExtractor,
     FakeMemberExtractor,
+    InMemoryPackageStore,  # NEW: returned so tests can assert on get() calls
 ]:
     idx = FakeIndexingService()
     resolver = FakeDependencyResolver(deps=deps)
@@ -254,13 +230,16 @@ def _make_service(
         project_members=project_members,
         dep_returns=dep_member_returns or {},
     )
+    pkg_store = InMemoryPackageStore(items=dict(cached_packages or {}))
+    uow_factory = make_fake_uow_factory(packages=pkg_store)
     service = ProjectIndexer(
         indexing_service=idx,
         dependency_resolver=resolver,
         chunk_extractor=chunks_ex,
         member_extractor=members_ex,
+        uow_factory=uow_factory,
     )
-    return service, idx, resolver, chunks_ex, members_ex
+    return service, idx, resolver, chunks_ex, members_ex, pkg_store
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────
@@ -270,7 +249,7 @@ def _make_service(
 async def test_index_project_force_clears_first(tmp_path: Path) -> None:
     """``force=True`` wipes everything before the first extraction call."""
     project_pkg = _pkg("__project__")
-    service, idx, _resolver, chunks_ex, _members_ex = _make_service(
+    service, idx, _resolver, chunks_ex, _members_ex, _pkg_store = _make_service(
         project_pkg=project_pkg,
     )
 
@@ -293,7 +272,7 @@ async def test_index_project_skips_source_when_include_false(tmp_path: Path) -> 
     dep_chunks = (_chunk("fastapi", "Routing"),)
     dep_members = (_member("fastapi", "APIRouter"),)
 
-    service, idx, resolver, chunks_ex, members_ex = _make_service(
+    service, idx, resolver, chunks_ex, members_ex, _pkg_store = _make_service(
         deps=("fastapi",),
         dep_chunk_returns={"fastapi": (dep_chunks, dep_pkg)},
         dep_member_returns={"fastapi": dep_members},
@@ -320,7 +299,7 @@ async def test_index_project_resolves_and_indexes_each_dep(tmp_path: Path) -> No
     pkg_a, pkg_b = _pkg("a"), _pkg("b")
     project_pkg = _pkg("__project__")
 
-    service, idx, resolver, chunks_ex, members_ex = _make_service(
+    service, idx, resolver, chunks_ex, members_ex, _pkg_store = _make_service(
         deps=("a", "b"),
         project_pkg=project_pkg,
         dep_chunk_returns={
@@ -358,7 +337,7 @@ async def test_index_one_dependency_increments_failed_on_exception(
     """A raising chunk-extractor must NOT abort the pass — stats.failed += 1
     and subsequent deps still process (spec §7)."""
     pkg_good = _pkg("good")
-    service, idx, _resolver, chunks_ex, _members_ex = _make_service(
+    service, idx, _resolver, chunks_ex, _members_ex, _pkg_store = _make_service(
         deps=("bad-dep", "good"),
         dep_chunk_returns={
             "bad-dep": RuntimeError("simulated pypi metadata corruption"),
@@ -386,7 +365,7 @@ async def test_index_one_dependency_failure_logs_warning(
     """On failure the service logs a warning that includes the dep name."""
     import logging
 
-    service, _idx, _resolver, _chunks, _members = _make_service(
+    service, _idx, _resolver, _chunks, _members, _pkg_store = _make_service(
         deps=("explode",),
         dep_chunk_returns={"explode": RuntimeError("boom")},
     )
@@ -404,7 +383,7 @@ async def test_index_one_dependency_success_increments_indexed(
 ) -> None:
     """Happy-path single dep: stats.indexed += 1; reindex_package called once."""
     pkg = _pkg("httpx")
-    service, idx, _resolver, _chunks, _members = _make_service(
+    service, idx, _resolver, _chunks, _members, _pkg_store = _make_service(
         deps=("httpx",),
         dep_chunk_returns={"httpx": ((_chunk("httpx", "Client"),), pkg)},
         dep_member_returns={"httpx": (_member("httpx", "Client"),)},
@@ -425,7 +404,7 @@ async def test_index_one_dependency_success_increments_indexed(
 async def test_index_project_without_force_does_not_clear(tmp_path: Path) -> None:
     """Default (``force=False``) leaves the index intact before reindexing."""
     project_pkg = _pkg("__project__")
-    service, idx, _resolver, _chunks, _members = _make_service(
+    service, idx, _resolver, _chunks, _members, _pkg_store = _make_service(
         project_pkg=project_pkg,
     )
 
@@ -440,7 +419,7 @@ async def test_index_project_returns_fresh_stats_each_call(tmp_path: Path) -> No
     """Each ``index_project`` call returns an independent IndexingStats
     accumulator — no leaked mutable state between invocations."""
     pkg = _pkg("httpx")
-    service, _idx, _resolver, _chunks, _members = _make_service(
+    service, _idx, _resolver, _chunks, _members, _pkg_store = _make_service(
         deps=("httpx",),
         dep_chunk_returns={"httpx": ((_chunk("httpx", "T"),), pkg)},
         dep_member_returns={"httpx": ()},
@@ -467,7 +446,7 @@ def test_project_indexer_is_frozen_and_slotted() -> None:
     """
     import dataclasses
 
-    service, _idx, _resolver, _chunks, _members = _make_service(
+    service, _idx, _resolver, _chunks, _members, _pkg_store = _make_service(
         project_pkg=_pkg("__project__"),
     )
     # Frozen: can't rebind a declared field.
@@ -509,7 +488,7 @@ async def test_index_project_forwards_trees_to_reindex_package(
     )
     project_pkg = _pkg("__project__")
     dep_pkg = _pkg("fastapi")
-    service, idx, _resolver, chunks_ex, _members = _make_service(
+    service, idx, _resolver, chunks_ex, _members, _pkg_store = _make_service(
         deps=("fastapi",),
         project_pkg=project_pkg,
         dep_chunk_returns={
@@ -546,7 +525,7 @@ async def test_index_project_workers_1_is_serial(tmp_path: Path) -> None:
     deterministic path that tests and byte-parity depend on.
     """
     pkg_a, pkg_b = _pkg("a"), _pkg("b")
-    service, idx, _resolver, chunks_ex, _members = _make_service(
+    service, idx, _resolver, chunks_ex, _members, _pkg_store = _make_service(
         deps=("a", "b"),
         dep_chunk_returns={
             "a": ((_chunk("a", "T"),), pkg_a),
@@ -612,7 +591,7 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
         },
     )
 
-    service, idx, _resolver, _chunks, _members = _make_service(
+    service, idx, _resolver, _chunks, _members, _pkg_store = _make_service(
         deps=("a", "b", "c"),
         dep_member_returns={"a": (), "b": (), "c": ()},
     )
@@ -622,6 +601,7 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
         dependency_resolver=service.dependency_resolver,
         chunk_extractor=probe,
         member_extractor=service.member_extractor,
+        uow_factory=service.uow_factory,
     )
 
     stats = await service.index_project(
@@ -639,3 +619,31 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
     assert sorted(pkg.name for pkg, _, _, _ in idx.reindex_calls) == ["a", "b", "c"]
 
 
+@pytest.mark.asyncio
+async def test_project_indexer_uses_own_uow_factory_for_cache_check(tmp_path: Path) -> None:
+    """spec §3.1 — ProjectIndexer reads cached package row via uow.packages.get,
+    not via reach-through to indexing_service.package_store."""
+    cached = _pkg("__project__")
+    cached_pkg_with_hash = Package(
+        name=cached.name, version=cached.version, summary=cached.summary,
+        homepage=cached.homepage, dependencies=cached.dependencies,
+        content_hash="h", origin=cached.origin,
+    )
+    project_pkg_same_hash = Package(
+        name="__project__", version="0", summary="", homepage="",
+        dependencies=(), content_hash="h",  # identical hash → cached
+        origin=PackageOrigin.PROJECT,
+    )
+
+    service, idx, _resolver, _chunks_ex, _members_ex, pkg_store = _make_service(
+        project_pkg=project_pkg_same_hash,
+        cached_packages={"__project__": cached_pkg_with_hash},
+    )
+
+    stats = await service.index_project(tmp_path)
+
+    # Cached → reindex_package NOT called; only the get on packages.
+    assert len(idx.reindex_calls) == 0
+    assert stats.project_indexed is False
+    # Reach-through proof: pkg_store.calls shows the get.
+    assert any(c.method == "get" and c.payload == "__project__" for c in pkg_store.calls)

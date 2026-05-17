@@ -111,11 +111,6 @@ class SqliteUnitOfWork:
     ``async with _maybe_acquire(self.provider): conn.commit()`` would
     re-enter the lock guarding the held connection and risk deadlock
     against concurrent repo calls sharing that lock.
-
-    ``begin()`` is the pre-#5a back-compat shim — services that haven't
-    migrated to ``async with uow:`` (e.g. ``IndexingService._in_uow``)
-    keep their exact behaviour: yield once, commit on success, roll back
-    on exception.
     """
 
     provider: ConnectionProvider
@@ -240,20 +235,6 @@ class SqliteUnitOfWork:
         if self._trees is None:
             raise UnitOfWorkNotEnteredError("trees")
         return self._trees
-
-    @asynccontextmanager
-    async def begin(self) -> AsyncIterator[None]:
-        """Pre-#5a back-compat shim — yields once, commits on success.
-
-        ``IndexingService._in_uow`` calls ``async with self.unit_of_work.begin():``
-        and relies on (a) yielding once, (b) committing on success,
-        (c) rolling back on exception. This wrapper preserves that exact
-        contract by composing ``__aenter__`` + explicit ``commit()`` on
-        clean exit; ``__aexit__``'s safety-net rolls back on exception.
-        """
-        async with self:
-            yield
-            await self.commit()
 
 
 # ── Chunk ↔ row ──────────────────────────────────────────────────────────

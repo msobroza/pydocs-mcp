@@ -106,18 +106,21 @@ def db_path(tmp_path: Path) -> Path:
 def _build_service(db_path: Path) -> ProjectIndexer:
     """Wire the production-shape ``ProjectIndexer`` over *db_path*.
 
-    Uses :func:`build_sqlite_indexing_service` (which now wires
-    ``tree_store=SqliteDocumentTreeStore``) + the real
-    :class:`PipelineChunkExtractor` / :class:`AstMemberExtractor` /
-    :class:`StaticDependencyResolver` strategies.
+    Post-#5a-2: ``ProjectIndexer`` takes its own ``uow_factory`` for the
+    hash-cache check (eng plan-review #4); wire one alongside the
+    indexing service.
     """
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
     indexing = build_sqlite_indexing_service(db_path)
+    uow_factory = build_sqlite_uow_factory(db_path)
     pipeline = build_ingestion_pipeline(AppConfig.load())
     return ProjectIndexer(
         indexing_service=indexing,
         dependency_resolver=StaticDependencyResolver(),
         chunk_extractor=PipelineChunkExtractor(pipeline=pipeline),
         member_extractor=AstMemberExtractor(),
+        uow_factory=uow_factory,
     )
 
 
@@ -298,8 +301,8 @@ async def test_e2e_get_tree_service_returns_saved_tree(
     """
     await _run_indexing(fixture_project, db_path)
 
-    tree_store = SqliteDocumentTreeStore(provider=build_connection_provider(db_path))
-    service = TreeService(tree_store=tree_store)
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+    service = TreeService(uow_factory=build_sqlite_uow_factory(db_path))
 
     tree = await service.get_tree("__project__", "src.app")
     assert isinstance(tree, DocumentNode)

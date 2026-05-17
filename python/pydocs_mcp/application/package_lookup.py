@@ -1,7 +1,7 @@
-"""PackageLookup — list + get_package_doc via stores (spec §5.1)."""
+"""PackageLookup — list + get_package_doc via UoW (spec §5.1, post-#5a-2)."""
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydocs_mcp.models import (
@@ -10,65 +10,52 @@ from pydocs_mcp.models import (
     Package,
     PackageDoc,
 )
-from pydocs_mcp.storage.protocols import (
-    ChunkStore,
-    ModuleMemberStore,
-    PackageStore,
-)
+from pydocs_mcp.storage.protocols import UnitOfWork
 
 
 @dataclass(frozen=True, slots=True)
 class PackageLookup:
-    """Composes the three domain stores into a read-only package view.
+    """Composes the three domain stores (via UoW) into a read-only package view.
 
-    ``list_packages`` returns up to 200 packages — enough to populate an MCP
-    catalogue tool in a single call. ``get_package_doc`` gathers a compact
-    "at a glance" bundle (first 10 chunks, first 30 members) for UI surfaces
-    that preview a package without running a full retrieval pipeline.
+    Post-#5a-2: depends only on ``uow_factory``. Each public method opens a
+    fresh UoW; reads run inside ``async with`` and exit without committing.
+
+    Note: ``get_package_doc`` no longer uses ``asyncio.gather`` for the two
+    list reads — both go through the same held connection inside the UoW,
+    and concurrent access would race ``_sqlite_transaction``'s lock. Per
+    spec §7.2, the two ~1ms SELECTs run sequentially.
     """
 
-    package_store: PackageStore
-    chunk_store: ChunkStore
-    module_member_store: ModuleMemberStore
+    uow_factory: Callable[[], UnitOfWork]
 
     async def list_packages(self) -> tuple[Package, ...]:
-        return tuple(await self.package_store.list(limit=200))
+        async with self.uow_factory() as uow:
+            return tuple(await uow.packages.list(limit=200))
 
     async def get_package_doc(self, package_name: str) -> PackageDoc | None:
-        pkg = await self.package_store.get(package_name)
-        if pkg is None:
-            # Short-circuit so unknown names don't waste two extra store
-            # round-trips producing empty lists.
-            return None
-        # Performance: the two list() calls target different tables and are
-        # fully independent, so issuing them concurrently halves the observed
-        # latency of a get_package_doc() call under async-capable backends.
-        chunks, members = await asyncio.gather(
-            self.chunk_store.list(
+        async with self.uow_factory() as uow:
+            pkg = await uow.packages.get(package_name)
+            if pkg is None:
+                return None
+            chunks = await uow.chunks.list(
                 filter={ChunkFilterField.PACKAGE.value: package_name},
                 limit=10,
-            ),
-            self.module_member_store.list(
+            )
+            members = await uow.module_members.list(
                 filter={ModuleMemberFilterField.PACKAGE.value: package_name},
                 limit=30,
-            ),
-        )
+            )
         return PackageDoc(package=pkg, chunks=tuple(chunks), members=tuple(members))
 
     async def find_module(self, package: str, module: str) -> bool:
-        """Return True iff at least one indexed Chunk exists for (package, module).
-
-        Added by sub-PR #6 — used by LookupService._longest_indexed_module to
-        resolve dotted-path targets when tree_svc (from #5) is unavailable.
-        Empty arguments short-circuit to False without querying the store.
-        """
         if not package or not module:
             return False
-        chunks = await self.chunk_store.list(
-            filter={
-                ChunkFilterField.PACKAGE.value: package,
-                ChunkFilterField.MODULE.value: module,
-            },
-            limit=1,
-        )
+        async with self.uow_factory() as uow:
+            chunks = await uow.chunks.list(
+                filter={
+                    ChunkFilterField.PACKAGE.value: package,
+                    ChunkFilterField.MODULE.value: module,
+                },
+                limit=1,
+            )
         return bool(chunks)

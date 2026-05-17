@@ -1,23 +1,25 @@
 """Application service coordinating write-side indexing (spec §5.6).
 
-`IndexingService` is a use-case service that owns the atomic
-delete-then-upsert sequence across the three entity stores
-(``PackageStore`` / ``ChunkStore`` / ``ModuleMemberStore``). It depends
-ONLY on Protocols — no SQLite, no concrete repositories — so any
-backend (SQLite today, Postgres/DuckDB later) can be plugged in as
-long as it implements the storage Protocols (AC #10).
+``IndexingService`` is a use-case service that owns the atomic
+delete-then-upsert sequence across the four entity stores
+(packages / chunks / module_members / trees). Sub-PR #5a-2 reduces the
+class to a single dependency: a ``uow_factory`` callable. Each public
+method opens a UoW, drives the write sequence, and commits — the
+"5 stores + optional UoW" shape is gone (eng-review bug #4: the old
+reach-through wiring let the service operate without a transaction).
 
-When a ``UnitOfWork`` is supplied, all three mutations run inside a
-single ``begin()`` scope so partial indexing state never becomes
-visible; when it is ``None`` the calls execute directly (used for
-non-transactional backends or in tests with Protocol fakes).
+The service depends ONLY on Protocols — no SQLite, no concrete
+repositories — so any backend (SQLite today, Postgres/DuckDB later)
+can be plugged in as long as ``uow_factory()`` returns something that
+structurally satisfies :class:`~pydocs_mcp.storage.protocols.UnitOfWork`
+(AC #10).
 """
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.models import (
     Chunk,
@@ -27,65 +29,25 @@ from pydocs_mcp.models import (
     Package,
 )
 from pydocs_mcp.storage.filters import All
-from pydocs_mcp.storage.protocols import (
-    ChunkStore,
-    DocumentTreeStore,
-    ModuleMemberStore,
-    PackageStore,
-    UnitOfWork,
-)
+from pydocs_mcp.storage.protocols import UnitOfWork
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.model import DocumentNode
-
-T = TypeVar("T")
 
 log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
 class IndexingService:
-    """Coordinates atomic write-side indexing across 3 entity stores.
+    """Coordinates atomic write-side indexing through a UnitOfWork (spec §5.6).
 
-    Depends ONLY on Protocols — backend-agnostic (spec §5.6, AC #10).
+    Single dependency — ``uow_factory: Callable[[], UnitOfWork]``. The
+    service opens a UoW per public-method call, drives the write
+    sequence inside it, and commits. All writes are atomic; partial
+    indexing state never becomes visible (eng-review §14 bug #4).
     """
 
-    package_store: PackageStore
-    chunk_store: ChunkStore
-    module_member_store: ModuleMemberStore
-    unit_of_work: UnitOfWork | None = None
-    # Sub-PR #5 addition — optional DocumentTreeStore for persisting
-    # DocumentNode trees alongside chunks. When None, ``trees`` parameter
-    # of ``reindex_package`` is accepted but silently dropped (backward compat).
-    tree_store: DocumentTreeStore | None = None
-
-    def __post_init__(self) -> None:
-        # Warn when the service is constructed without a UoW — ``_do_reindex``
-        # runs delete-then-upsert, and without a transaction boundary a
-        # mid-sequence crash can leave the package row wiped but chunks /
-        # members only partially re-inserted. Safe for tests with Protocol
-        # fakes (no persistence, no partial-visibility risk), but dangerous
-        # against a real backend. Dataclass frozen=True still permits
-        # __post_init__ — it just blocks ``self.x = y`` on declared fields.
-        if self.unit_of_work is None:
-            log.warning(
-                "IndexingService constructed without UnitOfWork — writes are "
-                "NOT atomic; partial reindex state can become visible on failure.",
-            )
-
-    async def _in_uow(
-        self, coro_fn: Callable[..., Awaitable[T]], /, *args, **kwargs,
-    ) -> T:
-        """Run ``coro_fn`` inside a ``unit_of_work.begin()`` scope if configured.
-
-        Collapses the three identical ``if self.unit_of_work is not None: async with
-        self.unit_of_work.begin(): ... else: ...`` shims that used to wrap
-        ``_do_reindex`` / ``_do_remove`` / ``_do_clear_all`` into a single helper.
-        """
-        if self.unit_of_work is not None:
-            async with self.unit_of_work.begin():
-                return await coro_fn(*args, **kwargs)
-        return await coro_fn(*args, **kwargs)
+    uow_factory: Callable[[], UnitOfWork]
 
     async def reindex_package(
         self,
@@ -93,84 +55,69 @@ class IndexingService:
         chunks: tuple[Chunk, ...],
         module_members: tuple[ModuleMember, ...],
         trees: Sequence["DocumentNode"] = (),
-        references: Sequence[Any] = (),
+        references: Sequence[Any] = (),  # noqa: ARG002 -- sub-PR #5b seam
     ) -> None:
         """Replace every row for ``package.name`` atomically (spec §13.3).
 
-        Canonical composite: delete + upsert for each of packages / chunks /
-        module_members; optionally persist ``trees`` via ``tree_store`` when
-        configured. ``references`` is accepted as a seam for sub-PR #5b
-        (cross-node reference graph); sub-PR #5 ignores them.
-
-        When a ``UnitOfWork`` is configured the whole sequence runs inside
-        one transaction.
+        Canonical order: package → chunks → trees → members. ``trees``
+        only triggers tree-store calls when non-empty (no point deleting
+        nothing). ``references`` is accepted as a seam for sub-PR #5b
+        (cross-node reference graph) but ignored today.
         """
-        await self._in_uow(
-            self._do_reindex, package, chunks, module_members, trees, references,
-        )
+        # Enum-typed filter keys are the single source of truth the
+        # safe-columns whitelist also derives from; the ``packages`` table
+        # keys on ``name`` (no matching enum), so that one stays literal.
+        async with self.uow_factory() as uow:
+            await uow.chunks.delete(
+                filter={ChunkFilterField.PACKAGE.value: package.name},
+            )
+            await uow.module_members.delete(
+                filter={ModuleMemberFilterField.PACKAGE.value: package.name},
+            )
+            await uow.packages.delete(filter={"name": package.name})
+            await uow.packages.upsert(package)
+            await uow.chunks.upsert(chunks)
+            # Tree persistence happens between chunks and members so
+            # FK-like post-conditions line up if a future schema adds them.
+            if trees:
+                await uow.trees.delete_for_package(package.name)
+                await uow.trees.save_many(tuple(trees), package=package.name)
+            await uow.module_members.upsert_many(module_members)
+            await uow.commit()
 
     async def remove_package(self, name: str) -> None:
-        """Delete a package and every chunk / module-member it owns."""
-        await self._in_uow(self._do_remove, name)
+        """Delete a package and every chunk / member / tree it owns."""
+        async with self.uow_factory() as uow:
+            await uow.chunks.delete(
+                filter={ChunkFilterField.PACKAGE.value: name},
+            )
+            await uow.module_members.delete(
+                filter={ModuleMemberFilterField.PACKAGE.value: name},
+            )
+            # Trees are per-package state too — without this delete a
+            # stale tree survives a re-index and LookupService.get_tree
+            # serves the pre-reindex payload (F5b from /ultrareview).
+            await uow.trees.delete_for_package(name)
+            await uow.packages.delete(filter={"name": name})
+            await uow.commit()
 
     async def clear_all(self) -> None:
-        """Wipe every row across all three entity stores.
+        """Wipe every row across all four entity stores.
 
-        Uses ``All(clauses=())`` — an empty conjunction that the
-        ``SqliteFilterAdapter`` translates to ``1 = 1``. That form matches
-        NULL columns too, unlike the previous ``LIKE '%'`` hack, and keeps
-        the delete semantics unconditional without adding a new
-        ``delete_all()`` method to the store Protocols.
+        Uses ``All(clauses=())`` — an empty conjunction the
+        ``SqliteFilterAdapter`` translates to ``1 = 1``. That form
+        matches NULL columns too, unlike the previous ``LIKE '%'`` hack,
+        and keeps the delete semantics unconditional without adding a
+        new ``delete_all()`` method to the entity-store Protocols.
         """
-        await self._in_uow(self._do_clear_all)
-
-    async def _do_reindex(
-        self,
-        package: Package,
-        chunks: tuple[Chunk, ...],
-        module_members: tuple[ModuleMember, ...],
-        trees: Sequence["DocumentNode"] = (),
-        references: Sequence[Any] = (),  # noqa: ARG002 -- sub-PR #5b seam
-    ) -> None:
-        # Enum-typed filter keys — stringly-typed ``{"package": ...}`` drifted
-        # silently when a column renamed; ``ChunkFilterField`` / ``ModuleMemberFilterField``
-        # are the single source of truth the safe-columns whitelist also derives from.
-        # The ``packages`` table keys on ``name`` (not ``package``), so that
-        # one stays literal — no matching enum today.
-        await self.chunk_store.delete(filter={ChunkFilterField.PACKAGE.value: package.name})
-        await self.module_member_store.delete(
-            filter={ModuleMemberFilterField.PACKAGE.value: package.name},
-        )
-        await self.package_store.delete(filter={"name": package.name})
-        # Canonical order (spec §13.3): package → chunks → trees → members.
-        # Tree persistence happens between chunks and members so FK-like
-        # post-conditions line up if a future schema adds them.
-        await self.package_store.upsert(package)
-        await self.chunk_store.upsert(chunks)
-        if self.tree_store is not None and trees:
-            await self.tree_store.delete_for_package(package.name)
-            await self.tree_store.save_many(tuple(trees), package=package.name)
-        await self.module_member_store.upsert_many(module_members)
-
-    async def _do_remove(self, name: str) -> None:
-        await self.chunk_store.delete(filter={ChunkFilterField.PACKAGE.value: name})
-        await self.module_member_store.delete(
-            filter={ModuleMemberFilterField.PACKAGE.value: name},
-        )
-        # Sub-PR #5 §12.2: trees are per-package state too. Without this
-        # delete a stale tree survives a re-index and ``LookupService.get_tree``
-        # returns the pre-reindex payload.
-        if self.tree_store is not None:
-            await self.tree_store.delete_for_package(name)
-        await self.package_store.delete(filter={"name": name})
-
-    async def _do_clear_all(self) -> None:
         match_all: All = All(clauses=())
-        await self.chunk_store.delete(filter=match_all)
-        await self.module_member_store.delete(filter=match_all)
-        # Match the destructive sweep across all entity stores — see
-        # _do_remove rationale; without this, document_trees rows accumulate
-        # indefinitely across clear_all cycles.
-        if self.tree_store is not None:
-            await self.tree_store.delete_all()
-        await self.package_store.delete(filter=match_all)
+        async with self.uow_factory() as uow:
+            await uow.chunks.delete(filter=match_all)
+            await uow.module_members.delete(filter=match_all)
+            # Trees store has a dedicated ``delete_all`` — match the
+            # destructive sweep across all entity stores; without this,
+            # document_trees rows accumulate indefinitely across
+            # clear_all cycles.
+            await uow.trees.delete_all()
+            await uow.packages.delete(filter=match_all)
+            await uow.commit()
