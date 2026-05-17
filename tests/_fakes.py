@@ -27,6 +27,7 @@ inject a shared audit list at construction time.
 from __future__ import annotations
 
 import sys
+import typing as _typing_mod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -35,21 +36,28 @@ from pydocs_mcp.models import Chunk, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 
 
+# Python 3.11 typing module file (matched via __file__ for portability).
+# The typing module was rewritten in 3.12, breaking frame-name detection —
+# matching by source file is stable across 3.11+.
+_TYPING_FILE = _typing_mod.__file__
+
+
 def _called_from_typing_runtime_check() -> bool:
-    """True if the current attribute access is from ``typing.runtime_checkable``.
+    """True if the current attribute access is from the ``typing`` module.
 
     ``typing._ProtocolMeta.__instancecheck__`` walks each protocol member
     with ``hasattr(instance, attr)`` — which evaluates property getters
     and propagates non-AttributeError exceptions. We need our not-entered
     guard to skip ``hasattr`` probes so ``isinstance(fake, UnitOfWork)``
-    works without first entering the context. Walk the call stack a few
-    frames to detect the probe.
+    works without first entering the context. Walk the call stack and
+    match by ``__file__`` (robust across Python versions; the 3.12
+    rewrite changed function/method names but the file stays the same).
     """
     frame = sys._getframe(2)
-    for _ in range(6):
+    for _ in range(8):
         if frame is None:
             return False
-        if frame.f_code.co_name in ("__instancecheck__", "_proto_hook"):
+        if frame.f_code.co_filename == _TYPING_FILE:
             return True
         frame = frame.f_back
     return False
@@ -248,8 +256,9 @@ class FakeUnitOfWork:
     non-``AttributeError`` exception that ``hasattr`` would propagate
     — making ``isinstance(self, UnitOfWork)`` fail before any test
     even enters the context. The override walks the call stack (see
-    :func:`_called_from_typing_runtime_check`) and returns ``None``
-    only when the probe is on the stack; every other access either
+    :func:`_called_from_typing_runtime_check`) and returns the real
+    store (a stand-in any caller would accept) only when the probe
+    originates inside the typing module; every other access either
     returns the real store (inside ``async with``) or raises
     :class:`UnitOfWorkNotEnteredError` (outside).
     """
@@ -267,15 +276,17 @@ class FakeUnitOfWork:
         # uses hasattr() to probe Protocol attributes. Our repo accessors raise
         # UnitOfWorkNotEnteredError (a non-AttributeError exception) outside the
         # async context — hasattr propagates that, so isinstance(self, UnitOfWork)
-        # would FAIL. This bypass returns None during typing's probe so isinstance
-        # succeeds; real test code accessing uow.packages outside the context still
-        # hits the raise. See _called_from_typing_runtime_check() for the narrow
-        # frame-name match.
+        # would FAIL. This bypass returns the real store during typing's probe so
+        # isinstance succeeds on both 3.11 (any non-None value works) and 3.12+
+        # (which strictly checks the attribute is non-None); real test code
+        # accessing uow.packages outside the context still hits the raise.
+        # See _called_from_typing_runtime_check() for the typing-module file-match.
         if name in _REPO_ATTR_TO_STORE:
             entered = object.__getattribute__(self, "_entered")
             if not entered:
                 if _called_from_typing_runtime_check():
-                    return None  # let runtime_checkable probe succeed
+                    # Return the underlying store — non-None so 3.12+ probes pass.
+                    return object.__getattribute__(self, _REPO_ATTR_TO_STORE[name])
                 raise UnitOfWorkNotEnteredError(name)
             return object.__getattribute__(self, _REPO_ATTR_TO_STORE[name])
         return object.__getattribute__(self, name)
