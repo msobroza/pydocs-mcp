@@ -141,3 +141,16 @@ async def test_in_memory_module_member_store_records_calls():
     m = ModuleMember(metadata={"package": "x", "module": "x.m", "name": "f", "kind": "function"})
     await store.upsert_many([m])
     assert any(c.method == "upsert_many" for c in store.calls)
+
+
+def test_not_entered_proxy_bool_raises_to_match_sqlite():
+    """SqliteUnitOfWork raises UnitOfWorkNotEnteredError when its
+    `@property` is accessed outside the context. The fake's proxy used to
+    return truthy from __bool__, diverging in code like
+    `if uow.packages: ...`. Make the fake match: any boolean coercion
+    raises too."""
+    from tests._fakes import _NotEnteredProxy
+
+    proxy = _NotEnteredProxy("packages")
+    with pytest.raises(UnitOfWorkNotEnteredError):
+        bool(proxy)

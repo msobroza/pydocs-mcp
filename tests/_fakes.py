@@ -52,8 +52,8 @@ class _NotEnteredProxy:
     def __getattr__(self, name: str) -> Any:
         raise UnitOfWorkNotEnteredError(self._attr_name)
 
-    def __bool__(self) -> bool:  # truthy for isinstance probes
-        return True
+    def __bool__(self) -> bool:  # raises to match SqliteUnitOfWork @property behavior
+        raise UnitOfWorkNotEnteredError(self._attr_name)
 
 
 @dataclass

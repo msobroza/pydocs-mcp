@@ -1,4 +1,5 @@
 """Storage subpackage — protocols + SQLite adapters + filters."""
+from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.filters import (
     All,
     Any_,
@@ -43,5 +44,6 @@ __all__ = [
     "SqliteChunkRepository", "SqliteDocumentTreeStore", "SqliteFilterAdapter",
     "SqliteModuleMemberRepository", "SqlitePackageRepository",
     "SqliteUnitOfWork", "SqliteVectorStore",
-    "TextSearchable", "UnitOfWork", "VectorSearchable", "format_registry",
+    "TextSearchable", "UnitOfWork", "UnitOfWorkNotEnteredError",
+    "VectorSearchable", "format_registry",
 ]
