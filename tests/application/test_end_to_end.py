@@ -50,6 +50,7 @@ from pydocs_mcp.storage.sqlite import (
     SqliteChunkRepository,
     SqliteModuleMemberRepository,
     SqlitePackageRepository,
+    SqliteUnitOfWork,
 )
 
 
@@ -88,7 +89,9 @@ def wired_services(integration_conn):
         ),
         "search_docs": DocsSearch(chunk_pipeline=chunk_pipeline),
         "search_api": ApiSearch(member_pipeline=member_pipeline),
-        "inspect": ModuleInspector(package_store=package_store),
+        "inspect": ModuleInspector(
+            uow_factory=lambda: SqliteUnitOfWork(provider=provider),
+        ),
     }
 
 

@@ -1,21 +1,23 @@
 """Tests for ModuleInspector — live importlib + inspect (spec §5.1).
 
-Uses a local in-memory ``FakePackageStore`` (same pattern as Tasks 3–5). The
-inspector only touches the ``PackageStore`` Protocol plus the standard
-library, so we exercise introspection against real stdlib modules (``json``,
-``asyncio``) — that keeps the tests hermetic while guaranteeing we exercise
-the genuine ``importlib`` + ``inspect`` path.
+Post-#5a-2: the inspector depends only on a ``uow_factory`` — package
+existence is checked via ``async with uow_factory() as uow: await
+uow.packages.get(name)``. We use the canonical ``InMemoryPackageStore``
+from :mod:`tests._fakes` together with ``make_fake_uow_factory`` so the
+inspector exercises the genuine UoW shape end-to-end while staying
+hermetic. Introspection runs against real stdlib modules (``json``,
+``asyncio``) — that keeps the genuine ``importlib`` + ``inspect`` path
+under test without needing a real package store.
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Any
 
 import pytest
 
 from pydocs_mcp.application.module_inspector import ModuleInspector
 from pydocs_mcp.models import Package, PackageOrigin
+from tests._fakes import InMemoryPackageStore, make_fake_uow_factory
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -33,33 +35,11 @@ def _pkg(name: str) -> Package:
     )
 
 
-@dataclass
-class FakePackageStore:
-    packages: dict[str, Package] = field(default_factory=dict)
-    get_call_count: int = 0
-
-    async def get(self, name: str) -> Package | None:
-        self.get_call_count += 1
-        return self.packages.get(name)
-
-    async def list(self, **kwargs: Any) -> list[Package]:  # noqa: ARG002
-        return list(self.packages.values())
-
-    async def upsert(self, package: Package) -> None:
-        self.packages[package.name] = package
-
-    async def delete(self, filter: Any) -> int:  # noqa: ARG002
-        return 0
-
-    async def count(self, filter: Any = None) -> int:  # noqa: ARG002
-        return len(self.packages)
-
-
 def _service(packages: dict[str, Package] | None = None) -> tuple[
-    ModuleInspector, FakePackageStore,
+    ModuleInspector, InMemoryPackageStore,
 ]:
-    store = FakePackageStore(packages=dict(packages or {}))
-    svc = ModuleInspector(package_store=store)
+    store = InMemoryPackageStore(items=dict(packages or {}))
+    svc = ModuleInspector(uow_factory=make_fake_uow_factory(packages=store))
     return svc, store
 
 
@@ -76,7 +56,7 @@ async def test_inspect_unindexed_package() -> None:
         "'ghost' is not indexed. "
         "Use lookup(target='') to see available packages."
     )
-    assert store.get_call_count == 1
+    assert sum(1 for c in store.calls if c.method == "get") == 1
 
 
 @pytest.mark.asyncio
@@ -150,7 +130,18 @@ async def test_inspect_normalizes_package_name() -> None:
 
 def test_service_is_frozen_slotted_dataclass() -> None:
     svc, _ = _service()
-
-    with pytest.raises((AttributeError, Exception)):
-        svc.package_store = None  # type: ignore[misc]
+    import dataclasses
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        svc.uow_factory = (lambda: None)  # type: ignore[misc]
     assert not hasattr(svc, "__dict__")
+
+
+@pytest.mark.asyncio
+async def test_inspect_opens_uow_for_package_lookup() -> None:
+    """spec §3.1 — inspect opens a UoW and reads packages through uow.packages.get."""
+    svc, store = _service(packages={"json": _pkg("json")})
+    # No exception path; the test just exercises the new shape.
+    result = await svc.inspect("json")
+    assert result.startswith("# json")
+    # The uow.packages.get call lands in the InMemory store's .calls history.
+    assert any(c.method == "get" and c.payload == "json" for c in store.calls)
