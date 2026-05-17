@@ -55,13 +55,14 @@ async def test_unit_of_work_commits_on_success(db_file):
     provider = build_connection_provider(db_file)
     uow = SqliteUnitOfWork(provider=provider)
 
-    async with uow.begin():
+    async with uow:
         async with _maybe_acquire(provider) as conn:
             conn.execute(
                 "INSERT INTO packages (name, version, summary, homepage, "
                 "dependencies, content_hash, origin) VALUES (?,?,?,?,?,?,?)",
                 ("test_pkg", "1.0", "", "", "[]", "h", "dependency"),
             )
+        await uow.commit()
 
     # After commit, the row must be visible on a fresh connection
     fresh = sqlite3.connect(str(db_file))
@@ -75,7 +76,7 @@ async def test_unit_of_work_rollbacks_on_exception(db_file):
     uow = SqliteUnitOfWork(provider=provider)
 
     with pytest.raises(RuntimeError, match="boom"):
-        async with uow.begin():
+        async with uow:
             async with _maybe_acquire(provider) as conn:
                 conn.execute(
                     "INSERT INTO packages (name, version, summary, homepage, "
@@ -162,11 +163,12 @@ async def test_unit_of_work_serializes_concurrent_repo_calls(db_file):
             },
         )
 
-    async with uow.begin():
+    async with uow:
         await _asyncio.gather(
             repo.upsert([_chunk("a"), _chunk("b")]),
             repo.upsert([_chunk("c"), _chunk("d")]),
         )
+        await uow.commit()
 
     fresh = sqlite3.connect(str(db_file))
     titles = {
@@ -259,33 +261,3 @@ async def test_sqlite_uow_rollback_when_commit_not_called(tmp_path):
         assert got is None
 
 
-@pytest.mark.asyncio
-async def test_sqlite_uow_legacy_begin_still_works(tmp_path):
-    """§14.9 AC #4 — pre-#5a callers using begin() unaffected."""
-    db = tmp_path / "uow.db"
-    open_index_database(db).close()
-    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
-    async with uow.begin():
-        pass  # body without exception → commit on exit
-
-
-@pytest.mark.asyncio
-async def test_legacy_begin_handles_explicit_rollback_in_body(tmp_path):
-    """begin() always calls commit() after yield. If the body called
-    rollback() explicitly, the subsequent commit is a no-op against
-    the already-rolled-back transaction. Document the contract."""
-    db = tmp_path / "uow.db"
-    open_index_database(db).close()
-    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
-
-    async with uow.begin():
-        await uow.packages.upsert(_pkg("explicit_rollback"))
-        await uow.rollback()
-        # begin() will still call commit() after this yield — that's OK,
-        # the transaction is already rolled back so commit is a no-op.
-
-    # Verify the row was NOT persisted.
-    uow2 = SqliteUnitOfWork(provider=build_connection_provider(db))
-    async with uow2:
-        got = await uow2.packages.get("explicit_rollback")
-        assert got is None

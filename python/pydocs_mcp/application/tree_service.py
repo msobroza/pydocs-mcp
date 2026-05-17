@@ -1,16 +1,16 @@
 """TreeService — query-side wrapper over DocumentTreeStore (spec §13.1).
 
-Used by :class:`LookupService` (and the MCP ``lookup`` tool) to fetch a
-previously-stored tree by ``(package, module)``. Depends only on the
-:class:`DocumentTreeStore` Protocol — keeps the application layer
-backend-agnostic (AC #10).
+Post-#5a-2: depends only on a ``uow_factory: Callable[[], UnitOfWork]``.
+Each method opens its own UoW, reads through ``uow.trees``, and exits
+without committing (read-only).
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.storage.protocols import DocumentTreeStore
+from pydocs_mcp.storage.protocols import UnitOfWork
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.model import DocumentNode
@@ -18,43 +18,22 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class TreeService:
-    """Fetches DocumentNode trees from a DocumentTreeStore.
+    """Fetches DocumentNode trees through a per-call UnitOfWork."""
 
-    frozen+slots for immutable value semantics + typo guard — matches the
-    rest of the application-layer service pattern established in sub-PR #4.
-    """
-
-    tree_store: DocumentTreeStore
+    uow_factory: Callable[[], UnitOfWork]
 
     async def get_tree(
         self, package: str, module: str,
     ) -> "DocumentNode | None":
-        """Return the tree for ``(package, module)`` or ``None`` on miss.
-
-        Mirrors :class:`DocumentTreeStore.load`'s contract; callers that
-        want a typed exception can wrap themselves. The None-on-miss form
-        is what ``LookupService._longest_indexed_module`` iterates over
-        while probing dotted-prefix candidates.
-        """
-        return await self.tree_store.load(package, module)
+        async with self.uow_factory() as uow:
+            return await uow.trees.load(package, module)
 
     async def exists(self, package: str, module: str) -> bool:
-        """Return whether a tree row exists for ``(package, module)``.
-
-        Cheap probe — no JSON parse, no ``DocumentNode`` allocation. Used
-        by ``LookupService._longest_indexed_module`` so the dotted-prefix
-        walk doesn't deserialize candidates it'll discard; the winning
-        candidate still goes through ``get_tree`` once downstream.
-        """
-        return await self.tree_store.exists(package, module)
+        async with self.uow_factory() as uow:
+            return await uow.trees.exists(package, module)
 
     async def list_package_modules(
         self, package: str,
     ) -> dict[str, "DocumentNode"]:
-        """Return dict module → DocumentNode for every module in a package.
-
-        Empty dict if the package has no indexed trees — caller decides
-        how to surface that (e.g. ``get_package_tree`` may raise; ``tree``
-        CLI may print "no trees").
-        """
-        return await self.tree_store.load_all_in_package(package)
+        async with self.uow_factory() as uow:
+            return await uow.trees.load_all_in_package(package)

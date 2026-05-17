@@ -1,7 +1,4 @@
-"""Tests for TreeService (sub-PR #5, spec §13.1).
-
-Uses in-memory DocumentTreeStore fake — no SQLite, no real persistence.
-"""
+"""Tests for TreeService — post-#5a-2 uow_factory shape (spec §3.1)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -10,6 +7,8 @@ import pytest
 
 from pydocs_mcp.application.tree_service import TreeService
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+
+from tests._fakes import InMemoryDocumentTreeStore, make_fake_uow_factory
 
 
 def _module_tree(module: str) -> DocumentNode:
@@ -26,114 +25,84 @@ def _module_tree(module: str) -> DocumentNode:
     )
 
 
-@dataclass
-class _FakeTreeStore:
-    """Structurally satisfies DocumentTreeStore — async methods only."""
-
-    by_key: dict[tuple[str, str], DocumentNode] = field(default_factory=dict)
-
-    async def save_many(self, trees, *, package, uow=None):
-        raise NotImplementedError("read-side tests don't exercise writes")
-
-    async def load(self, package: str, module: str):
-        return self.by_key.get((package, module))
-
-    async def load_all_in_package(self, package: str):
-        return {
-            module: tree
-            for (pkg, module), tree in self.by_key.items()
-            if pkg == package
-        }
-
-    async def exists(self, package: str, module: str) -> bool:
-        return (package, module) in self.by_key
-
-    async def delete_for_package(self, package, *, uow=None):
-        raise NotImplementedError("read-side tests don't exercise writes")
+def _service(by_package: dict[str, list[DocumentNode]] | None = None) -> tuple[
+    TreeService, InMemoryDocumentTreeStore,
+]:
+    store = InMemoryDocumentTreeStore(by_package=dict(by_package or {}))
+    svc = TreeService(uow_factory=make_fake_uow_factory(trees=store))
+    return svc, store
 
 
 @pytest.mark.asyncio
-async def test_get_tree_returns_document_node():
+async def test_get_tree_returns_document_node_when_present():
+    """spec §3.1 — TreeService.get_tree reads uow.trees.load."""
     tree = _module_tree("requests.adapters")
-    store = _FakeTreeStore(by_key={("requests", "requests.adapters"): tree})
-    service = TreeService(tree_store=store)
+    # InMemoryDocumentTreeStore.load returns None by default; for this test
+    # we monkey-patch the store's by_package to make load find it.
+    # Simpler: subclass + override.
+    class _SeededStore(InMemoryDocumentTreeStore):
+        async def load(self, package, module):
+            if package == "requests" and module == "requests.adapters":
+                return tree
+            return None
 
-    result = await service.get_tree("requests", "requests.adapters")
-
+    store = _SeededStore()
+    svc = TreeService(uow_factory=make_fake_uow_factory(trees=store))
+    result = await svc.get_tree("requests", "requests.adapters")
     assert result is tree
 
 
 @pytest.mark.asyncio
 async def test_get_tree_missing_returns_none():
-    """``get_tree`` mirrors the store's ``load`` contract — None on miss.
-
-    This is what ``LookupService._longest_indexed_module`` relies on while
-    probing dotted-prefix candidates (it can't except-match per call).
-    """
-    service = TreeService(tree_store=_FakeTreeStore())
-
-    result = await service.get_tree("unknown", "unknown.missing")
-
+    svc, _ = _service()
+    result = await svc.get_tree("unknown", "unknown.missing")
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_exists_returns_true_when_tree_present():
-    """``exists`` is the cheap delegate over ``DocumentTreeStore.exists`` —
-    no JSON parse, no DocumentNode allocation. Used by
-    ``LookupService._longest_indexed_module`` so the dotted-prefix walk
-    doesn't deserialize every candidate.
-    """
-    tree = _module_tree("requests.adapters")
-    store = _FakeTreeStore(by_key={("requests", "requests.adapters"): tree})
-    service = TreeService(tree_store=store)
+    class _Seeded(InMemoryDocumentTreeStore):
+        async def exists(self, package, module):
+            return package == "requests" and module == "requests.adapters"
 
-    assert await service.exists("requests", "requests.adapters") is True
+    store = _Seeded()
+    svc = TreeService(uow_factory=make_fake_uow_factory(trees=store))
+    assert await svc.exists("requests", "requests.adapters") is True
 
 
 @pytest.mark.asyncio
 async def test_exists_returns_false_when_tree_missing():
-    service = TreeService(tree_store=_FakeTreeStore())
-
-    assert await service.exists("ghost", "ghost.missing") is False
+    svc, _ = _service()
+    assert await svc.exists("ghost", "ghost.missing") is False
 
 
 @pytest.mark.asyncio
-async def test_list_package_modules_returns_dict():
-    a = _module_tree("requests.adapters")
-    s = _module_tree("requests.sessions")
-    store = _FakeTreeStore(by_key={
-        ("requests", "requests.adapters"): a,
-        ("requests", "requests.sessions"): s,
-        ("flask", "flask.app"): _module_tree("flask.app"),
-    })
-    service = TreeService(tree_store=store)
+async def test_list_package_modules_delegates_to_uow_trees():
+    class _Seeded(InMemoryDocumentTreeStore):
+        async def load_all_in_package(self, package):
+            if package == "requests":
+                return {
+                    "requests.adapters": _module_tree("requests.adapters"),
+                    "requests.sessions": _module_tree("requests.sessions"),
+                }
+            return {}
 
-    result = await service.list_package_modules("requests")
-
+    store = _Seeded()
+    svc = TreeService(uow_factory=make_fake_uow_factory(trees=store))
+    result = await svc.list_package_modules("requests")
     assert set(result.keys()) == {"requests.adapters", "requests.sessions"}
-    assert result["requests.adapters"] is a
-    assert result["requests.sessions"] is s
 
 
 @pytest.mark.asyncio
-async def test_list_package_modules_unknown_package_returns_empty_dict():
-    service = TreeService(tree_store=_FakeTreeStore())
-
-    result = await service.list_package_modules("ghost")
-
-    assert result == {}
+async def test_list_package_modules_unknown_returns_empty():
+    svc, _ = _service()
+    assert await svc.list_package_modules("ghost") == {}
 
 
 def test_service_is_frozen_and_slotted():
-    """Typo-guard: frozen + slots means rebinding / unknown attrs fail fast."""
     import dataclasses
-
-    service = TreeService(tree_store=_FakeTreeStore())
-    # Frozen — rebinding raises FrozenInstanceError.
+    svc, _ = _service()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        service.tree_store = _FakeTreeStore()  # type: ignore[misc]
-    # Slots — unknown attrs raise (AttributeError or TypeError depending on
-    # which check trips first under frozen+slots).
+        svc.uow_factory = (lambda: None)  # type: ignore[misc]
     with pytest.raises((AttributeError, TypeError)):
-        object.__setattr__(service, "unknown_attr", 42)
+        object.__setattr__(svc, "unknown_attr", 42)

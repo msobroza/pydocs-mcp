@@ -1,14 +1,9 @@
 """ModuleInspector — live importlib + inspect (spec §5.1).
 
-Factored out of ``server.py::inspect_module`` so the MCP handler is a thin
-adapter over a Protocol-only collaborator. The live-import + ``inspect`` logic
-is CPU-bound and synchronous — we offload it to a worker thread via
-``asyncio.to_thread`` so the FastMCP event loop is never blocked while an
-``__init__.py`` side-effect-imports half a framework.
-
-Byte-parity with the pre-PR handler output is a hard requirement (AC #8) —
-the ``_inspect_target`` body below is a verbatim move of the post-import
-branch in ``server.py``.
+Post-#5a-2: depends only on a ``uow_factory: Callable[[], UnitOfWork]``.
+Reads the indexed-package row through ``uow.packages.get(...)`` inside
+``async with self.uow_factory() as uow:`` — the UoW Protocol guarantees
+``packages`` is valid inside the context (spec §14.2 of #5b spec).
 """
 from __future__ import annotations
 
@@ -17,11 +12,12 @@ import importlib
 import inspect
 import pkgutil
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydocs_mcp.constants import LIVE_DOC_MAX, LIVE_SIGNATURE_MAX
 from pydocs_mcp.deps import normalize_package_name
-from pydocs_mcp.storage.protocols import PackageStore
+from pydocs_mcp.storage.protocols import UnitOfWork
 
 # Use \A...\Z (not ^...$) — Python's ``re`` treats ``$`` as matching before a
 # trailing ``\n`` by default, which lets ``"foo\n"`` slip past a naive anchor
@@ -42,17 +38,17 @@ def _validate_submodule(submodule: str) -> bool:
 class ModuleInspector:
     """Live-import a package/submodule and render its public API.
 
-    Depends only on ``PackageStore`` — first checks the indexed package
-    exists (so we never import arbitrary modules the user didn't previously
-    index), then delegates to ``asyncio.to_thread`` for the synchronous
-    ``importlib`` + ``inspect`` work.
+    Depends only on ``uow_factory`` — opens a UoW per ``inspect`` call to
+    check the package is indexed before crossing the import boundary.
     """
 
-    package_store: PackageStore
+    uow_factory: Callable[[], UnitOfWork]
 
     async def inspect(self, package: str, submodule: str = "") -> str:
         pkg_name = normalize_package_name(package)
-        if await self.package_store.get(pkg_name) is None:
+        async with self.uow_factory() as uow:
+            pkg = await uow.packages.get(pkg_name)
+        if pkg is None:
             return (
                 f"'{package}' is not indexed. "
                 "Use lookup(target='') to see available packages."

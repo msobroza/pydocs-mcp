@@ -46,11 +46,7 @@ from pydocs_mcp.retrieval.config import (
     build_member_pipeline_from_config,
 )
 from pydocs_mcp.retrieval.factories import build_retrieval_context
-from pydocs_mcp.storage.sqlite import (
-    SqliteChunkRepository,
-    SqliteModuleMemberRepository,
-    SqlitePackageRepository,
-)
+from pydocs_mcp.storage.sqlite import SqliteUnitOfWork
 
 
 @pytest.fixture
@@ -71,9 +67,6 @@ def wired_services(integration_conn):
     db_path = Path(row[2])
 
     provider = build_connection_provider(db_path)
-    package_store = SqlitePackageRepository(provider=provider)
-    chunk_store = SqliteChunkRepository(provider=provider)
-    member_store = SqliteModuleMemberRepository(provider=provider)
 
     config = AppConfig.load()
     context = build_retrieval_context(db_path, config)
@@ -82,13 +75,13 @@ def wired_services(integration_conn):
 
     return {
         "package_lookup": PackageLookup(
-            package_store=package_store,
-            chunk_store=chunk_store,
-            module_member_store=member_store,
+            uow_factory=lambda: SqliteUnitOfWork(provider=provider),
         ),
         "search_docs": DocsSearch(chunk_pipeline=chunk_pipeline),
         "search_api": ApiSearch(member_pipeline=member_pipeline),
-        "inspect": ModuleInspector(package_store=package_store),
+        "inspect": ModuleInspector(
+            uow_factory=lambda: SqliteUnitOfWork(provider=provider),
+        ),
     }
 
 

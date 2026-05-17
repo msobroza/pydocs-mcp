@@ -149,6 +149,7 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     :class:`StaticDependencyResolver`.
     """
     from pydocs_mcp.application import ProjectIndexer
+    from pydocs_mcp.db import build_connection_provider
     from pydocs_mcp.extraction import (
         AstMemberExtractor,
         InspectMemberExtractor,
@@ -157,12 +158,23 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
         build_ingestion_pipeline,
     )
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.storage.factories import build_sqlite_indexing_service
+    from pydocs_mcp.storage.factories import (
+        build_sqlite_indexing_service,
+        build_sqlite_uow_factory,
+    )
+    from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
     # Ensure the schema exists before repositories issue queries.
     open_index_database(db_path).close()
 
+    # Independent ``uow_factory`` closures per controller's design decision
+    # (Decision B): ``build_sqlite_indexing_service`` builds its OWN factory
+    # internally, and ``ProjectIndexer`` gets a separate one here. They
+    # point to the same DB; sub-ms cost; cleaner composition root than
+    # threading a single factory through two services.
     indexing_service = build_sqlite_indexing_service(db_path)
+    uow_factory = build_sqlite_uow_factory(db_path)
+
     use_inspect = not args.no_inspect
     mode = "inspect" if use_inspect else "static"
     log.info("Project: %s (mode=%s)", project, mode)
@@ -200,6 +212,7 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
         dependency_resolver=StaticDependencyResolver(),
         chunk_extractor=chunk_extractor,
         member_extractor=member_extractor,
+        uow_factory=uow_factory,
     )
 
     if args.force:
@@ -211,7 +224,11 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
         include_project_source=not args.skip_project,
         workers=args.workers,
     )
-    await indexing_service.chunk_store.rebuild_index()
+    # FTS rebuild is a maintenance op, not transactional — use a direct
+    # SqliteChunkRepository handle. Post-#5a-2 IndexingService no longer
+    # exposes a chunk_store attribute (Decision C).
+    chunk_repo = SqliteChunkRepository(provider=build_connection_provider(db_path))
+    await chunk_repo.rebuild_index()
 
     kb = db_path.stat().st_size / 1024 if db_path.exists() else 0.0
     log.info(
