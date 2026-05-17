@@ -411,274 +411,202 @@ The following were verified against `main` at commit `6ff112c` (sub-PR #5 squash
 | `IndexingService` has `remove_package` + `clear_all` (not `clear_package`) | `application/indexing_service.py` | ✓ Confirmed |
 | `lookup(show="callers"\|"callees")` raises `ServiceUnavailableError` today | `application/lookup_service.py:112-117` | ✓ Confirmed |
 
-## 14. Cross-cutting refactor: Unit-of-Work as the single persistence boundary
+## 14. Foundation refactor: widen `UnitOfWork` Protocol + rewrite `SqliteUnitOfWork`
 
-**Status:** This section proposes a **separate sub-PR — #5a — that MUST land BEFORE #5b implementation begins.** #5b's spec text in §1-§13 has been written *assuming* the post-#5a shape; if #5a doesn't land, every "uow.references" reference below reverts to "reference_store" plumbing alongside the existing direct-repo dependencies — workable but architectural debt grows.
+**Status:** Sub-PR #5a. **Trimmed scope** (2026-05-17): widens the `UnitOfWork` Protocol surface and rewrites `SqliteUnitOfWork` to expose repositories as Protocol attributes. **Does NOT migrate any application service.** The original full-migration plan was reviewed (eng + CEO subagents) and the service-migration scope was rejected as wrong-priority — see §14.6 for the rejection rationale.
 
 ### 14.1 The problem (current state)
 
-Every application service today holds **direct references to one or more repositories AND optionally a `UnitOfWork`**:
+`SqliteUnitOfWork` today exposes one method — `begin()` — that yields a transaction scope but does NOT expose repositories. Repository instances are constructed separately by `storage/factories.py` and threaded into each service's constructor (`IndexingService(package_store=..., chunk_store=..., module_member_store=..., unit_of_work=...)`). The "shared connection across repos during a transaction" guarantee is a property of how the service was **wired** (via a `ContextVar`-based ambient connection in `_maybe_acquire`), NOT a property of the **contract**. A future wiring bug (e.g., constructing `SqliteChunkRepository(provider=other_provider)`) silently breaks atomicity.
+
+#5a fixes that by adding the Cosmic-Python `AbstractUnitOfWork` Protocol surface — `__aenter__` / `__aexit__` / `commit` / `rollback` + repository attributes (`packages`, `chunks`, `module_members`, `trees`) — to the existing `UnitOfWork`. `SqliteUnitOfWork` implements the new surface against the same `ConnectionProvider`. The legacy `begin()` method stays as a back-compat shim so existing services don't have to migrate yet.
+
+### 14.2 Target shape
 
 ```python
-# python/pydocs_mcp/application/indexing_service.py — TODAY
-@dataclass(frozen=True, slots=True)
-class IndexingService:
-    package_store: PackageStore                          # repo dep
-    chunk_store: ChunkStore                              # repo dep
-    module_member_store: ModuleMemberStore               # repo dep
-    unit_of_work: UnitOfWork | None = None               # PLUS the UoW
-    tree_store: DocumentTreeStore | None = None          # ...and another repo
-```
-
-`PackageLookup`, `ModuleInspector`, `TreeService`, and the read-side services follow the same shape. The `UnitOfWork` Protocol is just `async def begin(self) -> AsyncIterator[None]: ...` — it owns the transaction scope but NOT the repositories themselves. The service composes them manually.
-
-**The architectural problems this creates:**
-
-1. **Coupling explosion** — adding a 6th repository (`ReferenceStore`) forces every service that touches references to gain another field. `IndexingService` is already at 5 fields. Each new repo = N service-signature changes.
-2. **No shared-session guarantee** — the current `UnitOfWork.begin()` opens a transaction scope, but the individual `store` instances were constructed earlier by a factory. Whether the stores actually use the same connection is a property of the **wiring**, not the **contract**. A future maintainer wiring a fresh `SqliteChunkRepository(provider=different_provider)` into `IndexingService` would silently break atomicity with zero compile-time warning.
-3. **Service-level transaction "gubbins"** — `IndexingService._in_uow` exists purely to wrap `async with self.unit_of_work.begin():` around three identical bodies. That wrapper is infrastructure leaking into a use-case service.
-4. **Test friction** — every service-level test constructs N `Fake*Store` instances + assembles them into the service. A new repo = update every test fixture. The fakes also can't enforce shared-session semantics, so service-layer tests can't catch a "different repos got wired to different DBs" bug.
-5. **DIP violation** — services depend on N concrete-Protocol shapes (repository Protocols). Per the Cosmic Python pattern, services should depend on ONE abstraction: the UoW, which then *exposes* the repos as attributes.
-
-The four-perspective plan review of this spec (eng/CEO/DX/adversarial) all surfaced versions of this same finding. The Eng reviewer noted "adding fields to a frozen+slots dataclass is breaking for any positional caller"; the Adversarial reviewer noted "concurrent reindex... two reindex tasks each call `reference_store.save_many` — does `node_references` PK collision crash one of them?"; the CEO reviewer noted "the surface area of #3 + #4 combined" for this kind of service-signature growth. The root cause is shared: services are **assembling** persistence infrastructure that the UoW pattern is supposed to **hide**.
-
-### 14.2 Target shape (post-#5a)
-
-The `UnitOfWork` Protocol becomes the single persistence dependency:
-
-```python
-# python/pydocs_mcp/storage/protocols.py — POST-#5a
+# python/pydocs_mcp/storage/protocols.py
 @runtime_checkable
 class UnitOfWork(Protocol):
-    """Owns the transaction boundary AND exposes per-transaction repositories.
+    """Atomic transaction scope + per-transaction repository accessor.
 
-    Services consume only this Protocol. The concrete implementation
-    (``SqliteUnitOfWork``) instantiates repository adapters against the SAME
-    connection on entry, so atomicity is a property of the CONTRACT — not
-    a fragile property of how the service was wired.
-
-    Async context manager: entering opens a transaction; ``commit()`` is
-    explicit; ``__aexit__`` rolls back on any exception OR if commit was
-    never called. Mirrors the Cosmic Python AbstractUnitOfWork contract.
+    Inside ``async with uow:`` the repository attributes are valid and
+    share one connection. Outside the context they raise
+    :class:`UnitOfWorkNotEnteredError`. Explicit ``commit()`` persists
+    changes; safety-net ``rollback`` on exception OR on no-commit.
     """
 
-    # Repositories are exposed as ATTRIBUTES, valid only inside the context.
-    # Accessing them outside ``async with`` raises ``UnitOfWorkNotEnteredError``.
-    packages:       PackageStore
-    chunks:         ChunkStore
-    module_members: ModuleMemberStore
-    trees:          DocumentTreeStore
-    references:     ReferenceStore           # NEW for #5b — peer of the others
+    packages:       "PackageStore"
+    chunks:         "ChunkStore"
+    module_members: "ModuleMemberStore"
+    trees:          "DocumentTreeStore"
 
     async def __aenter__(self) -> "UnitOfWork": ...
-
-    async def __aexit__(
-        self, exc_type, exc, tb,
-    ) -> bool: ...  # safety-net rollback on exception OR no-commit
+    async def __aexit__(self, exc_type, exc, tb) -> bool: ...
 
     async def commit(self) -> None: ...
     async def rollback(self) -> None: ...
 
-    def collect_new_events(self) -> Iterator["DomainEvent"]: ...
-    """Reserved for a future event-bus sub-PR. In #5a this returns ``iter(())``.
-    Documented now so the Protocol shape stays stable when events arrive."""
+    # Back-compat: the single-method shape services use today. Kept until
+    # a follow-on PR migrates services to the async-context form.
+    async def begin(self) -> "AsyncIterator[None]": ...
 ```
 
-Services become single-dependency:
+`SqliteUnitOfWork.__aenter__` must:
+1. Acquire `self._lock`
+2. Acquire a connection from `self.provider`
+3. Run `BEGIN` SQL
+4. **Set the `_sqlite_transaction` ContextVar** to `(conn, self._lock)` — this is the critical step that `_maybe_acquire` reads to route repositories to the held connection. Pre-existing `begin()` already does this; the new `__aenter__` must too.
+5. Instantiate repository adapters against `self.provider` and expose them as attributes
+6. Return `self`
+
+`__aexit__` must:
+1. If commit was not called OR an exception escaped: `await self.rollback()`
+2. Reset the `_sqlite_transaction` ContextVar
+3. Release the lock
+4. Release attribute references (set repo attributes back to `None`)
+5. Return `False` to propagate exceptions
+
+`commit()` and `rollback()` operate on the held connection directly — they do NOT go through `_maybe_acquire` (which would deadlock trying to re-acquire `self._lock`).
+
+The repo attributes (`packages`, `chunks`, `module_members`, `trees`) are exposed via `@property` that raises `UnitOfWorkNotEnteredError` when accessed outside the context.
+
+### 14.3 Implementation scope (trimmed)
+
+| Component | Change |
+|---|---|
+| `python/pydocs_mcp/storage/protocols.py` | Widen `UnitOfWork` Protocol: add 4 repo attributes + `__aenter__`/`__aexit__`/`commit`/`rollback`; keep `begin()` |
+| `python/pydocs_mcp/storage/errors.py` (new) | `UnitOfWorkNotEnteredError` typed exception |
+| `python/pydocs_mcp/storage/sqlite.py` | Rewrite `SqliteUnitOfWork` with `__aenter__`/`__aexit__`/`commit`/`rollback`/properties; keep `begin()` as a wrapper around the new shape |
+| `tests/_fakes.py` | Add `InMemoryPackageStore` / `InMemoryChunkStore` / `InMemoryModuleMemberStore` (matching real Protocol signatures — `list(filter, limit)`, NOT `all()`) + `FakeUnitOfWork` with `committed`/`rolled_back` flags |
+| `tests/storage/test_unit_of_work.py` | 4 new tests pinning the lifecycle: enter → repos accessible / outside context → raises / no-commit → rollback / exception → rollback |
+| `tests/test_fakes.py` (new) | Pin the FakeUnitOfWork Protocol-conformance + commit/rollback flag flip contract |
+
+**What is NOT in scope:**
+
+- Any change to `IndexingService`, `PackageLookup`, `ModuleInspector`, `TreeService`, or `ProjectIndexer` constructor signatures.
+- Any change to `storage/factories.py::build_sqlite_*_service` — they still construct services with direct store kwargs.
+- Removal of any service field.
+- Removal of `UnitOfWork.begin()`.
+- `collect_new_events()` method (deferred — no event bus design exists; YAGNI per CEO review).
+
+**Estimated diff:** ~250 LOC across 6 files (3 prod + 3 test). All 812+ existing tests pass unchanged.
+
+### 14.4 Async + ContextVar mechanics
+
+`_maybe_acquire` (existing function in `sqlite.py`) reads `_sqlite_transaction` ContextVar to decide whether to reuse the held connection or acquire a fresh one. The new `__aenter__` MUST set this ContextVar — otherwise the repository attributes exposed by the UoW would each open their own connection, defeating atomicity.
 
 ```python
-# python/pydocs_mcp/application/indexing_service.py — POST-#5a
-@dataclass(frozen=True, slots=True)
-class IndexingService:
-    """Coordinates atomic write-side indexing.
+# Pseudocode for SqliteUnitOfWork.__aenter__
+async def __aenter__(self):
+    await self._lock.acquire()
+    conn = await self.provider.acquire()  # NOT via _maybe_acquire
+    await asyncio.to_thread(conn.execute, "BEGIN")
+    self._held_conn = conn
+    self._ctx_token = _sqlite_transaction.set((conn, self._lock))
+    self._packages = SqlitePackageRepository(provider=self.provider)
+    # ... etc ...
+    return self
 
-    Single dependency: ``uow_factory`` — a callable that returns a fresh
-    ``UnitOfWork``. Each call to ``reindex_package`` / ``remove_package`` /
-    ``clear_all`` opens its own transaction scope; the UoW exposes the
-    repositories during the ``async with`` body. ``commit()`` is explicit
-    at the end of each successful operation; failure paths trigger the
-    safety-net rollback in ``__aexit__``.
-    """
-
-    uow_factory: Callable[[], UnitOfWork]
-
-    async def reindex_package(
-        self, package: Package, chunks: tuple[Chunk, ...],
-        members: tuple[ModuleMember, ...], *,
-        trees: Sequence[DocumentNode] = (),
-        references: Sequence[NodeReference] = (),
-    ) -> None:
-        async with self.uow_factory() as uow:
-            await uow.chunks.delete(filter={ChunkFilterField.PACKAGE.value: package.name})
-            await uow.module_members.delete(
-                filter={ModuleMemberFilterField.PACKAGE.value: package.name},
-            )
-            await uow.trees.delete_for_package(package.name)
-            await uow.references.delete_for_package(package.name)
-            await uow.packages.delete(filter={"name": package.name})
-
-            await uow.packages.upsert(package)
-            await uow.chunks.upsert(chunks)
-            if trees:
-                await uow.trees.save_many(tuple(trees), package=package.name)
-            if references:
-                await uow.references.save_many(tuple(references))
-            await uow.module_members.upsert_many(members)
-            await uow.commit()
+async def __aexit__(self, exc_type, exc, tb):
+    try:
+        if exc_type is not None or not self._committed:
+            await asyncio.to_thread(self._held_conn.rollback)
+        # Note: no commit here — explicit commit() already ran on success
+    finally:
+        _sqlite_transaction.reset(self._ctx_token)
+        self._packages = self._chunks = self._module_members = self._trees = None
+        await self.provider.release(self._held_conn)
+        self._held_conn = None
+        self._lock.release()
+    return False
 ```
 
-Read-side services also take `uow_factory` for shape consistency. They open the context but never call `commit()` — the safety-net `__aexit__` rolls back the (empty) transaction. Cost: one extra `BEGIN`/`ROLLBACK` per query. Benefit: every service-level test uses the same `FakeUnitOfWork` shape.
-
-### 14.3 Migration plan — sub-PR #5a
-
-**Out of scope for #5a:** no behavior change. Pure dependency-shape refactor. Schema unchanged at v3. Test count unchanged (existing tests pass against the new wiring).
-
-**In scope for #5a:**
-
-1. **Widen `UnitOfWork` Protocol** in `storage/protocols.py` to expose the 4 existing repositories as attributes (`packages`, `chunks`, `module_members`, `trees`) and define the async context-manager + `commit()` / `rollback()` / `collect_new_events()` shape. **No `references` field yet** — that lands in #5b's protocol amendment.
-2. **Rewrite `SqliteUnitOfWork`** in `storage/sqlite.py` to construct the 4 repository instances against the SAME `ConnectionProvider` on `__aenter__`, expose them as attributes, and serialise the connection's transaction state through `commit()` / `rollback()`. Mirror `_apply_v3_additions`-style additive shape — no schema bump.
-3. **Migrate each service** (write-side: `IndexingService`, `ProjectIndexer`. Read-side: `LookupService`, `PackageLookup`, `TreeService`, `ModuleInspector`. Search-side: `DocsSearch`, `ApiSearch`) to take `uow_factory: Callable[[], UnitOfWork]` as the sole persistence dependency. **No business-logic change.** All persistence operations move inside `async with self.uow_factory() as uow:` blocks; `commit()` at the end of write paths.
-4. **Update `storage/factories.py`** (`build_sqlite_indexing_service` / `build_sqlite_lookup_service`) to return services configured with `uow_factory=lambda: SqliteUnitOfWork(provider=provider)`. The factory becomes the ONLY place that knows about the concrete `SqliteUnitOfWork`.
-5. **Promote `tests/_fakes.py::InMemoryDocumentTreeStore`** + create peers (`InMemoryPackageStore`, `InMemoryChunkStore`, `InMemoryModuleMemberStore`) + assemble them into a `FakeUnitOfWork` exposing the same attributes. Add a `committed: bool` flag for test assertions per Cosmic Python conventions.
-6. **Rewrite test fixtures** (`conftest.py`, `tests/_retriever_helpers.py`) to construct services with `uow_factory=lambda: FakeUnitOfWork()`. The current `package_store=ps, chunk_store=cs, ...` keyword arguments disappear from test setup.
-
-**Estimated diff size:** ~30 files, ~1000-1500 LOC churn. The bulk is mechanical (Edit-rename pattern). Real risk concentrates in:
-- Concurrent-test fixtures that share fake state across multiple service instances (e.g., `test_concurrency_probe` in `test_project_indexer.py`) — need to use a single `FakeUnitOfWork` factory closure.
-- The 8-parity-golden test (AC #21 from #5) — verify rendered output is byte-identical post-refactor.
-- The 794+ existing tests must all pass unchanged — that's the contract.
-
-### 14.4 Async + connection-pool considerations
-
-Current `SqliteChunkRepository` / `SqliteVectorStore` etc. acquire connections via `provider.acquire()` per-call (the `PerCallConnectionProvider` pattern). `SqliteUnitOfWork` becomes the EXCLUSIVE connection holder for the duration of `async with`. Repository instances inside the UoW context reuse that single connection. Per-call acquisition still works for code paths that bypass the UoW (e.g., the `query()` CLI helper), but services no longer use that path.
-
-`asyncio.to_thread` wrapping stays per-repository-method — the UoW doesn't change the SQLite-is-sync-under-the-hood concurrency model. What it changes is the GUARANTEE that two writes inside one context use one connection.
-
-### 14.5 Testing — FakeUnitOfWork shape
+### 14.5 Testing — `FakeUnitOfWork`
 
 ```python
-# tests/_fakes.py — POST-#5a
+# tests/_fakes.py
 @dataclass
 class FakeUnitOfWork:
-    """Structurally satisfies UnitOfWork. Tracks committed/rolled-back flags
-    so service-layer tests can assert end-state without inspecting persistence.
-
-    Repositories are exposed identically to the production shape, so service
-    code is one path; tests just inject this instead of SqliteUnitOfWork.
-    """
-    packages:       InMemoryPackageStore       = field(default_factory=InMemoryPackageStore)
-    chunks:         InMemoryChunkStore         = field(default_factory=InMemoryChunkStore)
-    module_members: InMemoryModuleMemberStore  = field(default_factory=InMemoryModuleMemberStore)
-    trees:          InMemoryDocumentTreeStore  = field(default_factory=InMemoryDocumentTreeStore)
-    # references added by #5b — see §14.7
-
-    committed:     bool = False
-    rolled_back:   bool = False
-
-    async def __aenter__(self) -> "FakeUnitOfWork":
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        if not self.committed:
-            self.rolled_back = True
-        return False                # never suppress exceptions
-
-    async def commit(self) -> None:
-        self.committed = True
-
-    async def rollback(self) -> None:
-        self.rolled_back = True
-
-    def collect_new_events(self):
-        return iter(())             # reserved
+    packages_store:       InMemoryPackageStore       = field(default_factory=InMemoryPackageStore)
+    chunks_store:         InMemoryChunkStore         = field(default_factory=InMemoryChunkStore)
+    module_members_store: InMemoryModuleMemberStore  = field(default_factory=InMemoryModuleMemberStore)
+    trees_store:          InMemoryDocumentTreeStore  = field(default_factory=InMemoryDocumentTreeStore)
+    committed:   bool = False
+    rolled_back: bool = False
+    _entered:    bool = False
+    # ... __aenter__, __aexit__, commit, rollback, properties ...
 ```
 
-Test ergonomics improve sharply:
+The InMemory* fakes MUST match the real Protocol method signatures — specifically `PackageStore.list(filter=None, limit=None)` (NOT `all()`), `ChunkStore.list(...)`, `ModuleMemberStore.list(...)`. Plan-review caught a planned `all()` API mismatch that would have crashed against `SqlitePackageRepository`.
 
-```python
-# Before (today)
-async def test_remove_package_clears_document_trees():
-    ps, cs, ms = FakePackageStore(), FakeChunkStore(), FakeModuleMemberStore()
-    ts = FakeDocumentTreeStore()
-    ts.by_package["fastapi"] = ["tree-fastapi"]
-    service = IndexingService(
-        package_store=ps, chunk_store=cs, module_member_store=ms, tree_store=ts,
-    )
-    await service.remove_package("fastapi")
-    assert "fastapi" not in ts.by_package
+### 14.6 Service migration — REJECTED for #5a, deferred indefinitely
 
-# After (#5a)
-async def test_remove_package_clears_document_trees():
-    uow = FakeUnitOfWork()
-    uow.trees.by_package["fastapi"] = ["tree-fastapi"]
-    service = IndexingService(uow_factory=lambda: uow)
-    await service.remove_package("fastapi")
-    assert "fastapi" not in uow.trees.by_package
-    assert uow.committed                 # NEW signal — service correctly finalised
-```
+A prior version of §14 proposed migrating all 4 services (`IndexingService`, `PackageLookup`, `ModuleInspector`, `TreeService`) to take a single `uow_factory: Callable[[], UnitOfWork]` constructor argument, deleting their direct repository fields. Two independent plan reviews (eng + CEO) rejected this scope:
 
-The `assert uow.committed` line is the cosmic-python "explicit commit / implicit rollback" verification — service-layer tests now catch "forgot to commit" bugs that today silently pass.
+**Eng review found 5 correctness bugs in the proposed service migration:**
 
-### 14.6 Forward-looking — `collect_new_events`
+1. Proposed `SqliteUnitOfWork.__aenter__` didn't set the `_sqlite_transaction` ContextVar — atomicity contract broken.
+2. Proposed `uow.packages.all()` doesn't exist on `PackageStore` Protocol; real method is `list(filter, limit)`.
+3. Proposed `_reindex_via_uow` deleted trees unconditionally; current code is conditional on `trees` being supplied.
+4. `ProjectIndexer.index_project` reaches THROUGH `indexing_service.package_store.get(...)` — removing the field breaks ProjectIndexer.
+5. `InMemoryChunkStore` / `InMemoryModuleMemberStore` were missing the `list()` method that `PackageLookup.get_package_doc` actually calls.
 
-The `UnitOfWork.collect_new_events()` method is reserved in #5a but returns `iter(())`. Its eventual users:
+**CEO review found the strategic case weak:**
 
-- **Domain-event-driven invalidation.** When `reindex_package` succeeds, a `PackageReindexed(name=...)` event could trigger downstream cache invalidation (the LLM prompt cache, the chunk-FTS rebuild trigger, etc.). Today these are coupled inside `IndexProjectService`.
-- **Notification fan-out.** A future MCP `subscribe`-style tool could observe events without polling.
-- **Audit / observability.** Events feed a structured log channel separate from the existing Python `logging` calls.
+1. Spec §14.7 (former — now removed) explicitly documented that #5b can ship WITHOUT #5a via a 6-field `IndexingService` shape. So "#5a is prerequisite" was rhetorical, not real.
+2. #6 already shipped `lookup(show="callers"|"callees")` to MCP clients — those modes raise `ServiceUnavailableError` today. #5a does NOT clear that error; only #5b does. Doing #5a first leaves the user-visible IOU unpaid.
+3. The proposed service migration was ~1100-1400 LOC for zero user-visible improvement. The acid test: forced to choose one week's work — ship #5a (invisible) or implement #5b (delivers `lookup(show=callers)`) — the honest answer is #5b.
+4. Cosmic Python's full UoW + service-migration pattern targets systems with many aggregates, multiple data sources, and a domain-events bus. pydocs-mcp has 4 stores, 1 SQLite, 1 maintainer, 1 wiring site.
 
-Documenting the method shape now keeps the Protocol stable when events arrive. #5a does not implement event collection — only the no-op interface.
+The trimmed #5a scope keeps what's cheap and unambiguously useful (the Protocol surface, `SqliteUnitOfWork` rewrite that actually delivers atomicity-by-contract once anyone uses the new shape, and `FakeUnitOfWork` for #5b's tests). It skips what's expensive and weak-ROI (the service-signature churn). Service migration can be revisited as a future PR if the 5/6-field constructor proves painful in practice — there's no current evidence it does.
 
-### 14.7 #5b consumes the post-#5a shape
+### 14.7 #5b consumption (post-#5a)
 
-Two sections of #5b's spec body assume #5a has landed:
+#5b adds `ReferenceStore` as a new Protocol + concrete `SqliteReferenceStore`. Inside #5b:
+- The `UnitOfWork` Protocol gains a 5th attribute: `references: ReferenceStore`.
+- `SqliteUnitOfWork` exposes it via the same `@property` shape.
+- `IndexingService` gains its 6th constructor field: `reference_store: ReferenceStore | None = None`. Yes, it's a 6-field service. That's tolerable; current shape with 5 fields is also fine.
+- `FakeUnitOfWork` (from #5a) gets `references_store` + `references` property; #5b's tests use it.
 
-- **§6.2 ReferenceStore Protocol** — the Protocol itself is unchanged; what changes is HOW services obtain a `ReferenceStore`. Post-#5a: `uow.references` exposes it inside the context. Pre-#5a (fallback): `IndexingService(reference_store=ReferenceStore)` keyword adds a 6th field.
-- **§9 Sub-PR #5 amendments** — instead of "IndexingService gains `reference_store: ReferenceStore | None = None` field", #5b amends the `UnitOfWork` Protocol to add `references: ReferenceStore` as a peer attribute alongside the existing four. The service signature itself doesn't change — it already takes a UoW factory.
-
-If #5a doesn't land, #5b implementation falls back to the original §9 plan (direct field on IndexingService). The §1-§13 prose in this spec is **#5a-aware** but #5b is implementable either way.
+The #5b-implementation-against-current-shape path (spec §9 alternate) is also viable; #5a just gives it a cleaner consume site for `SqliteUnitOfWork`-driven tests.
 
 ### 14.8 Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| #5a refactor breaks one of the 794+ existing tests | Medium | All tests must pass against the new shape before #5a merges. Implementation must be done incrementally with full pytest after each service migration. AC #1 below. |
-| Read-side services pay extra `BEGIN`/`ROLLBACK` per query | Low | SQLite's empty-transaction overhead is sub-millisecond; the consistency win dominates |
-| `Callable[[], UnitOfWork]` factory typing erases the concrete connection-provider identity | Low | Concrete factories in `storage/factories.py` close over the provider explicitly; type erasure is intentional (the service shouldn't see the provider) |
-| `collect_new_events` is dead-weight today | Low | Single-line stub returning `iter(())`. Documented shape now > future Protocol churn |
-| Out-of-tree services importing `IndexingService(package_store=..., ...)` keyword args break | Low | We have no out-of-tree consumers. The constructor-args change is breaking by design |
-| Test-fixture rewrite touches every service-level test | Medium | Mechanical — promote `_fakes.py` first, then sweep tests with a single `tests/conftest.py` `uow_factory` fixture that hides the construction |
+| `__aenter__` ContextVar miss breaks atomicity for any new-shape caller | HIGH | Direct ContextVar set/reset in `__aenter__`/`__aexit__`; test pins `commit + reopen` round-trip end-to-end |
+| `commit()` / `rollback()` re-acquire the lock and deadlock | MED | Operate on `self._held_conn` directly — never go through `_maybe_acquire` while holding the lock |
+| Fake API drift from real Protocols | MED | `tests/test_fakes.py` runtime `isinstance(_, UnitOfWork)` check fails on signature mismatch; `tests/storage/test_unit_of_work.py` exercises the real path |
+| `begin()` back-compat behavior changes | LOW | `begin()` now wraps `__aenter__`/`__aexit__` + explicit `commit()` on success; existing test_indexing_service.py tests verify the old contract holds |
 
-### 14.9 Acceptance criteria for #5a
+### 14.9 Acceptance criteria (trimmed)
 
 | # | Criterion |
 |---|---|
-| 1 | All 794+ tests on main pass against post-#5a code without behavior change. Schema unchanged at v3. |
-| 2 | `UnitOfWork` Protocol exposes `packages`, `chunks`, `module_members`, `trees` as Protocol attributes (validated by `@runtime_checkable` `isinstance` check on `FakeUnitOfWork`). |
-| 3 | `IndexingService`, `ProjectIndexer`, `LookupService`, `PackageLookup`, `TreeService`, `ModuleInspector`, `DocsSearch`, `ApiSearch` each have a single `uow_factory` constructor argument; **no other repository or store field on any service**. |
-| 4 | `tests/_fakes.py` exports `FakeUnitOfWork`, `InMemoryPackageStore`, `InMemoryChunkStore`, `InMemoryModuleMemberStore`, `InMemoryDocumentTreeStore`. `tests/conftest.py` provides a `uow_factory` pytest fixture. |
-| 5 | `FakeUnitOfWork.committed` flips to `True` only after `await commit()`; verified by at least one service-level test per write-side service. |
-| 6 | Exiting a `FakeUnitOfWork` context without commit sets `rolled_back = True` (safety-net behavior). |
-| 7 | Accessing a UoW attribute outside `async with` raises a typed `UnitOfWorkNotEnteredError` (defensive; production `SqliteUnitOfWork` enforces this — fake mirrors it). |
-| 8 | AC #21 byte-parity golden test from #5 still passes — rendered output unchanged across the refactor. |
-| 9 | `storage/factories.py::build_sqlite_indexing_service` and `build_sqlite_lookup_service` are the ONLY production sites that import `SqliteUnitOfWork`; services importing it directly fail a code-search grep. |
-| 10 | `collect_new_events()` returns `iter(())` on every UoW implementation; documented in the Protocol docstring as "reserved for future event-bus sub-PR". |
+| 1 | All 812+ existing tests on `origin/main` pass against the post-#5a code without behavior change |
+| 2 | `UnitOfWork` Protocol exposes `packages`, `chunks`, `module_members`, `trees` as attributes — verified by `@runtime_checkable` `isinstance` check on `FakeUnitOfWork` |
+| 3 | `SqliteUnitOfWork` `__aenter__` sets `_sqlite_transaction` ContextVar before yielding; `__aexit__` resets it. Verified by an end-to-end test: open UoW, write a row via `uow.packages.upsert()`, commit, reopen DB, assert row persisted (proves connection-sharing worked) |
+| 4 | `SqliteUnitOfWork.begin()` still works — existing `IndexingService` tests pass unchanged. `begin()` is a thin wrapper around `async with self:` + explicit `commit()` |
+| 5 | `tests/_fakes.py` exports `FakeUnitOfWork`, `InMemoryPackageStore`, `InMemoryChunkStore`, `InMemoryModuleMemberStore`, `InMemoryDocumentTreeStore`. `InMemory*Store.list()` signatures match the real Protocol exactly |
+| 6 | `FakeUnitOfWork.committed` is True only after `await commit()`; `rolled_back` is True on exception OR on no-commit exit. Three pinning tests cover all three states |
+| 7 | Accessing `uow.packages` (or any repo attribute) outside `async with` raises `UnitOfWorkNotEnteredError` on both `SqliteUnitOfWork` and `FakeUnitOfWork` |
+| 8 | AC #21 byte-parity golden tests still pass — no rendering drift |
 
 ### 14.10 Ship sequence
 
 ```
-#5a (UoW refactor — this section)
-   ↓ services now take uow_factory; UoW exposes 4 repos
-#5b (reference graph capture + storage + service)
-   ↓ ReferenceStore joins the UoW as its 5th repo attribute
+#5a (this — Protocol + SqliteUnitOfWork + FakeUnitOfWork)
+   ↓ ~250 LOC, zero behavior change, services unchanged
+#5b (reference graph capture/storage/resolver/service)
+   ↓ uses FakeUnitOfWork from #5a in its tests; UoW.references attribute added
 #5c (MCP wiring + MENTIONS)
-   ↓ LookupService.lookup(show=callers|callees) actually returns rows
+   ↓ lookup(show="callers"|"callees") returns rows (today: ServiceUnavailableError)
 ```
 
-Three independent landings, each shippable on its own merits, each shrinking the surface area of the next.
+#5b's implementation against the CURRENT 5-field `IndexingService` shape (per spec §9 alternate) is also viable. #5a is no longer a hard prerequisite — it's preparatory groundwork.
 
----
 
 **Approval log:**
 - 2026-04-20: brainstormed as an extension of sub-PR #5; split out to keep #5 manageable.
 - 2026-05-17 (resync): resynchronised against post-#5/#6 main. Scope split into #5b (this spec, capture/storage/resolver/service) + #5c (MCP wiring, MENTIONS). Schema migration changed from destructive to additive. Resolver rules tightened (alias awareness, F20 suffix disambiguation, self.X.Y short-circuit, deterministic ambiguous-suffix handling). `canonical_dotted` replaces `ast.unparse` for version-stability. AC #15 adds resolution-rate floor. All findings from 4-perspective plan review (eng/CEO/DX/adversarial) folded in.
-- 2026-05-17 (§14 addition): cross-cutting Unit-of-Work refactor proposed as a separate prerequisite sub-PR #5a. Architectural rationale: today every service depends on N repository Protocols + an optional UoW alongside; target is single-dependency services consuming a UoW that exposes repositories as attributes. Mirrors Cosmic Python's AbstractUnitOfWork. Estimated 30 files / ~1000-1500 LOC churn, zero behavior change. Ship sequence locked: #5a → #5b → #5c.
+- 2026-05-17 (§14 trim): trimmed #5a scope to UoW Protocol widening + SqliteUnitOfWork rewrite + FakeUnitOfWork. Service migration REJECTED based on eng-review (5 correctness bugs) + CEO-review (wrong-priority, 1400 LOC for zero user-visible win, #5b's IOU unpaid). Trimmed scope ~250 LOC, zero behavior change, services unchanged. #5a is no longer a hard prerequisite for #5b.
