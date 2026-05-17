@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.protocols import UnitOfWork
 from tests._fakes import (
@@ -11,6 +12,7 @@ from tests._fakes import (
     InMemoryDocumentTreeStore,
     InMemoryModuleMemberStore,
     InMemoryPackageStore,
+    make_fake_uow_factory,
 )
 
 
@@ -74,3 +76,68 @@ async def test_inmemory_package_store_list_matches_protocol_signature():
     store = InMemoryPackageStore()
     result = await store.list(filter=None, limit=200)
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_make_fake_uow_factory_returns_callable():
+    """§9 — helper returns a Callable[[], FakeUnitOfWork]."""
+    factory = make_fake_uow_factory()
+    assert callable(factory)
+    uow = factory()
+    assert isinstance(uow, FakeUnitOfWork)
+
+
+@pytest.mark.asyncio
+async def test_make_fake_uow_factory_returned_uows_share_underlying_stores():
+    """§9 — each factory call returns a fresh UoW; underlying stores ARE shared."""
+    packages = InMemoryPackageStore()
+    factory = make_fake_uow_factory(packages=packages)
+
+    uow1 = factory()
+    uow2 = factory()
+    assert uow1 is not uow2
+    assert uow1.packages_store is packages
+    assert uow2.packages_store is packages
+
+
+@pytest.mark.asyncio
+async def test_make_fake_uow_factory_is_re_entrance_safe():
+    """§6 — each factory call returns an unentered UoW (re-entrance guard cleared)."""
+    factory = make_fake_uow_factory()
+    async with factory() as uow1:
+        pass  # exit normally
+    # Second call must succeed despite first having entered+exited.
+    async with factory() as uow2:
+        assert uow2._entered is True
+
+
+@pytest.mark.asyncio
+async def test_in_memory_package_store_records_calls():
+    """§9.1 — InMemoryPackageStore.calls mirrors InMemoryDocumentTreeStore."""
+    store = InMemoryPackageStore()
+    pkg = Package(
+        name="x", version="0", summary="", homepage="",
+        dependencies=(), content_hash="", origin=PackageOrigin.DEPENDENCY,
+    )
+    await store.upsert(pkg)
+    await store.get("x")
+    assert any(c.method == "upsert" for c in store.calls)
+    assert any(c.method == "get" for c in store.calls)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_chunk_store_records_calls():
+    """§9.1."""
+    store = InMemoryChunkStore()
+    chunk = Chunk(text="t", metadata={"package": "x"})
+    await store.upsert([chunk])
+    assert any(c.method == "upsert" for c in store.calls)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_module_member_store_records_calls():
+    """§9.1."""
+    store = InMemoryModuleMemberStore()
+    m = ModuleMember(metadata={"package": "x", "module": "x.m", "name": "f", "kind": "function"})
+    await store.upsert_many([m])
+    assert any(c.method == "upsert_many" for c in store.calls)

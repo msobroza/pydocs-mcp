@@ -26,6 +26,7 @@ inject a shared audit list at construction time.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -110,22 +111,27 @@ class InMemoryDocumentTreeStore:
 @dataclass
 class InMemoryPackageStore:
     items: dict[str, Package] = field(default_factory=dict)
+    calls: list[_Call] = field(default_factory=list)
 
     async def get(self, name: str) -> Package | None:
+        self.calls.append(_Call("get", name))
         return self.items.get(name)
 
     async def upsert(self, package: Package) -> None:
+        self.calls.append(_Call("upsert", package))
         self.items[package.name] = package
 
     async def list(
         self, filter: Any | None = None, limit: int | None = None,
     ) -> list[Package]:
+        self.calls.append(_Call("list", {"filter": filter, "limit": limit}))
         rows = list(self.items.values())
         if limit is not None:
             rows = rows[:limit]
         return rows
 
     async def delete(self, filter: Any | None = None) -> int:
+        self.calls.append(_Call("delete", filter))
         before = len(self.items)
         if filter is None:
             self.items.clear()
@@ -137,6 +143,7 @@ class InMemoryPackageStore:
         return before - len(self.items)
 
     async def count(self, filter: Any | None = None) -> int:
+        self.calls.append(_Call("count", filter))
         if isinstance(filter, dict) and "name" in filter:
             return 1 if filter["name"] in self.items else 0
         return len(self.items)
@@ -145,15 +152,22 @@ class InMemoryPackageStore:
 @dataclass
 class InMemoryChunkStore:
     by_package: dict[str, list[Chunk]] = field(default_factory=dict)
+    calls: list[_Call] = field(default_factory=list)
 
     async def upsert(self, chunks) -> None:
-        for c in chunks:
+        # Materialize first — the input may be an iterator, and we want
+        # `.calls` to record exactly what was upserted (mirroring real
+        # repository behavior + letting tests assert on the payload).
+        materialised = tuple(chunks)
+        self.calls.append(_Call("upsert", materialised))
+        for c in materialised:
             pkg = c.metadata.get("package", "")
             self.by_package.setdefault(pkg, []).append(c)
 
     async def list(
         self, filter: Any | None = None, limit: int | None = None,
     ) -> list[Chunk]:
+        self.calls.append(_Call("list", {"filter": filter, "limit": limit}))
         if isinstance(filter, dict) and "package" in filter:
             rows = list(self.by_package.get(filter["package"], []))
         else:
@@ -163,6 +177,7 @@ class InMemoryChunkStore:
         return rows
 
     async def delete(self, filter: Any | None = None) -> int:
+        self.calls.append(_Call("delete", filter))
         before = sum(len(v) for v in self.by_package.values())
         if filter is None:
             self.by_package.clear()
@@ -173,11 +188,13 @@ class InMemoryChunkStore:
         return before - sum(len(v) for v in self.by_package.values())
 
     async def count(self, filter: Any | None = None) -> int:
+        self.calls.append(_Call("count", filter))
         if isinstance(filter, dict) and "package" in filter:
             return len(self.by_package.get(filter["package"], []))
         return sum(len(v) for v in self.by_package.values())
 
     async def rebuild_index(self) -> None:
+        self.calls.append(_Call("rebuild_index", None))
         # In-memory store has no FTS index to rebuild.
         return None
 
@@ -185,15 +202,19 @@ class InMemoryChunkStore:
 @dataclass
 class InMemoryModuleMemberStore:
     by_package: dict[str, list[ModuleMember]] = field(default_factory=dict)
+    calls: list[_Call] = field(default_factory=list)
 
     async def upsert_many(self, members) -> None:
-        for m in members:
+        materialised = tuple(members)
+        self.calls.append(_Call("upsert_many", materialised))
+        for m in materialised:
             pkg = m.metadata.get("package", "")
             self.by_package.setdefault(pkg, []).append(m)
 
     async def list(
         self, filter: Any | None = None, limit: int | None = None,
     ) -> list[ModuleMember]:
+        self.calls.append(_Call("list", {"filter": filter, "limit": limit}))
         if isinstance(filter, dict) and "package" in filter:
             rows = list(self.by_package.get(filter["package"], []))
         else:
@@ -203,6 +224,7 @@ class InMemoryModuleMemberStore:
         return rows
 
     async def delete(self, filter: Any | None = None) -> int:
+        self.calls.append(_Call("delete", filter))
         before = sum(len(v) for v in self.by_package.values())
         if filter is None:
             self.by_package.clear()
@@ -213,6 +235,7 @@ class InMemoryModuleMemberStore:
         return before - sum(len(v) for v in self.by_package.values())
 
     async def count(self, filter: Any | None = None) -> int:
+        self.calls.append(_Call("count", filter))
         if isinstance(filter, dict) and "package" in filter:
             return len(self.by_package.get(filter["package"], []))
         return sum(len(v) for v in self.by_package.values())
@@ -301,6 +324,42 @@ class FakeUnitOfWork:
             await self.commit()
 
 
+# ── Service-test factory ─────────────────────────────────────────────────
+
+
+def make_fake_uow_factory(
+    *,
+    packages: InMemoryPackageStore | None = None,
+    chunks: InMemoryChunkStore | None = None,
+    module_members: InMemoryModuleMemberStore | None = None,
+    trees: InMemoryDocumentTreeStore | None = None,
+) -> Callable[[], FakeUnitOfWork]:
+    """Build a Callable[[], FakeUnitOfWork] for service-test wiring (spec §9).
+
+    Returns a callable that yields a FRESH FakeUnitOfWork per call (so the
+    SqliteUnitOfWork re-entrance guard, mirrored in FakeUnitOfWork, never
+    fires across multiple service-method invocations within one test) while
+    keeping the underlying InMemory* stores SHARED (so state persists across
+    calls — write-then-read patterns work as expected).
+
+    All four kwargs default to a fresh empty InMemory* — pass only the ones
+    you need to seed.
+    """
+    pkgs = packages or InMemoryPackageStore()
+    chs  = chunks   or InMemoryChunkStore()
+    mms  = module_members or InMemoryModuleMemberStore()
+    trs  = trees    or InMemoryDocumentTreeStore()
+
+    def factory() -> FakeUnitOfWork:
+        return FakeUnitOfWork(
+            packages_store=pkgs,
+            chunks_store=chs,
+            module_members_store=mms,
+            trees_store=trs,
+        )
+    return factory
+
+
 __all__ = (
     "FakeUnitOfWork",
     "InMemoryChunkStore",
@@ -308,4 +367,5 @@ __all__ = (
     "InMemoryModuleMemberStore",
     "InMemoryPackageStore",
     "_Call",
+    "make_fake_uow_factory",
 )
