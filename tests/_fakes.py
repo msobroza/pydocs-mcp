@@ -26,8 +26,6 @@ inject a shared audit list at construction time.
 """
 from __future__ import annotations
 
-import sys
-import typing as _typing_mod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -36,31 +34,26 @@ from pydocs_mcp.models import Chunk, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 
 
-# Python 3.11 typing module file (matched via __file__ for portability).
-# The typing module was rewritten in 3.12, breaking frame-name detection —
-# matching by source file is stable across 3.11+.
-_TYPING_FILE = _typing_mod.__file__
+class _NotEnteredProxy:
+    """Repo placeholder used outside ``async with uow:``.
 
-
-def _called_from_typing_runtime_check() -> bool:
-    """True if the current attribute access is from the ``typing`` module.
-
-    ``typing._ProtocolMeta.__instancecheck__`` walks each protocol member
-    with ``hasattr(instance, attr)`` — which evaluates property getters
-    and propagates non-AttributeError exceptions. We need our not-entered
-    guard to skip ``hasattr`` probes so ``isinstance(fake, UnitOfWork)``
-    works without first entering the context. Walk the call stack and
-    match by ``__file__`` (robust across Python versions; the 3.12
-    rewrite changed function/method names but the file stays the same).
+    Has to be a real instance attribute (not a property) so that
+    ``inspect.getattr_static`` — used by Python 3.12+'s
+    ``typing._ProtocolMeta.__instancecheck__`` — can see it. Any actual
+    method call raises :class:`UnitOfWorkNotEnteredError`, which is what
+    test code (and real services) would trigger.
     """
-    frame = sys._getframe(2)
-    for _ in range(8):
-        if frame is None:
-            return False
-        if frame.f_code.co_filename == _TYPING_FILE:
-            return True
-        frame = frame.f_back
-    return False
+
+    __slots__ = ("_attr_name",)
+
+    def __init__(self, attr_name: str) -> None:
+        self._attr_name = attr_name
+
+    def __getattr__(self, name: str) -> Any:
+        raise UnitOfWorkNotEnteredError(self._attr_name)
+
+    def __bool__(self) -> bool:  # truthy for isinstance probes
+        return True
 
 
 @dataclass
@@ -228,14 +221,6 @@ class InMemoryModuleMemberStore:
 # ── FakeUnitOfWork ───────────────────────────────────────────────────────
 
 
-_REPO_ATTR_TO_STORE = {
-    "packages":       "packages_store",
-    "chunks":         "chunks_store",
-    "module_members": "module_members_store",
-    "trees":          "trees_store",
-}
-
-
 @dataclass
 class FakeUnitOfWork:
     """Structurally satisfies UnitOfWork. Tracks committed/rolled_back.
@@ -249,18 +234,15 @@ class FakeUnitOfWork:
     ``@asynccontextmanager`` shape.
 
     Repo accessors (``packages`` / ``chunks`` / ``module_members`` /
-    ``trees``) are routed through ``__getattribute__`` rather than
-    ``@property`` for one reason: ``typing.runtime_checkable`` uses
-    ``_ProtocolMeta.__instancecheck__`` to probe Protocol members with
-    ``hasattr``, and our not-entered guard raises a
-    non-``AttributeError`` exception that ``hasattr`` would propagate
-    — making ``isinstance(self, UnitOfWork)`` fail before any test
-    even enters the context. The override walks the call stack (see
-    :func:`_called_from_typing_runtime_check`) and returns the real
-    store (a stand-in any caller would accept) only when the probe
-    originates inside the typing module; every other access either
-    returns the real store (inside ``async with``) or raises
-    :class:`UnitOfWorkNotEnteredError` (outside).
+    ``trees``) are stored as real instance attributes (rather than
+    ``@property`` or ``__getattribute__``-synthesized) because Python
+    3.12+'s ``typing._ProtocolMeta.__instancecheck__`` uses
+    ``inspect.getattr_static`` — which bypasses both descriptors and
+    ``__getattribute__``, so synthesized attributes are invisible to
+    Protocol checks. Outside the context they are bound to
+    :class:`_NotEnteredProxy` (any method call raises
+    :class:`UnitOfWorkNotEnteredError`); ``__aenter__`` swaps them with
+    the real stores and ``__aexit__`` swaps back.
     """
 
     packages_store:       InMemoryPackageStore       = field(default_factory=InMemoryPackageStore)
@@ -271,43 +253,46 @@ class FakeUnitOfWork:
     rolled_back: bool = False
     _entered:    bool = False
 
-    def __getattribute__(self, name: str) -> Any:
-        # Justification: typing.runtime_checkable's _ProtocolMeta.__instancecheck__
-        # uses hasattr() to probe Protocol attributes. Our repo accessors raise
-        # UnitOfWorkNotEnteredError (a non-AttributeError exception) outside the
-        # async context — hasattr propagates that, so isinstance(self, UnitOfWork)
-        # would FAIL. This bypass returns the real store during typing's probe so
-        # isinstance succeeds on both 3.11 (any non-None value works) and 3.12+
-        # (which strictly checks the attribute is non-None); real test code
-        # accessing uow.packages outside the context still hits the raise.
-        # See _called_from_typing_runtime_check() for the typing-module file-match.
-        if name in _REPO_ATTR_TO_STORE:
-            entered = object.__getattribute__(self, "_entered")
-            if not entered:
-                if _called_from_typing_runtime_check():
-                    # Return the underlying store — non-None so 3.12+ probes pass.
-                    return object.__getattribute__(self, _REPO_ATTR_TO_STORE[name])
-                raise UnitOfWorkNotEnteredError(name)
-            return object.__getattribute__(self, _REPO_ATTR_TO_STORE[name])
-        return object.__getattribute__(self, name)
+    # Real instance attributes — swapped by __aenter__/__aexit__. Initialized
+    # in __post_init__ so getattr_static() (used by typing on 3.12+) sees them.
+    packages:       Any = field(init=False, repr=False)
+    chunks:         Any = field(init=False, repr=False)
+    module_members: Any = field(init=False, repr=False)
+    trees:          Any = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.packages       = _NotEnteredProxy("packages")
+        self.chunks         = _NotEnteredProxy("chunks")
+        self.module_members = _NotEnteredProxy("module_members")
+        self.trees          = _NotEnteredProxy("trees")
 
     async def __aenter__(self) -> FakeUnitOfWork:
         if self._entered:
             raise RuntimeError("FakeUnitOfWork is already entered.")
-        object.__setattr__(self, "_entered", True)
+        self._entered = True
+        # Swap proxies for real stores.
+        self.packages       = self.packages_store
+        self.chunks         = self.chunks_store
+        self.module_members = self.module_members_store
+        self.trees          = self.trees_store
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
         if exc_type is not None or not self.committed:
-            object.__setattr__(self, "rolled_back", True)
-        object.__setattr__(self, "_entered", False)
+            self.rolled_back = True
+        self._entered = False
+        # Swap back to proxies so post-exit access raises.
+        self.packages       = _NotEnteredProxy("packages")
+        self.chunks         = _NotEnteredProxy("chunks")
+        self.module_members = _NotEnteredProxy("module_members")
+        self.trees          = _NotEnteredProxy("trees")
         return False
 
     async def commit(self) -> None:
-        object.__setattr__(self, "committed", True)
+        self.committed = True
 
     async def rollback(self) -> None:
-        object.__setattr__(self, "rolled_back", True)
+        self.rolled_back = True
 
     @asynccontextmanager
     async def begin(self):

@@ -51,10 +51,20 @@ async def test_fake_uow_rolls_back_on_exception():
 
 
 def test_fake_uow_attribute_outside_context_raises():
-    """§14.9 AC #7 — mirrors SqliteUnitOfWork contract."""
+    """§14.9 AC #7 — outside-context repo access raises.
+
+    SqliteUnitOfWork uses ``@property`` so bare attribute access raises
+    directly. FakeUnitOfWork can't (``getattr_static`` bypasses
+    properties on Python 3.12+, breaking ``isinstance(_, UnitOfWork)``),
+    so the fake's repo attrs return a ``_NotEnteredProxy`` that raises
+    on any method call — equivalent contract at the point of use.
+    """
     uow = FakeUnitOfWork()
     with pytest.raises(UnitOfWorkNotEnteredError):
-        _ = uow.packages
+        # _NotEnteredProxy raises on any attribute / method access.
+        # This mirrors what real services / tests would hit when they
+        # try to actually use the repo without entering the context.
+        uow.packages.get("anything")
 
 
 @pytest.mark.asyncio
