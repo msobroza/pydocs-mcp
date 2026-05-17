@@ -1,4 +1,4 @@
-"""Tests for SqliteUnitOfWork + _maybe_acquire (spec §5.3)."""
+"""Tests for SqliteUnitOfWork + _maybe_acquire (spec §5.3 + §14.2 / §14.9)."""
 from __future__ import annotations
 
 import sqlite3
@@ -6,11 +6,20 @@ import sqlite3
 import pytest
 
 from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.models import Package, PackageOrigin
+from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.sqlite import (
     SqliteUnitOfWork,
     _maybe_acquire,
     _sqlite_transaction,
 )
+
+
+def _pkg(name: str = "x") -> Package:
+    return Package(
+        name=name, version="0", summary="", homepage="",
+        dependencies=(), content_hash="", origin=PackageOrigin.DEPENDENCY,
+    )
 
 
 @pytest.fixture
@@ -165,3 +174,118 @@ async def test_unit_of_work_serializes_concurrent_repo_calls(db_file):
     }
     fresh.close()
     assert titles == {"a", "b", "c", "d"}
+
+
+# ── §14.2 + §14.9 — async context-manager shape (Task 2) ───────────────
+
+
+@pytest.mark.asyncio
+async def test_sqlite_uow_repos_accessible_inside_context(tmp_path):
+    """§14.9 AC #2 — repo attributes valid inside async with."""
+    db = tmp_path / "uow.db"
+    open_index_database(db).close()
+    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
+    async with uow as inside:
+        assert inside is uow
+        assert inside.packages is not None
+        assert inside.chunks is not None
+        assert inside.module_members is not None
+        assert inside.trees is not None
+        await inside.commit()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_uow_attribute_outside_context_raises(tmp_path):
+    """§14.9 AC #7."""
+    db = tmp_path / "uow.db"
+    open_index_database(db).close()
+    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
+    with pytest.raises(UnitOfWorkNotEnteredError) as excinfo:
+        _ = uow.packages
+    assert excinfo.value.attr_name == "packages"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_uow_commit_persists_across_reopen(tmp_path):
+    """§14.9 AC #3 — proves the ContextVar wired through. Without the
+    ContextVar set in __aenter__, the upsert commits to a transient
+    connection and is not visible after reopen."""
+    db = tmp_path / "uow.db"
+    open_index_database(db).close()
+
+    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
+    async with uow:
+        await uow.packages.upsert(_pkg("inside_uow"))
+        await uow.commit()
+
+    uow2 = SqliteUnitOfWork(provider=build_connection_provider(db))
+    async with uow2:
+        got = await uow2.packages.get("inside_uow")
+        assert got is not None
+        assert got.name == "inside_uow"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_uow_rollback_on_exception(tmp_path):
+    """§14.2 safety-net — exception triggers rollback before propagating."""
+    db = tmp_path / "uow.db"
+    open_index_database(db).close()
+
+    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
+    with pytest.raises(ValueError):
+        async with uow:
+            await uow.packages.upsert(_pkg("doomed"))
+            raise ValueError("simulated")
+
+    uow2 = SqliteUnitOfWork(provider=build_connection_provider(db))
+    async with uow2:
+        got = await uow2.packages.get("doomed")
+        assert got is None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_uow_rollback_when_commit_not_called(tmp_path):
+    """§14.2 — exit without commit rolls back."""
+    db = tmp_path / "uow.db"
+    open_index_database(db).close()
+
+    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
+    async with uow:
+        await uow.packages.upsert(_pkg("nocommit"))
+
+    uow2 = SqliteUnitOfWork(provider=build_connection_provider(db))
+    async with uow2:
+        got = await uow2.packages.get("nocommit")
+        assert got is None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_uow_legacy_begin_still_works(tmp_path):
+    """§14.9 AC #4 — pre-#5a callers using begin() unaffected."""
+    db = tmp_path / "uow.db"
+    open_index_database(db).close()
+    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
+    async with uow.begin():
+        pass  # body without exception → commit on exit
+
+
+@pytest.mark.asyncio
+async def test_legacy_begin_handles_explicit_rollback_in_body(tmp_path):
+    """begin() always calls commit() after yield. If the body called
+    rollback() explicitly, the subsequent commit is a no-op against
+    the already-rolled-back transaction. Document the contract."""
+    db = tmp_path / "uow.db"
+    open_index_database(db).close()
+    uow = SqliteUnitOfWork(provider=build_connection_provider(db))
+
+    async with uow.begin():
+        await uow.packages.upsert(_pkg("explicit_rollback"))
+        await uow.rollback()
+        # begin() will still call commit() after this yield — that's OK,
+        # the transaction is already rolled back so commit is a no-op.
+
+    # Verify the row was NOT persisted.
+    uow2 = SqliteUnitOfWork(provider=build_connection_provider(db))
+    async with uow2:
+        got = await uow2.packages.get("explicit_rollback")
+        assert got is None
