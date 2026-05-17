@@ -1,4 +1,4 @@
-"""Storage Protocols — 8 @runtime_checkable contracts (spec §5.2, AC #3)."""
+"""Storage Protocols — 9 @runtime_checkable contracts (spec §5.2, AC #3)."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
@@ -87,7 +87,31 @@ class FilterAdapter(Protocol):
     def adapt(self, filter: Filter) -> Any: ...
 
 
+@runtime_checkable
 class UnitOfWork(Protocol):
+    """Atomic transaction scope + per-transaction repository accessor (spec §14.2).
+
+    Inside ``async with uow:`` the repository attributes are valid and
+    share one SQLite connection. Outside the context they raise
+    :class:`~pydocs_mcp.storage.errors.UnitOfWorkNotEnteredError`.
+    Explicit ``commit()`` persists; safety-net ``rollback`` on
+    exception or no-commit. ``begin()`` is the pre-#5a back-compat
+    method — services that haven't migrated to ``async with`` still
+    use it. SqliteUnitOfWork (Task 2) implements both shapes.
+    """
+
+    packages: PackageStore
+    chunks: ChunkStore
+    module_members: ModuleMemberStore
+    trees: DocumentTreeStore
+
+    async def __aenter__(self) -> UnitOfWork: ...
+    async def __aexit__(self, exc_type, exc, tb) -> bool: ...
+
+    async def commit(self) -> None: ...
+    async def rollback(self) -> None: ...
+
+    # Back-compat shim for pre-#5a callers.
     async def begin(self) -> AsyncIterator[None]: ...
 
 

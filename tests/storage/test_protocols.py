@@ -76,3 +76,30 @@ def test_document_tree_store_save_many_signature_has_package_kwarg():
     assert "trees" in params
     # ``trees`` should typecheck-annotate as Sequence[...]; smoke by name only.
     assert Sequence is not None  # sanity for import
+
+
+def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
+    """§14.2 — UoW Protocol exposes packages/chunks/module_members/trees
+    AND defines __aenter__/__aexit__/commit/rollback."""
+    from pydocs_mcp.storage.protocols import UnitOfWork
+
+    class FakeUow:
+        packages = None
+        chunks = None
+        module_members = None
+        trees = None
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc, tb): return False
+        async def commit(self): pass
+        async def rollback(self): pass
+        async def begin(self): yield
+
+    assert isinstance(FakeUow(), UnitOfWork)
+
+
+def test_unit_of_work_not_entered_error_is_typed():
+    """§14.9 AC #7 — outside-context access raises typed error."""
+    from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+    err = UnitOfWorkNotEnteredError("packages")
+    assert "packages" in str(err)
+    assert err.attr_name == "packages"
