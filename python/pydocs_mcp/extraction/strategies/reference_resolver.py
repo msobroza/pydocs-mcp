@@ -1,0 +1,143 @@
+"""ReferenceResolver — alias-aware exact + suffix match (spec §7.2).
+
+Runs once per ``IndexingService.reindex_package(...)`` call, AFTER the
+chunker pass has emitted unresolved candidates. Mutates each candidate's
+``to_node_id`` from ``None`` to the resolved qname (when found) or
+leaves it as ``None`` (Rule E — no match).
+
+Construction is cheap (just dict refs + a frozenset of qnames). The
+resolver owns no I/O — the caller loads the qname universe and alias
+map from ``uow.trees.load_all_in_package(...)`` and the alias table
+populated by the capture pass, then invokes ``resolve(...)``.
+"""
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from pydocs_mcp.storage.node_reference import NodeReference
+
+if TYPE_CHECKING:
+    pass
+
+
+# Suffixes that mark synthetic doc/notebook module ids (sub-PR #5 F20).
+# CALLS / IMPORTS / INHERITS edges don't target these — when both a bare
+# `pkg.helpers` and `pkg.helpers.md` exist in the universe, the resolver
+# prefers the bare candidate.
+_SYNTHETIC_MODULE_SUFFIXES: tuple[str, ...] = (".md", ".ipynb")
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceResolver:
+    """Resolves NodeReference.to_name → to_node_id using a static qname universe.
+
+    ``qname_universe`` is the set of all indexed qnames across every
+    package (currently-indexed and the freshly-reindexed one). Built by
+    the caller from ``uow.trees.load_all_in_package(...)`` per spec §7.2
+    step 2.
+
+    ``aliases`` is the per-module alias table built by
+    ``capture_imports`` during the chunker pass. Keys are module qnames
+    (matching from_node_id's leading dotted segments); values are
+    ``{alias: dotted_target}`` maps for that module.
+
+    The frozen+slotted dataclass shape lets the resolver be re-used
+    safely across packages within the same `reindex_package` call.
+    """
+
+    qname_universe: frozenset[str]
+    aliases: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def resolve(self, refs: Sequence[NodeReference]) -> list[NodeReference]:
+        """Return a NEW list of NodeReferences with to_node_id filled.
+
+        Does NOT mutate inputs — NodeReference is frozen. Each output ref
+        is `dataclasses.replace(input, to_node_id=resolved_qname or None)`.
+        """
+        from dataclasses import replace
+
+        result: list[NodeReference] = []
+        for ref in refs:
+            resolved = self._resolve_one(ref)
+            result.append(replace(ref, to_node_id=resolved))
+        return result
+
+    def _resolve_one(self, ref: NodeReference) -> str | None:
+        to_name = ref.to_name
+
+        # Rule 5 — self.X.Y short-circuit. Recorded verbatim so user sees intent.
+        if to_name.startswith("self."):
+            return None
+
+        # Rule A — apply alias rewriting before exact/suffix lookup.
+        module_of_from_node = _module_part_of(ref.from_node_id)
+        alias_map = self.aliases.get(module_of_from_node, {})
+        leading = to_name.split(".", 1)[0]
+        if leading in alias_map:
+            rest = to_name[len(leading):]   # includes leading "." or empty
+            to_name = alias_map[leading] + rest
+
+        # Rule B — exact qname match, then F20-disambiguate.
+        if to_name in self.qname_universe:
+            return to_name
+        # F20: prefer bare candidate over .md / .ipynb siblings only when
+        # to_name matches a synthetic-suffixed candidate (rare but spec
+        # asks for it). Implementation: if to_name has a synthetic suffix
+        # and the bare form is in the universe, return the bare form.
+        for suffix in _SYNTHETIC_MODULE_SUFFIXES:
+            if to_name.endswith(suffix):
+                bare = to_name[: -len(suffix)]
+                if bare in self.qname_universe:
+                    return bare
+
+        # Rule C — strict dotted suffix within from_package.
+        # Build candidates = {qname in universe whose package prefix == from_package
+        #                     AND qname endswith ".<to_name>" OR qname == to_name}.
+        candidates: list[str] = []
+        suffix_dot = "." + to_name
+        for qname in self.qname_universe:
+            if not qname.startswith(ref.from_package + ".") and qname != ref.from_package:
+                continue
+            if qname == to_name or qname.endswith(suffix_dot):
+                candidates.append(qname)
+        if len(candidates) == 1:
+            return candidates[0]
+        # Rule D — ambiguous suffix (>1 candidate) leaves None deterministically.
+        if len(candidates) > 1:
+            return None
+
+        # Rule E — no match.
+        return None
+
+
+def _module_part_of(node_id: str) -> str:
+    """Return the dotted prefix that names the MODULE containing node_id.
+
+    The from_node_id is the chunker's qname for the source node —
+    ``pkg.mod.fn`` (function) or ``pkg.mod.ClassName.method`` or
+    ``pkg.mod`` (the module itself for IMPORTS). The alias table is
+    keyed by MODULE qname, not by symbol qname.
+
+    Implementation: walk-from-left over the dotted parts and return the
+    longest prefix that exists in self.aliases — but we don't have access
+    to self.aliases here. Simpler: return everything before the LAST
+    segment for symbols inside a module. For module-level (IMPORTS from
+    `pkg.mod`), the whole thing IS the module qname. The resolver
+    handles both via `self.aliases.get(...)` which returns {} on miss —
+    a wrong split silently misses the alias but never crashes.
+    """
+    # Heuristic: if the second-to-last segment starts with a capital,
+    # assume it's a class (e.g. ``pkg.mod.Cls.method``); strip TWO segments.
+    # Otherwise strip ONE (e.g. ``pkg.mod.fn`` → ``pkg.mod``). For module-
+    # level captures (from_node_id == module qname) the caller passes the
+    # full module qname through; this function's output won't match the
+    # alias table for those cases, which is fine — they don't need
+    # rewriting (the alias table is consulted for SYMBOL captures inside
+    # a module, not for module-level IMPORTS captures whose to_name is
+    # already absolute).
+    parts = node_id.split(".")
+    if len(parts) >= 2 and parts[-2] and parts[-2][0].isupper():
+        return ".".join(parts[:-2])
+    return ".".join(parts[:-1])
