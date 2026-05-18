@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.extraction.pipeline import stages as stages_mod
+from pydocs_mcp.extraction.pipeline.stages import reference_capture as stages_mod
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
 from pydocs_mcp.extraction.pipeline.stages import ReferenceCaptureStage
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
