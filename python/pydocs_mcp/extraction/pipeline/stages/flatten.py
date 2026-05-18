@@ -12,14 +12,13 @@ from typing import Any
 
 from pydocs_mcp.extraction.model import flatten_to_chunks
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
-from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.models import Chunk
 
 
 @stage_registry.register("flatten")
 @dataclass(frozen=True, slots=True)
-class FlattenStage(IngestionStage):
+class FlattenStage:
     name: str = "flatten"
 
     async def run(self, state: IngestionState) -> IngestionState:

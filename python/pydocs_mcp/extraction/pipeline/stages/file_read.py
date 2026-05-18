@@ -11,13 +11,12 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
-from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.serialization import stage_registry
 
 
 @stage_registry.register("file_read")
 @dataclass(frozen=True, slots=True)
-class FileReadStage(IngestionStage):
+class FileReadStage:
     name: str = "file_read"
 
     async def run(self, state: IngestionState) -> IngestionState:

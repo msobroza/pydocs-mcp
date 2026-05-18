@@ -16,14 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
-from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.models import Package, PackageOrigin
 
 
 @stage_registry.register("package_build")
 @dataclass(frozen=True, slots=True)
-class PackageBuildStage(IngestionStage):
+class PackageBuildStage:
     name: str = "package_build"
 
     async def run(self, state: IngestionState) -> IngestionState:

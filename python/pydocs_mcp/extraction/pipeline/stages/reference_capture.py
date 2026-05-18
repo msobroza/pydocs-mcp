@@ -33,7 +33,6 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
-from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
@@ -62,7 +61,7 @@ def _set_capture_config(cfg: ReferenceCaptureConfig) -> None:
 
 @stage_registry.register("reference_capture")
 @dataclass(frozen=True, slots=True)
-class ReferenceCaptureStage(IngestionStage):
+class ReferenceCaptureStage:
     name: str = "reference_capture"
 
     async def run(self, state: IngestionState) -> IngestionState:

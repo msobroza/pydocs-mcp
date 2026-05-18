@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
-from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.serialization import stage_registry
 
 if TYPE_CHECKING:
@@ -26,7 +25,7 @@ if TYPE_CHECKING:
 
 @stage_registry.register("file_discovery")
 @dataclass(frozen=True, slots=True)
-class FileDiscoveryStage(IngestionStage):
+class FileDiscoveryStage:
     project_discoverer: "ProjectFileDiscoverer"
     dep_discoverer: "DependencyFileDiscoverer"
     name: str = "file_discovery"

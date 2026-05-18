@@ -11,13 +11,12 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
-from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.serialization import stage_registry
 
 
 @stage_registry.register("content_hash")
 @dataclass(frozen=True, slots=True)
-class ContentHashStage(IngestionStage):
+class ContentHashStage:
     name: str = "content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:

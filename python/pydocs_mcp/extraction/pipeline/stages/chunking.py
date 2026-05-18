@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 import pydocs_mcp.extraction.strategies.chunkers  # noqa: F401 — side-effect: fires @chunker_registry.register decorators
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
-from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
 
 if TYPE_CHECKING:
@@ -27,7 +26,7 @@ log = logging.getLogger("pydocs-mcp")
 
 @stage_registry.register("chunking")
 @dataclass(frozen=True, slots=True)
-class ChunkingStage(IngestionStage):
+class ChunkingStage:
     chunking_config: "ChunkingConfig"
     name: str = "chunking"
 
