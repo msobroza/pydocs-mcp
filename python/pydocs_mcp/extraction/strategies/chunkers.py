@@ -27,10 +27,14 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.extraction.config import ChunkingConfig
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import _register_chunker
+
+if TYPE_CHECKING:
+    from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -64,16 +68,39 @@ class AstPythonChunker:
     Parse failure: logs a warning and returns a single MODULE node whose
     ``text`` is the full source — the file still produces a searchable
     chunk, no crash.
+
+    Sub-PR #5b — accepts an optional ``ref_collector`` for cross-node
+    reference capture. When ``None`` (default) no references are emitted,
+    so existing callers see zero behavior change; feature toggles purely
+    via wiring.
     """
 
     def build_tree(
         self, path: str, content: str, package: str, root: Path,
+        ref_collector: "ReferenceCollector | None" = None,
     ) -> DocumentNode:
         module = _module_from_path(path, root)
         tree = _safe_parse(content, path)
         if tree is None:
             return _fallback_module_node(module, path, content, root)
-        return _module_node_from_ast(tree, module, path, content, root)
+        # Module-level capture: imports + alias table for downstream resolver.
+        if ref_collector is not None:
+            try:
+                from pydocs_mcp.extraction.strategies.references import (
+                    capture_imports,
+                )
+                capture_imports(
+                    tree.body, from_package=package,
+                    module_qname=module, collector=ref_collector,
+                )
+            except Exception as exc:  # noqa: BLE001 -- per-file containment
+                log.warning(
+                    "capture_imports failed on %s: %s", path, exc,
+                )
+        return _module_node_from_ast(
+            tree, module, path, content, root,
+            ref_collector=ref_collector, package=package,
+        )
 
     @classmethod
     def from_config(cls, cfg: ChunkingConfig) -> "AstPythonChunker":
@@ -113,11 +140,16 @@ def _fallback_module_node(
 
 def _module_node_from_ast(
     tree: ast.Module, module: str, path: str, content: str, root: Path,
+    *, ref_collector: "ReferenceCollector | None" = None,
+    package: str = "",
 ) -> DocumentNode:
     """Build the MODULE root + all children from a parsed ``ast.Module``."""
     lines = content.splitlines()
     rel = _relpath(path, root)
-    children = _extract_module_children(tree, module, lines, rel)
+    children = _extract_module_children(
+        tree, module, lines, rel,
+        ref_collector=ref_collector, package=package,
+    )
     doc = ast.get_docstring(tree) or ""
     doc_examples = _extract_code_examples(doc, module, rel)
     all_children = tuple(children) + tuple(doc_examples)
@@ -139,6 +171,8 @@ def _module_node_from_ast(
 
 def _extract_module_children(
     tree: ast.Module, module: str, lines: list[str], rel: str,
+    *, ref_collector: "ReferenceCollector | None" = None,
+    package: str = "",
 ) -> list[DocumentNode]:
     """One IMPORT_BLOCK per contiguous import run + one FUNCTION / CLASS
     per top-level def. Returned in source order: scattered imports
@@ -159,9 +193,13 @@ def _extract_module_children(
             children.append(_function_node(
                 stmt, module, lines, rel,
                 parent_id=module, kind=NodeKind.FUNCTION,
+                ref_collector=ref_collector, package=package,
             ))
         elif isinstance(stmt, ast.ClassDef):
-            children.append(_class_node(stmt, module, lines, rel))
+            children.append(_class_node(
+                stmt, module, lines, rel,
+                ref_collector=ref_collector, package=package,
+            ))
     # Two-pass collection above produces import blocks first, then
     # defs — out of source order when a second import run lives below
     # a def. Stable sort by ``start_line`` restores intuitive ordering
@@ -235,11 +273,25 @@ def _function_node(
     stmt: ast.FunctionDef | ast.AsyncFunctionDef,
     module: str, lines: list[str], rel: str,
     *, parent_id: str, kind: NodeKind,
+    ref_collector: "ReferenceCollector | None" = None,
+    package: str = "",
 ) -> DocumentNode:
     """Shared FUNCTION / METHOD builder. ``kind`` + ``parent_id`` make
     the only difference (methods qualify under the class, functions under
     the module)."""
     qname = f"{parent_id}.{stmt.name}"
+    # Sub-PR #5b — capture CALLS edges from this function's body.
+    if ref_collector is not None:
+        try:
+            from pydocs_mcp.extraction.strategies.references import (
+                capture_calls,
+            )
+            capture_calls(
+                stmt.body, from_package=package,
+                from_node_id=qname, collector=ref_collector,
+            )
+        except Exception as exc:  # noqa: BLE001 -- per-function containment
+            log.warning("capture_calls failed on %s: %s", qname, exc)
     doc = ast.get_docstring(stmt) or ""
     start = stmt.lineno
     end = stmt.end_lineno or start
@@ -267,10 +319,24 @@ def _function_node(
 
 def _class_node(
     stmt: ast.ClassDef, module: str, lines: list[str], rel: str,
+    *, ref_collector: "ReferenceCollector | None" = None,
+    package: str = "",
 ) -> DocumentNode:
     """CLASS node with METHOD children. Direct text = class line through
     the line before the first method (spec §4.1.1 direct-text rule)."""
     qname = f"{module}.{stmt.name}"
+    # Sub-PR #5b — capture INHERITS edges for each base class.
+    if ref_collector is not None:
+        try:
+            from pydocs_mcp.extraction.strategies.references import (
+                capture_inherits,
+            )
+            capture_inherits(
+                list(stmt.bases), from_package=package,
+                class_qname=qname, collector=ref_collector,
+            )
+        except Exception as exc:  # noqa: BLE001 -- per-class containment
+            log.warning("capture_inherits failed on %s: %s", qname, exc)
     doc = ast.get_docstring(stmt) or ""
     method_stmts = [
         s for s in stmt.body
@@ -281,7 +347,11 @@ def _class_node(
     direct_end = (method_stmts[0].lineno - 1) if method_stmts else end
     direct_txt = _slice_lines(lines, start, direct_end)
     method_nodes = [
-        _function_node(m, module, lines, rel, parent_id=qname, kind=NodeKind.METHOD)
+        _function_node(
+            m, module, lines, rel,
+            parent_id=qname, kind=NodeKind.METHOD,
+            ref_collector=ref_collector, package=package,
+        )
         for m in method_stmts
     ]
     doc_examples = _extract_code_examples(doc, qname, rel)
