@@ -210,20 +210,29 @@ class ReferenceCaptureStage:
     async def run(self, state: IngestionState) -> IngestionState:
         cfg = _get_capture_config()
         if not cfg.enabled:
-            # Short-circuit — capture disabled by YAML. Leave state.references
-            # and state.reference_aliases at their defaults (empty tuple / dict).
-            return replace(state, references=(), reference_aliases={})
+            # Short-circuit — capture disabled by YAML. Leave state.references,
+            # state.reference_aliases and state.class_attribute_types at their
+            # defaults (empty tuple / empty dicts).
+            return replace(
+                state,
+                references=(),
+                reference_aliases={},
+                class_attribute_types={},
+            )
         allowed = set(cfg.kinds)
-        refs, aliases = await asyncio.to_thread(
+        refs, aliases, attr_types = await asyncio.to_thread(
             self._capture_all, state, allowed,
         )
         return replace(
-            state, references=tuple(refs), reference_aliases=aliases,
+            state,
+            references=tuple(refs),
+            reference_aliases=aliases,
+            class_attribute_types=attr_types,
         )
 
     def _capture_all(
         self, state: IngestionState, allowed: set[str],
-    ) -> tuple[list[Any], dict[str, dict[str, str]]]:
+    ) -> tuple[list[Any], dict[str, dict[str, str]], dict[str, dict[str, str]]]:
         # Deferred imports — strategies pull in ast + reference value objects
         # which are otherwise irrelevant at stage-registry construction time.
         from pydocs_mcp.extraction.strategies.chunkers import _module_from_path
@@ -233,6 +242,7 @@ class ReferenceCaptureStage:
             capture_imports,
             capture_inherits,
             capture_mentions,
+            capture_self_attribute_types,
         )
         collector = ReferenceCollector()
         for path, source in state.file_contents:
@@ -284,6 +294,14 @@ class ReferenceCaptureStage:
                                         collector=collector,
                                     )
                                 if "calls" in allowed:
+                                    # self.X.Y inference (spec follow-up): walk
+                                    # __init__ once to learn attribute types,
+                                    # then walk every method's body for calls.
+                                    # Cheap — both passes share the same AST.
+                                    collector.record_class_attrs(
+                                        class_qname,
+                                        capture_self_attribute_types(stmt),
+                                    )
                                     for m in stmt.body:
                                         if isinstance(
                                             m, (ast.FunctionDef, ast.AsyncFunctionDef),
@@ -322,7 +340,7 @@ class ReferenceCaptureStage:
             refs = [r for r in collector.refs if r.kind is not ReferenceKind.IMPORTS]
         else:
             refs = collector.refs
-        return refs, collector.aliases
+        return refs, collector.aliases, collector.class_attribute_types
 
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> "ReferenceCaptureStage":

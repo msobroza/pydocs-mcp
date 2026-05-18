@@ -43,12 +43,20 @@ class ReferenceResolver:
     (matching from_node_id's leading dotted segments); values are
     ``{alias: dotted_target}`` maps for that module.
 
+    ``class_attribute_types`` is the per-class ``self.X`` attribute-type
+    table built by ``capture_self_attribute_types``. Keys are CLASS qnames
+    (e.g. ``pkg.mod.Cls``); values are ``{attr_name: type_qname}`` maps.
+    Drives Rule 0: ``self.X.Y`` is rewritten to ``<type>.Y`` before Rule 5
+    short-circuits the reference. Empty (the default) preserves the
+    pre-#5d behavior of unconditional ``self.*`` short-circuit.
+
     The frozen+slotted dataclass shape lets the resolver be re-used
     safely across packages within the same `reindex_package` call.
     """
 
     qname_universe: frozenset[str]
     aliases: dict[str, dict[str, str]] = field(default_factory=dict)
+    class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def resolve(self, refs: Sequence[NodeReference]) -> list[NodeReference]:
         """Return a NEW list of NodeReferences with to_node_id filled.
@@ -67,7 +75,16 @@ class ReferenceResolver:
     def _resolve_one(self, ref: NodeReference) -> str | None:
         to_name = ref.to_name
 
-        # Rule 5 — self.X.Y short-circuit. Recorded verbatim so user sees intent.
+        # Rule 0 — self.X.Y inference. When ``self.X`` was typed at
+        # ``__init__`` time, rewrite to ``<type>.Y`` and let the normal
+        # rules (A → B/F20 → C → D → E) resolve the rewritten target.
+        if to_name.startswith("self."):
+            inferred = self._infer_self_type(ref.from_node_id, to_name)
+            if inferred is not None:
+                to_name = inferred
+
+        # Rule 5 — self.X.Y short-circuit for anything Rule 0 couldn't
+        # rewrite. Recorded verbatim so users see the intent in callees.
         if to_name.startswith("self."):
             return None
 
@@ -110,6 +127,45 @@ class ReferenceResolver:
 
         # Rule E — no match.
         return None
+
+    def _infer_self_type(self, from_node_id: str, to_name: str) -> str | None:
+        """Rewrite ``self.X[.Y]`` to ``<type>[.Y]`` when ``X``'s type is known.
+
+        Returns the rewritten dotted target, or None when no inference
+        applies (no enclosing class, class not in the table, or attr not
+        recorded). The caller falls through to Rule 5 on None.
+        """
+        cls_qname = _enclosing_class_qname(from_node_id)
+        if cls_qname is None:
+            return None
+        attrs = self.class_attribute_types.get(cls_qname)
+        if attrs is None:
+            return None
+        # Strip the literal "self." prefix, then split on the FIRST dot
+        # so chained access (self.X.Y.Z) preserves the remainder.
+        head, _sep, rest = to_name[5:].partition(".")
+        type_qname = attrs.get(head)
+        if type_qname is None:
+            return None
+        return f"{type_qname}.{rest}" if rest else type_qname
+
+
+def _enclosing_class_qname(from_node_id: str) -> str | None:
+    """Return the class qname enclosing ``from_node_id``, or None.
+
+    The chunker stamps method qnames as ``pkg.mod.ClassName.method``; the
+    second-to-last segment is the class name and starts uppercase by PEP 8.
+    Free functions and module-level captures fall through with None.
+
+    Same heuristic as ``_module_part_of`` (one segment up), inverted to
+    return the class-qname rather than the module-qname. False positives
+    (a UPPERCASE non-class segment) just miss the table lookup and the
+    caller falls through to Rule 5 — safe.
+    """
+    parts = from_node_id.split(".")
+    if len(parts) >= 3 and parts[-2] and parts[-2][0].isupper():
+        return ".".join(parts[:-1])
+    return None
 
 
 def _module_part_of(node_id: str) -> str:

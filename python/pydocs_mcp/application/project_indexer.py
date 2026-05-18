@@ -82,6 +82,7 @@ class ProjectIndexer:
             pkg, result.chunks, members, trees=result.trees,
             references=result.references,
             reference_aliases=result.reference_aliases,
+            class_attribute_types=result.class_attribute_types,
         )
         stats.project_indexed = True
         log.info(
