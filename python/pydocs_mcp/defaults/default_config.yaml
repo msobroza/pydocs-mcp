@@ -54,6 +54,8 @@ reference_graph:
   output:
     default_limit: 50
     max_limit: 1000
+  resolver:                                 # sub-PR follow-up to #5c
+    include_stdlib: true                    # merges bundled stdlib_qnames.json into universe
 
 search:
   output:

@@ -94,6 +94,15 @@ def configure_from_app_config(cfg) -> None:
 
     _set_capture_config(cfg.reference_graph.capture)
 
+    # AC #15 stdlib-idx: push resolver config so IndexingService picks up
+    # the include_stdlib toggle on next reindex. Parity with the capture
+    # config push above — same module-level slot pattern.
+    from pydocs_mcp.extraction.strategies.stdlib_qnames import (
+        _set_resolver_config,
+    )
+
+    _set_resolver_config(cfg.reference_graph.resolver)
+
 
 class SearchInput(BaseModel):
     """Input for the ``search`` MCP tool (spec §4.1)."""

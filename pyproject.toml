@@ -24,6 +24,7 @@ python-source = "python"
 compatibility = "manylinux2014"
 include = [
   "python/pydocs_mcp/defaults/*.yaml",
+  "python/pydocs_mcp/defaults/*.json",
   "python/pydocs_mcp/pipelines/*.yaml",
 ]
 

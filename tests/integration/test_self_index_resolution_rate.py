@@ -9,34 +9,36 @@ universe).
 
 Spec §16 AC #15 — target: CALLS resolution rate ≥ 35%.
 
-**Current measured rate (post-sub-PR #5c): 16.4%** (3594/21879 on this
-codebase). This is a material jump from #5b's 11.6% baseline, driven by
-sub-PR #5c's project-qname-prefix fix (Task 1) — the resolver now
-correctly composes ``__project__`` package qnames when matching
-intra-project edges. The 35% spec target remains UNREACHABLE given the
-resolver as designed, because the denominator is dominated by edges
-that no realistic local resolver can link:
+**Current measured rate (post-stdlib-indexing follow-up to #5c): 41.7%**
+(9179/22017 on this codebase). This clears the 35% spec target outright —
+AC #15 is **met**. The trajectory:
 
-- ~16% of all CALLS are ``self.X.Y`` patterns (Rule 5 short-circuit:
-  resolver returns None by design — needs class-context type inference).
-- ~40% of all CALLS target Python builtins (``isinstance``, ``len``,
-  ``str``, ``getattr``, ``super``, ``ValueError``, ``Path``, ...) — no
-  entry in any qname universe.
-- ~10% target stdlib (``asyncio.to_thread``, ``warnings.warn``,
-  ``hashlib.sha256``, ``pytest.raises``) — also not indexed.
+- 11.6% — pre-#5c baseline (before project-qname-prefix fix).
+- 16.4% — post-#5c (intra-project edges resolve via ``__project__``
+  qname composition).
+- 41.7% — post-stdlib-indexing (this PR; ``IndexingService`` merges
+  pre-baked stdlib + builtins qnames into the resolver universe, so
+  ``isinstance``, ``len``, ``asyncio.to_thread``, ``warnings.warn``,
+  ``hashlib.sha256`` etc. now link to real ``to_node_id`` values).
 
-Even with a perfect intra-project resolver (suffix-unique matching
-across the full project + dep universe), the empirical upper bound on
-this codebase is ~29%. Closing the gap to 35% requires either: (a)
-indexing the Python stdlib so its qnames join the universe, (b) a
-class-context type inference pass so ``self.method`` calls can resolve
-to the enclosing class, or (c) recalibrating AC #15 to match what a
-local-scope resolver can actually achieve. Tracked as a #5c follow-up.
+The +25.3pp lift from #5c is dominated by builtins (~40% of CALLS on
+this codebase) and stdlib (~10%) becoming resolvable. The remaining
+unresolved ~58% is mostly:
+
+- ``self.X.Y`` patterns (Rule 5 short-circuit by design — resolver
+  returns None for receiver-typed calls; would need class-context type
+  inference to close).
+- third-party dep calls whose qname doesn't suffix-uniquely match any
+  indexed package (low-confidence rejections — intentional).
+
+Closing the remaining gap requires class-context type inference for
+``self.method`` calls — tracked as a future follow-up, NOT a blocker
+for AC #15.
 
 This test asserts a stable floor below the current measured rate so
 - a regression that drops capture or resolver hit rate gets caught;
-- a future PR that lands one of (a)–(c) and pushes through 35% is
-  visible (and that PR should bump the floor + re-state the AC).
+- a future PR that lands type-inference and pushes higher is visible
+  (and that PR should bump the floor).
 
 The 50-edge minimum is a capture-stage sanity check — well below the
 ~22k edges this codebase actually produces.
@@ -65,17 +67,21 @@ from pydocs_mcp.storage.factories import (
 # docstring for the three available levers).
 SPEC_TARGET_AC15 = 0.35
 
-# Empirical floor on this codebase as of sub-PR #5c (post-project-qname fix).
-# Measured rate: 16.4% (3594/21879). Floor set ~2pp below
-# the measured value so unrelated ripples don't break the test, but a real
-# resolver regression does.
+# Empirical floor on this codebase as of the AC #15 stdlib-indexing follow-up
+# to #5c. Measured rate: 41.7% (9179/22017). Floor set ~2pp below the measured
+# rate so unrelated ripples don't break the test, but a real resolver
+# regression does.
 #
-# Spec AC #15 target is still 35%. Empirical ceiling on this codebase is
-# ~29% (per #5b's discovery work) due to builtins / stdlib / self.X.Y
-# unresolvable edges. Closing the gap requires either resolver investment
-# (stdlib indexing, self.X.Y type inference) or a spec recalibration —
-# tracked as a #5c follow-up.
-EMPIRICAL_FLOOR: float = 0.14
+# Rate trajectory:
+#   - 11.6% — pre-#5c baseline (before project-qname-prefix fix)
+#   - 16.4% — post-#5c (project-qname-prefix fix landed; intra-project resolved)
+#   - 41.7% — post-stdlib-idx (this PR; stdlib + builtins targets resolve)
+#
+# Spec AC #15 target is 35% and is now MET (41.7% > 35%). The remaining
+# unresolved ~58% is dominated by self.X.Y refs which Rule 5 short-circuits
+# by design — closing that gap requires class-context type inference,
+# tracked as a future follow-up.
+EMPIRICAL_FLOOR: float = 0.39
 
 
 async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
