@@ -80,6 +80,8 @@ class ProjectIndexer:
         members = await self.member_extractor.extract_from_project(project_dir)
         await self.indexing_service.reindex_package(
             pkg, result.chunks, members, trees=result.trees,
+            references=result.references,
+            reference_aliases=result.reference_aliases,
         )
         stats.project_indexed = True
         log.info(
@@ -101,6 +103,8 @@ class ProjectIndexer:
             members = await self.member_extractor.extract_from_dependency(dep_name)
             await self.indexing_service.reindex_package(
                 pkg, result.chunks, members, trees=result.trees,
+                references=result.references,
+                reference_aliases=result.reference_aliases,
             )
             stats.indexed += 1
             log.info("  ok %s %s (%d chunks, %d syms, %d trees)",

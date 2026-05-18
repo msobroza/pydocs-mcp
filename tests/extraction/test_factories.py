@@ -1,8 +1,8 @@
 """Unit tests for ``extraction/factories.py`` + ``extraction/pipeline/chunk_extractor.py``.
 
 Pins spec §7.3 + §7.4 + AC #33 + AC #19:
-- ``load_ingestion_pipeline`` builds a 6-stage ``IngestionPipeline`` from the
-  shipped ``pipelines/ingestion.yaml``.
+- ``load_ingestion_pipeline`` builds a 7-stage ``IngestionPipeline`` from the
+  shipped ``pipelines/ingestion.yaml`` (sub-PR #5b added ``reference_capture``).
 - Paths outside the allowlist raise ``ValueError`` — the same allowlist logic
   as sub-PR #2 retrieval pipelines (reused via
   ``retrieval.config._resolve_pipeline_path``).
@@ -36,6 +36,7 @@ from pydocs_mcp.extraction.pipeline.stages import (
     FileReadStage,
     FlattenStage,
     PackageBuildStage,
+    ReferenceCaptureStage,
 )
 from pydocs_mcp.extraction.factories import (
     build_ingestion_pipeline,
@@ -63,14 +64,16 @@ def _app_config() -> AppConfig:
 # ── load_ingestion_pipeline ────────────────────────────────────────────────
 
 def test_load_ingestion_pipeline_success() -> None:
-    """Shipped preset loads into a 6-stage pipeline of the expected types."""
+    """Shipped preset loads into a 7-stage pipeline of the expected types
+    (sub-PR #5b added ``reference_capture`` between chunking and flatten)."""
     cfg = _app_config()
     pipeline = load_ingestion_pipeline(_BUNDLED_INGESTION, cfg)
     assert isinstance(pipeline, IngestionPipeline)
-    assert len(pipeline.stages) == 6
+    assert len(pipeline.stages) == 7
     expected_types = [
         FileDiscoveryStage, FileReadStage, ChunkingStage,
-        FlattenStage, ContentHashStage, PackageBuildStage,
+        ReferenceCaptureStage, FlattenStage, ContentHashStage,
+        PackageBuildStage,
     ]
     for stage, exp in zip(pipeline.stages, expected_types, strict=True):
         assert isinstance(stage, exp)
@@ -113,7 +116,7 @@ def test_build_ingestion_pipeline_uses_bundled_preset_when_config_none() -> None
     assert cfg.extraction.ingestion.pipeline_path is None
     pipeline = build_ingestion_pipeline(cfg)
     assert isinstance(pipeline, IngestionPipeline)
-    assert len(pipeline.stages) == 6
+    assert len(pipeline.stages) == 7
 
 
 def test_build_ingestion_pipeline_uses_custom_path_when_provided(tmp_path: Path) -> None:
