@@ -1,8 +1,8 @@
 """Unit tests for ``extraction/pipeline/stages.py`` (sub-PR #5, spec §7.2).
 
-Pins the 6-stage behavior:
+Pins the 7-stage behavior (sub-PR #5b added ``reference_capture``):
 - Each stage is registered via ``@stage_registry.register("<type>")`` — all
-  6 stage types are discoverable by ``stage_registry.names()``.
+  7 stage types are discoverable by ``stage_registry.names()``.
 - Each stage returns a NEW :class:`IngestionState` (via ``dataclasses.replace``)
   — never mutates in place.
 - ``FileDiscoveryStage`` / ``PackageBuildStage`` branch on ``state.target_kind``
@@ -436,13 +436,15 @@ _EXPECTED_STAGE_NAMES = (
     "file_read",
     "flatten",
     "package_build",
+    "reference_capture",
 )
 
 
-def test_all_six_stages_are_registered() -> None:
-    """``stage_registry.names()`` lists exactly the 6 Task-20 stage types
+def test_all_seven_stages_are_registered() -> None:
+    """``stage_registry.names()`` lists exactly the 7 stage types
     (plus whatever dummy stages an earlier test may have registered). No
-    Task-20 stage is missing from the registry."""
+    shipped stage is missing from the registry — sub-PR #5b added
+    ``reference_capture``."""
     names = set(stage_registry.names())
     for expected in _EXPECTED_STAGE_NAMES:
         assert expected in names, f"stage {expected!r} not registered"

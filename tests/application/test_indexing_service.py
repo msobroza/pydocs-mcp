@@ -351,18 +351,28 @@ async def test_reindex_package_canonical_order():
 
 @pytest.mark.asyncio
 async def test_reindex_package_accepts_references_placeholder():
-    """``references`` is accepted as a seam for sub-PR #5b but ignored in #5/#5a-2.
-
-    Passing a non-empty references tuple must not raise — core stores
-    still get their usual delete+upsert.
+    """``references`` is accepted by the signature and flows through the
+    resolver into ``uow.references`` (sub-PR #5b — the seam from #5/#5a-2
+    is now wired through). A single unresolved ref must not raise; core
+    stores still get their usual delete+upsert.
     """
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+
     factory = make_fake_uow_factory()
     service = IndexingService(uow_factory=factory)
     await service.reindex_package(
-        _pkg("fastapi"), (), (), references=("fake-ref",),
+        _pkg("fastapi"), (), (),
+        references=(
+            NodeReference(
+                from_package="fastapi", from_node_id="fastapi.mod.fn",
+                to_name="some_target", to_node_id=None,
+                kind=ReferenceKind.CALLS,
+            ),
+        ),
     )
     # No assertion needed beyond "no exception" — the dataclass / signature
-    # accepts the kwarg.
+    # accepts the kwarg and the resolver runs without crashing.
 
 
 # ── e2e regression against real SQLite ───────────────────────────────────
@@ -407,3 +417,132 @@ async def test_indexing_service_clear_all_also_removes_null_package_rows(tmp_pat
     assert pkg_count == 0
     # Both the normal row and the NULL-package row must be gone.
     assert chunk_count == 0
+
+
+# ── Sub-PR #5b: references flow through reindex_package ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_writes_references_via_uow():
+    """spec §9 — references flow into uow.references.save_many."""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+    from tests._fakes import InMemoryReferenceStore, make_fake_uow_factory
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs_store)
+    service = IndexingService(uow_factory=factory)
+
+    pkg = _pkg("pkg")
+    raw_refs = (
+        NodeReference(
+            from_package="pkg", from_node_id="pkg.mod.fn",
+            to_name="helper", to_node_id=None,
+            kind=ReferenceKind.CALLS,
+        ),
+    )
+    await service.reindex_package(
+        pkg, chunks=(), module_members=(), trees=(),
+        references=raw_refs,
+    )
+    # save_many was called with the resolved tuple. Even though no trees
+    # are indexed (so resolver can't resolve `helper`), the call happened.
+    assert any(c.method == "save_many" for c in refs_store.calls)
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_runs_resolver_when_aliases_provided():
+    """AC #6 — alias rewrite + exact match flips to_node_id."""
+    from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+    from tests._fakes import (
+        InMemoryDocumentTreeStore,
+        InMemoryReferenceStore,
+        make_fake_uow_factory,
+    )
+
+    # Seed the tree store with `pkg.helpers.compute` as an indexed qname.
+    tree = DocumentNode(
+        node_id="pkg.helpers.compute",
+        qualified_name="pkg.helpers.compute",
+        title="compute", kind=NodeKind.FUNCTION,
+        source_path="pkg/helpers.py", start_line=1, end_line=2,
+        text="def compute(): ...", content_hash="h",
+    )
+    trees_store = InMemoryDocumentTreeStore()
+    trees_store.by_package["pkg"] = [tree]
+    # Also expose via load_all_in_package — the resolver loads from there.
+    async def load_all_in_package(package, *, _store=trees_store):
+        return {
+            n.qualified_name: n
+            for n in _store.by_package.get(package, [])
+        }
+    trees_store.load_all_in_package = load_all_in_package  # type: ignore
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(trees=trees_store, references=refs_store)
+    service = IndexingService(uow_factory=factory)
+
+    raw_refs = (
+        NodeReference(
+            from_package="pkg", from_node_id="pkg.utils.runner",
+            to_name="do_it", to_node_id=None,
+            kind=ReferenceKind.CALLS,
+        ),
+    )
+    aliases = {"pkg.utils": {"do_it": "pkg.helpers.compute"}}
+
+    await service.reindex_package(
+        _pkg("pkg"), chunks=(), module_members=(), trees=(),
+        references=raw_refs, reference_aliases=aliases,
+    )
+
+    # save_many got the resolved ref — to_node_id is filled in.
+    save_call = next(c for c in refs_store.calls if c.method == "save_many")
+    _, materialised_refs = save_call.payload
+    assert len(materialised_refs) == 1
+    assert materialised_refs[0].to_node_id == "pkg.helpers.compute"
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_writes_zero_refs_when_disabled():
+    """Spec §9 — when no references emitted, no save_many call."""
+    from tests._fakes import InMemoryReferenceStore, make_fake_uow_factory
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs_store)
+    service = IndexingService(uow_factory=factory)
+    await service.reindex_package(
+        _pkg("pkg"), chunks=(), module_members=(), trees=(),
+        references=(),
+    )
+    # No save_many call recorded (the service skips when refs is empty).
+    assert not any(c.method == "save_many" for c in refs_store.calls)
+
+
+@pytest.mark.asyncio
+async def test_remove_package_clears_references():
+    """AC #13 — remove_package wipes the package's reference rows."""
+    from tests._fakes import InMemoryReferenceStore, make_fake_uow_factory
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs_store)
+    service = IndexingService(uow_factory=factory)
+    await service.remove_package("pkg")
+    assert any(
+        c.method == "delete_for_package" and c.payload == "pkg"
+        for c in refs_store.calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_clear_all_wipes_references():
+    """AC #14 — clear_all invokes uow.references.delete_all."""
+    from tests._fakes import InMemoryReferenceStore, make_fake_uow_factory
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs_store)
+    service = IndexingService(uow_factory=factory)
+    await service.clear_all()
+    assert any(c.method == "delete_all" for c in refs_store.calls)

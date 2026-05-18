@@ -65,6 +65,8 @@ class PipelineChunkExtractor:
             chunks=state.chunks,
             trees=state.trees,
             package=state.package,
+            references=state.references,
+            reference_aliases=state.reference_aliases,
         )
 
 

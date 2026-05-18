@@ -11,12 +11,19 @@ stats) doesn't break every destructuring call site.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import Chunk, ModuleMember, Package
+
+if TYPE_CHECKING:
+    # Imported only for typing — keeps the application layer from taking
+    # a runtime dependency on storage value objects. ``NodeReference``
+    # is emitted by a future ``ReferenceExtractionStage`` and persisted
+    # by ``ReferenceStore`` (sub-PR #5b, spec §4.2).
+    from pydocs_mcp.storage.node_reference import NodeReference
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,11 +34,23 @@ class ExtractionResult:
     to ``document_trees`` for lookup), and the package metadata in one
     immutable value so adding a future field (e.g. ``stats``) doesn't
     force every destructuring call site to change.
+
+    ``references`` defaults to an empty tuple so existing extractors that
+    don't yet emit cross-node edges (spec §4.2, AC #21) keep working
+    without modification — Open/Closed compliance for the extension.
+
+    ``reference_aliases`` is the per-module alias table captured during
+    ingestion (spec §7.2 Rule A). Carried alongside ``references`` so the
+    resolver running inside ``IndexingService.reindex_package`` has both
+    inputs — references for the unresolved edges, aliases for ``from X
+    import Y as Z``-style rewrites.
     """
 
     chunks: tuple[Chunk, ...]
     trees: tuple[DocumentNode, ...]
     package: Package
+    references: tuple[NodeReference, ...] = field(default=())
+    reference_aliases: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @runtime_checkable

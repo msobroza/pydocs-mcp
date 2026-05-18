@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import pytest
 
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import UnitOfWork
 from tests._fakes import (
     FakeUnitOfWork,
@@ -12,8 +14,21 @@ from tests._fakes import (
     InMemoryDocumentTreeStore,
     InMemoryModuleMemberStore,
     InMemoryPackageStore,
+    InMemoryReferenceStore,
     make_fake_uow_factory,
 )
+
+
+def _ref(**kw) -> NodeReference:
+    base = dict(
+        from_package="pkg",
+        from_node_id="pkg.mod.fn",
+        to_name="other.symbol",
+        to_node_id=None,
+        kind=ReferenceKind.CALLS,
+    )
+    base.update(kw)
+    return NodeReference(**base)
 
 
 def test_fake_unit_of_work_satisfies_protocol():
@@ -141,3 +156,136 @@ async def test_in_memory_module_member_store_records_calls():
     m = ModuleMember(metadata={"package": "x", "module": "x.m", "name": "f", "kind": "function"})
     await store.upsert_many([m])
     assert any(c.method == "upsert_many" for c in store.calls)
+
+
+def test_not_entered_proxy_bool_raises_to_match_sqlite():
+    """SqliteUnitOfWork raises UnitOfWorkNotEnteredError when its
+    `@property` is accessed outside the context. The fake's proxy used to
+    return truthy from __bool__, diverging in code like
+    `if uow.packages: ...`. Make the fake match: any boolean coercion
+    raises too."""
+    from tests._fakes import _NotEnteredProxy
+
+    proxy = _NotEnteredProxy("packages")
+    with pytest.raises(UnitOfWorkNotEnteredError):
+        bool(proxy)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_reference_store_save_many_records_calls():
+    """spec §6.2 — save_many appends to .calls and stores under by_package."""
+    store = InMemoryReferenceStore()
+    await store.save_many([_ref()], package="pkg")
+    assert any(c.method == "save_many" for c in store.calls)
+    assert "pkg" in store.by_package
+
+
+@pytest.mark.asyncio
+async def test_in_memory_reference_store_find_callers_cross_package():
+    """Spec §6.2 — find_callers is cross-package (no package filter)."""
+    store = InMemoryReferenceStore()
+    await store.save_many(
+        [
+            _ref(from_package="pkg1", from_node_id="pkg1.a", to_node_id="t",
+                 to_name="t", kind=ReferenceKind.CALLS),
+            _ref(from_package="pkg2", from_node_id="pkg2.b", to_node_id="t",
+                 to_name="t", kind=ReferenceKind.CALLS),
+        ],
+        package="pkg1",  # save_many call only carries one package label, but
+                          # by_package stores by from_package of each ref
+    )
+    callers = await store.find_callers(target_node_id="t")
+    assert {r.from_package for r in callers} == {"pkg1", "pkg2"}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_reference_store_find_callees_filters_by_source():
+    store = InMemoryReferenceStore()
+    await store.save_many(
+        [
+            _ref(from_node_id="pkg.a", to_name="x", to_node_id="x"),
+            _ref(from_node_id="pkg.b", to_name="y", to_node_id="y"),
+        ],
+        package="pkg",
+    )
+    callees = await store.find_callees(from_node_id="pkg.a")
+    assert {r.to_name for r in callees} == {"x"}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_reference_store_find_by_name_optional_kind_filter():
+    store = InMemoryReferenceStore()
+    await store.save_many(
+        [
+            _ref(to_name="os.path.join", kind=ReferenceKind.CALLS),
+            _ref(to_name="os.path.join", kind=ReferenceKind.IMPORTS),
+        ],
+        package="pkg",
+    )
+    all_hits = await store.find_by_name("os.path.join")
+    assert len(all_hits) == 2
+    calls_only = await store.find_by_name("os.path.join", ReferenceKind.CALLS)
+    assert {r.kind for r in calls_only} == {ReferenceKind.CALLS}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_reference_store_delete_for_package():
+    store = InMemoryReferenceStore()
+    await store.save_many(
+        [
+            _ref(from_package="pkg1", to_name="x"),
+            _ref(from_package="pkg2", to_name="y"),
+        ],
+        package="pkg1",
+    )
+    await store.delete_for_package("pkg1")
+    rows = await store.find_by_name("x")
+    assert rows == []
+    rows = await store.find_by_name("y")
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_in_memory_reference_store_delete_all():
+    store = InMemoryReferenceStore()
+    await store.save_many([_ref()], package="pkg")
+    await store.delete_all()
+    assert store.by_package == {}
+
+
+@pytest.mark.asyncio
+async def test_fake_uow_now_carries_references_store():
+    """spec §14.7 — FakeUnitOfWork gains a 5th repo attribute."""
+    factory = make_fake_uow_factory()
+    async with factory() as uow:
+        assert isinstance(uow.references, InMemoryReferenceStore)
+
+
+@pytest.mark.asyncio
+async def test_fake_uow_references_raises_outside_context():
+    """spec §14.2 — outside `async with`, the references attribute raises."""
+    uow = FakeUnitOfWork()
+    # _NotEnteredProxy raises on any access, including bool(), incl. method calls.
+    with pytest.raises(UnitOfWorkNotEnteredError):
+        await uow.references.save_many([], package="pkg")
+
+
+@pytest.mark.asyncio
+async def test_make_fake_uow_factory_accepts_references_kwarg():
+    """spec §14.7 — factory threads a shared InMemoryReferenceStore."""
+    refs = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs)
+    uow1 = factory()
+    uow2 = factory()
+    assert uow1.references_store is refs
+    assert uow2.references_store is refs
+
+
+@pytest.mark.asyncio
+async def test_fake_uow_structurally_satisfies_widened_unit_of_work_protocol():
+    """isinstance(FakeUnitOfWork(), UnitOfWork) holds for the post-#5b
+    Protocol shape (5 attributes, not 4). Catches forgotten swap-in/out
+    of the new ``references`` attribute on a future re-shape."""
+    from pydocs_mcp.storage.protocols import UnitOfWork
+    uow = FakeUnitOfWork()
+    assert isinstance(uow, UnitOfWork)

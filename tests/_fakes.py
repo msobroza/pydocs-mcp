@@ -30,8 +30,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+from pydocs_mcp.storage.node_reference import NodeReference
 
 
 class _NotEnteredProxy:
@@ -52,8 +54,8 @@ class _NotEnteredProxy:
     def __getattr__(self, name: str) -> Any:
         raise UnitOfWorkNotEnteredError(self._attr_name)
 
-    def __bool__(self) -> bool:  # truthy for isinstance probes
-        return True
+    def __bool__(self) -> bool:  # raises to match SqliteUnitOfWork @property behavior
+        raise UnitOfWorkNotEnteredError(self._attr_name)
 
 
 @dataclass
@@ -240,6 +242,80 @@ class InMemoryModuleMemberStore:
         return sum(len(v) for v in self.by_package.values())
 
 
+# ── Reference store ──────────────────────────────────────────────────────
+
+
+@dataclass
+class InMemoryReferenceStore:
+    """Structurally satisfies ReferenceStore — async methods only.
+
+    ``by_package`` is keyed by ``ref.from_package`` (per row), NOT by the
+    ``package`` kwarg passed to ``save_many``. The kwarg labels the
+    batch's nominal source for the caller's convenience, but the index
+    we build is per-row — that lets find_callers / find_callees /
+    find_by_name return rows from packages OTHER than the save_many
+    invocation's package (which matters for cross-package re-resolution,
+    AC #6.5).
+    """
+
+    by_package: dict[str, list[NodeReference]] = field(default_factory=dict)
+    calls: list[_Call] = field(default_factory=list)
+
+    async def save_many(
+        self,
+        refs,
+        *,
+        package: str,
+        uow=None,
+    ) -> None:
+        materialised = tuple(refs)
+        self.calls.append(_Call("save_many", (package, materialised)))
+        for r in materialised:
+            self.by_package.setdefault(r.from_package, []).append(r)
+
+    async def find_callers(
+        self, *, target_node_id: str,
+    ) -> list[NodeReference]:
+        self.calls.append(_Call("find_callers", target_node_id))
+        return [
+            r for rs in self.by_package.values() for r in rs
+            if r.to_node_id == target_node_id
+        ]
+
+    async def find_callees(
+        self, *, from_node_id: str,
+    ) -> list[NodeReference]:
+        self.calls.append(_Call("find_callees", from_node_id))
+        return [
+            r for rs in self.by_package.values() for r in rs
+            if r.from_node_id == from_node_id
+        ]
+
+    async def find_by_name(
+        self,
+        to_name: str,
+        kind: ReferenceKind | None = None,
+    ) -> list[NodeReference]:
+        self.calls.append(_Call("find_by_name", (to_name, kind)))
+        rows = [
+            r for rs in self.by_package.values() for r in rs
+            if r.to_name == to_name
+        ]
+        if kind is not None:
+            rows = [r for r in rows if r.kind == kind]
+        return rows
+
+    async def delete_for_package(
+        self, package: str, *, uow=None,
+    ) -> None:
+        self.calls.append(_Call("delete_for_package", package))
+        self.by_package.pop(package, None)
+
+    async def delete_all(self, *, uow=None) -> None:
+        self.calls.append(_Call("delete_all", None))
+        self.by_package.clear()
+
+
 # ── FakeUnitOfWork ───────────────────────────────────────────────────────
 
 
@@ -271,6 +347,7 @@ class FakeUnitOfWork:
     chunks_store:         InMemoryChunkStore         = field(default_factory=InMemoryChunkStore)
     module_members_store: InMemoryModuleMemberStore  = field(default_factory=InMemoryModuleMemberStore)
     trees_store:          InMemoryDocumentTreeStore  = field(default_factory=InMemoryDocumentTreeStore)
+    references_store:     InMemoryReferenceStore     = field(default_factory=InMemoryReferenceStore)
     committed:   bool = False
     rolled_back: bool = False
     _entered:    bool = False
@@ -281,12 +358,14 @@ class FakeUnitOfWork:
     chunks:         Any = field(init=False, repr=False)
     module_members: Any = field(init=False, repr=False)
     trees:          Any = field(init=False, repr=False)
+    references:     Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.packages       = _NotEnteredProxy("packages")
         self.chunks         = _NotEnteredProxy("chunks")
         self.module_members = _NotEnteredProxy("module_members")
         self.trees          = _NotEnteredProxy("trees")
+        self.references     = _NotEnteredProxy("references")
 
     async def __aenter__(self) -> FakeUnitOfWork:
         if self._entered:
@@ -297,6 +376,7 @@ class FakeUnitOfWork:
         self.chunks         = self.chunks_store
         self.module_members = self.module_members_store
         self.trees          = self.trees_store
+        self.references     = self.references_store
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
@@ -308,6 +388,7 @@ class FakeUnitOfWork:
         self.chunks         = _NotEnteredProxy("chunks")
         self.module_members = _NotEnteredProxy("module_members")
         self.trees          = _NotEnteredProxy("trees")
+        self.references     = _NotEnteredProxy("references")
         return False
 
     async def commit(self) -> None:
@@ -326,6 +407,7 @@ def make_fake_uow_factory(
     chunks: InMemoryChunkStore | None = None,
     module_members: InMemoryModuleMemberStore | None = None,
     trees: InMemoryDocumentTreeStore | None = None,
+    references: InMemoryReferenceStore | None = None,
 ) -> Callable[[], FakeUnitOfWork]:
     """Build a Callable[[], FakeUnitOfWork] for service-test wiring (spec §9).
 
@@ -335,13 +417,16 @@ def make_fake_uow_factory(
     keeping the underlying InMemory* stores SHARED (so state persists across
     calls — write-then-read patterns work as expected).
 
-    All four kwargs default to a fresh empty InMemory* — pass only the ones
-    you need to seed.
+    All kwargs default to a fresh empty InMemory* — pass only the ones
+    you need to seed. Sub-PR #5b: adds the ``references=`` kwarg so #5b's
+    service tests can seed cross-node reference data the same way they
+    seed packages / chunks / etc.
     """
     pkgs = packages or InMemoryPackageStore()
     chs  = chunks   or InMemoryChunkStore()
     mms  = module_members or InMemoryModuleMemberStore()
     trs  = trees    or InMemoryDocumentTreeStore()
+    rfs  = references or InMemoryReferenceStore()
 
     def factory() -> FakeUnitOfWork:
         return FakeUnitOfWork(
@@ -349,6 +434,7 @@ def make_fake_uow_factory(
             chunks_store=chs,
             module_members_store=mms,
             trees_store=trs,
+            references_store=rfs,
         )
     return factory
 
@@ -359,6 +445,7 @@ __all__ = (
     "InMemoryDocumentTreeStore",
     "InMemoryModuleMemberStore",
     "InMemoryPackageStore",
+    "InMemoryReferenceStore",
     "_Call",
     "make_fake_uow_factory",
 )

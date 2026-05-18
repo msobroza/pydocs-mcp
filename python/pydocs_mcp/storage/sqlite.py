@@ -13,6 +13,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -35,6 +36,7 @@ from pydocs_mcp.storage.filters import (
     Not,
     format_registry,
 )
+from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 log = logging.getLogger("pydocs-mcp")
@@ -87,10 +89,12 @@ class SqliteUnitOfWork:
     Async context manager: ``__aenter__`` acquires a single connection
     from ``provider.acquire()``, runs ``BEGIN``, sets the
     ``_sqlite_transaction`` ContextVar (so repo writes routed through
-    ``_maybe_acquire`` reuse the held connection — without this the four
+    ``_maybe_acquire`` reuse the held connection — without this the five
     repository attributes would each open their own connection and
     atomicity would be lost), and exposes ``packages`` / ``chunks`` /
-    ``module_members`` / ``trees`` as attributes.
+    ``module_members`` / ``trees`` / ``references`` as attributes.
+    Sub-PR #5b adds ``references`` as the 5th repo attribute (the
+    cross-node reference-graph store).
 
     The ``asyncio.Lock`` lives on the instance and is exposed via the
     ContextVar so ``_maybe_acquire`` can serialise concurrent repo calls
@@ -126,6 +130,7 @@ class SqliteUnitOfWork:
     _chunks: SqliteChunkRepository | None = field(default=None, init=False, repr=False)
     _module_members: SqliteModuleMemberRepository | None = field(default=None, init=False, repr=False)
     _trees: SqliteDocumentTreeStore | None = field(default=None, init=False, repr=False)
+    _references: SqliteReferenceStore | None = field(default=None, init=False, repr=False)
 
     async def __aenter__(self) -> SqliteUnitOfWork:
         # Re-entrance guard — entering twice would silently leak the first
@@ -150,6 +155,7 @@ class SqliteUnitOfWork:
             self._chunks = SqliteChunkRepository(provider=self.provider)
             self._module_members = SqliteModuleMemberRepository(provider=self.provider)
             self._trees = SqliteDocumentTreeStore(provider=self.provider)
+            self._references = SqliteReferenceStore(provider=self.provider)
             self._committed = False
             self._entered = True
             return self
@@ -193,6 +199,7 @@ class SqliteUnitOfWork:
             self._chunks = None
             self._module_members = None
             self._trees = None
+            self._references = None
             self._committed = False
             self._entered = False
         return False
@@ -235,6 +242,12 @@ class SqliteUnitOfWork:
         if self._trees is None:
             raise UnitOfWorkNotEnteredError("trees")
         return self._trees
+
+    @property
+    def references(self) -> SqliteReferenceStore:
+        if self._references is None:
+            raise UnitOfWorkNotEnteredError("references")
+        return self._references
 
 
 # ── Chunk ↔ row ──────────────────────────────────────────────────────────
@@ -913,4 +926,124 @@ def _dict_to_node(d: dict) -> DocumentNode:
         extra_metadata=d.get("extra_metadata", {}),
         parent_id=d.get("parent_id"),
         children=tuple(_dict_to_node(c) for c in d.get("children", ())),
+    )
+
+
+# ── Reference store ─────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class SqliteReferenceStore:
+    """ReferenceStore backed by the ``node_references`` SQLite table (spec §6.2).
+
+    Each row is one (from_package, from_node_id, to_name, kind) edge.
+    UPSERT-on-PK semantics — re-extraction of the same source updates
+    ``to_node_id`` rather than crashing on the natural PK. The
+    ``package`` kwarg on ``save_many`` is a caller-side convenience for
+    logging — every row already carries ``from_package`` in its own
+    column. ``find_callers`` / ``find_callees`` / ``find_by_name`` are
+    cross-package per spec §6.2.
+    """
+
+    provider: ConnectionProvider
+
+    async def save_many(
+        self,
+        refs: Iterable[NodeReference],
+        *,
+        package: str,  # noqa: ARG002 -- caller convenience for logging
+        uow: UnitOfWork | None = None,  # noqa: ARG002 -- ambient via ContextVar
+    ) -> None:
+        rows = [
+            (r.from_package, r.from_node_id, r.to_name, r.to_node_id, str(r.kind))
+            for r in refs
+        ]
+        if not rows:
+            return
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.executemany,
+                "INSERT INTO node_references "
+                "(from_package, from_node_id, to_name, to_node_id, kind) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(from_package, from_node_id, to_name, kind) "
+                "DO UPDATE SET to_node_id = excluded.to_node_id",
+                rows,
+            )
+
+    async def find_callers(
+        self, *, target_node_id: str,
+    ) -> list[NodeReference]:
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(
+                    "SELECT from_package, from_node_id, to_name, to_node_id, kind "
+                    "FROM node_references WHERE to_node_id = ?",
+                    (target_node_id,),
+                ).fetchall()
+            )
+        return [_row_to_node_reference(r) for r in rows]
+
+    async def find_callees(
+        self, *, from_node_id: str,
+    ) -> list[NodeReference]:
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(
+                    "SELECT from_package, from_node_id, to_name, to_node_id, kind "
+                    "FROM node_references WHERE from_node_id = ?",
+                    (from_node_id,),
+                ).fetchall()
+            )
+        return [_row_to_node_reference(r) for r in rows]
+
+    async def find_by_name(
+        self,
+        to_name: str,
+        kind: ReferenceKind | None = None,
+    ) -> list[NodeReference]:
+        if kind is None:
+            sql = (
+                "SELECT from_package, from_node_id, to_name, to_node_id, kind "
+                "FROM node_references WHERE to_name = ?"
+            )
+            params: tuple = (to_name,)
+        else:
+            sql = (
+                "SELECT from_package, from_node_id, to_name, to_node_id, kind "
+                "FROM node_references WHERE to_name = ? AND kind = ?"
+            )
+            params = (to_name, str(kind))
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchall()
+            )
+        return [_row_to_node_reference(r) for r in rows]
+
+    async def delete_for_package(
+        self, package: str, *, uow: UnitOfWork | None = None,  # noqa: ARG002
+    ) -> None:
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.execute,
+                "DELETE FROM node_references WHERE from_package = ?",
+                (package,),
+            )
+
+    async def delete_all(
+        self, *, uow: UnitOfWork | None = None,  # noqa: ARG002
+    ) -> None:
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.execute, "DELETE FROM node_references",
+            )
+
+
+def _row_to_node_reference(row) -> NodeReference:
+    return NodeReference(
+        from_package=row["from_package"] or "",
+        from_node_id=row["from_node_id"] or "",
+        to_name=row["to_name"] or "",
+        to_node_id=row["to_node_id"],            # NULL → None
+        kind=ReferenceKind(row["kind"]),
     )

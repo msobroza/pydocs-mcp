@@ -11,7 +11,7 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 3  # v3 unifies sub-PR #5 (document_trees + content_hash + local_path) and sub-PR #6 (chunks.module)
+SCHEMA_VERSION = 4  # v4 adds the additive ``node_references`` table + 3 indices on top of v3 (sub-PR #5b)
 
 _DDL = """
     CREATE TABLE packages (
@@ -43,11 +43,22 @@ _DDL = """
         updated_at REAL,
         PRIMARY KEY (package, module)
     );
+    CREATE TABLE node_references (
+        from_package   TEXT NOT NULL,
+        from_node_id   TEXT NOT NULL,
+        to_name        TEXT NOT NULL,
+        to_node_id     TEXT,
+        kind           TEXT NOT NULL,
+        PRIMARY KEY (from_package, from_node_id, to_name, kind)
+    );
     CREATE INDEX ix_chunks_package         ON chunks(package);
     CREATE INDEX ix_chunks_module          ON chunks(module);
     CREATE INDEX ix_module_members_package ON module_members(package);
     CREATE INDEX ix_module_members_name    ON module_members(name);
     CREATE INDEX idx_trees_package         ON document_trees(package);
+    CREATE INDEX ix_refs_from              ON node_references(from_package, from_node_id);
+    CREATE INDEX ix_refs_to_name           ON node_references(to_name);
+    CREATE INDEX ix_refs_to_node           ON node_references(to_node_id);
 """
 
 # Tables we know about — dropped on a version mismatch so earlier schemas
@@ -55,6 +66,7 @@ _DDL = """
 _KNOWN_TABLES = (
     "chunks_fts", "chunks", "module_members", "packages", "symbols",
     "document_trees",
+    "node_references",
 )
 
 
@@ -118,17 +130,39 @@ def _apply_v3_additions(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v4_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply every additive change that makes up the v4 shape.
+
+    Mirrors :func:`_apply_v3_additions` — ``CREATE TABLE IF NOT EXISTS``
+    + ``CREATE INDEX IF NOT EXISTS``; no destructive drops. Used both as
+    the v3 → v4 forward migration AND as a v4-on-open repair sweep
+    (drift recovery, AC #3).
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS node_references ("
+        "from_package TEXT NOT NULL, from_node_id TEXT NOT NULL, "
+        "to_name TEXT NOT NULL, to_node_id TEXT, kind TEXT NOT NULL, "
+        "PRIMARY KEY (from_package, from_node_id, to_name, kind))"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_refs_from "
+        "ON node_references(from_package, from_node_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_refs_to_name ON node_references(to_name)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_refs_to_node ON node_references(to_node_id)"
+    )
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
-    - v3 already: re-run the additive v3 sweep anyway. The user_version
-      stamp doesn't guarantee the current shape — drift can leave a v3-
-      stamped DB missing ``document_trees`` or the new columns. The sweep
-      is idempotent (``CREATE TABLE IF NOT EXISTS`` + ``_try_add_column``
-      swallowing duplicate-column errors), so re-running on every v3 open
-      repairs drift at the cost of one PRAGMA + a handful of no-op ALTERs.
-    - v2 → v3: soft migration (CREATE document_trees + ALTER two columns);
-      rows in ``packages`` / ``chunks`` / ``module_members`` survive.
+    - v4 already: re-run v4 sweep (additive, idempotent; drift recovery).
+    - v3 → v4: additive forward migration (CREATE TABLE node_references
+      + 3 indices); rows in all existing tables survive.
+    - v2 → v3 → v4: walk both forward migrations in order.
     - Any other mismatch: drop every known table and recreate from current DDL.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,9 +173,22 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
+        # v4 — re-run additive sweep for drift recovery.
         _apply_v3_additions(conn)
+        _apply_v4_additions(conn)
+    elif current == 3:
+        # v3 → v4 — additive. We also re-run the v3 sweep first because some
+        # legacy v3-stamped DBs (rebase artefacts between sub-PR #5 and #6)
+        # lack ``document_trees`` / ``content_hash`` / ``local_path`` despite
+        # the stamp; rerunning the idempotent v3 sweep repairs that drift
+        # before stamping forward to v4.
+        _apply_v3_additions(conn)
+        _apply_v4_additions(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 2:
+        # v2 → v3 → v4 — walk both forward migrations in order.
         _apply_v3_additions(conn)
+        _apply_v4_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     else:
         _drop_all_known_tables(conn)
@@ -152,29 +199,26 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
 
 def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
-    """Remove all rows for a package across chunks, members, trees, and packages.
+    """Remove all rows for a package across chunks, members, trees, refs, packages.
 
-    ``document_trees`` is part of the v3 schema (sub-PR #5) and must be
-    cleared alongside the other per-package tables — otherwise stale trees
-    survive a re-index and ``LookupService.get_tree(package, module)``
-    returns an outdated payload.
+    Sub-PR #5b adds ``node_references`` to the per-package sweep — without
+    this, stale refs survive a re-index and ``ref_svc.callers(...)`` returns
+    references to deleted source nodes.
     """
     connection.execute("DELETE FROM chunks  WHERE package=?", (package_name,))
     connection.execute("DELETE FROM module_members WHERE package=?", (package_name,))
     connection.execute("DELETE FROM document_trees WHERE package=?", (package_name,))
+    connection.execute("DELETE FROM node_references WHERE from_package=?", (package_name,))
     connection.execute("DELETE FROM packages WHERE name=?", (package_name,))
 
 
 def clear_all_packages(connection: sqlite3.Connection) -> None:
-    """Clear every indexed package: packages, chunks, members, and trees.
-
-    See :func:`remove_package` — ``document_trees`` must be cleared too or
-    a fresh re-index reads stale tree rows for the deleted packages.
-    """
+    """Clear every indexed package across all five entity tables."""
     connection.execute("DELETE FROM packages")
     connection.execute("DELETE FROM chunks")
     connection.execute("DELETE FROM module_members")
     connection.execute("DELETE FROM document_trees")
+    connection.execute("DELETE FROM node_references")
     connection.commit()
 
 

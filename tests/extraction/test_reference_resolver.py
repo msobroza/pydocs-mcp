@@ -1,0 +1,164 @@
+"""ReferenceResolver tests (spec §7.2 — rules A, B, C, D, E + F20 + self.X.Y)."""
+from __future__ import annotations
+
+import pytest
+
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.extraction.strategies.reference_resolver import ReferenceResolver
+from pydocs_mcp.storage.node_reference import NodeReference
+
+
+def _ref(**kw) -> NodeReference:
+    base = dict(
+        from_package="pkg",
+        from_node_id="pkg.mod.fn",
+        to_name="x",
+        to_node_id=None,
+        kind=ReferenceKind.CALLS,
+    )
+    base.update(kw)
+    return NodeReference(**base)
+
+
+def test_rule_e_no_match_leaves_to_node_id_none():
+    """Spec §7.2 Rule E — no match → to_node_id stays None."""
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.mod.fn", "pkg.helpers.compute"},
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.mod.fn", to_name="totally.unknown"),
+    ])
+    assert out[0].to_node_id is None
+
+
+def test_rule_b_exact_match_sets_to_node_id():
+    """Spec §7.2 Rule B — exact qname match → to_node_id = that qname."""
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.helpers.compute"},
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(to_name="pkg.helpers.compute"),
+    ])
+    assert out[0].to_node_id == "pkg.helpers.compute"
+
+
+def test_rule_c_suffix_match_within_from_package():
+    """Spec §7.2 Rule C — strict dotted suffix within from_package → resolve.
+
+    `to_name="compute"` matches `pkg.helpers.compute` if it's the only
+    qname in `pkg.*` ending in `.compute`.
+    """
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.helpers.compute", "other.unrelated.compute"},
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.mod.fn", to_name="compute"),
+    ])
+    # Only one qname matches within `pkg.*`; resolved.
+    assert out[0].to_node_id == "pkg.helpers.compute"
+
+
+def test_rule_d_ambiguous_suffix_leaves_none():
+    """AC #8 — Rule D: when suffix matches MULTIPLE qnames within
+    from_package, the resolver leaves to_node_id = None deterministically.
+
+    This prevents nondeterministic "first match wins" between Python's
+    inherent dict-iteration order across runs.
+    """
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.a.Foo.bar", "pkg.b.Foo.bar"},
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.something.x", to_name="bar"),
+    ])
+    assert out[0].to_node_id is None
+
+
+def test_rule_a_alias_rewrites_then_resolves_exactly():
+    """AC #6 — Rule A: alias rewrite first, then exact match.
+
+    `from pkg.helpers import compute as do_it` makes
+    `do_it(42)` resolve to `pkg.helpers.compute`.
+    """
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.helpers.compute"},
+        aliases={"pkg.utils": {"do_it": "pkg.helpers.compute"}},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.utils.runner", to_name="do_it"),
+    ])
+    assert out[0].to_node_id == "pkg.helpers.compute"
+
+
+def test_rule_a_alias_with_dotted_remainder():
+    """Spec §7.2 — `do_it.something()` after `import X.Y as do_it` → X.Y.something."""
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.real.something"},
+        aliases={"pkg.utils": {"R": "pkg.real"}},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.utils.fn", to_name="R.something"),
+    ])
+    assert out[0].to_node_id == "pkg.real.something"
+
+
+def test_f20_prefers_bare_module_over_md_or_ipynb():
+    """AC §7.2 step 4 — when multiple qnames differ ONLY by trailing
+    `.md` / `.ipynb` synthetic suffix, prefer the bare (.py module)
+    candidate. CALLS / IMPORTS / INHERITS don't target docs/notebooks."""
+    resolver = ReferenceResolver(
+        qname_universe={
+            "pkg.helpers",          # .py module
+            "pkg.helpers.md",       # markdown sibling
+            "pkg.helpers.ipynb",    # notebook sibling
+        },
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(to_name="pkg.helpers"),
+    ])
+    assert out[0].to_node_id == "pkg.helpers"
+
+
+def test_self_dot_short_circuit_leaves_none():
+    """AC #9 — to_name starting with 'self.' short-circuits, to_node_id stays None."""
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.cls.client.fetch"},  # plausible target
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.cls.method", to_name="self.client.fetch"),
+    ])
+    assert out[0].to_node_id is None
+    # The to_name is preserved verbatim — users see "self.client.fetch" in callees.
+    assert out[0].to_name == "self.client.fetch"
+
+
+def test_inherits_resolution_works_same_rules():
+    """Rules A-E apply uniformly across CALLS / IMPORTS / INHERITS."""
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.base.Base"},
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(to_name="pkg.base.Base", kind=ReferenceKind.INHERITS),
+    ])
+    assert out[0].to_node_id == "pkg.base.Base"
+
+
+def test_unresolved_external_stays_unresolved():
+    """AC #10 — `os.path.join` not in qname_universe → to_node_id stays None,
+    queryable by to_name."""
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.something"},
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(to_name="os.path.join"),
+    ])
+    assert out[0].to_node_id is None
+    assert out[0].to_name == "os.path.join"

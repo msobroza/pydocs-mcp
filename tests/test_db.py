@@ -291,10 +291,13 @@ class TestSchemaV3:
     """Schema v3: document_trees table + chunks.content_hash + packages.local_path."""
 
     def test_fresh_db_is_v3(self, tmp_path):
+        # Sub-PR #5b: schema bumped to v4 (additive on top of v3). The v3
+        # invariants (document_trees / content_hash / local_path) still
+        # hold; the version stamp simply moved forward.
         conn = open_index_database(tmp_path / "v3.db")
         try:
-            assert SCHEMA_VERSION == 3
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert SCHEMA_VERSION == 4
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         finally:
             conn.close()
 
@@ -362,10 +365,11 @@ class TestSchemaV3:
         legacy.commit()
         legacy.close()
 
-        # Reopen via the real entry point — should soft-migrate to v3.
+        # Reopen via the real entry point — should soft-migrate forward.
+        # Sub-PR #5b extends this path: v2 → v3 → v4 in a single open.
         migrated = open_index_database(db_file)
         try:
-            assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert migrated.execute("PRAGMA user_version").fetchone()[0] == 4
 
             # Old rows must survive.
             pkg = migrated.execute(
@@ -496,3 +500,199 @@ class TestSchemaV3:
             assert pkg_cols.count("local_path") == 1
         finally:
             conn.close()
+
+
+def test_schema_version_is_4_after_open(tmp_path):
+    """Sub-PR #5b: bump to 4 (additive on top of v3)."""
+    db = tmp_path / "x.db"
+    conn = open_index_database(db)
+    try:
+        ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+    assert ver == 4
+    assert SCHEMA_VERSION == 4
+
+
+def test_node_references_table_created_on_fresh_db(tmp_path):
+    """Fresh DB DDL creates node_references + the 3 indices."""
+    db = tmp_path / "x.db"
+    conn = open_index_database(db)
+    try:
+        # PRAGMA table_info validates column shape.
+        cols = [r["name"] for r in conn.execute(
+            "PRAGMA table_info(node_references)").fetchall()]
+        assert cols == [
+            "from_package", "from_node_id", "to_name", "to_node_id", "kind",
+        ]
+        # 3 secondary indices.
+        idx = {
+            r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND tbl_name='node_references'").fetchall()
+        }
+        assert "ix_refs_from" in idx
+        assert "ix_refs_to_name" in idx
+        assert "ix_refs_to_node" in idx
+    finally:
+        conn.close()
+
+
+def test_v3_to_v4_migration_preserves_existing_rows(tmp_path):
+    """v3 → v4 must be ADDITIVE — packages/chunks/module_members/document_trees
+    rows survive the bump. Verifies spec Decision 6.
+    """
+    import sqlite3
+    db = tmp_path / "x.db"
+    # Hand-craft a v3 DB stamped at user_version=3 with one row in each table.
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE packages (
+            name TEXT PRIMARY KEY, version TEXT, summary TEXT,
+            homepage TEXT, dependencies TEXT, content_hash TEXT, origin TEXT,
+            local_path TEXT
+        );
+        CREATE TABLE chunks (
+            id INTEGER PRIMARY KEY, package TEXT,
+            module TEXT DEFAULT '',
+            title TEXT, text TEXT, origin TEXT,
+            content_hash TEXT
+        );
+        CREATE TABLE module_members (
+            id INTEGER PRIMARY KEY, package TEXT, module TEXT,
+            name TEXT, kind TEXT, signature TEXT,
+            return_annotation TEXT, parameters TEXT, docstring TEXT
+        );
+        CREATE TABLE document_trees (
+            package TEXT NOT NULL, module TEXT NOT NULL,
+            tree_json TEXT NOT NULL, content_hash TEXT, updated_at REAL,
+            PRIMARY KEY (package, module)
+        );
+        PRAGMA user_version = 3;
+    """)
+    conn.execute(
+        "INSERT INTO packages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("pkg", "1.0", "s", "h", "[]", "ch", "DEPENDENCY", None),
+    )
+    conn.execute(
+        "INSERT INTO chunks (package, module, title, text, origin, content_hash) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("pkg", "pkg.mod", "T", "body", "src", "ch"),
+    )
+    conn.commit()
+    conn.close()
+
+    # Now open through the production path — must migrate and PRESERVE rows.
+    conn = open_index_database(db)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        # The package row survives.
+        row = conn.execute(
+            "SELECT name FROM packages WHERE name='pkg'").fetchone()
+        assert row is not None
+        # The chunk row survives.
+        cnt = conn.execute(
+            "SELECT COUNT(*) AS c FROM chunks WHERE package='pkg'").fetchone()["c"]
+        assert cnt == 1
+        # node_references exists and is empty.
+        cnt = conn.execute(
+            "SELECT COUNT(*) AS c FROM node_references").fetchone()["c"]
+        assert cnt == 0
+    finally:
+        conn.close()
+
+
+def test_v4_open_open_open_is_idempotent(tmp_path):
+    """Spec AC #2: opening a v4 DB N times never duplicates anything.
+
+    Mirrors test_v3_open_open_open_is_idempotent (if it exists). Re-runs
+    the additive sweep — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF
+    NOT EXISTS, no-op on each subsequent open.
+    """
+    db = tmp_path / "x.db"
+    open_index_database(db).close()
+    open_index_database(db).close()
+    conn = open_index_database(db)
+    try:
+        # Still exactly one node_references table, exactly 3 named secondary
+        # indices (filtering out the implicit ``sqlite_autoindex_*`` index
+        # SQLite creates for the composite PRIMARY KEY).
+        tbl = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='node_references'").fetchall()
+        assert len(tbl) == 1
+        idx = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND tbl_name='node_references' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        assert len(idx) == 3
+    finally:
+        conn.close()
+
+
+def test_drift_recovery_recreates_missing_node_references(tmp_path):
+    """AC #3: opening a v4-stamped DB with the node_references table
+    manually DROPPED triggers the additive sweep on next open."""
+    import sqlite3
+    db = tmp_path / "x.db"
+    open_index_database(db).close()  # creates v4 schema
+
+    # Manually drop node_references — simulate drift / partial DB damage.
+    conn = sqlite3.connect(str(db))
+    conn.execute("DROP TABLE node_references")
+    conn.commit()
+    conn.close()
+
+    # Open again — repair sweep runs.
+    conn = open_index_database(db)
+    try:
+        tbl = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='node_references'").fetchall()
+        assert len(tbl) == 1
+    finally:
+        conn.close()
+
+
+def test_remove_package_clears_node_references(tmp_path):
+    """AC #13: remove_package deletes node_references rows for that package."""
+    import sqlite3
+    from pydocs_mcp.db import remove_package
+    db = tmp_path / "x.db"
+    conn = open_index_database(db)
+    try:
+        conn.execute(
+            "INSERT INTO node_references VALUES (?, ?, ?, ?, ?)",
+            ("pkg", "pkg.mod.fn", "other", None, "calls"),
+        )
+        conn.execute(
+            "INSERT INTO node_references VALUES (?, ?, ?, ?, ?)",
+            ("other_pkg", "other_pkg.x", "z", None, "calls"),
+        )
+        conn.commit()
+        remove_package(conn, "pkg")
+        rows = conn.execute(
+            "SELECT from_package FROM node_references").fetchall()
+        assert [r["from_package"] for r in rows] == ["other_pkg"]
+    finally:
+        conn.close()
+
+
+def test_clear_all_packages_clears_node_references(tmp_path):
+    """AC #14: clear_all_packages wipes node_references entirely."""
+    from pydocs_mcp.db import clear_all_packages
+    db = tmp_path / "x.db"
+    conn = open_index_database(db)
+    try:
+        conn.execute(
+            "INSERT INTO node_references VALUES (?, ?, ?, ?, ?)",
+            ("pkg", "pkg.mod.fn", "other", None, "calls"),
+        )
+        conn.commit()
+        clear_all_packages(conn)
+        cnt = conn.execute(
+            "SELECT COUNT(*) AS c FROM node_references").fetchone()["c"]
+        assert cnt == 0
+    finally:
+        conn.close()

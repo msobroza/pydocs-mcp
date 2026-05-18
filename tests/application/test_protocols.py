@@ -18,6 +18,7 @@ from pydocs_mcp.application.protocols import (
     MemberExtractor,
 )
 from pydocs_mcp.models import ModuleMember, Package, PackageOrigin
+from pydocs_mcp.storage.node_reference import NodeReference
 
 
 def _pkg(name: str = "x") -> Package:
@@ -70,3 +71,33 @@ def test_member_extractor_runtime_checkable() -> None:
             return ()
 
     assert isinstance(Fake(), MemberExtractor)
+
+
+def test_extraction_result_references_defaults_to_empty_tuple() -> None:
+    """Spec §4.2, AC #21: ``references`` is optional.
+
+    Existing extractors (sub-PR #5 chunkers, the AST/Inspect member
+    extractors) construct :class:`ExtractionResult` with positional
+    ``(chunks, trees, package)`` — adding a fourth field must not break
+    them, so the default is an empty tuple.
+    """
+    result = ExtractionResult(chunks=(), trees=(), package=_pkg())
+    assert result.references == ()
+
+
+def test_extraction_result_accepts_node_references() -> None:
+    """A ``ReferenceExtractionStage`` (later task) will emit real edges;
+    the dataclass must accept them in the ``references`` slot."""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+
+    ref = NodeReference(
+        from_package="pkg",
+        from_node_id="pkg.mod.caller",
+        to_name="pkg.mod.callee",
+        to_node_id="pkg.mod.callee",
+        kind=ReferenceKind.CALLS,
+    )
+    result = ExtractionResult(
+        chunks=(), trees=(), package=_pkg("pkg"), references=(ref,),
+    )
+    assert result.references == (ref,)

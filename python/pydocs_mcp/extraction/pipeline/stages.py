@@ -1,4 +1,4 @@
-"""Six ingestion stages for IngestionPipeline (spec §7.2).
+"""Seven ingestion stages for IngestionPipeline (spec §7.2 + §7.4 §5b).
 
 All registered via ``@stage_registry.register()``; all async; all return new
 ``IngestionState`` via ``dataclasses.replace``. Stages that vary by target
@@ -14,6 +14,7 @@ layer is expected to translate into a non-fatal skip.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import logging
 from dataclasses import dataclass, replace
@@ -158,6 +159,109 @@ class ChunkingStage:
         return {"type": "chunking"}
 
 
+@stage_registry.register("reference_capture")
+@dataclass(frozen=True, slots=True)
+class ReferenceCaptureStage:
+    """Captures cross-node references from Python files (spec §5.4 / §7).
+
+    Re-parses each ``.py`` file in ``state.file_contents`` (cheap —
+    ``ast.parse`` is ~ms per file) and runs ``capture_imports`` /
+    ``capture_calls`` / ``capture_inherits`` from
+    :mod:`pydocs_mcp.extraction.strategies.references`. Stores the
+    unresolved tuple on ``state.references`` and the per-module alias
+    table on ``state.reference_aliases``; the resolver pass runs later
+    inside ``IndexingService.reindex_package`` (where it has access to
+    the cross-package qname universe via ``uow.trees``).
+
+    Per-file isolation: a ``SyntaxError`` or other ``Exception`` on one
+    file logs and continues — same contract as :class:`ChunkingStage`
+    (AC #27). The dedicated stage (rather than rewiring ``ChunkingStage``
+    to thread ``ref_collector`` everywhere) keeps capture single-purpose
+    and the cost is one extra ``ast.parse`` per file — bounded and only
+    over ``.py`` files.
+    """
+
+    name: str = "reference_capture"
+
+    async def run(self, state: IngestionState) -> IngestionState:
+        refs, aliases = await asyncio.to_thread(self._capture_all, state)
+        return replace(
+            state, references=tuple(refs), reference_aliases=aliases,
+        )
+
+    def _capture_all(
+        self, state: IngestionState,
+    ) -> tuple[list[Any], dict[str, dict[str, str]]]:
+        # Deferred imports — strategies pull in ast + reference value objects
+        # which are otherwise irrelevant at stage-registry construction time.
+        from pydocs_mcp.extraction.strategies.chunkers import _module_from_path
+        from pydocs_mcp.extraction.strategies.references import (
+            ReferenceCollector,
+            capture_calls,
+            capture_imports,
+            capture_inherits,
+        )
+        collector = ReferenceCollector()
+        for path, source in state.file_contents:
+            if not path.endswith(".py"):
+                continue
+            if not source:
+                continue
+            try:
+                tree = ast.parse(source)
+            except SyntaxError as exc:
+                # Per-file containment — same contract as ChunkingStage (AC #27).
+                log.warning(
+                    "reference_capture: ast.parse failed on %s: %s", path, exc,
+                )
+                continue
+            try:
+                module_qname = _module_from_path(path, state.root)
+                capture_imports(
+                    tree.body,
+                    from_package=state.package_name,
+                    module_qname=module_qname,
+                    collector=collector,
+                )
+                for stmt in tree.body:
+                    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        capture_calls(
+                            stmt.body,
+                            from_package=state.package_name,
+                            from_node_id=f"{module_qname}.{stmt.name}",
+                            collector=collector,
+                        )
+                    elif isinstance(stmt, ast.ClassDef):
+                        class_qname = f"{module_qname}.{stmt.name}"
+                        capture_inherits(
+                            list(stmt.bases),
+                            from_package=state.package_name,
+                            class_qname=class_qname,
+                            collector=collector,
+                        )
+                        for m in stmt.body:
+                            if isinstance(
+                                m, (ast.FunctionDef, ast.AsyncFunctionDef),
+                            ):
+                                capture_calls(
+                                    m.body,
+                                    from_package=state.package_name,
+                                    from_node_id=f"{class_qname}.{m.name}",
+                                    collector=collector,
+                                )
+            except Exception as exc:  # noqa: BLE001 -- per-file containment
+                log.warning("reference_capture failed on %s: %s", path, exc)
+                continue
+        return collector.refs, collector.aliases
+
+    @classmethod
+    def from_dict(cls, data: dict, context: Any) -> "ReferenceCaptureStage":
+        return cls()
+
+    def to_dict(self) -> dict:
+        return {"type": "reference_capture"}
+
+
 @stage_registry.register("flatten")
 @dataclass(frozen=True, slots=True)
 class FlattenStage:
@@ -300,4 +404,5 @@ __all__ = (
     "FileReadStage",
     "FlattenStage",
     "PackageBuildStage",
+    "ReferenceCaptureStage",
 )
