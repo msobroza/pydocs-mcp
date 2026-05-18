@@ -13,9 +13,13 @@ def test_reference_kind_is_str_enum() -> None:
     assert issubclass(ReferenceKind, StrEnum)
 
 
-def test_reference_kind_values_are_the_three_ast_precise_kinds() -> None:
-    """MENTIONS is reserved for #5c — must NOT appear in #5b."""
-    assert {k.value for k in ReferenceKind} == {"calls", "imports", "inherits"}
+def test_reference_kind_values_are_the_four_kinds() -> None:
+    """Sub-PR #5c lands MENTIONS — regex-fuzzy backtick-quoted dotted
+    names captured from markdown. Joins the three AST-precise kinds
+    (calls / imports / inherits) as the fourth wire value."""
+    assert {k.value for k in ReferenceKind} == {
+        "calls", "imports", "inherits", "mentions",
+    }
 
 
 def test_reference_kind_string_identity() -> None:
@@ -25,3 +29,4 @@ def test_reference_kind_string_identity() -> None:
     assert str(ReferenceKind.CALLS) == "calls"
     assert str(ReferenceKind.IMPORTS) == "imports"
     assert str(ReferenceKind.INHERITS) == "inherits"
+    assert str(ReferenceKind.MENTIONS) == "mentions"

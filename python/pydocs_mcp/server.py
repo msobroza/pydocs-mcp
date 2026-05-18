@@ -21,11 +21,9 @@ from typing import TYPE_CHECKING
 
 from pydocs_mcp.application import (
     LookupInput,
-    LookupService,
     MCPToolError,
     SearchInput,
     ServiceUnavailableError,
-    TreeService,
 )
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
@@ -96,43 +94,36 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     from pydocs_mcp.application import (
         ApiSearch,
         DocsSearch,
-        PackageLookup,
     )
+    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import (
         AppConfig,
         build_chunk_pipeline_from_config,
         build_member_pipeline_from_config,
     )
     from pydocs_mcp.retrieval.factories import build_retrieval_context
-    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+    from pydocs_mcp.storage.factories import build_sqlite_lookup_service
 
     config = AppConfig.load(explicit_path=config_path)
+    # Push YAML-loaded settings into module-level slots read by
+    # ``LookupInput`` validators and ``ReferenceCaptureStage`` (sub-PR #5c
+    # Task 8). One call covers both — see ``configure_from_app_config``.
+    configure_from_app_config(config)
     context = build_retrieval_context(db_path, config)
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 
-    # One UoW factory for every read-side service. Post-#5a-2 services all
-    # share this — no more inline SqliteChunkRepository / SqlitePackageRepository
-    # / SqliteDocumentTreeStore wiring.
-    uow_factory = build_sqlite_uow_factory(db_path)
-
-    package_lookup = PackageLookup(uow_factory=uow_factory)
     search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
     search_api_svc = ApiSearch(member_pipeline=member_pipeline)
 
-    # TreeService (sub-PR #5) — same uow_factory backs the tree reads, so
-    # multi-segment ``lookup`` targets resolve against persisted
-    # DocumentNode trees written by ``IndexingService``. ReferenceService
-    # (sub-PR #5b) ships later; LookupService surfaces its absence as
-    # ServiceUnavailableError to MCP clients instead of failing startup.
-    tree_svc = TreeService(uow_factory=uow_factory)
-    ref_svc = None  # reserved for sub-PR #5b
-
-    lookup_svc = LookupService(
-        package_lookup=package_lookup,
-        tree_svc=tree_svc,
-        ref_svc=ref_svc,
-    )
+    # LookupService composition is owned by ``build_sqlite_lookup_service``
+    # so the CLI (``__main__._cmd_lookup``) and MCP server can never drift
+    # on which stores back ``lookup``. Post-#5c (Task 8): the factory wires
+    # a real ``ReferenceService`` into ``ref_svc`` — previously this site
+    # constructed ``LookupService(ref_svc=None)`` inline, leaving the MCP
+    # ``lookup(show="callers"|"callees"|"inherits")`` modes raising
+    # ``ServiceUnavailableError`` in production.
+    lookup_svc = build_sqlite_lookup_service(db_path, config=config)
 
     mcp = FastMCP("pydocs-mcp")
 
@@ -209,7 +200,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             log.exception("lookup failed unexpectedly")
             raise ServiceUnavailableError(f"lookup failed: {e}") from e
 
-    # TODO(sub-PR #5b/follow-up): wire TreeService + build_package_tree
+    # TODO(follow-up): wire TreeService + build_package_tree
     # into ``lookup(kind="tree")`` dispatch so the tree arborescence is reachable
     # via the unified 2-tool MCP surface. Standalone ``get_document_tree`` /
     # ``get_package_tree`` handlers were removed during the rebase onto #6's

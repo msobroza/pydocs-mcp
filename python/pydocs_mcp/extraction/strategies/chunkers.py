@@ -409,6 +409,39 @@ def _extract_code_examples(
     return examples
 
 
+def _python_package_root(source_file: Path) -> Path:
+    """Find the parent directory of the topmost ``__init__.py`` ancestor.
+
+    Walks upward from ``source_file`` collecting consecutive directories
+    that contain ``__init__.py``. The PARENT of the topmost such dir is
+    the right "root" for computing a dotted module qname — it matches
+    what Python's import machinery uses when ``source_file``'s package
+    is added to ``sys.path``.
+
+    Sub-PR #5c, AC #13: pre-#5c, project-source qnames came out as
+    ``python.pydocs_mcp.X`` because the indexing ``root`` was the project
+    directory and the filesystem walked through ``python/``. Using this
+    helper, the root becomes the parent of the topmost
+    ``__init__.py``-containing dir (typically ``project/python/``), so
+    the qname matches ``import pydocs_mcp.X``.
+
+    Falls back to ``source_file.parent`` when no ``__init__.py`` is
+    found anywhere up the chain — handles loose scripts / scratch files.
+    """
+    p = source_file.resolve() if source_file.is_absolute() else (Path.cwd() / source_file).resolve()
+    cur = p.parent
+    topmost_pkg: Path | None = None
+    while True:
+        if (cur / "__init__.py").exists():
+            topmost_pkg = cur
+            if cur.parent == cur:
+                break
+            cur = cur.parent
+        else:
+            break
+    return topmost_pkg.parent if topmost_pkg is not None else p.parent
+
+
 def _relative_module_parts(path: str, root: Path) -> tuple[list[str], Path]:
     """Return ``(parts_without_suffix, Path(path))`` relative to ``root``.
 
@@ -431,8 +464,21 @@ def _module_from_path(path: str, root: Path) -> str:
 
     Strips suffix, drops a trailing ``__init__``, joins ``/`` → ``.`` —
     matches Python's import machinery.
+
+    Sub-PR #5c (AC #13): if the file lives inside a real Python package
+    (its parent directory has ``__init__.py``), we use the package root
+    discovered by :func:`_python_package_root` as the effective root so
+    the resulting qname matches ``import pkg.mod`` (not
+    ``python.pkg.mod``). When the file's parent is NOT a package — e.g.
+    synthetic paths used in unit tests, or loose ``.py`` scripts — the
+    passed-in ``root`` is honored unchanged so test fixtures that
+    construct ``tmp_path/pkg/mod.py`` without ``__init__.py`` still get
+    a ``pkg.mod`` qname relative to the caller's root.
     """
-    parts, p = _relative_module_parts(path, root)
+    p = Path(path)
+    is_in_package = p.parent.is_dir() and (p.parent / "__init__.py").exists()
+    effective_root = _python_package_root(p) if is_in_package else root
+    parts, _p2 = _relative_module_parts(path, effective_root)
     if parts and parts[-1] == "__init__":
         parts.pop()
     return ".".join(parts) or p.stem

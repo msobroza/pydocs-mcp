@@ -50,21 +50,24 @@ def build_sqlite_lookup_service(
 ) -> "LookupService":
     """Compose a wired LookupService from a SQLite DB path.
 
-    Post-#5a-2: ``PackageLookup`` and ``TreeService`` each depend on a
-    ``uow_factory``. We build ONE factory and thread it through both so
-    they share connection-pool semantics. ``ref_svc`` (sub-PR #5b) defaults
-    to None — LookupService surfaces its absence to clients as
-    ``ServiceUnavailableError`` for the modes that need it.
+    Post-#5a-2: ``PackageLookup``, ``TreeService``, and ``ReferenceService``
+    each depend on a ``uow_factory``. We build ONE factory and thread it
+    through all three so they share connection-pool semantics. Post-#5c
+    (Task 8): ``ref_svc`` is now a real ``ReferenceService`` instead of
+    ``None`` — ``lookup(target=X, show="callers"|"callees")`` resolves
+    end-to-end through the reference graph.
     """
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.package_lookup import PackageLookup
+    from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.tree_service import TreeService
 
     uow_factory = build_sqlite_uow_factory(db_path)
     package_lookup = PackageLookup(uow_factory=uow_factory)
     tree_svc = TreeService(uow_factory=uow_factory)
+    ref_svc = ReferenceService(uow_factory=uow_factory)
     return LookupService(
         package_lookup=package_lookup,
         tree_svc=tree_svc,
-        ref_svc=None,  # sub-PR #5b
+        ref_svc=ref_svc,
     )

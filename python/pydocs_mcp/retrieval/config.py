@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -94,6 +94,66 @@ class HandlerConfig(BaseModel):
         return data
 
 
+class ReferenceCaptureConfig(BaseModel):
+    """Reference-graph capture toggles (sub-PR #5c, §5.3).
+
+    ``kinds`` is typed as ``Literal`` so an unknown value fails at YAML load
+    rather than silently producing zero edges. MENTIONS is opt-in: the
+    shipped default omits it because regex-over-markdown is lower-precision
+    than AST capture and would noise up the graph by default.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    kinds: list[Literal["calls", "imports", "inherits", "mentions"]] = Field(
+        default_factory=lambda: ["calls", "imports", "inherits"],
+    )
+
+
+class ReferenceOutputConfig(BaseModel):
+    """Per-deployment bounds for the ``lookup(show=callers|callees|inherits)``
+    output (sub-PR #5c, §5.3).
+
+    Both keys are read by ``configure_from_app_config`` at server/CLI
+    startup and wired into ``LookupInput.limit`` — ``default_limit``
+    becomes the field default, ``max_limit`` the validator ceiling. The
+    cross-field validator below ensures the default can never exceed the
+    ceiling (which would make the LookupInput default unusable).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_limit: int = Field(50, ge=1)
+    max_limit: int = Field(1000, ge=1)
+
+    @model_validator(mode="after")
+    def _default_le_max(self) -> "ReferenceOutputConfig":
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                f"reference_graph.output.default_limit={self.default_limit} "
+                f"> max_limit={self.max_limit}; the LookupInput default "
+                f"would always fail the max validator. Adjust YAML.",
+            )
+        return self
+
+
+class ReferenceGraphConfig(BaseModel):
+    """Composite — capture toggles + output bounds (sub-PR #5c, §5.3).
+
+    Lives under ``AppConfig.reference_graph``. Two reasons it's a typed
+    sub-model rather than two flat keys: (1) namespaces the YAML so future
+    reference-graph tunables (resolver thresholds, etc.) get an obvious
+    home, and (2) the ``output`` cross-field validator needs an enclosing
+    model to run on.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    capture: ReferenceCaptureConfig = Field(default_factory=ReferenceCaptureConfig)
+    output: ReferenceOutputConfig = Field(default_factory=ReferenceOutputConfig)
+
+
 class AppConfig(BaseSettings):
     """Runtime configuration.
 
@@ -112,6 +172,12 @@ class AppConfig(BaseSettings):
     # in ``defaults/default_config.yaml`` so user YAMLs need only override
     # the keys they care about.
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    # Sub-PR #5c: reference-graph capture toggles + output bounds. Read by
+    # ``ReferenceCaptureStage`` (enabled/kinds) and ``configure_from_app_config``
+    # (default_limit/max_limit → LookupInput.limit). Per CLAUDE.md §"MCP API
+    # surface vs YAML configuration": these are pipeline-tuning knobs, NOT
+    # MCP tool params. The MCP surface (search, lookup) stays fixed.
+    reference_graph: ReferenceGraphConfig = Field(default_factory=ReferenceGraphConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside

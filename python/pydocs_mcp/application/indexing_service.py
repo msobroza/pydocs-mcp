@@ -161,10 +161,10 @@ class IndexingService:
         """AC #6.5 — re-resolve OTHER packages' refs against this package's qnames.
 
         Controller decision A1 (plan §): we punt on a ``bulk_resolve``
-        Protocol method for sub-PR #5b. Instead, reach into the held
-        SQLite connection via ``_held_conn`` for a raw UPDATE. FakeUoW
-        returns ``None`` for ``_held_conn`` and the call is a silent
-        no-op — fakes don't exercise cross-package re-resolution.
+        Protocol method. Instead, reach into the held SQLite connection
+        via ``_held_conn`` for a raw UPDATE. FakeUoW returns ``None`` for
+        ``_held_conn`` and the call is a silent no-op — fakes don't
+        exercise cross-package re-resolution.
 
         Scope: this only implements Rule B (exact qname match). Rules A
         (alias rewrite) / C (suffix) / D (ambiguous) / E (no match) are

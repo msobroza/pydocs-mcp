@@ -150,3 +150,89 @@ def test_collector_per_node_error_isolation():
     # comprehension method-call captures or drops — just that the
     # capture doesn't crash and ``a`` gets its ref recorded.
     assert any(r.to_name == "legitimate_call" for r in calls)
+
+
+# ── capture_mentions (sub-PR #5c) ────────────────────────────────────────────
+
+
+def test_capture_mentions_matches_backtick_quoted_dotted_names():
+    """`capture_mentions` emits MENTIONS edges for backtick-quoted dotted
+    names with AT LEAST one dot (e.g. ``pkg.helpers.compute``)."""
+    from pydocs_mcp.extraction.strategies.references import (
+        ReferenceCollector,
+        capture_mentions,
+    )
+    collector = ReferenceCollector()
+    capture_mentions(
+        "See `pkg.helpers.compute` for details.\n"
+        "Also `other.mod.fn` does X.\n",
+        from_package="pkg",
+        from_node_id="pkg.docs.readme",
+        collector=collector,
+    )
+    mentions = [r for r in collector.refs if r.kind == ReferenceKind.MENTIONS]
+    names = {r.to_name for r in mentions}
+    assert names == {"pkg.helpers.compute", "other.mod.fn"}
+    assert all(r.from_node_id == "pkg.docs.readme" for r in mentions)
+    assert all(r.from_package == "pkg" for r in mentions)
+    assert all(r.to_node_id is None for r in mentions)
+
+
+def test_capture_mentions_ignores_bare_identifiers():
+    """Bare ``compute`` (no dots) MUST NOT be captured — the regex
+    requires AT LEAST one dot. Bare identifiers in backticks are noise
+    (variable names, single-word code) and would flood the graph."""
+    from pydocs_mcp.extraction.strategies.references import (
+        ReferenceCollector,
+        capture_mentions,
+    )
+    collector = ReferenceCollector()
+    capture_mentions(
+        "Calling `compute` directly is fine.\n"
+        "But `foo` and `bar` are bare.\n",
+        from_package="pkg",
+        from_node_id="pkg.docs.readme",
+        collector=collector,
+    )
+    mentions = [r for r in collector.refs if r.kind == ReferenceKind.MENTIONS]
+    assert mentions == []
+
+
+def test_capture_mentions_dedupes_per_chunk():
+    """Multiple occurrences of the same dotted name in one chunk emit
+    ONE edge — local ``seen: set[str]`` keeps the graph tidy."""
+    from pydocs_mcp.extraction.strategies.references import (
+        ReferenceCollector,
+        capture_mentions,
+    )
+    collector = ReferenceCollector()
+    capture_mentions(
+        "Use `pkg.helpers.compute` here.\n"
+        "Also `pkg.helpers.compute` there.\n"
+        "And finally `pkg.helpers.compute` again.\n",
+        from_package="pkg",
+        from_node_id="pkg.docs.readme",
+        collector=collector,
+    )
+    mentions = [r for r in collector.refs if r.kind == ReferenceKind.MENTIONS]
+    assert len(mentions) == 1
+    assert mentions[0].to_name == "pkg.helpers.compute"
+
+
+def test_capture_mentions_emits_kind_mentions():
+    """Every emitted edge has ``kind == ReferenceKind.MENTIONS`` — pin
+    the wire value so the DB column stays stable."""
+    from pydocs_mcp.extraction.strategies.references import (
+        ReferenceCollector,
+        capture_mentions,
+    )
+    collector = ReferenceCollector()
+    capture_mentions(
+        "Reference `a.b.c` and `x.y`.\n",
+        from_package="pkg",
+        from_node_id="pkg.docs.readme",
+        collector=collector,
+    )
+    for r in collector.refs:
+        assert r.kind == ReferenceKind.MENTIONS
+        assert r.kind == "mentions"  # StrEnum identity check

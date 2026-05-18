@@ -185,6 +185,12 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     # serve so ingestion pipeline overrides (spec §7.3) stay consistent
     # with the rest of the config.
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
+    # Push YAML-loaded settings into module-level slots read by
+    # ``LookupInput`` validators and ``ReferenceCaptureStage`` (sub-PR #5c
+    # Task 8). Indexing uses the latter via ``ReferenceCaptureStage`` in
+    # the ingestion pipeline; reads use the former.
+    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
+    configure_from_app_config(config)
     ingestion_pipeline = build_ingestion_pipeline(config)
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
@@ -269,6 +275,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
             DocsSearch,
             SearchInput,
         )
+        from pydocs_mcp.application.mcp_inputs import configure_from_app_config
         from pydocs_mcp.retrieval.config import (
             AppConfig,
             build_chunk_pipeline_from_config,
@@ -279,6 +286,11 @@ def _cmd_search(args: argparse.Namespace) -> int:
 
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
+        # Push YAML-loaded settings into module-level slots (sub-PR #5c
+        # Task 8). ``search`` itself doesn't consume the reference-graph
+        # config, but the call is uniform across every CLI command so a
+        # follow-up search subcommand can rely on it.
+        configure_from_app_config(config)
         context = build_retrieval_context(db_path, config)
         docs_svc = DocsSearch(
             chunk_pipeline=build_chunk_pipeline_from_config(config, context),
@@ -309,11 +321,16 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
     """
     try:
         from pydocs_mcp.application import LookupInput
+        from pydocs_mcp.application.mcp_inputs import configure_from_app_config
         from pydocs_mcp.retrieval.config import AppConfig
         from pydocs_mcp.storage.factories import build_sqlite_lookup_service
 
         _project, db_path = _project_and_db(args)
         config = AppConfig.load(explicit_path=getattr(args, "config", None))
+        # Push YAML-loaded settings into module-level slots (sub-PR #5c
+        # Task 8). ``LookupInput`` validators read ``_LIMIT_DEFAULT`` /
+        # ``_LIMIT_MAX`` from this for show='callers'|'callees' bounds.
+        configure_from_app_config(config)
         svc = build_sqlite_lookup_service(db_path, config=config)
 
         payload = LookupInput(target=args.target, show=args.show)

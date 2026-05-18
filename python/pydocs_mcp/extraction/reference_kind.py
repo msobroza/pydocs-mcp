@@ -1,8 +1,9 @@
 """ReferenceKind enum for the cross-node reference graph (spec §4.1).
 
-Three AST-precise kinds — CALLS, IMPORTS, INHERITS — captured during
-ingestion. MENTIONS (regex-fuzzy backtick-quoted dotted names in
-markdown) is deferred to sub-PR #5c per spec Decision 1.
+Four kinds total. Three are AST-precise — CALLS, IMPORTS, INHERITS —
+captured during Python file ingestion. MENTIONS is regex-fuzzy:
+backtick-quoted dotted names in markdown, lower-precision than AST
+capture and therefore opt-in via YAML (sub-PR #5c, §5.3).
 
 StrEnum so the on-disk ``kind`` column stays plain text — readable in
 SQLite shell, no enum-import-needed for ad-hoc queries.
@@ -16,3 +17,4 @@ class ReferenceKind(StrEnum):
     CALLS    = "calls"
     IMPORTS  = "imports"
     INHERITS = "inherits"
+    MENTIONS = "mentions"

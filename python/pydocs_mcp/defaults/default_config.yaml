@@ -46,3 +46,11 @@ extraction:
     docstring_max_chars: 1024
   ingestion:
     pipeline_path: null
+
+reference_graph:
+  capture:
+    enabled: true
+    kinds: [calls, imports, inherits]   # add 'mentions' to opt in
+  output:
+    default_limit: 50
+    max_limit: 1000

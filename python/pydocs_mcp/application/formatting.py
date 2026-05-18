@@ -23,6 +23,8 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Literal
+
 from pydocs_mcp.constants import (
     LIST_PACKAGES_MAX,
     PACKAGE_DOC_LINE_MAX,
@@ -37,6 +39,9 @@ from pydocs_mcp.models import (
     Package,
     PackageDoc,
 )
+
+if TYPE_CHECKING:
+    from pydocs_mcp.storage.node_reference import NodeReference
 
 # Approximate characters per token (conservative estimate for English text).
 # This module is the single source of truth for the ratio — ``TokenBudgetStage``
@@ -156,3 +161,95 @@ def format_members_markdown_within_budget(
         parts.append(piece)
         total += len(piece)
     return "\n".join(parts)
+
+
+# Per-``show`` rendering vocabulary (spec §5.7, appendix §A.1):
+#   - H1 phrasing differs per question ("Callers/Callees of X" / "Bases of X").
+#   - Group-header noun gets singular/plural ("caller" vs "callers").
+# Keeping these as a single table avoids ad-hoc conditionals at three
+# call sites and makes the §A.1 shape one edit away if the vocabulary
+# changes (e.g., MENTIONS → "Mentions of X").
+_SHOW_VOCAB: dict[str, tuple[str, str]] = {
+    "callers":  ("Callers of", "caller"),
+    "callees":  ("Callees of", "callee"),
+    "inherits": ("Bases of",   "base"),
+}
+
+
+def format_references(
+    rows: tuple["NodeReference", ...],
+    *,
+    target: str,
+    show: Literal["callers", "callees", "inherits"],
+    limit: int,
+) -> str:
+    """Render reference rows as markdown for the ``lookup`` MCP tool.
+
+    Spec §5.7 + appendix §A.1. Single source of truth for callers/callees/
+    inherits rendering; the MCP handler and CLI both delegate here.
+
+    Shape:
+      - H1 = ``# {Callers|Callees|Bases} of `target` ``
+      - Lead summary: ``N references found (R resolved, U unresolved).``
+      - H2 groups by ``from_package`` in first-seen order
+      - Within each group: resolved rows first (``to_node_id is not None``)
+      - Row format: ``- `from_node_id` → `to_node_id` `` for resolved,
+        ``- ⚠ `from_node_id` → `to_name` *(unresolved — to_name didn't
+        match any indexed qname)*`` for unresolved
+      - Empty rows → header + ``No {caller|callee|base}s found.``
+
+    Args:
+        rows: Reference rows for the target (already filtered to this
+              ``show`` direction by ``ReferenceService``).
+        target: Display name (the qualified name asked about).
+        show: ``"callers"`` / ``"callees"`` / ``"inherits"`` — controls
+              H1 wording and the singular/plural noun in group headers.
+        limit: The limit value used; rendered in lead only when truncation
+               is detectable from ``len(rows) == limit``. The argument is
+               accepted for API symmetry with the service (caller passes
+               whatever bound came from MCP); we do NOT re-truncate here.
+
+    Returns:
+        UTF-8 markdown string. Always ends with a single trailing ``\\n``.
+    """
+    title_verb, noun = _SHOW_VOCAB[show]
+    h1 = f"# {title_verb} `{target}`\n"
+
+    if not rows:
+        # Empty path: still emit the H1 + body so downstream parsers see
+        # a consistent shape. The body sentence pluralizes the noun.
+        return f"{h1}\nNo {noun}s found.\n"
+
+    resolved_count = sum(1 for r in rows if r.to_node_id is not None)
+    unresolved_count = len(rows) - resolved_count
+    lead = (
+        f"{len(rows)} references found "
+        f"({resolved_count} resolved, {unresolved_count} unresolved).\n"
+    )
+
+    # Group by from_package preserving FIRST-SEEN order — appendix §A.1's
+    # example renders packages in the order they appear in ``rows``.
+    groups: dict[str, list["NodeReference"]] = {}
+    for r in rows:
+        groups.setdefault(r.from_package, []).append(r)
+
+    blocks: list[str] = [h1, lead]
+    for pkg, refs in groups.items():
+        # Resolved-first within each group; stable on from_node_id for
+        # deterministic output across runs.
+        refs_sorted = sorted(
+            refs,
+            key=lambda r: (0 if r.to_node_id is not None else 1, r.from_node_id),
+        )
+        count = len(refs_sorted)
+        plural = "" if count == 1 else "s"
+        blocks.append(f"\n## from `{pkg}` ({count} {noun}{plural})\n\n")
+        for r in refs_sorted:
+            if r.to_node_id is not None:
+                blocks.append(f"- `{r.from_node_id}` → `{r.to_node_id}`\n")
+            else:
+                blocks.append(
+                    f"- ⚠ `{r.from_node_id}` → `{r.to_name}` "
+                    f"*(unresolved — to_name didn't match any indexed qname)*\n"
+                )
+    return "".join(blocks)
