@@ -22,7 +22,7 @@ from pydocs_mcp.storage.protocols import (
     HybridSearchable,
     ModuleMemberStore,
     PackageStore,
-    ReferenceStore,            # NEW — sub-PR #5b
+    ReferenceStore,  # NEW — sub-PR #5b
     TextSearchable,
     UnitOfWork,
     VectorSearchable,
@@ -33,7 +33,7 @@ from pydocs_mcp.storage.sqlite import (
     SqliteFilterAdapter,
     SqliteModuleMemberRepository,
     SqlitePackageRepository,
-    SqliteReferenceStore,      # NEW — sub-PR #5b
+    SqliteReferenceStore,  # NEW — sub-PR #5b
     SqliteUnitOfWork,
     SqliteVectorStore,
 )

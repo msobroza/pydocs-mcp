@@ -25,7 +25,6 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
-from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.filters import (
     All,
     Any_,
@@ -37,6 +36,7 @@ from pydocs_mcp.storage.filters import (
     Not,
     format_registry,
 )
+from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 log = logging.getLogger("pydocs-mcp")
