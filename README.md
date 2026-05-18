@@ -20,16 +20,23 @@ pip install -e .
 # Index project + deps, start MCP server
 pydocs-mcp serve /path/to/project
 
-# More options
-pydocs-mcp serve . --depth 2 --workers 8
+# More options (--no-inspect uses static parsing only; --workers parallelism)
+pydocs-mcp serve . --no-inspect --depth 2 --workers 8
 
 # Index only (no server)
 pydocs-mcp index .
 
-# Search from CLI
-pydocs-mcp query "batch inference"
-pydocs-mcp api predict -p vllm
-pydocs-mcp query "handle request" -p __project__
+# Search from CLI (mirrors the MCP `search` tool)
+pydocs-mcp search "batch inference"
+pydocs-mcp search "predict" --kind api -p vllm
+pydocs-mcp search "handle request" -p __project__
+
+# Navigate to a specific target (mirrors the MCP `lookup` tool)
+pydocs-mcp lookup                                      # list packages
+pydocs-mcp lookup fastapi.routing.APIRouter            # class overview
+pydocs-mcp lookup fastapi.routing.APIRouter --show tree
+pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
+pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 
 # Force re-index
 pydocs-mcp index . --force
@@ -63,27 +70,65 @@ pydocs-mcp/
 └── python/
     └── pydocs_mcp/
         ├── __init__.py         # Package version
-        ├── __main__.py         # CLI entry point
+        ├── __main__.py         # CLI entry point (serve / index / search / lookup)
         ├── _fallback.py        # Pure Python versions of Rust functions
         ├── _fast.py            # Import Rust or fallback
-        ├── db.py               # SQLite management
+        ├── db.py               # SQLite schema + cache lifecycle
         ├── deps.py             # Dependency resolution
-        ├── indexer.py          # Index project + deps
-        ├── search.py           # FTS5 + symbol search
-        └── server.py           # MCP server (5 tools)
+        ├── extraction/         # Chunkers, member extractors, ingestion pipeline
+        ├── application/        # Use-case services (indexing, search, lookup)
+        ├── storage/            # Repositories, UnitOfWork, VectorStore
+        ├── retrieval/          # Async retrieval pipelines + YAML config
+        ├── defaults/           # Shipped default_config.yaml
+        ├── pipelines/          # Built-in pipeline YAML blueprints
+        └── server.py           # MCP server (2 tools: search + lookup)
 ```
 
 ## MCP Tools
 
+The MCP surface is intentionally minimal — two tools cover every workflow:
+
 | Tool | Description |
 |---|---|
-| `list_packages` | List all indexed packages |
-| `get_package_doc` | Full docs for one package |
-| `search_docs` | BM25 search across all docs |
-| `search_api` | Search functions/classes by name |
-| `inspect_module` | Live-import and show current API |
+| `search(query, kind, package, scope, limit)` | BM25 full-text search across indexed docs/code. `kind` ∈ `{docs, api, any}`. |
+| `lookup(target, show)` | Navigate to a specific named target. `show` ∈ `{default, tree, callers, callees, inherits}`. Empty target lists indexed packages. |
+
+`lookup(target=X, show="callers")`, `show="callees"`, and `show="inherits"`
+query the **reference graph** (CALLS, IMPORTS, INHERITS edges) — captured
+at indexing time from AST analysis and stored alongside the chunks.
+Capture is on by default and tuned via YAML
+(`reference_graph.capture.{enabled,kinds}`); MENTIONS is opt-in.
 
 Use `__project__` as the package name to search your own code.
+
+## Configuration
+
+Behavior knobs — capture toggles, retrieval limits, ranking weights,
+indexing depth — are driven by YAML, not MCP tool params. The MCP API
+stays fixed at the two tools above so external clients (Claude Code,
+Cursor, IDE extensions) never have to version-bump on a tuning change.
+
+Layers (highest to lowest priority): env vars (`PYDOCS_*`) → user
+`./pydocs-mcp.yaml` or `~/.config/pydocs-mcp/config.yaml` → explicit
+`--config <path>` → shipped `defaults/default_config.yaml`.
+
+Example user overlay:
+
+```yaml
+# pydocs-mcp.yaml — sits next to your project
+reference_graph:
+  capture:
+    enabled: true
+    kinds: [calls, imports, inherits, mentions]   # opt into MENTIONS
+  output:
+    default_limit: 25       # lookup(..., show="callers") default
+    max_limit: 500
+
+search:
+  output:
+    default_limit: 10       # search(..., limit=...) default
+    max_limit: 1000
+```
 
 ## Performance
 

@@ -54,3 +54,8 @@ reference_graph:
   output:
     default_limit: 50
     max_limit: 1000
+
+search:
+  output:
+    default_limit: 10
+    max_limit: 1000

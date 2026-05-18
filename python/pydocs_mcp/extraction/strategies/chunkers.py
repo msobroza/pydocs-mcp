@@ -355,7 +355,12 @@ def _class_node(
         for m in method_stmts
     ]
     doc_examples = _extract_code_examples(doc, qname, rel)
-    inherits = tuple(ast.unparse(b) for b in stmt.bases)
+    # Use canonical_dotted (version-stable across CPython releases) instead of
+    # ast.unparse — consistent with the rest of the reference-graph machinery
+    # (capture_inherits in references.py). Non-dotted shapes (Subscript, Call,
+    # etc.) become "<complex>" rather than the variable ast.unparse output.
+    from pydocs_mcp.extraction.strategies.references import canonical_dotted
+    inherits = tuple(canonical_dotted(b) or "<complex>" for b in stmt.bases)
     return DocumentNode(
         node_id=qname,
         qualified_name=qname,
