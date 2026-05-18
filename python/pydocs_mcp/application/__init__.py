@@ -35,6 +35,7 @@ from pydocs_mcp.application.protocols import (
     ExtractionResult,
     MemberExtractor,
 )
+from pydocs_mcp.application.reference_service import ReferenceService
 from pydocs_mcp.application.tree_service import TreeService
 
 __all__ = [
@@ -53,6 +54,7 @@ __all__ = [
     "NotFoundError",
     "PackageLookup",
     "ProjectIndexer",
+    "ReferenceService",
     "SearchInput",
     "ServiceUnavailableError",
     "TreeService",

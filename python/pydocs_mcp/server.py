@@ -98,6 +98,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         DocsSearch,
         PackageLookup,
     )
+    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import (
         AppConfig,
         build_chunk_pipeline_from_config,
@@ -107,6 +108,10 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
     config = AppConfig.load(explicit_path=config_path)
+    # Push YAML-loaded settings into module-level slots read by
+    # ``LookupInput`` validators and ``ReferenceCaptureStage`` (sub-PR #5c
+    # Task 8). One call covers both — see ``configure_from_app_config``.
+    configure_from_app_config(config)
     context = build_retrieval_context(db_path, config)
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
