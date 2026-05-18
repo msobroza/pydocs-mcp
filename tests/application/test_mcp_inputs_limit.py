@@ -195,3 +195,29 @@ def test_search_input_limit_default_uses_constant_before_configure() -> None:
     SearchInput(query="x", limit=1000)
     with pytest.raises(ValidationError):
         SearchInput(query="x", limit=1001)
+
+
+def test_configure_from_app_config_pushes_resolver_config(monkeypatch):
+    """`configure_from_app_config(cfg)` propagates resolver config to the
+    extraction module (parity with the capture-config push from #5c)."""
+    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
+    from pydocs_mcp.extraction.strategies import stdlib_qnames as stdlib_mod
+    from pydocs_mcp.retrieval.config import (
+        AppConfig, ReferenceCaptureConfig, ReferenceGraphConfig,
+        ReferenceOutputConfig, ReferenceResolverConfig,
+        SearchConfig, SearchOutputConfig,
+    )
+
+    rg = ReferenceGraphConfig(
+        capture=ReferenceCaptureConfig(),
+        output=ReferenceOutputConfig(),
+        resolver=ReferenceResolverConfig(include_stdlib=False),
+    )
+    cfg = AppConfig(reference_graph=rg, search=SearchConfig(output=SearchOutputConfig()))
+
+    original = stdlib_mod._get_resolver_config()
+    configure_from_app_config(cfg)
+    try:
+        assert stdlib_mod._get_resolver_config().include_stdlib is False
+    finally:
+        stdlib_mod._set_resolver_config(original)
