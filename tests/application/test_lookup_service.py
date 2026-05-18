@@ -288,49 +288,99 @@ async def test_show_inherits_on_non_class_raises_invalid_argument(
 
 
 @pytest.mark.asyncio
-async def test_show_inherits_on_class_reads_from_node_metadata(
+async def test_show_inherits_on_class_routes_through_ref_svc(
     package_lookup_mock: MagicMock,
 ) -> None:
-    """Degraded mode — no ref_svc but inherits still works via tree node metadata."""
+    """Post-#5c contract: ``show='inherits'`` for a class routes through
+    ``ref_svc.find_by_name(qname, kind=INHERITS)``. The pre-#5c degraded
+    path that read ``node.extra_metadata['inherits_from']`` is gone — the
+    reference graph is the single source of truth for INHERITS edges
+    once ref_svc is wired. (When ref_svc=None, the dispatch raises
+    ServiceUnavailableError pointing at the YAML knob — see
+    ``test_lookup_service_refs.py``.)"""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+
     fake_node = MagicMock()
+    fake_node.node_id = "fastapi.routing.X"
     fake_node.kind = "class"
-    fake_node.extra_metadata = {"inherits_from": ["BaseAuth", "Mixin"]}
     fake_tree = MagicMock()
     fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
+    base_refs = (
+        NodeReference(
+            from_package="fastapi",
+            from_node_id="fastapi.routing.X",
+            to_name="BaseAuth",
+            to_node_id="fastapi.security.BaseAuth",
+            kind=ReferenceKind.INHERITS,
+        ),
+        NodeReference(
+            from_package="fastapi",
+            from_node_id="fastapi.routing.X",
+            to_name="Mixin",
+            to_node_id=None,  # unresolved — external base
+            kind=ReferenceKind.INHERITS,
+        ),
+    )
+    ref_svc = MagicMock()
+    ref_svc.find_by_name = AsyncMock(return_value=base_refs)
+
     svc = LookupService(
-        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=None,
+        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
     )
     out = await svc.lookup(
         LookupInput(target="fastapi.routing.X", show="inherits")
     )
     assert "BaseAuth" in out
     assert "Mixin" in out
+    ref_svc.find_by_name.assert_awaited_once_with(
+        "fastapi.routing.X", kind=ReferenceKind.INHERITS,
+    )
 
 
 @pytest.mark.asyncio
 async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
     package_lookup_mock: MagicMock,
 ) -> None:
+    """A class with zero INHERITS edges renders the canonical empty-rows
+    markdown via ``format_references`` — H1 + ``No bases found.``"""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+
     fake_node = MagicMock()
+    fake_node.node_id = "fastapi.routing.X"
     fake_node.kind = "class"
-    fake_node.extra_metadata = {"inherits_from": []}
     fake_tree = MagicMock()
     fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    ref_svc = MagicMock()
+    ref_svc.find_by_name = AsyncMock(return_value=())
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
+    )
     out = await svc.lookup(
         LookupInput(target="fastapi.routing.X", show="inherits")
     )
-    assert "no base classes" in out
+    assert "No bases found." in out
+    ref_svc.find_by_name.assert_awaited_once_with(
+        "fastapi.routing.X", kind=ReferenceKind.INHERITS,
+    )
 
 
 @pytest.mark.asyncio
 async def test_show_callers_with_ref_svc_renders_refs(
     package_lookup_mock: MagicMock,
 ) -> None:
+    """Post-#5c: callers route through ``format_references`` with the real
+    ``NodeReference`` shape (the placeholder ``MagicMock`` dance is gone —
+    we use the actual value object so the rendered output matches the
+    §A.1 contract end users see)."""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+
     fake_node = MagicMock()
     fake_node.node_id = "fastapi.routing.X.y"
     fake_node.kind = "method"
@@ -338,13 +388,15 @@ async def test_show_callers_with_ref_svc_renders_refs(
     fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
-    # Reference-like structural duck
-    ref = MagicMock()
-    ref.from_node_id = "caller.mod.a"
-    ref.to_name = "fastapi.routing.X.y"
-    ref.kind = "call"
+    ref = NodeReference(
+        from_package="caller_pkg",
+        from_node_id="caller.mod.a",
+        to_name="fastapi.routing.X.y",
+        to_node_id="fastapi.routing.X.y",
+        kind=ReferenceKind.CALLS,
+    )
     ref_svc = MagicMock()
-    ref_svc.callers = AsyncMock(return_value=[ref])
+    ref_svc.callers = AsyncMock(return_value=(ref,))
 
     svc = LookupService(
         package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
@@ -361,6 +413,10 @@ async def test_show_callers_with_ref_svc_renders_refs(
 async def test_show_callees_with_ref_svc_invokes_callees_method(
     package_lookup_mock: MagicMock,
 ) -> None:
+    """Post-#5c: empty callees renders ``# Callees of `qname` \\nNo
+    callees found.\\n`` via ``format_references`` — NOT the pre-#5c
+    ``(no references)`` placeholder. The 2-arg call assertion remains
+    intact (Decision C1 from #5b)."""
     fake_node = MagicMock()
     fake_node.node_id = "fastapi.routing.X.y"
     fake_node.kind = "method"
@@ -369,7 +425,7 @@ async def test_show_callees_with_ref_svc_invokes_callees_method(
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
     ref_svc = MagicMock()
-    ref_svc.callees = AsyncMock(return_value=[])
+    ref_svc.callees = AsyncMock(return_value=())
 
     svc = LookupService(
         package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
@@ -377,7 +433,8 @@ async def test_show_callees_with_ref_svc_invokes_callees_method(
     out = await svc.lookup(
         LookupInput(target="fastapi.routing.X.y", show="callees")
     )
-    assert out == "(no references)"
+    assert out.startswith("# Callees of `fastapi.routing.X.y`\n")
+    assert "No callees found." in out
     ref_svc.callees.assert_awaited_once_with("fastapi", "fastapi.routing.X.y")
 
 
