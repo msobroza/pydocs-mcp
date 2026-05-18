@@ -134,9 +134,20 @@ class IndexingService:
         refs: Sequence["NodeReference"],
         aliases: dict[str, dict[str, str]],
     ) -> list["NodeReference"]:
-        """Build the cross-package qname universe + run the resolver."""
+        """Build the cross-package qname universe + run the resolver.
+
+        Sub-PR follow-up to #5c (AC #15 stdlib-idx): when
+        ``reference_graph.resolver.include_stdlib`` is True (default), merges
+        the bundled stdlib + builtins qnames into the universe so CALLS edges
+        like ``os.path.join`` / ``len`` / ``asyncio.to_thread`` resolve instead
+        of staying ``to_node_id=None``.
+        """
         from pydocs_mcp.extraction.strategies.reference_resolver import (
             ReferenceResolver,
+        )
+        from pydocs_mcp.extraction.strategies.stdlib_qnames import (
+            _get_resolver_config,
+            load_stdlib_qnames,
         )
 
         # Universe = every indexed qname across every package. We load
@@ -149,6 +160,12 @@ class IndexingService:
             pkg_trees = await uow.trees.load_all_in_package(pkg.name)
             for tree in pkg_trees.values():
                 _add_qnames(tree, universe)
+
+        # AC #15 stdlib-idx: merge bundled stdlib qnames if enabled in YAML.
+        # The toggle is read at call time so YAML reloads / test overrides
+        # take effect on the next reindex without re-importing.
+        if _get_resolver_config().include_stdlib:
+            universe.update(load_stdlib_qnames())
 
         resolver = ReferenceResolver(
             qname_universe=frozenset(universe), aliases=aliases,
