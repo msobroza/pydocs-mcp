@@ -125,13 +125,13 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
     search_api_svc = ApiSearch(member_pipeline=member_pipeline)
 
-    # TreeService (sub-PR #5) — same uow_factory backs the tree reads, so
+    # TreeService — same uow_factory backs the tree reads, so
     # multi-segment ``lookup`` targets resolve against persisted
     # DocumentNode trees written by ``IndexingService``. ReferenceService
-    # (sub-PR #5b) ships later; LookupService surfaces its absence as
+    # ships later; LookupService surfaces its absence as
     # ServiceUnavailableError to MCP clients instead of failing startup.
     tree_svc = TreeService(uow_factory=uow_factory)
-    ref_svc = None  # reserved for sub-PR #5b
+    ref_svc = None  # reserved for the reference-graph service wiring
 
     lookup_svc = LookupService(
         package_lookup=package_lookup,
@@ -214,7 +214,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             log.exception("lookup failed unexpectedly")
             raise ServiceUnavailableError(f"lookup failed: {e}") from e
 
-    # TODO(sub-PR #5b/follow-up): wire TreeService + build_package_tree
+    # TODO(follow-up): wire TreeService + build_package_tree
     # into ``lookup(kind="tree")`` dispatch so the tree arborescence is reachable
     # via the unified 2-tool MCP surface. Standalone ``get_document_tree`` /
     # ``get_package_tree`` handlers were removed during the rebase onto #6's

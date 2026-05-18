@@ -1,18 +1,16 @@
-"""LookupService — unified dispatch for the 'lookup' MCP tool (sub-PR #6 §6).
+"""LookupService — unified dispatch for the 'lookup' MCP tool (spec §6).
 
 Routes a single ``LookupInput.target`` string (empty / package /
 package.module / package.module.symbol) to the right backing service:
-``PackageLookup`` for package metadata, ``TreeService``
-(optional, sub-PR #5) for file structure, ``ReferenceService``
-(optional, sub-PR #5b) for the call graph.
+``PackageLookup`` for package metadata, ``TreeService`` (optional) for
+file structure, ``ReferenceService`` (optional) for the call graph.
 
 Soft dependencies — when ``tree_svc`` or ``ref_svc`` is None, ``show``
-modes that need them raise ``ServiceUnavailableError``. Sub-PR #5c
-unified ``inherits`` with ``callers``/``callees`` behind the reference
-graph so all three need ``ref_svc``; the error message now points at the
-YAML knob (``reference_graph.capture.enabled``) instead of a development
-checkpoint name, so end users can fix the failure mode without reading
-release notes.
+modes that need them raise ``ServiceUnavailableError``. ``inherits`` is
+unified with ``callers``/``callees`` behind the reference graph so all
+three need ``ref_svc``; the error message points at the YAML knob
+(``reference_graph.capture.enabled``) so end users can fix the failure
+mode without reading release notes.
 """
 from __future__ import annotations
 
@@ -44,8 +42,8 @@ if TYPE_CHECKING:
 class LookupService:
     """Routes lookup targets to the right backing service.
 
-    ``tree_svc`` (sub-PR #5) and ``ref_svc`` (sub-PR #5b) are optional.
-    See spec §6.2 for the degraded-mode policy.
+    ``tree_svc`` and ``ref_svc`` are optional. See spec §6.2 for the
+    degraded-mode policy.
     """
 
     package_lookup: PackageLookup
@@ -136,10 +134,8 @@ class LookupService:
                     f"show='inherits' only applies to CLASS nodes, got {node.kind}"
                 )
             if self.ref_svc is None:
-                # Pre-#5c: pointed at "sub-PR #5b" — a development
-                # checkpoint meaningless to end users. Post-#5c:
-                # points at the YAML config knob so the user can fix
-                # it themselves without consulting release notes.
+                # Point at the YAML config knob so end users can fix
+                # the failure mode without consulting release notes.
                 raise ServiceUnavailableError(
                     "reference graph not configured "
                     "(check reference_graph.capture.enabled in YAML config)"

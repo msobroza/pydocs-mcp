@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     # Imported only for typing — keeps the application layer from taking
     # a runtime dependency on storage value objects. ``NodeReference``
     # is emitted by a future ``ReferenceExtractionStage`` and persisted
-    # by ``ReferenceStore`` (sub-PR #5b, spec §4.2).
+    # by ``ReferenceStore`` (spec §4.2).
     from pydocs_mcp.storage.node_reference import NodeReference
 
 

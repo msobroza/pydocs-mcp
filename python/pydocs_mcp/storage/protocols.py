@@ -97,15 +97,15 @@ class UnitOfWork(Protocol):
     and share one SQLite connection. Outside the context they raise
     :class:`~pydocs_mcp.storage.errors.UnitOfWorkNotEnteredError`.
     Explicit ``commit()`` persists; safety-net ``rollback`` on exception
-    or no-commit. Sub-PR #5b adds ``references`` as the 5th attribute
-    (the cross-node reference-graph store).
+    or no-commit. ``references`` is the 5th attribute (the cross-node
+    reference-graph store).
     """
 
     packages: PackageStore
     chunks: ChunkStore
     module_members: ModuleMemberStore
     trees: DocumentTreeStore
-    references: ReferenceStore   # NEW — sub-PR #5b
+    references: ReferenceStore
 
     async def __aenter__(self) -> UnitOfWork: ...
     async def __aexit__(self, exc_type, exc, tb) -> bool: ...

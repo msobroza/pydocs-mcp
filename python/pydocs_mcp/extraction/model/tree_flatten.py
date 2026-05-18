@@ -8,7 +8,7 @@ Each emitted Chunk carries (spec §4.4):
 - package, title, kind, origin, source_path, content_hash (standard metadata)
 - module (from node.extra_metadata["module"] if present, else node.qualified_name)
 - qualified_name (copied from node.qualified_name — first-class field, mirrored
-  into metadata so downstream consumers / filters / sub-PR #5b reference graph
+  into metadata so downstream consumers / filters / the reference graph
   don't need to peek into extra_metadata)
 - any other keys from node.extra_metadata (merged WITHOUT overwriting required keys)
 
@@ -101,7 +101,7 @@ def _node_to_chunk(
         # column); there is no ChunkFilterField.KIND enum member. Consumers that
         # need to filter by kind key on the literal string "kind".
         "kind": node.kind.value,
-        # First-class mirror: Chunk consumers (sub-PR #5b ReferenceExtractionStage,
+        # First-class mirror: Chunk consumers (ReferenceExtractionStage,
         # retrieval filters) can select on qualified_name without peeking into
         # extra_metadata or keeping a parallel tree in memory.
         "qualified_name": node.qualified_name,

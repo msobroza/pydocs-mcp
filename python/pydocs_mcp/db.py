@@ -11,7 +11,7 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 4  # v4 adds the additive ``node_references`` table + 3 indices on top of v3 (sub-PR #5b)
+SCHEMA_VERSION = 4  # v4 adds the additive ``node_references`` table + 3 indices on top of v3
 
 _DDL = """
     CREATE TABLE packages (
