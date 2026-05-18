@@ -154,6 +154,42 @@ class ReferenceGraphConfig(BaseModel):
     output: ReferenceOutputConfig = Field(default_factory=ReferenceOutputConfig)
 
 
+class SearchOutputConfig(BaseModel):
+    """Per-deployment bounds for the ``search`` MCP tool's ``limit``.
+
+    Parity with :class:`ReferenceOutputConfig` — two YAML knobs (default
+    and ceiling) pushed into ``SearchInput.limit`` via
+    ``configure_from_app_config``. Kept as a separate sub-model (rather
+    than reusing ``reference_graph.output``) because the two surfaces are
+    conceptually distinct: ``search`` returns chunks, ``lookup`` returns
+    references, and their historical defaults differ (10 vs 50). Keeping
+    independent YAML keys lets deployments tune one without the other.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_limit: int = Field(10, ge=1)
+    max_limit: int = Field(1000, ge=1)
+
+    @model_validator(mode="after")
+    def _default_le_max(self) -> "SearchOutputConfig":
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                f"search.output.default_limit={self.default_limit} "
+                f"> max_limit={self.max_limit}; the SearchInput default "
+                f"would always fail the max validator. Adjust YAML.",
+            )
+        return self
+
+
+class SearchConfig(BaseModel):
+    """Namespace for ``search``-tool tunables (parity with ``reference_graph``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
+
+
 class AppConfig(BaseSettings):
     """Runtime configuration.
 
@@ -178,6 +214,11 @@ class AppConfig(BaseSettings):
     # surface vs YAML configuration": these are pipeline-tuning knobs, NOT
     # MCP tool params. The MCP surface (search, lookup) stays fixed.
     reference_graph: ReferenceGraphConfig = Field(default_factory=ReferenceGraphConfig)
+    # Post-trilogy polish: parallel YAML knobs for the ``search`` MCP tool.
+    # Same wiring pattern as ``reference_graph.output`` — pushed into
+    # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
+    # surface stays fixed; only deployment-time bounds are configurable.
+    search: SearchConfig = Field(default_factory=SearchConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside

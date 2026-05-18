@@ -6,11 +6,11 @@ rejecting legit edge cases.
 
 Per CLAUDE.md §"MCP API surface vs YAML configuration": pipeline tunables
 live in YAML, NOT on the MCP tool surface. The one allowed exception is
-input-shape validators on these models (e.g., ``LookupInput.limit``'s
-default and ceiling), which are deployment-time bounds, not feature
-toggles. ``configure_from_app_config`` is the single wire that pushes the
-YAML-loaded ``AppConfig`` into the two module-level slots those validators
-read at runtime.
+input-shape validators on these models (e.g., ``LookupInput.limit`` /
+``SearchInput.limit`` defaults and ceilings), which are deployment-time
+bounds, not feature toggles. ``configure_from_app_config`` is the single
+wire that pushes the YAML-loaded ``AppConfig`` into the module-level
+slots those validators read at runtime.
 """
 from __future__ import annotations
 
@@ -30,9 +30,10 @@ _TARGET_RE = re.compile(
 # Module-level slots — installed by ``configure_from_app_config`` at
 # server / CLI startup. The initial values match the shipped
 # ``default_config.yaml`` (``reference_graph.output.default_limit=50``,
-# ``max_limit=1000``) so the model behaves correctly even if
-# ``configure_from_app_config`` is never called (e.g., direct unit tests
-# that just instantiate ``LookupInput``).
+# ``max_limit=1000`` for LookupInput; ``search.output.default_limit=10``,
+# ``max_limit=1000`` for SearchInput) so the models behave correctly even
+# if ``configure_from_app_config`` is never called (e.g., direct unit
+# tests that just instantiate ``LookupInput`` / ``SearchInput``).
 #
 # Why module-level globals instead of class-level defaults? Pydantic
 # resolves field defaults / validator constraints at class definition,
@@ -40,36 +41,51 @@ _TARGET_RE = re.compile(
 # ``default_factory=lambda: _LIMIT_DEFAULT`` and a validator that reads
 # ``_LIMIT_MAX`` inside its body re-read the slots on every model
 # instantiation, so a single ``configure_from_app_config`` call at startup
-# is enough to make every subsequent ``LookupInput(...)`` validate
-# against the YAML-supplied bounds.
+# is enough to make every subsequent ``LookupInput(...)`` /
+# ``SearchInput(...)`` validate against the YAML-supplied bounds.
 _LIMIT_DEFAULT: int = 50
 _LIMIT_MAX: int = 1000
+# SearchInput's historical default is 10 (not 50) — distinct knob from
+# LookupInput. Both pairs are tunable via separate YAML sub-models
+# (``reference_graph.output.*`` vs ``search.output.*``); deployments can
+# adjust one without the other.
+_SEARCH_LIMIT_DEFAULT: int = 10
+_SEARCH_LIMIT_MAX: int = 1000
 
 
 def configure_from_app_config(cfg) -> None:
-    """Install YAML-loaded settings into the two module-level slots this
+    """Install YAML-loaded settings into the module-level slots this
     package reads at runtime.
 
     Called ONCE at server / CLI startup (see ``server.py::run`` and
     ``__main__.py::_cmd_*``). The function is intentionally untyped on its
-    parameter — accepting any object with a ``reference_graph`` attribute
-    avoids a circular import between ``application`` and ``retrieval``,
-    and the AppConfig type is fully validated upstream anyway.
+    parameter — accepting any object with the right attributes avoids a
+    circular import between ``application`` and ``retrieval``, and the
+    AppConfig type is fully validated upstream anyway.
 
-    Two slots are updated:
+    Three slots are updated:
 
     1. ``_LIMIT_DEFAULT`` / ``_LIMIT_MAX`` here in ``mcp_inputs`` — read
        by ``LookupInput.limit`` (default + ceiling).
-    2. ``_CAPTURE_CONFIG`` in ``extraction.pipeline.stages`` — read by
+    2. ``_SEARCH_LIMIT_DEFAULT`` / ``_SEARCH_LIMIT_MAX`` here in
+       ``mcp_inputs`` — read by ``SearchInput.limit`` (default + ceiling).
+       Separate slot pair so deployments can tune search and lookup
+       limits independently.
+    3. ``_CAPTURE_CONFIG`` in ``extraction.pipeline.stages`` — read by
        ``ReferenceCaptureStage`` to gate capture on/off and pick which
        reference kinds to emit. Pushed via ``_set_capture_config`` so the
        stage module owns its own slot (no cross-package mutation).
     """
     global _LIMIT_DEFAULT, _LIMIT_MAX
+    global _SEARCH_LIMIT_DEFAULT, _SEARCH_LIMIT_MAX
 
     output = cfg.reference_graph.output
     _LIMIT_DEFAULT = output.default_limit
     _LIMIT_MAX = output.max_limit
+
+    search_output = cfg.search.output
+    _SEARCH_LIMIT_DEFAULT = search_output.default_limit
+    _SEARCH_LIMIT_MAX = search_output.max_limit
 
     # Local import — keeps the application -> extraction edge lazy so
     # importing ``mcp_inputs`` at app startup doesn't drag in the whole
@@ -86,7 +102,28 @@ class SearchInput(BaseModel):
     kind: Literal["docs", "api", "any"] = "any"
     package: str = ""
     scope: Literal["project", "deps", "all"] = "all"
-    limit: int = Field(default=10, ge=1, le=1000)
+    # ``limit`` bounds the chunk-result count. Both the default and the
+    # upper ceiling are driven by YAML (``search.output.default_limit`` /
+    # ``max_limit``), pushed into module-level slots by
+    # ``configure_from_app_config`` at server / CLI startup — parity with
+    # ``LookupInput.limit`` (post-#5c). ``default_factory`` re-reads the
+    # slot on every instantiation, and the ``@field_validator`` reads the
+    # ceiling inside its body, so the model picks up YAML changes without
+    # a re-import.
+    limit: int = Field(default_factory=lambda: _SEARCH_LIMIT_DEFAULT, ge=1)
+
+    @field_validator("limit")
+    @classmethod
+    def _check_limit_max(cls, v: int) -> int:
+        # Read ``_SEARCH_LIMIT_MAX`` at call time so YAML reloads (or test
+        # overrides) take effect on every ``SearchInput(...)`` rather than
+        # being frozen at class-definition time.
+        if v > _SEARCH_LIMIT_MAX:
+            raise ValueError(
+                f"limit must be <= {_SEARCH_LIMIT_MAX} "
+                f"(configured via search.output.max_limit)"
+            )
+        return v
 
     @field_validator("package")
     @classmethod
