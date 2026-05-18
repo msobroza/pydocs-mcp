@@ -24,8 +24,10 @@ from typing import TYPE_CHECKING, Any
 import pydocs_mcp.extraction.strategies.chunkers  # noqa: F401 — side-effect: fires @chunker_registry.register decorators
 from pydocs_mcp.extraction.model import DocumentNode, flatten_to_chunks
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
 from pydocs_mcp.models import Chunk, Package, PackageOrigin
+from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.config import ChunkingConfig
@@ -35,6 +37,28 @@ if TYPE_CHECKING:
     )
 
 log = logging.getLogger("pydocs-mcp")
+
+
+# Module-level capture config — installed by ``configure_from_app_config`` at
+# server / CLI startup (Task 5). The default keeps the pre-#5c behavior (all
+# three AST kinds enabled) so unit tests and any caller that constructs the
+# stage without going through the YAML path get the safe baseline. We use a
+# module-level constant rather than ``IngestionState.app_config`` because the
+# stage's ``run`` is otherwise stateless and the config is process-global, not
+# per-pipeline-invocation.
+_CAPTURE_CONFIG: ReferenceCaptureConfig = ReferenceCaptureConfig()
+
+
+def _get_capture_config() -> ReferenceCaptureConfig:
+    """Return the active reference-capture config (module-level singleton)."""
+    return _CAPTURE_CONFIG
+
+
+def _set_capture_config(cfg: ReferenceCaptureConfig) -> None:
+    """Install a new reference-capture config — called by
+    ``configure_from_app_config(cfg)`` at server / CLI startup (Task 5)."""
+    global _CAPTURE_CONFIG
+    _CAPTURE_CONFIG = cfg
 
 
 @stage_registry.register("file_discovery")
@@ -184,13 +208,21 @@ class ReferenceCaptureStage:
     name: str = "reference_capture"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        refs, aliases = await asyncio.to_thread(self._capture_all, state)
+        cfg = _get_capture_config()
+        if not cfg.enabled:
+            # Short-circuit — capture disabled by YAML. Leave state.references
+            # and state.reference_aliases at their defaults (empty tuple / dict).
+            return replace(state, references=(), reference_aliases={})
+        allowed = set(cfg.kinds)
+        refs, aliases = await asyncio.to_thread(
+            self._capture_all, state, allowed,
+        )
         return replace(
             state, references=tuple(refs), reference_aliases=aliases,
         )
 
     def _capture_all(
-        self, state: IngestionState,
+        self, state: IngestionState, allowed: set[str],
     ) -> tuple[list[Any], dict[str, dict[str, str]]]:
         # Deferred imports — strategies pull in ast + reference value objects
         # which are otherwise irrelevant at stage-registry construction time.
@@ -217,42 +249,61 @@ class ReferenceCaptureStage:
                 continue
             try:
                 module_qname = _module_from_path(path, state.root)
+                # capture_imports always runs — it populates collector.aliases,
+                # which the resolver consumes regardless of whether IMPORTS
+                # rows survive the kinds filter below. We drop the IMPORTS
+                # *rows* after capture if "imports" isn't in allowed, but
+                # the alias table is the source of truth for the resolver
+                # and must be preserved (spec §5.3 / Task 3 of sub-PR #5c).
                 capture_imports(
                     tree.body,
                     from_package=state.package_name,
                     module_qname=module_qname,
                     collector=collector,
                 )
-                for stmt in tree.body:
-                    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        capture_calls(
-                            stmt.body,
-                            from_package=state.package_name,
-                            from_node_id=f"{module_qname}.{stmt.name}",
-                            collector=collector,
-                        )
-                    elif isinstance(stmt, ast.ClassDef):
-                        class_qname = f"{module_qname}.{stmt.name}"
-                        capture_inherits(
-                            list(stmt.bases),
-                            from_package=state.package_name,
-                            class_qname=class_qname,
-                            collector=collector,
-                        )
-                        for m in stmt.body:
-                            if isinstance(
-                                m, (ast.FunctionDef, ast.AsyncFunctionDef),
-                            ):
-                                capture_calls(
-                                    m.body,
+                if "calls" in allowed or "inherits" in allowed:
+                    for stmt in tree.body:
+                        if (
+                            isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and "calls" in allowed
+                        ):
+                            capture_calls(
+                                stmt.body,
+                                from_package=state.package_name,
+                                from_node_id=f"{module_qname}.{stmt.name}",
+                                collector=collector,
+                            )
+                        elif isinstance(stmt, ast.ClassDef):
+                            class_qname = f"{module_qname}.{stmt.name}"
+                            if "inherits" in allowed:
+                                capture_inherits(
+                                    list(stmt.bases),
                                     from_package=state.package_name,
-                                    from_node_id=f"{class_qname}.{m.name}",
+                                    class_qname=class_qname,
                                     collector=collector,
                                 )
+                            if "calls" in allowed:
+                                for m in stmt.body:
+                                    if isinstance(
+                                        m, (ast.FunctionDef, ast.AsyncFunctionDef),
+                                    ):
+                                        capture_calls(
+                                            m.body,
+                                            from_package=state.package_name,
+                                            from_node_id=f"{class_qname}.{m.name}",
+                                            collector=collector,
+                                        )
             except Exception as exc:  # noqa: BLE001 -- per-file containment
                 log.warning("reference_capture failed on %s: %s", path, exc)
                 continue
-        return collector.refs, collector.aliases
+        # Filter IMPORTS rows out of collector.refs if "imports" isn't allowed.
+        # The alias table (collector.aliases) is untouched — the resolver
+        # consumes it independently of whether IMPORTS edges land in the DB.
+        if "imports" not in allowed:
+            refs = [r for r in collector.refs if r.kind is not ReferenceKind.IMPORTS]
+        else:
+            refs = collector.refs
+        return refs, collector.aliases
 
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> "ReferenceCaptureStage":
