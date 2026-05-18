@@ -103,3 +103,30 @@ def test_unit_of_work_not_entered_error_is_typed():
     err = UnitOfWorkNotEnteredError("packages")
     assert "packages" in str(err)
     assert err.attr_name == "packages"
+
+
+def test_reference_store_protocol_exists_in_storage_protocols():
+    """ReferenceStore is the 9th storage Protocol (spec §6.2)."""
+    from pydocs_mcp.storage.protocols import ReferenceStore
+    # @runtime_checkable so duck-typing tests work end-to-end.
+    assert hasattr(ReferenceStore, "_is_runtime_protocol")
+    # All required methods are declared.
+    method_names = {n for n in dir(ReferenceStore) if not n.startswith("_")}
+    assert "save_many" in method_names
+    assert "find_callers" in method_names
+    assert "find_callees" in method_names
+    assert "find_by_name" in method_names
+    assert "delete_for_package" in method_names
+    assert "delete_all" in method_names
+
+
+def test_unit_of_work_protocol_now_has_references_attribute():
+    """Spec §14.7 — UoW gains a 5th repo attribute (references)."""
+    from pydocs_mcp.storage.protocols import UnitOfWork
+    # __annotations__ exposes the typed attribute. Use get_type_hints to
+    # resolve forward refs.
+    from typing import get_type_hints
+    hints = get_type_hints(UnitOfWork)
+    assert "references" in hints
+    # Type should be ReferenceStore (or its name as a forward ref).
+    assert "ReferenceStore" in str(hints["references"])
