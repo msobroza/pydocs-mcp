@@ -1,0 +1,32 @@
+"""ChunkRetrievalStage — invoke the chunk retriever, store its result."""
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
+
+from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+
+if TYPE_CHECKING:
+    from pydocs_mcp.retrieval.protocols import ChunkRetriever
+
+
+@stage_registry.register("chunk_retrieval")
+@dataclass(frozen=True, slots=True)
+class ChunkRetrievalStage:
+    retriever: "ChunkRetriever"
+    name: str = "chunk_retrieval"
+
+    async def run(self, state: PipelineState) -> PipelineState:
+        result = await self.retriever.retrieve(state.query)
+        return replace(state, result=result)
+
+    def to_dict(self) -> dict:
+        return {"type": "chunk_retrieval", "retriever": self.retriever.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: dict, context: BuildContext) -> "ChunkRetrievalStage":
+        return cls(retriever=context.retriever_registry.build(data["retriever"], context))
+
+
+__all__ = ("ChunkRetrievalStage",)
