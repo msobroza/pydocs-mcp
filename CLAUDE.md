@@ -183,6 +183,30 @@ Other rules:
 
 **Composition roots** (`server.py`, `__main__.py`, `storage/factories.py`) build a `uow_factory = lambda: SqliteUnitOfWork(provider=provider, lock=lock, ...)` closure once and thread it to every service. No inline `SqliteDocumentTreeStore(...)` / `SqliteChunkRepository(...)` constructors in service-wiring code.
 
+## MCP API surface vs YAML configuration
+
+**Rule:** Pipeline / feature / behavior settings — capture toggles, resolver thresholds, retrieval limits-on-defaults, ranking weights, embedding model choices, indexing depth, kinds-to-emit, reference-graph capture on/off, etc. — MUST be configured via YAML (loaded through `AppConfig.load(...)` at server / CLI startup), NEVER exposed as new MCP tool parameters.
+
+**The MCP tool surface is FIXED at two tools:** `search(query, kind, ...)` and `lookup(target, show, ...)`. Their signatures are pinned by sub-PRs #4 / #6. New features land **behind** the existing surface — via YAML config + internal service composition — never as a new MCP param.
+
+**Why:**
+
+1. **MCP stability.** The MCP client surface is consumed by external tools (Claude Code, Cursor, IDE extensions). Every new MCP param is a versioning event for those clients. YAML edits are deployment changes — they don't ripple to clients.
+2. **Experiment tracking + benchmark evaluation.** A/B testing different resolver thresholds, capture strategies, or ranking weights happens server-side via swappable YAML. The benchmark harness can iterate over `configs/*.yaml` and produce comparable measurements **without rebuilding clients or churning the API**. Conflating "what the API offers" with "how the server is currently tuned" makes evaluation impossible.
+3. **Per-deployment tuning.** Different MCP server deployments (per-project, per-developer, per-environment) carry different configs. The API stays the same; the behavior varies.
+
+**The one allowed exception** is *input-shape* validators on the MCP tool models (e.g., `LookupInput.limit: int = Field(50, ge=1, le=1000)`) — these constrain a single client request's bounds and are client-driven, not feature toggles. If you find yourself adding a parameter like `lookup(kinds=[...])` or `search(min_score=0.5)`, **stop**: that's a pipeline setting, it belongs in YAML, and the MCP input should expose nothing.
+
+**Where YAML config lives:**
+
+- `python/pydocs_mcp/defaults/default_config.yaml` — shipped lowest-priority defaults, the canonical reference of every tunable.
+- `python/pydocs_mcp/pipelines/*.yaml` — built-in pipeline blueprints (ingestion, chunk search, member search).
+- User overlays loaded via `AppConfig.load(explicit_path=...)` at MCP server / CLI startup.
+
+**`AppConfig` is the single source of truth** — it's a `pydantic-settings` model that layers (1) defaults → (2) shipped pipeline YAML → (3) explicit overlay path → (4) env vars. New tunables go in the typed config sub-model that owns the relevant pipeline; never as a CLI flag *and* an MCP param.
+
+**When in doubt:** if a new behavior could be A/B tested against a benchmark to measure quality, it belongs in YAML.
+
 ## Code Comments
 
 - **Explain WHY, not WHAT** — the code should be self-documenting for the "what"
