@@ -138,6 +138,24 @@ class ReferenceOutputConfig(BaseModel):
         return self
 
 
+class ReferenceResolverConfig(BaseModel):
+    """Resolver-side knobs for the cross-node reference graph (sub-PR follow-up to #5c).
+
+    YAML keys map 1:1; defaults shipped in defaults/default_config.yaml.
+
+    ``include_stdlib`` toggles whether the resolver loads the bundled
+    ``stdlib_qnames.json`` and merges its qnames into the resolver's
+    qname universe. When True (default), CALLS edges to stdlib / builtins
+    targets (``os.path.join``, ``len``, ``asyncio.to_thread``, ...) resolve
+    instead of staying ``to_node_id=None``. AC #15 / sub-PR follow-up to
+    #5c — projected +5-10pp on the self-index resolution rate.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    include_stdlib: bool = True
+
+
 class ReferenceGraphConfig(BaseModel):
     """Composite — capture toggles + output bounds (sub-PR #5c, §5.3).
 
@@ -152,6 +170,7 @@ class ReferenceGraphConfig(BaseModel):
 
     capture: ReferenceCaptureConfig = Field(default_factory=ReferenceCaptureConfig)
     output: ReferenceOutputConfig = Field(default_factory=ReferenceOutputConfig)
+    resolver: ReferenceResolverConfig = Field(default_factory=ReferenceResolverConfig)
 
 
 class SearchOutputConfig(BaseModel):
