@@ -181,9 +181,16 @@ def _enclosing_class_qname(from_node_id: str) -> str | None:
     Free functions and module-level captures fall through with None.
 
     Same heuristic as ``_module_part_of`` (one segment up), inverted to
-    return the class-qname rather than the module-qname. False positives
-    (a UPPERCASE non-class segment) just miss the table lookup and the
-    caller falls through to Rule 5 — safe.
+    return the class-qname rather than the module-qname.
+
+    Safety: false negatives (e.g. a snake_case class ``my_helper`` or an
+    UPPERCASE module ``pkg.HTTP.client``) simply miss the table lookup
+    and Rule 5 short-circuits the reference unchanged. False positives
+    are impossible to leak into a real resolution because both inference
+    paths in :meth:`ReferenceResolver._infer_self_type` either consult
+    the captured ``class_attribute_types`` table (which only contains
+    real classes) or gate on qname-universe membership (the self-as-
+    class fallback). Misfires lose accuracy, never correctness.
     """
     parts = from_node_id.split(".")
     if len(parts) >= 3 and parts[-2] and parts[-2][0].isupper():

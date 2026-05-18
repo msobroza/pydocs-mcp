@@ -106,6 +106,7 @@ class ProjectIndexer:
                 pkg, result.chunks, members, trees=result.trees,
                 references=result.references,
                 reference_aliases=result.reference_aliases,
+                class_attribute_types=result.class_attribute_types,
             )
             stats.indexed += 1
             log.info("  ok %s %s (%d chunks, %d syms, %d trees)",

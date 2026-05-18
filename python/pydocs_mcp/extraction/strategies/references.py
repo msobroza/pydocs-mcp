@@ -240,10 +240,9 @@ def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
     init_types = _init_body_attribute_types(cls)
 
     # Annotation wins on conflict: class-body annotations are the type
-    # system's declaration; __init__ assignments are runtime intent.
-    # Apply class-body LAST so it overrides any __init__ bare-call entry
-    # for the same attribute (e.g. dataclass field that __init__ also
-    # explicitly assigns).
+    # system's declaration and supersede runtime intent. Order matters —
+    # ``dict.update`` writes the second arg LAST, so class-body entries
+    # win over any conflicting __init__ entry for the same attribute.
     result: dict[str, str] = {}
     result.update(init_types)
     result.update(class_body_types)
