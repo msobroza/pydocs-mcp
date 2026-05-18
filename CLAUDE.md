@@ -133,6 +133,56 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 
 **Dependency Inversion:** Core logic (`extraction/`, `retrieval/`, `application/`) depends on abstractions — `_fast.py` hides the Rust/Python choice and `storage/protocols.py` + `application/protocols.py` + `retrieval/protocols.py` define the backend contracts. Services depend only on Protocols from those three modules, never on concrete `Sqlite*` types. `ProjectIndexer` composes with the strategy classes from `extraction/` (`PipelineChunkExtractor` / `AstMemberExtractor` / `InspectMemberExtractor` / `StaticDependencyResolver`) — the service knows only the Protocol shape, so swapping chunkers, member extractors, or the resolver is a pure strategy change. Swapping SQLite for Postgres/DuckDB later is a pure adapter change. Never import `_native` or `_fallback` directly from other modules.
 
+## Creating new application services
+
+**Rule:** New `application/` services that touch any persisted entity (`Package`, `Chunk`, `ModuleMember`, `DocumentNode`, `Reference`, …) MUST depend on a single `uow_factory: Callable[[], UnitOfWork]` constructor parameter. **Do NOT take individual `PackageStore` / `ChunkStore` / `ModuleMemberStore` / `DocumentTreeStore` / `ReferenceStore` references**, do NOT take a `unit_of_work: UnitOfWork | None` field, and do NOT reach into `*Repository` types directly.
+
+**Pattern** (mandatory for every new service):
+
+```python
+from collections.abc import Callable
+from dataclasses import dataclass
+from pydocs_mcp.storage.protocols import UnitOfWork
+
+@dataclass(frozen=True, slots=True)
+class MyNewService:
+    uow_factory: Callable[[], UnitOfWork]
+
+    # READ path — no commit needed.
+    async def get_something(self, name: str) -> SomeResult:
+        async with self.uow_factory() as uow:
+            packages = await uow.packages.list(filter={"name": name})
+            chunks = await uow.chunks.list(filter={...}, limit=10)
+        return _render(packages, chunks)
+
+    # WRITE path — commit explicitly. The whole sequence is atomic.
+    async def replace_something(self, package: Package, chunks: tuple[Chunk, ...]) -> None:
+        async with self.uow_factory() as uow:
+            await uow.chunks.delete(filter={"package": package.name})
+            await uow.packages.delete(filter={"name": package.name})
+            await uow.packages.upsert(package)
+            await uow.chunks.upsert(chunks)
+            await uow.commit()  # success signal — flushes the SQLite transaction
+```
+
+**Atomicity model** (the boundary that makes writes safe):
+
+- `async with self.uow_factory() as uow:` opens a single SQLite connection and stores it on the `_sqlite_transaction` ContextVar. Every `uow.<repo>.<method>()` call inside the block routes through that one connection (no per-call connection acquisition).
+- SQLite's implicit transaction wraps every statement on that connection until you call `commit()` or `rollback()`. So the whole `delete → delete → upsert → upsert` sequence above either fully lands or fully rolls back — no partial writes survive a crash mid-sequence.
+- `await uow.commit()` is the explicit success signal. Calling it flushes the transaction (`SqliteUnitOfWork.commit` → `await asyncio.to_thread(self._held_conn.commit)`).
+- `__aexit__` is the safety net: if an exception escapes the `async with` body OR if the body completes without ever calling `commit()`, it calls `rollback()` automatically. Silently failing to commit cannot accidentally persist half a transaction.
+
+Other rules:
+
+- One UoW per public method call. Short transactions = low contention.
+- Inside `async with self.uow_factory() as uow:` you reach every repository via `uow.packages` / `uow.chunks` / `uow.module_members` / `uow.trees` / `uow.references`. The `UnitOfWork` Protocol guarantees they're present — no `if uow.X is not None:` guards.
+- Reads are wrapped too — even if a method touches only `uow.packages`, going through the UoW keeps the connection-acquisition path uniform and lets a single transaction span multiple reads with consistent isolation. Reads do **not** need `await uow.commit()`; the `__aexit__` safety-net rollback is a no-op for read-only paths.
+- **The only exception:** retrieval/search pipelines that consume `SqliteVectorStore` directly via `ConnectionProvider` (`DocsSearch`, `ApiSearch`). They are query-only against a single FTS table and don't need cross-store consistency. Anything that touches more than one store, or any write path, uses `uow_factory`.
+
+**Tests** use `make_fake_uow_factory(packages=..., chunks=..., module_members=..., trees=..., references=...)` from `tests/_fakes.py`. Never construct services with direct `package_store=` / `chunk_store=` / `module_member_store=` / `tree_store=` / `unit_of_work=` kwargs in tests — those constructor shapes are obsolete and the helper enforces the new contract.
+
+**Composition roots** (`server.py`, `__main__.py`, `storage/factories.py`) build a `uow_factory = lambda: SqliteUnitOfWork(provider=provider, lock=lock, ...)` closure once and thread it to every service. No inline `SqliteDocumentTreeStore(...)` / `SqliteChunkRepository(...)` constructors in service-wiring code.
+
 ## Code Comments
 
 - **Explain WHY, not WHAT** — the code should be self-documenting for the "what"

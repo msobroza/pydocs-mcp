@@ -1,7 +1,7 @@
 ---
-status: working-draft
-shipped-in: deferred (resynchronised 2026-05-17 against post-merge main)
-last-reviewed: 2026-05-17
+status: shipped
+shipped-in: sub-PR #5b (post-#5a-2 main)
+last-reviewed: 2026-05-18
 original-draft: 2026-04-20
 ---
 
@@ -193,6 +193,8 @@ class ReferenceStore(Protocol):
     ) -> None: ...
     async def find_callers(self, *, target_node_id: str) -> list[NodeReference]: ...
     async def find_callees(self, *, from_node_id: str) -> list[NodeReference]: ...
+    # Note: the storage-Protocol methods stay 1-arg (cross-package per §6.2).
+    # The APPLICATION-service signatures (§8.1) are 2-arg per Decision C1 below.
     async def find_by_name(
         self, to_name: str, kind: ReferenceKind | None = None,
     ) -> list[NodeReference]: ...
@@ -311,11 +313,14 @@ Resolution walk for the `CALLS` edge:
 class ReferenceService:
     ref_store: ReferenceStore
 
-    async def callers(self, target_node_id: str) -> tuple[NodeReference, ...]:
-        return tuple(await self.ref_store.find_callers(target_node_id=target_node_id))
+    # Decision C1 (2026-05-18): 2-arg signatures to match the existing
+    # LookupService._symbol_lookup call site (`ref_svc.callers(package, qname)`).
+    # The `package` arg is informational; storage stays cross-package per §6.2.
+    async def callers(self, package: str, target_node_qname: str) -> tuple[NodeReference, ...]:
+        return tuple(await self.ref_store.find_callers(target_node_id=target_node_qname))
 
-    async def callees(self, from_node_id: str) -> tuple[NodeReference, ...]:
-        return tuple(await self.ref_store.find_callees(from_node_id=from_node_id))
+    async def callees(self, package: str, from_node_qname: str) -> tuple[NodeReference, ...]:
+        return tuple(await self.ref_store.find_callees(from_node_id=from_node_qname))
 
     async def find_by_name(
         self, name: str, *, kind: ReferenceKind | None = None,
