@@ -162,6 +162,75 @@ def test_multiple_patterns_in_same_init():
     }
 
 
+def test_class_body_annotation_dataclass_field():
+    """Class-body AnnAssign — dataclass/Protocol field pattern.
+
+    ``cache: redis.Cache`` declared at class scope (no method body)
+    records ``cache → redis.Cache`` so calls like ``self.cache.get`` can
+    resolve. Most common form in this codebase (frozen dataclasses)."""
+    cls = _parse_class(
+        "class Service:\n"
+        "    cache: redis.Cache\n"
+        "    runner: Pipeline\n"
+    )
+    assert capture_self_attribute_types(cls) == {
+        "cache": "redis.Cache",
+        "runner": "Pipeline",
+    }
+
+
+def test_class_body_annotation_with_default_value():
+    """Class-body AnnAssign with a default value still records the type."""
+    cls = _parse_class(
+        "class Service:\n"
+        "    timeout: int = 30\n"
+    )
+    assert capture_self_attribute_types(cls) == {"timeout": "int"}
+
+
+def test_class_body_subscripted_annotation_is_skipped():
+    """``tuple[Chunk, ...]`` and ``Callable[[], UnitOfWork]`` aren't single
+    dotted names — canonical_dotted returns None and the attr is dropped.
+    Correct: these annotations don't name one class to resolve against."""
+    cls = _parse_class(
+        "class Service:\n"
+        "    chunks: tuple[Chunk, ...]\n"
+        "    factory: Callable[[], UnitOfWork]\n"
+        "    valid: Pipeline\n"
+    )
+    # Only ``valid: Pipeline`` survives — the two subscripted annotations
+    # don't reduce to a dotted target.
+    assert capture_self_attribute_types(cls) == {"valid": "Pipeline"}
+
+
+def test_class_body_annotation_wins_over_init_bare_call():
+    """Class-body annotation is the authoritative type declaration; it
+    overrides any conflicting __init__ bare-call assignment for the same
+    attribute. Same precedence as Pattern D over Pattern B."""
+    cls = _parse_class(
+        "class Service:\n"
+        "    cache: redis.Cache\n"
+        "    def __init__(self):\n"
+        "        self.cache = LocalCache()\n"
+    )
+    assert capture_self_attribute_types(cls) == {"cache": "redis.Cache"}
+
+
+def test_class_body_and_init_complement_each_other():
+    """Class-body fields and __init__ assignments to disjoint attrs
+    coexist — neither overrides the other when there's no conflict."""
+    cls = _parse_class(
+        "class Service:\n"
+        "    cache: redis.Cache\n"
+        "    def __init__(self):\n"
+        "        self.client = ApiClient()\n"
+    )
+    assert capture_self_attribute_types(cls) == {
+        "cache": "redis.Cache",
+        "client": "ApiClient",
+    }
+
+
 def test_collector_record_class_attrs_stores_per_class():
     """ReferenceCollector.class_attribute_types accumulates per class qname."""
     collector = ReferenceCollector()

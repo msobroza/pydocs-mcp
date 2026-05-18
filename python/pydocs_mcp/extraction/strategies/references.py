@@ -202,27 +202,83 @@ def capture_inherits(
 
 
 def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
-    """Infer ``self.X`` attribute types from a class's ``__init__`` body.
+    """Infer ``self.X`` attribute types from a class definition.
 
-    Recognises four patterns (the locked design for self.X.Y inference):
+    Walks two sources of type information:
 
-    - **B** — ``self.client = ApiClient()``        → ``{"client": "ApiClient"}``
-    - **C** — ``self.cache = redis.Cache()``       → ``{"cache":  "redis.Cache"}``
-    - **D** — ``self.runner: Pipeline = build()``  → ``{"runner": "Pipeline"}``
-    - **E** — ``self.queue: asyncio.Queue = q``    → ``{"queue":  "asyncio.Queue"}``
+    1. **Class-body annotations** — the dataclass/Protocol pattern:
 
-    Pattern A (``self.x = x`` — pass-through with no type info) is
-    intentionally skipped. Only the ``__init__`` body is scanned — other
-    methods could legitimately rebind attributes to instance-local
-    helpers and we'd rather miss those than introduce noise.
+       .. code-block:: python
 
-    Conflict policy: when the same attr appears via both a bare call
-    (Pattern B/C) AND an annotation (Pattern D/E), the annotation wins
-    — the developer's typed intent supersedes the runtime constructor.
+           @dataclass
+           class Service:
+               cache:  redis.Cache             # → cache  → redis.Cache
+               runner: Pipeline = build()      # → runner → Pipeline
 
-    Returns an empty dict if the class has no ``__init__`` or if no
-    pattern matches; the resolver treats absence the same as "no info"
-    and falls back to Rule 5.
+    2. **__init__ body** — the manual constructor pattern:
+
+       - **B**: ``self.client = ApiClient()``       → ``ApiClient``
+       - **C**: ``self.cache  = redis.Cache()``     → ``redis.Cache``
+       - **D**: ``self.runner: Pipeline = build()`` → ``Pipeline``
+       - **E**: ``self.queue:  asyncio.Queue = q``  → ``asyncio.Queue``
+
+    Pattern A (``self.x = x`` — pass-through, no type info) is skipped.
+    Only ``__init__`` is walked for assignments; other methods could
+    legitimately rebind attributes to local helpers and we'd rather
+    miss those than introduce noise.
+
+    Conflict policy: annotation wins. The order is class-body annotations
+    first (most authoritative — that's the type system speaking), then
+    ``__init__`` bare-call assignments (lowest priority), then
+    ``__init__`` annotated assignments (highest priority — explicit at
+    the assignment site).
+
+    Returns an empty dict when no pattern matches; the resolver treats
+    absence the same as "no info" and falls back to Rule 5.
+    """
+    class_body_types = _class_body_annotations(cls)
+    init_types = _init_body_attribute_types(cls)
+
+    # Annotation wins on conflict: class-body annotations are the type
+    # system's declaration; __init__ assignments are runtime intent.
+    # Apply class-body LAST so it overrides any __init__ bare-call entry
+    # for the same attribute (e.g. dataclass field that __init__ also
+    # explicitly assigns).
+    result: dict[str, str] = {}
+    result.update(init_types)
+    result.update(class_body_types)
+    return result
+
+
+def _class_body_annotations(cls: ast.ClassDef) -> dict[str, str]:
+    """Return ``{attr: type_qname}`` for AnnAssigns at the class body level.
+
+    Catches the dataclass/Protocol pattern where field types are declared
+    directly on the class body. Targets must be plain ``Name`` nodes
+    (excludes nested attribute targets like ``self.X``, which only appear
+    inside methods). Subscripted annotations (e.g. ``tuple[Chunk, ...]``,
+    ``Callable[[], UnitOfWork]``) silently drop because ``canonical_dotted``
+    rejects them — that's correct, they don't name a single class qname.
+    """
+    result: dict[str, str] = {}
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.AnnAssign):
+            continue
+        target = stmt.target
+        if not isinstance(target, ast.Name):
+            continue
+        type_name = canonical_dotted(stmt.annotation)
+        if type_name is None:
+            continue
+        result[target.id] = type_name
+    return result
+
+
+def _init_body_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
+    """Return ``{attr: type_qname}`` for self.X assignments inside __init__.
+
+    Recognises Patterns B/C (bare constructor call) and D/E (annotated
+    assignment). Annotation wins when the same attr appears as both.
     """
     init = _find_init(cls)
     if init is None:
@@ -233,7 +289,6 @@ def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
 
     for stmt in init.body:
         if isinstance(stmt, ast.AnnAssign):
-            # Pattern D/E — annotated assignment.
             attr = _self_attr_name(stmt.target)
             if attr is None:
                 continue
@@ -242,7 +297,6 @@ def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
                 continue
             annotated[attr] = type_name
         elif isinstance(stmt, ast.Assign):
-            # Pattern B/C — assignment whose RHS is a constructor call.
             if not isinstance(stmt.value, ast.Call):
                 continue
             type_name = canonical_dotted(stmt.value.func)
@@ -254,8 +308,6 @@ def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
                     continue
                 bare[attr] = type_name
 
-    # Annotation wins on conflict — apply annotations last so they
-    # overwrite any bare-call entry for the same attribute.
     bare.update(annotated)
     return bare
 

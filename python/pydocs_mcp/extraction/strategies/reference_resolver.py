@@ -129,25 +129,48 @@ class ReferenceResolver:
         return None
 
     def _infer_self_type(self, from_node_id: str, to_name: str) -> str | None:
-        """Rewrite ``self.X[.Y]`` to ``<type>[.Y]`` when ``X``'s type is known.
+        """Rewrite ``self.X[.Y]`` to a dotted target when self's type is known.
 
-        Returns the rewritten dotted target, or None when no inference
-        applies (no enclosing class, class not in the table, or attr not
-        recorded). The caller falls through to Rule 5 on None.
+        Two sources of evidence (in priority order):
+
+        1. **Attribute-typed**: ``self.X`` has a known type from the
+           ``class_attribute_types`` table (built from class-body
+           AnnAssigns and ``__init__`` patterns B/C/D/E). Rewrites
+           ``self.X.Y`` to ``<type>.Y`` and trusts the type — the
+           normal rules (A → B/F20 → C → D → E) handle the rewritten
+           target. Alias rewrites can still apply on the type.
+
+        2. **Self-as-class**: when no attribute type is known but the
+           rewritten target ``<enclosing_class>.<after_self>`` exists
+           verbatim in the qname universe, return it. Covers the common
+           ``self.method()`` pattern of methods calling other methods on
+           the same class. Gated on Rule B (exact match) to avoid Rule C
+           suffix-match false positives.
+
+        Returns None when neither source applies; the caller falls
+        through to Rule 5.
         """
         cls_qname = _enclosing_class_qname(from_node_id)
         if cls_qname is None:
             return None
-        attrs = self.class_attribute_types.get(cls_qname)
-        if attrs is None:
-            return None
         # Strip the literal "self." prefix, then split on the FIRST dot
         # so chained access (self.X.Y.Z) preserves the remainder.
         head, _sep, rest = to_name[5:].partition(".")
-        type_qname = attrs.get(head)
-        if type_qname is None:
-            return None
-        return f"{type_qname}.{rest}" if rest else type_qname
+
+        # 1. Attribute-typed inference.
+        attrs = self.class_attribute_types.get(cls_qname)
+        if attrs is not None:
+            type_qname = attrs.get(head)
+            if type_qname is not None:
+                return f"{type_qname}.{rest}" if rest else type_qname
+
+        # 2. Self-as-class fallback — guard with universe membership so
+        #    only Rule B-equivalent rewrites get through. Rule C / D
+        #    matches via this path would risk false positives.
+        rewritten = f"{cls_qname}.{to_name[5:]}"
+        if rewritten in self.qname_universe:
+            return rewritten
+        return None
 
 
 def _enclosing_class_qname(from_node_id: str) -> str | None:

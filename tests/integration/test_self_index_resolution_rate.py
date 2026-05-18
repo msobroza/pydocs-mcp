@@ -9,35 +9,35 @@ universe).
 
 Spec §16 AC #15 — target: CALLS resolution rate ≥ 35%.
 
-**Current measured rate (post-stdlib-indexing follow-up to #5c): 41.7%**
-(9179/22017 on this codebase). This clears the 35% spec target outright —
-AC #15 is **met**. The trajectory:
+**Current measured rate (post-self.X.Y type inference): 49.0%**
+(10835/22112 on this codebase). The trajectory:
 
 - 11.6% — pre-#5c baseline (before project-qname-prefix fix).
 - 16.4% — post-#5c (intra-project edges resolve via ``__project__``
   qname composition).
-- 41.7% — post-stdlib-indexing (this PR; ``IndexingService`` merges
-  pre-baked stdlib + builtins qnames into the resolver universe, so
+- 41.7% — post-stdlib-indexing (``IndexingService`` merges pre-baked
+  stdlib + builtins qnames into the resolver universe, so
   ``isinstance``, ``len``, ``asyncio.to_thread``, ``warnings.warn``,
-  ``hashlib.sha256`` etc. now link to real ``to_node_id`` values).
+  ``hashlib.sha256`` etc. link to real ``to_node_id`` values).
+- 49.0% — post-self.X.Y inference (this PR; ``ReferenceCaptureStage``
+  records ``{class_qname: {attr: type}}`` from class-body annotations
+  and ``__init__`` patterns B/C/D/E, and the resolver's Rule 0 rewrites
+  ``self.X.Y`` to ``<type>.Y``. A self-as-class fallback resolves
+  ``self.method()`` to ``<enclosing_class>.method`` when that qname
+  exists in the universe — the load-bearing rule for the lift).
 
-The +25.3pp lift from #5c is dominated by builtins (~40% of CALLS on
-this codebase) and stdlib (~10%) becoming resolvable. The remaining
-unresolved ~58% is mostly:
+The remaining unresolved ~51% is mostly:
 
-- ``self.X.Y`` patterns (Rule 5 short-circuit by design — resolver
-  returns None for receiver-typed calls; would need class-context type
-  inference to close).
 - third-party dep calls whose qname doesn't suffix-uniquely match any
   indexed package (low-confidence rejections — intentional).
-
-Closing the remaining gap requires class-context type inference for
-``self.method`` calls — tracked as a future follow-up, NOT a blocker
-for AC #15.
+- ``self.X.Y`` patterns where ``X`` is typed by a generic / Subscript
+  annotation (``Callable[[], UnitOfWork]``, ``tuple[Chunk, ...]``) that
+  ``canonical_dotted`` can't reduce to a single qname.
+- Cross-instance method calls through complex expressions (``foo().X``).
 
 This test asserts a stable floor below the current measured rate so
 - a regression that drops capture or resolver hit rate gets caught;
-- a future PR that lands type-inference and pushes higher is visible
+- a future PR that lands further inference and pushes higher is visible
   (and that PR should bump the floor).
 
 The 50-edge minimum is a capture-stage sanity check — well below the
@@ -67,21 +67,23 @@ from pydocs_mcp.storage.factories import (
 # docstring for the three available levers).
 SPEC_TARGET_AC15 = 0.35
 
-# Empirical floor on this codebase as of the AC #15 stdlib-indexing follow-up
-# to #5c. Measured rate: 41.7% (9179/22017). Floor set ~2pp below the measured
-# rate so unrelated ripples don't break the test, but a real resolver
-# regression does.
+# Empirical floor on this codebase as of the self.X.Y type-inference PR.
+# Measured rate: 49.0% (10835/22112). Floor set ~2pp below the measured rate
+# so unrelated ripples don't break the test, but a real resolver regression
+# does.
 #
 # Rate trajectory:
 #   - 11.6% — pre-#5c baseline (before project-qname-prefix fix)
 #   - 16.4% — post-#5c (project-qname-prefix fix landed; intra-project resolved)
-#   - 41.7% — post-stdlib-idx (this PR; stdlib + builtins targets resolve)
+#   - 41.7% — post-stdlib-idx (stdlib + builtins targets resolve)
+#   - 49.0% — post-self.X.Y inference (this PR; class_attribute_types +
+#             resolver Rule 0 + self-as-class fallback resolve sibling-
+#             method and typed-attribute calls).
 #
-# Spec AC #15 target is 35% and is now MET (41.7% > 35%). The remaining
-# unresolved ~58% is dominated by self.X.Y refs which Rule 5 short-circuits
-# by design — closing that gap requires class-context type inference,
-# tracked as a future follow-up.
-EMPIRICAL_FLOOR: float = 0.39
+# Spec AC #15 target is 35% and remains MET (49.0% > 35%). The remaining
+# unresolved ~51% is mostly third-party dep calls without suffix-unique
+# matches and Subscript-typed receivers we can't reduce to one qname.
+EMPIRICAL_FLOOR: float = 0.47
 
 
 async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:

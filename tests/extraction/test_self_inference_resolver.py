@@ -135,6 +135,59 @@ def test_rule_0_inferred_type_then_rule_c_suffix_match():
     assert out[0].to_node_id == "pkg.runners.Pipeline.start"
 
 
+def test_rule_0_self_as_class_method_call_resolves():
+    """Self-as-class fallback — ``self.helper()`` inside ``Cls.method``
+    resolves to ``Cls.helper`` when that qname is in the universe.
+
+    Covers the common "method calls a sibling method" pattern without
+    requiring class_attribute_types — just walks the enclosing class.
+    """
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.mod.Cls.helper", "pkg.mod.Cls.method"},
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.mod.Cls.method", to_name="self.helper"),
+    ])
+    assert out[0].to_node_id == "pkg.mod.Cls.helper"
+
+
+def test_rule_0_self_as_class_only_rewrites_when_in_universe():
+    """Self-as-class fallback is gated on Rule B (exact match) — if the
+    rewritten target isn't in the universe, no inference happens and
+    Rule 5 short-circuits as before.
+
+    Prevents Rule C suffix-match false positives (e.g. self.foo matching
+    any unrelated ``*.foo`` qname in from_package).
+    """
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.mod.Cls.method"},  # no Cls.unknown
+        aliases={},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.mod.Cls.method", to_name="self.unknown"),
+    ])
+    assert out[0].to_node_id is None
+    assert out[0].to_name == "self.unknown"
+
+
+def test_rule_0_attribute_typed_wins_over_self_as_class():
+    """When BOTH attribute-typed info AND self-as-class would apply, the
+    explicit type wins. ``self.X`` with X typed as ``Other`` resolves to
+    ``Other.method``, not ``Cls.X.method``."""
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.mod.Cls.X.method", "pkg.api.Other.method"},
+        aliases={},
+        class_attribute_types={"pkg.mod.Cls": {"X": "pkg.api.Other"}},
+    )
+    out = resolver.resolve([
+        _ref(from_node_id="pkg.mod.Cls.fn", to_name="self.X.method"),
+    ])
+    # Attribute-typed gives Other.method — that's the answer, even
+    # though pkg.mod.Cls.X.method also exists in the universe.
+    assert out[0].to_node_id == "pkg.api.Other.method"
+
+
 def test_rule_0_self_dot_with_no_attr_falls_through():
     """``to_name = "self."`` (an empty attr after self) — Rule 0 finds
     no head match and Rule 5 short-circuits. Defensive: not a shape the
