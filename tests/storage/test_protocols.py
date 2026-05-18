@@ -79,7 +79,7 @@ def test_document_tree_store_save_many_signature_has_package_kwarg():
 
 
 def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
-    """§14.2 — UoW Protocol exposes packages/chunks/module_members/trees
+    """§14.2 — UoW Protocol exposes packages/chunks/module_members/trees/references
     AND defines __aenter__/__aexit__/commit/rollback."""
     from pydocs_mcp.storage.protocols import UnitOfWork
 
@@ -88,6 +88,7 @@ def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
         chunks = None
         module_members = None
         trees = None
+        references = None  # sub-PR #5b — 5th repo attribute
         async def __aenter__(self): return self
         async def __aexit__(self, exc_type, exc, tb): return False
         async def commit(self): pass
