@@ -10,6 +10,8 @@ Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this reposit
 
 **pydocs-mcp** — A local Python documentation indexing and search MCP server with optional Rust acceleration. Indexes project source code + all installed dependencies into a searchable SQLite FTS5 database for AI coding assistants.
 
+**Post-trilogy state (sub-PRs #5a / #5a-2 / #5b / #5c, complete):** the reference graph (CALLS / IMPORTS / INHERITS / MENTIONS edges) ships in the indexer and is queried via the existing MCP surface as `lookup(target=X, show="callers" | "callees" | "inherits")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`. The MCP surface remains the fixed 2-tool `search` + `lookup` (see §"MCP API surface vs YAML configuration").
+
 ## Build & Run Commands
 
 ```bash
@@ -29,9 +31,11 @@ pydocs-mcp index .
 pydocs-mcp index . --force        # Clear cache and re-index
 pydocs-mcp index . --skip-project # Dependencies only
 
-# Search/debug from CLI
-pydocs-mcp query "batch inference"
-pydocs-mcp api predict -p vllm
+# Search/debug from CLI (mirrors MCP surface: `search` + `lookup`)
+pydocs-mcp search "batch inference"
+pydocs-mcp search "predict" --kind api -p vllm
+pydocs-mcp lookup fastapi.routing.APIRouter
+pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
 
 # Verbose logging
 pydocs-mcp -v serve .
