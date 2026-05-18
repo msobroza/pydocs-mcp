@@ -38,12 +38,19 @@ class ExtractionResult:
     ``references`` defaults to an empty tuple so existing extractors that
     don't yet emit cross-node edges (spec §4.2, AC #21) keep working
     without modification — Open/Closed compliance for the extension.
+
+    ``reference_aliases`` is the per-module alias table captured during
+    ingestion (spec §7.2 Rule A). Carried alongside ``references`` so the
+    resolver running inside ``IndexingService.reindex_package`` has both
+    inputs — references for the unresolved edges, aliases for ``from X
+    import Y as Z``-style rewrites.
     """
 
     chunks: tuple[Chunk, ...]
     trees: tuple[DocumentNode, ...]
     package: Package
     references: tuple[NodeReference, ...] = field(default=())
+    reference_aliases: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @runtime_checkable

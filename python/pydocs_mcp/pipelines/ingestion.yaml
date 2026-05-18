@@ -10,6 +10,7 @@ stages:
   - { type: file_discovery }
   - { type: file_read }
   - { type: chunking }
+  - { type: reference_capture }
   - { type: flatten }
   - { type: content_hash }
   - { type: package_build }

@@ -1,16 +1,18 @@
 """IngestionPipeline — write-side mirror of ``retrieval.CodeRetrieverPipeline``.
 
-A 6-stage pipeline composed via decorator-registered stages. A SINGLE
+A 7-stage pipeline composed via decorator-registered stages (sub-PR #5b
+added ``reference_capture`` between chunking and flatten). A SINGLE
 pipeline handles both project and dependency modes — ``FileDiscoveryStage``
 and ``PackageBuildStage`` branch on :attr:`IngestionState.target_kind`.
 That keeps ``__main__.py`` / ``ProjectIndexer`` from having two
 near-duplicate write paths (spec §7.1).
 
-Sub-PR #5b RESERVES the :attr:`IngestionState.references` field for
-``NodeReference`` tuples emitted by a future ``ReferenceExtractionStage``;
-sub-PR #5 stages do NOT populate it but the slot has to exist in this PR
-so the frozen ``IngestionState`` contract is stable once stages start
-reading/writing it in the next PR.
+Sub-PR #5b populates :attr:`IngestionState.references` +
+:attr:`IngestionState.reference_aliases` via
+:class:`~pydocs_mcp.extraction.pipeline.stages.ReferenceCaptureStage`,
+which runs after chunking and before flatten. The resolver pass lives
+later inside ``IndexingService.reindex_package`` so it has access to the
+cross-package qname universe via ``uow.trees``.
 """
 from __future__ import annotations
 
@@ -52,10 +54,16 @@ class IngestionState:
     chunks:        tuple["Chunk", ...]              = ()
     content_hash:  str                              = ""
     package:       "Package | None"                 = None
-    # Sub-PR #5b RESERVATION — populated by the future reference-extraction
-    # stage. Kept here (not in extra_metadata) so it's a typed first-class
-    # field the moment NodeReference ships.
+    # Sub-PR #5b — populated by :class:`ReferenceCaptureStage`. Kept here
+    # (not in extra_metadata) so it's a typed first-class field; the
+    # resolver pass in :class:`IndexingService.reindex_package` reads
+    # both ``references`` and ``reference_aliases`` together.
     references:    tuple[Any, ...]                  = ()
+    # Sub-PR #5b — per-module alias table captured alongside references.
+    # Forwarded to the resolver inside ``IndexingService.reindex_package``;
+    # carried as a dict because alias semantics are sparse + per-module and
+    # don't fit a flat tuple.
+    reference_aliases: dict[str, dict[str, str]]    = field(default_factory=dict)
 
 
 @runtime_checkable
