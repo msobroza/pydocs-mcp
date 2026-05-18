@@ -9,8 +9,8 @@ universe).
 
 Spec §16 AC #15 — target: CALLS resolution rate ≥ 35%.
 
-**Current measured rate (post-self.X.Y type inference): 49.0%**
-(10835/22112 on this codebase). The trajectory:
+**Current measured rate (post-self.X.Y type inference): 49.4%**
+(10934/22112 on this codebase). The trajectory:
 
 - 11.6% — pre-#5c baseline (before project-qname-prefix fix).
 - 16.4% — post-#5c (intra-project edges resolve via ``__project__``
@@ -19,7 +19,7 @@ Spec §16 AC #15 — target: CALLS resolution rate ≥ 35%.
   stdlib + builtins qnames into the resolver universe, so
   ``isinstance``, ``len``, ``asyncio.to_thread``, ``warnings.warn``,
   ``hashlib.sha256`` etc. link to real ``to_node_id`` values).
-- 49.0% — post-self.X.Y inference (this PR; ``ReferenceCaptureStage``
+- 49.4% — post-self.X.Y inference (this PR; ``ReferenceCaptureStage``
   records ``{class_qname: {attr: type}}`` from class-body annotations
   and ``__init__`` patterns B/C/D/E, and the resolver's Rule 0 rewrites
   ``self.X.Y`` to ``<type>.Y``. A self-as-class fallback resolves
@@ -68,7 +68,7 @@ from pydocs_mcp.storage.factories import (
 SPEC_TARGET_AC15 = 0.35
 
 # Empirical floor on this codebase as of the self.X.Y type-inference PR.
-# Measured rate: 49.0% (10835/22112). Floor set ~2pp below the measured rate
+# Measured rate: 49.4% (10934/22112). Floor set ~2pp below the measured rate
 # so unrelated ripples don't break the test, but a real resolver regression
 # does.
 #
@@ -76,11 +76,11 @@ SPEC_TARGET_AC15 = 0.35
 #   - 11.6% — pre-#5c baseline (before project-qname-prefix fix)
 #   - 16.4% — post-#5c (project-qname-prefix fix landed; intra-project resolved)
 #   - 41.7% — post-stdlib-idx (stdlib + builtins targets resolve)
-#   - 49.0% — post-self.X.Y inference (this PR; class_attribute_types +
+#   - 49.4% — post-self.X.Y inference (this PR; class_attribute_types +
 #             resolver Rule 0 + self-as-class fallback resolve sibling-
 #             method and typed-attribute calls).
 #
-# Spec AC #15 target is 35% and remains MET (49.0% > 35%). The remaining
+# Spec AC #15 target is 35% and remains MET (49.4% > 35%). The remaining
 # unresolved ~51% is mostly third-party dep calls without suffix-unique
 # matches and Subscript-typed receivers we can't reduce to one qname.
 EMPIRICAL_FLOOR: float = 0.47
