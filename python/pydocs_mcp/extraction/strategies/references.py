@@ -80,9 +80,25 @@ class ReferenceCollector:
     # Per-module alias table: module_qname → {alias_name: dotted_target}.
     # Populated by `capture_imports` (and used by the resolver).
     aliases: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Per-class attribute-type table: class_qname → {attr_name: type_qname}.
+    # Populated by `capture_self_attribute_types` and consumed by the
+    # resolver's Rule 0 to rewrite ``self.X.Y`` → ``<type>.Y`` before the
+    # Rule 5 short-circuit. Sibling of ``aliases`` (same shape, different
+    # axis: aliases are per-module, attribute types are per-class).
+    class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def add(self, ref: NodeReference) -> None:
         self.refs.append(ref)
+
+    def record_class_attrs(self, class_qname: str, attrs: dict[str, str]) -> None:
+        """Record inferred ``self.X = ...`` attribute types for one class.
+
+        Empty input is a no-op so callers don't have to guard. Otherwise
+        store under the class's fully-qualified name — the resolver keys
+        on that to find the table for a given from_node_id.
+        """
+        if attrs:
+            self.class_attribute_types[class_qname] = attrs
 
 
 def capture_calls(
@@ -183,6 +199,85 @@ def capture_inherits(
             to_node_id=None,
             kind=ReferenceKind.INHERITS,
         ))
+
+
+def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
+    """Infer ``self.X`` attribute types from a class's ``__init__`` body.
+
+    Recognises four patterns (the locked design for self.X.Y inference):
+
+    - **B** — ``self.client = ApiClient()``        → ``{"client": "ApiClient"}``
+    - **C** — ``self.cache = redis.Cache()``       → ``{"cache":  "redis.Cache"}``
+    - **D** — ``self.runner: Pipeline = build()``  → ``{"runner": "Pipeline"}``
+    - **E** — ``self.queue: asyncio.Queue = q``    → ``{"queue":  "asyncio.Queue"}``
+
+    Pattern A (``self.x = x`` — pass-through with no type info) is
+    intentionally skipped. Only the ``__init__`` body is scanned — other
+    methods could legitimately rebind attributes to instance-local
+    helpers and we'd rather miss those than introduce noise.
+
+    Conflict policy: when the same attr appears via both a bare call
+    (Pattern B/C) AND an annotation (Pattern D/E), the annotation wins
+    — the developer's typed intent supersedes the runtime constructor.
+
+    Returns an empty dict if the class has no ``__init__`` or if no
+    pattern matches; the resolver treats absence the same as "no info"
+    and falls back to Rule 5.
+    """
+    init = _find_init(cls)
+    if init is None:
+        return {}
+
+    bare: dict[str, str] = {}
+    annotated: dict[str, str] = {}
+
+    for stmt in init.body:
+        if isinstance(stmt, ast.AnnAssign):
+            # Pattern D/E — annotated assignment.
+            attr = _self_attr_name(stmt.target)
+            if attr is None:
+                continue
+            type_name = canonical_dotted(stmt.annotation)
+            if type_name is None:
+                continue
+            annotated[attr] = type_name
+        elif isinstance(stmt, ast.Assign):
+            # Pattern B/C — assignment whose RHS is a constructor call.
+            if not isinstance(stmt.value, ast.Call):
+                continue
+            type_name = canonical_dotted(stmt.value.func)
+            if type_name is None:
+                continue
+            for target in stmt.targets:
+                attr = _self_attr_name(target)
+                if attr is None:
+                    continue
+                bare[attr] = type_name
+
+    # Annotation wins on conflict — apply annotations last so they
+    # overwrite any bare-call entry for the same attribute.
+    bare.update(annotated)
+    return bare
+
+
+def _find_init(cls: ast.ClassDef) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """Return the class's ``__init__`` method node, or None."""
+    for stmt in cls.body:
+        if (
+            isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and stmt.name == "__init__"
+        ):
+            return stmt
+    return None
+
+
+def _self_attr_name(target: ast.expr) -> str | None:
+    """Return ``X`` if ``target`` is the AST ``self.X``, else None."""
+    if not isinstance(target, ast.Attribute):
+        return None
+    if not isinstance(target.value, ast.Name) or target.value.id != "self":
+        return None
+    return target.attr
 
 
 def capture_mentions(
