@@ -167,3 +167,77 @@ def test_get_capture_config_returns_safe_default():
     assert isinstance(cfg, ReferenceCaptureConfig)
     assert cfg.enabled is True
     assert set(cfg.kinds) == {"calls", "imports", "inherits"}
+
+
+@pytest.mark.asyncio
+async def test_capture_stage_emits_mentions_for_markdown_when_kinds_include_mentions(
+    monkeypatch,
+):
+    """Markdown files emit MENTIONS edges when ``mentions`` is in ``kinds``.
+
+    Sub-PR #5c — the stage gains a ``.md`` branch in ``_capture_all``,
+    gated on ``"mentions" in allowed``. The shipped default omits
+    ``mentions`` (regex over markdown is lower-precision than AST capture),
+    so this test overlays a config with mentions enabled.
+    """
+    monkeypatch.setattr(
+        stages_mod,
+        "_CAPTURE_CONFIG",
+        ReferenceCaptureConfig(
+            enabled=True,
+            kinds=["calls", "imports", "inherits", "mentions"],
+        ),
+    )
+    stage = ReferenceCaptureStage()
+    state = IngestionState(
+        target=Path("."),
+        target_kind=TargetKind.PROJECT,
+        package_name="pkg",
+        root=Path("."),
+        file_contents=(
+            (
+                "pkg/README.md",
+                "# Docs\n"
+                "See `pkg.helpers.compute` for the entry point.\n"
+                "Also mentions `pkg.utils.runner`.\n",
+            ),
+        ),
+    )
+    new_state = await stage.run(state)
+    mentions = [
+        r for r in new_state.references if r.kind == ReferenceKind.MENTIONS
+    ]
+    names = {r.to_name for r in mentions}
+    assert {"pkg.helpers.compute", "pkg.utils.runner"} <= names
+
+
+@pytest.mark.asyncio
+async def test_capture_stage_skips_mentions_when_not_in_kinds(monkeypatch):
+    """Default config omits ``mentions`` from ``kinds`` — markdown files
+    contribute zero MENTIONS edges (the markdown branch is gated)."""
+    monkeypatch.setattr(
+        stages_mod,
+        "_CAPTURE_CONFIG",
+        ReferenceCaptureConfig(
+            enabled=True,
+            kinds=["calls", "imports", "inherits"],
+        ),
+    )
+    stage = ReferenceCaptureStage()
+    state = IngestionState(
+        target=Path("."),
+        target_kind=TargetKind.PROJECT,
+        package_name="pkg",
+        root=Path("."),
+        file_contents=(
+            (
+                "pkg/README.md",
+                "See `pkg.helpers.compute` and `pkg.utils.runner`.\n",
+            ),
+        ),
+    )
+    new_state = await stage.run(state)
+    mentions = [
+        r for r in new_state.references if r.kind == ReferenceKind.MENTIONS
+    ]
+    assert mentions == []

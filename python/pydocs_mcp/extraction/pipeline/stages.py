@@ -232,69 +232,88 @@ class ReferenceCaptureStage:
             capture_calls,
             capture_imports,
             capture_inherits,
+            capture_mentions,
         )
         collector = ReferenceCollector()
         for path, source in state.file_contents:
-            if not path.endswith(".py"):
-                continue
             if not source:
                 continue
-            try:
-                tree = ast.parse(source)
-            except SyntaxError as exc:
-                # Per-file containment — same contract as ChunkingStage (AC #27).
-                log.warning(
-                    "reference_capture: ast.parse failed on %s: %s", path, exc,
-                )
-                continue
-            try:
-                module_qname = _module_from_path(path, state.root)
-                # capture_imports always runs — it populates collector.aliases,
-                # which the resolver consumes regardless of whether IMPORTS
-                # rows survive the kinds filter below. We drop the IMPORTS
-                # *rows* after capture if "imports" isn't in allowed, but
-                # the alias table is the source of truth for the resolver
-                # and must be preserved (spec §5.3 / Task 3 of sub-PR #5c).
-                capture_imports(
-                    tree.body,
-                    from_package=state.package_name,
-                    module_qname=module_qname,
-                    collector=collector,
-                )
-                if "calls" in allowed or "inherits" in allowed:
-                    for stmt in tree.body:
-                        if (
-                            isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
-                            and "calls" in allowed
-                        ):
-                            capture_calls(
-                                stmt.body,
-                                from_package=state.package_name,
-                                from_node_id=f"{module_qname}.{stmt.name}",
-                                collector=collector,
-                            )
-                        elif isinstance(stmt, ast.ClassDef):
-                            class_qname = f"{module_qname}.{stmt.name}"
-                            if "inherits" in allowed:
-                                capture_inherits(
-                                    list(stmt.bases),
+            # Python branch — AST capture for calls/imports/inherits.
+            if path.endswith(".py"):
+                try:
+                    tree = ast.parse(source)
+                except SyntaxError as exc:
+                    # Per-file containment — same contract as ChunkingStage (AC #27).
+                    log.warning(
+                        "reference_capture: ast.parse failed on %s: %s", path, exc,
+                    )
+                    continue
+                try:
+                    module_qname = _module_from_path(path, state.root)
+                    # capture_imports always runs — it populates collector.aliases,
+                    # which the resolver consumes regardless of whether IMPORTS
+                    # rows survive the kinds filter below. We drop the IMPORTS
+                    # *rows* after capture if "imports" isn't in allowed, but
+                    # the alias table is the source of truth for the resolver
+                    # and must be preserved (spec §5.3 / Task 3 of sub-PR #5c).
+                    capture_imports(
+                        tree.body,
+                        from_package=state.package_name,
+                        module_qname=module_qname,
+                        collector=collector,
+                    )
+                    if "calls" in allowed or "inherits" in allowed:
+                        for stmt in tree.body:
+                            if (
+                                isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                and "calls" in allowed
+                            ):
+                                capture_calls(
+                                    stmt.body,
                                     from_package=state.package_name,
-                                    class_qname=class_qname,
+                                    from_node_id=f"{module_qname}.{stmt.name}",
                                     collector=collector,
                                 )
-                            if "calls" in allowed:
-                                for m in stmt.body:
-                                    if isinstance(
-                                        m, (ast.FunctionDef, ast.AsyncFunctionDef),
-                                    ):
-                                        capture_calls(
-                                            m.body,
-                                            from_package=state.package_name,
-                                            from_node_id=f"{class_qname}.{m.name}",
-                                            collector=collector,
-                                        )
-            except Exception as exc:  # noqa: BLE001 -- per-file containment
-                log.warning("reference_capture failed on %s: %s", path, exc)
+                            elif isinstance(stmt, ast.ClassDef):
+                                class_qname = f"{module_qname}.{stmt.name}"
+                                if "inherits" in allowed:
+                                    capture_inherits(
+                                        list(stmt.bases),
+                                        from_package=state.package_name,
+                                        class_qname=class_qname,
+                                        collector=collector,
+                                    )
+                                if "calls" in allowed:
+                                    for m in stmt.body:
+                                        if isinstance(
+                                            m, (ast.FunctionDef, ast.AsyncFunctionDef),
+                                        ):
+                                            capture_calls(
+                                                m.body,
+                                                from_package=state.package_name,
+                                                from_node_id=f"{class_qname}.{m.name}",
+                                                collector=collector,
+                                            )
+                except Exception as exc:  # noqa: BLE001 -- per-file containment
+                    log.warning("reference_capture failed on %s: %s", path, exc)
+                continue
+            # Markdown branch — regex-fuzzy MENTIONS for backtick-quoted
+            # dotted names. Gated on "mentions" in allowed because the
+            # shipped default omits MENTIONS (lower-precision than AST
+            # capture, opt-in per spec §5.3).
+            if path.endswith(".md") and "mentions" in allowed:
+                try:
+                    from_node_id = _module_from_path(path, state.root)
+                    capture_mentions(
+                        source,
+                        from_package=state.package_name,
+                        from_node_id=from_node_id,
+                        collector=collector,
+                    )
+                except Exception as exc:  # noqa: BLE001 -- per-file containment
+                    log.warning(
+                        "reference_capture (markdown) failed on %s: %s", path, exc,
+                    )
                 continue
         # Filter IMPORTS rows out of collector.refs if "imports" isn't allowed.
         # The alias table (collector.aliases) is untouched — the resolver
