@@ -9,8 +9,11 @@ universe).
 
 Spec §16 AC #15 — target: CALLS resolution rate ≥ 35%.
 
-**Current measured rate: ~11.6%** (2532/21752 on this codebase as of
-2026-05-18). The 35% spec target is currently UNREACHABLE given the
+**Current measured rate (post-sub-PR #5c): 16.4%** (3594/21879 on this
+codebase). This is a material jump from #5b's 11.6% baseline, driven by
+sub-PR #5c's project-qname-prefix fix (Task 1) — the resolver now
+correctly composes ``__project__`` package qnames when matching
+intra-project edges. The 35% spec target remains UNREACHABLE given the
 resolver as designed, because the denominator is dominated by edges
 that no realistic local resolver can link:
 
@@ -28,7 +31,7 @@ this codebase is ~29%. Closing the gap to 35% requires either: (a)
 indexing the Python stdlib so its qnames join the universe, (b) a
 class-context type inference pass so ``self.method`` calls can resolve
 to the enclosing class, or (c) recalibrating AC #15 to match what a
-local-scope resolver can actually achieve.
+local-scope resolver can actually achieve. Tracked as a #5c follow-up.
 
 This test asserts a stable floor below the current measured rate so
 - a regression that drops capture or resolver hit rate gets caught;
@@ -36,7 +39,7 @@ This test asserts a stable floor below the current measured rate so
   visible (and that PR should bump the floor + re-state the AC).
 
 The 50-edge minimum is a capture-stage sanity check — well below the
-~21k edges this codebase actually produces.
+~22k edges this codebase actually produces.
 """
 from __future__ import annotations
 
@@ -62,11 +65,17 @@ from pydocs_mcp.storage.factories import (
 # docstring for the three available levers).
 SPEC_TARGET_AC15 = 0.35
 
-# Stable floor: the test PASSES at or above this. Set just below the
-# measured 11.6% to give room for minor codebase churn. Bump this
-# whenever a resolver/capture improvement raises the floor — it's the
-# canary for regressions, not the spec target.
-EMPIRICAL_FLOOR = 0.10
+# Empirical floor on this codebase as of sub-PR #5c (post-project-qname fix).
+# Measured rate: 16.4% (3594/21879). Floor set ~2pp below
+# the measured value so unrelated ripples don't break the test, but a real
+# resolver regression does.
+#
+# Spec AC #15 target is still 35%. Empirical ceiling on this codebase is
+# ~29% (per #5b's discovery work) due to builtins / stdlib / self.X.Y
+# unresolvable edges. Closing the gap requires either resolver investment
+# (stdlib indexing, self.X.Y type inference) or a spec recalibration —
+# tracked as a #5c follow-up.
+EMPIRICAL_FLOOR: float = 0.14
 
 
 async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:

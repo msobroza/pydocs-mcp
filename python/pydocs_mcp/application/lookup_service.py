@@ -1,25 +1,27 @@
-"""LookupService — unified dispatch for the 'lookup' MCP tool (sub-PR #6 §6).
+"""LookupService — unified dispatch for the 'lookup' MCP tool (spec §6).
 
 Routes a single ``LookupInput.target`` string (empty / package /
 package.module / package.module.symbol) to the right backing service:
-``PackageLookup`` for package metadata, ``TreeService``
-(optional, sub-PR #5) for file structure, ``ReferenceService``
-(optional, sub-PR #5b) for the call graph.
+``PackageLookup`` for package metadata, ``TreeService`` (optional) for
+file structure, ``ReferenceService`` (optional) for the call graph.
 
 Soft dependencies — when ``tree_svc`` or ``ref_svc`` is None, ``show``
-modes that need them raise ``ServiceUnavailableError``. ``show="inherits"``
-degrades gracefully via ``DocumentNode.extra_metadata['inherits_from']``
-and only needs ``tree_svc``.
+modes that need them raise ``ServiceUnavailableError``. ``inherits`` is
+unified with ``callers``/``callees`` behind the reference graph so all
+three need ``ref_svc``; the error message points at the YAML knob
+(``reference_graph.capture.enabled``) so end users can fix the failure
+mode without reading release notes.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.formatting import (
     format_package_doc,
     format_packages_list,
+    format_references,
 )
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
@@ -28,6 +30,7 @@ from pydocs_mcp.application.mcp_errors import (
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.package_lookup import PackageLookup
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
 
 if TYPE_CHECKING:
     # Avoid hard imports — these services may be absent pre-#5 / pre-#5b.
@@ -39,8 +42,8 @@ if TYPE_CHECKING:
 class LookupService:
     """Routes lookup targets to the right backing service.
 
-    ``tree_svc`` (sub-PR #5) and ``ref_svc`` (sub-PR #5b) are optional.
-    See spec §6.2 for the degraded-mode policy.
+    ``tree_svc`` and ``ref_svc`` are optional. See spec §6.2 for the
+    degraded-mode policy.
     """
 
     package_lookup: PackageLookup
@@ -50,6 +53,7 @@ class LookupService:
     async def lookup(self, payload: LookupInput) -> str:
         target = payload.target
         show = payload.show
+        limit = payload.limit
 
         # 1. Empty target → list all indexed packages
         if not target:
@@ -84,8 +88,10 @@ class LookupService:
         if not symbol_path:
             return await self._module_lookup(package, module)
 
-        # 5. Symbol lookup
-        return await self._symbol_lookup(package, module, target, show)
+        # 5. Symbol lookup — ``limit`` flows down into the reference-graph
+        # branches so YAML-tuned ``reference_graph.output.default_limit``
+        # caps the rendered row count.
+        return await self._symbol_lookup(package, module, target, show, limit)
 
     async def _module_lookup(self, package: str, module: str) -> str:
         if self.tree_svc is None:
@@ -98,7 +104,12 @@ class LookupService:
         return json.dumps(tree.to_pageindex_json(), indent=2)
 
     async def _symbol_lookup(
-        self, package: str, module: str, target: str, show: str,
+        self,
+        package: str,
+        module: str,
+        target: str,
+        show: str,
+        limit: int,
     ) -> str:
         if self.tree_svc is None:
             raise ServiceUnavailableError(
@@ -114,33 +125,42 @@ class LookupService:
         if show in ("default", "tree"):
             return json.dumps(node.to_pageindex_json(), indent=2)
 
-        if show in ("callers", "callees"):
-            if self.ref_svc is None:
-                raise ServiceUnavailableError(
-                    "reference graph not indexed — enable via sub-PR #5b"
-                )
-            fetch = self.ref_svc.callers if show == "callers" else self.ref_svc.callees
-            return self._render_refs(await fetch(package, node.node_id))
-
-        if show == "inherits":
-            if node.kind != "class":
+        # Reference-graph branches share the same gate: ref_svc must be
+        # wired. The hoist keeps the YAML-anchored error message in one
+        # place — actionable for end users hitting the failure mode.
+        if show in ("callers", "callees", "inherits"):
+            if show == "inherits" and node.kind != "class":
                 raise InvalidArgumentError(
                     f"show='inherits' only applies to CLASS nodes, got {node.kind}"
                 )
-            inherits = node.extra_metadata.get("inherits_from", [])
-            if not inherits:
-                return "(no base classes)"
-            return "\n".join(f"- {base}" for base in inherits)
+            if self.ref_svc is None:
+                # Point at the YAML config knob so end users can fix
+                # the failure mode without consulting release notes.
+                raise ServiceUnavailableError(
+                    "reference graph not configured "
+                    "(check reference_graph.capture.enabled in YAML config)"
+                )
+
+            if show == "callers":
+                rows = await self.ref_svc.callers(package, node.node_id)
+            elif show == "callees":
+                rows = await self.ref_svc.callees(package, node.node_id)
+            else:  # inherits
+                rows = await self.ref_svc.find_by_name(
+                    node.node_id, kind=ReferenceKind.INHERITS,
+                )
+
+            # Cap before render — the service may return more than
+            # ``limit`` rows (cross-package fan-in is unbounded). We do
+            # the slice here so format_references receives the same
+            # bound that we'll surface to the user.
+            if len(rows) > limit:
+                rows = rows[:limit]
+            return format_references(
+                rows, target=target, show=show, limit=limit,
+            )
 
         raise InvalidArgumentError(f"unknown show value: {show}")
-
-    @staticmethod
-    def _render_refs(refs: Any) -> str:
-        if not refs:
-            return "(no references)"
-        return "\n".join(
-            f"- {r.from_node_id} → {r.to_name} ({r.kind})" for r in refs
-        )
 
     # Module-id variants we try for each dotted-prefix candidate. The bare
     # variant matches Python modules (``pkg.foo`` for ``pkg/foo.py``); the

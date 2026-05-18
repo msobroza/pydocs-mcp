@@ -1,13 +1,13 @@
 """IngestionPipeline — write-side mirror of ``retrieval.CodeRetrieverPipeline``.
 
-A 7-stage pipeline composed via decorator-registered stages (sub-PR #5b
-added ``reference_capture`` between chunking and flatten). A SINGLE
+A 7-stage pipeline composed via decorator-registered stages
+(``reference_capture`` sits between chunking and flatten). A SINGLE
 pipeline handles both project and dependency modes — ``FileDiscoveryStage``
 and ``PackageBuildStage`` branch on :attr:`IngestionState.target_kind`.
 That keeps ``__main__.py`` / ``ProjectIndexer`` from having two
 near-duplicate write paths (spec §7.1).
 
-Sub-PR #5b populates :attr:`IngestionState.references` +
+The reference-capture stage populates :attr:`IngestionState.references` +
 :attr:`IngestionState.reference_aliases` via
 :class:`~pydocs_mcp.extraction.pipeline.stages.ReferenceCaptureStage`,
 which runs after chunking and before flatten. The resolver pass lives

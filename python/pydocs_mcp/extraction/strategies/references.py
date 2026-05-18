@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import re
 from dataclasses import dataclass, field
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
@@ -31,6 +32,12 @@ log = logging.getLogger("pydocs-mcp")
 # blow up the `node_references` row size. Truncate with an ellipsis to
 # preserve the prefix and signal truncation to inspectors.
 _MAX_TO_NAME_CHARS = 256
+
+# Backtick-quoted dotted names with AT LEAST one dot (e.g. ``pkg.helpers.compute``).
+# Bare backtick-quoted identifiers (``compute``, ``foo``) are intentionally
+# excluded — they're variable names / one-word code snippets and would flood
+# the graph with noise (sub-PR #5c, §5.3 + spec Decision 1).
+_MENTION_RE = re.compile(r"`([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)+)`")
 
 
 def canonical_dotted(node: ast.expr) -> str | None:
@@ -175,4 +182,42 @@ def capture_inherits(
             to_name=to_name,
             to_node_id=None,
             kind=ReferenceKind.INHERITS,
+        ))
+
+
+def capture_mentions(
+    text: str,
+    *,
+    from_package: str,
+    from_node_id: str,
+    collector: ReferenceCollector,
+) -> None:
+    """Scan markdown ``text`` for backtick-quoted dotted names, emit MENTIONS.
+
+    Sub-PR #5c — the regex-fuzzy counterpart to the three AST-precise
+    captures above. Only names with AT LEAST one dot are emitted
+    (``pkg.helpers.compute`` yes; bare ``compute`` no) — the dot
+    requirement filters out variable names and one-word code snippets
+    that would otherwise flood the reference graph.
+
+    Per-chunk dedupe: a local ``seen: set[str]`` ensures the same dotted
+    name appearing multiple times in one chunk yields ONE edge, not N.
+    Cross-chunk dedupe is intentionally not done here — different chunks
+    may legitimately mention the same target and the resolver / renderer
+    decides how to surface that.
+    """
+    seen: set[str] = set()
+    for match in _MENTION_RE.finditer(text):
+        to_name = match.group(1)
+        if to_name in seen:
+            continue
+        seen.add(to_name)
+        if len(to_name) > _MAX_TO_NAME_CHARS:
+            to_name = to_name[: _MAX_TO_NAME_CHARS - 1] + "…"
+        collector.add(NodeReference(
+            from_package=from_package,
+            from_node_id=from_node_id,
+            to_name=to_name,
+            to_node_id=None,
+            kind=ReferenceKind.MENTIONS,
         ))

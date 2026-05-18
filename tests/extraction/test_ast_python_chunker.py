@@ -304,6 +304,9 @@ def test_init_py_drops_init_suffix(tmp_path: Path) -> None:
     init_path = tmp_path / "pkg" / "sub" / "__init__.py"
     init_path.parent.mkdir(parents=True)
     init_path.write_text("", encoding="utf-8")
+    # Sub-PR #5c: make `pkg/` a real package too, so package discovery
+    # (`_python_package_root`) treats `tmp_path` as the qname root.
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
     root = AstPythonChunker().build_tree(
         path=str(init_path.resolve()),
         content="",
