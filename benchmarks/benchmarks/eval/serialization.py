@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Generic, TypeVar
 
-from benchmarks.eval.protocols import Dataset, ExperimentTracker, Metric, System
+from .protocols import Dataset, ExperimentTracker, Metric, System
 
 T = TypeVar("T")
 

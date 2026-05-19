@@ -359,7 +359,7 @@ Reads the JSONL output (or queries MLflow if tracking_uri set), emits markdown t
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-exec python -m benchmarks.benchmarks.eval.runner "$@"
+exec python -m benchmarks.eval.runner "$@"
 ```
 
 - [ ] **Step 6: Run tests — verify PASS**
@@ -499,8 +499,8 @@ git commit -m "ci(benchmarks): benchmark-repoqa workflow + baseline JSON + sweep
 ```bash
 .venv/bin/pytest -q                                       # all pass
 .venv/bin/ruff check python/ tests/ benchmarks/           # clean
-.venv/bin/python -m benchmarks.benchmarks.eval.runner --help  # registries listed
-.venv/bin/python -m benchmarks.benchmarks.eval.runner --systems pydocs-mcp --configs benchmarks/configs/baseline.yaml --dataset repoqa --trackers jsonl --limit 5  # smoke
+.venv/bin/python -m benchmarks.eval.runner --help  # registries listed
+.venv/bin/python -m benchmarks.eval.runner --systems pydocs-mcp --configs benchmarks/configs/baseline.yaml --dataset repoqa --trackers jsonl --limit 5  # smoke
 ```
 
 After all 9 tasks land cleanly: dispatch the final code-reviewer subagent across the entire diff, surface findings for human approval, then take PR #26 out of draft.
