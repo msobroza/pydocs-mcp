@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
 from benchmarks.eval.metrics import PassAt1Needle
-from benchmarks.eval.protocols import EvalTask, GoldAnswer, RetrievedItem
+from benchmarks.eval.systems.base_system import RetrievedItem
 
 
 def _task(body: str | None) -> EvalTask:

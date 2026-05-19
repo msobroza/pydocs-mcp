@@ -7,8 +7,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..ast_match import find_first_match_rank
-from ..protocols import EvalTask, RetrievedItem
+from ..datasets.base_dataset import EvalTask
 from ..serialization import metric_registry
+from ..systems.base_system import RetrievedItem
 
 
 @metric_registry.register("mrr")

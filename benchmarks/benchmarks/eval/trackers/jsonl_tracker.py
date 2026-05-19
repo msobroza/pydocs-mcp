@@ -12,8 +12,8 @@ from io import TextIOBase
 from pathlib import Path
 from typing import IO, Literal
 
-from ..protocols import RunHandle
 from ..serialization import tracker_registry
+from .base_tracker import RunHandle
 
 
 def _utc_ts() -> str:

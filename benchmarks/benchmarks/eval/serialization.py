@@ -14,9 +14,20 @@ recursion machinery, so we don't pay for it.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
-from .protocols import Dataset, ExperimentTracker, Metric, System
+if TYPE_CHECKING:
+    # WHY: importing the Protocols at runtime triggers a circular import
+    # — ``trackers/__init__.py`` (loaded as a side-effect of resolving
+    # ``.trackers.base_tracker``) imports ``jsonl_tracker``, which imports
+    # back into this module for ``tracker_registry``. Under
+    # ``from __future__ import annotations`` the Protocol names are only
+    # referenced inside the module-level type annotations below, so a
+    # TYPE_CHECKING-only import is sufficient.
+    from .datasets.base_dataset import Dataset
+    from .metrics.base_metric import Metric
+    from .systems.base_system import System
+    from .trackers.base_tracker import ExperimentTracker
 
 T = TypeVar("T")
 

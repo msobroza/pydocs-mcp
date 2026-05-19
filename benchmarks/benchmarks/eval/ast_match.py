@@ -18,7 +18,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .protocols import RetrievedItem
+    from .systems.base_system import RetrievedItem
 
 
 @lru_cache(maxsize=None)

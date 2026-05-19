@@ -11,8 +11,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
 from benchmarks.eval.metrics import MRR, PassAt1Needle, RecallAtK
-from benchmarks.eval.protocols import EvalTask, GoldAnswer, RetrievedItem, Scorer
+from benchmarks.eval.metrics.base_metric import Scorer
+from benchmarks.eval.systems.base_system import RetrievedItem
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 

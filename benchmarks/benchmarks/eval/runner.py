@@ -34,7 +34,7 @@ from . import systems as _systems  # noqa: F401 -- registry side-effects
 from . import trackers as _trackers  # noqa: F401 -- registry side-effects
 from .metrics import MRR, PassAt1Needle, RecallAtK
 from .metrics.aggregate import mean_with_bootstrap_ci
-from .protocols import Metric, Scorer
+from .metrics.base_metric import Metric, Scorer
 from .serialization import (
     dataset_registry,
     metric_registry,

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from benchmarks.eval.datasets import RepoQADataset
-from benchmarks.eval.protocols import Dataset, EvalTask
+from benchmarks.eval.datasets.base_dataset import Dataset, EvalTask
 from benchmarks.eval.serialization import dataset_registry
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"

@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from ..corpus import materialize_corpus
-from ..protocols import EvalTask, GoldAnswer
 from ..serialization import dataset_registry
+from .base_dataset import EvalTask, GoldAnswer
 
 # WHY: pinned revision is filled in by Task 9 (CI + baseline) once the
 # first real benchmark run captures the commit hash from HuggingFace.
