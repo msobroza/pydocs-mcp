@@ -14,14 +14,11 @@ from __future__ import annotations
 
 # WHY: metric row order is part of the report contract — downstream
 # regression-diff scripts walk the rows top-to-bottom and key on this
-# sequence. Don't reorder without updating the diff tool too.
-_METRIC_ROW_ORDER: tuple[str, ...] = (
-    "recall@1",
-    "recall@5",
-    "recall@10",
-    "mrr",
-    "pass@1-needle",
-)
+# sequence. Derive from ``runner.DEFAULT_METRIC_SPECS`` so the CLI
+# ``--metrics`` default and the report's row order share a single source
+# of truth — adding/removing a metric is a single-edit change in
+# ``runner.py``. Don't reorder without updating the diff tool too.
+from .runner import DEFAULT_METRIC_SPECS as _METRIC_ROW_ORDER
 
 
 def format_report(

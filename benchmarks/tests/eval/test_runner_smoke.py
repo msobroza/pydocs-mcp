@@ -38,7 +38,7 @@ async def test_runner_smoke_pydocs_jsonl_fixture(tmp_path: Path) -> None:
     overlay = _empty_overlay(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
 
-    results = await run_sweep(
+    results, tasks_ran = await run_sweep(
         systems=("pydocs-mcp",),
         config_paths=(overlay,),
         dataset_name="repoqa",
@@ -49,8 +49,11 @@ async def test_runner_smoke_pydocs_jsonl_fixture(tmp_path: Path) -> None:
     )
 
     # WHY: returned shape is documented as
+    # ``(sweep_results, tasks_ran)`` with sweep_results being
     # ``dict[(system, config_name), dict[metric, (mean, lo, hi)]]``. One
-    # system × one config × 5 metrics.
+    # system × one config × 5 metrics; tasks_ran is the actual per-leg
+    # task count consumed from the dataset.
+    assert tasks_ran == 2
     assert set(results.keys()) == {("pydocs-mcp", "baseline")}
     metrics = results[("pydocs-mcp", "baseline")]
     assert set(metrics.keys()) == {
@@ -141,7 +144,7 @@ async def test_runner_smoke_returns_aggregate_tuple_shape(tmp_path: Path) -> Non
     overlay = _empty_overlay(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
 
-    results = await run_sweep(
+    results, _tasks_ran = await run_sweep(
         systems=("pydocs-mcp",),
         config_paths=(overlay,),
         dataset_name="repoqa",
@@ -156,3 +159,40 @@ async def test_runner_smoke_returns_aggregate_tuple_shape(tmp_path: Path) -> Non
         assert isinstance(lo, float)
         assert isinstance(hi, float)
         assert lo <= mean <= hi
+
+
+async def test_runner_smoke_returns_full_dataset_task_count(tmp_path: Path) -> None:
+    """Pin the corrected ``tasks_ran`` counter on full-dataset runs.
+
+    Without ``--limit``, the CLI used to fall back to ``args.limit or 0``
+    and the report title rendered as ``"0 tasks"``. The runner now
+    returns the real per-leg task count alongside the aggregates, and the
+    fixture pins this to 5 (matching ``repoqa_mini.json``). The report's
+    title carries the same count.
+    """
+    from benchmarks.eval.report import format_report
+
+    overlay = _empty_overlay(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+
+    results, tasks_ran = await run_sweep(
+        systems=("pydocs-mcp",),
+        config_paths=(overlay,),
+        dataset_name="repoqa",
+        dataset_kwargs={"fixture_path": _FIXTURE},
+        tracker_names=("jsonl",),
+        tracker_kwargs={"jsonl": {"output_dir": jsonl_dir}},
+        limit=None,
+    )
+
+    # WHY: the fixture ships 5 tasks. Without ``--limit`` the runner
+    # consumes them all; the returned count must equal 5.
+    assert tasks_ran == 5
+    # WHY: thread the real count through to the report title so a reader
+    # tailing the markdown sees the dataset size instead of "0 tasks".
+    report = format_report(
+        sweep_results=results,
+        dataset_name="repoqa",
+        n_tasks=tasks_ran,
+    )
+    assert "5 tasks" in report

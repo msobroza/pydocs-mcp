@@ -18,6 +18,8 @@ import itertools
 import platform
 import shutil
 import subprocess
+import sys
+import traceback
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -46,6 +48,19 @@ if TYPE_CHECKING:
 
 SweepResults = dict[tuple[str, str], dict[str, tuple[float, float, float]]]
 
+# WHY: single source of truth for the default metric specs. The CLI
+# ``--metrics`` default and ``report.py``'s row order both derive from
+# this tuple, so adding/removing a metric in the default sweep happens in
+# one place. Keep the order stable — downstream regression-diff scripts
+# walk the report rows top-to-bottom and key on this sequence.
+DEFAULT_METRIC_SPECS: tuple[str, ...] = (
+    "recall@1",
+    "recall@5",
+    "recall@10",
+    "mrr",
+    "pass@1-needle",
+)
+
 
 async def run_sweep(
     *,
@@ -55,11 +70,9 @@ async def run_sweep(
     dataset_kwargs: Mapping[str, object] | None = None,
     tracker_names: tuple[str, ...] = ("jsonl",),
     tracker_kwargs: Mapping[str, Mapping[str, object]] | None = None,
-    metric_specs: tuple[str, ...] = (
-        "recall@1", "recall@5", "recall@10", "mrr", "pass@1-needle",
-    ),
+    metric_specs: tuple[str, ...] = DEFAULT_METRIC_SPECS,
     limit: int | None = None,
-) -> SweepResults:
+) -> tuple[SweepResults, int]:
     """Run a (system × config) sweep over a dataset.
 
     Args:
@@ -80,8 +93,11 @@ async def run_sweep(
             dataset.
 
     Returns:
-        ``{(system, config_name): {metric: (mean, ci_low, ci_high)}}``.
-        Same data is streamed to every tracker via ``log_metric``.
+        ``(sweep_results, tasks_ran)`` where ``sweep_results`` is
+        ``{(system, config_name): {metric: (mean, ci_low, ci_high)}}`` and
+        ``tasks_ran`` is the actual per-leg task count consumed from the
+        dataset (the same across legs — each leg sees the same dataset).
+        Same metric data is streamed to every tracker via ``log_metric``.
     """
     # WHY: build the dataset once — the iterator is consumed by every
     # (system, config) leg. ``async for`` triggers a fresh iteration each
@@ -96,6 +112,11 @@ async def run_sweep(
     ]
 
     sweep_results: SweepResults = {}
+    # WHY: track the actual per-leg task count so the report title can
+    # render "N tasks" correctly even when ``--limit`` is omitted. Each
+    # leg consumes the same dataset, so the count converges to the same
+    # value across legs; we overwrite per-leg and surface the final value.
+    tasks_ran = 0
 
     for system_name, cfg_path in itertools.product(systems, config_paths):
         # WHY: importing AppConfig at module import time would force every
@@ -153,6 +174,10 @@ async def run_sweep(
                     tracker.log_metric(h, f"{metric_name}_ci_low", ci_low, step=None)
                     tracker.log_metric(h, f"{metric_name}_ci_high", ci_high, step=None)
             sweep_results[(system_name, config_name)] = aggregates
+            # WHY: ``count`` is the actual number of tasks consumed this
+            # leg. Each leg consumes the same dataset (capped by ``limit``),
+            # so we surface this value to the caller for report titling.
+            tasks_ran = count
             _close_all(handles, trackers, status="finished")
         except Exception:
             # WHY: catch broad ``Exception`` (not bare except) so KeyboardInterrupt
@@ -164,7 +189,7 @@ async def run_sweep(
         finally:
             await system.teardown()
 
-    return sweep_results
+    return sweep_results, tasks_ran
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -263,9 +288,11 @@ def _close_all(handles, trackers, *, status) -> None:
             tracker.close_run(h, status=status)
         except Exception:  # noqa: BLE001 -- best-effort cleanup
             # WHY: a tracker that fails to flush its close record must not
-            # mask the original sweep error. Print to stderr (TODO: route
-            # to logger once the runner gets one) and continue.
-            pass
+            # mask the original sweep error — keep the broad ``except`` so
+            # one bad tracker doesn't block the others. But dump the
+            # traceback to stderr so close-time errors aren't invisible
+            # (TODO: route to logger once the runner gets one).
+            traceback.print_exc(file=sys.stderr)
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────
@@ -277,7 +304,15 @@ def _parse_csv(value: str) -> tuple[str, ...]:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m benchmarks.benchmarks.eval.runner",
+        # WHY: ``benchmarks.eval.runner`` (short path) matches how the
+        # shell script (``scripts/run_repoqa.sh``) and the
+        # ``from benchmarks.eval.X`` imports in ``serialization.py``
+        # actually invoke the module — i.e. with ``PYTHONPATH=benchmarks``
+        # so the ``benchmarks/`` directory is on sys.path. The previous
+        # double-namespaced ``benchmarks.benchmarks.eval.runner`` string
+        # leaked the source-tree layout into ``--help`` and contradicted
+        # what CI runs.
+        prog="python -m benchmarks.eval.runner",
         description="Benchmark harness sweep runner — system × config × dataset.",
     )
     parser.add_argument(
@@ -308,7 +343,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--metrics",
-        default="recall@1,recall@5,recall@10,mrr,pass@1-needle",
+        # WHY: derive the CLI default from ``DEFAULT_METRIC_SPECS`` so the
+        # runner's API default, the CLI default, and ``report.py``'s row
+        # order all point at the same tuple — adding a metric to the
+        # default sweep is a single-edit change.
+        default=",".join(DEFAULT_METRIC_SPECS),
         help="comma-separated metric specs (recall@k / mrr / pass@1-needle).",
     )
     parser.add_argument(
@@ -345,7 +384,7 @@ def main() -> None:
     if args.fixture is not None:
         dataset_kwargs["fixture_path"] = args.fixture
 
-    results = asyncio.run(
+    results, tasks_ran = asyncio.run(
         run_sweep(
             systems=_parse_csv(args.systems),
             config_paths=config_paths,
@@ -358,17 +397,15 @@ def main() -> None:
     )
 
     # WHY: render the report after the sweep so the run can crash without
-    # leaking a half-written markdown file. ``len(results.values())`` × the
-    # per-leg task count would be more accurate; use the simpler
-    # ``args.limit or 0`` proxy since the CLI doesn't track per-task
-    # counts after aggregation.
+    # leaking a half-written markdown file. ``tasks_ran`` is the actual
+    # per-leg task count returned by ``run_sweep`` — accurate on both
+    # ``--limit N`` and full-dataset runs.
     from .report import format_report
 
-    n_tasks_estimate = args.limit if args.limit is not None else 0
     report = format_report(
         sweep_results=results,
         dataset_name=args.dataset,
-        n_tasks=n_tasks_estimate,
+        n_tasks=tasks_ran,
     )
     if args.report is not None:
         args.report.write_text(report)
