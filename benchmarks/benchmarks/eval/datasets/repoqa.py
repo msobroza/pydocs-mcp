@@ -58,6 +58,11 @@ def _row_to_task(row: Mapping[str, Any]) -> EvalTask:
     next row's files into earlier tasks' corpus_source closures.
     """
     files: Mapping[str, str] = dict(row["files"])
+    # Field names below are placeholders matched by the fixture JSON. The real
+    # HuggingFace evalplus/repoqa schema may use different keys (e.g.
+    # nl_description vs description, function_body vs needle_function_body) —
+    # Task 9 pins _PINNED_REVISION and confirms / adjusts these column names
+    # against the actual dataset rows.
     return EvalTask(
         task_id=str(row["task_id"]),
         query=str(row["description"]),
@@ -134,7 +139,9 @@ def _download() -> None:
     AC11).
     """
     dataset = RepoQADataset()
-    dataset._load_from_hf()
+    rows = dataset._load_from_hf()
+    # CI logs read this line to confirm the cache step succeeded.
+    print(f"Downloaded {len(rows)} Python tasks to {dataset.cache_dir}")
 
 
 if __name__ == "__main__":  # pragma: no cover -- CLI entry, not unit-tested

@@ -33,7 +33,10 @@ def materialize_corpus(
             ``tmp_path`` so artifacts stay scoped to a single pytest run.
 
     Returns:
-        The newly-created directory. Always unique across calls.
+        The newly-created directory. Always unique across calls. The caller
+        owns cleanup — typically via ``shutil.rmtree`` in a ``try/finally``
+        wrapping the per-task ``system.index/search`` cycle (runner does
+        this; see spec §4.6).
     """
     # WHY: ``mkdtemp`` (not ``mkstemp``) — we want a directory, and the
     # ``repoqa_`` prefix lets ``find /tmp -name 'repoqa_*'`` clean up
