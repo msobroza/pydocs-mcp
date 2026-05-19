@@ -43,9 +43,10 @@ async def test_context7_index_closes_client_when_resolve_raises(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     stub = _StubClient()
-    # WHY: the system's index() does ``from benchmarks.context7_client
-    # import Context7Client``, so patch the symbol on that module.
-    import benchmarks.context7_client as c7
+    # WHY: ``Context7Client`` is now defined in the same module as
+    # ``Context7System``; the system's index() resolves it from the
+    # module-level scope, so patch the symbol on that module.
+    import benchmarks.eval.systems.context7 as c7
 
     monkeypatch.setattr(c7, "Context7Client", lambda *a, **kw: stub)
 

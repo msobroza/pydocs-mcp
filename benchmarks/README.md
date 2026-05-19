@@ -107,7 +107,7 @@ runs without false positives from per-task variance.
   work.
 - **Multi-language coverage.** Python only.
 - **Indexing throughput.** The harness optimises for retrieval signal, not
-  indexing latency — that is `indexer_bench.py`'s job.
+  indexing latency; an indexing-latency benchmark is a deferred follow-up.
 
 When you read a result, treat it as evidence about the retrieval surface,
 not the whole system.
