@@ -4,6 +4,7 @@ event (spec §4.5). Zero deps — the run file is self-describing via an
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,10 +22,15 @@ def _utc_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+# Chars rejected by GitHub Actions artifact upload (and broadly unfriendly
+# across POSIX/NTFS): " : < > | * ? \r \n. We also remap "@" → "_at_" so
+# ``repoqa@v1`` reads naturally. Anything else outside the safe set
+# collapses to "_" so revisions like "<TODO>" survive serialisation.
+_FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+
 def _slug(dataset: str) -> str:
-    # WHY: ``@`` in ``repoqa@v1`` is unfriendly in filenames; ``_at_``
-    # round-trips back to the dataset name visually without escaping.
-    return dataset.replace("@", "_at_").replace("/", "_")
+    return _FILENAME_SAFE.sub("_", dataset.replace("@", "_at_"))
 
 
 @tracker_registry.register("jsonl")
