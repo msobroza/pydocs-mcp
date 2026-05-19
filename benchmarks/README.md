@@ -50,10 +50,11 @@ The runner CLI is exposed as a module entry-point:
 mlflow ui --backend-store-uri file://./benchmarks/mlruns/
 ```
 
-The runner can also be invoked directly:
+The runner can also be invoked directly (the `benchmarks/` package lives
+under `benchmarks/src/` following the PyPA src-layout):
 
 ```bash
-PYTHONPATH=benchmarks python -m benchmarks.eval.runner --help
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --help
 ```
 
 For tests and offline development, pass a `--fixture` JSON to bypass the

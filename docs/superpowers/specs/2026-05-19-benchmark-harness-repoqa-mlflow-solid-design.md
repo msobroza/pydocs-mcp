@@ -97,7 +97,7 @@ Each axis has one Protocol, one registry, and a `base_<axis>.py` file that re-ex
 ### 4.2 Module layout
 
 ```
-benchmarks/benchmarks/eval/
+benchmarks/src/benchmarks/eval/
 ├── __init__.py
 ├── protocols.py              Dataset / Scorer / Metric / ExperimentTracker / System Protocols + EvalTask, RetrievedItem, RunHandle dataclasses
 ├── serialization.py          dataset_registry, metric_registry, tracker_registry, system_registry
@@ -231,7 +231,7 @@ tracker_registry:    _Registry[ExperimentTracker] = _Registry()
 system_registry:  _Registry[System]  = _Registry()
 ```
 
-The `__init__.py` of each plug-in package imports its concrete modules so the decorator side-effects fire at package import. The runner imports `benchmarks.eval` once (the absolute `from benchmarks.eval.X` import convention used in `serialization.py` requires `PYTHONPATH=benchmarks` at invocation — see `scripts/run_repoqa.sh`).
+The `__init__.py` of each plug-in package imports its concrete modules so the decorator side-effects fire at package import. The runner imports `benchmarks.eval` once (the absolute `from benchmarks.eval.X` import convention used in `serialization.py` requires `PYTHONPATH=benchmarks/src` at invocation under the PyPA src-layout — see `scripts/run_repoqa.sh`).
 
 ### 4.5 MLflow as optional extra (uv-friendly)
 
@@ -401,8 +401,8 @@ New job `benchmark-repoqa` in `.github/workflows/benchmark.yml`:
 - **Steps**:
   1. `uv pip install -e ".[dev]"` (root package)
   2. `uv pip install -e "benchmarks[all]"` (benchmark + extras)
-  3. `PYTHONPATH=benchmarks python -m benchmarks.eval.datasets.repoqa --download` (cache step — keyed on dataset revision; `PYTHONPATH=benchmarks` mirrors `scripts/run_repoqa.sh`)
-  4. `PYTHONPATH=benchmarks python -m benchmarks.eval.runner --system pydocs-mcp --config baseline --dataset repoqa --tracker jsonl` (`PYTHONPATH=benchmarks` is required so the absolute `from benchmarks.eval.X` imports — see `serialization.py` — resolve; this mirrors `scripts/run_repoqa.sh`).
+  3. `PYTHONPATH=benchmarks/src python -m benchmarks.eval.datasets.repoqa --download` (cache step — keyed on dataset revision; `PYTHONPATH=benchmarks/src` mirrors `scripts/run_repoqa.sh`)
+  4. `PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --system pydocs-mcp --config baseline --dataset repoqa --tracker jsonl` (`PYTHONPATH=benchmarks/src` is required so the absolute `from benchmarks.eval.X` imports — see `serialization.py` — resolve under the PyPA src-layout; this mirrors `scripts/run_repoqa.sh`).
   5. Compare `recall@10` against `benchmarks/baselines/repoqa_snf.json`.
   6. Fail if drop > 2pp outside the 95% CI.
   7. Post PR comment with metrics table + per-repo deltas.
@@ -431,8 +431,8 @@ Baseline JSON is bumped manually via a separate `bench-baseline-bump` workflow w
 |---|---|
 | AC1 | `pip install -e benchmarks` succeeds without optional extras. |
 | AC2 | `uv pip install -e "benchmarks[all]"` succeeds in CI. |
-| AC3 | `PYTHONPATH=benchmarks python -m benchmarks.eval.runner --help` prints all four registries' currently-registered names (`PYTHONPATH=benchmarks` mirrors `scripts/run_repoqa.sh`). |
-| AC4 | `PYTHONPATH=benchmarks python -m benchmarks.eval.runner --system pydocs-mcp --config baseline --dataset repoqa --tracker jsonl --limit 10` produces a JSONL file with one record per (task, metric) pair. |
+| AC3 | `PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --help` prints all four registries' currently-registered names (`PYTHONPATH=benchmarks/src` mirrors `scripts/run_repoqa.sh`). |
+| AC4 | `PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --system pydocs-mcp --config baseline --dataset repoqa --tracker jsonl --limit 10` produces a JSONL file with one record per (task, metric) pair. |
 | AC5 | Same as AC4 with `--tracker mlflow,jsonl` produces both outputs, no crash. |
 | AC6 | Adding a new dataset is one file change: create `datasets/foo.py`, register it, runnable without runner edits. |
 | AC7 | Adding a new metric is one file change. |

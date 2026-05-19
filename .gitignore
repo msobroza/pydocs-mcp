@@ -36,8 +36,6 @@ venv/
 Thumbs.db
 
 # Benchmark outputs
-benchmarks/data/*.csv
-benchmarks/data/*.png
 benchmarks/results/
 
 # Claude Code — local settings, worktrees, session state

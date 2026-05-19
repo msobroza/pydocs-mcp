@@ -40,18 +40,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pydocs-mcp/repoqa
-          key: hf-repoqa-${{ hashFiles('benchmarks/benchmarks/eval/datasets/repoqa.py') }}
+          key: hf-repoqa-${{ hashFiles('benchmarks/src/benchmarks/eval/datasets/repoqa.py') }}
 
       # WHY: CI runs against the bundled 5-task fixture (offline, reproducible)
       # rather than the full RepoQA HF dataset because _PINNED_REVISION is
       # still a placeholder. Switching to the real dataset is a one-line
-      # change here once that pin lands. PYTHONPATH=benchmarks mirrors
+      # change here once that pin lands. PYTHONPATH=benchmarks/src mirrors
       # scripts/run_repoqa.sh so the ``from benchmarks.eval.X`` absolute
-      # imports resolve.
+      # imports resolve under the PyPA src-layout.
       - name: Run benchmark sweep against baseline.yaml
         run: |
           mkdir -p benchmarks/results/ci
-          PYTHONPATH=benchmarks python -m benchmarks.eval.runner \
+          PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
             --systems pydocs-mcp \
             --configs benchmarks/configs/baseline.yaml \
             --dataset repoqa \
@@ -66,7 +66,7 @@ jobs:
       # ci_compare.py for the rationale.
       - name: Check recall@10 vs baseline
         run: |
-          PYTHONPATH=benchmarks python -m benchmarks.eval.ci_compare \
+          PYTHONPATH=benchmarks/src python -m benchmarks.eval.ci_compare \
             --baseline benchmarks/baselines/repoqa_snf.json \
             --current 'benchmarks/results/jsonl/*.jsonl' \
             --metric recall@10 \

@@ -306,11 +306,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         # WHY: ``benchmarks.eval.runner`` (short path) matches how the
         # shell script (``scripts/run_repoqa.sh``) and the
         # ``from benchmarks.eval.X`` imports in ``serialization.py``
-        # actually invoke the module — i.e. with ``PYTHONPATH=benchmarks``
-        # so the ``benchmarks/`` directory is on sys.path. The previous
-        # double-namespaced ``benchmarks.benchmarks.eval.runner`` string
-        # leaked the source-tree layout into ``--help`` and contradicted
-        # what CI runs.
+        # actually invoke the module — i.e. with ``PYTHONPATH=benchmarks/src``
+        # under the PyPA src-layout (the package lives at
+        # ``benchmarks/src/benchmarks/``).
         prog="python -m benchmarks.eval.runner",
         description="Benchmark harness sweep runner — system × config × dataset.",
     )

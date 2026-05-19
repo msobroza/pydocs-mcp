@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pyctx7-benchmarks"
 version = "0.1.0"
-description = "Benchmark suite comparing pyctx7-mcp vs Context7"
+description = "Benchmark suite for pydocs-mcp (RepoQA-SNF + MLflow)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -25,11 +25,8 @@ mlflow = ["mlflow>=2.0"]
 repoqa = ["datasets>=2.0", "huggingface-hub>=0.20"]
 all = ["mlflow>=2.0", "datasets>=2.0", "huggingface-hub>=0.20"]
 
-[project.scripts]
-run-benchmarks = "benchmarks.runner:main"
-
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["benchmarks*"]
 
 [tool.pytest.ini_options]
