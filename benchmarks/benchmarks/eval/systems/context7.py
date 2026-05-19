@@ -44,11 +44,19 @@ class Context7System:
             await self._client.__aenter__()
         # WHY: resolve-library-id is rate-limited and idempotent — cache
         # the lookup so a per-task harness can call ``index`` repeatedly
-        # for the same library without burning quota.
+        # for the same library without burning quota. Failure-atomicity:
+        # if ``resolve_library_id`` raises after we opened the HTTP client,
+        # close the client before re-raising so callers that don't wrap
+        # in finally: teardown() still don't leak the httpx session.
         if self.library_name:
-            self._library_id = await self._client.resolve_library_id(
-                self.library_name,
-            )
+            try:
+                self._library_id = await self._client.resolve_library_id(
+                    self.library_name,
+                )
+            except BaseException:
+                await self._client.__aexit__(None, None, None)
+                self._client = None
+                raise
 
     async def search(
         self, query: str, limit: int,  # noqa: ARG002 -- Context7 returns one blob

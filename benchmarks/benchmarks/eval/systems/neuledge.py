@@ -62,7 +62,7 @@ class NeuledgeSystem:
                 rank=1,
                 text=text,
                 source_path=self.library,
-                qualified_name=self.library or None,
+                qualified_name=self.library,
             ),
         )
 

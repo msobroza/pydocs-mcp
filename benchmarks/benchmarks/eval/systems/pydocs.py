@@ -9,6 +9,7 @@ the SQLite cache lives in a tmp file per ``index()`` call so two
 """
 from __future__ import annotations
 
+import os
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -70,13 +71,17 @@ class PydocsMcpSystem:
         )
         from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
-        # WHY: ``delete=False`` because ``open_index_database`` will reopen
-        # the path. We own the lifecycle and remove it in ``teardown``.
-        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 -- handle closed below
-            suffix=".sqlite", delete=False,
-        )
-        tmp.close()
-        self._db_path = Path(tmp.name)
+        # WHY: a second ``index()`` call without an intervening ``teardown()``
+        # would orphan the prior tmp SQLite (+ WAL/SHM) once ``_db_path`` is
+        # overwritten. Teardown is idempotent and a no-op on first call.
+        await self.teardown()
+
+        # WHY: ``mkstemp`` returns an open fd we close immediately because
+        # ``open_index_database`` will reopen the path. We own the lifecycle
+        # and remove it in ``teardown``.
+        fd, name = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        self._db_path = Path(name)
         open_index_database(self._db_path).close()
 
         self._uow_factory = build_sqlite_uow_factory(self._db_path)
