@@ -67,6 +67,7 @@ class PipelineChunkExtractor:
             package=state.package,
             references=state.references,
             reference_aliases=state.reference_aliases,
+            class_attribute_types=state.class_attribute_types,
         )
 
 

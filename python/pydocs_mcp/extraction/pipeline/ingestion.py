@@ -64,6 +64,11 @@ class IngestionState:
     # carried as a dict because alias semantics are sparse + per-module and
     # don't fit a flat tuple.
     reference_aliases: dict[str, dict[str, str]]    = field(default_factory=dict)
+    # Sub-PR #5d — per-class ``self.X`` attribute types captured from
+    # ``__init__`` bodies. Same shape as ``reference_aliases`` but keyed
+    # by class qname instead of module qname; consumed by the resolver's
+    # Rule 0 to rewrite ``self.X.Y`` → ``<type>.Y`` before Rule 5.
+    class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @runtime_checkable

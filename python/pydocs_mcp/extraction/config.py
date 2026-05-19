@@ -51,7 +51,7 @@ def path_under_excluded(
     """True iff any path component of ``filepath`` is in ``excluded``.
 
     Canonical helper used by every file-discovery path:
-    - :func:`pydocs_mcp.extraction.strategies.discovery._in_excluded_dir`
+    - :func:`pydocs_mcp.extraction.strategies.discovery._shared._in_excluded_dir`
       wraps it for the dependency-file walk.
     - :class:`pydocs_mcp.extraction.strategies.members.AstMemberExtractor`
       uses it to post-filter ``walk_py_files`` output against the

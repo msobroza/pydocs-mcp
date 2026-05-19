@@ -74,6 +74,7 @@ class IndexingService:
         trees: Sequence["DocumentNode"] = (),
         references: Sequence["NodeReference"] = (),
         reference_aliases: dict[str, dict[str, str]] | None = None,
+        class_attribute_types: dict[str, dict[str, str]] | None = None,
     ) -> None:
         """Replace every row for ``package.name`` atomically (spec §13.3).
 
@@ -83,9 +84,12 @@ class IndexingService:
         references → cross-package re-resolution UPDATE → commit.
 
         ``references`` is emitted by :class:`ReferenceCaptureStage`;
-        ``reference_aliases`` is its sibling alias map. The resolver
-        runs inside this method using the cross-package qname universe
-        loaded from ``uow.trees`` (so it sees the just-upserted trees).
+        ``reference_aliases`` is its sibling alias map. ``class_attribute_types``
+        is the per-class ``self.X`` → ``<type>`` table built by
+        ``capture_self_attribute_types`` — feeds the resolver's Rule 0
+        for cross-method ``self.X.Y`` inference. The resolver runs inside
+        this method using the cross-package qname universe loaded from
+        ``uow.trees`` (so it sees the just-upserted trees).
         """
         # Enum-typed filter keys are the single source of truth the
         # safe-columns whitelist also derives from; the ``packages`` table
@@ -114,7 +118,10 @@ class IndexingService:
             await uow.references.delete_for_package(package.name)
             if references:
                 resolved = await self._resolve_references(
-                    uow, references, reference_aliases or {},
+                    uow,
+                    references,
+                    reference_aliases or {},
+                    class_attribute_types or {},
                 )
                 await uow.references.save_many(
                     resolved, package=package.name,
@@ -133,6 +140,7 @@ class IndexingService:
         uow: UnitOfWork,
         refs: Sequence["NodeReference"],
         aliases: dict[str, dict[str, str]],
+        class_attribute_types: dict[str, dict[str, str]],
     ) -> list["NodeReference"]:
         """Build the cross-package qname universe + run the resolver.
 
@@ -168,7 +176,9 @@ class IndexingService:
             universe.update(load_stdlib_qnames())
 
         resolver = ReferenceResolver(
-            qname_universe=frozenset(universe), aliases=aliases,
+            qname_universe=frozenset(universe),
+            aliases=aliases,
+            class_attribute_types=class_attribute_types,
         )
         return resolver.resolve(refs)
 
