@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,10 +19,8 @@ from ..protocols import RetrievedItem
 from ..serialization import system_registry
 
 if TYPE_CHECKING:
-    from pydocs_mcp.application.indexing_service import IndexingService
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
-    from pydocs_mcp.storage.protocols import UnitOfWork
 
 
 @system_registry.register("pydocs-mcp")
@@ -40,12 +37,6 @@ class PydocsMcpSystem:
 
     name: str = "pydocs-mcp"
     _db_path: Path | None = field(default=None, init=False, repr=False)
-    _uow_factory: "Callable[[], UnitOfWork] | None" = field(
-        default=None, init=False, repr=False,
-    )
-    _indexing_service: "IndexingService | None" = field(
-        default=None, init=False, repr=False,
-    )
     _pipeline: "CodeRetrieverPipeline | None" = field(
         default=None, init=False, repr=False,
     )
@@ -84,8 +75,8 @@ class PydocsMcpSystem:
         self._db_path = Path(name)
         open_index_database(self._db_path).close()
 
-        self._uow_factory = build_sqlite_uow_factory(self._db_path)
-        self._indexing_service = build_sqlite_indexing_service(self._db_path)
+        uow_factory = build_sqlite_uow_factory(self._db_path)
+        indexing_service = build_sqlite_indexing_service(self._db_path)
 
         ingestion_pipeline = build_ingestion_pipeline(config)
         # WHY: AST-only member extraction matches the safer "static" mode
@@ -93,11 +84,11 @@ class PydocsMcpSystem:
         # so a malformed corpus cannot fire arbitrary code through Python
         # import side-effects.
         indexer = ProjectIndexer(
-            indexing_service=self._indexing_service,
+            indexing_service=indexing_service,
             dependency_resolver=StaticDependencyResolver(),
             chunk_extractor=PipelineChunkExtractor(pipeline=ingestion_pipeline),
             member_extractor=AstMemberExtractor(),
-            uow_factory=self._uow_factory,
+            uow_factory=uow_factory,
         )
         await indexer.index_project(
             corpus_dir,
@@ -169,8 +160,6 @@ class PydocsMcpSystem:
                 pass
         self._db_path = None
         self._pipeline = None
-        self._indexing_service = None
-        self._uow_factory = None
 
 
 def _first_str(*candidates: object) -> str | None:

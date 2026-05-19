@@ -90,18 +90,26 @@ class RepoQADataset:
     cache_dir: Path = field(
         default_factory=lambda: Path("~/.cache/pydocs-mcp/repoqa").expanduser()
     )
+    # WHY: cache the row list across ``tasks()`` calls so a sweep over
+    # (system × config) doesn't re-realize the HF dataset (or re-parse
+    # the fixture JSON) once per leg. The dataset is immutable for a
+    # pinned revision, so the cache is safe.
+    _rows_cache: "list[Mapping[str, Any]] | None" = field(
+        default=None, init=False, repr=False,
+    )
 
     # WHY: declared as ``def`` returning ``AsyncIterator`` (Protocol shape)
     # but implemented as an ``async def`` generator. Python wraps the
     # call site automatically so callers do ``async for t in ds.tasks():``
     # without an extra await.
     async def tasks(self) -> AsyncIterator[EvalTask]:
-        rows = (
-            self._load_from_fixture()
-            if self.fixture_path is not None
-            else self._load_from_hf()
-        )
-        for row in rows:
+        if self._rows_cache is None:
+            self._rows_cache = (
+                self._load_from_fixture()
+                if self.fixture_path is not None
+                else self._load_from_hf()
+            )
+        for row in self._rows_cache:
             yield _row_to_task(row)
 
     def _load_from_fixture(self) -> list[Mapping[str, Any]]:

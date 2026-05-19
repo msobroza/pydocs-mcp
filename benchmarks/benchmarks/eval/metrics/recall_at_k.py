@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..ast_match import ast_equivalent
+from ..ast_match import find_first_match_rank
 from ..protocols import EvalTask, RetrievedItem
 from ..serialization import metric_registry
 
@@ -24,10 +24,5 @@ class RecallAtK:
     def compute(
         self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
     ) -> float:
-        gold = task.gold.ast_body
-        if gold is None:
-            return 0.0
-        for item in retrieved[: self.k]:
-            if ast_equivalent(item.text, gold):
-                return 1.0
-        return 0.0
+        rank = find_first_match_rank(retrieved, task.gold.ast_body)
+        return 1.0 if rank is not None and rank <= self.k else 0.0

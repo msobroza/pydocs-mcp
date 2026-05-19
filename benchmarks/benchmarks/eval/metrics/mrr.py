@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..ast_match import ast_equivalent
+from ..ast_match import find_first_match_rank
 from ..protocols import EvalTask, RetrievedItem
 from ..serialization import metric_registry
 
@@ -19,12 +19,5 @@ class MRR:
     def compute(
         self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
     ) -> float:
-        gold = task.gold.ast_body
-        if gold is None:
-            return 0.0
-        # WHY: enumerate from 1 — MRR is 1/rank with rank starting at 1, not
-        # 0, so the top hit scores 1.0 not infinity.
-        for rank, item in enumerate(retrieved, start=1):
-            if ast_equivalent(item.text, gold):
-                return 1.0 / rank
-        return 0.0
+        rank = find_first_match_rank(retrieved, task.gold.ast_body)
+        return 1.0 / rank if rank is not None else 0.0

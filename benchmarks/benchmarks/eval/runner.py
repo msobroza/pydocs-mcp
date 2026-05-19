@@ -118,14 +118,13 @@ async def run_sweep(
     # value across legs; we overwrite per-leg and surface the final value.
     tasks_ran = 0
 
-    for system_name, cfg_path in itertools.product(systems, config_paths):
-        # WHY: importing AppConfig at module import time would force every
-        # ``--help`` invocation to load the entire ``pydocs_mcp.retrieval``
-        # chain. Lazy-importing inside the loop keeps ``--help`` fast and
-        # the runner module usable in environments where the retrieval
-        # config is unavailable (unlikely, but symmetric with the trackers).
-        from pydocs_mcp.retrieval.config import AppConfig
+    # WHY: lazy import (deferred until first sweep, not module import time)
+    # keeps ``--help`` fast and the runner usable without pulling in the
+    # whole ``pydocs_mcp.retrieval`` chain. Hoisted out of the sweep loop
+    # so the import cost is paid once, not per (system × config) leg.
+    from pydocs_mcp.retrieval.config import AppConfig
 
+    for system_name, cfg_path in itertools.product(systems, config_paths):
         config = AppConfig.load(explicit_path=cfg_path)
         system = system_registry.build(system_name)
         config_name = cfg_path.stem

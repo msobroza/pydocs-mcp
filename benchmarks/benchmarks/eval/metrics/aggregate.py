@@ -29,24 +29,23 @@ def mean_with_bootstrap_ci(
     if not values:
         return (0.0, 0.0, 0.0)
 
-    mean = sum(values) / len(values)
+    n = len(values)
+    mean = sum(values) / n
 
     # WHY: a fresh Random instance instead of touching the module-level RNG
     # keeps callers deterministic regardless of any other randomness in the
-    # process (test parallelism, other libs reseeding).
+    # process (test parallelism, other libs reseeding). ``rng.choices``
+    # samples with replacement in one C-level call, replacing what would
+    # otherwise be n_resamples × n Python-level ``randrange`` invocations.
     rng = random.Random(seed)
-    n = len(values)
-    resample_means: list[float] = []
-    for _ in range(n_resamples):
-        sample_sum = 0.0
-        for _ in range(n):
-            sample_sum += values[rng.randrange(n)]
-        resample_means.append(sample_sum / n)
+    resample_means = sorted(
+        sum(rng.choices(values, k=n)) / n for _ in range(n_resamples)
+    )
 
-    resample_means.sort()
     # WHY: symmetric inclusive percentile — 25 samples trimmed each tail at
     # n=1000, n=2.5%. ``high = n - 1 - low`` mirrors ``low`` around the median
     # so an asymmetry in indexing never biases the interval.
     low_idx = int(0.025 * n_resamples)
     high_idx = n_resamples - 1 - low_idx
     return (mean, resample_means[low_idx], resample_means[high_idx])
+
