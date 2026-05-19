@@ -1,0 +1,6 @@
+# Baseline — empty overlay; uses pydocs-mcp's shipped defaults verbatim.
+#
+# Layered under defaults/default_config.yaml via AppConfig.load(explicit_path=...).
+# This file is the reference point for every other sweep config; any metric
+# delta a sweep produces against baseline.yaml is attributable to the single
+# YAML key that sweep file flips.

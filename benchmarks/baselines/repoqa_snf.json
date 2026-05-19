@@ -1,0 +1,16 @@
+{
+  "dataset": "repoqa-fixture",
+  "system": "pydocs-mcp",
+  "config": "baseline",
+  "tasks_ran": 5,
+  "metrics": {
+    "recall@1":      {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0},
+    "recall@5":      {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0},
+    "recall@10":     {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0},
+    "mrr":           {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0},
+    "pass@1-needle": {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0}
+  },
+  "captured_at": "2026-05-19T02:48:20Z",
+  "git_sha": "f91befbaec9d323cc11c2060afcc3bc66162b6fb",
+  "notes": "Baseline captured against the 5-task RepoQA mini fixture (benchmarks/tests/eval/fixtures/repoqa_mini.json) — fully offline, fully reproducible. Real RepoQA HF dataset uses _PINNED_REVISION which is still a placeholder; a separate follow-up will replace the fixture with the pinned RepoQA-SNF Python split and regenerate this baseline."
+}

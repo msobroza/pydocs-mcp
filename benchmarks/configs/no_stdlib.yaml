@@ -1,0 +1,9 @@
+# Tests the contribution of stdlib qname indexing to AC #15 resolution rate.
+# Toggles off the merge of bundled stdlib_qnames.json into the resolver universe.
+# Expected effect: CALLS edges to stdlib / builtins targets (os.path.join, len,
+# asyncio.to_thread, ...) stop resolving; resolution rate drops by ~5-10pp per
+# the AC #15 follow-up notes. Use against baseline.yaml to quantify the stdlib
+# index's contribution to retrieval quality.
+reference_graph:
+  resolver:
+    include_stdlib: false

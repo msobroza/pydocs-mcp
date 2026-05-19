@@ -1,0 +1,9 @@
+# Raises the per-module ModuleMember cap from 120 to 500.
+# Tests whether retrieval quality on large dependencies (ML libraries, web
+# frameworks) is bounded by the default member cap. Expected effect: higher
+# recall on queries that probe rare APIs in big libraries, at the cost of a
+# larger FTS index and slower per-module ingestion. Trade-off worth measuring
+# before changing the shipped default.
+extraction:
+  members:
+    members_per_module_cap: 500
