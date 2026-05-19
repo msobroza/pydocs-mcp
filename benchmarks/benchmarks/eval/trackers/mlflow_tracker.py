@@ -1,0 +1,89 @@
+"""MLflow tracker — lazy-imports ``mlflow`` so the core install stays
+small (spec §4.5). Constructing the tracker triggers the import; users
+hit the install message immediately, not deep inside ``open_run``."""
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+from ..protocols import RunHandle
+from ..serialization import tracker_registry
+
+# WHY: the install command is duplicated verbatim in the error message so
+# users can copy-paste from any traceback. Keep this string in one place.
+_INSTALL_MSG = "uv pip install -e benchmarks[mlflow]"
+
+
+def _require_mlflow():
+    try:
+        import mlflow
+    except ImportError as exc:
+        raise ImportError(
+            f"MlflowExperimentTracker requires the optional [mlflow] extra. "
+            f"Install with: {_INSTALL_MSG}"
+        ) from exc
+    return mlflow
+
+
+@tracker_registry.register("mlflow")
+@dataclass
+class MlflowExperimentTracker:
+    """Adapts MLflow's run API to the ``ExperimentTracker`` Protocol."""
+
+    name: str = "mlflow"
+    tracking_uri: str = "file://./benchmarks/mlruns"
+    experiment_name: str = "pydocs-mcp-benchmarks"
+
+    def __post_init__(self) -> None:
+        # WHY: fail fast on missing optional dep — surfaces the install
+        # command at construction time rather than at the first open_run.
+        mlflow = _require_mlflow()
+        mlflow.set_tracking_uri(self.tracking_uri)
+        mlflow.set_experiment(self.experiment_name)
+
+    def open_run(
+        self,
+        *,
+        system: str,
+        config_name: str,
+        dataset: str,
+        params: Mapping[str, str],
+        tags: Mapping[str, str],
+    ) -> RunHandle:
+        mlflow = _require_mlflow()
+        active = mlflow.start_run(
+            run_name=f"{system}_{config_name}",
+            tags={"dataset": dataset, **dict(tags)},
+        )
+        if params:
+            mlflow.log_params(dict(params))
+        return RunHandle(tracker_name=self.name, raw=active)
+
+    def log_metric(
+        self,
+        handle: RunHandle,
+        name: str,
+        value: float,
+        step: int | None = None,
+    ) -> None:
+        mlflow = _require_mlflow()
+        mlflow.log_metric(name, value, step=step)
+
+    def log_artifact(
+        self,
+        handle: RunHandle,
+        path: Path,
+        name: str | None = None,
+    ) -> None:
+        mlflow = _require_mlflow()
+        mlflow.log_artifact(str(path), artifact_path=name)
+
+    def close_run(
+        self,
+        handle: RunHandle,
+        status: Literal["finished", "failed"],
+    ) -> None:
+        mlflow = _require_mlflow()
+        mlflow.end_run(status="FINISHED" if status == "finished" else "FAILED")
