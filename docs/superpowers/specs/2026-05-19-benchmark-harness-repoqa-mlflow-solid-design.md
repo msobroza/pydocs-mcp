@@ -170,7 +170,10 @@ class RunHandle:
 class Dataset(Protocol):
     name: str            # e.g. "repoqa"
     revision: str        # pinned dataset revision/hash for reproducibility
-    async def tasks(self) -> AsyncIterator[EvalTask]: ...
+    # NB: plain ``def`` (not ``async def``) — concrete impls are async
+    # generators, callers iterate ``async for task in dataset.tasks()``
+    # rather than ``async for task in await dataset.tasks()``.
+    def tasks(self) -> AsyncIterator[EvalTask]: ...
 
 @runtime_checkable
 class Metric(Protocol):

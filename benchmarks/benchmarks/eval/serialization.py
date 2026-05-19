@@ -46,6 +46,9 @@ class _Registry(Generic[T]):
             raise KeyError(
                 f"unknown entry {name!r}; have {sorted(self._items)}"
             ) from exc
+        # WHY: plug-in constructors take plug-in-specific kwargs the generic
+        # ``T`` can't capture — type safety is decorative here, runtime
+        # registration is the real contract.
         return cls(**kwargs)  # type: ignore[call-arg]
 
     def names(self) -> tuple[str, ...]:

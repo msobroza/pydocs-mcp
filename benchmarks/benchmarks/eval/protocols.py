@@ -68,10 +68,12 @@ class RunHandle:
     handle) — callers must treat it as opaque."""
 
     tracker_name: str
-    # WHY: ``field()`` lets the frozen dataclass accept a positional
-    # ``object`` payload without mypy / Pyright complaining about the
-    # untyped default.
-    raw: object = field()
+    # WHY: typed as ``object`` so trackers can stash whatever opaque handle
+    # they need (mlflow.ActiveRun, open file handle, dict, …). Type safety
+    # is intentionally lost here in exchange for tracker pluggability —
+    # callers must round-trip the handle through the tracker that produced
+    # it and never inspect ``raw`` directly.
+    raw: object
 
 
 @runtime_checkable
@@ -79,7 +81,13 @@ class Dataset(Protocol):
     name: str
     revision: str
 
-    async def tasks(self) -> AsyncIterator[EvalTask]: ...
+    # WHY: ``def`` (not ``async def``) so concrete impls can be plain async
+    # generators — callers iterate as ``async for task in dataset.tasks()``
+    # instead of the clunky ``async for task in await dataset.tasks()``.
+    # An ``async def`` function returning a generator would force the
+    # await-then-iterate pattern; ``def`` returning ``AsyncIterator``
+    # accepts both shapes.
+    def tasks(self) -> AsyncIterator[EvalTask]: ...
 
 
 @runtime_checkable

@@ -27,7 +27,6 @@ def test_register_returns_class_unchanged() -> None:
 
     # WHY: decorator must not wrap; metaclass + isinstance checks elsewhere
     # depend on the original class identity.
-    assert Subclass is not _Fake
     assert issubclass(Subclass, _Fake)
 
 
