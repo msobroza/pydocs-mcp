@@ -1,7 +1,8 @@
 """Tests for Context7 client — mocked, no real network calls."""
-import pytest
-import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
 from benchmarks.context7_client import Context7Client, Context7Error
 
 
