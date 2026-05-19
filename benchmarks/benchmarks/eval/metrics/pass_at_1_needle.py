@@ -9,10 +9,10 @@ from ..protocols import EvalTask, RetrievedItem
 from ..serialization import metric_registry
 
 
-@metric_registry.register("pass@1_needle")
+@metric_registry.register("pass@1-needle")
 @dataclass(frozen=True, slots=True)
 class PassAt1Needle:
-    name: str = "pass@1_needle"
+    name: str = "pass@1-needle"
 
     def compute(
         self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]

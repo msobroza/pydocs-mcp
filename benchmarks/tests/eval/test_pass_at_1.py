@@ -2,6 +2,8 @@
 "needle-in-the-haystack" pass criterion (spec §4.11)."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from benchmarks.eval.metrics import PassAt1Needle
 from benchmarks.eval.protocols import EvalTask, GoldAnswer, RetrievedItem
 
@@ -11,7 +13,7 @@ def _task(body: str | None) -> EvalTask:
         task_id="t",
         query="q",
         gold=GoldAnswer(ast_body=body),
-        corpus_source=lambda: __import__("pathlib").Path("."),
+        corpus_source=lambda: Path("."),
     )
 
 

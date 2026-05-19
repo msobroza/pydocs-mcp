@@ -44,9 +44,9 @@ def mean_with_bootstrap_ci(
         resample_means.append(sample_sum / n)
 
     resample_means.sort()
-    # WHY: percentile bootstrap — 2.5 / 97.5 percentiles of the resample
-    # distribution. Linear index (no interpolation) — good enough at
-    # n_resamples=1000 and trivially deterministic.
+    # WHY: symmetric inclusive percentile — 25 samples trimmed each tail at
+    # n=1000, n=2.5%. ``high = n - 1 - low`` mirrors ``low`` around the median
+    # so an asymmetry in indexing never biases the interval.
     low_idx = int(0.025 * n_resamples)
-    high_idx = int(0.975 * n_resamples)
+    high_idx = n_resamples - 1 - low_idx
     return (mean, resample_means[low_idx], resample_means[high_idx])

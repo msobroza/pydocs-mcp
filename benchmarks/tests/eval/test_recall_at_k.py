@@ -4,6 +4,8 @@ otherwise. Boundary at exactly rank k. Tolerant to whitespace + comments
 degrade to 0.0 so a partial dataset never aborts a run."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from benchmarks.eval.metrics import RecallAtK
 from benchmarks.eval.protocols import EvalTask, GoldAnswer, RetrievedItem
 
@@ -13,7 +15,7 @@ def _task(body: str | None) -> EvalTask:
         task_id="t",
         query="q",
         gold=GoldAnswer(ast_body=body),
-        corpus_source=lambda: __import__("pathlib").Path("."),
+        corpus_source=lambda: Path("."),
     )
 
 
