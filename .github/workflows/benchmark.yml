@@ -1,0 +1,80 @@
+name: benchmark-repoqa
+
+# WHY: only run on PRs touching code paths that can plausibly move retrieval
+# quality. The benchmark sweep adds ~10 minutes to CI; gating on
+# extraction/retrieval/defaults/benchmarks edits keeps unrelated PRs fast.
+on:
+  pull_request:
+    paths:
+      - 'python/pydocs_mcp/extraction/**'
+      - 'python/pydocs_mcp/retrieval/**'
+      - 'python/pydocs_mcp/defaults/**'
+      - 'benchmarks/**'
+      - '.github/workflows/benchmark.yml'
+
+jobs:
+  benchmark-repoqa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install pydocs-mcp + dev deps
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Install benchmarks + all extras
+        run: uv pip install --system -e "benchmarks[all]"
+
+      # WHY: cache HF datasets dir keyed on the loader file content so a
+      # _PINNED_REVISION bump (or other loader edit) invalidates the cache.
+      # Subsequent runs against the same revision skip the ~50 MB download.
+      - name: Cache HF datasets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pydocs-mcp/repoqa
+          key: hf-repoqa-${{ hashFiles('benchmarks/src/benchmarks/eval/datasets/repoqa.py') }}
+
+      # WHY: CI runs against the bundled 5-task fixture (offline, reproducible)
+      # rather than the full RepoQA HF dataset because _PINNED_REVISION is
+      # still a placeholder. Switching to the real dataset is a one-line
+      # change here once that pin lands. PYTHONPATH=benchmarks/src mirrors
+      # scripts/run_repoqa.sh so the ``from benchmarks.eval.X`` absolute
+      # imports resolve under the PyPA src-layout.
+      - name: Run benchmark sweep against baseline.yaml
+        run: |
+          mkdir -p benchmarks/results/ci
+          PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+            --systems pydocs-mcp \
+            --configs benchmarks/configs/baseline.yaml \
+            --dataset repoqa \
+            --fixture benchmarks/tests/eval/fixtures/repoqa_mini.json \
+            --trackers jsonl \
+            --limit 5 \
+          > benchmarks/results/ci/run.log
+
+      # WHY: 2pp absolute threshold matches spec §4.12 / AC11. The bootstrap
+      # CI band is wider than 2pp on a 5-task fixture, so we use a flat
+      # percentage-point gate rather than CI-based detection — see
+      # ci_compare.py for the rationale.
+      - name: Check recall@10 vs baseline
+        run: |
+          PYTHONPATH=benchmarks/src python -m benchmarks.eval.ci_compare \
+            --baseline benchmarks/baselines/repoqa_snf.json \
+            --current 'benchmarks/results/jsonl/*.jsonl' \
+            --metric recall@10 \
+            --threshold 0.02
+
+      - name: Upload JSONL run as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-jsonl
+          path: benchmarks/results/jsonl/

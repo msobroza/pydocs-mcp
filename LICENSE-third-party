@@ -1,0 +1,24 @@
+Third-party software used in this project:
+
+----------------------------------------------------------------------
+RepoQA — long-context code understanding benchmark
+----------------------------------------------------------------------
+Source: https://github.com/evalplus/repoqa
+License: Apache License 2.0
+Citation:
+  Liu, J. et al. RepoQA: Evaluating Long Context Code Understanding.
+  arXiv:2406.06025, June 2024.
+
+Used as the reference benchmark for retrieval-quality evaluation in
+benchmarks/benchmarks/eval/datasets/repoqa.py. No source code from
+RepoQA is vendored; only its dataset is consumed via huggingface
+datasets at runtime.
+
+----------------------------------------------------------------------
+MLflow — experiment tracking
+----------------------------------------------------------------------
+Source: https://github.com/mlflow/mlflow
+License: Apache License 2.0
+
+Optional dependency (uv pip install -e benchmarks[mlflow]). Used as
+the default experiment tracking backend.

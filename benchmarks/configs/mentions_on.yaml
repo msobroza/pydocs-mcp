@@ -1,0 +1,8 @@
+# Enables MENTIONS capture in addition to the default CALLS / IMPORTS / INHERITS.
+# Adds regex-over-markdown mentions of fully-qualified symbol names as MENTIONS
+# edges in the reference graph. Expected effect: higher recall on docs-heavy
+# retrieval queries (markdown links symbols are now traversable), at the cost
+# of lower-precision edges than AST-captured CALLS / IMPORTS / INHERITS.
+reference_graph:
+  capture:
+    kinds: [calls, imports, inherits, mentions]

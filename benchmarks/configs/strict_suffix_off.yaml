@@ -1,0 +1,12 @@
+# Tests the contribution of strict dotted-suffix matching to resolver precision.
+# When False, the resolver would fall back to looser suffix matching for
+# unresolved references — trading precision for recall.
+#
+# NOTE: the `strict_suffix` knob is not yet exposed in ReferenceResolverConfig
+# (python/pydocs_mcp/retrieval/config.py); the schema's `extra="forbid"` will
+# reject this overlay until that key is added in a follow-up sub-PR. The file
+# is checked in now to document the intended sweep dimension — once the knob
+# lands, this overlay becomes runnable without any harness changes.
+reference_graph:
+  resolver:
+    strict_suffix: false
