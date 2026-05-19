@@ -29,7 +29,7 @@ from pydocs_mcp.application.mcp_inputs import (
     SearchInput,
     configure_from_app_config,
 )
-from pydocs_mcp.extraction.pipeline import stages as pipeline_stages
+from pydocs_mcp.extraction.pipeline.stages import reference_capture as pipeline_stages
 from pydocs_mcp.retrieval.config import (
     ReferenceCaptureConfig,
     ReferenceGraphConfig,

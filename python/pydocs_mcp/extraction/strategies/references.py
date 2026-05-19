@@ -80,9 +80,25 @@ class ReferenceCollector:
     # Per-module alias table: module_qname → {alias_name: dotted_target}.
     # Populated by `capture_imports` (and used by the resolver).
     aliases: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Per-class attribute-type table: class_qname → {attr_name: type_qname}.
+    # Populated by `capture_self_attribute_types` and consumed by the
+    # resolver's Rule 0 to rewrite ``self.X.Y`` → ``<type>.Y`` before the
+    # Rule 5 short-circuit. Sibling of ``aliases`` (same shape, different
+    # axis: aliases are per-module, attribute types are per-class).
+    class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def add(self, ref: NodeReference) -> None:
         self.refs.append(ref)
+
+    def record_class_attrs(self, class_qname: str, attrs: dict[str, str]) -> None:
+        """Record inferred ``self.X = ...`` attribute types for one class.
+
+        Empty input is a no-op so callers don't have to guard. Otherwise
+        store under the class's fully-qualified name — the resolver keys
+        on that to find the table for a given from_node_id.
+        """
+        if attrs:
+            self.class_attribute_types[class_qname] = attrs
 
 
 def capture_calls(
@@ -183,6 +199,142 @@ def capture_inherits(
             to_node_id=None,
             kind=ReferenceKind.INHERITS,
         ))
+
+
+def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
+    """Infer ``self.X`` attribute types from a class definition.
+
+    Walks two sources of type information:
+
+    1. **Class-body annotations** — the dataclass/Protocol pattern:
+
+       .. code-block:: python
+
+           @dataclass
+           class Service:
+               cache:  redis.Cache             # → cache  → redis.Cache
+               runner: Pipeline = build()      # → runner → Pipeline
+
+    2. **__init__ body** — the manual constructor pattern:
+
+       - **B**: ``self.client = ApiClient()``       → ``ApiClient``
+       - **C**: ``self.cache  = redis.Cache()``     → ``redis.Cache``
+       - **D**: ``self.runner: Pipeline = build()`` → ``Pipeline``
+       - **E**: ``self.queue:  asyncio.Queue = q``  → ``asyncio.Queue``
+
+    Pattern A (``self.x = x`` — pass-through, no type info) is skipped.
+    Only ``__init__`` is walked for assignments; other methods could
+    legitimately rebind attributes to local helpers and we'd rather
+    miss those than introduce noise.
+
+    Conflict policy: annotation wins. The order is class-body annotations
+    first (most authoritative — that's the type system speaking), then
+    ``__init__`` bare-call assignments (lowest priority), then
+    ``__init__`` annotated assignments (highest priority — explicit at
+    the assignment site).
+
+    Returns an empty dict when no pattern matches; the resolver treats
+    absence the same as "no info" and falls back to Rule 5.
+    """
+    init_bare, init_annotated = _init_body_attribute_types(cls)
+    class_body_types = _class_body_annotations(cls)
+
+    # Three precedence layers, lowest to highest. ``dict.update`` writes
+    # the second arg LAST, so each successive update overrides earlier
+    # entries for the same attribute. Order encodes the conflict policy:
+    # init-bare (Pattern B/C runtime) < init-annotated (Pattern D/E
+    # explicit at the assignment site) < class-body annotation (the type
+    # system's declaration — most authoritative).
+    result: dict[str, str] = {}
+    result.update(init_bare)
+    result.update(init_annotated)
+    result.update(class_body_types)
+    return result
+
+
+def _class_body_annotations(cls: ast.ClassDef) -> dict[str, str]:
+    """Return ``{attr: type_qname}`` for AnnAssigns at the class body level.
+
+    Catches the dataclass/Protocol pattern where field types are declared
+    directly on the class body. Targets must be plain ``Name`` nodes
+    (excludes nested attribute targets like ``self.X``, which only appear
+    inside methods). Subscripted annotations (e.g. ``tuple[Chunk, ...]``,
+    ``Callable[[], UnitOfWork]``) silently drop because ``canonical_dotted``
+    rejects them — that's correct, they don't name a single class qname.
+    """
+    result: dict[str, str] = {}
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.AnnAssign):
+            continue
+        target = stmt.target
+        if not isinstance(target, ast.Name):
+            continue
+        type_name = canonical_dotted(stmt.annotation)
+        if type_name is None:
+            continue
+        result[target.id] = type_name
+    return result
+
+
+def _init_body_attribute_types(
+    cls: ast.ClassDef,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return ``(bare, annotated)`` self.X attribute types from ``__init__``.
+
+    Two separate dicts so the caller can merge them alongside the
+    class-body annotations in one explicit precedence chain. ``bare`` is
+    Patterns B/C (assignment whose RHS is a constructor Call);
+    ``annotated`` is Patterns D/E (AnnAssign with an explicit type).
+    """
+    init = _find_init(cls)
+    if init is None:
+        return {}, {}
+
+    bare: dict[str, str] = {}
+    annotated: dict[str, str] = {}
+
+    for stmt in init.body:
+        if isinstance(stmt, ast.AnnAssign):
+            attr = _self_attr_name(stmt.target)
+            if attr is None:
+                continue
+            type_name = canonical_dotted(stmt.annotation)
+            if type_name is None:
+                continue
+            annotated[attr] = type_name
+        elif isinstance(stmt, ast.Assign):
+            if not isinstance(stmt.value, ast.Call):
+                continue
+            type_name = canonical_dotted(stmt.value.func)
+            if type_name is None:
+                continue
+            for target in stmt.targets:
+                attr = _self_attr_name(target)
+                if attr is None:
+                    continue
+                bare[attr] = type_name
+
+    return bare, annotated
+
+
+def _find_init(cls: ast.ClassDef) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """Return the class's ``__init__`` method node, or None."""
+    for stmt in cls.body:
+        if (
+            isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and stmt.name == "__init__"
+        ):
+            return stmt
+    return None
+
+
+def _self_attr_name(target: ast.expr) -> str | None:
+    """Return ``X`` if ``target`` is the AST ``self.X``, else None."""
+    if not isinstance(target, ast.Attribute):
+        return None
+    if not isinstance(target.value, ast.Name) or target.value.id != "self":
+        return None
+    return target.attr
 
 
 def capture_mentions(

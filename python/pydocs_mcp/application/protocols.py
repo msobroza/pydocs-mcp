@@ -51,6 +51,11 @@ class ExtractionResult:
     package: Package
     references: tuple[NodeReference, ...] = field(default=())
     reference_aliases: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Sub-PR #5d — per-class ``self.X`` attribute-type table built by
+    # ``capture_self_attribute_types``. Drives the resolver's Rule 0
+    # (self.X.Y inference); carried alongside ``reference_aliases``
+    # because both feed the same resolver pass.
+    class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @runtime_checkable
