@@ -6,7 +6,7 @@
 
 ## 1. Goal
 
-Replace the placeholder benchmark (`benchmarks/fake_project/` + `dataset_gen.py`) with a **real, public retrieval-quality eval (RepoQA-SNF)** and a **MLflow-backed experiment-tracking layer**, structured around a **Protocol + registry plugin model** so future datasets, metrics, and sinks land without runner edits.
+Replace the placeholder benchmark (`benchmarks/fake_project/` + `dataset_gen.py`) with a **real, public retrieval-quality eval (RepoQA-SNF)** and a **MLflow-backed experiment-tracking layer**, structured around a **Protocol + registry plugin model** so future datasets, metrics, and experiment trackers land without runner edits.
 
 The harness must:
 
@@ -89,7 +89,7 @@ Four pluggable axes:
 
 1. **Dataset** — what corpus + queries to run against.
 2. **Metric** — what numbers to compute per task.
-3. **ResultSink** — where to send the runs (MLflow, JSONL, future W&B).
+3. **ExperimentTracker** — where to send the runs (MLflow, JSONL, future W&B).
 4. **System** — what's being measured (pydocs-mcp via in-process pipeline, Context7 via HTTP, Neuledge via HTTP).
 
 Each axis has one Protocol, one registry, and a `base_<axis>.py` file that re-exports the Protocol — same shape as the post-refactor `extraction/pipeline/stages/base_stage.py`.
@@ -99,10 +99,10 @@ Each axis has one Protocol, one registry, and a `base_<axis>.py` file that re-ex
 ```
 benchmarks/benchmarks/eval/
 ├── __init__.py
-├── protocols.py              Dataset / Scorer / Metric / ResultSink / System Protocols + EvalTask, RetrievedItem, RunHandle dataclasses
-├── serialization.py          dataset_registry, metric_registry, sink_registry, system_registry
+├── protocols.py              Dataset / Scorer / Metric / ExperimentTracker / System Protocols + EvalTask, RetrievedItem, RunHandle dataclasses
+├── serialization.py          dataset_registry, metric_registry, tracker_registry, system_registry
 ├── corpus.py                 materialize a task's long-context window → tmp project dir
-├── runner.py                 orchestrates (system × config × dataset) → metrics → sinks
+├── runner.py                 orchestrates (system × config × dataset) → metrics → trackers
 ├── ast_match.py              AST-equivalence matcher for retrieved-vs-gold (whitespace/comment-tolerant)
 ├── datasets/
 │   ├── __init__.py
@@ -114,11 +114,11 @@ benchmarks/benchmarks/eval/
 │   ├── recall_at_k.py        @metric_registry.register("recall@k") with k parameter
 │   ├── mrr.py                @metric_registry.register("mrr")
 │   └── pass_at_1_needle.py   @metric_registry.register("pass@1-needle")
-├── sinks/
+├── trackers/
 │   ├── __init__.py
-│   ├── base_sink.py          re-exports ResultSink Protocol
-│   ├── jsonl.py              @sink_registry.register("jsonl") — always available, no extra deps
-│   └── mlflow_sink.py        @sink_registry.register("mlflow") — lazy-imports mlflow
+│   ├── base_tracker.py          re-exports ExperimentTracker Protocol
+│   ├── jsonl_tracker.py              @tracker_registry.register("jsonl") — always available, no extra deps
+│   └── mlflow_tracker.py        @tracker_registry.register("mlflow") — lazy-imports mlflow
 └── systems/
     ├── __init__.py
     ├── base_system.py        re-exports System Protocol
@@ -127,7 +127,7 @@ benchmarks/benchmarks/eval/
     └── neuledge.py           @system_registry.register("neuledge") — HTTP client (re-uses existing)
 ```
 
-One file per concrete plug-in. Add SWE-bench Verified retrieval-only → `datasets/swebench.py`. Add Weights & Biases → `sinks/wandb_sink.py`. The runner never moves.
+One file per concrete plug-in. Add SWE-bench Verified retrieval-only → `datasets/swebench.py`. Add Weights & Biases → `trackers/wandb_tracker.py`. The runner never moves.
 
 ### 4.3 Protocol shapes
 
@@ -162,8 +162,8 @@ class RetrievedItem:
 
 @dataclass(frozen=True, slots=True)
 class RunHandle:
-    """Opaque handle for a sink run — stored by the sink implementation."""
-    sink_name: str
+    """Opaque handle for a tracker run — stored by the tracker implementation."""
+    tracker_name: str
     raw: object  # implementation-specific (mlflow.ActiveRun, file handle, etc.)
 
 @runtime_checkable
@@ -178,7 +178,7 @@ class Metric(Protocol):
     def compute(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> float: ...
 
 @runtime_checkable
-class ResultSink(Protocol):
+class ExperimentTracker(Protocol):
     name: str
     def open_run(self, *, system: str, config_name: str, dataset: str,
                  params: Mapping[str, str], tags: Mapping[str, str]) -> RunHandle: ...
@@ -196,7 +196,7 @@ class System(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Scorer:
-    """Composes a tuple of Metrics. SRP — Scorer just walks Metrics + Sinks."""
+    """Composes a tuple of Metrics. SRP — Scorer just walks Metrics + Trackers."""
     metrics: tuple[Metric, ...]
     def score(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> dict[str, float]:
         return {m.name: m.compute(task, retrieved) for m in self.metrics}
@@ -224,7 +224,7 @@ class _Registry(Generic[T]):
 
 dataset_registry: _Registry[Dataset] = _Registry()
 metric_registry:  _Registry[Metric]  = _Registry()
-sink_registry:    _Registry[ResultSink] = _Registry()
+tracker_registry:    _Registry[ExperimentTracker] = _Registry()
 system_registry:  _Registry[System]  = _Registry()
 ```
 
@@ -244,18 +244,18 @@ all    = ["mlflow>=2.0", "datasets>=2.0", "huggingface-hub>=0.20"]
 Install:
 
 ```bash
-uv pip install -e benchmarks                # core only — JSONL sink works, no datasets
-uv pip install -e "benchmarks[mlflow]"      # + MLflow sink
+uv pip install -e benchmarks                # core only — JSONL tracker works, no datasets
+uv pip install -e "benchmarks[mlflow]"      # + MLflow tracker
 uv pip install -e "benchmarks[repoqa]"      # + HF datasets loader for RepoQA
 uv pip install -e "benchmarks[all]"         # everything
 ```
 
-`MlflowResultSink` does `import mlflow` lazily inside `__init__`:
+`MlflowExperimentTracker` does `import mlflow` lazily inside `__init__`:
 
 ```python
-@sink_registry.register("mlflow")
+@tracker_registry.register("mlflow")
 @dataclass
-class MlflowResultSink:
+class MlflowExperimentTracker:
     name: str = "mlflow"
     tracking_uri: str = "file://./benchmarks/mlruns"
     def __post_init__(self) -> None:
@@ -263,7 +263,7 @@ class MlflowResultSink:
             import mlflow  # noqa: F401
         except ImportError as exc:
             raise ImportError(
-                "MLflow sink requires the optional extra: "
+                "MLflow tracker requires the optional extra: "
                 "`uv pip install -e benchmarks[mlflow]`"
             ) from exc
 ```
@@ -280,27 +280,27 @@ async def run_sweep(
     systems: tuple[str, ...],
     config_paths: tuple[Path, ...],
     dataset_name: str,
-    sink_names: tuple[str, ...],
+    tracker_names: tuple[str, ...],
     metric_specs: tuple[str, ...] = ("recall@1", "recall@5", "recall@10", "mrr", "pass@1-needle"),
     limit: int | None = None,
 ) -> None:
     dataset = dataset_registry.build(dataset_name)
     metrics = tuple(_build_metric(s) for s in metric_specs)
     scorer = Scorer(metrics=metrics)
-    sinks: list[ResultSink] = [sink_registry.build(s) for s in sink_names]
+    trackers: list[ExperimentTracker] = [tracker_registry.build(t) for t in tracker_names]
 
     for system_name in systems:
         for cfg_path in config_paths:
             config = AppConfig.load(explicit_path=cfg_path)
             system: System = system_registry.build(system_name, config=config)
             handles = [
-                s.open_run(
+                t.open_run(
                     system=system_name,
                     config_name=cfg_path.stem,
                     dataset=f"{dataset.name}@{dataset.revision}",
                     params=_flatten_app_config(config),
                     tags=_run_tags(),
-                ) for s in sinks
+                ) for t in trackers
             ]
             try:
                 count = 0
@@ -312,19 +312,19 @@ async def run_sweep(
                         await system.index(corpus_dir, config)
                         retrieved = await system.search(task.query, limit=10)
                         scores = scorer.score(task, retrieved)
-                        for h, sink in zip(handles, sinks):
+                        for h, tracker in zip(handles, trackers):
                             for metric_name, value in scores.items():
-                                sink.log_metric(h, metric_name, value, step=count)
+                                tracker.log_metric(h, metric_name, value, step=count)
                     finally:
                         shutil.rmtree(corpus_dir, ignore_errors=True)
                     count += 1
                 # aggregate metrics — bootstrap CI handled in metrics.aggregate (separate file)
                 ...
-                for h, sink in zip(handles, sinks):
-                    sink.close_run(h, status="finished")
+                for h, tracker in zip(handles, trackers):
+                    tracker.close_run(h, status="finished")
             except Exception:
-                for h, sink in zip(handles, sinks):
-                    sink.close_run(h, status="failed")
+                for h, tracker in zip(handles, trackers):
+                    tracker.close_run(h, status="failed")
                 raise
             finally:
                 await system.teardown()
@@ -350,8 +350,8 @@ tuple[RetrievedItem, ...]
        ▼  Scorer.score(task, retrieved)
 {recall@1: float, recall@5: float, ...}
        │
-       ▼  for each sink: log_metric / log_artifact
-MLflow run + JSONL line + (future sinks)
+       ▼  for each tracker: log_metric / log_artifact
+MLflow run + JSONL line + (future trackers)
 ```
 
 ### 4.8 RepoQA-SNF specifics
@@ -382,7 +382,7 @@ Adding a new sweep config is a new YAML file. The runner discovers it via the `-
 
 ### 4.11 Aggregation + reporting
 
-Per-run metrics are streamed via `sink.log_metric(step=task_index)`. Final aggregates (mean + 95% bootstrap CI, 1000 resamples, seed=0) are computed by `metrics/aggregate.py` after the task loop and logged as the same metric name with `step=None` (MLflow plots both the per-task series and the summary).
+Per-run metrics are streamed via `tracker.log_metric(step=task_index)`. Final aggregates (mean + 95% bootstrap CI, 1000 resamples, seed=0) are computed by `metrics/aggregate.py` after the task loop and logged as the same metric name with `step=None` (MLflow plots both the per-task series and the summary).
 
 A markdown `report.md` is generated by `report.py` and logged as an artifact on every run. The reporter does the per-repo breakdown + a diff against the baseline JSON file.
 
@@ -395,7 +395,7 @@ New job `benchmark-repoqa` in `.github/workflows/benchmark.yml`:
   1. `uv pip install -e ".[dev]"` (root package)
   2. `uv pip install -e "benchmarks[all]"` (benchmark + extras)
   3. `python -m benchmarks.benchmarks.eval.datasets.repoqa --download` (cache step — keyed on dataset revision)
-  4. `python -m benchmarks.benchmarks.eval.runner --system pydocs-mcp --config baseline --dataset repoqa --sink jsonl`
+  4. `python -m benchmarks.benchmarks.eval.runner --system pydocs-mcp --config baseline --dataset repoqa --tracker jsonl`
   5. Compare `recall@10` against `benchmarks/baselines/repoqa_snf.json`.
   6. Fail if drop > 2pp outside the 95% CI.
   7. Post PR comment with metrics table + per-repo deltas.
@@ -413,10 +413,10 @@ Baseline JSON is bumped manually via a separate `bench-baseline-bump` workflow w
 | Unit | `tests/eval/test_mrr.py` | MRR matches known formula on hand-crafted ranked lists |
 | Unit | `tests/eval/test_ast_match.py` | Whitespace + comment variations match the same canonical body |
 | Unit | `tests/eval/test_registries.py` | Each registry refuses unknown names with a helpful error |
-| Unit | `tests/eval/test_jsonl_sink.py` | Round-trip a run; assert one JSONL line per metric step |
-| Unit | `tests/eval/test_mlflow_sink_import_error.py` | Without `mlflow` installed, sink construction raises with the install instruction |
+| Unit | `tests/eval/test_jsonl_tracker.py` | Round-trip a run; assert one JSONL line per metric step |
+| Unit | `tests/eval/test_mlflow_tracker_import_error.py` | Without `mlflow` installed, tracker construction raises with the install instruction |
 | Integration | `tests/eval/test_repoqa_loader.py` | Tiny 5-task fixture (no HF download); end-to-end loader → tasks |
-| Integration | `tests/eval/test_runner_smoke.py` | Runner against 5-task fixture + JSONL sink, asserts JSONL well-formed |
+| Integration | `tests/eval/test_runner_smoke.py` | Runner against 5-task fixture + JSONL tracker, asserts JSONL well-formed |
 
 ## 5. Acceptance criteria
 
@@ -425,12 +425,12 @@ Baseline JSON is bumped manually via a separate `bench-baseline-bump` workflow w
 | AC1 | `pip install -e benchmarks` succeeds without optional extras. |
 | AC2 | `uv pip install -e "benchmarks[all]"` succeeds in CI. |
 | AC3 | `python -m benchmarks.benchmarks.eval.runner --help` prints all four registries' currently-registered names. |
-| AC4 | `python -m benchmarks.benchmarks.eval.runner --system pydocs-mcp --config baseline --dataset repoqa --sink jsonl --limit 10` produces a JSONL file with one record per (task, metric) pair. |
-| AC5 | Same as AC4 with `--sink mlflow,jsonl` produces both outputs, no crash. |
+| AC4 | `python -m benchmarks.benchmarks.eval.runner --system pydocs-mcp --config baseline --dataset repoqa --tracker jsonl --limit 10` produces a JSONL file with one record per (task, metric) pair. |
+| AC5 | Same as AC4 with `--tracker mlflow,jsonl` produces both outputs, no crash. |
 | AC6 | Adding a new dataset is one file change: create `datasets/foo.py`, register it, runnable without runner edits. |
 | AC7 | Adding a new metric is one file change. |
-| AC8 | Adding a new sink is one file change. |
-| AC9 | `MlflowResultSink` construction without `mlflow` installed raises `ImportError` with the exact `uv pip install` command in the message. |
+| AC8 | Adding a new experiment tracker is one file change. |
+| AC9 | `MlflowExperimentTracker` construction without `mlflow` installed raises `ImportError` with the exact `uv pip install` command in the message. |
 | AC10 | RepoQA-SNF baseline metrics on `main` HEAD are committed to `benchmarks/baselines/repoqa_snf.json`. |
 | AC11 | CI job `benchmark-repoqa` fails when `recall@10` drops > 2pp outside the 95% CI vs baseline. |
 | AC12 | All unit + integration tests pass; ruff clean. |
@@ -441,7 +441,7 @@ Baseline JSON is bumped manually via a separate `bench-baseline-bump` workflow w
 
 1. **SWE-bench Verified retrieval-only dataset** (`datasets/swebench.py`) — multi-file retrieval coverage.
 2. **In-house log-mined eval set** for real-user query distribution.
-3. **Weights & Biases sink** (`sinks/wandb_sink.py`).
+3. **Weights & Biases tracker** (`trackers/wandb_tracker.py`).
 4. **Latency-percentile metrics** (p50 / p95 indexing + search).
 5. **Dense-retriever experiment** (when/if pydocs-mcp adds dense retrieval as a YAML-toggleable plugin) — harness already produces the comparable Recall@k baseline.
 6. **Internal artifact mirroring** for fully air-gapped CI (RepoQA dataset hosted internally).
