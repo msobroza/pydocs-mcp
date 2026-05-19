@@ -1,0 +1,66 @@
+"""Pin PydocsMcpSystem: in-process index-then-search round-trip against a
+synthetic project must surface a target symbol via the shipped chunk
+pipeline. Also asserts teardown removes the temp SQLite file (so the
+runner's per-system cleanup contract holds).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from benchmarks.eval.serialization import system_registry
+from benchmarks.eval.systems import PydocsMcpSystem  # noqa: F401 -- triggers registration
+from pydocs_mcp.retrieval.config import AppConfig
+
+
+@pytest.mark.asyncio
+async def test_index_then_search_returns_matching_chunk(tmp_path: Path) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text(
+        '''def widget_helper() -> int:
+    """A helper that does widgety things."""
+    return 42
+'''
+    )
+
+    config = AppConfig.load()
+    system = system_registry.build("pydocs-mcp")
+
+    try:
+        await system.index(tmp_path, config)
+        items = await system.search("widget helper", limit=10)
+    finally:
+        await system.teardown()
+
+    assert items, "pipeline returned no items"
+    # WHY: the chunker tags the function chunk's title with the function
+    # signature ("def widget_helper()") so a hit appears in qualified_name,
+    # title metadata, or the chunk body itself — accept any of the three.
+    haystack = " ".join(
+        " ".join(filter(None, [it.qualified_name or "", it.text]))
+        for it in items
+    )
+    assert "widget_helper" in haystack
+
+
+@pytest.mark.asyncio
+async def test_teardown_is_idempotent(tmp_path: Path) -> None:
+    # WHY: the runner's failure path may call teardown twice (success +
+    # finally cleanup). Idempotence keeps the second call from raising
+    # and masking the original error.
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+
+    system = system_registry.build("pydocs-mcp")
+    await system.index(tmp_path, AppConfig.load())
+
+    db_path = system._db_path
+    assert db_path is not None and db_path.exists()
+
+    await system.teardown()
+    assert not db_path.exists()
+    # Second call must not raise even though the file is gone.
+    await system.teardown()
