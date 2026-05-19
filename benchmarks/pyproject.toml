@@ -22,8 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mlflow = ["mlflow>=2.0"]
-repoqa = ["datasets>=2.0", "huggingface-hub>=0.20"]
-all = ["mlflow>=2.0", "datasets>=2.0", "huggingface-hub>=0.20"]
+all = ["mlflow>=2.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

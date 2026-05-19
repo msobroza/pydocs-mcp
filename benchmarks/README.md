@@ -19,9 +19,8 @@ MLflow run with comparable params, metrics, and artifacts.
 `uv`-friendly extras let you pull in only what you need:
 
 ```bash
-uv pip install -e benchmarks                # core only — JSONL tracker, no datasets
+uv pip install -e benchmarks                # core only — JSONL tracker, stdlib RepoQA loader
 uv pip install -e "benchmarks[mlflow]"      # + MLflow tracker
-uv pip install -e "benchmarks[repoqa]"      # + HuggingFace datasets loader
 uv pip install -e "benchmarks[all]"         # everything
 ```
 
@@ -32,7 +31,7 @@ uv pip install -e "benchmarks[all]"         # everything
 The runner CLI is exposed as a module entry-point:
 
 ```bash
-# Baseline run, pydocs-mcp only, against the bundled fixture (no HF download).
+# Baseline run, pydocs-mcp only, against the bundled fixture (no network download).
 ./scripts/run_repoqa.sh \
     --systems pydocs-mcp \
     --configs <path-to-baseline.yaml> \
@@ -58,7 +57,7 @@ PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --help
 ```
 
 For tests and offline development, pass a `--fixture` JSON to bypass the
-HuggingFace download entirely (see `benchmarks/tests/eval/fixtures/repoqa_mini.json`).
+RepoQA download entirely (see `benchmarks/tests/eval/fixtures/repoqa_mini.json`).
 
 ## Metrics
 
@@ -131,4 +130,4 @@ pytest benchmarks/ -q
 ```
 
 The bundled fixture (`benchmarks/tests/eval/fixtures/repoqa_mini.json`) lets
-the full test suite run without HuggingFace credentials or network access.
+the full test suite run without network access.
