@@ -1,0 +1,413 @@
+"""Async sweep runner + CLI entry point (spec §4.6).
+
+Walks the ``systems × config_paths`` cartesian product, builds the
+plug-ins via the four registries (datasets / metrics / trackers /
+systems), and orchestrates one ``open_run → per-task index/search/score →
+aggregate → close_run`` cycle per (system, config).
+
+Single SOLID concern: orchestration. Plug-in construction lives in the
+registries; metric computation lives in ``metrics/``; aggregation lives
+in ``metrics/aggregate.py``; per-tracker I/O lives in ``trackers/``;
+markdown rendering lives in ``report.py``. The runner only glues them.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import itertools
+import platform
+import shutil
+import subprocess
+import sys
+import traceback
+from collections.abc import Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+# WHY: importing the umbrella subpackages here fires every
+# ``@*_registry.register`` decorator on import, so the four registries
+# are populated *before* ``argparse`` renders ``--help``. AC3 (help text
+# lists registered names) depends on this side effect.
+from . import datasets as _datasets  # noqa: F401 -- registry side-effects
+from . import metrics as _metrics_pkg  # noqa: F401 -- registry side-effects
+from . import systems as _systems  # noqa: F401 -- registry side-effects
+from . import trackers as _trackers  # noqa: F401 -- registry side-effects
+from .metrics import MRR, PassAt1Needle, RecallAtK
+from .metrics.aggregate import mean_with_bootstrap_ci
+from .metrics.base_metric import Metric, Scorer
+from .serialization import (
+    dataset_registry,
+    metric_registry,
+    system_registry,
+    tracker_registry,
+)
+
+if TYPE_CHECKING:
+    from pydocs_mcp.retrieval.config import AppConfig
+
+
+SweepResults = dict[tuple[str, str], dict[str, tuple[float, float, float]]]
+
+# WHY: single source of truth for the default metric specs. The CLI
+# ``--metrics`` default and ``report.py``'s row order both derive from
+# this tuple, so adding/removing a metric in the default sweep happens in
+# one place. Keep the order stable — downstream regression-diff scripts
+# walk the report rows top-to-bottom and key on this sequence.
+DEFAULT_METRIC_SPECS: tuple[str, ...] = (
+    "recall@1",
+    "recall@5",
+    "recall@10",
+    "mrr",
+    "pass@1-needle",
+)
+
+
+async def run_sweep(
+    *,
+    systems: tuple[str, ...],
+    config_paths: tuple[Path, ...],
+    dataset_name: str = "repoqa",
+    dataset_kwargs: Mapping[str, object] | None = None,
+    tracker_names: tuple[str, ...] = ("jsonl",),
+    tracker_kwargs: Mapping[str, Mapping[str, object]] | None = None,
+    metric_specs: tuple[str, ...] = DEFAULT_METRIC_SPECS,
+    limit: int | None = None,
+) -> tuple[SweepResults, int]:
+    """Run a (system × config) sweep over a dataset.
+
+    Args:
+        systems: Names registered in ``system_registry``.
+        config_paths: AppConfig YAML overlay paths. The file ``stem`` is
+            the config column key in the returned dict and the tracker run.
+        dataset_name: Name registered in ``dataset_registry``.
+        dataset_kwargs: Forwarded to ``dataset_registry.build``. Use
+            ``{"fixture_path": ...}`` to bypass HF in tests.
+        tracker_names: Names registered in ``tracker_registry``. Multiple
+            trackers receive identical events for the same run.
+        tracker_kwargs: Optional ``{tracker_name: {kwarg: value}}`` mapping
+            forwarded to ``tracker_registry.build``. Used to override the
+            JSONL output dir in tests; production runs accept defaults.
+        metric_specs: Metric handles (e.g. ``recall@5``). Composed into a
+            single ``Scorer``.
+        limit: Cap the per-(system, config) task count. ``None`` = full
+            dataset.
+
+    Returns:
+        ``(sweep_results, tasks_ran)`` where ``sweep_results`` is
+        ``{(system, config_name): {metric: (mean, ci_low, ci_high)}}`` and
+        ``tasks_ran`` is the actual per-leg task count consumed from the
+        dataset (the same across legs — each leg sees the same dataset).
+        Same metric data is streamed to every tracker via ``log_metric``.
+    """
+    # WHY: build the dataset once — the iterator is consumed by every
+    # (system, config) leg. ``async for`` triggers a fresh iteration each
+    # leg so ``corpus_source`` closures still fire per-task.
+    dataset = dataset_registry.build(dataset_name, **(dataset_kwargs or {}))
+    metrics: tuple[Metric, ...] = tuple(_build_metric(s) for s in metric_specs)
+    scorer = Scorer(metrics=metrics)
+
+    tk = dict(tracker_kwargs or {})
+    trackers = [
+        tracker_registry.build(name, **dict(tk.get(name, {}))) for name in tracker_names
+    ]
+
+    sweep_results: SweepResults = {}
+    # WHY: track the actual per-leg task count so the report title can
+    # render "N tasks" correctly even when ``--limit`` is omitted. Each
+    # leg consumes the same dataset, so the count converges to the same
+    # value across legs; we overwrite per-leg and surface the final value.
+    tasks_ran = 0
+
+    # WHY: lazy import (deferred until first sweep, not module import time)
+    # keeps ``--help`` fast and the runner usable without pulling in the
+    # whole ``pydocs_mcp.retrieval`` chain. Hoisted out of the sweep loop
+    # so the import cost is paid once, not per (system × config) leg.
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    for system_name, cfg_path in itertools.product(systems, config_paths):
+        config = AppConfig.load(explicit_path=cfg_path)
+        system = system_registry.build(system_name)
+        config_name = cfg_path.stem
+
+        handles = [
+            t.open_run(
+                system=system_name,
+                config_name=config_name,
+                dataset=f"{dataset.name}@{dataset.revision}",
+                params=_flatten_app_config(config),
+                tags=_run_tags(),
+            )
+            for t in trackers
+        ]
+
+        per_metric_values: dict[str, list[float]] = {m.name: [] for m in metrics}
+        # WHY: bracket the whole try with a single ``try/except/finally``
+        # that owns close_run. The exception surfaces *after* every
+        # tracker run is closed as ``failed`` and the system is torn down
+        # — no orphan file handles, no orphan tmp SQLite.
+        try:
+            count = 0
+            async for task in dataset.tasks():
+                if limit is not None and count >= limit:
+                    break
+                corpus_dir = task.corpus_source()
+                try:
+                    await system.index(corpus_dir, config)
+                    retrieved = await system.search(task.query, limit=10)
+                    scores = scorer.score(task, retrieved)
+                    for metric_name, value in scores.items():
+                        per_metric_values[metric_name].append(value)
+                        for h, tracker in zip(handles, trackers):
+                            tracker.log_metric(h, metric_name, value, step=count)
+                finally:
+                    shutil.rmtree(corpus_dir, ignore_errors=True)
+                count += 1
+
+            aggregates: dict[str, tuple[float, float, float]] = {}
+            for metric_name, values in per_metric_values.items():
+                triple = mean_with_bootstrap_ci(values)
+                aggregates[metric_name] = triple
+                mean, ci_low, ci_high = triple
+                for h, tracker in zip(handles, trackers):
+                    tracker.log_metric(h, f"{metric_name}_mean", mean, step=None)
+                    tracker.log_metric(h, f"{metric_name}_ci_low", ci_low, step=None)
+                    tracker.log_metric(h, f"{metric_name}_ci_high", ci_high, step=None)
+            sweep_results[(system_name, config_name)] = aggregates
+            # WHY: ``count`` is the actual number of tasks consumed this
+            # leg. Each leg consumes the same dataset (capped by ``limit``),
+            # so we surface this value to the caller for report titling.
+            tasks_ran = count
+            _close_all(handles, trackers, status="finished")
+        except Exception:
+            # WHY: catch broad ``Exception`` (not bare except) so KeyboardInterrupt
+            # still aborts the run cleanly. Per-leg failure closes that leg's
+            # tracker handles as ``failed`` and re-raises — the caller decides
+            # whether to retry or abort the rest of the sweep.
+            _close_all(handles, trackers, status="failed")
+            raise
+        finally:
+            await system.teardown()
+
+    return sweep_results, tasks_ran
+
+
+# ── helpers ──────────────────────────────────────────────────────────────
+
+
+def _build_metric(spec: str) -> Metric:
+    """Resolve ``recall@<k>`` / ``mrr`` / ``pass@1-needle`` to a metric
+    instance. Walks ``metric_registry`` for the simple cases and
+    instantiates ``RecallAtK(k)`` for the parameterised form.
+
+    Single source of construction so the runner can sweep arbitrary k
+    values via ``--metrics recall@1,recall@5,recall@10`` without the
+    registry needing one entry per k.
+    """
+    if spec == "mrr":
+        return MRR()
+    if spec == "pass@1-needle":
+        return PassAt1Needle()
+    if spec.startswith("recall@"):
+        k_part = spec.split("@", 1)[1]
+        try:
+            k = int(k_part)
+        except ValueError as exc:
+            raise ValueError(
+                f"recall metric spec must be ``recall@<int>``, got {spec!r}",
+            ) from exc
+        return RecallAtK(k=k)
+    # WHY: fall through to the registry so a future custom-named metric
+    # registered under a single key (e.g. ``ndcg@10``) still resolves.
+    return metric_registry.build(spec)
+
+
+def _flatten_app_config(cfg: "AppConfig") -> dict[str, str]:
+    """Dump ``AppConfig`` to a flat ``{dot.key: str(value)}`` mapping.
+
+    Trackers (MLflow especially) want flat ``Mapping[str, str]`` params.
+    ``model_dump()`` gives the nested dict; we walk it once and collapse
+    keys with ``.``.
+    """
+    nested = cfg.model_dump()
+    return dict(_flatten(nested))
+
+
+def _flatten(
+    obj: object, prefix: str = "",
+) -> list[tuple[str, str]]:
+    """Recursive dot-key flattener for nested dicts.
+
+    Lists become ``str([...])`` so the value space stays string-typed
+    without rewriting list-of-strings → joined-csv heuristics that would
+    re-bite us on nested dicts inside lists.
+    """
+    items: list[tuple[str, str]] = []
+    if isinstance(obj, Mapping):
+        for k, v in obj.items():
+            key = f"{prefix}.{k}" if prefix else str(k)
+            items.extend(_flatten(v, key))
+    else:
+        items.append((prefix, str(obj)))
+    return items
+
+
+def _run_tags() -> dict[str, str]:
+    """Best-effort env tags: git SHA + platform info. Missing git or
+    non-git working tree degrades each tag to ``""`` rather than aborting
+    the run.
+    """
+    return {
+        "git_sha": _git_sha(),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+    }
+
+
+def _git_sha() -> str:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        # WHY: detached / no-git / git binary missing — return empty so the
+        # tag still exists (downstream code does ``tags["git_sha"]`` without
+        # an Optional check).
+        return ""
+    return out.strip()
+
+
+def _close_all(handles, trackers, *, status) -> None:
+    """Close every (handle, tracker) pair, swallowing per-tracker errors
+    so one bad close doesn't block the others. Status applies uniformly.
+    """
+    for h, tracker in zip(handles, trackers):
+        try:
+            tracker.close_run(h, status=status)
+        except Exception:  # noqa: BLE001 -- best-effort cleanup
+            # WHY: a tracker that fails to flush its close record must not
+            # mask the original sweep error — keep the broad ``except`` so
+            # one bad tracker doesn't block the others. But dump the
+            # traceback to stderr so close-time errors aren't invisible
+            # (TODO: route to logger once the runner gets one).
+            traceback.print_exc(file=sys.stderr)
+
+
+# ── CLI ─────────────────────────────────────────────────────────────────
+
+
+def _parse_csv(value: str) -> tuple[str, ...]:
+    return tuple(s.strip() for s in value.split(",") if s.strip())
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        # WHY: ``benchmarks.eval.runner`` (short path) matches how the
+        # shell script (``scripts/run_repoqa.sh``) and the
+        # ``from benchmarks.eval.X`` imports in ``serialization.py``
+        # actually invoke the module — i.e. with ``PYTHONPATH=benchmarks/src``
+        # under the PyPA src-layout (the package lives at
+        # ``benchmarks/src/benchmarks/``).
+        prog="python -m benchmarks.eval.runner",
+        description="Benchmark harness sweep runner — system × config × dataset.",
+    )
+    parser.add_argument(
+        "--systems",
+        default="pydocs-mcp",
+        help=(
+            "comma-separated system names. available: "
+            + ", ".join(system_registry.names())
+        ),
+    )
+    parser.add_argument(
+        "--configs",
+        required=True,
+        help="comma-separated paths to YAML overlays (one column per path)",
+    )
+    parser.add_argument(
+        "--dataset",
+        default="repoqa",
+        help="dataset name. available: " + ", ".join(dataset_registry.names()),
+    )
+    parser.add_argument(
+        "--trackers",
+        default="jsonl",
+        help=(
+            "comma-separated tracker names. available: "
+            + ", ".join(tracker_registry.names())
+        ),
+    )
+    parser.add_argument(
+        "--metrics",
+        # WHY: derive the CLI default from ``DEFAULT_METRIC_SPECS`` so the
+        # runner's API default, the CLI default, and ``report.py``'s row
+        # order all point at the same tuple — adding a metric to the
+        # default sweep is a single-edit change.
+        default=",".join(DEFAULT_METRIC_SPECS),
+        help="comma-separated metric specs (recall@k / mrr / pass@1-needle).",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="cap per-(system, config) task count. omit for the full dataset.",
+    )
+    parser.add_argument(
+        "--fixture",
+        type=Path,
+        default=None,
+        help=(
+            "(repoqa-only) path to repoqa_mini.json — bypasses HuggingFace "
+            "download"
+        ),
+    )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        default=None,
+        help="optional path to write the markdown report. omitted = stdout only.",
+    )
+    return parser
+
+
+def main() -> None:
+    """``python -m benchmarks.benchmarks.eval.runner`` entry point."""
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+
+    config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
+    dataset_kwargs: dict[str, object] = {}
+    if args.fixture is not None:
+        dataset_kwargs["fixture_path"] = args.fixture
+
+    results, tasks_ran = asyncio.run(
+        run_sweep(
+            systems=_parse_csv(args.systems),
+            config_paths=config_paths,
+            dataset_name=args.dataset,
+            dataset_kwargs=dataset_kwargs or None,
+            tracker_names=_parse_csv(args.trackers),
+            metric_specs=_parse_csv(args.metrics),
+            limit=args.limit,
+        ),
+    )
+
+    # WHY: render the report after the sweep so the run can crash without
+    # leaking a half-written markdown file. ``tasks_ran`` is the actual
+    # per-leg task count returned by ``run_sweep`` — accurate on both
+    # ``--limit N`` and full-dataset runs.
+    from .report import format_report
+
+    report = format_report(
+        sweep_results=results,
+        dataset_name=args.dataset,
+        n_tasks=tasks_ran,
+    )
+    if args.report is not None:
+        args.report.write_text(report)
+    print(report)
+
+
+if __name__ == "__main__":  # pragma: no cover -- CLI entry, not unit-tested
+    main()

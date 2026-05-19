@@ -1,0 +1,58 @@
+[
+  {
+    "task_id": "fixture-1",
+    "description": "Compute the factorial of a non-negative integer.",
+    "needle_function_body": "def factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n",
+    "repo": "fixture-factorial",
+    "language": "python",
+    "files": {
+      "fixture_factorial/__init__.py": "",
+      "fixture_factorial/math_helpers.py": "def factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\n\ndef square(x: int) -> int:\n    return x * x\n"
+    }
+  },
+  {
+    "task_id": "fixture-2",
+    "description": "Return the nth Fibonacci number using iterative computation.",
+    "needle_function_body": "def fibonacci(n: int) -> int:\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n",
+    "repo": "fixture-fibonacci",
+    "language": "python",
+    "files": {
+      "fixture_fibonacci/__init__.py": "",
+      "fixture_fibonacci/sequences.py": "def fibonacci(n: int) -> int:\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n\n\ndef triangular(n: int) -> int:\n    return n * (n + 1) // 2\n"
+    }
+  },
+  {
+    "task_id": "fixture-3",
+    "description": "Reverse a string without using the built-in slice syntax.",
+    "needle_function_body": "def reverse_string(s: str) -> str:\n    out = []\n    for ch in s:\n        out.insert(0, ch)\n    return ''.join(out)\n",
+    "repo": "fixture-strings",
+    "language": "python",
+    "files": {
+      "fixture_strings/__init__.py": "",
+      "fixture_strings/text_utils.py": "def reverse_string(s: str) -> str:\n    out = []\n    for ch in s:\n        out.insert(0, ch)\n    return ''.join(out)\n\n\ndef is_palindrome(s: str) -> bool:\n    return s == s[::-1]\n"
+    }
+  },
+  {
+    "task_id": "fixture-4",
+    "description": "Recursively flatten a list of arbitrarily nested lists into a flat list.",
+    "needle_function_body": "def flatten(items):\n    result = []\n    for item in items:\n        if isinstance(item, list):\n            result.extend(flatten(item))\n        else:\n            result.append(item)\n    return result\n",
+    "repo": "fixture-collections",
+    "language": "python",
+    "files": {
+      "fixture_collections/__init__.py": "",
+      "fixture_collections/nested.py": "def flatten(items):\n    result = []\n    for item in items:\n        if isinstance(item, list):\n            result.extend(flatten(item))\n        else:\n            result.append(item)\n    return result\n",
+      "fixture_collections/helpers/sums.py": "def total(xs):\n    return sum(xs)\n"
+    }
+  },
+  {
+    "task_id": "fixture-5",
+    "description": "Build a simple decorator that memoizes a unary function's return values in a dict.",
+    "needle_function_body": "def simple_cache(func):\n    cache = {}\n    def wrapped(arg):\n        if arg not in cache:\n            cache[arg] = func(arg)\n        return cache[arg]\n    return wrapped\n",
+    "repo": "fixture-cache",
+    "language": "python",
+    "files": {
+      "fixture_cache/__init__.py": "",
+      "fixture_cache/decorators.py": "def simple_cache(func):\n    cache = {}\n    def wrapped(arg):\n        if arg not in cache:\n            cache[arg] = func(arg)\n        return cache[arg]\n    return wrapped\n\n\ndef noop(func):\n    return func\n"
+    }
+  }
+]
