@@ -4,9 +4,9 @@ hit the install message immediately, not deep inside ``open_run``."""
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from ..protocols import RunHandle
 from ..serialization import tracker_registry
@@ -33,15 +33,22 @@ class MlflowExperimentTracker:
     """Adapts MLflow's run API to the ``ExperimentTracker`` Protocol."""
 
     name: str = "mlflow"
+    # WHY: MLflow's tracking_uri expects a URI scheme string (file://, http://, …)
+    # — not a filesystem Path.
     tracking_uri: str = "file://./benchmarks/mlruns"
     experiment_name: str = "pydocs-mcp-benchmarks"
+    # WHY: cache the imported module on the instance — once __post_init__
+    # succeeds mlflow is in sys.modules and cannot disappear under normal
+    # usage, so per-method _require_mlflow() calls are redundant defensive
+    # code. The construction-time install-error path is unchanged.
+    _mlflow: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # WHY: fail fast on missing optional dep — surfaces the install
         # command at construction time rather than at the first open_run.
-        mlflow = _require_mlflow()
-        mlflow.set_tracking_uri(self.tracking_uri)
-        mlflow.set_experiment(self.experiment_name)
+        self._mlflow = _require_mlflow()
+        self._mlflow.set_tracking_uri(self.tracking_uri)
+        self._mlflow.set_experiment(self.experiment_name)
 
     def open_run(
         self,
@@ -52,13 +59,12 @@ class MlflowExperimentTracker:
         params: Mapping[str, str],
         tags: Mapping[str, str],
     ) -> RunHandle:
-        mlflow = _require_mlflow()
-        active = mlflow.start_run(
+        active = self._mlflow.start_run(
             run_name=f"{system}_{config_name}",
             tags={"dataset": dataset, **dict(tags)},
         )
         if params:
-            mlflow.log_params(dict(params))
+            self._mlflow.log_params(dict(params))
         return RunHandle(tracker_name=self.name, raw=active)
 
     def log_metric(
@@ -68,8 +74,7 @@ class MlflowExperimentTracker:
         value: float,
         step: int | None = None,
     ) -> None:
-        mlflow = _require_mlflow()
-        mlflow.log_metric(name, value, step=step)
+        self._mlflow.log_metric(name, value, step=step)
 
     def log_artifact(
         self,
@@ -77,13 +82,11 @@ class MlflowExperimentTracker:
         path: Path,
         name: str | None = None,
     ) -> None:
-        mlflow = _require_mlflow()
-        mlflow.log_artifact(str(path), artifact_path=name)
+        self._mlflow.log_artifact(str(path), artifact_path=name)
 
     def close_run(
         self,
         handle: RunHandle,
         status: Literal["finished", "failed"],
     ) -> None:
-        mlflow = _require_mlflow()
-        mlflow.end_run(status="FINISHED" if status == "finished" else "FAILED")
+        self._mlflow.end_run(status="FINISHED" if status == "finished" else "FAILED")
