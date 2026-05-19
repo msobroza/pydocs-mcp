@@ -18,10 +18,20 @@
 | Task category | Spec reviewer focus | Code reviewer focus |
 |---|---|---|
 | Resolver knob (Task 1) | New config field follows existing `include_stdlib` pattern | No defensive `if cfg is not None`; YAML overlay loads cleanly |
-| RepoQA loader (Task 2) | Real-schema field mapping (`name`, `description`, `path`, `start_line/end_line`) | Stdlib-only, deterministic cache key, body-extraction off-by-one |
-| Runner library wiring (Task 3) | Systems-agnostic via `hasattr`; runs BEFORE `index()` | No `isinstance` ladder; pure side-effect on system instance |
+| RepoQA loader (Task 2) | Real-schema field mapping (`name`, `description`, `path`, `start_line/end_line`) | Stdlib-only, deterministic cache key, body-extraction off-by-one, atomic write |
+| Runner library wiring (Task 3) | Systems-agnostic via `LibraryConfigurable` Protocol; runs BEFORE `index()` | No `isinstance` ladder; pure side-effect on system instance |
 | Latency aggregator (Task 4) | Per-task `step=task_index` emit + final percentile aggregate | `percentile()` matches numpy default convention; deterministic on equal values |
 | Real baseline (Task 5) | Numbers from a REAL run, not extrapolation | Commit message documents the env + git SHA the baseline was captured at |
+
+**Authorship rule (every commit in this plan):** the user's global CLAUDE.md mandates all commits authored by `msobroza` ONLY. **Do NOT add `Co-Authored-By:` trailers to any commit message in this plan.** This applies whether commits are made directly or by dispatched subagents.
+
+**Revisions from engineering review** (applied 2026-05-20 — supersedes initial draft):
+- Task 0 now greps for `[repoqa]` references in README/docs (M1).
+- Task 1 now updates `defaults/default_config.yaml` for the new `strict_suffix` field (M6).
+- Task 2 ordering rewritten: existing-test rescue BEFORE fixture shape flip (C1, C2). Adds atomic write (I2), mixed-newline test (I3), and `asyncio.to_thread` wrapping for the network call (I6).
+- Task 3 adopts a `LibraryConfigurable` Protocol instead of bare `hasattr` (I1) and adds a no-op test for systems without library fields (I5).
+- Task 4 updates the existing `test_runner_smoke_pydocs_jsonl_fixture` count assertions in lockstep with the new latency records (C5).
+- Task 5 splits the baseline into two files — `repoqa_snf.json` (real numbers) and `repoqa_fixture_baseline.json` (CI gate source) — to keep `ci_compare` hermetic (C6). The tautological self-compare step is removed (I7) and the heredoc is hardened (I8).
 
 ---
 
@@ -36,6 +46,7 @@ Branch: `feature/benchmark-connect-to-real-data` (already pushed as draft PR #27
 
 **Files:**
 - Modify: `benchmarks/pyproject.toml`
+- Possibly modify: `benchmarks/README.md` + any other doc referencing `[repoqa]`
 
 - [ ] **Step 1: Read current `benchmarks/pyproject.toml`**
 
@@ -58,19 +69,31 @@ all = ["mlflow>=2.0"]
 
 The `[repoqa]` extra is dropped entirely. `all` no longer pulls in `datasets` / `huggingface-hub`.
 
-- [ ] **Step 3: Verify baseline tests still pass**
+- [ ] **Step 3: Grep for residual `[repoqa]` / `datasets>=2.0` doc references**
 
 ```bash
 cd /Users/msobroza/Projects/pyctx7-mcp/.claude/worktrees/benchmark-connect
+grep -RIn "\[repoqa\]\|datasets>=2.0\|huggingface-hub" benchmarks/ docs/ README.md 2>/dev/null | grep -v "\.lock\|pyproject.toml"
+```
+
+For every hit:
+- If it's an install instruction (e.g., `pip install -e .[repoqa]`), remove the `[repoqa]` extra reference — the loader is stdlib-only now.
+- If it explains "RepoQA pulled from HuggingFace via `datasets`", replace with "RepoQA pulled from GitHub Releases via `urllib`".
+
+Expected hits: `benchmarks/README.md` (if present), possibly `docs/superpowers/plans/*.md` (PR #26's plan). Update the README; leave historical plan docs unchanged.
+
+- [ ] **Step 4: Verify baseline tests still pass**
+
+```bash
 PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/ -q
 ```
 
 Expected: 100 passing (unchanged — `[repoqa]` was unused at runtime).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add benchmarks/pyproject.toml
+git add benchmarks/pyproject.toml benchmarks/README.md 2>/dev/null  # README only if it changed
 git commit -m "chore(benchmarks): drop [repoqa] optional extra — RepoQA is not on HuggingFace"
 ```
 
@@ -82,8 +105,9 @@ git commit -m "chore(benchmarks): drop [repoqa] optional extra — RepoQA is not
 - Modify: `python/pydocs_mcp/retrieval/config.py` (add field)
 - Modify: `python/pydocs_mcp/extraction/strategies/reference_resolver.py` (gate Rule C)
 - Modify: `python/pydocs_mcp/application/indexing_service.py` (thread the toggle through resolver construction)
+- Modify: `python/pydocs_mcp/defaults/default_config.yaml` (publish the new tunable's default)
 - Modify: `tests/extraction/test_reference_resolver.py` (new test)
-- Create: `benchmarks/configs/strict_suffix_off.yaml` already exists from PR #26 — just verify it loads cleanly
+- Verify: `benchmarks/configs/strict_suffix_off.yaml` already exists from PR #26 — verify it loads cleanly
 
 - [ ] **Step 1: Write the failing test**
 
@@ -187,7 +211,31 @@ resolver = ReferenceResolver(
 )
 ```
 
-- [ ] **Step 6: Run test to verify PASS**
+- [ ] **Step 6: Update `defaults/default_config.yaml` for the new tunable**
+
+CLAUDE.md §"MCP API surface vs YAML configuration" says `default_config.yaml` is "the canonical reference of every tunable". Add `strict_suffix: true` under the `reference_graph.resolver` block in `python/pydocs_mcp/defaults/default_config.yaml`:
+
+```yaml
+reference_graph:
+  resolver:
+    include_stdlib: true
+    strict_suffix: true   # ablation knob — see ReferenceResolverConfig
+```
+
+Smoke-load the defaults to make sure pydantic's `extra="forbid"` is happy:
+
+```bash
+.venv/bin/python -c "
+from pydocs_mcp.retrieval.config import AppConfig
+cfg = AppConfig.load()
+assert cfg.reference_graph.resolver.strict_suffix is True
+print('defaults.strict_suffix =', cfg.reference_graph.resolver.strict_suffix)
+"
+```
+
+Expected: `defaults.strict_suffix = True`.
+
+- [ ] **Step 7: Run test to verify PASS**
 
 ```bash
 .venv/bin/pytest tests/extraction/test_reference_resolver.py::test_strict_suffix_off_skips_rule_c -v
@@ -195,7 +243,7 @@ resolver = ReferenceResolver(
 
 Expected: PASS.
 
-- [ ] **Step 7: Verify `benchmarks/configs/strict_suffix_off.yaml` loads cleanly**
+- [ ] **Step 8: Verify `benchmarks/configs/strict_suffix_off.yaml` loads cleanly**
 
 ```bash
 .venv/bin/python -c "
@@ -208,7 +256,7 @@ print('strict_suffix_off.yaml loads:', cfg.reference_graph.resolver.strict_suffi
 
 Expected: `strict_suffix_off.yaml loads: False`.
 
-- [ ] **Step 8: Run full suite**
+- [ ] **Step 9: Run full suite**
 
 ```bash
 .venv/bin/pytest -q
@@ -217,12 +265,13 @@ Expected: `strict_suffix_off.yaml loads: False`.
 
 Expected: all 996+ tests passing, ruff clean.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add python/pydocs_mcp/retrieval/config.py \
         python/pydocs_mcp/extraction/strategies/reference_resolver.py \
         python/pydocs_mcp/application/indexing_service.py \
+        python/pydocs_mcp/defaults/default_config.yaml \
         tests/extraction/test_reference_resolver.py
 git commit -m "feat(resolver): strict_suffix toggle on ReferenceResolverConfig
 
@@ -230,7 +279,8 @@ Adds a YAML-driven ablation knob — strict_suffix=False skips Rule C
 (suffix-within-package) so the harness can measure Rule C's contribution
 to AC #15 resolution rate against a baseline.
 
-Default stays True (pre-PR behavior). benchmarks/configs/strict_suffix_off.yaml
+Default stays True (pre-PR behavior). defaults/default_config.yaml
+publishes the new tunable. benchmarks/configs/strict_suffix_off.yaml
 now loads cleanly through AppConfig.load."
 ```
 
@@ -239,35 +289,110 @@ now loads cleanly through AppConfig.load."
 ## Task 2: Rewrite `RepoQADataset` for the GitHub-Releases distribution
 
 **Files:**
-- Modify: `benchmarks/src/benchmarks/eval/datasets/repoqa.py` (full rewrite)
-- Modify: `benchmarks/tests/eval/fixtures/repoqa_mini.json` (rewrite in real schema)
-- Modify: `benchmarks/tests/eval/test_repoqa_loader.py` (updated for new schema + stub URL fetch)
+- Modify: `benchmarks/src/benchmarks/eval/datasets/repoqa.py` (full rewrite — stdlib-only, atomic write, `asyncio.to_thread` wrapping)
+- Modify: `benchmarks/tests/eval/fixtures/repoqa_mini.json` (rewrite in real schema — **1 repo × 5 needles**, preserves `tasks_ran == 5` smoke-test invariant)
+- Modify: `benchmarks/tests/eval/test_repoqa_loader.py` (updated for new schema + stub URL fetch + atomic-write test + mixed-newline test)
+- **Modify: `benchmarks/tests/eval/test_scorer_e2e.py`** (rewrite `_load_fixture_tasks` to consume `RepoQADataset` instead of raw JSON — see Finding C1)
 
-- [ ] **Step 1: Write the failing test (new schema)**
+**Ordering rationale** (Finding C2): the old plan flipped the fixture schema in Step 1 and rewrote the loader in Step 3 simultaneously, leaving everything broken between commits. The new ordering walks two clean half-steps: (1) rescue the *fixture-consumer* test file by moving it onto the `RepoQADataset` interface so we never read raw JSON in test code, then (2) flip the schema + loader together — at which point both layers move in lockstep and the test suite returns to green in a single commit.
 
-Replace the contents of `benchmarks/tests/eval/test_repoqa_loader.py`:
+- [ ] **Step 1: Rescue `test_scorer_e2e.py::_load_fixture_tasks` — move it onto the `RepoQADataset` interface**
+
+In `benchmarks/tests/eval/test_scorer_e2e.py`, replace `_load_fixture_tasks`:
 
 ```python
-"""RepoQADataset tests — fixture-only (no network)."""
+import asyncio
+from benchmarks.eval.datasets.repoqa import RepoQADataset
+
+_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+
+
+def _load_fixture_tasks() -> list[EvalTask]:
+    """Consume the Dataset Protocol — the same path the runner walks.
+    Decouples this test from the on-disk JSON shape so future schema
+    changes only touch the loader."""
+    async def _collect() -> list[EvalTask]:
+        dataset = RepoQADataset(fixture_path=_FIXTURE)
+        return [t async for t in dataset.tasks()]
+    return asyncio.run(_collect())
+```
+
+Delete the old import (`from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer` — wait, keep `EvalTask` for the return type; remove `GoldAnswer` if no longer referenced) and the old JSON-walking body. Leave `_oracle_retrieved`, `_gold_at_rank_3_retrieved`, and every test body unchanged — they consume `EvalTask` objects, not raw rows.
+
+- [ ] **Step 2: Run the test_scorer_e2e suite to verify FAIL**
+
+```bash
+cd /Users/msobroza/Projects/pyctx7-mcp/.claude/worktrees/benchmark-connect
+PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/eval/test_scorer_e2e.py -v
+```
+
+Expected: the 3 tests fail because the OLD `RepoQADataset` still expects HuggingFace schema and the OLD fixture is flat-rows; either path errors out. This is the intentional "all-loader-readers broken" mid-state.
+
+- [ ] **Step 3: Replace the fixture file** at `benchmarks/tests/eval/fixtures/repoqa_mini.json`
+
+```json
+{
+  "python": [
+    {
+      "repo": "fixture/synthetic-repo",
+      "commit_sha": "abc1234567890abcdef1234567890abcdef12345",
+      "topic": "math",
+      "entrypoint_path": "fixture_repo",
+      "content": {
+        "fixture_repo/__init__.py": "",
+        "fixture_repo/math_helpers.py": "\"\"\"Module docstring.\"\"\"\n\ndef factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\n\ndef fibonacci(n: int) -> int:\n    if n < 2:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n\ndef is_prime(n: int) -> bool:\n    if n < 2:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True\n\n\ndef gcd(a: int, b: int) -> int:\n    while b:\n        a, b = b, a % b\n    return a\n\n\ndef lcm(a: int, b: int) -> int:\n    return a * b // gcd(a, b)\n"
+      },
+      "dependency": {},
+      "functions": {},
+      "needles": [
+        {"name": "factorial", "description": "Compute the factorial of a non-negative integer.", "path": "fixture_repo/math_helpers.py", "start_line": 3, "end_line": 6, "start_byte": 25, "end_byte": 130, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "fibonacci", "description": "Compute the n-th Fibonacci number.", "path": "fixture_repo/math_helpers.py", "start_line": 9, "end_line": 12, "start_byte": 140, "end_byte": 240, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "is_prime", "description": "Test whether n is prime.", "path": "fixture_repo/math_helpers.py", "start_line": 15, "end_line": 21, "start_byte": 250, "end_byte": 400, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "gcd", "description": "Greatest common divisor of two integers.", "path": "fixture_repo/math_helpers.py", "start_line": 24, "end_line": 27, "start_byte": 410, "end_byte": 480, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "lcm", "description": "Least common multiple via gcd.", "path": "fixture_repo/math_helpers.py", "start_line": 30, "end_line": 31, "start_byte": 490, "end_byte": 550, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5}
+      ]
+    }
+  ]
+}
+```
+
+**Why 1 repo × 5 needles, not 1 × 2:** the existing `test_runner_smoke_returns_aggregate_tuple_shape` (`test_runner_smoke.py:190`) asserts `tasks_ran == 5`. Keeping the new fixture at 5 needles preserves that invariant — no cross-test breakage.
+
+- [ ] **Step 4: Replace `benchmarks/tests/eval/test_repoqa_loader.py`**
+
+```python
+"""RepoQADataset tests — fixture-only by default, urllib stubbed for the
+release path (no network in tests)."""
 from __future__ import annotations
 
+import asyncio
+import gzip
 import json
+import urllib.request
 from pathlib import Path
-from typing import Any
 
 import pytest
-from benchmarks.eval.datasets.repoqa import RepoQADataset
-from benchmarks.eval.protocols import Dataset  # re-exported from base_dataset
+from benchmarks.eval.datasets.repoqa import (
+    RepoQADataset,
+    _extract_body,
+)
+from benchmarks.eval.datasets.base_dataset import Dataset
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 
 
+def _collect(dataset: RepoQADataset) -> list:
+    async def _go():
+        return [t async for t in dataset.tasks()]
+    return asyncio.run(_go())
+
+
 @pytest.mark.asyncio
-async def test_fixture_yields_two_tasks() -> None:
-    """Fixture has 1 Python repo with 2 needles → 2 EvalTasks."""
+async def test_fixture_yields_five_tasks() -> None:
+    """1 Python repo × 5 needles → 5 EvalTasks."""
     dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
     tasks = [t async for t in dataset.tasks()]
-    assert len(tasks) == 2
+    assert len(tasks) == 5
 
 
 @pytest.mark.asyncio
@@ -286,16 +411,14 @@ async def test_gold_body_extracted_from_content() -> None:
     """The gold body comes from content[path] sliced by start_line/end_line."""
     dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
     tasks = [t async for t in dataset.tasks()]
-    # The first fixture needle is at lines 3-5 of fixture_repo/math_helpers.py.
-    # The fixture's content has lines: ["def factorial(n: int) -> int:", ...].
     assert "def factorial" in tasks[0].gold.ast_body
+    assert "def fibonacci" in tasks[1].gold.ast_body
 
 
 @pytest.mark.asyncio
 async def test_task_id_includes_repo_sha_path_name() -> None:
     dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
     tasks = [t async for t in dataset.tasks()]
-    # Format: ``{repo}@{sha[:7]}/{path}::{name}``
     assert "@" in tasks[0].task_id
     assert "::" in tasks[0].task_id
 
@@ -320,14 +443,23 @@ def test_revision_is_pinned_release_version() -> None:
     assert dataset.revision == "2024-06-23"
 
 
+def test_extract_body_handles_mixed_line_endings() -> None:
+    """RepoQA needles can carry any of \\n / \\r\\n / \\r line endings — the
+    extraction must produce the same body regardless of source convention.
+    (Spec §8 risk row.)"""
+    source_unix = "line1\nline2\nline3\nline4\n"
+    source_win = "line1\r\nline2\r\nline3\r\nline4\r\n"
+    source_old_mac = "line1\rline2\rline3\rline4\r"
+    # 1-indexed inclusive lines 2..3 → "line2", "line3"
+    assert _extract_body(source_unix, 2, 3) == "line2\nline3"
+    assert _extract_body(source_win, 2, 3) == "line2\nline3"
+    assert _extract_body(source_old_mac, 2, 3) == "line2\nline3"
+
+
 @pytest.mark.asyncio
 async def test_release_download_path_uses_urllib(monkeypatch, tmp_path) -> None:
     """When no fixture is provided, the loader fetches the GitHub release via
-    urllib. We stub urlopen to return a tiny gzipped JSON so no network."""
-    import gzip
-    import io
-    import urllib.request
-
+    urllib. Stub urlopen to return a tiny gzipped JSON — no network."""
     fake_payload = json.dumps({"python": [], "go": []}).encode()
     fake_gz = gzip.compress(fake_payload)
 
@@ -336,78 +468,52 @@ async def test_release_download_path_uses_urllib(monkeypatch, tmp_path) -> None:
         def __exit__(self, *exc): return None
         def read(self): return fake_gz
 
-    def fake_urlopen(url, timeout=None):  # noqa: ARG001
-        return _FakeResp()
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda url, timeout=None: _FakeResp(),
+    )
 
     dataset = RepoQADataset(cache_dir=tmp_path)
     tasks = [t async for t in dataset.tasks()]
-    assert tasks == []  # empty python list → 0 tasks
-    # Cache file written
+    assert tasks == []
     assert (tmp_path / "repoqa-2024-06-23.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_release_download_corrupt_payload_does_not_clobber_cache(
+    monkeypatch, tmp_path,
+) -> None:
+    """A gzipped download that decompresses to non-JSON must NOT leave a
+    'good-looking' cache file behind. Atomic-write contract:
+    write-to-tmp → validate-JSON → os.replace into place."""
+    fake_gz = gzip.compress(b"not valid json{][")
+
+    class _FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return None
+        def read(self): return fake_gz
+
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda url, timeout=None: _FakeResp(),
+    )
+
+    dataset = RepoQADataset(cache_dir=tmp_path)
+    with pytest.raises(json.JSONDecodeError):
+        _ = [t async for t in dataset.tasks()]
+    # The final cache file must not exist — atomic write aborts before replace.
+    assert not (tmp_path / "repoqa-2024-06-23.json").exists()
 ```
 
-Also rewrite the fixture at `benchmarks/tests/eval/fixtures/repoqa_mini.json`:
-
-```json
-{
-  "python": [
-    {
-      "repo": "fixture/synthetic-repo",
-      "commit_sha": "abc1234567890abcdef1234567890abcdef12345",
-      "topic": "math",
-      "entrypoint_path": "fixture_repo",
-      "content": {
-        "fixture_repo/__init__.py": "",
-        "fixture_repo/math_helpers.py": "\"\"\"Module docstring.\"\"\"\n\ndef factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\n\ndef fibonacci(n: int) -> int:\n    if n < 2:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n"
-      },
-      "dependency": {},
-      "functions": {},
-      "needles": [
-        {
-          "name": "factorial",
-          "description": "Compute the factorial of a non-negative integer.",
-          "path": "fixture_repo/math_helpers.py",
-          "start_line": 3,
-          "end_line": 6,
-          "start_byte": 25,
-          "end_byte": 130,
-          "global_start_byte": 0,
-          "global_end_byte": 0,
-          "global_start_line": 0,
-          "global_end_line": 0,
-          "code_ratio": 0.5
-        },
-        {
-          "name": "fibonacci",
-          "description": "Compute the n-th Fibonacci number.",
-          "path": "fixture_repo/math_helpers.py",
-          "start_line": 9,
-          "end_line": 12,
-          "start_byte": 140,
-          "end_byte": 240,
-          "global_start_byte": 0,
-          "global_end_byte": 0,
-          "global_start_line": 0,
-          "global_end_line": 0,
-          "code_ratio": 0.5
-        }
-      ]
-    }
-  ]
-}
-```
-
-- [ ] **Step 2: Run test to verify FAIL**
+- [ ] **Step 5: Run loader tests + scorer tests to verify FAIL**
 
 ```bash
-PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/eval/test_repoqa_loader.py -v
+PYTHONPATH=benchmarks/src .venv/bin/pytest \
+    benchmarks/tests/eval/test_repoqa_loader.py \
+    benchmarks/tests/eval/test_scorer_e2e.py -v
 ```
 
-Expected: most tests fail because the loader still expects the old HF schema.
+Expected: most tests fail because the loader still expects the old HF schema. `test_scorer_e2e.py` may also fail since the fixture is now nested-by-language. This is the intentional pre-impl state.
 
-- [ ] **Step 3: Rewrite `benchmarks/src/benchmarks/eval/datasets/repoqa.py`**
+- [ ] **Step 6: Rewrite `benchmarks/src/benchmarks/eval/datasets/repoqa.py`**
 
 Full rewrite — replace the file contents:
 
@@ -420,6 +526,7 @@ RepoQA is distributed as a single gzipped JSON file from
 """
 from __future__ import annotations
 
+import asyncio
 import gzip
 import json
 import urllib.request
@@ -432,8 +539,9 @@ from ..corpus import materialize_corpus
 from ..serialization import dataset_registry
 from .base_dataset import Dataset, EvalTask, GoldAnswer  # re-exported
 
-# WHY: the date-tagged GitHub release. Bump in lockstep with EvalPlus
-# release cadence (see https://github.com/evalplus/repoqa_release/releases).
+# WHY: the date-tagged GitHub release. To bump: download the new gz,
+# run _flatten_needles + _row_to_task on it, verify _extract_body produces
+# valid Python for 3 sample needles, then update this constant.
 _PINNED_RELEASE_VERSION = "2024-06-23"
 _RELEASE_URL = (
     "https://github.com/evalplus/repoqa_release/releases/download/"
@@ -459,11 +567,13 @@ class RepoQADataset:
 
     async def tasks(self) -> AsyncIterator[EvalTask]:
         if self._rows_cache is None:
-            self._rows_cache = (
-                self._load_from_fixture()
-                if self.fixture_path is not None
-                else self._load_from_release()
-            )
+            if self.fixture_path is not None:
+                self._rows_cache = self._load_from_fixture()
+            else:
+                # WHY: urllib.urlopen + gzip.decompress are sync + CPU-bound.
+                # The runner loop is async (CLAUDE.md §"Async Patterns") — offload
+                # to a worker thread so the 12MB download doesn't block the event loop.
+                self._rows_cache = await asyncio.to_thread(self._load_from_release)
         for row in self._rows_cache:
             yield _row_to_task(row)
 
@@ -476,13 +586,25 @@ class RepoQADataset:
     def _load_from_release(self) -> list[dict[str, Any]]:
         target = self.cache_dir / f"repoqa-{self.revision}.json"
         if not target.exists():
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            url = _RELEASE_URL.format(version=self.revision)
-            with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310
-                payload = gzip.decompress(resp.read())
-            target.write_bytes(payload)
+            self._download_release_atomic(target)
         data = json.loads(target.read_text())
         return _flatten_needles(data.get(self.language, []))
+
+    def _download_release_atomic(self, target: Path) -> None:
+        # WHY: a partial / corrupt download must NOT masquerade as a good
+        # cache file. Pattern: write to .tmp, validate JSON parses, then
+        # os.replace into place. If JSON validation fails we propagate the
+        # decode error and the .tmp file gets garbage-collected by the OS.
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        url = _RELEASE_URL.format(version=self.revision)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310
+            payload = gzip.decompress(resp.read())
+        # Validate JSON shape before publishing. If this raises, the
+        # decode error propagates and `target` is never created.
+        json.loads(payload.decode())
+        tmp.write_bytes(payload)
+        tmp.replace(target)
 
 
 def _flatten_needles(repos: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -525,35 +647,40 @@ def _row_to_task(row: dict[str, Any]) -> EvalTask:
 
 
 def _extract_body(source: str, start_line: int, end_line: int) -> str:
-    """1-indexed inclusive line slice. Same convention as RepoQA's
-    ``start_line``/``end_line`` byte-aligned ranges."""
+    """1-indexed inclusive line slice. ``splitlines()`` normalizes mixed
+    line endings (\\n, \\r\\n, \\r) so the body is reconstructed with a
+    canonical \\n separator — extraction is endpoint-stable regardless of
+    the source's line-ending convention."""
     lines = source.splitlines()
     return "\n".join(lines[start_line - 1 : end_line])
 ```
 
-- [ ] **Step 4: Run tests to verify PASS**
+- [ ] **Step 7: Run loader + scorer suites to verify PASS**
 
 ```bash
-PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/eval/test_repoqa_loader.py -v
+PYTHONPATH=benchmarks/src .venv/bin/pytest \
+    benchmarks/tests/eval/test_repoqa_loader.py \
+    benchmarks/tests/eval/test_scorer_e2e.py -v
 ```
 
-Expected: 8 passing.
+Expected: 10 loader tests pass (8 existing-style + 2 new — mixed-newline + corrupt-payload); 3 scorer tests pass (oracle = 1.0, rank-3 = MRR 1/3, empty = 0.0).
 
-- [ ] **Step 5: Run full benchmarks suite + ruff**
+- [ ] **Step 8: Run full benchmarks suite + ruff**
 
 ```bash
 PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/ -q
 .venv/bin/ruff check benchmarks/
 ```
 
-Expected: 100+ passing, ruff clean.
+Expected: 100+ passing, ruff clean. (Net new tests in this task: ≈ +2 in loader. Existing scorer + smoke tests still pass because Task 3 fixture preserves the 5-needle count.)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add benchmarks/src/benchmarks/eval/datasets/repoqa.py \
         benchmarks/tests/eval/fixtures/repoqa_mini.json \
-        benchmarks/tests/eval/test_repoqa_loader.py
+        benchmarks/tests/eval/test_repoqa_loader.py \
+        benchmarks/tests/eval/test_scorer_e2e.py
 git commit -m "feat(benchmarks): rewrite RepoQA loader for GitHub Releases distribution
 
 RepoQA is not on HuggingFace. Real distribution is a gzipped JSON
@@ -562,12 +689,18 @@ datasets/huggingface-hub dependency.
 
 New shape:
 - _PINNED_RELEASE_VERSION = '2024-06-23'
-- _load_from_release uses urllib.request + gzip
+- _load_from_release uses urllib.request + gzip wrapped in
+  asyncio.to_thread so the runner's event loop doesn't block
+- Atomic download: write to .tmp, validate JSON parses, then
+  os.replace into target. Corrupt payloads never become cache files.
 - One row per needle (not per repo); gold body extracted from
-  content[needle.path] using start_line/end_line
+  content[needle.path] using start_line/end_line; splitlines()
+  normalizes mixed line endings.
 - Metadata carries repo, commit_sha, topic, needle_name, needle_path
-- Fixture rewritten in the real schema (1 repo, 2 needles)
-"
+- Fixture rewritten in real schema (1 repo, 5 needles — preserves
+  tasks_ran == 5 invariant in test_runner_smoke)
+- test_scorer_e2e.py rescued: _load_fixture_tasks now consumes the
+  RepoQADataset Protocol instead of raw JSON access"
 ```
 
 ---
@@ -575,10 +708,13 @@ New shape:
 ## Task 3: Runner library wiring for Context7 / Neuledge
 
 **Files:**
+- Modify: `benchmarks/src/benchmarks/eval/systems/base_system.py` (add `HasLibraryName` + `HasLibrary` Protocols)
 - Modify: `benchmarks/src/benchmarks/eval/runner.py` (add `_maybe_set_library` helper + call site)
-- Modify: `benchmarks/tests/eval/test_runner_smoke.py` (assert library is seeded)
+- Modify: `benchmarks/tests/eval/test_runner_smoke.py` (assert library is seeded; no-op for bare system)
 
-- [ ] **Step 1: Write the failing test**
+**Design note** (Finding I1): the original plan used a bare `hasattr` check. That works but the contract is invisible — a future system that happens to expose an unrelated `library_name` field would silently get repo-name injection. Two `runtime_checkable` Protocols (`HasLibraryName`, `HasLibrary`) make the opt-in explicit while preserving the same `hasattr` semantics under the hood (Protocols check via `hasattr`).
+
+- [ ] **Step 1: Write the failing tests**
 
 Add to `benchmarks/tests/eval/test_runner_smoke.py`:
 
@@ -599,44 +735,98 @@ async def test_runner_seeds_library_on_systems_before_index(tmp_path) -> None:
     assert system.library_name == "psf/black"
     # library combines repo + 7-char commit
     assert system.library == "psf/black@abcdef1"
+
+
+def test_maybe_set_library_noop_on_system_without_fields() -> None:
+    """Pydocs-mcp doesn't declare library_name / library — the runner
+    helper must be a strict no-op (no setattr fallback). Finding I5."""
+    from benchmarks.eval.runner import _maybe_set_library
+
+    class _Bare:
+        name = "bare"
+
+    bare = _Bare()
+    _maybe_set_library(bare, {"repo": "psf/black", "commit": "abcdef1234"})
+    assert not hasattr(bare, "library_name")
+    assert not hasattr(bare, "library")
+
+
+def test_maybe_set_library_noop_when_metadata_missing_repo() -> None:
+    """If task.metadata lacks 'repo', the helper must not touch the system."""
+    from benchmarks.eval.runner import _maybe_set_library
+
+    class _Recorder:
+        library_name: str = "initial"
+        library: str = "initial"
+
+    sys = _Recorder()
+    _maybe_set_library(sys, {})
+    assert sys.library_name == "initial"
+    assert sys.library == "initial"
 ```
 
-- [ ] **Step 2: Run test to verify FAIL**
+- [ ] **Step 2: Run tests to verify FAIL**
 
 ```bash
-PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/eval/test_runner_smoke.py::test_runner_seeds_library_on_systems_before_index -v
+PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/eval/test_runner_smoke.py -k library -v
 ```
 
-Expected: `ImportError: cannot import name '_maybe_set_library'`.
+Expected: `ImportError: cannot import name '_maybe_set_library'` for all three new tests.
 
-- [ ] **Step 3: Add `_maybe_set_library` to `runner.py`**
+- [ ] **Step 3: Define the opt-in Protocols**
+
+Add to `benchmarks/src/benchmarks/eval/systems/base_system.py` (alongside the existing `RetrievedItem` / `System` Protocol):
+
+```python
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class HasLibraryName(Protocol):
+    """A system that wants the human-readable library identifier
+    (e.g. ``"psf/black"``) seeded from ``task.metadata['repo']`` before
+    ``index()``. ``Context7System`` is the primary implementor."""
+    library_name: str
+
+
+@runtime_checkable
+class HasLibrary(Protocol):
+    """A system that wants the install identifier (``"{repo}@{commit[:7]}"``)
+    seeded from ``task.metadata`` before ``index()``. ``NeuledgeSystem`` is
+    the primary implementor."""
+    library: str
+```
+
+- [ ] **Step 4: Add `_maybe_set_library` to `runner.py`**
 
 In `benchmarks/src/benchmarks/eval/runner.py`, near the other private helpers:
 
 ```python
+from .systems.base_system import HasLibrary, HasLibraryName
+
+
 def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:
     """Seed comparative-system library identifiers from task metadata.
 
-    Context7System expects ``library_name`` (the human name, e.g.
-    ``"psf/black"``); NeuledgeSystem expects ``library`` (the install
-    identifier, e.g. ``"psf/black@abcdef1"``). Pydocs-mcp ignores both
-    — it indexes the corpus directory and answers from its own DB.
+    Systems-agnostic via two runtime_checkable Protocols:
+    - ``HasLibraryName`` — the human name (e.g. ``"psf/black"``).
+      Context7System opts in.
+    - ``HasLibrary`` — the install identifier (e.g. ``"psf/black@abcdef1"``).
+      NeuledgeSystem opts in.
 
-    Systems-agnostic via ``hasattr`` — avoids a special-case ladder per
-    system type and lets future comparative systems opt in by declaring
-    matching fields.
+    Pydocs-mcp implements neither and is a strict no-op.
     """
     repo = metadata.get("repo")
     if not repo:
         return
-    if hasattr(system, "library_name"):
+    if isinstance(system, HasLibraryName):
         system.library_name = repo
-    if hasattr(system, "library"):
+    if isinstance(system, HasLibrary):
         commit = metadata.get("commit", "")
         system.library = f"{repo}@{commit[:7]}" if commit else repo
 ```
 
-- [ ] **Step 4: Wire `_maybe_set_library` into the per-task loop**
+- [ ] **Step 5: Wire `_maybe_set_library` into the per-task loop**
 
 In the same file, inside `run_sweep`, BEFORE `corpus_dir = task.corpus_source()`:
 
@@ -646,35 +836,40 @@ async for task in dataset.tasks():
         break
 
     # WHY: comparative systems (Context7, Neuledge) need a library
-    # identifier resolved from task metadata BEFORE index(). Pydocs-mcp
-    # ignores this hook (no matching field), so this is systems-agnostic.
+    # identifier resolved from task metadata BEFORE index(). Opt-in
+    # via the HasLibraryName / HasLibrary Protocols (systems/base_system.py).
     _maybe_set_library(system, task.metadata)
 
     corpus_dir = task.corpus_source()
     ...
 ```
 
-- [ ] **Step 5: Run test to verify PASS**
+- [ ] **Step 6: Run tests to verify PASS**
 
 ```bash
 PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/eval/test_runner_smoke.py -v
 ```
 
-Expected: all runner tests passing including the new one.
+Expected: all runner tests passing including the 3 new library-wiring tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add benchmarks/src/benchmarks/eval/runner.py \
+        benchmarks/src/benchmarks/eval/systems/base_system.py \
         benchmarks/tests/eval/test_runner_smoke.py
-git commit -m "feat(benchmarks): runner seeds library_name/library from task.metadata
+git commit -m "feat(benchmarks): runner seeds library_name/library from task.metadata via opt-in Protocols
+
+Adds two runtime_checkable Protocols to systems/base_system.py:
+- HasLibraryName — human-readable library identifier
+- HasLibrary — install identifier ({repo}@{commit[:7]})
 
 Adds _maybe_set_library(system, metadata) called before every
-system.index(). Reads task.metadata['repo'] / metadata['commit']
-and populates Context7System.library_name + NeuledgeSystem.library
-via hasattr — systems-agnostic, no isinstance ladder.
+system.index(). Routes by isinstance against the Protocols, so opt-in
+is documented at the type level rather than left to bare hasattr —
+prevents accidental injection into unrelated library_name fields.
 
-Pydocs-mcp has no matching field and is unaffected."
+Pydocs-mcp implements neither Protocol and is a strict no-op."
 ```
 
 ---
@@ -864,13 +1059,44 @@ for latency_key in ("indexing_seconds", "search_seconds"):
         tracker.log_metric(h, f"{latency_key}_p99", p99, step=None)
 ```
 
-- [ ] **Step 8: Run smoke test to verify PASS**
+- [ ] **Step 8: Update existing smoke-test count assertions (Finding C5)**
+
+Adding 2 new latency observations per task + 6 new aggregate records (3 percentiles × 2 latency keys) will break `test_runner_smoke_pydocs_jsonl_fixture` at `test_runner_smoke.py:78,81,82`. Update those line-pinned counts.
+
+Old (at `test_runner_smoke.py:72-82`):
+
+```python
+    # Shape: 1 run_start + (limit × 5 metrics) per-task + 15 aggregate
+    ...
+    # 2 tasks × 5 metrics = 10 per-task, plus 5 × 3 = 15 aggregate.
+    assert len(metric_records) == 10 + 15
+    ...
+    aggregate = [r for r in metric_records if r.get("step") is None]
+    assert len(per_task) == 10
+    assert len(aggregate) == 15
+```
+
+New:
+
+```python
+    # Shape: 1 run_start + (limit × (5 quality + 2 latency)) per-task +
+    # (5 quality × 3 stats + 2 latency × 3 percentiles) aggregate
+    ...
+    # 2 tasks × 7 metrics = 14 per-task, plus 5×3 + 2×3 = 21 aggregate.
+    assert len(metric_records) == 14 + 21
+    ...
+    aggregate = [r for r in metric_records if r.get("step") is None]
+    assert len(per_task) == 14
+    assert len(aggregate) == 21
+```
+
+Run + verify it still passes alongside the new latency assertions:
 
 ```bash
 PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/eval/test_runner_smoke.py -v
 ```
 
-Expected: all runner smoke tests passing including the new latency one.
+Expected: all runner smoke tests passing.
 
 - [ ] **Step 9: Update `report.py` for latency cells**
 
@@ -951,108 +1177,185 @@ disambiguated by metric-name suffix (_seconds → percentile)."
 
 ---
 
-## Task 5: Capture the real measured baseline
+## Task 5: Capture the real measured baseline (and rewire CI to a fixture baseline)
 
 **Files:**
-- Modify: `benchmarks/baselines/repoqa_snf.json` (real numbers from a full sweep)
-- The full sweep itself takes 5-10 minutes; this task IS the run + the commit.
+- Create: `benchmarks/baselines/repoqa_fixture_baseline.json` (CI gate source — captured from fixture sweep)
+- Modify: `benchmarks/baselines/repoqa_snf.json` (replaces fixture-extrapolated placeholder with real numbers — documentation only, not gated by CI)
+- Modify: `.github/workflows/benchmark.yml` (point `ci_compare --baseline` at the new fixture baseline)
 
-- [ ] **Step 1: Run the full sweep against the real dataset**
+**Why two baselines now** (Finding C6): the existing CI workflow runs `--fixture repoqa_mini.json` and compares against `repoqa_snf.json`. If `repoqa_snf.json` carries real-data numbers (100 needles, different repos) but CI only ever runs the 5-needle fixture, the threshold gate (`--threshold 0.02`) fires on every PR. Split: `repoqa_fixture_baseline.json` is what CI compares against (fixture-vs-fixture, hermetic), and `repoqa_snf.json` is the real-data record kept alongside for documentation and out-of-CI manual comparisons.
+
+- [ ] **Step 1: Capture the fixture baseline (this is what CI gates against)**
 
 ```bash
+set -euo pipefail
 cd /Users/msobroza/Projects/pyctx7-mcp/.claude/worktrees/benchmark-connect
 
-# WHY: first invocation downloads the gzip; subsequent invocations use cache.
+# Reuse the same CLI shape the CI workflow uses (--fixture, --limit 5).
+PYTHONPATH=benchmarks/src .venv/bin/python -m benchmarks.eval.runner \
+    --systems pydocs-mcp \
+    --configs benchmarks/configs/baseline.yaml \
+    --dataset repoqa \
+    --fixture benchmarks/tests/eval/fixtures/repoqa_mini.json \
+    --trackers jsonl \
+    --limit 5
+
+FIXTURE_JSONL=$(ls -t benchmarks/results/jsonl/*.jsonl | head -1)
+echo "Fixture JSONL: $FIXTURE_JSONL"
+```
+
+- [ ] **Step 2: Run the full sweep against the real dataset**
+
+```bash
+set -euo pipefail
+# WHY: first invocation downloads the 12MB gzip from GitHub Releases;
+# subsequent invocations use the cache file at ~/.cache/pydocs-mcp/repoqa.
 PYTHONPATH=benchmarks/src .venv/bin/python -m benchmarks.eval.runner \
     --systems pydocs-mcp \
     --configs benchmarks/configs/baseline.yaml \
     --dataset repoqa \
     --trackers jsonl
+
+REAL_JSONL=$(ls -t benchmarks/results/jsonl/*.jsonl | head -1)
+echo "Real JSONL: $REAL_JSONL"
 ```
 
 Expected: 5-10 minutes. Final stdout prints the report markdown + the JSONL output path.
 
-- [ ] **Step 2: Extract aggregates from the JSONL output**
+- [ ] **Step 3: Extract aggregates and write BOTH baseline JSONs**
 
 ```bash
-LATEST_JSONL=$(ls -t benchmarks/results/jsonl/*.jsonl | head -1)
-echo "JSONL: $LATEST_JSONL"
+set -euo pipefail
 
-python3 <<EOF
-import json
-from pathlib import Path
+python3 - <<'PY'
 import datetime
+import json
 import subprocess
+from pathlib import Path
 
-lines = [json.loads(l) for l in Path("$LATEST_JSONL").read_text().splitlines()]
-aggs = {}
-for line in lines:
-    if line.get("_event") != "metric":
-        continue
-    name = line["name"]
-    if name.endswith("_mean") or name.endswith("_ci_low") or name.endswith("_ci_high"):
-        metric, suffix = name.rsplit("_", 1)
-        aggs.setdefault(metric, {})[suffix] = float(line["value"])
-    elif name.endswith("_p50") or name.endswith("_p95") or name.endswith("_p99"):
-        metric, suffix = name.rsplit("_", 1)
-        aggs.setdefault(metric, {})[suffix] = float(line["value"])
+JSONL_DIR = Path("benchmarks/results/jsonl")
+runs = sorted(JSONL_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+# Last two runs: Step 1 = fixture (older), Step 2 = real (newer)
+fixture_jsonl, real_jsonl = runs[-2], runs[-1]
 
-# Tasks_ran from the run header
-header = next(l for l in lines if l.get("_event") == "run_start")
 git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+now_iso = datetime.datetime.now(datetime.UTC).isoformat()
 
-baseline = {
-    "dataset": "repoqa-2024-06-23-python",
-    "system": "pydocs-mcp",
-    "config": "baseline",
-    "tasks_ran": header.get("params", {}).get("__tasks_ran__", 100),
-    "metrics": aggs,
-    "captured_at": datetime.datetime.utcnow().isoformat() + "Z",
-    "git_sha": git_sha,
-}
 
-with open("benchmarks/baselines/repoqa_snf.json", "w") as f:
-    json.dump(baseline, f, indent=2)
-print("Baseline written:", json.dumps(aggs, indent=2)[:500])
-EOF
+def _summarize(jsonl_path: Path, label: str, dataset_id: str) -> dict:
+    lines = [json.loads(l) for l in jsonl_path.read_text().splitlines() if l.strip()]
+    aggs: dict[str, dict[str, float]] = {}
+    # Count of distinct (step != None) records with name == "recall@10" gives
+    # tasks_ran. No magic number needed.
+    tasks_ran = sum(
+        1 for l in lines
+        if l.get("_event") == "metric"
+        and l.get("step") is not None
+        and l.get("name") == "recall@10"
+    )
+    for line in lines:
+        if line.get("_event") != "metric":
+            continue
+        name = line["name"]
+        for suffix in ("_mean", "_ci_low", "_ci_high", "_p50", "_p95", "_p99"):
+            if name.endswith(suffix):
+                metric = name[: -len(suffix)]
+                aggs.setdefault(metric, {})[suffix.lstrip("_")] = float(line["value"])
+                break
+    return {
+        "dataset": dataset_id,
+        "system": "pydocs-mcp",
+        "config": "baseline",
+        "tasks_ran": tasks_ran,
+        "metrics": aggs,
+        "captured_at": now_iso,
+        "git_sha": git_sha,
+        "source_jsonl": str(jsonl_path),
+        "label": label,
+    }
+
+
+fixture_baseline = _summarize(
+    fixture_jsonl, label="fixture-5-needles", dataset_id="repoqa-fixture-python",
+)
+real_baseline = _summarize(
+    real_jsonl, label="real-100-needles", dataset_id="repoqa-2024-06-23-python",
+)
+
+Path("benchmarks/baselines/repoqa_fixture_baseline.json").write_text(
+    json.dumps(fixture_baseline, indent=2) + "\n",
+)
+Path("benchmarks/baselines/repoqa_snf.json").write_text(
+    json.dumps(real_baseline, indent=2) + "\n",
+)
+print("fixture tasks_ran:", fixture_baseline["tasks_ran"])
+print("real tasks_ran:", real_baseline["tasks_ran"])
+PY
 ```
 
-- [ ] **Step 3: Manually inspect the new baseline**
+Expected: `fixture tasks_ran: 5`, `real tasks_ran: 100`.
+
+- [ ] **Step 4: Manually inspect both baselines**
 
 ```bash
-cat benchmarks/baselines/repoqa_snf.json | python3 -m json.tool | head -40
+python3 -m json.tool benchmarks/baselines/repoqa_fixture_baseline.json | head -30
+python3 -m json.tool benchmarks/baselines/repoqa_snf.json | head -30
 ```
 
-Verify: tasks_ran ≈ 100, every metric has the expected aggregate keys, latency keys have p50/p95/p99 (not mean/ci_low/ci_high).
+Verify: each baseline has its expected `tasks_ran`; every metric has `mean`/`ci_low`/`ci_high`; each `*_seconds` latency key has `p50`/`p95`/`p99`.
 
-- [ ] **Step 4: Confirm `ci_compare` still passes against the new baseline**
+- [ ] **Step 5: Update `.github/workflows/benchmark.yml` to point at the fixture baseline**
+
+In `.github/workflows/benchmark.yml`, locate the `Check recall@10 vs baseline` step and swap:
+
+```yaml
+      - name: Check recall@10 vs baseline
+        run: |
+          PYTHONPATH=benchmarks/src python -m benchmarks.eval.ci_compare \
+            --baseline benchmarks/baselines/repoqa_fixture_baseline.json \
+            --current 'benchmarks/results/jsonl/*.jsonl' \
+            --metric recall@10 \
+            --threshold 0.02
+```
+
+Update the WHY comment block above it to mention that `repoqa_snf.json` is a real-data record kept for documentation and that CI gates only against the fixture-derived baseline (hermetic / reproducible).
+
+- [ ] **Step 6: Smoke-test the CI gate locally**
 
 ```bash
+set -euo pipefail
 PYTHONPATH=benchmarks/src .venv/bin/python -m benchmarks.eval.ci_compare \
-    --baseline benchmarks/baselines/repoqa_snf.json \
-    --current "$LATEST_JSONL" \
+    --baseline benchmarks/baselines/repoqa_fixture_baseline.json \
+    --current "benchmarks/results/jsonl/*.jsonl" \
     --metric recall@10 \
     --threshold 0.02
 ```
 
-Expected: OK (the JSONL we just produced IS the baseline source).
+Expected: OK (the latest fixture JSONL is the source of the baseline, so they agree within threshold).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add benchmarks/baselines/repoqa_snf.json
-git commit -m "feat(benchmarks): first real measured baseline against RepoQA 100-needle Python subset
+git add benchmarks/baselines/repoqa_fixture_baseline.json \
+        benchmarks/baselines/repoqa_snf.json \
+        .github/workflows/benchmark.yml
+git commit -m "feat(benchmarks): first real measured baseline + dedicated fixture CI baseline
 
-Captured by running:
-  PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \\
-      --systems pydocs-mcp --configs benchmarks/configs/baseline.yaml \\
-      --dataset repoqa --trackers jsonl
+Splits the baseline into two files:
+- repoqa_fixture_baseline.json — captured from the 5-needle fixture
+  sweep; this is what CI's ci_compare gates against (hermetic +
+  reproducible).
+- repoqa_snf.json — real measured numbers from the 100-needle Python
+  subset of repoqa-2024-06-23, kept as a documentation record.
 
-Replaces the fixture-extrapolated placeholder with REAL measured
-numbers from the 100-needle Python subset of repoqa-2024-06-23.
+Updates .github/workflows/benchmark.yml to point ci_compare at the
+fixture baseline so the gate stays meaningful (was comparing fixture
+sweep against placeholder real-data baseline, now compares like for
+like).
 
-Run env: $(git rev-parse --short HEAD), $(uname -sr).
-Baseline JSON tracks the git SHA + UTC timestamp at capture time."
+Each baseline tracks the source JSONL path, the git SHA, and the UTC
+timestamp at capture time."
 ```
 
 ---
@@ -1065,7 +1368,11 @@ Baseline JSON tracks the git SHA + UTC timestamp at capture time."
 cd /Users/msobroza/Projects/pyctx7-mcp/.claude/worktrees/benchmark-connect
 
 .venv/bin/pytest -q                                              # main repo: 996+ passing
-PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/ -q  # benchmarks: 110+ passing
+PYTHONPATH=benchmarks/src .venv/bin/pytest benchmarks/tests/ -q  # benchmarks: ~113 passing
+                                                                  # (100 baseline + 1 strict_suffix
+                                                                  #  + 2 loader (mixed-newline + atomic write)
+                                                                  #  + 3 library wiring
+                                                                  #  + 7 latency = ~113)
 ```
 
 - [ ] **Step 2: Ruff clean**
