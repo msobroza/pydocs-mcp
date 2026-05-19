@@ -151,10 +151,14 @@ class ReferenceCaptureStage:
                                         collector=collector,
                                     )
                                 if "calls" in allowed:
-                                    # self.X.Y inference: walk __init__ once to
-                                    # learn attribute types, then walk every
-                                    # method's body for calls. Cheap — both
-                                    # passes share the same AST.
+                                    # self.X.Y inference: learn attribute types
+                                    # from this class FIRST, then walk every
+                                    # method body for calls. The capture helper
+                                    # re-iterates ``cls.body`` and ``init.body``
+                                    # internally, but that's a few extra dozen
+                                    # iterations per class — negligible
+                                    # alongside the per-method ast.walk that
+                                    # capture_calls runs.
                                     collector.record_class_attrs(
                                         class_qname,
                                         capture_self_attribute_types(stmt),

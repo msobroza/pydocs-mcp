@@ -153,9 +153,14 @@ class ReferenceResolver:
         cls_qname = _enclosing_class_qname(from_node_id)
         if cls_qname is None:
             return None
-        # Strip the literal "self." prefix, then split on the FIRST dot
-        # so chained access (self.X.Y.Z) preserves the remainder.
-        head, _sep, rest = to_name[5:].partition(".")
+        # Strip the literal "self." prefix once, then split on the FIRST
+        # dot so chained access (self.X.Y.Z) preserves the remainder.
+        # Defensive: a degenerate "self." input yields ``head == ""``,
+        # which misses ``attrs.get("")`` and produces a rewritten string
+        # ending in a trailing dot that can't appear in the universe —
+        # both inference paths fail-safe in that case.
+        after_self = to_name[5:]
+        head, _sep, rest = after_self.partition(".")
 
         # 1. Attribute-typed inference.
         attrs = self.class_attribute_types.get(cls_qname)
@@ -167,7 +172,7 @@ class ReferenceResolver:
         # 2. Self-as-class fallback — guard with universe membership so
         #    only Rule B-equivalent rewrites get through. Rule C / D
         #    matches via this path would risk false positives.
-        rewritten = f"{cls_qname}.{to_name[5:]}"
+        rewritten = f"{cls_qname}.{after_self}"
         if rewritten in self.qname_universe:
             return rewritten
         return None
@@ -191,6 +196,13 @@ def _enclosing_class_qname(from_node_id: str) -> str | None:
     the captured ``class_attribute_types`` table (which only contains
     real classes) or gate on qname-universe membership (the self-as-
     class fallback). Misfires lose accuracy, never correctness.
+
+    TODO: this heuristic depends on the chunker stamping method qnames
+    as ``<module>.<Class>.<method>``. If
+    :class:`~pydocs_mcp.extraction.strategies.chunkers.ast_python.AstPythonChunker`
+    ever changes that convention (e.g. to support nested classes inside
+    functions, or PEP 695 generic params in the qname), update this
+    heuristic in lockstep.
     """
     parts = from_node_id.split(".")
     if len(parts) >= 3 and parts[-2] and parts[-2][0].isupper():

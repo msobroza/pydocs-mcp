@@ -236,15 +236,18 @@ def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
     Returns an empty dict when no pattern matches; the resolver treats
     absence the same as "no info" and falls back to Rule 5.
     """
+    init_bare, init_annotated = _init_body_attribute_types(cls)
     class_body_types = _class_body_annotations(cls)
-    init_types = _init_body_attribute_types(cls)
 
-    # Annotation wins on conflict: class-body annotations are the type
-    # system's declaration and supersede runtime intent. Order matters —
-    # ``dict.update`` writes the second arg LAST, so class-body entries
-    # win over any conflicting __init__ entry for the same attribute.
+    # Three precedence layers, lowest to highest. ``dict.update`` writes
+    # the second arg LAST, so each successive update overrides earlier
+    # entries for the same attribute. Order encodes the conflict policy:
+    # init-bare (Pattern B/C runtime) < init-annotated (Pattern D/E
+    # explicit at the assignment site) < class-body annotation (the type
+    # system's declaration — most authoritative).
     result: dict[str, str] = {}
-    result.update(init_types)
+    result.update(init_bare)
+    result.update(init_annotated)
     result.update(class_body_types)
     return result
 
@@ -273,15 +276,19 @@ def _class_body_annotations(cls: ast.ClassDef) -> dict[str, str]:
     return result
 
 
-def _init_body_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
-    """Return ``{attr: type_qname}`` for self.X assignments inside __init__.
+def _init_body_attribute_types(
+    cls: ast.ClassDef,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return ``(bare, annotated)`` self.X attribute types from ``__init__``.
 
-    Recognises Patterns B/C (bare constructor call) and D/E (annotated
-    assignment). Annotation wins when the same attr appears as both.
+    Two separate dicts so the caller can merge them alongside the
+    class-body annotations in one explicit precedence chain. ``bare`` is
+    Patterns B/C (assignment whose RHS is a constructor Call);
+    ``annotated`` is Patterns D/E (AnnAssign with an explicit type).
     """
     init = _find_init(cls)
     if init is None:
-        return {}
+        return {}, {}
 
     bare: dict[str, str] = {}
     annotated: dict[str, str] = {}
@@ -307,8 +314,7 @@ def _init_body_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
                     continue
                 bare[attr] = type_name
 
-    bare.update(annotated)
-    return bare
+    return bare, annotated
 
 
 def _find_init(cls: ast.ClassDef) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
