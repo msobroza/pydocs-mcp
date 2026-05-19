@@ -16,6 +16,11 @@ dependencies = [
     "pydocs-mcp @ file://../",
 ]
 
+[project.optional-dependencies]
+mlflow = ["mlflow>=2.0"]
+repoqa = ["datasets>=2.0", "huggingface-hub>=0.20"]
+all = ["mlflow>=2.0", "datasets>=2.0", "huggingface-hub>=0.20"]
+
 [project.scripts]
 run-benchmarks = "benchmarks.runner:main"
 
