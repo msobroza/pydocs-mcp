@@ -64,10 +64,17 @@ jobs:
       # CI band is wider than 2pp on a 5-task fixture, so we use a flat
       # percentage-point gate rather than CI-based detection — see
       # ci_compare.py for the rationale.
+      #
+      # CI compares fixture-vs-fixture (hermetic + reproducible): the sweep
+      # above runs against repoqa_mini.json (5 needles), and the baseline
+      # is repoqa_fixture_baseline.json captured from the same fixture. The
+      # real-data record at repoqa_baselines/repoqa_snf.json is kept for
+      # documentation only — comparing fixture results against the real
+      # 100-needle baseline would diverge wildly on every PR.
       - name: Check recall@10 vs baseline
         run: |
           PYTHONPATH=benchmarks/src python -m benchmarks.eval.ci_compare \
-            --baseline benchmarks/baselines/repoqa_snf.json \
+            --baseline benchmarks/baselines/repoqa_fixture_baseline.json \
             --current 'benchmarks/results/jsonl/*.jsonl' \
             --metric recall@10 \
             --threshold 0.02

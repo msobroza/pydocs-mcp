@@ -41,4 +41,30 @@ class System(Protocol):
     async def teardown(self) -> None: ...
 
 
-__all__ = ["RetrievedItem", "System"]
+@runtime_checkable
+class HasLibraryName(Protocol):
+    """A system that wants the human-readable library identifier
+    (e.g. ``"psf/black"``) seeded from ``task.metadata['repo']`` before
+    ``index()``. ``Context7System`` is the primary implementor.
+
+    Opt-in is documented at the type level via ``runtime_checkable`` —
+    ``isinstance(sys, HasLibraryName)`` is the runner's gating check
+    (equivalent to ``hasattr`` under the hood, but with a name attached).
+    """
+
+    library_name: str
+
+
+@runtime_checkable
+class HasLibrary(Protocol):
+    """A system that wants the install identifier
+    (``"{repo}@{commit[:7]}"``) seeded from ``task.metadata`` before
+    ``index()``. ``NeuledgeSystem`` is the primary implementor.
+
+    See ``HasLibraryName`` for the opt-in mechanism.
+    """
+
+    library: str
+
+
+__all__ = ["HasLibrary", "HasLibraryName", "RetrievedItem", "System"]

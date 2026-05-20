@@ -1,58 +1,23 @@
-[
-  {
-    "task_id": "fixture-1",
-    "description": "Compute the factorial of a non-negative integer.",
-    "needle_function_body": "def factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n",
-    "repo": "fixture-factorial",
-    "language": "python",
-    "files": {
-      "fixture_factorial/__init__.py": "",
-      "fixture_factorial/math_helpers.py": "def factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\n\ndef square(x: int) -> int:\n    return x * x\n"
+{
+  "python": [
+    {
+      "repo": "fixture/synthetic-repo",
+      "commit_sha": "abc1234567890abcdef1234567890abcdef12345",
+      "topic": "math",
+      "entrypoint_path": "fixture_repo",
+      "content": {
+        "fixture_repo/__init__.py": "",
+        "fixture_repo/math_helpers.py": "\"\"\"Module docstring.\"\"\"\n\ndef factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\n\ndef fibonacci(n: int) -> int:\n    if n < 2:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n\ndef is_prime(n: int) -> bool:\n    if n < 2:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True\n\n\ndef gcd(a: int, b: int) -> int:\n    while b:\n        a, b = b, a % b\n    return a\n\n\ndef lcm(a: int, b: int) -> int:\n    return a * b // gcd(a, b)\n"
+      },
+      "dependency": {},
+      "functions": {},
+      "needles": [
+        {"name": "factorial", "description": "Compute the factorial of a non-negative integer.", "path": "fixture_repo/math_helpers.py", "start_line": 3, "end_line": 6, "start_byte": 25, "end_byte": 130, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "fibonacci", "description": "Compute the n-th Fibonacci number.", "path": "fixture_repo/math_helpers.py", "start_line": 9, "end_line": 12, "start_byte": 140, "end_byte": 240, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "is_prime", "description": "Test whether n is prime.", "path": "fixture_repo/math_helpers.py", "start_line": 15, "end_line": 21, "start_byte": 250, "end_byte": 400, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "gcd", "description": "Greatest common divisor of two integers.", "path": "fixture_repo/math_helpers.py", "start_line": 24, "end_line": 27, "start_byte": 410, "end_byte": 480, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "lcm", "description": "Least common multiple via gcd.", "path": "fixture_repo/math_helpers.py", "start_line": 30, "end_line": 31, "start_byte": 490, "end_byte": 550, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5}
+      ]
     }
-  },
-  {
-    "task_id": "fixture-2",
-    "description": "Return the nth Fibonacci number using iterative computation.",
-    "needle_function_body": "def fibonacci(n: int) -> int:\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n",
-    "repo": "fixture-fibonacci",
-    "language": "python",
-    "files": {
-      "fixture_fibonacci/__init__.py": "",
-      "fixture_fibonacci/sequences.py": "def fibonacci(n: int) -> int:\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n\n\ndef triangular(n: int) -> int:\n    return n * (n + 1) // 2\n"
-    }
-  },
-  {
-    "task_id": "fixture-3",
-    "description": "Reverse a string without using the built-in slice syntax.",
-    "needle_function_body": "def reverse_string(s: str) -> str:\n    out = []\n    for ch in s:\n        out.insert(0, ch)\n    return ''.join(out)\n",
-    "repo": "fixture-strings",
-    "language": "python",
-    "files": {
-      "fixture_strings/__init__.py": "",
-      "fixture_strings/text_utils.py": "def reverse_string(s: str) -> str:\n    out = []\n    for ch in s:\n        out.insert(0, ch)\n    return ''.join(out)\n\n\ndef is_palindrome(s: str) -> bool:\n    return s == s[::-1]\n"
-    }
-  },
-  {
-    "task_id": "fixture-4",
-    "description": "Recursively flatten a list of arbitrarily nested lists into a flat list.",
-    "needle_function_body": "def flatten(items):\n    result = []\n    for item in items:\n        if isinstance(item, list):\n            result.extend(flatten(item))\n        else:\n            result.append(item)\n    return result\n",
-    "repo": "fixture-collections",
-    "language": "python",
-    "files": {
-      "fixture_collections/__init__.py": "",
-      "fixture_collections/nested.py": "def flatten(items):\n    result = []\n    for item in items:\n        if isinstance(item, list):\n            result.extend(flatten(item))\n        else:\n            result.append(item)\n    return result\n",
-      "fixture_collections/helpers/sums.py": "def total(xs):\n    return sum(xs)\n"
-    }
-  },
-  {
-    "task_id": "fixture-5",
-    "description": "Build a simple decorator that memoizes a unary function's return values in a dict.",
-    "needle_function_body": "def simple_cache(func):\n    cache = {}\n    def wrapped(arg):\n        if arg not in cache:\n            cache[arg] = func(arg)\n        return cache[arg]\n    return wrapped\n",
-    "repo": "fixture-cache",
-    "language": "python",
-    "files": {
-      "fixture_cache/__init__.py": "",
-      "fixture_cache/decorators.py": "def simple_cache(func):\n    cache = {}\n    def wrapped(arg):\n        if arg not in cache:\n            cache[arg] = func(arg)\n        return cache[arg]\n    return wrapped\n\n\ndef noop(func):\n    return func\n"
-    }
-  }
-]
+  ]
+}

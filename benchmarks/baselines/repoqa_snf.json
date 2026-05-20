@@ -1,16 +1,47 @@
 {
-  "dataset": "repoqa-fixture",
+  "dataset": "repoqa-2024-06-23-python",
   "system": "pydocs-mcp",
   "config": "baseline",
-  "tasks_ran": 5,
+  "tasks_ran": 100,
   "metrics": {
-    "recall@1":      {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0},
-    "recall@5":      {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0},
-    "recall@10":     {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0},
-    "mrr":           {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0},
-    "pass@1-needle": {"mean": 0.6, "ci_low": 0.2, "ci_high": 1.0}
+    "recall@1": {
+      "mean": 0.0,
+      "ci_low": 0.0,
+      "ci_high": 0.0
+    },
+    "recall@5": {
+      "mean": 0.0,
+      "ci_low": 0.0,
+      "ci_high": 0.0
+    },
+    "recall@10": {
+      "mean": 0.0,
+      "ci_low": 0.0,
+      "ci_high": 0.0
+    },
+    "mrr": {
+      "mean": 0.0,
+      "ci_low": 0.0,
+      "ci_high": 0.0
+    },
+    "pass@1-needle": {
+      "mean": 0.0,
+      "ci_low": 0.0,
+      "ci_high": 0.0
+    },
+    "indexing_seconds": {
+      "p50": 4.493605020994437,
+      "p95": 26.838381095214572,
+      "p99": 27.592446075080378
+    },
+    "search_seconds": {
+      "p50": 0.010248770500766113,
+      "p95": 0.04903651521017297,
+      "p99": 0.11577352166204952
+    }
   },
-  "captured_at": "2026-05-19T02:48:20Z",
-  "git_sha": "f91befbaec9d323cc11c2060afcc3bc66162b6fb",
-  "notes": "Baseline captured against the 5-task RepoQA mini fixture (benchmarks/tests/eval/fixtures/repoqa_mini.json) — fully offline, fully reproducible. Real RepoQA HF dataset uses _PINNED_REVISION which is still a placeholder; a separate follow-up will replace the fixture with the pinned RepoQA-SNF Python split and regenerate this baseline."
+  "captured_at": "2026-05-20T01:14:14.814979+00:00",
+  "git_sha": "05f8dc256531243bcfcf33e73a7969ef1d92b9c9",
+  "source_jsonl": "benchmarks/results/jsonl/pydocs-mcp_baseline_repoqa_at_2024-06-23_20260520T010046Z.jsonl",
+  "label": "real-100-needles"
 }

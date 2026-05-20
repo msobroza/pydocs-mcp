@@ -154,6 +154,10 @@ class ReferenceResolverConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include_stdlib: bool = True
+    # WHY: when False, the resolver only fires Rule B (exact qname match)
+    # — Rule C (strict-suffix-within-package) is skipped. Ablation knob
+    # for measuring Rule C's contribution to AC #15 resolution rate.
+    strict_suffix: bool = True
 
 
 class ReferenceGraphConfig(BaseModel):

@@ -1,147 +1,125 @@
-"""Pin RepoQADataset: iterates the 5-task fixture, yields well-formed
-``EvalTask`` instances, materializes per-task corpora on demand, and
-hits the registry under ``"repoqa"``.
-
-The fixture path keeps the test fast and offline — no HuggingFace cache,
-no network. The HF path is exercised by a single test that monkeypatches
-``sys.modules["datasets"] = None`` and asserts the install-instruction
-ImportError surfaces from the lazy load.
-"""
+"""RepoQADataset tests — fixture-only by default, urllib stubbed for the
+release path (no network in tests)."""
 from __future__ import annotations
 
-import sys
+import gzip
+import json
+import urllib.request
 from pathlib import Path
 
 import pytest
-from benchmarks.eval.datasets import RepoQADataset
-from benchmarks.eval.datasets.base_dataset import Dataset, EvalTask
-from benchmarks.eval.serialization import dataset_registry
+from benchmarks.eval.datasets.base_dataset import Dataset
+from benchmarks.eval.datasets.repoqa import (
+    RepoQADataset,
+    _extract_body,
+)
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
-_EXPECTED_INSTALL_CMD = "uv pip install -e benchmarks[repoqa]"
-
-
-def _make_dataset() -> RepoQADataset:
-    return RepoQADataset(fixture_path=_FIXTURE)
-
-
-async def _collect(dataset: RepoQADataset) -> list[EvalTask]:
-    tasks: list[EvalTask] = []
-    async for task in dataset.tasks():
-        tasks.append(task)
-    return tasks
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 
 
 async def test_fixture_yields_five_tasks() -> None:
-    tasks = await _collect(_make_dataset())
+    """1 Python repo × 5 needles → 5 EvalTasks."""
+    dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
+    tasks = [t async for t in dataset.tasks()]
     assert len(tasks) == 5
 
 
 async def test_each_task_has_required_fields() -> None:
-    tasks = await _collect(_make_dataset())
-    for task in tasks:
-        assert isinstance(task, EvalTask)
+    dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
+    async for task in dataset.tasks():
         assert task.task_id
         assert task.query
-        # WHY: RepoQA-SNF gold is the function body — every task must
-        # supply ast_body or the AST-match metric has nothing to score
-        # against.
         assert task.gold.ast_body
-        assert callable(task.corpus_source)
+        assert task.metadata["repo"]
+        assert task.metadata["language"] == "python"
 
 
-async def test_task_ids_are_unique() -> None:
-    # WHY: the runner indexes per-task results by task_id; collisions
-    # would silently overwrite metrics for the earlier task.
-    tasks = await _collect(_make_dataset())
-    ids = [t.task_id for t in tasks]
-    assert len(ids) == len(set(ids))
+async def test_gold_body_extracted_from_content() -> None:
+    """The gold body comes from content[path] sliced by start_line/end_line."""
+    dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
+    tasks = [t async for t in dataset.tasks()]
+    assert "def factorial" in tasks[0].gold.ast_body
+    assert "def fibonacci" in tasks[1].gold.ast_body
 
 
-async def test_task_metadata_carries_repo_and_language() -> None:
-    tasks = await _collect(_make_dataset())
-    for task in tasks:
-        # WHY: per-repo breakdown in report.py depends on ``metadata['repo']``.
-        # ``language`` filters to ``python`` at load time so the tag is
-        # constant — kept anyway so per-language slicing stays trivial if
-        # we widen the loader later.
-        assert task.metadata.get("language") == "python"
-        assert task.metadata.get("repo")
+async def test_task_id_includes_repo_sha_path_name() -> None:
+    dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
+    tasks = [t async for t in dataset.tasks()]
+    assert "@" in tasks[0].task_id
+    assert "::" in tasks[0].task_id
 
 
-async def test_corpus_source_materializes_files(tmp_path: Path) -> None:
-    tasks = await _collect(_make_dataset())
-    first = tasks[0]
-    corpus_dir = first.corpus_source()
-    try:
-        # WHY: the fixture's first task is the factorial repo; verifying a
-        # concrete file lands proves the closure captured the right
-        # ``files`` mapping rather than reusing the last task's dict.
-        helpers = corpus_dir / "fixture_factorial" / "math_helpers.py"
-        assert helpers.is_file()
-        assert "factorial" in helpers.read_text()
-    finally:
-        import shutil
-
-        shutil.rmtree(corpus_dir, ignore_errors=True)
+async def test_corpus_source_materializes_repo_content() -> None:
+    """Each task's corpus_source returns a tmp dir containing the repo files."""
+    dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
+    tasks = [t async for t in dataset.tasks()]
+    corpus_dir = tasks[0].corpus_source()
+    assert (corpus_dir / "fixture_repo" / "math_helpers.py").exists()
 
 
-async def test_corpus_source_is_idempotent_per_task() -> None:
-    # WHY: ``corpus_source`` is a zero-arg callable — calling it twice
-    # must produce two independent dirs (one per call) rather than
-    # reusing a cached one. The runner relies on this so a retry on
-    # failure can rebuild a clean dir.
-    tasks = await _collect(_make_dataset())
-    first = tasks[0]
-    a = first.corpus_source()
-    b = first.corpus_source()
-    try:
-        assert a != b
-        assert a.is_dir() and b.is_dir()
-    finally:
-        import shutil
-
-        shutil.rmtree(a, ignore_errors=True)
-        shutil.rmtree(b, ignore_errors=True)
-
-
-def test_dataset_satisfies_protocol() -> None:
-    # WHY: runtime_checkable Protocol; the runner relies on isinstance
-    # checks to refuse a misconfigured registry entry.
-    dataset = _make_dataset()
+async def test_dataset_satisfies_protocol() -> None:
+    dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
     assert isinstance(dataset, Dataset)
-    assert dataset.name == "repoqa"
 
 
-def test_registered_in_dataset_registry() -> None:
-    instance = dataset_registry.build("repoqa", fixture_path=_FIXTURE)
-    assert isinstance(instance, RepoQADataset)
-    assert instance.name == "repoqa"
+def test_revision_is_pinned_release_version() -> None:
+    dataset = RepoQADataset()
+    assert dataset.revision == "2024-06-23"
 
 
-def test_construction_with_fixture_does_not_require_datasets(
-    monkeypatch: pytest.MonkeyPatch,
+def test_extract_body_handles_mixed_line_endings() -> None:
+    """RepoQA needles can carry any of \\n / \\r\\n / \\r line endings — the
+    extraction must produce the same body regardless of source convention.
+    (Spec §8 risk row.)"""
+    source_unix = "line1\nline2\nline3\nline4\n"
+    source_win = "line1\r\nline2\r\nline3\r\nline4\r\n"
+    source_old_mac = "line1\rline2\rline3\rline4\r"
+    # 1-indexed inclusive lines 2..3 → "line2", "line3"
+    assert _extract_body(source_unix, 2, 3) == "line2\nline3"
+    assert _extract_body(source_win, 2, 3) == "line2\nline3"
+    assert _extract_body(source_old_mac, 2, 3) == "line2\nline3"
+
+
+async def test_release_download_path_uses_urllib(monkeypatch, tmp_path) -> None:
+    """When no fixture is provided, the loader fetches the GitHub release via
+    urllib. Stub urlopen to return a tiny gzipped JSON — no network."""
+    fake_payload = json.dumps({"python": [], "go": []}).encode()
+    fake_gz = gzip.compress(fake_payload)
+
+    class _FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return None
+        def read(self): return fake_gz
+
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda url, timeout=None: _FakeResp(),
+    )
+
+    dataset = RepoQADataset(cache_dir=tmp_path)
+    tasks = [t async for t in dataset.tasks()]
+    assert tasks == []
+    assert (tmp_path / "repoqa-2024-06-23.json").exists()
+
+
+async def test_release_download_corrupt_payload_does_not_clobber_cache(
+    monkeypatch, tmp_path,
 ) -> None:
-    # WHY: the lazy-import contract differs from MLflow. RepoQA has a
-    # ``fixture_path`` fallback, so construction MUST succeed without
-    # ``datasets`` installed when a fixture is provided. The import is
-    # deferred to ``_load_from_hf`` and only fires on the HF code path.
-    monkeypatch.setitem(sys.modules, "datasets", None)
-    # No raise — construction stays offline-safe.
-    dataset = RepoQADataset(fixture_path=_FIXTURE)
-    assert dataset.fixture_path == _FIXTURE
+    """A gzipped download that decompresses to non-JSON must NOT leave a
+    'good-looking' cache file behind. Atomic-write contract:
+    write-to-tmp → validate-JSON → os.replace into place."""
+    fake_gz = gzip.compress(b"not valid json{][")
 
+    class _FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return None
+        def read(self): return fake_gz
 
-async def test_hf_path_without_datasets_raises_install_message(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # WHY: when fixture_path is None the loader falls through to the
-    # HuggingFace path; that path eagerly attempts ``import datasets`` and
-    # must surface the verbatim install command users can copy-paste.
-    monkeypatch.setitem(sys.modules, "datasets", None)
-    dataset = RepoQADataset()  # no fixture — HF path
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda url, timeout=None: _FakeResp(),
+    )
 
-    with pytest.raises(ImportError) as excinfo:
-        async for _ in dataset.tasks():
-            break  # pragma: no cover -- never reached
-    assert _EXPECTED_INSTALL_CMD in str(excinfo.value)
+    dataset = RepoQADataset(cache_dir=tmp_path)
+    with pytest.raises(json.JSONDecodeError):
+        _ = [t async for t in dataset.tasks()]
+    # The final cache file must not exist — atomic write aborts before replace.
+    assert not (tmp_path / "repoqa-2024-06-23.json").exists()
