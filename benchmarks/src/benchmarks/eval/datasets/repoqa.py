@@ -1,23 +1,15 @@
-"""RepoQA-SNF dataset loader (spec §4.3, §4.8).
+"""RepoQA-SNF dataset loader (spec §5.1).
 
-Two code paths, chosen at construction time:
-
-1. **Fixture path** (offline) — when ``fixture_path`` points at a local
-   JSON file, ``tasks()`` reads it and yields ``EvalTask`` instances
-   without touching the network. Tests and CI smoke runs use this.
-2. **HuggingFace path** — when ``fixture_path`` is ``None``, ``tasks()``
-   lazy-imports ``datasets``, calls ``load_dataset("evalplus/repoqa",
-   revision=PINNED_REVISION, cache_dir=...)``, filters to
-   ``language == "python"``, and yields one task per row.
-
-The lazy-import semantics differ deliberately from the MLflow tracker:
-MLflow has no fallback, so the import fires in ``__post_init__``. RepoQA
-*does* have a fallback (``fixture_path``), so the import is deferred to
-``_load_from_hf`` — construction stays offline-safe.
+RepoQA is distributed as a single gzipped JSON file from
+``evalplus/repoqa_release`` GitHub Releases. Stdlib-only — no
+``datasets`` / ``huggingface-hub`` dependency.
 """
 from __future__ import annotations
 
+import asyncio
+import gzip
 import json
+import urllib.request
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,140 +19,117 @@ from ..corpus import materialize_corpus
 from ..serialization import dataset_registry
 from .base_dataset import EvalTask, GoldAnswer
 
-# WHY: pinned revision is filled in by Task 9 (CI + baseline) once the
-# first real benchmark run captures the commit hash from HuggingFace.
-# Tests bypass this via ``fixture_path`` so the placeholder never reaches
-# the wire during development.
-_PINNED_REVISION = "<TODO_PIN_AT_FIRST_RUN>"
-
-# WHY: install command is duplicated verbatim in the error message so
-# users can copy-paste it from any traceback without scrolling around
-# for context. Single source of truth lives here.
-_INSTALL_MSG = "uv pip install -e benchmarks[repoqa]"
-
-
-def _require_datasets() -> Any:
-    try:
-        import datasets  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise ImportError(
-            f"RepoQADataset requires the optional [repoqa] extra. "
-            f"Install with: {_INSTALL_MSG}"
-        ) from exc
-    return datasets
-
-
-def _row_to_task(row: Mapping[str, Any]) -> EvalTask:
-    """Translate one fixture / HF row into an ``EvalTask``.
-
-    The closure over ``files`` (default-arg trick) freezes the mapping at
-    construction time so subsequent iterator advances don't smuggle the
-    next row's files into earlier tasks' corpus_source closures.
-    """
-    files: Mapping[str, str] = dict(row["files"])
-    # Field names below are placeholders matched by the fixture JSON. The real
-    # HuggingFace evalplus/repoqa schema may use different keys (e.g.
-    # nl_description vs description, function_body vs needle_function_body) —
-    # Task 9 pins _PINNED_REVISION and confirms / adjusts these column names
-    # against the actual dataset rows.
-    return EvalTask(
-        task_id=str(row["task_id"]),
-        query=str(row["description"]),
-        gold=GoldAnswer(ast_body=str(row["needle_function_body"])),
-        corpus_source=lambda files=files: materialize_corpus(files),
-        metadata={
-            "repo": str(row.get("repo", "")),
-            "language": str(row.get("language", "python")),
-        },
-    )
+# WHY: the date-tagged GitHub release. To bump: download the new gz,
+# run _flatten_needles + _row_to_task on it, verify _extract_body produces
+# valid Python for 3 sample needles, then update this constant.
+_PINNED_RELEASE_VERSION = "2024-06-23"
+_RELEASE_URL = (
+    "https://github.com/evalplus/repoqa_release/releases/download/"
+    "{version}/repoqa-{version}.json.gz"
+)
 
 
 @dataset_registry.register("repoqa")
 @dataclass
 class RepoQADataset:
-    """Loader for RepoQA-SNF (Apache-2.0, EvalPlus, arXiv 2406.06025).
-
-    Default behavior loads from HuggingFace; tests and air-gapped CI
-    smoke runs override ``fixture_path`` to read a local JSON copy.
-    """
+    """RepoQA-SNF (Apache-2.0, EvalPlus, arXiv 2406.06025)."""
 
     name: str = "repoqa"
-    revision: str = _PINNED_REVISION
+    revision: str = _PINNED_RELEASE_VERSION
     fixture_path: Path | None = None
     cache_dir: Path = field(
-        default_factory=lambda: Path("~/.cache/pydocs-mcp/repoqa").expanduser()
+        default_factory=lambda: Path("~/.cache/pydocs-mcp/repoqa").expanduser(),
     )
-    # WHY: cache the row list across ``tasks()`` calls so a sweep over
-    # (system × config) doesn't re-realize the HF dataset (or re-parse
-    # the fixture JSON) once per leg. The dataset is immutable for a
-    # pinned revision, so the cache is safe.
-    _rows_cache: "list[Mapping[str, Any]] | None" = field(
+    language: str = "python"
+    _rows_cache: list[dict[str, Any]] | None = field(
         default=None, init=False, repr=False,
     )
 
-    # WHY: declared as ``def`` returning ``AsyncIterator`` (Protocol shape)
-    # but implemented as an ``async def`` generator. Python wraps the
-    # call site automatically so callers do ``async for t in ds.tasks():``
-    # without an extra await.
     async def tasks(self) -> AsyncIterator[EvalTask]:
         if self._rows_cache is None:
-            self._rows_cache = (
-                self._load_from_fixture()
-                if self.fixture_path is not None
-                else self._load_from_hf()
-            )
+            if self.fixture_path is not None:
+                self._rows_cache = self._load_from_fixture()
+            else:
+                # WHY: urllib.urlopen + gzip.decompress are sync + CPU-bound.
+                # The runner loop is async (CLAUDE.md §"Async Patterns") — offload
+                # to a worker thread so the 12MB download doesn't block the event loop.
+                self._rows_cache = await asyncio.to_thread(self._load_from_release)
         for row in self._rows_cache:
             yield _row_to_task(row)
 
-    def _load_from_fixture(self) -> list[Mapping[str, Any]]:
-        # WHY: the fixture path is the offline / test-only escape hatch.
-        # Reading sync inside the async generator is fine — it's a one-shot
-        # JSON load before the yield loop, not per-task I/O.
-        assert self.fixture_path is not None  # narrowed by caller
+    def _load_from_fixture(self) -> list[dict[str, Any]]:
+        assert self.fixture_path is not None
         with self.fixture_path.open() as fh:
             data = json.load(fh)
-        return [row for row in data if row.get("language", "python") == "python"]
+        return _flatten_needles(data.get(self.language, []))
 
-    def _load_from_hf(self) -> list[Mapping[str, Any]]:
-        datasets = _require_datasets()
-        # WHY: ``cache_dir`` is created lazily by ``load_dataset`` itself
-        # — no need to ``mkdir`` here. The pinned ``revision`` makes the
-        # eval reproducible across CI runs even if EvalPlus pushes new
-        # data to ``main``.
-        ds = datasets.load_dataset(
-            "evalplus/repoqa",
-            revision=self.revision,
-            cache_dir=str(self.cache_dir),
-        )
-        # HF datasets ship a DatasetDict; the eval split is named ``test``
-        # for RepoQA-SNF. Filter language=python per spec §4.8.
-        split = ds["test"] if "test" in ds else next(iter(ds.values()))
-        return [row for row in split if row.get("language") == "python"]
+    def _load_from_release(self) -> list[dict[str, Any]]:
+        target = self.cache_dir / f"repoqa-{self.revision}.json"
+        if not target.exists():
+            self._download_release_atomic(target)
+        data = json.loads(target.read_text())
+        return _flatten_needles(data.get(self.language, []))
 
-
-def _download() -> None:
-    """Eager download — used by CI to pre-fill the HF cache.
-
-    ``python -m benchmarks.benchmarks.eval.datasets.repoqa --download``
-    triggers this. The CI workflow keys its cache on
-    ``_PINNED_REVISION`` so the artifact is reused across PRs (spec §4.12,
-    AC11).
-    """
-    dataset = RepoQADataset()
-    rows = dataset._load_from_hf()
-    # CI logs read this line to confirm the cache step succeeded.
-    print(f"Downloaded {len(rows)} Python tasks to {dataset.cache_dir}")
+    def _download_release_atomic(self, target: Path) -> None:
+        # WHY: a partial / corrupt download must NOT masquerade as a good
+        # cache file. Pattern: write to .tmp, validate JSON parses, then
+        # os.replace into place. If JSON validation fails we propagate the
+        # decode error and the .tmp file gets garbage-collected by the OS.
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        url = _RELEASE_URL.format(version=self.revision)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310
+            payload = gzip.decompress(resp.read())
+        # Validate JSON shape before publishing. If this raises, the
+        # decode error propagates and `target` is never created.
+        json.loads(payload.decode())
+        tmp.write_bytes(payload)
+        tmp.replace(target)
 
 
-if __name__ == "__main__":  # pragma: no cover -- CLI entry, not unit-tested
-    import argparse
+def _flatten_needles(repos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per needle (NOT per repo). Each row carries the repo content
+    once; corpus_source closures share it via the default-arg trick."""
+    rows: list[dict[str, Any]] = []
+    for repo_entry in repos:
+        for needle in repo_entry["needles"]:
+            rows.append({
+                "repo": repo_entry["repo"],
+                "commit_sha": repo_entry["commit_sha"],
+                "topic": repo_entry["topic"],
+                "content": repo_entry["content"],
+                "needle": needle,
+            })
+    return rows
 
-    parser = argparse.ArgumentParser(description="RepoQA dataset cache helper")
-    parser.add_argument(
-        "--download",
-        action="store_true",
-        help="Pre-fill the HuggingFace cache for the pinned revision.",
+
+def _row_to_task(row: dict[str, Any]) -> EvalTask:
+    needle = row["needle"]
+    content: Mapping[str, str] = dict(row["content"])
+    needle_body = _extract_body(
+        content[needle["path"]], needle["start_line"], needle["end_line"],
     )
-    args = parser.parse_args()
-    if args.download:
-        _download()
+    repo_id = f"{row['repo']}@{row['commit_sha'][:7]}"
+    return EvalTask(
+        task_id=f"{repo_id}/{needle['path']}::{needle['name']}",
+        query=needle["description"],
+        gold=GoldAnswer(ast_body=needle_body),
+        corpus_source=lambda files=content: materialize_corpus(files),
+        metadata={
+            "repo": row["repo"],
+            "commit": row["commit_sha"],
+            "topic": row["topic"],
+            "language": "python",
+            "needle_name": needle["name"],
+            "needle_path": needle["path"],
+        },
+    )
+
+
+def _extract_body(source: str, start_line: int, end_line: int) -> str:
+    """1-indexed inclusive line slice. ``splitlines()`` normalizes mixed
+    line endings (\\n, \\r\\n, \\r) so the body is reconstructed with a
+    canonical \\n separator — extraction is endpoint-stable regardless of
+    the source's line-ending convention."""
+    lines = source.splitlines()
+    return "\n".join(lines[start_line - 1 : end_line])

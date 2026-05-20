@@ -8,10 +8,11 @@ the per-metric contribution one metric at a time.
 """
 from __future__ import annotations
 
-import json
+import asyncio
 from pathlib import Path
 
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
+from benchmarks.eval.datasets.base_dataset import EvalTask
+from benchmarks.eval.datasets.repoqa import RepoQADataset
 from benchmarks.eval.metrics import MRR, PassAt1Needle, RecallAtK
 from benchmarks.eval.metrics.base_metric import Scorer
 from benchmarks.eval.systems.base_system import RetrievedItem
@@ -20,18 +21,15 @@ _FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 
 
 def _load_fixture_tasks() -> list[EvalTask]:
-    rows = json.loads(_FIXTURE.read_text())
-    return [
-        EvalTask(
-            task_id=str(row["task_id"]),
-            query=str(row["description"]),
-            gold=GoldAnswer(ast_body=str(row["needle_function_body"])),
-            # WHY: scorer-only test never materializes the corpus. A dummy
-            # callable keeps the dataclass valid; tests never call it.
-            corpus_source=lambda: Path("."),
-        )
-        for row in rows
-    ]
+    """Consume the Dataset Protocol — the same path the runner walks.
+
+    Decouples this test from the on-disk JSON shape so future schema
+    changes only touch the loader.
+    """
+    async def _collect() -> list[EvalTask]:
+        dataset = RepoQADataset(fixture_path=_FIXTURE)
+        return [t async for t in dataset.tasks()]
+    return asyncio.run(_collect())
 
 
 def _oracle_retrieved(task: EvalTask) -> tuple[RetrievedItem, ...]:

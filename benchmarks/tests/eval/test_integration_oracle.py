@@ -8,11 +8,11 @@ validated by real benchmark runs; this test guards the SCAFFOLDING.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from benchmarks.eval.datasets.repoqa import RepoQADataset
 from benchmarks.eval.runner import run_sweep
 from benchmarks.eval.serialization import system_registry
 from benchmarks.eval.systems.base_system import RetrievedItem
@@ -69,16 +69,18 @@ class _OracleTestSystem:
         return None
 
 
-def _populate_oracle_from_fixture() -> None:
-    """Read the bundled fixture and seed ``_ORACLE_LOOKUP`` by query."""
-    rows = json.loads(_FIXTURE.read_text())
+async def _populate_oracle_from_fixture() -> None:
+    """Seed ``_ORACLE_LOOKUP`` by walking the Dataset Protocol — the same
+    path the runner walks. Decouples this test from the on-disk JSON shape
+    so future schema changes only touch the loader."""
+    dataset = RepoQADataset(fixture_path=_FIXTURE)
     _ORACLE_LOOKUP.clear()
-    for row in rows:
-        _ORACLE_LOOKUP[str(row["description"])] = str(row["needle_function_body"])
+    async for task in dataset.tasks():
+        _ORACLE_LOOKUP[task.query] = task.gold.ast_body or ""
 
 
 async def test_oracle_system_scores_perfectly(tmp_path: Path) -> None:
-    _populate_oracle_from_fixture()
+    await _populate_oracle_from_fixture()
     overlay = tmp_path / "baseline.yaml"
     overlay.write_text("")
 
@@ -110,7 +112,7 @@ async def test_oracle_system_scores_recall_at_1_and_5_perfectly(tmp_path: Path) 
     # recall@1 + recall@5 separately catches a k-off-by-one bug that
     # recall@10 alone would mask (a wrong slice that still happens to
     # include rank 1).
-    _populate_oracle_from_fixture()
+    await _populate_oracle_from_fixture()
     overlay = tmp_path / "baseline.yaml"
     overlay.write_text("")
 
