@@ -68,7 +68,7 @@ DEFAULT_METRIC_SPECS: tuple[str, ...] = (
 # (p50, p95, p99) at the end. The ``_seconds`` suffix is the semantic
 # disambiguator — report.py routes any metric ending in ``_seconds`` to
 # the percentile-triple renderer instead of the mean+CI renderer.
-_LATENCY_KEYS: tuple[str, ...] = ("indexing_seconds", "search_seconds")
+LATENCY_KEYS: tuple[str, ...] = ("indexing_seconds", "search_seconds")
 
 
 async def run_sweep(
@@ -155,7 +155,7 @@ async def run_sweep(
         # ``search_seconds`` (spec §5.5). The aggregation step below
         # routes ``_seconds`` keys to ``percentile`` and everything else
         # to ``mean_with_bootstrap_ci`` — same map, two reducer functions.
-        latency_values: dict[str, list[float]] = {k: [] for k in _LATENCY_KEYS}
+        latency_values: dict[str, list[float]] = {k: [] for k in LATENCY_KEYS}
         # WHY: bracket the whole try with a single ``try/except/finally``
         # that owns close_run. The exception surfaces *after* every
         # tracker run is closed as ``failed`` and the system is torn down
@@ -186,20 +186,23 @@ async def run_sweep(
                     retrieved = await system.search(task.query, limit=10)
                     search_secs = time.perf_counter() - t1
 
-                    scores = scorer.score(task, retrieved)
-                    for metric_name, value in scores.items():
-                        per_metric_values[metric_name].append(value)
-                        for h, tracker in zip(handles, trackers):
-                            tracker.log_metric(h, metric_name, value, step=count)
                     # WHY: latency is an observation, not a Metric — see
                     # spec §5.5. Emit per-task with step=count so external
                     # tooling can plot the series; aggregate to p50/p95/p99
                     # below once all observations are in.
+                    # Emitted BEFORE the scorer so a scorer failure doesn't
+                    # suppress latency that was already measured cleanly.
                     latency_values["indexing_seconds"].append(index_secs)
                     latency_values["search_seconds"].append(search_secs)
                     for h, tracker in zip(handles, trackers):
                         tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
                         tracker.log_metric(h, "search_seconds", search_secs, step=count)
+
+                    scores = scorer.score(task, retrieved)
+                    for metric_name, value in scores.items():
+                        per_metric_values[metric_name].append(value)
+                        for h, tracker in zip(handles, trackers):
+                            tracker.log_metric(h, metric_name, value, step=count)
                 finally:
                     shutil.rmtree(corpus_dir, ignore_errors=True)
                 count += 1
@@ -217,7 +220,7 @@ async def run_sweep(
             # key) but a different reducer — p50/p95/p99 instead of
             # mean/ci_low/ci_high. report.py disambiguates by metric-name
             # suffix (``_seconds``) so the shared triple shape is safe.
-            for latency_key in _LATENCY_KEYS:
+            for latency_key in LATENCY_KEYS:
                 values = latency_values[latency_key]
                 p50 = percentile(values, 0.5)
                 p95 = percentile(values, 0.95)

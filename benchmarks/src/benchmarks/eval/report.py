@@ -12,19 +12,17 @@ rather than retrofitting a Protocol.
 """
 from __future__ import annotations
 
-# WHY: latency rows appear after the quality metrics so a reader scanning
-# top-down sees quality first (the headline number) and infrastructure
-# cost second. Sourced from ``runner._LATENCY_KEYS`` so a new latency
-# observation key shows up in the report without a second edit.
-from .runner import _LATENCY_KEYS as _LATENCY_ROW_ORDER
-
 # WHY: metric row order is part of the report contract — downstream
 # regression-diff scripts walk the rows top-to-bottom and key on this
 # sequence. Derive from ``runner.DEFAULT_METRIC_SPECS`` so the CLI
 # ``--metrics`` default and the report's row order share a single source
 # of truth — adding/removing a metric is a single-edit change in
 # ``runner.py``. Don't reorder without updating the diff tool too.
+# Latency rows (``LATENCY_KEYS``) render AFTER the quality metrics so a
+# reader scanning top-down sees quality first (the headline number) and
+# infrastructure cost second.
 from .runner import DEFAULT_METRIC_SPECS as _METRIC_ROW_ORDER
+from .runner import LATENCY_KEYS as _LATENCY_ROW_ORDER
 
 
 def format_report(
