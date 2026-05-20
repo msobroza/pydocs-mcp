@@ -172,13 +172,15 @@ class IndexingService:
         # AC #15 stdlib-idx: merge bundled stdlib qnames if enabled in YAML.
         # The toggle is read at call time so YAML reloads / test overrides
         # take effect on the next reindex without re-importing.
-        if _get_resolver_config().include_stdlib:
+        cfg = _get_resolver_config()
+        if cfg.include_stdlib:
             universe.update(load_stdlib_qnames())
 
         resolver = ReferenceResolver(
             qname_universe=frozenset(universe),
             aliases=aliases,
             class_attribute_types=class_attribute_types,
+            strict_suffix=cfg.strict_suffix,
         )
         return resolver.resolve(refs)
 

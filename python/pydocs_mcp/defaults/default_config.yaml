@@ -56,6 +56,7 @@ reference_graph:
     max_limit: 1000
   resolver:                                 # sub-PR follow-up to #5c
     include_stdlib: true                    # merges bundled stdlib_qnames.json into universe
+    strict_suffix: true                     # ablation knob — see ReferenceResolverConfig
 
 search:
   output:

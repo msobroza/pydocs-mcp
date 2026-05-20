@@ -162,3 +162,31 @@ def test_unresolved_external_stays_unresolved():
     ])
     assert out[0].to_node_id is None
     assert out[0].to_name == "os.path.join"
+
+
+def test_strict_suffix_off_skips_rule_c() -> None:
+    """When strict_suffix=False, Rule C (suffix-within-package) does NOT fire.
+
+    Setup: a reference like ``compute`` from package ``pkg`` and a single
+    qname ``pkg.helpers.compute`` in the universe. With strict_suffix=True
+    Rule C resolves it. With False, only Rule B (exact match) runs — no
+    resolution because the to_name doesn't match the full qname.
+    """
+    qnames = frozenset({"pkg.helpers.compute"})
+    resolver_strict = ReferenceResolver(
+        qname_universe=qnames, aliases={}, class_attribute_types={},
+        strict_suffix=True,
+    )
+    resolver_loose = ReferenceResolver(
+        qname_universe=qnames, aliases={}, class_attribute_types={},
+        strict_suffix=False,
+    )
+    ref = NodeReference(
+        from_package="pkg", from_node_id="pkg.module.fn",
+        to_name="compute", to_node_id=None, kind=ReferenceKind.CALLS,
+    )
+    out_strict = resolver_strict.resolve([ref])
+    out_loose = resolver_loose.resolve([ref])
+    # Rule C resolves under strict; only Rule B runs under loose.
+    assert out_strict[0].to_node_id == "pkg.helpers.compute"
+    assert out_loose[0].to_node_id is None

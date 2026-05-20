@@ -57,6 +57,12 @@ class ReferenceResolver:
     qname_universe: frozenset[str]
     aliases: dict[str, dict[str, str]] = field(default_factory=dict)
     class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
+    # WHY: ablation knob — when False, Rule C (strict-suffix-within-package)
+    # and Rule D (ambiguous-suffix) are skipped entirely; only Rules 0, A,
+    # B, F20 and Rule 5 short-circuit run. Lets the benchmark harness
+    # measure Rule C's contribution to AC #15 resolution rate against a
+    # baseline. Default True preserves pre-PR behavior.
+    strict_suffix: bool = True
 
     def resolve(self, refs: Sequence[NodeReference]) -> list[NodeReference]:
         """Return a NEW list of NodeReferences with to_node_id filled.
@@ -109,21 +115,25 @@ class ReferenceResolver:
                 if bare in self.qname_universe:
                     return bare
 
-        # Rule C — strict dotted suffix within from_package.
+        # Rule C — strict dotted suffix within from_package. Gated by the
+        # ``strict_suffix`` ablation knob: when False, the resolver skips
+        # straight to Rule E (no match) so the benchmark harness can
+        # measure Rule C's contribution to AC #15 resolution rate.
         # Build candidates = {qname in universe whose package prefix == from_package
         #                     AND qname endswith ".<to_name>" OR qname == to_name}.
-        candidates: list[str] = []
-        suffix_dot = "." + to_name
-        for qname in self.qname_universe:
-            if not qname.startswith(ref.from_package + ".") and qname != ref.from_package:
-                continue
-            if qname == to_name or qname.endswith(suffix_dot):
-                candidates.append(qname)
-        if len(candidates) == 1:
-            return candidates[0]
-        # Rule D — ambiguous suffix (>1 candidate) leaves None deterministically.
-        if len(candidates) > 1:
-            return None
+        if self.strict_suffix:
+            candidates: list[str] = []
+            suffix_dot = "." + to_name
+            for qname in self.qname_universe:
+                if not qname.startswith(ref.from_package + ".") and qname != ref.from_package:
+                    continue
+                if qname == to_name or qname.endswith(suffix_dot):
+                    candidates.append(qname)
+            if len(candidates) == 1:
+                return candidates[0]
+            # Rule D — ambiguous suffix (>1 candidate) leaves None deterministically.
+            if len(candidates) > 1:
+                return None
 
         # Rule E — no match.
         return None
