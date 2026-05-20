@@ -72,9 +72,9 @@ class RepoQADataset:
 
     def _download_release_atomic(self, target: Path) -> None:
         # WHY: a partial / corrupt download must NOT masquerade as a good
-        # cache file. Pattern: write to .tmp, validate JSON parses, then
-        # os.replace into place. If JSON validation fails we propagate the
-        # decode error and the .tmp file gets garbage-collected by the OS.
+        # cache file. Decompress in memory → validate JSON parses → write
+        # .tmp → os.replace into place. Because validation runs BEFORE the
+        # .tmp write, a corrupt payload never lands on disk at all.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         url = _RELEASE_URL.format(version=self.revision)
         tmp = target.with_suffix(target.suffix + ".tmp")

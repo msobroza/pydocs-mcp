@@ -2,7 +2,6 @@
 release path (no network in tests)."""
 from __future__ import annotations
 
-import asyncio
 import gzip
 import json
 import urllib.request
@@ -16,12 +15,6 @@ from benchmarks.eval.datasets.repoqa import (
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
-
-
-def _collect(dataset: RepoQADataset) -> list:
-    async def _go():
-        return [t async for t in dataset.tasks()]
-    return asyncio.run(_go())
 
 
 async def test_fixture_yields_five_tasks() -> None:
