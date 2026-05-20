@@ -41,6 +41,7 @@ from .serialization import (
     system_registry,
     tracker_registry,
 )
+from .systems.base_system import HasLibrary, HasLibraryName
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
@@ -150,6 +151,11 @@ async def run_sweep(
             async for task in dataset.tasks():
                 if limit is not None and count >= limit:
                     break
+                # WHY: comparative systems (Context7, Neuledge) need a
+                # library identifier resolved from task metadata BEFORE
+                # ``index()``. Opt-in via the ``HasLibraryName`` /
+                # ``HasLibrary`` Protocols (see ``systems/base_system.py``).
+                _maybe_set_library(system, task.metadata)
                 corpus_dir = task.corpus_source()
                 try:
                     await system.index(corpus_dir, config)
@@ -219,6 +225,32 @@ def _build_metric(spec: str) -> Metric:
     # WHY: fall through to the registry so a future custom-named metric
     # registered under a single key (e.g. ``ndcg@10``) still resolves.
     return metric_registry.build(spec)
+
+
+def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:
+    """Seed comparative-system library identifiers from task metadata.
+
+    Systems-agnostic via two ``runtime_checkable`` Protocols declared in
+    ``systems/base_system.py``:
+
+    - ``HasLibraryName`` — the human name (e.g. ``"psf/black"``).
+      ``Context7System`` opts in.
+    - ``HasLibrary`` — the install identifier
+      (e.g. ``"psf/black@abcdef1"``). ``NeuledgeSystem`` opts in.
+
+    Pydocs-mcp implements neither and is a strict no-op. Routing via
+    ``isinstance`` against the Protocols (rather than bare ``hasattr``)
+    documents the contract at the type level and prevents accidental
+    injection into unrelated ``library_name`` fields on future systems.
+    """
+    repo = metadata.get("repo")
+    if not repo:
+        return
+    if isinstance(system, HasLibraryName):
+        system.library_name = repo
+    if isinstance(system, HasLibrary):
+        commit = metadata.get("commit", "")
+        system.library = f"{repo}@{commit[:7]}" if commit else repo
 
 
 def _flatten_app_config(cfg: "AppConfig") -> dict[str, str]:

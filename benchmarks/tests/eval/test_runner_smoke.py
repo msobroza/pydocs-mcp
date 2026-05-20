@@ -161,6 +161,59 @@ async def test_runner_smoke_returns_aggregate_tuple_shape(tmp_path: Path) -> Non
         assert lo <= mean <= hi
 
 
+def test_runner_seeds_library_on_systems_before_index() -> None:
+    """The runner reads ``task.metadata['repo']`` and seeds
+    ``library_name`` / ``library`` on the system instance BEFORE
+    ``index()`` is called. Helper is sync; only the system-facing
+    boundary is async.
+    """
+    from benchmarks.eval.runner import _maybe_set_library
+
+    class _Recorder:
+        name = "recorder"
+        library_name: str = ""
+        library: str = ""
+
+    system = _Recorder()
+    _maybe_set_library(system, {"repo": "psf/black", "commit": "abcdef1234"})
+    assert system.library_name == "psf/black"
+    # WHY: library combines repo + 7-char commit prefix — matches the
+    # ``{repo}@{commit[:7]}`` install identifier consumed by Neuledge.
+    assert system.library == "psf/black@abcdef1"
+
+
+def test_maybe_set_library_noop_on_system_without_fields() -> None:
+    """Pydocs-mcp doesn't declare ``library_name`` / ``library`` — the
+    runner helper must be a strict no-op (no ``setattr`` fallback that
+    would invent attributes on unrelated systems). Finding I5.
+    """
+    from benchmarks.eval.runner import _maybe_set_library
+
+    class _Bare:
+        name = "bare"
+
+    bare = _Bare()
+    _maybe_set_library(bare, {"repo": "psf/black", "commit": "abcdef1234"})
+    assert not hasattr(bare, "library_name")
+    assert not hasattr(bare, "library")
+
+
+def test_maybe_set_library_noop_when_metadata_missing_repo() -> None:
+    """If ``task.metadata`` lacks ``'repo'``, the helper must not touch
+    the system. Defensive against datasets that don't carry the field.
+    """
+    from benchmarks.eval.runner import _maybe_set_library
+
+    class _Recorder:
+        library_name: str = "initial"
+        library: str = "initial"
+
+    sys = _Recorder()
+    _maybe_set_library(sys, {})
+    assert sys.library_name == "initial"
+    assert sys.library == "initial"
+
+
 async def test_runner_smoke_returns_full_dataset_task_count(tmp_path: Path) -> None:
     """Pin the corrected ``tasks_ran`` counter on full-dataset runs.
 
