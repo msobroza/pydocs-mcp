@@ -49,3 +49,26 @@ def mean_with_bootstrap_ci(
     high_idx = n_resamples - 1 - low_idx
     return (mean, resample_means[low_idx], resample_means[high_idx])
 
+
+def percentile(values: Sequence[float], q: float) -> float:
+    """Linear-interpolation percentile, deterministic. Empty → 0.0.
+
+    ``q`` is in [0, 1]. Matches numpy.percentile's default ``linear``
+    interpolation method so external comparisons stay sane.
+
+    Used by ``runner.run_sweep`` to aggregate per-task latency observations
+    (``indexing_seconds`` / ``search_seconds``) into p50/p95/p99 triples.
+    The semantic disambiguation between ``(mean, ci_low, ci_high)`` quality
+    aggregates and ``(p50, p95, p99)`` latency aggregates is by metric-name
+    suffix convention: any name ending ``_seconds`` → percentile.
+    """
+    if not values:
+        return 0.0
+    s = sorted(values)
+    k = q * (len(s) - 1)
+    f = int(k)
+    if f >= len(s) - 1:
+        return s[-1]
+    frac = k - f
+    return s[f] + frac * (s[f + 1] - s[f])
+

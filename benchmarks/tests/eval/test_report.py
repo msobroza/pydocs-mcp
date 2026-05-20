@@ -117,3 +117,61 @@ def test_format_report_metric_column_present() -> None:
     # change in column ordering surfaces here, not in a flakier downstream
     # diff test.
     assert "Metric" in report
+
+
+def test_format_report_renders_latency_cells_as_percentile_triple() -> None:
+    """Latency metric rows render p50/p95/p99 in seconds; quality rows
+    keep the mean+CI percent format. The semantic disambiguator is the
+    ``_seconds`` suffix (spec §5.5).
+    """
+    results: dict[
+        tuple[str, str], dict[str, tuple[float, float, float]],
+    ] = {
+        ("pydocs-mcp", "baseline"): {
+            "recall@1": (0.6, 0.4, 0.8),
+            "recall@5": (1.0, 1.0, 1.0),
+            "recall@10": (1.0, 1.0, 1.0),
+            "mrr": (0.75, 0.6, 0.9),
+            "pass@1-needle": (0.6, 0.4, 0.8),
+            "indexing_seconds": (0.5, 1.2, 2.1),
+            "search_seconds": (0.01, 0.05, 0.1),
+        },
+    }
+    out = format_report(
+        sweep_results=results, dataset_name="repoqa-fixture", n_tasks=5,
+    )
+    # Quality row keeps percent + CI rendering.
+    assert "60.0% [40.0%, 80.0%]" in out
+    # Latency rows use the p50/p95/p99 triple in seconds.
+    assert "p50 0.50s | p95 1.20s | p99 2.10s" in out
+    assert "p50 0.01s | p95 0.05s | p99 0.10s" in out
+
+
+def test_format_report_includes_latency_rows_after_quality() -> None:
+    """Latency rows appear below the quality metrics in row order — readers
+    scanning top-down see the headline quality numbers first.
+    """
+    results: dict[
+        tuple[str, str], dict[str, tuple[float, float, float]],
+    ] = {
+        ("pydocs-mcp", "baseline"): {
+            "recall@1": (0.6, 0.4, 0.8),
+            "recall@5": (1.0, 1.0, 1.0),
+            "recall@10": (1.0, 1.0, 1.0),
+            "mrr": (0.75, 0.6, 0.9),
+            "pass@1-needle": (0.6, 0.4, 0.8),
+            "indexing_seconds": (0.5, 1.2, 2.1),
+            "search_seconds": (0.01, 0.05, 0.1),
+        },
+    }
+    out = format_report(
+        sweep_results=results, dataset_name="repoqa-fixture", n_tasks=5,
+    )
+    # WHY: pass@1-needle is the last quality metric in DEFAULT_METRIC_SPECS;
+    # indexing_seconds is the first latency key. The first must appear
+    # before the second so the row ordering follows quality-then-latency.
+    pos_quality_last = out.find("pass@1-needle")
+    pos_latency_first = out.find("indexing_seconds")
+    assert pos_quality_last >= 0
+    assert pos_latency_first >= 0
+    assert pos_quality_last < pos_latency_first
