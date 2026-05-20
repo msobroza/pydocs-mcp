@@ -54,11 +54,16 @@ async def test_empty_system_scores_zero(tmp_path: Path) -> None:
 
     assert tasks_ran == 5
     aggregates = results[("empty-integration-test", "baseline")]
-    # WHY: every metric must collapse to mean = 0.0. A non-zero result
-    # would mean something downstream is fabricating signal — a metric
-    # defaulting to a positive value, the aggregator filling in NaN as
-    # 1.0, or the runner sneaking a fallback retrieval into the pipeline.
+    # WHY: every quality metric must collapse to mean = 0.0. A non-zero
+    # result would mean something downstream is fabricating signal — a
+    # metric defaulting to a positive value, the aggregator filling in NaN
+    # as 1.0, or the runner sneaking a fallback retrieval into the pipeline.
+    # Latency observations (``*_seconds``) are deliberately non-zero —
+    # they reflect real wall-clock time and use a different aggregation
+    # shape (p50/p95/p99 vs mean/ci_low/ci_high). Skip them here.
     for metric_name, (mean, _ci_low, _ci_high) in aggregates.items():
+        if metric_name.endswith("_seconds"):
+            continue
         assert mean == 0.0, f"{metric_name} mean = {mean}, expected 0.0"
 
 
@@ -79,7 +84,12 @@ async def test_empty_system_ci_bounds_collapse_to_zero(tmp_path: Path) -> None:
     )
 
     aggregates = results[("empty-integration-test", "baseline")]
+    # WHY: latency observations use percentile aggregation and reflect real
+    # wall-clock time, so they're allowed to be non-zero. The bootstrap-CI
+    # collapse invariant is a property of the quality-metric reducer.
     for metric_name, (mean, ci_low, ci_high) in aggregates.items():
+        if metric_name.endswith("_seconds"):
+            continue
         assert mean == 0.0, f"{metric_name} mean = {mean}"
         assert ci_low == 0.0, f"{metric_name} ci_low = {ci_low}"
         assert ci_high == 0.0, f"{metric_name} ci_high = {ci_high}"

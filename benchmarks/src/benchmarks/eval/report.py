@@ -18,7 +18,11 @@ from __future__ import annotations
 # ``--metrics`` default and the report's row order share a single source
 # of truth — adding/removing a metric is a single-edit change in
 # ``runner.py``. Don't reorder without updating the diff tool too.
+# Latency rows (``LATENCY_KEYS``) render AFTER the quality metrics so a
+# reader scanning top-down sees quality first (the headline number) and
+# infrastructure cost second.
 from .runner import DEFAULT_METRIC_SPECS as _METRIC_ROW_ORDER
+from .runner import LATENCY_KEYS as _LATENCY_ROW_ORDER
 
 
 def format_report(
@@ -48,11 +52,15 @@ def format_report(
     sep_cells = ["---"] * len(header_cells)
 
     rows: list[list[str]] = [header_cells, sep_cells]
-    for metric_name in _METRIC_ROW_ORDER:
+    # WHY: quality metrics first (headline numbers), latency metrics below
+    # (infrastructure cost). The two row groups share the same column
+    # layout but use different cell renderers — _format_cell picks the
+    # renderer by metric-name suffix.
+    for metric_name in (*_METRIC_ROW_ORDER, *_LATENCY_ROW_ORDER):
         row = [metric_name]
         for key in columns:
             triple = sweep_results.get(key, {}).get(metric_name)
-            row.append(_format_cell(triple))
+            row.append(_format_cell(metric_name, triple))
         rows.append(row)
 
     table = "\n".join(_format_row(r) for r in rows)
@@ -60,12 +68,31 @@ def format_report(
     return f"{title}\n\n{table}\n"
 
 
-def _format_cell(triple: tuple[float, float, float] | None) -> str:
+def _is_latency_metric(name: str) -> bool:
+    """Routing predicate for the cell renderer (spec §5.5).
+
+    Latency observations carry the ``_seconds`` suffix; quality metrics
+    don't. This is the single disambiguator between the two triple
+    shapes — ``(mean, ci_low, ci_high)`` vs ``(p50, p95, p99)`` — both
+    of which share the same 3-tuple representation.
+    """
+    return name.endswith("_seconds")
+
+
+def _format_cell(
+    metric_name: str, triple: tuple[float, float, float] | None,
+) -> str:
     if triple is None:
         # WHY: missing metric for a column is rendered as ``—`` rather than
         # an empty cell — keeps the column count fixed so markdown
         # alignment doesn't drift on partial sweeps.
         return "—"
+    if _is_latency_metric(metric_name):
+        # WHY: latency rows render as p50/p95/p99 in seconds with 2dp —
+        # sub-second resolution is the operating regime; finer precision
+        # is misleading because the underlying clock noise is on this scale.
+        p50, p95, p99 = triple
+        return f"p50 {p50:.2f}s | p95 {p95:.2f}s | p99 {p99:.2f}s"
     mean, lo, hi = triple
     return f"{mean:.1%} [{lo:.1%}, {hi:.1%}]"
 
