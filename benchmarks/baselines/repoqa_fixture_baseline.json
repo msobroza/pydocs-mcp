@@ -1,0 +1,47 @@
+{
+  "dataset": "repoqa-fixture-python",
+  "system": "pydocs-mcp",
+  "config": "baseline",
+  "tasks_ran": 5,
+  "metrics": {
+    "recall@1": {
+      "mean": 0.6,
+      "ci_low": 0.2,
+      "ci_high": 1.0
+    },
+    "recall@5": {
+      "mean": 0.6,
+      "ci_low": 0.2,
+      "ci_high": 1.0
+    },
+    "recall@10": {
+      "mean": 0.6,
+      "ci_low": 0.2,
+      "ci_high": 1.0
+    },
+    "mrr": {
+      "mean": 0.6,
+      "ci_low": 0.2,
+      "ci_high": 1.0
+    },
+    "pass@1-needle": {
+      "mean": 0.6,
+      "ci_low": 0.2,
+      "ci_high": 1.0
+    },
+    "indexing_seconds": {
+      "p50": 0.01604149999911897,
+      "p95": 0.030487041990272697,
+      "p99": 0.032701441985554996
+    },
+    "search_seconds": {
+      "p50": 0.0008591250225435942,
+      "p95": 0.0010186088155023753,
+      "p99": 0.001040888975840062
+    }
+  },
+  "captured_at": "2026-05-20T01:14:14.814979+00:00",
+  "git_sha": "05f8dc256531243bcfcf33e73a7969ef1d92b9c9",
+  "source_jsonl": "benchmarks/results/jsonl/pydocs-mcp_baseline_repoqa_at_2024-06-23_20260520T010036Z.jsonl",
+  "label": "fixture-5-needles"
+}
