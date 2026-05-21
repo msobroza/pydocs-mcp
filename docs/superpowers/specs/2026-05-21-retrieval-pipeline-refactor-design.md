@@ -2,13 +2,25 @@
 
 **Status:** Spec, awaiting plan.
 
-**Driver:** PR #27 shipped a real-data RepoQA baseline (0% recall on 100 needles). A targeted 5-needle investigation revealed two failure modes: (1) `TokenBudgetStage` collapses ranked retrieval output into a single composite chunk, breaking `recall@k` by construction — even when upstream BM25 finds the gold, only one composite is returned; (2) description ↔ code vocabulary gap — RepoQA queries are structured English essays ("1. **Purpose**: To retrieve..."), not symbol names, so BM25 can't bridge to code identifiers.
+### Naming conventions used in this spec
 
-Before fixing either, the retrieval layer's two parallel hierarchies need to be unified, and individual stages need to be decomposed into single-responsibility steps so future B3 work (dense embeddings, Cohere reranking) can be composed cleanly. Today:
+To stay consistent across before/after states:
+
+- **Post-refactor names** (`RetrieverStep`, `RetrieverPipeline`, `RetrieverState`, `*Step` classes, `steps/` directory, `steps:` YAML key) are the canonical names used everywhere this spec describes the **target** state.
+- **Pre-refactor names** (`PipelineStage`, `Retriever`, `*Stage` classes, `stages/` directory, `stages:` YAML key) appear only when explicitly describing what's being removed or renamed (§3 "Before" layout, deletion lists, "renamed from X" provenance in tables, commit messages, the literal rejected YAML key in §4).
+- **`IngestionStage`** is the extraction-side Protocol at [extraction/pipeline/ingestion.py:75](python/pydocs_mcp/extraction/pipeline/ingestion.py:75) — left unchanged in this PR, mentioned only for context. Future symmetry-rename in §9.
+
+### Driver
+
+PR #27 shipped a real-data RepoQA baseline (0% recall on 100 needles). A targeted 5-needle investigation revealed two failure modes: (1) the composite-rendering step (becomes `TokenBudgetStep` here) collapses ranked retrieval output into a single composite chunk, breaking `recall@k` by construction — even when upstream BM25 finds the gold, only one composite is returned; (2) description ↔ code vocabulary gap — RepoQA queries are structured English essays ("1. **Purpose**: To retrieve..."), not symbol names, so BM25 can't bridge to code identifiers.
+
+Before fixing either, the retrieval layer's two parallel hierarchies need to be unified, and the monolithic BM25 chunk retriever needs to be decomposed into single-responsibility steps so future B3 work (dense embeddings, Cohere reranking) can be composed cleanly.
+
+Today, pre-refactor (these names go away in this PR):
 
 - `Retriever` Protocol with `async retrieve(query) → result`
 - `PipelineStage` Protocol with `async run(state) → state`
-- `*RetrievalStage` adapter classes wrapping retrievers as stages
+- `*RetrievalStage` adapter classes wrapping retrievers as `PipelineStage`s
 - `PipelineChunkRetriever` — a Retriever that internally runs a Pipeline (reverse-Inception)
 - `Bm25ChunkRetriever` does THREE things at once: fetches candidates from FTS5, scores by BM25, applies cutoff — none of which are individually addressable or swappable
 
