@@ -18,12 +18,17 @@ Module layout:
 - :mod:`.rrf` — :class:`RRFStep`
 - :mod:`.conditional` — :class:`ConditionalStep`
 - :mod:`.route` — :class:`RouteCase` + :class:`RouteStep`
-- :mod:`.sub_pipeline` — :class:`SubPipelineStep`
+- :mod:`.sub_pipeline` — ``sub_pipeline`` YAML decoder (no class — returns
+  a bare nested ``CodeRetrieverPipeline`` since pipelines satisfy the
+  ``PipelineStage`` Protocol via polymorphic ``run``)
 - :mod:`.token_budget` — :class:`TokenBudgetStep` + ``COMPOSITE_TITLE_SENTINEL``
 - :mod:`.top_k_filter` — :class:`TopKFilterStep`
 """
 from __future__ import annotations
 
+# Side-effect import: register the "sub_pipeline" YAML decoder so existing
+# YAML keeps loading. The module exports no public symbols (Task 6).
+from pydocs_mcp.retrieval.steps import sub_pipeline as _sub_pipeline  # noqa: F401
 from pydocs_mcp.retrieval.steps.base_stage import PipelineStage
 from pydocs_mcp.retrieval.steps.bm25_scorer import BM25ScorerStep
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
@@ -36,7 +41,6 @@ from pydocs_mcp.retrieval.steps.module_member_retrieval import ModuleMemberRetri
 from pydocs_mcp.retrieval.steps.parallel import ParallelStep
 from pydocs_mcp.retrieval.steps.route import RouteCase, RouteStep
 from pydocs_mcp.retrieval.steps.rrf import RRFStep
-from pydocs_mcp.retrieval.steps.sub_pipeline import SubPipelineStep
 from pydocs_mcp.retrieval.steps.token_budget import (
     COMPOSITE_TITLE_SENTINEL,
     TokenBudgetStep,
@@ -58,7 +62,6 @@ __all__ = (
     "RRFStep",
     "RouteCase",
     "RouteStep",
-    "SubPipelineStep",
     "TokenBudgetStep",
     "TopKFilterStep",
 )

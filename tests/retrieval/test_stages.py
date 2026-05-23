@@ -290,9 +290,12 @@ async def test_route_stage_no_match_no_default_is_noop():
 
 
 @pytest.mark.asyncio
-async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
+async def test_nested_pipeline_threads_state_through_its_stages():
+    """A nested ``CodeRetrieverPipeline`` used directly as a stage threads
+    the incoming state through its own stages (no reset). Pipeline IS a
+    Stage — no adapter class needed.
+    """
     from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
-    from pydocs_mcp.retrieval.steps import SubPipelineStep
 
     @dataclass(frozen=True, slots=True)
     class _Tag:
@@ -308,7 +311,7 @@ async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
         query=SearchQuery(terms="x"),
         result=ChunkList(items=(Chunk(text="pre"),)),  # incoming state is preserved
     )
-    out = await SubPipelineStep(pipeline=nested).run(state)
+    out = await nested.run(state)  # Pipeline used DIRECTLY as a stage
     texts = [c.text for c in out.result.items]
     assert texts == ["pre", "inner1", "inner2"]  # state was threaded, not reset
 

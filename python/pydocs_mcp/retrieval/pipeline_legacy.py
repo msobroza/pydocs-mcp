@@ -26,20 +26,34 @@ class PipelineState:
 
 
 # Stops a malicious / recursive YAML from blowing the Python stack when
-# ``SubPipelineStep`` chains nest deeply. 32 levels is already far more
-# than any legitimate pipeline the project ships.
+# nested-pipeline chains (``type: sub_pipeline`` decoder, Pipeline-as-Stage)
+# nest deeply. 32 levels is already far more than any legitimate pipeline
+# the project ships.
 _MAX_PIPELINE_DEPTH = 32
 
 
 @dataclass(frozen=True, slots=True)
 class CodeRetrieverPipeline:
-    """Linear async pipeline of PipelineStages; runs them in order."""
+    """Linear async pipeline of PipelineStages; runs them in order.
+
+    Doubles as a ``PipelineStage`` itself — calling ``run(state)`` threads
+    an incoming ``PipelineState`` through the stages, while ``run(query)``
+    creates a fresh state from the ``SearchQuery``. This polymorphism lets
+    nested pipelines compose directly under a ``RouteStep`` without an
+    adapter class.
+    """
 
     name: str
     stages: tuple["PipelineStage", ...]
 
-    async def run(self, query: SearchQuery) -> PipelineState:
-        state = PipelineState(query=query)
+    async def run(self, query_or_state: "SearchQuery | PipelineState") -> PipelineState:
+        # Polymorphic entry: legacy callers pass a SearchQuery; nested use
+        # (Pipeline-as-Stage) passes an incoming PipelineState that must be
+        # threaded — not reset — through the inner stages.
+        if isinstance(query_or_state, PipelineState):
+            state = query_or_state
+        else:
+            state = PipelineState(query=query_or_state)
         for stage in self.stages:
             state = await stage.run(state)
         return state

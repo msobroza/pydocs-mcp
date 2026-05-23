@@ -25,7 +25,7 @@ from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401
 from pydocs_mcp.retrieval import retrievers as _retrievers  # noqa: F401
 from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
 from pydocs_mcp.retrieval.serialization import BuildContext
-from pydocs_mcp.retrieval.steps import RouteCase, RouteStep, SubPipelineStep
+from pydocs_mcp.retrieval.steps import RouteCase, RouteStep
 
 # ── Tunable user-config path override ───────────────────────────────────
 #
@@ -467,25 +467,25 @@ def _build_handler_pipeline(
     user_config_path: Path | None = None,
 ) -> CodeRetrieverPipeline:
     routes: list[RouteCase] = []
-    default = None
+    default: CodeRetrieverPipeline | None = None
     for entry in handler_config.routes:
         resolved = _resolve_pipeline_path(entry.pipeline_path, user_config_path)
+        # WHY: a CodeRetrieverPipeline IS a PipelineStage (polymorphic ``run``),
+        # so we slot it directly into ``RouteCase.stage`` — no adapter needed.
         sub_pipeline = _load_preset_yaml(resolved, context)
-        stage = SubPipelineStep(pipeline=sub_pipeline)
         # PipelineRouteEntry guarantees exactly-one-of, so we needn't re-validate
         if entry.default:
             if default is not None:
                 raise ValueError(f"{handler_name}: multiple default routes declared")
-            default = stage
+            default = sub_pipeline
         else:
             # predicate must be set — guaranteed by PipelineRouteEntry validator
-            routes.append(RouteCase(predicate_name=entry.predicate, stage=stage))
+            routes.append(RouteCase(predicate_name=entry.predicate, stage=sub_pipeline))
     if not routes and default is not None:
         # Single-default route collapses to the inner pipeline directly so
         # callers inspecting pipeline.stages see the preset's stage list,
         # not a RouteStep wrapper (preserves sub-PR #2's golden parity).
-        inner = default.pipeline
-        return CodeRetrieverPipeline(name=inner.name, stages=inner.stages)
+        return CodeRetrieverPipeline(name=default.name, stages=default.stages)
     return CodeRetrieverPipeline(
         name=f"{handler_name}_from_config",
         stages=(RouteStep(routes=tuple(routes), default=default),),
