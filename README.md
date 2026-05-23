@@ -29,6 +29,88 @@ That's it for the 30-second path. Read on for the three ways to actually integra
 
 ---
 
+## CLI `search` — every option with examples
+
+`pydocs-mcp search` mirrors the MCP `search` tool one-to-one — same pipelines, same scoring, same rendering. The flags below are the only knobs on the client side; everything else (ranking weights, chunk strategies, formatters) is tuned via YAML at server startup.
+
+```bash
+# Free-text query across docs + APIs (kind="any" is the default).
+pydocs-mcp search "batch inference"
+
+# Multi-word queries — quote them so the shell passes one string.
+pydocs-mcp search "async retry with exponential backoff"
+
+# --kind docs       → markdown / docstring chunks only
+# --kind api        → ModuleMember rows (functions, classes, signatures)
+# --kind any        → both, merged + scored together (default)
+pydocs-mcp search "predict" --kind api
+pydocs-mcp search "rate limiter" --kind docs
+pydocs-mcp search "router include" --kind any --limit 20
+
+# Restrict to one package. PyPI names are normalized to the DB form
+# (e.g., "Flask-Login" → "flask_login") so either spelling works.
+pydocs-mcp search "predict" --package vllm
+pydocs-mcp search "auth" -p Flask-Login          # same as -p flask_login
+
+# Search only YOUR project source (use the __project__ sentinel).
+pydocs-mcp search "handle request" -p __project__
+
+# Restrict by source SCOPE — your project, your deps, or both.
+# --scope project   → indexed under __project__
+# --scope deps      → indexed dependency packages
+# --scope all       → default
+pydocs-mcp search "retry" --scope project
+pydocs-mcp search "retry" --scope deps
+
+# Cap result count (default 10). Top-K capping is also configurable
+# server-side via YAML; --limit narrows the client-visible window.
+pydocs-mcp search "logging" --limit 5
+
+# Point at a different project (default is the cwd). Indexes that
+# project's deps if it isn't already cached.
+pydocs-mcp search "celery beat" --project-dir /path/to/other/project
+
+# Skip the Rust acceleration path (forces the pure-Python fallback —
+# useful for debugging the substitution boundary).
+pydocs-mcp search "tokenizer" --no-rust
+
+# Combine flags freely.
+pydocs-mcp search "embed" --kind api -p sentence_transformers --scope deps --limit 25
+```
+
+The `lookup` command has its own flag set (`--show {default, tree, callers, callees, inherits}`, listed in the [CLI reference](#cli-reference) section). `search` finds candidates by relevance; `lookup` jumps to a specific known name.
+
+---
+
+## How does this compare to Context7 and Neuledge Context?
+
+Three open-source projects in roughly the same MCP-doc-retrieval space. They optimize for different things — pick by what your workflow needs.
+
+| Aspect | **pydocs-mcp** | **Context7** ([upstash/context7](https://github.com/upstash/context7)) | **Neuledge Context** ([neuledge/context](https://github.com/neuledge/context)) |
+|---|---|---|---|
+| Deployment | Local stdio MCP server | Hosted MCP at `mcp.context7.com` (or CLI + skills via `ctx7`) | Local stdio MCP server (`context serve`) |
+| Doc source | **Your installed Python deps** + your project source, indexed in place | Curated community library docs hosted by Upstash (parsing + crawling engines are closed-source) | Community-driven package registry (~100+ libraries) downloaded then queried locally |
+| Version match | Whatever you have in `site-packages` — automatic | Library + version selectable in the prompt (`use library /supabase/supabase`) | Latest from the registry's package for the library |
+| Languages | Python only | Multi-language (any library Upstash has crawled) | Multi-language (registry-driven; ~100+ libraries today) |
+| Retrieval method | BM25 over SQLite FTS5 (Porter + unicode61 tokenizer) | Not publicly documented | Not publicly documented |
+| Code structure queries | **Reference graph** — `lookup(target, show="callers"\|"callees"\|"inherits")` via captured AST edges | None (doc retrieval only) | None (doc retrieval only) |
+| Project source indexing | Indexes your own code under the `__project__` package — `search ... -p __project__` works the same as searching deps | No (external library docs only) | No (registry packages only) |
+| MCP tools exposed | `search`, `lookup` (2 tools, surface intentionally pinned) | `resolve-library-id`, `query-docs` (2 tools) | Doc-retrieval tools (CLI: `context serve`) |
+| Privacy | **Fully offline** — zero network calls after install | Queries hit Upstash; free tier + paid for higher rate limits; OAuth + API key | Local once packages are downloaded from the registry |
+| Customization | YAML pipelines (chunkers, scorers, filters, formatters); single-source-of-truth defaults via `AppConfig` | API key + HTTP headers | Registry-package mechanics; see project docs |
+| Cost | Free (OSS) | Free tier + paid | Free (OSS) |
+| License | MIT | MIT | Apache-2.0 |
+
+**Pick pydocs-mcp when** you want offline, version-matched-to-your-install retrieval, you work primarily in Python, and you care about navigating code structure (callers / callees / inheritance), not just reading docs.
+
+**Pick Context7 when** you want a hosted service that gives an LLM up-to-date docs for any popular library across many languages without you setting up an indexer — and you're fine sending queries over the network.
+
+**Pick Neuledge Context when** you want local-first multi-language coverage from a community registry and don't need version-pinning to your installed code.
+
+The three are not exclusive — a coding agent can mount all three MCP servers at once and route by intent (pydocs-mcp for "what calls this method?", Context7 / Neuledge for "show me Next.js 15 middleware patterns").
+
+---
+
 ## Usage patterns
 
 pydocs-mcp is designed to work three ways. Pick the one that matches your setup.
