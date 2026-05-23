@@ -16,13 +16,18 @@ from pydocs_mcp.models import ChunkList, ModuleMemberList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
+# WHY: single source of truth for the top-K cutoff. Referenced from the
+# dataclass field default + to_dict (omit-when-default) + from_dict
+# (fallback when YAML omits the key).
+_DEFAULT_K = 50
+
 
 @stage_registry.register("top_k_filter")
 @dataclass(frozen=True, slots=True)
 class TopKFilterStep(RetrieverStep):
     """Top-K cutoff step. Works uniformly for chunks and members."""
 
-    k: int = field(default=50, kw_only=True)
+    k: int = field(default=_DEFAULT_K, kw_only=True)
     name: str = field(default="top_k_filter", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -51,13 +56,13 @@ class TopKFilterStep(RetrieverStep):
 
     def to_dict(self) -> dict:
         d: dict = {"type": "top_k_filter"}
-        if self.k != 50:
+        if self.k != _DEFAULT_K:
             d["k"] = self.k
         return d
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "TopKFilterStep":
-        return cls(k=data.get("k", 50))
+        return cls(k=data.get("k", _DEFAULT_K))
 
 
 __all__ = ("TopKFilterStep",)

@@ -85,6 +85,13 @@ _FETCH_SQL_TEMPLATE = (
     "ORDER BY m.rank LIMIT ?"
 )
 
+# WHY: single source of truth for the fetch-side defaults. Referenced from
+# the dataclass field defaults + to_dict (omit-when-default) + from_dict
+# (fallback when YAML omits the key). Bumping a default touches one line,
+# not three.
+_DEFAULT_LIMIT = 50
+_DEFAULT_RETRIEVER_NAME = "bm25_chunk"
+
 
 @stage_registry.register("chunk_fetcher")
 @dataclass(frozen=True, slots=True)
@@ -101,8 +108,8 @@ class ChunkFetcherStep(RetrieverStep):
 
     provider: ConnectionProvider
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
-    limit: int = field(default=50, kw_only=True)
-    retriever_name: str = field(default="bm25_chunk", kw_only=True)
+    limit: int = field(default=_DEFAULT_LIMIT, kw_only=True)
+    retriever_name: str = field(default=_DEFAULT_RETRIEVER_NAME, kw_only=True)
     name: str = field(default="chunk_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -192,15 +199,15 @@ class ChunkFetcherStep(RetrieverStep):
         return cls(
             provider=context.connection_provider,
             allowed_fields=allowed,
-            limit=data.get("limit", 50),
-            retriever_name=data.get("retriever_name", "bm25_chunk"),
+            limit=data.get("limit", _DEFAULT_LIMIT),
+            retriever_name=data.get("retriever_name", _DEFAULT_RETRIEVER_NAME),
         )
 
     def to_dict(self) -> dict:
         d: dict = {"type": "chunk_fetcher"}
-        if self.limit != 50:
+        if self.limit != _DEFAULT_LIMIT:
             d["limit"] = self.limit
-        if self.retriever_name != "bm25_chunk":
+        if self.retriever_name != _DEFAULT_RETRIEVER_NAME:
             d["retriever_name"] = self.retriever_name
         return d
 

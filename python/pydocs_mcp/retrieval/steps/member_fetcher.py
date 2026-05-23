@@ -60,6 +60,12 @@ _FETCH_SQL_TEMPLATE = (
     "LIMIT ?"
 )
 
+# WHY: single source of truth for the member-fetch defaults. Referenced
+# from the dataclass field defaults + to_dict (omit-when-default) +
+# from_dict (fallback when YAML omits the key).
+_DEFAULT_LIMIT = 50
+_DEFAULT_RETRIEVER_NAME = "like_member"
+
 
 @stage_registry.register("member_fetcher")
 @dataclass(frozen=True, slots=True)
@@ -75,8 +81,8 @@ class MemberFetcherStep(RetrieverStep):
 
     provider: ConnectionProvider
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
-    limit: int = field(default=50, kw_only=True)
-    retriever_name: str = field(default="like_member", kw_only=True)
+    limit: int = field(default=_DEFAULT_LIMIT, kw_only=True)
+    retriever_name: str = field(default=_DEFAULT_RETRIEVER_NAME, kw_only=True)
     name: str = field(default="member_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -168,15 +174,15 @@ class MemberFetcherStep(RetrieverStep):
         return cls(
             provider=context.connection_provider,
             allowed_fields=allowed,
-            limit=data.get("limit", 50),
-            retriever_name=data.get("retriever_name", "like_member"),
+            limit=data.get("limit", _DEFAULT_LIMIT),
+            retriever_name=data.get("retriever_name", _DEFAULT_RETRIEVER_NAME),
         )
 
     def to_dict(self) -> dict:
         d: dict = {"type": "member_fetcher"}
-        if self.limit != 50:
+        if self.limit != _DEFAULT_LIMIT:
             d["limit"] = self.limit
-        if self.retriever_name != "like_member":
+        if self.retriever_name != _DEFAULT_RETRIEVER_NAME:
             d["retriever_name"] = self.retriever_name
         return d
 
