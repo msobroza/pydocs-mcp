@@ -180,7 +180,7 @@ four-question pattern. Planned additions:
 
 | Benchmark | What it would add | Status |
 |---|---|---|
-| **SWE-bench Verified (retrieval-only slice)** | Multi-file resolution from a bug report — exercises the call-graph / reference-graph paths the post-#5c trilogy added. | One-file dataset plugin; not yet implemented. |
+| **SWE-bench Verified (retrieval-only slice)** | Given a real GitHub issue from a popular Python project, retrieve the set of files a developer needs to read to fix it. Scored against the human-verified patch set (which files actually changed). Stresses cross-file retrieval: a bug fix typically spans the changed file plus its callers, tests, and helpers — the system has to surface all of them from the issue text alone, not just one needle. Jimenez et al., arXiv:2310.06770 (2023); Verified subset (500 issues) curated by OpenAI (2024). | One-file dataset plugin; not yet implemented. |
 | **DocPrompting CoNaLa-Docs** | Natural-language intent → Python library doc retrieval. Tests the exact "look up the right API doc from an English question" loop that AI assistants hit. Zhou et al., arXiv:2207.05987 (2023). | Plugin scoped, deferred. |
 | **CodeRAG-Bench (DS-1000 + ODEX)** | Library-docs retrieval evaluated under the downstream code-generation task. DS-1000 covers NumPy/Pandas/SciPy/Matplotlib/scikit-learn (data-science Python); ODEX is execution-driven from StackOverflow. Wang et al., arXiv:2406.14497 (2024). | Roadmap. |
 
