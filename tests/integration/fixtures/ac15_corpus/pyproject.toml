@@ -1,0 +1,6 @@
+[project]
+name = "ac15_corpus"
+version = "0.0.1"
+description = "Curated corpus for the AC #15 resolution-rate floor test."
+requires-python = ">=3.11"
+dependencies = []

@@ -1,47 +1,37 @@
-"""AC #15: self-index CALLS resolution rate floor.
+"""AC #15: corpus-level CALLS resolution rate floor.
 
-Load-bearing test that proves the reference resolver actually works on
-real code: indexes THIS repo's own source (project + installed deps)
+Indexes a CURATED fixture corpus at tests/integration/fixtures/ac15_corpus/
 through the full extraction → resolution → storage pipeline, then asks
-SQLite what fraction of captured ``kind='calls'`` edges got resolved to
-a real ``to_node_id`` (i.e. linked into the cross-package qname
-universe).
+SQLite what fraction of captured ``kind='calls'`` edges got resolved to a
+real ``to_node_id`` (i.e. linked into the cross-package qname universe).
+
+The corpus is deterministic — same files, same imports, same call graph
+every run. The floor catches REGRESSIONS in the resolver, not venv-shape
+drift. (Earlier versions of this test scanned the live worktree, which
+made the result depend on which deps were pip-installed: CI venvs gave
+one number, local dev venvs with benchmark deps like pandas/numpy gave
+another. Same code, different measurements — not a useful regression
+detector.)
 
 Spec §16 AC #15 — target: CALLS resolution rate ≥ 35%.
 
-**Current measured rate (post-self.X.Y type inference): 49.4%**
-(10934/22112 on this codebase). The trajectory:
+The corpus exercises every resolver rule:
 
-- 11.6% — pre-#5c baseline (before project-qname-prefix fix).
-- 16.4% — post-#5c (intra-project edges resolve via ``__project__``
-  qname composition).
-- 41.7% — post-stdlib-indexing (``IndexingService`` merges pre-baked
-  stdlib + builtins qnames into the resolver universe, so
-  ``isinstance``, ``len``, ``asyncio.to_thread``, ``warnings.warn``,
-  ``hashlib.sha256`` etc. link to real ``to_node_id`` values).
-- 49.4% — post-self.X.Y inference (this PR; ``ReferenceCaptureStage``
-  records ``{class_qname: {attr: type}}`` from class-body annotations
-  and ``__init__`` patterns B/C/D/E, and the resolver's Rule 0 rewrites
-  ``self.X.Y`` to ``<type>.Y``. A self-as-class fallback resolves
-  ``self.method()`` to ``<enclosing_class>.method`` when that qname
-  exists in the universe — the load-bearing rule for the lift).
-
-The remaining unresolved ~51% is mostly:
-
-- third-party dep calls whose qname doesn't suffix-uniquely match any
-  indexed package (low-confidence rejections — intentional).
-- ``self.X.Y`` patterns where ``X`` is typed by a generic / Subscript
-  annotation (``Callable[[], UnitOfWork]``, ``tuple[Chunk, ...]``) that
-  ``canonical_dotted`` can't reduce to a single qname.
-- Cross-instance method calls through complex expressions (``foo().X``).
-
-This test asserts a stable floor below the current measured rate so
-- a regression that drops capture or resolver hit rate gets caught;
-- a future PR that lands further inference and pushes higher is visible
-  (and that PR should bump the floor).
-
-The 50-edge minimum is a capture-stage sanity check — well below the
-~22k edges this codebase actually produces.
+- Rule A / B (exact qname match): cross-module function calls
+  (``compute_sum``, ``compute_product``, ``normalize`` from
+  ``types_and_helpers``).
+- Rule 0 (``self.X.Y`` rewrite): ``Indexer.index_pair`` calls
+  ``self.pipeline.process`` — resolver records ``self.pipeline: Pipeline``
+  from ``__init__`` and rewrites the call to ``Pipeline.process``.
+- Rule 5 (self-method short-circuit): ``Pipeline.process`` calls
+  ``self.scale`` — resolved against the enclosing class qname.
+- INHERITS edges: ``Base`` → ``Middle`` → ``Leaf`` chain in
+  ``inheritance.py``.
+- Stdlib bundle lookups: ``hashlib.sha256``, ``json.loads``,
+  ``asyncio.to_thread`` — resolved against the pre-baked stdlib qname
+  universe merged in by ``IndexingService``.
+- Cross-module composition: ``orchestrator.py`` ties everything together
+  so the resolver has to walk through multiple packages in one project.
 """
 from __future__ import annotations
 
@@ -61,42 +51,37 @@ from pydocs_mcp.storage.factories import (
     build_sqlite_uow_factory,
 )
 
-# AC #15 spec target. Documented as the long-run goal; the test asserts
-# the empirical floor below because the codebase + resolver currently
-# sit well below this. A separate PR closes the gap (see module
-# docstring for the three available levers).
+# Curated, deterministic corpus that drives the floor. ~8 modules, hand-picked
+# to exercise every resolver rule (see module docstring). Lives in-tree under
+# tests/integration/fixtures/ so it's frozen across machines + venvs.
+_FIXTURE_CORPUS = Path(__file__).parent / "fixtures" / "ac15_corpus"
+
+# AC #15 spec target. Documented as the long-run goal; the floor below
+# tracks the corpus-specific measurement so a real resolver regression
+# fails the test.
 SPEC_TARGET_AC15 = 0.35
 
-# Empirical floor on this codebase as of the self.X.Y type-inference PR.
-# Measured rate: 49.4% (10934/22112). Floor set ~2pp below the measured rate
-# so unrelated ripples don't break the test, but a real resolver regression
-# does.
+# Empirical floor measured against the fixture corpus at
+# tests/integration/fixtures/ac15_corpus/. Measured rate: 70.8% (17/24)
+# as of the self.X.Y type-inference PR. Floor set ~5pp below to absorb
+# small resolver ripples without masking real regressions.
 #
-# Rate trajectory:
-#   - 11.6% — pre-#5c baseline (before project-qname-prefix fix)
-#   - 16.4% — post-#5c (project-qname-prefix fix landed; intra-project resolved)
-#   - 41.7% — post-stdlib-idx (stdlib + builtins targets resolve)
-#   - 49.4% — post-self.X.Y inference (this PR; class_attribute_types +
-#             resolver Rule 0 + self-as-class fallback resolve sibling-
-#             method and typed-attribute calls).
-#
-# Spec AC #15 target is 35% and remains MET (49.4% > 35%). The remaining
-# unresolved ~51% is mostly third-party dep calls without suffix-unique
-# matches and Subscript-typed receivers we can't reduce to one qname.
-EMPIRICAL_FLOOR: float = 0.47
+# The corpus is hand-picked to exercise every rule (see module docstring),
+# so a rate that drops below 65% almost certainly means a resolver
+# behavior change — investigate before lowering this number.
+EMPIRICAL_FLOOR: float = 0.65
 
 
 async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
-    """Self-index this repo → assert CALLS resolution rate above stable floor.
+    """Index fixture corpus → assert CALLS resolution rate above stable floor.
 
     Prints the actual rate. Future PRs that improve resolution should
     raise ``EMPIRICAL_FLOOR``; a PR that clears 35% closes AC #15 and
     should drop the SPEC vs FLOOR distinction here entirely.
     """
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    assert (repo_root / "python" / "pydocs_mcp").is_dir(), (
-        f"expected repo_root={repo_root} to contain python/pydocs_mcp/ — "
-        "the test's parent.parent.parent walk is wrong for this layout"
+    repo_root = _FIXTURE_CORPUS
+    assert (repo_root / "ac15_pkg" / "__init__.py").is_file(), (
+        f"expected fixture corpus at {repo_root} — files appear to be missing"
     )
 
     db_path = tmp_path / "self_index.db"
@@ -147,17 +132,18 @@ async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
         f"empirical floor {EMPIRICAL_FLOOR:.0%}",
     )
 
-    # Capture sanity: capture stage emitting <50 edges across the whole
-    # repo means it's structurally broken (regression in chunker
-    # ref_collector wiring, etc.). Healthy capture sits in the tens of
-    # thousands.
-    assert total >= 50, (
+    # Capture sanity: the fixture corpus deterministically emits ~24 CALLS
+    # edges. A drop below 20 means the capture stage itself broke
+    # (regression in chunker ref_collector wiring, etc.) rather than just
+    # the resolver hit rate.
+    assert total >= 20, (
         f"too few CALLS captured ({total}) — the capture stage itself "
         "is probably broken, not just resolution"
     )
 
-    # Stable floor — see module docstring for why this is below the
-    # spec's 35% target.
+    # Stable floor measured against the curated corpus. Floor is well
+    # above the spec's 35% target; tracking the higher number locks in
+    # the resolver lift PRs that already landed.
     assert rate >= EMPIRICAL_FLOOR, (
         f"CALLS resolution rate {rate:.1%} ({resolved}/{total}) "
         f"is below the empirical floor {EMPIRICAL_FLOOR:.0%}. This "
@@ -167,8 +153,9 @@ async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
 
     # Upper-bound sanity: if the rate suddenly jumps over 95%, the
     # resolver is probably matching too aggressively (false positives).
-    # The natural ceiling on this codebase is ~30% (see module docstring
-    # for why); a near-perfect rate is a bug, not a feature.
+    # The corpus has a small handful of unresolvable patterns by design
+    # (e.g. ``Path(path).read_text`` chained off a constructor); a
+    # near-perfect rate is a bug, not a feature.
     assert rate < 0.95, (
         f"CALLS resolution rate {rate:.1%} unexpectedly high — "
         "the resolver is likely matching false positives. Inspect "
