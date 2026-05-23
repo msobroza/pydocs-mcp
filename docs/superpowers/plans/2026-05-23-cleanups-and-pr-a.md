@@ -446,27 +446,37 @@ This task contributes no commit to `feature/cleanups-and-pr-a` (operation is on 
 
 ## Task 4: PreFilterStep extraction
 
+**Plan-eng-review decisions (locked):**
+- **1A** Use a typed `PreFilterResult` dataclass under a single scratch key `state.scratch["pre_filter"]`. NOT four stringly-typed keys.
+- **1B** Fetchers REQUIRE PreFilterStep upstream when `state.query.pre_filter` is set. No backward-compat fallback. Raise clear error if scratch missing. All shipped YAML pipelines include `pre_filter` as the first step.
+- **1C+3A** Add every gap test explicitly listed below.
+
 **Files:**
-- Create: `python/pydocs_mcp/retrieval/steps/pre_filter.py`
-- Modify: `python/pydocs_mcp/retrieval/steps/__init__.py` (export new step)
-- Modify: `python/pydocs_mcp/retrieval/steps/chunk_fetcher.py` (read from `state.scratch`)
+- Create: `python/pydocs_mcp/retrieval/steps/pre_filter.py` (PreFilterStep + PreFilterResult)
+- Modify: `python/pydocs_mcp/retrieval/steps/__init__.py` (export new step + result)
+- Modify: `python/pydocs_mcp/retrieval/steps/chunk_fetcher.py` (READ ONLY from `state.scratch["pre_filter"]`; raise if absent + query has filter)
 - Modify: `python/pydocs_mcp/retrieval/steps/member_fetcher.py` (same)
 - Modify: `python/pydocs_mcp/pipelines/chunk_search.yaml` (insert `pre_filter` step)
 - Modify: `python/pydocs_mcp/pipelines/member_search.yaml` (same)
-- Create: `tests/retrieval/steps/test_pre_filter.py`
+- Modify: `python/pydocs_mcp/pipelines/chunk_search_ranked.yaml` (also include `pre_filter` step — Task 5 detail, but mentioned here)
+- Create: `tests/retrieval/steps/test_pre_filter.py` (8 tests)
+- Modify: `tests/retrieval/steps/test_chunk_fetcher.py` (add scratch-read + missing-raises tests)
+- Modify: `tests/retrieval/steps/test_member_fetcher.py` (same)
 
-### Step 1: Write failing test for `PreFilterStep`
+### Step 1: Write failing tests for `PreFilterStep` (8 tests total)
 
 Create `tests/retrieval/steps/test_pre_filter.py`:
 ```python
-"""PreFilterStep tests — parse + validate + scope-split + scratch writes."""
+"""PreFilterStep tests — parse + validate + scope-split + typed result."""
 from __future__ import annotations
+
+from dataclasses import is_dataclass
 
 import pytest
 
 from pydocs_mcp.models import SearchQuery
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.steps.pre_filter import PreFilterStep
+from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult, PreFilterStep
 
 
 def _state(pre_filter: str | None = None, pre_filter_format: str = "multifield") -> RetrieverState:
@@ -477,63 +487,132 @@ def _state(pre_filter: str | None = None, pre_filter_format: str = "multifield")
     return RetrieverState(query=query)
 
 
-@pytest.mark.asyncio
-async def test_pre_filter_step_is_a_retriever_step() -> None:
-    step = PreFilterStep(
-        name="pre_filter",
-        allowed_fields=frozenset({"package", "module"}),
+def _step_chunk() -> PreFilterStep:
+    return PreFilterStep(
+        allowed_fields=frozenset({"package", "module", "scope"}),
         schema_name="chunk",
         target_field="chunk",
     )
-    assert isinstance(step, RetrieverStep)
+
+
+def _step_member() -> PreFilterStep:
+    return PreFilterStep(
+        allowed_fields=frozenset({"package", "module", "scope"}),
+        schema_name="member",
+        target_field="member",
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_filter_step_is_a_retriever_step() -> None:
+    assert isinstance(_step_chunk(), RetrieverStep)
 
 
 @pytest.mark.asyncio
 async def test_pre_filter_noop_when_pre_filter_is_none() -> None:
-    """No pre_filter → no scratch keys written."""
-    step = PreFilterStep(
-        name="pre_filter",
-        allowed_fields=frozenset({"package"}),
-        schema_name="chunk",
-        target_field="chunk",
-    )
-    out = await step.run(_state(pre_filter=None))
-    assert "pre_filter.tree" not in out.scratch
-    assert "pre_filter.scope" not in out.scratch
-    assert "pre_filter.sql" not in out.scratch
+    """No pre_filter → no scratch key written."""
+    out = await _step_chunk().run(_state(pre_filter=None))
+    assert "pre_filter" not in out.scratch
 
 
 @pytest.mark.asyncio
-async def test_pre_filter_writes_scratch_when_filter_present() -> None:
-    """A valid pre_filter → tree + sql + params land in scratch."""
-    step = PreFilterStep(
-        name="pre_filter",
-        allowed_fields=frozenset({"package", "module"}),
-        schema_name="chunk",
-        target_field="chunk",
-    )
-    out = await step.run(_state(pre_filter="package:demo"))
-    assert "pre_filter.tree" in out.scratch
-    assert "pre_filter.sql" in out.scratch
-    assert isinstance(out.scratch["pre_filter.sql"], str)
-    assert out.scratch["pre_filter.sql"]  # non-empty
+async def test_pre_filter_writes_typed_result_when_filter_present() -> None:
+    """A valid pre_filter → PreFilterResult dataclass under state.scratch['pre_filter']."""
+    out = await _step_chunk().run(_state(pre_filter="package:demo"))
+    assert "pre_filter" in out.scratch
+    result = out.scratch["pre_filter"]
+    assert isinstance(result, PreFilterResult)
+    assert is_dataclass(result)
+    assert result.sql  # non-empty SQL fragment
+    assert result.tree is not None
 
 
 @pytest.mark.asyncio
-async def test_pre_filter_round_trips_via_to_dict_from_dict() -> None:
-    from pydocs_mcp.retrieval.serialization import BuildContext
-    step = PreFilterStep(
-        name="pre_filter",
-        allowed_fields=frozenset({"package"}),
-        schema_name="chunk",
-        target_field="chunk",
-    )
-    d = step.to_dict()
+async def test_pre_filter_invalid_format_raises() -> None:
+    """Filter format that doesn't parse → propagates the exception."""
+    state = _state(pre_filter="!!!invalid!!!", pre_filter_format="multifield")
+    with pytest.raises(Exception):  # Specific FilterParseError or ValueError
+        await _step_chunk().run(state)
+
+
+@pytest.mark.asyncio
+async def test_pre_filter_scope_split_into_typed_field() -> None:
+    """A pre_filter with `scope:project` field → result.scope is a frozenset."""
+    out = await _step_chunk().run(_state(pre_filter="scope:project"))
+    result = out.scratch["pre_filter"]
+    assert result.scope is not None
+    assert isinstance(result.scope, frozenset)
+
+
+@pytest.mark.asyncio
+async def test_pre_filter_member_target_uses_member_columns() -> None:
+    """target_field='member' → SQL adapter uses _MEMBER_COLUMNS not _CHUNK_COLUMNS."""
+    out = await _step_member().run(_state(pre_filter="package:demo"))
+    result = out.scratch["pre_filter"]
+    assert result.sql  # non-empty
+    # member SQL has no 'c.' prefix; chunk SQL does (verified by adapter init)
+
+
+def test_pre_filter_to_dict_shape() -> None:
+    """to_dict emits type + schema_name + target_field."""
+    d = _step_chunk().to_dict()
     assert d["type"] == "pre_filter"
-    # Roundtrip — would need a real BuildContext, so check shape only.
-    assert "schema_name" in d
-    assert "target_field" in d
+    assert d["schema_name"] == "chunk"
+    assert d["target_field"] == "chunk"
+
+
+def test_pre_filter_round_trip_via_from_dict() -> None:
+    """from_dict reconstructs an equivalent step given a BuildContext."""
+    from pydocs_mcp.retrieval.serialization import BuildContext
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    config = AppConfig.load()
+    context = BuildContext(app_config=config)  # other fields default; only app_config used here
+    original = _step_chunk()
+    rebuilt = PreFilterStep.from_dict(original.to_dict(), context)
+    assert rebuilt.schema_name == original.schema_name
+    assert rebuilt.target_field == original.target_field
+    # allowed_fields is rebuilt from config.metadata_schemas; check it's non-empty
+    assert rebuilt.allowed_fields
 ```
+
+Also add to `tests/retrieval/steps/test_chunk_fetcher.py`:
+```python
+@pytest.mark.asyncio
+async def test_chunk_fetcher_reads_pre_filter_from_scratch(populated_db, monkeypatch) -> None:
+    """When PreFilterStep ran upstream and wrote PreFilterResult to
+    state.scratch['pre_filter'], the fetcher consumes it directly without
+    re-parsing state.query.pre_filter."""
+    from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
+    provider = PerCallConnectionProvider(cache_path=populated_db)
+    step = ChunkFetcherStep(provider=provider)
+    state = RetrieverState(
+        query=SearchQuery(terms="add", max_results=10, pre_filter="package:demo"),
+    )
+    state.scratch["pre_filter"] = PreFilterResult(
+        tree=None, scope=None, sql="c.package = ?", params=["demo"],
+    )
+    out = await step.run(state)
+    assert out.candidates is not None
+    # The fetcher used the pre-built SQL, didn't re-parse query.pre_filter.
+
+
+@pytest.mark.asyncio
+async def test_chunk_fetcher_raises_if_pre_filter_set_but_scratch_missing(populated_db) -> None:
+    """If state.query.pre_filter is set but PreFilterStep did NOT run
+    upstream (scratch lacks 'pre_filter'), the fetcher raises a clear
+    error pointing at the missing pipeline step."""
+    provider = PerCallConnectionProvider(cache_path=populated_db)
+    step = ChunkFetcherStep(provider=provider)
+    state = RetrieverState(
+        query=SearchQuery(terms="add", max_results=10, pre_filter="package:demo"),
+    )
+    # No state.scratch['pre_filter'] — PreFilterStep didn't run.
+    with pytest.raises(RuntimeError, match="pipeline must include pre_filter"):
+        await step.run(state)
+```
+
+Same two tests added to `tests/retrieval/steps/test_member_fetcher.py` (s/Chunk/Member/, s/c\.package/package/).
 
 ### Step 2: Run tests to verify FAIL
 ```bash
@@ -545,41 +624,55 @@ Expected: `ImportError: cannot import name 'PreFilterStep'`.
 
 Create `python/pydocs_mcp/retrieval/steps/pre_filter.py`:
 ```python
-"""PreFilterStep — parse + validate pre_filter once, share via state.scratch.
+"""PreFilterStep — parse + validate pre_filter once, share typed result via state.scratch.
 
 Single responsibility: take a SearchQuery's `pre_filter` (raw string) +
 `pre_filter_format`, parse it via the format registry, validate against
-the schema's allowed fields, split the scope clause off, and write the
-parsed artifacts to `state.scratch` under conventional keys for
+the schema's allowed fields, split the scope clause off, and write a
+typed `PreFilterResult` dataclass to `state.scratch["pre_filter"]` for
 downstream fetcher steps to consume.
 
 Dedups the inline pre-filter logic that previously lived in
 `ChunkFetcherStep` + `MemberFetcherStep`. A single `PreFilterStep` runs
-once per pipeline; the fetchers downstream read `state.scratch` instead
-of re-parsing.
+once per pipeline; the fetchers downstream read `state.scratch["pre_filter"]`
+directly (raise if missing when `state.query.pre_filter` is set).
 
-Scratch keys written (when `pre_filter is not None`):
-- `pre_filter.tree`  — the parsed Filter tree (with scope split out)
-- `pre_filter.scope` — frozenset[SearchScope] or None
-- `pre_filter.sql`   — SQL WHERE-clause fragment built from the tree
-- `pre_filter.params`— positional SQL parameters
+No backward-compat fallback — all shipped YAML pipelines include this
+step BEFORE the fetcher. User overlays that omit it break loudly.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+
+if TYPE_CHECKING:
+    from pydocs_mcp.models import SearchScope
+    from pydocs_mcp.storage.filters import Filter
 
 # WHY: single source of truth for the default schema_name when YAML omits it.
 _DEFAULT_SCHEMA_NAME = "chunk"
 
 
+@dataclass(frozen=True, slots=True)
+class PreFilterResult:
+    """Typed result emitted by PreFilterStep into state.scratch["pre_filter"].
+
+    Fetchers downstream read these fields without re-parsing the raw
+    SearchQuery.pre_filter string.
+    """
+    tree: "Filter | None"
+    scope: "frozenset[SearchScope] | None"
+    sql: str          # SQL WHERE-clause fragment (empty string if no SQL pushdown)
+    params: list[Any] # positional SQL parameters
+
+
 @step_registry.register("pre_filter")
 @dataclass(frozen=True, slots=True)
 class PreFilterStep(RetrieverStep):
-    """Parse + validate pre_filter once; share via state.scratch."""
+    """Parse + validate pre_filter once; share typed result via state.scratch."""
 
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     schema_name: str = field(default=_DEFAULT_SCHEMA_NAME, kw_only=True)
@@ -619,20 +712,20 @@ class PreFilterStep(RetrieverStep):
                 adapter = SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
             filter_sql, filter_params = adapter.adapt(tree)
 
-        # Write to state.scratch. The dict mutation is intentional —
-        # the dataclass is frozen but the scratch dict is mutable
-        # (per RetrieverState's documented contract).
-        state.scratch["pre_filter.tree"] = tree
-        state.scratch["pre_filter.scope"] = scope
-        state.scratch["pre_filter.sql"] = filter_sql
-        state.scratch["pre_filter.params"] = filter_params
+        # Write typed result to state.scratch under a single key. The dict
+        # mutation is intentional — the dataclass is frozen but the scratch
+        # dict is mutable (per RetrieverState's documented contract).
+        state.scratch["pre_filter"] = PreFilterResult(
+            tree=tree, scope=scope, sql=filter_sql, params=filter_params,
+        )
         return state
 
     def to_dict(self) -> dict:
-        d: dict = {"type": "pre_filter"}
-        d["schema_name"] = self.schema_name
-        d["target_field"] = self.target_field
-        return d
+        return {
+            "type": "pre_filter",
+            "schema_name": self.schema_name,
+            "target_field": self.target_field,
+        }
 
     @classmethod
     def from_dict(
@@ -662,10 +755,11 @@ Add `PreFilterStep` to imports + `__all__`.
 ```
 Expected: 4 passed.
 
-### Step 6: Update fetchers to read from `state.scratch` with fallback
+### Step 6: Update fetchers to read from `state.scratch["pre_filter"]` (no fallback)
+
+Per **decision 1B**, fetchers REQUIRE PreFilterStep upstream when `state.query.pre_filter` is set. No fallback — clean break.
 
 Edit `python/pydocs_mcp/retrieval/steps/chunk_fetcher.py`:
-- Inside `async def run`, check if `pre_filter.tree` is in `state.scratch`. If yes, read all four scratch keys instead of parsing inline. If no, fall back to current inline parsing (backward compat for one release).
 
 ```python
 async def run(self, state: RetrieverState) -> RetrieverState:
@@ -673,20 +767,46 @@ async def run(self, state: RetrieverState) -> RetrieverState:
     if fulltext is None:
         return replace(state, candidates=ChunkList(items=()))
 
-    # WHY: PreFilterStep parses once upstream and writes to scratch. If
-    # the scratch keys are present, reuse them. Otherwise fall back to
-    # inline parsing for backward compat (one-release transition).
-    if "pre_filter.sql" in state.scratch:
-        filter_sql = state.scratch.get("pre_filter.sql", "") or ""
-        filter_params = state.scratch.get("pre_filter.params", []) or []
-        scope = state.scratch.get("pre_filter.scope")
-    else:
-        # Existing inline path — keep verbatim for backward compat.
-        # (current code that parses pre_filter inline stays here)
-        ...
+    # Read PreFilterStep's typed result from scratch. PreFilterStep MUST
+    # run upstream — fetchers don't re-parse the raw filter string.
+    # When no filter is set on the query, no PreFilterStep work needs to
+    # have happened; we just use empty SQL pushdown.
+    from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
+
+    filter_sql = ""
+    filter_params: list = []
+    scope = None
+
+    if state.query.pre_filter is not None:
+        result = state.scratch.get("pre_filter")
+        if not isinstance(result, PreFilterResult):
+            raise RuntimeError(
+                "ChunkFetcherStep: state.query.pre_filter is set but "
+                "state.scratch['pre_filter'] is missing. The pipeline must "
+                "include the 'pre_filter' step before 'chunk_fetcher'. "
+                "See pipelines/chunk_search.yaml for the canonical shape.",
+            )
+        filter_sql = result.sql
+        filter_params = result.params
+        scope = result.scope
+
+    rows = await asyncio.to_thread(
+        self._fetch_sync, fulltext, filter_sql, filter_params,
+    )
+    chunks = tuple(
+        _row_to_candidate(row, self.retriever_name) for row in rows
+    )
+    if scope is not None:
+        chunks = tuple(
+            c for c in chunks
+            if _matches_scope(c.metadata.get(ChunkFilterField.PACKAGE.value, ""), scope)
+        )
+    return replace(state, candidates=ChunkList(items=chunks))
 ```
 
-Same pattern for `member_fetcher.py`.
+The inline parsing logic (~30 LOC of format_registry + _schema_from_fields + _split_scope + SqliteFilterAdapter) is **fully deleted** from `chunk_fetcher.py` — moved to `PreFilterStep`. Net file shrinkage: ~30 LOC removed, ~15 LOC added (the scratch read + error message).
+
+Same pattern for `member_fetcher.py` (s/ChunkFetcherStep/MemberFetcherStep/, s/chunk_fetcher/member_fetcher/, s/ChunkFilterField/ModuleMemberFilterField/).
 
 ### Step 7: Update YAML pipelines to insert `pre_filter` step
 
@@ -723,21 +843,27 @@ git commit -m "refactor(retrieval): extract PreFilterStep — dedup fetcher pre-
 ChunkFetcherStep + MemberFetcherStep both contained ~30 LOC of identical
 pre-filter parsing logic (parse via format_registry, validate against
 allowed_fields, split scope, build SQL via SqliteFilterAdapter).
-Extracting PreFilterStep removes the duplication and lets future steps
-(B3.1 DenseScorerStep, etc.) reuse pre-filter results via state.scratch
-without parsing again.
+PreFilterStep extracts this into one place, lets future steps
+(B3.1 DenseScorerStep, etc.) reuse the result via state.scratch.
 
-PreFilterStep writes to state.scratch under conventional keys:
-- pre_filter.tree    — the parsed Filter tree (scope split out)
-- pre_filter.scope   — frozenset[SearchScope] or None
-- pre_filter.sql     — SQL WHERE-clause fragment
-- pre_filter.params  — positional SQL parameters
-
-Fetchers downstream read from scratch when present, fall back to inline
-parsing otherwise (backward compat for one release).
+Design (per plan-eng-review):
+- Typed PreFilterResult dataclass under a single scratch key
+  state.scratch['pre_filter'] — NOT four stringly-typed keys.
+- No backward-compat fallback. Fetchers REQUIRE PreFilterStep upstream
+  when state.query.pre_filter is set. Raise clear RuntimeError with
+  pipeline-fix hint if scratch is missing.
+- All shipped YAML pipelines (chunk_search, chunk_search_ranked,
+  member_search) include pre_filter as the first step.
 
 Behavior preserved: same SQL fires, same candidates land in
-state.candidates. AC17 RepoQA fixture baseline SHA unchanged."
+state.candidates. AC17 RepoQA fixture baseline SHA unchanged.
+
+Tests:
+- test_pre_filter.py — 8 tests (isolation, none-noop, typed-result,
+  invalid-format-raises, scope-split, member target_field, to_dict,
+  from_dict round-trip)
+- test_chunk_fetcher.py — 2 added (scratch-read + missing-raises)
+- test_member_fetcher.py — 2 added (same)"
 ```
 
 ---
@@ -1022,3 +1148,18 @@ Every task ends with `pytest -q` showing the expected passing count. The PR is r
 3. **PR-A** (Tasks 5-6): new YAML preset + benchmark wiring + re-measurement. Real RepoQA recall@k > 0.
 
 After all tasks: dispatch the 4-skill review chain (`/code-review`, `/review`, `/devex-review`, `/codex review`), surface findings for inline fixes, then take PR out of draft.
+
+---
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | (deferred to post-coding) | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN) | 3 issues, 0 critical gaps (after locked decisions) |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | n/a | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | (post-coding: `/devex-review`) | — |
+
+**UNRESOLVED:** 0
+**VERDICT:** ENG REVIEW CLEARED — all 3 findings (typed PreFilterResult, no-fallback, gap tests) resolved by locked decisions. Ready to implement Tasks 1-6.
