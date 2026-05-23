@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING
 
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
 
 
-@stage_registry.register("conditional")
+@step_registry.register("conditional")
 @dataclass(frozen=True, slots=True)
 class ConditionalStep(RetrieverStep):
     stage: RetrieverStep
@@ -38,7 +38,7 @@ class ConditionalStep(RetrieverStep):
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "ConditionalStep":
         return cls(
-            stage=context.stage_registry.build(data["stage"], context),
+            stage=context.step_registry.build(data["stage"], context),
             predicate_name=data["predicate_name"],
             registry=context.predicate_registry,
         )

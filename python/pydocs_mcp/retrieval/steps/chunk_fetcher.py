@@ -35,7 +35,7 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 # Deferred storage / filter_helpers imports: a top-level
 # ``from pydocs_mcp.storage.filters import Filter`` (or
@@ -93,7 +93,7 @@ _DEFAULT_LIMIT = 50
 _DEFAULT_RETRIEVER_NAME = "bm25_chunk"
 
 
-@stage_registry.register("chunk_fetcher")
+@step_registry.register("chunk_fetcher")
 @dataclass(frozen=True, slots=True)
 class ChunkFetcherStep(RetrieverStep):
     """Candidate generation step for chunk pipelines.

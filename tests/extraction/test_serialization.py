@@ -26,7 +26,7 @@ from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.serialization import (
     BuildContext,
     ComponentRegistry,
-    stage_registry as retrieval_stage_registry,
+    step_registry as retrieval_step_registry,
 )
 
 
@@ -46,7 +46,7 @@ def test_stage_registry_is_separate_instance_from_retrieval():
     """Extraction stages must NOT pollute the retrieval registry and vice
     versa. Sharing the instance would leak ``chunking``/``file_read`` etc.
     into the retrieval pipeline decoder's known-types list."""
-    assert stage_registry is not retrieval_stage_registry
+    assert stage_registry is not retrieval_step_registry
 
 
 def test_chunker_registry_is_plain_dict():

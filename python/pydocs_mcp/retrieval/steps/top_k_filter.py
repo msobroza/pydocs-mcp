@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 # WHY: single source of truth for the top-K cutoff. Referenced from the
 # dataclass field default + to_dict (omit-when-default) + from_dict
@@ -22,7 +22,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 _DEFAULT_K = 50
 
 
-@stage_registry.register("top_k_filter")
+@step_registry.register("top_k_filter")
 @dataclass(frozen=True, slots=True)
 class TopKFilterStep(RetrieverStep):
     """Top-K cutoff step. Works uniformly for chunks and members."""

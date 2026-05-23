@@ -37,7 +37,7 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 # Deferred storage / filter_helpers imports — see
 # :mod:`pydocs_mcp.retrieval.steps.chunk_fetcher` for the rationale.
@@ -67,7 +67,7 @@ _DEFAULT_LIMIT = 50
 _DEFAULT_RETRIEVER_NAME = "like_member"
 
 
-@stage_registry.register("member_fetcher")
+@step_registry.register("member_fetcher")
 @dataclass(frozen=True, slots=True)
 class MemberFetcherStep(RetrieverStep):
     """Candidate generation step for member pipelines.
