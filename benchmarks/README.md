@@ -224,28 +224,38 @@ function raises `ValueError` listing the differing datasets if you try.
 To compare across datasets, call `plot_baselines` once per dataset and
 arrange the figures yourself.
 
+**Title convention:** keep the title benchmark-focused (dataset + tasks)
+and let the legend carry the system / config / method names. That way
+the same chart still makes sense when PR-B3.1 adds a second bar group
+for dense embeddings — no title rewrite needed. If you omit `--title`,
+the default uses the first record's `dataset` field and `tasks_ran`.
+
 ```bash
-# Today's plot — single BM25 baseline on real-100-needles.
+# Today's plot — single baseline on real-100-needles. Method is in the
+# legend (pydocs-mcp / baseline), not the title.
 PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
-    --output benchmarks/results/plots/bm25_only.png \
-    --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle
+    --output benchmarks/results/plots/repoqa_real.png \
+    --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle \
+    --title "RepoQA-2024-06-23 (Python, n=100)"
 
 # Future: side-by-side compare two configs on the SAME dataset
 # (e.g., PR-B3.1's dense embeddings vs current BM25). The plot picks up
-# the second bar group automatically — no code change to plotting.py.
+# the second bar group automatically — no code change to plotting.py,
+# and the title still works because it describes the benchmark, not the
+# methods being compared.
 PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
     benchmarks/baselines/repoqa_snf_dense.json \
-    --output benchmarks/results/plots/bm25_vs_dense.png \
-    --title "BM25 vs dense on RepoQA-2024-06-23 (Python, n=100)"
+    --output benchmarks/results/plots/repoqa_real_with_dense.png \
+    --title "RepoQA-2024-06-23 (Python, n=100)"
 ```
 
 The legend identifies each system as `<system> / <config> (<label>) [<git_sha>, n=<tasks>]`
 so a plot stays self-describing even when copy-pasted into a PR
 description. Sample output (committed to `benchmarks/docs/repoqa_baselines.png`):
 
-![pydocs-mcp BM25 baseline plot](docs/repoqa_baselines.png)
+![RepoQA-2024-06-23 (Python) baseline plot](docs/repoqa_baselines.png)
 
 Programmatic API — same behavior, more flexible for notebook use:
 
@@ -260,8 +270,10 @@ fig = plot_baselines(
     ],
     metrics=("recall@1", "recall@5", "recall@10", "mrr"),
     output=Path("benchmarks/results/plots/repoqa_real.png"),
-    palette="colorblind",          # also: "deep", "muted", "Set2"
-    title="pydocs-mcp on RepoQA",  # default: <dataset> (<tasks_ran> tasks)
+    palette="colorblind",                       # also: "deep", "muted", "Set2"
+    title="RepoQA-2024-06-23 (Python, n=100)",  # keep it benchmark-focused;
+                                                # legend carries the methods.
+                                                # default: <dataset> (<tasks_ran> tasks)
 )
 ```
 
