@@ -10,18 +10,18 @@
       "ci_high": 1.0
     },
     "recall@5": {
-      "mean": 0.6,
-      "ci_low": 0.2,
+      "mean": 0.8,
+      "ci_low": 0.4,
       "ci_high": 1.0
     },
     "recall@10": {
-      "mean": 0.6,
-      "ci_low": 0.2,
+      "mean": 0.8,
+      "ci_low": 0.4,
       "ci_high": 1.0
     },
     "mrr": {
-      "mean": 0.6,
-      "ci_low": 0.2,
+      "mean": 0.7,
+      "ci_low": 0.3,
       "ci_high": 1.0
     },
     "pass@1-needle": {
@@ -30,18 +30,18 @@
       "ci_high": 1.0
     },
     "indexing_seconds": {
-      "p50": 0.01604149999911897,
-      "p95": 0.030487041990272697,
-      "p99": 0.032701441985554996
+      "p50": 0.03799208300188184,
+      "p95": 0.05872749979607761,
+      "p99": 0.061297166347503665
     },
     "search_seconds": {
-      "p50": 0.0008591250225435942,
-      "p95": 0.0010186088155023753,
-      "p99": 0.001040888975840062
+      "p50": 0.0014346659881994128,
+      "p95": 0.00295173357008025,
+      "p99": 0.003218980280216783
     }
   },
-  "captured_at": "2026-05-20T01:14:14.814979+00:00",
-  "git_sha": "05f8dc256531243bcfcf33e73a7969ef1d92b9c9",
-  "source_jsonl": "benchmarks/results/jsonl/pydocs-mcp_baseline_repoqa_at_2024-06-23_20260520T010036Z.jsonl",
+  "captured_at": "2026-05-23T20:45:29.067403+00:00",
+  "git_sha": "5e248bc753fe6b606a0c5e40d1c7ff6396fec10d",
+  "source_jsonl": "benchmarks/results/jsonl/pydocs-mcp_baseline_repoqa_at_2024-06-23_20260523T204454Z.jsonl",
   "label": "fixture-5-needles"
 }
