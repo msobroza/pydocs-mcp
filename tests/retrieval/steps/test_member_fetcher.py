@@ -20,6 +20,7 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
+from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
 from pydocs_mcp.storage.sqlite import SqliteModuleMemberRepository
 
 
@@ -86,3 +87,42 @@ async def test_member_fetcher_satisfies_retriever_step_protocol(populated_db: Pa
     state = RetrieverState(query=SearchQuery(terms="add", max_results=10))
     out = await step.run(state)
     assert isinstance(out.candidates, ModuleMemberList)
+
+
+async def test_member_fetcher_reads_pre_filter_from_scratch(populated_db: Path) -> None:
+    """When PreFilterStep ran upstream and wrote PreFilterResult to
+    state.scratch['pre_filter.result'], the fetcher consumes it directly without
+    re-parsing state.query.pre_filter."""
+    provider = build_connection_provider(populated_db)
+    step = MemberFetcherStep(name="fetch", provider=provider, limit=10)
+    state = RetrieverState(
+        query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
+    )
+    # Simulate PreFilterStep having run upstream.
+    state.scratch["pre_filter.result"] = PreFilterResult(
+        tree=None, scope=None, sql="package = ?", params=("demo",),
+    )
+    out = await step.run(state)
+    # The fetcher used the pre-built SQL pushdown, didn't re-parse query.pre_filter.
+    assert isinstance(out.candidates, ModuleMemberList)
+    # All seeded members are in 'demo' package → all pass the pushdown.
+    assert all(
+        m.metadata.get(ModuleMemberFilterField.PACKAGE.value) == "demo"
+        for m in out.candidates.items
+    )
+
+
+async def test_member_fetcher_raises_if_pre_filter_set_but_scratch_missing(
+    populated_db: Path,
+) -> None:
+    """If state.query.pre_filter is set but PreFilterStep did NOT run
+    upstream (scratch lacks 'pre_filter'), the fetcher raises a clear
+    error pointing at the missing pipeline step."""
+    provider = build_connection_provider(populated_db)
+    step = MemberFetcherStep(name="fetch", provider=provider, limit=10)
+    state = RetrieverState(
+        query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
+    )
+    # No state.scratch['pre_filter.result'] — PreFilterStep didn't run.
+    with pytest.raises(RuntimeError, match="pre_filter"):
+        await step.run(state)

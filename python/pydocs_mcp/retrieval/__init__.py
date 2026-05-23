@@ -30,7 +30,7 @@ from pydocs_mcp.retrieval.serialization import (
     BuildContext,
     ComponentRegistry,
     formatter_registry,
-    stage_registry,
+    step_registry,
 )
 
 __all__ = [
@@ -45,5 +45,5 @@ __all__ = [
     "RetrieverState",
     "RetrieverStep",
     "formatter_registry",
-    "stage_registry",
+    "step_registry",
 ]

@@ -84,7 +84,7 @@ def _from_dict_accepts_depth(cls: type) -> bool:
     return False
 
 
-stage_registry: ComponentRegistry = ComponentRegistry()
+step_registry: ComponentRegistry = ComponentRegistry()
 formatter_registry: ComponentRegistry = ComponentRegistry()
 
 
@@ -107,7 +107,7 @@ class BuildContext:
 
     connection_provider: "ConnectionProvider"
     predicate_registry: "PredicateRegistry" = field(default_factory=_default_predicate_registry)
-    stage_registry: ComponentRegistry = field(default_factory=lambda: stage_registry)
+    step_registry: ComponentRegistry = field(default_factory=lambda: step_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
     vector_store: "SqliteVectorStore | None" = None
     module_member_store: "SqliteModuleMemberRepository | None" = None

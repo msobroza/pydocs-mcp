@@ -167,7 +167,7 @@ def _step_from_dict(
     # having to learn the nested-params shape.
     merged: dict = dict(params)
     merged["type"] = step["type"]
-    return context.stage_registry.build(merged, context, _depth=_depth)
+    return context.step_registry.build(merged, context, _depth=_depth)
 
 
 __all__ = ("CodeRetrieverPipeline", "PipelineLoadError")

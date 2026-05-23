@@ -12,16 +12,27 @@ class DocsSearch:
     """Runs the chunk retrieval pipeline and wraps its state as a SearchResponse.
 
     Deliberately thin: all ranking/filtering logic lives in the pipeline
-    stages. This class only threads query → pipeline → response and
-    substitutes an empty ``ChunkList`` when the pipeline returns no result.
+    stages. This class only threads query → pipeline → response.
+
+    Reads ``state.result`` first (composite output from
+    ``token_budget_formatter`` — what ``chunk_search.yaml`` produces) and
+    falls back to ``state.candidates`` (ranked top-K from
+    ``chunk_search_ranked.yaml``-style presets that omit the formatter).
+    Avoids the silent-empty-results footgun if a deployment overlays the
+    ranked preset onto the MCP server.
     """
 
     chunk_pipeline: CodeRetrieverPipeline
 
     async def search(self, query: SearchQuery) -> SearchResponse:
         state = await self.chunk_pipeline.run(query)
+        result = state.result
+        if result is None:
+            # Ranked preset (no token_budget_formatter) — surface
+            # state.candidates instead of returning silent empty.
+            result = state.candidates if state.candidates is not None else ChunkList(items=())
         return SearchResponse(
-            result=state.result or ChunkList(items=()),
+            result=result,
             query=state.query,
             duration_ms=state.duration_ms,
         )

@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 # WHY: single source of truth for the BM25-style RRF constant. Referenced
 # from the dataclass field default + to_dict (omit-when-default) + from_dict
@@ -13,7 +13,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 _DEFAULT_K = 60
 
 
-@stage_registry.register("reciprocal_rank_fusion")
+@step_registry.register("reciprocal_rank_fusion")
 @dataclass(frozen=True, slots=True)
 class RRFStep(RetrieverStep):
     k: int = _DEFAULT_K

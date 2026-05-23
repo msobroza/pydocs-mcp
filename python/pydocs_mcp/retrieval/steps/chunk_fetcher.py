@@ -4,15 +4,15 @@ Single responsibility: take a query, return up to N candidate chunks
 with FTS5's raw BM25 rank captured as ``relevance``. No score
 normalization, no top-K cutoff, no rendering.
 
-Pre-filter pushdown (Task 8): when ``state.query.pre_filter`` is set,
-the filter tree is parsed through the configured
-``MetadataFilterFormat``, validated against the schema's allowed
-fields, and pushed into the SQL ``WHERE`` clause through the same
-:class:`SqliteFilterAdapter` that ``SqliteVectorStore.text_search``
-uses — so AC17 SQL parity is preserved. The semantic ``scope`` field
-is split out via ``_split_scope`` and re-applied in-process via
-``_matches_scope`` (the SQL adapter rejects ``scope`` as an unsafe
-column, mirroring the legacy ``Bm25ChunkRetriever`` flow).
+Pre-filter pushdown: when ``state.query.pre_filter`` is set,
+:class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterStep` MUST run
+upstream and write a typed
+:class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterResult` to
+``state.scratch["pre_filter.result"]``. The fetcher consumes the pre-built SQL
+pushdown clause + scope set directly; it does not re-parse the raw
+filter mapping. If the scratch key is missing while the query carries a
+filter, the fetcher raises a clear ``RuntimeError`` pointing at the
+canonical YAML shape.
 
 Mirrors the FTS5 SQL in :mod:`pydocs_mcp.storage.sqlite.SqliteVectorStore`
 but deliberately does NOT flip the sign of FTS5's negative rank — that's
@@ -35,7 +35,7 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 # Deferred storage / filter_helpers imports: a top-level
 # ``from pydocs_mcp.storage.filters import Filter`` (or
@@ -93,7 +93,7 @@ _DEFAULT_LIMIT = 50
 _DEFAULT_RETRIEVER_NAME = "bm25_chunk"
 
 
-@stage_registry.register("chunk_fetcher")
+@step_registry.register("chunk_fetcher")
 @dataclass(frozen=True, slots=True)
 class ChunkFetcherStep(RetrieverStep):
     """Candidate generation step for chunk pipelines.
@@ -117,35 +117,30 @@ class ChunkFetcherStep(RetrieverStep):
         if fulltext is None:
             return replace(state, candidates=ChunkList(items=()))
 
-        # Pre-filter pushdown: parse + validate + split scope. The SQL
-        # branch carries the non-scope clauses; the scope set is applied
-        # in-process below. Lazy imports break the storage→extraction→
-        # retrieval.config→retrieval.steps cycle (see module docstring).
-        from pydocs_mcp.retrieval.filter_helpers import (
-            _matches_scope,
-            _schema_from_fields,
-            _split_scope,
-        )
-        from pydocs_mcp.storage.filters import format_registry
-
-        tree = None
-        scope: frozenset[SearchScope] | None = None
-        if state.query.pre_filter is not None:
-            tree = format_registry[state.query.pre_filter_format].parse(state.query.pre_filter)
-            _schema_from_fields(self.allowed_fields).validate(tree)
-            tree, scope = _split_scope(tree)
+        # Read PreFilterStep's typed result from scratch. PreFilterStep MUST
+        # run upstream when query.pre_filter is set — the fetcher does not
+        # re-parse the raw filter mapping. When no filter is set on the
+        # query, no PreFilterStep work needs to have happened; we just use
+        # empty SQL pushdown.
+        from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
 
         filter_sql = ""
         filter_params: list = []
-        if tree is not None:
-            from pydocs_mcp.storage.sqlite import (
-                _CHUNK_COLUMNS,
-                SqliteFilterAdapter,
-            )
-            adapter = SqliteFilterAdapter(
-                safe_columns=_CHUNK_COLUMNS, column_prefix="c.",
-            )
-            filter_sql, filter_params = adapter.adapt(tree)
+        scope: frozenset[SearchScope] | None = None
+
+        if state.query.pre_filter is not None:
+            result = state.scratch.get("pre_filter.result")
+            if not isinstance(result, PreFilterResult):
+                raise RuntimeError(
+                    "ChunkFetcherStep: state.query.pre_filter is set but "
+                    "state.scratch['pre_filter.result'] is missing. The "
+                    "pipeline must include the 'pre_filter' step before "
+                    "'chunk_fetcher'. See pipelines/chunk_search.yaml for "
+                    "the canonical shape.",
+                )
+            filter_sql = result.sql
+            filter_params = list(result.params)
+            scope = result.scope
 
         rows = await asyncio.to_thread(
             self._fetch_sync, fulltext, filter_sql, filter_params,
@@ -154,6 +149,9 @@ class ChunkFetcherStep(RetrieverStep):
             _row_to_candidate(row, self.retriever_name) for row in rows
         )
         if scope is not None:
+            # Lazy import — break the storage→extraction→retrieval.config→
+            # retrieval.steps cycle (see module docstring).
+            from pydocs_mcp.retrieval.filter_helpers import _matches_scope
             chunks = tuple(
                 c for c in chunks
                 if _matches_scope(c.metadata.get(ChunkFilterField.PACKAGE.value, ""), scope)

@@ -3,7 +3,7 @@
 Reuses :class:`~pydocs_mcp.retrieval.serialization.ComponentRegistry` — same
 decorator pattern (``@stage_registry.register("name")``) already used by the
 retrieval pipeline. The ingestion ``stage_registry`` here is a SEPARATE
-instance from ``retrieval.stage_registry``; :func:`build_ingestion_pipeline`
+instance from ``retrieval.step_registry``; :func:`build_ingestion_pipeline`
 constructs a :class:`BuildContext` that points at the ingestion registry
 when building an :class:`~pydocs_mcp.extraction.pipeline.IngestionPipeline`.
 

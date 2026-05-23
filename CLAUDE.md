@@ -277,6 +277,58 @@ class RRFStep(RetrieverStep):
 - Write Rust doc comments (`///`) for `#[pyfunction]` exports since they document the API contract with Python
 - Don't comment obvious code; don't leave commented-out code without a reason
 
+## README files: no internal PR / sub-PR / task jargon
+
+**Rule:** every `README.md` in this repository (root and any subproject —
+`README.md`, `benchmarks/README.md`, future ones) is written for end users
+and external readers. It MUST NOT reference the project's internal PR
+history, sub-PR labels, task IDs, internal commit messages, or any other
+jargon that requires reading our PR log to understand.
+
+**Forbidden patterns** (audit-grep before merge):
+
+- `PR #<N>`, `pull request #<N>`, `(#<N>)`, `see #<N>` — internal PR
+  numbers mean nothing to a reader without GitHub access; cite the
+  *behavior* or *file* instead.
+- `sub-PR #5a` / `#5b` / `#5c` / `#5a-2` / `#6` — internal sub-PR labels
+  from the trilogy work. If you need to mention historical context, say
+  "the reference-graph capture (see `application/reference_service.py`)"
+  not "post-#5c trilogy".
+- `trilogy` / `pre-trilogy` / `post-trilogy` — same problem, less precise.
+- `Task <N>` / `Task <N> of <plan>` — superpowers-plan task IDs are
+  internal scaffolding; reference the *file* or *capability* instead.
+- Branch / worktree names (`feature/cleanups-and-pr-a`,
+  `.claude/worktrees/...`) — implementation detail, not API.
+
+**Allowed** (these are NOT jargon):
+
+- External citations: `arXiv:2406.06025`, `Apache-2.0`, library names, etc.
+- Public version references for shipped deps: `mcp>=1.0`, `pydantic-settings>=2.0`.
+- Filesystem paths inside the repo when describing where code lives:
+  `python/pydocs_mcp/retrieval/steps/`. (Paths are stable; PR numbers
+  rot the moment a PR is merged.)
+- Public file names of pipelines / configs: `chunk_search.yaml`.
+
+**Where PR / task history DOES belong** (so the information isn't lost):
+
+- Commit messages (`git log` is the canonical PR-history reader).
+- PR descriptions on GitHub.
+- `docs/superpowers/plans/*.md` and `docs/superpowers/specs/*.md` —
+  internal planning artifacts, written for the implementer.
+- `CHANGELOG.md` when it exists — its job is to summarize what changed.
+- Code comments where a workaround needs to point at the incident that
+  caused it (rare; use sparingly).
+
+**Audit command** (run before merging any README change):
+
+```bash
+find . -name "README.md" -not -path "*/.venv/*" -not -path "*/.claude/*" \
+    -not -path "*/node_modules/*" -not -path "*/.git/*" | \
+    xargs grep -nE "PR #[0-9]+|sub-PR|#5[a-c]|trilogy|Task [0-9]+ of"
+```
+
+Any match is a violation — replace with concrete capability / file refs.
+
 ## Async Patterns
 
 The MCP server (`server.py`) uses FastMCP which is async. Follow these patterns:
