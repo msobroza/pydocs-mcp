@@ -120,14 +120,20 @@ class PydocsMcpSystem:
         state = await self._pipeline.run(
             SearchQuery(terms=query, max_results=limit),
         )
-        result = state.result
-        # WHY: chunk_search pipeline emits a ChunkList; a defensive isinstance
-        # check keeps a future routing change (member result) from raising a
-        # confusing AttributeError on ``.items``.
-        if not isinstance(result, ChunkList):
+        # WHY: prefer state.candidates (ranked top-K from chunk_search_ranked.yaml)
+        # over state.result (composite from chunk_search.yaml). The composite
+        # preset is correct for MCP/LLM consumption but collapses K candidates
+        # to 1 — recall@k can't measure K separate hits then. Falling back to
+        # state.result keeps the adapter compatible with the legacy preset.
+        items_source: ChunkList | None = None
+        if isinstance(state.candidates, ChunkList) and state.candidates.items:
+            items_source = state.candidates
+        elif isinstance(state.result, ChunkList):
+            items_source = state.result
+        if items_source is None:
             return ()
         out: list[RetrievedItem] = []
-        for rank, chunk in enumerate(result.items, start=1):
+        for rank, chunk in enumerate(items_source.items, start=1):
             meta = chunk.metadata
             out.append(
                 RetrievedItem(

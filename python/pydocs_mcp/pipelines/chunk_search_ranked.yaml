@@ -1,0 +1,33 @@
+# Ranked chunk-search pipeline — benchmark / evaluation use only.
+#
+# Identical to chunk_search.yaml but drops the final token_budget_formatter
+# step so the pipeline returns top-K SEPARATE ranked chunks in state.candidates
+# instead of one composite chunk in state.result. recall@k / mrr / pass@1
+# metrics can actually measure top-K hits with this preset; the MCP server
+# keeps chunk_search.yaml (composite output) as its default.
+name: chunk_search_ranked
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: chunk_fetcher
+    params:
+      schema_name: chunk
+  - name: score
+    type: bm25_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  # NO token_budget_formatter — output is state.candidates (ranked list),
+  # not state.result (composite). Benchmark adapter prefers state.candidates.

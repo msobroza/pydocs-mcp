@@ -1,6 +1,17 @@
-# Baseline — empty overlay; uses pydocs-mcp's shipped defaults verbatim.
+# Baseline — switches the chunk pipeline to chunk_search_ranked.yaml.
 #
 # Layered under defaults/default_config.yaml via AppConfig.load(explicit_path=...).
 # This file is the reference point for every other sweep config; any metric
 # delta a sweep produces against baseline.yaml is attributable to the single
 # YAML key that sweep file flips.
+#
+# WHY ranked, not composite: recall@k / mrr / pass@1 must walk K *separate*
+# items to find the gold. The shipped chunk_search.yaml ends in
+# token_budget_formatter, which collapses ranked candidates into one composite
+# markdown blob (correct for MCP/LLM clients). The benchmark adapter
+# (PydocsMcpSystem.search) prefers state.candidates and the ranked preset
+# emits exactly that — top-K separate, ranked chunks.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/chunk_search_ranked.yaml
