@@ -359,7 +359,7 @@ def _pre_filter_from_package(package: str | None) -> dict | None:
 
 def _print_search_response(response) -> None:
     """Preserve the pre-PR CLI behaviour: print the top composite chunk's
-    text (the ``TokenBudgetStage`` output) or nothing when empty.
+    text (the ``TokenBudgetStep`` output) or nothing when empty.
     """
     result = response.result
     if result is None or not result.items:

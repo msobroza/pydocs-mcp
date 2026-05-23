@@ -1,4 +1,4 @@
-"""MetadataPostFilterStage — apply ``SearchQuery.post_filter`` in memory.
+"""MetadataPostFilterStep — apply ``SearchQuery.post_filter`` in memory.
 
 The filter is parsed via ``format_registry[state.query.post_filter_format]``,
 so the same ``{field: value}`` / ``{field: {op: value}}`` shapes accepted
@@ -6,7 +6,7 @@ by retrievers are accepted here — only the evaluation happens on
 already-fetched items instead of being pushed down into SQL (spec §5.8,
 AC #13).
 
-Composite results from :class:`TokenBudgetStage` carry the
+Composite results from :class:`TokenBudgetStep` carry the
 ``COMPOSITE_TITLE_SENTINEL`` marker and are bypassed so the budgeted
 answer chunk never gets dropped by title-based filters (AC #34).
 """
@@ -19,9 +19,9 @@ from pydocs_mcp.models import (
     ChunkList,
     ModuleMemberList,
 )
-from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
-from pydocs_mcp.retrieval.stages.token_budget import COMPOSITE_TITLE_SENTINEL
+from pydocs_mcp.retrieval.steps.token_budget import COMPOSITE_TITLE_SENTINEL
 from pydocs_mcp.storage.filters import (
     All,
     FieldEq,
@@ -34,13 +34,18 @@ from pydocs_mcp.storage.filters import (
 
 @stage_registry.register("metadata_post_filter")
 @dataclass(frozen=True, slots=True)
-class MetadataPostFilterStage:
+class MetadataPostFilterStep(RetrieverStep):
     name: str = "metadata_post_filter"
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         if state.query.post_filter is None:
             return state
-        if state.result is None:
+        # Task 8: operate on ``state.candidates`` (intermediate ranked
+        # list). Fall back to ``state.result`` for the
+        # MetadataPostFilterStep-after-renderer composition that the
+        # sentinel-bypass test still exercises directly on ``result``.
+        target = state.candidates if state.candidates is not None else state.result
+        if target is None:
             return state
         tree = format_registry[state.query.post_filter_format].parse(state.query.post_filter)
 
@@ -49,8 +54,12 @@ class MetadataPostFilterStage:
                 return True
             return _evaluate(tree, item)
 
-        kept = tuple(item for item in state.result.items if _keep(item))
-        if isinstance(state.result, ChunkList):
+        kept = tuple(item for item in target.items if _keep(item))
+        if state.candidates is not None:
+            if isinstance(target, ChunkList):
+                return replace(state, candidates=ChunkList(items=kept))
+            return replace(state, candidates=ModuleMemberList(items=kept))
+        if isinstance(target, ChunkList):
             return replace(state, result=ChunkList(items=kept))
         return replace(state, result=ModuleMemberList(items=kept))
 
@@ -58,7 +67,7 @@ class MetadataPostFilterStage:
         return {"type": "metadata_post_filter"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "MetadataPostFilterStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "MetadataPostFilterStep":
         return cls()
 
 
@@ -88,4 +97,4 @@ def _field_value(item, field_name: str):
     return None
 
 
-__all__ = ("MetadataPostFilterStage",)
+__all__ = ("MetadataPostFilterStep",)

@@ -1,12 +1,33 @@
+# Default chunk-search retrieval pipeline (Task 8 — retrieval-pipeline-refactor).
+#
+# Six-step chain replaces the monolithic legacy ``bm25_chunk`` retriever:
+#   1. chunk_fetcher  — FTS5 MATCH + pre-filter pushdown, raw negative ranks
+#   2. bm25_scorer    — flip sign so higher = better
+#   3. metadata_post_filter — apply SearchQuery.post_filter in-memory
+#   4. top_k_filter   — sort by relevance desc, keep top K
+#   5. limit          — cap final item count (legacy AC parity)
+#   6. token_budget_formatter — render the composite chunk for MCP output
 name: chunk_search
-stages:
-  - type: chunk_retrieval
-    retriever:
-      type: bm25_chunk
+steps:
+  - name: fetch
+    type: chunk_fetcher
+    params:
       schema_name: chunk
-  - type: metadata_post_filter
-  - type: limit
-    max_results: 8
-  - type: token_budget_formatter
-    formatter: {type: chunk_markdown}
-    budget: 2000
+  - name: score
+    type: bm25_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  - name: budget
+    type: token_budget_formatter
+    params:
+      formatter: {type: chunk_markdown}
+      budget: 2000

@@ -1,20 +1,25 @@
-"""ReciprocalRankFusionStage — score items by 1/(k+rank), sort descending."""
+"""RRFStep — score items by 1/(k+rank), sort descending."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
-from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+
+# WHY: single source of truth for the BM25-style RRF constant. Referenced
+# from the dataclass field default + to_dict (omit-when-default) + from_dict
+# (fallback when YAML omits the key). Bumping touches one line, not three.
+_DEFAULT_K = 60
 
 
 @stage_registry.register("reciprocal_rank_fusion")
 @dataclass(frozen=True, slots=True)
-class ReciprocalRankFusionStage:
-    k: int = 60
+class RRFStep(RetrieverStep):
+    k: int = _DEFAULT_K
     name: str = "reciprocal_rank_fusion"
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         if state.result is None or not state.result.items:
             return state
         # Score by 1/(k+rank), keyed by item id (fall back to id(item)).
@@ -35,13 +40,13 @@ class ReciprocalRankFusionStage:
 
     def to_dict(self) -> dict:
         d: dict = {"type": "reciprocal_rank_fusion"}
-        if self.k != 60:
+        if self.k != _DEFAULT_K:
             d["k"] = self.k
         return d
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ReciprocalRankFusionStage":
-        return cls(k=data.get("k", 60))
+    def from_dict(cls, data: dict, context: BuildContext) -> "RRFStep":
+        return cls(k=data.get("k", _DEFAULT_K))
 
 
-__all__ = ("ReciprocalRankFusionStage",)
+__all__ = ("RRFStep",)

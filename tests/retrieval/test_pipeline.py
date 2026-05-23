@@ -53,22 +53,24 @@ async def test_pipeline_empty_stages_is_noop():
 
 
 def test_from_dict_rejects_excessive_nesting(tmp_path):
-    """AC #31 — from_dict enforces _MAX_PIPELINE_DEPTH."""
+    """AC #31 — from_dict enforces _MAX_PIPELINE_DEPTH (Task 8: ``steps:`` schema)."""
     from pydocs_mcp.retrieval.pipeline import (
         PerCallConnectionProvider,
         _MAX_PIPELINE_DEPTH,
     )
     from pydocs_mcp.retrieval.serialization import BuildContext
 
-    # Build a pipeline dict that recursively nests SubPipelineStage one
-    # level beyond the allowed depth.
+    # Build a pipeline dict that recursively nests ``type: sub_pipeline``
+    # one level beyond the allowed depth.
     def _leaf() -> dict:
-        return {"name": "leaf", "stages": []}
+        return {"name": "leaf", "steps": []}
 
     def _wrap(inner: dict) -> dict:
         return {
             "name": "wrap",
-            "stages": [{"type": "sub_pipeline", "pipeline": inner}],
+            "steps": [
+                {"name": "nested", "type": "sub_pipeline", "params": {"pipeline": inner}},
+            ],
         }
 
     data = _leaf()
@@ -87,10 +89,12 @@ def test_from_dict_accepts_shallow_nesting(tmp_path):
     from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
     from pydocs_mcp.retrieval.serialization import BuildContext
 
-    inner = {"name": "inner", "stages": []}
+    inner = {"name": "inner", "steps": []}
     data = {
         "name": "outer",
-        "stages": [{"type": "sub_pipeline", "pipeline": inner}],
+        "steps": [
+            {"name": "nested", "type": "sub_pipeline", "params": {"pipeline": inner}},
+        ],
     }
     context = BuildContext(
         connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "x.db"),
@@ -98,3 +102,73 @@ def test_from_dict_accepts_shallow_nesting(tmp_path):
     pipeline = CodeRetrieverPipeline.from_dict(data, context)
     assert pipeline.name == "outer"
     assert len(pipeline.stages) == 1
+
+
+def test_from_dict_rejects_legacy_stages_key(tmp_path):
+    """Task 8: ``stages:`` is rejected with a migration error."""
+    from pydocs_mcp.retrieval.pipeline import (
+        PerCallConnectionProvider,
+        PipelineLoadError,
+    )
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    context = BuildContext(
+        connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "x.db"),
+    )
+    with pytest.raises(PipelineLoadError, match="'stages:' key is no longer accepted"):
+        CodeRetrieverPipeline.from_dict({"name": "old", "stages": []}, context)
+
+
+def test_from_dict_rejects_step_missing_name(tmp_path):
+    """Task 8: every step must declare a ``name:``."""
+    from pydocs_mcp.retrieval.pipeline import (
+        PerCallConnectionProvider,
+        PipelineLoadError,
+    )
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    context = BuildContext(
+        connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "x.db"),
+    )
+    data = {
+        "name": "p",
+        "steps": [{"type": "limit", "params": {"max_results": 3}}],
+    }
+    with pytest.raises(PipelineLoadError, match="missing required 'name:'"):
+        CodeRetrieverPipeline.from_dict(data, context)
+
+
+def test_from_dict_rejects_missing_steps_key(tmp_path):
+    """Task 8: top-level pipeline YAML must declare ``steps:``."""
+    from pydocs_mcp.retrieval.pipeline import (
+        PerCallConnectionProvider,
+        PipelineLoadError,
+    )
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    context = BuildContext(
+        connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "x.db"),
+    )
+    with pytest.raises(PipelineLoadError, match="missing required 'steps:' key"):
+        CodeRetrieverPipeline.from_dict({"name": "p"}, context)
+
+
+def test_from_dict_steps_with_names_round_trip(tmp_path):
+    """Task 8: ``steps:`` with ``name:`` + ``type:`` + ``params:`` round-trips."""
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    context = BuildContext(
+        connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "x.db"),
+    )
+    data = {
+        "name": "p",
+        "steps": [
+            {"name": "trim", "type": "limit", "params": {"max_results": 3}},
+        ],
+    }
+    pipeline = CodeRetrieverPipeline.from_dict(data, context)
+    assert pipeline.name == "p"
+    assert len(pipeline.stages) == 1
+    # Limit stage carries the configured cap.
+    assert pipeline.stages[0].max_results == 3

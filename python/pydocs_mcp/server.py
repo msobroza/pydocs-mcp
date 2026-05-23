@@ -72,7 +72,7 @@ def _build_search_query(payload: SearchInput) -> SearchQuery:
 
 
 def _render_search_response(response: SearchResponse, empty_msg: str) -> str:
-    """The pipeline's TokenBudgetStage wraps the final output as a
+    """The pipeline's TokenBudgetStep wraps the final output as a
     single composite chunk, so ``items[0].text`` is the formatted body."""
     result = response.result
     if result is None or not result.items:

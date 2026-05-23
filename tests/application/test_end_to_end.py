@@ -135,7 +135,7 @@ async def test_search_docs_returns_chunklist(wired_services):
 async def test_search_api_returns_composite_response(wired_services):
     """ApiSearch.search drives the real member pipeline.
 
-    The pipeline's final stage (``TokenBudgetStage``) wraps the
+    The pipeline's final stage (``TokenBudgetStep``) wraps the
     member-search output into a single composite ``ChunkList`` entry so the
     CLI / MCP consumer can print it verbatim — same shape the parity golden
     (``tests/retrieval/test_parity_golden.py``) pins. The empty-result

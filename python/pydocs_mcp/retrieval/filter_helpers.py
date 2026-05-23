@@ -1,18 +1,9 @@
-"""Helpers shared by the metadata-aware retrievers.
+"""Pre-filter helpers — scope splitting + schema validation.
 
-``Bm25ChunkRetriever`` and ``LikeMemberRetriever`` both:
-
-- accept a ``pre_filter`` parsed through the configured
-  ``MetadataFilterFormat`` and validated against an
-  ``allowed_fields`` allowlist;
-- split the ``scope`` clause out of the pushdown filter (the SQL layer
-  rejects ``scope`` as an "unsafe column") and re-apply it in-process
-  via :func:`_matches_scope`;
-- expose a :class:`MetadataSchema` built from a flat field allowlist.
-
-The pipeline-adapter retrievers (``PipelineChunkRetriever`` /
-``PipelineModuleMemberRetriever``) don't touch these — they delegate to
-an inner pipeline that handles filter wiring itself.
+Shared by chunk and member fetchers: both fold pre-filter pushdown into
+their fetch step, so the scope split + schema validation helpers live
+here at retrieval/ top level to avoid a circular import chain through
+``storage.filters`` → ``extraction`` → ``retrieval.steps``.
 """
 from __future__ import annotations
 
@@ -34,7 +25,7 @@ def _split_scope(tree: Filter) -> tuple[Filter | None, frozenset[SearchScope] | 
 
     ``scope`` is a semantic field — ``PROJECT_ONLY`` / ``DEPENDENCIES_ONLY``
     map to equality / inequality on ``package``, which the push-down SQL
-    layer cannot express via the ``MultiFieldFormat`` alone. The retriever
+    layer cannot express via the ``MultiFieldFormat`` alone. The fetcher
     strips ``scope`` out so the store sees only real columns (the SQL
     layer would otherwise raise "unsafe column" on ``scope``), then
     re-applies the constraint in-process via :func:`_matches_scope`.
@@ -83,12 +74,7 @@ def _matches_scope(package: str, scope: frozenset[SearchScope]) -> bool:
 
 
 def _schema_from_fields(fields: frozenset[str]) -> MetadataSchema:
-    """Build a :class:`MetadataSchema` from a flat allowlist of field names.
-
-    Retrievers only know the field names (via
-    ``AppConfig.metadata_schemas``), not per-field operator sets —
-    default to whatever :class:`FieldSpec` does.
-    """
+    """Build a :class:`MetadataSchema` from a flat allowlist of field names."""
     return MetadataSchema(fields=tuple(FieldSpec(name=f) for f in sorted(fields)))
 
 

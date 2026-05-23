@@ -1,12 +1,26 @@
+# Default member-search retrieval pipeline (Task 8 — retrieval-pipeline-refactor).
+#
+# LIKE-based fetcher → optional metadata post-filter → top-K → limit → render.
+# No score step: LIKE doesn't produce a relevance rank, so candidates carry
+# ``relevance=None`` and ``top_k_filter`` falls back to source order.
 name: member_search
-stages:
-  - type: module_member_retrieval
-    retriever:
-      type: like_member
+steps:
+  - name: fetch
+    type: member_fetcher
+    params:
       schema_name: member
-  - type: metadata_post_filter
-  - type: limit
-    max_results: 15
-  - type: token_budget_formatter
-    formatter: {type: member_markdown}
-    budget: 2000
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 15
+  - name: budget
+    type: token_budget_formatter
+    params:
+      formatter: {type: member_markdown}
+      budget: 2000
