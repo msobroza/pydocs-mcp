@@ -10,7 +10,8 @@ Module layout:
 - :mod:`.bm25_scorer` — :class:`BM25ScorerStep`
 - :mod:`.chunk_fetcher` — :class:`ChunkFetcherStep`
 - :mod:`.chunk_retrieval` — :class:`ChunkRetrievalStep` (legacy adapter)
-- :mod:`.module_member_retrieval` — :class:`ModuleMemberRetrievalStep`
+- :mod:`.member_fetcher` — :class:`MemberFetcherStep`
+- :mod:`.module_member_retrieval` — :class:`ModuleMemberRetrievalStep` (legacy adapter)
 - :mod:`.metadata_post_filter` — :class:`MetadataPostFilterStep`
 - :mod:`.limit` — :class:`LimitStep`
 - :mod:`.parallel` — :class:`ParallelStep`
@@ -29,6 +30,7 @@ from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
 from pydocs_mcp.retrieval.steps.chunk_retrieval import ChunkRetrievalStep
 from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
 from pydocs_mcp.retrieval.steps.limit import LimitStep
+from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
 from pydocs_mcp.retrieval.steps.module_member_retrieval import ModuleMemberRetrievalStep
 from pydocs_mcp.retrieval.steps.parallel import ParallelStep
@@ -48,6 +50,7 @@ __all__ = (
     "ChunkRetrievalStep",
     "ConditionalStep",
     "LimitStep",
+    "MemberFetcherStep",
     "MetadataPostFilterStep",
     "ModuleMemberRetrievalStep",
     "ParallelStep",
