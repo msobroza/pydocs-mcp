@@ -24,6 +24,12 @@ class RetrieverStep(ABC):
 
     Subclasses set ``name: str`` (used for addressing + debug logs) and
     implement ``async def run(self, state) -> state``.
+
+    Subclasses MUST also declare ``@dataclass(frozen=True, slots=True)``
+    — without ``slots=True`` on the subclass, ``__dict__`` reappears and
+    the slots discipline is lost (instances become 5-10x larger and
+    accept arbitrary attribute assignment). The frozen contract still
+    propagates from the parent but slots does not.
     """
     name: str
 
@@ -56,12 +62,15 @@ class RetrieverPipeline(RetrieverStep):
 
     def __post_init__(self) -> None:
         names = [n for n, _ in self.steps]
+        # WHY: validate "shape exists" before "shape is well-formed".
+        # An empty steps tuple has no duplicates trivially, so the
+        # duplicate check would silently miss the "no steps" case.
+        if not names:
+            raise ValueError(f"pipeline {self.name!r} has no steps")
         if len(names) != len(set(names)):
             raise ValueError(
                 f"duplicate step names in {self.name!r}: {names}",
             )
-        if not names:
-            raise ValueError(f"pipeline {self.name!r} has no steps")
 
     def __getitem__(self, name: str) -> RetrieverStep:
         for n, step in self.steps:
