@@ -9,6 +9,7 @@ from pydocs_mcp.db import build_connection_provider, open_index_database
 from pydocs_mcp.models import Chunk, ChunkFilterField, ChunkList, SearchQuery
 from pydocs_mcp.retrieval.pipeline import RetrieverState
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
+from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
 from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
 
@@ -73,3 +74,42 @@ async def test_fetcher_captures_fts5_rank_as_negative_relevance(populated_db: Pa
     assert all(c.relevance is not None for c in out.candidates.items)
     # FTS5's raw bm25() column is negative (lower-magnitude-negative = better match).
     assert all(c.relevance <= 0.0 for c in out.candidates.items)
+
+
+async def test_chunk_fetcher_reads_pre_filter_from_scratch(populated_db: Path) -> None:
+    """When PreFilterStep ran upstream and wrote PreFilterResult to
+    state.scratch['pre_filter'], the fetcher consumes it directly without
+    re-parsing state.query.pre_filter."""
+    provider = build_connection_provider(populated_db)
+    step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
+    state = RetrieverState(
+        query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
+    )
+    # Simulate PreFilterStep having run upstream.
+    state.scratch["pre_filter"] = PreFilterResult(
+        tree=None, scope=None, sql="c.package = ?", params=["demo"],
+    )
+    out = await step.run(state)
+    # The fetcher used the pre-built SQL pushdown, didn't re-parse query.pre_filter.
+    assert isinstance(out.candidates, ChunkList)
+    # Both seeded chunks are in 'demo' package → both should pass the pushdown.
+    assert all(
+        c.metadata.get(ChunkFilterField.PACKAGE.value) == "demo"
+        for c in out.candidates.items
+    )
+
+
+async def test_chunk_fetcher_raises_if_pre_filter_set_but_scratch_missing(
+    populated_db: Path,
+) -> None:
+    """If state.query.pre_filter is set but PreFilterStep did NOT run
+    upstream (scratch lacks 'pre_filter'), the fetcher raises a clear
+    error pointing at the missing pipeline step."""
+    provider = build_connection_provider(populated_db)
+    step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
+    state = RetrieverState(
+        query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
+    )
+    # No state.scratch['pre_filter'] — PreFilterStep didn't run.
+    with pytest.raises(RuntimeError, match="pre_filter"):
+        await step.run(state)

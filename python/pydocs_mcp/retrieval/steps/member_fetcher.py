@@ -7,15 +7,15 @@ cutoff, no rendering — LIKE doesn't produce relevance ranks, so
 candidates carry ``relevance=None`` and downstream
 :class:`TopKFilterStep` handles the cap with source-order fallback.
 
-Pre-filter pushdown (Task 8): when ``state.query.pre_filter`` is set,
-the filter tree is parsed through the configured
-``MetadataFilterFormat``, validated against the schema's allowed
-fields, and pushed into the SQL ``WHERE`` clause through the same
-:class:`SqliteFilterAdapter` that ``SqliteModuleMemberRepository.list``
-uses — so AC17 SQL parity is preserved. The semantic ``scope`` field
-is split out via ``_split_scope`` and re-applied in-process via
-``_matches_scope`` (the SQL adapter rejects ``scope`` as an unsafe
-column, mirroring the legacy ``LikeMemberRetriever`` flow).
+Pre-filter pushdown: when ``state.query.pre_filter`` is set,
+:class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterStep` MUST run
+upstream and write a typed
+:class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterResult` to
+``state.scratch["pre_filter"]``. The fetcher consumes the pre-built SQL
+pushdown clause + scope set directly; it does not re-parse the raw
+filter mapping. If the scratch key is missing while the query carries a
+filter, the fetcher raises a clear ``RuntimeError`` pointing at the
+canonical YAML shape.
 
 Mirrors the LIKE query shape the legacy ``LikeMemberRetriever`` used
 (deleted in Task 9) but pushes the substring match down to SQL instead
@@ -90,31 +90,28 @@ class MemberFetcherStep(RetrieverStep):
         if not needle:
             return replace(state, candidates=ModuleMemberList(items=()))
 
-        # Lazy imports — see module docstring on the import cycle.
-        from pydocs_mcp.retrieval.filter_helpers import (
-            _matches_scope,
-            _schema_from_fields,
-            _split_scope,
-        )
-        from pydocs_mcp.storage.filters import format_registry
-
-        # Pre-filter pushdown — same shape as ChunkFetcherStep.
-        tree = None
-        scope: frozenset[SearchScope] | None = None
-        if state.query.pre_filter is not None:
-            tree = format_registry[state.query.pre_filter_format].parse(state.query.pre_filter)
-            _schema_from_fields(self.allowed_fields).validate(tree)
-            tree, scope = _split_scope(tree)
+        # Read PreFilterStep's typed result from scratch. Same contract as
+        # ChunkFetcherStep — PreFilterStep MUST run upstream when
+        # query.pre_filter is set; the fetcher does not re-parse the raw
+        # mapping.
+        from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
 
         filter_sql = ""
         filter_params: list = []
-        if tree is not None:
-            from pydocs_mcp.storage.sqlite import (
-                _MEMBER_COLUMNS,
-                SqliteFilterAdapter,
-            )
-            adapter = SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
-            filter_sql, filter_params = adapter.adapt(tree)
+        scope: frozenset[SearchScope] | None = None
+
+        if state.query.pre_filter is not None:
+            result = state.scratch.get("pre_filter")
+            if not isinstance(result, PreFilterResult):
+                raise RuntimeError(
+                    "MemberFetcherStep: state.query.pre_filter is set but "
+                    "state.scratch['pre_filter'] is missing. The pipeline must "
+                    "include the 'pre_filter' step before 'member_fetcher'. "
+                    "See pipelines/member_search.yaml for the canonical shape.",
+                )
+            filter_sql = result.sql
+            filter_params = result.params
+            scope = result.scope
 
         rows = await asyncio.to_thread(
             self._fetch_sync, filter_sql, filter_params,
@@ -126,6 +123,9 @@ class MemberFetcherStep(RetrieverStep):
         members = tuple(_keep_by_terms(m, needle) for m in members)
         members = tuple(m for m in members if m is not None)
         if scope is not None:
+            # Lazy import — break the storage→extraction→retrieval.config→
+            # retrieval.steps cycle (see module docstring).
+            from pydocs_mcp.retrieval.filter_helpers import _matches_scope
             members = tuple(
                 m for m in members
                 if _matches_scope(

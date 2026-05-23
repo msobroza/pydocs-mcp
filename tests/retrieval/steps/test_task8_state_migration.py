@@ -35,6 +35,7 @@ from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
 from pydocs_mcp.retrieval.steps.limit import LimitStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
+from pydocs_mcp.retrieval.steps.pre_filter import PreFilterStep
 from pydocs_mcp.retrieval.steps.token_budget import (
     COMPOSITE_TITLE_SENTINEL,
     TokenBudgetStep,
@@ -128,9 +129,17 @@ async def fts_db(tmp_path: Path) -> Path:
 
 async def test_chunk_fetcher_pushes_pre_filter_into_sql(fts_db: Path) -> None:
     """Item B: pre_filter={'package': 'fastapi'} → only the fastapi chunk
-    is returned from SQL (no post-fetch pruning needed)."""
+    is returned from SQL (no post-fetch pruning needed).
+
+    Post-Task-4: PreFilterStep is the canonical pre-filter parser; the
+    fetcher consumes the typed result from state.scratch."""
     provider = build_connection_provider(fts_db)
-    step = ChunkFetcherStep(
+    pre_filter_step = PreFilterStep(
+        allowed_fields=frozenset({"package", "scope", "module", "title"}),
+        schema_name="chunk",
+        target_field="chunk",
+    )
+    fetch = ChunkFetcherStep(
         name="fetch",
         provider=provider,
         allowed_fields=frozenset({"package", "scope", "module", "title"}),
@@ -139,7 +148,8 @@ async def test_chunk_fetcher_pushes_pre_filter_into_sql(fts_db: Path) -> None:
     state = RetrieverState(
         query=SearchQuery(terms="install", pre_filter={"package": "fastapi"}),
     )
-    out = await step.run(state)
+    state = await pre_filter_step.run(state)
+    out = await fetch.run(state)
     assert isinstance(out.candidates, ChunkList)
     packages = [c.metadata.get(ChunkFilterField.PACKAGE.value) for c in out.candidates.items]
     assert packages == ["fastapi"]
@@ -147,9 +157,16 @@ async def test_chunk_fetcher_pushes_pre_filter_into_sql(fts_db: Path) -> None:
 
 async def test_chunk_fetcher_strips_scope_for_sql_pushdown(fts_db: Path) -> None:
     """Item B: scope=PROJECT_ONLY is split out — SQL only sees real columns,
-    in-process filter applies the scope."""
+    in-process filter applies the scope.
+
+    Post-Task-4: PreFilterStep does the parse/validate/split before the fetcher."""
     provider = build_connection_provider(fts_db)
-    step = ChunkFetcherStep(
+    pre_filter_step = PreFilterStep(
+        allowed_fields=frozenset({"package", "scope", "module", "title"}),
+        schema_name="chunk",
+        target_field="chunk",
+    )
+    fetch = ChunkFetcherStep(
         name="fetch",
         provider=provider,
         allowed_fields=frozenset({"package", "scope", "module", "title"}),
@@ -159,7 +176,8 @@ async def test_chunk_fetcher_strips_scope_for_sql_pushdown(fts_db: Path) -> None
     state = RetrieverState(
         query=SearchQuery(terms="install", pre_filter={"scope": "project_only"}),
     )
-    out = await step.run(state)
+    state = await pre_filter_step.run(state)
+    out = await fetch.run(state)
     assert isinstance(out.candidates, ChunkList)
     # No chunk has package='__project__' in the test data → all filtered.
     assert len(out.candidates.items) == 0
@@ -193,9 +211,17 @@ async def members_db(tmp_path: Path) -> Path:
 
 
 async def test_member_fetcher_pushes_pre_filter_into_sql(members_db: Path) -> None:
-    """Item B: pre_filter={'package': 'fastapi'} restricts the SQL fetch."""
+    """Item B: pre_filter={'package': 'fastapi'} restricts the SQL fetch.
+
+    Post-Task-4: PreFilterStep parses + validates the filter before the fetcher
+    consumes the typed result from state.scratch."""
     provider = build_connection_provider(members_db)
-    step = MemberFetcherStep(
+    pre_filter_step = PreFilterStep(
+        allowed_fields=frozenset({"package", "scope", "module", "name", "kind"}),
+        schema_name="member",
+        target_field="member",
+    )
+    fetch = MemberFetcherStep(
         name="fetch",
         provider=provider,
         allowed_fields=frozenset({"package", "scope", "module", "name", "kind"}),
@@ -204,7 +230,8 @@ async def test_member_fetcher_pushes_pre_filter_into_sql(members_db: Path) -> No
     state = RetrieverState(
         query=SearchQuery(terms="router", pre_filter={"package": "fastapi"}),
     )
-    out = await step.run(state)
+    state = await pre_filter_step.run(state)
+    out = await fetch.run(state)
     assert isinstance(out.candidates, ModuleMemberList)
     packages = [m.metadata.get(ModuleMemberFilterField.PACKAGE.value) for m in out.candidates.items]
     assert packages == ["fastapi"]
