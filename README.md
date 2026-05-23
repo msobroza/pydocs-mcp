@@ -417,18 +417,6 @@ The MCP surface is intentionally minimal — two tools cover every workflow.
 
 ---
 
-## Performance
-
-| Operation | Python | Rust |
-|---|---|---|
-| File walk (1000 .py) | ~200ms | ~20ms |
-| File hashing | ~150ms | ~30ms |
-| Text chunking | ~100ms | ~10ms |
-| Source parsing | ~300ms | ~50ms |
-| **Total indexing** | **~2s** | **~0.5s** |
-
-Re-runs with no changes: <100ms (hash check only).
-
 ## Cache
 
 Each project gets its own SQLite database at `~/.pydocs-mcp/{dirname}_{path_hash}.db`. The schema is versioned via `PRAGMA user_version`; opening a DB whose version doesn't match drops all tables and re-indexes from scratch. The cache is always rebuildable from source, so it's safe to delete at any time.
