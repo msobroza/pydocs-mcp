@@ -170,7 +170,7 @@ async def test_like_member_retriever_rejects_filter_fields_outside_allowlist():
 @pytest.mark.asyncio
 async def test_pipeline_chunk_retriever_forwards_to_inner_pipeline(tmp_path):
     """Adapter runs the inner pipeline and returns the ChunkList at state.result."""
-    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
+    from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline, PipelineState
     from pydocs_mcp.retrieval.retrievers import PipelineChunkRetriever
 
     @dataclass(frozen=True, slots=True)
@@ -192,7 +192,7 @@ async def test_pipeline_chunk_retriever_forwards_to_inner_pipeline(tmp_path):
 
 @pytest.mark.asyncio
 async def test_pipeline_module_member_retriever_forwards():
-    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
+    from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline, PipelineState
     from pydocs_mcp.retrieval.retrievers import PipelineModuleMemberRetriever
 
     @dataclass(frozen=True, slots=True)

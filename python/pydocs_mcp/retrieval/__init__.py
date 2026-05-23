@@ -15,7 +15,7 @@ from pydocs_mcp.retrieval import route_predicates as _route_predicates  # noqa: 
 # registries at package import time so bare ``import pydocs_mcp.retrieval``
 # is a sufficient precondition for config-driven pipeline assembly.
 from pydocs_mcp.retrieval import stages as _stages  # noqa: F401, E402
-from pydocs_mcp.retrieval.pipeline import (
+from pydocs_mcp.retrieval.pipeline_legacy import (
     CodeRetrieverPipeline,
     PerCallConnectionProvider,
     PipelineState,

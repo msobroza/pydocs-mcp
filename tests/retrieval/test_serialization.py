@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
 from pydocs_mcp.retrieval.serialization import (
     BuildContext,
     ComponentRegistry,

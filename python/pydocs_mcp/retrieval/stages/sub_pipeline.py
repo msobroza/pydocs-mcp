@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
+from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline, PipelineState
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 

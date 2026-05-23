@@ -5,7 +5,7 @@ import pytest
 
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.sqlite import SqliteReferenceStore, SqliteUnitOfWork
 

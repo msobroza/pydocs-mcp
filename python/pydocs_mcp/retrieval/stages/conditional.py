@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
 from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 

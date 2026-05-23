@@ -18,7 +18,7 @@ from pydocs_mcp.models import (
     SearchQuery,
     SearchResponse,
 )
-from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
 
 
 # ── Fake pipeline ─────────────────────────────────────────────────────────

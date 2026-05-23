@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pydocs_mcp.models import ModuleMemberList, SearchQuery, SearchResponse
-from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
 
 
 @dataclass(frozen=True, slots=True)

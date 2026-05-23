@@ -8,7 +8,7 @@ from pydocs_mcp.models import ModuleMemberList, SearchQuery
 from pydocs_mcp.retrieval.serialization import BuildContext, retriever_registry
 
 if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
 
 
 @retriever_registry.register("pipeline_member")
@@ -28,7 +28,7 @@ class PipelineModuleMemberRetriever:
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "PipelineModuleMemberRetriever":
-        from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+        from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
         return cls(pipeline=CodeRetrieverPipeline.from_dict(data["pipeline"], context))
 
 

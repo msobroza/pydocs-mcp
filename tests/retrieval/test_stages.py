@@ -15,7 +15,7 @@ from pydocs_mcp.models import (
     ModuleMemberList,
     SearchQuery,
 )
-from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
 from pydocs_mcp.retrieval.stages import (
     ChunkRetrievalStage,
     LimitStage,
@@ -291,7 +291,7 @@ async def test_route_stage_no_match_no_default_is_noop():
 
 @pytest.mark.asyncio
 async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
-    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
     from pydocs_mcp.retrieval.stages import SubPipelineStage
 
     @dataclass(frozen=True, slots=True)
@@ -344,7 +344,7 @@ async def test_token_budget_formatter_stage_composite_output():
 async def test_metadata_post_filter_bypasses_composite_sentinel():
     """AC #34 — composite chunks skip the title post-filter."""
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
-    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
     from pydocs_mcp.retrieval.stages import (
         MetadataPostFilterStage,
         TokenBudgetStage,

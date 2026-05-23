@@ -19,7 +19,7 @@ from pydocs_mcp.models import (
     ChunkList,
     ModuleMemberList,
 )
-from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 from pydocs_mcp.retrieval.stages.token_budget import COMPOSITE_TITLE_SENTINEL
 from pydocs_mcp.storage.filters import (

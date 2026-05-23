@@ -24,7 +24,7 @@ from pydocs_mcp.models import (
     ChunkList,
     ChunkOrigin,
 )
-from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 if TYPE_CHECKING:

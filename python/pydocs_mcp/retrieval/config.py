@@ -23,7 +23,7 @@ from pydocs_mcp.extraction.config import ExtractionConfig
 # Side-effect imports: populate stage/retriever/formatter registries via decorators.
 from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401
 from pydocs_mcp.retrieval import retrievers as _retrievers  # noqa: F401
-from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
 from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.retrieval.stages import RouteCase, RouteStage, SubPipelineStage
 

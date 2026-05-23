@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 import pytest
 
 from pydocs_mcp.models import ChunkList, SearchQuery
-from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
+from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline, PipelineState
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +54,7 @@ async def test_pipeline_empty_stages_is_noop():
 
 def test_from_dict_rejects_excessive_nesting(tmp_path):
     """AC #31 — from_dict enforces _MAX_PIPELINE_DEPTH."""
-    from pydocs_mcp.retrieval.pipeline import (
+    from pydocs_mcp.retrieval.pipeline_legacy import (
         PerCallConnectionProvider,
         _MAX_PIPELINE_DEPTH,
     )
@@ -84,7 +84,7 @@ def test_from_dict_rejects_excessive_nesting(tmp_path):
 
 def test_from_dict_accepts_shallow_nesting(tmp_path):
     """Shallow nesting well under the depth cap must still succeed."""
-    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+    from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
     from pydocs_mcp.retrieval.serialization import BuildContext
 
     inner = {"name": "inner", "stages": []}

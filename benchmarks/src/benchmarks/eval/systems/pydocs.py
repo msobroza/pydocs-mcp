@@ -20,7 +20,7 @@ from .base_system import RetrievedItem
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
 
 
 @system_registry.register("pydocs-mcp")
