@@ -122,6 +122,8 @@ def test_bare_retrieval_import_populates_registries():
     from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
 
     assert len(stage_registry.names()) >= 10
-    assert len(retriever_registry.names()) >= 4
+    # Task 7: pipeline_chunk / pipeline_member adapter retrievers deleted.
+    # Only bm25_chunk + like_member remain until the rest fall in Task 9.
+    assert len(retriever_registry.names()) >= 2
     assert len(formatter_registry.names()) >= 2
     assert len(default_predicate_registry.names()) >= 4

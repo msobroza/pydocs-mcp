@@ -10,9 +10,10 @@
   via :func:`_matches_scope`;
 - expose a :class:`MetadataSchema` built from a flat field allowlist.
 
-The pipeline-adapter retrievers (``PipelineChunkRetriever`` /
-``PipelineModuleMemberRetriever``) don't touch these — they delegate to
-an inner pipeline that handles filter wiring itself.
+Task 7: the legacy pipeline-adapter retrievers
+(``PipelineChunkRetriever`` / ``PipelineModuleMemberRetriever``) were
+deleted — services now consume the YAML pipeline directly via
+``chunk_pipeline.run(query)``.
 """
 from __future__ import annotations
 
