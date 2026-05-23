@@ -286,6 +286,52 @@ fig = plot_baselines(
 The returned `matplotlib.figure.Figure` is yours to further customize,
 `.show()` in a notebook, or `.savefig()` again with different DPI.
 
+### Timing plots (indexing + per-query latency)
+
+Score metrics (`recall@k`, `MRR`, etc.) live on a 0..1 scale and look right
+as vertical bars. Latency metrics live on a duration scale (with p50 / p95 /
+p99 percentiles, not means + CIs) and read more naturally as **horizontal
+bars**. The `plot_timings()` function does this — one subplot per timing
+metric so indexing (seconds) and per-query search (milliseconds) don't get
+crushed onto the same X-axis.
+
+```bash
+# Horizontal timing-percentile plot — defaults to indexing_seconds +
+# search_seconds, one subplot per metric.
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
+    benchmarks/baselines/repoqa_snf.json \
+    --output benchmarks/results/plots/repoqa_timings.png \
+    --timings \
+    --title "RepoQA-2024-06-23 (Python, n=100) — latency"
+```
+
+Inside each subplot, the horizontal bar marks p50; a black whisker
+extends to p95; the right edge of the whisker is annotated with the
+full `p50 / p95 / p99` triple, formatted per magnitude (µs / ms / s).
+Sample output (committed to `benchmarks/docs/repoqa_timings.png`):
+
+![RepoQA-2024-06-23 (Python) latency plot](docs/repoqa_timings.png)
+
+Programmatic API mirrors `plot_baselines`:
+
+```python
+from pathlib import Path
+from benchmarks.eval.plotting import plot_timings
+
+fig = plot_timings(
+    baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
+    metrics=("indexing_seconds", "search_seconds"),   # default
+    output=Path("benchmarks/results/plots/repoqa_timings.png"),
+    palette="colorblind",
+    title="RepoQA-2024-06-23 (Python, n=100) — latency",
+)
+```
+
+Same apples-to-apples constraint as the score plot — every baseline must
+share the same `dataset` field. The function raises `ValueError`
+otherwise. Two BM25 vs dense configs on the same dataset add a second
+bar per subplot automatically when a future baseline lands.
+
 ## License and attribution
 
 Per-benchmark licensing + citation lives in the relevant subsection under

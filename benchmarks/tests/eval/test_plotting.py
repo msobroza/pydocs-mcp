@@ -27,7 +27,9 @@ def _bar_containers(ax) -> list[BarContainer]:
 
 from benchmarks.eval.plotting import (  # noqa: E402
     BaselineRecord,
+    _format_seconds,
     plot_baselines,
+    plot_timings,
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -272,3 +274,106 @@ def test_cli_main_writes_output(tmp_path: Path, capsys: pytest.CaptureFixture) -
     captured = capsys.readouterr()
     assert "Saved" in captured.out
     assert str(output) in captured.out
+
+
+# ── plot_timings ──────────────────────────────────────────────────────────
+
+
+def test_plot_timings_returns_figure_for_single_record(tmp_path: Path) -> None:
+    rec = BaselineRecord.from_path(_write_baseline(tmp_path, "single_timings"))
+    fig = plot_timings([rec])
+    try:
+        assert fig is not None
+        # Default = 2 timing metrics → 2 stacked subplots.
+        assert len(fig.axes) == 2
+    finally:
+        plt.close(fig)
+
+
+def test_plot_timings_renders_one_panel_per_metric(tmp_path: Path) -> None:
+    rec = BaselineRecord.from_path(_write_baseline(tmp_path, "one_metric"))
+    fig = plot_timings([rec], metrics=("indexing_seconds",))
+    try:
+        assert len(fig.axes) == 1
+    finally:
+        plt.close(fig)
+
+
+def test_plot_timings_groups_two_systems_same_dataset(tmp_path: Path) -> None:
+    bm25 = BaselineRecord.from_path(
+        _write_baseline(tmp_path, "bm25_t", config="baseline"),
+    )
+    dense = BaselineRecord.from_path(
+        _write_baseline(tmp_path, "dense_t", config="dense_v1"),
+    )
+    fig = plot_timings([bm25, dense])
+    try:
+        # 2 metrics × 1 BarContainer per axis = 2 bar containers total.
+        bars_per_axis = [len(_bar_containers(ax)) for ax in fig.axes]
+        # One BarContainer per axis carrying both bars.
+        assert all(n == 1 for n in bars_per_axis)
+        # Each container holds two bars (one per system).
+        for ax in fig.axes:
+            (container,) = _bar_containers(ax)
+            assert len(container) == 2
+    finally:
+        plt.close(fig)
+
+
+def test_plot_timings_saves_to_output(tmp_path: Path) -> None:
+    rec = BaselineRecord.from_path(_write_baseline(tmp_path, "save_t"))
+    output = tmp_path / "nested" / "timings.png"
+    fig = plot_timings([rec], output=output)
+    try:
+        assert output.exists()
+        assert output.stat().st_size > 100
+    finally:
+        plt.close(fig)
+
+
+def test_plot_timings_rejects_mixed_datasets(tmp_path: Path) -> None:
+    real = BaselineRecord.from_path(_write_baseline(tmp_path, "real_t"))
+    fixture = BaselineRecord.from_path(
+        _write_baseline(
+            tmp_path, "fixture_t",
+            dataset="repoqa-fixture-python",
+            tasks_ran=5,
+        ),
+    )
+    with pytest.raises(ValueError, match="same dataset"):
+        plot_timings([real, fixture])
+
+
+def test_plot_timings_empty_baselines_raises() -> None:
+    with pytest.raises(ValueError, match="at least one baseline"):
+        plot_timings([])
+
+
+def test_plot_timings_empty_metrics_raises(tmp_path: Path) -> None:
+    rec = BaselineRecord.from_path(_write_baseline(tmp_path, "x_t"))
+    with pytest.raises(ValueError, match="at least one metric"):
+        plot_timings([rec], metrics=())
+
+
+def test_format_seconds_picks_unit_by_magnitude() -> None:
+    assert _format_seconds(0.0) == "0s"
+    assert _format_seconds(123e-6) == "123µs"
+    assert _format_seconds(0.05) == "50.0ms"
+    assert _format_seconds(7.45) == "7.45s"
+
+
+def test_cli_main_timings_mode_writes_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    from benchmarks.eval.plotting import _cli_main
+
+    path = _write_baseline(tmp_path, "cli_t")
+    output = tmp_path / "cli_t.png"
+    rc = _cli_main([
+        str(path),
+        "--output", str(output),
+        "--timings",
+    ])
+    assert rc == 0
+    assert output.exists()
+    assert "Saved" in capsys.readouterr().out

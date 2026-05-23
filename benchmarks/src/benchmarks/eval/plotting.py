@@ -61,7 +61,21 @@ _DEFAULT_PALETTE = "colorblind"
 _DEFAULT_METRICS: tuple[str, ...] = (
     "recall@1", "recall@5", "recall@10", "mrr",
 )
+_DEFAULT_TIMING_METRICS: tuple[str, ...] = (
+    "indexing_seconds", "search_seconds",
+)
 _DEFAULT_FIGSIZE: tuple[float, float] = (10.0, 6.0)
+# One subplot per timing metric — height multiplies per metric so the
+# total figure stays the right size for stacking 1, 2, or 3 panels.
+_TIMING_PANEL_HEIGHT: float = 1.6        # inches per panel
+_TIMING_BAR_PADDING: float = 0.5         # extra vertical padding for labels
+
+# Pretty labels for the timing-metric panels — fall back to the raw
+# metric name for unknown keys.
+_TIMING_PRETTY: dict[str, str] = {
+    "indexing_seconds": "Indexing time (seconds)",
+    "search_seconds":   "Per-query search latency (seconds)",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,36 +173,13 @@ def plot_baselines(
     Raises:
         ValueError: if ``baselines`` or ``metrics`` is empty.
     """
-    records = [
-        item if isinstance(item, BaselineRecord)
-        else BaselineRecord.from_path(item)
-        for item in baselines
-    ]
-    if not records:
-        raise ValueError("plot_baselines requires at least one baseline")
+    records = _load_records(baselines, fn_name="plot_baselines")
 
     metrics = tuple(metrics)
     if not metrics:
         raise ValueError("plot_baselines requires at least one metric")
 
-    # Hard guard: a single plot must compare apples-to-apples — the same
-    # benchmark + dataset slice. Cross-dataset overlays (e.g., the 5-needle
-    # CI fixture next to the real 100-needle sweep) misrepresent the
-    # numbers, since the 5-needle fixture is a hermetic regression test,
-    # not a competing system worth comparing against. If the user really
-    # wants to render two datasets, they can call plot_baselines twice and
-    # arrange the figures themselves.
-    datasets = {r.dataset for r in records}
-    if len(datasets) > 1:
-        per_dataset = ", ".join(
-            f"{r.display_label} → {r.dataset}" for r in records
-        )
-        raise ValueError(
-            "plot_baselines requires every baseline to come from the "
-            "same dataset (apples-to-apples comparison). Got multiple "
-            f"datasets: {sorted(datasets)}. Records: {per_dataset}. "
-            "Call plot_baselines once per dataset instead."
-        )
+    _validate_same_dataset(records, fn_name="plot_baselines")
 
     df = _long_dataframe(records, metrics)
 
@@ -237,6 +228,218 @@ def plot_baselines(
         fig.savefig(output, dpi=150, bbox_inches="tight")
 
     return fig
+
+
+def _load_records(
+    baselines: Iterable[BaselineRecord | Path], *, fn_name: str,
+) -> list[BaselineRecord]:
+    """Resolve a mix of ``BaselineRecord`` / ``Path`` items into records."""
+    records = [
+        item if isinstance(item, BaselineRecord)
+        else BaselineRecord.from_path(item)
+        for item in baselines
+    ]
+    if not records:
+        raise ValueError(f"{fn_name} requires at least one baseline")
+    return records
+
+
+def _validate_same_dataset(
+    records: list[BaselineRecord], *, fn_name: str,
+) -> None:
+    """Apples-to-apples guard — every baseline in a single plot must come
+    from the same ``dataset`` slice. Cross-dataset overlays (e.g., the
+    5-needle CI fixture next to the real 100-needle sweep) misrepresent
+    the numbers because the fixture is a hermetic regression test, not a
+    competing system. Caller can render multiple datasets by calling
+    once per dataset and arranging the figures externally.
+    """
+    datasets = {r.dataset for r in records}
+    if len(datasets) > 1:
+        per_dataset = ", ".join(
+            f"{r.display_label} → {r.dataset}" for r in records
+        )
+        raise ValueError(
+            f"{fn_name} requires every baseline to come from the same "
+            "dataset (apples-to-apples comparison). Got multiple "
+            f"datasets: {sorted(datasets)}. Records: {per_dataset}. "
+            f"Call {fn_name} once per dataset instead."
+        )
+
+
+def plot_timings(
+    baselines: Iterable[BaselineRecord | Path],
+    metrics: Iterable[str] = _DEFAULT_TIMING_METRICS,
+    *,
+    output: Path | None = None,
+    palette: str = _DEFAULT_PALETTE,
+    title: str | None = None,
+    figsize: tuple[float, float] | None = None,
+) -> Figure:
+    """Horizontal bar plot of timing percentiles per baseline.
+
+    Each metric (``indexing_seconds``, ``search_seconds``, ...) becomes
+    its own subplot — indexing latency and per-query search latency live
+    on very different magnitudes (seconds vs milliseconds), so stacking
+    them on a shared X-axis would crush one of them. Inside each panel,
+    one horizontal bar per baseline marks p50; a black line + cap
+    extends to p95 to show tail dispersion. Exact p50 / p95 / p99
+    numbers are annotated at the bar's right edge.
+
+    Apples-to-apples constraint same as :func:`plot_baselines`: every
+    baseline must come from the same ``dataset`` slice. Mixing the
+    5-needle CI fixture next to the real 100-needle sweep raises
+    ``ValueError``.
+
+    Args:
+        baselines: one or more ``BaselineRecord`` / ``Path`` items.
+        metrics: ordered timing metric names — one subplot per metric.
+            Default: ``("indexing_seconds", "search_seconds")``.
+        output: optional figure save path.
+        palette: seaborn palette name. Default ``"colorblind"``.
+        title: figure title. Default: ``"<dataset> (<tasks_ran> tasks)"``
+            from the first baseline.
+        figsize: ``(width, height)``. Default sizes height per panel so
+            adding metrics doesn't squish bars.
+
+    Returns:
+        The matplotlib ``Figure``.
+
+    Raises:
+        ValueError: if ``baselines`` or ``metrics`` is empty, or if the
+            baselines span multiple datasets.
+    """
+    records = _load_records(baselines, fn_name="plot_timings")
+    metrics = tuple(metrics)
+    if not metrics:
+        raise ValueError("plot_timings requires at least one metric")
+    _validate_same_dataset(records, fn_name="plot_timings")
+
+    sns.set_theme(style="whitegrid", context="paper", font_scale=1.0)
+
+    if figsize is None:
+        width = 10.0
+        # Each panel gets a fixed slice of height; extra padding for the
+        # global title + xlabel keeps the figure legible at 1, 2, or 3
+        # metrics.
+        height = (
+            _TIMING_PANEL_HEIGHT * max(len(records), 1) * len(metrics)
+            + _TIMING_BAR_PADDING * 2
+        )
+        figsize = (width, max(height, 3.0))
+
+    fig, axes = plt.subplots(
+        nrows=len(metrics),
+        ncols=1,
+        figsize=figsize,
+        sharex=False,
+        constrained_layout=True,
+    )
+    # plt.subplots returns a bare Axes when nrows=1 — normalize to list.
+    axes_list = list(axes) if len(metrics) > 1 else [axes]
+
+    colors = sns.color_palette(palette, n_colors=max(len(records), 3))
+
+    for ax, metric in zip(axes_list, metrics):
+        _plot_timing_axis(ax, records, metric, colors)
+
+    if title is None:
+        title = f"{records[0].dataset} ({records[0].tasks_ran} tasks)"
+    fig.suptitle(title, fontsize=11, y=1.02)
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output, dpi=150, bbox_inches="tight")
+
+    return fig
+
+
+def _plot_timing_axis(
+    ax,
+    records: list[BaselineRecord],
+    metric: str,
+    colors: list,
+) -> None:
+    """Render one horizontal-bar timing panel.
+
+    Bar length = p50. Black line + cap from p50 → p95. Annotation at the
+    bar's right edge: ``p50 / p95 / p99`` formatted for legibility
+    (µs / ms / s based on magnitude).
+    """
+    y_pos = list(range(len(records)))
+    p50s: list[float] = []
+    p95s: list[float] = []
+    p99s: list[float] = []
+    for rec in records:
+        stats = rec.metrics.get(metric, {})
+        p50 = float(stats.get("p50", 0.0))
+        p95 = float(stats.get("p95", p50))
+        p99 = float(stats.get("p99", p95))
+        p50s.append(p50)
+        p95s.append(p95)
+        p99s.append(p99)
+
+    ax.barh(
+        y_pos, p50s,
+        color=colors[:len(records)],
+        edgecolor="black",
+        linewidth=0.5,
+        height=0.6,
+    )
+
+    # p50 → p95 whisker — drawn manually so the cap stays inside the bar
+    # band regardless of how many panels share the figure.
+    for i, (p50, p95) in enumerate(zip(p50s, p95s)):
+        if p95 > p50:
+            ax.plot([p50, p95], [i, i], color="black", linewidth=1.2)
+            ax.plot(
+                [p95, p95], [i - 0.12, i + 0.12],
+                color="black", linewidth=1.2,
+            )
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(
+        [r.display_label + r.legend_suffix for r in records],
+        fontsize=8,
+    )
+    ax.invert_yaxis()  # first record at top — natural reading order.
+
+    pretty = _TIMING_PRETTY.get(metric, metric)
+    ax.set_xlabel(f"{pretty}  (bar = p50, whisker = p95)", fontsize=9)
+
+    # X-limit with headroom for the right-edge annotation.
+    upper = max(p95s) if p95s else 0.0
+    if upper > 0:
+        ax.set_xlim(0.0, upper * 1.6)
+
+    # Annotation: 'p50=… / p95=… / p99=…' next to the whisker end.
+    for i, (p50, p95, p99) in enumerate(zip(p50s, p95s, p99s)):
+        ax.text(
+            (p95 if p95 > 0 else p50) + upper * 0.03,
+            i,
+            (
+                f"p50={_format_seconds(p50)} / "
+                f"p95={_format_seconds(p95)} / "
+                f"p99={_format_seconds(p99)}"
+            ),
+            va="center",
+            fontsize=8,
+            family="monospace",
+        )
+
+
+def _format_seconds(value: float) -> str:
+    """Format a duration in seconds at the right magnitude for the eye.
+
+    < 1 ms → µs, < 1 s → ms, else seconds with two decimals.
+    """
+    if value <= 0:
+        return "0s"
+    if value < 1e-3:
+        return f"{value * 1e6:.0f}µs"
+    if value < 1.0:
+        return f"{value * 1e3:.1f}ms"
+    return f"{value:.2f}s"
 
 
 def _long_dataframe(
@@ -307,9 +510,12 @@ def _cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m benchmarks.eval.plotting",
         description=(
-            "Grouped bar plot of one or more baseline JSON files. "
-            "Side-by-side bars per system; one X-axis tick per metric; "
-            "95%% CI error bars; legend includes git_sha and tasks_ran."
+            "Plot baseline JSON files. Default mode: grouped vertical "
+            "bars per metric (score metrics like recall@k / MRR) with "
+            "95%% CI error bars. ``--timings`` switches to horizontal "
+            "bars over timing percentiles (indexing_seconds / "
+            "search_seconds) — one subplot per metric, with a p50 bar "
+            "and p95 whisker."
         ),
     )
     parser.add_argument(
@@ -325,10 +531,23 @@ def _cli_parser() -> argparse.ArgumentParser:
         help="Output path for the figure (.png, .pdf, .svg).",
     )
     parser.add_argument(
+        "--timings",
+        action="store_true",
+        help=(
+            "Switch to timing-percentile mode (horizontal bars, p50 + "
+            "p95 whisker). Default metrics become indexing_seconds + "
+            "search_seconds; override with --metrics."
+        ),
+    )
+    parser.add_argument(
         "--metrics",
         type=str,
-        default=",".join(_DEFAULT_METRICS),
-        help=f"Comma-separated metric names. Default: {','.join(_DEFAULT_METRICS)}",
+        default=None,
+        help=(
+            "Comma-separated metric names. Default for score mode: "
+            f"{','.join(_DEFAULT_METRICS)}. Default for --timings: "
+            f"{','.join(_DEFAULT_TIMING_METRICS)}."
+        ),
     )
     parser.add_argument(
         "--palette",
@@ -347,14 +566,27 @@ def _cli_parser() -> argparse.ArgumentParser:
 
 def _cli_main(argv: list[str] | None = None) -> int:
     args = _cli_parser().parse_args(argv)
-    metrics = tuple(m.strip() for m in args.metrics.split(",") if m.strip())
-    fig = plot_baselines(
-        baselines=args.baselines,
-        metrics=metrics,
-        output=args.output,
-        palette=args.palette,
-        title=args.title,
-    )
+    default_metrics = _DEFAULT_TIMING_METRICS if args.timings else _DEFAULT_METRICS
+    if args.metrics:
+        metrics = tuple(m.strip() for m in args.metrics.split(",") if m.strip())
+    else:
+        metrics = default_metrics
+    if args.timings:
+        fig = plot_timings(
+            baselines=args.baselines,
+            metrics=metrics,
+            output=args.output,
+            palette=args.palette,
+            title=args.title,
+        )
+    else:
+        fig = plot_baselines(
+            baselines=args.baselines,
+            metrics=metrics,
+            output=args.output,
+            palette=args.palette,
+            title=args.title,
+        )
     plt.close(fig)
     print(f"Saved {args.output}")
     return 0
@@ -369,4 +601,4 @@ if __name__ == "__main__":
     raise SystemExit(_cli_main())
 
 
-__all__ = ("BaselineRecord", "plot_baselines")
+__all__ = ("BaselineRecord", "plot_baselines", "plot_timings")
