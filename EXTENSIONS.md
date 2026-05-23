@@ -1,6 +1,6 @@
 # Extension Points
 
-**Context:** this document describes the extensibility surface of pydocs-mcp **after sub-PRs #1, #2, and #3 land** (see `docs/superpowers/specs/`). Until then, some extension hooks listed below exist only as Protocol declarations; the complete surface activates once the three planned PRs ship.
+**Context:** this document describes the extensibility surface of pydocs-mcp. The framework PRs (sub-PRs #1–#5 + #6 MCP consolidation + the sklearn-style pipeline refactor) have all shipped; every extension hook listed below is live in the current codebase.
 
 **Purpose:** a reference menu for picking "test-the-architecture" work. Use it to propose small follow-up PRs that exercise one extension point end-to-end and validate that the abstractions hold up in practice.
 
@@ -16,15 +16,18 @@
                            ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  application/ — Application Services                             │
-│    IndexingService (sub-PR #3)                                   │
-│    SearchDocsService, PackageLookupService, ... (sub-PR #4+)     │
+│    IndexingService, ProjectIndexer                               │
+│    DocsSearch, ApiSearch, PackageLookup, ModuleInspector         │
 └──────────────────────────┬───────────────────────────────────────┘
                            │
                            ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  retrieval/ — Pipeline + stages + retrievers + formatters        │
-│    CodeRetrieverPipeline, PipelineStage, RouteStage, ...         │
-│    ChunkRetriever / ModuleMemberRetriever (Retriever hierarchy)  │
+│  retrieval/ — sklearn-style Pipeline + Step ABC + formatters     │
+│    RetrieverStep (ABC), RetrieverPipeline, RetrieverState        │
+│    ChunkFetcherStep, BM25ScorerStep, MemberFetcherStep,          │
+│    TopKFilterStep, MetadataPostFilterStep, LimitStep,            │
+│    TokenBudgetStep, RouteStep, ConditionalStep, ParallelStep,    │
+│    RRFStep                                                       │
 │    ResultFormatter, PredicateRegistry                            │
 │    AppConfig (pydantic-settings + YAML)                          │
 └──────────────────────────┬───────────────────────────────────────┘
@@ -77,16 +80,16 @@ Wiring: instantiate in `server.py` startup; reference by config path.
 
 ## C. Retrieval pipeline
 
-Every primitive uses **registry + decorator**. One class + one `@register("name")` line + optional YAML preset.
+Every primitive subclasses `RetrieverStep` (ABC) and uses **registry + decorator**. One class + one `@stage_registry.register("name")` line + optional YAML preset. (`stage_registry` is the historical registry name; it now holds `RetrieverStep` subclasses — kept stable for YAML compatibility.)
 
 | Extension | Register via |
 |---|---|
-| New pipeline stage (`TimedStage`, `CachingStage`, `ExplainStage`, `DedupeStage`, `LoopStage`, ...) | `@stage_registry.register("name")` |
-| New retriever strategy (`DenseChunkRetriever`, `NativeHybridChunkRetriever`, `HyDERetriever`, `SemanticRouterRetriever`, `KeywordBoostRetriever`, ...) | `@retriever_registry.register("name")` |
+| New pipeline step (`TimedStep`, `CachingStep`, `ExplainStep`, `DedupeStep`, `LoopStep`, ...) | `@stage_registry.register("name")` |
+| New fetcher / scorer step (`DenseScorerStep`, `HyDEFetcherStep`, `SemanticRouterStep`, `KeywordBoostScorerStep`, ...) — replaces the old `Retriever` Protocol hierarchy with sklearn-shaped composition | `@stage_registry.register("name")` |
 | New formatter (`JsonFormatter`, `CompactMarkdownFormatter`, `CitationFormatter`, `XmlFormatter`, ...) | `@formatter_registry.register("name")` |
 | New conditional predicate (`is_code_like_query`, `has_high_relevance`, `feature_flag_enabled`, ...) | `@predicate("name")` decorator |
-| New fusion algorithm (`WeightedSumFusionStage`, `DistributionBasedScoreFusionStage`, `BordaCountFusionStage`) | `@stage_registry.register("name")` |
-| New pipeline blueprint | YAML file under `python/pydocs_mcp/pipelines/` or a user path; referenced from `pydocs-mcp.yaml` |
+| New fusion algorithm (`WeightedSumFusionStep`, `DistributionBasedScoreFusionStep`, `BordaCountFusionStep`) | `@stage_registry.register("name")` |
+| New pipeline blueprint | YAML file under `python/pydocs_mcp/pipelines/` or a user path; referenced from `pydocs-mcp.yaml`. Schema: top-level `name:` + `steps:` list, each entry has `name:` + `type:` + `params:` |
 
 ## D. Configuration
 
@@ -119,11 +122,11 @@ Every primitive uses **registry + decorator**. One class + one `@register("name"
 
 | Extension | LOC | Files touched | Existing code changes |
 |---|:---:|:---:|---|
-| New pipeline stage | ~30 | 1 new class | None |
+| New pipeline step | ~30 | 1 new class subclassing `RetrieverStep` | None |
 | New predicate | ~3 | Existing `route_predicates.py` | None |
 | New formatter | ~30 | 1 new class | None |
-| New retriever | ~60 | 1 new class | None |
-| New pipeline preset (YAML) | ~20 | 1 new YAML file | None |
+| New fetcher / scorer step | ~60 | 1 new class subclassing `RetrieverStep` (replaces the old "new retriever" pattern) | None |
+| New pipeline preset (YAML) | ~20 | 1 new YAML file (`steps:` schema with `name:` per step) | None |
 | New filter operator in `MultiFieldFormat` | ~10 | `filters.py` + each `FilterAdapter` | Backends that don't support it keep raising `NotImplementedError` |
 | New filter tree node type | ~10 | `filters.py` + each `FilterAdapter` | Every `FilterAdapter` gains one case |
 | New filter format (`ChromaFormat`, etc.) | ~80 | 1 new class + registry entry | None |
@@ -157,9 +160,9 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 1. **Add `CompactMarkdownFormatter`** — a `ResultFormatter` that renders matches more densely for token-constrained MCP responses. Exercises the `formatter_registry` + YAML preset path.
 
-2. **Add `is_code_like_query` predicate** — heuristic that detects `self.`, `.__`, parentheses in the query terms. Exercises the `@predicate` decorator + `RouteStage` composition.
+2. **Add `is_code_like_query` predicate** — heuristic that detects `self.`, `.__`, parentheses in the query terms. Exercises the `@predicate` decorator + `RouteStep` composition.
 
-3. **Add `TimedStage(inner)`** — a decorator stage that logs duration. Exercises the uniform `PipelineStage` protocol + the "compound stage" pattern (wraps another stage).
+3. **Add `TimedStep(inner)`** — a decorator step that logs duration. Exercises the uniform `RetrieverStep` ABC + the "compound step" pattern (wraps another step). Pipeline-IS-a-Step composition means it can wrap a whole sub-pipeline.
 
 4. **Add `JsonResultFormatter`** — output as JSON for tooling that wants structured results. Pair with a `json_chunk` YAML preset.
 
@@ -167,21 +170,21 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 5. **Add `FilterTreeFormat`** — full dict-form filter with `$and` / `$or` / `$not`. Lights up `Any_` and `Not` in the `SqliteFilterAdapter`. First non-multifield format; validates the two-format architecture.
 
-6. **Add `TryStage(stage, on_error=None)`** — the first error-tolerance primitive (originally planned for sub-PR #7). Exercises stage-wrapper composition + the "stages propagate exceptions" contract.
+6. **Add `TryStep(inner, on_error=None)`** — the first error-tolerance primitive (originally planned for sub-PR #7). Exercises step-wrapper composition + the "steps propagate exceptions" contract.
 
 7. **Add `FieldRange(field, lo, hi)` filter node** — validates that the Filter tree extends cleanly; `SqliteFilterAdapter` gains a `BETWEEN` translation. Would support queries like "chunks indexed in the last 7 days" once a timestamp field lands.
 
-8. **Add `CachingStage(inner, cache)` with a simple LRU** — decorator that memoizes `retrieve()` results on query hash. Validates the compound-stage pattern under real load.
+8. **Add `CachingStep(inner, cache)` with a simple LRU** — decorator that memoizes step output on query hash. Validates the compound-step pattern under real load.
 
 ### Tier 3 — medium PRs (~400–800 LOC)
 
-9. **Add `SqliteVecVectorStore`** — wire `sqlite-vec` to get `VectorSearchable` on the existing SQLite backend. Requires adding `Chunk.embedding` field (and its migration) + an embedder. First real dense-retrieval path; tests the whole vector-search pipeline.
+9. **Add `SqliteVecVectorStore`** — wire `sqlite-vec` to get `VectorSearchable` on the existing SQLite backend. Requires adding `Chunk.embedding` field (and its migration) + an embedder. First real dense-retrieval path; tests the whole vector-search pipeline. Pairs with a new `DenseScorerStep` (mirrors `BM25ScorerStep`'s shape).
 
 10. **Add `QdrantVectorStore`** with the full `ChunkStore + TextSearchable + VectorSearchable + HybridSearchable` stack. First full backend swap — validates that nothing above the storage layer changes.
 
-11. **Add `ChromaVectorStore` with `ChunkStore + VectorSearchable` only** — tests that Option C (split Protocols) handles the "not all backends support every capability" case cleanly. Demonstrates the type-checker-level protection against wiring a BM25 retriever to a Chroma store.
+11. **Add `ChromaVectorStore` with `ChunkStore + VectorSearchable` only** — tests that Option C (split Protocols) handles the "not all backends support every capability" case cleanly. Demonstrates the type-checker-level protection against wiring a BM25 fetcher step to a Chroma store.
 
-12. **Add `LlmRerankStage` with an OpenAI/Anthropic client** — validates that an I/O-bound stage composes with the pipeline. Tests predicate-guarded execution (skip rerank on short queries).
+12. **Add `LlmRerankStep` with an OpenAI/Anthropic/Cohere client** — validates that an I/O-bound step composes with the pipeline. Tests predicate-guarded execution (skip rerank on short queries). This is the planned PR-B3.2.
 
 ### Tier 4 — larger PRs (~800+ LOC)
 
