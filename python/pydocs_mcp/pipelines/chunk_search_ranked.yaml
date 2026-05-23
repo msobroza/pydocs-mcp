@@ -5,6 +5,12 @@
 # instead of one composite chunk in state.result. recall@k / mrr / pass@1
 # metrics can actually measure top-K hits with this preset; the MCP server
 # keeps chunk_search.yaml (composite output) as its default.
+#
+# Production note: pointing DocsSearch (MCP `search` handler) at this preset
+# is supported — DocsSearch.search reads state.candidates when state.result
+# is None — but the composite/budgeted output of chunk_search.yaml is what
+# LLM clients typically want. Use this preset for benchmark sweeps + offline
+# evaluation, not as the live MCP default.
 name: chunk_search_ranked
 steps:
   - name: pre_filter

@@ -2,7 +2,7 @@
 #
 # Seven-step chain replaces the monolithic legacy ``bm25_chunk`` retriever:
 #   1. pre_filter    — parse + validate + scope-split, write typed result
-#                      to state.scratch['pre_filter'] (consumed by fetcher)
+#                      to state.scratch['pre_filter.result'] (consumed by fetcher)
 #   2. chunk_fetcher  — FTS5 MATCH + pre-filter pushdown, raw negative ranks
 #   3. bm25_scorer    — flip sign so higher = better
 #   4. metadata_post_filter — apply SearchQuery.post_filter in-memory

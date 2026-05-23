@@ -78,7 +78,7 @@ async def test_fetcher_captures_fts5_rank_as_negative_relevance(populated_db: Pa
 
 async def test_chunk_fetcher_reads_pre_filter_from_scratch(populated_db: Path) -> None:
     """When PreFilterStep ran upstream and wrote PreFilterResult to
-    state.scratch['pre_filter'], the fetcher consumes it directly without
+    state.scratch['pre_filter.result'], the fetcher consumes it directly without
     re-parsing state.query.pre_filter."""
     provider = build_connection_provider(populated_db)
     step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
@@ -86,8 +86,8 @@ async def test_chunk_fetcher_reads_pre_filter_from_scratch(populated_db: Path) -
         query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
     )
     # Simulate PreFilterStep having run upstream.
-    state.scratch["pre_filter"] = PreFilterResult(
-        tree=None, scope=None, sql="c.package = ?", params=["demo"],
+    state.scratch["pre_filter.result"] = PreFilterResult(
+        tree=None, scope=None, sql="c.package = ?", params=("demo",),
     )
     out = await step.run(state)
     # The fetcher used the pre-built SQL pushdown, didn't re-parse query.pre_filter.
@@ -110,6 +110,6 @@ async def test_chunk_fetcher_raises_if_pre_filter_set_but_scratch_missing(
     state = RetrieverState(
         query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
     )
-    # No state.scratch['pre_filter'] — PreFilterStep didn't run.
+    # No state.scratch['pre_filter.result'] — PreFilterStep didn't run.
     with pytest.raises(RuntimeError, match="pre_filter"):
         await step.run(state)

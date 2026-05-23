@@ -3,14 +3,18 @@
 Single responsibility: take a SearchQuery's ``pre_filter`` (raw mapping) +
 ``pre_filter_format``, parse it via the format registry, validate against
 the schema's allowed fields, split the scope clause off, and write a
-typed :class:`PreFilterResult` dataclass to ``state.scratch["pre_filter"]``
-for downstream fetcher steps to consume.
+typed :class:`PreFilterResult` dataclass to
+``state.scratch["pre_filter.result"]`` for downstream fetcher steps to
+consume.
 
 Dedups the inline pre-filter logic that previously lived in
 :class:`ChunkFetcherStep` + :class:`MemberFetcherStep`. A single
 :class:`PreFilterStep` runs once per pipeline; the fetchers downstream
-read ``state.scratch["pre_filter"]`` directly (raise if missing when
-``state.query.pre_filter`` is set).
+read ``state.scratch["pre_filter.result"]`` directly (raise if missing
+when ``state.query.pre_filter`` is set).
+
+Scratch key follows the ``<step_name>.<field>`` convention documented on
+``RetrieverState.scratch`` so future steps can't silently shadow it.
 
 No backward-compat fallback — all shipped YAML pipelines include this
 step BEFORE the fetcher. User overlays that omit it break loudly.
@@ -44,7 +48,7 @@ _DEFAULT_TARGET_FIELD: Literal["chunk", "member"] = "chunk"
 
 @dataclass(frozen=True, slots=True)
 class PreFilterResult:
-    """Typed result emitted by :class:`PreFilterStep` into ``state.scratch["pre_filter"]``.
+    """Typed result emitted by :class:`PreFilterStep` into ``state.scratch["pre_filter.result"]``.
 
     Fetchers downstream read these fields without re-parsing the raw
     ``SearchQuery.pre_filter`` mapping.
@@ -57,11 +61,12 @@ class PreFilterResult:
     - ``sql``: the SQL ``WHERE``-clause fragment built by
       :class:`SqliteFilterAdapter`. Empty string when ``tree`` is ``None``.
     - ``params``: positional SQL parameters paired with ``sql``.
+      Immutable tuple — the frozen dataclass keeps the contract truthful.
     """
     tree: "Filter | None"
     scope: "frozenset[SearchScope] | None"
     sql: str
-    params: list[Any]
+    params: tuple[Any, ...]
 
 
 @step_registry.register("pre_filter")
@@ -110,12 +115,15 @@ class PreFilterStep(RetrieverStep):
                 adapter = SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
             filter_sql, filter_params = adapter.adapt(tree)
 
-        # Write typed result to state.scratch under a single key. The dict
-        # mutation is intentional — RetrieverState is frozen but the
-        # scratch dict is mutable by its documented contract (see
-        # ``RetrieverState.scratch`` docstring).
-        state.scratch["pre_filter"] = PreFilterResult(
-            tree=tree, scope=scope, sql=filter_sql, params=filter_params,
+        # Write typed result to state.scratch under the canonical
+        # ``<step_name>.<field>`` key. The dict mutation is intentional —
+        # RetrieverState is frozen but the scratch dict is mutable by its
+        # documented contract (see ``RetrieverState.scratch`` docstring).
+        state.scratch["pre_filter.result"] = PreFilterResult(
+            tree=tree,
+            scope=scope,
+            sql=filter_sql,
+            params=tuple(filter_params),
         )
         return state
 

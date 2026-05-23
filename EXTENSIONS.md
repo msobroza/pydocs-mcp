@@ -80,15 +80,15 @@ Wiring: instantiate in `server.py` startup; reference by config path.
 
 ## C. Retrieval pipeline
 
-Every primitive subclasses `RetrieverStep` (ABC) and uses **registry + decorator**. One class + one `@stage_registry.register("name")` line + optional YAML preset. (`stage_registry` is the historical registry name; it now holds `RetrieverStep` subclasses — kept stable for YAML compatibility.)
+Every primitive subclasses `RetrieverStep` (ABC) and uses **registry + decorator**. One class + one `@step_registry.register("name")` line + optional YAML preset. (`step_registry` holds `RetrieverStep` subclasses keyed by their YAML `type:` string. The `extraction/` pipeline has its own separate `stage_registry` — see CLAUDE.md §"Naming: retrieval vs ingestion pipelines".)
 
 | Extension | Register via |
 |---|---|
-| New pipeline step (`TimedStep`, `CachingStep`, `ExplainStep`, `DedupeStep`, `LoopStep`, ...) | `@stage_registry.register("name")` |
-| New fetcher / scorer step (`DenseScorerStep`, `HyDEFetcherStep`, `SemanticRouterStep`, `KeywordBoostScorerStep`, ...) — replaces the old `Retriever` Protocol hierarchy with sklearn-shaped composition | `@stage_registry.register("name")` |
+| New pipeline step (`TimedStep`, `CachingStep`, `ExplainStep`, `DedupeStep`, `LoopStep`, ...) | `@step_registry.register("name")` |
+| New fetcher / scorer step (`DenseScorerStep`, `HyDEFetcherStep`, `SemanticRouterStep`, `KeywordBoostScorerStep`, ...) — replaces the old `Retriever` Protocol hierarchy with sklearn-shaped composition | `@step_registry.register("name")` |
 | New formatter (`JsonFormatter`, `CompactMarkdownFormatter`, `CitationFormatter`, `XmlFormatter`, ...) | `@formatter_registry.register("name")` |
 | New conditional predicate (`is_code_like_query`, `has_high_relevance`, `feature_flag_enabled`, ...) | `@predicate("name")` decorator |
-| New fusion algorithm (`WeightedSumFusionStep`, `DistributionBasedScoreFusionStep`, `BordaCountFusionStep`) | `@stage_registry.register("name")` |
+| New fusion algorithm (`WeightedSumFusionStep`, `DistributionBasedScoreFusionStep`, `BordaCountFusionStep`) | `@step_registry.register("name")` |
 | New pipeline blueprint | YAML file under `python/pydocs_mcp/pipelines/` or a user path; referenced from `pydocs-mcp.yaml`. Schema: top-level `name:` + `steps:` list, each entry has `name:` + `type:` + `params:` |
 
 ## D. Configuration

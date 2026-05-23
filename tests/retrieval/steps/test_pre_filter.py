@@ -5,7 +5,7 @@ decisions for Task 4:
 
 1. PreFilterStep is a RetrieverStep (ABC subclass check).
 2. No-op when state.query.pre_filter is None — no scratch key written.
-3. Writes a typed PreFilterResult dataclass under state.scratch['pre_filter'].
+3. Writes a typed PreFilterResult dataclass under state.scratch['pre_filter.result'].
 4. Invalid filter format (unknown field for the schema) raises.
 5. Scope clause is split out into result.scope (frozenset[SearchScope]).
 6. target_field='member' routes through _MEMBER_COLUMNS (no 'c.' prefix).
@@ -61,14 +61,14 @@ async def test_pre_filter_step_is_a_retriever_step() -> None:
 async def test_pre_filter_noop_when_pre_filter_is_none() -> None:
     """No pre_filter on the query → no scratch key written."""
     out = await _step_chunk().run(_state(pre_filter=None))
-    assert "pre_filter" not in out.scratch
+    assert "pre_filter.result" not in out.scratch
 
 
 async def test_pre_filter_writes_typed_result_when_filter_present() -> None:
-    """A valid pre_filter → PreFilterResult dataclass under state.scratch['pre_filter']."""
+    """A valid pre_filter → PreFilterResult dataclass under state.scratch['pre_filter.result']."""
     out = await _step_chunk().run(_state(pre_filter={"package": "demo"}))
-    assert "pre_filter" in out.scratch
-    result = out.scratch["pre_filter"]
+    assert "pre_filter.result" in out.scratch
+    result = out.scratch["pre_filter.result"]
     assert isinstance(result, PreFilterResult)
     assert is_dataclass(result)
     # SQL pushdown clause is non-empty (LIKE / equality on 'package').
@@ -88,7 +88,7 @@ async def test_pre_filter_invalid_format_raises() -> None:
 async def test_pre_filter_scope_split_into_typed_field() -> None:
     """A pre_filter with `scope:project_only` → result.scope is a frozenset."""
     out = await _step_chunk().run(_state(pre_filter={"scope": "project_only"}))
-    result = out.scratch["pre_filter"]
+    result = out.scratch["pre_filter.result"]
     assert result.scope is not None
     assert isinstance(result.scope, frozenset)
     assert SearchScope.PROJECT_ONLY in result.scope
@@ -97,7 +97,7 @@ async def test_pre_filter_scope_split_into_typed_field() -> None:
 async def test_pre_filter_member_target_uses_member_columns() -> None:
     """target_field='member' → SQL adapter uses _MEMBER_COLUMNS (no 'c.' prefix)."""
     out = await _step_member().run(_state(pre_filter={"package": "demo"}))
-    result = out.scratch["pre_filter"]
+    result = out.scratch["pre_filter.result"]
     assert result.sql  # non-empty
     # Chunk SQL has 'c.package'; member SQL has bare 'package'. Both contain
     # the column name, but only the chunk variant has the 'c.' prefix.

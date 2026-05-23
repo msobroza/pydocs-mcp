@@ -62,14 +62,20 @@ _FIXTURE_CORPUS = Path(__file__).parent / "fixtures" / "ac15_corpus"
 SPEC_TARGET_AC15 = 0.35
 
 # Empirical floor measured against the fixture corpus at
-# tests/integration/fixtures/ac15_corpus/. Measured rate: 70.8% (17/24)
-# as of the self.X.Y type-inference PR. Floor set ~5pp below to absorb
-# small resolver ripples without masking real regressions.
+# tests/integration/fixtures/ac15_corpus/. Floor = MEASURED_RATE - margin
+# so the relationship stays mechanical when the resolver moves: bumping
+# MEASURED_RATE on an intentional improvement automatically lifts the floor.
+#
+# Margin (5.8pp) sized to absorb the ~1-edge worth of ripple a single
+# fixture change can introduce (the corpus captures ~24 CALLS edges) while
+# still catching a real regression of >1 edge.
 #
 # The corpus is hand-picked to exercise every rule (see module docstring),
-# so a rate that drops below 65% almost certainly means a resolver
-# behavior change — investigate before lowering this number.
-EMPIRICAL_FLOOR: float = 0.65
+# so a rate that drops below the floor almost certainly means a resolver
+# behavior change — investigate before lowering MEASURED_RATE.
+MEASURED_RATE: float = 0.708  # 17/24 as of the self.X.Y type-inference PR
+FLOOR_MARGIN: float = 0.058
+EMPIRICAL_FLOOR: float = MEASURED_RATE - FLOOR_MARGIN
 
 
 async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ Pre-filter pushdown: when ``state.query.pre_filter`` is set,
 :class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterStep` MUST run
 upstream and write a typed
 :class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterResult` to
-``state.scratch["pre_filter"]``. The fetcher consumes the pre-built SQL
+``state.scratch["pre_filter.result"]``. The fetcher consumes the pre-built SQL
 pushdown clause + scope set directly; it does not re-parse the raw
 filter mapping. If the scratch key is missing while the query carries a
 filter, the fetcher raises a clear ``RuntimeError`` pointing at the
@@ -129,16 +129,17 @@ class ChunkFetcherStep(RetrieverStep):
         scope: frozenset[SearchScope] | None = None
 
         if state.query.pre_filter is not None:
-            result = state.scratch.get("pre_filter")
+            result = state.scratch.get("pre_filter.result")
             if not isinstance(result, PreFilterResult):
                 raise RuntimeError(
                     "ChunkFetcherStep: state.query.pre_filter is set but "
-                    "state.scratch['pre_filter'] is missing. The pipeline must "
-                    "include the 'pre_filter' step before 'chunk_fetcher'. "
-                    "See pipelines/chunk_search.yaml for the canonical shape.",
+                    "state.scratch['pre_filter.result'] is missing. The "
+                    "pipeline must include the 'pre_filter' step before "
+                    "'chunk_fetcher'. See pipelines/chunk_search.yaml for "
+                    "the canonical shape.",
                 )
             filter_sql = result.sql
-            filter_params = result.params
+            filter_params = list(result.params)
             scope = result.scope
 
         rows = await asyncio.to_thread(
