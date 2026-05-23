@@ -11,7 +11,7 @@ import it from this module.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.formatting import (
@@ -24,7 +24,7 @@ from pydocs_mcp.models import (
     ChunkList,
     ChunkOrigin,
 )
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 if TYPE_CHECKING:
@@ -39,12 +39,15 @@ COMPOSITE_TITLE_SENTINEL = "_composite"
 
 @stage_registry.register("token_budget_formatter")
 @dataclass(frozen=True, slots=True)
-class TokenBudgetStep:
+class TokenBudgetStep(RetrieverStep):
     formatter: "ResultFormatter"
     budget: int
-    name: str = "token_budget_formatter"
+    # WHY: inherited ``RetrieverStep.name`` has no default; redeclaring as
+    # ``kw_only`` lets non-default subclass fields (formatter, budget)
+    # come before it without violating "non-default after default" rule.
+    name: str = field(default="token_budget_formatter", kw_only=True)
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         if state.result is None or not state.result.items:
             return state
         if isinstance(state.result, ChunkList):

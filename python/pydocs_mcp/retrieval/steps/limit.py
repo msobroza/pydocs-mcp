@@ -4,17 +4,17 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 
 @stage_registry.register("limit")
 @dataclass(frozen=True, slots=True)
-class LimitStep:
+class LimitStep(RetrieverStep):
     max_results: int = 8
     name: str = "limit"
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         if state.result is None:
             return state
         capped = state.result.items[: self.max_results]

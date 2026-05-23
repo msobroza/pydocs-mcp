@@ -19,7 +19,7 @@ from pydocs_mcp.models import (
     ChunkList,
     ModuleMemberList,
 )
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 from pydocs_mcp.retrieval.steps.token_budget import COMPOSITE_TITLE_SENTINEL
 from pydocs_mcp.storage.filters import (
@@ -34,10 +34,10 @@ from pydocs_mcp.storage.filters import (
 
 @stage_registry.register("metadata_post_filter")
 @dataclass(frozen=True, slots=True)
-class MetadataPostFilterStep:
+class MetadataPostFilterStep(RetrieverStep):
     name: str = "metadata_post_filter"
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         if state.query.post_filter is None:
             return state
         if state.result is None:

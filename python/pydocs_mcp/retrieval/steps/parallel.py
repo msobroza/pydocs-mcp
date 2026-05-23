@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 if TYPE_CHECKING:
@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 
 @stage_registry.register("parallel_retrieval")
 @dataclass(frozen=True, slots=True)
-class ParallelStep:
+class ParallelStep(RetrieverStep):
     stages: tuple["PipelineStage", ...] = ()
     name: str = "parallel_retrieval"
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         results = await asyncio.gather(*(s.run(state) for s in self.stages))
 
         initial_items: tuple = ()

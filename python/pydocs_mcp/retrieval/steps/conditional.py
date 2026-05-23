@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
@@ -15,13 +15,16 @@ if TYPE_CHECKING:
 
 @stage_registry.register("conditional")
 @dataclass(frozen=True, slots=True)
-class ConditionalStep:
+class ConditionalStep(RetrieverStep):
     stage: "PipelineStage"
     predicate_name: str
     registry: "PredicateRegistry" = field(default_factory=lambda: default_predicate_registry)
-    name: str = "conditional"
+    # WHY: inherited ``RetrieverStep.name`` has no default; redeclaring as
+    # ``kw_only`` lets non-default subclass fields (stage, predicate_name)
+    # come before it without violating "non-default after default" rule.
+    name: str = field(default="conditional", kw_only=True)
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         if self.registry.get(self.predicate_name)(state):
             return await self.stage.run(state)
         return state

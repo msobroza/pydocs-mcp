@@ -4,17 +4,17 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 
 @stage_registry.register("reciprocal_rank_fusion")
 @dataclass(frozen=True, slots=True)
-class RRFStep:
+class RRFStep(RetrieverStep):
     k: int = 60
     name: str = "reciprocal_rank_fusion"
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         if state.result is None or not state.result.items:
             return state
         # Score by 1/(k+rank), keyed by item id (fall back to id(item)).
