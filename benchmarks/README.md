@@ -8,11 +8,12 @@ The harness exists to A/B test YAML pipeline tunings (`AppConfig`) on a real
 benchmark, then track every `(system × config × dataset)` combination as one
 MLflow run with comparable params, metrics, and artifacts.
 
-> The pre-trilogy placeholder (`fake_project/` + synthetic `dataset_gen.py`)
-> has been removed — it synthesized queries from the chunks it just indexed,
-> so a chunker change shifted both the corpus and the queries together and
-> the eval was blind. The new harness uses an external benchmark (RepoQA-SNF)
-> with stable gold answers that the system under test cannot influence.
+> An earlier placeholder harness (`fake_project/` + synthetic
+> `dataset_gen.py`) was removed — it synthesized queries from the chunks
+> it just indexed, so a chunker change shifted both the corpus and the
+> queries together and the eval was blind. The current harness uses an
+> external benchmark (RepoQA-SNF) with stable gold answers that the
+> system under test cannot influence.
 
 ## Install
 
@@ -201,9 +202,13 @@ Two baseline JSON files are tracked in `benchmarks/baselines/`:
 
 CIs are 95% Wilson intervals from bootstrap resampling (1000 iter, seed=0).
 Both baselines were captured against the `chunk_search_ranked.yaml` preset
-that returns top-K ranked separate chunks (the MCP server's default
-`chunk_search.yaml` collapses to one composite chunk and structurally pegs
-`recall@k > 1` at 0 — see PR #31 for the rationale split).
+that returns top-K ranked separate chunks. The MCP server's default
+`chunk_search.yaml` collapses to one composite chunk via
+`token_budget_formatter` — correct for LLM consumers, but it structurally
+caps `recall@k > 1` at 0 because there is only ever one item to retrieve.
+The ranked preset drops the formatter so `recall@k` can actually measure
+top-K hits; the docstring at the top of `chunk_search_ranked.yaml`
+expands on the split.
 
 The real-100-needle numbers are the headline figure: PR-B3.1 (dense
 embeddings + RRF) should beat `recall@10 = 18%` to be worth landing.
