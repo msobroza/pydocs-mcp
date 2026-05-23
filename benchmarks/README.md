@@ -78,6 +78,117 @@ The aggregator (`benchmarks/eval/metrics/aggregate.py`) emits the mean plus a
 bootstrap confidence interval for each metric so regression gates can compare
 runs without false positives from per-task variance.
 
+## Benchmarks
+
+One subsection per benchmark. Each subsection answers four questions in
+the same order, so adding a future benchmark is a copy-paste of the shape:
+
+1. **What it tests** — the retrieval task in one sentence.
+2. **Example task** — a concrete query + gold answer so the shape is
+   obvious without reading the paper.
+3. **Dataset size + source** — how many tasks, where they come from.
+4. **What this benchmark proxies** *and* what it does NOT — calibrate
+   how much weight to put on the resulting numbers.
+
+### RepoQA-SNF (Python subset of `repoqa-2024-06-23`)
+
+**What it tests:** natural-language description → Python function retrieval
+in long, real-world code repositories. Each task hands the system under
+test a multi-file repo slice and a one-sentence English description of
+one function ("the needle"); the system returns a ranked list of
+candidate chunks; the harness counts whether an AST-equivalent match of
+the needle's body appears in the top-K. This is the dominant query shape
+for `search(query, kind, ...)` on the MCP surface.
+
+**Example task** (from `benchmarks/tests/eval/fixtures/repoqa_mini.json`,
+the 5-needle fixture shipped for hermetic CI):
+
+```text
+Query (description):
+    Compute the factorial of a non-negative integer.
+
+Repo content (file path → source, pinned to a specific commit):
+    fixture_repo/__init__.py
+    fixture_repo/math_helpers.py
+    [in production tasks: 30–80 real Python files per repo]
+
+Gold answer (AST-matched, comments + whitespace tolerant):
+    def factorial(n: int) -> int:
+        if n <= 1:
+            return 1
+        return n * factorial(n - 1)
+
+Other needles in the same repo:
+    - fibonacci  — Compute the n-th Fibonacci number.
+    - is_prime   — Test whether n is prime.
+    - gcd        — Greatest common divisor of two integers.
+    - lcm        — Least common multiple via gcd.
+```
+
+A "pass" on `recall@k` means: at least one of the top-K retrieved chunks
+contains a function whose AST body matches the gold needle's body
+(comments + whitespace tolerant, see `benchmarks/eval/metrics/ast_match.py`).
+`pass@1-needle` is the same check restricted to the top-1 result. `mrr`
+rewards getting the gold high in the ranking, not just within the top-K.
+
+**Dataset size:** 100 needles total — 10 real Python repos (HuggingFace
+Transformers, vLLM, FastAPI, sympy, …) × ~10 needles each. The shipped
+fixture (`repoqa_mini.json`) has 5 needles from one synthetic repo for
+hermetic CI runs that don't touch the network.
+
+**Source:** Liu, J. et al. *RepoQA: Evaluating Long Context Code
+Understanding.* arXiv:2406.06025, June 2024. Apache-2.0 license, by the
+EvalPlus team. Downloaded on first run to `~/.cache/pydocs-mcp/repoqa/`
+and cached thereafter.
+
+**What this benchmark proxies well:**
+
+- **Description → function retrieval.** The 1:1 query-to-result shape
+  matches the MCP `search` surface exactly.
+- **Long-context indexing.** Each task ships a real repo slice, so the
+  chunker and indexer are exercised on real-world Python layouts (not
+  synthetic toys).
+- **A/B testing YAML tunings.** Capture toggles, ranking weights,
+  chunker parameters, and resolver thresholds can all be sweep-compared
+  against the same dataset and metric set — the architectural payoff of
+  the "behavior in YAML, surface stable" rule from `CLAUDE.md`.
+- **Cross-system retrieval comparison.** `pydocs-mcp` (in-process
+  pipeline) is comparable against `context7` (cloud MCP API) and
+  `neuledge` (local MCP HTTP) on the same queries + the same gold answers.
+
+**What it does NOT proxy:**
+
+- **End-to-end LLM code generation quality.** Retrieval only — what an
+  LLM does with the chunks is out of scope.
+- **Multi-file / call-graph retrieval.** Each task is single-needle; the
+  planned SWE-bench retrieval benchmark covers cross-file reasoning.
+- **Real-user query distribution.** Queries are LLM-generated from
+  function docstrings, not log-mined from real MCP traffic.
+- **Multi-language coverage.** Python only.
+- **Indexing throughput.** This harness optimizes for retrieval signal;
+  an indexing-latency benchmark is a deferred follow-up.
+
+When you read a result, treat it as evidence about the retrieval surface,
+not the whole system.
+
+### Roadmap: additional benchmarks
+
+Each future benchmark gets its own subsection above following the same
+four-question pattern. Planned additions:
+
+| Benchmark | What it would add | Status |
+|---|---|---|
+| **SWE-bench Verified (retrieval-only slice)** | Multi-file resolution from a bug report — exercises the call-graph / reference-graph paths the post-#5c trilogy added. | One-file dataset plugin; not yet implemented. |
+| **LiveCodeBench (retrieval slice)** | Recency-stratified queries; tests whether the index handles "post-cutoff" code by recall, not memorization. | Plugin scoped, deferred. |
+| **In-house log-mined query set** | Real MCP search queries from production logs paired with developer-curated gold chunks. Highest external validity, requires harvesting + curation. | Roadmap. |
+| **Indexing-throughput benchmark** | Measures wall-clock + memory across repo sizes; complements the retrieval-quality numbers here. | Roadmap. |
+
+Adding one means: drop a `Dataset` Protocol implementation under
+`benchmarks/src/benchmarks/eval/datasets/`, register it via
+`@dataset_registry.register("<name>")`, point a config at it, and write
+one README subsection mirroring RepoQA-SNF's shape. No harness changes
+required.
+
 ## Current baselines
 
 Two baseline JSON files are tracked in `benchmarks/baselines/`:
@@ -146,48 +257,17 @@ fig = plot_baselines(
 The returned `matplotlib.figure.Figure` is yours to further customize,
 `.show()` in a notebook, or `.savefig()` again with different DPI.
 
-## What this benchmark proxies — and what it does NOT
-
-**What it proxies well:**
-
-- **Natural-language description → Python function retrieval.** This is the
-  dominant query shape for `search(query, kind, ...)` on the MCP surface.
-- **Long-context indexing.** RepoQA tasks ship a full repo slice per task, so
-  the chunker and indexer are exercised on real-world code layouts (not
-  synthetic toys).
-- **A/B testing YAML tunings.** Capture toggles, ranking weights, chunker
-  parameters, and resolver thresholds can all be sweep-compared against the
-  same dataset and metric set. This is the architectural payoff of the
-  "behavior in YAML, surface stable" rule from `CLAUDE.md`.
-- **Cross-system retrieval comparison.** `pydocs-mcp` (in-process pipeline)
-  is comparable against `context7` (cloud MCP API) and `neuledge`
-  (local MCP HTTP) on the same queries and the same gold answers.
-
-**What it does NOT proxy:**
-
-- **End-to-end LLM code generation quality.** The harness measures retrieval
-  only — what an LLM does with the retrieved chunks is out of scope.
-- **Multi-file / call-graph retrieval.** Each RepoQA task is single-needle;
-  SWE-bench Verified retrieval-only would cover this and is on the roadmap
-  as a one-file plugin.
-- **Real-user query distribution.** RepoQA queries are LLM-generated from
-  function docstrings. An in-house log-mined eval set is separate future
-  work.
-- **Multi-language coverage.** Python only.
-- **Indexing throughput.** The harness optimises for retrieval signal, not
-  indexing latency; an indexing-latency benchmark is a deferred follow-up.
-
-When you read a result, treat it as evidence about the retrieval surface,
-not the whole system.
-
 ## License and attribution
 
-- **RepoQA-SNF** — Apache-2.0, by the EvalPlus team. Cite:
-  > Liu, J. et al. *RepoQA: Evaluating Long Context Code Understanding.*
-  > arXiv:2406.06025, June 2024.
+Per-benchmark licensing + citation lives in the relevant subsection under
+`## Benchmarks` above (each benchmark cites its own source). Cross-cutting
+attribution:
+
 - **MLflow** — Apache-2.0, Databricks. Used as the experiment-tracking
-  backend; tracking URI defaults to a local `file://` store so no network or
-  remote server is required to run the harness.
+  backend; tracking URI defaults to a local `file://` store so no network
+  or remote server is required to run the harness.
+- **seaborn / matplotlib** — BSD-3-Clause, used for the baseline plotting
+  module described under `## Visualizing baselines`.
 - Third-party attribution lands in `LICENSE-third-party` once it is added.
 
 ## Running tests
