@@ -215,6 +215,58 @@ Other rules:
 
 **When in doubt:** if a new behavior could be A/B tested against a benchmark to measure quality, it belongs in YAML.
 
+## Default values: single source of truth
+
+**Rule:** Every default value lives in exactly ONE place. Code that needs to reference that default MUST refer to the canonical source — NEVER repeat the literal.
+
+Acceptable canonical sources, in order of preference:
+
+1. **Module-level `_DEFAULT_X = value` constant** — best for dataclass field defaults that also appear in `to_dict` comparisons or `from_dict` fallbacks. Matches the existing `_MAX_PIPELINE_DEPTH = 32` precedent in `retrieval/pipeline/code_pipeline.py`.
+2. **pydantic `Field(default=N)`** in `AppConfig` sub-models — the canonical source for YAML-tunable settings. Application code reads these via `AppConfig.load(...)`, never re-encoding the literal elsewhere.
+3. **Dataclass field default** — fine when the default is referenced only at construction (no `to_dict` / `from_dict` round-trip).
+
+**Anti-pattern** (do NOT do this):
+
+```python
+@dataclass(frozen=True, slots=True)
+class RRFStep(RetrieverStep):
+    k: int = 60                                          # canonical
+
+    def to_dict(self) -> dict:
+        if self.k != 60:                                 # ← BAD: literal repeated
+            ...
+
+    @classmethod
+    def from_dict(cls, data, context):
+        return cls(k=data.get("k", 60))                  # ← BAD: literal repeated
+```
+
+**Correct pattern:**
+
+```python
+_DEFAULT_K = 60                                          # single source of truth
+
+@dataclass(frozen=True, slots=True)
+class RRFStep(RetrieverStep):
+    k: int = _DEFAULT_K
+
+    def to_dict(self) -> dict:
+        if self.k != _DEFAULT_K:
+            ...
+
+    @classmethod
+    def from_dict(cls, data, context):
+        return cls(k=data.get("k", _DEFAULT_K))
+```
+
+**Why:**
+
+1. **One place to change.** Bumping the default touches the `_DEFAULT_K` line, not three sites that drift.
+2. **No silent regressions.** A diff that changes the constant is obvious in code review; a diff that changes one of three hardcoded `60`s is easy to miss.
+3. **YAML / Python parity.** When the same default appears in YAML, it's intentional duplication for config-file clarity (the YAML is the user-visible knob). Inside Python, duplicating a literal is just churn.
+
+**YAML files are exempt** — `pipelines/*.yaml` and `default_config.yaml` explicitly state values for user-facing clarity, even when the Python field default would be the same.
+
 ## Code Comments
 
 - **Explain WHY, not WHAT** — the code should be self-documenting for the "what"
