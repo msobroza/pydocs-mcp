@@ -1,7 +1,16 @@
 # pydocs-mcp
 
-Local Python docs MCP server — indexes your project + installed deps.
-Zero network. SQLite FTS5 + BM25. Optionally accelerated with Rust.
+**Local Python docs + code-structure retrieval for AI agents — pinned to the versions you actually have installed.**
+
+Your AI assistant remembers `requests` 2.28. You have 2.31 installed. It writes code calling a kwarg that was renamed two versions ago — and you spend the next twenty minutes debugging why a test fails. The fix isn't a smarter prompt; it's giving the AI documentation that matches **your lockfile**, not the average of every StackOverflow answer it ever read.
+
+pydocs-mcp indexes your project source + every installed Python dependency from your `site-packages`, on your machine, in a couple of seconds. It exposes two MCP tools (`search`, `lookup`) plus a CLI mirror with the same surface and the same scoring. No network calls, no API keys, no rate limits. Just BM25 over SQLite FTS5 against the exact code your `pip install` resolved to.
+
+It also captures a **reference graph** at indexing time (CALLS / IMPORTS / INHERITS edges), so `lookup(target=X, show="callers")` answers *"what code in this repo or any installed dep calls this method?"* — not just *"what does this method do?"*
+
+**Install once. Index once. Then ask your AI.**
+
+---
 
 ## Install
 
@@ -92,7 +101,7 @@ Three open-source projects in roughly the same MCP-doc-retrieval space. They opt
 | Doc source | **Your installed Python deps** + your project source, indexed in place | Curated community library docs hosted by Upstash (parsing + crawling engines are closed-source) | Community-driven package registry (~100+ libraries) downloaded then queried locally |
 | Version match | Whatever you have in `site-packages` — automatic | Library + version selectable in the prompt (`use library /supabase/supabase`) | Latest from the registry's package for the library |
 | Languages | Python only | Multi-language (any library Upstash has crawled) | Multi-language (registry-driven; ~100+ libraries today) |
-| Retrieval method | BM25 over SQLite FTS5 (Porter + unicode61 tokenizer) | Not publicly documented | Not publicly documented |
+| Retrieval method | BM25 over SQLite FTS5 (Porter + unicode61 tokenizer) | Not publicly documented | BM25 over SQLite FTS5 |
 | Code structure queries | **Reference graph** — `lookup(target, show="callers"\|"callees"\|"inherits")` via captured AST edges | None (doc retrieval only) | None (doc retrieval only) |
 | Project source indexing | Indexes your own code under the `__project__` package — `search ... -p __project__` works the same as searching deps | No (external library docs only) | No (registry packages only) |
 | MCP tools exposed | `search`, `lookup` (2 tools, surface intentionally pinned) | `resolve-library-id`, `query-docs` (2 tools) | Doc-retrieval tools (CLI: `context serve`) |
