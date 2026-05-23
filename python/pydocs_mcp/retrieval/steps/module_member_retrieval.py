@@ -1,4 +1,4 @@
-"""ModuleMemberRetrievalStage — invoke the member retriever, store its result."""
+"""ModuleMemberRetrievalStep — invoke the member retriever, store its result."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 @stage_registry.register("module_member_retrieval")
 @dataclass(frozen=True, slots=True)
-class ModuleMemberRetrievalStage:
+class ModuleMemberRetrievalStep:
     retriever: "ModuleMemberRetriever"
     name: str = "module_member_retrieval"
 
@@ -25,8 +25,8 @@ class ModuleMemberRetrievalStage:
         return {"type": "module_member_retrieval", "retriever": self.retriever.to_dict()}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ModuleMemberRetrievalStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "ModuleMemberRetrievalStep":
         return cls(retriever=context.retriever_registry.build(data["retriever"], context))
 
 
-__all__ = ("ModuleMemberRetrievalStage",)
+__all__ = ("ModuleMemberRetrievalStep",)

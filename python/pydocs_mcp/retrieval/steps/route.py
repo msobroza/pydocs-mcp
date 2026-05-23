@@ -1,8 +1,8 @@
-"""RouteStage — first matching predicate's stage runs; optional default fallback.
+"""RouteStep — first matching predicate's stage runs; optional default fallback.
 
 ``RouteCase`` is the value object grouping a predicate name with the
 stage to invoke when it matches. The two types live together because
-``RouteCase`` is exclusively a constructor argument of ``RouteStage``.
+``RouteCase`` is exclusively a constructor argument of ``RouteStep``.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class RouteCase:
 
 @stage_registry.register("route")
 @dataclass(frozen=True, slots=True)
-class RouteStage:
+class RouteStep:
     routes: tuple[RouteCase, ...]
     default: "PipelineStage | None" = None
     registry: "PredicateRegistry" = field(default_factory=lambda: default_predicate_registry)
@@ -53,7 +53,7 @@ class RouteStage:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "RouteStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "RouteStep":
         routes = tuple(
             RouteCase(
                 predicate_name=r["predicate_name"],
@@ -66,4 +66,4 @@ class RouteStage:
         return cls(routes=routes, default=default, registry=context.predicate_registry)
 
 
-__all__ = ("RouteCase", "RouteStage")
+__all__ = ("RouteCase", "RouteStep")

@@ -1,4 +1,4 @@
-"""LimitStage — cap the result item count at ``max_results``."""
+"""LimitStep — cap the result item count at ``max_results``."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -10,7 +10,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 @stage_registry.register("limit")
 @dataclass(frozen=True, slots=True)
-class LimitStage:
+class LimitStep:
     max_results: int = 8
     name: str = "limit"
 
@@ -29,8 +29,8 @@ class LimitStage:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "LimitStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "LimitStep":
         return cls(max_results=data.get("max_results", 8))
 
 
-__all__ = ("LimitStage",)
+__all__ = ("LimitStep",)

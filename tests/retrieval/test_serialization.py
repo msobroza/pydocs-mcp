@@ -88,7 +88,7 @@ def test_build_context_defaults(tmp_path):
 
 def test_registry_build_forwards_depth_to_var_keyword_from_dict(tmp_path):
     """A stage whose ``from_dict`` uses ``**kwargs`` must still receive
-    ``_depth`` — otherwise the recursion guard for nested SubPipelineStage
+    ``_depth`` — otherwise the recursion guard for nested SubPipelineStep
     decoding silently resets to 0 (AC #31 regression).
     """
     registry: ComponentRegistry = ComponentRegistry()

@@ -26,7 +26,7 @@ class PipelineState:
 
 
 # Stops a malicious / recursive YAML from blowing the Python stack when
-# ``SubPipelineStage`` chains nest deeply. 32 levels is already far more
+# ``SubPipelineStep`` chains nest deeply. 32 levels is already far more
 # than any legitimate pipeline the project ships.
 _MAX_PIPELINE_DEPTH = 32
 

@@ -60,7 +60,7 @@ def test_from_dict_rejects_excessive_nesting(tmp_path):
     )
     from pydocs_mcp.retrieval.serialization import BuildContext
 
-    # Build a pipeline dict that recursively nests SubPipelineStage one
+    # Build a pipeline dict that recursively nests SubPipelineStep one
     # level beyond the allowed depth.
     def _leaf() -> dict:
         return {"name": "leaf", "stages": []}

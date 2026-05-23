@@ -1,4 +1,4 @@
-"""SubPipelineStage — run another pipeline's stages on the incoming state."""
+"""SubPipelineStep — run another pipeline's stages on the incoming state."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,7 +9,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 @stage_registry.register("sub_pipeline")
 @dataclass(frozen=True, slots=True)
-class SubPipelineStage:
+class SubPipelineStep:
     pipeline: CodeRetrieverPipeline
     name: str = "sub_pipeline"
 
@@ -28,7 +28,7 @@ class SubPipelineStage:
         data: dict,
         context: BuildContext,
         _depth: int = 0,
-    ) -> "SubPipelineStage":
+    ) -> "SubPipelineStep":
         return cls(
             pipeline=CodeRetrieverPipeline.from_dict(
                 data["pipeline"], context, _depth=_depth + 1,
@@ -36,4 +36,4 @@ class SubPipelineStage:
         )
 
 
-__all__ = ("SubPipelineStage",)
+__all__ = ("SubPipelineStep",)

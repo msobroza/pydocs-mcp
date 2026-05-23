@@ -1,4 +1,4 @@
-"""ConditionalStage — run ``stage`` only when ``predicate_name`` evaluates true."""
+"""ConditionalStep — run ``stage`` only when ``predicate_name`` evaluates true."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 @stage_registry.register("conditional")
 @dataclass(frozen=True, slots=True)
-class ConditionalStage:
+class ConditionalStep:
     stage: "PipelineStage"
     predicate_name: str
     registry: "PredicateRegistry" = field(default_factory=lambda: default_predicate_registry)
@@ -34,7 +34,7 @@ class ConditionalStage:
         }
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ConditionalStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "ConditionalStep":
         return cls(
             stage=context.stage_registry.build(data["stage"], context),
             predicate_name=data["predicate_name"],
@@ -42,4 +42,4 @@ class ConditionalStage:
         )
 
 
-__all__ = ("ConditionalStage",)
+__all__ = ("ConditionalStep",)

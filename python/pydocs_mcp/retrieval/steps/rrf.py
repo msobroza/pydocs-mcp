@@ -1,4 +1,4 @@
-"""ReciprocalRankFusionStage — score items by 1/(k+rank), sort descending."""
+"""RRFStep — score items by 1/(k+rank), sort descending."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -10,7 +10,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 @stage_registry.register("reciprocal_rank_fusion")
 @dataclass(frozen=True, slots=True)
-class ReciprocalRankFusionStage:
+class RRFStep:
     k: int = 60
     name: str = "reciprocal_rank_fusion"
 
@@ -40,8 +40,8 @@ class ReciprocalRankFusionStage:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ReciprocalRankFusionStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "RRFStep":
         return cls(k=data.get("k", 60))
 
 
-__all__ = ("ReciprocalRankFusionStage",)
+__all__ = ("RRFStep",)

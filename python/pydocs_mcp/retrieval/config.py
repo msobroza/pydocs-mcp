@@ -25,7 +25,7 @@ from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401
 from pydocs_mcp.retrieval import retrievers as _retrievers  # noqa: F401
 from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
 from pydocs_mcp.retrieval.serialization import BuildContext
-from pydocs_mcp.retrieval.stages import RouteCase, RouteStage, SubPipelineStage
+from pydocs_mcp.retrieval.steps import RouteCase, RouteStep, SubPipelineStep
 
 # ── Tunable user-config path override ───────────────────────────────────
 #
@@ -471,7 +471,7 @@ def _build_handler_pipeline(
     for entry in handler_config.routes:
         resolved = _resolve_pipeline_path(entry.pipeline_path, user_config_path)
         sub_pipeline = _load_preset_yaml(resolved, context)
-        stage = SubPipelineStage(pipeline=sub_pipeline)
+        stage = SubPipelineStep(pipeline=sub_pipeline)
         # PipelineRouteEntry guarantees exactly-one-of, so we needn't re-validate
         if entry.default:
             if default is not None:
@@ -483,10 +483,10 @@ def _build_handler_pipeline(
     if not routes and default is not None:
         # Single-default route collapses to the inner pipeline directly so
         # callers inspecting pipeline.stages see the preset's stage list,
-        # not a RouteStage wrapper (preserves sub-PR #2's golden parity).
+        # not a RouteStep wrapper (preserves sub-PR #2's golden parity).
         inner = default.pipeline
         return CodeRetrieverPipeline(name=inner.name, stages=inner.stages)
     return CodeRetrieverPipeline(
         name=f"{handler_name}_from_config",
-        stages=(RouteStage(routes=tuple(routes), default=default),),
+        stages=(RouteStep(routes=tuple(routes), default=default),),
     )

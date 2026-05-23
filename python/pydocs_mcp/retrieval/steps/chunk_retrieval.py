@@ -1,4 +1,4 @@
-"""ChunkRetrievalStage — invoke the chunk retriever, store its result."""
+"""ChunkRetrievalStep — invoke the chunk retriever, store its result."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 @stage_registry.register("chunk_retrieval")
 @dataclass(frozen=True, slots=True)
-class ChunkRetrievalStage:
+class ChunkRetrievalStep:
     retriever: "ChunkRetriever"
     name: str = "chunk_retrieval"
 
@@ -25,8 +25,8 @@ class ChunkRetrievalStage:
         return {"type": "chunk_retrieval", "retriever": self.retriever.to_dict()}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ChunkRetrievalStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "ChunkRetrievalStep":
         return cls(retriever=context.retriever_registry.build(data["retriever"], context))
 
 
-__all__ = ("ChunkRetrievalStage",)
+__all__ = ("ChunkRetrievalStep",)

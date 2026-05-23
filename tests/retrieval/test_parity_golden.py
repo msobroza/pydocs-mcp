@@ -92,7 +92,7 @@ async def test_chunk_composite_output_shape(seeded_db: Path):
 
 @pytest.mark.asyncio
 async def test_chunk_composite_preserves_trailing_newline(seeded_db: Path):
-    """TokenBudgetStage must not rstrip() the trailing newline —
+    """TokenBudgetStep must not rstrip() the trailing newline —
     old format_within_budget preserved it."""
     provider = build_connection_provider(seeded_db)
     config = AppConfig.load()

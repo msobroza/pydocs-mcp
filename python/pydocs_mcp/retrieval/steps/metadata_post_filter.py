@@ -1,4 +1,4 @@
-"""MetadataPostFilterStage — apply ``SearchQuery.post_filter`` in memory.
+"""MetadataPostFilterStep — apply ``SearchQuery.post_filter`` in memory.
 
 The filter is parsed via ``format_registry[state.query.post_filter_format]``,
 so the same ``{field: value}`` / ``{field: {op: value}}`` shapes accepted
@@ -6,7 +6,7 @@ by retrievers are accepted here — only the evaluation happens on
 already-fetched items instead of being pushed down into SQL (spec §5.8,
 AC #13).
 
-Composite results from :class:`TokenBudgetStage` carry the
+Composite results from :class:`TokenBudgetStep` carry the
 ``COMPOSITE_TITLE_SENTINEL`` marker and are bypassed so the budgeted
 answer chunk never gets dropped by title-based filters (AC #34).
 """
@@ -21,7 +21,7 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
-from pydocs_mcp.retrieval.stages.token_budget import COMPOSITE_TITLE_SENTINEL
+from pydocs_mcp.retrieval.steps.token_budget import COMPOSITE_TITLE_SENTINEL
 from pydocs_mcp.storage.filters import (
     All,
     FieldEq,
@@ -34,7 +34,7 @@ from pydocs_mcp.storage.filters import (
 
 @stage_registry.register("metadata_post_filter")
 @dataclass(frozen=True, slots=True)
-class MetadataPostFilterStage:
+class MetadataPostFilterStep:
     name: str = "metadata_post_filter"
 
     async def run(self, state: PipelineState) -> PipelineState:
@@ -58,7 +58,7 @@ class MetadataPostFilterStage:
         return {"type": "metadata_post_filter"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "MetadataPostFilterStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "MetadataPostFilterStep":
         return cls()
 
 
@@ -88,4 +88,4 @@ def _field_value(item, field_name: str):
     return None
 
 
-__all__ = ("MetadataPostFilterStage",)
+__all__ = ("MetadataPostFilterStep",)

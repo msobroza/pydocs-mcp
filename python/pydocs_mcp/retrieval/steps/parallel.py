@@ -1,4 +1,4 @@
-"""ParallelRetrievalStage — fan-out to multiple sub-stages, merge results.
+"""ParallelStep — fan-out to multiple sub-stages, merge results.
 
 Each inner stage sees the SAME input state independently; outputs are
 deduped by ``item.id`` (falling back to ``id(item)`` when ``.id`` is
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 @stage_registry.register("parallel_retrieval")
 @dataclass(frozen=True, slots=True)
-class ParallelRetrievalStage:
+class ParallelStep:
     stages: tuple["PipelineStage", ...] = ()
     name: str = "parallel_retrieval"
 
@@ -70,8 +70,8 @@ class ParallelRetrievalStage:
         return {"type": "parallel_retrieval", "stages": [s.to_dict() for s in self.stages]}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ParallelRetrievalStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "ParallelStep":
         return cls(stages=tuple(context.stage_registry.build(s, context) for s in data["stages"]))
 
 
-__all__ = ("ParallelRetrievalStage",)
+__all__ = ("ParallelStep",)

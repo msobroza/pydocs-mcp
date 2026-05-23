@@ -1,4 +1,4 @@
-"""TokenBudgetStage — render the result as a budgeted composite Chunk.
+"""TokenBudgetStep — render the result as a budgeted composite Chunk.
 
 Rendering delegates to :mod:`pydocs_mcp.application.formatting` (the
 same helpers MCP / CLI fallback paths use), so byte-identical output
@@ -6,7 +6,7 @@ is preserved across call sites (AC #6 single-source-of-truth; AC #21
 byte-parity with pre-sub-PR-2 ``format_within_budget``).
 
 ``COMPOSITE_TITLE_SENTINEL`` is defined here because this stage is the
-sentinel's producer; consumers like :class:`MetadataPostFilterStage`
+sentinel's producer; consumers like :class:`MetadataPostFilterStep`
 import it from this module.
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.protocols import ResultFormatter
 
 
-# Sentinel title on composite formatter output. ``MetadataPostFilterStage``
+# Sentinel title on composite formatter output. ``MetadataPostFilterStep``
 # bypasses title-based filters when it sees this marker so downstream
 # post-filters never drop the budgeted answer chunk (AC #34).
 COMPOSITE_TITLE_SENTINEL = "_composite"
@@ -39,7 +39,7 @@ COMPOSITE_TITLE_SENTINEL = "_composite"
 
 @stage_registry.register("token_budget_formatter")
 @dataclass(frozen=True, slots=True)
-class TokenBudgetStage:
+class TokenBudgetStep:
     formatter: "ResultFormatter"
     budget: int
     name: str = "token_budget_formatter"
@@ -72,11 +72,11 @@ class TokenBudgetStage:
         }
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "TokenBudgetStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "TokenBudgetStep":
         return cls(
             formatter=context.formatter_registry.build(data["formatter"], context),
             budget=data["budget"],
         )
 
 
-__all__ = ("COMPOSITE_TITLE_SENTINEL", "TokenBudgetStage")
+__all__ = ("COMPOSITE_TITLE_SENTINEL", "TokenBudgetStep")
