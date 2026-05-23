@@ -14,21 +14,20 @@ from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.protocols import PipelineStage
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
 
 
 @dataclass(frozen=True, slots=True)
 class RouteCase:
     predicate_name: str
-    stage: "PipelineStage"
+    stage: RetrieverStep
 
 
 @stage_registry.register("route")
 @dataclass(frozen=True, slots=True)
 class RouteStep(RetrieverStep):
     routes: tuple[RouteCase, ...]
-    default: "PipelineStage | None" = None
+    default: RetrieverStep | None = None
     registry: "PredicateRegistry" = field(default_factory=lambda: default_predicate_registry)
     # WHY: inherited ``RetrieverStep.name`` has no default; redeclaring as
     # ``kw_only`` lets non-default subclass field (routes) come before it

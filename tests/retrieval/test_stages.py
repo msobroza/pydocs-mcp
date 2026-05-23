@@ -15,7 +15,7 @@ from pydocs_mcp.models import (
     ModuleMemberList,
     SearchQuery,
 )
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import PipelineState
 from pydocs_mcp.retrieval.steps import (
     LimitStep,
     MetadataPostFilterStep,
@@ -270,7 +270,7 @@ async def test_nested_pipeline_threads_state_through_its_stages():
     the incoming state through its own stages (no reset). Pipeline IS a
     Stage — no adapter class needed.
     """
-    from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
 
     @dataclass(frozen=True, slots=True)
     class _Tag:
@@ -322,7 +322,7 @@ async def test_token_budget_formatter_stage_composite_output():
 async def test_metadata_post_filter_bypasses_composite_sentinel():
     """AC #34 — composite chunks skip the title post-filter."""
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
-    from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
+    from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
     from pydocs_mcp.retrieval.steps import (
         MetadataPostFilterStep,
         TokenBudgetStep,

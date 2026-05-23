@@ -20,12 +20,20 @@ from pydantic_settings import (
 
 from pydocs_mcp.extraction.config import ExtractionConfig
 
-# Side-effect imports: populate stage/retriever/formatter registries via decorators.
+# Side-effect imports: populate stage/formatter registries via decorators.
 from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401
-from pydocs_mcp.retrieval import retrievers as _retrievers  # noqa: F401
-from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
+from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
 from pydocs_mcp.retrieval.serialization import BuildContext
-from pydocs_mcp.retrieval.steps import RouteCase, RouteStep
+
+# WHY: ``RouteCase`` / ``RouteStep`` are imported lazily inside
+# :func:`_build_handler_pipeline` rather than top-level. After the
+# Task-9 corpse removal removed the eager ``retrievers`` side-effect
+# import from :mod:`pydocs_mcp.retrieval.__init__`, the import chain
+# ``retrieval.steps`` → ``token_budget`` → ``application`` →
+# ``storage`` → ``extraction.reference_capture`` → ``retrieval.config``
+# hits this module before ``retrieval.steps.__init__`` has finished
+# binding ``RouteCase`` / ``RouteStep``. Deferring the import to
+# function scope breaks the cycle without changing call-site shape.
 
 # ── Tunable user-config path override ───────────────────────────────────
 #
@@ -466,12 +474,17 @@ def _build_handler_pipeline(
     context: BuildContext,
     user_config_path: Path | None = None,
 ) -> CodeRetrieverPipeline:
+    # Lazy import — see top-level WHY note. Breaks the
+    # ``retrieval.steps`` ⇄ ``retrieval.config`` cycle that runs through
+    # the extraction-side reference-capture stage at import time.
+    from pydocs_mcp.retrieval.steps import RouteCase, RouteStep
+
     routes: list[RouteCase] = []
     default: CodeRetrieverPipeline | None = None
     for entry in handler_config.routes:
         resolved = _resolve_pipeline_path(entry.pipeline_path, user_config_path)
-        # WHY: a CodeRetrieverPipeline IS a PipelineStage (polymorphic ``run``),
-        # so we slot it directly into ``RouteCase.stage`` — no adapter needed.
+        # WHY: a CodeRetrieverPipeline subclasses ``RetrieverStep``, so we
+        # slot it directly into ``RouteCase.stage`` — no adapter needed.
         sub_pipeline = _load_preset_yaml(resolved, context)
         # PipelineRouteEntry guarantees exactly-one-of, so we needn't re-validate
         if entry.default:

@@ -22,7 +22,7 @@ from pydocs_mcp.extraction.serialization import (
     chunker_registry,
     stage_registry,
 )
-from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
+from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.serialization import (
     BuildContext,
     ComponentRegistry,

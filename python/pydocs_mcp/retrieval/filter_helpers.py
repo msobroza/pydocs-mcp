@@ -1,14 +1,9 @@
 """Pre-filter helpers — scope splitting + schema validation.
 
-Shared by chunk and member fetchers (Task 8): both fold pre-filter
-pushdown into their fetch step, so the scope split + schema validation
-helpers live here at retrieval/ top level (rather than under
-``retrieval/retrievers/_shared.py``) to avoid a circular import chain
-through ``storage.filters`` → ``extraction`` → ``retrieval.steps``.
-
-The legacy ``retrievers/_shared.py`` re-exports the same names for
-backward compat with code that still imports the old path; both
-modules expose the same identity.
+Shared by chunk and member fetchers: both fold pre-filter pushdown into
+their fetch step, so the scope split + schema validation helpers live
+here at retrieval/ top level to avoid a circular import chain through
+``storage.filters`` → ``extraction`` → ``retrieval.steps``.
 """
 from __future__ import annotations
 

@@ -9,14 +9,13 @@ from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.protocols import PipelineStage
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
 
 
 @stage_registry.register("conditional")
 @dataclass(frozen=True, slots=True)
 class ConditionalStep(RetrieverStep):
-    stage: "PipelineStage"
+    stage: RetrieverStep
     predicate_name: str
     registry: "PredicateRegistry" = field(default_factory=lambda: default_predicate_registry)
     # WHY: inherited ``RetrieverStep.name`` has no default; redeclaring as

@@ -1,6 +1,6 @@
-"""Test-only adapter helpers — run the new async retrievers synchronously
-and return dict-shaped records so pre-retrieval behavioural tests keep
-exercising the same invariants after search.py removal.
+"""Test-only adapter helpers — run the new pipeline steps synchronously
+and return dict-shaped records so behavioural tests keep exercising the
+same invariants after the retrieval-pipeline refactor.
 
 Usage:
     from tests._retriever_helpers import retrieve_chunks, retrieve_module_members
@@ -8,9 +8,11 @@ Usage:
     hits = retrieve_chunks(db_path, "fibonacci", internal=True)
     # hits is a list[dict] with keys: pkg, heading, body, kind, doc, name, ...
 
-These helpers exist only to keep the behavioural test matrix green while
-production code moves fully to the retriever protocols. New tests should
-use ``Bm25ChunkRetriever`` / ``LikeMemberRetriever`` directly."""
+These helpers exist to keep the behavioural test matrix green while
+production code uses the YAML-loaded pipeline. New tests should compose
+:class:`ChunkFetcherStep` / :class:`BM25ScorerStep` / etc. directly via
+the YAML loader or in-code construction.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -28,18 +30,18 @@ from pydocs_mcp.models import (
     Package,
     PackageOrigin,
     SearchQuery,
-    SearchScope,
 )
-from pydocs_mcp.retrieval.retrievers import Bm25ChunkRetriever, LikeMemberRetriever
-from pydocs_mcp.storage.sqlite import (
-    SqliteModuleMemberRepository,
-    SqliteVectorStore,
+from pydocs_mcp.retrieval.pipeline import RetrieverState
+from pydocs_mcp.retrieval.steps import (
+    BM25ScorerStep,
+    ChunkFetcherStep,
+    MemberFetcherStep,
 )
 from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 
 # Allowlist mirrors the shipped default_config.yaml metadata_schemas so the
-# retrievers accept the same fields production does, without requiring the
-# helpers to load AppConfig themselves.
+# step pre-filter validation accepts the same fields production does,
+# without requiring the helpers to load AppConfig themselves.
 _CHUNK_ALLOWED_FIELDS = frozenset({"package", "scope", "origin", "title", "module"})
 _MEMBER_ALLOWED_FIELDS = frozenset({"package", "module", "name", "kind"})
 
@@ -60,10 +62,6 @@ def _resolve_db_path(conn_or_path) -> Path:
                 return Path(file_col)
         raise RuntimeError("Connection has no on-disk file")
     return Path(conn_or_path)
-
-
-def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
 
 
 def _make_indexing_service(conn_or_path) -> IndexingService:
@@ -115,17 +113,20 @@ def retrieve_chunks(
     internal: bool | None = None,
     topic: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Behavioural shim around ``Bm25ChunkRetriever`` over the vector store.
+    """Behavioural shim — fetch + score chunks via the new pipeline steps.
 
-    Returns a list of dicts using the historical keys (``pkg``, ``heading``,
-    ``body``, ``kind``) so existing assertions continue to work. Scope / title
-    post-filters are applied here so the shim preserves the pre-refactor
-    semantics while the production pipeline uses store-side push-down.
+    Composes :class:`ChunkFetcherStep` (FTS pushdown + raw rank) then
+    :class:`BM25ScorerStep` (sign flip → positive relevance) — the same
+    front-half of the shipped ``chunk_search.yaml`` pipeline. Returns a
+    list of dicts using the historical keys (``pkg``, ``heading``,
+    ``body``, ``kind``) so existing assertions continue to work. Scope /
+    title post-filters are applied here so the shim preserves the
+    pre-refactor semantics.
     """
     path = _resolve_db_path(conn_or_path)
     provider = build_connection_provider(path)
 
-    # Only push the single-equality package filter into the retriever —
+    # Only push the single-equality package filter into the step —
     # SearchScope is encoded as either "__project__" or a NOT-equals clause in
     # SQL, which the multifield format can't express. We apply scope + topic
     # post-hoc on the returned items below.
@@ -139,16 +140,28 @@ def retrieve_chunks(
         max_results=limit,
     )
 
-    store = SqliteVectorStore(provider=provider)
-    retriever = Bm25ChunkRetriever(store=store, allowed_fields=_CHUNK_ALLOWED_FIELDS)
+    fetcher = ChunkFetcherStep(
+        name="fetch",
+        provider=provider,
+        allowed_fields=_CHUNK_ALLOWED_FIELDS,
+        limit=limit,
+    )
+    scorer = BM25ScorerStep(name="score")
+
+    async def _run() -> tuple[Chunk, ...]:
+        state = RetrieverState(query=search_query)
+        state = await fetcher.run(state)
+        state = await scorer.run(state)
+        return state.candidates.items if state.candidates is not None else ()
+
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(retriever.retrieve(search_query))
+        items = loop.run_until_complete(_run())
     finally:
         loop.close()
 
     out: list[dict[str, Any]] = []
-    for chunk in result.items:
+    for chunk in items:
         md = chunk.metadata
         chunk_pkg = md.get(ChunkFilterField.PACKAGE.value, "")
         chunk_title = md.get(ChunkFilterField.TITLE.value, "")
@@ -178,7 +191,7 @@ def retrieve_module_members(
     limit: int = 15,
     internal: bool | None = None,
 ) -> list[dict[str, Any]]:
-    """Behavioural shim around ``LikeMemberRetriever``.
+    """Behavioural shim — LIKE-substring members via :class:`MemberFetcherStep`.
 
     Returns historical-shaped dicts (``pkg``, ``module``, ``name``, ``kind``,
     ``signature``, ``returns``, ``params``, ``doc``).
@@ -198,16 +211,26 @@ def retrieve_module_members(
         max_results=limit,
     )
 
-    store = SqliteModuleMemberRepository(provider=provider)
-    retriever = LikeMemberRetriever(store=store, allowed_fields=_MEMBER_ALLOWED_FIELDS)
+    fetcher = MemberFetcherStep(
+        name="fetch",
+        provider=provider,
+        allowed_fields=_MEMBER_ALLOWED_FIELDS,
+        limit=limit,
+    )
+
+    async def _run() -> tuple[ModuleMember, ...]:
+        state = RetrieverState(query=search_query)
+        state = await fetcher.run(state)
+        return state.candidates.items if state.candidates is not None else ()
+
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(retriever.retrieve(search_query))
+        items = loop.run_until_complete(_run())
     finally:
         loop.close()
 
     out: list[dict[str, Any]] = []
-    for member in result.items:
+    for member in items:
         md = member.metadata
         member_pkg = md.get(ModuleMemberFilterField.PACKAGE.value, "")
         if pkg is not None and member_pkg != pkg:

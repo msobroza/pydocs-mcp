@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 import pytest
 
 from pydocs_mcp.models import ChunkList, SearchQuery
-from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline, PipelineState
+from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +54,7 @@ async def test_pipeline_empty_stages_is_noop():
 
 def test_from_dict_rejects_excessive_nesting(tmp_path):
     """AC #31 — from_dict enforces _MAX_PIPELINE_DEPTH (Task 8: ``steps:`` schema)."""
-    from pydocs_mcp.retrieval.pipeline_legacy import (
+    from pydocs_mcp.retrieval.pipeline import (
         PerCallConnectionProvider,
         _MAX_PIPELINE_DEPTH,
     )
@@ -86,7 +86,7 @@ def test_from_dict_rejects_excessive_nesting(tmp_path):
 
 def test_from_dict_accepts_shallow_nesting(tmp_path):
     """Shallow nesting well under the depth cap must still succeed."""
-    from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
     from pydocs_mcp.retrieval.serialization import BuildContext
 
     inner = {"name": "inner", "steps": []}
@@ -106,7 +106,7 @@ def test_from_dict_accepts_shallow_nesting(tmp_path):
 
 def test_from_dict_rejects_legacy_stages_key(tmp_path):
     """Task 8: ``stages:`` is rejected with a migration error."""
-    from pydocs_mcp.retrieval.pipeline_legacy import (
+    from pydocs_mcp.retrieval.pipeline import (
         PerCallConnectionProvider,
         PipelineLoadError,
     )
@@ -121,7 +121,7 @@ def test_from_dict_rejects_legacy_stages_key(tmp_path):
 
 def test_from_dict_rejects_step_missing_name(tmp_path):
     """Task 8: every step must declare a ``name:``."""
-    from pydocs_mcp.retrieval.pipeline_legacy import (
+    from pydocs_mcp.retrieval.pipeline import (
         PerCallConnectionProvider,
         PipelineLoadError,
     )
@@ -140,7 +140,7 @@ def test_from_dict_rejects_step_missing_name(tmp_path):
 
 def test_from_dict_rejects_missing_steps_key(tmp_path):
     """Task 8: top-level pipeline YAML must declare ``steps:``."""
-    from pydocs_mcp.retrieval.pipeline_legacy import (
+    from pydocs_mcp.retrieval.pipeline import (
         PerCallConnectionProvider,
         PipelineLoadError,
     )
@@ -155,7 +155,7 @@ def test_from_dict_rejects_missing_steps_key(tmp_path):
 
 def test_from_dict_steps_with_names_round_trip(tmp_path):
     """Task 8: ``steps:`` with ``name:`` + ``type:`` + ``params:`` round-trips."""
-    from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
     from pydocs_mcp.retrieval.serialization import BuildContext
 
     context = BuildContext(

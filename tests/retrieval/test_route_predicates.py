@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from pydocs_mcp.models import Chunk, ChunkFilterField, ChunkList, SearchQuery, SearchScope
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import PipelineState
 from pydocs_mcp.retrieval.route_predicates import (
     PredicateRegistry,
     default_predicate_registry,

@@ -1,17 +1,16 @@
 """``sub_pipeline`` YAML decoder — returns a bare nested pipeline (no wrapper).
 
 A previous adapter class wrapped a ``CodeRetrieverPipeline`` so it could
-be slotted into a ``RouteStep`` as a ``PipelineStage``. Now
-``CodeRetrieverPipeline.run`` is polymorphic (accepts ``PipelineState`` as
-well as ``SearchQuery``), so the pipeline itself satisfies the
-``PipelineStage`` Protocol and can be used directly as a stage. The
-adapter class has been removed; only the YAML decoder remains so existing
-``{"type": "sub_pipeline", "pipeline": {...}}`` YAML keeps loading until
-Task 8 flips the schema to bare nested pipelines.
+be slotted into a ``RouteStep`` as a nested step. Now ``CodeRetrieverPipeline``
+subclasses :class:`RetrieverStep` directly, so the pipeline itself
+satisfies the ``RetrieverStep`` ABC and can be used directly as a step.
+The adapter class has been removed; only the YAML decoder remains so
+existing ``{"type": "sub_pipeline", "pipeline": {...}}`` YAML keeps
+loading.
 """
 from __future__ import annotations
 
-from pydocs_mcp.retrieval.pipeline_legacy import CodeRetrieverPipeline
+from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 

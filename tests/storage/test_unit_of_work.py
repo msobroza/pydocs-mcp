@@ -268,7 +268,7 @@ async def test_sqlite_uow_rollback_when_commit_not_called(tmp_path):
 async def test_uow_references_attribute_accessible_inside_context(tmp_path):
     """spec §14.7 — references is the 5th repo attribute (sub-PR #5b)."""
     from pydocs_mcp.db import open_index_database
-    from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
     from pydocs_mcp.storage.sqlite import SqliteReferenceStore, SqliteUnitOfWork
 
     db = tmp_path / "x.db"
@@ -282,7 +282,7 @@ async def test_uow_references_attribute_accessible_inside_context(tmp_path):
 async def test_uow_references_raises_outside_context(tmp_path):
     """spec §14.2 — outside `async with`, references @property raises."""
     from pydocs_mcp.db import open_index_database
-    from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
     from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
     from pydocs_mcp.storage.sqlite import SqliteUnitOfWork
 

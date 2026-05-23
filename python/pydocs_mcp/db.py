@@ -238,7 +238,7 @@ def get_stored_content_hash(
     return row["content_hash"] if row else None
 
 
-from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider  # noqa: E402
+from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider  # noqa: E402
 
 
 def build_connection_provider(cache_path: Path):

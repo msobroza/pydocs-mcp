@@ -6,12 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
+from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.serialization import (
     BuildContext,
     ComponentRegistry,
     formatter_registry,
-    retriever_registry,
     stage_registry,
 )
 
@@ -74,14 +73,12 @@ def test_unknown_type_raises_listing_known(tmp_path):
 
 def test_shared_registries_exist():
     assert isinstance(stage_registry, ComponentRegistry)
-    assert isinstance(retriever_registry, ComponentRegistry)
     assert isinstance(formatter_registry, ComponentRegistry)
 
 
 def test_build_context_defaults(tmp_path):
     ctx = _ctx(tmp_path)
     assert ctx.stage_registry is stage_registry
-    assert ctx.retriever_registry is retriever_registry
     assert ctx.formatter_registry is formatter_registry
     assert ctx.predicate_registry is not None
 
@@ -116,14 +113,10 @@ def test_bare_retrieval_import_populates_registries():
     import pydocs_mcp.retrieval  # noqa: F401
     from pydocs_mcp.retrieval import (
         formatter_registry,
-        retriever_registry,
         stage_registry,
     )
     from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
 
     assert len(stage_registry.names()) >= 10
-    # Task 7: pipeline_chunk / pipeline_member adapter retrievers deleted.
-    # Only bm25_chunk + like_member remain until the rest fall in Task 9.
-    assert len(retriever_registry.names()) >= 2
     assert len(formatter_registry.names()) >= 2
     assert len(default_predicate_registry.names()) >= 4

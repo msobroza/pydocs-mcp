@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from pydocs_mcp.models import ChunkFilterField, SearchScope
-from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
+from pydocs_mcp.retrieval.pipeline import PipelineState
 
 PipelinePredicate = Callable[[PipelineState], bool]
 

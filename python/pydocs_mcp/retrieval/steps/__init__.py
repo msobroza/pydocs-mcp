@@ -6,7 +6,6 @@ working without each call site needing to learn the submodule path.
 
 Module layout:
 
-- :mod:`.base_stage` — :class:`PipelineStage` Protocol (re-exported)
 - :mod:`.bm25_scorer` — :class:`BM25ScorerStep`
 - :mod:`.chunk_fetcher` — :class:`ChunkFetcherStep`
 - :mod:`.member_fetcher` — :class:`MemberFetcherStep`
@@ -17,23 +16,20 @@ Module layout:
 - :mod:`.conditional` — :class:`ConditionalStep`
 - :mod:`.route` — :class:`RouteCase` + :class:`RouteStep`
 - :mod:`.sub_pipeline` — ``sub_pipeline`` YAML decoder (no class — returns
-  a bare nested ``CodeRetrieverPipeline`` since pipelines satisfy the
-  ``PipelineStage`` Protocol via polymorphic ``run``)
+  a bare nested ``CodeRetrieverPipeline`` since pipelines subclass
+  :class:`RetrieverStep` directly)
 - :mod:`.token_budget` — :class:`TokenBudgetStep` + ``COMPOSITE_TITLE_SENTINEL``
 - :mod:`.top_k_filter` — :class:`TopKFilterStep`
 
-Task 8 removed :class:`ChunkRetrievalStep` and
-:class:`ModuleMemberRetrievalStep` — the new step chain
-(``chunk_fetcher`` → ``bm25_scorer`` → ``top_k_filter`` and
-``member_fetcher`` → ``top_k_filter``) replaces both legacy adapter
-steps directly in the shipped YAML.
+Every step subclasses :class:`~pydocs_mcp.retrieval.pipeline.RetrieverStep`.
+The legacy ``PipelineStage`` Protocol re-export module (``base_stage.py``)
+went away in Task 9 alongside the Protocol itself.
 """
 from __future__ import annotations
 
 # Side-effect import: register the "sub_pipeline" YAML decoder so existing
-# YAML keeps loading. The module exports no public symbols (Task 6).
+# YAML keeps loading. The module exports no public symbols.
 from pydocs_mcp.retrieval.steps import sub_pipeline as _sub_pipeline  # noqa: F401
-from pydocs_mcp.retrieval.steps.base_stage import PipelineStage
 from pydocs_mcp.retrieval.steps.bm25_scorer import BM25ScorerStep
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
 from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
@@ -58,7 +54,6 @@ __all__ = (
     "MemberFetcherStep",
     "MetadataPostFilterStep",
     "ParallelStep",
-    "PipelineStage",
     "RRFStep",
     "RouteCase",
     "RouteStep",

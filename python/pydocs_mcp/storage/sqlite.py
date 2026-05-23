@@ -619,7 +619,7 @@ class SqliteChunkRepository:
 def _build_fts_match_query(terms: str) -> str | None:
     """Shape raw user terms into an FTS5 MATCH expression.
 
-    Mirrors the Bm25ChunkRetriever logic in sub-PR #2 so behaviour stays
+    Mirrors the ChunkFetcherStep MATCH expression so behaviour stays
     byte-identical. Returns ``None`` when no usable token survives filtering.
     """
     tokens = terms.split()

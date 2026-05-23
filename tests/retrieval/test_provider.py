@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
+from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 
 
 async def test_provider_opens_and_closes_connection(tmp_path: Path):

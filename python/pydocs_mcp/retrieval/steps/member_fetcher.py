@@ -17,10 +17,9 @@ is split out via ``_split_scope`` and re-applied in-process via
 ``_matches_scope`` (the SQL adapter rejects ``scope`` as an unsafe
 column, mirroring the legacy ``LikeMemberRetriever`` flow).
 
-Mirrors the LIKE query shape in
-:class:`pydocs_mcp.retrieval.retrievers.like_member.LikeMemberRetriever`
-but pushes the substring match down to SQL instead of post-filtering
-in Python.
+Mirrors the LIKE query shape the legacy ``LikeMemberRetriever`` used
+(deleted in Task 9) but pushes the substring match down to SQL instead
+of post-filtering in Python.
 """
 from __future__ import annotations
 

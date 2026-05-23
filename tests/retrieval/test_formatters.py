@@ -12,7 +12,7 @@ from pydocs_mcp.retrieval.formatters import (
     ChunkFormatter,
     ModuleMemberFormatter,
 )
-from pydocs_mcp.retrieval.pipeline_legacy import PerCallConnectionProvider
+from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.serialization import BuildContext, formatter_registry
 
 

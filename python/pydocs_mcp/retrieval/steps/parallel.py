@@ -10,20 +10,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
-if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.protocols import PipelineStage
-
 
 @stage_registry.register("parallel_retrieval")
 @dataclass(frozen=True, slots=True)
 class ParallelStep(RetrieverStep):
-    stages: tuple["PipelineStage", ...] = ()
+    stages: tuple[RetrieverStep, ...] = ()
     name: str = "parallel_retrieval"
 
     async def run(self, state: RetrieverState) -> RetrieverState:

@@ -1,42 +1,26 @@
-"""Retrieval-pipeline protocols — structural types for sub-PR #2."""
+"""Retrieval-pipeline protocols — cross-cutting structural types.
+
+After the retrieval-pipeline refactor (Tasks 1-9), only two structural
+types remain here:
+
+- :class:`ConnectionProvider` — the SQLite-connection acquisition contract
+  threaded through ``BuildContext`` into the fetcher steps.
+- :class:`ResultFormatter` — the per-item render contract used by
+  ``application/formatting`` and the token-budget step.
+
+``RetrieverStep`` (the nominal ABC every step subclasses) lives in
+:mod:`pydocs_mcp.retrieval.pipeline.base`. The legacy
+``PipelineStage`` / ``Retriever`` / ``ChunkRetriever`` /
+``ModuleMemberRetriever`` Protocols were deleted in Task 9 once the
+``retrievers/`` directory and ``pipeline_legacy.py`` went away.
+"""
 from __future__ import annotations
 
 import sqlite3
 from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
-from pydocs_mcp.models import (
-    Chunk,
-    ChunkList,
-    ModuleMember,
-    ModuleMemberList,
-    SearchQuery,
-)
-
-
-@runtime_checkable
-class Retriever(Protocol):
-    """Any component that produces a ranked list of results from a SearchQuery."""
-    name: str
-
-
-@runtime_checkable
-class ChunkRetriever(Retriever, Protocol):
-    """A Retriever that returns a ChunkList."""
-    async def retrieve(self, query: SearchQuery) -> ChunkList: ...
-
-
-@runtime_checkable
-class ModuleMemberRetriever(Retriever, Protocol):
-    """A Retriever that returns a ModuleMemberList."""
-    async def retrieve(self, query: SearchQuery) -> ModuleMemberList: ...
-
-
-@runtime_checkable
-class PipelineStage(Protocol):
-    """One stage in a CodeRetrieverPipeline. Takes state, returns state."""
-    name: str
-    async def run(self, state): ...
+from pydocs_mcp.models import Chunk, ModuleMember
 
 
 @runtime_checkable
