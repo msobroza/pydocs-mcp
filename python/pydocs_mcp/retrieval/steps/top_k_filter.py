@@ -14,8 +14,10 @@ from dataclasses import dataclass, field, replace
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
+from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
 
+@stage_registry.register("top_k_filter")
 @dataclass(frozen=True, slots=True)
 class TopKFilterStep(RetrieverStep):
     """Top-K cutoff step. Works uniformly for chunks and members."""
@@ -46,6 +48,16 @@ class TopKFilterStep(RetrieverStep):
         if isinstance(state.candidates, ModuleMemberList):
             return replace(state, candidates=ModuleMemberList(items=new_items))
         return state
+
+    def to_dict(self) -> dict:
+        d: dict = {"type": "top_k_filter"}
+        if self.k != 50:
+            d["k"] = self.k
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict, context: BuildContext) -> "TopKFilterStep":
+        return cls(k=data.get("k", 50))
 
 
 __all__ = ("TopKFilterStep",)

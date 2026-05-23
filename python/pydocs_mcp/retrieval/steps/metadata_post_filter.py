@@ -40,7 +40,12 @@ class MetadataPostFilterStep(RetrieverStep):
     async def run(self, state: RetrieverState) -> RetrieverState:
         if state.query.post_filter is None:
             return state
-        if state.result is None:
+        # Task 8: operate on ``state.candidates`` (intermediate ranked
+        # list). Fall back to ``state.result`` for the
+        # MetadataPostFilterStep-after-renderer composition that the
+        # sentinel-bypass test still exercises directly on ``result``.
+        target = state.candidates if state.candidates is not None else state.result
+        if target is None:
             return state
         tree = format_registry[state.query.post_filter_format].parse(state.query.post_filter)
 
@@ -49,8 +54,12 @@ class MetadataPostFilterStep(RetrieverStep):
                 return True
             return _evaluate(tree, item)
 
-        kept = tuple(item for item in state.result.items if _keep(item))
-        if isinstance(state.result, ChunkList):
+        kept = tuple(item for item in target.items if _keep(item))
+        if state.candidates is not None:
+            if isinstance(target, ChunkList):
+                return replace(state, candidates=ChunkList(items=kept))
+            return replace(state, candidates=ModuleMemberList(items=kept))
+        if isinstance(target, ChunkList):
             return replace(state, result=ChunkList(items=kept))
         return replace(state, result=ModuleMemberList(items=kept))
 

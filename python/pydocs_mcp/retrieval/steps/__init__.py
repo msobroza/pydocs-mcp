@@ -1,7 +1,7 @@
-"""Retrieval-pipeline stages — one file per concrete stage.
+"""Retrieval-pipeline steps — one file per concrete step.
 
-Re-exports every stage class so existing imports
-(``from pydocs_mcp.retrieval.steps import ChunkRetrievalStep``) keep
+Re-exports every step class so existing imports
+(``from pydocs_mcp.retrieval.steps import LimitStep``) keep
 working without each call site needing to learn the submodule path.
 
 Module layout:
@@ -9,9 +9,7 @@ Module layout:
 - :mod:`.base_stage` — :class:`PipelineStage` Protocol (re-exported)
 - :mod:`.bm25_scorer` — :class:`BM25ScorerStep`
 - :mod:`.chunk_fetcher` — :class:`ChunkFetcherStep`
-- :mod:`.chunk_retrieval` — :class:`ChunkRetrievalStep` (legacy adapter)
 - :mod:`.member_fetcher` — :class:`MemberFetcherStep`
-- :mod:`.module_member_retrieval` — :class:`ModuleMemberRetrievalStep` (legacy adapter)
 - :mod:`.metadata_post_filter` — :class:`MetadataPostFilterStep`
 - :mod:`.limit` — :class:`LimitStep`
 - :mod:`.parallel` — :class:`ParallelStep`
@@ -23,6 +21,12 @@ Module layout:
   ``PipelineStage`` Protocol via polymorphic ``run``)
 - :mod:`.token_budget` — :class:`TokenBudgetStep` + ``COMPOSITE_TITLE_SENTINEL``
 - :mod:`.top_k_filter` — :class:`TopKFilterStep`
+
+Task 8 removed :class:`ChunkRetrievalStep` and
+:class:`ModuleMemberRetrievalStep` — the new step chain
+(``chunk_fetcher`` → ``bm25_scorer`` → ``top_k_filter`` and
+``member_fetcher`` → ``top_k_filter``) replaces both legacy adapter
+steps directly in the shipped YAML.
 """
 from __future__ import annotations
 
@@ -32,12 +36,10 @@ from pydocs_mcp.retrieval.steps import sub_pipeline as _sub_pipeline  # noqa: F4
 from pydocs_mcp.retrieval.steps.base_stage import PipelineStage
 from pydocs_mcp.retrieval.steps.bm25_scorer import BM25ScorerStep
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
-from pydocs_mcp.retrieval.steps.chunk_retrieval import ChunkRetrievalStep
 from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
 from pydocs_mcp.retrieval.steps.limit import LimitStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
-from pydocs_mcp.retrieval.steps.module_member_retrieval import ModuleMemberRetrievalStep
 from pydocs_mcp.retrieval.steps.parallel import ParallelStep
 from pydocs_mcp.retrieval.steps.route import RouteCase, RouteStep
 from pydocs_mcp.retrieval.steps.rrf import RRFStep
@@ -51,12 +53,10 @@ __all__ = (
     "COMPOSITE_TITLE_SENTINEL",
     "BM25ScorerStep",
     "ChunkFetcherStep",
-    "ChunkRetrievalStep",
     "ConditionalStep",
     "LimitStep",
     "MemberFetcherStep",
     "MetadataPostFilterStep",
-    "ModuleMemberRetrievalStep",
     "ParallelStep",
     "PipelineStage",
     "RRFStep",

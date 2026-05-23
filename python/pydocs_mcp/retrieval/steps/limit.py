@@ -1,4 +1,10 @@
-"""LimitStep — cap the result item count at ``max_results``."""
+"""LimitStep — cap the item count at ``max_results``.
+
+Task 8: operates on ``state.candidates`` (the intermediate ranked
+list) when present, falling back to ``state.result`` for backward
+compatibility with code that hasn't migrated to the
+candidates/result split.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -15,10 +21,18 @@ class LimitStep(RetrieverStep):
     name: str = "limit"
 
     async def run(self, state: RetrieverState) -> RetrieverState:
-        if state.result is None:
+        # Task 8: prefer ``state.candidates`` (post-fetch / post-score
+        # intermediate). Fall back to ``state.result`` for legacy
+        # composition paths still relying on the pre-Task-8 shape.
+        target = state.candidates if state.candidates is not None else state.result
+        if target is None:
             return state
-        capped = state.result.items[: self.max_results]
-        if isinstance(state.result, ChunkList):
+        capped = target.items[: self.max_results]
+        if state.candidates is not None:
+            if isinstance(target, ChunkList):
+                return replace(state, candidates=ChunkList(items=tuple(capped)))
+            return replace(state, candidates=ModuleMemberList(items=tuple(capped)))
+        if isinstance(target, ChunkList):
             return replace(state, result=ChunkList(items=tuple(capped)))
         return replace(state, result=ModuleMemberList(items=tuple(capped)))
 

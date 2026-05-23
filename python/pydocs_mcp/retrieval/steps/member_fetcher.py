@@ -7,12 +7,20 @@ cutoff, no rendering — LIKE doesn't produce relevance ranks, so
 candidates carry ``relevance=None`` and downstream
 :class:`TopKFilterStep` handles the cap with source-order fallback.
 
+Pre-filter pushdown (Task 8): when ``state.query.pre_filter`` is set,
+the filter tree is parsed through the configured
+``MetadataFilterFormat``, validated against the schema's allowed
+fields, and pushed into the SQL ``WHERE`` clause through the same
+:class:`SqliteFilterAdapter` that ``SqliteModuleMemberRepository.list``
+uses — so AC17 SQL parity is preserved. The semantic ``scope`` field
+is split out via ``_split_scope`` and re-applied in-process via
+``_matches_scope`` (the SQL adapter rejects ``scope`` as an unsafe
+column, mirroring the legacy ``LikeMemberRetriever`` flow).
+
 Mirrors the LIKE query shape in
 :class:`pydocs_mcp.retrieval.retrievers.like_member.LikeMemberRetriever`
 but pushes the substring match down to SQL instead of post-filtering
-in Python. Splitting fetch out of the legacy retriever keeps the
-fetcher step focused on candidate generation; pre_filter / scope logic
-will compose in via a separate filter step in Task 7.
+in Python.
 """
 from __future__ import annotations
 
@@ -26,42 +34,105 @@ from pydocs_mcp.models import (
     ModuleMemberFilterField,
     ModuleMemberList,
     Parameter,
+    SearchScope,
 )
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
+from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 
-_FETCH_SQL = (
+# Deferred storage / filter_helpers imports — see
+# :mod:`pydocs_mcp.retrieval.steps.chunk_fetcher` for the rationale.
+# Importing inside ``run`` breaks the storage→extraction→
+# retrieval.config→retrieval.steps cycle at module-load time.
+
+
+# Legacy LIKE-based query — Task 4 split fetcher from filter, Task 8
+# folds pre-filter pushdown into the fetcher (mirroring
+# ChunkFetcherStep). NOTE: legacy ``LikeMemberRetriever`` fetched WITHOUT
+# the LIKE constraint (relying on Python substring post-filter), so
+# parity requires the same flow here — the SQL pre-filter only carries
+# the metadata filter (package/module/name/kind), and the LIKE pass
+# happens post-fetch via ``_keep_by_terms``.
+_FETCH_SQL_TEMPLATE = (
     "SELECT id, package, module, name, kind, signature, return_annotation, "
     "parameters, docstring "
     "FROM module_members "
-    "WHERE LOWER(name) LIKE ? OR LOWER(docstring) LIKE ? "
+    "{where_clause}"
     "LIMIT ?"
 )
 
 
+@stage_registry.register("member_fetcher")
 @dataclass(frozen=True, slots=True)
 class MemberFetcherStep(RetrieverStep):
     """Candidate generation step for member pipelines.
 
-    Reads ``state.query.terms``. Writes ``state.candidates`` as a
+    Reads ``state.query.terms`` (LIKE) and ``state.query.pre_filter``
+    (SQL pushdown). Writes ``state.candidates`` as a
     :class:`ModuleMemberList`. Each candidate's ``relevance`` is ``None``
     — LIKE produces no rank. :class:`TopKFilterStep` downstream handles
     the "no relevance" case via source-order fallback.
     """
 
     provider: ConnectionProvider
+    allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     limit: int = field(default=50, kw_only=True)
+    retriever_name: str = field(default="like_member", kw_only=True)
     name: str = field(default="member_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         needle = state.query.terms.strip().lower()
         if not needle:
             return replace(state, candidates=ModuleMemberList(items=()))
-        rows = await asyncio.to_thread(self._fetch_sync, needle)
-        members = tuple(_row_to_candidate(row, self.name) for row in rows)
+
+        # Lazy imports — see module docstring on the import cycle.
+        from pydocs_mcp.retrieval.filter_helpers import (
+            _matches_scope,
+            _schema_from_fields,
+            _split_scope,
+        )
+        from pydocs_mcp.storage.filters import format_registry
+
+        # Pre-filter pushdown — same shape as ChunkFetcherStep.
+        tree = None
+        scope: frozenset[SearchScope] | None = None
+        if state.query.pre_filter is not None:
+            tree = format_registry[state.query.pre_filter_format].parse(state.query.pre_filter)
+            _schema_from_fields(self.allowed_fields).validate(tree)
+            tree, scope = _split_scope(tree)
+
+        filter_sql = ""
+        filter_params: list = []
+        if tree is not None:
+            from pydocs_mcp.storage.sqlite import (
+                _MEMBER_COLUMNS,
+                SqliteFilterAdapter,
+            )
+            adapter = SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
+            filter_sql, filter_params = adapter.adapt(tree)
+
+        rows = await asyncio.to_thread(
+            self._fetch_sync, filter_sql, filter_params,
+        )
+        members = tuple(_row_to_candidate(row, self.retriever_name) for row in rows)
+        # Apply LIKE-style substring match in-process (matches legacy
+        # LikeMemberRetriever's Python-side `needle in name or needle in
+        # docstring` post-filter).
+        members = tuple(_keep_by_terms(m, needle) for m in members)
+        members = tuple(m for m in members if m is not None)
+        if scope is not None:
+            members = tuple(
+                m for m in members
+                if _matches_scope(
+                    str(m.metadata.get(ModuleMemberFilterField.PACKAGE.value, "")),
+                    scope,
+                )
+            )
         return replace(state, candidates=ModuleMemberList(items=members))
 
-    def _fetch_sync(self, needle: str) -> list[sqlite3.Row]:
+    def _fetch_sync(
+        self, filter_sql: str, filter_params: list,
+    ) -> list[sqlite3.Row]:
         # WHY: PerCallConnectionProvider exposes ``cache_path`` directly so a
         # sync-friendly fresh connection avoids tangling with the provider's
         # async ``acquire()`` context manager from inside ``to_thread``.
@@ -72,13 +143,54 @@ class MemberFetcherStep(RetrieverStep):
                 "MemberFetcherStep requires a provider exposing 'cache_path'; "
                 f"got {type(self.provider).__name__}"
             )
-        pattern = f"%{needle}%"
+        where_clause = ""
+        params: list = []
+        if filter_sql:
+            where_clause = f"WHERE {filter_sql} "
+            params.extend(filter_params)
+        params.append(self.limit)
+        sql = _FETCH_SQL_TEMPLATE.format(where_clause=where_clause)
         conn = sqlite3.connect(str(cache_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:
-            return list(conn.execute(_FETCH_SQL, (pattern, pattern, self.limit)).fetchall())
+            return list(conn.execute(sql, params).fetchall())
         finally:
             conn.close()
+
+    @classmethod
+    def from_dict(cls, data: dict, context: BuildContext) -> "MemberFetcherStep":
+        schema_name = data.get("schema_name", "member")
+        if context.app_config is None:
+            raise ValueError(
+                "MemberFetcherStep requires BuildContext.app_config; "
+                "provide AppConfig at server/CLI startup."
+            )
+        allowed = frozenset(context.app_config.metadata_schemas[schema_name])
+        return cls(
+            provider=context.connection_provider,
+            allowed_fields=allowed,
+            limit=data.get("limit", 50),
+            retriever_name=data.get("retriever_name", "like_member"),
+        )
+
+    def to_dict(self) -> dict:
+        d: dict = {"type": "member_fetcher"}
+        if self.limit != 50:
+            d["limit"] = self.limit
+        if self.retriever_name != "like_member":
+            d["retriever_name"] = self.retriever_name
+        return d
+
+
+def _keep_by_terms(member: ModuleMember, needle: str) -> ModuleMember | None:
+    """LIKE-style in-process post-filter — drop members whose name AND
+    docstring miss the needle. Mirrors the legacy
+    ``LikeMemberRetriever`` substring check exactly."""
+    name_value = str(member.metadata.get(ModuleMemberFilterField.NAME.value, "")).lower()
+    doc_value = str(member.metadata.get("docstring", "")).lower()
+    if needle in name_value or needle in doc_value:
+        return member
+    return None
 
 
 def _row_to_candidate(row: sqlite3.Row, retriever_name: str) -> ModuleMember:

@@ -17,42 +17,17 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.pipeline_legacy import PipelineState
 from pydocs_mcp.retrieval.steps import (
-    ChunkRetrievalStep,
     LimitStep,
     MetadataPostFilterStep,
-    ModuleMemberRetrievalStep,
 )
 
 
-@dataclass(frozen=True, slots=True)
-class _StaticChunkRetriever:
-    name: str = "static_chunk"
-    _payload: tuple[Chunk, ...] = ()
-    async def retrieve(self, query): return ChunkList(items=self._payload)
-
-
-@dataclass(frozen=True, slots=True)
-class _StaticMemberRetriever:
-    name: str = "static_member"
-    _payload: tuple[ModuleMember, ...] = ()
-    async def retrieve(self, query): return ModuleMemberList(items=self._payload)
-
-
-@pytest.mark.asyncio
-async def test_chunk_retrieval_stage_sets_result():
-    stage = ChunkRetrievalStep(retriever=_StaticChunkRetriever(_payload=(Chunk(text="a"),)))
-    state = await stage.run(PipelineState(query=SearchQuery(terms="x")))
-    assert isinstance(state.result, ChunkList)
-    assert state.result.items[0].text == "a"
-
-
-@pytest.mark.asyncio
-async def test_member_retrieval_stage_sets_result():
-    stage = ModuleMemberRetrievalStep(
-        retriever=_StaticMemberRetriever(_payload=(ModuleMember(metadata={"n": "f"}),))
-    )
-    state = await stage.run(PipelineState(query=SearchQuery(terms="x")))
-    assert isinstance(state.result, ModuleMemberList)
+# Task 8 removed ChunkRetrievalStep + ModuleMemberRetrievalStep. The
+# new step chain (chunk_fetcher → bm25_scorer → top_k_filter for chunks;
+# member_fetcher → top_k_filter for members) replaces them directly in
+# the shipped YAML — the previous "stage wraps a retriever" indirection
+# is gone. Tests below exercise the downstream steps (MetadataPostFilter,
+# Limit) which were migrated to ``state.candidates`` in Task 8.
 
 
 @pytest.mark.asyncio
