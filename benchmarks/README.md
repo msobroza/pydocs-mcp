@@ -78,6 +78,74 @@ The aggregator (`benchmarks/eval/metrics/aggregate.py`) emits the mean plus a
 bootstrap confidence interval for each metric so regression gates can compare
 runs without false positives from per-task variance.
 
+## Current baselines
+
+Two baseline JSON files are tracked in `benchmarks/baselines/`:
+
+| File | What | Tasks | recall@1 | recall@5 | recall@10 | MRR |
+|---|---|---:|---:|---:|---:|---:|
+| `repoqa_snf.json` | Real 100-needle sweep against the Python subset of `repoqa-2024-06-23` | 100 | 14.0% [7%, 21%] | 17.0% [10%, 24%] | 18.0% [11%, 26%] | 15.2% [9%, 22%] |
+| `repoqa_fixture_baseline.json` | 5-needle hermetic CI gate fixture | 5 | 60.0% | 80.0% | 80.0% | 70.0% |
+
+CIs are 95% Wilson intervals from bootstrap resampling (1000 iter, seed=0).
+Both baselines were captured against the `chunk_search_ranked.yaml` preset
+that returns top-K ranked separate chunks (the MCP server's default
+`chunk_search.yaml` collapses to one composite chunk and structurally pegs
+`recall@k > 1` at 0 — see PR #31 for the rationale split).
+
+The real-100-needle numbers are the headline figure: PR-B3.1 (dense
+embeddings + RRF) should beat `recall@10 = 18%` to be worth landing.
+
+## Visualizing baselines
+
+`benchmarks.eval.plotting` produces grouped vertical bar plots from one or
+more baseline JSON files. Each baseline becomes a colored bar group; each
+metric becomes an X-axis category; 95% CI error bars come straight from
+each metric's `ci_low` / `ci_high`. Default palette is seaborn's
+`colorblind` (colorblind-safe + Nature figure-guideline compliant).
+
+```bash
+# Plot a single baseline (BM25 only, current state).
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
+    benchmarks/baselines/repoqa_snf.json \
+    --output benchmarks/results/plots/bm25_only.png \
+    --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle
+
+# Side-by-side compare two baselines (e.g., future dense vs current BM25).
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
+    benchmarks/baselines/repoqa_snf.json \
+    benchmarks/baselines/repoqa_snf_dense.json \
+    --output benchmarks/results/plots/bm25_vs_dense.png \
+    --title "BM25 vs dense on RepoQA-2024-06-23 (Python, n=100)"
+```
+
+The legend identifies each system as `<system> / <config> (<label>) [<git_sha>, n=<tasks>]`
+so a plot stays self-describing even when copy-pasted into a PR
+description. Sample output (committed to `benchmarks/docs/repoqa_baselines.png`):
+
+![pydocs-mcp BM25 baseline plot](docs/repoqa_baselines.png)
+
+Programmatic API — same behavior, more flexible for notebook use:
+
+```python
+from pathlib import Path
+from benchmarks.eval.plotting import plot_baselines
+
+fig = plot_baselines(
+    baselines=[
+        Path("benchmarks/baselines/repoqa_snf.json"),
+        # Path("benchmarks/baselines/repoqa_snf_dense.json"),  # PR-B3.1
+    ],
+    metrics=("recall@1", "recall@5", "recall@10", "mrr"),
+    output=Path("benchmarks/results/plots/repoqa_real.png"),
+    palette="colorblind",          # also: "deep", "muted", "Set2"
+    title="pydocs-mcp on RepoQA",  # default: <dataset> (<tasks_ran> tasks)
+)
+```
+
+The returned `matplotlib.figure.Figure` is yours to further customize,
+`.show()` in a notebook, or `.savefig()` again with different DPI.
+
 ## What this benchmark proxies — and what it does NOT
 
 **What it proxies well:**
