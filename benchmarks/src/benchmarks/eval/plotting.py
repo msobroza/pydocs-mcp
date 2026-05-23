@@ -354,6 +354,136 @@ def plot_timings(
     return fig
 
 
+def plot_metric_vs_latency(
+    baselines: Iterable[BaselineRecord | Path],
+    metric: str = "recall@10",
+    *,
+    latency_metric: str = "search_seconds",
+    latency_percentile: str = "p50",
+    output: Path | None = None,
+    palette: str = _DEFAULT_PALETTE,
+    title: str | None = None,
+    figsize: tuple[float, float] = (10.0, 6.0),
+) -> Figure:
+    """Scatter plot of a principal score metric vs per-query search latency.
+
+    Each baseline becomes one point — Y is a chosen score metric (default
+    ``recall@10``), X is a chosen latency percentile (default ``p50`` of
+    ``search_seconds``). Vertical error bars show the score's 95% CI
+    (from ``ci_low`` / ``ci_high``); horizontal error bars extend the
+    latency from the chosen percentile up to ``p95`` so tail-latency
+    pressure is visible.
+
+    Reading the chart:
+    - Up-and-left = the dominant point (higher quality at lower latency).
+    - Down-and-right = strictly worse.
+    - Up-and-right = quality-vs-latency trade-off — typically the dense /
+      hybrid retrievers vs BM25.
+
+    Apples-to-apples constraint same as the other plot functions: every
+    baseline must come from the same ``dataset`` slice.
+
+    Args:
+        baselines: one or more ``BaselineRecord`` / ``Path`` items.
+        metric: Y-axis score metric. Default ``"recall@10"``.
+        latency_metric: which latency series to use. Default
+            ``"search_seconds"`` (use ``"indexing_seconds"`` for the
+            indexing-cost-vs-quality trade-off instead).
+        latency_percentile: ``"p50"`` / ``"p95"`` / ``"p99"``. Default
+            ``"p50"``. The horizontal error bar always extends to ``p95``
+            (or up to the chosen percentile when that exceeds p95) so
+            the tail spread is visible.
+        output: optional save path.
+        palette: seaborn palette name.
+        title: figure title. Default: ``"<dataset> (<tasks_ran> tasks)"``.
+        figsize: ``(width, height)`` in inches.
+
+    Returns:
+        The matplotlib ``Figure``.
+
+    Raises:
+        ValueError: empty baselines, or mixed datasets.
+    """
+    records = _load_records(baselines, fn_name="plot_metric_vs_latency")
+    _validate_same_dataset(records, fn_name="plot_metric_vs_latency")
+
+    sns.set_theme(style="whitegrid", context="paper", font_scale=1.0)
+    fig, ax = plt.subplots(figsize=figsize)
+
+    colors = sns.color_palette(palette, n_colors=max(len(records), 3))
+
+    plotted = 0
+    for i, rec in enumerate(records):
+        score_stats = rec.metrics.get(metric)
+        latency_stats = rec.metrics.get(latency_metric)
+        if not score_stats or not latency_stats:
+            continue  # Skip baselines missing either axis.
+
+        y = float(score_stats.get("mean", 0.0))
+        y_lo = float(score_stats.get("ci_low", y))
+        y_hi = float(score_stats.get("ci_high", y))
+
+        # X in milliseconds — search latency is consistently sub-second so
+        # ms is easier to read than 0.0xx-style seconds.
+        x_target_s = float(latency_stats.get(latency_percentile, 0.0))
+        x_p95_s = float(latency_stats.get("p95", x_target_s))
+        x_ms = x_target_s * 1000.0
+        x_hi_ms = max(x_p95_s * 1000.0, x_ms)
+
+        label = rec.display_label + rec.legend_suffix
+
+        ax.errorbar(
+            x_ms, y,
+            yerr=[[max(y - y_lo, 0.0)], [max(y_hi - y, 0.0)]],
+            xerr=[[0.0], [max(x_hi_ms - x_ms, 0.0)]],
+            fmt="o",
+            color=colors[i],
+            markersize=10,
+            capsize=4,
+            linewidth=1.2,
+            label=label,
+        )
+        # Tiny offset so the label sits next to the point, not on top of it.
+        ax.annotate(
+            label,
+            xy=(x_ms, y),
+            xytext=(10, -4),
+            textcoords="offset points",
+            fontsize=8,
+            color=colors[i],
+        )
+        plotted += 1
+
+    if plotted == 0:
+        raise ValueError(
+            f"plot_metric_vs_latency: no baseline had both '{metric}' "
+            f"and '{latency_metric}' populated."
+        )
+
+    ax.set_xlabel(
+        f"Search latency {latency_percentile} (ms)  "
+        "— horizontal bar extends to p95",
+    )
+    ax.set_ylabel(f"{metric}  (95% CI vertical bars)")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlim(left=0.0)
+
+    if title is None:
+        title = f"{records[0].dataset} ({records[0].tasks_ran} tasks)"
+    ax.set_title(title)
+
+    # The annotations already identify each point — keep the legend off
+    # by default so the chart stays clean when N is small. Users who
+    # want a legend can grab handles/labels off the returned Figure.
+    fig.tight_layout()
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output, dpi=150, bbox_inches="tight")
+
+    return fig
+
+
 def _plot_timing_axis(
     ax,
     records: list[BaselineRecord],
@@ -530,24 +660,60 @@ def _cli_parser() -> argparse.ArgumentParser:
         required=True,
         help="Output path for the figure (.png, .pdf, .svg).",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--timings",
-        action="store_true",
+        action="store_const", dest="mode", const="timings",
         help=(
-            "Switch to timing-percentile mode (horizontal bars, p50 + "
-            "p95 whisker). Default metrics become indexing_seconds + "
-            "search_seconds; override with --metrics."
+            "Timing-percentile mode (horizontal bars, p50 + p95 whisker, "
+            "one subplot per timing metric). Default metrics become "
+            "indexing_seconds + search_seconds."
         ),
     )
+    mode.add_argument(
+        "--scatter",
+        action="store_const", dest="mode", const="scatter",
+        help=(
+            "Scatter mode — quality vs latency. One point per baseline; "
+            "Y = --scatter-metric (default recall@10), X = "
+            "--scatter-latency p50 (default search_seconds, ms). "
+            "Vertical bars = 95%% score CI; horizontal bar extends to p95 "
+            "latency."
+        ),
+    )
+    parser.set_defaults(mode="scores")
     parser.add_argument(
         "--metrics",
         type=str,
         default=None,
         help=(
-            "Comma-separated metric names. Default for score mode: "
-            f"{','.join(_DEFAULT_METRICS)}. Default for --timings: "
-            f"{','.join(_DEFAULT_TIMING_METRICS)}."
+            "Comma-separated metric names (scores or timings mode). "
+            f"Default scores: {','.join(_DEFAULT_METRICS)}. "
+            f"Default timings: {','.join(_DEFAULT_TIMING_METRICS)}."
         ),
+    )
+    parser.add_argument(
+        "--scatter-metric",
+        type=str,
+        default="recall@10",
+        help="Score metric for the scatter Y-axis. Default: recall@10.",
+    )
+    parser.add_argument(
+        "--scatter-latency",
+        type=str,
+        default="search_seconds",
+        help=(
+            "Latency metric for the scatter X-axis. Default: "
+            "search_seconds. Use indexing_seconds for an indexing-cost "
+            "trade-off chart instead."
+        ),
+    )
+    parser.add_argument(
+        "--scatter-percentile",
+        type=str,
+        default="p50",
+        choices=("p50", "p95", "p99"),
+        help="Latency percentile for the scatter X-axis. Default: p50.",
     )
     parser.add_argument(
         "--palette",
@@ -566,21 +732,30 @@ def _cli_parser() -> argparse.ArgumentParser:
 
 def _cli_main(argv: list[str] | None = None) -> int:
     args = _cli_parser().parse_args(argv)
-    default_metrics = _DEFAULT_TIMING_METRICS if args.timings else _DEFAULT_METRICS
-    if args.metrics:
-        metrics = tuple(m.strip() for m in args.metrics.split(",") if m.strip())
-    else:
-        metrics = default_metrics
-    if args.timings:
-        fig = plot_timings(
+
+    if args.mode == "scatter":
+        fig = plot_metric_vs_latency(
             baselines=args.baselines,
-            metrics=metrics,
+            metric=args.scatter_metric,
+            latency_metric=args.scatter_latency,
+            latency_percentile=args.scatter_percentile,
             output=args.output,
             palette=args.palette,
             title=args.title,
         )
     else:
-        fig = plot_baselines(
+        default_metrics = (
+            _DEFAULT_TIMING_METRICS if args.mode == "timings"
+            else _DEFAULT_METRICS
+        )
+        if args.metrics:
+            metrics = tuple(
+                m.strip() for m in args.metrics.split(",") if m.strip()
+            )
+        else:
+            metrics = default_metrics
+        plot_fn = plot_timings if args.mode == "timings" else plot_baselines
+        fig = plot_fn(
             baselines=args.baselines,
             metrics=metrics,
             output=args.output,
@@ -601,4 +776,9 @@ if __name__ == "__main__":
     raise SystemExit(_cli_main())
 
 
-__all__ = ("BaselineRecord", "plot_baselines", "plot_timings")
+__all__ = (
+    "BaselineRecord",
+    "plot_baselines",
+    "plot_metric_vs_latency",
+    "plot_timings",
+)

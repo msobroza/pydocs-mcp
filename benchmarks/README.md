@@ -344,6 +344,65 @@ share the same `dataset` field. The function raises `ValueError`
 otherwise. Two BM25 vs dense configs on the same dataset add a second
 bar per subplot automatically when a future baseline lands.
 
+### Quality vs latency scatter (the Pareto trade-off)
+
+`plot_metric_vs_latency()` puts one point per baseline on a quality-vs-
+latency chart — the classic IR trade-off view. Y-axis is a chosen score
+metric (default `recall@10`) with 95% CI vertical bars; X-axis is a
+chosen latency percentile (default p50 of `search_seconds`, in ms) with
+a horizontal bar extending to p95. Reading the chart:
+
+- **Up-and-left = strictly better** (higher quality at lower latency).
+- **Down-and-right = strictly worse.**
+- **Up-and-right = the trade-off line** — typically dense / hybrid
+  retrievers buy higher recall at the cost of higher per-query latency.
+
+```bash
+# Quality vs latency scatter. Today: a single dot (BM25 only).
+# When PR-B3.1's dense embeddings land, a second dot appears
+# automatically on the same chart.
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
+    benchmarks/baselines/repoqa_snf.json \
+    --output benchmarks/results/plots/repoqa_quality_vs_latency.png \
+    --scatter \
+    --scatter-metric recall@10 \
+    --title "RepoQA-2024-06-23 (Python, n=100) — recall@10 vs latency"
+
+# Swap the X-axis to indexing cost instead of search latency to
+# get a quality-vs-indexing-cost view.
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
+    benchmarks/baselines/repoqa_snf.json \
+    --output benchmarks/results/plots/repoqa_quality_vs_indexing.png \
+    --scatter \
+    --scatter-metric recall@10 \
+    --scatter-latency indexing_seconds \
+    --scatter-percentile p50
+```
+
+Sample output (committed to `benchmarks/docs/repoqa_quality_vs_latency.png`):
+
+![RepoQA-2024-06-23 (Python) quality vs latency](docs/repoqa_quality_vs_latency.png)
+
+Programmatic API:
+
+```python
+from pathlib import Path
+from benchmarks.eval.plotting import plot_metric_vs_latency
+
+fig = plot_metric_vs_latency(
+    baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
+    metric="recall@10",
+    latency_metric="search_seconds",
+    latency_percentile="p50",
+    output=Path("benchmarks/results/plots/repoqa_quality_vs_latency.png"),
+    title="RepoQA-2024-06-23 (Python, n=100) — recall@10 vs latency",
+)
+```
+
+The point colors come from the same `colorblind` palette, so the same
+baseline keeps the same color across all three plot types (score bars,
+timing bars, and quality-vs-latency scatter).
+
 ## License and attribution
 
 Per-benchmark licensing + citation lives in the relevant subsection under
