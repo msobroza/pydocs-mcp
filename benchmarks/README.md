@@ -159,14 +159,16 @@ and cached thereafter.
 **What it does NOT proxy:**
 
 - **End-to-end LLM code generation quality.** Retrieval only — what an
-  LLM does with the chunks is out of scope.
+  LLM does with the chunks is out of scope. The planned CodeRAG-Bench
+  (DS-1000 + ODEX) integration closes this gap by scoring retrieval under
+  the downstream code-generation task.
 - **Multi-file / call-graph retrieval.** Each task is single-needle; the
-  planned SWE-bench retrieval benchmark covers cross-file reasoning.
-- **Real-user query distribution.** Queries are LLM-generated from
-  function docstrings, not log-mined from real MCP traffic.
+  planned SWE-bench Verified retrieval slice covers cross-file reasoning.
+- **Library-docs lookup from a natural-language intent.** RepoQA queries
+  describe a *function inside a specific repo*, not "what's the right API
+  in this library for what I'm trying to do." The planned DocPrompting
+  CoNaLa-Docs integration covers that loop directly.
 - **Multi-language coverage.** Python only.
-- **Indexing throughput.** This harness optimizes for retrieval signal;
-  an indexing-latency benchmark is a deferred follow-up.
 
 When you read a result, treat it as evidence about the retrieval surface,
 not the whole system.
@@ -179,9 +181,8 @@ four-question pattern. Planned additions:
 | Benchmark | What it would add | Status |
 |---|---|---|
 | **SWE-bench Verified (retrieval-only slice)** | Multi-file resolution from a bug report — exercises the call-graph / reference-graph paths the post-#5c trilogy added. | One-file dataset plugin; not yet implemented. |
-| **LiveCodeBench (retrieval slice)** | Recency-stratified queries; tests whether the index handles "post-cutoff" code by recall, not memorization. | Plugin scoped, deferred. |
-| **In-house log-mined query set** | Real MCP search queries from production logs paired with developer-curated gold chunks. Highest external validity, requires harvesting + curation. | Roadmap. |
-| **Indexing-throughput benchmark** | Measures wall-clock + memory across repo sizes; complements the retrieval-quality numbers here. | Roadmap. |
+| **DocPrompting CoNaLa-Docs** | Natural-language intent → Python library doc retrieval. Tests the exact "look up the right API doc from an English question" loop that AI assistants hit. Zhou et al., arXiv:2207.05987 (2023). | Plugin scoped, deferred. |
+| **CodeRAG-Bench (DS-1000 + ODEX)** | Library-docs retrieval evaluated under the downstream code-generation task. DS-1000 covers NumPy/Pandas/SciPy/Matplotlib/scikit-learn (data-science Python); ODEX is execution-driven from StackOverflow. Wang et al., arXiv:2406.14497 (2024). | Roadmap. |
 
 Adding one means: drop a `Dataset` Protocol implementation under
 `benchmarks/src/benchmarks/eval/datasets/`, register it via
