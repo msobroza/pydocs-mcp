@@ -51,9 +51,13 @@ def _scope_value(state: PipelineState) -> str | None:
 
 @predicate("has_matches")
 def _has_matches(state: PipelineState) -> bool:
-    if state.result is None:
+    # Task 8: prefer ``state.candidates`` (post-fetch intermediate) so
+    # predicate-driven branching works in the new step chain. Fall back
+    # to ``state.result`` for legacy pipelines that bypass candidates.
+    target = state.candidates if state.candidates is not None else state.result
+    if target is None:
         return False
-    return len(state.result.items) > 0
+    return len(target.items) > 0
 
 
 @predicate("query_has_multiple_terms")

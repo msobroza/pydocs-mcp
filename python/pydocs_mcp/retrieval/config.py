@@ -20,12 +20,20 @@ from pydantic_settings import (
 
 from pydocs_mcp.extraction.config import ExtractionConfig
 
-# Side-effect imports: populate stage/retriever/formatter registries via decorators.
+# Side-effect imports: populate stage/formatter registries via decorators.
 from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401
-from pydocs_mcp.retrieval import retrievers as _retrievers  # noqa: F401
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
 from pydocs_mcp.retrieval.serialization import BuildContext
-from pydocs_mcp.retrieval.stages import RouteCase, RouteStage, SubPipelineStage
+
+# WHY: ``RouteCase`` / ``RouteStep`` are imported lazily inside
+# :func:`_build_handler_pipeline` rather than top-level. After the
+# Task-9 corpse removal removed the eager ``retrievers`` side-effect
+# import from :mod:`pydocs_mcp.retrieval.__init__`, the import chain
+# ``retrieval.steps`` → ``token_budget`` → ``application`` →
+# ``storage`` → ``extraction.reference_capture`` → ``retrieval.config``
+# hits this module before ``retrieval.steps.__init__`` has finished
+# binding ``RouteCase`` / ``RouteStep``. Deferring the import to
+# function scope breaks the cycle without changing call-site shape.
 
 # ── Tunable user-config path override ───────────────────────────────────
 #
@@ -466,27 +474,32 @@ def _build_handler_pipeline(
     context: BuildContext,
     user_config_path: Path | None = None,
 ) -> CodeRetrieverPipeline:
+    # Lazy import — see top-level WHY note. Breaks the
+    # ``retrieval.steps`` ⇄ ``retrieval.config`` cycle that runs through
+    # the extraction-side reference-capture stage at import time.
+    from pydocs_mcp.retrieval.steps import RouteCase, RouteStep
+
     routes: list[RouteCase] = []
-    default = None
+    default: CodeRetrieverPipeline | None = None
     for entry in handler_config.routes:
         resolved = _resolve_pipeline_path(entry.pipeline_path, user_config_path)
+        # WHY: a CodeRetrieverPipeline subclasses ``RetrieverStep``, so we
+        # slot it directly into ``RouteCase.stage`` — no adapter needed.
         sub_pipeline = _load_preset_yaml(resolved, context)
-        stage = SubPipelineStage(pipeline=sub_pipeline)
         # PipelineRouteEntry guarantees exactly-one-of, so we needn't re-validate
         if entry.default:
             if default is not None:
                 raise ValueError(f"{handler_name}: multiple default routes declared")
-            default = stage
+            default = sub_pipeline
         else:
             # predicate must be set — guaranteed by PipelineRouteEntry validator
-            routes.append(RouteCase(predicate_name=entry.predicate, stage=stage))
+            routes.append(RouteCase(predicate_name=entry.predicate, stage=sub_pipeline))
     if not routes and default is not None:
         # Single-default route collapses to the inner pipeline directly so
         # callers inspecting pipeline.stages see the preset's stage list,
-        # not a RouteStage wrapper (preserves sub-PR #2's golden parity).
-        inner = default.pipeline
-        return CodeRetrieverPipeline(name=inner.name, stages=inner.stages)
+        # not a RouteStep wrapper (preserves sub-PR #2's golden parity).
+        return CodeRetrieverPipeline(name=default.name, stages=default.stages)
     return CodeRetrieverPipeline(
         name=f"{handler_name}_from_config",
-        stages=(RouteStage(routes=tuple(routes), default=default),),
+        stages=(RouteStep(routes=tuple(routes), default=default),),
     )

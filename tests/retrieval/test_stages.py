@@ -16,50 +16,25 @@ from pydocs_mcp.models import (
     SearchQuery,
 )
 from pydocs_mcp.retrieval.pipeline import PipelineState
-from pydocs_mcp.retrieval.stages import (
-    ChunkRetrievalStage,
-    LimitStage,
-    MetadataPostFilterStage,
-    ModuleMemberRetrievalStage,
+from pydocs_mcp.retrieval.steps import (
+    LimitStep,
+    MetadataPostFilterStep,
 )
 
 
-@dataclass(frozen=True, slots=True)
-class _StaticChunkRetriever:
-    name: str = "static_chunk"
-    _payload: tuple[Chunk, ...] = ()
-    async def retrieve(self, query): return ChunkList(items=self._payload)
-
-
-@dataclass(frozen=True, slots=True)
-class _StaticMemberRetriever:
-    name: str = "static_member"
-    _payload: tuple[ModuleMember, ...] = ()
-    async def retrieve(self, query): return ModuleMemberList(items=self._payload)
-
-
-@pytest.mark.asyncio
-async def test_chunk_retrieval_stage_sets_result():
-    stage = ChunkRetrievalStage(retriever=_StaticChunkRetriever(_payload=(Chunk(text="a"),)))
-    state = await stage.run(PipelineState(query=SearchQuery(terms="x")))
-    assert isinstance(state.result, ChunkList)
-    assert state.result.items[0].text == "a"
-
-
-@pytest.mark.asyncio
-async def test_member_retrieval_stage_sets_result():
-    stage = ModuleMemberRetrievalStage(
-        retriever=_StaticMemberRetriever(_payload=(ModuleMember(metadata={"n": "f"}),))
-    )
-    state = await stage.run(PipelineState(query=SearchQuery(terms="x")))
-    assert isinstance(state.result, ModuleMemberList)
+# Task 8 removed ChunkRetrievalStep + ModuleMemberRetrievalStep. The
+# new step chain (chunk_fetcher → bm25_scorer → top_k_filter for chunks;
+# member_fetcher → top_k_filter for members) replaces them directly in
+# the shipped YAML — the previous "stage wraps a retriever" indirection
+# is gone. Tests below exercise the downstream steps (MetadataPostFilter,
+# Limit) which were migrated to ``state.candidates`` in Task 8.
 
 
 @pytest.mark.asyncio
 async def test_metadata_post_filter_stage_noop_when_post_filter_none():
     payload = ChunkList(items=(Chunk(text="a"), Chunk(text="b")))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await MetadataPostFilterStage().run(state)
+    out = await MetadataPostFilterStep().run(state)
     assert len(out.result.items) == 2
 
 
@@ -73,7 +48,7 @@ async def test_metadata_post_filter_stage_filters_chunks_by_eq():
         query=SearchQuery(terms="x", post_filter={"package": "fastapi"}),
         result=payload,
     )
-    out = await MetadataPostFilterStage().run(state)
+    out = await MetadataPostFilterStep().run(state)
     assert len(out.result.items) == 1
     assert out.result.items[0].text == "a"
 
@@ -88,7 +63,7 @@ async def test_metadata_post_filter_stage_filters_by_like():
         query=SearchQuery(terms="x", post_filter={"title": {"like": "rout"}}),
         result=payload,
     )
-    out = await MetadataPostFilterStage().run(state)
+    out = await MetadataPostFilterStep().run(state)
     assert len(out.result.items) == 1
     assert out.result.items[0].text == "a"
 
@@ -97,7 +72,7 @@ async def test_metadata_post_filter_stage_filters_by_like():
 async def test_limit_stage_truncates():
     payload = ChunkList(items=tuple(Chunk(text=str(i)) for i in range(10)))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await LimitStage(max_results=3).run(state)
+    out = await LimitStep(max_results=3).run(state)
     assert len(out.result.items) == 3
 
 
@@ -105,14 +80,14 @@ async def test_limit_stage_truncates():
 async def test_limit_stage_default_eight():
     payload = ChunkList(items=tuple(Chunk(text=str(i)) for i in range(20)))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await LimitStage().run(state)
+    out = await LimitStep().run(state)
     assert len(out.result.items) == 8
 
 
 @pytest.mark.asyncio
 async def test_parallel_retrieval_stage_runs_branches_concurrently():
     """Each inner stage sees the same input state. Their results are CONCATENATED."""
-    from pydocs_mcp.retrieval.stages import ParallelRetrievalStage
+    from pydocs_mcp.retrieval.steps import ParallelStep
 
     @dataclass(frozen=True, slots=True)
     class _AppendA:
@@ -129,7 +104,7 @@ async def test_parallel_retrieval_stage_runs_branches_concurrently():
             return replace(state, result=ChunkList(items=existing + (Chunk(text="B"),)))
 
     from dataclasses import replace
-    stage = ParallelRetrievalStage(stages=(_AppendA(), _AppendB()))
+    stage = ParallelStep(stages=(_AppendA(), _AppendB()))
     state = await stage.run(PipelineState(query=SearchQuery(terms="x")))
     texts = [c.text for c in state.result.items]
     # Both branch contributions should be present (order depends on gather)
@@ -138,7 +113,7 @@ async def test_parallel_retrieval_stage_runs_branches_concurrently():
 
 @pytest.mark.asyncio
 async def test_reciprocal_rank_fusion_basic():
-    from pydocs_mcp.retrieval.stages import ReciprocalRankFusionStage
+    from pydocs_mcp.retrieval.steps import RRFStep
 
     # 4 chunks, 2 duplicates — RRF sums 1/(k+rank) across duplicates
     # The duplicate should rank higher than singletons
@@ -148,7 +123,7 @@ async def test_reciprocal_rank_fusion_basic():
         Chunk(text="a", id=1),  # duplicate of #1 at a lower initial position
     )
     state = PipelineState(query=SearchQuery(terms="x"), result=ChunkList(items=items))
-    out = await ReciprocalRankFusionStage(k=60).run(state)
+    out = await RRFStep(k=60).run(state)
     # "a" (id=1) has 2 appearances; its RRF score is strictly higher than "b"'s single.
     assert out.result.items[0].id == 1
     # Duplicates deduplicated by id
@@ -159,14 +134,14 @@ async def test_reciprocal_rank_fusion_basic():
 @pytest.mark.asyncio
 async def test_reciprocal_rank_fusion_preserves_first_seen_metadata():
     """AC #33 — duplicates keep the first branch's retriever_name / relevance."""
-    from pydocs_mcp.retrieval.stages import ReciprocalRankFusionStage
+    from pydocs_mcp.retrieval.steps import RRFStep
 
     items = (
         Chunk(text="a", id=1, retriever_name="first", relevance=0.9),
         Chunk(text="a", id=1, retriever_name="second", relevance=0.1),
     )
     state = PipelineState(query=SearchQuery(terms="x"), result=ChunkList(items=items))
-    out = await ReciprocalRankFusionStage(k=60).run(state)
+    out = await RRFStep(k=60).run(state)
     assert len(out.result.items) == 1
     # First-seen wins the representative — setdefault, not assignment.
     assert out.result.items[0].retriever_name == "first"
@@ -176,7 +151,7 @@ async def test_reciprocal_rank_fusion_preserves_first_seen_metadata():
 @pytest.mark.asyncio
 async def test_conditional_stage_runs_when_predicate_true():
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
-    from pydocs_mcp.retrieval.stages import ConditionalStage
+    from pydocs_mcp.retrieval.steps import ConditionalStep
 
     registry = PredicateRegistry()
 
@@ -190,7 +165,7 @@ async def test_conditional_stage_runs_when_predicate_true():
             return replace(state, result=ChunkList(items=(Chunk(text="fired"),)))
 
     from dataclasses import replace
-    stage = ConditionalStage(stage=_Sentinel(), predicate_name="always", registry=registry)
+    stage = ConditionalStep(stage=_Sentinel(), predicate_name="always", registry=registry)
     out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
     assert out.result.items[0].text == "fired"
 
@@ -198,7 +173,7 @@ async def test_conditional_stage_runs_when_predicate_true():
 @pytest.mark.asyncio
 async def test_conditional_stage_skipped_when_predicate_false():
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
-    from pydocs_mcp.retrieval.stages import ConditionalStage
+    from pydocs_mcp.retrieval.steps import ConditionalStep
 
     registry = PredicateRegistry()
 
@@ -210,7 +185,7 @@ async def test_conditional_stage_skipped_when_predicate_false():
         name: str = "sentinel"
         async def run(self, state): raise AssertionError("should not run")
 
-    stage = ConditionalStage(stage=_Sentinel(), predicate_name="never", registry=registry)
+    stage = ConditionalStep(stage=_Sentinel(), predicate_name="never", registry=registry)
     out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
     assert out.result is None  # state unchanged
 
@@ -218,7 +193,7 @@ async def test_conditional_stage_skipped_when_predicate_false():
 @pytest.mark.asyncio
 async def test_route_stage_first_match_wins():
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
-    from pydocs_mcp.retrieval.stages import RouteCase, RouteStage
+    from pydocs_mcp.retrieval.steps import RouteCase, RouteStep
 
     registry = PredicateRegistry()
 
@@ -236,7 +211,7 @@ async def test_route_stage_first_match_wins():
             return replace(state, result=ChunkList(items=(Chunk(text=self.tag),)))
 
     from dataclasses import replace
-    stage = RouteStage(
+    stage = RouteStep(
         routes=(
             RouteCase(predicate_name="always", stage=_Tag("first")),
             RouteCase(predicate_name="also_always", stage=_Tag("second")),
@@ -250,7 +225,7 @@ async def test_route_stage_first_match_wins():
 @pytest.mark.asyncio
 async def test_route_stage_falls_through_to_default():
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
-    from pydocs_mcp.retrieval.stages import RouteCase, RouteStage
+    from pydocs_mcp.retrieval.steps import RouteCase, RouteStep
 
     registry = PredicateRegistry()
 
@@ -265,7 +240,7 @@ async def test_route_stage_falls_through_to_default():
             return replace(state, result=ChunkList(items=(Chunk(text=self.tag),)))
 
     from dataclasses import replace
-    stage = RouteStage(
+    stage = RouteStep(
         routes=(RouteCase(predicate_name="never", stage=_Tag("route")),),
         default=_Tag("fallback"),
         registry=registry,
@@ -277,22 +252,25 @@ async def test_route_stage_falls_through_to_default():
 @pytest.mark.asyncio
 async def test_route_stage_no_match_no_default_is_noop():
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry, predicate
-    from pydocs_mcp.retrieval.stages import RouteStage
+    from pydocs_mcp.retrieval.steps import RouteStep
 
     registry = PredicateRegistry()
 
     @predicate("never", registry=registry)
     def _f(s): return False
 
-    stage = RouteStage(routes=(), default=None, registry=registry)
+    stage = RouteStep(routes=(), default=None, registry=registry)
     out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
     assert out.result is None
 
 
 @pytest.mark.asyncio
-async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
+async def test_nested_pipeline_threads_state_through_its_stages():
+    """A nested ``CodeRetrieverPipeline`` used directly as a stage threads
+    the incoming state through its own stages (no reset). Pipeline IS a
+    Stage — no adapter class needed.
+    """
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
-    from pydocs_mcp.retrieval.stages import SubPipelineStage
 
     @dataclass(frozen=True, slots=True)
     class _Tag:
@@ -308,7 +286,7 @@ async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
         query=SearchQuery(terms="x"),
         result=ChunkList(items=(Chunk(text="pre"),)),  # incoming state is preserved
     )
-    out = await SubPipelineStage(pipeline=nested).run(state)
+    out = await nested.run(state)  # Pipeline used DIRECTLY as a stage
     texts = [c.text for c in out.result.items]
     assert texts == ["pre", "inner1", "inner2"]  # state was threaded, not reset
 
@@ -316,9 +294,9 @@ async def test_sub_pipeline_stage_runs_nested_stages_on_incoming_state():
 @pytest.mark.asyncio
 async def test_token_budget_formatter_stage_composite_output():
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
-    from pydocs_mcp.retrieval.stages import (
+    from pydocs_mcp.retrieval.steps import (
         COMPOSITE_TITLE_SENTINEL,
-        TokenBudgetStage,
+        TokenBudgetStep,
     )
 
     payload = ChunkList(items=(
@@ -326,7 +304,7 @@ async def test_token_budget_formatter_stage_composite_output():
         Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
     ))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await TokenBudgetStage(
+    out = await TokenBudgetStep(
         formatter=ChunkFormatter(),
         budget=10_000,
     ).run(state)
@@ -345,9 +323,9 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
     """AC #34 — composite chunks skip the title post-filter."""
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
-    from pydocs_mcp.retrieval.stages import (
-        MetadataPostFilterStage,
-        TokenBudgetStage,
+    from pydocs_mcp.retrieval.steps import (
+        MetadataPostFilterStep,
+        TokenBudgetStep,
     )
 
     payload = ChunkList(items=(
@@ -360,11 +338,11 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
     pipeline = CodeRetrieverPipeline(
         name="p",
         stages=(
-            TokenBudgetStage(
+            TokenBudgetStep(
                 formatter=ChunkFormatter(),
                 budget=10_000,
             ),
-            MetadataPostFilterStage(),
+            MetadataPostFilterStep(),
         ),
     )
     state = PipelineState(query=query, result=payload)
@@ -377,7 +355,7 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
 @pytest.mark.asyncio
 async def test_token_budget_formatter_respects_budget():
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
-    from pydocs_mcp.retrieval.stages import TokenBudgetStage
+    from pydocs_mcp.retrieval.steps import TokenBudgetStep
 
     # 100 chunks * ~10-byte render ≈ 1000 bytes. Budget = 50 tokens ≈ 200 bytes (cut early).
     payload = ChunkList(items=tuple(
@@ -385,7 +363,7 @@ async def test_token_budget_formatter_respects_budget():
         for i in range(100)
     ))
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
-    out = await TokenBudgetStage(
+    out = await TokenBudgetStep(
         formatter=ChunkFormatter(),
         budget=50,
     ).run(state)
@@ -396,10 +374,10 @@ async def test_token_budget_formatter_respects_budget():
 @pytest.mark.asyncio
 async def test_token_budget_formatter_none_result_noop():
     from pydocs_mcp.retrieval.formatters import ChunkFormatter
-    from pydocs_mcp.retrieval.stages import TokenBudgetStage
+    from pydocs_mcp.retrieval.steps import TokenBudgetStep
 
     state = PipelineState(query=SearchQuery(terms="x"), result=None)
-    out = await TokenBudgetStage(
+    out = await TokenBudgetStep(
         formatter=ChunkFormatter(),
         budget=1000,
     ).run(state)
@@ -410,7 +388,7 @@ async def test_token_budget_formatter_none_result_noop():
 async def test_parallel_retrieval_stage_preserves_filtered_branches():
     """A branch that filters must still contribute its kept items, even if initial items drop."""
     from dataclasses import replace
-    from pydocs_mcp.retrieval.stages import ParallelRetrievalStage
+    from pydocs_mcp.retrieval.steps import ParallelStep
 
     @dataclass(frozen=True, slots=True)
     class _FilterAndTag:
@@ -427,7 +405,7 @@ async def test_parallel_retrieval_stage_preserves_filtered_branches():
         query=SearchQuery(terms="x"),
         result=ChunkList(items=(Chunk(text="pre", id=1), Chunk(text="drop", id=2))),
     )
-    stage = ParallelRetrievalStage(stages=(_FilterAndTag(tag="A"), _FilterAndTag(tag="B")))
+    stage = ParallelStep(stages=(_FilterAndTag(tag="A"), _FilterAndTag(tag="B")))
     out = await stage.run(state)
     ids = {c.id for c in out.result.items}
     # Both branches' new items (id=999) must be present; initial id=1 preserved;

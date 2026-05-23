@@ -1,4 +1,4 @@
-"""ParallelRetrievalStage — fan-out to multiple sub-stages, merge results.
+"""ParallelStep — fan-out to multiple sub-stages, merge results.
 
 Each inner stage sees the SAME input state independently; outputs are
 deduped by ``item.id`` (falling back to ``id(item)`` when ``.id`` is
@@ -10,23 +10,19 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
-from pydocs_mcp.retrieval.pipeline import PipelineState
+from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
-
-if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.protocols import PipelineStage
 
 
 @stage_registry.register("parallel_retrieval")
 @dataclass(frozen=True, slots=True)
-class ParallelRetrievalStage:
-    stages: tuple["PipelineStage", ...] = ()
+class ParallelStep(RetrieverStep):
+    stages: tuple[RetrieverStep, ...] = ()
     name: str = "parallel_retrieval"
 
-    async def run(self, state: PipelineState) -> PipelineState:
+    async def run(self, state: RetrieverState) -> RetrieverState:
         results = await asyncio.gather(*(s.run(state) for s in self.stages))
 
         initial_items: tuple = ()
@@ -70,8 +66,8 @@ class ParallelRetrievalStage:
         return {"type": "parallel_retrieval", "stages": [s.to_dict() for s in self.stages]}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ParallelRetrievalStage":
+    def from_dict(cls, data: dict, context: BuildContext) -> "ParallelStep":
         return cls(stages=tuple(context.stage_registry.build(s, context) for s in data["stages"]))
 
 
-__all__ = ("ParallelRetrievalStage",)
+__all__ = ("ParallelStep",)

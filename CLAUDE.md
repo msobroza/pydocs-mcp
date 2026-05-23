@@ -65,14 +65,18 @@ python/pydocs_mcp/
 │   └── model/       #   DocumentNode, NodeKind, tree helpers
 ├── application/   # Use-case services — IndexingService + ProjectIndexer + PackageLookup + DocsSearch + ApiSearch + ModuleInspector + shared formatting helpers
 ├── storage/       # Filter tree, Protocols, SQLite repositories + VectorStore + UnitOfWork
-├── retrieval/     # Async pipelines, retrievers, stages, registries, YAML config
+├── retrieval/     # sklearn-style RetrieverPipeline + RetrieverStep ABC; one file per step under steps/; pipeline/ holds Step/Pipeline base + RetrieverState + ConnectionProvider; YAML config
+│   ├── pipeline/    #   RetrieverStep ABC, RetrieverPipeline, RetrieverState, PerCallConnectionProvider, CodeRetrieverPipeline (legacy entry-point shim)
+│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, member_fetcher, top_k_filter, metadata_post_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
 ├── pipelines/     # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
 └── server.py      # MCP handlers over services
 src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
 ```
 
-**Data flow:** CLI / MCP server → services (`PackageLookup` / `DocsSearch` / `ApiSearch` / `ModuleInspector` for queries; `ProjectIndexer.index_project` for writes) → `application.IndexingService` writes through `storage.SqlitePackageRepository` / `SqliteChunkRepository` / `SqliteModuleMemberRepository` under a `SqliteUnitOfWork` → `extraction.PipelineChunkExtractor` + `AstMemberExtractor` / `InspectMemberExtractor` feed write-side extraction; retrieval/ runs the async `CodeRetrieverPipeline` (BM25 chunks via `SqliteVectorStore` + LIKE module-members via `SqliteModuleMemberRepository`) → server.py / __main__.py render via `application/formatting` helpers → client.
+**Naming: retrieval vs ingestion pipelines** — `retrieval/` uses `RetrieverStep` (ABC) and `RetrieverPipeline`. `extraction/pipeline/` uses `IngestionStage` (Protocol) and `IngestionPipeline`. Two different pipelines, two different abstractions; don't confuse them. A future PR may rename `IngestionStage` → `IngestionStep` for symmetry.
+
+**Data flow:** CLI / MCP server → services (`PackageLookup` / `DocsSearch` / `ApiSearch` / `ModuleInspector` for queries; `ProjectIndexer.index_project` for writes) → `application.IndexingService` writes through `storage.SqlitePackageRepository` / `SqliteChunkRepository` / `SqliteModuleMemberRepository` under a `SqliteUnitOfWork` → `extraction.PipelineChunkExtractor` + `AstMemberExtractor` / `InspectMemberExtractor` feed write-side extraction; retrieval/ runs an async `RetrieverPipeline` whose steps fetch chunks (BM25 via FTS5 + pre-filter pushdown) or members (LIKE) → score → filter → top-K → render → server.py / __main__.py via `application/formatting` helpers → client.
 
 **Rust/Python duality:** `_fast.py` tries `from ._native import *`; on ImportError falls back to `_fallback.py`. All Rust functions have pure Python equivalents — the package works without Rust compiled.
 
@@ -86,7 +90,7 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 
 - Python 3.11+ required, single runtime dependency: `mcp>=1.0`
 - `pydantic-settings>=2.0` and `pyyaml>=6.0` runtime deps (YAML-driven pipeline config, added sub-PR #2)
-- `retrieval/` uses a uniform `PipelineStage` protocol + compound stages (`RouteStage`, `SubPipelineStage`) for composition
+- `retrieval/` uses a uniform `RetrieverStep` ABC + composable `RetrieverPipeline` (Pipeline IS a Step, so sub-pipelines compose directly without a SubPipelineStep adapter — named, addressable steps a la sklearn's `Pipeline([(name, step), ...])`)
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
 - Entry point: `pydocs-mcp = "pydocs_mcp.__main__:main"`
@@ -127,7 +131,7 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 
 ## SOLID Principles
 
-**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `storage/` owns persistence (repositories, filter adapter, UoW, VectorStore), `application/` owns both write-side (`IndexingService`, `ProjectIndexer`) AND read-side (`PackageLookup`, `DocsSearch`, `ApiSearch`, `ModuleInspector`) use-case services, `retrieval/` owns the pipeline machinery (retrievers, stages, pipelines), `extraction/` owns the write-side ingestion pipeline, chunkers, member extractors, and DocumentNode trees. `application/formatting.py` is the single source of truth for rendering — stages, MCP handlers, and CLI all delegate to it. New features should follow this pattern. If a module gains a second reason to change, split it.
+**Single Responsibility:** Each module has one concern — `db.py` owns the schema, `storage/` owns persistence (repositories, filter adapter, UoW, VectorStore), `application/` owns both write-side (`IndexingService`, `ProjectIndexer`) AND read-side (`PackageLookup`, `DocsSearch`, `ApiSearch`, `ModuleInspector`) use-case services, `retrieval/` owns the pipeline machinery (`RetrieverStep` ABC + `RetrieverPipeline` + concrete steps under `steps/`), `extraction/` owns the write-side ingestion pipeline, chunkers, member extractors, and DocumentNode trees. `application/formatting.py` is the single source of truth for rendering — stages, MCP handlers, and CLI all delegate to it. New features should follow this pattern. If a module gains a second reason to change, split it.
 
 **Open/Closed:** Extend behavior through new `kind` values in chunks/module_members tables rather than modifying existing indexing logic. New search strategies should be added as new retrievers/stages registered in `retrieval/`, not by modifying existing ones.
 
@@ -210,6 +214,58 @@ Other rules:
 **`AppConfig` is the single source of truth** — it's a `pydantic-settings` model that layers (1) defaults → (2) shipped pipeline YAML → (3) explicit overlay path → (4) env vars. New tunables go in the typed config sub-model that owns the relevant pipeline; never as a CLI flag *and* an MCP param.
 
 **When in doubt:** if a new behavior could be A/B tested against a benchmark to measure quality, it belongs in YAML.
+
+## Default values: single source of truth
+
+**Rule:** Every default value lives in exactly ONE place. Code that needs to reference that default MUST refer to the canonical source — NEVER repeat the literal.
+
+Acceptable canonical sources, in order of preference:
+
+1. **Module-level `_DEFAULT_X = value` constant** — best for dataclass field defaults that also appear in `to_dict` comparisons or `from_dict` fallbacks. Matches the existing `_MAX_PIPELINE_DEPTH = 32` precedent in `retrieval/pipeline/code_pipeline.py`.
+2. **pydantic `Field(default=N)`** in `AppConfig` sub-models — the canonical source for YAML-tunable settings. Application code reads these via `AppConfig.load(...)`, never re-encoding the literal elsewhere.
+3. **Dataclass field default** — fine when the default is referenced only at construction (no `to_dict` / `from_dict` round-trip).
+
+**Anti-pattern** (do NOT do this):
+
+```python
+@dataclass(frozen=True, slots=True)
+class RRFStep(RetrieverStep):
+    k: int = 60                                          # canonical
+
+    def to_dict(self) -> dict:
+        if self.k != 60:                                 # ← BAD: literal repeated
+            ...
+
+    @classmethod
+    def from_dict(cls, data, context):
+        return cls(k=data.get("k", 60))                  # ← BAD: literal repeated
+```
+
+**Correct pattern:**
+
+```python
+_DEFAULT_K = 60                                          # single source of truth
+
+@dataclass(frozen=True, slots=True)
+class RRFStep(RetrieverStep):
+    k: int = _DEFAULT_K
+
+    def to_dict(self) -> dict:
+        if self.k != _DEFAULT_K:
+            ...
+
+    @classmethod
+    def from_dict(cls, data, context):
+        return cls(k=data.get("k", _DEFAULT_K))
+```
+
+**Why:**
+
+1. **One place to change.** Bumping the default touches the `_DEFAULT_K` line, not three sites that drift.
+2. **No silent regressions.** A diff that changes the constant is obvious in code review; a diff that changes one of three hardcoded `60`s is easy to miss.
+3. **YAML / Python parity.** When the same default appears in YAML, it's intentional duplication for config-file clarity (the YAML is the user-visible knob). Inside Python, duplicating a literal is just churn.
+
+**YAML files are exempt** — `pipelines/*.yaml` and `default_config.yaml` explicitly state values for user-facing clarity, even when the Python field default would be the same.
 
 ## Code Comments
 

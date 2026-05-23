@@ -25,7 +25,7 @@ class ComponentRegistry(Generic[C]):
         self._types: dict[str, type[C]] = {}
         # Cache the "should we forward _depth?" decision per registered class so
         # ``build`` doesn't re-introspect every single call (decoders run in
-        # hot recursive paths for nested SubPipelineStage graphs).
+        # hot recursive paths for nested-pipeline graphs).
         self._forwards_depth: dict[str, bool] = {}
 
     def register(self, type_name: str):
@@ -50,7 +50,7 @@ class ComponentRegistry(Generic[C]):
         # Only stages need the depth counter — retrievers / formatters do not
         # re-enter ``CodeRetrieverPipeline.from_dict``. Forward ``_depth`` when
         # the callee accepts it (explicitly or via ``**kwargs``) so nested
-        # ``SubPipelineStage`` decoding sees the accumulated depth.
+        # ``sub_pipeline`` decoding sees the accumulated depth.
         if self._forwards_depth.get(type_name, False):
             return from_dict(data, context, _depth=_depth)
         return from_dict(data, context)
@@ -85,7 +85,6 @@ def _from_dict_accepts_depth(cls: type) -> bool:
 
 
 stage_registry: ComponentRegistry = ComponentRegistry()
-retriever_registry: ComponentRegistry = ComponentRegistry()
 formatter_registry: ComponentRegistry = ComponentRegistry()
 
 
@@ -109,7 +108,6 @@ class BuildContext:
     connection_provider: "ConnectionProvider"
     predicate_registry: "PredicateRegistry" = field(default_factory=_default_predicate_registry)
     stage_registry: ComponentRegistry = field(default_factory=lambda: stage_registry)
-    retriever_registry: ComponentRegistry = field(default_factory=lambda: retriever_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
     vector_store: "SqliteVectorStore | None" = None
     module_member_store: "SqliteModuleMemberRepository | None" = None
