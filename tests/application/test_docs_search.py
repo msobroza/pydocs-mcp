@@ -80,6 +80,38 @@ async def test_search_empty_result_defaults_to_empty_chunk_list() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_falls_back_to_state_candidates_for_ranked_preset() -> None:
+    """When state.result is None (e.g., chunk_search_ranked.yaml preset
+    that drops TokenBudgetStep), DocsSearch returns state.candidates
+    instead of silently producing an empty ChunkList.
+
+    Without this fallback, overlaying the ranked preset onto the MCP
+    server would silently return zero hits on every search — a footgun
+    the post-coding review chain caught."""
+    query = SearchQuery(terms="ranked", max_results=3)
+    candidates = ChunkList(
+        items=(
+            Chunk(text="first", id=1, relevance=0.9),
+            Chunk(text="second", id=2, relevance=0.7),
+        ),
+    )
+    # state.result deliberately None — ranked preset doesn't run
+    # token_budget_formatter. state.candidates carries the ranked top-K.
+    state = PipelineState(
+        query=query,
+        result=None,
+        candidates=candidates,
+        duration_ms=2.0,
+    )
+    service = DocsSearch(chunk_pipeline=FakeChunkPipeline(state=state))
+
+    response = await service.search(query)
+
+    assert response.result is candidates
+    assert response.query is query
+
+
+@pytest.mark.asyncio
 async def test_search_threads_duration_ms_from_state() -> None:
     query = SearchQuery(terms="timing")
     chunks = ChunkList(items=(Chunk(text="hit", id=1),))

@@ -32,7 +32,7 @@ from pydocs_mcp.models import (
     ChunkOrigin,
 )
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.protocols import ResultFormatter
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 COMPOSITE_TITLE_SENTINEL = "_composite"
 
 
-@stage_registry.register("token_budget_formatter")
+@step_registry.register("token_budget_formatter")
 @dataclass(frozen=True, slots=True)
 class TokenBudgetStep(RetrieverStep):
     formatter: "ResultFormatter"

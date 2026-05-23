@@ -36,6 +36,7 @@ from pydocs_mcp.retrieval.steps import (
     BM25ScorerStep,
     ChunkFetcherStep,
     MemberFetcherStep,
+    PreFilterStep,
 )
 from pydocs_mcp.storage.factories import build_sqlite_indexing_service
 
@@ -140,6 +141,11 @@ def retrieve_chunks(
         max_results=limit,
     )
 
+    pre_filter_step = PreFilterStep(
+        allowed_fields=_CHUNK_ALLOWED_FIELDS,
+        schema_name="chunk",
+        target_field="chunk",
+    )
     fetcher = ChunkFetcherStep(
         name="fetch",
         provider=provider,
@@ -150,6 +156,7 @@ def retrieve_chunks(
 
     async def _run() -> tuple[Chunk, ...]:
         state = RetrieverState(query=search_query)
+        state = await pre_filter_step.run(state)
         state = await fetcher.run(state)
         state = await scorer.run(state)
         return state.candidates.items if state.candidates is not None else ()
@@ -211,6 +218,11 @@ def retrieve_module_members(
         max_results=limit,
     )
 
+    pre_filter_step = PreFilterStep(
+        allowed_fields=_MEMBER_ALLOWED_FIELDS,
+        schema_name="member",
+        target_field="member",
+    )
     fetcher = MemberFetcherStep(
         name="fetch",
         provider=provider,
@@ -220,6 +232,7 @@ def retrieve_module_members(
 
     async def _run() -> tuple[ModuleMember, ...]:
         state = RetrieverState(query=search_query)
+        state = await pre_filter_step.run(state)
         state = await fetcher.run(state)
         return state.candidates.items if state.candidates is not None else ()
 

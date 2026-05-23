@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 # WHY: single source of truth for the legacy AC max-results cap.
 # Referenced from the dataclass field default + to_dict (omit-when-default)
@@ -19,7 +19,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
 _DEFAULT_MAX_RESULTS = 8
 
 
-@stage_registry.register("limit")
+@step_registry.register("limit")
 @dataclass(frozen=True, slots=True)
 class LimitStep(RetrieverStep):
     max_results: int = _DEFAULT_MAX_RESULTS

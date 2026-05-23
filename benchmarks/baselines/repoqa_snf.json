@@ -5,43 +5,43 @@
   "tasks_ran": 100,
   "metrics": {
     "recall@1": {
-      "mean": 0.0,
-      "ci_low": 0.0,
-      "ci_high": 0.0
+      "mean": 0.14,
+      "ci_low": 0.07,
+      "ci_high": 0.21
     },
     "recall@5": {
-      "mean": 0.0,
-      "ci_low": 0.0,
-      "ci_high": 0.0
+      "mean": 0.17,
+      "ci_low": 0.1,
+      "ci_high": 0.24
     },
     "recall@10": {
-      "mean": 0.0,
-      "ci_low": 0.0,
-      "ci_high": 0.0
+      "mean": 0.18,
+      "ci_low": 0.11,
+      "ci_high": 0.26
     },
     "mrr": {
-      "mean": 0.0,
-      "ci_low": 0.0,
-      "ci_high": 0.0
+      "mean": 0.15166666666666667,
+      "ci_low": 0.0875,
+      "ci_high": 0.21750000000000003
     },
     "pass@1-needle": {
-      "mean": 0.0,
-      "ci_low": 0.0,
-      "ci_high": 0.0
+      "mean": 0.14,
+      "ci_low": 0.07,
+      "ci_high": 0.21
     },
     "indexing_seconds": {
-      "p50": 4.493605020994437,
-      "p95": 26.838381095214572,
-      "p99": 27.592446075080378
+      "p50": 7.4468517914938275,
+      "p95": 53.69587750902283,
+      "p99": 62.233820293378685
     },
     "search_seconds": {
-      "p50": 0.010248770500766113,
-      "p95": 0.04903651521017297,
-      "p99": 0.11577352166204952
+      "p50": 0.021222875016974285,
+      "p95": 0.09800272885768184,
+      "p99": 0.2788797367492227
     }
   },
-  "captured_at": "2026-05-20T01:14:14.814979+00:00",
-  "git_sha": "05f8dc256531243bcfcf33e73a7969ef1d92b9c9",
-  "source_jsonl": "benchmarks/results/jsonl/pydocs-mcp_baseline_repoqa_at_2024-06-23_20260520T010046Z.jsonl",
+  "captured_at": "2026-05-23T20:45:29.067403+00:00",
+  "git_sha": "5e248bc753fe6b606a0c5e40d1c7ff6396fec10d",
+  "source_jsonl": "benchmarks/results/jsonl/pydocs-mcp_baseline_repoqa_at_2024-06-23_20260523T202106Z.jsonl",
   "label": "real-100-needles"
 }

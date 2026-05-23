@@ -1,10 +1,16 @@
 # Default member-search retrieval pipeline (Task 8 — retrieval-pipeline-refactor).
 #
-# LIKE-based fetcher → optional metadata post-filter → top-K → limit → render.
-# No score step: LIKE doesn't produce a relevance rank, so candidates carry
-# ``relevance=None`` and ``top_k_filter`` falls back to source order.
+# pre_filter (typed scratch) → LIKE-based fetcher → metadata post-filter →
+# top-K → limit → render. No score step: LIKE doesn't produce a relevance
+# rank, so candidates carry ``relevance=None`` and ``top_k_filter`` falls
+# back to source order.
 name: member_search
 steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: member
+      target_field: member
   - name: fetch
     type: member_fetcher
     params:

@@ -20,7 +20,7 @@ from pydocs_mcp.models import (
     ModuleMemberList,
 )
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 from pydocs_mcp.retrieval.steps.token_budget import COMPOSITE_TITLE_SENTINEL
 from pydocs_mcp.storage.filters import (
     All,
@@ -32,7 +32,7 @@ from pydocs_mcp.storage.filters import (
 )
 
 
-@stage_registry.register("metadata_post_filter")
+@step_registry.register("metadata_post_filter")
 @dataclass(frozen=True, slots=True)
 class MetadataPostFilterStep(RetrieverStep):
     name: str = "metadata_post_filter"

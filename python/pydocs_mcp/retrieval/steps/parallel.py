@@ -13,10 +13,10 @@ from dataclasses import dataclass, replace
 
 from pydocs_mcp.models import ChunkList, ModuleMemberList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 
-@stage_registry.register("parallel_retrieval")
+@step_registry.register("parallel_retrieval")
 @dataclass(frozen=True, slots=True)
 class ParallelStep(RetrieverStep):
     stages: tuple[RetrieverStep, ...] = ()
@@ -67,7 +67,7 @@ class ParallelStep(RetrieverStep):
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "ParallelStep":
-        return cls(stages=tuple(context.stage_registry.build(s, context) for s in data["stages"]))
+        return cls(stages=tuple(context.step_registry.build(s, context) for s in data["stages"]))
 
 
 __all__ = ("ParallelStep",)

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
@@ -23,7 +23,7 @@ class RouteCase:
     stage: RetrieverStep
 
 
-@stage_registry.register("route")
+@step_registry.register("route")
 @dataclass(frozen=True, slots=True)
 class RouteStep(RetrieverStep):
     routes: tuple[RouteCase, ...]
@@ -59,12 +59,12 @@ class RouteStep(RetrieverStep):
         routes = tuple(
             RouteCase(
                 predicate_name=r["predicate_name"],
-                stage=context.stage_registry.build(r["stage"], context),
+                stage=context.step_registry.build(r["stage"], context),
             )
             for r in data.get("routes", [])
         )
         default_data = data.get("default")
-        default = context.stage_registry.build(default_data, context) if default_data else None
+        default = context.step_registry.build(default_data, context) if default_data else None
         return cls(routes=routes, default=default, registry=context.predicate_registry)
 
 

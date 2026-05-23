@@ -18,10 +18,10 @@ from dataclasses import dataclass, field, replace
 
 from pydocs_mcp.models import Chunk, ChunkList, ModuleMemberList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 
-@stage_registry.register("bm25_scorer")
+@step_registry.register("bm25_scorer")
 @dataclass(frozen=True, slots=True)
 class BM25ScorerStep(RetrieverStep):
     """Score normalization step for chunk pipelines."""

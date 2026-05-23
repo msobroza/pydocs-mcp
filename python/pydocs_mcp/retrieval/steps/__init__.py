@@ -12,6 +12,7 @@ Module layout:
 - :mod:`.metadata_post_filter` — :class:`MetadataPostFilterStep`
 - :mod:`.limit` — :class:`LimitStep`
 - :mod:`.parallel` — :class:`ParallelStep`
+- :mod:`.pre_filter` — :class:`PreFilterStep` + :class:`PreFilterResult`
 - :mod:`.rrf` — :class:`RRFStep`
 - :mod:`.conditional` — :class:`ConditionalStep`
 - :mod:`.route` — :class:`RouteCase` + :class:`RouteStep`
@@ -37,6 +38,7 @@ from pydocs_mcp.retrieval.steps.limit import LimitStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
 from pydocs_mcp.retrieval.steps.parallel import ParallelStep
+from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult, PreFilterStep
 from pydocs_mcp.retrieval.steps.route import RouteCase, RouteStep
 from pydocs_mcp.retrieval.steps.rrf import RRFStep
 from pydocs_mcp.retrieval.steps.token_budget import (
@@ -54,6 +56,8 @@ __all__ = (
     "MemberFetcherStep",
     "MetadataPostFilterStep",
     "ParallelStep",
+    "PreFilterResult",
+    "PreFilterStep",
     "RRFStep",
     "RouteCase",
     "RouteStep",

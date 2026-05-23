@@ -11,7 +11,7 @@ loading.
 from __future__ import annotations
 
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
-from pydocs_mcp.retrieval.serialization import BuildContext, stage_registry
+from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 
 class _SubPipelineDecoder:
@@ -35,7 +35,7 @@ class _SubPipelineDecoder:
         )
 
 
-stage_registry.register("sub_pipeline")(_SubPipelineDecoder)
+step_registry.register("sub_pipeline")(_SubPipelineDecoder)
 
 
 __all__ = ()
