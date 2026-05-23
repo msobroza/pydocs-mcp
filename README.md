@@ -107,7 +107,7 @@ Three open-source projects in roughly the same MCP-doc-retrieval space. They opt
 | MCP tools exposed | `search`, `lookup` (2 tools, surface intentionally pinned) | `resolve-library-id`, `query-docs` (2 tools) | Doc-retrieval tools (CLI: `context serve`) |
 | Privacy | **Fully offline** — zero network calls after install | Queries hit Upstash; free tier + paid for higher rate limits; OAuth + API key | Local once packages are downloaded from the registry |
 | Customization | YAML pipelines (chunkers, scorers, filters, formatters); single-source-of-truth defaults via `AppConfig` | API key + HTTP headers | Registry-package mechanics; see project docs |
-| Cost | **$0.** OSS (MIT). Runs locally — no API keys, no rate limits, no per-query fees. Only ongoing cost is a small SQLite DB per project (~tens of MB) on your disk. | **Free tier + paid plans.** Free tier is rate-limited and requires an API key (OAuth setup at `context7.com/dashboard`); paid plans lift rate limits / add SLA. Pricing details on `context7.com`. | **$0.** OSS (Apache-2.0). Local-first — no API keys, no rate limits, no per-query fees. |
+| Cost | **$0.** OSS (MIT). Runs locally — no API keys, no rate limits, no per-query fees. | **Free tier + paid plans.** Free tier is rate-limited and requires an API key. | **$0.** OSS (Apache-2.0). Local-first — no API keys, no rate limits, no per-query fees. |
 | Vendor lock-in | None — your data is a SQLite file you can read/delete/move. | Reliance on the hosted service; the parsing + crawling engines are closed-source, so a self-host fallback isn't equivalent. | None — registry packages are pulled but retrieval and storage stay local. |
 | License | MIT | MIT | Apache-2.0 |
 
