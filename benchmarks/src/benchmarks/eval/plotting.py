@@ -171,6 +171,25 @@ def plot_baselines(
     if not metrics:
         raise ValueError("plot_baselines requires at least one metric")
 
+    # Hard guard: a single plot must compare apples-to-apples — the same
+    # benchmark + dataset slice. Cross-dataset overlays (e.g., the 5-needle
+    # CI fixture next to the real 100-needle sweep) misrepresent the
+    # numbers, since the 5-needle fixture is a hermetic regression test,
+    # not a competing system worth comparing against. If the user really
+    # wants to render two datasets, they can call plot_baselines twice and
+    # arrange the figures themselves.
+    datasets = {r.dataset for r in records}
+    if len(datasets) > 1:
+        per_dataset = ", ".join(
+            f"{r.display_label} → {r.dataset}" for r in records
+        )
+        raise ValueError(
+            "plot_baselines requires every baseline to come from the "
+            "same dataset (apples-to-apples comparison). Got multiple "
+            f"datasets: {sorted(datasets)}. Records: {per_dataset}. "
+            "Call plot_baselines once per dataset instead."
+        )
+
     df = _long_dataframe(records, metrics)
 
     sns.set_theme(style="whitegrid", context="paper", font_scale=1.1)

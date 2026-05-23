@@ -215,14 +215,25 @@ metric becomes an X-axis category; 95% CI error bars come straight from
 each metric's `ci_low` / `ci_high`. Default palette is seaborn's
 `colorblind` (colorblind-safe + Nature figure-guideline compliant).
 
+**Apples-to-apples constraint:** every baseline passed to `plot_baselines`
+must come from the same `dataset` field (e.g., all from
+`repoqa-2024-06-23-python`). Mixing the 5-needle CI fixture next to the
+real 100-needle sweep would silently misrepresent the numbers — the
+fixture is a hermetic regression test, not a competing system. The
+function raises `ValueError` listing the differing datasets if you try.
+To compare across datasets, call `plot_baselines` once per dataset and
+arrange the figures yourself.
+
 ```bash
-# Plot a single baseline (BM25 only, current state).
+# Today's plot — single BM25 baseline on real-100-needles.
 PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/bm25_only.png \
     --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle
 
-# Side-by-side compare two baselines (e.g., future dense vs current BM25).
+# Future: side-by-side compare two configs on the SAME dataset
+# (e.g., PR-B3.1's dense embeddings vs current BM25). The plot picks up
+# the second bar group automatically — no code change to plotting.py.
 PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
     benchmarks/baselines/repoqa_snf_dense.json \

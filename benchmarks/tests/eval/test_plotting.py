@@ -219,6 +219,41 @@ def test_plot_baselines_empty_metrics_raises(tmp_path: Path) -> None:
         plot_baselines([rec], metrics=())
 
 
+def test_plot_baselines_rejects_mixed_datasets(tmp_path: Path) -> None:
+    """Apples-to-apples: a single plot must compare baselines from the
+    same dataset slice. Mixing a 5-needle fixture with a 100-needle
+    real sweep silently misleads — raise a clear error instead."""
+    real = BaselineRecord.from_path(_write_baseline(tmp_path, "real"))
+    fixture = BaselineRecord.from_path(
+        _write_baseline(
+            tmp_path, "fixture",
+            dataset="repoqa-fixture-python",
+            tasks_ran=5,
+        ),
+    )
+    with pytest.raises(ValueError, match="same dataset"):
+        plot_baselines([real, fixture])
+
+
+def test_plot_baselines_accepts_two_baselines_on_same_dataset(
+    tmp_path: Path,
+) -> None:
+    """Different configs on the SAME dataset is the supported case
+    (e.g., BM25 vs dense embeddings, both on repoqa-2024-06-23-python)."""
+    bm25 = BaselineRecord.from_path(
+        _write_baseline(tmp_path, "bm25", config="baseline"),
+    )
+    dense = BaselineRecord.from_path(
+        _write_baseline(tmp_path, "dense", config="dense_v1"),
+    )
+    assert bm25.dataset == dense.dataset
+    fig = plot_baselines([bm25, dense])
+    try:
+        assert len(_bar_containers(fig.axes[0])) == 2
+    finally:
+        plt.close(fig)
+
+
 # ── CLI smoke test ────────────────────────────────────────────────────────
 
 
