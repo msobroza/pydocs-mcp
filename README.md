@@ -366,7 +366,86 @@ Use `__project__` as the package name to scope a search to your own code.
 3. Indexes installed deps via `inspect` (parallel, optional — skip with `--no-inspect` for static-only).
 4. Stores everything in SQLite with FTS5 full-text search.
 5. Captures the reference graph (CALLS / IMPORTS / INHERITS edges) for `lookup(..., show="callers")` etc.
-6. Cache: per-project `.db`, hash-based skip on re-runs (<100ms).
+
+### Indexing is one-time per source change
+
+**You only pay the indexing cost once.** The first run on a project walks every file in your project + every installed dep and builds the SQLite database. Subsequent runs do a quick metadata scan and skip indexing entirely if nothing changed — typical re-run latency is **&lt;100 ms** (just the hash check + a SQLite open).
+
+How the skip decision works:
+
+- **Per-project cache file.** Each project gets its own SQLite at `~/.pydocs-mcp/{dirname}_{path_hash}.db`, where `path_hash` is a 10-char MD5 slug of the absolute project path so two projects in different directories never share state.
+- **Per-package content hash.** For every package indexed (your project + every dep), the server collects `(file_path, mtime_nanos)` pairs for all files in the package, joins them into one byte buffer, and hashes the buffer with **xxh3-64** — 16 hex chars. The hash is stored alongside the package row in `packages.content_hash`.
+- **Skip when match.** Before re-indexing a package on the next run, the server recomputes the hash from current disk metadata and compares it to the stored value. **Match → skip the whole package** (no parsing, no chunking, no DB writes). Mismatch → re-extract that package only; untouched packages still skip.
+- **Why mtime + path (not file contents).** Filesystem `mtime` is cheap to read in bulk, and the project's file tree is the actual source-of-truth signal. Touching a file changes its `mtime`; renaming a file changes its path. Reading file *contents* would defeat the speed goal.
+- **Force a rebuild** with `pydocs-mcp index . --force` (clears the cache + re-indexes from scratch). Safe to delete `~/.pydocs-mcp/*.db` at any time — the cache is always rebuildable.
+
+For a typical 100-deps project, a no-change re-run does a few thousand `stat()` calls + one xxh3 per package. That's bounded by your disk's metadata throughput, not by anything pydocs-mcp does.
+
+### Database schema (simplified)
+
+The SQLite file holds six tables. The schema is versioned via `PRAGMA user_version`; a mismatch on open drops the known tables and re-indexes from scratch.
+
+```mermaid
+erDiagram
+    packages {
+        TEXT name PK
+        TEXT version
+        TEXT content_hash "xxh3 of (path,mtime) pairs"
+        TEXT origin "site-packages | __project__"
+        TEXT local_path
+    }
+    chunks {
+        INTEGER id PK
+        TEXT package FK
+        TEXT module
+        TEXT title
+        TEXT text "indexed by chunks_fts (FTS5)"
+        TEXT content_hash
+    }
+    chunks_fts {
+        FTS5 virtual "porter + unicode61 tokenizer"
+    }
+    module_members {
+        INTEGER id PK
+        TEXT package FK
+        TEXT module
+        TEXT name "function/class/method"
+        TEXT kind
+        TEXT signature
+        TEXT docstring
+    }
+    document_trees {
+        TEXT package PK
+        TEXT module PK
+        TEXT tree_json "DocumentNode tree"
+        TEXT content_hash
+    }
+    node_references {
+        TEXT from_package PK
+        TEXT from_node_id PK
+        TEXT to_name PK
+        TEXT kind PK "CALLS | IMPORTS | INHERITS | MENTIONS"
+        TEXT to_node_id "null if unresolved"
+    }
+    packages ||--o{ chunks                : has
+    packages ||--o{ module_members        : has
+    packages ||--o{ document_trees        : has
+    packages ||--o{ node_references       : owns
+    chunks   ||--|| chunks_fts            : indexed_by
+```
+
+Per-table purpose, one line each:
+
+| Table | What it stores | Where it's read |
+|---|---|---|
+| `packages` | One row per indexed package + the cache-skip `content_hash`. Project source is stored under the sentinel `name = "__project__"`. | Indexing skip-check, `lookup` (list packages) |
+| `chunks` | Documentation + source chunks (markdown sections, docstrings, code blocks). | `search(query, kind="docs")` via FTS5 |
+| `chunks_fts` | FTS5 virtual table mirroring `chunks.title` + `chunks.text` + `chunks.package`, with Porter stemming + unicode61. | `search` BM25 ranking |
+| `module_members` | Functions, classes, methods, attributes — name + signature + docstring + kind. | `search(query, kind="api")`, `lookup(target)` |
+| `document_trees` | The hierarchical `DocumentNode` tree per module (used for `lookup(..., show="tree")` and structural rendering). | `lookup(..., show="tree")` |
+| `node_references` | The reference graph: one row per (`from_node`, `to_name`, `kind`) edge captured during indexing (CALLS / IMPORTS / INHERITS, plus MENTIONS if opted into via YAML). | `lookup(..., show="callers"\|"callees"\|"inherits")` |
+
+The schema is documented in [python/pydocs_mcp/db.py](python/pydocs_mcp/db.py) — read it as the canonical reference, including indexes and migration notes.
 
 ---
 

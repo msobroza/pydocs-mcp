@@ -60,6 +60,18 @@ PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --help
 For tests and offline development, pass a `--fixture` JSON to bypass the
 RepoQA download entirely (see `benchmarks/tests/eval/fixtures/repoqa_mini.json`).
 
+**Indexing is one-time per RepoQA task.** Each task ships its own
+repo slice, so the harness indexes that slice into a fresh SQLite cache
+on first touch and reuses it for every subsequent query on the same
+task. The `indexing_seconds` row in the baseline JSON measures that
+first-touch cost; `search_seconds` measures per-query latency after the
+index is warm. Skip detection uses a per-package xxh3 hash over
+`(file_path, mtime)` pairs — recomputing the hash is `O(file count)`
+of `stat()` calls plus one xxh3 over that buffer, so subsequent
+sweeps on unchanged repo slices skip indexing entirely (typical
+re-run latency &lt;100 ms per task). The DB schema is described in
+the [project README](../README.md#database-schema-simplified).
+
 ## Metrics
 
 Every `(system × config × dataset)` run reports the following per-task metrics
