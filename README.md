@@ -101,13 +101,14 @@ Three open-source projects in roughly the same MCP-doc-retrieval space. They opt
 | Doc source | **Your installed Python deps** + your project source, indexed in place | Curated community library docs hosted by Upstash (parsing + crawling engines are closed-source) | Community-driven package registry (~100+ libraries) downloaded then queried locally |
 | Version match | Whatever you have in `site-packages` — automatic | Library + version selectable in the prompt (`use library /supabase/supabase`) | Latest from the registry's package for the library |
 | Languages | Python only | Multi-language (any library Upstash has crawled) | Multi-language (registry-driven; ~100+ libraries today) |
-| Retrieval method | BM25 over SQLite FTS5 (Porter + unicode61 tokenizer) | Not publicly documented | BM25 over SQLite FTS5 |
+| Retrieval method | BM25 over SQLite FTS5 | Not publicly documented | BM25 over SQLite FTS5 |
 | Code structure queries | **Reference graph** — `lookup(target, show="callers"\|"callees"\|"inherits")` via captured AST edges | None (doc retrieval only) | None (doc retrieval only) |
 | Project source indexing | Indexes your own code under the `__project__` package — `search ... -p __project__` works the same as searching deps | No (external library docs only) | No (registry packages only) |
 | MCP tools exposed | `search`, `lookup` (2 tools, surface intentionally pinned) | `resolve-library-id`, `query-docs` (2 tools) | Doc-retrieval tools (CLI: `context serve`) |
 | Privacy | **Fully offline** — zero network calls after install | Queries hit Upstash; free tier + paid for higher rate limits; OAuth + API key | Local once packages are downloaded from the registry |
 | Customization | YAML pipelines (chunkers, scorers, filters, formatters); single-source-of-truth defaults via `AppConfig` | API key + HTTP headers | Registry-package mechanics; see project docs |
-| Cost | Free (OSS) | Free tier + paid | Free (OSS) |
+| Cost | **$0.** OSS (MIT). Runs locally — no API keys, no rate limits, no per-query fees. Only ongoing cost is a small SQLite DB per project (~tens of MB) on your disk. | **Free tier + paid plans.** Free tier is rate-limited and requires an API key (OAuth setup at `context7.com/dashboard`); paid plans lift rate limits / add SLA. Pricing details on `context7.com`. | **$0.** OSS (Apache-2.0). Local-first — no API keys, no rate limits, no per-query fees. |
+| Vendor lock-in | None — your data is a SQLite file you can read/delete/move. | Reliance on the hosted service; the parsing + crawling engines are closed-source, so a self-host fallback isn't equivalent. | None — registry packages are pulled but retrieval and storage stay local. |
 | License | MIT | MIT | Apache-2.0 |
 
 **Pick pydocs-mcp when** you want offline, version-matched-to-your-install retrieval, you work primarily in Python, and you care about navigating code structure (callers / callees / inheritance), not just reading docs.
