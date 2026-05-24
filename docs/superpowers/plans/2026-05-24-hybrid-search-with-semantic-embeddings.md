@@ -773,13 +773,33 @@ extras so 'pip install pydocs-mcp' core stays lean."
 
 ---
 
-### Task 7: Schema v5 migration — `packages.embedding_model`
+### Task 7: Schema v5 migration — `packages.embedding_model` (DB column + Python dataclass field)
 
 **Files:**
 - Modify: `python/pydocs_mcp/db.py`
+- Modify: `python/pydocs_mcp/models.py` (`Package.embedding_model: str | None = None`)
 - Test: `tests/test_db_schema_v5_migration.py`
+- Test: `tests/test_models_package_embedding_model.py`
 
-- [ ] **Step 1: Write the failing test**
+This task adds BOTH the SQL column and the Python dataclass field so Tasks 26 (write vectors) and 28 (stale-model detection) can instantiate `Package(..., embedding_model="...")` without a missing-field error.
+
+- [ ] **Step 1: Write the failing tests** (both files)
+
+```python
+# tests/test_models_package_embedding_model.py
+"""Package.embedding_model dataclass field (Task 7 + AC-11)."""
+from pydocs_mcp.models import Package
+
+
+def test_package_defaults_to_none() -> None:
+    p = Package(name="x", version="1.0")
+    assert p.embedding_model is None
+
+
+def test_package_accepts_embedding_model() -> None:
+    p = Package(name="x", version="1.0", embedding_model="BAAI/bge-small-en-v1.5")
+    assert p.embedding_model == "BAAI/bge-small-en-v1.5"
+```
 
 ```python
 # tests/test_db_schema_v5_migration.py
@@ -841,12 +861,35 @@ def test_v4_to_v5_migration_lossless(tmp_path: Path) -> None:
     conn.close()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run both tests to verify they fail**
 
-Run: `.venv/bin/pytest tests/test_db_schema_v5_migration.py -v`
-Expected: FAIL — `assert SCHEMA_VERSION == 5` (currently 4).
+```bash
+.venv/bin/pytest tests/test_models_package_embedding_model.py tests/test_db_schema_v5_migration.py -v
+```
 
-- [ ] **Step 3: Update db.py**
+Expected: FAIL — `Package() got an unexpected keyword argument 'embedding_model'` for the model test; `assert SCHEMA_VERSION == 5` for the schema test.
+
+- [ ] **Step 3a: Add the Python dataclass field**
+
+In `python/pydocs_mcp/models.py`, locate the `Package` dataclass and add `embedding_model` (additive, default `None`):
+
+```python
+@dataclass(frozen=True)
+class Package:
+    name: str
+    version: str = ""
+    summary: str = ""
+    homepage: str = ""
+    dependencies: tuple[str, ...] = ()
+    content_hash: str = ""
+    origin: str = ""
+    local_path: str = ""
+    embedding_model: str | None = None  # NEW — re-embed-on-model-change marker
+```
+
+(Adapt to the existing `Package` field order; insert `embedding_model` as the last default-typed field so existing positional callers stay compatible.)
+
+- [ ] **Step 3b: Update db.py**
 
 In `python/pydocs_mcp/db.py`:
 
@@ -894,21 +937,27 @@ def open_index_database(db_path: Path) -> sqlite3.Connection:
 
 (Match the exact dispatch shape of the existing `_apply_v3_additions` / `_apply_v4_additions` flow.)
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run both tests + full suite to verify all pass**
 
-Run: `.venv/bin/pytest tests/test_db_schema_v5_migration.py -v`
-Expected: PASS (3 tests). Also run full suite to verify no regression: `.venv/bin/pytest -q --ignore=tests/integration/test_self_index_resolution_rate.py 2>&1 | tail -3`.
+```bash
+.venv/bin/pytest tests/test_models_package_embedding_model.py tests/test_db_schema_v5_migration.py -v
+.venv/bin/pytest -q --ignore=tests/integration/test_self_index_resolution_rate.py 2>&1 | tail -3
+```
+
+Expected: 5 PASS (2 model + 3 schema); full suite still green.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add python/pydocs_mcp/db.py tests/test_db_schema_v5_migration.py
-git commit -m "feat(db): schema v5 — packages.embedding_model TEXT additive column
+git add python/pydocs_mcp/db.py python/pydocs_mcp/models.py tests/test_db_schema_v5_migration.py tests/test_models_package_embedding_model.py
+git commit -m "feat(db,models): schema v5 — packages.embedding_model column + Python field
 
-AC-11. Tracks which embedding model produced each package's vectors so
-the indexing service can force re-embed when YAML's embedding.model_name
-changes. Additive migration via _apply_v5_additions; v4→v5 lossless;
-fresh-DB path also updated."
+AC-11. Both layers together: SQL column via _apply_v5_additions
+(v4→v5 lossless, additive), and Python dataclass field
+Package.embedding_model: str | None = None (default None). Tracks
+which embedding model produced each package's vectors so the
+indexing service can force re-embed when YAML's embedding.model_name
+changes. Tasks 26 + 28 build on this field."
 ```
 
 ---
@@ -1145,8 +1194,13 @@ class TurboQuantUnitOfWork:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
-        if exc_type is not None and self._dirty:
-            # Caller's context manager raised — discard in-memory work.
+        # Safety net matching the SqliteUnitOfWork contract (CLAUDE.md
+        # §"Creating new application services"): if an exception escapes
+        # OR the body completes without calling commit(), rollback the
+        # in-memory adds. For TurboQuant this is harmless when no commit
+        # was attempted (the .tq file on disk hasn't been touched), but
+        # the consistency keeps the UoW contract uniform across backends.
+        if self._dirty:
             try:
                 await self.rollback()
             except Exception:
@@ -3475,9 +3529,9 @@ NOTE: The actual `ParallelStep` API may use a different `branches` shape — adj
 Run: `.venv/bin/pytest tests/retrieval/steps/test_parallel_scratch_handoff.py -v`
 Expected: FAIL — scratch keys absent in the output state because current ParallelStep merges via `state.result` only (per the Explore survey).
 
-- [ ] **Step 3: Update ParallelStep**
+- [ ] **Step 3a: Update `ParallelStep.run` — propagate branches' scratch writes**
 
-In `python/pydocs_mcp/retrieval/steps/parallel.py`, modify the merge logic so each branch's `state.scratch` writes propagate to the final state. Concretely, after each branch's sub-pipeline runs, copy non-conflicting scratch keys to the merged state. Existing `state.result` merge behavior stays for backward compat.
+In `python/pydocs_mcp/retrieval/steps/parallel.py`, modify the merge logic so each branch's `state.scratch` writes propagate to the final state. Concretely, after each branch's sub-pipeline runs, copy scratch keys to the merged state. Existing `state.result` merge behavior stays for backward compat.
 
 ```python
 async def run(self, state: RetrieverState) -> RetrieverState:
@@ -3495,26 +3549,101 @@ async def run(self, state: RetrieverState) -> RetrieverState:
 
 (Splice this scratch-merge into the existing merge function. The `state.result` merge stays intact for the legacy use case.)
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 3b: Update `ParallelStep.from_dict` to accept the named-branches YAML shape**
+
+The new hybrid YAML pipelines (Task 25) use:
+
+```yaml
+- name: parallel
+  type: parallel
+  params:
+    branches:
+      - {name: bm25,  steps: [{name: fetch, type: chunk_fetcher, ...}, ...]}
+      - {name: dense, steps: [{name: fetch, type: dense_fetcher, ...}, ...]}
+```
+
+`ParallelStep.from_dict` must accept this shape and produce one sub-`RetrieverPipeline` per branch (each pipeline's `name` set from the branch's `name` field). Each sub-pipeline IS a `RetrieverStep`, so the existing `asyncio.gather` over `self.stages` keeps working — the only change is parsing-time. If the existing shape supports a flat `stages: [...]` list (from before this PR), keep accepting it too for backward compat — but no shipped pipeline uses it.
+
+```python
+@classmethod
+def from_dict(cls, data: dict, context: BuildContext) -> "ParallelStep":
+    if "branches" in data:
+        from pydocs_mcp.retrieval.pipeline import RetrieverPipeline
+        stages = tuple(
+            RetrieverPipeline(
+                name=branch["name"],
+                steps=tuple(
+                    (s["name"], context.step_registry.build(s, context))
+                    for s in branch["steps"]
+                ),
+            )
+            for branch in data["branches"]
+        )
+    elif "stages" in data:
+        # Legacy flat-list shape — kept for any unshipped consumer.
+        stages = tuple(
+            context.step_registry.build(s, context)
+            for s in data["stages"]
+        )
+    else:
+        raise ValueError(
+            "ParallelStep YAML must declare 'branches: [{name, steps}]' "
+            "(preferred) or legacy 'stages: [...]'.",
+        )
+    return cls(stages=stages)
+```
+
+Add a test asserting the named-branches shape parses correctly:
+
+```python
+# tests/retrieval/steps/test_parallel_yaml_named_branches.py
+"""ParallelStep.from_dict accepts named-branches shape (Task 22 + AC-21)."""
+from pydocs_mcp.retrieval.steps.parallel import ParallelStep
+from pydocs_mcp.retrieval.serialization import BuildContext
+# ... build a minimal BuildContext stub ...
+
+def test_named_branches_yaml_parses() -> None:
+    data = {
+        "type": "parallel",
+        "branches": [
+            {"name": "bm25",  "steps": [{"name": "limit", "type": "limit", "params": {"max_results": 5}}]},
+            {"name": "dense", "steps": [{"name": "limit", "type": "limit", "params": {"max_results": 5}}]},
+        ],
+    }
+    context = ...  # build minimal context
+    step = ParallelStep.from_dict(data, context)
+    assert len(step.stages) == 2
+    # Each sub-pipeline carries its branch name.
+    assert step.stages[0].name == "bm25"
+    assert step.stages[1].name == "dense"
+```
+
+- [ ] **Step 4: Run both new tests + full suite**
 
 ```bash
-.venv/bin/pytest tests/retrieval/steps/test_parallel_scratch_handoff.py -v
+.venv/bin/pytest tests/retrieval/steps/test_parallel_scratch_handoff.py tests/retrieval/steps/test_parallel_yaml_named_branches.py -v
 .venv/bin/pytest -q --ignore=tests/integration/test_self_index_resolution_rate.py 2>&1 | tail -3
 ```
 
-Expected: 1 new test PASS; full suite still PASS.
+Expected: 2 new tests PASS; full suite still PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add python/pydocs_mcp/retrieval/steps/parallel.py tests/retrieval/steps/test_parallel_scratch_handoff.py
-git commit -m "feat(retrieval): ParallelStep propagates branches' scratch writes
+git add python/pydocs_mcp/retrieval/steps/parallel.py tests/retrieval/steps/test_parallel_scratch_handoff.py tests/retrieval/steps/test_parallel_yaml_named_branches.py
+git commit -m "feat(retrieval): ParallelStep — scratch propagation + named-branches YAML
 
-Spec §3.1 Decision 3. Each parallel branch's state.scratch (typically
-set via TopKFilterStep.publish_to) is merged into the final state so
-downstream RRFFusionStep can read the named branch keys. Last-write-
-wins on key collision — branches use unique <branch_name>.<field>
-convention. state.result merge behavior unchanged."
+Spec §3.1 Decision 3. Two changes:
+1. Each branch's state.scratch is merged into the final state so
+   downstream RRFFusionStep can read named branch keys (last-write-
+   wins; branches use unique <branch_name>.<field> convention).
+2. from_dict accepts the new shape 'branches: [{name, steps}]' that
+   the hybrid YAML pipelines (Task 25) require — each branch becomes
+   a sub-RetrieverPipeline whose .name carries the branch identifier.
+   Legacy flat 'stages: [...]' shape still accepted for unshipped
+   consumers.
+
+state.result merge behavior unchanged."
 ```
 
 ---
@@ -4326,16 +4455,14 @@ async def test_model_change_detected_via_stored_embedding_model(
     assert stale_no_change == []
 ```
 
-NOTE: This requires (a) `Package.embedding_model` field exists in the model, (b) `IndexingService` writes it on replace, (c) `find_packages_with_stale_embeddings` helper exists. If `Package.embedding_model` doesn't exist, the prerequisite is to add the field — should land in Task 7 (schema migration) but ALSO needs the model dataclass field. Confirm Package has it before this task; if not, split into a small prereq.
+NOTE: `Package.embedding_model` field is already added in Task 7 (alongside the SQL column). This task adds only the `find_packages_with_stale_embeddings` helper + the IndexingService write of `embedding_model` on `replace_package`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `.venv/bin/pytest tests/application/test_re_embed_on_model_change.py -v`
-Expected: FAIL — `find_packages_with_stale_embeddings` not defined, OR `Package.embedding_model` field missing.
+Expected: FAIL — `ImportError: cannot import name 'find_packages_with_stale_embeddings' from 'pydocs_mcp.application.indexing_service'`.
 
-- [ ] **Step 3: Add the field + the helper**
-
-In `python/pydocs_mcp/models.py`, add `embedding_model: str | None = None` to `Package`.
+- [ ] **Step 3: Add the helper + wire IndexingService**
 
 In `python/pydocs_mcp/application/indexing_service.py`, add:
 
@@ -4367,15 +4494,17 @@ Expected: PASS (2 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add python/pydocs_mcp/models.py python/pydocs_mcp/application/indexing_service.py tests/application/test_re_embed_on_model_change.py
-git commit -m "feat(application): re-embed-on-model-change via stored embedding_model
+git add python/pydocs_mcp/application/indexing_service.py tests/application/test_re_embed_on_model_change.py
+git commit -m "feat(application): re-embed-on-model-change helper + indexing-service wire
 
-AC-26. Package.embedding_model dataclass field; IndexingService writes
-it on replace_package; find_packages_with_stale_embeddings returns
-names where stored != current YAML model. Composition root calls the
-helper at startup and clears content_hash on stale packages so the
-next sweep re-extracts + re-embeds them — re-uses the existing
---force code path under the hood."
+AC-26. find_packages_with_stale_embeddings returns names where stored
+embedding_model != current YAML model. IndexingService.replace_package
+persists package.embedding_model on every write. Composition root
+calls the helper at startup (between integrity check + UoW factory
+build) and clears content_hash on stale packages so the next sweep
+re-extracts + re-embeds them — re-uses the existing --force code
+path under the hood. Package.embedding_model field itself was added
+in Task 7 alongside the schema column."
 ```
 
 ---

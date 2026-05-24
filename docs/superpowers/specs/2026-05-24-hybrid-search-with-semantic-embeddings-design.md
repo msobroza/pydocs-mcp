@@ -484,7 +484,7 @@ See §"Files likely touched" of `/Users/msobroza/.claude/plans/i-would-like-to-s
 
 Key modified files:
 
-- `python/pydocs_mcp/models.py` — add type aliases + `is_multi_vector` + `Chunk.embedding`.
+- `python/pydocs_mcp/models.py` — add type aliases (`Vector`, `MultiVector`, `Embedding`) + `SparseEmbedding` Protocol + `is_multi_vector` helper + `Chunk.embedding` field + `Package.embedding_model: str | None = None` field (the dataclass companion to the new SQL column).
 - `python/pydocs_mcp/storage/protocols.py` — add `Embedder` + `ResultFuser`.
 - `python/pydocs_mcp/storage/factories.py` — composite builders + `turboquant_path_for_project`.
 - `python/pydocs_mcp/db.py` — `SCHEMA_VERSION = 5` + `_apply_v5_additions`.
