@@ -221,6 +221,26 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+class EmbeddingConfig(BaseModel):
+    """Embedding + vector-quantization config (spec §5.10).
+
+    YAML-tunable; no MCP tool params (per CLAUDE.md §"MCP API surface
+    vs YAML configuration").
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider:   Literal["fastembed", "openai"] = "fastembed"
+    model_name: str = "BAAI/bge-small-en-v1.5"
+    dim:        int = Field(default=384, ge=1)
+    batch_size: int = Field(default=32, ge=1)
+    # TurboQuant scalar-quantization bit width. 4 is the sweet spot per
+    # turbovec README — ~16x compression with minimal recall loss on
+    # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
+    # 2 for max compression.
+    bit_width:  int = Field(default=4, ge=1, le=8)
+
+
 class AppConfig(BaseSettings):
     """Runtime configuration.
 
@@ -250,6 +270,13 @@ class AppConfig(BaseSettings):
     # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
     # surface stays fixed; only deployment-time bounds are configurable.
     search: SearchConfig = Field(default_factory=SearchConfig)
+    # Hybrid-search foundation (spec §5.10): embedding provider /
+    # model / dim / batch / TurboQuant bit-width. Consumed by
+    # ``build_embedder()`` and ``EmbedChunksStage`` later in the
+    # hybrid-search PR. Per CLAUDE.md §"MCP API surface vs YAML
+    # configuration": embedding model choice is a pipeline-tuning knob,
+    # NOT an MCP tool param — the MCP surface stays fixed.
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside
