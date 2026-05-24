@@ -1,0 +1,78 @@
+[
+  {
+    "prompt": "Problem: I have a pandas DataFrame and I want to drop rows containing NaN values in a specific column. How do I do that?\nA: <code>\nimport pandas as pd\ndf = df.dropna(subset=['col1'])\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 0,
+    "docs": [
+      {"doc_id": "pandas.DataFrame.dropna", "doc_content": "DataFrame.dropna(*, axis=0, how=_NoDefault.no_default, thresh=_NoDefault.no_default, subset=None, inplace=False, ignore_index=False) Remove missing values."},
+      {"doc_id": "pandas.DataFrame.isna", "doc_content": "DataFrame.isna() Detect missing values. Return a boolean same-sized object indicating if the values are NA."}
+    ]
+  },
+  {
+    "prompt": "Problem: I want to merge two pandas DataFrames on a column called 'id' using a left join. What's the syntax?\nA: <code>\nresult = pd.merge(left, right, on='id', how='left')\n</code>",
+    "library": "Pandas",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 5,
+    "docs": [
+      {"doc_id": "pandas.merge", "doc_content": "pandas.merge(left, right, how='inner', on=None, ...) Merge DataFrame or named Series objects with a database-style join."}
+    ]
+  },
+  {
+    "prompt": "Problem: Given a pandas DataFrame, how do I group by one column and aggregate another with the mean?\nA: <code>\nout = df.groupby('group_col')['value_col'].mean()\nBEGIN SOLUTION\n</code>",
+    "library": "Pandas",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 12,
+    "docs": [
+      {"doc_id": "pandas.DataFrame.groupby", "doc_content": "DataFrame.groupby(by=None, axis=_NoDefault.no_default, level=None, ...) Group DataFrame using a mapper or by a Series of columns."},
+      {"doc_id": "pandas.core.groupby.GroupBy.mean", "doc_content": "GroupBy.mean(numeric_only=False, engine=None, engine_kwargs=None) Compute mean of groups, excluding missing values."}
+    ]
+  },
+  {
+    "prompt": "Problem: I have a numpy 2D array and want to compute the row-wise mean. What is the right axis argument?\nA: <code>\nimport numpy as np\nrow_means = np.mean(arr, axis=1)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 22,
+    "docs": [
+      {"doc_id": "numpy.mean", "doc_content": "numpy.mean(a, axis=None, dtype=None, out=None, keepdims=<no value>, *, where=<no value>) Compute the arithmetic mean along the specified axis."}
+    ]
+  },
+  {
+    "prompt": "Problem: How do I reshape a numpy array from shape (12,) to (3, 4)?\nA: <code>\nimport numpy as np\nreshaped = arr.reshape(3, 4)\n</code>",
+    "library": "Numpy",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 30,
+    "docs": [
+      {"doc_id": "numpy.ndarray.reshape", "doc_content": "ndarray.reshape(shape, order='C') Returns an array containing the same data with a new shape."},
+      {"doc_id": "numpy.reshape", "doc_content": "numpy.reshape(a, newshape, order='C') Gives a new shape to an array without changing its data."}
+    ]
+  },
+  {
+    "prompt": "Problem: I want to draw a simple matplotlib line plot of y vs x and save the figure to disk as PNG. What's the minimal code?\nA: <code>\nimport matplotlib.pyplot as plt\nplt.plot(x, y)\nplt.savefig('out.png')\nBEGIN SOLUTION\n</code>",
+    "library": "Matplotlib",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 40,
+    "docs": [
+      {"doc_id": "matplotlib.pyplot.plot", "doc_content": "matplotlib.pyplot.plot(*args, scalex=True, scaley=True, data=None, **kwargs) Plot y versus x as lines and/or markers."},
+      {"doc_id": "matplotlib.pyplot.savefig", "doc_content": "matplotlib.pyplot.savefig(*args, **kwargs) Save the current figure."}
+    ]
+  },
+  {
+    "prompt": "Problem: I want to fit a scikit-learn logistic regression on (X, y). How do I do this?\nA: <code>\nfrom sklearn.linear_model import LogisticRegression\nclf = LogisticRegression().fit(X, y)\n</code>",
+    "library": "Sklearn",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 50,
+    "docs": [
+      {"doc_id": "sklearn.linear_model.LogisticRegression", "doc_content": "class sklearn.linear_model.LogisticRegression(penalty='l2', *, dual=False, tol=0.0001, C=1.0, ...) Logistic Regression (aka logit, MaxEnt) classifier."}
+    ]
+  },
+  {
+    "prompt": "Problem: How do I compute the eigenvalues of a square matrix using scipy?\nA: <code>\nfrom scipy.linalg import eig\neigvals, eigvecs = eig(A)\n</code>",
+    "library": "Scipy",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 60,
+    "docs": [
+      {"doc_id": "scipy.linalg.eig", "doc_content": "scipy.linalg.eig(a, b=None, left=False, right=True, overwrite_a=False, overwrite_b=False, check_finite=True, homogeneous_eigvals=False) Solve an ordinary or generalized eigenvalue problem of a square matrix."}
+    ]
+  }
+]
