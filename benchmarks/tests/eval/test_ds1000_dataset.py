@@ -60,6 +60,20 @@ async def test_library_filter_slices_rows() -> None:
     assert all(t.metadata["library"] == "pandas" for t in tasks)
 
 
+async def test_library_filter_multi_element_selects_union_of_libraries() -> None:
+    """``library_filter`` with multiple PyPI-canonical names returns the
+    union of matching rows. The mini fixture has 3 pandas + 2 numpy rows;
+    filtering to ``("pandas", "numpy")`` yields exactly 5 tasks, each
+    tagged with one of the two requested libraries (guards against
+    off-by-one in the filter loop)."""
+    dataset = Ds1000Dataset(
+        fixture_path=FIXTURE_PATH, library_filter=("pandas", "numpy"),
+    )
+    tasks = [t async for t in dataset.tasks()]
+    assert len(tasks) == 5
+    assert all(t.metadata["library"] in {"pandas", "numpy"} for t in tasks)
+
+
 async def test_perturbation_filter_slices_rows() -> None:
     """``perturbation_filter`` selects rows by perturbation bucket. The mini
     fixture has rows tagged ``"Origin"`` and ``"Surface"``; filtering to
