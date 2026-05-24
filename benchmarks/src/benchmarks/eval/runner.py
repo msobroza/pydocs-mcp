@@ -43,7 +43,12 @@ from .serialization import (
     system_registry,
     tracker_registry,
 )
-from .systems.base_system import HasGoldResolver, HasLibrary, HasLibraryName
+from .systems.base_system import (
+    HasGoldResolver,
+    HasLibrary,
+    HasLibraryName,
+    HasResolvedLibrary,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
@@ -202,6 +207,15 @@ async def run_sweep(
                         tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
                         tracker.log_metric(h, "search_seconds", search_secs, step=count)
 
+                    # WHY: capture the library id the system resolved during
+                    # index() (Context7's router pick / oracle) into
+                    # gold.extra BEFORE _resolve_and_inject — that helper
+                    # spreads ``{**task.gold.extra}``, so anything injected
+                    # first survives. Feeds ``library_resolution@1`` and the
+                    # ``coverage_signal`` side channel. Non-matching systems
+                    # (pydocs / RepoQA) are a strict no-op.
+                    task = _capture_library_resolution(system, task)
+
                     # WHY: unified ground-truth resolution (spec §5). For an
                     # opt-in ``HasGoldResolver`` system, label the task's
                     # ground-truth chunk-ids BEFORE scoring so every metric
@@ -327,6 +341,42 @@ async def _resolve_and_inject(
     )
 
 
+def _capture_library_resolution(system: object, task: "EvalTask") -> "EvalTask":
+    """Record the library id the system resolved during ``index()`` into a
+    fresh task's ``gold.extra`` (frozen gold -> ``dataclasses.replace``).
+
+    Opt-in via ``isinstance(system, HasResolvedLibrary)`` — a system that
+    doesn't expose ``last_resolved_library_id`` (pydocs / RepoQA flows) is a
+    strict no-op that returns the SAME task object.
+
+    Injects two keys for matching systems (Context7):
+      - ``resolved_library_id`` — the router's pick (or the configured
+        oracle id), feeding the ``library_resolution@1`` metric. Always
+        injected, even when ``None``/empty, so the metric reads a present
+        (falsy) value rather than a missing key.
+      - ``coverage_signal`` — ``bool(rid)``: True iff resolution produced a
+        non-empty id. This is the side channel Task 4's ``coverage`` metric
+        falls back to for non-enumerable stores (no chunk-id set to count).
+
+    Called BEFORE ``_resolve_and_inject`` in the loop so the injected extra
+    survives that helper's ``{**task.gold.extra}`` spread.
+    """
+    if not isinstance(system, HasResolvedLibrary):
+        return task
+    rid = system.last_resolved_library_id
+    return replace(
+        task,
+        gold=replace(
+            task.gold,
+            extra={
+                **task.gold.extra,
+                "resolved_library_id": rid,
+                "coverage_signal": bool(rid),
+            },
+        ),
+    )
+
+
 def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:
     """Seed comparative-system library identifiers from task metadata.
 
@@ -342,15 +392,24 @@ def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:
     ``isinstance`` against the Protocols (rather than bare ``hasattr``)
     documents the contract at the type level and prevents accidental
     injection into unrelated ``library_name`` fields on future systems.
+
+    Source key precedence is ``repo`` then ``library``: RepoQA carries
+    ``metadata["repo"]`` (a ``"org/name"`` slug) while DS-1000 carries
+    ``metadata["library"]`` (a bare package name like ``"pandas"``). Both
+    datasets thus reach Context7 / Neuledge through the same seam — without
+    this fallback, ``search()`` would raise on DS-1000 for lack of a library.
     """
-    repo = metadata.get("repo")
-    if not repo:
+    name = metadata.get("repo") or metadata.get("library")
+    if not name:
         return
     if isinstance(system, HasLibraryName):
-        system.library_name = repo
+        system.library_name = name
     if isinstance(system, HasLibrary):
+        # WHY: only RepoQA's ``repo`` slug pairs with a ``commit`` to form
+        # the ``{repo}@{sha7}`` install id. DS-1000's bare ``library`` has
+        # no commit, so it seeds the install id verbatim.
         commit = metadata.get("commit", "")
-        system.library = f"{repo}@{commit[:7]}" if commit else repo
+        system.library = f"{name}@{commit[:7]}" if commit else name
 
 
 def _flatten_app_config(cfg: "AppConfig") -> dict[str, str]:
