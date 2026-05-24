@@ -22,6 +22,35 @@ def seeded_project(tmp_path):
     return project
 
 
+@pytest.fixture(autouse=True)
+def _patch_ingestion_pipeline_with_mock_embedder(monkeypatch):
+    """Thread MockEmbedder into the CLI's ``build_ingestion_pipeline`` calls.
+
+    The shipped ingestion pipeline now includes ``EmbedChunksStage`` by
+    default, which requires ``BuildContext.embedder`` to be non-None.
+    Production wiring will call ``build_embedder(cfg)`` at CLI startup once
+    Task 27 lands; until then, the CLI is invoked without an embedder, so
+    every test that exercises ``index``/``serve`` must patch the deferred
+    import to inject one. Applied autouse so individual tests don't repeat
+    the boilerplate.
+    """
+    from tests._fakes import MockEmbedder
+    import pydocs_mcp.extraction as _extraction
+    from pydocs_mcp.extraction import factories as _factories
+
+    _orig = _factories.build_ingestion_pipeline
+
+    def _build_with_mock(cfg, *, embedder=None):
+        return _orig(cfg, embedder=embedder or MockEmbedder())
+
+    # ``_run_indexing`` does ``from pydocs_mcp.extraction import build_ingestion_pipeline``
+    # at call time (deferred import) — patch both the re-exported attribute
+    # on the package and the source attribute on factories, since the
+    # deferred import resolves the former and direct callers use the latter.
+    monkeypatch.setattr(_extraction, "build_ingestion_pipeline", _build_with_mock)
+    monkeypatch.setattr(_factories, "build_ingestion_pipeline", _build_with_mock)
+
+
 class TestMainNoArgs:
     def test_no_command_prints_help(self, capsys):
         with patch("sys.argv", ["pydocs-mcp"]):
@@ -239,6 +268,9 @@ class TestServeCommand:
         The handler defers the ``pydocs_mcp.server`` import to its call
         path, so patching happens at the source module rather than the
         pre-refactor ``pydocs_mcp.__main__.run`` attribute.
+
+        EmbedChunksStage's MockEmbedder is wired via the autouse
+        ``_patch_ingestion_pipeline_with_mock_embedder`` fixture.
         """
         with patch("pydocs_mcp.server.run") as mock_run:
             with patch("sys.argv", ["pydocs-mcp", "serve", str(seeded_project)]):
