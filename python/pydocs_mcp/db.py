@@ -80,6 +80,17 @@ def cache_path_for_project(project_dir: Path) -> Path:
     return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.db"
 
 
+def turboquant_path_for_project(project_dir: Path) -> Path:
+    """Return the per-project TurboQuant ``.tq`` sidecar path under ``CACHE_DIR``.
+
+    Mirrors :func:`cache_path_for_project`: same dir, same path-hash slug,
+    ``.tq`` suffix instead of ``.db``. The two files live side-by-side so a
+    ``--force`` cache clear deletes both (caller's responsibility).
+    """
+    slug = hashlib.md5(str(project_dir.resolve()).encode()).hexdigest()[:10]
+    return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.tq"
+
+
 def _drop_all_known_tables(connection: sqlite3.Connection) -> None:
     for tbl in _KNOWN_TABLES:
         connection.execute(f"DROP TABLE IF EXISTS {tbl}")
