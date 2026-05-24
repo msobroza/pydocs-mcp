@@ -263,7 +263,7 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
     }
 
 
-def _row_to_chunk(row) -> Chunk:
+def row_to_chunk(row) -> Chunk:
     """Convert a ``sqlite3.Row`` (or dict) to a ``Chunk`` domain model.
 
     Accesses each column directly: a ``KeyError`` from a missing column is
@@ -433,7 +433,7 @@ class SqliteFilterAdapter:
 
 
 # Safe-column whitelists per table (spec §5.3)
-_CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
+CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
 _PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
 _MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
 
@@ -546,7 +546,7 @@ class SqliteChunkRepository:
 
     provider: ConnectionProvider
     filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=_CHUNK_COLUMNS)
+        default_factory=lambda: SqliteFilterAdapter(safe_columns=CHUNK_COLUMNS)
     )
 
     async def upsert(self, chunks: Iterable[Chunk]) -> None:
@@ -578,7 +578,7 @@ class SqliteChunkRepository:
             rows = await asyncio.to_thread(
                 lambda: conn.execute(sql, params).fetchall()
             )
-        return [_row_to_chunk(r) for r in rows]
+        return [row_to_chunk(r) for r in rows]
 
     async def delete(self, filter: Filter | Mapping) -> int:
         tree = _resolve_filter(filter)
@@ -647,7 +647,7 @@ class SqliteVectorStore:
     provider: ConnectionProvider
     filter_adapter: SqliteFilterAdapter = field(
         default_factory=lambda: SqliteFilterAdapter(
-            safe_columns=_CHUNK_COLUMNS, column_prefix="c.",
+            safe_columns=CHUNK_COLUMNS, column_prefix="c.",
         )
     )
     retriever_name: str = "bm25_chunk"
@@ -690,7 +690,7 @@ class SqliteVectorStore:
 
         items: list[Chunk] = []
         for row in rows:
-            base = _row_to_chunk(row)
+            base = row_to_chunk(row)
             items.append(
                 Chunk(
                     text=base.text,

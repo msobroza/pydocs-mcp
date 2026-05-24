@@ -9,6 +9,7 @@ through a single factory instead of N copies.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,11 +22,11 @@ from pydocs_mcp.models import Chunk
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
 from pydocs_mcp.storage.sqlite import (
-    _CHUNK_COLUMNS,
+    CHUNK_COLUMNS,
     SqliteFilterAdapter,
     SqliteUnitOfWork,
     _maybe_acquire,
-    _row_to_chunk,
+    row_to_chunk,
 )
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 
@@ -131,13 +132,15 @@ def build_sqlite_candidate_id_resolver(
     without touching the store class.
     """
     provider = build_connection_provider(db_path)
-    adapter = SqliteFilterAdapter(safe_columns=_CHUNK_COLUMNS)
+    adapter = SqliteFilterAdapter(safe_columns=CHUNK_COLUMNS)
 
     async def resolve(filter_tree: Filter) -> np.ndarray:
         sql_clause, params = adapter.adapt(filter_tree)
         sql = f"SELECT id FROM chunks WHERE {sql_clause}"
         async with _maybe_acquire(provider) as conn:
-            rows = conn.execute(sql, params).fetchall()
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchall()
+            )
         # ``np.asarray([], dtype=np.uint64)`` preserves the dtype on the
         # empty-result path; numpy would otherwise infer float64 from [].
         return np.asarray([r[0] for r in rows], dtype=np.uint64)
@@ -152,7 +155,7 @@ def build_sqlite_chunk_hydrator(
 
     Used by ``TurboQuantVectorStore`` to turn vector hits (just IDs) back into
     rich ``Chunk`` records the retrieval pipeline can consume. Reuses
-    ``_row_to_chunk`` so the deserialisation contract matches the rest of
+    ``row_to_chunk`` so the deserialisation contract matches the rest of
     the SQLite adapter — any schema drift surfaces uniformly.
     """
     provider = build_connection_provider(db_path)
@@ -163,12 +166,19 @@ def build_sqlite_chunk_hydrator(
         id_list = list(ids)
         placeholders = ",".join("?" * len(id_list))
         # ``SELECT *`` keeps the column list in lockstep with the schema —
-        # ``_row_to_chunk`` reads named columns from the ``sqlite3.Row`` so
+        # ``row_to_chunk`` reads named columns from the ``sqlite3.Row`` so
         # additive migrations (e.g., the v5 ``content_hash`` column) don't
         # require touching this query.
         sql = f"SELECT * FROM chunks WHERE id IN ({placeholders})"
         async with _maybe_acquire(provider) as conn:
-            rows = conn.execute(sql, id_list).fetchall()
-        return tuple(_row_to_chunk(r) for r in rows)
+            # Performance: ``row_to_chunk`` is pure CPU work — bundling
+            # the fetch + map into a single ``to_thread`` call keeps the
+            # whole hydration off the event-loop thread, matching the
+            # ``SqliteChunkRepository.list`` pattern.
+            return await asyncio.to_thread(
+                lambda: tuple(
+                    row_to_chunk(r) for r in conn.execute(sql, id_list).fetchall()
+                )
+            )
 
     return hydrate

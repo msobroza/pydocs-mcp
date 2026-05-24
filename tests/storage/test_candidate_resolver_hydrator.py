@@ -100,7 +100,7 @@ async def test_chunk_hydrator_returns_chunks_for_given_ids(
     by_id = {c.id: c for c in chunks}
     assert by_id[beta_id].text == "beta"
     assert by_id[gamma_id].text == "gamma"
-    # Metadata round-trips through the same _row_to_chunk path the repos use.
+    # Metadata round-trips through the same row_to_chunk path the repos use.
     assert by_id[beta_id].metadata.get("package") == "demo"
     assert by_id[gamma_id].metadata.get("package") == "other"
 

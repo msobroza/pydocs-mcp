@@ -38,9 +38,9 @@ from pydocs_mcp.storage.sqlite import (
     _chunk_to_row,
     _module_member_to_row,
     _package_to_row,
-    _row_to_chunk,
     _row_to_module_member,
     _row_to_package,
+    row_to_chunk,
 )
 
 
@@ -341,7 +341,7 @@ def test_chunk_row_roundtrip():
         },
     )
     row = _chunk_to_row(c)
-    c2 = _row_to_chunk(row)
+    c2 = row_to_chunk(row)
     assert c2.id == 1
     assert c2.text == "body"
     assert c2.metadata["package"] == "fastapi"
@@ -399,7 +399,7 @@ def test_row_to_chunk_raises_on_missing_column():
         "origin": "readme",
     }
     with pytest.raises(KeyError):
-        _row_to_chunk(bad_row)
+        row_to_chunk(bad_row)
 
 
 # ---------------------------------------------------------------------------
