@@ -69,3 +69,18 @@ def test_env_nested_delimiter_overrides_embedding_field(monkeypatch) -> None:
     monkeypatch.setenv("PYDOCS_EMBEDDING__BATCH_SIZE", "64")
     cfg = AppConfig.load()
     assert cfg.embedding.batch_size == 64
+
+
+def test_embedding_config_dim_must_be_multiple_of_8() -> None:
+    # Valid multiples of 8 — covers the small end (8), shipped default (384),
+    # and the largest OpenAI dim (3072 — passes via the field validator,
+    # then would fail the known-model cross-check if model_name didn't
+    # match, hence the dummy model_name here).
+    EmbeddingConfig(model_name="my-custom-model", dim=8)
+    EmbeddingConfig(dim=384)
+    EmbeddingConfig(model_name="text-embedding-3-small", dim=1536)
+    # Non-multiples raise at load time — not at first write.
+    with pytest.raises(ValidationError, match="multiple of 8"):
+        EmbeddingConfig(dim=100)
+    with pytest.raises(ValidationError, match="multiple of 8"):
+        EmbeddingConfig(dim=7)

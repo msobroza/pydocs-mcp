@@ -13,6 +13,8 @@ future PR that adds a ``chunk_vectors`` side-table.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -22,6 +24,8 @@ import numpy as np
 from turbovec import IdMapIndex
 
 from pydocs_mcp.models import Embedding, is_multi_vector
+
+logger = logging.getLogger(__name__)
 
 
 class TurboQuantUnitOfWork:
@@ -41,12 +45,18 @@ class TurboQuantUnitOfWork:
         self._dirty = False
 
     async def __aenter__(self) -> "TurboQuantUnitOfWork":
-        self._index = (
-            IdMapIndex.load(str(self._index_path))
-            if self._index_path.exists()
-            else IdMapIndex(dim=self._dim, bit_width=self._bit_width)
-        )
+        # ``IdMapIndex.load`` / constructor are sync PyO3 calls that perform
+        # CPU + IO work (mmap a ``.tq`` file or zero-allocate dim*N bits).
+        # Per CLAUDE.md §"Async Patterns", offload via asyncio.to_thread so
+        # the event loop doesn't stall on large indices.
+        self._index = await asyncio.to_thread(self._open_index)
         return self
+
+    def _open_index(self) -> IdMapIndex:
+        """Sync helper — pick load-or-construct branch off the event loop."""
+        if self._index_path.exists():
+            return IdMapIndex.load(str(self._index_path))
+        return IdMapIndex(dim=self._dim, bit_width=self._bit_width)
 
     async def __aexit__(
         self,
@@ -63,10 +73,16 @@ class TurboQuantUnitOfWork:
         if self._dirty:
             try:
                 await self.rollback()
-            except Exception:
+            except Exception as rollback_exc:
                 # Best-effort cleanup; don't mask the original exception
-                # that triggered ``__aexit__``.
-                pass
+                # that triggered ``__aexit__``. Mirrors SqliteUnitOfWork's
+                # __aexit__ rollback-failure path — log the inner exception
+                # rather than swallowing silently so an operator running
+                # at WARNING+ still sees the failure.
+                logger.warning(
+                    "TurboQuant rollback in __aexit__ failed: %r",
+                    rollback_exc,
+                )
 
     async def add_vectors(
         self,
@@ -98,7 +114,10 @@ class TurboQuantUnitOfWork:
         # FastEmbed in that dtype.
         vectors = np.asarray(np.stack(list(embeddings)), dtype=np.float32)
         ids_arr = np.asarray(list(ids), dtype=np.uint64)
-        self._index.add_with_ids(vectors, ids_arr)
+        # ``add_with_ids`` is a sync PyO3 call doing per-vector
+        # quantization — offload to a worker thread per CLAUDE.md
+        # §"Async Patterns".
+        await asyncio.to_thread(self._index.add_with_ids, vectors, ids_arr)
         self._dirty = True
 
     async def remove_vectors(self, ids: Sequence[int]) -> None:
@@ -106,9 +125,19 @@ class TurboQuantUnitOfWork:
             raise RuntimeError(
                 "TurboQuantUnitOfWork.remove_vectors called outside async with",
             )
-        for chunk_id in ids:
-            self._index.remove(int(chunk_id))
+        # Batch the per-id PyO3 ``remove`` calls inside a single worker
+        # thread: N sync calls hopped across N ``asyncio.to_thread`` boundaries
+        # would amplify context-switch overhead linearly in ``len(ids)``. The
+        # inner loop runs to completion off the event loop, then yields once.
+        ids_list = [int(chunk_id) for chunk_id in ids]
+        await asyncio.to_thread(self._remove_ids_sync, ids_list)
         self._dirty = True
+
+    def _remove_ids_sync(self, ids: Sequence[int]) -> None:
+        """Sync inner loop for :meth:`remove_vectors` — runs in a worker thread."""
+        assert self._index is not None  # checked by caller
+        for chunk_id in ids:
+            self._index.remove(chunk_id)
 
     async def commit(self) -> None:
         """Persist in-memory index to ``<path>.tmp`` then atomic-rename.
@@ -120,7 +149,11 @@ class TurboQuantUnitOfWork:
         if not self._dirty or self._index is None:
             return
         tmp = self._index_path.with_suffix(self._index_path.suffix + ".tmp")
-        self._index.write(str(tmp))
+        # ``IdMapIndex.write`` serializes the full index to disk — sync +
+        # IO-bound, offload per CLAUDE.md §"Async Patterns". ``os.replace``
+        # itself is a single atomic syscall and is fast enough to leave on
+        # the event loop.
+        await asyncio.to_thread(self._index.write, str(tmp))
         os.replace(tmp, self._index_path)
         self._dirty = False
 
@@ -128,11 +161,10 @@ class TurboQuantUnitOfWork:
         """Discard in-memory adds/removes by reloading from disk."""
         if not self._dirty:
             return
-        self._index = (
-            IdMapIndex.load(str(self._index_path))
-            if self._index_path.exists()
-            else IdMapIndex(dim=self._dim, bit_width=self._bit_width)
-        )
+        # Same load-or-construct branch as ``__aenter__`` — also offloaded
+        # so a large ``.tq`` reload after a failed transaction doesn't
+        # stall the loop.
+        self._index = await asyncio.to_thread(self._open_index)
         self._dirty = False
 
     def size(self) -> int:

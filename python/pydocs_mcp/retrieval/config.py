@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -255,6 +255,22 @@ class EmbeddingConfig(BaseModel):
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
     # 2 for max compression.
     bit_width:  int = Field(default=4, ge=1, le=8)
+
+    @field_validator("dim")
+    @classmethod
+    def _validate_dim_multiple_of_8(cls, v: int) -> int:
+        # WHY: turbovec's ``IdMapIndex`` asserts ``dim % 8 == 0`` (see
+        # turbovec/src/lib.rs). Without this validator, a YAML setting
+        # like ``embedding.dim: 100`` would load fine and only blow up
+        # at first write — far from the misconfiguration. Failing at
+        # config-load surfaces it next to the offending line.
+        if v % 8 != 0:
+            raise ValueError(
+                f"embedding.dim={v} must be a multiple of 8 (TurboQuant "
+                "IdMapIndex constraint). Common values: 384, 512, 768, "
+                "1024, 1536, 3072."
+            )
+        return v
 
     @model_validator(mode="after")
     def _validate_dim_matches_known_model(self) -> "EmbeddingConfig":
