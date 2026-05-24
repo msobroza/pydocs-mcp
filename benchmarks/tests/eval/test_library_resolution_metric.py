@@ -1,10 +1,10 @@
 """Pin library_resolution@1 (Task 7).
 
 The metric scores Context7's router: did it resolve the task's library to
-the right Context7 ``/org/project`` id? Matching is case-insensitive
-SUBSTRING containment (not equality) because resolved ids are
-``/org/project`` paths, never bare library names — and it consults a small
-alias map for cross-naming gaps (``torch`` vs ``/pytorch/pytorch``).
+the right Context7 ``/org/project`` id? Matching is a case-insensitive
+PATH-SEGMENT match (not equality, not raw substring) because resolved ids
+are ``/org/project`` paths, never bare library names — and it consults a
+small alias map for cross-naming gaps (``torch`` vs ``/pytorch/pytorch``).
 
 Hermetic: no ``pydocs_mcp`` import — drives the metric with in-memory
 ``EvalTask`` fakes.
@@ -31,7 +31,7 @@ def _task(resolved: object, library: str) -> EvalTask:
     )
 
 
-def test_pandas_substring_match_returns_1_0() -> None:
+def test_pandas_segment_match_returns_1_0() -> None:
     task = _task("/pandas-dev/pandas", "pandas")
     assert LibraryResolution1().compute(task, ()) == 1.0
 
@@ -39,6 +39,14 @@ def test_pandas_substring_match_returns_1_0() -> None:
 def test_pandas_resolution_wrong_library_returns_0_0() -> None:
     # Resolved /pandas-dev/pandas but the task's library is numpy -> miss.
     task = _task("/pandas-dev/pandas", "numpy")
+    assert LibraryResolution1().compute(task, ()) == 0.0
+
+
+def test_substring_false_positive_rejected() -> None:
+    # "numpy" is a raw SUBSTRING of /pyro-ppl/numpyro but NOT a path
+    # segment — segment matching must reject this unrelated id (a plain
+    # substring test would wrongly score 1.0).
+    task = _task("/pyro-ppl/numpyro", "numpy")
     assert LibraryResolution1().compute(task, ()) == 0.0
 
 
