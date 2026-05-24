@@ -82,6 +82,21 @@ class HasLibrary(Protocol):
 
 
 @runtime_checkable
+class HasResolvedLibrary(Protocol):
+    """A system that exposes the library id it resolved during ``index()``
+    so the runner can capture it for scoring. ``Context7System`` is the
+    primary implementor (the id is its router's pick, or the oracle).
+
+    See ``HasLibraryName`` for the opt-in mechanism — the runner gates on
+    ``isinstance(system, HasResolvedLibrary)`` and records
+    ``last_resolved_library_id`` into ``gold.extra`` between ``search()``
+    and scoring. Systems that don't expose it are a strict no-op.
+    """
+
+    last_resolved_library_id: str | None
+
+
+@runtime_checkable
 class HasGoldResolver(Protocol):
     """A system that supplies a per-system ``GoldResolver`` so the runner
     can label ground-truth between ``search()`` and scoring.
@@ -99,6 +114,7 @@ __all__ = [
     "HasGoldResolver",
     "HasLibrary",
     "HasLibraryName",
+    "HasResolvedLibrary",
     "RetrievedItem",
     "System",
 ]
