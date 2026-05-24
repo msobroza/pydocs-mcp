@@ -67,15 +67,29 @@ _LIBRARY_NORMALIZATION: dict[str, str] = {
     "PyTorch": "torch",
 }
 
+
+def _normalize_library(raw: str) -> str:
+    """Map a DS-1000 title-case ``library`` value to its PyPI-canonical
+    lowercase name. Unknown values fall back to ``raw.lower()`` so the
+    normalization is total (never raises) and the fallback semantics live
+    in exactly one place."""
+    return _LIBRARY_NORMALIZATION.get(raw, raw.lower())
+
 # Markers inside the canonical-solution block to strip from the NL
-# question after the ``A:`` split. Order is incidental — each is
-# substituted with empty string.
+# question after the ``A:`` split.
 _SOLUTION_MARKERS: tuple[str, ...] = (
     "<code>",
     "</code>",
     "BEGIN SOLUTION",
     "END SOLUTION",
 )
+
+# DS-1000's answer delimiter is a LINE-LEADING ``A:`` (prompt format is
+# ``Problem:\n<NL question>\nA:\n<code>``). Anchor on the line-leading
+# marker only — a bare ``A:`` substring also matches in-body NL labels
+# like ``"DataFrame A:"`` / ``"matrix A:"`` and would amputate the
+# question. ``(?m)`` makes ``^``/``$`` match per-line.
+_ANSWER_DELIMITER = re.compile(r"(?m)^A:\s*$")
 
 
 @dataset_registry.register("ds1000")
@@ -127,6 +141,7 @@ class Ds1000Dataset:
             "code-rag-bench/ds1000",
             revision=self.revision,
             split="train",
+            cache_dir=str(self.cache_dir) if self.cache_dir else None,
         )
         rows = [dict(row) for row in ds]
         return self._apply_filters(rows)
@@ -138,9 +153,7 @@ class Ds1000Dataset:
         filtered: list[dict[str, Any]] = []
         for row in rows:
             if self.library_filter:
-                normalized = _LIBRARY_NORMALIZATION.get(
-                    row.get("library", ""), row.get("library", "").lower(),
-                )
+                normalized = _normalize_library(row.get("library", ""))
                 if normalized not in self.library_filter:
                     continue
             if self.perturbation_filter:
@@ -156,7 +169,7 @@ def _row_to_task(row: dict[str, Any]) -> EvalTask | None:
         return None
     query = _strip_query(raw_prompt)
     library_raw = row.get("library", "")
-    library = _LIBRARY_NORMALIZATION.get(library_raw, library_raw.lower())
+    library = _normalize_library(library_raw)
     perturbation = row.get("perturbation_type", "")
     origin_id = row.get("perturbation_origin_id", "")
     docs = row.get("docs", []) or []
@@ -194,16 +207,25 @@ def _row_to_task(row: dict[str, Any]) -> EvalTask | None:
 def _strip_query(prompt: str) -> str:
     """Drop the canonical-solution block from a DS-1000 prompt.
 
-    DS-1000's prompts embed the gold answer after a literal ``A:`` token,
+    DS-1000's prompts embed the gold answer after a LINE-LEADING ``A:``
+    delimiter (the format is ``Problem:\\n<NL question>\\nA:\\n<code>``),
     typically wrapped in ``<code>...</code>`` and sometimes flanked by
-    ``BEGIN SOLUTION`` / ``END SOLUTION`` markers. Retrieval systems
-    must NOT see the solution — they're being scored on whether they can
-    surface the relevant docs from the NL question alone. We split at
-    the FIRST ``A:`` (so any earlier mention inside the NL question
-    survives), then remove any leftover code/solution markers and
-    collapse the surrounding whitespace.
+    ``BEGIN SOLUTION`` / ``END SOLUTION`` markers. Retrieval systems must
+    NOT see the solution — they're scored on whether they can surface the
+    relevant docs from the NL question alone. We split at the FIRST
+    line-leading ``A:`` (``_ANSWER_DELIMITER``), then remove any leftover
+    code/solution markers and collapse the surrounding whitespace.
+
+    WHY line-leading, not a bare substring: real DS-1000 question bodies
+    reference in-body labels like ``"DataFrame A:"`` / ``"matrix A:"`` /
+    ``"column A:"``. A bare ``prompt.split("A:")`` would cut at the first
+    such in-body mention and amputate the actual question. Anchoring on
+    ``^A:\\s*$`` matches only the real answer delimiter; an in-body
+    ``A:`` never triggers the cut. If no line-leading ``A:`` exists,
+    ``split`` returns the whole prompt unchanged — correct, since then the
+    entire prompt (minus markers) is the query.
     """
-    body = prompt.split("A:", 1)[0]
+    body = _ANSWER_DELIMITER.split(prompt, maxsplit=1)[0]
     for marker in _SOLUTION_MARKERS:
         body = body.replace(marker, "")
     # Collapse runs of blank lines / trailing whitespace introduced by
