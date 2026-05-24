@@ -8,6 +8,7 @@ Module layout:
 
 - :mod:`.bm25_scorer` — :class:`BM25ScorerStep`
 - :mod:`.chunk_fetcher` — :class:`ChunkFetcherStep`
+- :mod:`.dense_fetcher` — :class:`DenseFetcherStep`
 - :mod:`.member_fetcher` — :class:`MemberFetcherStep`
 - :mod:`.metadata_post_filter` — :class:`MetadataPostFilterStep`
 - :mod:`.limit` — :class:`LimitStep`
@@ -34,6 +35,7 @@ from pydocs_mcp.retrieval.steps import sub_pipeline as _sub_pipeline  # noqa: F4
 from pydocs_mcp.retrieval.steps.bm25_scorer import BM25ScorerStep
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
 from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
+from pydocs_mcp.retrieval.steps.dense_fetcher import DenseFetcherStep
 from pydocs_mcp.retrieval.steps.limit import LimitStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
@@ -52,6 +54,7 @@ __all__ = (
     "BM25ScorerStep",
     "ChunkFetcherStep",
     "ConditionalStep",
+    "DenseFetcherStep",
     "LimitStep",
     "MemberFetcherStep",
     "MetadataPostFilterStep",

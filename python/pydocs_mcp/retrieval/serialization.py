@@ -9,9 +9,9 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.protocols import ConnectionProvider
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
+    from pydocs_mcp.storage.protocols import Embedder
     from pydocs_mcp.storage.sqlite import (
         SqliteModuleMemberRepository,
-        SqliteVectorStore,
     )
 
 
@@ -98,17 +98,30 @@ def _default_predicate_registry():
 class BuildContext:
     """Carries ambient dependencies used by ``from_dict`` decoders.
 
-    ``vector_store`` / ``module_member_store`` / ``app_config`` are optional at
-    the type level so isolated unit tests can instantiate a minimal context,
-    but ``from_dict`` decoders that need them raise ``ValueError`` when the
-    store or config is missing. Production wiring in ``server.py`` /
-    ``__main__.py`` provides all three at startup (spec §5.7, AC #15).
+    ``vector_store`` / ``module_member_store`` / ``app_config`` / ``embedder``
+    are optional at the type level so isolated unit tests can instantiate a
+    minimal context, but ``from_dict`` decoders that need them raise
+    ``ValueError`` when the store or config is missing. Production wiring in
+    ``server.py`` / ``__main__.py`` provides all of them at startup
+    (spec §5.7, AC #15, AC #17).
+
+    ``vector_store`` is typed as ``object`` rather than a concrete class
+    because the field currently holds either the FTS5-only
+    ``SqliteVectorStore`` (text retrieval) OR a dense
+    ``TurboQuantVectorStore`` (vector retrieval) — the two satisfy
+    *different* search Protocols, so a single union type would mis-narrow.
+    ``DenseFetcherStep.from_dict`` checks-and-casts at construction time.
+
+    ``embedder`` is typed as :class:`Embedder` and is consumed by
+    :class:`DenseFetcherStep` to embed the user's query text into a vector
+    at retrieval time.
     """
 
     connection_provider: "ConnectionProvider"
     predicate_registry: "PredicateRegistry" = field(default_factory=_default_predicate_registry)
     step_registry: ComponentRegistry = field(default_factory=lambda: step_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
-    vector_store: "SqliteVectorStore | None" = None
+    vector_store: object | None = None
     module_member_store: "SqliteModuleMemberRepository | None" = None
     app_config: "AppConfig | None" = None
+    embedder: "Embedder | None" = None
