@@ -12,6 +12,7 @@ Module layout:
 - :mod:`.chunking` — :class:`ChunkingStage`
 - :mod:`.reference_capture` — :class:`ReferenceCaptureStage` + ``_get_capture_config`` / ``_set_capture_config``
 - :mod:`.flatten` — :class:`FlattenStage`
+- :mod:`.assign_chunk_content_hash` — :class:`AssignChunkContentHashStage`
 - :mod:`.embed_chunks` — :class:`EmbedChunksStage`
 - :mod:`.content_hash` — :class:`ContentHashStage`
 - :mod:`.package_build` — :class:`PackageBuildStage`
@@ -21,6 +22,9 @@ each file has one stage, one reason to change.
 """
 from __future__ import annotations
 
+from pydocs_mcp.extraction.pipeline.stages.assign_chunk_content_hash import (
+    AssignChunkContentHashStage,
+)
 from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.pipeline.stages.chunking import ChunkingStage
 from pydocs_mcp.extraction.pipeline.stages.content_hash import ContentHashStage
@@ -36,6 +40,7 @@ from pydocs_mcp.extraction.pipeline.stages.reference_capture import (
 )
 
 __all__ = (
+    "AssignChunkContentHashStage",
     "ChunkingStage",
     "ContentHashStage",
     "EmbedChunksStage",
