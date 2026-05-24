@@ -34,6 +34,40 @@ class ChunkStore(Protocol):
     async def count(self, filter: Filter | Mapping | None = None) -> int: ...
     async def rebuild_index(self) -> None: ...
 
+    async def list_id_hash_pairs(
+        self, *, filter: Filter | Mapping | None = None,
+    ) -> tuple[tuple[int, str | None], ...]:
+        """Return (id, content_hash) for chunks matching filter.
+
+        Cheap variant of list() that avoids loading full text/metadata.
+        Used by the diff-merge in IndexingService.reindex_package and
+        by LoadExistingChunkHashesStage in ingestion.
+
+        Rows whose content_hash is NULL (pre-existing legacy rows) return
+        None for the hash slot — the diff-merge treats those as 'removed'
+        so they self-heal on the first reindex per package (spec AC-8).
+        """
+        ...
+
+    async def delete_by_ids(self, ids: Sequence[int]) -> None:
+        """Delete chunks by their SQLite primary-key IDs.
+
+        Used by the diff-merge to remove only the rows that no longer
+        exist in the incoming chunk set (instead of wiping the whole
+        package's chunks like ``delete(filter={"package": X})`` does).
+        Empty ids → no-op.
+        """
+        ...
+
+    async def insert(self, chunks: tuple[Chunk, ...]) -> None:
+        """Insert chunks; assigns rowids.
+
+        Distinct from ``upsert`` (which silently updates on duplicate keys
+        — undesirable for the diff-merge which only inserts the
+        added/changed subset). Persists Chunk.content_hash.
+        """
+        ...
+
 
 @runtime_checkable
 class ModuleMemberStore(Protocol):

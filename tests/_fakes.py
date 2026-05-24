@@ -202,6 +202,48 @@ class InMemoryChunkStore:
         # In-memory store has no FTS index to rebuild.
         return None
 
+    async def list_id_hash_pairs(
+        self, *, filter: Any | None = None,
+    ) -> tuple[tuple[int, str | None], ...]:
+        self.calls.append(_Call("list_id_hash_pairs", {"filter": filter}))
+        if isinstance(filter, dict) and "package" in filter:
+            rows = list(self.by_package.get(filter["package"], []))
+        else:
+            rows = [c for cs in self.by_package.values() for c in cs]
+        # Mirror the SQLite repo's NULL semantics: a chunk that lacks a
+        # content_hash returns None in the hash slot so the diff-merge can
+        # treat legacy rows as "removed".
+        return tuple(
+            (c.id if c.id is not None else 0, c.content_hash or None)
+            for c in rows
+        )
+
+    async def delete_by_ids(self, ids) -> None:
+        self.calls.append(_Call("delete_by_ids", list(ids)))
+        if not ids:
+            return
+        ids_set = set(ids)
+        for pkg, items in self.by_package.items():
+            self.by_package[pkg] = [c for c in items if c.id not in ids_set]
+
+    async def insert(self, chunks) -> None:
+        # Mimic SQLite autoincrement so list_id_hash_pairs returns real ints.
+        from dataclasses import replace
+        materialised = tuple(chunks)
+        self.calls.append(_Call("insert", materialised))
+        existing_max = max(
+            (c.id for cs in self.by_package.values() for c in cs if c.id is not None),
+            default=0,
+        )
+        for c in materialised:
+            if c.id is None:
+                existing_max += 1
+                stored = replace(c, id=existing_max)
+            else:
+                stored = c
+            pkg = c.metadata.get("package", "")
+            self.by_package.setdefault(pkg, []).append(stored)
+
 
 @dataclass
 class InMemoryModuleMemberStore:
