@@ -210,15 +210,22 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     # (process killed mid-commit, etc.) is detected and repaired by
     # clearing ``packages.content_hash`` so the next pass re-extracts.
     # No-op on a fresh project (both counts == 0).
-    repaired = await check_integrity_and_repair(
-        db_path=db_path, tq_path=tq_path,
-        dim=config.embedding.dim, bit_width=config.embedding.bit_width,
-    )
-    if repaired:
-        log.warning(
-            "Cache integrity: cleared content_hash on %d package(s); "
-            "they will be re-extracted this run", len(repaired),
+    #
+    # Skip when ``--force`` is set: the .tq wipe above leaves vec_count=0
+    # while SQLite still holds N chunks, which would log a misleading
+    # "Cache integrity mismatch" warning. The subsequent ``index_project(
+    # force=True)`` clears everything anyway, so the integrity check is
+    # superseded by the wipe + re-extract.
+    if not args.force:
+        repaired = await check_integrity_and_repair(
+            db_path=db_path, tq_path=tq_path,
+            dim=config.embedding.dim, bit_width=config.embedding.bit_width,
         )
+        if repaired:
+            log.warning(
+                "Cache integrity: cleared content_hash on %d package(s); "
+                "they will be re-extracted this run", len(repaired),
+            )
 
     from pydocs_mcp.application.indexing_service import IndexingService
     indexing_service = IndexingService(uow_factory=uow_factory)

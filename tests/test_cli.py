@@ -281,7 +281,7 @@ class TestServeCommand:
         pre-refactor ``pydocs_mcp.__main__.run`` attribute.
 
         EmbedChunksStage's MockEmbedder is wired via the autouse
-        ``_patch_ingestion_pipeline_with_mock_embedder`` fixture.
+        ``_patch_embedder_with_mock`` fixture.
         """
         with patch("pydocs_mcp.server.run") as mock_run:
             with patch("sys.argv", ["pydocs-mcp", "serve", str(seeded_project)]):

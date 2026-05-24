@@ -177,6 +177,12 @@ async def check_integrity_and_repair(
     empty in-memory index for a missing ``.tq`` file, so ``size() == 0``
     matches an empty ``chunks`` table — no false alarm. Per spec §5.7
     (cache is regenerable; silent recovery preserves user flow).
+
+    Assumes the configured ingestion pipeline writes one embedding per chunk
+    (the shipped default does — ``embed_chunks`` stage with strict=True 1:1
+    zip). If a custom ingestion.yaml omits embed_chunks, chunks > vectors
+    becomes the expected steady state and this helper will trigger
+    persistent false positives. Skip via custom startup wiring in that case.
     """
     def _chunk_count() -> int:
         conn = sqlite3.connect(str(db_path))
