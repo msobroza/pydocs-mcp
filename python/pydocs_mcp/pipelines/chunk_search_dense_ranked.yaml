@@ -1,0 +1,40 @@
+# Ranked dense-only chunk-search pipeline — benchmark / evaluation use only.
+#
+# Identical to chunk_search_dense.yaml but drops the final
+# token_budget_formatter step so the pipeline returns top-K SEPARATE
+# ranked chunks in state.candidates instead of one composite chunk in
+# state.result. recall@k / mrr / pass@1 metrics can actually measure
+# top-K hits with this preset; the MCP server keeps chunk_search.yaml
+# (BM25 composite) as its default.
+#
+# Production note: pointing DocsSearch (MCP `search` handler) at this
+# preset is supported — DocsSearch.search reads state.candidates when
+# state.result is None — but the composite / budgeted output of the
+# composite variants is what LLM clients typically want. Use this
+# preset for benchmark sweeps + offline evaluation, not as the live
+# MCP default.
+name: chunk_search_dense_ranked
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: score
+    type: dense_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  # NO token_budget_formatter — output is state.candidates (ranked list),
+  # not state.result (composite). Benchmark adapter prefers state.candidates.
