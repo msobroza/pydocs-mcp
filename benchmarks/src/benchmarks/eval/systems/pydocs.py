@@ -232,6 +232,23 @@ class PydocsMcpSystem:
         self._pipeline = None
 
 
+@system_registry.register("pydocs-mcp-composite")
+@dataclass
+class PydocsMcpCompositeSystem(PydocsMcpSystem):
+    """``pydocs-mcp`` with ``composite_mode`` defaulted on.
+
+    WHY a registered variant (not a runner kwarg): the runner builds systems
+    via ``system_registry.build(name)`` with NO kwargs, so a subclass that
+    flips the default is the only way ``composite_mode=True`` reaches the
+    cross-system comparison run. Everything else (index/search/teardown,
+    the lazy ``gold_resolver``) is inherited unchanged — the override is
+    purely the two defaults below.
+    """
+
+    name: str = "pydocs-mcp-composite"
+    composite_mode: bool = True
+
+
 def _first_str(*candidates: object) -> str | None:
     for c in candidates:
         if isinstance(c, str) and c:
