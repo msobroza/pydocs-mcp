@@ -586,6 +586,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--split",
+        choices=["all", "dev", "test"],
+        default="all",
+        help=(
+            "(ds1000-only) stratified-by-library dev/test split -> "
+            "Ds1000Dataset.split. `all` (default) yields every task; `dev` / "
+            "`test` partition each library independently (preserving its "
+            "corpus proportion) into a seeded dev head + test tail — tune on "
+            "`dev`, evaluate on held-out `test`. Passed as a kwarg ONLY when "
+            "!= `all`, so datasets that don't accept it (RepoQA) are "
+            "unaffected. Tune the fraction/seed via the dataclass defaults "
+            "(dev_fraction=0.2, split_seed=0)."
+        ),
+    )
+    parser.add_argument(
         "--corpus-dir",
         # WHY resolve(): a relative --corpus-dir would otherwise be
         # cwd-dependent. Resolving to an absolute path at parse time pins the
@@ -633,6 +648,13 @@ def main() -> None:
     # RepoQA's constructor rejects.
     if args.dataset_library_filter is not None:
         dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
+    # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
+    # kwarg is absent for the common case AND for datasets that don't accept
+    # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``
+    # gating above — passing ``split="all"`` would be a no-op for DS-1000 but
+    # would still crash RepoQA's constructor.
+    if args.split != "all":
+        dataset_kwargs["split"] = args.split
 
     results, tasks_ran = asyncio.run(
         run_sweep(

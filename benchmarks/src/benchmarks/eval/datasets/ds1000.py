@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -75,6 +76,21 @@ def _normalize_library(raw: str) -> str:
     in exactly one place."""
     return _LIBRARY_NORMALIZATION.get(raw, raw.lower())
 
+
+def _split_sort_key(row: dict[str, Any]) -> str:
+    """A deterministic, position-independent sort key for the dev/test
+    split's per-library shuffle.
+
+    Uses the gold ``doc_id``\\ s joined with ``"|"`` (stable across runs,
+    unique per problem), falling back to the raw ``prompt`` when a row has
+    no gold docs. Deliberately NOT the row's list index — the key must be
+    stable regardless of where the row lands in the loaded list so the
+    seeded shuffle yields the same partition across runs and load paths."""
+    docs = row.get("docs", []) or []
+    doc_ids = [str(d.get("doc_id", "")) for d in docs]
+    joined = "|".join(doc_ids)
+    return joined if joined else str(row.get("prompt", ""))
+
 # Markers inside the canonical-solution block to strip from the NL
 # question after the ``A:`` split.
 _SOLUTION_MARKERS: tuple[str, ...] = (
@@ -91,6 +107,12 @@ _SOLUTION_MARKERS: tuple[str, ...] = (
 # question. ``(?m)`` makes ``^``/``$`` match per-line.
 _ANSWER_DELIMITER = re.compile(r"(?m)^A:\s*$")
 
+# The three accepted ``split`` values. Single source of truth: both the
+# ``__post_init__`` validation message and the runner's argparse
+# ``choices`` mirror this set (``"all"`` is the backward-compat default —
+# the whole filtered corpus, no partition).
+_VALID_SPLITS: tuple[str, ...] = ("all", "dev", "test")
+
 
 @dataset_registry.register("ds1000")
 @dataclass
@@ -102,12 +124,28 @@ class Ds1000Dataset:
     fixture_path: Path | None = None
     library_filter: tuple[str, ...] = ()
     perturbation_filter: tuple[str, ...] = ()
+    # WHY: stratified-by-library dev/test split so each slice keeps the
+    # 7-library proportions of the full corpus; seeded so the partition is
+    # reproducible across runs. Default ``"all"`` is the whole filtered
+    # corpus (no partition) — strict backward-compat for existing usage and
+    # the CI fixture, which rely on getting every task.
+    split: str = "all"
+    dev_fraction: float = 0.2
+    split_seed: int = 0
     cache_dir: Path = field(
         default_factory=lambda: Path("~/.cache/pydocs-mcp/ds1000").expanduser(),
     )
     _rows_cache: list[dict[str, Any]] | None = field(
         default=None, init=False, repr=False,
     )
+
+    def __post_init__(self) -> None:
+        # A bad ``split`` is a caller bug — fail loud at construction rather
+        # than silently yielding the wrong slice deep in the async loop.
+        if self.split not in _VALID_SPLITS:
+            raise ValueError(
+                f"split must be one of {_VALID_SPLITS!r}, got {self.split!r}",
+            )
 
     async def tasks(self) -> AsyncIterator[EvalTask]:
         if self._rows_cache is None:
@@ -175,7 +213,51 @@ class Ds1000Dataset:
                 if row.get("perturbation_type") not in self.perturbation_filter:
                     continue
             filtered.append(row)
-        return filtered
+        # Partition AFTER the library/perturbation filters so the split
+        # slices the already-narrowed corpus (the split composes with the
+        # filters, never the raw HF rows).
+        return self._apply_split(filtered)
+
+    def _apply_split(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep only the rows belonging to ``self.split``.
+
+        ``"all"`` is a strict no-op (returns ``rows`` unchanged) — the
+        backward-compat default. For ``"dev"`` / ``"test"`` the rows are
+        partitioned with a STRATIFIED-by-library scheme: each normalized
+        library is split independently into a ``dev`` head and a ``test``
+        tail, so both slices preserve the corpus's per-library proportions.
+
+        Within each library group the rows are first STABLE-sorted by a
+        deterministic per-row key (the gold doc_ids joined, else the raw
+        prompt) so the ordering is independent of the rows' arrival
+        position, then shuffled with a fresh ``random.Random(split_seed)``.
+        Seeding makes the partition reproducible across runs; the
+        sort-then-shuffle makes it independent of upstream row ordering.
+        ``n_dev = round(dev_fraction * len(group))`` (Python banker's
+        rounding) rows go to ``dev``, the remainder to ``test``.
+        """
+        if self.split == "all":
+            return rows
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            lib = _normalize_library(row.get("library", ""))
+            groups.setdefault(lib, []).append(row)
+
+        rng = random.Random(self.split_seed)
+        selected: list[dict[str, Any]] = []
+        # Sort group keys so the RNG draw sequence is itself deterministic
+        # across runs (dict insertion order already is, but pinning the
+        # iteration order makes the determinism explicit and robust to a
+        # future change in row arrival order).
+        for lib in sorted(groups):
+            group = sorted(groups[lib], key=_split_sort_key)
+            rng.shuffle(group)
+            n_dev = round(self.dev_fraction * len(group))
+            dev_rows = group[:n_dev]
+            test_rows = group[n_dev:]
+            selected.extend(dev_rows if self.split == "dev" else test_rows)
+        return selected
 
 
 def _row_to_task(row: dict[str, Any]) -> EvalTask | None:
