@@ -58,7 +58,7 @@
 
 ## Tasks 1-10: Foundation (types + Protocols + config + extras + schema + factories)
 
-### Task 1: Type aliases + `is_multi_vector` helper
+### Task 1: Type aliases + `SparseEmbedding` Protocol + `is_multi_vector` helper
 
 **Files:**
 - Modify: `python/pydocs_mcp/models.py`
@@ -68,30 +68,65 @@
 
 ```python
 # tests/test_models_embedding_types.py
-"""Test embedding type aliases + is_multi_vector helper (spec §5.1)."""
-from pydocs_mcp.models import Embedding, MultiVector, Vector, is_multi_vector
+"""Embedding type aliases align with FastEmbed convention (spec §5.1, AC-1)."""
+import numpy as np
+
+from pydocs_mcp.models import (
+    Embedding,
+    MultiVector,
+    SparseEmbedding,
+    Vector,
+    is_multi_vector,
+)
+
+
+def test_vector_is_np_ndarray_alias() -> None:
+    assert Vector is np.ndarray
+
+
+def test_multi_vector_alias_accepts_list_of_ndarray() -> None:
+    # Pure runtime check — MultiVector is `list[np.ndarray]`.
+    mv: MultiVector = [np.array([1.0, 2.0]), np.array([3.0, 4.0])]
+    assert isinstance(mv, list)
+    assert all(isinstance(v, np.ndarray) for v in mv)
 
 
 def test_is_multi_vector_single_vector_false() -> None:
-    single: Vector = (1.0, 2.0, 3.0)
+    single: Vector = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     assert is_multi_vector(single) is False
 
 
 def test_is_multi_vector_multi_vector_true() -> None:
-    multi: MultiVector = ((1.0, 2.0), (3.0, 4.0))
+    multi: MultiVector = [
+        np.array([1.0, 2.0], dtype=np.float32),
+        np.array([3.0, 4.0], dtype=np.float32),
+    ]
     assert is_multi_vector(multi) is True
 
 
-def test_is_multi_vector_empty_false() -> None:
-    assert is_multi_vector(()) is False
+def test_is_multi_vector_empty_ndarray_false() -> None:
+    # Empty single vector is still a Vector, not a MultiVector.
+    assert is_multi_vector(np.array([], dtype=np.float32)) is False
 
 
-def test_embedding_union_accepts_both_shapes() -> None:
-    # Should typecheck + runtime-accept both; no exception.
-    e1: Embedding = (1.0, 2.0)
-    e2: Embedding = ((1.0, 2.0), (3.0, 4.0))
-    assert isinstance(e1, tuple)
-    assert isinstance(e2, tuple)
+def test_sparse_embedding_protocol_runtime_checkable() -> None:
+    """SparseEmbedding is a runtime_checkable Protocol matching FastEmbed's
+    shape. Not in the Embedding union this PR — just defined for forward
+    compatibility."""
+    class _Stub:
+        indices = np.array([0, 5, 9], dtype=np.uint32)
+        values = np.array([0.5, 0.7, 0.2], dtype=np.float32)
+
+    assert isinstance(_Stub(), SparseEmbedding)
+
+
+def test_sparse_embedding_NOT_in_embedding_union_yet() -> None:
+    """Sentinel: this PR's Embedding union stays Vector | MultiVector.
+    Adding SparseEmbedding is a future PR's job."""
+    # typing.get_args on a union type alias returns the union members.
+    import typing
+    args = typing.get_args(Embedding)
+    assert SparseEmbedding not in args
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -101,40 +136,75 @@ Expected: FAIL — `ImportError: cannot import name 'Embedding' from 'pydocs_mcp
 
 - [ ] **Step 3: Add the types to models.py**
 
-In `python/pydocs_mcp/models.py`, add near the top (after existing imports, before the first dataclass):
+In `python/pydocs_mcp/models.py`, add near the top (after existing imports, before the first dataclass). Note the new numpy import.
 
 ```python
+import numpy as np
+from typing import Protocol, runtime_checkable
+
 # ── Embedding types (spec §5.1) ──────────────────────────────────────────
-# Vector = a single embedding (e.g., from bge-small-en-v1.5: tuple of 384 floats).
-# MultiVector = a sequence of vectors (ColBERT-style late-interaction; tuple of N vectors,
-#   each a tuple of floats). Length-1 case is "almost single-vector" but is_multi_vector()
-#   uses the OUTER element type to decide — `(1.0, 2.0)` is Vector, `((1.0, 2.0),)` is
-#   MultiVector even though both encode one vector.
-Vector = tuple[float, ...]
-MultiVector = tuple[Vector, ...]
+# Aligned with FastEmbed (https://github.com/qdrant/fastembed):
+#
+#   Vector       = 1D np.ndarray, shape (dim,), dtype=float32.
+#                  What TextEmbedding.embed() yields per document; what
+#                  OpenAI returns; what TurboQuant IdMapIndex consumes.
+#
+#   MultiVector  = list[np.ndarray] — one 1D vector per token, ColBERT
+#                  late-interaction shape. NOT persisted this PR (single-
+#                  vector storage only); the type union accepts the shape
+#                  so future late-interaction work doesn't break the
+#                  Chunk model.
+#
+# SparseEmbedding (Protocol) — FastEmbed convention with .indices +
+# .values numpy arrays. NOT in the Embedding union this PR; defined here
+# so a future sparse-retrieval PR can extend Embedding without breaking
+# changes.
+Vector = np.ndarray
+MultiVector = list[np.ndarray]
 Embedding = Vector | MultiVector
 
 
+@runtime_checkable
+class SparseEmbedding(Protocol):
+    """FastEmbed-compatible sparse embedding shape (forward-compat).
+
+    Mirrors `fastembed.SparseEmbedding`'s public attributes (uint32
+    indices + float32 values numpy arrays). Sparse retrieval is OUT OF
+    SCOPE for this PR — this Protocol exists only so the typing layer
+    is ready for it.
+    """
+    indices: np.ndarray   # uint32
+    values:  np.ndarray   # float32
+
+
 def is_multi_vector(emb: Embedding) -> bool:
-    """True if `emb` is a sequence of vectors (ColBERT-style)."""
-    return bool(emb) and isinstance(emb[0], tuple)
+    """True if `emb` is a multi-vector (list of 1D vectors, ColBERT-style).
+
+    FastEmbed convention: single-vector embedders return `np.ndarray`;
+    multi-vector embedders return `list[np.ndarray]`. The check is on
+    the OUTER container type.
+    """
+    return isinstance(emb, list)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/pytest tests/test_models_embedding_types.py -v`
-Expected: PASS (4 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add python/pydocs_mcp/models.py tests/test_models_embedding_types.py
-git commit -m "feat(models): add Vector/MultiVector/Embedding type aliases + is_multi_vector helper
+git commit -m "feat(models): FastEmbed-aligned Vector/MultiVector/Embedding + SparseEmbedding Protocol
 
-Spec §5.1. Embedding type union accepts both shapes — single-vector
-embedders (FastEmbed, OpenAI) return Vector; future ColBERT-style
-embedders return MultiVector. is_multi_vector() lets downstream code
-branch on shape without isinstance gymnastics."
+Spec §5.1 + AC-1. Vector = np.ndarray (1D, float32);
+MultiVector = list[np.ndarray]; Embedding = Vector | MultiVector.
+SparseEmbedding lands as a runtime_checkable Protocol matching
+fastembed.SparseEmbedding's shape — NOT in the Embedding union this
+PR (sparse retrieval is a separate future PR), but the typing layer is
+ready for it without breaking changes. is_multi_vector() checks the
+outer container type: np.ndarray = single, list = multi."
 ```
 
 ---
@@ -149,7 +219,12 @@ branch on shape without isinstance gymnastics."
 
 ```python
 # tests/test_models_chunk_embedding.py
-"""Chunk.embedding field is additive (spec §5.1 + AC-2)."""
+"""Chunk.embedding field is additive + np.ndarray-typed (spec §5.1 + AC-2)."""
+import dataclasses
+
+import numpy as np
+import pytest
+
 from pydocs_mcp.models import Chunk
 
 
@@ -158,22 +233,28 @@ def test_chunk_constructed_without_embedding_defaults_none() -> None:
     assert c.embedding is None
 
 
-def test_chunk_accepts_single_vector_embedding() -> None:
-    c = Chunk(text="hello", embedding=(0.1, 0.2, 0.3))
-    assert c.embedding == (0.1, 0.2, 0.3)
+def test_chunk_accepts_single_vector_ndarray() -> None:
+    vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    c = Chunk(text="hello", embedding=vec)
+    assert isinstance(c.embedding, np.ndarray)
+    assert np.array_equal(c.embedding, vec)
 
 
-def test_chunk_accepts_multi_vector_embedding() -> None:
-    c = Chunk(text="hello", embedding=((0.1, 0.2), (0.3, 0.4)))
-    assert c.embedding == ((0.1, 0.2), (0.3, 0.4))
+def test_chunk_accepts_multi_vector_list_of_ndarrays() -> None:
+    multi = [
+        np.array([0.1, 0.2], dtype=np.float32),
+        np.array([0.3, 0.4], dtype=np.float32),
+    ]
+    c = Chunk(text="hello", embedding=multi)
+    assert isinstance(c.embedding, list)
+    assert len(c.embedding) == 2
+    assert np.array_equal(c.embedding[0], multi[0])
 
 
 def test_chunk_remains_frozen() -> None:
-    import dataclasses
-
-    c = Chunk(text="hello", embedding=(0.1, 0.2))
-    with __import__("pytest").raises(dataclasses.FrozenInstanceError):
-        c.embedding = (0.3, 0.4)  # type: ignore[misc]
+    c = Chunk(text="hello", embedding=np.array([0.1, 0.2], dtype=np.float32))
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        c.embedding = np.array([0.3, 0.4], dtype=np.float32)  # type: ignore[misc]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -244,10 +325,11 @@ def test_resultfuser_protocol_exposes_fuse() -> None:
 
 def test_embedder_is_runtime_checkable() -> None:
     # A duck-typed class satisfies the Protocol at runtime.
+    import numpy as np
     class Stub:
         dim = 4
-        async def embed_query(self, text: str): return (0.1, 0.2, 0.3, 0.4)
-        async def embed_chunks(self, texts): return tuple((0.1, 0.2, 0.3, 0.4) for _ in texts)
+        async def embed_query(self, text: str): return np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+        async def embed_chunks(self, texts): return tuple(np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32) for _ in texts)
 
     assert isinstance(Stub(), Embedder)
 
@@ -338,7 +420,8 @@ ResultFuser is the abstraction RRFResultFuser (Task 15) will satisfy."
 
 ```python
 # tests/test_mock_embedder.py
-"""MockEmbedder satisfies Embedder Protocol + is deterministic (AC-27)."""
+"""MockEmbedder satisfies Embedder Protocol + returns np.ndarray (AC-27)."""
+import numpy as np
 import pytest
 
 from pydocs_mcp.storage.protocols import Embedder
@@ -355,12 +438,12 @@ def test_mock_embedder_dim_field() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mock_embedder_embed_query_returns_vector_of_correct_dim() -> None:
+async def test_mock_embedder_embed_query_returns_ndarray_of_correct_dim() -> None:
     emb = MockEmbedder(dim=8)
     vec = await emb.embed_query("hello world")
-    assert isinstance(vec, tuple)
-    assert all(isinstance(x, float) for x in vec)
-    assert len(vec) == 8
+    assert isinstance(vec, np.ndarray)
+    assert vec.dtype == np.float32
+    assert vec.shape == (8,)
 
 
 @pytest.mark.asyncio
@@ -368,7 +451,7 @@ async def test_mock_embedder_is_deterministic_same_input_same_output() -> None:
     emb = MockEmbedder(dim=8)
     v1 = await emb.embed_query("hello world")
     v2 = await emb.embed_query("hello world")
-    assert v1 == v2
+    assert np.array_equal(v1, v2)
 
 
 @pytest.mark.asyncio
@@ -376,17 +459,17 @@ async def test_mock_embedder_different_input_different_output() -> None:
     emb = MockEmbedder(dim=8)
     v1 = await emb.embed_query("alpha")
     v2 = await emb.embed_query("beta")
-    assert v1 != v2
+    assert not np.array_equal(v1, v2)
 
 
 @pytest.mark.asyncio
-async def test_mock_embedder_embed_chunks_returns_one_vector_per_text() -> None:
+async def test_mock_embedder_embed_chunks_returns_one_ndarray_per_text() -> None:
     emb = MockEmbedder(dim=4)
     vecs = await emb.embed_chunks(["x", "y", "z"])
     assert len(vecs) == 3
-    assert all(len(v) == 4 for v in vecs)
+    assert all(isinstance(v, np.ndarray) and v.shape == (4,) for v in vecs)
     # Each chunk's vector is the same as if embed_query were called on it.
-    assert vecs[0] == await emb.embed_query("x")
+    assert np.array_equal(vecs[0], await emb.embed_query("x"))
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -401,9 +484,10 @@ Append to `tests/_fakes.py`:
 ```python
 # ── MockEmbedder (canonical Embedder test double, AC-27) ─────────────────
 import hashlib
-import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
+
+import numpy as np
 
 from pydocs_mcp.models import Embedding
 
@@ -412,11 +496,12 @@ from pydocs_mcp.models import Embedding
 class MockEmbedder:
     """Deterministic Embedder test double — same input → same vector.
 
-    The vector is derived from a SHA-256 of the input text, sliced to
-    `dim` 4-byte chunks, each interpreted as a float in [-1, 1]. This
-    gives stable per-input vectors without any model dependency. The
-    canonical embedder mock for this PR and future PRs that need
-    embedding-shaped data without invoking a real model.
+    Returns shape-matched ``np.ndarray`` (float32, dim-shaped) so it's
+    drop-in for FastEmbed / OpenAI / any single-vector Embedder. The
+    vector is derived from a SHA-256 of the input text seeded into a
+    numpy RNG, giving stable per-input vectors without any model
+    dependency. The canonical embedder mock for this PR and future PRs
+    that need embedding-shaped data without invoking a real model.
     """
     dim: int = 384
 
@@ -428,16 +513,13 @@ class MockEmbedder:
     ) -> tuple[Embedding, ...]:
         return tuple(self._derive(t) for t in texts)
 
-    def _derive(self, text: str) -> tuple[float, ...]:
-        # Hash → repeat → take dim 4-byte chunks → unpack as int32 → normalize.
-        h = hashlib.sha256(text.encode("utf-8")).digest()
-        needed_bytes = self.dim * 4
-        # Stretch hash to needed length via repetition (SHA-256 is 32 bytes).
-        stretched = (h * ((needed_bytes // len(h)) + 1))[:needed_bytes]
-        ints = struct.unpack(f"<{self.dim}i", stretched)
-        # Normalize int32 to [-1, 1] range.
-        scale = float(2**31)
-        return tuple(i / scale for i in ints)
+    def _derive(self, text: str) -> np.ndarray:
+        # SHA-256 → first 8 bytes → uint64 seed → numpy default_rng.
+        # Output is a (dim,) float32 array in [-1, 1] — deterministic per text.
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        seed = int.from_bytes(digest[:8], "little", signed=False)
+        rng = np.random.default_rng(seed)
+        return rng.uniform(-1.0, 1.0, size=self.dim).astype(np.float32)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -933,11 +1015,18 @@ import pytest
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 
 
+def _vec(*values: float) -> np.ndarray:
+    return np.array(values, dtype=np.float32)
+
+
 @pytest.mark.asyncio
 async def test_add_then_commit_persists(tmp_path: Path) -> None:
     tq = tmp_path / "test.tq"
     async with TurboQuantUnitOfWork(index_path=tq, dim=4, bit_width=4) as uow:
-        await uow.add_vectors([1, 2, 3], [(0.1, 0.2, 0.3, 0.4)] * 3)
+        await uow.add_vectors(
+            [1, 2, 3],
+            [_vec(0.1, 0.2, 0.3, 0.4) for _ in range(3)],
+        )
         await uow.commit()
     assert tq.exists()
     # Re-open and check size.
@@ -950,11 +1039,13 @@ async def test_rollback_discards_in_memory_adds(tmp_path: Path) -> None:
     tq = tmp_path / "test.tq"
     # First, persist baseline of 2 vectors.
     async with TurboQuantUnitOfWork(index_path=tq, dim=4, bit_width=4) as uow:
-        await uow.add_vectors([10, 11], [(0.0, 0.0, 0.0, 0.0)] * 2)
+        await uow.add_vectors([10, 11], [_vec(0, 0, 0, 0) for _ in range(2)])
         await uow.commit()
     # Now add then rollback; on next open, size should still be 2 (not 5).
     async with TurboQuantUnitOfWork(index_path=tq, dim=4, bit_width=4) as uow:
-        await uow.add_vectors([12, 13, 14], [(1.0, 0.0, 0.0, 0.0)] * 3)
+        await uow.add_vectors(
+            [12, 13, 14], [_vec(1, 0, 0, 0) for _ in range(3)],
+        )
         await uow.rollback()
         # After rollback in-memory state matches disk.
         assert uow.size() == 2
@@ -963,7 +1054,9 @@ async def test_rollback_discards_in_memory_adds(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_multi_vector_input_raises_notimplementederror(tmp_path: Path) -> None:
     tq = tmp_path / "test.tq"
-    multi: tuple[tuple[float, ...], ...] = ((0.1, 0.2, 0.3, 0.4), (0.5, 0.6, 0.7, 0.8))
+    multi: list[np.ndarray] = [
+        _vec(0.1, 0.2, 0.3, 0.4), _vec(0.5, 0.6, 0.7, 0.8),
+    ]
     async with TurboQuantUnitOfWork(index_path=tq, dim=4, bit_width=4) as uow:
         with pytest.raises(NotImplementedError, match="chunk_vectors"):
             await uow.add_vectors([1], [multi])
@@ -975,12 +1068,12 @@ async def test_write_is_atomic_via_tmp_rename(tmp_path: Path, monkeypatch) -> No
     tq = tmp_path / "test.tq"
     # Seed with one vector and commit.
     async with TurboQuantUnitOfWork(index_path=tq, dim=4, bit_width=4) as uow:
-        await uow.add_vectors([1], [(0.0, 0.0, 0.0, 0.0)])
+        await uow.add_vectors([1], [_vec(0, 0, 0, 0)])
         await uow.commit()
     pre_bytes = tq.read_bytes()
     # Now make the next commit fail mid-write.
     async with TurboQuantUnitOfWork(index_path=tq, dim=4, bit_width=4) as uow:
-        await uow.add_vectors([2], [(1.0, 1.0, 1.0, 1.0)])
+        await uow.add_vectors([2], [_vec(1, 1, 1, 1)])
 
         def boom(self, path):
             raise OSError("disk full")
@@ -1083,8 +1176,11 @@ class TurboQuantUnitOfWork:
                     "deferred to a future PR that adds a chunk_vectors "
                     "side-table; see spec §5.4 + plan task notes.",
                 )
+        # Each emb is np.ndarray (1D, float32) — stack into a 2D matrix
+        # for IdMapIndex.add_with_ids. asarray with dtype=float32 is a
+        # no-op when the inputs already come from FastEmbed in that dtype.
         vectors = np.asarray(
-            [list(emb) for emb in embeddings], dtype=np.float32,
+            np.stack(list(embeddings)), dtype=np.float32,
         )
         ids_arr = np.asarray(list(ids), dtype=np.uint64)
         self._index.add_with_ids(vectors, ids_arr)
@@ -1961,6 +2057,8 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from pydocs_mcp.extraction.strategies.embedders import OptionalDepMissing
 from pydocs_mcp.models import Embedding
 
@@ -1975,7 +2073,11 @@ except ImportError as exc:
 
 @dataclass
 class FastEmbedEmbedder:
-    """Embedder backed by FastEmbed (ONNX-accelerated, no API key)."""
+    """Embedder backed by FastEmbed (ONNX-accelerated, no API key).
+
+    Zero-copy from FastEmbed's TextEmbedding.embed() yields straight
+    through to our Embedding type — both are np.ndarray (1D, float32).
+    """
     model_name: str = "BAAI/bge-small-en-v1.5"
     dim: int = 384
     _model: TextEmbedding = field(init=False, repr=False)
@@ -1987,7 +2089,8 @@ class FastEmbedEmbedder:
         results = await asyncio.to_thread(
             lambda: list(self._model.embed([text])),
         )
-        return tuple(float(x) for x in results[0])
+        # FastEmbed yields np.ndarray (float32, 1D) per document.
+        return np.asarray(results[0], dtype=np.float32)
 
     async def embed_chunks(
         self, texts: Sequence[str],
@@ -1997,7 +2100,7 @@ class FastEmbedEmbedder:
         results = await asyncio.to_thread(
             lambda: list(self._model.embed(list(texts))),
         )
-        return tuple(tuple(float(x) for x in v) for v in results)
+        return tuple(np.asarray(v, dtype=np.float32) for v in results)
 
 
 __all__ = ("FastEmbedEmbedder",)
@@ -2124,7 +2227,9 @@ class OpenAIEmbedder:
         resp = await self._client.embeddings.create(
             model=self.model_name, input=text, dimensions=self.dim,
         )
-        return tuple(float(x) for x in resp.data[0].embedding)
+        # OpenAI returns list[float]; wrap as np.ndarray (float32) to
+        # match the Embedding type aligned with FastEmbed.
+        return np.asarray(resp.data[0].embedding, dtype=np.float32)
 
     async def embed_chunks(
         self, texts: Sequence[str],
@@ -2136,7 +2241,8 @@ class OpenAIEmbedder:
         )
         # Preserve input order — OpenAI returns embeddings in request order.
         return tuple(
-            tuple(float(x) for x in item.embedding) for item in resp.data
+            np.asarray(item.embedding, dtype=np.float32)
+            for item in resp.data
         )
 
 
@@ -2931,6 +3037,7 @@ class DenseFetcherStep(RetrieverStep):
             if isinstance(result, PreFilterResult):
                 filter_tree = result.tree
 
+        # query_vec is np.ndarray (FastEmbed-aligned); pass straight through.
         candidates = await self.store.vector_search(
             query_vector=query_vec,
             limit=self.limit,
@@ -2993,9 +3100,8 @@ results to state.candidates."
 
 ```python
 # tests/retrieval/steps/test_dense_scorer.py
-"""DenseScorerStep — cosine sim re-scoring (AC-18)."""
-import math
-
+"""DenseScorerStep — cosine sim re-scoring on np.ndarray (AC-18)."""
+import numpy as np
 import pytest
 
 from pydocs_mcp.models import Chunk, ChunkList, SearchQuery
@@ -3004,10 +3110,18 @@ from pydocs_mcp.retrieval.steps.dense_scorer import DenseScorerStep
 from tests._fakes import MockEmbedder
 
 
+def _cos(u: np.ndarray, v: np.ndarray) -> float:
+    nu = float(np.linalg.norm(u))
+    nv = float(np.linalg.norm(v))
+    if nu == 0.0 or nv == 0.0:
+        return 0.0
+    return float(np.dot(u, v) / (nu * nv))
+
+
 @pytest.mark.asyncio
 async def test_dense_scorer_writes_cosine_similarity_per_candidate() -> None:
     embedder = MockEmbedder(dim=4)
-    # MockEmbedder is deterministic — q for "alpha" matches embedding for "alpha" exactly.
+    # MockEmbedder is deterministic — same input → same np.ndarray.
     q_vec = await embedder.embed_query("alpha")
     a_vec = await embedder.embed_query("alpha")
     b_vec = await embedder.embed_query("beta")
@@ -3023,14 +3137,8 @@ async def test_dense_scorer_writes_cosine_similarity_per_candidate() -> None:
     step = DenseScorerStep(name="dense_scorer", embedder=embedder)
     out = await step.run(state)
     items = out.candidates.items
-    # Compute expected cosine sims:
-    def cos(u, v):
-        dot = sum(a * b for a, b in zip(u, v))
-        nu = math.sqrt(sum(a * a for a in u))
-        nv = math.sqrt(sum(a * a for a in v))
-        return dot / (nu * nv) if nu and nv else 0.0
-    expected_a = cos(q_vec, a_vec)
-    expected_b = cos(q_vec, b_vec)
+    expected_a = _cos(q_vec, a_vec)
+    expected_b = _cos(q_vec, b_vec)
     by_id = {c.id: c for c in items}
     assert by_id[1].relevance == pytest.approx(expected_a, rel=1e-5)
     assert by_id[2].relevance == pytest.approx(expected_b, rel=1e-5)
@@ -3062,13 +3170,14 @@ Mirrors BM25ScorerStep's shape:
 - Reads state.candidates (no DB access).
 - Embeds query via the injected Embedder.
 - For each candidate, computes cosine sim between query_vec and
-  candidate.embedding.
+  candidate.embedding using numpy linalg.
 - Writes the scores back to state.candidates with updated relevance.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field, replace
+
+import numpy as np
 
 from pydocs_mcp.models import ChunkList, is_multi_vector
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
@@ -3076,13 +3185,12 @@ from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 from pydocs_mcp.storage.protocols import Embedder
 
 
-def _cosine_sim(u: tuple[float, ...], v: tuple[float, ...]) -> float:
-    if not u or not v:
+def _cosine_sim(u: np.ndarray, v: np.ndarray) -> float:
+    nu = float(np.linalg.norm(u))
+    nv = float(np.linalg.norm(v))
+    if nu == 0.0 or nv == 0.0:
         return 0.0
-    dot = sum(a * b for a, b in zip(u, v))
-    nu = math.sqrt(sum(a * a for a in u))
-    nv = math.sqrt(sum(a * a for a in v))
-    return dot / (nu * nv) if nu and nv else 0.0
+    return float(np.dot(u, v) / (nu * nv))
 
 
 @step_registry.register("dense_scorer")
@@ -3102,6 +3210,9 @@ class DenseScorerStep(RetrieverStep):
         query_vec = await self.embedder.embed_query(state.query.terms)
         if is_multi_vector(query_vec):
             query_vec = query_vec[0]  # single-vector path only this PR
+        # Ensure np.ndarray + float32 (FastEmbed/OpenAI already comply;
+        # MockEmbedder also; defensive cast is cheap).
+        query_vec = np.asarray(query_vec, dtype=np.float32)
 
         scored = []
         for c in state.candidates.items:
@@ -3109,7 +3220,8 @@ class DenseScorerStep(RetrieverStep):
                 scored.append(c)
                 continue
             chunk_vec = c.embedding[0] if is_multi_vector(c.embedding) else c.embedding
-            score = _cosine_sim(tuple(query_vec), tuple(chunk_vec))
+            chunk_vec = np.asarray(chunk_vec, dtype=np.float32)
+            score = _cosine_sim(query_vec, chunk_vec)
             scored.append(replace(c, relevance=score))
         return replace(state, candidates=ChunkList(items=tuple(scored)))
 
@@ -3430,6 +3542,7 @@ from tests._fakes import MockEmbedder
 
 @pytest.mark.asyncio
 async def test_embed_chunks_populates_every_chunk_embedding() -> None:
+    import numpy as np
     embedder = MockEmbedder(dim=4)
     state = IngestionState(
         chunks=(
@@ -3441,12 +3554,14 @@ async def test_embed_chunks_populates_every_chunk_embedding() -> None:
     stage = EmbedChunksStage(embedder=embedder, batch_size=2)
     out = await stage.run(state)
     assert len(out.chunks) == 3
-    # Every chunk now has an embedding of dim 4.
+    # Every chunk now has a np.ndarray embedding of shape (4,).
     for c in out.chunks:
-        assert c.embedding is not None
-        assert len(c.embedding) == 4
+        assert isinstance(c.embedding, np.ndarray)
+        assert c.embedding.shape == (4,)
     # Determinism: re-embedding the same text gives the same vector.
-    assert out.chunks[0].embedding == await embedder.embed_query("alpha")
+    assert np.array_equal(
+        out.chunks[0].embedding, await embedder.embed_query("alpha"),
+    )
 
 
 @pytest.mark.asyncio
@@ -3838,6 +3953,7 @@ from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 @pytest.mark.asyncio
 async def test_index_package_writes_chunks_AND_vectors(tmp_path: Path) -> None:
     """End-to-end: IndexingService.replace_package commits to both children."""
+    import numpy as np
     from pydocs_mcp.application.indexing_service import IndexingService
 
     project = tmp_path / "myproj"
@@ -3847,8 +3963,8 @@ async def test_index_package_writes_chunks_AND_vectors(tmp_path: Path) -> None:
     open_index_database(db_path).close()
 
     chunks = (
-        Chunk(text="alpha", id=None, embedding=(0.1, 0.2, 0.3, 0.4)),
-        Chunk(text="beta", id=None, embedding=(0.5, 0.6, 0.7, 0.8)),
+        Chunk(text="alpha", id=None, embedding=np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)),
+        Chunk(text="beta", id=None, embedding=np.array([0.5, 0.6, 0.7, 0.8], dtype=np.float32)),
     )
     package = Package(name="demo", version="1.0", embedding_model="test-model")
 
@@ -3980,7 +4096,7 @@ async def test_integrity_check_clears_content_hash_on_size_mismatch(
             Chunk(text="b", id=2, metadata={"package": "demo"}),
             Chunk(text="c", id=3, metadata={"package": "demo"}),
         ))
-        await uow.vectors.add_vectors([1], [(0.1, 0.2, 0.3, 0.4)])
+        await uow.vectors.add_vectors([1], [np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)])
         await uow.commit()
     # Now run the integrity check.
     import logging
@@ -4013,7 +4129,7 @@ async def test_integrity_check_passes_when_counts_match(tmp_path: Path) -> None:
         await uow.chunks.upsert((
             Chunk(text="a", id=1, metadata={"package": "demo"}),
         ))
-        await uow.vectors.add_vectors([1], [(0.1, 0.2, 0.3, 0.4)])
+        await uow.vectors.add_vectors([1], [np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)])
         await uow.commit()
     repaired = await check_integrity_and_repair(
         db_path=db_path, tq_path=tq_path, dim=4, bit_width=8,
@@ -4168,7 +4284,7 @@ async def test_indexed_package_records_embedding_model(tmp_path: Path) -> None:
     svc = IndexingService(uow_factory=factory)
     pkg = Package(name="demo", version="1.0", embedding_model="model-A")
     await svc.replace_package(pkg, (
-        Chunk(text="alpha", embedding=(0.1, 0.2, 0.3, 0.4)),
+        Chunk(text="alpha", embedding=np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)),
     ))
     async with factory() as uow:
         pkgs = await uow.packages.list(filter={"name": "demo"})
@@ -4194,11 +4310,11 @@ async def test_model_change_detected_via_stored_embedding_model(
     svc = IndexingService(uow_factory=factory)
     await svc.replace_package(
         Package(name="pkg-a", version="1", embedding_model="model-A"),
-        (Chunk(text="a", embedding=(0.0, 0.0, 0.0, 0.0)),),
+        (Chunk(text="a", embedding=np.zeros(4, dtype=np.float32)),),
     )
     await svc.replace_package(
         Package(name="pkg-b", version="1", embedding_model="model-A"),
-        (Chunk(text="b", embedding=(0.0, 0.0, 0.0, 0.0)),),
+        (Chunk(text="b", embedding=np.zeros(4, dtype=np.float32)),),
     )
     stale = await find_packages_with_stale_embeddings(
         uow_factory=factory, current_model="model-B",

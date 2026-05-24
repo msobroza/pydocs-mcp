@@ -33,7 +33,7 @@ All five architectural decisions plus the eight open-item defaults were locked d
 | Decision | Choice | Rationale |
 |---|---|---|
 | **Vector-store composition** | Three classes implementing three Protocols: `SqliteVectorStore` (existing, `TextSearchable`), `TurboQuantVectorStore` (NEW, `VectorSearchable`), `HybridSqliteTurboStore` (NEW, `HybridSearchable`, composes the two + a `ResultFuser`) | SOLID. Adding `QdrantVectorStore` later = one new class; `HybridSqliteTurboStore(text=Sqlite…, vector=Qdrant…)` works unchanged. |
-| **`Chunk.embedding` field** | Typed `embedding: Embedding \| None` where `Embedding = Vector \| MultiVector`. Single-vector embedders return `Vector`; multi-vector embedders return `MultiVector`. No forced wrapping. | Type-discoverable via `is_multi_vector(emb)` helper. Storage path single-vector only this PR; multi-vector inputs raise clear `NotImplementedError`. |
+| **`Chunk.embedding` field** | Typed `embedding: Embedding \| None` where `Embedding = Vector \| MultiVector` and `Vector = np.ndarray` (1D, float32), `MultiVector = list[np.ndarray]`. Aligned with FastEmbed convention. Type-system is forward-compatible with `SparseEmbedding` (FastEmbed-shape struct with `indices` + `values` numpy arrays) — defined as a runtime-checkable Protocol but NOT added to the `Embedding` union this PR (sparse retrieval is a separate future PR). | Type-discoverable via `is_multi_vector(emb)` helper. Storage path single-vector only this PR; multi-vector inputs raise clear `NotImplementedError`. |
 | **Pipeline integration** | `ParallelStep([bm25_chain, dense_chain]) → RRFFusionStep` — branches publish ranked lists to `scratch["<branch_name>.ranked"]`, fusion reads both. | Standard hybrid IR pattern. Requires refactoring `RRFStep` into a true multi-list fuser + a small `ParallelStep` contract clarification. |
 | **`CompositeUnitOfWork`** | Full implementation now, load-bearing (two children: `SqliteUnitOfWork` + new `TurboQuantUnitOfWork`). Best-effort rollback semantics. | TurboQuant is a separate backend (`.tq` sidecar file). Single-UoW coordination is the only path that keeps `uow_factory` consumers untouched. |
 | **`Embedder` Protocol** | Single Protocol exposing `embed_query(text) -> Embedding` + `embed_chunks(texts) -> tuple[Embedding, ...]`. Same instance serves retrieval + ingestion. No registry — explicit `build_embedder(cfg)` factory. | Per user revision. Concrete classes (`FastEmbedEmbedder`, `OpenAIEmbedder`) implement both methods. Adding new providers = one file + one `if` branch. |
@@ -106,15 +106,49 @@ All five architectural decisions plus the eight open-item defaults were locked d
 
 ### 5.1 Types (in `pydocs_mcp/models.py`)
 
+Types align with the [FastEmbed](https://github.com/qdrant/fastembed) convention so concrete embedders return their natural shape with no marshalling:
+
 ```python
-Vector      = tuple[float, ...]
-MultiVector = tuple[Vector, ...]
-Embedding   = Vector | MultiVector
+import numpy as np
+from typing import Protocol, runtime_checkable
+
+# Vector = a single dense embedding, 1D numpy array (shape: (dim,), float32).
+#   This is what FastEmbed's TextEmbedding.embed() yields per document, what
+#   OpenAI returns (after np.asarray), and what TurboQuant's IdMapIndex
+#   consumes.
+Vector = np.ndarray
+
+# MultiVector = ColBERT-style late-interaction embedding — a list of 1D
+#   vectors, one per token. FastEmbed's LateInteractionTextEmbedding
+#   convention. Not persisted this PR (single-vector storage only); the
+#   Embedding union accepts the shape so future late-interaction work
+#   doesn't need a model-level breaking change.
+MultiVector = list[np.ndarray]
+
+Embedding = Vector | MultiVector
+
+
+@runtime_checkable
+class SparseEmbedding(Protocol):
+    """FastEmbed-compatible sparse embedding shape.
+
+    NOT implemented in this PR — defined here so a future sparse-retrieval
+    PR can extend `Embedding` to include it without breaking changes.
+    Mirrors `fastembed.SparseEmbedding`'s public attributes (uint32
+    indices + float32 values numpy arrays).
+    """
+    indices: np.ndarray   # uint32
+    values:  np.ndarray   # float32
 
 
 def is_multi_vector(emb: Embedding) -> bool:
-    """True if `emb` is a sequence of vectors (ColBERT-style)."""
-    return bool(emb) and isinstance(emb[0], tuple)
+    """True if `emb` is a multi-vector (list of 1D vectors, ColBERT-style).
+
+    Aligned with FastEmbed: single-vector embedders return `np.ndarray`;
+    multi-vector embedders return `list[np.ndarray]`. The check is on the
+    OUTER container type — `np.ndarray` is single, `list` is multi.
+    """
+    return isinstance(emb, list)
 
 
 @dataclass(frozen=True)
@@ -127,7 +161,9 @@ class Chunk:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 ```
 
-`Chunk.embedding` is populated during **ingestion** (the embed stage writes it; the persistence layer hands it to `TurboQuantUnitOfWork.add_vectors`). On **read paths** it stays `None` — embeddings live in the `.tq` sidecar, the SQL row doesn't carry them back.
+`Chunk.embedding` is populated during **ingestion** (the embed stage writes it; the persistence layer hands it to `TurboQuantUnitOfWork.add_vectors`). On **read paths** it stays `None` — embeddings live in the `.tq` sidecar, the SQL row doesn't carry them back. The `np.ndarray` choice keeps the path zero-copy from FastEmbed's output through to TurboQuant's `IdMapIndex.add_with_ids`.
+
+**Equality + hashing caveat:** `np.ndarray` is unhashable and `==` returns an array, not a bool. Tests that compare `Chunk` instances containing embeddings should compare fields explicitly (e.g., `np.array_equal(c1.embedding, c2.embedding)`) rather than `c1 == c2`. The `Chunk` dataclass stays `frozen=True` for shape immutability but doesn't claim hashable — production code never puts Chunks in sets or dict keys.
 
 ### 5.2 Protocols (in `pydocs_mcp/storage/protocols.py`)
 
@@ -136,8 +172,11 @@ class Chunk:
 ```python
 class Embedder(Protocol):
     """One embedder serves both query and ingestion. Concrete classes
-    return their natural shape: Vector for single-vector models;
-    MultiVector for ColBERT-style. Use is_multi_vector(emb) to branch."""
+    return their natural shape — `Vector` (np.ndarray) for single-vector
+    models (FastEmbed, OpenAI, BGE); `MultiVector` (list[np.ndarray]) for
+    ColBERT-style late-interaction models. Use `is_multi_vector(emb)` to
+    branch when the storage / scoring layer needs to know.
+    """
     dim: int
     async def embed_query(self, text: str) -> Embedding: ...
     async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]: ...
@@ -196,8 +235,11 @@ class TurboQuantUnitOfWork:
                     "TurboQuantUnitOfWork. See <future PR> for the "
                     "chunk_vectors side-table design."
                 )
+        # Each emb is np.ndarray (1D, float32) — stack into a 2D matrix
+        # for IdMapIndex.add_with_ids. asarray with dtype=float32 is a
+        # no-op when the inputs already come from FastEmbed in that dtype.
         vectors = np.asarray(
-            [emb for emb in embeddings], dtype=np.float32,
+            np.stack(list(embeddings)), dtype=np.float32,
         )
         ids_arr = np.asarray(ids, dtype=np.uint64)
         self._index.add_with_ids(vectors, ids_arr)
@@ -477,8 +519,8 @@ All test-driven; CI must be green pre-merge.
 
 ### 8.1 Type + model layer
 
-- AC-1: `Vector`, `MultiVector`, `Embedding` type aliases exist in `models.py`; `is_multi_vector(emb)` returns `True` for `((1.0,), (2.0,))` and `False` for `(1.0, 2.0)` and `False` for `()`.
-- AC-2: `Chunk.embedding` defaults to `None`; existing constructors that don't pass `embedding` keep working unchanged.
+- AC-1: `Vector` (alias for `np.ndarray`), `MultiVector` (alias for `list[np.ndarray]`), `Embedding` (union), and `SparseEmbedding` (runtime_checkable Protocol — NOT in the `Embedding` union this PR) exist in `models.py`. `is_multi_vector(emb)` returns `True` for `[np.array([1.0]), np.array([2.0])]` (multi-vector) and `False` for `np.array([1.0, 2.0])` (single vector) and `False` for `np.array([])` (empty single vector).
+- AC-2: `Chunk.embedding` defaults to `None`; existing constructors that don't pass `embedding` keep working unchanged. Frozen dataclass shape preserved; equality comparison on Chunks with embeddings is the caller's responsibility (np.ndarray is unhashable + `==` returns an array — tests that need it use `np.array_equal`).
 
 ### 8.2 Storage layer
 
