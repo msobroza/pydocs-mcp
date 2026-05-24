@@ -21,7 +21,11 @@ import sys
 from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
-from pydocs_mcp.db import cache_path_for_project, open_index_database
+from pydocs_mcp.db import (
+    cache_path_for_project,
+    open_index_database,
+    turboquant_path_for_project,
+)
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -157,23 +161,16 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
         StaticDependencyResolver,
         build_ingestion_pipeline,
     )
+    from pydocs_mcp.extraction.strategies.embedders import build_embedder
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.storage.factories import (
-        build_sqlite_indexing_service,
-        build_sqlite_uow_factory,
+        build_sqlite_plus_turboquant_uow_factory,
+        check_integrity_and_repair,
     )
     from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
     # Ensure the schema exists before repositories issue queries.
     open_index_database(db_path).close()
-
-    # Independent ``uow_factory`` closures per controller's design decision
-    # (Decision B): ``build_sqlite_indexing_service`` builds its OWN factory
-    # internally, and ``ProjectIndexer`` gets a separate one here. They
-    # point to the same DB; sub-ms cost; cleaner composition root than
-    # threading a single factory through two services.
-    indexing_service = build_sqlite_indexing_service(db_path)
-    uow_factory = build_sqlite_uow_factory(db_path)
 
     use_inspect = not args.no_inspect
     mode = "inspect" if use_inspect else "static"
@@ -191,7 +188,47 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     # the ingestion pipeline; reads use the former.
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     configure_from_app_config(config)
-    ingestion_pipeline = build_ingestion_pipeline(config)
+
+    # Hybrid-search composition root: SQLite + TurboQuant under a composite
+    # UoW so ``reindex_package`` writes chunks AND vectors atomically.
+    # ``IndexingService`` and ``ProjectIndexer`` share one composite factory
+    # so the indexing transaction spans both backends without per-service
+    # branching for "is there a vector store?".
+    tq_path = turboquant_path_for_project(project)
+    # ``--force`` clears the SQLite cache via ``IndexingService.clear_all``;
+    # the .tq sidecar lives alongside and must be cleared in lockstep,
+    # otherwise stale vectors with recycled SQLite IDs collide with the
+    # freshly-issued IDs on the next ``add_vectors`` call (IdMapIndex
+    # rejects duplicates).
+    if args.force and tq_path.exists():
+        tq_path.unlink()
+    uow_factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path, tq_path=tq_path,
+        dim=config.embedding.dim, bit_width=config.embedding.bit_width,
+    )
+    # Cache integrity sweep — drift between SQLite and the ``.tq`` sidecar
+    # (process killed mid-commit, etc.) is detected and repaired by
+    # clearing ``packages.content_hash`` so the next pass re-extracts.
+    # No-op on a fresh project (both counts == 0).
+    repaired = await check_integrity_and_repair(
+        db_path=db_path, tq_path=tq_path,
+        dim=config.embedding.dim, bit_width=config.embedding.bit_width,
+    )
+    if repaired:
+        log.warning(
+            "Cache integrity: cleared content_hash on %d package(s); "
+            "they will be re-extracted this run", len(repaired),
+        )
+
+    from pydocs_mcp.application.indexing_service import IndexingService
+    indexing_service = IndexingService(uow_factory=uow_factory)
+
+    # Build the embedder ONCE at startup so every chunk goes through the
+    # same configured backend. Failing here (OptionalDepMissing) surfaces
+    # the "pip install pydocs-mcp[fastembed]" hint immediately rather than
+    # mid-extraction. Spec §"fail loud with actionable error".
+    embedder = build_embedder(config.embedding)
+    ingestion_pipeline = build_ingestion_pipeline(config, embedder=embedder)
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
     ast_member = AstMemberExtractor()

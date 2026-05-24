@@ -10,6 +10,8 @@ through a single factory instead of N copies.
 from __future__ import annotations
 
 import asyncio
+import logging
+import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,6 +31,8 @@ from pydocs_mcp.storage.sqlite import (
     row_to_chunk,
 )
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
@@ -146,6 +150,67 @@ def build_sqlite_candidate_id_resolver(
         return np.asarray([r[0] for r in rows], dtype=np.uint64)
 
     return resolve
+
+
+async def check_integrity_and_repair(
+    *,
+    db_path: Path,
+    tq_path: Path,
+    dim: int,
+    bit_width: int,
+) -> list[str]:
+    """Compare ``chunks`` row count vs TurboQuant ``size()``; repair drift.
+
+    Composite SQLite + TurboQuant deployments are not strictly cross-backend
+    ACID (see :class:`CompositeUnitOfWork` docstring). A crash between the
+    SQLite commit and the TurboQuant ``.tq`` write can leave the two
+    backends out of sync. This startup hook detects the drift by
+    counting both sides; on mismatch it logs a warning and clears
+    ``packages.content_hash`` on every package so the next indexing sweep
+    treats them as stale and re-extracts (re-embedding the chunks in the
+    process). Returns the list of repaired package names so callers can
+    surface them in logs / metrics.
+
+    The fresh-project case is intentional: when neither backend has any
+    rows yet (``chunk_count == 0 == vec_count``) the function is a no-op
+    and returns ``[]``. ``TurboQuantUnitOfWork.__aenter__`` synthesises an
+    empty in-memory index for a missing ``.tq`` file, so ``size() == 0``
+    matches an empty ``chunks`` table — no false alarm. Per spec §5.7
+    (cache is regenerable; silent recovery preserves user flow).
+    """
+    def _chunk_count() -> int:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            return conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        finally:
+            conn.close()
+
+    chunk_count = await asyncio.to_thread(_chunk_count)
+    async with TurboQuantUnitOfWork(
+        index_path=tq_path, dim=dim, bit_width=bit_width,
+    ) as tq_uow:
+        vec_count = tq_uow.size()
+    if chunk_count == vec_count:
+        return []
+
+    logger.warning(
+        "Cache integrity mismatch: chunks=%d but TurboQuant index "
+        "size=%d. Clearing content_hash on affected packages so the "
+        "next indexing sweep re-extracts them.",
+        chunk_count, vec_count,
+    )
+
+    def _clear_all_hashes() -> list[str]:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            names = [r[0] for r in conn.execute("SELECT name FROM packages")]
+            conn.execute("UPDATE packages SET content_hash = NULL")
+            conn.commit()
+            return names
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_clear_all_hashes)
 
 
 def build_sqlite_chunk_hydrator(

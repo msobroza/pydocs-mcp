@@ -23,21 +23,32 @@ def seeded_project(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _patch_ingestion_pipeline_with_mock_embedder(monkeypatch):
-    """Thread MockEmbedder into the CLI's ``build_ingestion_pipeline`` calls.
+def _patch_embedder_with_mock(monkeypatch):
+    """Inject ``MockEmbedder`` so CLI tests don't hit optional-deps.
 
-    The shipped ingestion pipeline now includes ``EmbedChunksStage`` by
-    default, which requires ``BuildContext.embedder`` to be non-None.
-    Production wiring will call ``build_embedder(cfg)`` at CLI startup once
-    Task 27 lands; until then, the CLI is invoked without an embedder, so
-    every test that exercises ``index``/``serve`` must patch the deferred
-    import to inject one. Applied autouse so individual tests don't repeat
-    the boilerplate.
+    Post-Task-27 wiring: ``_run_indexing`` calls ``build_embedder(cfg)`` at
+    startup and threads the result into ``build_ingestion_pipeline``. The
+    shipped default config selects ``provider=fastembed``, which would
+    raise :class:`OptionalDepMissing` in the test env because the
+    ``fastembed`` extra is not installed. Patching ``build_embedder`` at
+    the call-site module (``embedders``) AND keeping the safety net on
+    ``build_ingestion_pipeline`` covers both the production CLI path
+    (which now constructs its own embedder) and any direct
+    ``build_ingestion_pipeline(cfg)`` callers (older tests / integration
+    fixtures).
     """
     from tests._fakes import MockEmbedder
     import pydocs_mcp.extraction as _extraction
     from pydocs_mcp.extraction import factories as _factories
+    from pydocs_mcp.extraction.strategies import embedders as _embedders
 
+    # Patch the embedder factory so ``build_embedder(cfg)`` returns a mock
+    # in the CLI startup path that Task 27 wires.
+    monkeypatch.setattr(_embedders, "build_embedder", lambda cfg: MockEmbedder())
+
+    # Safety net for older callers / fixtures that still hand
+    # ``build_ingestion_pipeline`` a bare config — auto-inject a mock when
+    # no explicit embedder is threaded.
     _orig = _factories.build_ingestion_pipeline
 
     def _build_with_mock(cfg, *, embedder=None):
