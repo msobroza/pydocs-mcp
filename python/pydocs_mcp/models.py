@@ -12,10 +12,56 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
+import numpy as np
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pyd_dataclass
+
+
+# ── Embedding types (spec §5.1) ──────────────────────────────────────────
+# Aligned with FastEmbed (https://github.com/qdrant/fastembed):
+#
+#   Vector       = 1D np.ndarray, shape (dim,), dtype=float32.
+#                  What TextEmbedding.embed() yields per document; what
+#                  OpenAI returns; what TurboQuant IdMapIndex consumes.
+#
+#   MultiVector  = list[np.ndarray] — one 1D vector per token, ColBERT
+#                  late-interaction shape. NOT persisted this PR (single-
+#                  vector storage only); the type union accepts the shape
+#                  so future late-interaction work doesn't break the
+#                  Chunk model.
+#
+# SparseEmbedding (Protocol) — FastEmbed convention with .indices +
+# .values numpy arrays. NOT in the Embedding union this PR; defined here
+# so a future sparse-retrieval PR can extend Embedding without breaking
+# changes.
+Vector = np.ndarray
+MultiVector = list[np.ndarray]
+Embedding = Vector | MultiVector
+
+
+@runtime_checkable
+class SparseEmbedding(Protocol):
+    """FastEmbed-compatible sparse embedding shape (forward-compat).
+
+    Mirrors `fastembed.SparseEmbedding`'s public attributes (uint32
+    indices + float32 values numpy arrays). Sparse retrieval is OUT OF
+    SCOPE for this PR — this Protocol exists only so the typing layer
+    is ready for it.
+    """
+    indices: np.ndarray   # uint32
+    values:  np.ndarray   # float32
+
+
+def is_multi_vector(emb: Embedding) -> bool:
+    """True if `emb` is a multi-vector (list of 1D vectors, ColBERT-style).
+
+    FastEmbed convention: single-vector embedders return `np.ndarray`;
+    multi-vector embedders return `list[np.ndarray]`. The check is on
+    the OUTER container type.
+    """
+    return isinstance(emb, list)
 
 
 class ChunkOrigin(StrEnum):
