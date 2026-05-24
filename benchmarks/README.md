@@ -15,6 +15,53 @@ MLflow run with comparable params, metrics, and artifacts.
 > external benchmark (RepoQA-SNF) with stable gold answers that the
 > system under test cannot influence.
 
+## How the harness works
+
+Each run fans a dataset's tasks across one or more systems (under a config
+overlay), resolves ground truth per system, then scores every system on the
+same relevance signal:
+
+```mermaid
+flowchart TB
+    DS["Dataset loader<br/>(RepoQA · DS-1000)"]
+    SPLIT["stratified dev/test split<br/>by repo / library"]
+    TASKS["EvalTask<br/>query · gold · corpus · metadata"]
+    DS --> SPLIT --> TASKS
+
+    subgraph SUT["system under test  ×  config overlay"]
+        direction LR
+        PM["pydocs-mcp<br/>ranked"]
+        PC["pydocs-mcp-composite<br/>single blob"]
+        PO["pydocs-oracle<br/>library-documentation"]
+        C7["Context7"]
+        NL["Neuledge"]
+    end
+
+    TASKS -->|"index(corpus) · search(query)"| SUT
+    SUT --> RET["RetrievedItem(s)"]
+
+    GR["GoldResolver per system<br/>eager-fuzzy · oracle exact-doc_id · lazy-fuzzy"]
+    RID["resolved_chunk_ids"]
+    RET --> GR
+    TASKS --> GR
+    GR --> RID
+
+    ISREL["is_relevant(item, task)"]
+    RID --> ISREL
+    RET --> ISREL
+
+    METRICS["metrics<br/>recall@k · mrr · ndcg@k<br/>precision@1 · coverage · library_resolution@1"]
+    REPORT["report → trackers<br/>(jsonl · mlflow)"]
+    PLOT["plotting.py → PNG"]
+    ISREL --> METRICS --> REPORT --> PLOT
+```
+
+The **GoldResolver** layer is what lets heterogeneous systems share one
+metric suite: each system maps its own output to a `resolved_chunk_ids` set
+(native pydocs fuzzy-matches gold doc contents; the oracle uses exact
+`doc_id` equality; Context7/Neuledge lazily fuzzy-match their single blob),
+and every metric consumes the unified `is_relevant(item, task)` predicate.
+
 ## Install
 
 `uv`-friendly extras let you pull in only what you need:
