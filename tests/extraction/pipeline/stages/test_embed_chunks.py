@@ -152,3 +152,37 @@ def test_embed_chunks_to_dict_omits_default_batch_size() -> None:
         "type": "embed_chunks",
         "batch_size": 64,
     }
+
+
+@pytest.mark.asyncio
+async def test_embed_chunks_strict_zip_raises_on_embedder_mismatch() -> None:
+    """If an Embedder returns fewer embeddings than chunks, raise ValueError."""
+    import numpy as np
+
+    class _TruncatingEmbedder:
+        dim = 4
+
+        async def embed_query(self, text):
+            return np.zeros(4, dtype=np.float32)
+
+        async def embed_chunks(self, texts):
+            # Return ONE FEWER embedding than requested — buggy Embedder
+            return tuple(np.zeros(4, dtype=np.float32) for _ in texts[:-1])
+
+    state = _state((
+        Chunk(text="alpha", id=1),
+        Chunk(text="beta", id=2),
+        Chunk(text="gamma", id=3),
+    ))
+    stage = EmbedChunksStage(embedder=_TruncatingEmbedder(), batch_size=10)
+    with pytest.raises(ValueError):  # strict=True raises
+        await stage.run(state)
+
+
+def test_embed_chunks_rejects_nonpositive_batch_size() -> None:
+    """__post_init__ surfaces a friendly error for batch_size <= 0."""
+    embedder = MockEmbedder(dim=4)
+    with pytest.raises(ValueError, match="batch_size must be > 0"):
+        EmbedChunksStage(embedder=embedder, batch_size=0)
+    with pytest.raises(ValueError, match="batch_size must be > 0"):
+        EmbedChunksStage(embedder=embedder, batch_size=-1)

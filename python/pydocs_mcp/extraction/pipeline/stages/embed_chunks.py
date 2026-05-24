@@ -46,6 +46,16 @@ class EmbedChunksStage:
     batch_size: int = _DEFAULT_BATCH_SIZE
     name: str = "embed_chunks"
 
+    def __post_init__(self) -> None:
+        # Guard against degenerate batch_size: 0 raises a cryptic
+        # ``range() arg 3 must not be zero`` from stdlib, and negative
+        # values silently produce an empty range → empty embeddings →
+        # strict-zip mismatch. Fail loud at construction instead.
+        if self.batch_size <= 0:
+            raise ValueError(
+                f"EmbedChunksStage.batch_size must be > 0, got {self.batch_size}",
+            )
+
     async def run(self, state: IngestionState) -> IngestionState:
         if not state.chunks:
             return state
@@ -56,9 +66,11 @@ class EmbedChunksStage:
                 tuple(c.text for c in batch),
             )
             embeddings.extend(embs)
+        # strict=True surfaces buggy Embedders that return the wrong
+        # number of vectors instead of silently truncating state.chunks.
         new_chunks = tuple(
             replace(c, embedding=emb)
-            for c, emb in zip(state.chunks, embeddings)
+            for c, emb in zip(state.chunks, embeddings, strict=True)
         )
         return replace(state, chunks=new_chunks)
 
