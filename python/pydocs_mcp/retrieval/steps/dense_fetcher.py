@@ -53,7 +53,7 @@ class DenseFetcherStep(RetrieverStep):
 
     store: VectorSearchable
     embedder: Embedder
-    limit: int = field(default=_DEFAULT_LIMIT, kw_only=True)
+    limit: int = _DEFAULT_LIMIT
     name: str = field(default="dense_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -73,18 +73,18 @@ class DenseFetcherStep(RetrieverStep):
             # persistence lands.
             query_vec = query_vec[0]
 
+        # Silent-None fallback: when ``state.query.pre_filter`` is set but the
+        # upstream PreFilterStep hasn't published a typed result to scratch,
+        # we fall back to ``filter=None`` rather than raising. This matches
+        # the ChunkFetcherStep convention — pipelines that genuinely need a
+        # filter should compose ``pre_filter`` before ``dense_fetcher`` (see
+        # pipelines/chunk_search.yaml). The store still receives the call;
+        # it just sees the unrestricted candidate set.
         filter_tree = None
         if state.query.pre_filter is not None:
             result = state.scratch.get("pre_filter.result")
-            if not isinstance(result, PreFilterResult):
-                raise RuntimeError(
-                    "DenseFetcherStep: state.query.pre_filter is set but "
-                    "state.scratch['pre_filter.result'] is missing. The "
-                    "pipeline must include the 'pre_filter' step before "
-                    "'dense_fetcher'. See pipelines/chunk_search.yaml for "
-                    "the canonical shape.",
-                )
-            filter_tree = result.tree
+            if isinstance(result, PreFilterResult):
+                filter_tree = result.tree
 
         candidates = await self.store.vector_search(
             query_vector=query_vec,

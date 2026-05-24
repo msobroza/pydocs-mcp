@@ -9,7 +9,11 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.protocols import ConnectionProvider
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
-    from pydocs_mcp.storage.protocols import Embedder
+    from pydocs_mcp.storage.protocols import (
+        Embedder,
+        TextSearchable,
+        VectorSearchable,
+    )
     from pydocs_mcp.storage.sqlite import (
         SqliteModuleMemberRepository,
     )
@@ -105,12 +109,12 @@ class BuildContext:
     ``server.py`` / ``__main__.py`` provides all of them at startup
     (spec §5.7, AC #15, AC #17).
 
-    ``vector_store`` is typed as ``object`` rather than a concrete class
-    because the field currently holds either the FTS5-only
-    ``SqliteVectorStore`` (text retrieval) OR a dense
-    ``TurboQuantVectorStore`` (vector retrieval) — the two satisfy
-    *different* search Protocols, so a single union type would mis-narrow.
-    ``DenseFetcherStep.from_dict`` checks-and-casts at construction time.
+    ``vector_store`` is typed as the union of the two retrieval-side
+    Protocols (:class:`TextSearchable` for FTS5-only ``SqliteVectorStore`` /
+    :class:`VectorSearchable` for dense ``TurboQuantVectorStore``) because
+    the field carries either flavour at runtime. ``DenseFetcherStep.from_dict``
+    narrows to :class:`VectorSearchable` at construction time; text-side
+    fetchers narrow to :class:`TextSearchable` the same way.
 
     ``embedder`` is typed as :class:`Embedder` and is consumed by
     :class:`DenseFetcherStep` to embed the user's query text into a vector
@@ -121,7 +125,7 @@ class BuildContext:
     predicate_registry: "PredicateRegistry" = field(default_factory=_default_predicate_registry)
     step_registry: ComponentRegistry = field(default_factory=lambda: step_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
-    vector_store: object | None = None
+    vector_store: "TextSearchable | VectorSearchable | None" = None
     module_member_store: "SqliteModuleMemberRepository | None" = None
     app_config: "AppConfig | None" = None
     embedder: "Embedder | None" = None

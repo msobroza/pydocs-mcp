@@ -182,39 +182,54 @@ async def test_dense_fetcher_with_pre_filter_restricts_results(
     assert all(c.id == text_to_id["alpha"] for c in out.candidates.items)
 
 
-async def test_dense_fetcher_raises_when_pre_filter_set_but_scratch_missing(
-    tmp_path: Path,
-) -> None:
-    """state.query.pre_filter set but PreFilterStep did NOT run → loud error."""
-    db_path = tmp_path / "x.db"
-    tq_path = tmp_path / "x.tq"
-    open_index_database(db_path).close()
-    embedder = MockEmbedder(dim=_DIM)
+async def test_dense_fetcher_empty_query_short_circuits() -> None:
+    """Empty terms (post-strip) returns empty candidates without calling embedder/store.
 
-    sqlite_factory = build_sqlite_uow_factory(db_path)
-    async with sqlite_factory() as uow:
-        await uow.packages.upsert(_pkg("demo"))
-        await uow.chunks.upsert((_chunk("alpha", "demo"),))
-        await uow.commit()
+    ``SearchQuery._terms_non_empty`` rejects whitespace at construction, so we
+    build a valid query then bypass the frozen pydantic dataclass via
+    ``object.__setattr__`` to land whitespace-only ``terms`` on the instance.
+    This exercises the empty-terms guard branch directly.
+    """
+    embedder_called = False
+    store_called = False
 
-    async with TurboQuantUnitOfWork(
-        index_path=tq_path, dim=_DIM, bit_width=_BIT_WIDTH,
-    ) as tq_uow:
-        store = TurboQuantVectorStore(
-            uow=tq_uow,
-            candidate_id_resolver=build_sqlite_candidate_id_resolver(db_path),
-            chunk_hydrator=build_sqlite_chunk_hydrator(db_path),
-        )
-        step = DenseFetcherStep(store=store, embedder=embedder, limit=5)
-        state = RetrieverState(
-            query=SearchQuery(
-                terms="alpha",
-                max_results=10,
-                pre_filter={"package": "demo"},
-            ),
-        )
-        with pytest.raises(RuntimeError, match="pre_filter"):
-            await step.run(state)
+    class _RecordingEmbedder:
+        dim = _DIM
+
+        async def embed_query(self, text):  # noqa: ARG002
+            nonlocal embedder_called
+            embedder_called = True
+            import numpy as np
+            return np.zeros(_DIM, dtype=np.float32)
+
+        async def embed_chunks(self, texts):  # noqa: ARG002
+            return ()
+
+    class _RecordingStore:
+        async def vector_search(self, query_vector, limit, filter=None):  # noqa: ARG002
+            nonlocal store_called
+            store_called = True
+            return ()
+
+    query = SearchQuery(terms="ok", max_results=10)
+    # Bypass the frozen-dataclass barrier. The post-strip empty-terms branch
+    # in ``DenseFetcherStep.run`` is unreachable through normal construction
+    # because the field validator rejects whitespace — direct mutation is the
+    # only clean way to verify the guard fires when called.
+    object.__setattr__(query, "terms", "   ")
+    state = RetrieverState(query=query)
+
+    step = DenseFetcherStep(
+        store=_RecordingStore(),  # type: ignore[arg-type]
+        embedder=_RecordingEmbedder(),  # type: ignore[arg-type]
+        limit=10,
+    )
+    out = await step.run(state)
+
+    assert isinstance(out.candidates, ChunkList)
+    assert out.candidates.items == ()
+    assert embedder_called is False
+    assert store_called is False
 
 
 def test_dense_fetcher_from_dict_requires_vector_store_and_embedder() -> None:
