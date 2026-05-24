@@ -26,7 +26,7 @@ def _state_with_chunk_relevances(*relevances: float) -> RetrieverState:
 async def test_scorer_flips_sign_of_fts5_rank() -> None:
     """FTS5 ranks are negative (lower-magnitude-negative = better). Scorer
     flips sign so higher = better — the convention every downstream step
-    (TopKFilterStep, RRFStep, …) assumes.
+    (TopKFilterStep, RRFFusionStep, …) assumes.
     """
     state = _state_with_chunk_relevances(-2.5, -1.0, -0.5)
     out = await BM25ScorerStep(name="score").run(state)

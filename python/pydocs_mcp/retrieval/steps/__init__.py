@@ -13,7 +13,7 @@ Module layout:
 - :mod:`.limit` — :class:`LimitStep`
 - :mod:`.parallel` — :class:`ParallelStep`
 - :mod:`.pre_filter` — :class:`PreFilterStep` + :class:`PreFilterResult`
-- :mod:`.rrf` — :class:`RRFStep`
+- :mod:`.rrf_fusion` — :class:`RRFFusionStep` + :class:`RRFResultFuser`
 - :mod:`.conditional` — :class:`ConditionalStep`
 - :mod:`.route` — :class:`RouteCase` + :class:`RouteStep`
 - :mod:`.sub_pipeline` — ``sub_pipeline`` YAML decoder (no class — returns
@@ -40,7 +40,7 @@ from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterSt
 from pydocs_mcp.retrieval.steps.parallel import ParallelStep
 from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult, PreFilterStep
 from pydocs_mcp.retrieval.steps.route import RouteCase, RouteStep
-from pydocs_mcp.retrieval.steps.rrf import RRFStep
+from pydocs_mcp.retrieval.steps.rrf_fusion import RRFFusionStep, RRFResultFuser
 from pydocs_mcp.retrieval.steps.token_budget import (
     COMPOSITE_TITLE_SENTINEL,
     TokenBudgetStep,
@@ -58,7 +58,8 @@ __all__ = (
     "ParallelStep",
     "PreFilterResult",
     "PreFilterStep",
-    "RRFStep",
+    "RRFFusionStep",
+    "RRFResultFuser",
     "RouteCase",
     "RouteStep",
     "TokenBudgetStep",

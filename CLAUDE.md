@@ -67,7 +67,7 @@ python/pydocs_mcp/
 ├── storage/       # Filter tree, Protocols, SQLite repositories + VectorStore + UnitOfWork
 ├── retrieval/     # sklearn-style RetrieverPipeline + RetrieverStep ABC; one file per step under steps/; pipeline/ holds Step/Pipeline base + RetrieverState + ConnectionProvider; YAML config
 │   ├── pipeline/    #   RetrieverStep ABC, RetrieverPipeline, RetrieverState, PerCallConnectionProvider, CodeRetrieverPipeline (legacy entry-point shim)
-│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, member_fetcher, top_k_filter, metadata_post_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf
+│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, member_fetcher, top_k_filter, metadata_post_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
 ├── pipelines/     # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
 └── server.py      # MCP handlers over services
