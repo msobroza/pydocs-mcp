@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
+    Embedding,
     ModuleMember,
     ModuleMemberFilterField,
     Package,
@@ -106,8 +107,9 @@ class IndexingService:
             await uow.chunks.upsert(chunks)
             # AC-24: when the UoW is composite (SqliteUnitOfWork +
             # TurboQuantUnitOfWork), forward every chunk's embedding to
-            # the .tq sidecar under the autoincrement id SQLite just
-            # assigned. The SqliteUnitOfWork-only path is a no-op
+            # the .tq sidecar under the auto-assigned ``INTEGER PRIMARY
+            # KEY`` id SQLite just gave each row (rowid-alias id, not
+            # AUTOINCREMENT). The SqliteUnitOfWork-only path is a no-op
             # (``getattr`` returns None) so legacy callers stay green.
             await self._maybe_write_vectors(uow, package, chunks)
             # Tree persistence happens between chunks and members so
@@ -154,15 +156,16 @@ class IndexingService:
         method becomes a no-op so the legacy single-backend path stays
         identical.
 
-        The SQLite ``id`` column is autoincrement: ``chunks.upsert`` did
-        not return the assigned IDs (``executemany`` doesn't), so we
-        re-fetch by package and sort by id. Because ``delete`` cleared
-        the package's rows first and ``executemany`` inserts in input
-        order, the id-sorted persisted list is positionally aligned with
-        ``input_chunks`` — index ``i`` in both lists is the same logical
-        chunk. We then keep only the pairs where the input chunk carried
-        an embedding; mixed batches (some embedded, some not) skip the
-        bare entries instead of failing the whole write.
+        The SQLite ``id`` column is a rowid-alias ``INTEGER PRIMARY
+        KEY`` (not AUTOINCREMENT): ``chunks.upsert`` did not return the
+        assigned IDs (``executemany`` doesn't), so we re-fetch by package
+        and sort by id. Because ``delete`` cleared the package's rows
+        first and ``executemany`` inserts in input order, the id-sorted
+        persisted list is positionally aligned with ``input_chunks`` —
+        index ``i`` in both lists is the same logical chunk. We then keep
+        only the pairs where the input chunk carried an embedding; mixed
+        batches (some embedded, some not) skip the bare entries instead
+        of failing the whole write.
         """
         vectors_store = getattr(uow, "vectors", None)
         if vectors_store is None:
@@ -185,7 +188,7 @@ class IndexingService:
             return
         persisted_sorted = sorted(persisted, key=lambda c: c.id or 0)
         ids: list[int] = []
-        embeddings: list = []
+        embeddings: list[Embedding] = []
         for persisted_chunk, input_chunk in zip(
             persisted_sorted, input_chunks, strict=True,
         ):

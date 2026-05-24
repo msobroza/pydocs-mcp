@@ -102,15 +102,24 @@ async def test_reindex_package_skips_chunks_without_embedding(
     ``add_vectors`` — chunks without one still persist to SQLite but do
     not produce vector rows. This protects against partial-embedding
     ingestion (e.g. when ``EmbedChunksStage`` is disabled or fails for
-    a subset)."""
+    a subset).
+
+    The test asserts pairing DIRECTION: the kept vector must map to the
+    embedded chunk's id, not the bare chunk's id. A regression that
+    swapped the input/persisted ordering (e.g. mapped the embedding to
+    the wrong row by counting bare chunks) would still pass a
+    ``size() == 1`` count check, so we additionally probe membership via
+    ``IdMapIndex.contains``.
+    """
     db_path = tmp_path / "cache.db"
     tq_path = tmp_path / "cache.tq"
     open_index_database(db_path).close()
 
+    embedded_vec = _vec(0.1, 0.2)
     chunks = (
         # No embedding — must NOT contribute a vector row.
         Chunk(text="bare", metadata={"package": "demo", "title": "bare"}),
-        _chunk("demo", "alpha", "alpha body", _vec(0.1, 0.2)),
+        _chunk("demo", "alpha", "alpha body", embedded_vec),
     )
     package = _pkg("demo")
     factory = build_sqlite_plus_turboquant_uow_factory(
@@ -124,11 +133,28 @@ async def test_reindex_package_skips_chunks_without_embedding(
         persisted = await uow.chunks.list(filter={"package": "demo"})
     assert len(persisted) == 2  # both chunks landed in SQLite
 
-    # Only one embedding → exactly one vector.
+    # Recover the SQLite ids assigned to each input chunk. The service
+    # pairs by sorting persisted rows by id (ascending) and zipping with
+    # ``input_chunks`` positionally — id 0 = bare, id 1 = alpha — so the
+    # correct mapping is "kept vector lives under alpha's id".
+    persisted_sorted = sorted(persisted, key=lambda c: c.id or 0)
+    bare_id = persisted_sorted[0].id
+    embedded_id = persisted_sorted[1].id
+    assert bare_id is not None and embedded_id is not None
+    assert bare_id != embedded_id  # sanity — distinct rows got distinct ids
+
+    # Only one embedding → exactly one vector AND that vector must be
+    # keyed by the embedded chunk's id, NOT the bare chunk's id. A
+    # pairing-direction regression (mapping the embedding to the wrong
+    # row) would flip these two assertions.
     async with TurboQuantUnitOfWork(
         index_path=tq_path, dim=_DIM, bit_width=_BW,
     ) as tq_uow:
         assert tq_uow.size() == 1
+        # IdMapIndex.contains is the direct membership probe — proves
+        # WHICH id the stored vector is keyed under, not just the count.
+        assert tq_uow.index.contains(embedded_id) is True
+        assert tq_uow.index.contains(bare_id) is False
 
 
 @pytest.mark.asyncio
