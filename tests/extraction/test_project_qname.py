@@ -34,8 +34,11 @@ async def test_project_qnames_use_python_module_path_not_filesystem(tmp_path):
     open_index_database(db_path).close()
     uow_factory = build_sqlite_uow_factory(db_path)
     indexing = build_sqlite_indexing_service(db_path)
+    # EmbedChunksStage is wired into the shipped ingestion pipeline by
+    # default; thread MockEmbedder until Task 27 lands production wiring.
+    from tests._fakes import MockEmbedder
     config = AppConfig.load()
-    pipeline = build_ingestion_pipeline(config)
+    pipeline = build_ingestion_pipeline(config, embedder=MockEmbedder())
 
     class _NoDeps:
         async def resolve(self, project_dir):

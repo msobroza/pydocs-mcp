@@ -22,6 +22,46 @@ def seeded_project(tmp_path):
     return project
 
 
+@pytest.fixture(autouse=True)
+def _patch_embedder_with_mock(monkeypatch):
+    """Inject ``MockEmbedder`` so CLI tests don't hit optional-deps.
+
+    Post-Task-27 wiring: ``_run_indexing`` calls ``build_embedder(cfg)`` at
+    startup and threads the result into ``build_ingestion_pipeline``. The
+    shipped default config selects ``provider=fastembed``, which would
+    raise :class:`OptionalDepMissing` in the test env because the
+    ``fastembed`` extra is not installed. Patching ``build_embedder`` at
+    the call-site module (``embedders``) AND keeping the safety net on
+    ``build_ingestion_pipeline`` covers both the production CLI path
+    (which now constructs its own embedder) and any direct
+    ``build_ingestion_pipeline(cfg)`` callers (older tests / integration
+    fixtures).
+    """
+    from tests._fakes import MockEmbedder
+    import pydocs_mcp.extraction as _extraction
+    from pydocs_mcp.extraction import factories as _factories
+    from pydocs_mcp.extraction.strategies import embedders as _embedders
+
+    # Patch the embedder factory so ``build_embedder(cfg)`` returns a mock
+    # in the CLI startup path that Task 27 wires.
+    monkeypatch.setattr(_embedders, "build_embedder", lambda cfg: MockEmbedder())
+
+    # Safety net for older callers / fixtures that still hand
+    # ``build_ingestion_pipeline`` a bare config — auto-inject a mock when
+    # no explicit embedder is threaded.
+    _orig = _factories.build_ingestion_pipeline
+
+    def _build_with_mock(cfg, *, embedder=None):
+        return _orig(cfg, embedder=embedder or MockEmbedder())
+
+    # ``_run_indexing`` does ``from pydocs_mcp.extraction import build_ingestion_pipeline``
+    # at call time (deferred import) — patch both the re-exported attribute
+    # on the package and the source attribute on factories, since the
+    # deferred import resolves the former and direct callers use the latter.
+    monkeypatch.setattr(_extraction, "build_ingestion_pipeline", _build_with_mock)
+    monkeypatch.setattr(_factories, "build_ingestion_pipeline", _build_with_mock)
+
+
 class TestMainNoArgs:
     def test_no_command_prints_help(self, capsys):
         with patch("sys.argv", ["pydocs-mcp"]):
@@ -239,6 +279,9 @@ class TestServeCommand:
         The handler defers the ``pydocs_mcp.server`` import to its call
         path, so patching happens at the source module rather than the
         pre-refactor ``pydocs_mcp.__main__.run`` attribute.
+
+        EmbedChunksStage's MockEmbedder is wired via the autouse
+        ``_patch_embedder_with_mock`` fixture.
         """
         with patch("pydocs_mcp.server.run") as mock_run:
             with patch("sys.argv", ["pydocs-mcp", "serve", str(seeded_project)]):

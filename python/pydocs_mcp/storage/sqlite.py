@@ -263,7 +263,7 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
     }
 
 
-def _row_to_chunk(row) -> Chunk:
+def row_to_chunk(row) -> Chunk:
     """Convert a ``sqlite3.Row`` (or dict) to a ``Chunk`` domain model.
 
     Accesses each column directly: a ``KeyError`` from a missing column is
@@ -347,11 +347,23 @@ def _package_to_row(pkg: Package) -> dict[str, object]:
         "dependencies": json.dumps(list(pkg.dependencies)),
         "content_hash": pkg.content_hash,
         "origin": pkg.origin.value,
+        # ``embedding_model`` round-trips so the startup staleness check
+        # (find_packages_with_stale_embeddings) can detect a YAML model
+        # rename and trigger re-embed of the affected packages.
+        "embedding_model": pkg.embedding_model,
     }
 
 
 def _row_to_package(row) -> Package:
     """Convert a ``sqlite3.Row`` (or dict) to a ``Package`` domain model."""
+    # ``embedding_model`` column was added in schema v5 — older rows /
+    # legacy callers may not surface it via ``sqlite3.Row`` key access,
+    # so default to None when absent. ``or None`` keeps "" out of the
+    # stale check (an empty string is not a model name).
+    try:
+        embedding_model = row["embedding_model"]
+    except (IndexError, KeyError):
+        embedding_model = None
     return Package(
         name=row["name"] or "",
         version=row["version"] or "",
@@ -360,6 +372,7 @@ def _row_to_package(row) -> Package:
         dependencies=tuple(json.loads(row["dependencies"] or "[]")),
         content_hash=row["content_hash"] or "",
         origin=PackageOrigin(row["origin"] or PackageOrigin.DEPENDENCY.value),
+        embedding_model=embedding_model or None,
     )
 
 
@@ -433,7 +446,7 @@ class SqliteFilterAdapter:
 
 
 # Safe-column whitelists per table (spec §5.3)
-_CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
+CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
 _PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
 _MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
 
@@ -465,12 +478,14 @@ class SqlitePackageRepository:
             await asyncio.to_thread(
                 conn.execute,
                 "INSERT INTO packages (name, version, summary, homepage, "
-                "dependencies, content_hash, origin) "
-                "VALUES (:name,:version,:summary,:homepage,:dependencies,:content_hash,:origin) "
+                "dependencies, content_hash, origin, embedding_model) "
+                "VALUES (:name,:version,:summary,:homepage,:dependencies,"
+                ":content_hash,:origin,:embedding_model) "
                 "ON CONFLICT(name) DO UPDATE SET "
                 "version=excluded.version, summary=excluded.summary, "
                 "homepage=excluded.homepage, dependencies=excluded.dependencies, "
-                "content_hash=excluded.content_hash, origin=excluded.origin",
+                "content_hash=excluded.content_hash, origin=excluded.origin, "
+                "embedding_model=excluded.embedding_model",
                 row,
             )
 
@@ -546,7 +561,7 @@ class SqliteChunkRepository:
 
     provider: ConnectionProvider
     filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=_CHUNK_COLUMNS)
+        default_factory=lambda: SqliteFilterAdapter(safe_columns=CHUNK_COLUMNS)
     )
 
     async def upsert(self, chunks: Iterable[Chunk]) -> None:
@@ -578,7 +593,7 @@ class SqliteChunkRepository:
             rows = await asyncio.to_thread(
                 lambda: conn.execute(sql, params).fetchall()
             )
-        return [_row_to_chunk(r) for r in rows]
+        return [row_to_chunk(r) for r in rows]
 
     async def delete(self, filter: Filter | Mapping) -> int:
         tree = _resolve_filter(filter)
@@ -647,7 +662,7 @@ class SqliteVectorStore:
     provider: ConnectionProvider
     filter_adapter: SqliteFilterAdapter = field(
         default_factory=lambda: SqliteFilterAdapter(
-            safe_columns=_CHUNK_COLUMNS, column_prefix="c.",
+            safe_columns=CHUNK_COLUMNS, column_prefix="c.",
         )
     )
     retriever_name: str = "bm25_chunk"
@@ -690,7 +705,7 @@ class SqliteVectorStore:
 
         items: list[Chunk] = []
         for row in rows:
-            base = _row_to_chunk(row)
+            base = row_to_chunk(row)
             items.append(
                 Chunk(
                     text=base.text,

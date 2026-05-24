@@ -32,6 +32,7 @@ from pydocs_mcp.extraction.pipeline import (
 from pydocs_mcp.extraction.pipeline.stages import (
     ChunkingStage,
     ContentHashStage,
+    EmbedChunksStage,
     FileDiscoveryStage,
     FileReadStage,
     FlattenStage,
@@ -44,6 +45,7 @@ from pydocs_mcp.extraction.factories import (
 )
 from pydocs_mcp.models import Package, PackageOrigin
 from pydocs_mcp.retrieval.config import AppConfig
+from tests._fakes import MockEmbedder
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -64,16 +66,24 @@ def _app_config() -> AppConfig:
 # ── load_ingestion_pipeline ────────────────────────────────────────────────
 
 def test_load_ingestion_pipeline_success() -> None:
-    """Shipped preset loads into a 7-stage pipeline of the expected types
-    (sub-PR #5b added ``reference_capture`` between chunking and flatten)."""
+    """Shipped preset loads into an 8-stage pipeline of the expected types.
+
+    The hybrid-search PR slotted ``embed_chunks`` between ``flatten`` and
+    ``content_hash`` so vectors land on every chunk before the per-package
+    hash is computed. A MockEmbedder satisfies ``EmbedChunksStage.from_dict``
+    in tests; production callers thread the real
+    :func:`build_embedder` instance.
+    """
     cfg = _app_config()
-    pipeline = load_ingestion_pipeline(_BUNDLED_INGESTION, cfg)
+    pipeline = load_ingestion_pipeline(
+        _BUNDLED_INGESTION, cfg, embedder=MockEmbedder(),
+    )
     assert isinstance(pipeline, IngestionPipeline)
-    assert len(pipeline.stages) == 7
+    assert len(pipeline.stages) == 8
     expected_types = [
         FileDiscoveryStage, FileReadStage, ChunkingStage,
-        ReferenceCaptureStage, FlattenStage, ContentHashStage,
-        PackageBuildStage,
+        ReferenceCaptureStage, FlattenStage, EmbedChunksStage,
+        ContentHashStage, PackageBuildStage,
     ]
     for stage, exp in zip(pipeline.stages, expected_types, strict=True):
         assert isinstance(stage, exp)
@@ -114,9 +124,9 @@ def test_build_ingestion_pipeline_uses_bundled_preset_when_config_none() -> None
     """Default config has ``pipeline_path=None`` → build falls back to shipped YAML."""
     cfg = _app_config()
     assert cfg.extraction.ingestion.pipeline_path is None
-    pipeline = build_ingestion_pipeline(cfg)
+    pipeline = build_ingestion_pipeline(cfg, embedder=MockEmbedder())
     assert isinstance(pipeline, IngestionPipeline)
-    assert len(pipeline.stages) == 7
+    assert len(pipeline.stages) == 8
 
 
 def test_build_ingestion_pipeline_uses_custom_path_when_provided(tmp_path: Path) -> None:

@@ -206,7 +206,12 @@ def integration_conn(tmp_path):
     service = build_sqlite_indexing_service(db_path)
 
     async def _index_project_only() -> None:
-        pipeline = build_ingestion_pipeline(AppConfig())
+        # MockEmbedder satisfies the Embedder Protocol consumed by
+        # EmbedChunksStage (wired by default into the shipped ingestion
+        # pipeline). Production wiring will use build_embedder(cfg) when
+        # Task 27 lands; until then, tests must thread their own.
+        from tests._fakes import MockEmbedder
+        pipeline = build_ingestion_pipeline(AppConfig(), embedder=MockEmbedder())
         extractor = PipelineChunkExtractor(pipeline=pipeline)
         members_extractor = AstMemberExtractor()
         result = await extractor.extract_from_project(FAKE_PROJECT)

@@ -95,7 +95,10 @@ async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
 
     uow_factory = build_sqlite_uow_factory(db_path)
     indexing_service = build_sqlite_indexing_service(db_path)
-    pipeline = build_ingestion_pipeline(AppConfig.load())
+    # EmbedChunksStage is wired into the shipped pipeline by default;
+    # thread MockEmbedder until Task 27 lands production wiring.
+    from tests._fakes import MockEmbedder
+    pipeline = build_ingestion_pipeline(AppConfig.load(), embedder=MockEmbedder())
 
     orchestrator = ProjectIndexer(
         indexing_service=indexing_service,

@@ -34,6 +34,7 @@ from pydocs_mcp.extraction.serialization import stage_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.protocols import Embedder
 
 
 @cache
@@ -50,40 +51,58 @@ def _default_ingestion_pipeline_path() -> Path:
 
 
 def load_ingestion_pipeline(
-    path: Path, cfg: "AppConfig",
+    path: Path, cfg: "AppConfig", *, embedder: "Embedder | None" = None,
 ) -> IngestionPipeline:
     """Load and build an :class:`IngestionPipeline` from a YAML file.
 
     The path is resolved + allowlisted through retrieval's
     ``_resolve_pipeline_path`` so ingestion and retrieval share a single
     security-critical path-check implementation (AC #33).
+
+    ``embedder`` is threaded into the :class:`BuildContext` so
+    :class:`EmbedChunksStage.from_dict` can construct itself with a real
+    :class:`Embedder` — production wiring (see ``__main__.py``) supplies
+    one via :func:`~pydocs_mcp.extraction.strategies.embedders.build_embedder`;
+    tests pass a :class:`tests._fakes.MockEmbedder`. The
+    pipeline YAML wires ``embed_chunks`` by default, so any caller building
+    that pipeline must supply an embedder until Task 27 lands the
+    composition-root wiring.
     """
     resolved = _resolve_ingestion_pipeline_path(path, cfg)
     data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or "stages" not in data:
         raise ValueError(f"invalid ingestion pipeline YAML: {resolved!s}")
     # Reuse retrieval's BuildContext — extraction stages only read
-    # ``context.app_config`` inside ``from_dict``; the other BuildContext
-    # fields stay unused here but must be constructed to satisfy the
-    # dataclass's required ``connection_provider`` field. A ``None`` stand-in
-    # is acceptable because no extraction stage dereferences it.
+    # ``context.app_config`` + ``context.embedder`` inside ``from_dict``;
+    # the other BuildContext fields stay unused here but must be
+    # constructed to satisfy the dataclass's required
+    # ``connection_provider`` field. A ``None`` stand-in is acceptable
+    # because no extraction stage dereferences it.
     from pydocs_mcp.retrieval.serialization import BuildContext
-    context = BuildContext(connection_provider=None, app_config=cfg)  # type: ignore[arg-type]
+    context = BuildContext(connection_provider=None, app_config=cfg, embedder=embedder)  # type: ignore[arg-type]
     pipeline_stages = tuple(stage_registry.build(s, context) for s in data["stages"])
     return IngestionPipeline(stages=pipeline_stages)
 
 
-def build_ingestion_pipeline(cfg: "AppConfig") -> IngestionPipeline:
+def build_ingestion_pipeline(
+    cfg: "AppConfig", *, embedder: "Embedder | None" = None,
+) -> IngestionPipeline:
     """Build the :class:`IngestionPipeline` for this :class:`AppConfig`.
 
     Uses ``cfg.extraction.ingestion.pipeline_path`` if set (allowlist
     enforced); otherwise falls back to the bundled
     ``pipelines/ingestion.yaml``. The bundled default stays inside
     ``_shipped_pipelines_dir`` and always passes the allowlist.
+
+    ``embedder`` is forwarded to :func:`load_ingestion_pipeline`; the
+    bundled pipeline includes :class:`EmbedChunksStage`, so callers must
+    supply one until Task 27 lands the composition-root wiring (production
+    will call :func:`~pydocs_mcp.extraction.strategies.embedders.build_embedder`
+    once at startup; tests pass a :class:`tests._fakes.MockEmbedder`).
     """
     override = cfg.extraction.ingestion.pipeline_path
     path = override if override is not None else _default_ingestion_pipeline_path()
-    return load_ingestion_pipeline(Path(path), cfg)
+    return load_ingestion_pipeline(Path(path), cfg, embedder=embedder)
 
 
 def _resolve_ingestion_pipeline_path(
