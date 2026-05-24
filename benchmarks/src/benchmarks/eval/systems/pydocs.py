@@ -36,6 +36,14 @@ class PydocsMcpSystem:
     """
 
     name: str = "pydocs-mcp"
+    # WHY: cross-system output-shape parity. Context7/Neuledge each return a
+    # single doc blob, so for a fair ``recall@1`` comparison pydocs must emit
+    # ONE composite chunk too — not its pre-budget N-item ranked list (which
+    # would hand pydocs an unfair "more text -> more chance of a fuzzy match"
+    # edge). When True, ``search()`` prefers the budgeted composite
+    # (``state.result``) over the ranked list (``state.candidates``). Default
+    # False keeps the recall@k-friendly N-item behavior for RepoQA et al.
+    composite_mode: bool = False
     _db_path: Path | None = field(default=None, init=False, repr=False)
     _pipeline: "CodeRetrieverPipeline | None" = field(
         default=None, init=False, repr=False,
@@ -120,16 +128,34 @@ class PydocsMcpSystem:
         state = await self._pipeline.run(
             SearchQuery(terms=query, max_results=limit),
         )
-        # WHY: prefer state.candidates (ranked top-K from chunk_search_ranked.yaml)
-        # over state.result (composite from chunk_search.yaml). The composite
-        # preset is correct for MCP/LLM consumption but collapses K candidates
-        # to 1 — recall@k can't measure K separate hits then. Falling back to
-        # state.result keeps the adapter compatible with the legacy preset.
+        # WHY: which state slot we read controls pydocs's output SHAPE.
+        # ``state.candidates`` holds the ranked top-K (chunk_search_ranked.yaml);
+        # ``state.result`` holds the budgeted 1-item composite that
+        # TokenBudgetStep renders from those candidates (chunk_search.yaml),
+        # leaving ``state.candidates`` untouched.
+        #   composite_mode=False (default): prefer ``state.candidates`` so
+        #     recall@k can measure K separate hits — collapsing to the 1-item
+        #     composite would make per-K recall unmeasurable. This is the
+        #     behavior RepoQA and every other caller rely on.
+        #   composite_mode=True: prefer ``state.result`` so pydocs emits ONE
+        #     composite chunk, matching Context7/Neuledge's single blob for a
+        #     fair cross-system recall@1 (no "more text -> more fuzzy-match
+        #     chances" edge from the N-item list).
+        # Either branch falls back to the other slot when its preferred slot is
+        # empty/None, so an adapter mis-wiring (e.g. a missing
+        # token_budget_formatter step) degrades gracefully instead of returning
+        # nothing.
         items_source: ChunkList | None = None
-        if isinstance(state.candidates, ChunkList) and state.candidates.items:
-            items_source = state.candidates
-        elif isinstance(state.result, ChunkList):
-            items_source = state.result
+        if self.composite_mode:
+            if isinstance(state.result, ChunkList) and state.result.items:
+                items_source = state.result
+            elif isinstance(state.candidates, ChunkList):
+                items_source = state.candidates
+        else:
+            if isinstance(state.candidates, ChunkList) and state.candidates.items:
+                items_source = state.candidates
+            elif isinstance(state.result, ChunkList):
+                items_source = state.result
         if items_source is None:
             return ()
         out: list[RetrievedItem] = []
