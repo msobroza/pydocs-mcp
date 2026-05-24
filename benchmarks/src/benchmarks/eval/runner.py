@@ -90,6 +90,7 @@ async def run_sweep(
     tracker_kwargs: Mapping[str, Mapping[str, object]] | None = None,
     metric_specs: tuple[str, ...] = DEFAULT_METRIC_SPECS,
     limit: int | None = None,
+    corpus_dir: Path | None = None,
 ) -> tuple[SweepResults, int]:
     """Run a (system × config) sweep over a dataset.
 
@@ -109,6 +110,13 @@ async def run_sweep(
             single ``Scorer``.
         limit: Cap the per-(system, config) task count. ``None`` = full
             dataset.
+        corpus_dir: Operator-supplied corpus path that OVERRIDES each task's
+            ``corpus_source()`` for the whole sweep. ``None`` (default) keeps
+            the per-task ``corpus_source()`` behavior. When set, the loop also
+            SKIPS the ``shutil.rmtree`` teardown — an operator-supplied dir is
+            never deleted (it's reused across every task and leg). Used to
+            point native ``pydocs-mcp`` at a prepared reference project for
+            datasets (e.g. DS-1000) whose ``corpus_source`` is a no-op stub.
 
     Returns:
         ``(sweep_results, tasks_ran)`` where ``sweep_results`` is
@@ -179,7 +187,12 @@ async def run_sweep(
                 # ``index()``. Opt-in via the ``HasLibraryName`` /
                 # ``HasLibrary`` Protocols (see ``systems/base_system.py``).
                 _maybe_set_library(system, task.metadata)
-                corpus_dir = task.corpus_source()
+                # WHY: an operator-supplied ``--corpus-dir`` overrides the
+                # task's own ``corpus_source()`` for the whole sweep (e.g.
+                # DS-1000, whose ``corpus_source`` is a ``/dev/null`` no-op —
+                # native pydocs must instead index the prepared reference
+                # project). When absent, fall back to the per-task source.
+                dir_ = corpus_dir if corpus_dir is not None else task.corpus_source()
                 try:
                     # WHY: time.perf_counter is monotonic and the highest-
                     # resolution clock available — appropriate for sub-
@@ -188,7 +201,7 @@ async def run_sweep(
                     # the scorer or tracker writes — so the latency series
                     # reflects the system under test, not the harness.
                     t0 = time.perf_counter()
-                    await system.index(corpus_dir, config)
+                    await system.index(dir_, config)
                     index_secs = time.perf_counter() - t0
 
                     t1 = time.perf_counter()
@@ -230,7 +243,13 @@ async def run_sweep(
                         for h, tracker in zip(handles, trackers):
                             tracker.log_metric(h, metric_name, value, step=count)
                 finally:
-                    shutil.rmtree(corpus_dir, ignore_errors=True)
+                    # WHY: only rmtree a per-task corpus the dataset
+                    # materialized — NEVER an operator-supplied ``--corpus-dir``
+                    # (it's reused across every task/leg and owned by the
+                    # operator, so deleting it would break the rest of the
+                    # sweep and clobber their files).
+                    if corpus_dir is None:
+                        shutil.rmtree(dir_, ignore_errors=True)
                 count += 1
 
             aggregates: dict[str, tuple[float, float, float]] = {}
@@ -554,6 +573,27 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--dataset-library-filter",
+        default=None,
+        help=(
+            "(ds1000-only) comma-separated PyPI-canonical library names "
+            "(e.g. pandas,numpy) -> Ds1000Dataset.library_filter. Omit to "
+            "evaluate every library. Passed as a kwarg ONLY when set, so "
+            "datasets that don't accept it (RepoQA) are unaffected."
+        ),
+    )
+    parser.add_argument(
+        "--corpus-dir",
+        type=Path,
+        default=None,
+        help=(
+            "override each task's corpus_source() with this path for the "
+            "whole sweep (e.g. a prepared DS-1000 reference project for "
+            "native pydocs-mcp). The runner NEVER deletes an operator-"
+            "supplied dir. Omit to use the per-task corpus."
+        ),
+    )
+    parser.add_argument(
         "--report",
         type=Path,
         default=None,
@@ -571,6 +611,12 @@ def main() -> None:
     dataset_kwargs: dict[str, object] = {}
     if args.fixture is not None:
         dataset_kwargs["fixture_path"] = args.fixture
+    # WHY: only add ``library_filter`` when the flag is set so the kwarg is
+    # absent for datasets that don't accept it (RepoQA). An empty/omitted
+    # flag must not pass ``library_filter=()`` — that would still be a kwarg
+    # RepoQA's constructor rejects.
+    if args.dataset_library_filter is not None:
+        dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
 
     results, tasks_ran = asyncio.run(
         run_sweep(
@@ -581,6 +627,7 @@ def main() -> None:
             tracker_names=_parse_csv(args.trackers),
             metric_specs=_parse_csv(args.metrics),
             limit=args.limit,
+            corpus_dir=args.corpus_dir,
         ),
     )
 

@@ -1,0 +1,17 @@
+# DS-1000 composite overlay — explicitly selects the token-budgeted
+# chunk_search.yaml composite pipeline.
+#
+# Layered under defaults/default_config.yaml via
+# AppConfig.load(explicit_path=...). Used by the cross-system comparison run
+# (pydocs-mcp-composite vs Context7 vs Neuledge).
+#
+# WHY explicit even though chunk_search.yaml is the shipped default: a
+# self-documenting comparison CLI. The comparison run pins this overlay so a
+# reader sees, side by side with ds1000_ranked.yaml, exactly which blueprint
+# each run uses — the composite (one budgeted blob, matching Context7/
+# Neuledge's single doc) vs the ranked top-K. Stating it here means a future
+# change to the shipped default cannot silently retune the comparison run.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/chunk_search.yaml
