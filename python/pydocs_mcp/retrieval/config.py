@@ -221,6 +221,22 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+# Known-model dim lookup. Add entries as the model-selection follow-up
+# PR locks in benchmarked models. Models not in this table skip the
+# check (caller is on the hook).
+_KNOWN_MODEL_DIMS: dict[str, int] = {
+    # FastEmbed
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-base-en-v1.5":  768,
+    "BAAI/bge-large-en-v1.5": 1024,
+    "sentence-transformers/all-MiniLM-L6-v2": 384,
+    # OpenAI (text-embedding-3-* default dims; can be reduced via .dimensions)
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
+
+
 class EmbeddingConfig(BaseModel):
     """Embedding + vector-quantization config (spec §5.10).
 
@@ -239,6 +255,26 @@ class EmbeddingConfig(BaseModel):
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
     # 2 for max compression.
     bit_width:  int = Field(default=4, ge=1, le=8)
+
+    @model_validator(mode="after")
+    def _validate_dim_matches_known_model(self) -> "EmbeddingConfig":
+        # WHY: without this check, setting ``model_name: BAAI/bge-base-en-v1.5``
+        # (768-dim) while leaving ``dim=384`` (the shipped default) silently
+        # produces a corrupt vector store at query time — every embedded
+        # vector lands in a column dimensioned for the wrong model. Failing
+        # at config-load time surfaces the misconfiguration immediately.
+        # Unknown models skip the check so custom / locally-finetuned models
+        # remain usable (caller is on the hook for matching dim).
+        expected = _KNOWN_MODEL_DIMS.get(self.model_name)
+        if expected is not None and self.dim != expected:
+            raise ValueError(
+                f"embedding.dim={self.dim} does not match the known "
+                f"dimension of {self.model_name!r} (expected {expected}). "
+                "Either set dim to the model's native dimension or "
+                "remove the model from the known-dims lookup if you "
+                "intend a custom configuration."
+            )
+        return self
 
 
 class AppConfig(BaseSettings):
@@ -287,7 +323,14 @@ class AppConfig(BaseSettings):
     #
     # Read-only from the outside — treat it as private state.
 
-    model_config = SettingsConfigDict(env_prefix="PYDOCS_", extra="ignore")
+    # WHY env_nested_delimiter='__': without it, nested env-var overrides
+    # like ``PYDOCS_EMBEDDING__MODEL_NAME=...`` would silently no-op —
+    # pydantic-settings only routes env vars into sub-models when a
+    # delimiter is configured. The ``__`` (double underscore) separator
+    # is the pydantic-settings convention.
+    model_config = SettingsConfigDict(
+        env_prefix="PYDOCS_", env_nested_delimiter="__", extra="ignore",
+    )
 
     @classmethod
     def settings_customise_sources(

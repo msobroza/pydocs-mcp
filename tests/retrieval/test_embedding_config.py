@@ -5,6 +5,20 @@ from pydantic import ValidationError
 from pydocs_mcp.retrieval.config import AppConfig, EmbeddingConfig
 
 
+@pytest.fixture(autouse=True)
+def _clean_config_env(monkeypatch, tmp_path):
+    """Isolate each test from ambient ``PYDOCS_*`` env vars and a user file.
+
+    Mirrors the fixture in ``test_config.py`` / ``test_reference_graph_config.py``
+    so ``AppConfig.load()`` resolves only the shipped baseline unless a test
+    explicitly sets env or supplies an explicit_path.
+    """
+    monkeypatch.delenv("PYDOCS_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("PYDOCS_LOG_LEVEL", raising=False)
+    monkeypatch.chdir(tmp_path)  # no ./pydocs-mcp.yaml
+    yield
+
+
 def test_embedding_config_defaults() -> None:
     cfg = EmbeddingConfig()
     assert cfg.provider == "fastembed"
@@ -38,3 +52,20 @@ def test_appconfig_load_exposes_embedding_block() -> None:
     assert isinstance(cfg.embedding, EmbeddingConfig)
     assert cfg.embedding.provider == "fastembed"
     assert cfg.embedding.model_name == "BAAI/bge-small-en-v1.5"
+
+
+def test_dim_mismatch_with_known_model_raises() -> None:
+    with pytest.raises(ValidationError, match="does not match the known dimension"):
+        EmbeddingConfig(model_name="BAAI/bge-small-en-v1.5", dim=1024)
+
+
+def test_unknown_model_name_skips_dim_check() -> None:
+    # Custom model not in _KNOWN_MODEL_DIMS — caller is on the hook.
+    cfg = EmbeddingConfig(model_name="my-custom-model", dim=512)
+    assert cfg.dim == 512
+
+
+def test_env_nested_delimiter_overrides_embedding_field(monkeypatch) -> None:
+    monkeypatch.setenv("PYDOCS_EMBEDDING__BATCH_SIZE", "64")
+    cfg = AppConfig.load()
+    assert cfg.embedding.batch_size == 64
