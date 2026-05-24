@@ -55,4 +55,8 @@ class NDCGAtK:
         idcg = sum(
             1.0 / math.log2(i + 1) for i in range(1, min(self.k, n_gt) + 1)
         )
-        return dcg / idcg
+        # WHY: defends the ndcg <= 1.0 invariant if one relevant key recurs in
+        # the ranking (DCG counts each rank; IDCG normalizes over n_gt distinct
+        # items). Real FTS retrieval yields distinct rows, so this is a
+        # defensive bound, not a hot path.
+        return min(dcg / idcg, 1.0)
