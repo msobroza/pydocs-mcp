@@ -227,6 +227,40 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
                 "they will be re-extracted this run", len(repaired),
             )
 
+    # Detect a model rename in YAML — packages tagged with the old
+    # ``embedding_model`` carry vectors that the new model cannot match
+    # at query time (different vector space). Clearing ``content_hash``
+    # routes them through the existing hash-skip path so the next sweep
+    # re-extracts + re-embeds them under the current model. Skipped
+    # under ``--force``: that path already wipes the cache wholesale.
+    if not args.force:
+        from dataclasses import replace as dc_replace
+
+        from pydocs_mcp.application.indexing_service import (
+            find_packages_with_stale_embeddings,
+        )
+        stale_pkg_names = await find_packages_with_stale_embeddings(
+            uow_factory=uow_factory,
+            current_model=config.embedding.model_name,
+        )
+        if stale_pkg_names:
+            log.warning(
+                "Embedding model changed; re-embedding %d package(s): %s",
+                len(stale_pkg_names), ", ".join(stale_pkg_names),
+            )
+            async with uow_factory() as uow:
+                for name in stale_pkg_names:
+                    pkg = await uow.packages.get(name)
+                    if pkg is not None:
+                        # Empty content_hash will not equal the freshly-
+                        # extracted package's real hash, so the skip check
+                        # in ProjectIndexer (existing.content_hash ==
+                        # pkg.content_hash) falls through to a full reindex.
+                        await uow.packages.upsert(
+                            dc_replace(pkg, content_hash=""),
+                        )
+                await uow.commit()
+
     from pydocs_mcp.application.indexing_service import IndexingService
     indexing_service = IndexingService(uow_factory=uow_factory)
 

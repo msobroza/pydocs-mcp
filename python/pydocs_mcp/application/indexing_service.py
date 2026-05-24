@@ -337,3 +337,32 @@ def _add_qnames(node: "DocumentNode", out: set[str]) -> None:
     out.add(node.qualified_name)
     for child in node.children:
         _add_qnames(child, out)
+
+
+async def find_packages_with_stale_embeddings(
+    *,
+    uow_factory: Callable[[], UnitOfWork],
+    current_model: str,
+) -> list[str]:
+    """Return packages whose stored ``embedding_model`` differs from ``current_model``.
+
+    Used at startup (see ``__main__._run_indexing``) to detect when the
+    YAML's ``embedding.model_name`` has changed since the last index
+    pass. The composition root clears each returned package's
+    ``content_hash`` so the next sweep re-extracts + re-embeds them via
+    the existing hash-skip code path — no manual cache surgery.
+
+    Packages with ``embedding_model is None`` are intentionally NOT
+    flagged stale: they predate the embedding feature (no vectors in
+    the .tq sidecar to mismatch) and will pick up a model tag on their
+    next natural reindex. Flipping them here would trigger a blanket
+    re-extract on every model rename for callers who haven't enabled
+    embeddings yet.
+    """
+    async with uow_factory() as uow:
+        all_pkgs = await uow.packages.list()
+    return [
+        p.name for p in all_pkgs
+        if p.embedding_model is not None
+        and p.embedding_model != current_model
+    ]
