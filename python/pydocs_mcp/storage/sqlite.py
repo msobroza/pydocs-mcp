@@ -768,6 +768,7 @@ class SqliteVectorStore:
                     relevance=float(row["rank"]),
                     retriever_name=self.retriever_name,
                     metadata=dict(base.metadata),
+                    content_hash=base.content_hash,  # defense-in-depth: don't trigger auto-compute
                 )
             )
         return tuple(items)
