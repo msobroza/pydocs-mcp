@@ -164,6 +164,9 @@ class Chunk:
     id: int | None = None
     relevance: float | None = None
     retriever_name: str | None = None
+    embedding: Embedding | None = None  # spec §5.1: populated by the embed
+    # stage during ingestion; stays None on read paths (vectors live in the
+    # .tq sidecar, the SQL row doesn't carry them back).
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
