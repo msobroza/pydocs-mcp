@@ -62,3 +62,11 @@ search:
   output:
     default_limit: 10
     max_limit: 1000
+
+# Embedding + vector-quantization (spec §5.10).
+embedding:
+  provider:    fastembed
+  model_name:  BAAI/bge-small-en-v1.5
+  dim:         384
+  batch_size:  32
+  bit_width:   4

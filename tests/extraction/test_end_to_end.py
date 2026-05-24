@@ -114,7 +114,11 @@ def _build_service(db_path: Path) -> ProjectIndexer:
 
     indexing = build_sqlite_indexing_service(db_path)
     uow_factory = build_sqlite_uow_factory(db_path)
-    pipeline = build_ingestion_pipeline(AppConfig.load())
+    # EmbedChunksStage is now wired into the shipped pipeline by default.
+    # Thread a MockEmbedder until Task 27 lands the composition-root wiring
+    # that calls build_embedder(cfg) at startup.
+    from tests._fakes import MockEmbedder
+    pipeline = build_ingestion_pipeline(AppConfig.load(), embedder=MockEmbedder())
     return ProjectIndexer(
         indexing_service=indexing,
         dependency_resolver=StaticDependencyResolver(),

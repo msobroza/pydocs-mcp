@@ -213,7 +213,7 @@ class ChunkFetcherStep(RetrieverStep):
 def _row_to_candidate(row: sqlite3.Row, retriever_name: str) -> Chunk:
     """sqlite3.Row → Chunk with raw FTS5 rank captured as relevance.
 
-    Mirrors :func:`pydocs_mcp.storage.sqlite._row_to_chunk` for metadata
+    Mirrors :func:`pydocs_mcp.storage.sqlite.row_to_chunk` for metadata
     population. ``rank`` here is the RAW (negative) FTS5 rank; the sign
     flip happens in :class:`BM25ScorerStep` downstream. ``retriever_name``
     carries provenance so downstream parallel/RRF merges can trace which

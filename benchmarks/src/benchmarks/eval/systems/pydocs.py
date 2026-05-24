@@ -78,7 +78,16 @@ class PydocsMcpSystem:
         uow_factory = build_sqlite_uow_factory(self._db_path)
         indexing_service = build_sqlite_indexing_service(self._db_path)
 
-        ingestion_pipeline = build_ingestion_pipeline(config)
+        # EmbedChunksStage is wired into the shipped ingestion pipeline by
+        # default; build the embedder once here so the benchmark sweep
+        # actually computes vectors during ingestion. Production wiring
+        # (see Task 27) will move this construction into __main__.py /
+        # server.py and thread the same instance through the composition
+        # root. The benchmarks workflow installs ``benchmarks[all]`` +
+        # pydocs-mcp[fastembed] so the FastEmbed import path succeeds.
+        from pydocs_mcp.extraction.strategies.embedders import build_embedder
+        embedder = build_embedder(config.embedding)
+        ingestion_pipeline = build_ingestion_pipeline(config, embedder=embedder)
         # WHY: AST-only member extraction matches the safer "static" mode
         # of the CLI — no inspect-mode imports during a benchmark sweep,
         # so a malformed corpus cannot fire arbitrary code through Python

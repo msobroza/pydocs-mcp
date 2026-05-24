@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -221,6 +221,78 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+# Known-model dim lookup. Add entries as the model-selection follow-up
+# PR locks in benchmarked models. Models not in this table skip the
+# check (caller is on the hook).
+_KNOWN_MODEL_DIMS: dict[str, int] = {
+    # FastEmbed
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-base-en-v1.5":  768,
+    "BAAI/bge-large-en-v1.5": 1024,
+    "sentence-transformers/all-MiniLM-L6-v2": 384,
+    # OpenAI (text-embedding-3-* default dims; can be reduced via .dimensions)
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
+
+
+class EmbeddingConfig(BaseModel):
+    """Embedding + vector-quantization config (spec §5.10).
+
+    YAML-tunable; no MCP tool params (per CLAUDE.md §"MCP API surface
+    vs YAML configuration").
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider:   Literal["fastembed", "openai"] = "fastembed"
+    model_name: str = "BAAI/bge-small-en-v1.5"
+    dim:        int = Field(default=384, ge=1)
+    batch_size: int = Field(default=32, ge=1)
+    # TurboQuant scalar-quantization bit width. 4 is the sweet spot per
+    # turbovec README — ~16x compression with minimal recall loss on
+    # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
+    # 2 for max compression.
+    bit_width:  int = Field(default=4, ge=1, le=8)
+
+    @field_validator("dim")
+    @classmethod
+    def _validate_dim_multiple_of_8(cls, v: int) -> int:
+        # WHY: turbovec's ``IdMapIndex`` asserts ``dim % 8 == 0`` (see
+        # turbovec/src/lib.rs). Without this validator, a YAML setting
+        # like ``embedding.dim: 100`` would load fine and only blow up
+        # at first write — far from the misconfiguration. Failing at
+        # config-load surfaces it next to the offending line.
+        if v % 8 != 0:
+            raise ValueError(
+                f"embedding.dim={v} must be a multiple of 8 (TurboQuant "
+                "IdMapIndex constraint). Common values: 384, 512, 768, "
+                "1024, 1536, 3072."
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_dim_matches_known_model(self) -> "EmbeddingConfig":
+        # WHY: without this check, setting ``model_name: BAAI/bge-base-en-v1.5``
+        # (768-dim) while leaving ``dim=384`` (the shipped default) silently
+        # produces a corrupt vector store at query time — every embedded
+        # vector lands in a column dimensioned for the wrong model. Failing
+        # at config-load time surfaces the misconfiguration immediately.
+        # Unknown models skip the check so custom / locally-finetuned models
+        # remain usable (caller is on the hook for matching dim).
+        expected = _KNOWN_MODEL_DIMS.get(self.model_name)
+        if expected is not None and self.dim != expected:
+            raise ValueError(
+                f"embedding.dim={self.dim} does not match the known "
+                f"dimension of {self.model_name!r} (expected {expected}). "
+                "Either set dim to the model's native dimension or "
+                "remove the model from the known-dims lookup if you "
+                "intend a custom configuration."
+            )
+        return self
+
+
 class AppConfig(BaseSettings):
     """Runtime configuration.
 
@@ -250,6 +322,13 @@ class AppConfig(BaseSettings):
     # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
     # surface stays fixed; only deployment-time bounds are configurable.
     search: SearchConfig = Field(default_factory=SearchConfig)
+    # Hybrid-search foundation (spec §5.10): embedding provider /
+    # model / dim / batch / TurboQuant bit-width. Consumed by
+    # ``build_embedder()`` and ``EmbedChunksStage`` later in the
+    # hybrid-search PR. Per CLAUDE.md §"MCP API surface vs YAML
+    # configuration": embedding model choice is a pipeline-tuning knob,
+    # NOT an MCP tool param — the MCP surface stays fixed.
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside
@@ -260,7 +339,14 @@ class AppConfig(BaseSettings):
     #
     # Read-only from the outside — treat it as private state.
 
-    model_config = SettingsConfigDict(env_prefix="PYDOCS_", extra="ignore")
+    # WHY env_nested_delimiter='__': without it, nested env-var overrides
+    # like ``PYDOCS_EMBEDDING__MODEL_NAME=...`` would silently no-op —
+    # pydantic-settings only routes env vars into sub-models when a
+    # delimiter is configured. The ``__`` (double underscore) separator
+    # is the pydantic-settings convention.
+    model_config = SettingsConfigDict(
+        env_prefix="PYDOCS_", env_nested_delimiter="__", extra="ignore",
+    )
 
     @classmethod
     def settings_customise_sources(
