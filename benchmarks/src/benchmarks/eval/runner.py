@@ -34,7 +34,7 @@ from . import datasets as _datasets  # noqa: F401 -- registry side-effects
 from . import metrics as _metrics_pkg  # noqa: F401 -- registry side-effects
 from . import systems as _systems  # noqa: F401 -- registry side-effects
 from . import trackers as _trackers  # noqa: F401 -- registry side-effects
-from .metrics import MRR, PassAt1Needle, RecallAtK
+from .metrics import MRR, NDCGAtK, PassAt1Needle, RecallAtK
 from .metrics.aggregate import mean_with_bootstrap_ci, percentile
 from .metrics.base_metric import Metric, Scorer
 from .serialization import (
@@ -265,13 +265,14 @@ async def run_sweep(
 
 
 def _build_metric(spec: str) -> Metric:
-    """Resolve ``recall@<k>`` / ``mrr`` / ``pass@1-needle`` to a metric
-    instance. Walks ``metric_registry`` for the simple cases and
-    instantiates ``RecallAtK(k)`` for the parameterised form.
+    """Resolve ``recall@<k>`` / ``ndcg@<k>`` / ``mrr`` / ``pass@1-needle``
+    to a metric instance. Walks ``metric_registry`` for the simple cases and
+    instantiates ``RecallAtK(k)`` / ``NDCGAtK(k)`` for the parameterised
+    forms.
 
     Single source of construction so the runner can sweep arbitrary k
-    values via ``--metrics recall@1,recall@5,recall@10`` without the
-    registry needing one entry per k.
+    values via ``--metrics recall@1,recall@5,ndcg@10`` without the registry
+    needing one entry per k.
     """
     if spec == "mrr":
         return MRR()
@@ -286,8 +287,17 @@ def _build_metric(spec: str) -> Metric:
                 f"recall metric spec must be ``recall@<int>``, got {spec!r}",
             ) from exc
         return RecallAtK(k=k)
+    if spec.startswith("ndcg@"):
+        k_part = spec.split("@", 1)[1]
+        try:
+            k = int(k_part)
+        except ValueError as exc:
+            raise ValueError(
+                f"ndcg metric spec must be ``ndcg@<int>``, got {spec!r}",
+            ) from exc
+        return NDCGAtK(k=k)
     # WHY: fall through to the registry so a future custom-named metric
-    # registered under a single key (e.g. ``ndcg@10``) still resolves.
+    # registered under a single key still resolves.
     return metric_registry.build(spec)
 
 

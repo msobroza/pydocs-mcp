@@ -6,10 +6,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..ast_match import find_first_match_rank
 from ..datasets.base_dataset import EvalTask
 from ..serialization import metric_registry
 from ..systems.base_system import RetrievedItem
+from ._relevance import first_relevant_rank
 
 
 @metric_registry.register("mrr")
@@ -20,5 +20,7 @@ class MRR:
     def compute(
         self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
     ) -> float:
-        rank = find_first_match_rank(retrieved, task.gold.ast_body)
+        # WHY: same unified relevance source as recall@k — RepoQA delegates
+        # to the ast match (byte-identical), DS-1000 scans the resolved set.
+        rank = first_relevant_rank(retrieved, task)
         return 1.0 / rank if rank is not None else 0.0
