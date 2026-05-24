@@ -83,6 +83,18 @@ def test_three_of_five_multi_gold_idcg_normalization() -> None:
     assert NDCGAtK(k=10).compute(task, retrieved) == dcg / idcg
 
 
+def test_ndcg_clamped_to_one_when_relevant_key_repeats() -> None:
+    # One ground-truth chunk (n_gt=1 -> IDCG = 1/log2(2) = 1). The SAME
+    # relevant key (chunk:10) lands at ranks 1 AND 2, so an unclamped DCG
+    # double-counts it (1/log2(2) + 1/log2(3) = 1.63) and NDCG would breach
+    # the [0,1] bound. The clamp pins it back to 1.0. Real FTS retrieval
+    # yields distinct rows, so this is a defensive bound, not a hot path.
+    task = _ds1000_task(frozenset({"chunk:10"}))
+    retrieved = (_item(1, 10), _item(2, 10), _item(3, 99))
+    assert NDCGAtK(k=10).compute(task, retrieved) == 1.0
+    assert NDCGAtK(k=10).compute(task, retrieved) <= 1.0
+
+
 def test_k_truncates_below_hit_rank() -> None:
     # The only hit is at rank 4 but k=3 -> nothing in the top-k -> 0.0.
     task = _ds1000_task(frozenset({"chunk:40"}))
