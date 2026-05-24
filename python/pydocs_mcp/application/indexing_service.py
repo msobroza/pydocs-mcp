@@ -104,6 +104,12 @@ class IndexingService:
             await uow.packages.delete(filter={"name": package.name})
             await uow.packages.upsert(package)
             await uow.chunks.upsert(chunks)
+            # AC-24: when the UoW is composite (SqliteUnitOfWork +
+            # TurboQuantUnitOfWork), forward every chunk's embedding to
+            # the .tq sidecar under the autoincrement id SQLite just
+            # assigned. The SqliteUnitOfWork-only path is a no-op
+            # (``getattr`` returns None) so legacy callers stay green.
+            await self._maybe_write_vectors(uow, package, chunks)
             # Tree persistence happens between chunks and members so
             # FK-like post-conditions line up if a future schema adds them.
             if trees:
@@ -134,6 +140,62 @@ class IndexingService:
             await self._reresolve_cross_package(uow, package.name)
 
             await uow.commit()
+
+    async def _maybe_write_vectors(
+        self,
+        uow: UnitOfWork,
+        package: Package,
+        input_chunks: tuple[Chunk, ...],
+    ) -> None:
+        """AC-24: forward chunk embeddings to ``uow.vectors`` when present.
+
+        Composite UoW (SQLite + TurboQuant) exposes ``vectors``; the
+        SQLite-only UoW does not — ``getattr`` returns ``None`` and the
+        method becomes a no-op so the legacy single-backend path stays
+        identical.
+
+        The SQLite ``id`` column is autoincrement: ``chunks.upsert`` did
+        not return the assigned IDs (``executemany`` doesn't), so we
+        re-fetch by package and sort by id. Because ``delete`` cleared
+        the package's rows first and ``executemany`` inserts in input
+        order, the id-sorted persisted list is positionally aligned with
+        ``input_chunks`` — index ``i`` in both lists is the same logical
+        chunk. We then keep only the pairs where the input chunk carried
+        an embedding; mixed batches (some embedded, some not) skip the
+        bare entries instead of failing the whole write.
+        """
+        vectors_store = getattr(uow, "vectors", None)
+        if vectors_store is None:
+            return
+        # Re-fetch the just-upserted rows to learn their assigned IDs.
+        # ``delete`` ran before ``upsert`` so this returns exactly the
+        # rows ``executemany`` just inserted — no stale survivors.
+        persisted = await uow.chunks.list(
+            filter={ChunkFilterField.PACKAGE.value: package.name},
+        )
+        if len(persisted) != len(input_chunks):
+            # Defensive: a row count mismatch means our positional pairing
+            # would associate the wrong embedding to the wrong id. Silently
+            # skipping is safer than corrupting the .tq index.
+            log.warning(
+                "Skipping vector write for %s: persisted row count %d "
+                "does not match input chunk count %d.",
+                package.name, len(persisted), len(input_chunks),
+            )
+            return
+        persisted_sorted = sorted(persisted, key=lambda c: c.id or 0)
+        ids: list[int] = []
+        embeddings: list = []
+        for persisted_chunk, input_chunk in zip(
+            persisted_sorted, input_chunks, strict=True,
+        ):
+            if input_chunk.embedding is None or persisted_chunk.id is None:
+                continue
+            ids.append(persisted_chunk.id)
+            embeddings.append(input_chunk.embedding)
+        if not ids:
+            return
+        await vectors_store.add_vectors(ids, embeddings)
 
     async def _resolve_references(
         self,
