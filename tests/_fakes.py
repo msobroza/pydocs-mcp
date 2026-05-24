@@ -26,12 +26,15 @@ inject a shared audit list at construction time.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+import hashlib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
+
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.models import Chunk, ModuleMember, Package
+from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -440,14 +443,6 @@ def make_fake_uow_factory(
 
 
 # ── MockEmbedder (canonical Embedder test double, AC-27) ─────────────────
-import hashlib
-from collections.abc import Sequence
-
-import numpy as np
-
-from pydocs_mcp.models import Embedding
-
-
 @dataclass(frozen=True, slots=True)
 class MockEmbedder:
     """Deterministic Embedder test double — same input → same vector.
