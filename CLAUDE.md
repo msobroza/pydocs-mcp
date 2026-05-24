@@ -297,6 +297,9 @@ jargon that requires reading our PR log to understand.
 - `trilogy` / `pre-trilogy` / `post-trilogy` — same problem, less precise.
 - `Task <N>` / `Task <N> of <plan>` — superpowers-plan task IDs are
   internal scaffolding; reference the *file* or *capability* instead.
+- `PR-B3.1`, `PR-C2`, any `PR-<LETTER><N>.<M>`-style label — internal
+  multi-PR series labels. Reference the *capability* instead
+  ("the planned dense-embeddings + RRF baseline").
 - Branch / worktree names (`feature/cleanups-and-pr-a`,
   `.claude/worktrees/...`) — implementation detail, not API.
 
@@ -324,7 +327,7 @@ jargon that requires reading our PR log to understand.
 ```bash
 find . -name "README.md" -not -path "*/.venv/*" -not -path "*/.claude/*" \
     -not -path "*/node_modules/*" -not -path "*/.git/*" | \
-    xargs grep -nE "PR #[0-9]+|sub-PR|#5[a-c]|trilogy|Task [0-9]+ of"
+    xargs grep -nE "PR #[0-9]+|sub-PR|#5[a-c]|trilogy|Task [0-9]+ of|PR-[A-Z][0-9.]+"
 ```
 
 Any match is a violation — replace with concrete capability / file refs.
