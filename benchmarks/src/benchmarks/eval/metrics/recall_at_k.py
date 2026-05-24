@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..ast_match import find_first_match_rank
 from ..datasets.base_dataset import EvalTask
 from ..serialization import metric_registry
 from ..systems.base_system import RetrievedItem
+from ._relevance import first_relevant_rank
 
 
 @metric_registry.register("recall@k")
@@ -25,5 +25,8 @@ class RecallAtK:
     def compute(
         self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
     ) -> float:
-        rank = find_first_match_rank(retrieved, task.gold.ast_body)
+        # WHY: relevance comes from the single ``first_relevant_rank`` helper
+        # (RepoQA -> ast match; DS-1000 -> resolved-set scan), so this metric
+        # never branches on dataset. RepoQA stays byte-identical.
+        rank = first_relevant_rank(retrieved, task)
         return 1.0 if rank is not None and rank <= self.k else 0.0
