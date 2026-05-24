@@ -72,7 +72,18 @@ class EmbedChunksStage:
             replace(c, embedding=emb)
             for c, emb in zip(state.chunks, embeddings, strict=True)
         )
-        return replace(state, chunks=new_chunks)
+        # Also stamp the package with the embedder's identity so
+        # ``find_packages_with_stale_embeddings`` can detect a YAML
+        # ``embedding.model_name`` swap and trigger a re-embed sweep.
+        # ``PackageBuildStage`` runs BEFORE this stage and sets
+        # ``state.package`` with ``embedding_model=None`` — we overwrite
+        # here because this stage owns the (model_name → vectors) coupling.
+        new_package = state.package
+        if state.package is not None:
+            new_package = replace(
+                state.package, embedding_model=self.embedder.model_name,
+            )
+        return replace(state, chunks=new_chunks, package=new_package)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], context: Any) -> "EmbedChunksStage":

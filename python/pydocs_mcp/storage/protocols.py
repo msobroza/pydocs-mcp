@@ -215,9 +215,14 @@ class Embedder(Protocol):
     MultiVector (list of 1D np.ndarrays). Use
     `pydocs_mcp.models.is_multi_vector(emb)` to disambiguate.
     """
-    # Default makes the attribute discoverable via hasattr(Embedder, "dim")
+    # Defaults make the attributes discoverable via hasattr(Embedder, ...)
     # for structural / introspection tests. Real implementations override.
     dim: int = 0
+    # Identifier string the embedder embedded with — written to
+    # ``Package.embedding_model`` by ``EmbedChunksStage`` so a YAML
+    # ``embedding.model_name`` swap triggers the re-embed sweep in
+    # :func:`find_packages_with_stale_embeddings`.
+    model_name: str = ""
 
     async def embed_query(self, text: str) -> Embedding: ...
 

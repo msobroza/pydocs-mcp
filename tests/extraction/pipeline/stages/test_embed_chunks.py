@@ -8,21 +8,27 @@ import pytest
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
 from pydocs_mcp.extraction.pipeline.stages.embed_chunks import EmbedChunksStage
-from pydocs_mcp.models import Chunk
+from pydocs_mcp.models import Chunk, Package, PackageOrigin
 from tests._fakes import MockEmbedder
 
 
-def _state(chunks: tuple[Chunk, ...]) -> IngestionState:
+def _state(
+    chunks: tuple[Chunk, ...],
+    *,
+    package: Package | None = None,
+) -> IngestionState:
     """IngestionState requires target + target_kind — supply minimal stubs.
 
-    The stage under test only reads/writes ``state.chunks``; the other
-    fields are inert here and provide just enough shape to satisfy
-    ``IngestionState``'s required positional fields.
+    The stage under test only reads/writes ``state.chunks`` and
+    ``state.package``; the other fields are inert here and provide just
+    enough shape to satisfy ``IngestionState``'s required positional
+    fields.
     """
     return IngestionState(
         target=Path("."),
         target_kind=TargetKind.PROJECT,
         chunks=chunks,
+        package=package,
     )
 
 
@@ -186,3 +192,42 @@ def test_embed_chunks_rejects_nonpositive_batch_size() -> None:
         EmbedChunksStage(embedder=embedder, batch_size=0)
     with pytest.raises(ValueError, match="batch_size must be > 0"):
         EmbedChunksStage(embedder=embedder, batch_size=-1)
+
+
+@pytest.mark.asyncio
+async def test_embed_chunks_updates_package_embedding_model() -> None:
+    """After embedding, ``state.package.embedding_model`` reflects the
+    embedder's identity so ``find_packages_with_stale_embeddings`` can
+    detect a YAML ``embedding.model_name`` swap and trigger re-embed
+    (the production round-trip needed for AC-26)."""
+    embedder = MockEmbedder(dim=4, model_name="mock-v1")
+    pkg = Package(
+        name="demo",
+        version="1.0",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",
+        origin=PackageOrigin.DEPENDENCY,
+        embedding_model=None,
+    )
+    state = _state((Chunk(text="alpha"),), package=pkg)
+    stage = EmbedChunksStage(embedder=embedder, batch_size=2)
+    out = await stage.run(state)
+    assert out.package is not None
+    assert out.package.embedding_model == "mock-v1"
+    # Other Package fields round-trip untouched.
+    assert out.package.name == "demo"
+    assert out.package.version == "1.0"
+    assert out.package.content_hash == "h"
+
+
+@pytest.mark.asyncio
+async def test_embed_chunks_leaves_package_none_when_state_lacks_one() -> None:
+    """Defensive: ``state.package`` may be None in test/stage-isolation
+    contexts. Don't crash trying to ``replace(None, ...)``."""
+    embedder = MockEmbedder(dim=4, model_name="mock-v1")
+    state = _state((Chunk(text="alpha"),), package=None)
+    stage = EmbedChunksStage(embedder=embedder)
+    out = await stage.run(state)
+    assert out.package is None

@@ -455,6 +455,10 @@ class MockEmbedder:
     that need embedding-shaped data without invoking a real model.
     """
     dim: int = 384
+    # Mirrors the ``Embedder`` Protocol's ``model_name`` field — written
+    # into ``Package.embedding_model`` by ``EmbedChunksStage`` so tests
+    # that exercise the model-change re-embed sweep can pin a value.
+    model_name: str = "mock"
 
     async def embed_query(self, text: str) -> Embedding:
         return self._derive(text)
