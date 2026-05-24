@@ -150,11 +150,26 @@ class Ds1000Dataset:
         # Filters compare against the NORMALIZED (lowercase canonical)
         # library name, so callers don't have to know the upstream
         # title-case form. Empty filter = keep all.
+        #
+        # WHY normalize the FILTER too: the row library is already run
+        # through ``_normalize_library`` (title-case -> PyPI-canonical), so a
+        # filter value must go through the same canonicalization or the two
+        # sides can't match. DS-1000's raw library field is title-case, so an
+        # operator passing the casing they SEE (``--dataset-library-filter
+        # Pandas``) would otherwise silently match zero rows. Build the
+        # normalized filter set once so ``"Pandas"`` / ``"pandas"`` /
+        # ``"PANDAS"`` and ``"Sklearn"`` / ``"scikit-learn"`` all behave
+        # identically.
+        normalized_filter = (
+            {_normalize_library(x) for x in self.library_filter}
+            if self.library_filter
+            else None
+        )
         filtered: list[dict[str, Any]] = []
         for row in rows:
-            if self.library_filter:
+            if normalized_filter is not None:
                 normalized = _normalize_library(row.get("library", ""))
-                if normalized not in self.library_filter:
+                if normalized not in normalized_filter:
                     continue
             if self.perturbation_filter:
                 if row.get("perturbation_type") not in self.perturbation_filter:

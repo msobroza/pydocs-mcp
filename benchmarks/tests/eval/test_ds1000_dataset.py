@@ -83,6 +83,48 @@ async def test_library_filter_slices_rows() -> None:
     assert all(t.metadata["library"] == "pandas" for t in tasks)
 
 
+async def test_library_filter_normalizes_title_case_input() -> None:
+    """REGRESSION: ``library_filter`` values are normalized through the same
+    ``_normalize_library`` canonicalization as the row library before
+    comparing, so the casing a user sees in DS-1000 (title-case ``"Pandas"``)
+    matches. ``("Pandas",)``, ``("pandas",)``, and ``("PANDAS",)`` must all
+    select exactly the 3 pandas rows, each tagged with the normalized
+    lowercase form."""
+    for filter_value in (("Pandas",), ("pandas",), ("PANDAS",)):
+        dataset = Ds1000Dataset(
+            fixture_path=FIXTURE_PATH, library_filter=filter_value,
+        )
+        tasks = [t async for t in dataset.tasks()]
+        assert len(tasks) == 3, f"{filter_value!r} should match 3 pandas rows"
+        assert all(t.metadata["library"] == "pandas" for t in tasks)
+
+
+async def test_library_filter_normalizes_alias_input() -> None:
+    """``library_filter`` accepts DS-1000 title-case aliases AND their
+    PyPI-canonical form interchangeably. ``("Sklearn",)`` and
+    ``("scikit-learn",)`` both normalize to ``scikit-learn`` and select the
+    one sklearn fixture row."""
+    for filter_value in (("Sklearn",), ("scikit-learn",)):
+        dataset = Ds1000Dataset(
+            fixture_path=FIXTURE_PATH, library_filter=filter_value,
+        )
+        tasks = [t async for t in dataset.tasks()]
+        assert len(tasks) == 1, f"{filter_value!r} should match the sklearn row"
+        assert all(t.metadata["library"] == "scikit-learn" for t in tasks)
+
+
+async def test_library_filter_mixed_case_multi_element() -> None:
+    """A mixed-case multi-element filter normalizes every element before
+    comparing. ``("Pandas", "NUMPY")`` selects the union of the 3 pandas +
+    2 numpy rows (5 total), each tagged with the normalized lowercase form."""
+    dataset = Ds1000Dataset(
+        fixture_path=FIXTURE_PATH, library_filter=("Pandas", "NUMPY"),
+    )
+    tasks = [t async for t in dataset.tasks()]
+    assert len(tasks) == 5
+    assert all(t.metadata["library"] in {"pandas", "numpy"} for t in tasks)
+
+
 async def test_library_filter_multi_element_selects_union_of_libraries() -> None:
     """``library_filter`` with multiple PyPI-canonical names returns the
     union of matching rows. The mini fixture has 3 pandas + 2 numpy rows;

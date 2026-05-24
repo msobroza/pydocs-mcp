@@ -576,21 +576,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--dataset-library-filter",
         default=None,
         help=(
-            "(ds1000-only) comma-separated PyPI-canonical library names "
-            "(e.g. pandas,numpy) -> Ds1000Dataset.library_filter. Omit to "
-            "evaluate every library. Passed as a kwarg ONLY when set, so "
-            "datasets that don't accept it (RepoQA) are unaffected."
+            "(ds1000-only) comma-separated library names (e.g. pandas,numpy) "
+            "-> Ds1000Dataset.library_filter. Matching is case-insensitive / "
+            "normalized — `Pandas`, `pandas`, `PANDAS` all match, and DS-1000 "
+            "title-case aliases map to PyPI canonical (`Sklearn` == "
+            "`scikit-learn`, `Pytorch` == `torch`). Omit to evaluate every "
+            "library. Passed as a kwarg ONLY when set, so datasets that don't "
+            "accept it (RepoQA) are unaffected."
         ),
     )
     parser.add_argument(
         "--corpus-dir",
-        type=Path,
+        # WHY resolve(): a relative --corpus-dir would otherwise be
+        # cwd-dependent. Resolving to an absolute path at parse time pins the
+        # dir regardless of where the sweep is launched from; main() then
+        # fast-fails if it isn't a real directory.
+        type=lambda p: Path(p).resolve(),
         default=None,
         help=(
             "override each task's corpus_source() with this path for the "
             "whole sweep (e.g. a prepared DS-1000 reference project for "
-            "native pydocs-mcp). The runner NEVER deletes an operator-"
-            "supplied dir. Omit to use the per-task corpus."
+            "native pydocs-mcp). The path is resolved to an absolute path and "
+            "must be an existing directory (the runner fast-fails otherwise). "
+            "The runner NEVER deletes an operator-supplied dir. Omit to use "
+            "the per-task corpus."
         ),
     )
     parser.add_argument(
@@ -606,6 +615,13 @@ def main() -> None:
     """``python -m benchmarks.benchmarks.eval.runner`` entry point."""
     parser = _build_arg_parser()
     args = parser.parse_args()
+
+    # WHY fast-fail here: a typo'd --corpus-dir would otherwise index an empty
+    # directory, scoring ~0 across the sweep with no error — silently
+    # misleading for operators. Catch the bad path before launching anything.
+    # (--corpus-dir's argparse type already resolved it to an absolute Path.)
+    if args.corpus_dir is not None and not args.corpus_dir.is_dir():
+        parser.error(f"--corpus-dir not a directory: {args.corpus_dir}")
 
     config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
     dataset_kwargs: dict[str, object] = {}

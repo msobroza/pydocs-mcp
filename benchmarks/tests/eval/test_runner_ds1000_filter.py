@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+
 from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
 from benchmarks.eval.datasets.ds1000 import Ds1000Dataset
 from benchmarks.eval.runner import _build_arg_parser, run_sweep
@@ -95,6 +97,43 @@ def test_cli_flag_present_parses_comma_list() -> None:
         ["--configs", "x.yaml", "--dataset-library-filter", "pandas,numpy"],
     )
     assert args.dataset_library_filter == "pandas,numpy"
+
+
+# ── --corpus-dir resolution + fast-fail ─────────────────────────────────────
+
+
+def test_corpus_dir_resolved_to_absolute_path(tmp_path: Path) -> None:
+    """``--corpus-dir`` is resolved to an absolute Path at parse time, so a
+    relative value isn't cwd-dependent downstream."""
+    args = _parse(["--configs", "x.yaml", "--corpus-dir", str(tmp_path)])
+    assert args.corpus_dir == tmp_path.resolve()
+    assert args.corpus_dir.is_absolute()
+
+
+def test_corpus_dir_missing_dir_fast_fails(tmp_path: Path) -> None:
+    """A non-existent ``--corpus-dir`` makes ``main()`` ``parser.error`` out
+    (SystemExit) BEFORE launching the sweep — a typo'd path can't silently
+    index an empty dir and score ~0. Driven through ``main()`` with a patched
+    ``argv`` so no real sweep runs."""
+    import sys
+
+    from benchmarks.eval import runner
+
+    bad_dir = tmp_path / "does-not-exist"
+    argv = [
+        "prog",
+        "--configs", "x.yaml",
+        "--corpus-dir", str(bad_dir),
+    ]
+    orig_argv = sys.argv
+    sys.argv = argv
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            runner.main()
+    finally:
+        sys.argv = orig_argv
+    # argparse's parser.error() exits with status 2.
+    assert excinfo.value.code == 2
 
 
 # ── --corpus-dir override + rmtree guard ────────────────────────────────────
