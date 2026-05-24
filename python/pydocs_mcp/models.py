@@ -18,7 +18,6 @@ import numpy as np
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pyd_dataclass
 
-
 # ── Embedding types (spec §5.1) ──────────────────────────────────────────
 # Aligned with FastEmbed (https://github.com/qdrant/fastembed):
 #
