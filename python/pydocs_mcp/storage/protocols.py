@@ -78,9 +78,7 @@ class HybridSearchable(Protocol):
         query_terms: str,
         query_vector: Sequence[float],
         limit: int,
-        filter: Filter | Mapping | None = None,
-        *,
-        alpha: float = 0.5,
+        filter: Filter | None = None,
     ) -> tuple[Chunk, ...]: ...
 
 
