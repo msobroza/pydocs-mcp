@@ -30,8 +30,10 @@ namespacing means an int chunk-id can never collide with an int rank.
   chunks carry ``id=None``). Fuzzy-matches the *retrieved* items' text
   only.
 
-(Oracle indexing's exact-match ``PydocsOracleGoldResolver`` plugs in via
-this same Protocol in a later task.)
+Oracle indexing's exact-match ``PydocsOracleGoldResolver`` also ships here
+(for ``PydocsOracleSystem``): same injected-``uow_factory`` shape, but it
+matches the gold ``doc_ids`` against each stored chunk's ``title`` metadata
+exactly (no fuzz), returning ``chunk:{store_id}`` for every hit.
 """
 from __future__ import annotations
 
@@ -130,6 +132,63 @@ class PydocsFuzzyGoldResolver:
 
 
 @dataclass(frozen=True, slots=True)
+class PydocsOracleGoldResolver:
+    """Exact-match resolver for ``PydocsOracleSystem`` (oracle-indexing mode).
+
+    Where the fuzzy resolver scores stored chunk *text* against gold
+    ``doc_contents``, this resolver matches on the gold ``doc_ids`` directly:
+    the oracle indexer wrote each ``code-rag-bench/library-documentation`` row's
+    ``doc_id`` into the chunk's ``title`` metadata (the ``chunks.title`` column),
+    so an EXACT string membership of that title against ``gold.extra["doc_ids"]``
+    is the ground truth. No ``rapidfuzz`` — exactness is the point of an oracle.
+
+    ``uow_factory`` is INJECTED (a ``Callable[[], UnitOfWork]`` opening an
+    async-context-manager UoW exposing ``.chunks.list``) so the matching test
+    pattern as ``PydocsFuzzyGoldResolver`` holds; ``PydocsOracleSystem`` builds
+    the real one from its post-index ``_db_path`` via ``build_sqlite_uow_factory``.
+
+    Identity coherence with Task 3's ``_item_key``: oracle chunks are real store
+    rows, so the resolver returns ``chunk:{store_id}`` (NOT the doc_id string) for
+    every matched chunk — lining up with the ``chunk:{chunk_id}`` keys
+    ``search()`` stamps onto the ranked items.
+    """
+
+    uow_factory: Callable[[], object]
+
+    async def resolve(
+        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
+    ) -> frozenset[str]:
+        # WHY: cheap no-op BEFORE any DB access — same RepoQA-safety rationale
+        # as the fuzzy resolver. A task with no gold doc_ids never opens a UoW.
+        gold_ids = task.gold.extra.get("doc_ids", ())
+        if not gold_ids:
+            return frozenset()
+
+        # Deferred imports keep this module importable without pydocs_mcp.
+        from pydocs_mcp.deps import normalize_package_name
+        from pydocs_mcp.models import ChunkFilterField
+
+        # WHY (coherence): the oracle indexer normalized each row's library the
+        # SAME way before writing the Package + chunk ``package`` metadata, so
+        # we MUST normalize the task's library here or the store scan reads zero
+        # rows. ``doc_id`` global uniqueness keeps exact-match correct, and the
+        # package filter keeps the scan fast.
+        library = task.metadata.get("library", "")
+        pkg = normalize_package_name(library)
+        async with self.uow_factory() as uow:
+            chunks = await uow.chunks.list(filter={"package": pkg})
+
+        # EXACT string membership: the chunk's ``title`` metadata IS the row's
+        # doc_id. id=None chunks can't be id-matched to a store row -> skip.
+        return frozenset(
+            f"chunk:{c.id}"
+            for c in chunks
+            if c.id is not None
+            and c.metadata.get(ChunkFilterField.TITLE.value) in gold_ids
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class LazyFuzzyGoldResolver:
     """Lazy resolver for non-enumerable stores (Context7/Neuledge, and
     pydocs composite mode). Fuzzy-matches the *retrieved* items' text
@@ -157,4 +216,5 @@ __all__ = [
     "GoldResolver",
     "LazyFuzzyGoldResolver",
     "PydocsFuzzyGoldResolver",
+    "PydocsOracleGoldResolver",
 ]
