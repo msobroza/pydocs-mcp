@@ -29,11 +29,14 @@ from typing import TYPE_CHECKING, Optional
 
 import httpx
 
+from ..gold_resolver import _DEFAULT_FUZZ_THRESHOLD, LazyFuzzyGoldResolver
 from ..serialization import system_registry
 from .base_system import RetrievedItem
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
+
+    from ..gold_resolver import GoldResolver
 
 CONTEXT7_BASE_URL = "https://mcp.context7.com/mcp"
 _DEFAULT_TIMEOUT = 30.0
@@ -213,6 +216,14 @@ class Context7System:
                 qualified_name=self.library_name or None,
             ),
         )
+
+    @property
+    def gold_resolver(self) -> "GoldResolver":
+        # WHY: Context7 returns a single concatenated blob from a
+        # non-enumerable remote store — there's no chunk-id store to scan,
+        # so ground-truth is decided by fuzzy-matching the retrieved blob
+        # against gold ``doc_contents`` (lazy), same as Neuledge.
+        return LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
 
     async def teardown(self) -> None:
         client = self._client

@@ -22,6 +22,7 @@ import sys
 import time
 import traceback
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,10 +43,13 @@ from .serialization import (
     system_registry,
     tracker_registry,
 )
-from .systems.base_system import HasLibrary, HasLibraryName
+from .systems.base_system import HasGoldResolver, HasLibrary, HasLibraryName
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
+
+    from .datasets.base_dataset import EvalTask
+    from .systems.base_system import RetrievedItem
 
 
 SweepResults = dict[tuple[str, str], dict[str, tuple[float, float, float]]]
@@ -198,6 +202,14 @@ async def run_sweep(
                         tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
                         tracker.log_metric(h, "search_seconds", search_secs, step=count)
 
+                    # WHY: unified ground-truth resolution (spec §5). For an
+                    # opt-in ``HasGoldResolver`` system, label the task's
+                    # ground-truth chunk-ids BEFORE scoring so every metric
+                    # reads one ``resolved_chunk_ids`` set via
+                    # ``is_relevant`` instead of branching fuzzy-vs-exact.
+                    # RepoQA systems aren't ``HasGoldResolver`` -> no-op.
+                    task = await _resolve_and_inject(system, task, retrieved)
+
                     scores = scorer.score(task, retrieved)
                     for metric_name, value in scores.items():
                         per_metric_values[metric_name].append(value)
@@ -277,6 +289,32 @@ def _build_metric(spec: str) -> Metric:
     # WHY: fall through to the registry so a future custom-named metric
     # registered under a single key (e.g. ``ndcg@10``) still resolves.
     return metric_registry.build(spec)
+
+
+async def _resolve_and_inject(
+    system: object,
+    task: "EvalTask",
+    retrieved: tuple["RetrievedItem", ...],
+) -> "EvalTask":
+    """Run the system's ``GoldResolver`` and inject its result into a fresh
+    task (frozen gold -> ``dataclasses.replace``, never mutated).
+
+    Opt-in via ``isinstance(system, HasGoldResolver)`` — a system without a
+    ``gold_resolver`` (RepoQA flows) is a strict no-op that returns the
+    SAME task object, leaving the existing ``ast_body`` relevance path
+    untouched. Returns the (possibly augmented) task so the caller can hand
+    it to ``scorer.score``.
+    """
+    if not isinstance(system, HasGoldResolver):
+        return task
+    resolved = await system.gold_resolver.resolve(task, retrieved)
+    return replace(
+        task,
+        gold=replace(
+            task.gold,
+            extra={**task.gold.extra, "resolved_chunk_ids": resolved},
+        ),
+    )
 
 
 def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:
