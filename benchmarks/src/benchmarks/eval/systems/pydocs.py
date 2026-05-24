@@ -15,12 +15,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..gold_resolver import (
+    _DEFAULT_FUZZ_THRESHOLD,
+    LazyFuzzyGoldResolver,
+    PydocsFuzzyGoldResolver,
+)
 from ..serialization import system_registry
 from .base_system import RetrievedItem
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+
+    from ..gold_resolver import GoldResolver
 
 
 @system_registry.register("pydocs-mcp")
@@ -170,9 +177,40 @@ class PydocsMcpSystem:
                         meta.get("qualified_name"), meta.get("title"),
                     ),
                     relevance=chunk.relevance,
+                    # WHY: stamp the store row id so the eager
+                    # ``PydocsFuzzyGoldResolver`` (which keys store rows as
+                    # ``chunk:{id}``) lines up with these ranked items. The
+                    # FTS path preserves the id via ``_row_to_candidate``;
+                    # composite/budgeted chunks carry ``id=None`` (-> rank
+                    # key), which is why composite_mode uses the lazy
+                    # resolver instead.
+                    chunk_id=chunk.id,
                 ),
             )
         return tuple(out)
+
+    @property
+    def gold_resolver(self) -> "GoldResolver":
+        """Per-system ground-truth resolver (opt into ``HasGoldResolver``).
+
+        WHY a property (not a field): the choice depends on
+        ``composite_mode`` and on ``_db_path``, which is only set after
+        ``index()``; the runner reads ``gold_resolver`` AFTER index+search.
+
+        WHY the composite split: a composite/budgeted chunk has ``id=None``,
+        so it can't be id-matched against the store — composite mode must
+        match on content (lazy), exactly like Context7/Neuledge. Native
+        (ranked) mode enumerates the store and id-matches (eager). The
+        ``build_sqlite_uow_factory`` import is DEFERRED so ``import pydocs``
+        works without ``pydocs_mcp`` installed (matching ``index()``).
+        """
+        if self.composite_mode or self._db_path is None:
+            return LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
+        from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
+        return PydocsFuzzyGoldResolver(
+            build_sqlite_uow_factory(self._db_path), _DEFAULT_FUZZ_THRESHOLD,
+        )
 
     async def teardown(self) -> None:
         # Idempotent: the runner's failure path may call this twice.
