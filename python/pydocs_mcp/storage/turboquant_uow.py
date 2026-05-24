@@ -185,5 +185,18 @@ class TurboQuantUnitOfWork:
             )
         return self._index
 
+    @property
+    def vectors(self) -> "TurboQuantUnitOfWork":
+        """Self-reference under the canonical name expected by CompositeUnitOfWork.
+
+        CompositeUnitOfWork delegates attribute access by name across children.
+        Sibling SqliteUnitOfWork exposes ``packages`` / ``chunks`` / ...; this
+        UoW owns the vector backend, so callers reach it via ``uow.vectors`` —
+        returning ``self`` keeps the name consistent and lets services call
+        ``await uow.vectors.add_vectors(...)`` whether wrapped in a composite
+        or used directly.
+        """
+        return self
+
 
 __all__ = ("TurboQuantUnitOfWork",)

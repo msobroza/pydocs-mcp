@@ -9,13 +9,15 @@ through a single factory instead of N copies.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import build_connection_provider
+from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.sqlite import SqliteUnitOfWork
+from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
@@ -71,3 +73,36 @@ def build_sqlite_lookup_service(
         tree_svc=tree_svc,
         ref_svc=ref_svc,
     )
+
+
+def build_composite_uow_factory(
+    children: Sequence[Callable[[], object]],
+) -> Callable[[], CompositeUnitOfWork]:
+    """Wrap N child UoW factories into a composite factory (spec §5.7).
+
+    The returned callable instantiates each child via its factory and
+    wraps them in a CompositeUnitOfWork. Order-preserving (children[0]
+    commits first; rollback walks in reverse).
+    """
+    def _make() -> CompositeUnitOfWork:
+        return CompositeUnitOfWork([f() for f in children])
+    return _make
+
+
+def build_sqlite_plus_turboquant_uow_factory(
+    *,
+    db_path: Path,
+    tq_path: Path,
+    dim: int,
+    bit_width: int = 4,
+) -> Callable[[], CompositeUnitOfWork]:
+    """The production composite for pydocs-mcp: SQLite + TurboQuant.
+
+    Used by the composition roots in server.py + __main__.py. Drop-in
+    replacement for build_sqlite_uow_factory once dense search is on.
+    """
+    sqlite_factory = build_sqlite_uow_factory(db_path)
+    tq_factory = lambda: TurboQuantUnitOfWork(  # noqa: E731
+        index_path=tq_path, dim=dim, bit_width=bit_width,
+    )
+    return build_composite_uow_factory([sqlite_factory, tq_factory])
