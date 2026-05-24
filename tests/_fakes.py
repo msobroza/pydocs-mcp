@@ -439,6 +439,45 @@ def make_fake_uow_factory(
     return factory
 
 
+# ── MockEmbedder (canonical Embedder test double, AC-27) ─────────────────
+import hashlib
+from collections.abc import Sequence
+
+import numpy as np
+
+from pydocs_mcp.models import Embedding
+
+
+@dataclass(frozen=True, slots=True)
+class MockEmbedder:
+    """Deterministic Embedder test double — same input → same vector.
+
+    Returns shape-matched ``np.ndarray`` (float32, dim-shaped) so it's
+    drop-in for FastEmbed / OpenAI / any single-vector Embedder. The
+    vector is derived from a SHA-256 of the input text seeded into a
+    numpy RNG, giving stable per-input vectors without any model
+    dependency. The canonical embedder mock for this PR and future PRs
+    that need embedding-shaped data without invoking a real model.
+    """
+    dim: int = 384
+
+    async def embed_query(self, text: str) -> Embedding:
+        return self._derive(text)
+
+    async def embed_chunks(
+        self, texts: Sequence[str],
+    ) -> tuple[Embedding, ...]:
+        return tuple(self._derive(t) for t in texts)
+
+    def _derive(self, text: str) -> np.ndarray:
+        # SHA-256 → first 8 bytes → uint64 seed → numpy default_rng.
+        # Output is a (dim,) float32 array in [-1, 1] — deterministic per text.
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        seed = int.from_bytes(digest[:8], "little", signed=False)
+        rng = np.random.default_rng(seed)
+        return rng.uniform(-1.0, 1.0, size=self.dim).astype(np.float32)
+
+
 __all__ = (
     "FakeUnitOfWork",
     "InMemoryChunkStore",
@@ -446,6 +485,7 @@ __all__ = (
     "InMemoryModuleMemberStore",
     "InMemoryPackageStore",
     "InMemoryReferenceStore",
+    "MockEmbedder",
     "_Call",
     "make_fake_uow_factory",
 )
