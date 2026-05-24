@@ -436,16 +436,15 @@ class AppConfig(BaseSettings):
         — mirroring the resolution in
         :func:`pydocs_mcp.extraction.factories.build_ingestion_pipeline`.
         """
+        # Deferred import: ``extraction.factories`` pulls in
+        # ``extraction.pipeline.stages.reference_capture`` which imports
+        # back from ``retrieval.config`` (for ``ReferenceCaptureConfig``).
+        # Importing inside the method breaks the module-level cycle and
+        # keeps the single source of truth for the bundled-YAML lookup.
+        from pydocs_mcp.extraction.factories import _default_ingestion_pipeline_path
+
         override = self.extraction.ingestion.pipeline_path
-        if override is not None:
-            ingestion_path = Path(override)
-        else:
-            # Mirror extraction.factories._default_ingestion_pipeline_path:
-            # resolve via importlib.resources so the lookup is correct under
-            # zipimport / installed wheels where __file__ arithmetic breaks.
-            ingestion_path = Path(str(
-                importlib.resources.files("pydocs_mcp.pipelines").joinpath("ingestion.yaml")
-            ))
+        ingestion_path = override if override is not None else _default_ingestion_pipeline_path()
         return hashlib.sha256(
             self.embedding.compute_pipeline_hash().encode("utf-8")
             + b"|"
