@@ -24,11 +24,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      # WHY: turbovec's compiled .so links against cblas_sgemm. macOS provides
-      # this via Accelerate; Ubuntu runners do not have libcblas installed by
-      # default, so `import pydocs_mcp` fails at conftest load without this.
-      - name: Install libopenblas (turbovec runtime dep)
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
+      # WHY: turbovec's compiled .so links against cblas_sgemm (CBLAS C-ABI).
+      # Ubuntu's default libopenblas-dev provides only the Fortran ABI
+      # (sgemm_). libopenblas-pthread-dev adds the CBLAS interface and the
+      # update-alternatives selection makes the dynamic linker resolve it.
+      - name: Install OpenBLAS with CBLAS interface (turbovec runtime dep)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-pthread-dev liblapack-dev
+          sudo update-alternatives --set libblas.so.3-x86_64-linux-gnu \
+            /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 || true
 
       - name: Install uv
         run: pip install uv
