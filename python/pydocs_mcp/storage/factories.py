@@ -9,14 +9,24 @@ through a single factory instead of N copies.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import build_connection_provider
+from pydocs_mcp.models import Chunk
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
-from pydocs_mcp.storage.sqlite import SqliteUnitOfWork
+from pydocs_mcp.storage.filters import Filter
+from pydocs_mcp.storage.sqlite import (
+    _CHUNK_COLUMNS,
+    SqliteFilterAdapter,
+    SqliteUnitOfWork,
+    _maybe_acquire,
+    _row_to_chunk,
+)
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 
 if TYPE_CHECKING:
@@ -106,3 +116,59 @@ def build_sqlite_plus_turboquant_uow_factory(
         index_path=tq_path, dim=dim, bit_width=bit_width,
     )
     return build_composite_uow_factory([sqlite_factory, tq_factory])
+
+
+def build_sqlite_candidate_id_resolver(
+    db_path: Path,
+) -> Callable[[Filter], Awaitable[np.ndarray]]:
+    """Build a CandidateIdResolver — runs the filter as SQL against the
+    SQLite cache and returns matching chunk IDs as ``np.uint64``.
+
+    Used by ``TurboQuantVectorStore`` to construct its allowlist (spec §7
+    risk row 1). The vector store does not import sqlite3 directly; this
+    callable is the only seam through which it learns about the relational
+    cache, so a future Qdrant / Postgres adapter slots its own resolver in
+    without touching the store class.
+    """
+    provider = build_connection_provider(db_path)
+    adapter = SqliteFilterAdapter(safe_columns=_CHUNK_COLUMNS)
+
+    async def resolve(filter_tree: Filter) -> np.ndarray:
+        sql_clause, params = adapter.adapt(filter_tree)
+        sql = f"SELECT id FROM chunks WHERE {sql_clause}"
+        async with _maybe_acquire(provider) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        # ``np.asarray([], dtype=np.uint64)`` preserves the dtype on the
+        # empty-result path; numpy would otherwise infer float64 from [].
+        return np.asarray([r[0] for r in rows], dtype=np.uint64)
+
+    return resolve
+
+
+def build_sqlite_chunk_hydrator(
+    db_path: Path,
+) -> Callable[[Sequence[int]], Awaitable[tuple[Chunk, ...]]]:
+    """Build a ChunkHydrator — loads full ``Chunk`` objects for the given IDs.
+
+    Used by ``TurboQuantVectorStore`` to turn vector hits (just IDs) back into
+    rich ``Chunk`` records the retrieval pipeline can consume. Reuses
+    ``_row_to_chunk`` so the deserialisation contract matches the rest of
+    the SQLite adapter — any schema drift surfaces uniformly.
+    """
+    provider = build_connection_provider(db_path)
+
+    async def hydrate(ids: Sequence[int]) -> tuple[Chunk, ...]:
+        if not ids:
+            return ()
+        id_list = list(ids)
+        placeholders = ",".join("?" * len(id_list))
+        # ``SELECT *`` keeps the column list in lockstep with the schema —
+        # ``_row_to_chunk`` reads named columns from the ``sqlite3.Row`` so
+        # additive migrations (e.g., the v5 ``content_hash`` column) don't
+        # require touching this query.
+        sql = f"SELECT * FROM chunks WHERE id IN ({placeholders})"
+        async with _maybe_acquire(provider) as conn:
+            rows = conn.execute(sql, id_list).fetchall()
+        return tuple(_row_to_chunk(r) for r in rows)
+
+    return hydrate
