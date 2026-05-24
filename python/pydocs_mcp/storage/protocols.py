@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from pydocs_mcp.models import Chunk, ModuleMember, Package
+from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
 
 if TYPE_CHECKING:
@@ -205,3 +205,40 @@ class ReferenceStore(Protocol):
     ) -> None: ...
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None: ...
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """One embedder serves both query-time and ingestion-time work.
+
+    Spec §5.2 — concrete classes return their natural shape:
+    single-vector embedders (FastEmbed, OpenAI, BGE) return Vector
+    (1D np.ndarray, float32); future ColBERT-style embedders return
+    MultiVector (list of 1D np.ndarrays). Use
+    `pydocs_mcp.models.is_multi_vector(emb)` to disambiguate.
+    """
+    # Default makes the attribute discoverable via hasattr(Embedder, "dim")
+    # for structural / introspection tests. Real implementations override.
+    dim: int = 0
+
+    async def embed_query(self, text: str) -> Embedding: ...
+
+    async def embed_chunks(
+        self, texts: Sequence[str],
+    ) -> tuple[Embedding, ...]: ...
+
+
+@runtime_checkable
+class ResultFuser(Protocol):
+    """Combines N ranked Chunk lists into one fused ranking.
+
+    Spec §5.2. Implementations: RRFResultFuser (reciprocal-rank fusion).
+    Future: WeightedSumResultFuser, DistributionBasedResultFuser.
+    """
+
+    async def fuse(
+        self,
+        ranked_lists: Sequence[tuple[Chunk, ...]],
+        *,
+        limit: int,
+    ) -> tuple[Chunk, ...]: ...
