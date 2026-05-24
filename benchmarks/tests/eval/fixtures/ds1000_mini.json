@@ -1,6 +1,6 @@
 [
   {
-    "prompt": "Problem: I have a pandas DataFrame and I want to drop rows containing NaN values in a specific column. How do I do that?\nA: <code>\nimport pandas as pd\ndf = df.dropna(subset=['col1'])\n</code>\nEND SOLUTION",
+    "prompt": "Problem: I have a pandas DataFrame and I want to drop rows containing NaN values in a specific column. How do I do that?\nA:\n<code>\nimport pandas as pd\ndf = df.dropna(subset=['col1'])\n</code>\nEND SOLUTION",
     "library": "Pandas",
     "perturbation_type": "Origin",
     "perturbation_origin_id": 0,
@@ -10,7 +10,7 @@
     ]
   },
   {
-    "prompt": "Problem: I want to merge two pandas DataFrames on a column called 'id' using a left join. What's the syntax?\nA: <code>\nresult = pd.merge(left, right, on='id', how='left')\n</code>",
+    "prompt": "Problem: I want to merge DataFrame A: with DataFrame B on a column called 'id' using a left join. What's the syntax?\nA:\n<code>\nresult = pd.merge(left, right, on='id', how='left')\n</code>",
     "library": "Pandas",
     "perturbation_type": "Surface",
     "perturbation_origin_id": 5,
@@ -19,7 +19,7 @@
     ]
   },
   {
-    "prompt": "Problem: Given a pandas DataFrame, how do I group by one column and aggregate another with the mean?\nA: <code>\nout = df.groupby('group_col')['value_col'].mean()\nBEGIN SOLUTION\n</code>",
+    "prompt": "Problem: Given a pandas DataFrame, how do I group by one column and aggregate another with the mean?\nA:\n<code>\nout = df.groupby('group_col')['value_col'].mean()\nBEGIN SOLUTION\n</code>",
     "library": "Pandas",
     "perturbation_type": "Origin",
     "perturbation_origin_id": 12,
@@ -29,7 +29,7 @@
     ]
   },
   {
-    "prompt": "Problem: I have a numpy 2D array and want to compute the row-wise mean. What is the right axis argument?\nA: <code>\nimport numpy as np\nrow_means = np.mean(arr, axis=1)\n</code>\nEND SOLUTION",
+    "prompt": "Problem: I have a numpy 2D array and want to compute the row-wise mean. What is the right axis argument?\nA:\n<code>\nimport numpy as np\nrow_means = np.mean(arr, axis=1)\n</code>\nEND SOLUTION",
     "library": "Numpy",
     "perturbation_type": "Origin",
     "perturbation_origin_id": 22,
@@ -38,7 +38,7 @@
     ]
   },
   {
-    "prompt": "Problem: How do I reshape a numpy array from shape (12,) to (3, 4)?\nA: <code>\nimport numpy as np\nreshaped = arr.reshape(3, 4)\n</code>",
+    "prompt": "Problem: How do I reshape a numpy array from shape (12,) to (3, 4)?\nA:\n<code>\nimport numpy as np\nreshaped = arr.reshape(3, 4)\n</code>",
     "library": "Numpy",
     "perturbation_type": "Semantic",
     "perturbation_origin_id": 30,
@@ -48,7 +48,7 @@
     ]
   },
   {
-    "prompt": "Problem: I want to draw a simple matplotlib line plot of y vs x and save the figure to disk as PNG. What's the minimal code?\nA: <code>\nimport matplotlib.pyplot as plt\nplt.plot(x, y)\nplt.savefig('out.png')\nBEGIN SOLUTION\n</code>",
+    "prompt": "Problem: I want to draw a simple matplotlib line plot of y vs x and save the figure to disk as PNG. What's the minimal code?\nA:\n<code>\nimport matplotlib.pyplot as plt\nplt.plot(x, y)\nplt.savefig('out.png')\nBEGIN SOLUTION\n</code>",
     "library": "Matplotlib",
     "perturbation_type": "Origin",
     "perturbation_origin_id": 40,
@@ -58,7 +58,7 @@
     ]
   },
   {
-    "prompt": "Problem: I want to fit a scikit-learn logistic regression on (X, y). How do I do this?\nA: <code>\nfrom sklearn.linear_model import LogisticRegression\nclf = LogisticRegression().fit(X, y)\n</code>",
+    "prompt": "Problem: I want to fit a scikit-learn logistic regression on (X, y). How do I do this?\nA:\n<code>\nfrom sklearn.linear_model import LogisticRegression\nclf = LogisticRegression().fit(X, y)\n</code>",
     "library": "Sklearn",
     "perturbation_type": "Difficult-Rewrite",
     "perturbation_origin_id": 50,
@@ -67,7 +67,7 @@
     ]
   },
   {
-    "prompt": "Problem: How do I compute the eigenvalues of a square matrix using scipy?\nA: <code>\nfrom scipy.linalg import eig\neigvals, eigvecs = eig(A)\n</code>",
+    "prompt": "Problem: How do I compute the eigenvalues of a square matrix using scipy?\nA:\n<code>\nfrom scipy.linalg import eig\neigvals, eigvecs = eig(A)\n</code>",
     "library": "Scipy",
     "perturbation_type": "Surface",
     "perturbation_origin_id": 60,

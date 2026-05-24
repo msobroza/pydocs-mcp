@@ -50,6 +50,29 @@ async def test_query_stripping_removes_solution_blocks() -> None:
     assert "A:" in raw  # The raw is preserved verbatim with the solution block.
 
 
+async def test_query_stripping_preserves_in_body_answer_label() -> None:
+    """REGRESSION: DS-1000's answer delimiter is a LINE-LEADING ``A:``, not a
+    bare ``A:`` substring. Real question bodies reference in-body labels like
+    ``"DataFrame A:"`` — splitting on the first bare ``A:`` would amputate the
+    question. The merge fixture row's NL body contains ``"DataFrame A:"``; the
+    stripped query must STILL contain that in-body reference (question intact)
+    while STILL excluding the ``<code>`` answer block."""
+    dataset = Ds1000Dataset(fixture_path=FIXTURE_PATH)
+    tasks = [t async for t in dataset.tasks()]
+    # The merge row (perturbation_origin_id=5) carries an in-body "DataFrame A:"
+    # label in its question, plus a trailing line-leading "A:\n<code>" answer.
+    merge_tasks = [
+        t for t in tasks if t.metadata["perturbation_origin_id"] == "5"
+    ]
+    assert merge_tasks, "fixture must include the merge row (origin_id=5)"
+    merge_task = merge_tasks[0]
+    # The in-body label must survive — the question was not truncated.
+    assert "DataFrame A:" in merge_task.query
+    # ...but the canonical-solution block is still gone.
+    assert "<code>" not in merge_task.query
+    assert "pd.merge" not in merge_task.query
+
+
 async def test_library_filter_slices_rows() -> None:
     """``library_filter`` accepts PyPI-canonical lowercase names (the same
     form used by ``task.metadata["library"]``). The mini fixture has 3
