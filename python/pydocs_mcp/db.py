@@ -11,13 +11,13 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 4  # v4 adds the additive ``node_references`` table + 3 indices on top of v3
+SCHEMA_VERSION = 5  # v5 adds ``packages.embedding_model`` TEXT on top of v4
 
 _DDL = """
     CREATE TABLE packages (
         name TEXT PRIMARY KEY, version TEXT, summary TEXT,
         homepage TEXT, dependencies TEXT, content_hash TEXT, origin TEXT,
-        local_path TEXT
+        local_path TEXT, embedding_model TEXT
     );
     CREATE TABLE chunks (
         id INTEGER PRIMARY KEY, package TEXT,
@@ -156,13 +156,25 @@ def _apply_v4_additions(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v5_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply every additive change that makes up the v5 shape.
+
+    Adds ``packages.embedding_model TEXT`` so the indexer can force re-embed
+    when YAML's embedding.model_name changes (spec §3.2). Mirrors the v3/v4
+    pattern — ``_try_add_column`` swallows duplicate-column errors so the
+    sweep is safe to re-run as a v5-on-open repair (drift recovery).
+    """
+    _try_add_column(conn, "packages", "embedding_model TEXT")
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
-    - v4 already: re-run v4 sweep (additive, idempotent; drift recovery).
-    - v3 → v4: additive forward migration (CREATE TABLE node_references
-      + 3 indices); rows in all existing tables survive.
-    - v2 → v3 → v4: walk both forward migrations in order.
+    - v5 already: re-run v3+v4+v5 sweeps (additive, idempotent; drift recovery).
+    - v4 → v5: additive forward migration (ALTER TABLE packages ADD COLUMN
+      embedding_model); rows in all existing tables survive.
+    - v3 → v4 → v5: walk all forward migrations in order.
+    - v2 → v3 → v4 → v5: walk all forward migrations in order.
     - Any other mismatch: drop every known table and recreate from current DDL.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,22 +185,32 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v4 — re-run additive sweep for drift recovery.
+        # v5 — re-run additive sweeps for drift recovery.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
+        _apply_v5_additions(conn)
+    elif current == 4:
+        # v4 → v5 — additive. Rerun the v3/v4 idempotent sweeps first to
+        # repair any drift in legacy v4-stamped DBs before stamping forward.
+        _apply_v3_additions(conn)
+        _apply_v4_additions(conn)
+        _apply_v5_additions(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 3:
-        # v3 → v4 — additive. We also re-run the v3 sweep first because some
+        # v3 → v4 → v5 — additive. We also re-run the v3 sweep first because some
         # legacy v3-stamped DBs (rebase artefacts between sub-PR #5 and #6)
         # lack ``document_trees`` / ``content_hash`` / ``local_path`` despite
         # the stamp; rerunning the idempotent v3 sweep repairs that drift
-        # before stamping forward to v4.
+        # before stamping forward.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
+        _apply_v5_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 2:
-        # v2 → v3 → v4 — walk both forward migrations in order.
+        # v2 → v3 → v4 → v5 — walk every forward migration in order.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
+        _apply_v5_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     else:
         _drop_all_known_tables(conn)

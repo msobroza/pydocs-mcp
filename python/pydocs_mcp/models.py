@@ -147,6 +147,10 @@ class Package:
     dependencies: tuple[str, ...]
     content_hash: str
     origin: PackageOrigin
+    # Marks which embedding model produced this package's vectors so the
+    # indexing service can force re-embed when YAML's embedding.model_name
+    # changes. ``None`` = pre-hybrid cache (no vectors yet).
+    embedding_model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

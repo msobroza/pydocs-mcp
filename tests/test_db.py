@@ -291,13 +291,13 @@ class TestSchemaV3:
     """Schema v3: document_trees table + chunks.content_hash + packages.local_path."""
 
     def test_fresh_db_is_v3(self, tmp_path):
-        # Sub-PR #5b: schema bumped to v4 (additive on top of v3). The v3
-        # invariants (document_trees / content_hash / local_path) still
-        # hold; the version stamp simply moved forward.
+        # Schema is now v5 (additive on top of v4, which was additive on top
+        # of v3). The v3 invariants (document_trees / content_hash /
+        # local_path) still hold; the version stamp simply moved forward.
         conn = open_index_database(tmp_path / "v3.db")
         try:
-            assert SCHEMA_VERSION == 4
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert SCHEMA_VERSION == 5
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         finally:
             conn.close()
 
@@ -366,10 +366,10 @@ class TestSchemaV3:
         legacy.close()
 
         # Reopen via the real entry point — should soft-migrate forward.
-        # Sub-PR #5b extends this path: v2 → v3 → v4 in a single open.
+        # Walks v2 → v3 → v4 → v5 in a single open.
         migrated = open_index_database(db_file)
         try:
-            assert migrated.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
 
             # Old rows must survive.
             pkg = migrated.execute(
@@ -503,15 +503,15 @@ class TestSchemaV3:
 
 
 def test_schema_version_is_4_after_open(tmp_path):
-    """Sub-PR #5b: bump to 4 (additive on top of v3)."""
+    """Schema version is 5 — additive bump for packages.embedding_model."""
     db = tmp_path / "x.db"
     conn = open_index_database(db)
     try:
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
     finally:
         conn.close()
-    assert ver == 4
-    assert SCHEMA_VERSION == 4
+    assert ver == 5
+    assert SCHEMA_VERSION == 5
 
 
 def test_node_references_table_created_on_fresh_db(tmp_path):
@@ -584,9 +584,10 @@ def test_v3_to_v4_migration_preserves_existing_rows(tmp_path):
     conn.close()
 
     # Now open through the production path — must migrate and PRESERVE rows.
+    # Walks v3 → v4 → v5 in a single open.
     conn = open_index_database(db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         # The package row survives.
         row = conn.execute(
             "SELECT name FROM packages WHERE name='pkg'").fetchone()
