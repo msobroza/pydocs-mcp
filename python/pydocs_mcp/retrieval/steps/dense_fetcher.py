@@ -31,12 +31,11 @@ from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
 from pydocs_mcp.storage.protocols import Embedder, VectorSearchable
 
-# WHY: single source of truth for the fetch-side defaults — referenced by
+# WHY: single source of truth for the fetch-side default — referenced by
 # the dataclass field, ``to_dict`` (omit-when-default), and ``from_dict``
 # (fallback when YAML omits the key). Per CLAUDE.md §"Default values:
 # single source of truth".
 _DEFAULT_LIMIT = 50
-_DEFAULT_RETRIEVER_NAME = "dense_chunk"
 
 
 @step_registry.register("dense_fetcher")
