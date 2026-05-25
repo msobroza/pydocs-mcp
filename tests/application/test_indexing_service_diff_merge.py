@@ -225,3 +225,36 @@ async def test_reindex_sqlite_only_uow_works(tmp_path: Path) -> None:
             filter={"package": "demo"},
         )
     assert {cid for cid, _ in pairs} == {cid for cid, _ in pairs_after}
+
+
+@pytest.mark.asyncio
+async def test_remove_package_wipes_vectors_atomically(tmp_path: Path) -> None:
+    """AC-4: remove_package deletes chunks AND wipes their vectors."""
+    db_path = tmp_path / "x.db"
+    tq_path = tmp_path / "x.tq"
+    open_index_database(db_path).close()
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+    )
+    svc = IndexingService(uow_factory=factory)
+    await svc.reindex_package(_pkg("pkg-a"), (
+        Chunk(text="a1", metadata={"package": "pkg-a"}, embedding=_vec(0.1)),
+        Chunk(text="a2", metadata={"package": "pkg-a"}, embedding=_vec(0.2)),
+    ), ())
+    await svc.reindex_package(_pkg("pkg-b"), (
+        Chunk(text="b1", metadata={"package": "pkg-b"}, embedding=_vec(0.3)),
+    ), ())
+
+    async with factory() as uow:
+        assert uow.vectors.size() == 3  # 2 + 1
+
+    await svc.remove_package("pkg-a")
+
+    async with factory() as uow:
+        # pkg-a chunks gone; pkg-b chunks remain
+        a_pairs = await uow.chunks.list_id_hash_pairs(filter={"package": "pkg-a"})
+        b_pairs = await uow.chunks.list_id_hash_pairs(filter={"package": "pkg-b"})
+        assert a_pairs == ()
+        assert len(b_pairs) == 1
+        # Vector count: only pkg-b's 1 vector left
+        assert uow.vectors.size() == 1

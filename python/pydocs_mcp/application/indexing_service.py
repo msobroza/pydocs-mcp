@@ -324,11 +324,28 @@ class IndexingService:
             )
 
     async def remove_package(self, name: str) -> None:
-        """Delete a package and every chunk / member / tree / ref it owns."""
+        """Delete a package and every chunk / member / tree / ref it owns.
+
+        AC-4: capture the soon-to-be-stale chunk IDs BEFORE deleting from
+        SQLite, then wipe their vectors from the TurboQuant sidecar after.
+        Without this, a package's vectors outlive its SQLite rows and
+        pollute future similarity searches with orphaned embeddings.
+        Atomic via the surrounding UoW transaction; the
+        ``getattr(uow, 'vectors', None)`` gate keeps the SQLite-only path
+        unchanged (AC-9).
+        """
         async with self.uow_factory() as uow:
+            stale_vector_ids: list[int] = []
+            if getattr(uow, "vectors", None) is not None:
+                pairs = await uow.chunks.list_id_hash_pairs(
+                    filter={ChunkFilterField.PACKAGE.value: name},
+                )
+                stale_vector_ids = [cid for cid, _ in pairs]
             await uow.chunks.delete(
                 filter={ChunkFilterField.PACKAGE.value: name},
             )
+            if stale_vector_ids:
+                await uow.vectors.remove_vectors(stale_vector_ids)
             await uow.module_members.delete(
                 filter={ModuleMemberFilterField.PACKAGE.value: name},
             )
