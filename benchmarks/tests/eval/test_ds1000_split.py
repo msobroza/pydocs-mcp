@@ -19,7 +19,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from benchmarks.eval.datasets.ds1000 import Ds1000Dataset
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_mini.json"

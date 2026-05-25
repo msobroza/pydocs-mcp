@@ -12,9 +12,9 @@ from pathlib import Path
 
 from benchmarks.eval.datasets.base_dataset import Dataset
 from benchmarks.eval.datasets.ds1000 import (
-    Ds1000Dataset,
     _PINNED_DS1000_REVISION,
     _PINNED_LIBDOCS_REVISION,
+    Ds1000Dataset,
 )
 from benchmarks.eval.serialization import dataset_registry
 

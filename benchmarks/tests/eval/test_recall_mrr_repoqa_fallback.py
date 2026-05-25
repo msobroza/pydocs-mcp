@@ -22,7 +22,6 @@ from benchmarks.eval.metrics import MRR, RecallAtK
 from benchmarks.eval.metrics._relevance import first_relevant_rank
 from benchmarks.eval.systems.base_system import RetrievedItem
 
-
 GOLD = "def f(): return 1"
 
 

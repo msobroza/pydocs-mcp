@@ -25,7 +25,6 @@ from benchmarks.eval.serialization import system_registry
 from benchmarks.eval.systems import PydocsOracleSystem  # noqa: F401 -- triggers registration
 from pydocs_mcp.retrieval.config import AppConfig
 
-
 # WHY: 5 canned rows mimicking the HF ``library-documentation`` schema.
 # Two libraries so the per-library Package upsert + package-filtered
 # resolver scan are both exercised. ``doc_content`` carries a distinctive
