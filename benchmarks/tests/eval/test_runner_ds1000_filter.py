@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-
 from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
 from benchmarks.eval.datasets.ds1000 import Ds1000Dataset
 from benchmarks.eval.runner import _build_arg_parser, run_sweep

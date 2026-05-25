@@ -11,8 +11,9 @@ a version pin in the fixture, the equality assertion below fails loudly.
 """
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 # parents[0] = tests/eval, parents[1] = tests, parents[2] = benchmarks
 _PYPROJECT_PATH = (

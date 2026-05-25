@@ -27,7 +27,6 @@ from benchmarks.eval.runner import (
 )
 from benchmarks.eval.systems.base_system import RetrievedItem
 
-
 # ── fakes (no pydocs_mcp) ──────────────────────────────────────────────────
 
 
