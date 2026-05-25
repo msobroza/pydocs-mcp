@@ -87,7 +87,16 @@ class PydocsMcpSystem:
         # pydocs-mcp[fastembed] so the FastEmbed import path succeeds.
         from pydocs_mcp.extraction.strategies.embedders import build_embedder
         embedder = build_embedder(config.embedding)
-        ingestion_pipeline = build_ingestion_pipeline(config, embedder=embedder)
+        # WHY: LoadExistingChunkHashesStage needs uow_factory to read existing
+        # content_hashes; AssignChunkContentHashStage needs pipeline_hash to
+        # invalidate every chunk's hash when the embedder or pipeline changes.
+        # Both are passed through BuildContext to the stage from_dict methods.
+        ingestion_pipeline = build_ingestion_pipeline(
+            config,
+            embedder=embedder,
+            uow_factory=uow_factory,
+            pipeline_hash=config.compute_ingestion_pipeline_hash(),
+        )
         # WHY: AST-only member extraction matches the safer "static" mode
         # of the CLI — no inspect-mode imports during a benchmark sweep,
         # so a malformed corpus cannot fire arbitrary code through Python
