@@ -24,18 +24,13 @@ def seeded_project(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _patch_embedder_with_mock(monkeypatch):
-    """Inject ``MockEmbedder`` so CLI tests don't hit optional-deps.
+    """Inject MockEmbedder so CLI tests don't pull the FastEmbed ONNX model.
 
-    Post-Task-27 wiring: ``_run_indexing`` calls ``build_embedder(cfg)`` at
-    startup and threads the result into ``build_ingestion_pipeline``. The
-    shipped default config selects ``provider=fastembed``, which would
-    raise :class:`OptionalDepMissing` in the test env because the
-    ``fastembed`` extra is not installed. Patching ``build_embedder`` at
-    the call-site module (``embedders``) AND keeping the safety net on
-    ``build_ingestion_pipeline`` covers both the production CLI path
-    (which now constructs its own embedder) and any direct
-    ``build_ingestion_pipeline(cfg)`` callers (older tests / integration
-    fixtures).
+    The shipped default config selects ``provider=fastembed``. fastembed is
+    a required dep, so the import succeeds in the test env — but
+    constructing FastEmbedEmbedder triggers a ~80MB ONNX download on first
+    inference. Patching build_embedder keeps unit tests fast. (Production
+    CLI runs the real embedder.)
     """
     from tests._fakes import MockEmbedder
     import pydocs_mcp.extraction as _extraction

@@ -62,10 +62,10 @@ jobs:
 
       # WHY: hybrid-search wired EmbedChunksStage into the shipped ingestion
       # pipeline by default, and the benchmark adapter calls build_embedder()
-      # at index time. The fastembed extra brings in the FastEmbed runtime so
-      # that call succeeds; without it benchmarks would fail at first index.
-      - name: Install pydocs-mcp + dev deps + fastembed
-        run: uv pip install --system -e ".[dev,fastembed]"
+      # at index time. fastembed is a required dep, so `.[dev]` already
+      # pulls in the FastEmbed runtime.
+      - name: Install pydocs-mcp + dev deps
+        run: uv pip install --system -e ".[dev]"
 
       - name: Install benchmarks + all extras
         run: uv pip install --system -e "benchmarks[all]"

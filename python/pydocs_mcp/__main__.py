@@ -255,10 +255,9 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     from pydocs_mcp.application.indexing_service import IndexingService
     indexing_service = IndexingService(uow_factory=uow_factory)
 
-    # Build the embedder ONCE at startup so every chunk goes through the
-    # same configured backend. Failing here (OptionalDepMissing) surfaces
-    # the "pip install pydocs-mcp[fastembed]" hint immediately rather than
-    # mid-extraction. Spec §"fail loud with actionable error".
+    # Construct the embedder once at startup so the rest of the pipeline
+    # can share it. Failing here (e.g., OPENAI_API_KEY missing) surfaces
+    # the issue immediately rather than at first query.
     embedder = build_embedder(config.embedding)
     # Compute the ingestion pipeline_hash ONCE at startup. This identity
     # slot (embedder + raw ingestion-YAML bytes) is threaded through the
