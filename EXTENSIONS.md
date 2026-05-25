@@ -183,6 +183,27 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 ### Tier 3 — medium PRs (~400–800 LOC)
 
+N. **Add capability-aware ingestion (`REQUIRES` declarations + auto-derivation)** — couple the ingestion pipeline to retrieval needs without coupling code. Each `RetrieverStep` gains a class-level `REQUIRES: ClassVar[frozenset[str]]` declaring what storage shapes it reads at query time (e.g., `BM25ScorerStep` → `{"chunks", "chunks_fts"}`; `DenseScorerStep` → `{"chunks", "chunk_embeddings"}`; `LlmTreeReasoningStep` → `{"chunks", "document_trees"}`). A new `derive_ingestion_capabilities(retrieval_yaml_path)` walks the active retrieval YAML, unions every step's `REQUIRES`, and `build_ingestion_pipeline()` conditionally assembles stages based on the result — `FlattenStage` runs only when `"chunks"` is needed, `EmbedChunksStage` only when `"chunk_embeddings"` is needed, etc.
+
+    Wins:
+
+    - **Zero-mismatch by construction** — ingestion automatically produces exactly the storage shapes the active retrieval pipeline will read. Switching retrieval YAMLs triggers a re-index only when the new YAML's `REQUIRES` is a strict superset. No more "I set `tree_only.yaml` and BM25 returns nothing" support burden.
+    - **Tree-only deployments save real money** — skipping `EmbedChunksStage` zeros out the FastEmbed ONNX inference (or OpenAI embedding spend) at index time. On a 100-dep project this is the difference between "indexes in 30s" and "indexes in 5 minutes + costs ~$2 on OpenAI" — a meaningful unlock for users who go all-in on LLM tree reasoning.
+    - **Self-documenting** — reading any step's `REQUIRES = frozenset({...})` line tells you exactly which storage shapes it consumes. New contributors get capability wiring right without reading the ingestion pipeline.
+    - **Composes with `pipeline_hash`** (shipped in the chunk-cache work) — extend the hash input to include the capability set so switching retrieval profiles auto-invalidates the index when the new profile needs strictly more storage. No manual `--force` required after a profile flip.
+    - **Forces honest step design** — a step that secretly reads from `uow.chunks` but doesn't declare it in `REQUIRES` becomes a code-review issue. Encourages single-responsibility.
+
+    Implementation notes:
+
+    - Add `REQUIRES: ClassVar[frozenset[str]] = frozenset()` to the `RetrieverStep` ABC (default empty → backward-compatible).
+    - Override `REQUIRES` on every shipped step (~15 step classes, ~1 line each).
+    - Add `derive_ingestion_capabilities(yaml_path)` in `extraction/factories.py` (~50 LOC + tests).
+    - Refactor `build_ingestion_pipeline` to conditionally assemble stages from the capability set (~50 LOC).
+    - Extend `compute_ingestion_pipeline_hash` to include `sorted(capabilities)` in the hash input (~10 LOC).
+    - Lint rule (or test) that fails when a step's `run()` reads `state.scratch` / `uow.X` without declaring the matching capability (catches regressions).
+
+    Pairs well with the `LlmTreeReasoningStep` PR — once that lands, this is the natural follow-up that makes `tree_only.yaml` deployments stop paying for embeddings they never use.
+
 9. **Add `SqliteVecVectorStore`** — alternative dense backend that keeps vectors in SQLite (via `sqlite-vec`) instead of the shipped TurboQuant `.tq` sidecar. The dense plumbing (`Chunk.embedding`, `Embedder` Protocol, `FastEmbedEmbedder`, `OpenAIEmbedder`, `DenseScorerStep`, `DenseFetcherStep`, `HybridSqliteTurboStore`) already exists; this swaps the storage layer to make `.db` self-contained. Useful for deployments that prefer a single-file index.
 
 10. **Add `QdrantVectorStore`** with the full `ChunkStore + TextSearchable + VectorSearchable + HybridSearchable` stack. First full backend swap — validates that nothing above the storage layer changes.
