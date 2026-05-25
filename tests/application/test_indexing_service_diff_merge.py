@@ -258,3 +258,31 @@ async def test_remove_package_wipes_vectors_atomically(tmp_path: Path) -> None:
         assert len(b_pairs) == 1
         # Vector count: only pkg-b's 1 vector left
         assert uow.vectors.size() == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_all_wipes_vectors_atomically(tmp_path: Path) -> None:
+    """AC-5: clear_all wipes both SQLite AND vectors."""
+    db_path = tmp_path / "x.db"
+    tq_path = tmp_path / "x.tq"
+    open_index_database(db_path).close()
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+    )
+    svc = IndexingService(uow_factory=factory)
+    await svc.reindex_package(_pkg("demo"), (
+        Chunk(text="a", metadata={"package": "demo"}, embedding=_vec(0.1)),
+        Chunk(text="b", metadata={"package": "demo"}, embedding=_vec(0.2)),
+    ), ())
+
+    async with factory() as uow:
+        assert uow.vectors.size() == 2
+
+    await svc.clear_all()
+
+    async with factory() as uow:
+        assert await uow.packages.list() == []
+        assert uow.vectors.size() == 0
+
+    # The .tq file still exists (empty serialization, not unlinked)
+    assert tq_path.exists()

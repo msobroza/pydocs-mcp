@@ -359,13 +359,19 @@ class IndexingService:
             await uow.commit()
 
     async def clear_all(self) -> None:
-        """Wipe every row across all five entity stores.
+        """Wipe every row across all five entity stores + every vector.
 
         Uses ``All(clauses=())`` — an empty conjunction the
         ``SqliteFilterAdapter`` translates to ``1 = 1``. That form
         matches NULL columns too, unlike the previous ``LIKE '%'`` hack,
         and keeps the delete semantics unconditional without adding a
         new ``delete_all()`` method to the entity-store Protocols.
+
+        AC-5: when the composite UoW exposes ``vectors``, also wipe the
+        in-memory ``IdMapIndex`` so the next commit serializes an empty
+        ``.tq`` sidecar. The SQLite-only UoW lacks ``.vectors`` — the
+        ``getattr`` gate keeps that path unchanged (matches the AC-9
+        idiom used in ``reindex_package`` and ``remove_package``).
         """
         match_all: All = All(clauses=())
         async with self.uow_factory() as uow:
@@ -380,6 +386,8 @@ class IndexingService:
             # dedicated ``delete_all`` for the unconditional sweep.
             await uow.references.delete_all()
             await uow.packages.delete(filter=match_all)
+            if getattr(uow, "vectors", None) is not None:
+                await uow.vectors.clear_all()
             await uow.commit()
 
 
