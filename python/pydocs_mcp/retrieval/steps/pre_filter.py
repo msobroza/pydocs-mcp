@@ -103,13 +103,13 @@ class PreFilterStep(RetrieverStep):
         filter_params: list = []
         if tree is not None:
             from pydocs_mcp.storage.sqlite import (
-                _CHUNK_COLUMNS,
                 _MEMBER_COLUMNS,
+                CHUNK_COLUMNS,
                 SqliteFilterAdapter,
             )
             if self.target_field == "chunk":
                 adapter = SqliteFilterAdapter(
-                    safe_columns=_CHUNK_COLUMNS, column_prefix="c.",
+                    safe_columns=CHUNK_COLUMNS, column_prefix="c.",
                 )
             else:
                 adapter = SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)

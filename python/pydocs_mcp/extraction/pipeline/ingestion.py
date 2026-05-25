@@ -69,6 +69,14 @@ class IngestionState:
     # by class qname instead of module qname; consumed by the resolver's
     # Rule 0 to rewrite ``self.X.Y`` → ``<type>.Y`` before Rule 5.
     class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Hash → SQLite-id map of chunks already persisted for ``package``.
+    # Populated by :class:`LoadExistingChunkHashesStage` from
+    # ``uow.chunks.list_id_hash_pairs`` and consumed by
+    # :class:`EmbedChunksStage` to skip embedding chunks whose
+    # pipeline-aware content_hash already lives in the DB (spec Decision 5).
+    # ``None`` means "stage didn't run / no factory" — distinct from ``{}``
+    # which means "ran and found nothing already cached".
+    existing_chunk_hashes: dict[str, int] | None = None
 
 
 @runtime_checkable

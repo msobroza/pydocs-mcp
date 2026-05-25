@@ -111,41 +111,8 @@ async def test_parallel_retrieval_stage_runs_branches_concurrently():
     assert set(texts) == {"A", "B"}
 
 
-@pytest.mark.asyncio
-async def test_reciprocal_rank_fusion_basic():
-    from pydocs_mcp.retrieval.steps import RRFStep
-
-    # 4 chunks, 2 duplicates — RRF sums 1/(k+rank) across duplicates
-    # The duplicate should rank higher than singletons
-    items = (
-        Chunk(text="a", id=1),
-        Chunk(text="b", id=2),
-        Chunk(text="a", id=1),  # duplicate of #1 at a lower initial position
-    )
-    state = PipelineState(query=SearchQuery(terms="x"), result=ChunkList(items=items))
-    out = await RRFStep(k=60).run(state)
-    # "a" (id=1) has 2 appearances; its RRF score is strictly higher than "b"'s single.
-    assert out.result.items[0].id == 1
-    # Duplicates deduplicated by id
-    ids = [c.id for c in out.result.items]
-    assert ids.count(1) == 1
-
-
-@pytest.mark.asyncio
-async def test_reciprocal_rank_fusion_preserves_first_seen_metadata():
-    """AC #33 — duplicates keep the first branch's retriever_name / relevance."""
-    from pydocs_mcp.retrieval.steps import RRFStep
-
-    items = (
-        Chunk(text="a", id=1, retriever_name="first", relevance=0.9),
-        Chunk(text="a", id=1, retriever_name="second", relevance=0.1),
-    )
-    state = PipelineState(query=SearchQuery(terms="x"), result=ChunkList(items=items))
-    out = await RRFStep(k=60).run(state)
-    assert len(out.result.items) == 1
-    # First-seen wins the representative — setdefault, not assignment.
-    assert out.result.items[0].retriever_name == "first"
-    assert out.result.items[0].relevance == 0.9
+# Single-list RRF re-scorer (RRFStep / "reciprocal_rank_fusion") was replaced
+# by the multi-list RRFFusionStep — see tests/retrieval/steps/test_rrf_fusion.py.
 
 
 @pytest.mark.asyncio

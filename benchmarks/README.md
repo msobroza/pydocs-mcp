@@ -525,9 +525,8 @@ The ranked preset drops the formatter so `recall@k` can actually measure
 top-K hits; the docstring at the top of `chunk_search_ranked.yaml`
 expands on the split.
 
-The real-100-needle numbers are the headline figure: a future dense-embedding
-retriever (dense embeddings + RRF) should beat `recall@10 = 18%` to be worth
-landing.
+The real-100-needle numbers are the headline figure: the planned dense
+embeddings + RRF baseline should beat `recall@10 = 18%` to be worth landing.
 
 ## Visualizing baselines
 
@@ -548,8 +547,8 @@ arrange the figures yourself.
 
 **Title convention:** keep the title benchmark-focused (dataset + tasks)
 and let the legend carry the system / config / method names. That way
-the same chart still makes sense when a dense-embedding baseline adds a
-second bar group — no title rewrite needed. If you omit `--title`,
+the same chart still makes sense when dense embeddings land as a second
+bar group — no title rewrite needed. If you omit `--title`,
 the default uses the first record's `dataset` field and `tasks_ran`.
 
 ```bash
@@ -562,7 +561,7 @@ PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
     --title "RepoQA-2024-06-23 (Python, n=100)"
 
 # Future: side-by-side compare two configs on the SAME dataset
-# (e.g., a dense-embedding retriever vs current BM25). The plot picks up
+# (e.g., dense embeddings vs current BM25). The plot picks up
 # the second bar group automatically — no code change to plotting.py,
 # and the title still works because it describes the benchmark, not the
 # methods being compared.
@@ -588,7 +587,7 @@ from benchmarks.eval.plotting import plot_baselines
 fig = plot_baselines(
     baselines=[
         Path("benchmarks/baselines/repoqa_snf.json"),
-        # Path("benchmarks/baselines/repoqa_snf_dense.json"),  # dense-embedding baseline
+        # Path("benchmarks/baselines/repoqa_snf_dense.json"),  # dense baseline
     ],
     metrics=("recall@1", "recall@5", "recall@10", "mrr"),
     output=Path("benchmarks/results/plots/repoqa_real.png"),
@@ -663,7 +662,7 @@ a horizontal bar extending to p95. Reading the chart:
 
 ```bash
 # Quality vs latency scatter. Today: a single dot (BM25 only).
-# When a dense-embedding baseline lands, a second dot appears
+# When the dense-embeddings baseline lands, a second dot appears
 # automatically on the same chart.
 PYTHONPATH=benchmarks/src python -m benchmarks.eval.plotting \
     benchmarks/baselines/repoqa_snf.json \

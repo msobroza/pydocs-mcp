@@ -260,10 +260,11 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
         "title":   md.get(ChunkFilterField.TITLE.value, ""),
         "text":    c.text,
         "origin":  md.get(ChunkFilterField.ORIGIN.value, ""),
+        "content_hash": c.content_hash,
     }
 
 
-def _row_to_chunk(row) -> Chunk:
+def row_to_chunk(row) -> Chunk:
     """Convert a ``sqlite3.Row`` (or dict) to a ``Chunk`` domain model.
 
     Accesses each column directly: a ``KeyError`` from a missing column is
@@ -281,10 +282,15 @@ def _row_to_chunk(row) -> Chunk:
         value = row[key]
         if value:
             metadata[key] = value
+    # Defensive against NULL: legacy rows (pre-content_hash wiring) carry
+    # NULL in this column. Empty-string preserves the existing __post_init__
+    # auto-compute path (which fires when content_hash is falsy).
+    hash_value = row["content_hash"]
     return Chunk(
         text=row["text"] or "",
         id=row["id"],
         metadata=metadata,
+        content_hash=hash_value if hash_value is not None else "",
     )
 
 
@@ -347,11 +353,23 @@ def _package_to_row(pkg: Package) -> dict[str, object]:
         "dependencies": json.dumps(list(pkg.dependencies)),
         "content_hash": pkg.content_hash,
         "origin": pkg.origin.value,
+        # ``embedding_model`` round-trips so the startup staleness check
+        # (find_packages_with_stale_embeddings) can detect a YAML model
+        # rename and trigger re-embed of the affected packages.
+        "embedding_model": pkg.embedding_model,
     }
 
 
 def _row_to_package(row) -> Package:
     """Convert a ``sqlite3.Row`` (or dict) to a ``Package`` domain model."""
+    # ``embedding_model`` column was added in schema v5 — older rows /
+    # legacy callers may not surface it via ``sqlite3.Row`` key access,
+    # so default to None when absent. ``or None`` keeps "" out of the
+    # stale check (an empty string is not a model name).
+    try:
+        embedding_model = row["embedding_model"]
+    except (IndexError, KeyError):
+        embedding_model = None
     return Package(
         name=row["name"] or "",
         version=row["version"] or "",
@@ -360,6 +378,7 @@ def _row_to_package(row) -> Package:
         dependencies=tuple(json.loads(row["dependencies"] or "[]")),
         content_hash=row["content_hash"] or "",
         origin=PackageOrigin(row["origin"] or PackageOrigin.DEPENDENCY.value),
+        embedding_model=embedding_model or None,
     )
 
 
@@ -433,7 +452,7 @@ class SqliteFilterAdapter:
 
 
 # Safe-column whitelists per table (spec §5.3)
-_CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
+CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
 _PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
 _MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
 
@@ -465,12 +484,14 @@ class SqlitePackageRepository:
             await asyncio.to_thread(
                 conn.execute,
                 "INSERT INTO packages (name, version, summary, homepage, "
-                "dependencies, content_hash, origin) "
-                "VALUES (:name,:version,:summary,:homepage,:dependencies,:content_hash,:origin) "
+                "dependencies, content_hash, origin, embedding_model) "
+                "VALUES (:name,:version,:summary,:homepage,:dependencies,"
+                ":content_hash,:origin,:embedding_model) "
                 "ON CONFLICT(name) DO UPDATE SET "
                 "version=excluded.version, summary=excluded.summary, "
                 "homepage=excluded.homepage, dependencies=excluded.dependencies, "
-                "content_hash=excluded.content_hash, origin=excluded.origin",
+                "content_hash=excluded.content_hash, origin=excluded.origin, "
+                "embedding_model=excluded.embedding_model",
                 row,
             )
 
@@ -546,7 +567,7 @@ class SqliteChunkRepository:
 
     provider: ConnectionProvider
     filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=_CHUNK_COLUMNS)
+        default_factory=lambda: SqliteFilterAdapter(safe_columns=CHUNK_COLUMNS)
     )
 
     async def upsert(self, chunks: Iterable[Chunk]) -> None:
@@ -556,8 +577,8 @@ class SqliteChunkRepository:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
                 conn.executemany,
-                "INSERT INTO chunks (package, module, title, text, origin) "
-                "VALUES (:package, :module, :title, :text, :origin)",
+                "INSERT INTO chunks (package, module, title, text, origin, content_hash) "
+                "VALUES (:package, :module, :title, :text, :origin, :content_hash)",
                 rows,
             )
 
@@ -578,7 +599,7 @@ class SqliteChunkRepository:
             rows = await asyncio.to_thread(
                 lambda: conn.execute(sql, params).fetchall()
             )
-        return [_row_to_chunk(r) for r in rows]
+        return [row_to_chunk(r) for r in rows]
 
     async def delete(self, filter: Filter | Mapping) -> int:
         tree = _resolve_filter(filter)
@@ -610,6 +631,54 @@ class SqliteChunkRepository:
             await asyncio.to_thread(
                 conn.execute,
                 "INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')",
+            )
+
+    async def list_id_hash_pairs(
+        self, *, filter: Filter | Mapping | None = None,
+    ) -> tuple[tuple[int, str | None], ...]:
+        tree = _resolve_filter(filter)
+        where, params = "", []
+        if tree is not None:
+            where, params = self.filter_adapter.adapt(tree)
+        sql = "SELECT id, content_hash FROM chunks"
+        if where:
+            sql += f" WHERE {where}"
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchall()
+            )
+        return tuple((row["id"], row["content_hash"]) for row in rows)
+
+    async def delete_by_ids(self, ids: Sequence[int]) -> None:
+        if not ids:
+            return
+        # Performance: batch at 500 to stay safely under SQLITE_MAX_VARIABLE_NUMBER
+        # (default 999 in older SQLite builds; 32766 in newer ones — 500 is
+        # well under both and limits per-statement parsing cost).
+        async with _maybe_acquire(self.provider) as conn:
+            for i in range(0, len(ids), 500):
+                batch = ids[i:i + 500]
+                placeholders = ",".join("?" * len(batch))
+                await asyncio.to_thread(
+                    conn.execute,
+                    f"DELETE FROM chunks WHERE id IN ({placeholders})",
+                    list(batch),
+                )
+
+    async def insert(self, chunks: tuple[Chunk, ...]) -> None:
+        # SQL is identical to upsert (SQLite INSERT with no conflict clause
+        # IS the insert-only semantic). The two methods are kept distinct
+        # to make caller intent explicit — the diff-merge wants insert-only,
+        # while the legacy "wipe and rewrite" path uses upsert.
+        rows = [_chunk_to_row(c) for c in chunks]
+        if not rows:
+            return
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.executemany,
+                "INSERT INTO chunks (package, module, title, text, origin, content_hash) "
+                "VALUES (:package, :module, :title, :text, :origin, :content_hash)",
+                rows,
             )
 
 
@@ -647,7 +716,7 @@ class SqliteVectorStore:
     provider: ConnectionProvider
     filter_adapter: SqliteFilterAdapter = field(
         default_factory=lambda: SqliteFilterAdapter(
-            safe_columns=_CHUNK_COLUMNS, column_prefix="c.",
+            safe_columns=CHUNK_COLUMNS, column_prefix="c.",
         )
     )
     retriever_name: str = "bm25_chunk"
@@ -677,7 +746,8 @@ class SqliteVectorStore:
         params.append(limit)
 
         sql = (
-            "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, -m.rank AS rank "
+            "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
+            "c.content_hash, -m.rank AS rank "
             "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
             f"WHERE {' AND '.join(where_parts)} "
             "ORDER BY rank LIMIT ?"
@@ -690,7 +760,7 @@ class SqliteVectorStore:
 
         items: list[Chunk] = []
         for row in rows:
-            base = _row_to_chunk(row)
+            base = row_to_chunk(row)
             items.append(
                 Chunk(
                     text=base.text,
@@ -698,6 +768,7 @@ class SqliteVectorStore:
                     relevance=float(row["rank"]),
                     retriever_name=self.retriever_name,
                     metadata=dict(base.metadata),
+                    content_hash=base.content_hash,  # defense-in-depth: don't trigger auto-compute
                 )
             )
         return tuple(items)

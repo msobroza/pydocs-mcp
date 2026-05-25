@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -85,11 +84,7 @@ def _render_search_response(response: SearchResponse, empty_msg: str) -> str:
 
 def run(db_path: Path, config_path: Path | None = None) -> None:
     """Start the MCP server."""
-    try:
-        from mcp.server.fastmcp import FastMCP
-    except ImportError:
-        log.error("Missing dependency: pip install mcp")
-        sys.exit(1)
+    from mcp.server.fastmcp import FastMCP
 
     from pydocs_mcp.application import (
         ApiSearch,

@@ -24,9 +24,46 @@ jobs:
         with:
           python-version: "3.11"
 
+      # WHY: turbovec's compiled .so links against cblas_sgemm (CBLAS C-ABI).
+      # Ubuntu's default libopenblas-dev provides only the Fortran ABI
+      # (sgemm_). libopenblas-pthread-dev adds the CBLAS interface and the
+      # update-alternatives selection makes the dynamic linker resolve it.
+      - name: Install OpenBLAS with CBLAS interface (turbovec runtime dep)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-pthread-dev liblapack-dev
+          sudo update-alternatives --set libblas.so.3-x86_64-linux-gnu \
+            /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 || true
+
+      # WHY: prior fix attempts (libopenblas-dev, then libopenblas-pthread-dev
+      # + update-alternatives) still failed with `undefined symbol: cblas_sgemm`
+      # when turbovec/_turbovec.abi3.so was loaded. Diagnostic prints which
+      # libopenblas variants are installed and which actually export the CBLAS
+      # entry points — informs the LD_PRELOAD path on the runner step.
+      # TODO: remove this diagnostic step once CI is reliably green.
+      - name: Diagnose BLAS availability
+        run: |
+          echo "=== installed openblas pkgs ==="
+          dpkg -l | grep -i openblas || echo "(no openblas pkgs)"
+          echo "=== libopenblas .so files ==="
+          find / -name 'libopenblas*' 2>/dev/null || true
+          echo "=== cblas symbols in candidates ==="
+          for so in $(find / -name 'libopenblas*.so*' 2>/dev/null); do
+            if readelf -d "$so" >/dev/null 2>&1; then
+              echo "--- $so ---"
+              nm -D "$so" 2>/dev/null | grep -E "cblas_sgemm|sgemm" | head -3
+            fi
+          done
+          echo "=== libblas alternatives ==="
+          update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>&1 || true
+
       - name: Install uv
         run: pip install uv
 
+      # WHY: hybrid-search wired EmbedChunksStage into the shipped ingestion
+      # pipeline by default, and the benchmark adapter calls build_embedder()
+      # at index time. fastembed is a required dep, so `.[dev]` already
+      # pulls in the FastEmbed runtime.
       - name: Install pydocs-mcp + dev deps
         run: uv pip install --system -e ".[dev]"
 
@@ -48,7 +85,13 @@ jobs:
       # change here once that pin lands. PYTHONPATH=benchmarks/src mirrors
       # scripts/run_repoqa.sh so the ``from benchmarks.eval.X`` absolute
       # imports resolve under the PyPA src-layout.
+      # WHY: LD_PRELOAD forces libopenblas.so.0 (CBLAS-enabled pthread variant)
+      # to load before turbovec/_turbovec.abi3.so so cblas_sgemm resolves at
+      # dlopen() time. The benchmark runner imports pydocs_mcp which pulls in
+      # turbovec via the HybridSqliteTurboStore wiring path.
       - name: Run benchmark sweep against baseline.yaml
+        env:
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
         run: |
           mkdir -p benchmarks/results/ci
           PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
@@ -72,6 +115,8 @@ jobs:
       # documentation only — comparing fixture results against the real
       # 100-needle baseline would diverge wildly on every PR.
       - name: Check recall@10 vs baseline
+        env:
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
         run: |
           PYTHONPATH=benchmarks/src python -m benchmarks.eval.ci_compare \
             --baseline benchmarks/baselines/repoqa_fixture_baseline.json \

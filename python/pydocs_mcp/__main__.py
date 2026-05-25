@@ -21,7 +21,11 @@ import sys
 from pathlib import Path
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
-from pydocs_mcp.db import cache_path_for_project, open_index_database
+from pydocs_mcp.db import (
+    cache_path_for_project,
+    open_index_database,
+    turboquant_path_for_project,
+)
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -157,23 +161,16 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
         StaticDependencyResolver,
         build_ingestion_pipeline,
     )
+    from pydocs_mcp.extraction.strategies.embedders import build_embedder
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.storage.factories import (
-        build_sqlite_indexing_service,
-        build_sqlite_uow_factory,
+        build_sqlite_plus_turboquant_uow_factory,
+        check_integrity_and_repair,
     )
     from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
     # Ensure the schema exists before repositories issue queries.
     open_index_database(db_path).close()
-
-    # Independent ``uow_factory`` closures per controller's design decision
-    # (Decision B): ``build_sqlite_indexing_service`` builds its OWN factory
-    # internally, and ``ProjectIndexer`` gets a separate one here. They
-    # point to the same DB; sub-ms cost; cleaner composition root than
-    # threading a single factory through two services.
-    indexing_service = build_sqlite_indexing_service(db_path)
-    uow_factory = build_sqlite_uow_factory(db_path)
 
     use_inspect = not args.no_inspect
     mode = "inspect" if use_inspect else "static"
@@ -191,7 +188,91 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     # the ingestion pipeline; reads use the former.
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     configure_from_app_config(config)
-    ingestion_pipeline = build_ingestion_pipeline(config)
+
+    # Hybrid-search composition root: SQLite + TurboQuant under a composite
+    # UoW so ``reindex_package`` writes chunks AND vectors atomically.
+    # ``IndexingService`` and ``ProjectIndexer`` share one composite factory
+    # so the indexing transaction spans both backends without per-service
+    # branching for "is there a vector store?".
+    tq_path = turboquant_path_for_project(project)
+    uow_factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path, tq_path=tq_path,
+        dim=config.embedding.dim, bit_width=config.embedding.bit_width,
+    )
+    # Cache integrity sweep — drift between SQLite and the ``.tq`` sidecar
+    # (process killed mid-commit, etc.) is detected and repaired by
+    # clearing ``packages.content_hash`` so the next pass re-extracts.
+    # No-op on a fresh project (both counts == 0). Under ``--force`` the
+    # subsequent ``index_project(force=True)`` calls ``IndexingService.clear_all``
+    # which atomically wipes SQLite + TurboQuant via the composite UoW —
+    # post-clear, chunks=vectors=0, so this check sees a consistent state
+    # and is a clean no-op rather than the false-positive trigger it would
+    # have been before clear_all was atomic.
+    repaired = await check_integrity_and_repair(
+        db_path=db_path, tq_path=tq_path,
+        dim=config.embedding.dim, bit_width=config.embedding.bit_width,
+    )
+    if repaired:
+        log.warning(
+            "Cache integrity: cleared content_hash on %d package(s); "
+            "they will be re-extracted this run", len(repaired),
+        )
+
+    # Detect a model rename in YAML — packages tagged with the old
+    # ``embedding_model`` carry vectors that the new model cannot match
+    # at query time (different vector space). Clearing ``content_hash``
+    # routes them through the existing hash-skip path so the next sweep
+    # re-extracts + re-embeds them under the current model. Skipped
+    # under ``--force``: that path already wipes the cache wholesale.
+    if not args.force:
+        from dataclasses import replace as dc_replace
+
+        from pydocs_mcp.application.indexing_service import (
+            find_packages_with_stale_embeddings,
+        )
+        stale_pkg_names = await find_packages_with_stale_embeddings(
+            uow_factory=uow_factory,
+            current_model=config.embedding.model_name,
+        )
+        if stale_pkg_names:
+            log.warning(
+                "Embedding model changed; re-embedding %d package(s): %s",
+                len(stale_pkg_names), ", ".join(stale_pkg_names),
+            )
+            async with uow_factory() as uow:
+                for name in stale_pkg_names:
+                    pkg = await uow.packages.get(name)
+                    if pkg is not None:
+                        # Empty content_hash will not equal the freshly-
+                        # extracted package's real hash, so the skip check
+                        # in ProjectIndexer (existing.content_hash ==
+                        # pkg.content_hash) falls through to a full reindex.
+                        await uow.packages.upsert(
+                            dc_replace(pkg, content_hash=""),
+                        )
+                await uow.commit()
+
+    from pydocs_mcp.application.indexing_service import IndexingService
+    indexing_service = IndexingService(uow_factory=uow_factory)
+
+    # Construct the embedder once at startup so the rest of the pipeline
+    # can share it. Failing here (e.g., OPENAI_API_KEY missing) surfaces
+    # the issue immediately rather than at first query.
+    embedder = build_embedder(config.embedding)
+    # Compute the ingestion pipeline_hash ONCE at startup. This identity
+    # slot (embedder + raw ingestion-YAML bytes) is threaded through the
+    # BuildContext so ``AssignChunkContentHashStage`` can stamp every
+    # chunk's content_hash with it. Any embedder swap or YAML edit
+    # invalidates every chunk hash, the diff-merge sees them as 'added',
+    # and the existing add path re-embeds them — no separate force-re-embed
+    # code path needed (spec Decisions 4 + 12).
+    pipeline_hash = config.compute_ingestion_pipeline_hash()
+    ingestion_pipeline = build_ingestion_pipeline(
+        config,
+        embedder=embedder,
+        uow_factory=uow_factory,
+        pipeline_hash=pipeline_hash,
+    )
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
     ast_member = AstMemberExtractor()

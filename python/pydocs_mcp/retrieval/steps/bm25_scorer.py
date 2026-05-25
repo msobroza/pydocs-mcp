@@ -2,7 +2,7 @@
 
 Single responsibility: flip the sign of FTS5's negative BM25 rank so
 ``relevance`` is a positive "higher = better" score that downstream
-steps (:class:`TopKFilterStep`, :class:`RRFStep`, …) can sort on
+steps (:class:`TopKFilterStep`, :class:`RRFFusionStep`, …) can sort on
 uniformly.
 
 Future PR-B3.1 ``DenseScorerStep`` will operate in the same shape: read

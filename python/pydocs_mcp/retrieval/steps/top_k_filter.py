@@ -25,9 +25,20 @@ _DEFAULT_K = 50
 @step_registry.register("top_k_filter")
 @dataclass(frozen=True, slots=True)
 class TopKFilterStep(RetrieverStep):
-    """Top-K cutoff step. Works uniformly for chunks and members."""
+    """Top-K cutoff step. Works uniformly for chunks and members.
+
+    When ``publish_to`` is set, the ranked output is ALSO written to
+    ``state.scratch[publish_to]`` (same payload as ``state.candidates``).
+    This is how parallel branches publish their rankings for
+    :class:`RRFFusionStep` to consume (spec §5.8, AC-20).
+    """
 
     k: int = field(default=_DEFAULT_K, kw_only=True)
+    # WHY: optional scratch-publish key for the parallel-branch / RRF
+    # hand-off. Default None preserves the legacy single-pipeline
+    # behavior — no scratch mutation. Set to e.g. ``"bm25.ranked"`` to
+    # hand the ranked list to a downstream :class:`RRFFusionStep`.
+    publish_to: str | None = field(default=None, kw_only=True)
     name: str = field(default="top_k_filter", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -49,20 +60,35 @@ class TopKFilterStep(RetrieverStep):
             sorted_items = tuple(items)
         new_items = sorted_items[: self.k]
         if isinstance(state.candidates, ChunkList):
-            return replace(state, candidates=ChunkList(items=new_items))
-        if isinstance(state.candidates, ModuleMemberList):
-            return replace(state, candidates=ModuleMemberList(items=new_items))
-        return state
+            new_candidates: ChunkList | ModuleMemberList = ChunkList(
+                items=new_items
+            )
+        elif isinstance(state.candidates, ModuleMemberList):
+            new_candidates = ModuleMemberList(items=new_items)
+        else:
+            return state
+        new_state = replace(state, candidates=new_candidates)
+        if self.publish_to is not None:
+            # scratch is mutable even inside the frozen state (see
+            # RetrieverState docstring). Publish the same ChunkList /
+            # ModuleMemberList payload that landed in state.candidates.
+            new_state.scratch[self.publish_to] = new_candidates
+        return new_state
 
     def to_dict(self) -> dict:
         d: dict = {"type": "top_k_filter"}
         if self.k != _DEFAULT_K:
             d["k"] = self.k
+        if self.publish_to is not None:
+            d["publish_to"] = self.publish_to
         return d
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> "TopKFilterStep":
-        return cls(k=data.get("k", _DEFAULT_K))
+        return cls(
+            k=data.get("k", _DEFAULT_K),
+            publish_to=data.get("publish_to"),
+        )
 
 
 __all__ = ("TopKFilterStep",)

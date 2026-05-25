@@ -206,7 +206,19 @@ def integration_conn(tmp_path):
     service = build_sqlite_indexing_service(db_path)
 
     async def _index_project_only() -> None:
-        pipeline = build_ingestion_pipeline(AppConfig())
+        # MockEmbedder satisfies the Embedder Protocol consumed by
+        # EmbedChunksStage (wired by default into the shipped ingestion
+        # pipeline). ``make_fake_uow_factory`` satisfies
+        # LoadExistingChunkHashesStage's strict from_dict gate — the stage
+        # short-circuits its run() on empty existing-hash state, so the
+        # in-memory fake is enough to satisfy the wiring contract without
+        # interfering with this fixture's diff-merge semantics.
+        from tests._fakes import MockEmbedder, make_fake_uow_factory
+        pipeline = build_ingestion_pipeline(
+            AppConfig(),
+            embedder=MockEmbedder(),
+            uow_factory=make_fake_uow_factory(),
+        )
         extractor = PipelineChunkExtractor(pipeline=pipeline)
         members_extractor = AstMemberExtractor()
         result = await extractor.extract_from_project(FAKE_PROJECT)
