@@ -1,6 +1,6 @@
 # Extension Points
 
-**Context:** this document describes the extensibility surface of pydocs-mcp. The framework PRs (sub-PRs #1–#5 + #6 MCP consolidation + the sklearn-style pipeline refactor) have all shipped; every extension hook listed below is live in the current codebase.
+**Context:** this document describes the extensibility surface of pydocs-mcp. The MCP surface (2 tools), the storage Protocol layer, the sklearn-style retrieval pipeline, the reference graph, and the hybrid BM25 + dense retrieval stack have all shipped — every extension hook listed below is live in the current codebase.
 
 **Purpose:** a reference menu for picking "test-the-architecture" work. Use it to propose small follow-up PRs that exercise one extension point end-to-end and validate that the abstractions hold up in practice.
 
@@ -25,9 +25,10 @@
 │  retrieval/ — sklearn-style Pipeline + Step ABC + formatters     │
 │    RetrieverStep (ABC), RetrieverPipeline, RetrieverState        │
 │    ChunkFetcherStep, BM25ScorerStep, MemberFetcherStep,          │
+│    DenseFetcherStep, DenseScorerStep, PreFilterStep,             │
 │    TopKFilterStep, MetadataPostFilterStep, LimitStep,            │
 │    TokenBudgetStep, RouteStep, ConditionalStep, ParallelStep,    │
-│    RRFStep                                                       │
+│    RRFFusionStep                                                 │
 │    ResultFormatter, PredicateRegistry                            │
 │    AppConfig (pydantic-settings + YAML)                          │
 └──────────────────────────┬───────────────────────────────────────┘
@@ -35,11 +36,13 @@
                            ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  storage/ — Ports (Protocols) + Adapters (concrete)              │
-│    ChunkStore, PackageStore, ModuleMemberStore                   │
+│    ChunkStore, PackageStore, ModuleMemberStore,                  │
+│    DocumentTreeStore, ReferenceStore, Embedder, ResultFuser      │
 │    TextSearchable, VectorSearchable, HybridSearchable            │
 │    UnitOfWork, ConnectionProvider                                │
 │    Filter tree + FilterFormat + FilterAdapter + MetadataSchema   │
-│    Sqlite* concrete implementations                              │
+│    Sqlite* + TurboQuantStore + HybridSqliteTurboStore adapters   │
+│    SqliteUnitOfWork + TurboQuantUnitOfWork + CompositeUnitOfWork │
 └──────────────────────────┬───────────────────────────────────────┘
                            │
                            ▼
@@ -64,7 +67,7 @@ Each new backend implements the Protocol combinations it supports. **Zero modifi
 | `ElasticsearchVectorStore` | `ChunkStore + TextSearchable + VectorSearchable + HybridSearchable` + `ElasticsearchFilterAdapter` | ~400 LOC |
 | `PineconeVectorStore` | `ChunkStore + VectorSearchable` + `PineconeFilterAdapter` | ~300 LOC |
 | `RedisVectorStore` (RediSearch) | `ChunkStore + TextSearchable + VectorSearchable + HybridSearchable` | ~400 LOC |
-| `SqliteVecVectorStore` | Extends `SqliteVectorStore` with `VectorSearchable` via `sqlite-vec` | ~150 LOC |
+| `SqliteVecVectorStore` | Alternative dense backend keeping vectors in SQLite (via `sqlite-vec`) instead of the shipped TurboQuant `.tq` sidecar — `ChunkStore + VectorSearchable` + reuses the existing `Embedder` + `DenseScorerStep` | ~150 LOC |
 | `MilvusVectorStore` | `ChunkStore + VectorSearchable` + adapter | ~300 LOC |
 
 Wiring: instantiate in `server.py` startup; reference by config path.
@@ -143,9 +146,9 @@ These are the walls — the current architecture accepts them as trade-offs rath
 
 | Thing | Why it's coupled | When to revisit |
 |---|---|---|
-| Schema DDL | Lives in `db.py`; version bumps trigger full rebuild | Sub-PR #5 may extract a `SchemaManager` if per-repo DDL becomes worth it |
+| Schema DDL | Lives in `db.py`; version bumps trigger full rebuild | A future PR may extract a `SchemaManager` if per-repo DDL becomes worth it |
 | Rust-side `ModuleMember` shape | Defined in `src/lib.rs` as `#[pyclass]` | Only parser output; `ApiDefinition`-style richer types could live purely Python-side |
-| `SqliteFilterAdapter.safe_columns` is per-repo | Cross-table JOIN filters would need a `plan()` method | Declared as future extension in sub-PR #3 §13 |
+| `SqliteFilterAdapter.safe_columns` is per-repo | Cross-table JOIN filters would need a `plan()` method | Tracked as a future extension; see the filter-adapter docstring |
 | Cross-backend atomicity | Physics — no single backend supports all stores' native transactions | `CompositeUnitOfWork` with best-effort rollback, when needed |
 | `SearchQuery` is single-query | Multi-query (find A and B simultaneously) requires a different model | Additive: add a `SearchQuery.sub_queries` if ever needed |
 | Three entity types (`Chunk`, `ModuleMember`, `Package`) | Adding a fundamentally new entity requires a new Protocol + repository + schema | Standard extension work, just scope |
@@ -178,13 +181,13 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 ### Tier 3 — medium PRs (~400–800 LOC)
 
-9. **Add `SqliteVecVectorStore`** — wire `sqlite-vec` to get `VectorSearchable` on the existing SQLite backend. Requires adding `Chunk.embedding` field (and its migration) + an embedder. First real dense-retrieval path; tests the whole vector-search pipeline. Pairs with a new `DenseScorerStep` (mirrors `BM25ScorerStep`'s shape).
+9. **Add `SqliteVecVectorStore`** — alternative dense backend that keeps vectors in SQLite (via `sqlite-vec`) instead of the shipped TurboQuant `.tq` sidecar. The dense plumbing (`Chunk.embedding`, `Embedder` Protocol, `FastEmbedEmbedder`, `OpenAIEmbedder`, `DenseScorerStep`, `DenseFetcherStep`, `HybridSqliteTurboStore`) already exists; this swaps the storage layer to make `.db` self-contained. Useful for deployments that prefer a single-file index.
 
 10. **Add `QdrantVectorStore`** with the full `ChunkStore + TextSearchable + VectorSearchable + HybridSearchable` stack. First full backend swap — validates that nothing above the storage layer changes.
 
 11. **Add `ChromaVectorStore` with `ChunkStore + VectorSearchable` only** — tests that Option C (split Protocols) handles the "not all backends support every capability" case cleanly. Demonstrates the type-checker-level protection against wiring a BM25 fetcher step to a Chroma store.
 
-12. **Add `LlmRerankStep` with an OpenAI/Anthropic/Cohere client** — validates that an I/O-bound step composes with the pipeline. Tests predicate-guarded execution (skip rerank on short queries). This is the planned PR-B3.2.
+12. **Add `LlmRerankStep` with an OpenAI/Anthropic/Cohere client** — validates that an I/O-bound step composes with the pipeline. Tests predicate-guarded execution (skip rerank on short queries). The planned LLM-rerank step listed in §C "Retrieval pipeline".
 
 ### Tier 4 — larger PRs (~800+ LOC)
 
@@ -196,9 +199,9 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 ---
 
-## How to propose a test-extension sub-PR
+## How to propose a test-extension PR
 
 1. Pick one extension from the list above (or a combination).
-2. Brainstorm the spec in a session following the same pattern used for sub-PRs #1–#3: clarifying questions → design sections → spec file under `docs/superpowers/specs/YYYY-MM-DD-<topic>.md`.
+2. Brainstorm the spec in a session: clarifying questions → design sections → spec file under `docs/superpowers/specs/YYYY-MM-DD-<topic>.md`. Match the shape of the existing specs in that directory.
 3. The spec template (see existing specs for reference) covers: Goal, Decisions, Scope, Domain components, Files touched, Risks, Acceptance criteria, Open items.
 4. Acceptance criteria should include at least one test that verifies the extension integrates at a seam (e.g., "a pipeline YAML referencing the new stage round-trips through `to_dict` / `from_dict` and executes end-to-end against a fixture").
