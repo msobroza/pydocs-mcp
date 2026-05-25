@@ -1,538 +1,144 @@
 # pydocs-mcp
 
-**Local Python docs + code-structure retrieval for AI agents — pinned to the versions you actually have installed.**
+**A local Python documentation MCP server that gives your AI coding agent fast,
+version-matched code retrieval — keyword (BM25) and semantic (dense) search,
+fused into one hybrid ranking — over the exact versions of every dependency
+installed on your machine.**
 
-Your AI assistant remembers `requests` 2.28. You have 2.31 installed. It writes code calling a kwarg that was renamed two versions ago — and you spend the next twenty minutes debugging why a test fails. The fix isn't a smarter prompt; it's giving the AI documentation that matches **your lockfile**, not the average of every StackOverflow answer it ever read.
+Your AI assistant remembers `requests` 2.28. You have 2.31 installed. It writes
+code calling a kwarg that was renamed two versions ago — and you spend twenty
+minutes debugging a failing test. The fix isn't a smarter prompt; it's giving
+the AI documentation that matches **your lockfile**, not the average of every
+StackOverflow answer it ever read.
 
-pydocs-mcp indexes your project source + every installed Python dependency from your `site-packages`, on your machine, in a couple of seconds. It exposes two MCP tools (`search`, `lookup`) plus a CLI mirror with the same surface and the same scoring. No network calls (with the default FastEmbed embedder), no API keys, no rate limits. Hybrid retrieval — BM25 over SQLite FTS5 + dense embeddings (FastEmbed by default, OpenAI optional) with RRF fusion — against the exact code your `pip install` resolved to.
-
-It also captures a **reference graph** at indexing time (CALLS / IMPORTS / INHERITS edges), so `lookup(target=X, show="callers")` answers *"what code in this repo or any installed dep calls this method?"* — not just *"what does this method do?"*
+pydocs-mcp indexes your project source + every installed Python dependency from
+your `site-packages`, on your machine, in seconds. It exposes two MCP tools
+(`search`, `lookup`) — plus a CLI mirror with the same surface and scoring — and
+captures a **reference graph** so `lookup` can answer *"what calls this method?"*
+across your code and every dep. No required network calls, no API keys, no rate
+limits.
 
 **Install once. Index once. Then ask your AI.**
 
----
+## Retrieval, at a glance
 
-## Install
+Every query runs through a composable, sklearn-shaped retrieval pipeline. Two
+retrieval modes ship today, and the YAML config lets you swap, weight, or fuse
+them:
+
+- **Keyword — BM25 over SQLite FTS5** (the default). Cheap, deterministic, ideal
+  for exact terms: function names, error strings, type signatures. Metadata
+  filters (`package=X`, `kind=api`) push down into SQLite rather than running in
+  Python.
+- **Semantic — dense embeddings.** FastEmbed by default (`BAAI/bge-small-en-v1.5`,
+  no API key, ONNX model cached locally), OpenAI optional. Vectors live in a
+  per-project `.tq` sidecar (TurboQuant) — never in SQLite, never in your cloud.
+  Recalls paraphrases that BM25 misses.
+- **Hybrid.** The `chunk_search_hybrid.yaml` preset runs BM25 + dense in parallel
+  and fuses them with reciprocal-rank fusion (RRF) into a single ranking.
+
+Plus **reference-graph navigation**: `lookup(target, show=…)` answers
+`callers` / `callees` / `inherits` / `tree` over `CALLS / IMPORTS / INHERITS`
+edges captured at indexing time — across your project *and* every installed dep.
+
+> Deep dives — the full retrieval pipeline, reference graph, two-level cache,
+> configuration, database schema, and the complete CLI reference — live in
+> **[DOCUMENTATION.md](DOCUMENTATION.md)**. The extensibility surface (storage
+> backends, new pipeline steps, planned features) is in
+> **[EXTENSIONS.md](EXTENSIONS.md)**.
+
+## Quick start
+
+### Install
 
 ```bash
-# With Rust acceleration (requires Rust toolchain)
-pip install maturin
-cd pydocs-mcp && maturin develop --release
-
-# Without Rust (pure Python, works everywhere)
-pip install -e .
+pip install -e .                              # pure Python, works everywhere
+# …or with Rust acceleration:
+pip install maturin && maturin develop --release
 ```
 
-`fastembed` and `openai` are required runtime dependencies — `pip install` pulls them
-automatically (~90MB transitively: `onnxruntime` + `tokenizers` + the `openai` client).
-On the first inference call, FastEmbed downloads a ~80MB ONNX model to its cache.
-Linux users need `libopenblas-pthread-dev` before the install — see the next section.
-
-## System requirements
-
-### Linux
-
-`pydocs-mcp` depends on [turbovec](https://github.com/RyanCodrai/turbovec), a Rust
-vector store whose compiled wheel links against CBLAS. Ubuntu/Debian users must
-install OpenBLAS with the CBLAS interface before installing the package:
+`fastembed` and `openai` are required runtime dependencies; `pip` pulls them
+automatically (≈90 MB transitively, plus a ~80 MB ONNX model FastEmbed caches on
+first use). **Linux** also needs OpenBLAS (the CBLAS interface) for the
+TurboQuant vector store:
 
 ```bash
 sudo apt-get install -y libopenblas-pthread-dev
 ```
 
-Without this, `import pydocs_mcp` fails at runtime with:
-`undefined symbol: cblas_sgemm`.
+Without it, `import pydocs_mcp` fails with `undefined symbol: cblas_sgemm`.
+macOS/Windows get CBLAS from the Accelerate framework / MSVC runtime. See
+**[INSTALL.md](INSTALL.md)** for details and the `LD_PRELOAD` fallback.
 
-### macOS / Windows
-
-No additional system packages needed — CBLAS is provided by the Accelerate
-framework (macOS) or the MSVC runtime (Windows).
-
-For more detailed install instructions (including the `LD_PRELOAD` fallback
-for environments where `update-alternatives` doesn't take effect), see
-[INSTALL.md](INSTALL.md).
-
-## Quick start
+### Index, serve, query
 
 ```bash
-# Index your project + its installed deps and start the MCP server
-pydocs-mcp serve .
-
-# Sample CLI queries (same surface the MCP tools expose)
-pydocs-mcp search "batch inference"
-pydocs-mcp lookup fastapi.routing.APIRouter --show callers
-```
-
-That's it for the 30-second path. Read on for the three ways to actually integrate pydocs-mcp into your workflow.
-
----
-
-## CLI `search` — every option with examples
-
-`pydocs-mcp search` mirrors the MCP `search` tool one-to-one — same pipelines, same scoring, same rendering. The flags below are the only knobs on the client side; everything else (ranking weights, chunk strategies, formatters) is tuned via YAML at server startup.
-
-```bash
-# Free-text query across docs + APIs (kind="any" is the default).
-pydocs-mcp search "batch inference"
-
-# Multi-word queries — quote them so the shell passes one string.
-pydocs-mcp search "async retry with exponential backoff"
-
-# --kind docs       → markdown / docstring chunks only
-# --kind api        → ModuleMember rows (functions, classes, signatures)
-# --kind any        → both, merged + scored together (default)
-pydocs-mcp search "predict" --kind api
-pydocs-mcp search "rate limiter" --kind docs
-pydocs-mcp search "router include" --kind any --limit 20
-
-# Restrict to one package. PyPI names are normalized to the DB form
-# (e.g., "Flask-Login" → "flask_login") so either spelling works.
-pydocs-mcp search "predict" --package vllm
-pydocs-mcp search "auth" -p Flask-Login          # same as -p flask_login
-
-# Search only YOUR project source (use the __project__ sentinel).
-pydocs-mcp search "handle request" -p __project__
-
-# Restrict by source SCOPE — your project, your deps, or both.
-# --scope project   → indexed under __project__
-# --scope deps      → indexed dependency packages
-# --scope all       → default
-pydocs-mcp search "retry" --scope project
-pydocs-mcp search "retry" --scope deps
-
-# Cap result count (default 10). Top-K capping is also configurable
-# server-side via YAML; --limit narrows the client-visible window.
-pydocs-mcp search "logging" --limit 5
-
-# Point at a different project (default is the cwd). Indexes that
-# project's deps if it isn't already cached.
-pydocs-mcp search "celery beat" --project-dir /path/to/other/project
-
-# Skip the Rust acceleration path (forces the pure-Python fallback —
-# useful for debugging the substitution boundary).
-pydocs-mcp search "tokenizer" --no-rust
-
-# Combine flags freely.
-pydocs-mcp search "embed" --kind api -p sentence_transformers --scope deps --limit 25
-```
-
-The `lookup` command has its own flag set (`--show {default, tree, callers, callees, inherits}`, listed in the [CLI reference](#cli-reference) section). `search` finds candidates by relevance; `lookup` jumps to a specific known name.
-
----
-
-## How does this compare to Context7 and Neuledge Context?
-
-Three open-source projects in roughly the same MCP-doc-retrieval space. They optimize for different things — pick by what your workflow needs.
-
-| Aspect | **pydocs-mcp** | **Context7** ([upstash/context7](https://github.com/upstash/context7)) | **Neuledge Context** ([neuledge/context](https://github.com/neuledge/context)) |
-|---|---|---|---|
-| Deployment | Local stdio MCP server | Hosted MCP at `mcp.context7.com` (or CLI + skills via `ctx7`) | Local stdio MCP server (`context serve`) |
-| Doc source | **Your installed Python deps** + your project source, indexed in place | Curated community library docs hosted by Upstash (parsing + crawling engines are closed-source) | Community-driven package registry (~100+ libraries) downloaded then queried locally |
-| Version match | Whatever you have in `site-packages` — automatic | Library + version selectable in the prompt (`use library /supabase/supabase`) | Latest from the registry's package for the library |
-| Languages | Python only | Multi-language (any library Upstash has crawled) | Multi-language (registry-driven; ~100+ libraries today) |
-| Retrieval method | Hybrid — BM25 (SQLite FTS5) + dense embeddings (FastEmbed / OpenAI in a TurboQuant `.tq` sidecar) fused via RRF | Not publicly documented | BM25 over SQLite FTS5 |
-| Code structure queries | **Reference graph** — `lookup(target, show="callers"\|"callees"\|"inherits")` via captured AST edges | None (doc retrieval only) | None (doc retrieval only) |
-| Project source indexing | Indexes your own code under the `__project__` package — `search ... -p __project__` works the same as searching deps | No (external library docs only) | No (registry packages only) |
-| MCP tools exposed | `search`, `lookup` (2 tools, surface intentionally pinned) | `resolve-library-id`, `query-docs` (2 tools) | Doc-retrieval tools (CLI: `context serve`) |
-| Privacy | **Fully offline** — zero network calls after install | Queries hit Upstash; free tier + paid for higher rate limits; OAuth + API key | Local once packages are downloaded from the registry |
-| Customization | YAML pipelines (chunkers, scorers, filters, formatters); single-source-of-truth defaults via `AppConfig` | API key + HTTP headers | Registry-package mechanics; see project docs |
-| Cost | **$0.** OSS (MIT). Runs locally — no API keys, no rate limits, no per-query fees. | **Free tier + paid plans.** Free tier is rate-limited and requires an API key. | **$0.** OSS (Apache-2.0). Local-first — no API keys, no rate limits, no per-query fees. |
-| Vendor lock-in | None — your data is a SQLite file you can read/delete/move. | Reliance on the hosted service; the parsing + crawling engines are closed-source, so a self-host fallback isn't equivalent. | None — registry packages are pulled but retrieval and storage stay local. |
-| License | MIT | MIT | Apache-2.0 |
-
-**Pick pydocs-mcp when** you want offline, version-matched-to-your-install retrieval, you work primarily in Python, and you care about navigating code structure (callers / callees / inheritance), not just reading docs.
-
-**Pick Context7 when** you want a hosted service that gives an LLM up-to-date docs for any popular library across many languages without you setting up an indexer — and you're fine sending queries over the network.
-
-**Pick Neuledge Context when** you want local-first multi-language coverage from a community registry and don't need version-pinning to your installed code.
-
-The three are not exclusive — a coding agent can mount all three MCP servers at once and route by intent (pydocs-mcp for "what calls this method?", Context7 / Neuledge for "show me Next.js 15 middleware patterns").
-
----
-
-## Usage patterns
-
-pydocs-mcp is designed to work three ways. Pick the one that matches your setup.
-
-### A. Run as an MCP server (most common)
-
-For Claude Code, Cursor, or any MCP-compatible client.
-
-**Start the server** (stdio transport):
-
-```bash
-pydocs-mcp serve /path/to/project
-```
-
-The server indexes the project + installed deps on startup (or uses the cached `.db` if unchanged) and exposes two tools over MCP stdio.
-
-**Claude Code integration** (`~/.config/claude-code/mcp_servers.json` or workspace `.claude/mcp_servers.json`):
-
-```json
-{
-  "mcpServers": {
-    "pydocs": {
-      "command": "pydocs-mcp",
-      "args": ["serve", "/path/to/your/project"]
-    }
-  }
-}
-```
-
-**Cursor integration** (`~/.cursor/mcp.json` or `.cursor/mcp.json`):
-
-```yaml
-mcpServers:
-  - name: pydocs
-    command: pydocs-mcp
-    args: ["serve", "/path/to/your/project"]
-```
-
-**Continue.dev integration** (`~/.continue/config.json`):
-
-```json
-{
-  "mcpServers": [
-    {
-      "name": "pydocs",
-      "command": "pydocs-mcp",
-      "args": ["serve", "/path/to/your/project"]
-    }
-  ]
-}
-```
-
-**Example client invocations** (ask your LLM to run these after the MCP server is connected):
-
-```
-search("batch inference vllm", kind="api", package="vllm", limit=20)
-lookup("fastapi.routing.APIRouter")
-lookup("fastapi.routing.APIRouter.include_router", show="callers")
-lookup("requests.auth.HTTPBasicAuth", show="inherits")
-```
-
-The MCP surface is **fixed at two tools by design** (see CLAUDE.md §"MCP API surface vs YAML configuration"). All pipeline tuning happens server-side via YAML — clients don't need rebuilds when you adjust ranking weights or chunk strategies.
-
-### B. Configure via YAML
-
-Production deployments + benchmark sweeps. Both the MCP server and the CLI load pipelines from YAML at startup.
-
-**Shipped blueprints** (copy + modify as needed):
-
-- `python/pydocs_mcp/pipelines/chunk_search.yaml` — default chunk-search pipeline (BM25 fetch → score → metadata filter → top-K → limit → token-budget renderer); the hybrid variant adds a `dense_fetcher` + `dense_scorer` branch fused into the BM25 branch via `rrf_fusion`
-- `python/pydocs_mcp/pipelines/member_search.yaml` — default member-search pipeline (LIKE fetch → metadata filter → top-K → limit → budget)
-- `python/pydocs_mcp/pipelines/ingestion.yaml` — default ingestion pipeline (file_discovery → file_read → chunking → reference_capture → flatten → assign_chunk_content_hash → load_existing_chunk_hashes → embed_chunks → content_hash → package_build)
-
-**Pipeline schema** (`steps:` with `name:` per step):
-
-```yaml
-name: chunk_search
-steps:
-  - name: fetch
-    type: chunk_fetcher
-    params: { limit: 200 }
-  - name: score
-    type: bm25_scorer
-    params: {}
-  - name: post_filter
-    type: metadata_post_filter
-    params: {}
-  - name: topk
-    type: top_k_filter
-    params: { k: 50 }
-  - name: limit
-    type: limit
-    params: { max_results: 8 }
-  - name: budget
-    type: token_budget_formatter
-    params: { budget: 2000 }
-```
-
-Each step entry needs a `name:` (addressable + greppable), a registered `type:`, and `params:` matching the step's dataclass fields.
-
-**Override with a user overlay** — a single file that layers on top of the shipped defaults:
-
-```yaml
-# my-pydocs.yaml — sits next to your project, or anywhere
-extraction:
-  chunking:
-    markdown:
-      max_heading_level: 4         # default: 3
-search:
-  output:
-    default_limit: 20              # default: 10
-reference_graph:
-  capture:
-    enabled: true
-    kinds: [calls, imports, inherits, mentions]   # opt into MENTIONS
-```
-
-Load it explicitly:
-
-```bash
-pydocs-mcp serve . --config ./my-pydocs.yaml
-```
-
-Or set `PYDOCS_CONFIG_PATH=./my-pydocs.yaml` in the environment. The config layer is: shipped `defaults/default_config.yaml` → shipped pipeline YAML → user overlay → env vars (`PYDOCS_*`, highest priority).
-
-All tunables are listed in `python/pydocs_mcp/defaults/default_config.yaml` — read it as the canonical reference.
-
-### C. Build pipelines in Python code
-
-For tests, benchmarks, or embedded usage. Build an `IngestionPipeline` and a `RetrieverPipeline` programmatically, no YAML required.
-
-```python
-import asyncio
-import tempfile
-from pathlib import Path
-
-from pydocs_mcp.application import ProjectIndexer
-from pydocs_mcp.db import build_connection_provider, open_index_database
-from pydocs_mcp.extraction import (
-    AstMemberExtractor,
-    PipelineChunkExtractor,
-    StaticDependencyResolver,
-    build_ingestion_pipeline,
-)
-from pydocs_mcp.models import SearchQuery
-from pydocs_mcp.retrieval.config import AppConfig
-from pydocs_mcp.retrieval.pipeline import (
-    PerCallConnectionProvider,
-    RetrieverPipeline,
-    RetrieverState,
-)
-from pydocs_mcp.retrieval.steps import (
-    BM25ScorerStep,
-    ChunkFetcherStep,
-    LimitStep,
-    MetadataPostFilterStep,
-    TokenBudgetStep,
-    TopKFilterStep,
-)
-from pydocs_mcp.storage.factories import (
-    build_sqlite_indexing_service,
-    build_sqlite_uow_factory,
-)
-from pydocs_mcp.storage.sqlite import SqliteChunkRepository
-
-
-async def main() -> None:
-    # 1. Fresh SQLite + ingestion pipeline from default AppConfig
-    db_path = Path(tempfile.mkstemp(suffix=".sqlite")[1])
-    open_index_database(db_path).close()
-    config = AppConfig.load()
-
-    indexer = ProjectIndexer(
-        indexing_service=build_sqlite_indexing_service(db_path),
-        dependency_resolver=StaticDependencyResolver(),
-        chunk_extractor=PipelineChunkExtractor(pipeline=build_ingestion_pipeline(config)),
-        member_extractor=AstMemberExtractor(),
-        uow_factory=build_sqlite_uow_factory(db_path),
-    )
-    await indexer.index_project(Path("/path/to/your/project"))
-    await SqliteChunkRepository(provider=build_connection_provider(db_path)).rebuild_index()
-
-    # 2. RetrieverPipeline composed from steps — sklearn-shaped, named + addressable
-    provider = PerCallConnectionProvider(cache_path=db_path)
-    pipeline = RetrieverPipeline(
-        name="chunk_search",
-        steps=(
-            ("fetch", ChunkFetcherStep(provider=provider)),
-            ("score", BM25ScorerStep(name="bm25_scorer")),
-            ("post_filter", MetadataPostFilterStep(name="metadata_post_filter")),
-            ("topk", TopKFilterStep(name="top_k_filter")),
-            ("limit", LimitStep(name="limit")),
-            ("budget", TokenBudgetStep(name="token_budget_formatter")),
-        ),
-    )
-
-    # 3. Run a search
-    state = await pipeline.run(RetrieverState(query=SearchQuery(terms="async retry")))
-    if state.result is not None:
-        print(state.result.items[0].text[:500])
-
-
-asyncio.run(main())
-```
-
-`RetrieverPipeline` IS a `RetrieverStep`, so pipelines compose recursively — nest one as a step inside another for sub-routing. Address steps by name (`pipeline["fetch"]`) for introspection or testing.
-
----
-
-## CLI reference
-
-```bash
-# Serve as an MCP server (the most common entry point)
-pydocs-mcp serve /path/to/project
-pydocs-mcp serve . --no-inspect --depth 2 --workers 8 --config ./my-pydocs.yaml
-
-# Index only (no server) — useful for one-shot benchmark setups
-pydocs-mcp index .
-pydocs-mcp index . --force          # clear cache + re-index
-pydocs-mcp index . --skip-project   # only index deps, not the project
-
-# Search from CLI (mirrors the MCP `search` tool)
-pydocs-mcp search "batch inference"
-pydocs-mcp search "predict" --kind api -p vllm
-pydocs-mcp search "handle request" -p __project__
-
-# Navigate to a specific target (mirrors the MCP `lookup` tool)
-pydocs-mcp lookup                                      # list packages
-pydocs-mcp lookup fastapi.routing.APIRouter            # class overview
-pydocs-mcp lookup fastapi.routing.APIRouter --show tree
+pydocs-mcp serve .                            # index project + deps, start MCP server (stdio)
+pydocs-mcp search "batch inference"           # CLI mirror of the search tool
 pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
-pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 ```
 
-Use `__project__` as the package name to scope a search to your own code.
+The first run indexes your project + every installed dep; later runs skip
+unchanged packages in <100 ms. Wire it into Claude Code / Cursor / Continue.dev
+over stdio — integration snippets are in
+[DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration).
 
----
+## Benchmark & evaluation
 
-## How it works
+pydocs-mcp ships a real retrieval-quality benchmark harness (`benchmarks/`) — not
+just smoke tests. It measures retrieval against public benchmarks and competing
+services:
 
-1. Reads `pyproject.toml` (priority) or `requirements.txt` to discover dependencies.
-2. Indexes project source via AST/regex (no imports needed).
-3. Indexes installed deps via `inspect` (parallel, optional — skip with `--no-inspect` for static-only).
-4. Embeds each chunk via FastEmbed (default) or OpenAI and writes vectors to a per-project TurboQuant `.tq` sidecar.
-5. Stores docs/code chunks in SQLite with FTS5 full-text search; dense vectors live in the `.tq` file.
-6. Captures the reference graph (CALLS / IMPORTS / INHERITS edges) for `lookup(..., show="callers")` etc.
+- **Datasets:** **RepoQA-SNF** (natural-language → function retrieval in real
+  repos) and **DS-1000** (data-science intent → library-docs retrieval,
+  CodeRAG-Bench flavor).
+- **Head-to-head:** pydocs-mcp vs **Context7** vs **Neuledge** on the same
+  queries and the same gold answers, through a unified relevance layer so
+  heterogeneous systems share one metric suite.
+- **Metrics:** `recall@k`, `precision@1`, `mrr`, `ndcg@k`, `coverage`,
+  `library_resolution@1` — each with 95% bootstrap confidence intervals — plus
+  JSONL- or MLflow-backed tracking and built-in plotting.
+- **Comparable runs:** because all behavior lives in YAML (below), two configs
+  produce two comparable runs with zero client changes — A/B a chunker, ranker,
+  or embedder against a fixed dataset.
 
-### Indexing is one-time per source change
+Full guide: **[benchmarks/README.md](benchmarks/README.md)**.
 
-**You only pay the indexing cost once.** The first run on a project walks every file in your project + every installed dep, builds the SQLite database, and embeds every chunk into the `.tq` sidecar. Subsequent runs do a quick metadata scan and skip indexing entirely if nothing changed — typical re-run latency is **&lt;100 ms** (just the hash check + a SQLite open).
+## Configuration — YAML, not API params
 
-The skip decision has two levels:
+The MCP tool surface is pinned at two tools (`search` + `lookup`) so MCP clients
+(Claude Code, Cursor, IDE extensions) stay stable across deployments. Every other
+knob — ranking weights, fusion, embedder identity, reference-graph capture,
+chunking, output limits — lives in `AppConfig` (pydantic-settings) with layered
+defaults: shipped `default_config.yaml` → pipeline blueprints → your overlay →
+env vars (`PYDOCS_*`). Details and the full tunable list:
+[DOCUMENTATION.md](DOCUMENTATION.md#configuration).
 
-- **Per-package content hash.** Each project gets its own SQLite at `~/.pydocs-mcp/{dirname}_{path_hash}.db` plus a matching `.tq` sidecar, where `path_hash` is a 10-char MD5 slug of the absolute project path. For every package (your project + every dep) the server collects `(file_path, mtime_nanos)` pairs across the package, joins them into one byte buffer, and hashes the buffer with **xxh3-64** — 16 hex chars stored in `packages.content_hash`. On the next run, recomputed hash matches stored → skip the whole package (no parsing, no chunking, no embedding, no DB writes).
-- **Per-chunk content hash.** When a package IS re-extracted, the server still avoids redundant work at the chunk level. `chunks.content_hash` = SHA-256 of `package + module + title + text + pipeline_hash`. `IndexingService.reindex_package` diffs the persisted hash set against the freshly-extracted one: unchanged chunks keep their existing rows + vectors, removed chunks have both their SQLite row AND `.tq` entry wiped atomically, added chunks are embedded + written. Re-embedding only happens for chunks whose content actually changed — meaningful when the embedder is OpenAI ($) or FastEmbed (CPU).
-- **`pipeline_hash` invalidates everything.** SHA-256 of the embedder identity (provider, model_name, dim, bit_width) + the raw bytes of `ingestion.yaml`. Swap models, edit the YAML, or change a stage parameter and every chunk hash flips → diff-merge sees them all as added → full re-embed via the normal path. No manual cache wipe needed.
-- **Why mtime + path (not file contents) at the package level.** Filesystem `mtime` is cheap to read in bulk, and the project's file tree is the actual source-of-truth signal. Touching a file changes its `mtime`; renaming a file changes its path. Reading file *contents* would defeat the speed goal.
-- **Force a full rebuild** with `pydocs-mcp index . --force`. This calls `IndexingService.clear_all`, which atomically wipes BOTH SQLite rows AND the TurboQuant index via the UoW — no manual `.tq` deletion needed. Safe to delete `~/.pydocs-mcp/*.db` and `~/.pydocs-mcp/*.tq` at any time; both files are always rebuildable.
+## How it compares
 
-For a typical 100-deps project, a no-change re-run does a few thousand `stat()` calls + one xxh3 per package. That's bounded by your disk's metadata throughput, not by anything pydocs-mcp does.
+pydocs-mcp is **local, offline, version-matched to your install, Python-focused,
+and reference-graph-aware**. Context7 is a hosted, multi-language doc service;
+Neuledge is a local-first multi-language registry. The three aren't exclusive — a
+coding agent can mount all three and route by intent (pydocs-mcp for "what calls
+this method?", the others for "show me Next.js middleware patterns"). Full
+side-by-side table:
+[DOCUMENTATION.md](DOCUMENTATION.md#how-it-compares-context7--neuledge).
 
-### Database schema (simplified)
+## Roadmap
 
-The SQLite file holds six tables. The schema is versioned via `PRAGMA user_version`; a mismatch on open drops the known tables and re-indexes from scratch.
+Planned extensions — weighted-score fusion alongside RRF, LLM-driven tree
+reasoning over `DocumentNode` trees (PageIndex-style) for long/structural
+queries, and additional vector-store backends (Qdrant, Chroma, `sqlite-vec`, …)
+— are catalogued in **[EXTENSIONS.md](EXTENSIONS.md)**, each scoped as a focused
+follow-up PR. They are not yet shipped.
 
-```mermaid
-erDiagram
-    packages {
-        TEXT name PK
-        TEXT version
-        TEXT content_hash "xxh3 of (path,mtime) pairs"
-        TEXT origin "site-packages | __project__"
-        TEXT local_path
-    }
-    chunks {
-        INTEGER id PK
-        TEXT package FK
-        TEXT module
-        TEXT title
-        TEXT text "indexed by chunks_fts (FTS5)"
-        TEXT content_hash
-    }
-    chunks_fts {
-        FTS5 virtual "porter + unicode61 tokenizer"
-    }
-    module_members {
-        INTEGER id PK
-        TEXT package FK
-        TEXT module
-        TEXT name "function/class/method"
-        TEXT kind
-        TEXT signature
-        TEXT docstring
-    }
-    document_trees {
-        TEXT package PK
-        TEXT module PK
-        TEXT tree_json "DocumentNode tree"
-        TEXT content_hash
-    }
-    node_references {
-        TEXT from_package PK
-        TEXT from_node_id PK
-        TEXT to_name PK
-        TEXT kind PK "CALLS | IMPORTS | INHERITS | MENTIONS"
-        TEXT to_node_id "null if unresolved"
-    }
-    packages ||--o{ chunks                : has
-    packages ||--o{ module_members        : has
-    packages ||--o{ document_trees        : has
-    packages ||--o{ node_references       : owns
-    chunks   ||--|| chunks_fts            : indexed_by
-```
+## Learn more
 
-Per-table purpose, one line each:
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** — retrieval pipeline, reference graph,
+  cache, configuration, database schema, architecture, and the full CLI reference.
+- **[EXTENSIONS.md](EXTENSIONS.md)** — the extensibility surface and planned work.
+- **[benchmarks/README.md](benchmarks/README.md)** — the evaluation harness.
+- **[INSTALL.md](INSTALL.md)** — installation and troubleshooting.
+- **[CLAUDE.md](CLAUDE.md)** — contributor / architecture guide.
 
-| Table | What it stores | Where it's read |
-|---|---|---|
-| `packages` | One row per indexed package + the cache-skip `content_hash`. Project source is stored under the sentinel `name = "__project__"`. | Indexing skip-check, `lookup` (list packages) |
-| `chunks` | Documentation + source chunks (markdown sections, docstrings, code blocks). `content_hash` powers the chunk-level reindex-skip (no re-embed when unchanged). Dense embeddings for the same chunks live in the `.tq` sidecar, not in this row. | `search(query, kind="docs")` via FTS5 + dense scoring |
-| `chunks_fts` | FTS5 virtual table mirroring `chunks.title` + `chunks.text` + `chunks.package`, with Porter stemming + unicode61. | `search` BM25 ranking (paired with dense scoring from the `.tq` sidecar, fused via RRF) |
-| `module_members` | Functions, classes, methods, attributes — name + signature + docstring + kind. | `search(query, kind="api")`, `lookup(target)` |
-| `document_trees` | The hierarchical `DocumentNode` tree per module (used for `lookup(..., show="tree")` and structural rendering). | `lookup(..., show="tree")` |
-| `node_references` | The reference graph: one row per (`from_node`, `to_name`, `kind`) edge captured during indexing (CALLS / IMPORTS / INHERITS, plus MENTIONS if opted into via YAML). | `lookup(..., show="callers"\|"callees"\|"inherits")` |
-
-The schema is documented in [python/pydocs_mcp/db.py](python/pydocs_mcp/db.py) — read it as the canonical reference, including indexes and migration notes.
-
----
-
-## Architecture
-
-```
-pydocs-mcp/
-├── Cargo.toml                  # Rust dependencies
-├── pyproject.toml              # Python package config (maturin mixed layout)
-├── src/
-│   └── lib.rs                  # Rust: walker, hasher, chunker, parser (6 PyO3 functions)
-└── python/
-    └── pydocs_mcp/
-        ├── __init__.py         # Package version
-        ├── __main__.py         # CLI entry point (serve / index / search / lookup)
-        ├── _fallback.py        # Pure Python versions of Rust functions
-        ├── _fast.py            # Import Rust or fallback (substitution boundary)
-        ├── db.py               # SQLite schema + cache lifecycle + FTS rebuild
-        ├── deps.py             # Dependency resolution (pyproject.toml, requirements.txt)
-        ├── extraction/         # Chunkers, member extractors, ingestion pipeline
-        │   ├── strategies/     #   chunkers, members, discovery, dependencies
-        │   ├── pipeline/       #   IngestionPipeline, stages, PipelineChunkExtractor
-        │   └── model/          #   DocumentNode, NodeKind, tree helpers
-        ├── application/        # Use-case services (indexing, search, lookup, formatting)
-        ├── storage/            # SQLite repositories, UnitOfWork, VectorStore
-        ├── retrieval/          # sklearn-style RetrieverStep ABC + RetrieverPipeline
-        │   ├── pipeline/       #   RetrieverStep ABC, RetrieverPipeline, RetrieverState
-        │   └── steps/          #   one file per step (chunk_fetcher, bm25_scorer, …)
-        ├── defaults/           # Shipped default_config.yaml
-        ├── pipelines/          # Built-in pipeline YAML blueprints
-        └── server.py           # MCP server (2 tools: search + lookup)
-```
-
-For the detailed architecture (data flow, SOLID principles, async patterns, MCP API rules, single-source-of-truth defaults), see [CLAUDE.md](CLAUDE.md).
-
----
-
-## MCP tool reference
-
-The MCP surface is intentionally minimal — two tools cover every workflow.
-
-| Tool | Signature | Purpose |
-|---|---|---|
-| `search` | `search(query, kind, package, scope, limit)` | BM25 full-text search across indexed docs/code. `kind` ∈ `{docs, api, any}`. |
-| `lookup` | `lookup(target, show)` | Navigate to a specific named target. `show` ∈ `{default, tree, callers, callees, inherits}`. Empty target lists indexed packages. |
-
-`lookup(target=X, show="callers")`, `show="callees"`, and `show="inherits"` query the **reference graph** (CALLS, IMPORTS, INHERITS edges) — captured at indexing time from AST analysis and stored alongside the chunks. Capture is on by default and tuned via YAML (`reference_graph.capture.{enabled,kinds}`); MENTIONS edges are opt-in.
-
----
-
-## Cache
-
-Each project gets two sidecar files at `~/.pydocs-mcp/`:
-
-- `{dirname}_{path_hash}.db` — SQLite (schema + chunks + module members + document trees + reference graph). Versioned via `PRAGMA user_version`; opening a DB whose version doesn't match drops all tables and re-indexes from scratch.
-- `{dirname}_{path_hash}.tq` — TurboQuant binary index holding the dense embedding for every chunk.
-
-Both files are always rebuildable from source. The `--force` flag calls `IndexingService.clear_all`, which wipes them atomically through the UoW (no manual `.tq` deletion needed). It's safe to delete both files at any time.
-
-**Downgrading:** if you install an older version of `pydocs-mcp` that uses a pre-v2 schema, delete both `~/.pydocs-mcp/*.db` AND `~/.pydocs-mcp/*.tq` first — otherwise the older code will fail with "no such column" against the newer schema.
+License: MIT.
