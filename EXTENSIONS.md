@@ -207,7 +207,7 @@ Each is small enough to land in one focused PR and exercises the abstractions en
     - `LlmConfig` sub-model in `retrieval/config.py` mirroring `EmbeddingConfig` (`provider: Literal["openai", ...]`, `model_name`, `temperature`, `max_tokens`).
     - Two Jinja2 prompt templates under `python/pydocs_mcp/retrieval/prompts/`: `tree_reasoning_pageindex_v1.j2` (verbatim PageIndex baseline) and `tree_reasoning_pydocs_v1.j2` (adapted for code-doc queries). Prompts are versioned (`_vN` suffix); selected at runtime via a `prompt_template` dataclass field on the step. Versioned prompts make A/B comparison and rollback a YAML edit instead of a code change.
 
-    Inspired by [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) (MIT-licensed).
+    Inspired by [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) (MIT). **Re-implemented locally — no `pageindex` package dependency.** The single-shot algorithm is small (one Jinja2 prompt + one `json.loads` + one chunk fetch through the existing `uow.chunks`); vendoring the logic ≈30 LOC, avoids growing the install surface (already +90 MB after the FastEmbed/OpenAI promotion), and keeps prompt versioning + reproducibility in our repo instead of someone else's release schedule. PageIndex isn't on PyPI under `pageindex` anyway (`pageindex-rs` is an unrelated Rust port).
 
 ### Tier 4 — larger PRs (~800+ LOC)
 
