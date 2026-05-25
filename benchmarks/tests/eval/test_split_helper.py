@@ -14,7 +14,6 @@ dataset) guards the contract regardless of which loader calls it.
 from __future__ import annotations
 
 import pytest
-
 from benchmarks.eval.datasets._split import (
     VALID_SPLITS,
     stratified_split,
