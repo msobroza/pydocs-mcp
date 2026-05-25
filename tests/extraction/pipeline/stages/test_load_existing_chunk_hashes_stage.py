@@ -16,6 +16,13 @@ from pydocs_mcp.extraction.pipeline.stages.load_existing_chunk_hashes import (
 from pydocs_mcp.models import Chunk, Package, PackageOrigin
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
+# Capture the real ``from_dict`` at import time, before the conftest-level
+# autouse fixture replaces it with a permissive stub (the stub bypasses the
+# ``uow_factory`` strict check so production-wired pipeline builds in CLI /
+# integration tests don't explode). The strict-mode unit test below needs
+# the real classmethod to verify the ValueError contract.
+_REAL_FROM_DICT = LoadExistingChunkHashesStage.from_dict
+
 
 def _pkg(name: str) -> Package:
     """Build a Package with all required fields."""
@@ -124,6 +131,10 @@ async def test_load_excludes_null_content_hash_rows(tmp_path: Path) -> None:
 
 
 def test_load_from_dict_raises_without_uow_factory_in_context() -> None:
+    # Use the captured pre-stub classmethod — the conftest-level autouse
+    # fixture replaces ``LoadExistingChunkHashesStage.from_dict`` with a
+    # permissive stub for the duration of every test; verifying the strict
+    # production contract requires the original.
     context = MagicMock(uow_factory=None)
     with pytest.raises(ValueError, match="uow_factory"):
-        LoadExistingChunkHashesStage.from_dict({}, context)
+        _REAL_FROM_DICT({}, context)

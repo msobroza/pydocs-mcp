@@ -37,3 +37,21 @@ def test_embed_chunks_stage_type_is_embed_chunks() -> None:
         s for s in cfg["stages"] if s["type"] == "embed_chunks"
     )
     assert embed_stage["type"] == "embed_chunks"
+
+
+def test_assign_chunk_content_hash_is_between_flatten_and_embed_chunks() -> None:
+    cfg = yaml.safe_load(INGESTION_YAML.read_text(encoding="utf-8"))
+    types = [s["type"] for s in cfg["stages"]]
+    flat = types.index("flatten")
+    assign = types.index("assign_chunk_content_hash")
+    embed = types.index("embed_chunks")
+    assert flat < assign < embed
+
+
+def test_load_existing_chunk_hashes_is_between_assign_and_embed_chunks() -> None:
+    cfg = yaml.safe_load(INGESTION_YAML.read_text(encoding="utf-8"))
+    types = [s["type"] for s in cfg["stages"]]
+    assign = types.index("assign_chunk_content_hash")
+    load = types.index("load_existing_chunk_hashes")
+    embed = types.index("embed_chunks")
+    assert assign < load < embed
