@@ -574,7 +574,7 @@ per-query latency once the index is warm. Skip detection uses a per-package xxh3
 hash over `(file_path, mtime)` pairs, so subsequent sweeps over unchanged slices
 skip indexing entirely (typical re-run latency &lt;100 ms per task). The DB schema
 is described in the
-[project README](../README.md#database-schema-simplified).
+[project documentation](../DOCUMENTATION.md#database-schema-simplified).
 
 ### Running the tests
 
