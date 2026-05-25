@@ -8,14 +8,24 @@ Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this reposit
 
 ## Project Overview
 
-**pydocs-mcp** — A local Python documentation indexing and search MCP server with optional Rust acceleration. Indexes project source code + all installed dependencies into a searchable SQLite FTS5 database for AI coding assistants.
+**pydocs-mcp** — A local Python documentation indexing and search MCP server with optional Rust acceleration. Indexes project source code + all installed dependencies into a hybrid index (SQLite FTS5 for BM25 + a per-project TurboQuant `.tq` sidecar for dense embeddings) for AI coding assistants.
 
-**Post-trilogy state (sub-PRs #5a / #5a-2 / #5b / #5c, complete):** the reference graph (CALLS / IMPORTS / INHERITS / MENTIONS edges) ships in the indexer and is queried via the existing MCP surface as `lookup(target=X, show="callers" | "callees" | "inherits")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`. The MCP surface remains the fixed 2-tool `search` + `lookup` (see §"MCP API surface vs YAML configuration").
+**Current state:**
+
+- **Reference graph** (CALLS / IMPORTS / INHERITS / MENTIONS edges) lives in the indexer and is queried via the existing MCP surface as `lookup(target=X, show="callers" | "callees" | "inherits")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`.
+- **Hybrid retrieval** — BM25 (FTS5) + dense embeddings (FastEmbed by default, OpenAI optional) fused via RRF. The vector store is `HybridSqliteTurboStore` (FTS5 + TurboQuant) coordinated through `CompositeUnitOfWork`.
+- **Chunk-level cache + atomic vector cleanup** — `chunks.content_hash` (SHA-256 of `package+module+title+text+pipeline_hash`) skips re-embedding unchanged chunks on reindex; `pipeline_hash` invalidates every chunk hash when the embedder or `ingestion.yaml` changes; `IndexingService.reindex_package` / `remove_package` / `clear_all` keep SQLite + TurboQuant coherent atomically through the UoW.
+
+The MCP surface remains the fixed 2-tool `search` + `lookup` (see §"MCP API surface vs YAML configuration").
 
 ## Build & Run Commands
 
 ```bash
-# Pure Python install (no Rust needed)
+# Linux only: libopenblas is a hard system requirement (turbovec links CBLAS).
+# macOS / Windows ship CBLAS via Accelerate / MSVC runtime — skip this step.
+sudo apt-get install -y libopenblas-pthread-dev   # see INSTALL.md for fallbacks
+
+# Pure Python install (no Rust acceleration needed)
 pip install -e .
 
 # With Rust acceleration (requires Rust 1.70+)
@@ -28,7 +38,7 @@ pydocs-mcp serve . --no-inspect --depth 2 --workers 8
 
 # Index only (no server)
 pydocs-mcp index .
-pydocs-mcp index . --force        # Clear cache and re-index
+pydocs-mcp index . --force        # Atomic SQLite + .tq wipe via IndexingService.clear_all
 pydocs-mcp index . --skip-project # Dependencies only
 
 # Search/debug from CLI (mirrors MCP surface: `search` + `lookup`)
@@ -41,13 +51,20 @@ pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
 pydocs-mcp -v serve .
 ```
 
-No test suite or linting configuration exists yet.
+## Tests & Lint
 
 ```bash
+# Python suite (1199 unit + 141 benchmark tests on the current main)
+pytest -q
+PYTHONPATH=benchmarks/src pytest benchmarks/tests/ -q
+
+# Python lint
+ruff check python/ tests/ benchmarks/
+
 # Rust checks
-cargo fmt --check          # Format check
-cargo clippy               # Lint Rust code
-cargo test                 # Run Rust unit tests
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test
 ```
 
 ## Architecture
@@ -63,11 +80,11 @@ python/pydocs_mcp/
 │   ├── strategies/  #   chunkers, members, discovery, dependencies
 │   ├── pipeline/    #   IngestionPipeline, stages, PipelineChunkExtractor
 │   └── model/       #   DocumentNode, NodeKind, tree helpers
-├── application/   # Use-case services — IndexingService + ProjectIndexer + PackageLookup + DocsSearch + ApiSearch + ModuleInspector + shared formatting helpers
-├── storage/       # Filter tree, Protocols, SQLite repositories + VectorStore + UnitOfWork
+├── application/   # Use-case services — IndexingService + ProjectIndexer + PackageLookup + DocsSearch + ApiSearch + ModuleInspector + ReferenceService + shared formatting helpers
+├── storage/       # Filter tree, Protocols, SQLite repositories + TurboQuant store + HybridSqliteTurboStore + SqliteUnitOfWork + TurboQuantUnitOfWork + CompositeUnitOfWork
 ├── retrieval/     # sklearn-style RetrieverPipeline + RetrieverStep ABC; one file per step under steps/; pipeline/ holds Step/Pipeline base + RetrieverState + ConnectionProvider; YAML config
 │   ├── pipeline/    #   RetrieverStep ABC, RetrieverPipeline, RetrieverState, PerCallConnectionProvider, CodeRetrieverPipeline (legacy entry-point shim)
-│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, member_fetcher, top_k_filter, metadata_post_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion
+│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
 ├── pipelines/     # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
 └── server.py      # MCP handlers over services
@@ -76,7 +93,7 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 
 **Naming: retrieval vs ingestion pipelines** — `retrieval/` uses `RetrieverStep` (ABC) and `RetrieverPipeline`. `extraction/pipeline/` uses `IngestionStage` (Protocol) and `IngestionPipeline`. Two different pipelines, two different abstractions; don't confuse them. A future PR may rename `IngestionStage` → `IngestionStep` for symmetry.
 
-**Data flow:** CLI / MCP server → services (`PackageLookup` / `DocsSearch` / `ApiSearch` / `ModuleInspector` for queries; `ProjectIndexer.index_project` for writes) → `application.IndexingService` writes through `storage.SqlitePackageRepository` / `SqliteChunkRepository` / `SqliteModuleMemberRepository` under a `SqliteUnitOfWork` → `extraction.PipelineChunkExtractor` + `AstMemberExtractor` / `InspectMemberExtractor` feed write-side extraction; retrieval/ runs an async `RetrieverPipeline` whose steps fetch chunks (BM25 via FTS5 + pre-filter pushdown) or members (LIKE) → score → filter → top-K → render → server.py / __main__.py via `application/formatting` helpers → client.
+**Data flow:** CLI / MCP server → services (`PackageLookup` / `DocsSearch` / `ApiSearch` / `ModuleInspector` / `ReferenceService` for queries; `ProjectIndexer.index_project` for writes) → `application.IndexingService` writes through `storage.SqlitePackageRepository` / `SqliteChunkRepository` / `SqliteModuleMemberRepository` / `SqliteDocumentTreeStore` / `SqliteReferenceRepository` under a `CompositeUnitOfWork` (`SqliteUnitOfWork` + `TurboQuantUnitOfWork`) → `extraction.PipelineChunkExtractor` + `AstMemberExtractor` / `InspectMemberExtractor` feed write-side extraction; embeddings flow through `EmbedChunksStage` → `HybridSqliteTurboStore` → `.tq` sidecar; retrieval/ runs an async `RetrieverPipeline` whose steps fetch chunks (BM25 via FTS5 + pre-filter pushdown AND/OR dense via TurboQuant) or members (LIKE) → score (BM25 / dense) → optionally fuse via RRF → filter → top-K → render → server.py / __main__.py via `application/formatting` helpers → client.
 
 **Rust/Python duality:** `_fast.py` tries `from ._native import *`; on ImportError falls back to `_fallback.py`. All Rust functions have pure Python equivalents — the package works without Rust compiled.
 
@@ -84,17 +101,19 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 - **Inspect mode** (default): Imports modules via Python's `inspect`, gets full type hints and signatures. Riskier (side effects from imports).
 - **Static mode** (`--no-inspect`): Reads `.py` files from site-packages with regex parsing. Faster, safer, no side effects.
 
-**Cache:** Per-project SQLite at `~/.pydocs-mcp/{dirname}_{path_hash}.db`. Hash-based invalidation — subsequent runs with no changes skip indexing (<100ms).
+**Cache:** Per-project, two sidecar files at `~/.pydocs-mcp/{dirname}_{path_hash}.db` (SQLite) and `~/.pydocs-mcp/{dirname}_{path_hash}.tq` (TurboQuant vectors). Two-level skip:
+
+- **Package-level** — `packages.content_hash` = xxh3 of `(path, mtime)` pairs across the package; match → skip the whole package on next index (<100ms for a no-change re-run).
+- **Chunk-level** — `chunks.content_hash` = SHA-256 of `package + module + title + text + pipeline_hash`; reindex of a re-extracted package diffs against the persisted set and re-embeds only added chunks. `pipeline_hash` invalidates every chunk hash when the embedder identity or `ingestion.yaml` bytes change.
 
 ## Key Technical Details
 
-- Python 3.11+ required, single runtime dependency: `mcp>=1.0`
-- `pydantic-settings>=2.0` and `pyyaml>=6.0` runtime deps (YAML-driven pipeline config, added sub-PR #2)
+- Python 3.11+ required. Required runtime deps: `mcp>=1.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `pyyaml>=6.0`, `numpy>=1.26`, `turbovec>=0.5,<1.0`, `fastembed>=0.4,<1.0`, `openai>=1.40,<2.0` (~90MB transitively — `onnxruntime` + `tokenizers` + the `openai` client).
 - `retrieval/` uses a uniform `RetrieverStep` ABC + composable `RetrieverPipeline` (Pipeline IS a Step, so sub-pipelines compose directly without a SubPipelineStep adapter — named, addressable steps a la sklearn's `Pipeline([(name, step), ...])`)
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
 - Entry point: `pydocs-mcp = "pydocs_mcp.__main__:main"`
-- DB has three main tables: `packages`, `chunks` (with FTS5 virtual table), `module_members`
+- DB has six tables: `packages`, `chunks` (+ `chunks_fts` FTS5 virtual table), `module_members`, `document_trees`, `node_references`. Dense vectors live in the `.tq` sidecar, NOT in SQLite.
 - FTS5 uses porter stemming + unicode61 tokenizer
 - The project code itself is indexed under the special package name `__project__`
 
@@ -128,6 +147,37 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 - Publish both wheels (per-platform) and sdist — users without Rust get the pure Python fallback from sdist
 - For Linux: build inside manylinux2014+ container or use `maturin build --zig` for cross-compilation
 - Use `PyO3/maturin-action` in GitHub Actions for CI wheel building across platforms
+
+## Design Patterns & Code Conventions
+
+Quick map of the patterns this codebase uses; deeper rules live in the sections below.
+
+**Architectural patterns:**
+
+- **Hexagonal / Ports & Adapters** — Protocols (`storage/protocols.py`, `application/protocols.py`, `retrieval/protocols.py`) define the contracts; concrete `Sqlite*` / `TurboQuant*` / `HybridSqliteTurboStore` adapters live behind them.
+- **Repository pattern** — one repository class per persisted entity (`SqlitePackageRepository`, `SqliteChunkRepository`, `SqliteModuleMemberRepository`, `SqliteDocumentTreeStore`, `SqliteReferenceRepository`).
+- **Unit of Work** — `SqliteUnitOfWork` + `TurboQuantUnitOfWork` + `CompositeUnitOfWork` make multi-repo writes atomic across backends. See §"Creating new application services".
+- **Pipeline pattern (sklearn-shaped)** — `RetrieverPipeline = [(name, RetrieverStep), …]` for read paths; `IngestionPipeline` + `IngestionStage` for the write path. Pipeline-IS-a-Step composition (a pipeline is itself a step, so sub-pipelines nest without an adapter). See §"Naming: retrieval vs ingestion pipelines".
+- **Strategy pattern** — chunkers, member extractors, dependency resolvers, embedders are swappable strategies behind Protocols.
+- **Composition root** — `server.py`, `__main__.py`, `storage/factories.py` are the only places that wire concrete adapters; everything downstream takes a `uow_factory: Callable[[], UnitOfWork]` closure.
+- **Registry + decorator** — `@step_registry.register("name")`, `@stage_registry.register("name")`, `@predicate("name")`, `@formatter_registry.register("name")` keep YAML-addressable extensions one decorator away from being usable.
+- **Substitution boundary** — `_fast.py` resolves to either the Rust `_native` module or the pure-Python `_fallback.py`. Same signatures both sides (§"Fallback contract").
+
+**Code conventions:**
+
+- `@dataclass(frozen=True, slots=True)` for value objects and steps/stages; mutation happens via `dataclasses.replace`, not in-place writes.
+- One responsibility per file — one retrieval step per file under `retrieval/steps/`; one ingestion stage per file under `extraction/pipeline/stages/`.
+- `async def` for I/O; `asyncio.to_thread()` for CPU-bound or blocking SQLite work (§"Async Patterns").
+- Type hints everywhere; depend on Protocols (`UnitOfWork`, `ChunkStore`, `Embedder`, etc.), never on concrete `Sqlite*` types from application code.
+- Single source of truth for defaults — module-level `_DEFAULT_X` constants OR pydantic `Field(default=…)`; never repeat the literal (§"Default values: single source of truth").
+- Comments explain **WHY**, not WHAT (§"Code Comments").
+
+**SOLID + clean code:**
+
+- **Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion** — applied throughout; see §"SOLID Principles" for which module owns which concern and how to extend without modifying existing code.
+- **DRY** — defaults rule above; shared rendering lives in `application/formatting.py`; no inline duplication of repository wiring (composition root only).
+- **YAGNI** — pipeline / feature settings go to YAML, never new MCP params (§"MCP API surface vs YAML configuration"). The MCP surface is fixed at two tools by design.
+- **TDD** — failing test first, smallest change to green, then refactor; every PR ships with new tests mapped to discrete acceptance criteria.
 
 ## SOLID Principles
 
@@ -195,7 +245,7 @@ Other rules:
 
 **Rule:** Pipeline / feature / behavior settings — capture toggles, resolver thresholds, retrieval limits-on-defaults, ranking weights, embedding model choices, indexing depth, kinds-to-emit, reference-graph capture on/off, etc. — MUST be configured via YAML (loaded through `AppConfig.load(...)` at server / CLI startup), NEVER exposed as new MCP tool parameters.
 
-**The MCP tool surface is FIXED at two tools:** `search(query, kind, ...)` and `lookup(target, show, ...)`. Their signatures are pinned by sub-PRs #4 / #6. New features land **behind** the existing surface — via YAML config + internal service composition — never as a new MCP param.
+**The MCP tool surface is FIXED at two tools:** `search(query, kind, ...)` and `lookup(target, show, ...)`. Their signatures are pinned in `server.py`. New features land **behind** the existing surface — via YAML config + internal service composition — never as a new MCP param.
 
 **Why:**
 

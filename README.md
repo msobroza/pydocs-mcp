@@ -4,7 +4,7 @@
 
 Your AI assistant remembers `requests` 2.28. You have 2.31 installed. It writes code calling a kwarg that was renamed two versions ago — and you spend the next twenty minutes debugging why a test fails. The fix isn't a smarter prompt; it's giving the AI documentation that matches **your lockfile**, not the average of every StackOverflow answer it ever read.
 
-pydocs-mcp indexes your project source + every installed Python dependency from your `site-packages`, on your machine, in a couple of seconds. It exposes two MCP tools (`search`, `lookup`) plus a CLI mirror with the same surface and the same scoring. No network calls, no API keys, no rate limits. Just BM25 over SQLite FTS5 against the exact code your `pip install` resolved to.
+pydocs-mcp indexes your project source + every installed Python dependency from your `site-packages`, on your machine, in a couple of seconds. It exposes two MCP tools (`search`, `lookup`) plus a CLI mirror with the same surface and the same scoring. No network calls (with the default FastEmbed embedder), no API keys, no rate limits. Hybrid retrieval — BM25 over SQLite FTS5 + dense embeddings (FastEmbed by default, OpenAI optional) with RRF fusion — against the exact code your `pip install` resolved to.
 
 It also captures a **reference graph** at indexing time (CALLS / IMPORTS / INHERITS edges), so `lookup(target=X, show="callers")` answers *"what code in this repo or any installed dep calls this method?"* — not just *"what does this method do?"*
 
@@ -22,6 +22,11 @@ cd pydocs-mcp && maturin develop --release
 # Without Rust (pure Python, works everywhere)
 pip install -e .
 ```
+
+`fastembed` and `openai` are required runtime dependencies — `pip install` pulls them
+automatically (~90MB transitively: `onnxruntime` + `tokenizers` + the `openai` client).
+On the first inference call, FastEmbed downloads a ~80MB ONNX model to its cache.
+Linux users need `libopenblas-pthread-dev` before the install — see the next section.
 
 ## System requirements
 
@@ -125,7 +130,7 @@ Three open-source projects in roughly the same MCP-doc-retrieval space. They opt
 | Doc source | **Your installed Python deps** + your project source, indexed in place | Curated community library docs hosted by Upstash (parsing + crawling engines are closed-source) | Community-driven package registry (~100+ libraries) downloaded then queried locally |
 | Version match | Whatever you have in `site-packages` — automatic | Library + version selectable in the prompt (`use library /supabase/supabase`) | Latest from the registry's package for the library |
 | Languages | Python only | Multi-language (any library Upstash has crawled) | Multi-language (registry-driven; ~100+ libraries today) |
-| Retrieval method | BM25 over SQLite FTS5 | Not publicly documented | BM25 over SQLite FTS5 |
+| Retrieval method | Hybrid — BM25 (SQLite FTS5) + dense embeddings (FastEmbed / OpenAI in a TurboQuant `.tq` sidecar) fused via RRF | Not publicly documented | BM25 over SQLite FTS5 |
 | Code structure queries | **Reference graph** — `lookup(target, show="callers"\|"callees"\|"inherits")` via captured AST edges | None (doc retrieval only) | None (doc retrieval only) |
 | Project source indexing | Indexes your own code under the `__project__` package — `search ... -p __project__` works the same as searching deps | No (external library docs only) | No (registry packages only) |
 | MCP tools exposed | `search`, `lookup` (2 tools, surface intentionally pinned) | `resolve-library-id`, `query-docs` (2 tools) | Doc-retrieval tools (CLI: `context serve`) |
@@ -214,9 +219,9 @@ Production deployments + benchmark sweeps. Both the MCP server and the CLI load 
 
 **Shipped blueprints** (copy + modify as needed):
 
-- `python/pydocs_mcp/pipelines/chunk_search.yaml` — default chunk-search pipeline (BM25 fetch → score → metadata filter → top-K → limit → token-budget renderer)
+- `python/pydocs_mcp/pipelines/chunk_search.yaml` — default chunk-search pipeline (BM25 fetch → score → metadata filter → top-K → limit → token-budget renderer); the hybrid variant adds a `dense_fetcher` + `dense_scorer` branch fused into the BM25 branch via `rrf_fusion`
 - `python/pydocs_mcp/pipelines/member_search.yaml` — default member-search pipeline (LIKE fetch → metadata filter → top-K → limit → budget)
-- `python/pydocs_mcp/pipelines/ingestion.yaml` — default ingestion pipeline (discovery → read → chunk → flatten → hash → package → reference capture)
+- `python/pydocs_mcp/pipelines/ingestion.yaml` — default ingestion pipeline (file_discovery → file_read → chunking → reference_capture → flatten → assign_chunk_content_hash → load_existing_chunk_hashes → embed_chunks → content_hash → package_build)
 
 **Pipeline schema** (`steps:` with `name:` per step):
 
@@ -388,20 +393,21 @@ Use `__project__` as the package name to scope a search to your own code.
 1. Reads `pyproject.toml` (priority) or `requirements.txt` to discover dependencies.
 2. Indexes project source via AST/regex (no imports needed).
 3. Indexes installed deps via `inspect` (parallel, optional — skip with `--no-inspect` for static-only).
-4. Stores everything in SQLite with FTS5 full-text search.
-5. Captures the reference graph (CALLS / IMPORTS / INHERITS edges) for `lookup(..., show="callers")` etc.
+4. Embeds each chunk via FastEmbed (default) or OpenAI and writes vectors to a per-project TurboQuant `.tq` sidecar.
+5. Stores docs/code chunks in SQLite with FTS5 full-text search; dense vectors live in the `.tq` file.
+6. Captures the reference graph (CALLS / IMPORTS / INHERITS edges) for `lookup(..., show="callers")` etc.
 
 ### Indexing is one-time per source change
 
-**You only pay the indexing cost once.** The first run on a project walks every file in your project + every installed dep and builds the SQLite database. Subsequent runs do a quick metadata scan and skip indexing entirely if nothing changed — typical re-run latency is **&lt;100 ms** (just the hash check + a SQLite open).
+**You only pay the indexing cost once.** The first run on a project walks every file in your project + every installed dep, builds the SQLite database, and embeds every chunk into the `.tq` sidecar. Subsequent runs do a quick metadata scan and skip indexing entirely if nothing changed — typical re-run latency is **&lt;100 ms** (just the hash check + a SQLite open).
 
-How the skip decision works:
+The skip decision has two levels:
 
-- **Per-project cache file.** Each project gets its own SQLite at `~/.pydocs-mcp/{dirname}_{path_hash}.db`, where `path_hash` is a 10-char MD5 slug of the absolute project path so two projects in different directories never share state.
-- **Per-package content hash.** For every package indexed (your project + every dep), the server collects `(file_path, mtime_nanos)` pairs for all files in the package, joins them into one byte buffer, and hashes the buffer with **xxh3-64** — 16 hex chars. The hash is stored alongside the package row in `packages.content_hash`.
-- **Skip when match.** Before re-indexing a package on the next run, the server recomputes the hash from current disk metadata and compares it to the stored value. **Match → skip the whole package** (no parsing, no chunking, no DB writes). Mismatch → re-extract that package only; untouched packages still skip.
-- **Why mtime + path (not file contents).** Filesystem `mtime` is cheap to read in bulk, and the project's file tree is the actual source-of-truth signal. Touching a file changes its `mtime`; renaming a file changes its path. Reading file *contents* would defeat the speed goal.
-- **Force a rebuild** with `pydocs-mcp index . --force` (clears the cache + re-indexes from scratch). Safe to delete `~/.pydocs-mcp/*.db` at any time — the cache is always rebuildable.
+- **Per-package content hash.** Each project gets its own SQLite at `~/.pydocs-mcp/{dirname}_{path_hash}.db` plus a matching `.tq` sidecar, where `path_hash` is a 10-char MD5 slug of the absolute project path. For every package (your project + every dep) the server collects `(file_path, mtime_nanos)` pairs across the package, joins them into one byte buffer, and hashes the buffer with **xxh3-64** — 16 hex chars stored in `packages.content_hash`. On the next run, recomputed hash matches stored → skip the whole package (no parsing, no chunking, no embedding, no DB writes).
+- **Per-chunk content hash.** When a package IS re-extracted, the server still avoids redundant work at the chunk level. `chunks.content_hash` = SHA-256 of `package + module + title + text + pipeline_hash`. `IndexingService.reindex_package` diffs the persisted hash set against the freshly-extracted one: unchanged chunks keep their existing rows + vectors, removed chunks have both their SQLite row AND `.tq` entry wiped atomically, added chunks are embedded + written. Re-embedding only happens for chunks whose content actually changed — meaningful when the embedder is OpenAI ($) or FastEmbed (CPU).
+- **`pipeline_hash` invalidates everything.** SHA-256 of the embedder identity (provider, model_name, dim, bit_width) + the raw bytes of `ingestion.yaml`. Swap models, edit the YAML, or change a stage parameter and every chunk hash flips → diff-merge sees them all as added → full re-embed via the normal path. No manual cache wipe needed.
+- **Why mtime + path (not file contents) at the package level.** Filesystem `mtime` is cheap to read in bulk, and the project's file tree is the actual source-of-truth signal. Touching a file changes its `mtime`; renaming a file changes its path. Reading file *contents* would defeat the speed goal.
+- **Force a full rebuild** with `pydocs-mcp index . --force`. This calls `IndexingService.clear_all`, which atomically wipes BOTH SQLite rows AND the TurboQuant index via the UoW — no manual `.tq` deletion needed. Safe to delete `~/.pydocs-mcp/*.db` and `~/.pydocs-mcp/*.tq` at any time; both files are always rebuildable.
 
 For a typical 100-deps project, a no-change re-run does a few thousand `stat()` calls + one xxh3 per package. That's bounded by your disk's metadata throughput, not by anything pydocs-mcp does.
 
@@ -463,8 +469,8 @@ Per-table purpose, one line each:
 | Table | What it stores | Where it's read |
 |---|---|---|
 | `packages` | One row per indexed package + the cache-skip `content_hash`. Project source is stored under the sentinel `name = "__project__"`. | Indexing skip-check, `lookup` (list packages) |
-| `chunks` | Documentation + source chunks (markdown sections, docstrings, code blocks). | `search(query, kind="docs")` via FTS5 |
-| `chunks_fts` | FTS5 virtual table mirroring `chunks.title` + `chunks.text` + `chunks.package`, with Porter stemming + unicode61. | `search` BM25 ranking |
+| `chunks` | Documentation + source chunks (markdown sections, docstrings, code blocks). `content_hash` powers the chunk-level reindex-skip (no re-embed when unchanged). Dense embeddings for the same chunks live in the `.tq` sidecar, not in this row. | `search(query, kind="docs")` via FTS5 + dense scoring |
+| `chunks_fts` | FTS5 virtual table mirroring `chunks.title` + `chunks.text` + `chunks.package`, with Porter stemming + unicode61. | `search` BM25 ranking (paired with dense scoring from the `.tq` sidecar, fused via RRF) |
 | `module_members` | Functions, classes, methods, attributes — name + signature + docstring + kind. | `search(query, kind="api")`, `lookup(target)` |
 | `document_trees` | The hierarchical `DocumentNode` tree per module (used for `lookup(..., show="tree")` and structural rendering). | `lookup(..., show="tree")` |
 | `node_references` | The reference graph: one row per (`from_node`, `to_name`, `kind`) edge captured during indexing (CALLS / IMPORTS / INHERITS, plus MENTIONS if opted into via YAML). | `lookup(..., show="callers"\|"callees"\|"inherits")` |
@@ -522,6 +528,11 @@ The MCP surface is intentionally minimal — two tools cover every workflow.
 
 ## Cache
 
-Each project gets its own SQLite database at `~/.pydocs-mcp/{dirname}_{path_hash}.db`. The schema is versioned via `PRAGMA user_version`; opening a DB whose version doesn't match drops all tables and re-indexes from scratch. The cache is always rebuildable from source, so it's safe to delete at any time.
+Each project gets two sidecar files at `~/.pydocs-mcp/`:
 
-**Downgrading:** if you install an older version of `pydocs-mcp` that uses a pre-v2 schema, delete `~/.pydocs-mcp/*.db` first — otherwise the older code will fail with "no such column: pkg" against the newer schema.
+- `{dirname}_{path_hash}.db` — SQLite (schema + chunks + module members + document trees + reference graph). Versioned via `PRAGMA user_version`; opening a DB whose version doesn't match drops all tables and re-indexes from scratch.
+- `{dirname}_{path_hash}.tq` — TurboQuant binary index holding the dense embedding for every chunk.
+
+Both files are always rebuildable from source. The `--force` flag calls `IndexingService.clear_all`, which wipes them atomically through the UoW (no manual `.tq` deletion needed). It's safe to delete both files at any time.
+
+**Downgrading:** if you install an older version of `pydocs-mcp` that uses a pre-v2 schema, delete both `~/.pydocs-mcp/*.db` AND `~/.pydocs-mcp/*.tq` first — otherwise the older code will fail with "no such column" against the newer schema.
