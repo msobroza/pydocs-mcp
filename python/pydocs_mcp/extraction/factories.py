@@ -17,6 +17,7 @@ first stage lookup.
 from __future__ import annotations
 
 import importlib.resources
+from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -34,6 +35,7 @@ from pydocs_mcp.extraction.serialization import stage_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.protocols import Embedder, UnitOfWork
 
 
 @cache
@@ -50,40 +52,88 @@ def _default_ingestion_pipeline_path() -> Path:
 
 
 def load_ingestion_pipeline(
-    path: Path, cfg: "AppConfig",
+    path: Path,
+    cfg: "AppConfig",
+    *,
+    embedder: "Embedder | None" = None,
+    uow_factory: "Callable[[], UnitOfWork] | None" = None,
+    pipeline_hash: str = "",
 ) -> IngestionPipeline:
     """Load and build an :class:`IngestionPipeline` from a YAML file.
 
     The path is resolved + allowlisted through retrieval's
     ``_resolve_pipeline_path`` so ingestion and retrieval share a single
     security-critical path-check implementation (AC #33).
+
+    ``embedder`` is threaded into the :class:`BuildContext` so
+    :class:`EmbedChunksStage.from_dict` can construct itself with a real
+    :class:`Embedder` — production wiring (see ``__main__.py``) supplies
+    one via :func:`~pydocs_mcp.extraction.strategies.embedders.build_embedder`;
+    tests pass a :class:`tests._fakes.MockEmbedder`. The
+    pipeline YAML wires ``embed_chunks`` by default, so any caller building
+    that pipeline must supply an embedder.
+
+    ``uow_factory`` + ``pipeline_hash`` are likewise threaded into
+    :class:`BuildContext` so :class:`LoadExistingChunkHashesStage.from_dict`
+    can find the composite UoW factory (it reads SQLite for the package's
+    existing chunk hashes) and :class:`AssignChunkContentHashStage.from_dict`
+    can read the embedder + ingestion-YAML identity slot. Production wiring
+    in ``__main__.py`` provides both at startup; tests that don't exercise
+    the cache-skip path may omit them (the affected stages raise loud
+    ValueErrors if the YAML wires them without the deps).
     """
     resolved = _resolve_ingestion_pipeline_path(path, cfg)
     data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or "stages" not in data:
         raise ValueError(f"invalid ingestion pipeline YAML: {resolved!s}")
-    # Reuse retrieval's BuildContext — extraction stages only read
-    # ``context.app_config`` inside ``from_dict``; the other BuildContext
+    # Reuse retrieval's BuildContext — extraction stages read
+    # ``context.app_config`` + ``context.embedder`` + ``context.uow_factory``
+    # + ``context.pipeline_hash`` inside ``from_dict``; the other BuildContext
     # fields stay unused here but must be constructed to satisfy the
-    # dataclass's required ``connection_provider`` field. A ``None`` stand-in
-    # is acceptable because no extraction stage dereferences it.
+    # dataclass's required ``connection_provider`` field. A ``None``
+    # stand-in is acceptable because no extraction stage dereferences it.
     from pydocs_mcp.retrieval.serialization import BuildContext
-    context = BuildContext(connection_provider=None, app_config=cfg)  # type: ignore[arg-type]
+    context = BuildContext(  # type: ignore[arg-type]
+        connection_provider=None,
+        app_config=cfg,
+        embedder=embedder,
+        uow_factory=uow_factory,
+        pipeline_hash=pipeline_hash,
+    )
     pipeline_stages = tuple(stage_registry.build(s, context) for s in data["stages"])
     return IngestionPipeline(stages=pipeline_stages)
 
 
-def build_ingestion_pipeline(cfg: "AppConfig") -> IngestionPipeline:
+def build_ingestion_pipeline(
+    cfg: "AppConfig",
+    *,
+    embedder: "Embedder | None" = None,
+    uow_factory: "Callable[[], UnitOfWork] | None" = None,
+    pipeline_hash: str = "",
+) -> IngestionPipeline:
     """Build the :class:`IngestionPipeline` for this :class:`AppConfig`.
 
     Uses ``cfg.extraction.ingestion.pipeline_path`` if set (allowlist
     enforced); otherwise falls back to the bundled
     ``pipelines/ingestion.yaml``. The bundled default stays inside
     ``_shipped_pipelines_dir`` and always passes the allowlist.
+
+    ``embedder`` / ``uow_factory`` / ``pipeline_hash`` are forwarded to
+    :func:`load_ingestion_pipeline`; the bundled pipeline includes
+    :class:`EmbedChunksStage` + :class:`LoadExistingChunkHashesStage` +
+    :class:`AssignChunkContentHashStage`, so production callers must supply
+    all three (the composition root in ``__main__.py`` does this at
+    startup).
     """
     override = cfg.extraction.ingestion.pipeline_path
     path = override if override is not None else _default_ingestion_pipeline_path()
-    return load_ingestion_pipeline(Path(path), cfg)
+    return load_ingestion_pipeline(
+        Path(path),
+        cfg,
+        embedder=embedder,
+        uow_factory=uow_factory,
+        pipeline_hash=pipeline_hash,
+    )
 
 
 def _resolve_ingestion_pipeline_path(

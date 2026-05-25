@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from pydocs_mcp.models import Chunk, ModuleMember, Package
+from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
 
 if TYPE_CHECKING:
@@ -33,6 +33,40 @@ class ChunkStore(Protocol):
     async def delete(self, filter: Filter | Mapping) -> int: ...
     async def count(self, filter: Filter | Mapping | None = None) -> int: ...
     async def rebuild_index(self) -> None: ...
+
+    async def list_id_hash_pairs(
+        self, *, filter: Filter | Mapping | None = None,
+    ) -> tuple[tuple[int, str | None], ...]:
+        """Return (id, content_hash) for chunks matching filter.
+
+        Cheap variant of list() that avoids loading full text/metadata.
+        Used by the diff-merge in IndexingService.reindex_package and
+        by LoadExistingChunkHashesStage in ingestion.
+
+        Rows whose content_hash is NULL (pre-existing legacy rows) return
+        None for the hash slot — the diff-merge treats those as 'removed'
+        so they self-heal on the first reindex per package (spec AC-8).
+        """
+        ...
+
+    async def delete_by_ids(self, ids: Sequence[int]) -> None:
+        """Delete chunks by their SQLite primary-key IDs.
+
+        Used by the diff-merge to remove only the rows that no longer
+        exist in the incoming chunk set (instead of wiping the whole
+        package's chunks like ``delete(filter={"package": X})`` does).
+        Empty ids → no-op.
+        """
+        ...
+
+    async def insert(self, chunks: tuple[Chunk, ...]) -> None:
+        """Insert chunks; assigns rowids.
+
+        Distinct from ``upsert`` (which silently updates on duplicate keys
+        — undesirable for the diff-merge which only inserts the
+        added/changed subset). Persists Chunk.content_hash.
+        """
+        ...
 
 
 @runtime_checkable
@@ -78,9 +112,7 @@ class HybridSearchable(Protocol):
         query_terms: str,
         query_vector: Sequence[float],
         limit: int,
-        filter: Filter | Mapping | None = None,
-        *,
-        alpha: float = 0.5,
+        filter: Filter | None = None,
     ) -> tuple[Chunk, ...]: ...
 
 
@@ -205,3 +237,45 @@ class ReferenceStore(Protocol):
     ) -> None: ...
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None: ...
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """One embedder serves both query-time and ingestion-time work.
+
+    Spec §5.2 — concrete classes return their natural shape:
+    single-vector embedders (FastEmbed, OpenAI, BGE) return Vector
+    (1D np.ndarray, float32); future ColBERT-style embedders return
+    MultiVector (list of 1D np.ndarrays). Use
+    `pydocs_mcp.models.is_multi_vector(emb)` to disambiguate.
+    """
+    # Defaults make the attributes discoverable via hasattr(Embedder, ...)
+    # for structural / introspection tests. Real implementations override.
+    dim: int = 0
+    # Identifier string the embedder embedded with — written to
+    # ``Package.embedding_model`` by ``EmbedChunksStage`` so a YAML
+    # ``embedding.model_name`` swap triggers the re-embed sweep in
+    # :func:`find_packages_with_stale_embeddings`.
+    model_name: str = ""
+
+    async def embed_query(self, text: str) -> Embedding: ...
+
+    async def embed_chunks(
+        self, texts: Sequence[str],
+    ) -> tuple[Embedding, ...]: ...
+
+
+@runtime_checkable
+class ResultFuser(Protocol):
+    """Combines N ranked Chunk lists into one fused ranking.
+
+    Spec §5.2. Implementations: RRFResultFuser (reciprocal-rank fusion).
+    Future: WeightedSumResultFuser, DistributionBasedResultFuser.
+    """
+
+    async def fuse(
+        self,
+        ranked_lists: Sequence[tuple[Chunk, ...]],
+        *,
+        limit: int,
+    ) -> tuple[Chunk, ...]: ...

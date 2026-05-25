@@ -95,7 +95,13 @@ async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
 
     uow_factory = build_sqlite_uow_factory(db_path)
     indexing_service = build_sqlite_indexing_service(db_path)
-    pipeline = build_ingestion_pipeline(AppConfig.load())
+    # EmbedChunksStage + LoadExistingChunkHashesStage are wired into the
+    # shipped pipeline by default; thread MockEmbedder + the real SQLite
+    # UoW factory so the strict from_dict gates in both stages are met.
+    from tests._fakes import MockEmbedder
+    pipeline = build_ingestion_pipeline(
+        AppConfig.load(), embedder=MockEmbedder(), uow_factory=uow_factory,
+    )
 
     orchestrator = ProjectIndexer(
         indexing_service=indexing_service,

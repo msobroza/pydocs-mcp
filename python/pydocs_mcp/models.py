@@ -8,14 +8,60 @@ round-trip through SQLite TEXT columns and JSON without glue code.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
+import numpy as np
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pyd_dataclass
+
+# ── Embedding types (spec §5.1) ──────────────────────────────────────────
+# Aligned with FastEmbed (https://github.com/qdrant/fastembed):
+#
+#   Vector       = 1D np.ndarray, shape (dim,), dtype=float32.
+#                  What TextEmbedding.embed() yields per document; what
+#                  OpenAI returns; what TurboQuant IdMapIndex consumes.
+#
+#   MultiVector  = list[np.ndarray] — one 1D vector per token, ColBERT
+#                  late-interaction shape. NOT persisted this PR (single-
+#                  vector storage only); the type union accepts the shape
+#                  so future late-interaction work doesn't break the
+#                  Chunk model.
+#
+# SparseEmbedding (Protocol) — FastEmbed convention with .indices +
+# .values numpy arrays. NOT in the Embedding union this PR; defined here
+# so a future sparse-retrieval PR can extend Embedding without breaking
+# changes.
+Vector = np.ndarray
+MultiVector = list[np.ndarray]
+Embedding = Vector | MultiVector
+
+
+@runtime_checkable
+class SparseEmbedding(Protocol):
+    """FastEmbed-compatible sparse embedding shape (forward-compat).
+
+    Mirrors `fastembed.SparseEmbedding`'s public attributes (uint32
+    indices + float32 values numpy arrays). Sparse retrieval is OUT OF
+    SCOPE for this PR — this Protocol exists only so the typing layer
+    is ready for it.
+    """
+    indices: np.ndarray   # uint32
+    values:  np.ndarray   # float32
+
+
+def is_multi_vector(emb: Embedding) -> bool:
+    """True if `emb` is a multi-vector (list of 1D vectors, ColBERT-style).
+
+    FastEmbed convention: single-vector embedders return `np.ndarray`;
+    multi-vector embedders return `list[np.ndarray]`. The check is on
+    the OUTER container type.
+    """
+    return isinstance(emb, list)
 
 
 class ChunkOrigin(StrEnum):
@@ -102,6 +148,33 @@ class Package:
     dependencies: tuple[str, ...]
     content_hash: str
     origin: PackageOrigin
+    # Marks which embedding model produced this package's vectors so the
+    # indexing service can force re-embed when YAML's embedding.model_name
+    # changes. ``None`` = pre-hybrid cache (no vectors yet).
+    embedding_model: str | None = None
+
+
+def compute_chunk_content_hash(
+    package: str, module: str, title: str, text: str,
+    pipeline_hash: str = "",
+) -> str:
+    """SHA-256 hex digest of the null-separated chunk-identity tuple.
+
+    Mirrors Package.content_hash. Used by Chunk.__post_init__ for auto-
+    compute (pipeline_hash="" — test ergonomics), by
+    AssignChunkContentHashStage in production (pipeline_hash from
+    BuildContext), and by the diff-merge in
+    IndexingService.reindex_package to match incoming chunks against
+    the existing SQLite snapshot.
+
+    The pipeline_hash slot ensures embedder swaps or ingestion YAML
+    edits invalidate every chunk's hash so the diff naturally
+    re-embeds via the existing add path.
+    """
+    return hashlib.sha256(
+        f"{package}\0{module}\0{title}\0{text}\0{pipeline_hash}"
+        .encode("utf-8"),
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,10 +191,29 @@ class Chunk:
     id: int | None = None
     relevance: float | None = None
     retriever_name: str | None = None
+    embedding: Embedding | None = None  # spec §5.1: populated by the embed
+    # stage during ingestion; stays None on read paths (vectors live in the
+    # .tq sidecar, the SQL row doesn't carry them back).
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # SHA-256(package + \0 + module + \0 + title + \0 + text + \0 + pipeline_hash).
+    # Auto-computed in __post_init__ when unset; production overrides with
+    # the pipeline-aware version via AssignChunkContentHashStage.
+    content_hash: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        if not self.content_hash:
+            # Test ergonomics: Chunk(text="foo") just works. Production
+            # overrides with the pipeline-aware hash via the new stage.
+            object.__setattr__(
+                self, "content_hash",
+                compute_chunk_content_hash(
+                    package=str(self.metadata.get("package", "")),
+                    module=str(self.metadata.get("module", "")),
+                    title=str(self.metadata.get("title", "")),
+                    text=self.text,
+                ),
+            )
 
 
 @dataclass(frozen=True, slots=True)

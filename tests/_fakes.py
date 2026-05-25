@@ -26,12 +26,15 @@ inject a shared audit list at construction time.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
+import hashlib
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+import numpy as np
+
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.models import Chunk, ModuleMember, Package
+from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -198,6 +201,47 @@ class InMemoryChunkStore:
         self.calls.append(_Call("rebuild_index", None))
         # In-memory store has no FTS index to rebuild.
         return None
+
+    async def list_id_hash_pairs(
+        self, *, filter: Any | None = None,
+    ) -> tuple[tuple[int, str | None], ...]:
+        self.calls.append(_Call("list_id_hash_pairs", {"filter": filter}))
+        if isinstance(filter, dict) and "package" in filter:
+            rows = list(self.by_package.get(filter["package"], []))
+        else:
+            rows = [c for cs in self.by_package.values() for c in cs]
+        # Mirror the SQLite repo's NULL semantics: a chunk that lacks a
+        # content_hash returns None in the hash slot so the diff-merge can
+        # treat legacy rows as "removed".
+        return tuple(
+            (c.id if c.id is not None else 0, c.content_hash or None)
+            for c in rows
+        )
+
+    async def delete_by_ids(self, ids) -> None:
+        self.calls.append(_Call("delete_by_ids", list(ids)))
+        if not ids:
+            return
+        ids_set = set(ids)
+        for pkg, items in self.by_package.items():
+            self.by_package[pkg] = [c for c in items if c.id not in ids_set]
+
+    async def insert(self, chunks) -> None:
+        # Mimic SQLite autoincrement so list_id_hash_pairs returns real ints.
+        materialised = tuple(chunks)
+        self.calls.append(_Call("insert", materialised))
+        existing_max = max(
+            (c.id for cs in self.by_package.values() for c in cs if c.id is not None),
+            default=0,
+        )
+        for c in materialised:
+            if c.id is None:
+                existing_max += 1
+                stored = replace(c, id=existing_max)
+            else:
+                stored = c
+            pkg = c.metadata.get("package", "")
+            self.by_package.setdefault(pkg, []).append(stored)
 
 
 @dataclass
@@ -439,6 +483,41 @@ def make_fake_uow_factory(
     return factory
 
 
+# ── MockEmbedder (canonical Embedder test double, AC-27) ─────────────────
+@dataclass(frozen=True, slots=True)
+class MockEmbedder:
+    """Deterministic Embedder test double — same input → same vector.
+
+    Returns shape-matched ``np.ndarray`` (float32, dim-shaped) so it's
+    drop-in for FastEmbed / OpenAI / any single-vector Embedder. The
+    vector is derived from a SHA-256 of the input text seeded into a
+    numpy RNG, giving stable per-input vectors without any model
+    dependency. The canonical embedder mock for this PR and future PRs
+    that need embedding-shaped data without invoking a real model.
+    """
+    dim: int = 384
+    # Mirrors the ``Embedder`` Protocol's ``model_name`` field — written
+    # into ``Package.embedding_model`` by ``EmbedChunksStage`` so tests
+    # that exercise the model-change re-embed sweep can pin a value.
+    model_name: str = "mock"
+
+    async def embed_query(self, text: str) -> Embedding:
+        return self._derive(text)
+
+    async def embed_chunks(
+        self, texts: Sequence[str],
+    ) -> tuple[Embedding, ...]:
+        return tuple(self._derive(t) for t in texts)
+
+    def _derive(self, text: str) -> np.ndarray:
+        # SHA-256 → first 8 bytes → uint64 seed → numpy default_rng.
+        # Output is a (dim,) float32 array in [-1, 1] — deterministic per text.
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        seed = int.from_bytes(digest[:8], "little", signed=False)
+        rng = np.random.default_rng(seed)
+        return rng.uniform(-1.0, 1.0, size=self.dim).astype(np.float32)
+
+
 __all__ = (
     "FakeUnitOfWork",
     "InMemoryChunkStore",
@@ -446,6 +525,7 @@ __all__ = (
     "InMemoryModuleMemberStore",
     "InMemoryPackageStore",
     "InMemoryReferenceStore",
+    "MockEmbedder",
     "_Call",
     "make_fake_uow_factory",
 )
