@@ -228,7 +228,6 @@ class InMemoryChunkStore:
 
     async def insert(self, chunks) -> None:
         # Mimic SQLite autoincrement so list_id_hash_pairs returns real ints.
-        from dataclasses import replace
         materialised = tuple(chunks)
         self.calls.append(_Call("insert", materialised))
         existing_max = max(
