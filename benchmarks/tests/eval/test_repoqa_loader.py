@@ -18,7 +18,7 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 
 
 async def test_fixture_yields_five_tasks() -> None:
-    """1 Python repo × 5 needles → 5 EvalTasks."""
+    """2 Python repos (3 + 2 needles) → 5 EvalTasks (one per needle)."""
     dataset = RepoQADataset(fixture_path=FIXTURE_PATH)
     tasks = [t async for t in dataset.tasks()]
     assert len(tasks) == 5

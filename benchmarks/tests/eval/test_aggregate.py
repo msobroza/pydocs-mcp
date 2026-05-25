@@ -10,7 +10,10 @@ degrades to 0.0 so a metric with no observations does not abort the run.
 from __future__ import annotations
 
 import pytest
-from benchmarks.eval.metrics.aggregate import mean_with_bootstrap_ci
+from benchmarks.eval.metrics.aggregate import (
+    mean_with_bootstrap_ci,
+    paired_bootstrap_ci,
+)
 
 
 def test_mean_no_resamples_edge_case() -> None:
@@ -72,3 +75,41 @@ def test_percentile_deterministic_on_repeated_calls() -> None:
     p50_a = percentile(values, 0.5)
     p50_b = percentile(values, 0.5)
     assert p50_a == p50_b  # no internal randomness
+
+
+def test_paired_bootstrap_brackets_zero_for_identical_arrays() -> None:
+    # WHY: identical per-task scores → every paired diff (a[i] - b[i]) is 0,
+    # so every resample diff is exactly 0 and the CI collapses to a point
+    # straddling zero. A "no difference between systems" sanity floor.
+    values = [0.2, 0.5, 0.8, 1.0, 0.0]
+    mean_diff, low, high = paired_bootstrap_ci(values, values)
+    assert mean_diff == 0.0
+    assert low <= 0.0 <= high
+    assert (mean_diff, low, high) == (0.0, 0.0, 0.0)
+
+
+def test_paired_bootstrap_a_strictly_greater_ci_above_zero() -> None:
+    # WHY: A clearly beats B on every task with some variance; a correct
+    # paired test must place the WHOLE 95% CI above zero (significant win).
+    # mean(a) = 4/5 = 0.8, mean(b) = 0.0 ⇒ mean_diff = 0.8.
+    mean_diff, low, high = paired_bootstrap_ci([1, 1, 1, 1, 0], [0, 0, 0, 0, 0])
+    assert mean_diff == pytest.approx(0.8)
+    assert low > 0.0
+
+
+def test_paired_bootstrap_seed_determinism() -> None:
+    a = [0.9, 0.8, 0.7, 0.6, 0.1]
+    b = [0.1, 0.2, 0.3, 0.4, 0.0]
+    first = paired_bootstrap_ci(a, b, seed=7)
+    second = paired_bootstrap_ci(a, b, seed=7)
+    assert first == second  # same seed ⇒ bit-identical triple
+    # A different seed may shift the interval but must stay a valid CI.
+    diff, low, high = paired_bootstrap_ci(a, b, seed=99)
+    assert low <= diff <= high
+
+
+def test_paired_bootstrap_length_mismatch_raises() -> None:
+    # WHY: a paired test on unequal-length series is a caller bug — pairing
+    # is undefined — so abort loudly rather than silently degrade.
+    with pytest.raises(ValueError):
+        paired_bootstrap_ci([0.1, 0.2, 0.3], [0.1, 0.2])

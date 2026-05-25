@@ -6,11 +6,14 @@ from __future__ import annotations
 from .base_system import System
 from .context7 import Context7System
 from .neuledge import NeuledgeSystem
-from .pydocs import PydocsMcpSystem
+from .pydocs import PydocsMcpCompositeSystem, PydocsMcpSystem
+from .pydocs_oracle import PydocsOracleSystem
 
 __all__ = [
     "Context7System",
     "NeuledgeSystem",
+    "PydocsMcpCompositeSystem",
     "PydocsMcpSystem",
+    "PydocsOracleSystem",
     "System",
 ]

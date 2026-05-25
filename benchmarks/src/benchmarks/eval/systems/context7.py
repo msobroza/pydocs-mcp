@@ -29,11 +29,14 @@ from typing import TYPE_CHECKING, Optional
 
 import httpx
 
+from ..gold_resolver import _DEFAULT_FUZZ_THRESHOLD, LazyFuzzyGoldResolver
 from ..serialization import system_registry
 from .base_system import RetrievedItem
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
+
+    from ..gold_resolver import GoldResolver
 
 CONTEXT7_BASE_URL = "https://mcp.context7.com/mcp"
 _DEFAULT_TIMEOUT = 30.0
@@ -170,6 +173,14 @@ class Context7System:
 
     name: str = "context7"
     library_name: str = ""  # WHY: set per task via EvalTask.metadata["package"]
+    # WHY: doc-quality-vs-router axis (methodology §5.4). When set to a
+    # Context7 ``/org/project`` id by config, ``index()`` seeds
+    # ``_library_id`` directly and SKIPS the ``resolve-library-id`` HTTP
+    # hop — so end-to-end doc retrieval is measured against an oracle
+    # library, isolating it from the router's accuracy. Not auto-seeded
+    # from metadata: the oracle value is a Context7 id, not a DS-1000
+    # library name (a name→id map is out of scope; configs set it).
+    oracle_library_name: str = ""
     _client: "Context7Client | None" = field(
         default=None, init=False, repr=False,
     )
@@ -179,6 +190,13 @@ class Context7System:
         if self._client is None:
             self._client = Context7Client()
             await self._client.__aenter__()
+        # WHY: oracle mode short-circuits the router. ``search()`` still
+        # needs the open client for ``query_docs``, so we open it above
+        # then seed the id from the oracle and return BEFORE the
+        # ``resolve_library_id`` hop — that hop is never called here.
+        if self.oracle_library_name:
+            self._library_id = self.oracle_library_name
+            return
         # WHY: resolve-library-id is rate-limited and idempotent — cache
         # the lookup so a per-task harness can call ``index`` repeatedly
         # for the same library without burning quota. Failure-atomicity:
@@ -213,6 +231,23 @@ class Context7System:
                 qualified_name=self.library_name or None,
             ),
         )
+
+    @property
+    def gold_resolver(self) -> "GoldResolver":
+        # WHY: Context7 returns a single concatenated blob from a
+        # non-enumerable remote store — there's no chunk-id store to scan,
+        # so ground-truth is decided by fuzzy-matching the retrieved blob
+        # against gold ``doc_contents`` (lazy), same as Neuledge.
+        return LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
+
+    @property
+    def last_resolved_library_id(self) -> str | None:
+        # WHY: surfaces the id ``index()`` settled on (the router's pick,
+        # or the oracle) so the runner's ``_capture_library_resolution``
+        # can record it for the ``library_resolution@1`` metric and the
+        # ``coverage_signal`` side channel. Read-only view — Context7 is
+        # mutable, so no wrapper is needed; this is just the cached field.
+        return self._library_id
 
     async def teardown(self) -> None:
         client = self._client

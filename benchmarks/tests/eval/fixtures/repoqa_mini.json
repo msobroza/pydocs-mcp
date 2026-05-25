@@ -7,16 +7,30 @@
       "entrypoint_path": "fixture_repo",
       "content": {
         "fixture_repo/__init__.py": "",
-        "fixture_repo/math_helpers.py": "\"\"\"Module docstring.\"\"\"\n\ndef factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\n\ndef fibonacci(n: int) -> int:\n    if n < 2:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n\ndef is_prime(n: int) -> bool:\n    if n < 2:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True\n\n\ndef gcd(a: int, b: int) -> int:\n    while b:\n        a, b = b, a % b\n    return a\n\n\ndef lcm(a: int, b: int) -> int:\n    return a * b // gcd(a, b)\n"
+        "fixture_repo/math_helpers.py": "\"\"\"Module docstring.\"\"\"\n\ndef factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\n\ndef fibonacci(n: int) -> int:\n    if n < 2:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n\ndef is_prime(n: int) -> bool:\n    if n < 2:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True\n"
       },
       "dependency": {},
       "functions": {},
       "needles": [
         {"name": "factorial", "description": "Compute the factorial of a non-negative integer.", "path": "fixture_repo/math_helpers.py", "start_line": 3, "end_line": 6, "start_byte": 25, "end_byte": 130, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
         {"name": "fibonacci", "description": "Compute the n-th Fibonacci number.", "path": "fixture_repo/math_helpers.py", "start_line": 9, "end_line": 12, "start_byte": 140, "end_byte": 240, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
-        {"name": "is_prime", "description": "Test whether n is prime.", "path": "fixture_repo/math_helpers.py", "start_line": 15, "end_line": 21, "start_byte": 250, "end_byte": 400, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
-        {"name": "gcd", "description": "Greatest common divisor of two integers.", "path": "fixture_repo/math_helpers.py", "start_line": 24, "end_line": 27, "start_byte": 410, "end_byte": 480, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
-        {"name": "lcm", "description": "Least common multiple via gcd.", "path": "fixture_repo/math_helpers.py", "start_line": 30, "end_line": 31, "start_byte": 490, "end_byte": 550, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5}
+        {"name": "is_prime", "description": "Test whether n is prime.", "path": "fixture_repo/math_helpers.py", "start_line": 15, "end_line": 21, "start_byte": 250, "end_byte": 400, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5}
+      ]
+    },
+    {
+      "repo": "fixture/synthetic-strings",
+      "commit_sha": "def4567890abcdef1234567890abcdef67890123",
+      "topic": "strings",
+      "entrypoint_path": "fixture_strings",
+      "content": {
+        "fixture_strings/__init__.py": "",
+        "fixture_strings/text_helpers.py": "\"\"\"String helpers.\"\"\"\n\ndef reverse(s: str) -> str:\n    return s[::-1]\n\n\ndef is_palindrome(s: str) -> bool:\n    cleaned = s.lower()\n    return cleaned == cleaned[::-1]\n"
+      },
+      "dependency": {},
+      "functions": {},
+      "needles": [
+        {"name": "reverse", "description": "Reverse the characters of a string.", "path": "fixture_strings/text_helpers.py", "start_line": 3, "end_line": 4, "start_byte": 22, "end_byte": 60, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5},
+        {"name": "is_palindrome", "description": "Test whether a string is a palindrome ignoring case.", "path": "fixture_strings/text_helpers.py", "start_line": 7, "end_line": 9, "start_byte": 70, "end_byte": 150, "global_start_byte": 0, "global_end_byte": 0, "global_start_line": 0, "global_end_line": 0, "code_ratio": 0.5}
       ]
     }
   ]

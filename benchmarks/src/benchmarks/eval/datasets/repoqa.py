@@ -17,6 +17,7 @@ from typing import Any
 
 from ..corpus import materialize_corpus
 from ..serialization import dataset_registry
+from ._split import stratified_split, validate_split
 from .base_dataset import EvalTask, GoldAnswer
 
 # WHY: the date-tagged GitHub release. To bump: download the new gz,
@@ -37,6 +38,17 @@ class RepoQADataset:
     name: str = "repoqa"
     revision: str = _PINNED_RELEASE_VERSION
     fixture_path: Path | None = None
+    # WHY: stratified-by-repo dev/test split so each slice keeps the
+    # per-repo proportions of the full corpus; seeded so the partition is
+    # reproducible across runs. Default ``"all"`` is the whole corpus (no
+    # partition) — strict backward-compat for existing usage and the CI
+    # fixture, which rely on getting every needle. The split is stratified
+    # by ``repo`` (RepoQA's analogue of DS-1000's library) via the shared
+    # ``_split.stratified_split`` helper, so the two datasets' partition
+    # logic stays identical.
+    split: str = "all"
+    dev_fraction: float = 0.2
+    split_seed: int = 0
     cache_dir: Path = field(
         default_factory=lambda: Path("~/.cache/pydocs-mcp/repoqa").expanduser(),
     )
@@ -44,6 +56,11 @@ class RepoQADataset:
     _rows_cache: list[dict[str, Any]] | None = field(
         default=None, init=False, repr=False,
     )
+
+    def __post_init__(self) -> None:
+        # A bad ``split`` is a caller bug — fail loud at construction rather
+        # than silently yielding the wrong slice deep in the async loop.
+        validate_split(self.split)
 
     async def tasks(self) -> AsyncIterator[EvalTask]:
         if self._rows_cache is None:
@@ -54,7 +71,23 @@ class RepoQADataset:
                 # The runner loop is async (CLAUDE.md §"Async Patterns") — offload
                 # to a worker thread so the 12MB download doesn't block the event loop.
                 self._rows_cache = await asyncio.to_thread(self._load_from_release)
-        for row in self._rows_cache:
+        # Partition the flattened needle rows by ``split``. Stratify by
+        # ``repo`` so each slice keeps the corpus's per-repo proportions;
+        # the shared helper owns the determinism contract (see
+        # ``_split.stratified_split``). Default ``"all"`` returns the rows
+        # unchanged — a strict no-op preserving the pre-split behavior. The
+        # sort key (``<path>::<name>``) is a deterministic, position-
+        # independent per-needle identity so the seeded shuffle is stable
+        # across runs and load paths.
+        rows = stratified_split(
+            self._rows_cache,
+            split=self.split,
+            dev_fraction=self.dev_fraction,
+            seed=self.split_seed,
+            stratum_of=lambda r: r["repo"],
+            sort_key=lambda r: f"{r['needle']['path']}::{r['needle']['name']}",
+        )
+        for row in rows:
             yield _row_to_task(row)
 
     def _load_from_fixture(self) -> list[dict[str, Any]]:

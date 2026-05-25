@@ -16,6 +16,12 @@ if TYPE_CHECKING:
     # importable without pulling the whole pydocs_mcp.retrieval package.
     from pydocs_mcp.retrieval.config import AppConfig
 
+    # WHY: typed-only to avoid a runtime import cycle — ``gold_resolver``
+    # imports ``RetrievedItem`` from this module, so importing
+    # ``GoldResolver`` at runtime here would be circular. The
+    # ``runtime_checkable`` Protocol below only needs the name at type time.
+    from ..gold_resolver import GoldResolver
+
 
 @dataclass(frozen=True, slots=True)
 class RetrievedItem:
@@ -26,6 +32,14 @@ class RetrievedItem:
     source_path: str
     qualified_name: str | None = None
     relevance: float | None = None
+    # WHY: the ground-truth resolution layer's identity linchpin. For
+    # pydocs's enumerable store this is the DB row id (set by ``search()``
+    # from ``chunk.id``) so an eager resolver's ``chunk:{store_id}`` keys
+    # line up with the ranked items here. ``None`` for composite/blob
+    # systems (Context7/Neuledge, pydocs composite mode), where
+    # ``_item_key`` falls back to the rank. Additive + last so existing
+    # positional ``RetrievedItem(...)`` call sites stay valid.
+    chunk_id: int | None = None
 
 
 @runtime_checkable
@@ -67,4 +81,40 @@ class HasLibrary(Protocol):
     library: str
 
 
-__all__ = ["HasLibrary", "HasLibraryName", "RetrievedItem", "System"]
+@runtime_checkable
+class HasResolvedLibrary(Protocol):
+    """A system that exposes the library id it resolved during ``index()``
+    so the runner can capture it for scoring. ``Context7System`` is the
+    primary implementor (the id is its router's pick, or the oracle).
+
+    See ``HasLibraryName`` for the opt-in mechanism — the runner gates on
+    ``isinstance(system, HasResolvedLibrary)`` and records
+    ``last_resolved_library_id`` into ``gold.extra`` between ``search()``
+    and scoring. Systems that don't expose it are a strict no-op.
+    """
+
+    last_resolved_library_id: str | None
+
+
+@runtime_checkable
+class HasGoldResolver(Protocol):
+    """A system that supplies a per-system ``GoldResolver`` so the runner
+    can label ground-truth between ``search()`` and scoring.
+
+    Opt-in via ``isinstance(system, HasGoldResolver)`` in the runner,
+    mirroring ``HasLibrary``. Systems that don't expose ``gold_resolver``
+    (e.g. RepoQA-only flows) are a strict no-op and keep their existing
+    ``ast_body`` relevance path.
+    """
+
+    gold_resolver: GoldResolver
+
+
+__all__ = [
+    "HasGoldResolver",
+    "HasLibrary",
+    "HasLibraryName",
+    "HasResolvedLibrary",
+    "RetrievedItem",
+    "System",
+]
