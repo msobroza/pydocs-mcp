@@ -1,0 +1,642 @@
+[
+  {
+    "prompt": "Problem: [synthetic CI task #0] Using Pandas, how do I use `dropna` to solve a small data-science task on my input data?\nA:\n<code>\nresult = dropna(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 0,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_0.DataFrame.dropna",
+        "doc_content": "DataFrame.dropna: Remove rows or columns containing missing values from a DataFrame. (synthetic CI doc 0)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #1] Using Pandas, how do I use `merge` to solve a small data-science task on my input data?\nA:\n<code>\nresult = merge(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 1,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_1.DataFrame.merge",
+        "doc_content": "DataFrame.merge: Merge two DataFrame objects with a database-style join on shared keys. (synthetic CI doc 1)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #2] Using Pandas, how do I use `groupby` to solve a small data-science task on my input data?\nA:\n<code>\nresult = groupby(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 2,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_2.DataFrame.groupby",
+        "doc_content": "DataFrame.groupby: Group a DataFrame by one or more columns for split-apply-combine. (synthetic CI doc 2)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #3] Using Pandas, how do I use `pivot_table` to solve a small data-science task on my input data?\nA:\n<code>\nresult = pivot_table(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 3,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_3.DataFrame.pivot_table",
+        "doc_content": "DataFrame.pivot_table: Build a spreadsheet-style pivot table aggregating values by index and columns. (synthetic CI doc 3)"
+      },
+      {
+        "doc_id": "pandas.api.synthetic_4.Series.value_counts",
+        "doc_content": "Series.value_counts: Return a Series of counts of unique values, ordered descending. (synthetic CI doc 4)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #4] Using Pandas, how do I use `value_counts` to solve a small data-science task on my input data?\nA:\n<code>\nresult = value_counts(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 4,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_5.Series.value_counts",
+        "doc_content": "Series.value_counts: Return a Series of counts of unique values, ordered descending. (synthetic CI doc 5)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #5] Using Pandas, how do I use `apply` to solve a small data-science task on my input data?\nA:\n<code>\nresult = apply(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 5,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_6.DataFrame.apply",
+        "doc_content": "DataFrame.apply: Apply a function along an axis of the DataFrame. (synthetic CI doc 6)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #6] Using Pandas, how do I use `fillna` to solve a small data-science task on my input data?\nA:\n<code>\nresult = fillna(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 6,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_7.DataFrame.fillna",
+        "doc_content": "DataFrame.fillna: Fill missing values using a scalar, dict, or forward/backward method. (synthetic CI doc 7)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #7] Using Pandas, how do I use `to_datetime` to solve a small data-science task on my input data?\nA:\n<code>\nresult = to_datetime(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 7,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_8.to_datetime",
+        "doc_content": "to_datetime: Convert argument to a pandas datetime, parsing common string formats. (synthetic CI doc 8)"
+      },
+      {
+        "doc_id": "pandas.api.synthetic_9.DataFrame.dropna",
+        "doc_content": "DataFrame.dropna: Remove rows or columns containing missing values from a DataFrame. (synthetic CI doc 9)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #8] Using Pandas, how do I use `dropna` to solve a small data-science task on my input data?\nA:\n<code>\nresult = dropna(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 8,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_10.DataFrame.dropna",
+        "doc_content": "DataFrame.dropna: Remove rows or columns containing missing values from a DataFrame. (synthetic CI doc 10)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #9] Using Pandas, how do I use `merge` to solve a small data-science task on my input data?\nA:\n<code>\nresult = merge(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 9,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_11.DataFrame.merge",
+        "doc_content": "DataFrame.merge: Merge two DataFrame objects with a database-style join on shared keys. (synthetic CI doc 11)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #10] Using Pandas, how do I use `groupby` to solve a small data-science task on my input data?\nA:\n<code>\nresult = groupby(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 10,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_12.DataFrame.groupby",
+        "doc_content": "DataFrame.groupby: Group a DataFrame by one or more columns for split-apply-combine. (synthetic CI doc 12)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #11] Using Pandas, how do I use `pivot_table` to solve a small data-science task on my input data?\nA:\n<code>\nresult = pivot_table(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 11,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_13.DataFrame.pivot_table",
+        "doc_content": "DataFrame.pivot_table: Build a spreadsheet-style pivot table aggregating values by index and columns. (synthetic CI doc 13)"
+      },
+      {
+        "doc_id": "pandas.api.synthetic_14.Series.value_counts",
+        "doc_content": "Series.value_counts: Return a Series of counts of unique values, ordered descending. (synthetic CI doc 14)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #12] Using Pandas, how do I use `value_counts` to solve a small data-science task on my input data?\nA:\n<code>\nresult = value_counts(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 12,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_15.Series.value_counts",
+        "doc_content": "Series.value_counts: Return a Series of counts of unique values, ordered descending. (synthetic CI doc 15)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #13] Using Pandas, how do I use `apply` to solve a small data-science task on my input data?\nA:\n<code>\nresult = apply(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 13,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_16.DataFrame.apply",
+        "doc_content": "DataFrame.apply: Apply a function along an axis of the DataFrame. (synthetic CI doc 16)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #14] Using Pandas, how do I use `fillna` to solve a small data-science task on my input data?\nA:\n<code>\nresult = fillna(data)\n</code>\nEND SOLUTION",
+    "library": "Pandas",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 14,
+    "docs": [
+      {
+        "doc_id": "pandas.api.synthetic_17.DataFrame.fillna",
+        "doc_content": "DataFrame.fillna: Fill missing values using a scalar, dict, or forward/backward method. (synthetic CI doc 17)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #15] Using Numpy, how do I use `mean` to solve a small data-science task on my input data?\nA:\n<code>\nresult = mean(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 15,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_18.mean",
+        "doc_content": "mean: Compute the arithmetic mean along the specified axis of an array. (synthetic CI doc 18)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #16] Using Numpy, how do I use `reshape` to solve a small data-science task on my input data?\nA:\n<code>\nresult = reshape(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 16,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_19.ndarray.reshape",
+        "doc_content": "ndarray.reshape: Return an array with the same data reshaped to a new compatible shape. (synthetic CI doc 19)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #17] Using Numpy, how do I use `concatenate` to solve a small data-science task on my input data?\nA:\n<code>\nresult = concatenate(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 17,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_20.concatenate",
+        "doc_content": "concatenate: Join a sequence of arrays along an existing axis. (synthetic CI doc 20)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #18] Using Numpy, how do I use `argsort` to solve a small data-science task on my input data?\nA:\n<code>\nresult = argsort(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 18,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_21.argsort",
+        "doc_content": "argsort: Return the indices that would sort an array along an axis. (synthetic CI doc 21)"
+      },
+      {
+        "doc_id": "numpy.api.synthetic_22.where",
+        "doc_content": "where: Return elements chosen from two arrays depending on a boolean condition. (synthetic CI doc 22)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #19] Using Numpy, how do I use `where` to solve a small data-science task on my input data?\nA:\n<code>\nresult = where(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 19,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_23.where",
+        "doc_content": "where: Return elements chosen from two arrays depending on a boolean condition. (synthetic CI doc 23)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #20] Using Numpy, how do I use `inv` to solve a small data-science task on my input data?\nA:\n<code>\nresult = inv(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 20,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_24.linalg.inv",
+        "doc_content": "linalg.inv: Compute the multiplicative inverse of a square matrix. (synthetic CI doc 24)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #21] Using Numpy, how do I use `clip` to solve a small data-science task on my input data?\nA:\n<code>\nresult = clip(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 21,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_25.clip",
+        "doc_content": "clip: Clip array values to lie within a given interval. (synthetic CI doc 25)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #22] Using Numpy, how do I use `unique` to solve a small data-science task on my input data?\nA:\n<code>\nresult = unique(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 22,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_26.unique",
+        "doc_content": "unique: Return the sorted unique elements of an array. (synthetic CI doc 26)"
+      },
+      {
+        "doc_id": "numpy.api.synthetic_27.mean",
+        "doc_content": "mean: Compute the arithmetic mean along the specified axis of an array. (synthetic CI doc 27)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #23] Using Numpy, how do I use `mean` to solve a small data-science task on my input data?\nA:\n<code>\nresult = mean(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 23,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_28.mean",
+        "doc_content": "mean: Compute the arithmetic mean along the specified axis of an array. (synthetic CI doc 28)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #24] Using Numpy, how do I use `reshape` to solve a small data-science task on my input data?\nA:\n<code>\nresult = reshape(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 24,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_29.ndarray.reshape",
+        "doc_content": "ndarray.reshape: Return an array with the same data reshaped to a new compatible shape. (synthetic CI doc 29)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #25] Using Numpy, how do I use `concatenate` to solve a small data-science task on my input data?\nA:\n<code>\nresult = concatenate(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 25,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_30.concatenate",
+        "doc_content": "concatenate: Join a sequence of arrays along an existing axis. (synthetic CI doc 30)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #26] Using Numpy, how do I use `argsort` to solve a small data-science task on my input data?\nA:\n<code>\nresult = argsort(data)\n</code>\nEND SOLUTION",
+    "library": "Numpy",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 26,
+    "docs": [
+      {
+        "doc_id": "numpy.api.synthetic_31.argsort",
+        "doc_content": "argsort: Return the indices that would sort an array along an axis. (synthetic CI doc 31)"
+      },
+      {
+        "doc_id": "numpy.api.synthetic_32.where",
+        "doc_content": "where: Return elements chosen from two arrays depending on a boolean condition. (synthetic CI doc 32)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #27] Using Matplotlib, how do I use `plot` to solve a small data-science task on my input data?\nA:\n<code>\nresult = plot(data)\n</code>\nEND SOLUTION",
+    "library": "Matplotlib",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 27,
+    "docs": [
+      {
+        "doc_id": "matplotlib.api.synthetic_33.pyplot.plot",
+        "doc_content": "pyplot.plot: Plot y versus x as connected lines and/or markers on the current axes. (synthetic CI doc 33)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #28] Using Matplotlib, how do I use `savefig` to solve a small data-science task on my input data?\nA:\n<code>\nresult = savefig(data)\n</code>\nEND SOLUTION",
+    "library": "Matplotlib",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 28,
+    "docs": [
+      {
+        "doc_id": "matplotlib.api.synthetic_34.pyplot.savefig",
+        "doc_content": "pyplot.savefig: Save the current figure to a file in a chosen format such as PNG. (synthetic CI doc 34)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #29] Using Matplotlib, how do I use `scatter` to solve a small data-science task on my input data?\nA:\n<code>\nresult = scatter(data)\n</code>\nEND SOLUTION",
+    "library": "Matplotlib",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 29,
+    "docs": [
+      {
+        "doc_id": "matplotlib.api.synthetic_35.pyplot.scatter",
+        "doc_content": "pyplot.scatter: Draw a scatter plot of y against x with per-point size and color. (synthetic CI doc 35)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #30] Using Matplotlib, how do I use `hist` to solve a small data-science task on my input data?\nA:\n<code>\nresult = hist(data)\n</code>\nEND SOLUTION",
+    "library": "Matplotlib",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 30,
+    "docs": [
+      {
+        "doc_id": "matplotlib.api.synthetic_36.pyplot.hist",
+        "doc_content": "pyplot.hist: Compute and draw the histogram of a one-dimensional array. (synthetic CI doc 36)"
+      },
+      {
+        "doc_id": "matplotlib.api.synthetic_37.Axes.set_xlabel",
+        "doc_content": "Axes.set_xlabel: Set the label text for the x-axis of an Axes. (synthetic CI doc 37)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #31] Using Matplotlib, how do I use `set_xlabel` to solve a small data-science task on my input data?\nA:\n<code>\nresult = set_xlabel(data)\n</code>\nEND SOLUTION",
+    "library": "Matplotlib",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 31,
+    "docs": [
+      {
+        "doc_id": "matplotlib.api.synthetic_38.Axes.set_xlabel",
+        "doc_content": "Axes.set_xlabel: Set the label text for the x-axis of an Axes. (synthetic CI doc 38)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #32] Using Matplotlib, how do I use `subplots` to solve a small data-science task on my input data?\nA:\n<code>\nresult = subplots(data)\n</code>\nEND SOLUTION",
+    "library": "Matplotlib",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 32,
+    "docs": [
+      {
+        "doc_id": "matplotlib.api.synthetic_39.pyplot.subplots",
+        "doc_content": "pyplot.subplots: Create a figure and a grid of subplots in a single call. (synthetic CI doc 39)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #33] Using Matplotlib, how do I use `plot` to solve a small data-science task on my input data?\nA:\n<code>\nresult = plot(data)\n</code>\nEND SOLUTION",
+    "library": "Matplotlib",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 33,
+    "docs": [
+      {
+        "doc_id": "matplotlib.api.synthetic_40.pyplot.plot",
+        "doc_content": "pyplot.plot: Plot y versus x as connected lines and/or markers on the current axes. (synthetic CI doc 40)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #34] Using Matplotlib, how do I use `savefig` to solve a small data-science task on my input data?\nA:\n<code>\nresult = savefig(data)\n</code>\nEND SOLUTION",
+    "library": "Matplotlib",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 34,
+    "docs": [
+      {
+        "doc_id": "matplotlib.api.synthetic_41.pyplot.savefig",
+        "doc_content": "pyplot.savefig: Save the current figure to a file in a chosen format such as PNG. (synthetic CI doc 41)"
+      },
+      {
+        "doc_id": "matplotlib.api.synthetic_42.pyplot.scatter",
+        "doc_content": "pyplot.scatter: Draw a scatter plot of y against x with per-point size and color. (synthetic CI doc 42)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #35] Using Sklearn, how do I use `LogisticRegression` to solve a small data-science task on my input data?\nA:\n<code>\nresult = LogisticRegression(data)\n</code>\nEND SOLUTION",
+    "library": "Sklearn",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 35,
+    "docs": [
+      {
+        "doc_id": "sklearn.api.synthetic_43.linear_model.LogisticRegression",
+        "doc_content": "linear_model.LogisticRegression: Logistic Regression classifier with L2 regularization by default. (synthetic CI doc 43)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #36] Using Sklearn, how do I use `StandardScaler` to solve a small data-science task on my input data?\nA:\n<code>\nresult = StandardScaler(data)\n</code>\nEND SOLUTION",
+    "library": "Sklearn",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 36,
+    "docs": [
+      {
+        "doc_id": "sklearn.api.synthetic_44.preprocessing.StandardScaler",
+        "doc_content": "preprocessing.StandardScaler: Standardize features by removing the mean and scaling to unit variance. (synthetic CI doc 44)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #37] Using Sklearn, how do I use `train_test_split` to solve a small data-science task on my input data?\nA:\n<code>\nresult = train_test_split(data)\n</code>\nEND SOLUTION",
+    "library": "Sklearn",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 37,
+    "docs": [
+      {
+        "doc_id": "sklearn.api.synthetic_45.model_selection.train_test_split",
+        "doc_content": "model_selection.train_test_split: Split arrays into random train and test subsets. (synthetic CI doc 45)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #38] Using Sklearn, how do I use `RandomForestClassifier` to solve a small data-science task on my input data?\nA:\n<code>\nresult = RandomForestClassifier(data)\n</code>\nEND SOLUTION",
+    "library": "Sklearn",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 38,
+    "docs": [
+      {
+        "doc_id": "sklearn.api.synthetic_46.ensemble.RandomForestClassifier",
+        "doc_content": "ensemble.RandomForestClassifier: A random forest classifier fitting many decision trees on subsamples. (synthetic CI doc 46)"
+      },
+      {
+        "doc_id": "sklearn.api.synthetic_47.metrics.accuracy_score",
+        "doc_content": "metrics.accuracy_score: Compute the fraction of correctly classified samples. (synthetic CI doc 47)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #39] Using Sklearn, how do I use `accuracy_score` to solve a small data-science task on my input data?\nA:\n<code>\nresult = accuracy_score(data)\n</code>\nEND SOLUTION",
+    "library": "Sklearn",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 39,
+    "docs": [
+      {
+        "doc_id": "sklearn.api.synthetic_48.metrics.accuracy_score",
+        "doc_content": "metrics.accuracy_score: Compute the fraction of correctly classified samples. (synthetic CI doc 48)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #40] Using Sklearn, how do I use `KMeans` to solve a small data-science task on my input data?\nA:\n<code>\nresult = KMeans(data)\n</code>\nEND SOLUTION",
+    "library": "Sklearn",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 40,
+    "docs": [
+      {
+        "doc_id": "sklearn.api.synthetic_49.cluster.KMeans",
+        "doc_content": "cluster.KMeans: K-Means clustering partitioning samples into k centroid-based groups. (synthetic CI doc 49)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #41] Using Scipy, how do I use `eig` to solve a small data-science task on my input data?\nA:\n<code>\nresult = eig(data)\n</code>\nEND SOLUTION",
+    "library": "Scipy",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 41,
+    "docs": [
+      {
+        "doc_id": "scipy.api.synthetic_50.linalg.eig",
+        "doc_content": "linalg.eig: Solve an ordinary or generalized eigenvalue problem for a square matrix. (synthetic CI doc 50)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #42] Using Scipy, how do I use `minimize` to solve a small data-science task on my input data?\nA:\n<code>\nresult = minimize(data)\n</code>\nEND SOLUTION",
+    "library": "Scipy",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 42,
+    "docs": [
+      {
+        "doc_id": "scipy.api.synthetic_51.optimize.minimize",
+        "doc_content": "optimize.minimize: Minimize a scalar function of one or more variables. (synthetic CI doc 51)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #43] Using Scipy, how do I use `ttest_ind` to solve a small data-science task on my input data?\nA:\n<code>\nresult = ttest_ind(data)\n</code>\nEND SOLUTION",
+    "library": "Scipy",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 43,
+    "docs": [
+      {
+        "doc_id": "scipy.api.synthetic_52.stats.ttest_ind",
+        "doc_content": "stats.ttest_ind: Compute the t-test for the means of two independent samples. (synthetic CI doc 52)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #44] Using Scipy, how do I use `csr_matrix` to solve a small data-science task on my input data?\nA:\n<code>\nresult = csr_matrix(data)\n</code>\nEND SOLUTION",
+    "library": "Scipy",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 44,
+    "docs": [
+      {
+        "doc_id": "scipy.api.synthetic_53.sparse.csr_matrix",
+        "doc_content": "sparse.csr_matrix: Compressed Sparse Row matrix for efficient arithmetic and row slicing. (synthetic CI doc 53)"
+      },
+      {
+        "doc_id": "scipy.api.synthetic_54.interpolate.interp1d",
+        "doc_content": "interpolate.interp1d: Interpolate a 1-D function from sampled points. (synthetic CI doc 54)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #45] Using Scipy, how do I use `interp1d` to solve a small data-science task on my input data?\nA:\n<code>\nresult = interp1d(data)\n</code>\nEND SOLUTION",
+    "library": "Scipy",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 45,
+    "docs": [
+      {
+        "doc_id": "scipy.api.synthetic_55.interpolate.interp1d",
+        "doc_content": "interpolate.interp1d: Interpolate a 1-D function from sampled points. (synthetic CI doc 55)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #46] Using Tensorflow, how do I use `softmax` to solve a small data-science task on my input data?\nA:\n<code>\nresult = softmax(data)\n</code>\nEND SOLUTION",
+    "library": "Tensorflow",
+    "perturbation_type": "Semantic",
+    "perturbation_origin_id": 46,
+    "docs": [
+      {
+        "doc_id": "tensorflow.api.synthetic_56.nn.softmax",
+        "doc_content": "nn.softmax: Compute softmax activations over the specified axis of a tensor. (synthetic CI doc 56)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #47] Using Tensorflow, how do I use `Dense` to solve a small data-science task on my input data?\nA:\n<code>\nresult = Dense(data)\n</code>\nEND SOLUTION",
+    "library": "Tensorflow",
+    "perturbation_type": "Difficult-Rewrite",
+    "perturbation_origin_id": 47,
+    "docs": [
+      {
+        "doc_id": "tensorflow.api.synthetic_57.keras.layers.Dense",
+        "doc_content": "keras.layers.Dense: A densely-connected neural network layer. (synthetic CI doc 57)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #48] Using Pytorch, how do I use `Linear` to solve a small data-science task on my input data?\nA:\n<code>\nresult = Linear(data)\n</code>\nEND SOLUTION",
+    "library": "Pytorch",
+    "perturbation_type": "Origin",
+    "perturbation_origin_id": 48,
+    "docs": [
+      {
+        "doc_id": "torch.api.synthetic_58.nn.Linear",
+        "doc_content": "nn.Linear: Apply a linear transformation y = xA^T + b to incoming data. (synthetic CI doc 58)"
+      }
+    ]
+  },
+  {
+    "prompt": "Problem: [synthetic CI task #49] Using Pytorch, how do I use `relu` to solve a small data-science task on my input data?\nA:\n<code>\nresult = relu(data)\n</code>\nEND SOLUTION",
+    "library": "Pytorch",
+    "perturbation_type": "Surface",
+    "perturbation_origin_id": 49,
+    "docs": [
+      {
+        "doc_id": "torch.api.synthetic_59.nn.functional.relu",
+        "doc_content": "nn.functional.relu: Apply the rectified linear unit function element-wise. (synthetic CI doc 59)"
+      }
+    ]
+  }
+]

@@ -22,6 +22,7 @@ import sys
 import time
 import traceback
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,7 +34,7 @@ from . import datasets as _datasets  # noqa: F401 -- registry side-effects
 from . import metrics as _metrics_pkg  # noqa: F401 -- registry side-effects
 from . import systems as _systems  # noqa: F401 -- registry side-effects
 from . import trackers as _trackers  # noqa: F401 -- registry side-effects
-from .metrics import MRR, PassAt1Needle, RecallAtK
+from .metrics import MRR, NDCGAtK, PassAt1Needle, RecallAtK
 from .metrics.aggregate import mean_with_bootstrap_ci, percentile
 from .metrics.base_metric import Metric, Scorer
 from .serialization import (
@@ -42,10 +43,18 @@ from .serialization import (
     system_registry,
     tracker_registry,
 )
-from .systems.base_system import HasLibrary, HasLibraryName
+from .systems.base_system import (
+    HasGoldResolver,
+    HasLibrary,
+    HasLibraryName,
+    HasResolvedLibrary,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
+
+    from .datasets.base_dataset import EvalTask
+    from .systems.base_system import RetrievedItem
 
 
 SweepResults = dict[tuple[str, str], dict[str, tuple[float, float, float]]]
@@ -81,6 +90,7 @@ async def run_sweep(
     tracker_kwargs: Mapping[str, Mapping[str, object]] | None = None,
     metric_specs: tuple[str, ...] = DEFAULT_METRIC_SPECS,
     limit: int | None = None,
+    corpus_dir: Path | None = None,
 ) -> tuple[SweepResults, int]:
     """Run a (system × config) sweep over a dataset.
 
@@ -100,6 +110,13 @@ async def run_sweep(
             single ``Scorer``.
         limit: Cap the per-(system, config) task count. ``None`` = full
             dataset.
+        corpus_dir: Operator-supplied corpus path that OVERRIDES each task's
+            ``corpus_source()`` for the whole sweep. ``None`` (default) keeps
+            the per-task ``corpus_source()`` behavior. When set, the loop also
+            SKIPS the ``shutil.rmtree`` teardown — an operator-supplied dir is
+            never deleted (it's reused across every task and leg). Used to
+            point native ``pydocs-mcp`` at a prepared reference project for
+            datasets (e.g. DS-1000) whose ``corpus_source`` is a no-op stub.
 
     Returns:
         ``(sweep_results, tasks_ran)`` where ``sweep_results`` is
@@ -170,7 +187,12 @@ async def run_sweep(
                 # ``index()``. Opt-in via the ``HasLibraryName`` /
                 # ``HasLibrary`` Protocols (see ``systems/base_system.py``).
                 _maybe_set_library(system, task.metadata)
-                corpus_dir = task.corpus_source()
+                # WHY: an operator-supplied ``--corpus-dir`` overrides the
+                # task's own ``corpus_source()`` for the whole sweep (e.g.
+                # DS-1000, whose ``corpus_source`` is a ``/dev/null`` no-op —
+                # native pydocs must instead index the prepared reference
+                # project). When absent, fall back to the per-task source.
+                dir_ = corpus_dir if corpus_dir is not None else task.corpus_source()
                 try:
                     # WHY: time.perf_counter is monotonic and the highest-
                     # resolution clock available — appropriate for sub-
@@ -179,7 +201,7 @@ async def run_sweep(
                     # the scorer or tracker writes — so the latency series
                     # reflects the system under test, not the harness.
                     t0 = time.perf_counter()
-                    await system.index(corpus_dir, config)
+                    await system.index(dir_, config)
                     index_secs = time.perf_counter() - t0
 
                     t1 = time.perf_counter()
@@ -198,13 +220,36 @@ async def run_sweep(
                         tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
                         tracker.log_metric(h, "search_seconds", search_secs, step=count)
 
+                    # WHY: capture the library id the system resolved during
+                    # index() (Context7's router pick / oracle) into
+                    # gold.extra BEFORE _resolve_and_inject — that helper
+                    # spreads ``{**task.gold.extra}``, so anything injected
+                    # first survives. Feeds ``library_resolution@1`` and the
+                    # ``coverage_signal`` side channel. Non-matching systems
+                    # (pydocs / RepoQA) are a strict no-op.
+                    task = _capture_library_resolution(system, task)
+
+                    # WHY: unified ground-truth resolution (spec §5). For an
+                    # opt-in ``HasGoldResolver`` system, label the task's
+                    # ground-truth chunk-ids BEFORE scoring so every metric
+                    # reads one ``resolved_chunk_ids`` set via
+                    # ``is_relevant`` instead of branching fuzzy-vs-exact.
+                    # RepoQA systems aren't ``HasGoldResolver`` -> no-op.
+                    task = await _resolve_and_inject(system, task, retrieved)
+
                     scores = scorer.score(task, retrieved)
                     for metric_name, value in scores.items():
                         per_metric_values[metric_name].append(value)
                         for h, tracker in zip(handles, trackers):
                             tracker.log_metric(h, metric_name, value, step=count)
                 finally:
-                    shutil.rmtree(corpus_dir, ignore_errors=True)
+                    # WHY: only rmtree a per-task corpus the dataset
+                    # materialized — NEVER an operator-supplied ``--corpus-dir``
+                    # (it's reused across every task/leg and owned by the
+                    # operator, so deleting it would break the rest of the
+                    # sweep and clobber their files).
+                    if corpus_dir is None:
+                        shutil.rmtree(dir_, ignore_errors=True)
                 count += 1
 
             aggregates: dict[str, tuple[float, float, float]] = {}
@@ -253,13 +298,14 @@ async def run_sweep(
 
 
 def _build_metric(spec: str) -> Metric:
-    """Resolve ``recall@<k>`` / ``mrr`` / ``pass@1-needle`` to a metric
-    instance. Walks ``metric_registry`` for the simple cases and
-    instantiates ``RecallAtK(k)`` for the parameterised form.
+    """Resolve ``recall@<k>`` / ``ndcg@<k>`` / ``mrr`` / ``pass@1-needle``
+    to a metric instance. Walks ``metric_registry`` for the simple cases and
+    instantiates ``RecallAtK(k)`` / ``NDCGAtK(k)`` for the parameterised
+    forms.
 
     Single source of construction so the runner can sweep arbitrary k
-    values via ``--metrics recall@1,recall@5,recall@10`` without the
-    registry needing one entry per k.
+    values via ``--metrics recall@1,recall@5,ndcg@10`` without the registry
+    needing one entry per k.
     """
     if spec == "mrr":
         return MRR()
@@ -274,9 +320,80 @@ def _build_metric(spec: str) -> Metric:
                 f"recall metric spec must be ``recall@<int>``, got {spec!r}",
             ) from exc
         return RecallAtK(k=k)
+    if spec.startswith("ndcg@"):
+        k_part = spec.split("@", 1)[1]
+        try:
+            k = int(k_part)
+        except ValueError as exc:
+            raise ValueError(
+                f"ndcg metric spec must be ``ndcg@<int>``, got {spec!r}",
+            ) from exc
+        return NDCGAtK(k=k)
     # WHY: fall through to the registry so a future custom-named metric
-    # registered under a single key (e.g. ``ndcg@10``) still resolves.
+    # registered under a single key still resolves.
     return metric_registry.build(spec)
+
+
+async def _resolve_and_inject(
+    system: object,
+    task: "EvalTask",
+    retrieved: tuple["RetrievedItem", ...],
+) -> "EvalTask":
+    """Run the system's ``GoldResolver`` and inject its result into a fresh
+    task (frozen gold -> ``dataclasses.replace``, never mutated).
+
+    Opt-in via ``isinstance(system, HasGoldResolver)`` — a system without a
+    ``gold_resolver`` (RepoQA flows) is a strict no-op that returns the
+    SAME task object, leaving the existing ``ast_body`` relevance path
+    untouched. Returns the (possibly augmented) task so the caller can hand
+    it to ``scorer.score``.
+    """
+    if not isinstance(system, HasGoldResolver):
+        return task
+    resolved = await system.gold_resolver.resolve(task, retrieved)
+    return replace(
+        task,
+        gold=replace(
+            task.gold,
+            extra={**task.gold.extra, "resolved_chunk_ids": resolved},
+        ),
+    )
+
+
+def _capture_library_resolution(system: object, task: "EvalTask") -> "EvalTask":
+    """Record the library id the system resolved during ``index()`` into a
+    fresh task's ``gold.extra`` (frozen gold -> ``dataclasses.replace``).
+
+    Opt-in via ``isinstance(system, HasResolvedLibrary)`` — a system that
+    doesn't expose ``last_resolved_library_id`` (pydocs / RepoQA flows) is a
+    strict no-op that returns the SAME task object.
+
+    Injects two keys for matching systems (Context7):
+      - ``resolved_library_id`` — the router's pick (or the configured
+        oracle id), feeding the ``library_resolution@1`` metric. Always
+        injected, even when ``None``/empty, so the metric reads a present
+        (falsy) value rather than a missing key.
+      - ``coverage_signal`` — ``bool(rid)``: True iff resolution produced a
+        non-empty id. This is the side channel Task 4's ``coverage`` metric
+        falls back to for non-enumerable stores (no chunk-id set to count).
+
+    Called BEFORE ``_resolve_and_inject`` in the loop so the injected extra
+    survives that helper's ``{**task.gold.extra}`` spread.
+    """
+    if not isinstance(system, HasResolvedLibrary):
+        return task
+    rid = system.last_resolved_library_id
+    return replace(
+        task,
+        gold=replace(
+            task.gold,
+            extra={
+                **task.gold.extra,
+                "resolved_library_id": rid,
+                "coverage_signal": bool(rid),
+            },
+        ),
+    )
 
 
 def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:
@@ -294,15 +411,24 @@ def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:
     ``isinstance`` against the Protocols (rather than bare ``hasattr``)
     documents the contract at the type level and prevents accidental
     injection into unrelated ``library_name`` fields on future systems.
+
+    Source key precedence is ``repo`` then ``library``: RepoQA carries
+    ``metadata["repo"]`` (a ``"org/name"`` slug) while DS-1000 carries
+    ``metadata["library"]`` (a bare package name like ``"pandas"``). Both
+    datasets thus reach Context7 / Neuledge through the same seam — without
+    this fallback, ``search()`` would raise on DS-1000 for lack of a library.
     """
-    repo = metadata.get("repo")
-    if not repo:
+    name = metadata.get("repo") or metadata.get("library")
+    if not name:
         return
     if isinstance(system, HasLibraryName):
-        system.library_name = repo
+        system.library_name = name
     if isinstance(system, HasLibrary):
+        # WHY: only RepoQA's ``repo`` slug pairs with a ``commit`` to form
+        # the ``{repo}@{sha7}`` install id. DS-1000's bare ``library`` has
+        # no commit, so it seeds the install id verbatim.
         commit = metadata.get("commit", "")
-        system.library = f"{repo}@{commit[:7]}" if commit else repo
+        system.library = f"{name}@{commit[:7]}" if commit else name
 
 
 def _flatten_app_config(cfg: "AppConfig") -> dict[str, str]:
@@ -447,6 +573,51 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--dataset-library-filter",
+        default=None,
+        help=(
+            "(ds1000-only) comma-separated library names (e.g. pandas,numpy) "
+            "-> Ds1000Dataset.library_filter. Matching is case-insensitive / "
+            "normalized — `Pandas`, `pandas`, `PANDAS` all match, and DS-1000 "
+            "title-case aliases map to PyPI canonical (`Sklearn` == "
+            "`scikit-learn`, `Pytorch` == `torch`). Omit to evaluate every "
+            "library. Passed as a kwarg ONLY when set, so datasets that don't "
+            "accept it (RepoQA) are unaffected."
+        ),
+    )
+    parser.add_argument(
+        "--split",
+        choices=["all", "dev", "test"],
+        default="all",
+        help=(
+            "(ds1000-only) stratified-by-library dev/test split -> "
+            "Ds1000Dataset.split. `all` (default) yields every task; `dev` / "
+            "`test` partition each library independently (preserving its "
+            "corpus proportion) into a seeded dev head + test tail — tune on "
+            "`dev`, evaluate on held-out `test`. Passed as a kwarg ONLY when "
+            "!= `all`, so datasets that don't accept it (RepoQA) are "
+            "unaffected. Tune the fraction/seed via the dataclass defaults "
+            "(dev_fraction=0.2, split_seed=0)."
+        ),
+    )
+    parser.add_argument(
+        "--corpus-dir",
+        # WHY resolve(): a relative --corpus-dir would otherwise be
+        # cwd-dependent. Resolving to an absolute path at parse time pins the
+        # dir regardless of where the sweep is launched from; main() then
+        # fast-fails if it isn't a real directory.
+        type=lambda p: Path(p).resolve(),
+        default=None,
+        help=(
+            "override each task's corpus_source() with this path for the "
+            "whole sweep (e.g. a prepared DS-1000 reference project for "
+            "native pydocs-mcp). The path is resolved to an absolute path and "
+            "must be an existing directory (the runner fast-fails otherwise). "
+            "The runner NEVER deletes an operator-supplied dir. Omit to use "
+            "the per-task corpus."
+        ),
+    )
+    parser.add_argument(
         "--report",
         type=Path,
         default=None,
@@ -460,10 +631,30 @@ def main() -> None:
     parser = _build_arg_parser()
     args = parser.parse_args()
 
+    # WHY fast-fail here: a typo'd --corpus-dir would otherwise index an empty
+    # directory, scoring ~0 across the sweep with no error — silently
+    # misleading for operators. Catch the bad path before launching anything.
+    # (--corpus-dir's argparse type already resolved it to an absolute Path.)
+    if args.corpus_dir is not None and not args.corpus_dir.is_dir():
+        parser.error(f"--corpus-dir not a directory: {args.corpus_dir}")
+
     config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
     dataset_kwargs: dict[str, object] = {}
     if args.fixture is not None:
         dataset_kwargs["fixture_path"] = args.fixture
+    # WHY: only add ``library_filter`` when the flag is set so the kwarg is
+    # absent for datasets that don't accept it (RepoQA). An empty/omitted
+    # flag must not pass ``library_filter=()`` — that would still be a kwarg
+    # RepoQA's constructor rejects.
+    if args.dataset_library_filter is not None:
+        dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
+    # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
+    # kwarg is absent for the common case AND for datasets that don't accept
+    # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``
+    # gating above — passing ``split="all"`` would be a no-op for DS-1000 but
+    # would still crash RepoQA's constructor.
+    if args.split != "all":
+        dataset_kwargs["split"] = args.split
 
     results, tasks_ran = asyncio.run(
         run_sweep(
@@ -474,6 +665,7 @@ def main() -> None:
             tracker_names=_parse_csv(args.trackers),
             metric_specs=_parse_csv(args.metrics),
             limit=args.limit,
+            corpus_dir=args.corpus_dir,
         ),
     )
 

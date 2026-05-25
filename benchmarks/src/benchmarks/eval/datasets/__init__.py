@@ -4,9 +4,11 @@ so the runner can look them up by name."""
 from __future__ import annotations
 
 from .base_dataset import Dataset
+from .ds1000 import Ds1000Dataset
 from .repoqa import RepoQADataset
 
 __all__ = [
     "Dataset",
+    "Ds1000Dataset",
     "RepoQADataset",
 ]

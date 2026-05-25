@@ -33,11 +33,14 @@ from typing import TYPE_CHECKING, Optional
 
 import httpx
 
+from ..gold_resolver import _DEFAULT_FUZZ_THRESHOLD, LazyFuzzyGoldResolver
 from ..serialization import system_registry
 from .base_system import RetrievedItem
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
+
+    from ..gold_resolver import GoldResolver
 
 
 class NeuledgeError(Exception):
@@ -223,6 +226,14 @@ class NeuledgeSystem:
                 qualified_name=self.library,
             ),
         )
+
+    @property
+    def gold_resolver(self) -> "GoldResolver":
+        # WHY: Neuledge returns a single concatenated blob from a
+        # non-enumerable local MCP store — no chunk-id store to scan, so
+        # ground-truth is fuzzy-matched against the retrieved blob (lazy),
+        # same as Context7.
+        return LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
 
     async def teardown(self) -> None:
         client = self._client
