@@ -91,7 +91,7 @@ Every primitive subclasses `RetrieverStep` (ABC) and uses **registry + decorator
 | New fetcher / scorer step (`DenseScorerStep`, `HyDEFetcherStep`, `SemanticRouterStep`, `KeywordBoostScorerStep`, ...) — replaces the old `Retriever` Protocol hierarchy with sklearn-shaped composition | `@step_registry.register("name")` |
 | New formatter (`JsonFormatter`, `CompactMarkdownFormatter`, `CitationFormatter`, `XmlFormatter`, ...) | `@formatter_registry.register("name")` |
 | New conditional predicate (`is_code_like_query`, `has_high_relevance`, `feature_flag_enabled`, ...) | `@predicate("name")` decorator |
-| New fusion algorithm (`WeightedSumFusionStep`, `DistributionBasedScoreFusionStep`, `BordaCountFusionStep`) | `@step_registry.register("name")` |
+| New fusion algorithm (`DistributionBasedScoreFusionStep`, `BordaCountFusionStep`) | `@step_registry.register("name")` |
 | New pipeline blueprint | YAML file under `python/pydocs_mcp/pipelines/` or a user path; referenced from `pydocs-mcp.yaml`. Schema: top-level `name:` + `steps:` list, each entry has `name:` + `type:` + `params:` |
 
 ## D. Configuration
@@ -169,6 +169,8 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 4. **Add `JsonResultFormatter`** — output as JSON for tooling that wants structured results. Pair with a `json_chunk` YAML preset.
 
+5. **Add `WeightedScoreInterpolationStep`** — alternative fusion to the shipped `RRFFusionStep`. Normalizes each branch's scores to `[0, 1]` (min-max), then blends via `α·norm(bm25) + (1-α)·norm(dense)`. RRF discards score magnitude; this preserves it, which sometimes wins when one retriever is dramatically stronger than the other on a given query. Reads from the same `state.scratch[<branch>.ranked]` keys RRF uses, so it drops in as a YAML swap. Pairs naturally with `ConditionalStep` for per-query-type routing (e.g., RRF for short queries, weighted interpolation for long).
+
 ### Tier 2 — small PRs (~200–400 LOC)
 
 5. **Add `FilterTreeFormat`** — full dict-form filter with `$and` / `$or` / `$not`. Lights up `Any_` and `Not` in the `SqliteFilterAdapter`. First non-multifield format; validates the two-format architecture.
@@ -189,13 +191,31 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 12. **Add `LlmRerankStep` with an OpenAI/Anthropic/Cohere client** — validates that an I/O-bound step composes with the pipeline. Tests predicate-guarded execution (skip rerank on short queries). The planned LLM-rerank step listed in §C "Retrieval pipeline".
 
+13. **Add `LlmTreeReasoningStep` (vectorless RAG, PageIndex-style)** — a `RetrieverStep` that uses an LLM to navigate the existing `DocumentNode` trees and pick the nodes most likely to contain the answer, without embedding. Single-shot prompt: serialize the tree via `DocumentNode.to_pageindex_json()` (strip body text, keep titles + summaries + node_ids), send `(query, tree_json)` to a configured LLM, parse `{"thinking", "node_list": [node_id, ...]}` from the response, then fetch the corresponding chunks via `uow.chunks` and emit them as the step's result.
+
+    Composes with the existing pipeline machinery:
+
+    - **In parallel with hybrid** — `ParallelStep` branches: one runs BM25 + dense + RRF, the other runs tree reasoning; downstream `RRFFusionStep` (or the planned `WeightedScoreInterpolationStep`) fuses by `branch_keys=("hybrid.ranked", "tree.ranked")`.
+    - **After hybrid** — `ConditionalStep` triggers tree reasoning only on long or structural queries (`is_long_query` predicate), using the hybrid result as a candidate filter.
+    - **Standalone** — a YAML preset that skips dense entirely; useful for long-doc corpora where TOC carries signal (PageIndex cites 98.7% on FinanceBench).
+
+    Reuses the storage layer already in place: `BuildContext.uow_factory` threads through, the step opens `async with uow_factory()` and reads `uow.trees` (same pattern as `LoadExistingChunkHashesStage` from the chunk-cache work).
+
+    New abstractions added by this PR:
+
+    - `LlmClient` Protocol in `storage/protocols.py` mirroring `Embedder` but exposing BOTH `async chat()` and `chat_sync()` — LLM calls surface in more contexts than embedding calls. First concrete: `OpenAiLlmClient` using `openai>=1.40` (already a required dep, no new dependencies). New providers (Anthropic, Gemini, LiteLLM) land as one-file additions per SOLID open/closed.
+    - `LlmConfig` sub-model in `retrieval/config.py` mirroring `EmbeddingConfig` (`provider: Literal["openai", ...]`, `model_name`, `temperature`, `max_tokens`).
+    - Two Jinja2 prompt templates under `python/pydocs_mcp/retrieval/prompts/`: `tree_reasoning_pageindex_v1.j2` (verbatim PageIndex baseline) and `tree_reasoning_pydocs_v1.j2` (adapted for code-doc queries). Prompts are versioned (`_vN` suffix); selected at runtime via a `prompt_template` dataclass field on the step. Versioned prompts make A/B comparison and rollback a YAML edit instead of a code change.
+
+    Inspired by [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) (MIT-licensed).
+
 ### Tier 4 — larger PRs (~800+ LOC)
 
-13. **Add `CompositeUnitOfWork`** — coordinates multiple backend UoWs with best-effort rollback. Enables heterogeneous setups (e.g., Qdrant chunks + SQLite packages). Tests the heterogeneous-backends story.
+14. **Add `CompositeUnitOfWork`** — coordinates multiple backend UoWs with best-effort rollback. Enables heterogeneous setups (e.g., Qdrant chunks + SQLite packages). Tests the heterogeneous-backends story.
 
-14. **Add `HyDERetriever`** (Hypothetical Document Embeddings) — asks an LLM to draft a hypothetical answer, embeds it, then does vector search. Exercises retriever composition (LLM client + embedder + vector store).
+15. **Add `HyDERetriever`** (Hypothetical Document Embeddings) — asks an LLM to draft a hypothetical answer, embeds it, then does vector search. Exercises retriever composition (LLM client + embedder + vector store).
 
-15. **Add config-driven pipeline reloading** — watch the YAML file; rebuild pipelines on change without restart. Tests the serialization boundary (dict round-trip).
+16. **Add config-driven pipeline reloading** — watch the YAML file; rebuild pipelines on change without restart. Tests the serialization boundary (dict round-trip).
 
 ---
 
