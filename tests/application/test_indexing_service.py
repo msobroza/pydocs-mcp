@@ -78,7 +78,14 @@ def test_indexing_service_only_has_one_field():
 
 @pytest.mark.asyncio
 async def test_reindex_package_writes_through_uow():
-    """Open a UoW, delete then upsert on all 3 stores, commit fires once."""
+    """Open a UoW, diff-merge chunks + delete-then-upsert members/pkg, commit fires.
+
+    The chunks store no longer sees the legacy ``delete + upsert`` pair —
+    the diff-merge instead probes ``list_id_hash_pairs`` to learn the
+    existing snapshot, then INSERTs only the added chunks (here: all of
+    them, since the store starts empty). The members + packages stores
+    keep the delete-then-upsert shape.
+    """
     factory = make_fake_uow_factory()
     service = IndexingService(uow_factory=factory)
 
@@ -95,17 +102,17 @@ async def test_reindex_package_writes_through_uow():
         cs = uow.chunks_store
         ms = uow.module_members_store
 
-    # Each entity store saw a delete-then-upsert pair.
-    assert [c.method for c in cs.calls] == ["delete", "upsert"]
+    # Chunks: empty starting state → no delete_by_ids, just probe + insert.
+    assert [c.method for c in cs.calls] == ["list_id_hash_pairs", "insert"]
+    # Members + packages keep the legacy delete-then-upsert shape.
     assert [c.method for c in ms.calls] == ["delete", "upsert_many"]
-    # Package delete-then-upsert ordering.
     assert [c.method for c in ps.calls if c.method in ("delete", "upsert")] == [
         "delete",
         "upsert",
     ]
 
-    # Delete filters key on the right column.
-    assert cs.calls[0].payload == {"package": "fastapi"}
+    # Diff probe filters key on the right column.
+    assert cs.calls[0].payload == {"filter": {"package": "fastapi"}}
     assert ms.calls[0].payload == {"package": "fastapi"}
     # Package store uses the literal "name" column.
     pkg_calls = [c for c in ps.calls if c.method in ("delete", "upsert")]
@@ -119,13 +126,18 @@ async def test_reindex_package_writes_through_uow():
 
 @pytest.mark.asyncio
 async def test_reindex_package_rolls_back_on_exception():
-    """A RuntimeError during chunk upsert → rolled_back is set, committed
-    is NOT set. The UoW's safety-net rollback fires from ``__aexit__``."""
-    # Build a chunk store that explodes on upsert. We swap it into the
+    """A RuntimeError during chunk insert → rolled_back is set, committed
+    is NOT set. The UoW's safety-net rollback fires from ``__aexit__``.
+
+    The diff-merge now writes added chunks via ``insert`` (not ``upsert``);
+    we hook the bomb on ``insert`` so the failure lands inside the
+    transaction body the same way as before.
+    """
+    # Build a chunk store that explodes on insert. We swap it into the
     # shared store set, so the factory returns UoWs wired to the bomb.
     class _BoomChunkStore(InMemoryChunkStore):
-        async def upsert(self, chunks):
-            await super().upsert(chunks)  # record the call before failing
+        async def insert(self, chunks):
+            await super().insert(chunks)  # record the call before failing
             raise RuntimeError("boom")
 
     chunks_store = _BoomChunkStore()
@@ -333,7 +345,8 @@ async def test_reindex_package_canonical_order():
     # Verify each phase happened, then verify their relative order via a
     # combined call sequence reconstructed in real time.
     pkg_upsert = next(c for c in packages_store.calls if c.method == "upsert")
-    chunk_upsert = next(c for c in chunks_store.calls if c.method == "upsert")
+    # Diff-merge: added chunks land via ``insert`` (not ``upsert``).
+    chunk_insert = next(c for c in chunks_store.calls if c.method == "insert")
     tree_save = next(c for c in trees_store.calls if c.method == "save_many")
     member_upsert = next(c for c in module_members_store.calls if c.method == "upsert_many")
 
@@ -341,10 +354,10 @@ async def test_reindex_package_canonical_order():
     # counters on each call — since we can't merge call lists from
     # different stores into one chronological list easily, we instead lean
     # on the implementation contract: spec §13.3 says
-    # package.upsert → chunks.upsert → trees.save_many → members.upsert_many.
+    # package.upsert → chunks.insert → trees.save_many → members.upsert_many.
     # Each store recorded its call; assert each store saw its expected call.
     assert pkg_upsert.payload is pkg
-    assert chunk in chunk_upsert.payload
+    assert chunk in chunk_insert.payload
     assert tree_save.payload == ("fastapi", fake_trees)
     assert member in member_upsert.payload
 

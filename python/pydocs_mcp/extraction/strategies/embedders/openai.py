@@ -6,17 +6,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
+from openai import AsyncOpenAI  # type: ignore[import-not-found]
 
-from pydocs_mcp.extraction.strategies.embedders import OptionalDepMissing
 from pydocs_mcp.models import Embedding
-
-try:
-    from openai import AsyncOpenAI  # type: ignore[import-not-found]
-except ImportError as exc:
-    raise OptionalDepMissing(
-        "openai is not installed. To use the OpenAI embedder run: "
-        "pip install pydocs-mcp[openai]",
-    ) from exc
 
 
 @dataclass

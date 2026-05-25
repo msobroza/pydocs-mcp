@@ -260,6 +260,7 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
         "title":   md.get(ChunkFilterField.TITLE.value, ""),
         "text":    c.text,
         "origin":  md.get(ChunkFilterField.ORIGIN.value, ""),
+        "content_hash": c.content_hash,
     }
 
 
@@ -281,10 +282,15 @@ def row_to_chunk(row) -> Chunk:
         value = row[key]
         if value:
             metadata[key] = value
+    # Defensive against NULL: legacy rows (pre-content_hash wiring) carry
+    # NULL in this column. Empty-string preserves the existing __post_init__
+    # auto-compute path (which fires when content_hash is falsy).
+    hash_value = row["content_hash"]
     return Chunk(
         text=row["text"] or "",
         id=row["id"],
         metadata=metadata,
+        content_hash=hash_value if hash_value is not None else "",
     )
 
 
@@ -571,8 +577,8 @@ class SqliteChunkRepository:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
                 conn.executemany,
-                "INSERT INTO chunks (package, module, title, text, origin) "
-                "VALUES (:package, :module, :title, :text, :origin)",
+                "INSERT INTO chunks (package, module, title, text, origin, content_hash) "
+                "VALUES (:package, :module, :title, :text, :origin, :content_hash)",
                 rows,
             )
 
@@ -625,6 +631,54 @@ class SqliteChunkRepository:
             await asyncio.to_thread(
                 conn.execute,
                 "INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')",
+            )
+
+    async def list_id_hash_pairs(
+        self, *, filter: Filter | Mapping | None = None,
+    ) -> tuple[tuple[int, str | None], ...]:
+        tree = _resolve_filter(filter)
+        where, params = "", []
+        if tree is not None:
+            where, params = self.filter_adapter.adapt(tree)
+        sql = "SELECT id, content_hash FROM chunks"
+        if where:
+            sql += f" WHERE {where}"
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, params).fetchall()
+            )
+        return tuple((row["id"], row["content_hash"]) for row in rows)
+
+    async def delete_by_ids(self, ids: Sequence[int]) -> None:
+        if not ids:
+            return
+        # Performance: batch at 500 to stay safely under SQLITE_MAX_VARIABLE_NUMBER
+        # (default 999 in older SQLite builds; 32766 in newer ones — 500 is
+        # well under both and limits per-statement parsing cost).
+        async with _maybe_acquire(self.provider) as conn:
+            for i in range(0, len(ids), 500):
+                batch = ids[i:i + 500]
+                placeholders = ",".join("?" * len(batch))
+                await asyncio.to_thread(
+                    conn.execute,
+                    f"DELETE FROM chunks WHERE id IN ({placeholders})",
+                    list(batch),
+                )
+
+    async def insert(self, chunks: tuple[Chunk, ...]) -> None:
+        # SQL is identical to upsert (SQLite INSERT with no conflict clause
+        # IS the insert-only semantic). The two methods are kept distinct
+        # to make caller intent explicit — the diff-merge wants insert-only,
+        # while the legacy "wipe and rewrite" path uses upsert.
+        rows = [_chunk_to_row(c) for c in chunks]
+        if not rows:
+            return
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.executemany,
+                "INSERT INTO chunks (package, module, title, text, origin, content_hash) "
+                "VALUES (:package, :module, :title, :text, :origin, :content_hash)",
+                rows,
             )
 
 
@@ -692,7 +746,8 @@ class SqliteVectorStore:
         params.append(limit)
 
         sql = (
-            "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, -m.rank AS rank "
+            "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
+            "c.content_hash, -m.rank AS rank "
             "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
             f"WHERE {' AND '.join(where_parts)} "
             "ORDER BY rank LIMIT ?"
@@ -713,6 +768,7 @@ class SqliteVectorStore:
                     relevance=float(row["rank"]),
                     retriever_name=self.retriever_name,
                     metadata=dict(base.metadata),
+                    content_hash=base.content_hash,  # defense-in-depth: don't trigger auto-compute
                 )
             )
         return tuple(items)

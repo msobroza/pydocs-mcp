@@ -79,10 +79,13 @@ class IndexingService:
     ) -> None:
         """Replace every row for ``package.name`` atomically (spec §13.3).
 
-        Canonical order: delete chunks → delete members → delete pkg →
-        upsert pkg → upsert chunks → trees (delete then save_many) →
-        upsert members → delete references for package → write resolved
-        references → cross-package re-resolution UPDATE → commit.
+        Canonical order: diff chunks by content_hash (delete removed +
+        insert added, keep unchanged in place) → delete members → delete
+        pkg → upsert pkg → trees (delete then save_many) → upsert members
+        → delete references for package → write resolved references →
+        cross-package re-resolution UPDATE → commit. The chunks-side
+        diff-merge replaces the legacy ``delete + upsert`` pair so
+        unchanged rows survive (and their vectors with them).
 
         ``references`` is emitted by :class:`ReferenceCaptureStage`;
         ``reference_aliases`` is its sibling alias map. ``class_attribute_types``
@@ -96,22 +99,49 @@ class IndexingService:
         # safe-columns whitelist also derives from; the ``packages`` table
         # keys on ``name`` (no matching enum), so that one stays literal.
         async with self.uow_factory() as uow:
-            await uow.chunks.delete(
+            # === BEGIN diff-merge for chunks (AC-3 + AC-8 + AC-9) ===
+            # Replaces the legacy ``chunks.delete + chunks.upsert`` pair.
+            # We diff incoming chunks against the persisted snapshot by
+            # ``content_hash``: keep unchanged rows + their vectors, drop
+            # only the rows that disappeared, insert only the genuinely
+            # new chunks. Pre-migration NULL-hash rows always count as
+            # 'removed' so they self-heal on the first reindex per
+            # package (spec AC-8).
+            existing_pairs = await uow.chunks.list_id_hash_pairs(
                 filter={ChunkFilterField.PACKAGE.value: package.name},
             )
+            incoming_hashes = {c.content_hash for c in chunks}
+            existing_by_hash = {h: cid for cid, h in existing_pairs if h}
+            removed_ids = [
+                cid for cid, h in existing_pairs
+                if not h or h not in incoming_hashes
+            ]
+            added_chunks = tuple(
+                c for c in chunks if c.content_hash not in existing_by_hash
+            )
+
+            if removed_ids:
+                await uow.chunks.delete_by_ids(removed_ids)
+                # AC-9 — only the composite UoW exposes ``vectors``; the
+                # SQLite-only path is a silent no-op.
+                vectors_store = getattr(uow, "vectors", None)
+                if vectors_store is not None:
+                    await vectors_store.remove_vectors(removed_ids)
+
             await uow.module_members.delete(
                 filter={ModuleMemberFilterField.PACKAGE.value: package.name},
             )
             await uow.packages.delete(filter={"name": package.name})
             await uow.packages.upsert(package)
-            await uow.chunks.upsert(chunks)
-            # AC-24: when the UoW is composite (SqliteUnitOfWork +
-            # TurboQuantUnitOfWork), forward every chunk's embedding to
-            # the .tq sidecar under the auto-assigned ``INTEGER PRIMARY
-            # KEY`` id SQLite just gave each row (rowid-alias id, not
-            # AUTOINCREMENT). The SqliteUnitOfWork-only path is a no-op
-            # (``getattr`` returns None) so legacy callers stay green.
-            await self._maybe_write_vectors(uow, package, chunks)
+
+            if added_chunks:
+                await uow.chunks.insert(added_chunks)
+                # AC-24 — forward only the newly-inserted chunks'
+                # embeddings to the .tq sidecar. Unchanged chunks kept
+                # their existing vectors (no re-add); removed chunks'
+                # vectors were wiped above.
+                await self._maybe_write_vectors(uow, package, added_chunks)
+            # === END diff-merge ===
             # Tree persistence happens between chunks and members so
             # FK-like post-conditions line up if a future schema adds them.
             if trees:
@@ -156,42 +186,46 @@ class IndexingService:
         method becomes a no-op so the legacy single-backend path stays
         identical.
 
-        The SQLite ``id`` column is a rowid-alias ``INTEGER PRIMARY
-        KEY`` (not AUTOINCREMENT): ``chunks.upsert`` did not return the
-        assigned IDs (``executemany`` doesn't), so we re-fetch by package
-        and sort by id. Because ``delete`` cleared the package's rows
-        first and ``executemany`` inserts in input order, the id-sorted
-        persisted list is positionally aligned with ``input_chunks`` —
-        index ``i`` in both lists is the same logical chunk. We then keep
-        only the pairs where the input chunk carried an embedding; mixed
-        batches (some embedded, some not) skip the bare entries instead
-        of failing the whole write.
+        Diff-merge variant (AC-3): ``input_chunks`` is now the
+        ``added_chunks`` subset, NOT the full incoming batch. The
+        persisted snapshot still includes the UNCHANGED rows the diff
+        kept in place, so a positional align would map the wrong row to
+        the wrong embedding. We match by ``content_hash`` instead — the
+        hash is unique per (package, module, title, text, pipeline_hash)
+        tuple, so it picks out exactly the freshly-inserted row for each
+        input chunk.
         """
         vectors_store = getattr(uow, "vectors", None)
         if vectors_store is None:
             return
-        # Re-fetch the just-upserted rows to learn their assigned IDs.
-        # ``delete`` ran before ``upsert`` so this returns exactly the
-        # rows ``executemany`` just inserted — no stale survivors.
+        input_hashes = {c.content_hash for c in input_chunks}
+        if not input_hashes:
+            return
+        # Re-fetch persisted rows by package — includes unchanged keepers
+        # plus the just-inserted added chunks. We filter to only the rows
+        # whose content_hash is in our input set (the added subset).
         persisted = await uow.chunks.list(
             filter={ChunkFilterField.PACKAGE.value: package.name},
         )
-        if len(persisted) != len(input_chunks):
-            # Defensive: a row count mismatch means our positional pairing
-            # would associate the wrong embedding to the wrong id. Silently
-            # skipping is safer than corrupting the .tq index.
+        persisted_for_input = [
+            p for p in persisted if p.content_hash in input_hashes
+        ]
+        if len(persisted_for_input) != len(input_chunks):
+            # Defensive: a hash-set mismatch means INSERT didn't land what
+            # we asked for (or two inputs share a hash — should be
+            # impossible given the hash inputs include title + text).
+            # Silently skipping is safer than corrupting the .tq index.
             log.warning(
-                "Skipping vector write for %s: persisted row count %d "
+                "Skipping vector write for %s: persisted matching count %d "
                 "does not match input chunk count %d.",
-                package.name, len(persisted), len(input_chunks),
+                package.name, len(persisted_for_input), len(input_chunks),
             )
             return
-        persisted_sorted = sorted(persisted, key=lambda c: c.id or 0)
+        by_hash = {p.content_hash: p for p in persisted_for_input}
         ids: list[int] = []
         embeddings: list[Embedding] = []
-        for persisted_chunk, input_chunk in zip(
-            persisted_sorted, input_chunks, strict=True,
-        ):
+        for input_chunk in input_chunks:
+            persisted_chunk = by_hash[input_chunk.content_hash]
             if input_chunk.embedding is None or persisted_chunk.id is None:
                 continue
             ids.append(persisted_chunk.id)
@@ -290,11 +324,28 @@ class IndexingService:
             )
 
     async def remove_package(self, name: str) -> None:
-        """Delete a package and every chunk / member / tree / ref it owns."""
+        """Delete a package and every chunk / member / tree / ref it owns.
+
+        AC-4: capture the soon-to-be-stale chunk IDs BEFORE deleting from
+        SQLite, then wipe their vectors from the TurboQuant sidecar after.
+        Without this, a package's vectors outlive its SQLite rows and
+        pollute future similarity searches with orphaned embeddings.
+        Atomic via the surrounding UoW transaction; the
+        ``getattr(uow, 'vectors', None)`` gate keeps the SQLite-only path
+        unchanged (AC-9).
+        """
         async with self.uow_factory() as uow:
+            stale_vector_ids: list[int] = []
+            if getattr(uow, "vectors", None) is not None:
+                pairs = await uow.chunks.list_id_hash_pairs(
+                    filter={ChunkFilterField.PACKAGE.value: name},
+                )
+                stale_vector_ids = [cid for cid, _ in pairs]
             await uow.chunks.delete(
                 filter={ChunkFilterField.PACKAGE.value: name},
             )
+            if stale_vector_ids:
+                await uow.vectors.remove_vectors(stale_vector_ids)
             await uow.module_members.delete(
                 filter={ModuleMemberFilterField.PACKAGE.value: name},
             )
@@ -308,13 +359,19 @@ class IndexingService:
             await uow.commit()
 
     async def clear_all(self) -> None:
-        """Wipe every row across all five entity stores.
+        """Wipe every row across all five entity stores + every vector.
 
         Uses ``All(clauses=())`` — an empty conjunction the
         ``SqliteFilterAdapter`` translates to ``1 = 1``. That form
         matches NULL columns too, unlike the previous ``LIKE '%'`` hack,
         and keeps the delete semantics unconditional without adding a
         new ``delete_all()`` method to the entity-store Protocols.
+
+        AC-5: when the composite UoW exposes ``vectors``, also wipe the
+        in-memory ``IdMapIndex`` so the next commit serializes an empty
+        ``.tq`` sidecar. The SQLite-only UoW lacks ``.vectors`` — the
+        ``getattr`` gate keeps that path unchanged (matches the AC-9
+        idiom used in ``reindex_package`` and ``remove_package``).
         """
         match_all: All = All(clauses=())
         async with self.uow_factory() as uow:
@@ -329,6 +386,8 @@ class IndexingService:
             # dedicated ``delete_all`` for the unconditional sweep.
             await uow.references.delete_all()
             await uow.packages.delete(filter=match_all)
+            if getattr(uow, "vectors", None) is not None:
+                await uow.vectors.clear_all()
             await uow.commit()
 
 
