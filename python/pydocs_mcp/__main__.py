@@ -195,13 +195,6 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     # so the indexing transaction spans both backends without per-service
     # branching for "is there a vector store?".
     tq_path = turboquant_path_for_project(project)
-    # ``--force`` clears the SQLite cache via ``IndexingService.clear_all``;
-    # the .tq sidecar lives alongside and must be cleared in lockstep,
-    # otherwise stale vectors with recycled SQLite IDs collide with the
-    # freshly-issued IDs on the next ``add_vectors`` call (IdMapIndex
-    # rejects duplicates).
-    if args.force and tq_path.exists():
-        tq_path.unlink()
     uow_factory = build_sqlite_plus_turboquant_uow_factory(
         db_path=db_path, tq_path=tq_path,
         dim=config.embedding.dim, bit_width=config.embedding.bit_width,
@@ -209,23 +202,21 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     # Cache integrity sweep — drift between SQLite and the ``.tq`` sidecar
     # (process killed mid-commit, etc.) is detected and repaired by
     # clearing ``packages.content_hash`` so the next pass re-extracts.
-    # No-op on a fresh project (both counts == 0).
-    #
-    # Skip when ``--force`` is set: the .tq wipe above leaves vec_count=0
-    # while SQLite still holds N chunks, which would log a misleading
-    # "Cache integrity mismatch" warning. The subsequent ``index_project(
-    # force=True)`` clears everything anyway, so the integrity check is
-    # superseded by the wipe + re-extract.
-    if not args.force:
-        repaired = await check_integrity_and_repair(
-            db_path=db_path, tq_path=tq_path,
-            dim=config.embedding.dim, bit_width=config.embedding.bit_width,
+    # No-op on a fresh project (both counts == 0). Under ``--force`` the
+    # subsequent ``index_project(force=True)`` calls ``IndexingService.clear_all``
+    # which atomically wipes SQLite + TurboQuant via the composite UoW —
+    # post-clear, chunks=vectors=0, so this check sees a consistent state
+    # and is a clean no-op rather than the false-positive trigger it would
+    # have been before clear_all was atomic.
+    repaired = await check_integrity_and_repair(
+        db_path=db_path, tq_path=tq_path,
+        dim=config.embedding.dim, bit_width=config.embedding.bit_width,
+    )
+    if repaired:
+        log.warning(
+            "Cache integrity: cleared content_hash on %d package(s); "
+            "they will be re-extracted this run", len(repaired),
         )
-        if repaired:
-            log.warning(
-                "Cache integrity: cleared content_hash on %d package(s); "
-                "they will be re-extracted this run", len(repaired),
-            )
 
     # Detect a model rename in YAML — packages tagged with the old
     # ``embedding_model`` carry vectors that the new model cannot match
@@ -269,7 +260,20 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     # the "pip install pydocs-mcp[fastembed]" hint immediately rather than
     # mid-extraction. Spec §"fail loud with actionable error".
     embedder = build_embedder(config.embedding)
-    ingestion_pipeline = build_ingestion_pipeline(config, embedder=embedder)
+    # Compute the ingestion pipeline_hash ONCE at startup. This identity
+    # slot (embedder + raw ingestion-YAML bytes) is threaded through the
+    # BuildContext so ``AssignChunkContentHashStage`` can stamp every
+    # chunk's content_hash with it. Any embedder swap or YAML edit
+    # invalidates every chunk hash, the diff-merge sees them as 'added',
+    # and the existing add path re-embeds them — no separate force-re-embed
+    # code path needed (spec Decisions 4 + 12).
+    pipeline_hash = config.compute_ingestion_pipeline_hash()
+    ingestion_pipeline = build_ingestion_pipeline(
+        config,
+        embedder=embedder,
+        uow_factory=uow_factory,
+        pipeline_hash=pipeline_hash,
+    )
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
     ast_member = AstMemberExtractor()

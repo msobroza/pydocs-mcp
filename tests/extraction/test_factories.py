@@ -49,7 +49,7 @@ from pydocs_mcp.extraction.factories import (
 )
 from pydocs_mcp.models import Package, PackageOrigin
 from pydocs_mcp.retrieval.config import AppConfig
-from tests._fakes import MockEmbedder
+from tests._fakes import MockEmbedder, make_fake_uow_factory
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -84,7 +84,10 @@ def test_load_ingestion_pipeline_success() -> None:
     """
     cfg = _app_config()
     pipeline = load_ingestion_pipeline(
-        _BUNDLED_INGESTION, cfg, embedder=MockEmbedder(),
+        _BUNDLED_INGESTION,
+        cfg,
+        embedder=MockEmbedder(),
+        uow_factory=make_fake_uow_factory(),
     )
     assert isinstance(pipeline, IngestionPipeline)
     assert len(pipeline.stages) == 10
@@ -133,7 +136,9 @@ def test_build_ingestion_pipeline_uses_bundled_preset_when_config_none() -> None
     """Default config has ``pipeline_path=None`` → build falls back to shipped YAML."""
     cfg = _app_config()
     assert cfg.extraction.ingestion.pipeline_path is None
-    pipeline = build_ingestion_pipeline(cfg, embedder=MockEmbedder())
+    pipeline = build_ingestion_pipeline(
+        cfg, embedder=MockEmbedder(), uow_factory=make_fake_uow_factory(),
+    )
     assert isinstance(pipeline, IngestionPipeline)
     assert len(pipeline.stages) == 10
 

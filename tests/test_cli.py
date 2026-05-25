@@ -48,11 +48,18 @@ def _patch_embedder_with_mock(monkeypatch):
 
     # Safety net for older callers / fixtures that still hand
     # ``build_ingestion_pipeline`` a bare config — auto-inject a mock when
-    # no explicit embedder is threaded.
+    # no explicit embedder is threaded. Mirrors the post-Task-12 signature
+    # (``uow_factory`` + ``pipeline_hash`` kwargs) so the CLI startup path
+    # threads the composite UoW + ingestion identity slot into BuildContext.
     _orig = _factories.build_ingestion_pipeline
 
-    def _build_with_mock(cfg, *, embedder=None):
-        return _orig(cfg, embedder=embedder or MockEmbedder())
+    def _build_with_mock(cfg, *, embedder=None, uow_factory=None, pipeline_hash=""):
+        return _orig(
+            cfg,
+            embedder=embedder or MockEmbedder(),
+            uow_factory=uow_factory,
+            pipeline_hash=pipeline_hash,
+        )
 
     # ``_run_indexing`` does ``from pydocs_mcp.extraction import build_ingestion_pipeline``
     # at call time (deferred import) — patch both the re-exported attribute
@@ -88,6 +95,34 @@ class TestIndexCommand:
         from pydocs_mcp.db import cache_path_for_project
         db_path = cache_path_for_project(seeded_project)
         assert db_path.exists()
+
+    def test_force_reindex_works_without_tq_unlink_workaround(self, seeded_project):
+        """AC-6: ``pydocs-mcp index --force`` succeeds without explicit .tq cleanup.
+
+        The --force path should call ``IndexingService.clear_all`` which atomically
+        wipes both SQLite and TurboQuant via the composite UoW; no out-of-band
+        ``.tq`` file deletion is needed in the CLI. Smoke-test that a populated
+        cache survives a force re-index with both .db and .tq still present.
+        """
+        from pydocs_mcp.db import (
+            cache_path_for_project,
+            turboquant_path_for_project,
+        )
+
+        # First index — populates both SQLite + the TurboQuant sidecar.
+        with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project)]):
+            from pydocs_mcp.__main__ import main
+            main()
+        db_path = cache_path_for_project(seeded_project)
+        tq_path = turboquant_path_for_project(seeded_project)
+        assert db_path.exists()
+
+        # --force re-index — must not error on the now-populated .tq. The old
+        # ``tq_path.unlink()`` workaround has been removed; clear_all handles it.
+        with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project), "--force"]):
+            main()
+        assert db_path.exists()
+        assert tq_path.exists()
 
     def test_index_skip_project(self, seeded_project):
         with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project), "--skip-project"]):
