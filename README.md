@@ -23,6 +23,30 @@ cd pydocs-mcp && maturin develop --release
 pip install -e .
 ```
 
+## System requirements
+
+### Linux
+
+`pydocs-mcp` depends on [turbovec](https://github.com/RyanCodrai/turbovec), a Rust
+vector store whose compiled wheel links against CBLAS. Ubuntu/Debian users must
+install OpenBLAS with the CBLAS interface before installing the package:
+
+```bash
+sudo apt-get install -y libopenblas-pthread-dev
+```
+
+Without this, `import pydocs_mcp` fails at runtime with:
+`undefined symbol: cblas_sgemm`.
+
+### macOS / Windows
+
+No additional system packages needed — CBLAS is provided by the Accelerate
+framework (macOS) or the MSVC runtime (Windows).
+
+For more detailed install instructions (including the `LD_PRELOAD` fallback
+for environments where `update-alternatives` doesn't take effect), see
+[INSTALL.md](INSTALL.md).
+
 ## Quick start
 
 ```bash

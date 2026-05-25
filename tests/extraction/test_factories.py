@@ -1,8 +1,10 @@
 """Unit tests for ``extraction/factories.py`` + ``extraction/pipeline/chunk_extractor.py``.
 
 Pins spec §7.3 + §7.4 + AC #33 + AC #19:
-- ``load_ingestion_pipeline`` builds a 7-stage ``IngestionPipeline`` from the
-  shipped ``pipelines/ingestion.yaml`` (sub-PR #5b added ``reference_capture``).
+- ``load_ingestion_pipeline`` builds a 10-stage ``IngestionPipeline`` from the
+  shipped ``pipelines/ingestion.yaml``: discovery → read → chunking →
+  references → flatten → assign_chunk_content_hash →
+  load_existing_chunk_hashes → embed_chunks → content_hash → package_build.
 - Paths outside the allowlist raise ``ValueError`` — the same allowlist logic
   as sub-PR #2 retrieval pipelines (reused via
   ``retrieval.config._resolve_pipeline_path``).
@@ -30,12 +32,14 @@ from pydocs_mcp.extraction.pipeline import (
     TargetKind,
 )
 from pydocs_mcp.extraction.pipeline.stages import (
+    AssignChunkContentHashStage,
     ChunkingStage,
     ContentHashStage,
     EmbedChunksStage,
     FileDiscoveryStage,
     FileReadStage,
     FlattenStage,
+    LoadExistingChunkHashesStage,
     PackageBuildStage,
     ReferenceCaptureStage,
 )
@@ -45,7 +49,7 @@ from pydocs_mcp.extraction.factories import (
 )
 from pydocs_mcp.models import Package, PackageOrigin
 from pydocs_mcp.retrieval.config import AppConfig
-from tests._fakes import MockEmbedder
+from tests._fakes import MockEmbedder, make_fake_uow_factory
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -66,24 +70,32 @@ def _app_config() -> AppConfig:
 # ── load_ingestion_pipeline ────────────────────────────────────────────────
 
 def test_load_ingestion_pipeline_success() -> None:
-    """Shipped preset loads into an 8-stage pipeline of the expected types.
+    """Shipped preset loads into a 10-stage pipeline of the expected types.
 
-    The hybrid-search PR slotted ``embed_chunks`` between ``flatten`` and
-    ``content_hash`` so vectors land on every chunk before the per-package
-    hash is computed. A MockEmbedder satisfies ``EmbedChunksStage.from_dict``
-    in tests; production callers thread the real
-    :func:`build_embedder` instance.
+    Slot order: discovery → read → chunking → references → flatten →
+    assign_chunk_content_hash → load_existing_chunk_hashes →
+    embed_chunks → content_hash → package_build. The two new chunk-cache
+    stages sit between ``flatten`` (chunks materialised) and
+    ``embed_chunks`` (consumes the skip set) so the embed gate can short
+    circuit on unchanged chunks.
+
+    A MockEmbedder satisfies ``EmbedChunksStage.from_dict`` in tests;
+    production callers thread the real :func:`build_embedder` instance.
     """
     cfg = _app_config()
     pipeline = load_ingestion_pipeline(
-        _BUNDLED_INGESTION, cfg, embedder=MockEmbedder(),
+        _BUNDLED_INGESTION,
+        cfg,
+        embedder=MockEmbedder(),
+        uow_factory=make_fake_uow_factory(),
     )
     assert isinstance(pipeline, IngestionPipeline)
-    assert len(pipeline.stages) == 8
+    assert len(pipeline.stages) == 10
     expected_types = [
         FileDiscoveryStage, FileReadStage, ChunkingStage,
-        ReferenceCaptureStage, FlattenStage, EmbedChunksStage,
-        ContentHashStage, PackageBuildStage,
+        ReferenceCaptureStage, FlattenStage,
+        AssignChunkContentHashStage, LoadExistingChunkHashesStage,
+        EmbedChunksStage, ContentHashStage, PackageBuildStage,
     ]
     for stage, exp in zip(pipeline.stages, expected_types, strict=True):
         assert isinstance(stage, exp)
@@ -124,9 +136,11 @@ def test_build_ingestion_pipeline_uses_bundled_preset_when_config_none() -> None
     """Default config has ``pipeline_path=None`` → build falls back to shipped YAML."""
     cfg = _app_config()
     assert cfg.extraction.ingestion.pipeline_path is None
-    pipeline = build_ingestion_pipeline(cfg, embedder=MockEmbedder())
+    pipeline = build_ingestion_pipeline(
+        cfg, embedder=MockEmbedder(), uow_factory=make_fake_uow_factory(),
+    )
     assert isinstance(pipeline, IngestionPipeline)
-    assert len(pipeline.stages) == 8
+    assert len(pipeline.stages) == 10
 
 
 def test_build_ingestion_pipeline_uses_custom_path_when_provided(tmp_path: Path) -> None:

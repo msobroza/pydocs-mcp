@@ -1,6 +1,7 @@
 """Runtime config — pydantic-settings + YAML source layering (spec §5.9)."""
 from __future__ import annotations
 
+import hashlib
 import importlib.resources
 import os
 from collections.abc import Mapping
@@ -292,6 +293,25 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
+    def compute_pipeline_hash(self) -> str:
+        """SHA-256 of embedder fields that affect vector identity.
+
+        ``batch_size`` is deliberately excluded — it affects throughput,
+        not vector contents. Future preprocessing flags
+        (``normalize_whitespace``, etc.) get added here as they're
+        introduced. Pipe-separated to keep the hash input human-readable
+        in a debugger; the field set is small enough that no escaping
+        is required (``provider`` / ``bit_width`` are bounded enums /
+        ints, ``model_name`` cannot legally contain a pipe).
+        """
+        identity = "|".join([
+            self.provider,
+            self.model_name,
+            str(self.dim),
+            str(self.bit_width),
+        ])
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
 
 class AppConfig(BaseSettings):
     """Runtime configuration.
@@ -393,6 +413,43 @@ class AppConfig(BaseSettings):
     def _user_config_path(self) -> Path | None:
         """Return the user-config path captured at ``load`` time, if any."""
         return getattr(self, "_effective_user_config_path", None)
+
+    def compute_ingestion_pipeline_hash(self) -> str:
+        """SHA-256 of embedder identity + ingestion YAML bytes.
+
+        Used as the ``pipeline_hash`` slot in
+        :func:`~pydocs_mcp.models.compute_chunk_content_hash`. Any edit
+        to ingestion.yaml (added stage, changed batch_size, reordered
+        steps, even comment-only changes — we hash raw bytes) OR any
+        change to embedder config invalidates every chunk's hash. The
+        diff-merge sees all chunks as 'added' and re-embeds via the
+        existing path. No separate 'force re-embed' code path needed.
+
+        Hashing raw bytes (vs parsed YAML) is intentionally conservative:
+        even comment-only or whitespace edits trigger re-embed. Trade:
+        occasionally over-invalidates, but eliminates the risk of two
+        semantically-different YAMLs hashing equal due to parser quirks.
+        Pipeline edits are rare; over-invalidation cost is bounded.
+
+        When ``extraction.ingestion.pipeline_path`` is unset (the default),
+        we fall back to the shipped ``pydocs_mcp/pipelines/ingestion.yaml``
+        — mirroring the resolution in
+        :func:`pydocs_mcp.extraction.factories.build_ingestion_pipeline`.
+        """
+        # Deferred import: ``extraction.factories`` pulls in
+        # ``extraction.pipeline.stages.reference_capture`` which imports
+        # back from ``retrieval.config`` (for ``ReferenceCaptureConfig``).
+        # Importing inside the method breaks the module-level cycle and
+        # keeps the single source of truth for the bundled-YAML lookup.
+        from pydocs_mcp.extraction.factories import _default_ingestion_pipeline_path
+
+        override = self.extraction.ingestion.pipeline_path
+        ingestion_path = override if override is not None else _default_ingestion_pipeline_path()
+        return hashlib.sha256(
+            self.embedding.compute_pipeline_hash().encode("utf-8")
+            + b"|"
+            + ingestion_path.read_bytes()
+        ).hexdigest()
 
 
 @cache

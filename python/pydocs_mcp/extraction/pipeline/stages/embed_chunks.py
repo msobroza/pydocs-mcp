@@ -59,30 +59,51 @@ class EmbedChunksStage:
     async def run(self, state: IngestionState) -> IngestionState:
         if not state.chunks:
             return state
-        embeddings: list[Embedding] = []
-        for i in range(0, len(state.chunks), self.batch_size):
-            batch = state.chunks[i:i + self.batch_size]
-            embs = await self.embedder.embed_chunks(
-                tuple(c.text for c in batch),
-            )
-            embeddings.extend(embs)
-        # strict=True surfaces buggy Embedders that return the wrong
-        # number of vectors instead of silently truncating state.chunks.
-        new_chunks = tuple(
-            replace(c, embedding=emb)
-            for c, emb in zip(state.chunks, embeddings, strict=True)
+
+        skip = state.existing_chunk_hashes or {}
+        chunks_to_embed = tuple(
+            c for c in state.chunks if c.content_hash not in skip
         )
-        # Also stamp the package with the embedder's identity so
-        # ``find_packages_with_stale_embeddings`` can detect a YAML
-        # ``embedding.model_name`` swap and trigger a re-embed sweep.
-        # ``PackageBuildStage`` runs BEFORE this stage and sets
-        # ``state.package`` with ``embedding_model=None`` — we overwrite
-        # here because this stage owns the (model_name → vectors) coupling.
+
+        # Always stamp the package with embedder identity, even if no chunks
+        # need re-embedding — so ``find_packages_with_stale_embeddings``
+        # still sees the current model_name for fully-cached packages.
         new_package = state.package
         if state.package is not None:
             new_package = replace(
                 state.package, embedding_model=self.embedder.model_name,
             )
+
+        if not chunks_to_embed:
+            # Full skip: no embedder call at all. Chunks come out untouched
+            # (their existing TQ vectors stay valid).
+            return replace(state, package=new_package)
+
+        # Embed only the chunks not in the skip set
+        embeddings: list[Embedding] = []
+        for i in range(0, len(chunks_to_embed), self.batch_size):
+            batch = chunks_to_embed[i:i + self.batch_size]
+            embs = await self.embedder.embed_chunks(
+                tuple(c.text for c in batch),
+            )
+            embeddings.extend(embs)
+
+        # strict=True surfaces buggy Embedders that return the wrong
+        # number of vectors instead of silently truncating chunks_to_embed.
+        embedded_by_hash = dict(zip(
+            (c.content_hash for c in chunks_to_embed),
+            embeddings,
+            strict=True,
+        ))
+
+        # Splice embeddings back into state.chunks at the right positions;
+        # skipped chunks (not in embedded_by_hash) come out with their
+        # existing embedding (typically None — their vector lives in TQ).
+        new_chunks = tuple(
+            replace(c, embedding=embedded_by_hash[c.content_hash])
+            if c.content_hash in embedded_by_hash else c
+            for c in state.chunks
+        )
         return replace(state, chunks=new_chunks, package=new_package)
 
     @classmethod

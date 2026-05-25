@@ -22,24 +22,23 @@ def test_numpy_in_main_dependencies() -> None:
     assert any(d.startswith("numpy") for d in deps)
 
 
-def test_fastembed_extra_exists() -> None:
+def test_fastembed_in_main_deps_not_optional() -> None:
+    """AC-14: fastembed is a required dep, not an extra."""
     cfg = _load()
-    extras = cfg["project"]["optional-dependencies"]
-    assert "fastembed" in extras
-    assert any("fastembed" in d for d in extras["fastembed"])
+    main_deps = cfg["project"]["dependencies"]
+    assert any("fastembed" in d for d in main_deps), (
+        f"fastembed not in main dependencies: {main_deps}"
+    )
+    extras = cfg["project"].get("optional-dependencies", {})
+    assert "fastembed" not in extras
+    assert "openai" not in extras
+    assert "all-embedders" not in extras
 
 
-def test_openai_extra_exists() -> None:
+def test_openai_in_main_deps_not_optional() -> None:
+    """AC-14: openai is a required dep, not an extra."""
     cfg = _load()
-    extras = cfg["project"]["optional-dependencies"]
-    assert "openai" in extras
-    assert any(d.startswith("openai") for d in extras["openai"])
-
-
-def test_all_embedders_extra_unions_both() -> None:
-    cfg = _load()
-    extras = cfg["project"]["optional-dependencies"]
-    assert "all-embedders" in extras
-    items = extras["all-embedders"]
-    assert any("fastembed" in d for d in items)
-    assert any(d.startswith("openai") for d in items)
+    main_deps = cfg["project"]["dependencies"]
+    assert any("openai" in d for d in main_deps), (
+        f"openai not in main dependencies: {main_deps}"
+    )

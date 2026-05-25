@@ -139,6 +139,23 @@ class TurboQuantUnitOfWork:
         for chunk_id in ids:
             self._index.remove(chunk_id)
 
+    async def clear_all(self) -> None:
+        """Reset the in-memory index to empty; commit writes empty .tq.
+
+        Used by IndexingService.clear_all (which the --force indexing path
+        drives). Atomic with the surrounding UoW transaction — the actual
+        file write happens in commit() via the existing tmp + os.replace
+        path. No separate unlink() needed.
+        """
+        if self._index is None:
+            raise RuntimeError(
+                "TurboQuantUnitOfWork.clear_all called outside async with",
+            )
+        self._index = await asyncio.to_thread(
+            IdMapIndex, dim=self._dim, bit_width=self._bit_width,
+        )
+        self._dirty = True
+
     async def commit(self) -> None:
         """Persist in-memory index to ``<path>.tmp`` then atomic-rename.
 

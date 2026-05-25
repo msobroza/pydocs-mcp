@@ -6,12 +6,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.protocols import ConnectionProvider
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
     from pydocs_mcp.storage.protocols import (
         Embedder,
         TextSearchable,
+        UnitOfWork,
         VectorSearchable,
     )
     from pydocs_mcp.storage.sqlite import (
@@ -102,10 +105,10 @@ def _default_predicate_registry():
 class BuildContext:
     """Carries ambient dependencies used by ``from_dict`` decoders.
 
-    ``vector_store`` / ``module_member_store`` / ``app_config`` / ``embedder``
-    are optional at the type level so isolated unit tests can instantiate a
-    minimal context, but ``from_dict`` decoders that need them raise
-    ``ValueError`` when the store or config is missing. Production wiring in
+    ``vector_store`` / ``module_member_store`` / ``app_config`` / ``embedder`` /
+    ``uow_factory`` are optional at the type level so isolated unit tests can
+    instantiate a minimal context, but ``from_dict`` decoders that need them
+    raise ``ValueError`` when the dep is missing. Production wiring in
     ``server.py`` / ``__main__.py`` provides all of them at startup
     (spec §5.7, AC #15, AC #17).
 
@@ -119,6 +122,16 @@ class BuildContext:
     ``embedder`` is typed as :class:`Embedder` and is consumed by
     :class:`DenseFetcherStep` to embed the user's query text into a vector
     at retrieval time.
+
+    ``uow_factory`` is consumed by
+    :class:`LoadExistingChunkHashesStage` to read existing chunk hashes
+    from SQLite during ingestion (so EmbedChunksStage can skip unchanged
+    chunks).
+
+    ``pipeline_hash`` is consumed by :class:`AssignChunkContentHashStage`
+    to rewrite each chunk's content_hash with the embedder + ingestion-YAML
+    identity slot. Composition root computes via
+    ``AppConfig.compute_ingestion_pipeline_hash()`` once at startup.
     """
 
     connection_provider: "ConnectionProvider"
@@ -129,3 +142,5 @@ class BuildContext:
     module_member_store: "SqliteModuleMemberRepository | None" = None
     app_config: "AppConfig | None" = None
     embedder: "Embedder | None" = None
+    uow_factory: "Callable[[], UnitOfWork] | None" = None
+    pipeline_hash: str = ""

@@ -8,6 +8,7 @@ round-trip through SQLite TEXT columns and JSON without glue code.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -153,6 +154,29 @@ class Package:
     embedding_model: str | None = None
 
 
+def compute_chunk_content_hash(
+    package: str, module: str, title: str, text: str,
+    pipeline_hash: str = "",
+) -> str:
+    """SHA-256 hex digest of the null-separated chunk-identity tuple.
+
+    Mirrors Package.content_hash. Used by Chunk.__post_init__ for auto-
+    compute (pipeline_hash="" — test ergonomics), by
+    AssignChunkContentHashStage in production (pipeline_hash from
+    BuildContext), and by the diff-merge in
+    IndexingService.reindex_package to match incoming chunks against
+    the existing SQLite snapshot.
+
+    The pipeline_hash slot ensures embedder swaps or ingestion YAML
+    edits invalidate every chunk's hash so the diff naturally
+    re-embeds via the existing add path.
+    """
+    return hashlib.sha256(
+        f"{package}\0{module}\0{title}\0{text}\0{pipeline_hash}"
+        .encode("utf-8"),
+    ).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class Chunk:
     """Unit of retrieval. `text` is the primary payload; everything else
@@ -171,9 +195,25 @@ class Chunk:
     # stage during ingestion; stays None on read paths (vectors live in the
     # .tq sidecar, the SQL row doesn't carry them back).
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # SHA-256(package + \0 + module + \0 + title + \0 + text + \0 + pipeline_hash).
+    # Auto-computed in __post_init__ when unset; production overrides with
+    # the pipeline-aware version via AssignChunkContentHashStage.
+    content_hash: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        if not self.content_hash:
+            # Test ergonomics: Chunk(text="foo") just works. Production
+            # overrides with the pipeline-aware hash via the new stage.
+            object.__setattr__(
+                self, "content_hash",
+                compute_chunk_content_hash(
+                    package=str(self.metadata.get("package", "")),
+                    module=str(self.metadata.get("module", "")),
+                    title=str(self.metadata.get("title", "")),
+                    text=self.text,
+                ),
+            )
 
 
 @dataclass(frozen=True, slots=True)

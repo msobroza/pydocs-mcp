@@ -12,6 +12,8 @@ Module layout:
 - :mod:`.chunking` — :class:`ChunkingStage`
 - :mod:`.reference_capture` — :class:`ReferenceCaptureStage` + ``_get_capture_config`` / ``_set_capture_config``
 - :mod:`.flatten` — :class:`FlattenStage`
+- :mod:`.assign_chunk_content_hash` — :class:`AssignChunkContentHashStage`
+- :mod:`.load_existing_chunk_hashes` — :class:`LoadExistingChunkHashesStage`
 - :mod:`.embed_chunks` — :class:`EmbedChunksStage`
 - :mod:`.content_hash` — :class:`ContentHashStage`
 - :mod:`.package_build` — :class:`PackageBuildStage`
@@ -21,6 +23,9 @@ each file has one stage, one reason to change.
 """
 from __future__ import annotations
 
+from pydocs_mcp.extraction.pipeline.stages.assign_chunk_content_hash import (
+    AssignChunkContentHashStage,
+)
 from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.pipeline.stages.chunking import ChunkingStage
 from pydocs_mcp.extraction.pipeline.stages.content_hash import ContentHashStage
@@ -28,6 +33,9 @@ from pydocs_mcp.extraction.pipeline.stages.embed_chunks import EmbedChunksStage
 from pydocs_mcp.extraction.pipeline.stages.file_discovery import FileDiscoveryStage
 from pydocs_mcp.extraction.pipeline.stages.file_read import FileReadStage
 from pydocs_mcp.extraction.pipeline.stages.flatten import FlattenStage
+from pydocs_mcp.extraction.pipeline.stages.load_existing_chunk_hashes import (
+    LoadExistingChunkHashesStage,
+)
 from pydocs_mcp.extraction.pipeline.stages.package_build import PackageBuildStage
 from pydocs_mcp.extraction.pipeline.stages.reference_capture import (
     ReferenceCaptureStage,
@@ -36,6 +44,7 @@ from pydocs_mcp.extraction.pipeline.stages.reference_capture import (
 )
 
 __all__ = (
+    "AssignChunkContentHashStage",
     "ChunkingStage",
     "ContentHashStage",
     "EmbedChunksStage",
@@ -43,6 +52,7 @@ __all__ = (
     "FileReadStage",
     "FlattenStage",
     "IngestionStage",
+    "LoadExistingChunkHashesStage",
     "PackageBuildStage",
     "ReferenceCaptureStage",
     "_get_capture_config",

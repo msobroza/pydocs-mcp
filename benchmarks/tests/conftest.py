@@ -1,15 +1,18 @@
 """Benchmark test autouse fixtures.
 
-Local pytest does not install the ``[fastembed]`` extra, so
-``build_embedder(config.embedding)`` — called by the pydocs benchmark
-adapter at ``benchmarks/src/benchmarks/eval/systems/pydocs.py`` during
-``index()`` — would raise ``OptionalDepMissing`` and break every smoke
-test that drives the runner end-to-end.
+``fastembed`` is now a required dep (the shipped default config selects
+``provider=fastembed``), so ``build_embedder(config.embedding)`` — called
+by the pydocs benchmark adapter at
+``benchmarks/src/benchmarks/eval/systems/pydocs.py`` during ``index()`` —
+imports successfully. The catch: constructing ``FastEmbedEmbedder``
+triggers a ~80MB ONNX model download on first inference, which would
+balloon local pytest runtime and require network access.
 
-The production benchmark CI workflow (``.github/workflows/benchmark.yml``)
-installs ``pydocs-mcp[dev,fastembed]`` for real sweeps, so this autouse
-fixture only intercepts ``build_embedder`` in the **local pytest** path
-— CI continues to exercise the real FastEmbed model.
+This autouse fixture intercepts ``build_embedder`` in the **local pytest**
+path with a lightweight mock so every smoke test that drives the runner
+end-to-end stays fast and offline. The production benchmark CI workflow
+(``.github/workflows/benchmark.yml``) runs against the real FastEmbed
+model.
 
 The mock is intentionally a minimal duplicate of
 ``tests/_fakes.MockEmbedder``: the benchmarks subproject has its own
