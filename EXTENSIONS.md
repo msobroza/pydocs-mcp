@@ -169,7 +169,7 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 4. **Add `JsonResultFormatter`** — output as JSON for tooling that wants structured results. Pair with a `json_chunk` YAML preset.
 
-5. **Add `WeightedScoreInterpolationStep`** — alternative fusion to the shipped `RRFFusionStep`. Normalizes each branch's scores to `[0, 1]` (min-max), then blends via `α·norm(bm25) + (1-α)·norm(dense)`. RRF discards score magnitude; this preserves it, which sometimes wins when one retriever is dramatically stronger than the other on a given query. Reads from the same `state.scratch[<branch>.ranked]` keys RRF uses, so it drops in as a YAML swap. Pairs naturally with `ConditionalStep` for per-query-type routing (e.g., RRF for short queries, weighted interpolation for long).
+5. **[SHIPPED] `WeightedScoreInterpolationStep`** — see `python/pydocs_mcp/retrieval/steps/weighted_score_interpolation.py`. Alternative fusion to the shipped `RRFFusionStep`. Normalizes each branch's scores to `[0, 1]` (min-max), then blends via `α·norm(bm25) + (1-α)·norm(dense)`. RRF discards score magnitude; this preserves it, which sometimes wins when one retriever is dramatically stronger than the other on a given query. Reads from the same `state.scratch[<branch>.ranked]` keys RRF uses, so it drops in as a YAML swap. Pairs naturally with `ConditionalStep` for per-query-type routing (e.g., RRF for short queries, weighted interpolation for long).
 
 ### Tier 2 — small PRs (~200–400 LOC)
 
@@ -212,7 +212,7 @@ N. **Add capability-aware ingestion (`REQUIRES` declarations + auto-derivation)*
 
 12. **Add `LlmRerankStep` with an OpenAI/Anthropic/Cohere client** — validates that an I/O-bound step composes with the pipeline. Tests predicate-guarded execution (skip rerank on short queries). The planned LLM-rerank step listed in §C "Retrieval pipeline".
 
-13. **Add `LlmTreeReasoningStep` (vectorless RAG, PageIndex-style)** — a `RetrieverStep` that uses an LLM to navigate the existing `DocumentNode` trees and pick the nodes most likely to contain the answer, without embedding. Single-shot prompt: serialize the tree via `DocumentNode.to_pageindex_json()` (strip body text, keep titles + summaries + node_ids), send `(query, tree_json)` to a configured LLM, parse `{"thinking", "node_list": [node_id, ...]}` from the response, then fetch the corresponding chunks via `uow.chunks` and emit them as the step's result.
+13. **[SHIPPED] `LlmTreeReasoningStep` (vectorless RAG, PageIndex-style)** — see `python/pydocs_mcp/retrieval/steps/llm_tree_reasoning.py`. Vectorless RAG over `__project__` `DocumentNode` trees. Three opt-in YAML presets ship under `python/pydocs_mcp/pipelines/`: `tree_only.yaml`, `chunk_search_with_tree_reasoning_parallel.yaml`, `chunk_search_with_tree_reasoning_after.yaml`. `LlmClient` Protocol + `OpenAiLlmClient` concrete at `python/pydocs_mcp/retrieval/llm_clients/`. Two Jinja2 prompt templates (pageindex_v1 baseline + pydocs_v1 adapted) at `python/pydocs_mcp/retrieval/prompts/`. A `RetrieverStep` that uses an LLM to navigate the existing `DocumentNode` trees and pick the nodes most likely to contain the answer, without embedding. Single-shot prompt: serialize the tree via `DocumentNode.to_pageindex_json()` (strip body text, keep titles + summaries + node_ids), send `(query, tree_json)` to a configured LLM, parse `{"thinking", "node_list": [node_id, ...]}` from the response, then fetch the corresponding chunks via `uow.chunks` and emit them as the step's result.
 
     Composes with the existing pipeline machinery:
 

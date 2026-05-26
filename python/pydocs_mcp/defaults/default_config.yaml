@@ -70,3 +70,14 @@ embedding:
   dim:         384
   batch_size:  32
   bit_width:   4
+
+# LLM client configuration — used by LlmTreeReasoningStep and other
+# LLM-driven retrieval primitives. Defaults to OpenAI's gpt-4o-mini.
+# OPENAI_API_KEY env var is the credential source.
+#
+# Uncomment to override:
+# llm:
+#   provider: openai
+#   model_name: gpt-4o-mini
+#   temperature: 0.0
+#   max_tokens: 1024
