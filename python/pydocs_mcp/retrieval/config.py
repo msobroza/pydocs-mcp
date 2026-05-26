@@ -313,6 +313,24 @@ class EmbeddingConfig(BaseModel):
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
+class LlmConfig(BaseModel):
+    """LLM chat-completion client configuration.
+
+    Architectural twin of ``EmbeddingConfig`` — same shape (provider,
+    model_name, tuning params), used by ``build_llm_client(cfg)`` to
+    construct the right concrete client. Defaults selected for cost
+    efficiency: gpt-4o-mini is OpenAI's cheap-but-capable model and the
+    right baseline for a retrieval re-ranking step where calls are
+    frequent but small.
+    """
+
+    provider: Literal["openai"] = "openai"
+    model_name: str = "gpt-4o-mini"
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1)
+    api_key: str | None = None  # None -> SDK reads OPENAI_API_KEY env var
+
+
 class AppConfig(BaseSettings):
     """Runtime configuration.
 
@@ -349,6 +367,13 @@ class AppConfig(BaseSettings):
     # configuration": embedding model choice is a pipeline-tuning knob,
     # NOT an MCP tool param — the MCP surface stays fixed.
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    # LLM chat-completion client config (Task 3 / AC-2). Architectural twin
+    # of ``embedding`` — provider/model_name/tuning knobs consumed by
+    # ``build_llm_client(cfg)`` to construct the right concrete client. Per
+    # CLAUDE.md §"MCP API surface vs YAML configuration": LLM model choice
+    # is a pipeline-tuning knob, NOT an MCP tool param — the MCP surface
+    # stays fixed.
+    llm: LlmConfig = Field(default_factory=LlmConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside
