@@ -85,7 +85,13 @@ class ModuleInspector:
                 items.append(f"{kind} {name}{sig}\n    {doc}")
                 if len(items) >= _MAX_MEMBERS:
                     break
-        except Exception:  # noqa: BLE001 -- AC #8 byte-parity: pre-PR server.py swallowed broadly so custom-DSL libs that raise unusual types during inspect.getmembers don't crash the handler
+        except (AttributeError, ImportError, OSError, RuntimeError):
+            # Narrowed from ``except Exception``. Custom-DSL libs raise
+            # these from ``inspect.getmembers`` (broken __getattr__, lazy
+            # import shims, FS-backed descriptors, RuntimeError property
+            # guards). Real bugs (ValueError, KeyError, TypeError, ...)
+            # propagate so they surface in tests instead of being
+            # silently swallowed.
             pass
 
         if not items and hasattr(mod, "__path__"):
@@ -95,7 +101,11 @@ class ModuleInspector:
                     if not s.startswith("_")
                 ]
                 return f"# {target}\nSubmodules: {', '.join(subs)}"
-            except Exception:  # noqa: BLE001 -- AC #8 byte-parity: pre-PR server.py swallowed broadly on pkgutil.iter_modules failures
+            except (AttributeError, ImportError, OSError, RuntimeError):
+                # Narrowed from ``except Exception``. Same rationale as
+                # the getmembers site above — these are the failure
+                # modes that occur with broken / lazy / FS-backed
+                # packages; other exceptions are real bugs.
                 pass
 
         return (

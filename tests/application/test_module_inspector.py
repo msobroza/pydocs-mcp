@@ -145,3 +145,72 @@ async def test_inspect_opens_uow_for_package_lookup() -> None:
     assert result.startswith("# json")
     # The uow.packages.get call lands in the InMemory store's .calls history.
     assert any(c.method == "get" and c.payload == "json" for c in store.calls)
+
+
+# ── Exception narrowing (I10) ──────────────────────────────────────────────
+#
+# The two ``except Exception`` sites in ``module_inspector._inspect_target``
+# protect against custom-DSL libraries that raise unusual types during
+# ``inspect.getmembers`` / ``pkgutil.iter_modules``. The narrowed set
+# ``(AttributeError, ImportError, OSError, RuntimeError)`` keeps that
+# defensive behaviour for the failure modes that actually happen in the
+# wild (broken ``__getattr__``, lazy-import shims, FS-backed descriptors,
+# RuntimeError-raising property guards) while letting real programming
+# bugs — ``ValueError``, ``KeyError``, ``TypeError`` — propagate so they
+# surface in tests instead of being silently swallowed.
+#
+# ``math`` is a single-file C-extension module with no ``__path__``, so
+# the ``pkgutil.iter_modules`` fallback at site #2 doesn't trigger. That
+# isolates the test to the site #1 ``except`` around the ``getmembers``
+# loop — patching ``inspect.getmembers`` is the only failure source on
+# the inspect path for that target.
+
+
+@pytest.mark.asyncio
+async def test_inspect_skips_attribute_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AttributeError from inspect.getmembers → empty member list, no crash."""
+    svc, _ = _service(packages={"math": _pkg("math")})
+
+    def _boom(_mod: object) -> list[tuple[str, object]]:
+        raise AttributeError("synthetic")
+
+    monkeypatch.setattr("inspect.getmembers", _boom)
+
+    result = await svc.inspect("math")
+
+    # ``math`` has no ``__path__`` (single-file module, not a package), so
+    # the iter_modules fallback doesn't trigger. The narrowed except
+    # swallows the AttributeError and we land on the "No API in ..."
+    # sentinel.
+    assert result == "No API in 'math'."
+
+
+@pytest.mark.asyncio
+async def test_inspect_skips_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ImportError from inspect.getmembers (e.g., lazy-import shims) → empty list."""
+    svc, _ = _service(packages={"math": _pkg("math")})
+
+    def _boom(_mod: object) -> list[tuple[str, object]]:
+        raise ImportError("synthetic")
+
+    monkeypatch.setattr("inspect.getmembers", _boom)
+
+    result = await svc.inspect("math")
+
+    assert result == "No API in 'math'."
+
+
+@pytest.mark.asyncio
+async def test_inspect_does_not_swallow_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ValueError is NOT in the narrowed set — it must propagate to the caller."""
+    svc, _ = _service(packages={"math": _pkg("math")})
+
+    def _boom(_mod: object) -> list[tuple[str, object]]:
+        raise ValueError("real bug")
+
+    monkeypatch.setattr("inspect.getmembers", _boom)
+
+    with pytest.raises(ValueError, match="real bug"):
+        await svc.inspect("math")
