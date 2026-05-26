@@ -4,7 +4,11 @@
 **Tracks:** code-quality cleanup PR
 **Related work:** in-depth `review-architecture` run on 2026-05-26 using the
 `MKToronto/python-clean-architecture` plugin (4 Critical, 20 Important,
-26 actionable Suggestions surfaced across `python/pydocs_mcp/`).
+26 actionable Suggestions surfaced across `python/pydocs_mcp/`), plus a
+follow-up **import-graph audit** that found 4 additional hexagonal-leak
+fixes (1 Critical, 1 Important, 2 Suggestions). Combined totals
+addressed by this PR: **5 Critical, 21 Important, 28 actionable
+Suggestions.**
 **Companion PRs in flight:** #41 (benchmark tree-reasoning), #42
 (capability-aware ingestion / REQUIRES). This PR is independent of both.
 
@@ -44,6 +48,35 @@ composition roots, frozen+slotted dataclasses, single-source defaults,
 atomic UoW with safety-net, etc.) ARE preserved. This PR doesn't disturb
 any of them. It cleans up the residual tight spots, redundancies, and
 contract gaps in the *same direction* the existing code is moving.
+
+### Follow-up import-graph audit (2026-05-26)
+
+A targeted audit after the in-depth review ran `grep` across
+`application/`, `models.py`, `extraction/model/`, and the rest of
+`retrieval/` for direct imports of concrete storage adapters
+(`Sqlite*`, `TurboQuant*`, `HybridSqliteTurboStore`, `CompositeUnitOfWork`).
+Most of the codebase is clean — the application layer depends only on
+`storage.protocols.{UnitOfWork, ...}` and the `NodeReference` /
+`filters.All` domain types, and `extraction/model/` has **zero** storage
+imports. Four sites failed the audit:
+
+- **V1** (now **C5**) — `retrieval/steps/pre_filter.py:105-115` does an
+  inline `from pydocs_mcp.storage.sqlite import (SqliteFilterAdapter,
+  _MEMBER_COLUMNS, CHUNK_COLUMNS)` at runtime inside `run()`. The leak
+  is structural: `PreFilterResult` carries `sql: str` + `params: tuple`
+  fields, so the result schema itself is SQL-shaped.
+- **V2** (now **I21**) — `retrieval/serialization.py:21-23` has a
+  `TYPE_CHECKING` import of `SqliteModuleMemberRepository` to type a
+  field on `BuildContext` (line 143).
+- **V3** (now **S32**) — `models.py:286-297` lazy-imports
+  `format_registry` from `storage/filters.py` inside a `model_validator`.
+  The dependency is port-adjacent (filters.py is a port-like module),
+  but the directionality `models → storage` is acknowledged-in-comment
+  and still a smell.
+- **V4** (now **S33**) — `application/indexing_service.py:365` names
+  `SqliteFilterAdapter` in a docstring. Not a coupling — just text.
+
+The four sites are covered in §5 (C5), §6.10 (I21), and §7 (S32, S33).
 
 ## 3. Locked-in decisions
 
@@ -426,6 +459,169 @@ def _fetch_sync(self, ...) -> list[Chunk]:
     with self.provider.acquire_sync() as conn:
         return list(conn.execute(sql, params).fetchall())
 ```
+
+---
+
+### C5 — Remove `PreFilterStep`'s direct dependency on `SqliteFilterAdapter` + reach into private `_MEMBER_COLUMNS` (introduce `FilterAdapter` Protocol)
+
+**File:** `python/pydocs_mcp/retrieval/steps/pre_filter.py:49-71` (the
+`PreFilterResult` dataclass) and `pre_filter.py:104-117` (the runtime
+import + adapter construction inside `run()`)
+**Severity:** Critical
+**Principles:** P3 Depend on Abstractions, P2 Low Coupling (Common
+Coupling — reaching into a private `_MEMBER_COLUMNS` constant)
+**Pattern:** Adapter / Strategy — introduce a `FilterAdapter` Protocol
+on `retrieval/protocols.py`; thread it through `BuildContext`; the
+SQLite-bound translation lives in `storage/sqlite.py` and is wired
+once by the composition root.
+**LOC estimate:** +50 / -25 (Protocol + composition-root wiring +
+PreFilterResult shape change + step body cleanup)
+**Risk:** Medium — `PreFilterResult` field set changes from
+`(tree, scope, sql, params)` to `(tree, scope)`. Every fetcher that
+reads `PreFilterResult.sql` / `.params` (3 of them: chunk_fetcher,
+member_fetcher, dense_fetcher) is touched.
+**Tests required:**
+- Unit test on `FilterAdapter` Protocol: a `FakeFilterAdapter` confirms
+  `PreFilterStep` calls it once with the parsed tree + target field.
+- Existing pre_filter round-trip + fetcher integration tests pin
+  behavior end-to-end.
+- New test: every concrete `FilterAdapter` impl (just
+  `SqliteFilterAdapter` today) satisfies the Protocol at
+  `@runtime_checkable` time.
+
+**Current code:**
+
+```python
+# python/pydocs_mcp/retrieval/steps/pre_filter.py:49-71 — leaky result shape
+@dataclass(frozen=True, slots=True)
+class PreFilterResult:
+    """Typed result emitted by PreFilterStep into state.scratch[...].
+
+    Fields:
+    - tree, scope: backend-neutral
+    - sql: SQL WHERE-clause fragment built by SqliteFilterAdapter   # ← leak
+    - params: positional SQL parameters paired with sql              # ← leak
+    """
+    tree: "Filter | None"
+    scope: "frozenset[SearchScope] | None"
+    sql: str                          # ← SQL belongs at the storage seam, not the retrieval result
+    params: tuple[Any, ...]           # ← same
+
+# python/pydocs_mcp/retrieval/steps/pre_filter.py:104-117 — leaky body
+if tree is not None:
+    from pydocs_mcp.storage.sqlite import (
+        _MEMBER_COLUMNS,                  # ← private impl detail of SQLite adapter
+        CHUNK_COLUMNS,
+        SqliteFilterAdapter,
+    )
+    if self.target_field == "chunk":
+        adapter = SqliteFilterAdapter(safe_columns=CHUNK_COLUMNS, column_prefix="c.")
+    else:
+        adapter = SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
+    filter_sql, filter_params = adapter.adapt(tree)
+```
+
+**Why:** `PreFilterStep` is a generic retrieval step that should produce a
+**backend-neutral** result. Today it (a) imports a concrete SQLite
+adapter, (b) reaches into a private `_MEMBER_COLUMNS` constant
+(leading underscore signals "implementation detail"), and (c) stuffs
+SQL strings into the result schema itself. Swapping SQLite for
+Postgres/DuckDB requires changing this step **and** changing the
+`PreFilterResult` schema — the leak permeates downstream fetchers
+which read `.sql` / `.params`. The first move when this design ages
+out is a structural one, not a swap-the-adapter one.
+
+**Proposed fix:**
+
+```python
+# python/pydocs_mcp/retrieval/protocols.py — new Protocol
+@runtime_checkable
+class FilterAdapter(Protocol):
+    """Translate a backend-neutral Filter tree to a backend-specific
+    query fragment. Concrete impls live in the storage layer; the
+    composition root wires them into BuildContext."""
+
+    def adapt(
+        self,
+        tree: Filter,
+        *,
+        target_field: Literal["chunk", "member"],
+    ) -> tuple[str, tuple[Any, ...]]:
+        """Return (where_clause, positional_params). For SQL backends
+        this is a parameterized WHERE fragment; for Cypher/Mongo/etc.
+        the shape varies. The fetcher that consumes the output knows
+        the backend's expected query string format."""
+        ...
+
+# python/pydocs_mcp/storage/sqlite.py — concrete impl
+@dataclass(frozen=True, slots=True)
+class SqliteFilterAdapter:
+    chunk_columns: tuple[str, ...] = CHUNK_COLUMNS
+    member_columns: tuple[str, ...] = _MEMBER_COLUMNS
+    chunk_column_prefix: str = "c."
+
+    def adapt(
+        self,
+        tree: Filter,
+        *,
+        target_field: Literal["chunk", "member"],
+    ) -> tuple[str, tuple[Any, ...]]:
+        if target_field == "chunk":
+            cols, prefix = self.chunk_columns, self.chunk_column_prefix
+        else:
+            cols, prefix = self.member_columns, ""
+        # Existing SqliteFilterAdapter logic moves here. Private
+        # _MEMBER_COLUMNS becomes an internal default; nothing outside
+        # storage/sqlite.py touches it.
+        ...
+
+# python/pydocs_mcp/retrieval/serialization.py — extend BuildContext
+@dataclass(frozen=True, slots=True)
+class BuildContext:
+    ...
+    filter_adapter: FilterAdapter | None = None   # composition root wires SqliteFilterAdapter()
+
+# python/pydocs_mcp/retrieval/factories.py — composition root
+def build_retrieval_context(...) -> BuildContext:
+    return BuildContext(
+        ...
+        filter_adapter=SqliteFilterAdapter(),
+    )
+
+# python/pydocs_mcp/retrieval/steps/pre_filter.py — neutral result shape
+@dataclass(frozen=True, slots=True)
+class PreFilterResult:
+    """Backend-neutral filter tree + scope. Fetchers translate to their
+    backend's query language via BuildContext.filter_adapter when they
+    need to execute."""
+    tree: "Filter | None"
+    scope: "frozenset[SearchScope] | None"
+    # NO sql, NO params — those live at the storage boundary.
+
+# python/pydocs_mcp/retrieval/steps/pre_filter.py — clean run() body
+async def run(self, state: RetrieverState, ctx: BuildContext) -> RetrieverState:
+    ...
+    # No SQLite imports. No SqliteFilterAdapter construction. Just produce
+    # the neutral result; consumers translate when they execute.
+    new_scratch = {
+        **state.scratch,
+        PRE_FILTER_SCRATCH_KEY: PreFilterResult(tree=tree, scope=scope),
+    }
+    return replace(state, scratch=new_scratch)
+
+# python/pydocs_mcp/retrieval/steps/chunk_fetcher.py — fetchers do the SQL gen via the Protocol
+def _build_query(self, state, ctx):
+    pf = state.scratch.get(PRE_FILTER_SCRATCH_KEY)
+    if pf and pf.tree is not None:
+        sql, params = ctx.filter_adapter.adapt(pf.tree, target_field="chunk")
+    ...
+```
+
+**Bonus payoff:** the per-fetcher SQL translation also disappears once
+the adapter is reachable via context — closes the architectural gap
+that today has 3 different fetchers re-deriving the SQL the same way.
+
+---
 
 ## 6. Important fixes (grouped by component, compact)
 
@@ -963,6 +1159,46 @@ class IngestionState:
 across 2-3 commits within this PR (introduce bundles → migrate stages →
 drop old fields).
 
+### 6.10 Retrieval-storage decoupling (I21)
+
+#### I21 — Replace `SqliteModuleMemberRepository` type hint on `BuildContext` with the `ModuleMemberStore` Protocol
+
+**File:** `retrieval/serialization.py:21-23` (TYPE_CHECKING import) +
+`retrieval/serialization.py:143` (the field declaration)
+**Principles:** P3 Depend on Abstractions
+**LOC:** +2 / -4 · **Risk:** Low — type-only change, no runtime
+behavior difference.
+**Tests:** existing `serialization` tests pin behavior; add a Protocol
+conformance test confirming `SqliteModuleMemberRepository` still
+satisfies `ModuleMemberStore`.
+
+```python
+# Current — retrieval/serialization.py:21-23, 143
+if TYPE_CHECKING:
+    from pydocs_mcp.storage.sqlite import (
+        SqliteModuleMemberRepository,        # ← concrete adapter as a type
+    )
+# ...
+@dataclass(frozen=True, slots=True)
+class BuildContext:
+    module_member_store: "SqliteModuleMemberRepository | None" = None   # ← concrete-class type hint
+
+# Proposed:
+if TYPE_CHECKING:
+    from pydocs_mcp.storage.protocols import (
+        ModuleMemberStore,                   # already exists; storage/protocols.py
+    )
+
+@dataclass(frozen=True, slots=True)
+class BuildContext:
+    module_member_store: "ModuleMemberStore | None" = None
+```
+
+If `ModuleMemberStore` doesn't already exist in `storage/protocols.py`
+(the `UnitOfWork.module_members` field is likely typed as a Protocol
+elsewhere; implementer to confirm during planning), add it as a small
+Protocol with the methods PreFilterStep / fetchers actually call.
+
 ## 7. Suggestion fixes (compact table)
 
 | # | File:line | Principle | Issue | Proposed fix | LOC | Risk |
@@ -993,6 +1229,8 @@ drop old fields).
 | **S28** | `models.py:152-154` | Rule 6 (mild) | `Package.embedding_model` + `Package.content_hash` — parallel structure | Extract `EmbeddingProvenance(model_name, content_hash)` value object | +20 / -10 | Med |
 | **S30** | `application/lookup_service.py:175-206` | (cosmetic) | `_longest_indexed_module` docstring could include worked example | Add 2-line example showing `consumed` ≠ `len(module.split("."))` | +3 / -0 | Low |
 | **S31** | `retrieval/steps/rrf_fusion.py:112-128`, `weighted_score_interpolation.py:94-102` | Rule 20 cousin | Asymmetric handling: RRF silent-skip vs Weighted KeyError | Document both behaviors in docstrings; no code change (both intentional) | +5 / -0 | Low |
+| **S32** | `models.py:286-297` | P3 (directionality) | `SearchQuery._validate_filter_syntax` lazy-imports `format_registry` from `storage/filters.py` (acknowledged in code comment as `models ← storage.filters`) | Move `format_registry` + Filter tree value objects out of `storage/` to a domain-side module (e.g., `pydocs_mcp/filters.py` or `models/filters.py`); both `models` and `storage/sqlite` then depend on the new module instead of `models` reaching into `storage` | +30 / -15 | Med |
+| **S33** | `application/indexing_service.py:365` | (cosmetic) | Docstring names `SqliteFilterAdapter` to explain `1 = 1` behavior | Rewrite as "the filter adapter translates an empty filter tree to `1 = 1`" — backend-neutral prose | +2 / -2 | Low |
 
 **Note on excluded findings:** S1, S3, S11, S22, S29 were self-flagged as
 false-alarms or out-of-scope by the reviewer. We honor those.
@@ -1006,10 +1244,11 @@ regression test before applying the fix (TDD discipline).
 
 ### 8.2 PR-wide
 
-1. **AC-1 — All 4 Critical, all 20 Important, all 26 actionable
+1. **AC-1 — All 5 Critical, all 21 Important, all 28 actionable
    Suggestions land** as commits in this PR (or are explicitly deferred
    to a follow-up with a written rationale on the PR description if
-   any are dropped — e.g., I7 or I12 if they prove too large to bundle).
+   any are dropped — e.g., I7, I12, or C5 if they prove too large to
+   bundle).
 
 2. **AC-2 — Full test suite green.** `pytest -q` shows the same pass
    count as before the cleanup (currently 1254 passed + 1 skipped), or
@@ -1021,8 +1260,9 @@ regression test before applying the fix (TDD discipline).
 
 4. **AC-4 — `mypy --strict python/pydocs_mcp/` clean** for new Protocol
    additions (`resolve_unresolved`, `delete_all`, `acquire_sync`,
-   `_ConfigShape`, `NullVectorStore`, `NullTreeService`,
-   `NullReferenceService`).
+   `FilterAdapter`, `_ConfigShape`, `NullVectorStore`, `NullTreeService`,
+   `NullReferenceService`, plus `ModuleMemberStore` if it doesn't
+   already exist).
 
 5. **AC-5 — No new MCP tool parameters** (CLAUDE.md §"MCP API surface
    vs YAML configuration"). All Protocol extensions stay below the MCP
@@ -1088,6 +1328,19 @@ or a tool that auto-adds them. Mitigation: implementer runs
 `git log <BASE>..HEAD --pretty=full | grep -i 'co-authored-by'`
 before each push; must return nothing.
 
+### R8 — C5 (`PreFilterResult` shape change) ripples through every fetcher
+The `PreFilterResult` dataclass loses `sql` and `params` fields.
+Today, `chunk_fetcher.py`, `member_fetcher.py`, and `dense_fetcher.py`
+read those fields directly when building their queries. The fix moves
+the SQL generation into each fetcher (via the new `FilterAdapter`
+Protocol on `BuildContext`), so every fetcher's query-build path is
+touched. Mitigation: land C5 as a 2-commit sequence — first commit
+adds `FilterAdapter` Protocol + composition-root wiring + both new
++ old `PreFilterResult` fields side-by-side (transitional); second
+commit migrates each fetcher to read `pf.tree` + call
+`ctx.filter_adapter.adapt(...)` and removes the old `sql`/`params`
+fields. Both commits independently testable.
+
 ## 10. Open items for implementation planning
 
 These do not block this spec but the implementer should resolve them
@@ -1112,8 +1365,27 @@ in the plan:
   Candidates: (1) Null Object pattern for optional service deps;
   (2) `RetrieverState.scratch` mutation discipline (always via
   `dataclasses.replace`, never in-place); (3) `ConnectionProvider`
-  sync/async parity. Pick 2 (or 3) before implementation starts so
+  sync/async parity; (4) **`FilterAdapter` Protocol contract — the
+  hexagonal seam between retrieval-layer filter trees and storage-layer
+  query languages.** Pick 2 (or more) before implementation starts so
   reviewers know what's incoming.
+- **O7 — C5 fix shape decision.** Two viable shapes for the V1
+  cleanup: (a) **Protocol on `BuildContext`** — introduce
+  `FilterAdapter` Protocol, thread via context, retrieval layer uses
+  it without naming `SqliteFilterAdapter`. Cleanest hexagonally but
+  bigger touch. (b) **Per-fetcher translation** — keep
+  `PreFilterResult` neutral; each fetcher does its own
+  `SqliteFilterAdapter.adapt(tree)` call. Smaller change but doesn't
+  fix the underlying coupling (just localizes it). **Recommendation:
+  ship (a)** — the Protocol surface widens by one method but every
+  follow-up backend swap gets dramatically easier. The spec body
+  describes shape (a); locking-in happens at plan-write time.
+- **O8 — `ModuleMemberStore` Protocol existence check** (per I21).
+  If the Protocol already exists in `storage/protocols.py`, the I21
+  fix is a one-line type-hint rename. If not, define a minimal
+  Protocol with the methods PreFilterStep / fetchers actually call,
+  and have `SqliteModuleMemberRepository` implement it via
+  `@runtime_checkable` conformance.
 
 ## 11. Next step
 
