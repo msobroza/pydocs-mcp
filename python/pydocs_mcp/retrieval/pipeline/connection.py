@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +30,27 @@ class PerCallConnectionProvider:
         finally:
             await asyncio.to_thread(connection.close)
 
+    @contextmanager
+    def acquire_sync(self) -> Iterator[sqlite3.Connection]:
+        """Sync mirror of :meth:`acquire` (spec C4 — formalized Protocol surface).
+
+        Used by retrieval steps that already hand work off to
+        ``asyncio.to_thread`` and would otherwise need to wrap the async
+        CM inside the worker thread. The connection is opened with
+        ``check_same_thread=False`` (via :meth:`_open`) so the executor
+        thread can use it.
+        """
+        connection = self._open()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
     def _open(self) -> sqlite3.Connection:
+        # check_same_thread=False is REQUIRED — both ``acquire`` (whose
+        # close() runs through ``asyncio.to_thread``) and ``acquire_sync``
+        # (called from retrieval steps' own ``asyncio.to_thread`` workers)
+        # cross the opening thread.
         conn = sqlite3.connect(str(self.cache_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")

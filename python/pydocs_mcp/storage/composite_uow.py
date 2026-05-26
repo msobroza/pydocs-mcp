@@ -86,13 +86,51 @@ class CompositeUnitOfWork:
                     child, exc,
                 )
 
+    async def delete_all(self) -> None:
+        """Fan-out :meth:`UnitOfWork.delete_all` to every child (spec I3).
+
+        Each child wipes its own backend; per-child failures DO NOT
+        short-circuit (best-effort across the composite, mirroring the
+        :meth:`rollback` semantics above). Required because attribute
+        delegation through :meth:`__getattr__` would only invoke the
+        FIRST owning child's ``delete_all`` — leaving the other
+        backend's rows behind.
+        """
+        for child in self._children:
+            if not hasattr(child, "delete_all"):
+                continue
+            await child.delete_all()
+
     def __getattr__(self, name: str) -> Any:
-        """Delegate attribute access to whichever child declares it."""
+        """Delegate attribute access to whichever child declares it.
+
+        Spec S15: when a child exposes a Null-Object placeholder (e.g.
+        :class:`~pydocs_mcp.storage.null_vector_store.NullVectorStore`
+        sitting on ``SqliteUnitOfWork.vectors`` for the dense-disabled
+        deployment), another child carrying a real backend takes
+        precedence. The placeholder is filtered before the
+        ambiguity check so a composite ``[SqliteUoW, TurboQuantUoW]``
+        wiring routes ``uow.vectors`` to the TurboQuant child without
+        tripping the "multiple owners" guard.
+        """
+        # Local import — top-level would create a hard cycle between
+        # composite_uow.py and null_vector_store.py (sqlite.py imports
+        # this module for the SqliteUnitOfWork.vectors default).
+        from pydocs_mcp.storage.null_vector_store import NullVectorStore
         owners = []
         for child in self._children:
             if hasattr(child, name):
+                value = getattr(child, name)
+                if isinstance(value, NullVectorStore):
+                    continue
                 owners.append(child)
         if not owners:
+            # Fallback: every child's attribute was a Null placeholder —
+            # surface the first one rather than raising, so the call
+            # semantics ("silent no-op") still hold.
+            for child in self._children:
+                if hasattr(child, name):
+                    return getattr(child, name)
             raise AttributeError(
                 f"CompositeUnitOfWork: no child exposes attribute "
                 f"{name!r}",

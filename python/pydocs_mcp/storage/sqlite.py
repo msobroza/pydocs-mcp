@@ -37,6 +37,7 @@ from pydocs_mcp.storage.filters import (
     format_registry,
 )
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 log = logging.getLogger("pydocs-mcp")
@@ -131,6 +132,14 @@ class SqliteUnitOfWork:
     _module_members: SqliteModuleMemberRepository | None = field(default=None, init=False, repr=False)
     _trees: SqliteDocumentTreeStore | None = field(default=None, init=False, repr=False)
     _references: SqliteReferenceStore | None = field(default=None, init=False, repr=False)
+    # Spec S15: ``uow.vectors`` is always present; the SQLite-only UoW
+    # exposes a :class:`NullVectorStore` so application code does not
+    # need to ``getattr(uow, "vectors", None)`` guards. The composite
+    # SQLite + TurboQuant wiring overrides this via attribute
+    # delegation (see :class:`CompositeUnitOfWork.__getattr__`).
+    vectors: NullVectorStore = field(
+        default_factory=NullVectorStore, init=False, repr=False,
+    )
 
     async def __aenter__(self) -> SqliteUnitOfWork:
         # Re-entrance guard — entering twice would silently leak the first
@@ -218,6 +227,22 @@ class SqliteUnitOfWork:
             raise UnitOfWorkNotEnteredError("rollback")
         await asyncio.to_thread(self._held_conn.rollback)
         self._committed = False
+
+    async def delete_all(self) -> None:
+        """Wipe every row across every store on this UoW (spec I3).
+
+        Ordered: children first (chunks / module_members / trees /
+        references), then parents (packages); finally :meth:`clear_all`
+        on ``vectors`` (which may be a :class:`NullVectorStore`). All
+        statements run on the held connection — the surrounding UoW
+        transaction is what makes the sweep atomic.
+        """
+        await self.chunks.delete_all()
+        await self.module_members.delete_all()
+        await self.trees.delete_all()
+        await self.references.delete_all()
+        await self.packages.delete_all()
+        await self.vectors.clear_all()
 
     @property
     def packages(self) -> SqlitePackageRepository:
@@ -547,6 +572,11 @@ class SqlitePackageRepository:
             )
         return row[0]
 
+    async def delete_all(self) -> None:
+        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(conn.execute, "DELETE FROM packages")
+
 
 # ── Chunk repository ─────────────────────────────────────────────────────
 
@@ -680,6 +710,11 @@ class SqliteChunkRepository:
                 "VALUES (:package, :module, :title, :text, :origin, :content_hash)",
                 rows,
             )
+
+    async def delete_all(self) -> None:
+        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(conn.execute, "DELETE FROM chunks")
 
 
 # ── Vector store (FTS5 text search) ──────────────────────────────────────
@@ -847,6 +882,11 @@ class SqliteModuleMemberRepository:
                 lambda: conn.execute(sql, params).fetchone()
             )
         return row[0]
+
+    async def delete_all(self) -> None:
+        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(conn.execute, "DELETE FROM module_members")
 
 
 # ── Document tree store ──────────────────────────────────────────────────
@@ -1108,6 +1148,30 @@ class SqliteReferenceStore:
             await asyncio.to_thread(
                 conn.execute, "DELETE FROM node_references",
             )
+
+    async def resolve_unresolved(self, qnames: Iterable[str]) -> int:
+        """Flip ``to_node_id = to_name`` for matching unresolved rows (spec C1).
+
+        Replaces the historical ``_held_conn`` reach-through in
+        :class:`IndexingService._reresolve_cross_package`. Looping in
+        Python (rather than ``IN (...)`` with bind) matches the previous
+        implementation byte-for-byte and keeps each statement bound to
+        ``ix_refs_to_name`` for O(log n) lookups on the 100k-row table.
+        """
+        qset = tuple({q for q in qnames if q})
+        if not qset:
+            return 0
+        rows_updated = 0
+        async with _maybe_acquire(self.provider) as conn:
+            for qname in qset:
+                cur = await asyncio.to_thread(
+                    conn.execute,
+                    "UPDATE node_references SET to_node_id = ? "
+                    "WHERE to_node_id IS NULL AND to_name = ?",
+                    (qname, qname),
+                )
+                rows_updated += cur.rowcount or 0
+        return rows_updated
 
 
 def _row_to_node_reference(row) -> NodeReference:

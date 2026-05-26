@@ -14,12 +14,10 @@ if TYPE_CHECKING:
     from pydocs_mcp.storage.protocols import (
         Embedder,
         LlmClient,
+        ModuleMemberStore,
         TextSearchable,
         UnitOfWork,
         VectorSearchable,
-    )
-    from pydocs_mcp.storage.sqlite import (
-        SqliteModuleMemberRepository,
     )
 
 
@@ -140,7 +138,11 @@ class BuildContext:
     step_registry: ComponentRegistry = field(default_factory=lambda: step_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
     vector_store: "TextSearchable | VectorSearchable | None" = None
-    module_member_store: "SqliteModuleMemberRepository | None" = None
+    # Spec I21: typed as the :class:`ModuleMemberStore` Protocol (not
+    # the concrete ``SqliteModuleMemberRepository``) so a future
+    # Postgres / DuckDB adapter can satisfy this field without
+    # touching the BuildContext type signature.
+    module_member_store: "ModuleMemberStore | None" = None
     app_config: "AppConfig | None" = None
     embedder: "Embedder | None" = None
     uow_factory: "Callable[[], UnitOfWork] | None" = None

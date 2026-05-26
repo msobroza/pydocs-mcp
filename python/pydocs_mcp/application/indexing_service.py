@@ -8,27 +8,28 @@ Each public method opens a UoW, drives the write sequence, and commits —
 the "5 stores + optional UoW" shape is gone (eng-review bug #4: the old
 reach-through wiring let the service operate without a transaction).
 
-Sub-PR #5b: references flow into ``uow.references`` inside the same UoW
-as the rest of the reindex sequence. The resolver runs as a post-pass
-within ``reindex_package``: it loads the cross-package qname universe
-from ``uow.trees`` (already inside the UoW), rewrites each candidate's
+References flow into ``uow.references`` inside the same UoW as the rest
+of the reindex sequence. The resolver runs as a post-pass within
+``reindex_package``: it loads the cross-package qname universe from
+``uow.trees`` (already inside the UoW), rewrites each candidate's
 ``to_node_id``, then writes via ``uow.references.save_many``.
 
-Cross-package re-resolution (AC #6.5): after writing the freshly-indexed
-package's references, a targeted UPDATE re-runs Rule B (exact match)
-resolution on any unresolved refs whose ``to_name`` is now in the
-just-indexed package's qname universe — catching the case where package
-A's old ``to_name = "B.func"`` refs were unresolved at the time A was
-indexed but B is now in the universe. The UPDATE reaches into the held
-SQLite connection via ``_held_conn``; FakeUoW returns ``None`` for that
-attribute and the call is a silent no-op (fakes don't exercise
-cross-package re-resolution).
+Cross-package re-resolution: after writing the freshly-indexed
+package's references, :meth:`ReferenceStore.resolve_unresolved` flips
+``to_node_id`` for any previously-unresolved row whose ``to_name`` is
+now an exact qname in the just-indexed package — catching the case
+where package A's old ``to_name = "B.func"`` refs were unresolved at
+the time A was indexed but B is now in the universe (spec C1
+replaces the historical ``_held_conn`` reach-through with the new
+Protocol method).
 
 The service depends ONLY on Protocols — no SQLite, no concrete
 repositories — so any backend (SQLite today, Postgres/DuckDB later)
 can be plugged in as long as ``uow_factory()`` returns something that
-structurally satisfies :class:`~pydocs_mcp.storage.protocols.UnitOfWork`
-(AC #10).
+structurally satisfies :class:`~pydocs_mcp.storage.protocols.UnitOfWork`.
+``uow.vectors`` is always present (spec S15 — :class:`NullVectorStore`
+covers the dense-disabled deployment), so this service never branches
+on backend identity.
 """
 from __future__ import annotations
 
@@ -45,7 +46,6 @@ from pydocs_mcp.models import (
     ModuleMemberFilterField,
     Package,
 )
-from pydocs_mcp.storage.filters import All
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 if TYPE_CHECKING:
@@ -122,11 +122,11 @@ class IndexingService:
 
             if removed_ids:
                 await uow.chunks.delete_by_ids(removed_ids)
-                # AC-9 — only the composite UoW exposes ``vectors``; the
-                # SQLite-only path is a silent no-op.
-                vectors_store = getattr(uow, "vectors", None)
-                if vectors_store is not None:
-                    await vectors_store.remove_vectors(removed_ids)
+                # ``uow.vectors`` is always present (spec S15). The
+                # SQLite-only deployment routes through
+                # :class:`NullVectorStore`, whose ``remove_vectors`` is
+                # a silent no-op.
+                await uow.vectors.remove_vectors(removed_ids)
 
             await uow.module_members.delete(
                 filter={ModuleMemberFilterField.PACKAGE.value: package.name},
@@ -149,10 +149,10 @@ class IndexingService:
                 await uow.trees.save_many(tuple(trees), package=package.name)
             await uow.module_members.upsert_many(module_members)
 
-            # Sub-PR #5b — references. Always sweep this package's
-            # existing reference rows first, then write the freshly-
-            # resolved ones (empty ``references`` = sweep only, leaves
-            # a clean row set for the next call).
+            # References. Always sweep this package's existing rows
+            # first, then write the freshly-resolved ones (empty
+            # ``references`` = sweep only, leaves a clean row set for
+            # the next call).
             await uow.references.delete_for_package(package.name)
             if references:
                 resolved = await self._resolve_references(
@@ -179,27 +179,30 @@ class IndexingService:
         package: Package,
         input_chunks: tuple[Chunk, ...],
     ) -> None:
-        """AC-24: forward chunk embeddings to ``uow.vectors`` when present.
+        """Forward chunk embeddings to ``uow.vectors``.
 
-        Composite UoW (SQLite + TurboQuant) exposes ``vectors``; the
-        SQLite-only UoW does not — ``getattr`` returns ``None`` and the
-        method becomes a no-op so the legacy single-backend path stays
-        identical.
+        Spec S15 — ``uow.vectors`` is always present. SQLite-only
+        deployments route through :class:`NullVectorStore` (silent
+        no-op on ``add_vectors``), composite SQLite + TurboQuant
+        deployments route to the real backend.
 
-        Diff-merge variant (AC-3): ``input_chunks`` is now the
-        ``added_chunks`` subset, NOT the full incoming batch. The
-        persisted snapshot still includes the UNCHANGED rows the diff
-        kept in place, so a positional align would map the wrong row to
-        the wrong embedding. We match by ``content_hash`` instead — the
-        hash is unique per (package, module, title, text, pipeline_hash)
-        tuple, so it picks out exactly the freshly-inserted row for each
-        input chunk.
+        Diff-merge variant: ``input_chunks`` is the ``added_chunks``
+        subset, NOT the full incoming batch. The persisted snapshot
+        still includes the UNCHANGED rows the diff kept in place, so a
+        positional align would map the wrong row to the wrong
+        embedding. We match by ``content_hash`` instead — the hash is
+        unique per (package, module, title, text, pipeline_hash) tuple,
+        so it picks out exactly the freshly-inserted row for each input
+        chunk.
         """
-        vectors_store = getattr(uow, "vectors", None)
-        if vectors_store is None:
-            return
         input_hashes = {c.content_hash for c in input_chunks}
         if not input_hashes:
+            return
+        # Performance: if NONE of the input chunks carry an embedding,
+        # there is nothing to forward — skip the persisted-row re-fetch
+        # entirely. The SQLite-only deployment (ingestion pipelines
+        # without ``EmbedChunksStage``) hits this branch on every reindex.
+        if not any(c.embedding is not None for c in input_chunks):
             return
         # Re-fetch persisted rows by package — includes unchanged keepers
         # plus the just-inserted added chunks. We filter to only the rows
@@ -232,7 +235,7 @@ class IndexingService:
             embeddings.append(input_chunk.embedding)
         if not ids:
             return
-        await vectors_store.add_vectors(ids, embeddings)
+        await uow.vectors.add_vectors(ids, embeddings)
 
     async def _resolve_references(
         self,
@@ -286,13 +289,14 @@ class IndexingService:
     async def _reresolve_cross_package(
         self, uow: UnitOfWork, just_indexed_package: str,
     ) -> None:
-        """AC #6.5 — re-resolve OTHER packages' refs against this package's qnames.
+        """Re-resolve OTHER packages' refs against this package's qnames.
 
-        Controller decision A1 (plan §): we punt on a ``bulk_resolve``
-        Protocol method. Instead, reach into the held SQLite connection
-        via ``_held_conn`` for a raw UPDATE. FakeUoW returns ``None`` for
-        ``_held_conn`` and the call is a silent no-op — fakes don't
-        exercise cross-package re-resolution.
+        Spec C1 — delegates to :meth:`ReferenceStore.resolve_unresolved`
+        on the UoW. Replaces the historical reach-through into
+        :attr:`SqliteUnitOfWork._held_conn`: the Protocol now owns the
+        bulk-fixup contract, so any backend (SQLite today, Postgres /
+        DuckDB later) satisfies this code path without service-side
+        changes.
 
         Scope: this only implements Rule B (exact qname match). Rules A
         (alias rewrite) / C (suffix) / D (ambiguous) / E (no match) are
@@ -300,10 +304,6 @@ class IndexingService:
         marginal compared to the full resolver re-run that would be
         required.
         """
-        import sqlite3
-        conn = getattr(uow, "_held_conn", None)
-        if conn is None or not isinstance(conn, sqlite3.Connection):
-            return
         # Build the qname universe for the just-indexed package only —
         # that's the set whose membership might newly resolve other
         # packages' unresolved refs.
@@ -311,36 +311,26 @@ class IndexingService:
         new_qnames: set[str] = set()
         for tree in pkg_trees.values():
             _add_qnames(tree, new_qnames)
-        # Rule B fast path: UPDATE unresolved rows whose to_name exactly
-        # equals a new qname. The ix_refs_to_name index makes each row
-        # lookup O(log n); for a 100k-row table the loop runs in <100ms.
-        import asyncio
-        for qname in new_qnames:
-            await asyncio.to_thread(
-                conn.execute,
-                "UPDATE node_references SET to_node_id = ? "
-                "WHERE to_node_id IS NULL AND to_name = ?",
-                (qname, qname),
-            )
+        if new_qnames:
+            await uow.references.resolve_unresolved(new_qnames)
 
     async def remove_package(self, name: str) -> None:
         """Delete a package and every chunk / member / tree / ref it owns.
 
-        AC-4: capture the soon-to-be-stale chunk IDs BEFORE deleting from
-        SQLite, then wipe their vectors from the TurboQuant sidecar after.
-        Without this, a package's vectors outlive its SQLite rows and
-        pollute future similarity searches with orphaned embeddings.
-        Atomic via the surrounding UoW transaction; the
-        ``getattr(uow, 'vectors', None)`` gate keeps the SQLite-only path
-        unchanged (AC-9).
+        Capture the soon-to-be-stale chunk IDs BEFORE deleting from
+        SQLite, then wipe their vectors from the (real or null) backend
+        after. Without this, a package's vectors outlive its SQLite
+        rows on composite deployments and pollute future similarity
+        searches with orphaned embeddings. Atomic via the surrounding
+        UoW transaction. Spec S15 — :attr:`uow.vectors` is always
+        present; SQLite-only deployments route through
+        :class:`NullVectorStore` (silent no-op).
         """
         async with self.uow_factory() as uow:
-            stale_vector_ids: list[int] = []
-            if getattr(uow, "vectors", None) is not None:
-                pairs = await uow.chunks.list_id_hash_pairs(
-                    filter={ChunkFilterField.PACKAGE.value: name},
-                )
-                stale_vector_ids = [cid for cid, _ in pairs]
+            pairs = await uow.chunks.list_id_hash_pairs(
+                filter={ChunkFilterField.PACKAGE.value: name},
+            )
+            stale_vector_ids = [cid for cid, _ in pairs]
             await uow.chunks.delete(
                 filter={ChunkFilterField.PACKAGE.value: name},
             )
@@ -351,9 +341,8 @@ class IndexingService:
             )
             # Trees are per-package state too — without this delete a
             # stale tree survives a re-index and LookupService.get_tree
-            # serves the pre-reindex payload (F5b from /ultrareview).
+            # serves the pre-reindex payload.
             await uow.trees.delete_for_package(name)
-            # Sub-PR #5b: reference rows are per-package state too.
             await uow.references.delete_for_package(name)
             await uow.packages.delete(filter={"name": name})
             await uow.commit()
@@ -361,33 +350,14 @@ class IndexingService:
     async def clear_all(self) -> None:
         """Wipe every row across all five entity stores + every vector.
 
-        Uses ``All(clauses=())`` — an empty conjunction the
-        ``SqliteFilterAdapter`` translates to ``1 = 1``. That form
-        matches NULL columns too, unlike the previous ``LIKE '%'`` hack,
-        and keeps the delete semantics unconditional without adding a
-        new ``delete_all()`` method to the entity-store Protocols.
-
-        AC-5: when the composite UoW exposes ``vectors``, also wipe the
-        in-memory ``IdMapIndex`` so the next commit serializes an empty
-        ``.tq`` sidecar. The SQLite-only UoW lacks ``.vectors`` — the
-        ``getattr`` gate keeps that path unchanged (matches the AC-9
-        idiom used in ``reindex_package`` and ``remove_package``).
+        Spec I3 — :meth:`UnitOfWork.delete_all` drives the per-store
+        sweep in one call. Atomic within the UoW transaction. The
+        ``vectors`` clear (NullVectorStore on SQLite-only deployments,
+        TurboQuant on composite deployments) is part of that single
+        delete sequence.
         """
-        match_all: All = All(clauses=())
         async with self.uow_factory() as uow:
-            await uow.chunks.delete(filter=match_all)
-            await uow.module_members.delete(filter=match_all)
-            # Trees store has a dedicated ``delete_all`` — match the
-            # destructive sweep across all entity stores; without this,
-            # document_trees rows accumulate indefinitely across
-            # clear_all cycles.
-            await uow.trees.delete_all()
-            # Sub-PR #5b: references store mirrors the trees store —
-            # dedicated ``delete_all`` for the unconditional sweep.
-            await uow.references.delete_all()
-            await uow.packages.delete(filter=match_all)
-            if getattr(uow, "vectors", None) is not None:
-                await uow.vectors.clear_all()
+            await uow.delete_all()
             await uow.commit()
 
 

@@ -131,6 +131,12 @@ class UnitOfWork(Protocol):
     Explicit ``commit()`` persists; safety-net ``rollback`` on exception
     or no-commit. ``references`` is the 5th attribute (the cross-node
     reference-graph store).
+
+    Spec S15: ``vectors`` is ALWAYS present — the SQLite-only deployment
+    exposes a :class:`~pydocs_mcp.storage.null_vector_store.NullVectorStore`,
+    the composite SQLite + TurboQuant deployment exposes the real
+    backend. Callers no longer need ``getattr(uow, "vectors", None)``
+    guards.
     """
 
     packages: PackageStore
@@ -138,12 +144,29 @@ class UnitOfWork(Protocol):
     module_members: ModuleMemberStore
     trees: DocumentTreeStore
     references: ReferenceStore
+    # Untyped here to avoid a hard import of NullVectorStore at the
+    # Protocol level (NullVectorStore is a concrete dataclass with no
+    # @runtime_checkable Protocol behind it yet). The structural
+    # contract is "clear_all() / add_vectors() / remove_vectors() —
+    # all async no-op or real" and is enforced by the impls below.
+    vectors: object
 
     async def __aenter__(self) -> UnitOfWork: ...
     async def __aexit__(self, exc_type, exc, tb) -> bool: ...
 
     async def commit(self) -> None: ...
     async def rollback(self) -> None: ...
+
+    async def delete_all(self) -> None:
+        """Wipe every row across every store on this UoW (spec I3).
+
+        Atomic within the surrounding UoW transaction. Lets
+        :meth:`IndexingService.clear_all` express its intent in one
+        line and removes the per-store ``delete(filter=All(...))``
+        gymnastics. Concrete impls order children-before-parents to
+        respect future FK constraints.
+        """
+        ...
 
 
 @runtime_checkable
@@ -237,6 +260,21 @@ class ReferenceStore(Protocol):
     ) -> None: ...
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None: ...
+
+    async def resolve_unresolved(self, qnames: Iterable[str]) -> int:
+        """Resolve previously-unresolved refs whose ``to_name`` matches a qname.
+
+        Sets ``to_node_id = to_name`` for every row where
+        ``to_node_id IS NULL`` AND ``to_name`` is in ``qnames``. Returns
+        the number of rows updated. Idempotent (already-resolved rows
+        and unmatched ``to_name`` values are skipped).
+
+        Replaces :class:`IndexingService`'s historical reach-through into
+        :attr:`SqliteUnitOfWork._held_conn` (spec C1) so the service stays
+        backend-agnostic: any future Postgres / DuckDB adapter satisfies
+        this method and the cross-package re-resolution pass keeps working.
+        """
+        ...
 
 
 @runtime_checkable
