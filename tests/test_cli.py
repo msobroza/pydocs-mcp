@@ -24,36 +24,56 @@ def seeded_project(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _patch_embedder_with_mock(monkeypatch):
-    """Inject MockEmbedder so CLI tests don't pull the FastEmbed ONNX model.
+    """Inject MockEmbedder + FakeLlmClient so CLI tests stay offline.
 
-    The shipped default config selects ``provider=fastembed``. fastembed is
-    a required dep, so the import succeeds in the test env — but
-    constructing FastEmbedEmbedder triggers a ~80MB ONNX download on first
-    inference. Patching build_embedder keeps unit tests fast. (Production
-    CLI runs the real embedder.)
+    The shipped default config selects ``provider=fastembed`` for
+    embedding and ``provider=openai`` for the LLM. Both are required deps
+    so the imports succeed in the test env — but constructing the real
+    clients triggers a ~80MB ONNX download (fastembed) or hits the OpenAI
+    network (openai). Patching both factories keeps unit tests fast and
+    offline. (Production CLI runs the real clients.)
     """
-    from tests._fakes import MockEmbedder
+    from tests._fakes import FakeLlmClient, MockEmbedder
     import pydocs_mcp.extraction as _extraction
     from pydocs_mcp.extraction import factories as _factories
     from pydocs_mcp.extraction.strategies import embedders as _embedders
+    from pydocs_mcp.retrieval import factories as _retrieval_factories
+    from pydocs_mcp.retrieval import llm_clients as _llm_clients
 
     # Patch the embedder factory so ``build_embedder(cfg)`` returns a mock
     # in the CLI startup path that Task 27 wires.
     monkeypatch.setattr(_embedders, "build_embedder", lambda cfg: MockEmbedder())
 
+    # Patch ``build_llm_client`` at every site where a consumer imports
+    # it at module top (so the local binding inside that module is what
+    # production code dereferences). The retrieval factory imports it
+    # directly, ``__main__.py`` resolves it lazily inside ``_run_indexing``
+    # via ``from pydocs_mcp.retrieval.llm_clients import build_llm_client``
+    # — patching the canonical module attribute covers both.
+    def _llm_with_mock(cfg):
+        return FakeLlmClient(responses={})
+
+    monkeypatch.setattr(_llm_clients, "build_llm_client", _llm_with_mock)
+    monkeypatch.setattr(_retrieval_factories, "build_llm_client", _llm_with_mock)
+
     # Safety net for older callers / fixtures that still hand
     # ``build_ingestion_pipeline`` a bare config — auto-inject a mock when
     # no explicit embedder is threaded. Mirrors the post-Task-12 signature
-    # (``uow_factory`` + ``pipeline_hash`` kwargs) so the CLI startup path
-    # threads the composite UoW + ingestion identity slot into BuildContext.
+    # (``uow_factory`` + ``pipeline_hash`` + ``llm_client`` kwargs) so the
+    # CLI startup path threads the composite UoW + ingestion identity slot
+    # + (future) ingestion LLM client into BuildContext.
     _orig = _factories.build_ingestion_pipeline
 
-    def _build_with_mock(cfg, *, embedder=None, uow_factory=None, pipeline_hash=""):
+    def _build_with_mock(
+        cfg, *, embedder=None, uow_factory=None, pipeline_hash="",
+        llm_client=None,
+    ):
         return _orig(
             cfg,
             embedder=embedder or MockEmbedder(),
             uow_factory=uow_factory,
             pipeline_hash=pipeline_hash,
+            llm_client=llm_client or FakeLlmClient(responses={}),
         )
 
     # ``_run_indexing`` does ``from pydocs_mcp.extraction import build_ingestion_pipeline``

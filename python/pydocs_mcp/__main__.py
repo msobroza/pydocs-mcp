@@ -163,6 +163,7 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     )
     from pydocs_mcp.extraction.strategies.embedders import build_embedder
     from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.retrieval.llm_clients import build_llm_client
     from pydocs_mcp.storage.factories import (
         build_sqlite_plus_turboquant_uow_factory,
         check_integrity_and_repair,
@@ -267,11 +268,19 @@ async def _run_indexing(args: argparse.Namespace, project: Path, db_path: Path) 
     # and the existing add path re-embeds them — no separate force-re-embed
     # code path needed (spec Decisions 4 + 12).
     pipeline_hash = config.compute_ingestion_pipeline_hash()
+    # Construct the LLM client once at startup so any future ingestion-time
+    # LLM stage can be wired without another composition change. Symmetric
+    # with ``embedder``: build once, thread through. No shipped ingestion
+    # stage consumes ``llm_client`` today; the retrieval pipeline does
+    # (LlmTreeReasoningStep) but goes through ``build_retrieval_context``
+    # which constructs its own client.
+    llm_client = build_llm_client(config.llm)
     ingestion_pipeline = build_ingestion_pipeline(
         config,
         embedder=embedder,
         uow_factory=uow_factory,
         pipeline_hash=pipeline_hash,
+        llm_client=llm_client,
     )
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
