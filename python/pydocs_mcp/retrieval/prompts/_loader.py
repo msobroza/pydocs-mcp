@@ -11,7 +11,6 @@ from typing import Any
 
 from jinja2 import Environment, StrictUndefined
 
-
 _env = Environment(
     autoescape=False,           # prompt text is not HTML; don't escape
     undefined=StrictUndefined,  # missing vars in templates raise loudly
