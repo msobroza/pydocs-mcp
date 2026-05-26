@@ -267,6 +267,76 @@ class PydocsMcpCompositeSystem(PydocsMcpSystem):
     composite_mode: bool = True
 
 
+def _pipelines_dir() -> Path:
+    """Path to the shipped ``pipelines/`` directory inside ``pydocs_mcp``.
+
+    WHY ``importlib.resources``: resolves the shipped YAML directory regardless
+    of how ``pydocs_mcp`` was installed (editable vs wheel vs zip), so the
+    tree-reasoning variants below can reach ``tree_only.yaml`` /
+    ``chunk_search_with_tree_reasoning_parallel.yaml`` without hard-coding a
+    repo-layout path.
+    """
+    from importlib import resources
+
+    return Path(str(resources.files("pydocs_mcp.pipelines")))
+
+
+@system_registry.register("pydocs-mcp-tree-only")
+@dataclass
+class PydocsTreeOnlySystem(PydocsMcpSystem):
+    """``pydocs-mcp`` vectorless variant — ``LlmTreeReasoningStep`` only.
+
+    Loads the shipped ``tree_only.yaml`` preset (no BM25, no dense, no RRF
+    fusion — purely the LLM-driven DocumentNode-tree walk) regardless of the
+    YAML the runner pinned for the sweep leg. Everything else (search /
+    teardown / gold_resolver) is inherited from ``PydocsMcpSystem``.
+
+    WHY override the runner's config: the runner pairs ``(system × cfg_path)``
+    cartesianly, but this variant is defined BY the preset it loads; running
+    it against any other YAML would defeat the comparison. ``index()`` below
+    reloads ``AppConfig`` from ``_config_path`` and drops the runner's
+    ``config`` arg.
+    """
+
+    name: str = "pydocs-mcp-tree-only"
+    _config_path: Path = field(
+        default_factory=lambda: _pipelines_dir() / "tree_only.yaml",
+    )
+
+    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:
+        from pydocs_mcp.retrieval.config import AppConfig
+
+        # WHY: ignore the runner's ``config`` and load our preset instead —
+        # see the class docstring. Same ``index()`` body as the parent
+        # otherwise (delegated by super()).
+        override = AppConfig.load(explicit_path=self._config_path)
+        await super().index(corpus_dir, override)
+
+
+@system_registry.register("pydocs-mcp-tree-parallel")
+@dataclass
+class PydocsTreeParallelSystem(PydocsMcpSystem):
+    """``pydocs-mcp`` hybrid + tree-reasoning in parallel, fused via RRF.
+
+    Loads the shipped ``chunk_search_with_tree_reasoning_parallel.yaml``
+    preset (BM25 + dense + LlmTreeReasoningStep run as parallel legs,
+    candidate sets fused by RRF). Same override pattern as
+    ``PydocsTreeOnlySystem`` — see that class for the rationale.
+    """
+
+    name: str = "pydocs-mcp-tree-parallel"
+    _config_path: Path = field(
+        default_factory=lambda: _pipelines_dir()
+        / "chunk_search_with_tree_reasoning_parallel.yaml",
+    )
+
+    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:
+        from pydocs_mcp.retrieval.config import AppConfig
+
+        override = AppConfig.load(explicit_path=self._config_path)
+        await super().index(corpus_dir, override)
+
+
 def _first_str(*candidates: object) -> str | None:
     for c in candidates:
         if isinstance(c, str) and c:
