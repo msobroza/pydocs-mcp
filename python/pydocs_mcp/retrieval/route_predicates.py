@@ -10,8 +10,10 @@ PipelinePredicate = Callable[[PipelineState], bool]
 
 
 class PredicateRegistry:
-    def __init__(self) -> None:
-        self._predicates: dict[str, PipelinePredicate] = {}
+    def __init__(self, _predicates: dict[str, PipelinePredicate] | None = None) -> None:
+        self._predicates: dict[str, PipelinePredicate] = (
+            dict(_predicates) if _predicates is not None else {}
+        )
 
     def register(self, name: str, predicate: PipelinePredicate) -> None:
         if name in self._predicates:
@@ -29,6 +31,16 @@ class PredicateRegistry:
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._predicates))
+
+    def unregister(self, name: str) -> None:
+        """Remove a predicate. Idempotent — no error if absent."""
+        self._predicates.pop(name, None)
+
+    def copy(self) -> "PredicateRegistry":
+        """Snapshot for test isolation. Modifications to the copy do
+        not affect the original (predicate functions are immutable
+        callables, so they are not deep-copied)."""
+        return PredicateRegistry(_predicates=self._predicates)
 
 
 default_predicate_registry = PredicateRegistry()
