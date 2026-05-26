@@ -16,6 +16,7 @@ fuse this branch with hybrid branches by name.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -136,10 +137,20 @@ class LlmTreeReasoningStep(RetrieverStep):
                 # operator. Iterating with one call per picked qname keeps
                 # this step pure against the Protocol (same shape as
                 # InMemoryReferenceStore and SqliteReferenceStore).
+                #
+                # Performance: asyncio.gather fans the per-qname lookups
+                # out concurrently. Typical N is 5-20 and each call hits
+                # SQLite, so concurrent dispatch cuts wall-clock latency
+                # by ~Nx vs the serial for-loop this replaces. Dedup +
+                # per-target neighbors cap still apply downstream, on
+                # the gathered results, so observable output is
+                # unchanged.
+                caller_lists = await asyncio.gather(
+                    *(uow.references.find_by_name(qname) for qname in picked),
+                )
                 surfaced: list = []
                 seen: set[tuple[str, str, str, str]] = set()
-                for qname in picked:
-                    callers = await uow.references.find_by_name(qname)
+                for callers in caller_lists:
                     # Apply per-node neighbors cap before deduping so the
                     # bound is per-target, not global.
                     for ref in callers[: self.reference_neighbors_limit]:
