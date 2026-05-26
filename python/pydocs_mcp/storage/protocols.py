@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, runtime_checkable
 
 from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
@@ -263,6 +263,58 @@ class Embedder(Protocol):
     async def embed_chunks(
         self, texts: Sequence[str],
     ) -> tuple[Embedding, ...]: ...
+
+
+class ChatMessage(TypedDict):
+    """One message in an LLM chat-completion conversation.
+
+    Mirrors the OpenAI / Anthropic / common LLM API shape: role +
+    content. Used by LlmClient.chat() / chat_sync() as input.
+    """
+
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
+@runtime_checkable
+class LlmClient(Protocol):
+    """LLM chat-completion client.
+
+    Exposes BOTH async ``chat()`` and sync ``chat_sync()`` — LLM calls
+    surface in more contexts than embedding calls (the MCP server is
+    async, but the CLI debug path, test helpers, and notebooks need a
+    sync surface).
+
+    Implementations live under
+    ``python/pydocs_mcp/extraction/strategies/llm_clients/``. The
+    factory ``build_llm_client(cfg)`` dispatches on ``cfg.provider``
+    to the right concrete (OpenAiLlmClient for v1; SOLID open/closed
+    for future providers).
+    """
+
+    model_name: str
+
+    async def chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        response_format: Literal["text", "json_object"] = "text",
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Async chat completion. Returns the assistant's response text."""
+        ...
+
+    def chat_sync(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        response_format: Literal["text", "json_object"] = "text",
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Sync chat completion. Same contract as ``chat()``."""
+        ...
 
 
 @runtime_checkable
