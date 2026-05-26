@@ -102,21 +102,53 @@ def test_round_trip_yaml() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_branch_key_skipped_gracefully() -> None:
-    """If a branch_key isn't in state.scratch, that branch contributes 0
-    — graceful degradation, matches RRFFusionStep behavior."""
+async def test_missing_branch_key_raises_diagnostic() -> None:
+    """A declared branch_key MUST be present in state.scratch; missing
+    keys raise KeyError with a diagnostic listing the missing key + the
+    available scratch keys.
+
+    Louder than RRFFusionStep on purpose: a missing branch usually
+    means an upstream pipeline misconfiguration (e.g., TopKFilterStep
+    forgot to publish_to a matching name). Silent skip would hide the
+    bug behind worse retrieval quality.
+    """
     state = RetrieverState(
         query=_q(),
         candidates=None,
         result=None,
         scratch={
             "bm25.ranked": _ranked([_chunk(1, 10.0)]),
+            # "dense.ranked" deliberately absent
         },
     )
     step = WeightedScoreInterpolationStep(
         weights=(0.5, 0.5),
         branch_keys=("bm25.ranked", "dense.ranked"),
     )
-    out = await step.run(state)
-    by_id = {c.id: c.relevance for c in out.candidates.items}
-    assert by_id[1] == pytest.approx(0.5)
+    with pytest.raises(KeyError) as exc_info:
+        await step.run(state)
+    # Diagnostic mentions the missing key + the available keys.
+    message = str(exc_info.value)
+    assert "dense.ranked" in message
+    assert "bm25.ranked" in message  # listed as available
+
+
+@pytest.mark.asyncio
+async def test_multiple_missing_keys_all_listed() -> None:
+    """When several branch_keys are absent, the diagnostic lists all of
+    them — not just the first one — so the user sees the full gap."""
+    state = RetrieverState(
+        query=_q(),
+        candidates=None,
+        result=None,
+        scratch={},  # both branches absent
+    )
+    step = WeightedScoreInterpolationStep(
+        weights=(0.5, 0.5),
+        branch_keys=("bm25.ranked", "dense.ranked"),
+    )
+    with pytest.raises(KeyError) as exc_info:
+        await step.run(state)
+    message = str(exc_info.value)
+    assert "bm25.ranked" in message
+    assert "dense.ranked" in message

@@ -7,6 +7,13 @@ retriever is dramatically stronger than the other on a given query.
 
 Reads from the same ``state.scratch[<branch>.ranked]`` keys
 RRFFusionStep uses, so it drops in as a YAML swap.
+
+**Strict on missing branches:** every key in ``branch_keys`` MUST be
+present in ``state.scratch`` at run time, or :class:`KeyError` is
+raised with a diagnostic listing the missing key + the available
+scratch keys. This catches pipeline-configuration bugs (e.g., the
+upstream :class:`TopKFilterStep` forgot to ``publish_to`` the matching
+name) at the boundary instead of silently producing degraded rankings.
 """
 from __future__ import annotations
 
@@ -44,8 +51,16 @@ class WeightedScoreInterpolationStep(RetrieverStep):
     For each branch ``i``, scores are min-max normalized to [0, 1] across
     that branch's candidates; the final score per chunk is
     ``sum(weights[i] * norm_score_i)`` summed over the branches that
-    contained the chunk. Missing branches contribute zero (graceful
-    degradation, matches :class:`RRFFusionStep`).
+    contained the chunk.
+
+    **Branches must be present.** If any key in ``branch_keys`` is
+    absent from ``state.scratch``, :class:`KeyError` is raised with a
+    diagnostic listing the missing key and the available scratch keys.
+    This is louder than :class:`RRFFusionStep`'s graceful skip on
+    purpose: a missing branch usually means an upstream pipeline
+    misconfiguration (e.g., ``TopKFilterStep`` forgot to ``publish_to``
+    the matching name), and silently degrading the fusion would hide
+    the bug behind worse retrieval quality.
 
     Reads ``state.scratch[<branch>.ranked]`` keys (same convention RRF
     uses) — each branch payload is either a :class:`ChunkList` (has
@@ -67,13 +82,28 @@ class WeightedScoreInterpolationStep(RetrieverStep):
     async def run(self, state: RetrieverState) -> RetrieverState:
         # Accumulate per-chunk-id weighted normalized scores across branches.
         # For each branch: min-max normalize scores in that branch, then
-        # weight by self.weights[i]. Missing branches contribute zero.
+        # weight by self.weights[i].
+        #
+        # WHY raise on missing keys: a branch_key declared in the YAML
+        # but absent from scratch at run time is almost certainly a
+        # pipeline-config bug (upstream forgot to publish_to a matching
+        # name, or the YAML's branch_keys typoed an existing key).
+        # Silent skip would let the bug ship — wrong retrieval, no
+        # visible failure. Raising with a diagnostic lists the missing
+        # key + the actual scratch keys so the cause is one error line.
+        missing = [k for k in self.branch_keys if k not in state.scratch]
+        if missing:
+            raise KeyError(
+                f"WeightedScoreInterpolationStep: branch_keys "
+                f"{sorted(missing)!r} not in state.scratch. "
+                f"Available scratch keys: {sorted(state.scratch)!r}. "
+                f"Check that upstream TopKFilterStep (or equivalent) "
+                f"uses publish_to=<branch_key> to expose its ranking.",
+            )
         accumulated: dict[int, float] = {}
         first_seen: dict[int, Chunk] = {}
         for weight, key in zip(self.weights, self.branch_keys, strict=True):
-            branch = state.scratch.get(key)
-            if branch is None:
-                continue
+            branch = state.scratch[key]
             items = tuple(branch.items) if hasattr(branch, "items") else tuple(branch)
             if not items:
                 continue
