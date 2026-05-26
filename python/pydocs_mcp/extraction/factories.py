@@ -35,7 +35,7 @@ from pydocs_mcp.extraction.serialization import stage_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.storage.protocols import Embedder, UnitOfWork
+    from pydocs_mcp.storage.protocols import Embedder, LlmClient, UnitOfWork
 
 
 @cache
@@ -58,6 +58,7 @@ def load_ingestion_pipeline(
     embedder: "Embedder | None" = None,
     uow_factory: "Callable[[], UnitOfWork] | None" = None,
     pipeline_hash: str = "",
+    llm_client: "LlmClient | None" = None,
 ) -> IngestionPipeline:
     """Load and build an :class:`IngestionPipeline` from a YAML file.
 
@@ -81,6 +82,14 @@ def load_ingestion_pipeline(
     in ``__main__.py`` provides both at startup; tests that don't exercise
     the cache-skip path may omit them (the affected stages raise loud
     ValueErrors if the YAML wires them without the deps).
+
+    ``llm_client`` is reserved for future ingestion-time LLM stages
+    (e.g., LLM-driven chunk summarization). No shipped ingestion stage
+    consumes it today, but accepting the kwarg symmetrically with
+    ``embedder`` keeps the composition roots in ``__main__.py`` /
+    ``server.py`` uniform: every dependency built once at startup is
+    threaded through the same path. When a future ingestion stage
+    needs it, the wiring is already in place.
     """
     resolved = _resolve_ingestion_pipeline_path(path, cfg)
     data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
@@ -99,6 +108,7 @@ def load_ingestion_pipeline(
         embedder=embedder,
         uow_factory=uow_factory,
         pipeline_hash=pipeline_hash,
+        llm_client=llm_client,
     )
     pipeline_stages = tuple(stage_registry.build(s, context) for s in data["stages"])
     return IngestionPipeline(stages=pipeline_stages)
@@ -110,6 +120,7 @@ def build_ingestion_pipeline(
     embedder: "Embedder | None" = None,
     uow_factory: "Callable[[], UnitOfWork] | None" = None,
     pipeline_hash: str = "",
+    llm_client: "LlmClient | None" = None,
 ) -> IngestionPipeline:
     """Build the :class:`IngestionPipeline` for this :class:`AppConfig`.
 
@@ -118,12 +129,14 @@ def build_ingestion_pipeline(
     ``pipelines/ingestion.yaml``. The bundled default stays inside
     ``_shipped_pipelines_dir`` and always passes the allowlist.
 
-    ``embedder`` / ``uow_factory`` / ``pipeline_hash`` are forwarded to
-    :func:`load_ingestion_pipeline`; the bundled pipeline includes
-    :class:`EmbedChunksStage` + :class:`LoadExistingChunkHashesStage` +
-    :class:`AssignChunkContentHashStage`, so production callers must supply
-    all three (the composition root in ``__main__.py`` does this at
-    startup).
+    ``embedder`` / ``uow_factory`` / ``pipeline_hash`` / ``llm_client``
+    are forwarded to :func:`load_ingestion_pipeline`; the bundled
+    pipeline includes :class:`EmbedChunksStage` +
+    :class:`LoadExistingChunkHashesStage` +
+    :class:`AssignChunkContentHashStage`, so production callers must
+    supply all three (the composition root in ``__main__.py`` does
+    this at startup). ``llm_client`` is plumbed symmetrically for a
+    future LLM-driven ingestion stage.
     """
     override = cfg.extraction.ingestion.pipeline_path
     path = override if override is not None else _default_ingestion_pipeline_path()
@@ -133,6 +146,7 @@ def build_ingestion_pipeline(
         embedder=embedder,
         uow_factory=uow_factory,
         pipeline_hash=pipeline_hash,
+        llm_client=llm_client,
     )
 
 

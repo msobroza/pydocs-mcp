@@ -15,6 +15,7 @@ Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this reposit
 - **Reference graph** (CALLS / IMPORTS / INHERITS / MENTIONS edges) lives in the indexer and is queried via the existing MCP surface as `lookup(target=X, show="callers" | "callees" | "inherits")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`.
 - **Hybrid retrieval** — BM25 (FTS5) + dense embeddings (FastEmbed by default, OpenAI optional) fused via RRF. The vector store is `HybridSqliteTurboStore` (FTS5 + TurboQuant) coordinated through `CompositeUnitOfWork`.
 - **Chunk-level cache + atomic vector cleanup** — `chunks.content_hash` (SHA-256 of `package+module+title+text+pipeline_hash`) skips re-embedding unchanged chunks on reindex; `pipeline_hash` invalidates every chunk hash when the embedder or `ingestion.yaml` changes; `IndexingService.reindex_package` / `remove_package` / `clear_all` keep SQLite + TurboQuant coherent atomically through the UoW.
+- **LLM tree reasoning + weighted fusion** — opt-in retrieval steps (`weighted_score_interpolation`, `llm_tree_reasoning`) compose with the existing pipeline. Tuned via the `llm:` section in `AppConfig` (provider / model / temperature / max_tokens), mirroring `embedding:`. Three preset YAMLs ship under `python/pydocs_mcp/pipelines/` (`tree_only.yaml`, `chunk_search_with_tree_reasoning_parallel.yaml`, `chunk_search_with_tree_reasoning_after.yaml`).
 
 The MCP surface remains the fixed 2-tool `search` + `lookup` (see §"MCP API surface vs YAML configuration").
 
@@ -84,7 +85,7 @@ python/pydocs_mcp/
 ├── storage/       # Filter tree, Protocols, SQLite repositories + TurboQuant store + HybridSqliteTurboStore + SqliteUnitOfWork + TurboQuantUnitOfWork + CompositeUnitOfWork
 ├── retrieval/     # sklearn-style RetrieverPipeline + RetrieverStep ABC; one file per step under steps/; pipeline/ holds Step/Pipeline base + RetrieverState + ConnectionProvider; YAML config
 │   ├── pipeline/    #   RetrieverStep ABC, RetrieverPipeline, RetrieverState, PerCallConnectionProvider, CodeRetrieverPipeline (legacy entry-point shim)
-│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion
+│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
 ├── pipelines/     # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
 └── server.py      # MCP handlers over services

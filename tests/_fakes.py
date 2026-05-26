@@ -29,7 +29,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -37,6 +37,7 @@ from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.protocols import ChatMessage
 
 
 class _NotEnteredProxy:
@@ -89,7 +90,12 @@ class InMemoryDocumentTreeStore:
         return None  # not exercised in write-side tests
 
     async def load_all_in_package(self, package):
-        return {}
+        # Mirror the Protocol contract: dict keyed by module qualified_name.
+        # Used both by IndexingService.compute_qname_universe (which
+        # iterates ``.values()``) and by the new LlmTreeReasoningStep
+        # (which iterates ``.values()`` too). Empty package → empty dict
+        # (not None) so callers can unconditionally iterate.
+        return {t.qualified_name: t for t in self.by_package.get(package, ())}
 
     async def exists(self, package, module):
         return False  # not exercised in write-side tests
@@ -518,7 +524,69 @@ class MockEmbedder:
         return rng.uniform(-1.0, 1.0, size=self.dim).astype(np.float32)
 
 
+@dataclass(slots=True)
+class FakeLlmClient:
+    """Offline LlmClient for unit tests.
+
+    Returns canned responses keyed by a SUBSTRING match against the LAST
+    message's content. Unknown keys raise KeyError with diagnostic context
+    so test failures point at the missing canned response, not at
+    mysterious None returns.
+
+    Substring matching covers BOTH styles of test:
+
+    - Bare-content tests (``responses={"hello": "world"}`` →
+      ``chat([{"content": "hello"}])``) — exact equality is itself a
+      substring containment, so they still resolve.
+    - Rendered-prompt tests where the final ``content`` is a
+      Jinja2-expanded prompt containing the user's question and the
+      whole tree JSON. Keying on the user's question substring
+      (e.g. ``"what does foo do"``) lets the test ignore the prompt-
+      template prose and assert only on the meaningful pivot.
+
+    Multiple matches: the first key (insertion order) that's a substring
+    of ``content`` wins. Keep tests targeted with distinct query terms
+    to avoid ambiguity.
+    """
+
+    responses: dict[str, str] = field(default_factory=dict)
+    model_name: str = "fake-llm-model"
+    _calls: list[Sequence[ChatMessage]] = field(default_factory=list)
+
+    async def chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        response_format: Literal["text", "json_object"] = "text",
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        self._calls.append(tuple(messages))
+        return self._lookup(messages[-1]["content"])
+
+    def chat_sync(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        response_format: Literal["text", "json_object"] = "text",
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        self._calls.append(tuple(messages))
+        return self._lookup(messages[-1]["content"])
+
+    def _lookup(self, content: str) -> str:
+        for key, response in self.responses.items():
+            if key in content:
+                return response
+        raise KeyError(
+            f"FakeLlmClient has no canned response matching key={content!r}. "
+            f"Available keys: {sorted(self.responses)}",
+        )
+
+
 __all__ = (
+    "FakeLlmClient",
     "FakeUnitOfWork",
     "InMemoryChunkStore",
     "InMemoryDocumentTreeStore",

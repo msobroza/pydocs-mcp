@@ -1,0 +1,44 @@
+# Vectorless: LLM tree reasoning is the only retrieval signal (AC-12).
+#
+# Pipeline shape:
+#
+#   llm_tree_reasoning (writes scratch[candidates_inline] via output_scratch_key)
+#     |
+#   rrf_fusion (reads scratch[candidates_inline] -- single-branch RRF
+#               degrades to a re-scored copy that lands in state.candidates)
+#     |
+#   limit -> token_budget_formatter
+#
+# Single-branch RRF is well-defined here: the inner loop produces
+# ``sum(1 / (k + rank)) over one list`` = ``1 / (k + rank)`` per item,
+# which is a valid (monotonically decreasing) ranking. The step is only
+# used to lift the scratch ChunkList into ``state.candidates`` so the
+# downstream ``limit`` + ``token_budget_formatter`` can consume the
+# standard ``state.candidates`` shape.
+#
+# Requires BuildContext.llm_client + .uow_factory at load time (raises
+# at ``from_dict`` if either is None). Pure-tree retrieval: no embedder,
+# no vector_store, no FTS needed.
+#
+# Opt in via PYDOCS_CONFIG_PATH or --config; the default
+# chunk_search.yaml is unchanged.
+name: tree_only
+steps:
+  - name: tree_reasoning
+    type: llm_tree_reasoning
+    params:
+      prompt_template: tree_reasoning_pydocs_v1
+      output_scratch_key: candidates_inline
+  - name: promote_scratch_to_candidates
+    type: rrf_fusion
+    params:
+      branch_keys: [candidates_inline]
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  - name: budget
+    type: token_budget_formatter
+    params:
+      formatter: {type: chunk_markdown}
+      budget: 2000

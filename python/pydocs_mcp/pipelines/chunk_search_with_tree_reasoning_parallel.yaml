@@ -1,0 +1,102 @@
+# Hybrid (BM25 + dense + RRF) in parallel with LLM tree reasoning;
+# outer RRF fuses both branches by their published scratch keys (AC-12).
+#
+# Pipeline shape:
+#
+#   pre_filter
+#     |
+#   parallel_retrieval
+#     |-- branch hybrid:
+#     |     fetch (BM25)  -> score -> filter -> topk (-> scratch[hybrid.bm25.ranked])
+#     |     fetch (dense) -> score -> filter -> topk (-> scratch[hybrid.dense.ranked])
+#     |     rrf_fusion (reads .bm25.ranked + .dense.ranked, writes state.candidates)
+#     |     topk (publish_to hybrid.ranked) -- lifts the fused result into scratch
+#     +-- branch tree:
+#           llm_tree_reasoning (writes state.scratch[tree.ranked])
+#     |
+#   rrf_fusion (reads hybrid.ranked + tree.ranked, writes state.candidates)
+#     |
+#   limit -> token_budget_formatter
+#
+# Requires BuildContext.embedder + .vector_store + .llm_client +
+# .uow_factory at load time (the inner dense steps + LlmTreeReasoningStep
+# raise on None). Provided by build_retrieval_context(...) when the
+# server / CLI boots with the embedder + LLM client configured.
+#
+# Opt in via PYDOCS_CONFIG_PATH or --config; the default chunk_search.yaml
+# is unchanged.
+name: chunk_search_with_tree_reasoning_parallel
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: parallel
+    type: parallel_retrieval
+    params:
+      branches:
+        - name: hybrid
+          steps:
+            - name: parallel_lexical_dense
+              type: parallel_retrieval
+              params:
+                branches:
+                  - name: bm25
+                    steps:
+                      - name: fetch
+                        type: chunk_fetcher
+                        params:
+                          schema_name: chunk
+                      - name: score
+                        type: bm25_scorer
+                        params: {}
+                      - name: filter
+                        type: metadata_post_filter
+                        params: {}
+                      - name: topk
+                        type: top_k_filter
+                        params:
+                          publish_to: hybrid.bm25.ranked
+                  - name: dense
+                    steps:
+                      - name: fetch
+                        type: dense_fetcher
+                        params: {}
+                      - name: score
+                        type: dense_scorer
+                        params: {}
+                      - name: filter
+                        type: metadata_post_filter
+                        params: {}
+                      - name: topk
+                        type: top_k_filter
+                        params:
+                          publish_to: hybrid.dense.ranked
+            - name: hybrid_rrf
+              type: rrf_fusion
+              params:
+                branch_keys: [hybrid.bm25.ranked, hybrid.dense.ranked]
+            - name: hybrid_publish
+              type: top_k_filter
+              params:
+                publish_to: hybrid.ranked
+        - name: tree
+          steps:
+            - name: tree_reasoning
+              type: llm_tree_reasoning
+              params:
+                prompt_template: tree_reasoning_pydocs_v1
+  - name: final_fuse
+    type: rrf_fusion
+    params:
+      branch_keys: [hybrid.ranked, tree.ranked]
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  - name: budget
+    type: token_budget_formatter
+    params:
+      formatter: {type: chunk_markdown}
+      budget: 2000

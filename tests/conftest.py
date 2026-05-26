@@ -9,6 +9,47 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _patch_build_llm_client_with_fake(monkeypatch):
+    """Inject FakeLlmClient so test runs stay offline.
+
+    ``build_retrieval_context`` calls ``build_llm_client(config.llm)`` at
+    composition time so the resulting client lives on ``BuildContext.llm_client``.
+    The shipped default config picks ``provider=openai`` and the
+    ``OpenAiLlmClient`` constructor instantiates ``AsyncOpenAI`` eagerly —
+    which raises ``OpenAIError`` when no ``OPENAI_API_KEY`` is set in CI.
+
+    Patching at both call sites (the canonical module attribute and the
+    re-bound name on retrieval.factories) covers every consumer: tests
+    that import ``build_llm_client`` directly hit the first patch; the
+    production wiring in retrieval.factories hits the second. Tests that
+    need to assert the factory was called with specific args (see
+    ``tests/test_composition_root_llm.py``) override this autouse with a
+    local ``patch.object(...)`` whose ``__exit__`` restores the test-
+    layer monkeypatch.
+    """
+    from tests._fakes import FakeLlmClient
+
+    def _fake_build_llm_client(cfg):
+        return FakeLlmClient(responses={})
+
+    # Canonical module attribute — any test that imports ``build_llm_client``
+    # directly from ``pydocs_mcp.retrieval.llm_clients`` resolves the patched
+    # version.
+    monkeypatch.setattr(
+        "pydocs_mcp.retrieval.llm_clients.build_llm_client",
+        _fake_build_llm_client,
+    )
+    # Re-bound name on the consumer — ``retrieval.factories`` does a
+    # top-level ``from pydocs_mcp.retrieval.llm_clients import build_llm_client``
+    # so the local module-level binding is what production code dereferences.
+    # Same trick the per-suite ``test_cli.py`` fixture uses for build_embedder.
+    monkeypatch.setattr(
+        "pydocs_mcp.retrieval.factories.build_llm_client",
+        _fake_build_llm_client,
+    )
+
 from pydocs_mcp.db import (
     open_index_database,
     rebuild_fulltext_index,

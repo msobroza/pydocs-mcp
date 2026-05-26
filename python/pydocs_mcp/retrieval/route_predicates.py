@@ -75,3 +75,18 @@ def _scope_includes_dependencies(state: PipelineState) -> bool:
 def _scope_includes_project(state: PipelineState) -> bool:
     v = _scope_value(state)
     return v != SearchScope.DEPENDENCIES_ONLY.value
+
+
+_IS_LONG_QUERY_THRESHOLD = 8
+
+
+@predicate("is_long_query")
+def _is_long_query(state: PipelineState) -> bool:
+    """True when the query has at least _IS_LONG_QUERY_THRESHOLD (8) tokens.
+
+    Used by tree-reasoning presets to gate the LLM call: short queries
+    are well-served by BM25 + dense, so we avoid paying the LLM cost
+    on every keyword lookup.
+    """
+    terms = state.query.terms or ""
+    return len(terms.split()) >= _IS_LONG_QUERY_THRESHOLD
