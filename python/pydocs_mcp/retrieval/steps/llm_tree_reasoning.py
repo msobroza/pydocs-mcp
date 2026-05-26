@@ -151,6 +151,11 @@ class LlmTreeReasoningStep(RetrieverStep):
                             continue
                         seen.add(key)
                         surfaced.append(ref)
+                # WHY: this scratch key is reserved for future formatters/steps
+                # that want to surface reference-graph context alongside picked
+                # chunks. No shipped step consumes it today; the field is opt-in
+                # (default include_references=False) and adding a consumer is
+                # one-step extension work per EXTENSIONS.md.
                 new_scratch[f"{self.output_scratch_key}.refs"] = tuple(surfaced)
 
             return replace(state, scratch=new_scratch)
@@ -209,24 +214,35 @@ class LlmTreeReasoningStep(RetrieverStep):
 
 
 def _pageindex_with_qname(node: DocumentNode) -> dict[str, Any]:
-    """Like :meth:`DocumentNode.to_pageindex_json` but adds ``qualified_name``.
+    """Build the LLM-visible tree shape — only fields the prompt asks for.
 
-    The shipped ``to_pageindex_json`` omits ``qualified_name`` (it's a
-    first-class field on DocumentNode but the PageIndex shape predates
-    that field's promotion). The LLM here needs symbol-stable IDs that
-    map back onto chunk metadata — ``node_id`` is per-extraction
-    auto-generated and not present in chunk metadata, but
-    ``qualified_name`` IS persisted into ``chunk.metadata["qualified_name"]``
-    by :func:`flatten_to_chunks`. Augmenting the serialization here keeps
-    the step self-contained without changing the existing
-    ``to_pageindex_json`` shape (which is consumed by LookupService and
-    pinned by a contract test in
-    ``tests/extraction/test_document_node_lookup_contract.py``).
+    The shipped :meth:`DocumentNode.to_pageindex_json` emits ``node_id``,
+    ``source_path``, ``start_index``, ``end_index`` (because LookupService
+    needs that shape and a contract test in
+    ``tests/extraction/test_document_node_lookup_contract.py`` pins it),
+    but the LLM here MUST NOT see ``node_id``: the prompts ask for
+    ``qualified_name`` (a stable symbol path), while ``node_id`` is a
+    per-extraction auto-generated content-hash identifier that doesn't
+    exist in chunk metadata. If the LLM saw ``node_id`` it would be an
+    attractive nuisance — the model would naturally pick the shorter,
+    flatter-looking string, and downstream :func:`_parse_node_list` would
+    silently drop every pick (because it filters against the
+    ``qualified_name`` set, the only field that joins back to
+    ``chunk.metadata["qualified_name"]`` via :func:`flatten_to_chunks`).
+
+    So this helper deliberately bypasses ``to_pageindex_json`` and builds
+    a tight shape: ``qualified_name`` (the join key), ``title``, ``kind``,
+    ``summary``, and recursive ``nodes``. Source-line spans are dropped
+    too — the LLM doesn't pick on byte offsets, and omitting them keeps
+    the prompt token budget tight.
     """
-    d = node.to_pageindex_json()
-    d["qualified_name"] = node.qualified_name
-    d["nodes"] = [_pageindex_with_qname(child) for child in node.children]
-    return d
+    return {
+        "qualified_name": node.qualified_name,
+        "title": node.title,
+        "kind": node.kind.value,
+        "summary": node.summary,
+        "nodes": [_pageindex_with_qname(child) for child in node.children],
+    }
 
 
 def _collect_qnames(node: DocumentNode, acc: set[str]) -> None:

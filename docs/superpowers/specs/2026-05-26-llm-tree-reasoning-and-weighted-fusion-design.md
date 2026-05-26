@@ -72,7 +72,7 @@ ship?
 concrete. Matches the existing pattern (Embedder → FastEmbed +
 OpenAI), reuses `openai>=1.40` already in `pyproject.toml`, no new
 dependencies. New providers (Anthropic, Gemini, LiteLLM wrapper) land
-as one-file additions to `extraction/strategies/llm_clients/`.
+as one-file additions to `retrieval/llm_clients/`.
 
 **Code example (Protocol + first concrete):**
 
@@ -111,7 +111,7 @@ class ChatMessage(TypedDict):
 ```
 
 ```python
-# extraction/strategies/llm_clients/openai.py — first concrete
+# retrieval/llm_clients/openai.py — first concrete
 from openai import AsyncOpenAI, OpenAI
 
 
@@ -146,7 +146,7 @@ class OpenAiLlmClient:
 ```
 
 ```python
-# extraction/strategies/llm_clients/__init__.py — SOLID factory
+# retrieval/llm_clients/__init__.py — SOLID factory
 def build_llm_client(cfg: LlmConfig) -> LlmClient:
     if cfg.provider == "openai":
         return OpenAiLlmClient(model_name=cfg.model_name, api_key=cfg.api_key)
@@ -593,9 +593,9 @@ then the same outer RRF fuses both branches.
 
 ### Create
 
-- `python/pydocs_mcp/extraction/strategies/llm_clients/__init__.py`
+- `python/pydocs_mcp/retrieval/llm_clients/__init__.py`
   (factory + `__all__`)
-- `python/pydocs_mcp/extraction/strategies/llm_clients/openai.py`
+- `python/pydocs_mcp/retrieval/llm_clients/openai.py`
   (`OpenAiLlmClient`)
 - `python/pydocs_mcp/retrieval/steps/weighted_score_interpolation.py`
 - `python/pydocs_mcp/retrieval/steps/llm_tree_reasoning.py`

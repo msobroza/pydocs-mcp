@@ -130,3 +130,75 @@ def test_from_dict_strict_gate_on_missing_llm_client() -> None:
         LlmTreeReasoningStep.from_dict(
             {"type": "llm_tree_reasoning"}, ctx,
         )
+
+
+@pytest.mark.asyncio
+async def test_llm_returning_qualified_name_shaped_values_is_handled() -> None:
+    """REGRESSION (final-review CRITICAL-1): a real LLM following the
+    prompts literally returns the node_id field, NOT qualified_name.
+    Either:
+    (a) the prompts must ask for qualified_name AND the code matches
+        qualified_name (current direction — pick this), OR
+    (b) the prompts must ask for node_id AND the code matches node_id.
+
+    Tests pass under (a) when the LLM correctly returns qualified_name.
+    The prompts have been corrected to ask for qualified_name; this
+    test confirms the chunk-fetch path works when the LLM returns the
+    field the prompt asked for.
+    """
+    tree = DocumentNode(
+        node_id="autogen-abc123",  # node_id is auto-generated, NOT a qname
+        qualified_name="pkg.mod.foo",
+        title="foo", kind=NodeKind.FUNCTION,
+        source_path="path.py", start_line=1, end_line=10,
+        text="foo body", content_hash="", summary="foo summary",
+        extra_metadata={}, parent_id=None, children=(),
+    )
+    chunk_store = InMemoryChunkStore()
+    await chunk_store.upsert((_chunk("pkg.mod.foo", "foo source"),))
+    uow_factory = make_fake_uow_factory(
+        trees=InMemoryDocumentTreeStore(by_package={"__project__": [tree]}),
+        chunks=chunk_store,
+    )
+    # The LLM, following the corrected prompts, returns qualified_name:
+    llm = FakeLlmClient(responses={
+        "find foo": json.dumps({
+            "thinking": "foo is the answer",
+            "node_list": ["pkg.mod.foo"],  # qualified_name as instructed
+        }),
+    })
+    step = LlmTreeReasoningStep(
+        llm_client=llm, uow_factory=uow_factory,
+        prompt_template="tree_reasoning_pydocs_v1",
+    )
+    state = RetrieverState(
+        query=_q("find foo"), candidates=None, result=None, scratch={},
+    )
+    out = await step.run(state)
+    # The fix: with prompts asking for qualified_name AND code matching
+    # qualified_name, the picked chunk should be in tree.ranked.
+    assert "tree.ranked" in out.scratch
+    items = out.scratch["tree.ranked"].items
+    assert len(items) == 1
+
+
+@pytest.mark.asyncio
+async def test_pageindex_json_helper_does_not_emit_node_id_field() -> None:
+    """The pageindex JSON we send to the LLM should NOT include the
+    node_id field — it's a tempting attractive nuisance that an LLM
+    will pick over qualified_name. Only include the field the prompt
+    actually asks for: qualified_name."""
+    tree = DocumentNode(
+        node_id="r", qualified_name="pkg.mod", title="module",
+        kind=NodeKind.MODULE, source_path="mod.py", start_line=1, end_line=100,
+        text="module body", content_hash="", summary="root",
+        extra_metadata={}, parent_id=None, children=(),
+    )
+    # Render via the same helper the step uses internally
+    from pydocs_mcp.retrieval.steps.llm_tree_reasoning import _pageindex_with_qname
+    out = _pageindex_with_qname(tree)
+    # node_id should be absent; qualified_name should be present
+    assert "qualified_name" in out
+    assert "node_id" not in out, (
+        f"node_id should not appear in LLM-visible JSON; got keys: {list(out)}"
+    )
