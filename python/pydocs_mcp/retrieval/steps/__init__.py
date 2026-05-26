@@ -39,6 +39,7 @@ from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
 from pydocs_mcp.retrieval.steps.dense_fetcher import DenseFetcherStep
 from pydocs_mcp.retrieval.steps.dense_scorer import DenseScorerStep
 from pydocs_mcp.retrieval.steps.limit import LimitStep
+from pydocs_mcp.retrieval.steps.llm_tree_reasoning import LlmTreeReasoningStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
 from pydocs_mcp.retrieval.steps.parallel import ParallelStep
@@ -62,6 +63,7 @@ __all__ = (
     "DenseFetcherStep",
     "DenseScorerStep",
     "LimitStep",
+    "LlmTreeReasoningStep",
     "MemberFetcherStep",
     "MetadataPostFilterStep",
     "ParallelStep",

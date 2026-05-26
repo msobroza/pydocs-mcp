@@ -90,7 +90,12 @@ class InMemoryDocumentTreeStore:
         return None  # not exercised in write-side tests
 
     async def load_all_in_package(self, package):
-        return {}
+        # Mirror the Protocol contract: dict keyed by module qualified_name.
+        # Used both by IndexingService.compute_qname_universe (which
+        # iterates ``.values()``) and by the new LlmTreeReasoningStep
+        # (which iterates ``.values()`` too). Empty package → empty dict
+        # (not None) so callers can unconditionally iterate.
+        return {t.qualified_name: t for t in self.by_package.get(package, ())}
 
     async def exists(self, package, module):
         return False  # not exercised in write-side tests
@@ -523,13 +528,25 @@ class MockEmbedder:
 class FakeLlmClient:
     """Offline LlmClient for unit tests.
 
-    Returns canned responses keyed by the LAST message's content. Unknown
-    keys raise KeyError with diagnostic context so test failures point at
-    the missing canned response, not at mysterious None returns.
+    Returns canned responses keyed by a SUBSTRING match against the LAST
+    message's content. Unknown keys raise KeyError with diagnostic context
+    so test failures point at the missing canned response, not at
+    mysterious None returns.
 
-    The key choice (last message content) covers the simple single-turn
-    case the retrieval pipeline uses. Multi-turn tests can override by
-    subclassing.
+    Substring matching covers BOTH styles of test:
+
+    - Bare-content tests (``responses={"hello": "world"}`` →
+      ``chat([{"content": "hello"}])``) — exact equality is itself a
+      substring containment, so they still resolve.
+    - Rendered-prompt tests where the final ``content`` is a
+      Jinja2-expanded prompt containing the user's question and the
+      whole tree JSON. Keying on the user's question substring
+      (e.g. ``"what does foo do"``) lets the test ignore the prompt-
+      template prose and assert only on the meaningful pivot.
+
+    Multiple matches: the first key (insertion order) that's a substring
+    of ``content`` wins. Keep tests targeted with distinct query terms
+    to avoid ambiguity.
     """
 
     responses: dict[str, str] = field(default_factory=dict)
@@ -545,13 +562,7 @@ class FakeLlmClient:
         max_tokens: int | None = None,
     ) -> str:
         self._calls.append(tuple(messages))
-        key = messages[-1]["content"]
-        if key not in self.responses:
-            raise KeyError(
-                f"FakeLlmClient has no canned response for key={key!r}. "
-                f"Available keys: {sorted(self.responses)}",
-            )
-        return self.responses[key]
+        return self._lookup(messages[-1]["content"])
 
     def chat_sync(
         self,
@@ -562,13 +573,16 @@ class FakeLlmClient:
         max_tokens: int | None = None,
     ) -> str:
         self._calls.append(tuple(messages))
-        key = messages[-1]["content"]
-        if key not in self.responses:
-            raise KeyError(
-                f"FakeLlmClient has no canned response for key={key!r}. "
-                f"Available keys: {sorted(self.responses)}",
-            )
-        return self.responses[key]
+        return self._lookup(messages[-1]["content"])
+
+    def _lookup(self, content: str) -> str:
+        for key, response in self.responses.items():
+            if key in content:
+                return response
+        raise KeyError(
+            f"FakeLlmClient has no canned response matching key={content!r}. "
+            f"Available keys: {sorted(self.responses)}",
+        )
 
 
 __all__ = (
