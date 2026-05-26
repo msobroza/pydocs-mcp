@@ -286,10 +286,12 @@ class LlmClient(Protocol):
     sync surface).
 
     Implementations live under
-    ``python/pydocs_mcp/extraction/strategies/llm_clients/``. The
-    factory ``build_llm_client(cfg)`` dispatches on ``cfg.provider``
-    to the right concrete (OpenAiLlmClient for v1; SOLID open/closed
-    for future providers).
+    ``python/pydocs_mcp/retrieval/llm_clients/``. The factory
+    ``build_llm_client(cfg)`` dispatches on ``cfg.provider`` to the
+    right concrete (OpenAiLlmClient for v1; SOLID open/closed for
+    future providers). The retrieval-owned location reflects current
+    usage (only LlmTreeReasoningStep consumes it); if extraction-time
+    LLM use lands, the package can be lifted to a neutral location.
     """
 
     model_name: str

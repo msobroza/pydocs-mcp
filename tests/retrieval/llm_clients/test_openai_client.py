@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pydocs_mcp.extraction.strategies.llm_clients.openai import OpenAiLlmClient
+from pydocs_mcp.retrieval.llm_clients.openai import OpenAiLlmClient
 from pydocs_mcp.storage.protocols import LlmClient
 
 

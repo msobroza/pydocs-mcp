@@ -174,7 +174,7 @@ class LlmClient(Protocol):
     sync surface).
 
     Implementations live under
-    ``python/pydocs_mcp/extraction/strategies/llm_clients/``. The
+    ``python/pydocs_mcp/retrieval.llm_clients/``. The
     factory ``build_llm_client(cfg)`` dispatches on ``cfg.provider``
     to the right concrete (OpenAiLlmClient for v1; SOLID open/closed
     for future providers).
@@ -375,15 +375,15 @@ via the existing AppConfig.load() path."
 **Spec ref:** Decision A / AC-1, AC-3.
 
 **Files:**
-- Create: `python/pydocs_mcp/extraction/strategies/llm_clients/__init__.py`
-- Create: `python/pydocs_mcp/extraction/strategies/llm_clients/openai.py`
-- Create: `tests/extraction/strategies/llm_clients/__init__.py` (empty)
-- Create: `tests/extraction/strategies/llm_clients/test_openai_client.py`
+- Create: `python/pydocs_mcp/retrieval.llm_clients/__init__.py`
+- Create: `python/pydocs_mcp/retrieval.llm_clients/openai.py`
+- Create: `tests/retrieval.llm_clients/__init__.py` (empty)
+- Create: `tests/retrieval.llm_clients/test_openai_client.py`
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/extraction/strategies/llm_clients/test_openai_client.py
+# tests/retrieval.llm_clients/test_openai_client.py
 """AC-1: OpenAiLlmClient implements LlmClient with both async + sync."""
 from __future__ import annotations
 
@@ -391,7 +391,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pydocs_mcp.extraction.strategies.llm_clients.openai import OpenAiLlmClient
+from pydocs_mcp.retrieval.llm_clients.openai import OpenAiLlmClient
 from pydocs_mcp.storage.protocols import LlmClient
 
 
@@ -447,14 +447,14 @@ def test_chat_sync_calls_openai_with_expected_args() -> None:
 - [ ] **Step 2: Run test, verify FAIL**
 
 ```bash
-.venv/bin/pytest tests/extraction/strategies/llm_clients/test_openai_client.py -v
+.venv/bin/pytest tests/retrieval.llm_clients/test_openai_client.py -v
 ```
 
 Expected: FAIL — `ImportError: cannot import name 'OpenAiLlmClient'`.
 
 - [ ] **Step 3: Create the concrete**
 
-`python/pydocs_mcp/extraction/strategies/llm_clients/__init__.py`:
+`python/pydocs_mcp/retrieval.llm_clients/__init__.py`:
 
 ```python
 """LLM client concretes + factory.
@@ -476,7 +476,7 @@ def build_llm_client(cfg: LlmConfig) -> LlmClient:
     cold-import costs upfront. Raises ValueError for unknown providers.
     """
     if cfg.provider == "openai":
-        from pydocs_mcp.extraction.strategies.llm_clients.openai import (
+        from pydocs_mcp.retrieval.llm_clients.openai import (
             OpenAiLlmClient,
         )
         return OpenAiLlmClient(
@@ -491,7 +491,7 @@ def build_llm_client(cfg: LlmConfig) -> LlmClient:
 __all__ = ("build_llm_client",)
 ```
 
-`python/pydocs_mcp/extraction/strategies/llm_clients/openai.py`:
+`python/pydocs_mcp/retrieval.llm_clients/openai.py`:
 
 ```python
 """OpenAiLlmClient — LlmClient Protocol concrete using the openai SDK.
@@ -568,12 +568,12 @@ class OpenAiLlmClient:
 __all__ = ("OpenAiLlmClient",)
 ```
 
-Also create `tests/extraction/strategies/llm_clients/__init__.py` (empty file) so pytest discovers the new test dir.
+Also create `tests/retrieval.llm_clients/__init__.py` (empty file) so pytest discovers the new test dir.
 
 - [ ] **Step 4: Run test, verify PASS**
 
 ```bash
-.venv/bin/pytest tests/extraction/strategies/llm_clients/test_openai_client.py -v
+.venv/bin/pytest tests/retrieval.llm_clients/test_openai_client.py -v
 ```
 
 Expected: PASS (3/3).
@@ -589,7 +589,7 @@ Expected: ~1210 passed.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add python/pydocs_mcp/extraction/strategies/llm_clients/ tests/extraction/strategies/llm_clients/
+git add python/pydocs_mcp/retrieval.llm_clients/ tests/retrieval.llm_clients/
 git commit -m "feat(llm): OpenAiLlmClient concrete + build_llm_client factory (AC-1, AC-3)
 
 Per spec Decision A. Uses openai>=1.40 (already required dep).
@@ -2283,7 +2283,7 @@ def test_build_llm_client_called_at_pipeline_construction(tmp_path) -> None:
     config = AppConfig()
     fake = FakeLlmClient(responses={})
     with patch(
-        "pydocs_mcp.extraction.strategies.llm_clients.build_llm_client",
+        "pydocs_mcp.retrieval.llm_clients.build_llm_client",
         return_value=fake,
     ) as mock:
         # The exact entry point is whatever helper builds the chunk
@@ -2314,7 +2314,7 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
     Called by server.py + __main__.py at startup; once per server lifecycle.
     """
     from pydocs_mcp.extraction.strategies.embedders import build_embedder
-    from pydocs_mcp.extraction.strategies.llm_clients import build_llm_client
+    from pydocs_mcp.retrieval.llm_clients import build_llm_client
     # ... existing context construction ...
     return BuildContext(
         # ... existing fields ...
@@ -2362,7 +2362,7 @@ def _patch_embedder_with_mock(monkeypatch):
     Production CLI runs the real concretes.
     """
     from pydocs_mcp.extraction.strategies.embedders import build_embedder as _orig_embedder
-    from pydocs_mcp.extraction.strategies.llm_clients import build_llm_client as _orig_llm
+    from pydocs_mcp.retrieval.llm_clients import build_llm_client as _orig_llm
     from tests._fakes import FakeLlmClient
 
     def _embedder_with_mock(cfg, *args, **kwargs):
@@ -2376,7 +2376,7 @@ def _patch_embedder_with_mock(monkeypatch):
         _embedder_with_mock,
     )
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.strategies.llm_clients.build_llm_client",
+        "pydocs_mcp.retrieval.llm_clients.build_llm_client",
         _llm_with_mock,
     )
 ```
@@ -2792,7 +2792,7 @@ import os
 
 import pytest
 
-from pydocs_mcp.extraction.strategies.llm_clients.openai import OpenAiLlmClient
+from pydocs_mcp.retrieval.llm_clients.openai import OpenAiLlmClient
 from pydocs_mcp.retrieval.config import LlmConfig
 
 pytestmark = pytest.mark.skipif(
