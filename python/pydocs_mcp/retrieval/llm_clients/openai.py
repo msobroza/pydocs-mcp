@@ -1,11 +1,15 @@
 """OpenAiLlmClient — LlmClient Protocol concrete using the openai SDK.
 
 Async surface uses openai.AsyncOpenAI; sync surface uses openai.OpenAI.
-Both SDK instances are constructed once in __post_init__ to avoid the
-cold-import cost on every call.
+Both SDK instances are constructed **lazily on first use** — NOT in
+``__post_init__`` — so a deployment that never calls ``chat()`` (e.g.,
+a hybrid-only pipeline with no LLM step in its YAML) doesn't need
+OPENAI_API_KEY set just to construct the composition root.
 
 OPENAI_API_KEY env var is the default credential source — set api_key
 explicitly only when you need a non-default key (e.g., per-tenant).
+The OpenAIError ("api_key must be set") surfaces at first ``chat()``
+call, not at server startup.
 """
 from __future__ import annotations
 
@@ -22,15 +26,28 @@ from pydocs_mcp.storage.protocols import ChatMessage
 class OpenAiLlmClient:
     model_name: str
     api_key: str | None = None
-    _async_client: AsyncOpenAI = field(init=False, repr=False, compare=False)
-    _sync_client: OpenAI = field(init=False, repr=False, compare=False)
+    # WHY mutable single-element list inside a frozen dataclass: the SDK
+    # clients are constructed lazily on first use. A plain attribute
+    # would need object.__setattr__ on every call; a list lets us cache
+    # without that ceremony. Type-annotated as list to suppress slots
+    # complaints.
+    _async_cache: list[AsyncOpenAI] = field(
+        default_factory=list, init=False, repr=False, compare=False,
+    )
+    _sync_cache: list[OpenAI] = field(
+        default_factory=list, init=False, repr=False, compare=False,
+    )
 
-    def __post_init__(self) -> None:
-        # WHY: frozen dataclass requires object.__setattr__ to populate
-        # init=False fields. The SDK clients are constructed once and
-        # reused across every chat() call to avoid per-request handshake.
-        object.__setattr__(self, "_async_client", AsyncOpenAI(api_key=self.api_key))
-        object.__setattr__(self, "_sync_client", OpenAI(api_key=self.api_key))
+    def _async_client(self) -> AsyncOpenAI:
+        if not self._async_cache:
+            # Lazy construction — error surfaces here, not at server boot.
+            self._async_cache.append(AsyncOpenAI(api_key=self.api_key))
+        return self._async_cache[0]
+
+    def _sync_client(self) -> OpenAI:
+        if not self._sync_cache:
+            self._sync_cache.append(OpenAI(api_key=self.api_key))
+        return self._sync_cache[0]
 
     async def chat(
         self,
@@ -41,7 +58,7 @@ class OpenAiLlmClient:
         max_tokens: int | None = None,
     ) -> str:
         rf = {"type": "json_object"} if response_format == "json_object" else None
-        rsp = await self._async_client.chat.completions.create(
+        rsp = await self._async_client().chat.completions.create(
             model=self.model_name,
             messages=list(messages),
             response_format=rf,
@@ -59,7 +76,7 @@ class OpenAiLlmClient:
         max_tokens: int | None = None,
     ) -> str:
         rf = {"type": "json_object"} if response_format == "json_object" else None
-        rsp = self._sync_client.chat.completions.create(
+        rsp = self._sync_client().chat.completions.create(
             model=self.model_name,
             messages=list(messages),
             response_format=rf,
