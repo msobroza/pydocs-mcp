@@ -117,6 +117,42 @@ class LlmTreeReasoningStep(RetrieverStep):
             ranked = _score_by_position(matched, picked)
             new_scratch = dict(state.scratch)
             new_scratch[self.output_scratch_key] = ranked
+
+            if self.include_references:
+                # WHY filter direction: ``to_name`` (the picked qnames) —
+                # surfaces CALLERS of the picked nodes, which is the more
+                # useful direction for "what calls this" queries.
+                # NodeReference.from_node_id is a DocumentNode node_id,
+                # NOT a qualified_name; filtering on the from-side would
+                # need an extra qname→node_id translation step (and the
+                # node_id isn't persisted into chunk.metadata at all).
+                # ``to_name`` IS a dotted qname (it's the reference target
+                # the resolver matched against), so it's the natural join
+                # key here.
+                #
+                # WHY find_by_name per qname: the ReferenceStore Protocol
+                # surface only exposes find_by_name / find_callers /
+                # find_callees — no generic list({"to_name": {"in": [...]}})
+                # operator. Iterating with one call per picked qname keeps
+                # this step pure against the Protocol (same shape as
+                # InMemoryReferenceStore and SqliteReferenceStore).
+                surfaced: list = []
+                seen: set[tuple[str, str, str, str]] = set()
+                for qname in picked:
+                    callers = await uow.references.find_by_name(qname)
+                    # Apply per-node neighbors cap before deduping so the
+                    # bound is per-target, not global.
+                    for ref in callers[: self.reference_neighbors_limit]:
+                        key = (
+                            ref.from_package, ref.from_node_id,
+                            ref.to_name, str(ref.kind),
+                        )
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        surfaced.append(ref)
+                new_scratch[f"{self.output_scratch_key}.refs"] = tuple(surfaced)
+
             return replace(state, scratch=new_scratch)
 
     def to_dict(self) -> dict[str, Any]:
