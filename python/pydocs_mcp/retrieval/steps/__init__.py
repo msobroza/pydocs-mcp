@@ -50,6 +50,9 @@ from pydocs_mcp.retrieval.steps.token_budget import (
     TokenBudgetStep,
 )
 from pydocs_mcp.retrieval.steps.top_k_filter import TopKFilterStep
+from pydocs_mcp.retrieval.steps.weighted_score_interpolation import (
+    WeightedScoreInterpolationStep,
+)
 
 __all__ = (
     "COMPOSITE_TITLE_SENTINEL",
@@ -70,4 +73,5 @@ __all__ = (
     "RouteStep",
     "TokenBudgetStep",
     "TopKFilterStep",
+    "WeightedScoreInterpolationStep",
 )
