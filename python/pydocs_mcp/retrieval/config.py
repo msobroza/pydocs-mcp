@@ -6,7 +6,7 @@ import importlib.resources
 import os
 from collections.abc import Mapping
 from contextvars import ContextVar
-from functools import cache
+from functools import cache, cached_property
 from pathlib import Path
 from typing import Any, Literal
 
@@ -439,7 +439,8 @@ class AppConfig(BaseSettings):
         """Return the user-config path captured at ``load`` time, if any."""
         return getattr(self, "_effective_user_config_path", None)
 
-    def compute_ingestion_pipeline_hash(self) -> str:
+    @cached_property
+    def ingestion_pipeline_hash(self) -> str:
         """SHA-256 of embedder identity + ingestion YAML bytes.
 
         Used as the ``pipeline_hash`` slot in
@@ -460,6 +461,14 @@ class AppConfig(BaseSettings):
         we fall back to the shipped ``pydocs_mcp/pipelines/ingestion.yaml``
         — mirroring the resolution in
         :func:`pydocs_mcp.extraction.factories.build_ingestion_pipeline`.
+
+        Cached per-AppConfig instance via :func:`functools.cached_property`:
+        the YAML path + content are fixed for the life of the config, so
+        re-opening the file on every chunk's content-hash assignment is
+        wasted I/O. ``__main__.py`` reads this once at startup, but the
+        cache is the contract — future callers (background indexers, tests,
+        any code path that touches the hash repeatedly) get the same
+        free read-once behavior.
         """
         # Deferred import: ``extraction.factories`` pulls in
         # ``extraction.pipeline.stages.reference_capture`` which imports
@@ -475,6 +484,17 @@ class AppConfig(BaseSettings):
             + b"|"
             + ingestion_path.read_bytes()
         ).hexdigest()
+
+    def compute_ingestion_pipeline_hash(self) -> str:
+        """Method-form shim over :attr:`ingestion_pipeline_hash`.
+
+        Kept for call sites that predate the property form
+        (``__main__.py``'s composition root, the
+        ``test_config_pipeline_hash`` suite). New code should read the
+        property directly so the cache contract is obvious at the call
+        site.
+        """
+        return self.ingestion_pipeline_hash
 
 
 @cache

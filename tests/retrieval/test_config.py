@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.resources
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -270,3 +271,47 @@ def test_appconfig_extraction_yaml_round_trips(tmp_path):
         ".py", ".md", ".ipynb",
     ]
     assert config.extraction.members.members_per_module_cap == 120
+
+
+# ── Ingestion pipeline-hash caching (I14) ───────────────────────────────
+
+
+def test_compute_ingestion_pipeline_hash_cached(tmp_path: Path) -> None:
+    """The ingestion YAML must be read at most once per AppConfig instance.
+
+    Without caching, each ``compute_ingestion_pipeline_hash()`` /
+    ``ingestion_pipeline_hash`` access re-opens the YAML file and re-hashes
+    its bytes — wasted work, since the file path + content are fixed for the
+    life of the AppConfig. Spy on ``Path.read_bytes`` over 3 accesses and
+    assert at most one call (after potential warm-up reads from
+    ``AppConfig.load`` settling).
+    """
+    yaml_path = tmp_path / "ingestion.yaml"
+    yaml_path.write_text("name: test\nstages: []\n")
+    cfg = AppConfig.load()
+    cfg.extraction.ingestion.pipeline_path = yaml_path
+
+    # Wrap read_bytes so we count calls against ``yaml_path`` specifically —
+    # AppConfig.load() may have opened other files (shipped YAMLs) that we
+    # don't want to count here.
+    real_read_bytes = Path.read_bytes
+    yaml_reads = 0
+
+    def counting_read_bytes(self: Path) -> bytes:
+        nonlocal yaml_reads
+        if self.resolve() == yaml_path.resolve():
+            yaml_reads += 1
+        return real_read_bytes(self)
+
+    with patch.object(Path, "read_bytes", counting_read_bytes):
+        h1 = cfg.ingestion_pipeline_hash
+        h2 = cfg.ingestion_pipeline_hash
+        h3 = cfg.ingestion_pipeline_hash
+
+    # cached_property — file is read once across 3 accesses
+    assert yaml_reads <= 1, (
+        f"expected ingestion YAML to be read at most once, got {yaml_reads} reads"
+    )
+    assert h1 == h2 == h3
+    # Method form must still exist and produce the same value (backward compat).
+    assert cfg.compute_ingestion_pipeline_hash() == h1
