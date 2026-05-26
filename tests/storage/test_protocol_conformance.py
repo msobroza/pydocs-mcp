@@ -67,6 +67,36 @@ def test_sqlite_module_member_repository_conforms(tmp_path):
     provider = PerCallConnectionProvider(cache_path=db)
     repo = SqliteModuleMemberRepository(provider=provider)
     assert isinstance(repo, ModuleMemberStore)
+    # Task 1.6: every entity-store Protocol declares delete_all symmetrically.
+    assert hasattr(repo, "delete_all") and callable(repo.delete_all)
+
+
+def test_sqlite_package_repository_delete_all(tmp_path):
+    """SqlitePackageRepository.delete_all satisfies PackageStore.delete_all
+    (Task 1.6 Protocol symmetry)."""
+    from pydocs_mcp.storage.protocols import PackageStore
+    from pydocs_mcp.storage.sqlite import SqlitePackageRepository
+
+    db = tmp_path / "x.db"
+    open_index_database(db).close()
+    provider = PerCallConnectionProvider(cache_path=db)
+    repo = SqlitePackageRepository(provider=provider)
+    assert isinstance(repo, PackageStore)
+    assert hasattr(repo, "delete_all") and callable(repo.delete_all)
+
+
+def test_sqlite_chunk_repository_delete_all(tmp_path):
+    """SqliteChunkRepository.delete_all satisfies ChunkStore.delete_all
+    (Task 1.6 Protocol symmetry)."""
+    from pydocs_mcp.storage.protocols import ChunkStore
+    from pydocs_mcp.storage.sqlite import SqliteChunkRepository
+
+    db = tmp_path / "x.db"
+    open_index_database(db).close()
+    provider = PerCallConnectionProvider(cache_path=db)
+    repo = SqliteChunkRepository(provider=provider)
+    assert isinstance(repo, ChunkStore)
+    assert hasattr(repo, "delete_all") and callable(repo.delete_all)
 
 
 def test_sqlite_unit_of_work_conforms(tmp_path):

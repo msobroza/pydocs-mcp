@@ -23,6 +23,19 @@ class PackageStore(Protocol):
     async def delete(self, filter: Filter | Mapping) -> int: ...
     async def count(self, filter: Filter | Mapping | None = None) -> int: ...
 
+    async def delete_all(self) -> None:
+        """Delete every package row. Atomic within the surrounding UoW.
+
+        Symmetric with :class:`DocumentTreeStore.delete_all` and
+        :class:`ReferenceStore.delete_all` — closes the Protocol gap so
+        :meth:`IndexingService.clear_all` does not need to build an
+        ``All(clauses=())`` filter to express "wipe everything". The
+        explicit method also documents the destructive sweep as part of
+        the Protocol surface; alternate backends (Postgres, DuckDB) can
+        implement it without reverse-engineering the filter intent.
+        """
+        ...
+
 
 @runtime_checkable
 class ChunkStore(Protocol):
@@ -33,6 +46,15 @@ class ChunkStore(Protocol):
     async def delete(self, filter: Filter | Mapping) -> int: ...
     async def count(self, filter: Filter | Mapping | None = None) -> int: ...
     async def rebuild_index(self) -> None: ...
+
+    async def delete_all(self) -> None:
+        """Delete every chunk row. Atomic within the surrounding UoW.
+
+        Symmetric with :class:`DocumentTreeStore.delete_all` and
+        :class:`ReferenceStore.delete_all`. See :class:`PackageStore.delete_all`
+        for rationale.
+        """
+        ...
 
     async def list_id_hash_pairs(
         self, *, filter: Filter | Mapping | None = None,
@@ -77,6 +99,15 @@ class ModuleMemberStore(Protocol):
     ) -> list[ModuleMember]: ...
     async def delete(self, filter: Filter | Mapping) -> int: ...
     async def count(self, filter: Filter | Mapping | None = None) -> int: ...
+
+    async def delete_all(self) -> None:
+        """Delete every module-member row. Atomic within the surrounding UoW.
+
+        Symmetric with :class:`DocumentTreeStore.delete_all` and
+        :class:`ReferenceStore.delete_all`. See :class:`PackageStore.delete_all`
+        for rationale.
+        """
+        ...
 
 
 # Each SearchMatch is a Chunk or ModuleMember with relevance/retriever_name set.

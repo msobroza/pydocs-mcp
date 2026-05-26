@@ -162,6 +162,11 @@ class InMemoryPackageStore:
             return 1 if filter["name"] in self.items else 0
         return len(self.items)
 
+    async def delete_all(self) -> None:
+        """Wipe every package row — Protocol-symmetric with the SQLite repo."""
+        self.calls.append(_Call("delete_all", None))
+        self.items.clear()
+
 
 @dataclass
 class InMemoryChunkStore:
@@ -253,6 +258,11 @@ class InMemoryChunkStore:
             pkg = c.metadata.get("package", "")
             self.by_package.setdefault(pkg, []).append(stored)
 
+    async def delete_all(self) -> None:
+        """Wipe every chunk row — Protocol-symmetric with the SQLite repo."""
+        self.calls.append(_Call("delete_all", None))
+        self.by_package.clear()
+
 
 @dataclass
 class InMemoryModuleMemberStore:
@@ -294,6 +304,11 @@ class InMemoryModuleMemberStore:
         if isinstance(filter, dict) and "package" in filter:
             return len(self.by_package.get(filter["package"], []))
         return sum(len(v) for v in self.by_package.values())
+
+    async def delete_all(self) -> None:
+        """Wipe every module-member row — Protocol-symmetric with the SQLite repo."""
+        self.calls.append(_Call("delete_all", None))
+        self.by_package.clear()
 
 
 # ── Reference store ──────────────────────────────────────────────────────
