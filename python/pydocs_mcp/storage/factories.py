@@ -100,7 +100,7 @@ def build_composite_uow_factory(
     commits first; rollback walks in reverse).
     """
     def _make() -> CompositeUnitOfWork:
-        return CompositeUnitOfWork([f() for f in children])
+        return CompositeUnitOfWork(*(f() for f in children))
     return _make
 
 
