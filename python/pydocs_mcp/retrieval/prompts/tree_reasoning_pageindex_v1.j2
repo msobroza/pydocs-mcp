@@ -1,0 +1,26 @@
+{# Prompt: tree_reasoning_pageindex_v1 — verbatim PageIndex baseline,    #}
+{# adapted to use qualified_name (stable Python symbol path) instead of  #}
+{# the original node_id (a per-extraction auto-generated identifier).    #}
+{# Inputs: query (str), trees (list of node dicts with title,            #}
+{#         qualified_name, kind, summary, nodes[]).                      #}
+You are given a question and a tree structure of a document.
+Each node contains a qualified_name (a dotted Python path like
+`pkg.mod.func` — the stable symbol identifier), a title, and a
+corresponding summary.
+Your task is to find all nodes that are likely to contain the answer to the question.
+
+Question: {{ query }}
+
+Document tree structure:
+{{ trees | tojson(indent=2) }}
+
+Please reply in the following JSON format:
+{
+    "thinking": "<Your thinking process on which nodes are relevant to the question>",
+    "node_list": ["qualified.name.one", "qualified.name.two", "...", "qualified.name.n"]
+}
+
+Return each picked node's `qualified_name` field — the dotted Python
+path like `pkg.mod.func`. The tree intentionally does NOT include a
+`node_id` field; do not invent one.
+Directly return the final JSON structure. Do not output anything else.

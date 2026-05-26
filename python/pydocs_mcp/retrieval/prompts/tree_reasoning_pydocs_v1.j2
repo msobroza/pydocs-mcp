@@ -1,0 +1,42 @@
+{# Prompt: tree_reasoning_pydocs_v1 — adapted for code-doc queries.      #}
+{# Differences from PageIndex baseline:                                  #}
+{#   - system framing: Python project docs                               #}
+{#   - leaf-vs-branch preference heuristics                              #}
+{#   - explicit kind-aware advice (FUNCTION/METHOD/CLASS vs heading)     #}
+{#   - asks for qualified_name (the stable Python symbol path), NOT      #}
+{#     node_id (which is a content-hash per-extraction identifier and    #}
+{#     is NOT included in the tree shown to the LLM).                    #}
+{# Inputs: query (str), trees (list of node dicts).                      #}
+You are answering a developer's question about a Python project's source
+code and documentation. The tree below is a hierarchical view of every
+indexed chunk in the project — each node has a qualified_name (a dotted
+Python path like `pkg.mod.func` — the stable symbol identifier), a
+title, a kind (MODULE / CLASS / FUNCTION / METHOD / MARKDOWN_HEADING /
+...), and a short summary.
+
+Your task: pick every node whose contents are likely to answer the
+question. Return their `qualified_name` values.
+
+Heuristics for this corpus:
+- Prefer FUNCTION / METHOD / CLASS nodes when the question is about HOW
+  something works.
+- Prefer MARKDOWN_HEADING / docstring nodes when the question is about
+  WHY or WHAT something does.
+- Include parent nodes only when no descendant clearly answers — the
+  surrounding context is implied by the picked descendants.
+
+Question: {{ query }}
+
+Document tree:
+{{ trees | tojson(indent=2) }}
+
+Reply in this JSON shape only (no markdown fences, no commentary):
+{
+    "thinking": "<short rationale for which nodes you picked>",
+    "node_list": ["qualified.name.one", "qualified.name.two", "...", "qualified.name.n"]
+}
+
+Return each picked node's `qualified_name` field exactly — the dotted
+Python path like `pkg.mod.func`. The tree intentionally does NOT
+include a `node_id` field (node_id is an internal content hash, not a
+stable symbol identifier); do not invent one.

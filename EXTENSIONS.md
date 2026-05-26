@@ -169,7 +169,7 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 4. **Add `JsonResultFormatter`** — output as JSON for tooling that wants structured results. Pair with a `json_chunk` YAML preset.
 
-5. **Add `WeightedScoreInterpolationStep`** — alternative fusion to the shipped `RRFFusionStep`. Normalizes each branch's scores to `[0, 1]` (min-max), then blends via `α·norm(bm25) + (1-α)·norm(dense)`. RRF discards score magnitude; this preserves it, which sometimes wins when one retriever is dramatically stronger than the other on a given query. Reads from the same `state.scratch[<branch>.ranked]` keys RRF uses, so it drops in as a YAML swap. Pairs naturally with `ConditionalStep` for per-query-type routing (e.g., RRF for short queries, weighted interpolation for long).
+5. **[SHIPPED] `WeightedScoreInterpolationStep`** — see `python/pydocs_mcp/retrieval/steps/weighted_score_interpolation.py`. Alternative fusion to the shipped `RRFFusionStep`. Normalizes each branch's scores to `[0, 1]` (min-max), then blends via `α·norm(bm25) + (1-α)·norm(dense)`. RRF discards score magnitude; this preserves it, which sometimes wins when one retriever is dramatically stronger than the other on a given query. Reads from the same `state.scratch[<branch>.ranked]` keys RRF uses, so it drops in as a YAML swap. Pairs naturally with `ConditionalStep` for per-query-type routing (e.g., RRF for short queries, weighted interpolation for long).
 
 ### Tier 2 — small PRs (~200–400 LOC)
 
@@ -183,6 +183,27 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 ### Tier 3 — medium PRs (~400–800 LOC)
 
+N. **Add capability-aware ingestion (`REQUIRES` declarations + auto-derivation)** — couple the ingestion pipeline to retrieval needs without coupling code. Each `RetrieverStep` gains a class-level `REQUIRES: ClassVar[frozenset[str]]` declaring what storage shapes it reads at query time (e.g., `BM25ScorerStep` → `{"chunks", "chunks_fts"}`; `DenseScorerStep` → `{"chunks", "chunk_embeddings"}`; `LlmTreeReasoningStep` → `{"chunks", "document_trees"}`). A new `derive_ingestion_capabilities(retrieval_yaml_path)` walks the active retrieval YAML, unions every step's `REQUIRES`, and `build_ingestion_pipeline()` conditionally assembles stages based on the result — `FlattenStage` runs only when `"chunks"` is needed, `EmbedChunksStage` only when `"chunk_embeddings"` is needed, etc.
+
+    Wins:
+
+    - **Zero-mismatch by construction** — ingestion automatically produces exactly the storage shapes the active retrieval pipeline will read. Switching retrieval YAMLs triggers a re-index only when the new YAML's `REQUIRES` is a strict superset. No more "I set `tree_only.yaml` and BM25 returns nothing" support burden.
+    - **Tree-only deployments save real money** — skipping `EmbedChunksStage` zeros out the FastEmbed ONNX inference (or OpenAI embedding spend) at index time. On a 100-dep project this is the difference between "indexes in 30s" and "indexes in 5 minutes + costs ~$2 on OpenAI" — a meaningful unlock for users who go all-in on LLM tree reasoning.
+    - **Self-documenting** — reading any step's `REQUIRES = frozenset({...})` line tells you exactly which storage shapes it consumes. New contributors get capability wiring right without reading the ingestion pipeline.
+    - **Composes with `pipeline_hash`** (shipped in the chunk-cache work) — extend the hash input to include the capability set so switching retrieval profiles auto-invalidates the index when the new profile needs strictly more storage. No manual `--force` required after a profile flip.
+    - **Forces honest step design** — a step that secretly reads from `uow.chunks` but doesn't declare it in `REQUIRES` becomes a code-review issue. Encourages single-responsibility.
+
+    Implementation notes:
+
+    - Add `REQUIRES: ClassVar[frozenset[str]] = frozenset()` to the `RetrieverStep` ABC (default empty → backward-compatible).
+    - Override `REQUIRES` on every shipped step (~15 step classes, ~1 line each).
+    - Add `derive_ingestion_capabilities(yaml_path)` in `extraction/factories.py` (~50 LOC + tests).
+    - Refactor `build_ingestion_pipeline` to conditionally assemble stages from the capability set (~50 LOC).
+    - Extend `compute_ingestion_pipeline_hash` to include `sorted(capabilities)` in the hash input (~10 LOC).
+    - Lint rule (or test) that fails when a step's `run()` reads `state.scratch` / `uow.X` without declaring the matching capability (catches regressions).
+
+    Pairs well with the `LlmTreeReasoningStep` PR — once that lands, this is the natural follow-up that makes `tree_only.yaml` deployments stop paying for embeddings they never use.
+
 9. **Add `SqliteVecVectorStore`** — alternative dense backend that keeps vectors in SQLite (via `sqlite-vec`) instead of the shipped TurboQuant `.tq` sidecar. The dense plumbing (`Chunk.embedding`, `Embedder` Protocol, `FastEmbedEmbedder`, `OpenAIEmbedder`, `DenseScorerStep`, `DenseFetcherStep`, `HybridSqliteTurboStore`) already exists; this swaps the storage layer to make `.db` self-contained. Useful for deployments that prefer a single-file index.
 
 10. **Add `QdrantVectorStore`** with the full `ChunkStore + TextSearchable + VectorSearchable + HybridSearchable` stack. First full backend swap — validates that nothing above the storage layer changes.
@@ -191,7 +212,7 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 12. **Add `LlmRerankStep` with an OpenAI/Anthropic/Cohere client** — validates that an I/O-bound step composes with the pipeline. Tests predicate-guarded execution (skip rerank on short queries). The planned LLM-rerank step listed in §C "Retrieval pipeline".
 
-13. **Add `LlmTreeReasoningStep` (vectorless RAG, PageIndex-style)** — a `RetrieverStep` that uses an LLM to navigate the existing `DocumentNode` trees and pick the nodes most likely to contain the answer, without embedding. Single-shot prompt: serialize the tree via `DocumentNode.to_pageindex_json()` (strip body text, keep titles + summaries + node_ids), send `(query, tree_json)` to a configured LLM, parse `{"thinking", "node_list": [node_id, ...]}` from the response, then fetch the corresponding chunks via `uow.chunks` and emit them as the step's result.
+13. **[SHIPPED] `LlmTreeReasoningStep` (vectorless RAG, PageIndex-style)** — see `python/pydocs_mcp/retrieval/steps/llm_tree_reasoning.py`. Vectorless RAG over `__project__` `DocumentNode` trees. Three opt-in YAML presets ship under `python/pydocs_mcp/pipelines/`: `tree_only.yaml`, `chunk_search_with_tree_reasoning_parallel.yaml`, `chunk_search_with_tree_reasoning_after.yaml`. `LlmClient` Protocol + `OpenAiLlmClient` concrete at `python/pydocs_mcp/retrieval/llm_clients/`. Two Jinja2 prompt templates (pageindex_v1 baseline + pydocs_v1 adapted) at `python/pydocs_mcp/retrieval/prompts/`. A `RetrieverStep` that uses an LLM to navigate the existing `DocumentNode` trees and pick the nodes most likely to contain the answer, without embedding. Single-shot prompt: serialize the tree via `DocumentNode.to_pageindex_json()` (strip body text, keep titles + summaries + node_ids), send `(query, tree_json)` to a configured LLM, parse `{"thinking", "node_list": [node_id, ...]}` from the response, then fetch the corresponding chunks via `uow.chunks` and emit them as the step's result.
 
     Composes with the existing pipeline machinery:
 

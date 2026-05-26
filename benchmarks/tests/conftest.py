@@ -79,3 +79,60 @@ def _patch_build_embedder_with_mock(monkeypatch):
         lambda cfg: mock,
     )
     yield
+
+
+@dataclass(slots=True)
+class _BenchmarkFakeLlmClient:
+    """No-op LlmClient stand-in for benchmark smoke tests.
+
+    The retrieval-side composition root (``build_retrieval_context``) now
+    eagerly calls ``build_llm_client(config.llm)`` so the resulting client
+    lives on ``BuildContext.llm_client``. The shipped default config picks
+    ``provider=openai`` and instantiating ``AsyncOpenAI`` requires
+    ``OPENAI_API_KEY`` — which the local benchmark test env doesn't set.
+    Patching at the canonical module attribute AND the rebound name on
+    ``retrieval.factories`` covers both call sites (mirrors the embedder
+    pattern and the same-name autouse in ``tests/conftest.py``).
+
+    Trivial chat() implementation — none of the benchmark smoke tests
+    drive ``LlmTreeReasoningStep``, so the fake never actually services
+    a request; the constructor existing is the entire contract.
+    """
+
+    model_name: str = "benchmark-fake-llm"
+
+    async def chat(self, messages, **kwargs) -> str:
+        raise NotImplementedError(
+            "_BenchmarkFakeLlmClient.chat called — benchmark tests must "
+            "not exercise the LLM tree-reasoning path",
+        )
+
+    def chat_sync(self, messages, **kwargs) -> str:
+        raise NotImplementedError(
+            "_BenchmarkFakeLlmClient.chat_sync called — benchmark tests "
+            "must not exercise the LLM tree-reasoning path",
+        )
+
+
+@pytest.fixture(autouse=True)
+def _patch_build_llm_client_with_fake(monkeypatch):
+    """Patch ``build_llm_client`` so benchmark smoke tests stay offline.
+
+    Mirrors the matching fixture in ``tests/conftest.py``. Without this,
+    ``build_retrieval_context`` raises ``openai.OpenAIError`` on every
+    benchmark run that touches the retrieval composition.
+    """
+    fake = _BenchmarkFakeLlmClient()
+
+    def _factory(cfg):
+        return fake
+
+    monkeypatch.setattr(
+        "pydocs_mcp.retrieval.llm_clients.build_llm_client",
+        _factory,
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.retrieval.factories.build_llm_client",
+        _factory,
+    )
+    yield

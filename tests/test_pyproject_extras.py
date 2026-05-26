@@ -42,3 +42,13 @@ def test_openai_in_main_deps_not_optional() -> None:
     assert any("openai" in d for d in main_deps), (
         f"openai not in main dependencies: {main_deps}"
     )
+
+
+def test_jinja2_in_main_deps() -> None:
+    """LLM tree reasoning loads Jinja2 prompt templates; jinja2 must be a
+    required runtime dep, not a transitive accident."""
+    cfg = _load()
+    main_deps = cfg["project"]["dependencies"]
+    assert any("jinja2" in d.lower() for d in main_deps), (
+        f"jinja2 not in main dependencies: {main_deps}"
+    )

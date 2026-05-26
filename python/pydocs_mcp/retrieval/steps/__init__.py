@@ -39,6 +39,7 @@ from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
 from pydocs_mcp.retrieval.steps.dense_fetcher import DenseFetcherStep
 from pydocs_mcp.retrieval.steps.dense_scorer import DenseScorerStep
 from pydocs_mcp.retrieval.steps.limit import LimitStep
+from pydocs_mcp.retrieval.steps.llm_tree_reasoning import LlmTreeReasoningStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
 from pydocs_mcp.retrieval.steps.parallel import ParallelStep
@@ -50,6 +51,9 @@ from pydocs_mcp.retrieval.steps.token_budget import (
     TokenBudgetStep,
 )
 from pydocs_mcp.retrieval.steps.top_k_filter import TopKFilterStep
+from pydocs_mcp.retrieval.steps.weighted_score_interpolation import (
+    WeightedScoreInterpolationStep,
+)
 
 __all__ = (
     "COMPOSITE_TITLE_SENTINEL",
@@ -59,6 +63,7 @@ __all__ = (
     "DenseFetcherStep",
     "DenseScorerStep",
     "LimitStep",
+    "LlmTreeReasoningStep",
     "MemberFetcherStep",
     "MetadataPostFilterStep",
     "ParallelStep",
@@ -70,4 +75,5 @@ __all__ = (
     "RouteStep",
     "TokenBudgetStep",
     "TopKFilterStep",
+    "WeightedScoreInterpolationStep",
 )

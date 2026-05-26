@@ -1,0 +1,97 @@
+# Hybrid (BM25 + dense + RRF) first; LLM tree-reasoning fires only on
+# long queries via the ``is_long_query`` predicate (AC-12 + AC-13).
+#
+# Pipeline shape:
+#
+#   pre_filter
+#     |
+#   parallel_retrieval (bm25 + dense branches publish to scratch[*.ranked])
+#     |
+#   rrf_fusion (reads hybrid.bm25.ranked + hybrid.dense.ranked,
+#               writes state.candidates)
+#     |
+#   topk (publish_to hybrid.ranked) -- lift fused result back into scratch
+#     |
+#   conditional (predicate is_long_query):
+#     +-- llm_tree_reasoning (writes scratch[tree.ranked])
+#     |
+#   final_fuse (rrf_fusion of hybrid.ranked + tree.ranked) -- when the
+#     conditional skipped, tree.ranked is absent and final_fuse degrades
+#     to single-list RRF over hybrid.ranked (still a valid ranking).
+#     |
+#   limit -> token_budget_formatter
+#
+# Requires BuildContext.embedder + .vector_store + .llm_client +
+# .uow_factory at load time. Opt in via PYDOCS_CONFIG_PATH or --config;
+# the default chunk_search.yaml is unchanged.
+name: chunk_search_with_tree_reasoning_after
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: parallel
+    type: parallel_retrieval
+    params:
+      branches:
+        - name: bm25
+          steps:
+            - name: fetch
+              type: chunk_fetcher
+              params:
+                schema_name: chunk
+            - name: score
+              type: bm25_scorer
+              params: {}
+            - name: filter
+              type: metadata_post_filter
+              params: {}
+            - name: topk
+              type: top_k_filter
+              params:
+                publish_to: hybrid.bm25.ranked
+        - name: dense
+          steps:
+            - name: fetch
+              type: dense_fetcher
+              params: {}
+            - name: score
+              type: dense_scorer
+              params: {}
+            - name: filter
+              type: metadata_post_filter
+              params: {}
+            - name: topk
+              type: top_k_filter
+              params:
+                publish_to: hybrid.dense.ranked
+  - name: hybrid_rrf
+    type: rrf_fusion
+    params:
+      branch_keys: [hybrid.bm25.ranked, hybrid.dense.ranked]
+  - name: hybrid_publish
+    type: top_k_filter
+    params:
+      publish_to: hybrid.ranked
+  - name: maybe_tree_rerank
+    type: conditional
+    params:
+      predicate_name: is_long_query
+      stage:
+        type: llm_tree_reasoning
+        name: tree_reasoning
+        prompt_template: tree_reasoning_pydocs_v1
+  - name: final_fuse
+    type: rrf_fusion
+    params:
+      branch_keys: [hybrid.ranked, tree.ranked]
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  - name: budget
+    type: token_budget_formatter
+    params:
+      formatter: {type: chunk_markdown}
+      budget: 2000
