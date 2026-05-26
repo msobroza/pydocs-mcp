@@ -29,7 +29,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -37,6 +37,7 @@ from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.protocols import ChatMessage
 
 
 class _NotEnteredProxy:
@@ -518,7 +519,60 @@ class MockEmbedder:
         return rng.uniform(-1.0, 1.0, size=self.dim).astype(np.float32)
 
 
+@dataclass(slots=True)
+class FakeLlmClient:
+    """Offline LlmClient for unit tests.
+
+    Returns canned responses keyed by the LAST message's content. Unknown
+    keys raise KeyError with diagnostic context so test failures point at
+    the missing canned response, not at mysterious None returns.
+
+    The key choice (last message content) covers the simple single-turn
+    case the retrieval pipeline uses. Multi-turn tests can override by
+    subclassing.
+    """
+
+    responses: dict[str, str] = field(default_factory=dict)
+    model_name: str = "fake-llm-model"
+    _calls: list[Sequence[ChatMessage]] = field(default_factory=list)
+
+    async def chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        response_format: Literal["text", "json_object"] = "text",
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        self._calls.append(tuple(messages))
+        key = messages[-1]["content"]
+        if key not in self.responses:
+            raise KeyError(
+                f"FakeLlmClient has no canned response for key={key!r}. "
+                f"Available keys: {sorted(self.responses)}",
+            )
+        return self.responses[key]
+
+    def chat_sync(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        response_format: Literal["text", "json_object"] = "text",
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        self._calls.append(tuple(messages))
+        key = messages[-1]["content"]
+        if key not in self.responses:
+            raise KeyError(
+                f"FakeLlmClient has no canned response for key={key!r}. "
+                f"Available keys: {sorted(self.responses)}",
+            )
+        return self.responses[key]
+
+
 __all__ = (
+    "FakeLlmClient",
     "FakeUnitOfWork",
     "InMemoryChunkStore",
     "InMemoryDocumentTreeStore",
