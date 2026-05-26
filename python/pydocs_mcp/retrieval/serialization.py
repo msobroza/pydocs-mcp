@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
     from pydocs_mcp.storage.protocols import (
         Embedder,
+        LlmClient,
         TextSearchable,
         UnitOfWork,
         VectorSearchable,
@@ -134,7 +135,7 @@ class BuildContext:
     ``AppConfig.compute_ingestion_pipeline_hash()`` once at startup.
     """
 
-    connection_provider: "ConnectionProvider"
+    connection_provider: "ConnectionProvider | None" = None
     predicate_registry: "PredicateRegistry" = field(default_factory=_default_predicate_registry)
     step_registry: ComponentRegistry = field(default_factory=lambda: step_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
@@ -143,4 +144,5 @@ class BuildContext:
     app_config: "AppConfig | None" = None
     embedder: "Embedder | None" = None
     uow_factory: "Callable[[], UnitOfWork] | None" = None
+    llm_client: "LlmClient | None" = None
     pipeline_hash: str = ""
