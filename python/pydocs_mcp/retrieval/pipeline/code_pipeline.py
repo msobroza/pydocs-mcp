@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.retrieval.pipeline.base import RetrieverStep
 from pydocs_mcp.retrieval.pipeline.state import RetrieverState
 
@@ -45,7 +46,7 @@ if TYPE_CHECKING:
 _MAX_PIPELINE_DEPTH = 32
 
 
-class PipelineLoadError(ValueError):
+class PipelineLoadError(PydocsMCPError, ValueError):
     """Raised by :meth:`CodeRetrieverPipeline.from_dict` on YAML schema violations.
 
     The YAML schema uses ``steps:`` (each step requires a ``name:``). This
