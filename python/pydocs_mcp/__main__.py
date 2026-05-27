@@ -540,22 +540,6 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
     return _run_cmd(_run_lookup(args), verbose=args.verbose)
 
 
-def _pre_filter_from_package(package: str | None) -> dict | None:
-    """Build the MULTIFIELD pre_filter dict for ``-p/--package``.
-
-    Mirrors ``server.py::_normalize_pkg_filter_value``: PyPI names get
-    normalised to the DB's underscore/lowercase form so ``Flask-Login``
-    resolves to ``flask_login``; the ``__project__`` sentinel stays intact.
-    """
-    if not package:
-        return None
-    from pydocs_mcp.deps import normalize_package_name
-    from pydocs_mcp.models import ChunkFilterField
-
-    pkg = package if package == "__project__" else normalize_package_name(package)
-    return {ChunkFilterField.PACKAGE.value: pkg}
-
-
 # ── Entry point ───────────────────────────────────────────────────────────
 
 

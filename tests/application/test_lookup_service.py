@@ -3,6 +3,12 @@
 Uses MagicMock + AsyncMock for the backing services so each branch can
 be exercised in isolation. Real-store integration is covered by the
 golden-fixture suite in tests/test_mcp_surface.py.
+
+Post-I9: ``tree_svc`` and ``ref_svc`` are mandatory.  Tests that
+previously passed ``tree_svc=None`` / ``ref_svc=None`` to exercise
+the no-backing-service path now pass ``NullTreeService()`` /
+``NullReferenceService()`` — same user-visible error contract, no
+``is None`` branches in production code.
 """
 from __future__ import annotations
 
@@ -18,6 +24,10 @@ from pydocs_mcp.application.mcp_errors import (
     ServiceUnavailableError,
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput
+from pydocs_mcp.application.null_services import (
+    NullReferenceService,
+    NullTreeService,
+)
 from pydocs_mcp.models import Package, PackageDoc, PackageOrigin
 
 
@@ -43,6 +53,14 @@ def package_lookup_mock(fake_package: Package) -> MagicMock:
     return m
 
 
+def _null_tree() -> NullTreeService:
+    return NullTreeService()
+
+
+def _null_ref() -> NullReferenceService:
+    return NullReferenceService()
+
+
 # ── Empty target → list packages ─────────────────────────────────────────
 
 
@@ -50,7 +68,11 @@ def package_lookup_mock(fake_package: Package) -> MagicMock:
 async def test_lookup_empty_target_returns_package_list(
     package_lookup_mock: MagicMock,
 ) -> None:
-    svc = LookupService(package_lookup=package_lookup_mock)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=_null_tree(),
+        ref_svc=_null_ref(),
+    )
     out = await svc.lookup(LookupInput(target=""))
     assert "fastapi" in out
     assert "0.110.0" in out
@@ -67,7 +89,11 @@ async def test_lookup_package_only_returns_package_doc(
     doc = PackageDoc(package=fake_package, chunks=(), members=())
     package_lookup_mock.get_package_doc = AsyncMock(return_value=doc)
 
-    svc = LookupService(package_lookup=package_lookup_mock)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=_null_tree(),
+        ref_svc=_null_ref(),
+    )
     out = await svc.lookup(LookupInput(target="fastapi"))
 
     assert "fastapi" in out
@@ -80,7 +106,11 @@ async def test_lookup_unknown_package_raises_not_found(
     package_lookup_mock: MagicMock,
 ) -> None:
     package_lookup_mock.get_package_doc = AsyncMock(return_value=None)
-    svc = LookupService(package_lookup=package_lookup_mock)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=_null_tree(),
+        ref_svc=_null_ref(),
+    )
 
     with pytest.raises(NotFoundError) as exc:
         await svc.lookup(LookupInput(target="nonexistent"))
@@ -103,7 +133,11 @@ async def test_longest_indexed_module_prefers_tree_when_wired(
 
     tree_svc.exists = _exists
 
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
     match = await svc._longest_indexed_module(
         "fastapi", ["fastapi", "routing", "APIRouter", "include_router"]
     )
@@ -117,14 +151,20 @@ async def test_longest_indexed_module_prefers_tree_when_wired(
 async def test_longest_indexed_module_falls_back_to_find_module(
     package_lookup_mock: MagicMock,
 ) -> None:
-    """When tree_svc is None, fall back to PackageLookup.find_module."""
+    """With ``NullTreeService`` (no tree index), fall back to
+    ``PackageLookup.find_module`` — ``NullTreeService.exists`` returns
+    ``False`` so the fallback path runs unchanged."""
 
     async def _find(package: str, module: str) -> bool:
         return module == "fastapi.routing"
 
     package_lookup_mock.find_module = AsyncMock(side_effect=_find)
 
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=None)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=_null_tree(),
+        ref_svc=_null_ref(),
+    )
     match = await svc._longest_indexed_module(
         "fastapi", ["fastapi", "routing", "APIRouter"]
     )
@@ -135,7 +175,11 @@ async def test_longest_indexed_module_falls_back_to_find_module(
 async def test_longest_indexed_module_returns_none_when_nothing_matches(
     package_lookup_mock: MagicMock,
 ) -> None:
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=None)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=_null_tree(),
+        ref_svc=_null_ref(),
+    )
     match = await svc._longest_indexed_module(
         "fastapi", ["fastapi", "nonexistent", "foo"]
     )
@@ -161,7 +205,11 @@ async def test_longest_indexed_module_resolves_markdown_via_suffix_probe(
         return module == "docs.guide.md"
 
     tree_svc.exists = _exists
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
     match = await svc._longest_indexed_module("__project__", ["docs", "guide"])
     assert match == ("docs.guide.md", 2)
 
@@ -180,7 +228,11 @@ async def test_longest_indexed_module_python_wins_over_markdown(
         return module in {"pkg.foo", "pkg.foo.md"}
 
     tree_svc.exists = _exists
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
     match = await svc._longest_indexed_module("pkg", ["pkg", "foo"])
     assert match == ("pkg.foo", 2)
 
@@ -189,12 +241,19 @@ async def test_longest_indexed_module_python_wins_over_markdown(
 
 
 @pytest.mark.asyncio
-async def test_module_lookup_without_tree_svc_raises_service_unavailable(
+async def test_module_lookup_with_null_tree_svc_raises_service_unavailable(
     package_lookup_mock: MagicMock,
 ) -> None:
-    """A multi-segment target but no tree_svc wired: no way to render the tree."""
+    """A multi-segment target with ``NullTreeService`` wired: the Null
+    impl's ``get_tree`` raises ``ServiceUnavailableError`` directly
+    (preserves the pre-refactor user-facing error contract; no ``is
+    None`` branch in the dispatcher)."""
     package_lookup_mock.find_module = AsyncMock(return_value=True)
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=None)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=_null_tree(),
+        ref_svc=_null_ref(),
+    )
 
     with pytest.raises(ServiceUnavailableError):
         await svc.lookup(LookupInput(target="fastapi.routing"))
@@ -212,7 +271,11 @@ async def test_module_lookup_with_tree_svc_returns_rendered_tree(
     tree_svc.exists = AsyncMock(return_value=True)
     tree_svc.get_tree = AsyncMock(return_value=fake_tree)
 
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
     out = await svc.lookup(LookupInput(target="fastapi.routing"))
     assert "routing" in out
 
@@ -245,15 +308,21 @@ async def test_symbol_lookup_not_found_when_module_resolves_but_symbol_missing(
     fake_tree.find_node_by_qualified_name = MagicMock(return_value=None)
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
     with pytest.raises(NotFoundError):
         await svc.lookup(LookupInput(target="fastapi.routing.NoSuchClass"))
 
 
 @pytest.mark.asyncio
-async def test_show_callers_without_ref_svc_raises_service_unavailable(
+async def test_show_callers_with_null_ref_svc_raises_service_unavailable(
     package_lookup_mock: MagicMock,
 ) -> None:
+    """``NullReferenceService.callers`` raises ``ServiceUnavailableError``
+    pointing at the YAML knob; the dispatcher just propagates it."""
     fake_node = MagicMock()
     fake_node.kind = "method"
     fake_tree = MagicMock()
@@ -261,7 +330,9 @@ async def test_show_callers_without_ref_svc_raises_service_unavailable(
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
     svc = LookupService(
-        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=None,
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
     )
     with pytest.raises(ServiceUnavailableError):
         await svc.lookup(
@@ -279,7 +350,11 @@ async def test_show_inherits_on_non_class_raises_invalid_argument(
     fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
     with pytest.raises(InvalidArgumentError) as exc:
         await svc.lookup(
             LookupInput(target="fastapi.routing.X.y", show="inherits")
@@ -451,9 +526,142 @@ async def test_show_tree_on_symbol_returns_node_json(
     fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
-    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc)
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
     out = await svc.lookup(
         LookupInput(target="fastapi.routing.APIRouter", show="tree")
     )
     assert "APIRouter" in out
     assert "include_router" in out
+
+
+# ── I8 dispatch table + I9 Null-services contract ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_symbol_lookup_unknown_show_raises_invalid_argument(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """I8: unknown ``show`` values raise ``InvalidArgumentError`` from
+    the dispatch table lookup (replaces the trailing ``raise`` after
+    the 6-level nested if/elif).  Guard is a single ``.get`` against
+    the table; the test pins it stays in place.
+
+    ``LookupInput`` already validates ``show`` at the schema layer, so
+    we invoke ``_symbol_lookup`` directly here — the defence-in-depth
+    InvalidArgumentError inside the dispatcher catches the case where
+    a future internal caller bypasses the schema (or where the schema's
+    Literal grows out of sync with the table)."""
+    fake_node = MagicMock()
+    fake_node.kind = "method"
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
+    with pytest.raises(InvalidArgumentError) as exc:
+        await svc._symbol_lookup(
+            package="fastapi",
+            module="fastapi.routing",
+            target="fastapi.routing.X.y",
+            show="weird-mode",
+            limit=10,
+        )
+    assert "unknown show" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_symbol_lookup_inherits_class_check_runs_before_ref_call(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """I8: the ``inherits``-only-for-classes guard runs BEFORE the
+    dispatch-table call, so a non-class node never hits ``ref_svc``.
+    If the guard moves into the table lambda, the Null impl will raise
+    ServiceUnavailableError first — masking the real InvalidArgumentError."""
+    fake_node = MagicMock()
+    fake_node.kind = "function"  # not a class
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("pkg.mod", fake_tree)
+
+    ref_svc = MagicMock()
+    ref_svc.find_by_name = AsyncMock(return_value=())
+    ref_svc.callers = AsyncMock(return_value=())
+    ref_svc.callees = AsyncMock(return_value=())
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
+    )
+    with pytest.raises(InvalidArgumentError) as exc:
+        await svc.lookup(
+            LookupInput(target="pkg.mod.func", show="inherits")
+        )
+    assert "class" in str(exc.value).lower()
+    # ref_svc was never reached — class-check fires first.
+    ref_svc.find_by_name.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lookup_service_accepts_null_tree_and_ref_services(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """I9: ``NullTreeService`` and ``NullReferenceService`` satisfy
+    ``LookupService``'s structural contract — construction works, the
+    empty-target path returns packages without ever touching the Null
+    impls (so they don't raise spuriously on read-only meta paths)."""
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=_null_tree(),
+        ref_svc=_null_ref(),
+    )
+    # Empty target → list_packages, never invokes tree_svc or ref_svc.
+    out = await svc.lookup(LookupInput(target=""))
+    assert "fastapi" in out
+
+
+@pytest.mark.asyncio
+async def test_null_ref_svc_callers_raises_yaml_anchored_message(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """I9 + S20: the YAML-anchored failure message
+    (``reference_graph.capture.enabled``) is now raised from inside
+    ``NullReferenceService`` rather than from a sentinel branch in
+    ``_symbol_lookup``.  Same user-visible error contract, but the
+    dispatcher stays branch-free."""
+    fake_node = MagicMock()
+    fake_node.node_id = "pkg.mod.f"
+    fake_node.kind = "function"
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("pkg.mod", fake_tree)
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
+    with pytest.raises(ServiceUnavailableError) as exc:
+        await svc.lookup(
+            LookupInput(target="pkg.mod.f", show="callers")
+        )
+    assert "reference_graph.capture.enabled" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_ref_getters_table_has_three_keys() -> None:
+    """I8: the dispatch table covers exactly the three reference-graph
+    show modes — callers/callees/inherits.  Pinning the keyset prevents
+    silent drift (e.g. a future show='subclasses' added to the input
+    schema without a matching table entry would fall through to
+    InvalidArgumentError, which the symmetric test above catches)."""
+    from pydocs_mcp.application.lookup_service import _REF_GETTERS
+    assert set(_REF_GETTERS) == {"callers", "callees", "inherits"}

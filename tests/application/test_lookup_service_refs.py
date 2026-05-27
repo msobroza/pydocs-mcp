@@ -15,9 +15,11 @@ The 5 tests below pin:
   4. Empty rows still render the canonical ``# {Verb} of `target` \\nNo
      {noun}s found.\\n`` markdown via ``format_references`` — NOT the
      pre-#5c ``(no references)`` placeholder.
-  5. ``ref_svc=None`` now raises with the YAML-anchored error message
-     (``reference_graph.capture.enabled``) — the old ``sub-PR #5b`` text
-     is gone; users get an actionable pointer at the config knob.
+  5. ``NullReferenceService`` raises with the YAML-anchored error
+     message (``reference_graph.capture.enabled``) — the old ``sub-PR
+     #5b`` text is gone; users get an actionable pointer at the config
+     knob.  Post-I9 the Null impl replaces ``ref_svc=None``; the
+     user-visible error contract is preserved.
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ import pytest
 from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
 from pydocs_mcp.application.mcp_inputs import LookupInput
+from pydocs_mcp.application.null_services import NullReferenceService
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -176,21 +179,24 @@ async def test_lookup_inherits_uses_find_by_name() -> None:
     assert "pkg.base.BaseModel" in out, out
 
 
-# ── Test 4: ref_svc=None now raises with YAML-anchored message ─────────────
+# ── Test 4: NullReferenceService raises with YAML-anchored message ─────────
 
 
 @pytest.mark.asyncio
-async def test_lookup_callers_with_ref_svc_none_raises_with_yaml_message() -> None:
-    """The post-#5c error message points users at the YAML knob
-    (``reference_graph.capture.enabled``) — NOT the old ``sub-PR #5b``
-    text. The forcing function: a user who hits this error must be able
-    to fix it themselves by editing config; ``sub-PR #5b`` is a
-    development checkpoint that means nothing to them."""
+async def test_lookup_callers_with_null_ref_svc_raises_with_yaml_message() -> None:
+    """The post-I9 error message points users at the YAML knob
+    (``reference_graph.capture.enabled``) — raised from inside
+    ``NullReferenceService.callers`` rather than from a sentinel
+    branch in ``LookupService._symbol_lookup``.  Same user-visible
+    error contract — the forcing function (user hits error → edits
+    YAML → re-runs) is preserved."""
     tree = _real_node_tree("pkg.helpers.compute")
     tree_svc = _tree_svc_for_module("pkg.helpers", tree)
 
     svc = LookupService(
-        package_lookup=_pkg_lookup_mock(), tree_svc=tree_svc, ref_svc=None,
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=NullReferenceService(),
     )
     with pytest.raises(ServiceUnavailableError) as excinfo:
         await svc.lookup(
