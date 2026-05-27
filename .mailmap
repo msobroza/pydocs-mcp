@@ -1,0 +1,42 @@
+# Canonical commit author for this repository.
+#
+# Per the project's git-authorship policy (see CLAUDE.md), every
+# commit must be attributed to `msobroza` alone. This file remaps
+# historical author identities to the canonical
+# `msobroza <max.raphael@gmail.com>` form for display in `git log`
+# (with `--use-mailmap` or when `log.mailmap=true` is set) and on
+# GitHub's commit listings (GitHub honors `.mailmap` automatically).
+#
+# What this file does NOT do: it does not rewrite commit objects.
+# The raw `.git/objects/` data still carries the original author
+# strings — only display is remapped. To inspect the original
+# attribution, run `git log --no-mailmap` or `git log --format='%aN <%aE>'`.
+#
+# Reference: https://git-scm.com/docs/gitmailmap
+#
+# Mailmap entry form used below:
+#     <canonical>      <commit-email-to-match>
+# matches any commit whose AUTHOR email is the right-hand value,
+# regardless of the historical author NAME field.
+#
+# Note on committer: the squash-merge commits on `main` carry
+# `GitHub <noreply@github.com>` in the COMMITTER field — that's the
+# legitimate web-flow service identity for merges performed via the
+# GitHub UI, and it is intentionally NOT remapped here. The AUTHOR
+# field for those commits IS remapped (the author email is
+# `max.raphael@gmail.com`, which the first entry below covers).
+
+# Primary identity: any commit with the canonical email becomes
+# `msobroza <max.raphael@gmail.com>`. Covers both the
+# `Max Raphael Sobroza Marques` and `Max Sobroza` name variants
+# that have appeared in the history.
+msobroza <max.raphael@gmail.com>   <max.raphael@gmail.com>
+
+# Early commits made before `git config user.email` was set
+# locally — git defaulted to the `you@example.com` placeholder.
+msobroza <max.raphael@gmail.com>   <you@example.com>
+
+# One historical merge commit whose author email was Claude's
+# tooling identity. Per the authorship policy, attribution belongs
+# to msobroza alone.
+msobroza <max.raphael@gmail.com>   <noreply@anthropic.com>
