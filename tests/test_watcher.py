@@ -461,3 +461,27 @@ async def test_watcher_no_two_reindexes_overlap(tmp_path: Path) -> None:
         await task
     except asyncio.CancelledError:
         pass
+
+
+def test_index_db_wal_mode_enabled_for_concurrent_reindex(tmp_path: Path) -> None:
+    """Risk R5: concurrent MCP queries + watcher-triggered reindex needs
+    WAL mode so readers don't block on the reindex writer.
+
+    The pin lives in `tests/test_db.py::test_wal_mode` already; this test
+    re-asserts it with the watcher context attached so a future PR that
+    naively removes WAL also breaks a `--watch`-flavored test, surfacing
+    the impact on live reindex during MCP queries.
+    """
+    from pydocs_mcp.db import open_index_database
+
+    db_path = tmp_path / "test.db"
+    conn = open_index_database(db_path)
+    try:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal", (
+            f"watcher requires WAL so concurrent MCP queries during reindex "
+            f"don't block; got journal_mode={mode!r}. "
+            f"See spec §6 Risk R5."
+        )
+    finally:
+        conn.close()
