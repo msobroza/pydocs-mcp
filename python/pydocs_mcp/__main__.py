@@ -556,16 +556,6 @@ def _pre_filter_from_package(package: str | None) -> dict | None:
     return {ChunkFilterField.PACKAGE.value: pkg}
 
 
-def _print_search_response(response) -> None:
-    """Preserve the pre-PR CLI behaviour: print the top composite chunk's
-    text (the ``TokenBudgetStep`` output) or nothing when empty.
-    """
-    result = response.result
-    if result is None or not result.items:
-        return
-    print(result.items[0].text)
-
-
 # ── Entry point ───────────────────────────────────────────────────────────
 
 

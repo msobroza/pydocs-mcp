@@ -29,27 +29,25 @@ from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
 from pydocs_mcp.application.module_inspector import ModuleInspector
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.project_indexer import ProjectIndexer
-from pydocs_mcp.application.protocols import (
-    ChunkExtractor,
-    DependencyResolver,
-    ExtractionResult,
-    MemberExtractor,
-)
 from pydocs_mcp.application.reference_service import ReferenceService
 from pydocs_mcp.application.tree_service import TreeService
 
+# NOTE: the extraction Protocols (``ChunkExtractor``, ``MemberExtractor``,
+# ``DependencyResolver``, ``ExtractionResult``) are intentionally NOT
+# re-exported from this package. They are consumer-side contracts for
+# ``extraction/`` (implementors) and the composition roots only;
+# importers MUST reach into :mod:`pydocs_mcp.application.protocols`
+# directly. This keeps the package-level surface focused on the
+# composition-root services and the MCP-public input/error types the
+# CLI and MCP handlers need.
 __all__ = [
     "ApiSearch",
-    "ChunkExtractor",
-    "DependencyResolver",
     "DocsSearch",
-    "ExtractionResult",
     "IndexingService",
     "InvalidArgumentError",
     "LookupInput",
     "LookupService",
     "MCPToolError",
-    "MemberExtractor",
     "ModuleInspector",
     "NotFoundError",
     "PackageLookup",

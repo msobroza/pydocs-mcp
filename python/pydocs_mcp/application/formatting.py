@@ -41,6 +41,7 @@ from pydocs_mcp.models import (
 )
 
 if TYPE_CHECKING:
+    from pydocs_mcp.models import SearchResponse
     from pydocs_mcp.storage.node_reference import NodeReference
 
 # Approximate characters per token (conservative estimate for English text).
@@ -253,3 +254,40 @@ def format_references(
                     f"*(unresolved — to_name didn't match any indexed qname)*\n"
                 )
     return "".join(blocks)
+
+
+# Default empty-state message for ``render_top_composite``. Single source of
+# truth so both server.py (kind='docs', kind='api') and __main__.py share
+# the same wording when no override is supplied.
+_DEFAULT_EMPTY_MSG = "No results."
+
+
+def render_top_composite(
+    response: "SearchResponse",
+    empty_msg: str = _DEFAULT_EMPTY_MSG,
+) -> str:
+    """Collapse a :class:`SearchResponse` to a single rendered string.
+
+    The retrieval pipeline's ``TokenBudgetStep`` wraps the final output as a
+    single composite chunk at ``items[0]``, so reading its ``.text`` is the
+    contract for "the rendered body". Both the MCP server (``server.py``) and
+    the CLI (``__main__.py``) need that collapse on every search; this helper
+    is the single source of truth.
+
+    Args:
+        response: ``SearchResponse`` from a chunk or member pipeline. When
+            ``response.result`` is ``None`` or its ``items`` tuple is empty,
+            the pipeline produced nothing renderable.
+        empty_msg: Returned verbatim when the response is empty. Callers
+            customize this for the MCP surface (``"No matches found."`` /
+            ``"No symbols found."``) or pass the empty string when joining
+            multiple responses (the ``kind="any"`` search path).
+
+    Returns:
+        ``response.result.items[0].text`` if a composite is present,
+        otherwise ``empty_msg``.
+    """
+    result = response.result
+    if result is None or not result.items:
+        return empty_msg
+    return result.items[0].text

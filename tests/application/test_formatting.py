@@ -10,12 +10,16 @@ from __future__ import annotations
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
+    render_top_composite,
 )
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
+    ChunkList,
     ModuleMember,
     ModuleMemberFilterField,
+    SearchQuery,
+    SearchResponse,
 )
 
 
@@ -193,3 +197,68 @@ def test_format_members_markdown_budget_truncation():
     )
     out = format_members_markdown_within_budget(members, budget_tokens=50)  # 200 chars
     assert len(out) <= 200 + 100
+
+
+# ---------- render_top_composite ----------
+#
+# Pins the I19 cross-surface invariant: the MCP server (`server.py`) and
+# the CLI (`__main__.py`) BOTH collapse a ``SearchResponse`` to one string
+# by reading ``response.result.items[0].text`` — the composite chunk the
+# pipeline's ``TokenBudgetStep`` deposits at index 0. The helper is the
+# single source of truth, so this is the contract test.
+
+_DUMMY_QUERY = SearchQuery(terms="anything")
+
+
+def test_render_top_composite_returns_first_item_text():
+    """The first chunk's ``.text`` is the formatted body (composite output)."""
+    response = SearchResponse(
+        result=ChunkList(items=(
+            Chunk(text="winner-body", metadata={ChunkFilterField.TITLE.value: "T"}),
+            Chunk(text="loser-body", metadata={ChunkFilterField.TITLE.value: "T2"}),
+        )),
+        query=_DUMMY_QUERY,
+    )
+    assert render_top_composite(response) == "winner-body"
+
+
+def test_render_top_composite_empty_items_uses_default_empty_msg():
+    """An empty ``items`` tuple falls back to the default empty message."""
+    response = SearchResponse(
+        result=ChunkList(items=()),
+        query=_DUMMY_QUERY,
+    )
+    assert render_top_composite(response) == "No results."
+
+
+def test_render_top_composite_empty_items_custom_empty_msg():
+    """Callers can override the empty fallback (server uses 'No matches found.'
+    and 'No symbols found.'; the kind='any' path passes the empty string)."""
+    response = SearchResponse(
+        result=ChunkList(items=()),
+        query=_DUMMY_QUERY,
+    )
+    assert render_top_composite(response, empty_msg="No matches found.") == "No matches found."
+
+
+def test_render_top_composite_none_result_uses_empty_msg():
+    """``response.result is None`` mirrors the old server/CLI guards: when
+    the pipeline returns no result object at all, the empty fallback wins.
+    Constructed via ``object.__new__`` because the dataclass is frozen and
+    declares ``result`` as required."""
+    response = object.__new__(SearchResponse)
+    object.__setattr__(response, "result", None)
+    object.__setattr__(response, "query", _DUMMY_QUERY)
+    object.__setattr__(response, "duration_ms", 0.0)
+    assert render_top_composite(response, empty_msg="nope") == "nope"
+
+
+def test_render_top_composite_empty_string_passthrough():
+    """The ``kind='any'`` server path passes ``empty_msg=''`` so empty
+    halves don't push a 'No matches found.' line into the joined output.
+    Pin that behaviour."""
+    response = SearchResponse(
+        result=ChunkList(items=()),
+        query=_DUMMY_QUERY,
+    )
+    assert render_top_composite(response, empty_msg="") == ""
