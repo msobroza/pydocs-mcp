@@ -211,10 +211,24 @@ and pinning them keeps MCP clients stable across server retunes (see
 
 ## Live re-indexing
 
-`pydocs-mcp serve --watch` runs a file-system watcher alongside the MCP
-server. Edits under the project root re-trigger indexing in the
-background; the next MCP query sees fresh data. Without `--watch`, the
-server indexes once at startup (today's behavior — unchanged).
+The file-system watcher re-triggers indexing on edits so subsequent
+queries see fresh data. Two modes are available, each tuned for a
+different workflow:
+
+```bash
+pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients connected over stdio)
+pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh for CLI `search` / `lookup`)
+```
+
+Use `serve --watch` when an AI client (Claude Code, Cursor, Continue.dev)
+is connected over stdio and you want the index to refresh as you edit.
+Use `watch` when you don't need an MCP server running — for example, you
+prefer the CLI `search` / `lookup` commands, or you want to keep the
+index fresh from an IDE-driven workflow without leaving an idle FastMCP
+stdio process. Both modes share the same YAML knobs under `serve.watch.*`.
+
+Without either mode, the server (or `pydocs-mcp index`) indexes once and
+exits — today's behavior, unchanged.
 
 ### Install
 
@@ -222,12 +236,13 @@ The watcher uses `watchdog`, which ships as an optional extra:
 
 ```bash
 pip install pydocs-mcp[watch]
-pydocs-mcp serve . --watch
+pydocs-mcp serve . --watch    # or:
+pydocs-mcp watch .
 ```
 
-Without the `[watch]` extras, `pydocs-mcp serve --watch` exits with
-an actionable install hint. Default `pydocs-mcp serve` (no `--watch`)
-does not require `watchdog`.
+Without the `[watch]` extras, both `pydocs-mcp serve --watch` and
+`pydocs-mcp watch` exit with an actionable install hint. Default
+`pydocs-mcp serve` (no `--watch`) does not require `watchdog`.
 
 ### How it works
 

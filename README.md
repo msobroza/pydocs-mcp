@@ -85,18 +85,18 @@ pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 
 ### Live re-indexing (optional)
 
-If you edit code while the MCP server is running, pass `--watch` to keep
-the index fresh as you save files. Edits to `.py`, `.md`, and `.ipynb`
-files trigger a debounced reindex; the next `search` / `lookup` call
-sees the updated content.
+If you edit code while you want the index to stay fresh, install the
+`watch` extras and pick one of two modes — both debounce edits to
+`.py`, `.md`, and `.ipynb` files into a single reindex.
 
 ```bash
 pip install 'pydocs-mcp[watch]'
-pydocs-mcp serve . --watch
+pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients)
+pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh for CLI `search` / `lookup`)
 ```
 
-Debounce, file extensions, and ignored paths are tunable via
-`serve.watch.*` in your `pydocs-mcp.yaml` (see
+Both modes share the same YAML tunables: debounce, file extensions, and
+ignored paths live under `serve.watch.*` in your `pydocs-mcp.yaml` (see
 [DOCUMENTATION.md](DOCUMENTATION.md#live-re-indexing)).
 
 Point Claude Code, Cursor, or Continue.dev at it over stdio — copy-paste client

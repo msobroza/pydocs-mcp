@@ -237,6 +237,16 @@ Every commit on this branch is sole-authored by `msobroza`. No
      the YAML knobs, the debounce + coalesce semantics, and the
      `pip install pydocs-mcp[watch]` requirement
 
+8. **NEW: standalone `pydocs-mcp watch <project>` subcommand** —
+   watcher loop only, no MCP server. Spec follow-up. Targets operators
+   who want a fresh on-disk index for the CLI `search` / `lookup`
+   commands (or an IDE-driven workflow) without keeping an idle
+   FastMCP stdio process running. Reads the same `serve.watch.*` YAML
+   knobs as `serve --watch`. Implementation shares a
+   `_build_watcher_and_callback(args, watch_cfg)` helper with
+   `_run_watch_loop` so both modes can only differ in whether they
+   ALSO run an MCP server.
+
 ### 4.2 Out of scope
 
 - Watching `site-packages/` for dependency changes (Decision F)
