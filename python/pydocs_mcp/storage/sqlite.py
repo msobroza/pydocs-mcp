@@ -95,8 +95,8 @@ class SqliteUnitOfWork:
     repository attributes would each open their own connection and
     atomicity would be lost), and exposes ``packages`` / ``chunks`` /
     ``module_members`` / ``trees`` / ``references`` as attributes.
-    Sub-PR #5b adds ``references`` as the 5th repo attribute (the
-    cross-node reference-graph store).
+    The ``references`` attribute is the cross-node reference-graph store
+    (CALLS / IMPORTS / INHERITS / MENTIONS edges).
 
     The ``asyncio.Lock`` lives on the instance and is exposed via the
     ContextVar so ``_maybe_acquire`` can serialise concurrent repo calls

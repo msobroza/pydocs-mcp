@@ -13,8 +13,9 @@ Two surfaces:
   :class:`NodeReference` candidates as the chunker walks the AST. The
   resolver runs as a separate pass (see :class:`ReferenceResolver`).
 
-Sub-PR #5b ships Python-only capture. Markdown / notebook chunkers do
-NOT emit references (per spec Decision 7); MENTIONS lands in #5c.
+Python-only capture today. Markdown / notebook chunkers do NOT emit
+references (per spec Decision 7). MENTIONS edges land via the markdown
+chunker's separate capture path.
 """
 from __future__ import annotations
 

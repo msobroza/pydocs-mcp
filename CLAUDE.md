@@ -327,6 +327,56 @@ class RRFStep(RetrieverStep):
 - Write Python docstrings (`"""..."""`) for public functions — especially MCP tool handlers in `server.py` since these become user-facing tool descriptions
 - Write Rust doc comments (`///`) for `#[pyfunction]` exports since they document the API contract with Python
 - Don't comment obvious code; don't leave commented-out code without a reason
+- **Code comments that reference AC numbers / sub-PR numbers should die with the code they explain.** When a fix lands that removes or restructures the code an `# AC #N — …` comment annotated, delete the comment in the same commit. Stale `AC #` refs accumulate noise that future readers can't disambiguate from active rationale.
+
+## Null Object pattern for optional service deps
+
+**Rule:** when an application service has a dependency that is *optional at deployment time* (e.g., `LookupService` works without the reference graph when `reference_graph.capture.enabled=False`), do NOT type the field as `X | None`. Instead, ship a `NullX` impl that satisfies the same Protocol with no-op / empty-return semantics, and make the composition root wire `NullX()` when the real impl is disabled.
+
+Examples in this repo:
+
+- `pydocs_mcp.application.null_services.NullTreeService` / `NullReferenceService` — covers `LookupService.tree_svc` / `ref_svc` when the deployment doesn't index trees / references. Methods raise `ServiceUnavailableError` with a YAML-anchored actionable pointer.
+- `pydocs_mcp.storage.null_vector_store.NullVectorStore` — covers `uow.vectors` when the deployment doesn't index dense embeddings. Methods are silent no-ops (vectors are advisory; missing them shouldn't break indexing).
+
+**Why:** `X | None` forces every consumer to add `if x is not None:` guards. Null Object pattern keeps the call sites uniform and the type signatures simple. The `getattr(uow, "vectors", None)` guards previously scattered across `application/indexing_service.py` were removed under this rule.
+
+The failure-semantics asymmetry between the two Null impls is deliberate: `NullVectorStore` is silent because vectors are advisory; `NullTreeService` / `NullReferenceService` raise because trees / references are user-requested via the MCP `lookup` tool — a silent empty result would mislead the caller.
+
+## `RetrieverState.scratch` mutation discipline
+
+`RetrieverState` is `@dataclass(frozen=True, slots=True)`. The `scratch: dict[str, object]` field is the documented escape hatch for per-step coordination. Mutation rules:
+
+- **Sequential steps** (running outside a `ParallelStep` branch) MAY mutate `state.scratch` in-place. `frozen=True` forbids field reassignment, not deep mutation.
+- **Steps that MAY run inside a `ParallelStep` branch** MUST NOT mutate the input state's scratch — they MUST build a new dict and return `replace(state, scratch=new_scratch)`. Reason: `ParallelStep` shares the input state's scratch reference across branches; in-place mutation in one branch leaks into the others.
+
+Today, two shipped steps run inside parallel branches: `TopKFilterStep` and `PreFilterStep`. Both use `dataclasses.replace`. The latent input-aliasing bug in `TopKFilterStep` (where `dataclasses.replace(state, candidates=...)` followed by `new_state.scratch[k] = v` aliased through to the caller's input dict) was fixed under this rule.
+
+Key convention: scratch keys are `<step_name>.<field>` so collisions are detectable. The shared `PRE_FILTER_SCRATCH_KEY` constant lives in `retrieval/steps/_constants.py`.
+
+`ParallelStep`'s merge helper `_merge_branch_results(initial, branches) -> (items, scratch, first_type)` always returns a fresh scratch dict so branch outputs don't alias the input.
+
+## `FilterAdapter` Protocol contract
+
+The hexagonal seam between retrieval-layer backend-neutral filter trees and storage-layer query languages is the `FilterAdapter` Protocol at `storage/protocols.py`:
+
+```python
+@runtime_checkable
+class FilterAdapter(Protocol):
+    def adapt(
+        self,
+        tree: Filter,
+        *,
+        target_field: Literal["chunk", "member"],
+    ) -> tuple[str, tuple[Any, ...]]: ...
+```
+
+Rules:
+
+- **Any retrieval-layer SQL generation MUST go through `FilterAdapter` via `BuildContext.filter_adapter`.** No retrieval step is allowed to `from pydocs_mcp.storage.sqlite import SqliteFilterAdapter` at runtime.
+- **`PreFilterResult` is backend-neutral** — `(tree, scope)` only, no SQL strings. Fetchers (`chunk_fetcher`, `member_fetcher`) translate the tree via `ctx.filter_adapter.adapt(...)` when they need to execute. `dense_fetcher` uses the `VectorSearchable` Protocol and has no SQL path.
+- **The concrete adapter lives in `storage/`**, alongside the SQL it emits. Composition roots wire `SqliteFilterAdapter()` into `BuildContext.filter_adapter`.
+
+This is the rule that closes the hexagonal leak that previously had `retrieval/steps/pre_filter.py` importing from `pydocs_mcp.storage.sqlite` at runtime.
 
 ## README files: no internal PR / sub-PR / task jargon
 

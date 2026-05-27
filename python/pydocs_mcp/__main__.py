@@ -476,7 +476,7 @@ def _run_cmd(coro: Awaitable[None], *, verbose: bool) -> int:
     try:
         asyncio.run(coro)
         return 0
-    except Exception as exc:  # noqa: BLE001 -- CLI top-level (AC #16)
+    except Exception as exc:  # noqa: BLE001 -- intentional top-level CLI boundary
         print(f"Error: {exc}", file=sys.stderr)
         if verbose:
             traceback.print_exc(file=sys.stderr)
@@ -521,7 +521,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         # Graceful shutdown via Ctrl+C — not an error.
         return 0
-    except Exception as exc:  # noqa: BLE001 -- CLI top-level (AC #16)
+    except Exception as exc:  # noqa: BLE001 -- intentional top-level CLI boundary
         print(f"Error: {exc}", file=sys.stderr)
         if args.verbose:
             traceback.print_exc(file=sys.stderr)

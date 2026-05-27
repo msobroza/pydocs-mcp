@@ -234,9 +234,9 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
     """Remove all rows for a package across chunks, members, trees, refs, packages.
 
-    Sub-PR #5b adds ``node_references`` to the per-package sweep — without
-    this, stale refs survive a re-index and ``ref_svc.callers(...)`` returns
-    references to deleted source nodes.
+    The reference-graph capture (``node_references``) participates in the
+    per-package sweep — without this, stale refs survive a re-index and
+    ``ref_svc.callers(...)`` returns references to deleted source nodes.
     """
     connection.execute("DELETE FROM chunks  WHERE package=?", (package_name,))
     connection.execute("DELETE FROM module_members WHERE package=?", (package_name,))
