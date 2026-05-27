@@ -114,11 +114,12 @@ async def test_run_watch_loop_cancels_watcher_on_server_exit(tmp_path, monkeypat
 
     monkeypatch.setattr("pydocs_mcp.server.run", _fake_run)
 
-    # Inject the fake observer into the watcher.
+    # Inject the fake observer into the watcher. _load_watchdog now returns
+    # ONLY the Observer class (FileSystemEventHandler dropped — `_Handler`
+    # uses duck typing per watchdog's documented dispatch contract).
     from pydocs_mcp.serve import watcher as watcher_mod
     monkeypatch.setattr(
-        watcher_mod, "_load_watchdog",
-        lambda: (lambda: fake_observer, type("H", (), {"on_any_event": lambda self, e: None})),
+        watcher_mod, "_load_watchdog", lambda: (lambda: fake_observer),
     )
 
     # The integration: server exits, watcher gets cancelled, observer stopped.
@@ -155,8 +156,7 @@ async def test_run_watch_loop_cancels_watcher_on_server_crash(tmp_path, monkeypa
 
     from pydocs_mcp.serve import watcher as watcher_mod
     monkeypatch.setattr(
-        watcher_mod, "_load_watchdog",
-        lambda: (lambda: fake_observer, type("H", (), {"on_any_event": lambda self, e: None})),
+        watcher_mod, "_load_watchdog", lambda: (lambda: fake_observer),
     )
 
     with pytest.raises(RuntimeError, match="simulated server crash"):

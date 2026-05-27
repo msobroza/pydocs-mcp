@@ -87,11 +87,7 @@ def test_run_watch_only_uses_fakeobserver_without_mcp(
     from pydocs_mcp.serve import watcher as watcher_mod
 
     monkeypatch.setattr(
-        watcher_mod, "_load_watchdog",
-        lambda: (
-            lambda: fake_observer,
-            type("H", (), {"on_any_event": lambda self, e: None}),
-        ),
+        watcher_mod, "_load_watchdog", lambda: (lambda: fake_observer),
     )
 
     # Stub server.run so any accidental import path doesn't actually

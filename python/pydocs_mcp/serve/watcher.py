@@ -37,17 +37,23 @@ _INSTALL_HINT = (
 
 
 def _load_watchdog():
-    """Resolve `watchdog.observers.Observer` + `watchdog.events.FileSystemEventHandler`.
+    """Resolve `watchdog.observers.Observer`.
 
     Isolated so tests can monkeypatch `builtins.__import__` to simulate
     the no-extras case without touching the actual site-packages tree.
+
+    The matching `FileSystemEventHandler` class is NOT imported here —
+    `_Handler` (inside `run_until_cancelled`) uses duck typing
+    (watchdog's `Observer.schedule(handler, ...)` only calls
+    `handler.on_any_event(event)`; no isinstance check). Decoupling
+    keeps the test path watchdog-free when callers pass
+    `observer_factory=FakeObserver`.
     """
     try:
-        from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer
     except ImportError as exc:
         raise ServiceUnavailableError(_INSTALL_HINT) from exc
-    return Observer, FileSystemEventHandler
+    return Observer
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +80,7 @@ class FileWatcher:
         # construction time rather than at first event — startup failure
         # is easier to diagnose than mid-run "why isn't my watcher firing".
         if self.observer_factory is None:
-            Observer, _ = _load_watchdog()
-            object.__setattr__(self, "observer_factory", Observer)
+            object.__setattr__(self, "observer_factory", _load_watchdog())
 
     def _matches(self, path: Path) -> bool:
         """Pure-function event filter — returns True iff the path is
@@ -105,13 +110,17 @@ class FileWatcher:
         Cancelling the parent task stops the observer and unwinds cleanly.
         See spec Decisions E + G.
         """
-        _, FileSystemEventHandler = _load_watchdog()
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Path] = asyncio.Queue()
 
         watcher_self = self
 
-        class _Handler(FileSystemEventHandler):
+        # Plain class (no FileSystemEventHandler parent): watchdog's
+        # Observer.schedule() is duck-typed — it only calls
+        # `handler.on_any_event(event)`. Dropping the inheritance keeps the
+        # test path watchdog-free when callers pass `observer_factory=
+        # FakeObserver`, so unit tests don't depend on the `[watch]` extras.
+        class _Handler:
             def on_any_event(self, event) -> None:  # noqa: ANN001
                 # WHY: `watchdog` calls this from its own native thread.
                 # `loop.call_soon_threadsafe(queue.put_nowait, ...)` is the
