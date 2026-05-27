@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from pydocs_mcp.retrieval.config import WatchConfig
     from pydocs_mcp.serve.watcher import FileWatcher
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
@@ -414,7 +415,7 @@ async def _run_serve_indexing(args: argparse.Namespace) -> None:
 
 
 def _build_watcher_and_callback(
-    args: argparse.Namespace, watch_cfg,
+    args: argparse.Namespace, watch_cfg: "WatchConfig",
 ) -> tuple["FileWatcher", Callable[[], Awaitable[None]]]:
     """Build the ``FileWatcher`` + ``on_change`` callback shared by
     ``serve --watch`` and the standalone ``watch`` subcommand.
