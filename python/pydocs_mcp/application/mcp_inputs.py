@@ -15,9 +15,17 @@ slots those validators read at runtime.
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
+
+if TYPE_CHECKING:
+    # Type-only import — keeps the runtime ``application -> retrieval`` edge
+    # lazy (the actual ``cfg.reference_graph`` / ``cfg.search`` attribute
+    # reads in ``configure_from_app_config`` happen on whatever the caller
+    # passes, validated structurally via ``_ConfigShape``). Avoids the
+    # circular-import risk called out in the pre-refactor docstring.
+    from pydocs_mcp.retrieval.config import ReferenceGraphConfig, SearchConfig
 
 # Format validators — reject malformed input at the boundary.
 _PACKAGE_RE = re.compile(
@@ -53,15 +61,44 @@ _SEARCH_LIMIT_DEFAULT: int = 10
 _SEARCH_LIMIT_MAX: int = 1000
 
 
-def configure_from_app_config(cfg) -> None:
+@runtime_checkable
+class _ConfigShape(Protocol):
+    """Structural shape of the YAML-loaded ``AppConfig`` that
+    :func:`configure_from_app_config` reads (I11).
+
+    Replaces the previous ``cfg: Any`` parameter with a typed Protocol
+    that documents exactly which cfg sub-trees the function consumes —
+    ``reference_graph`` (for ``capture`` / ``resolver`` / ``output``
+    sub-models) and ``search`` (for the ``search.output`` bounds).
+
+    The Protocol is ``@runtime_checkable`` so unit tests can structurally
+    verify any duck-typed config carrier satisfies the shape via
+    ``isinstance(cfg, _ConfigShape)``. The real ``AppConfig`` (defined in
+    :mod:`pydocs_mcp.retrieval.config`) satisfies this Protocol nominally
+    — no nominal subclassing required.
+
+    Module-private (``_ConfigShape``) on purpose: external callers should
+    pass a real ``AppConfig`` instance from
+    :class:`pydocs_mcp.retrieval.config.AppConfig`. The Protocol exists
+    only to document the structural contract and avoid a hard runtime
+    dependency on ``AppConfig`` at the type level (which would create a
+    circular import between ``application`` and ``retrieval``).
+    """
+
+    reference_graph: "ReferenceGraphConfig"
+    search: "SearchConfig"
+
+
+def configure_from_app_config(cfg: _ConfigShape) -> None:
     """Install YAML-loaded settings into the module-level slots this
     package reads at runtime.
 
     Called ONCE at server / CLI startup (see ``server.py::run`` and
-    ``__main__.py::_cmd_*``). The function is intentionally untyped on its
-    parameter — accepting any object with the right attributes avoids a
-    circular import between ``application`` and ``retrieval``, and the
-    AppConfig type is fully validated upstream anyway.
+    ``__main__.py::_cmd_*``). The parameter is typed against
+    :class:`_ConfigShape` — a structural Protocol covering the two cfg
+    sub-trees this function reads (``reference_graph`` and ``search``).
+    Stamp coupling is gone: callers no longer pass an untyped ``Any``;
+    static type-checkers can verify the contract.
 
     Three slots are updated:
 
