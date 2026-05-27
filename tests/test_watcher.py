@@ -223,10 +223,140 @@ async def test_watcher_matches_extension_case_insensitively(tmp_path: Path) -> N
     task = asyncio.create_task(fw.run_until_cancelled(_on_change))
     await asyncio.sleep(0.01)
 
+    # Space the two fires past the 10ms debounce window so each gets
+    # its own callback — the test is about the case-filter matching
+    # both, not about debounce semantics (which has its own test).
     fake.fire(str(tmp_path / "Setup.PY"))  # uppercase extension
+    await asyncio.sleep(0.05)
     fake.fire(str(tmp_path / "Module.Py"))  # mixed-case extension
     await asyncio.sleep(0.05)
     assert fire_count == 2  # both should match
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_watcher_debounces_burst_edits(tmp_path: Path) -> None:
+    """AC-4: 3 events within `debounce_ms` produce exactly 1 callback."""
+    from tests._fakes import FakeObserver
+
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=50,
+        observer_factory=lambda: fake,
+    )
+
+    fire_count = 0
+
+    async def _on_change() -> None:
+        nonlocal fire_count
+        fire_count += 1
+
+    task = asyncio.create_task(fw.run_until_cancelled(_on_change))
+    await asyncio.sleep(0.01)
+
+    # Three rapid edits within the 50ms debounce window.
+    fake.fire(str(tmp_path / "a.py"))
+    fake.fire(str(tmp_path / "b.py"))
+    fake.fire(str(tmp_path / "c.py"))
+
+    # Wait > debounce_ms — exactly one callback should have fired.
+    await asyncio.sleep(0.12)
+    assert fire_count == 1, f"expected 1 callback, got {fire_count}"
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_watcher_fires_after_debounce_window(tmp_path: Path) -> None:
+    """AC-2: callback fires within debounce_ms + small headroom."""
+    from tests._fakes import FakeObserver
+
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=30,
+        observer_factory=lambda: fake,
+    )
+
+    times: list[float] = []
+    loop = asyncio.get_running_loop()
+
+    async def _on_change() -> None:
+        times.append(loop.time())
+
+    task = asyncio.create_task(fw.run_until_cancelled(_on_change))
+    await asyncio.sleep(0.01)
+
+    start = loop.time()
+    fake.fire(str(tmp_path / "a.py"))
+    # Should fire roughly debounce_ms after the last event.
+    await asyncio.sleep(0.1)
+
+    assert len(times) == 1
+    elapsed = times[0] - start
+    # 30ms debounce, allow 100ms slack for test-host scheduling jitter.
+    assert 0.025 <= elapsed <= 0.130, (
+        f"callback fired at {elapsed*1000:.1f}ms; expected ~30ms debounce"
+    )
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_watcher_two_bursts_separated_by_idle_produce_two_callbacks(
+    tmp_path: Path,
+) -> None:
+    """Sanity: two bursts separated by > debounce_ms idle → 2 callbacks."""
+    from tests._fakes import FakeObserver
+
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=30,
+        observer_factory=lambda: fake,
+    )
+
+    fire_count = 0
+
+    async def _on_change() -> None:
+        nonlocal fire_count
+        fire_count += 1
+
+    task = asyncio.create_task(fw.run_until_cancelled(_on_change))
+    await asyncio.sleep(0.01)
+
+    # First burst.
+    fake.fire(str(tmp_path / "a.py"))
+    fake.fire(str(tmp_path / "b.py"))
+    await asyncio.sleep(0.1)  # well past debounce, callback ran
+
+    # Idle, then second burst.
+    fake.fire(str(tmp_path / "c.py"))
+    await asyncio.sleep(0.1)
+    assert fire_count == 2
 
     task.cancel()
     try:

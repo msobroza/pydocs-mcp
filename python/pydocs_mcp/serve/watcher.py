@@ -140,13 +140,43 @@ class FileWatcher:
         queue: asyncio.Queue,
         on_change: Callable[[], Awaitable[None]],
     ) -> None:
-        """Consume queued events, fire `on_change` per spec Decision E.
+        """Consume queued events, debounce, fire `on_change` per spec Decision E.
 
-        Filled in over subsequent tasks (debounce + in-flight coalesce);
-        this version just calls `on_change` on every event so the
-        extension / ignore-glob filter can be pinned first.
+        Debounce algorithm: pop the first event, then repeatedly wait
+        `debounce_ms` more — if another event arrives during the wait,
+        reset the timer (the wait coalesces it). Once the timer expires
+        without a new event, fire `on_change`.
         """
+        debounce_s = self.debounce_ms / 1000.0
         while True:
-            path = await queue.get()
-            log.info("watch: reindex triggered by %s", path)
+            # Block until something arrives — no work to do otherwise.
+            first_path = await queue.get()
+            pending_paths: list[Path] = [first_path]
+
+            # Debounce loop — extend the window every time a new event
+            # lands during the wait. Exits when wait_for times out
+            # without seeing an event.
+            while True:
+                try:
+                    nxt = await asyncio.wait_for(queue.get(), timeout=debounce_s)
+                    pending_paths.append(nxt)
+                except asyncio.TimeoutError:
+                    break
+
+            self._log_trigger(pending_paths)
             await on_change()
+
+    def _log_trigger(self, paths: list[Path]) -> None:
+        """Log the trigger paths (cap at 3 + a count to keep logs sane).
+
+        Spec Open Item O5 — INFO line per trigger with up to 3 changed
+        paths. Larger bursts (editor save-all, git checkout) collapse
+        into `(+N more)` suffix so the log stays readable.
+        """
+        if not paths:
+            return
+        head = ", ".join(str(p) for p in paths[:3])
+        if len(paths) > 3:
+            log.info("watch: reindex triggered (%s, +%d more)", head, len(paths) - 3)
+        else:
+            log.info("watch: reindex triggered (%s)", head)
