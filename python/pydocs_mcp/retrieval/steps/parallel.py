@@ -39,6 +39,74 @@ from pydocs_mcp.retrieval.pipeline import (
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
 
+def _merge_branch_results(
+    initial_state: RetrieverState,
+    branch_states: tuple[RetrieverState, ...],
+) -> tuple[list, dict[str, object], type | None]:
+    """Merge parallel branches' items + scratch into deterministic output.
+
+    Returns a 3-tuple ``(items, scratch, first_type)``:
+
+    - ``items``: the deduped item list, in (initial-state, then
+      branch-order) sequence; earlier-wins on duplicate ``item.id``
+      (falling back to ``id(item)`` when ``.id`` is None) so the first
+      branch's representative ``retriever_name`` / ``relevance``
+      survive (AC #33).
+    - ``scratch``: a FRESH dict starting from a copy of the initial
+      state's scratch, then ``update``d in branch order (last-write-wins
+      on shared keys). The caller's input dict is never aliased.
+    - ``first_type``: ``ChunkList`` / ``ModuleMemberList`` / ``None`` —
+      the result-list type to materialize on the merged state. ``None``
+      means no branch produced typed output and the caller should
+      propagate scratch only.
+
+    Pure function on already-resolved branch states. Extracted from
+    ``ParallelStep.run`` so the merge contract has one named, testable
+    surface and ``run`` stays focused on fan-out + assembly.
+    """
+    initial_items: tuple = ()
+    if initial_state.result is not None:
+        initial_items = initial_state.result.items
+
+    first_type: type | None = (
+        type(initial_state.result) if initial_state.result is not None else None
+    )
+
+    # Track items by their identity (id field if set, else Python id() fallback).
+    # Branches may filter or reorder; we dedupe by content-key, not position.
+    seen_keys: set = set()
+    accumulated_items: list = []
+
+    def _key(item):
+        return item.id if item.id is not None else id(item)
+
+    for item in initial_items:
+        k = _key(item)
+        if k not in seen_keys:
+            seen_keys.add(k)
+            accumulated_items.append(item)
+
+    # Last-write-wins merge in branch order so earlier branches set the
+    # baseline and later branches can deliberately override a shared
+    # key (e.g. two branches both publishing "ranked" — the rightmost
+    # wins, matching the natural reading order of YAML branches).
+    merged_scratch: dict[str, object] = dict(initial_state.scratch)
+
+    for branch_state in branch_states:
+        merged_scratch.update(branch_state.scratch)
+        if branch_state.result is None:
+            continue
+        if first_type is None:
+            first_type = type(branch_state.result)
+        for item in branch_state.result.items:
+            k = _key(item)
+            if k not in seen_keys:
+                seen_keys.add(k)
+                accumulated_items.append(item)
+
+    return accumulated_items, merged_scratch, first_type
+
+
 @step_registry.register("parallel_retrieval")
 @dataclass(frozen=True, slots=True)
 class ParallelStep(RetrieverStep):
@@ -57,43 +125,10 @@ class ParallelStep(RetrieverStep):
             *(s.run(bi) for s, bi in zip(self.stages, branch_inputs))
         )
 
-        initial_items: tuple = ()
-        if state.result is not None:
-            initial_items = state.result.items
-
-        first_type = type(state.result) if state.result is not None else None
-
-        # Track items by their identity (id field if set, else Python id() fallback).
-        # Branches may filter or reorder; we dedupe by content-key, not position.
-        seen_keys: set = set()
-        accumulated_items: list = []
-
-        def _key(item):
-            return item.id if item.id is not None else id(item)
-
-        for item in initial_items:
-            k = _key(item)
-            if k not in seen_keys:
-                seen_keys.add(k)
-                accumulated_items.append(item)
-
-        # Last-write-wins merge in branch order so earlier branches set the
-        # baseline and later branches can deliberately override a shared
-        # key (e.g. two branches both publishing "ranked" — the rightmost
-        # wins, matching the natural reading order of YAML branches).
-        merged_scratch: dict[str, object] = dict(state.scratch)
-
-        for branch_state in results:
-            merged_scratch.update(branch_state.scratch)
-            if branch_state.result is None:
-                continue
-            if first_type is None:
-                first_type = type(branch_state.result)
-            for item in branch_state.result.items:
-                k = _key(item)
-                if k not in seen_keys:
-                    seen_keys.add(k)
-                    accumulated_items.append(item)
+        accumulated_items, merged_scratch, first_type = _merge_branch_results(
+            initial_state=state,
+            branch_states=tuple(results),
+        )
 
         if first_type is ChunkList:
             return replace(
