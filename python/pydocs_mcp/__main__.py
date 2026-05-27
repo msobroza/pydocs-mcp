@@ -97,6 +97,12 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Don't import deps. Read .py files from site-packages instead. "
                  "Faster, safer, no side-effects. Uses the same parser as project source.",
         )
+        if cmd == "serve":
+            sp.add_argument(
+                "--watch", action="store_true",
+                help="Watch the project for changes and reindex on edits. "
+                     "Requires the 'watch' extras: pip install pydocs-mcp[watch]",
+            )
 
     # sub-PR #6: replace query/api with 2 tools matching the MCP surface.
     sp_search = sub.add_parser("search", help="Full-text search over indexed docs/code")
