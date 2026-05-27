@@ -1,146 +1,149 @@
 # pydocs-mcp
 
-**A local Python documentation MCP server that gives your AI coding agent fast,
-version-matched code retrieval — keyword (BM25) and semantic (dense) search,
-fused into one hybrid ranking — over the exact versions of every dependency
-installed on your machine.**
+**Local, version-aware code & docs search for your AI coding agent — over the
+exact library versions installed on your machine. No cloud, no API keys.**
 
 ![pydocs-mcp architecture overview: your project source and installed Python libraries are indexed into a SQLite database (chunks, metadata, reference graph) plus a TurboQuant .tq vector file; an AI coding assistant's query runs through keyword (BM25) and vector search fused together — with a tree-navigating mode over the code map — then a result ranker returns version-aware answers, all locally with no API keys or network upload.](assets/pydocs-mcp-overview.png)
 
-Your AI assistant remembers `requests` 2.28. You have 2.31 installed. It writes
-code calling a kwarg that was renamed two versions ago — and you spend twenty
-minutes debugging a failing test. The fix isn't a smarter prompt; it's giving
-the AI documentation that matches **your lockfile**, not the average of every
-StackOverflow answer it ever read.
+Your AI assistant thinks you're on `requests` 2.28. You actually have 2.31. It
+calls a kwarg that was renamed two versions ago, your test fails, and you lose
+twenty minutes. The fix isn't a smarter prompt — it's giving the AI docs that
+match **your lockfile**, not the average of every StackOverflow answer it ever
+read.
 
-pydocs-mcp indexes your project source + every installed Python dependency from
-your `site-packages`, on your machine, in seconds. It exposes two MCP tools
-(`search`, `lookup`) — plus a CLI mirror with the same surface and scoring — and
-captures a **reference graph** so `lookup` can answer *"what calls this method?"*
-across your code and every dep. No required network calls, no API keys, no rate
-limits.
+pydocs-mcp indexes your project plus every installed dependency, right on your
+machine, in seconds. Your agent connects over MCP and gets answers grounded in
+*your* code — fully offline.
 
-**Install once. Index once. Then ask your AI.**
+## What you get
 
-## Retrieval, at a glance
+- **Matched to your install.** Searches the exact versions sitting in your
+  `site-packages`, so your agent stops inventing APIs from some older release.
+- **Private & offline.** Everything runs locally — no API keys, no uploads, no
+  rate limits, no per-query fees.
+- **Three ways to find code.** Keyword, meaning, and LLM reasoning (see
+  [How it works](#how-it-works)) — on their own or fused into one ranked answer.
+- **Knows how your code connects.** Ask *"what calls this?"*, *"what does it
+  call?"*, or *"what does this class inherit?"* — across your project and every
+  dependency.
+- **Lean, not bloated.** Minimal dependencies — **no PyTorch, no FAISS**. A small
+  local ONNX embedder plus the Rust [TurboQuant](https://arxiv.org/abs/2504.19874)
+  vector store ([`turbovec`](https://github.com/RyanCodrai/turbovec)), which packs
+  embeddings **~16× smaller than float32** (a 1536-dim vector drops from 6,144 to
+  384 bytes; a 10M-doc corpus fits in 4 GB instead of 31 GB) and benchmarks
+  **faster than FAISS FastScan**. The on-disk index stays tiny and search stays
+  quick.
+- **Cheap to keep current.** Edit a doc and only the *changed* chunks are
+  re-embedded — **partial re-ingestion**, not a full rebuild — while unchanged
+  packages are skipped in under 100 ms. A Rust core does the heavy lifting.
 
-Every query runs through a composable, sklearn-shaped retrieval pipeline. Two
-retrieval modes ship today, and the YAML config lets you swap, weight, or fuse
-them:
+## How it works
 
-- **Keyword — BM25 over SQLite FTS5** (the default). Cheap, deterministic, ideal
-  for exact terms: function names, error strings, type signatures. Metadata
-  filters (`package=X`, `kind=api`) push down into SQLite rather than running in
-  Python.
-- **Semantic — dense embeddings.** FastEmbed by default (`BAAI/bge-small-en-v1.5`,
-  no API key, ONNX model cached locally), OpenAI optional. Vectors live in a
-  per-project `.tq` sidecar (TurboQuant) — never in SQLite, never in your cloud.
-  Recalls paraphrases that BM25 misses.
-- **Hybrid.** The `chunk_search_hybrid.yaml` preset runs BM25 + dense in parallel
-  and fuses them with reciprocal-rank fusion (RRF) into a single ranking.
+Three steps, all on your machine (see the diagram above):
 
-Plus **reference-graph navigation**: `lookup(target, show=…)` answers
-`callers` / `callees` / `inherits` / `tree` over `CALLS / IMPORTS / INHERITS`
-edges captured at indexing time — across your project *and* every installed dep.
+1. **Index** — pydocs-mcp scans your project and installed deps into a local
+   SQLite database (code chunks, metadata, and a graph of how everything
+   references everything else) plus a compact TurboQuant `.tq` vector file for
+   meaning-based search. Re-running is cheap: unchanged packages are skipped, and
+   when a file *does* change, only its changed chunks are re-embedded.
+2. **Search** — each query can use three complementary modes and fuse them into
+   one ranked list:
+   - **Keyword** — instant, exact matches for names, error strings, and
+     signatures.
+   - **Meaning** — dense embeddings find the right code even when your words
+     differ from the docs', via a small model that runs locally.
+   - **Reasoning** — for broad or structural questions, an LLM walks your code's
+     map (titles + summaries, no embeddings) to pick the best spots.
+3. **Answer** — results flow back to your agent through two simple tools:
+   `search` (find by relevance) and `lookup` (jump to a known name, or trace its
+   callers, callees, and inheritance).
 
-> Deep dives — the full retrieval pipeline, reference graph, two-level cache,
-> configuration, database schema, and the complete CLI reference — live in
-> **[DOCUMENTATION.md](DOCUMENTATION.md)**. The extensibility surface (storage
-> backends, new pipeline steps, planned features) is in
-> **[EXTENSIONS.md](EXTENSIONS.md)**.
+The only call that ever leaves your machine is the optional reasoning mode — and
+only if you turn it on with your own key.
 
 ## Quick start
 
-### Install
-
 ```bash
-pip install -e .                              # pure Python, works everywhere
-# …or with Rust acceleration:
+pip install -e .                  # pure Python, works everywhere
+# …or with the Rust core for speed:
 pip install maturin && maturin develop --release
 ```
 
-`fastembed` and `openai` are required runtime dependencies; `pip` pulls them
-automatically (≈90 MB transitively, plus a ~80 MB ONNX model FastEmbed caches on
-first use). **Linux** also needs OpenBLAS (the CBLAS interface) for the
-TurboQuant vector store:
+**Linux** needs OpenBLAS for the vector store (macOS and Windows already ship it):
 
 ```bash
 sudo apt-get install -y libopenblas-pthread-dev
 ```
 
-Without it, `import pydocs_mcp` fails with `undefined symbol: cblas_sgemm`.
-macOS/Windows get CBLAS from the Accelerate framework / MSVC runtime. See
-**[INSTALL.md](INSTALL.md)** for details and the `LD_PRELOAD` fallback.
-
-### Index, serve, query
+Then index your project and start the server:
 
 ```bash
-pydocs-mcp serve .                            # index project + deps, start MCP server (stdio)
-pydocs-mcp search "batch inference"           # CLI mirror of the search tool
-pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
+pydocs-mcp serve .                            # index project + deps, serve over MCP (stdio)
+pydocs-mcp search "batch inference"           # the same search, from the CLI
+pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 ```
 
-The first run indexes your project + every installed dep; later runs skip
-unchanged packages in <100 ms. Wire it into Claude Code / Cursor / Continue.dev
-over stdio — integration snippets are in
-[DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration).
-
-## Benchmark & evaluation
-
-pydocs-mcp ships a real retrieval-quality benchmark harness (`benchmarks/`) — not
-just smoke tests. It measures retrieval against public benchmarks and competing
-services:
-
-- **Datasets:** **RepoQA-SNF** (natural-language → function retrieval in real
-  repos) and **DS-1000** (data-science intent → library-docs retrieval,
-  CodeRAG-Bench flavor).
-- **Head-to-head:** pydocs-mcp vs **Context7** vs **Neuledge** on the same
-  queries and the same gold answers, through a unified relevance layer so
-  heterogeneous systems share one metric suite.
-- **Metrics:** `recall@k`, `precision@1`, `mrr`, `ndcg@k`, `coverage`,
-  `library_resolution@1` — each with 95% bootstrap confidence intervals — plus
-  JSONL- or MLflow-backed tracking and built-in plotting.
-- **Comparable runs:** because all behavior lives in YAML (below), two configs
-  produce two comparable runs with zero client changes — A/B a chunker, ranker,
-  or embedder against a fixed dataset.
-
-Full guide: **[benchmarks/README.md](benchmarks/README.md)**.
-
-## Configuration — YAML, not API params
-
-The MCP tool surface is pinned at two tools (`search` + `lookup`) so MCP clients
-(Claude Code, Cursor, IDE extensions) stay stable across deployments. Every other
-knob — ranking weights, fusion, embedder identity, reference-graph capture,
-chunking, output limits — lives in `AppConfig` (pydantic-settings) with layered
-defaults: shipped `default_config.yaml` → pipeline blueprints → your overlay →
-env vars (`PYDOCS_*`). Details and the full tunable list:
-[DOCUMENTATION.md](DOCUMENTATION.md#configuration).
+Point Claude Code, Cursor, or Continue.dev at it over stdio — copy-paste client
+configs are in [DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration), and
+install troubleshooting (including the `libopenblas` fallback) is in
+[INSTALL.md](INSTALL.md).
 
 ## How it compares
 
-pydocs-mcp is **local, offline, version-matched to your install, Python-focused,
-and reference-graph-aware**. Context7 is a hosted, multi-language doc service;
-Neuledge is a local-first multi-language registry. The three aren't exclusive — a
-coding agent can mount all three and route by intent (pydocs-mcp for "what calls
-this method?", the others for "show me Next.js middleware patterns"). Full
-side-by-side table:
-[DOCUMENTATION.md](DOCUMENTATION.md#how-it-compares-context7--neuledge).
+pydocs-mcp, **Context7**, and **Neuledge Context** all feed docs to an AI agent
+over MCP, but optimize for different things. They aren't mutually exclusive — an
+agent can mount all three and route by intent.
 
-## Roadmap
+| | **pydocs-mcp** | **Context7** | **Neuledge Context** |
+|---|---|---|---|
+| **Deployment** | Local stdio MCP server | Hosted MCP (`mcp.context7.com`) | Local stdio MCP server |
+| **Doc source** | Your installed Python deps + your own project, indexed in place | Curated community docs hosted by Upstash | Community registry (~100+ libraries), pulled then queried locally |
+| **Version match** | Exactly what's in your `site-packages` — automatic | Library + version chosen in the prompt | Latest from the registry |
+| **Languages** | Python | Multi-language | Multi-language (~100+ libraries) |
+| **Retrieval** | Keyword (BM25) + dense embeddings + LLM tree reasoning, fused via RRF or weighted scores | Not publicly documented | BM25 over SQLite FTS5 |
+| **Code-structure queries** | Reference graph — `lookup(show=callers\|callees\|inherits)` | None (doc retrieval only) | None (doc retrieval only) |
+| **Indexes your code** | Yes — under the `__project__` package | No | No |
+| **Privacy** | Fully offline with the default embedder — zero network calls | Queries hit Upstash; OAuth + API key | Local once packages are downloaded |
+| **Dependencies** | Lean — no PyTorch, no FAISS (Rust TurboQuant store + small ONNX embedder) | Hosted service (nothing to install) | Local service |
+| **Cost** | **$0** — OSS (MIT); no keys, limits, or fees | Free tier (rate-limited) + paid plans | **$0** — OSS (Apache-2.0) |
 
-Planned extensions — weighted-score fusion alongside RRF, LLM-driven tree
-reasoning over `DocumentNode` trees (PageIndex-style) for long/structural
-queries, and additional vector-store backends (Qdrant, Chroma, `sqlite-vec`, …)
-— are catalogued in **[EXTENSIONS.md](EXTENSIONS.md)**, each scoped as a focused
-follow-up PR. They are not yet shipped.
+**In short:** choose pydocs-mcp for offline, version-matched Python retrieval
+where you also navigate code structure; Context7 for hosted, multi-language docs;
+Neuledge for a local-first multi-language registry.
+
+## Benchmarked, not hand-waved
+
+pydocs-mcp ships a real benchmark harness that scores retrieval quality on public
+benchmarks (RepoQA, DS-1000) and head-to-head against Context7 and Neuledge —
+with confidence intervals and plots. See
+[benchmarks/README.md](benchmarks/README.md).
 
 ## Learn more
 
-- **[DOCUMENTATION.md](DOCUMENTATION.md)** — retrieval pipeline, reference graph,
-  cache, configuration, database schema, architecture, and the full CLI reference.
-- **[EXTENSIONS.md](EXTENSIONS.md)** — the extensibility surface and planned work.
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval
+  pipeline, reference graph, cache, configuration, database schema, and the full
+  CLI reference.
+- **[EXTENSIONS.md](EXTENSIONS.md)** — extend it: new vector-store backends,
+  pipeline steps, and fusion strategies.
 - **[benchmarks/README.md](benchmarks/README.md)** — the evaluation harness.
-- **[INSTALL.md](INSTALL.md)** — installation and troubleshooting.
-- **[CLAUDE.md](CLAUDE.md)** — contributor / architecture guide.
+- **[INSTALL.md](INSTALL.md)** — installation & troubleshooting.
+- **[CLAUDE.md](CLAUDE.md)** — architecture & contributor guide.
+
+## Sources & references
+
+**Benchmarks**
+- RepoQA — *Evaluating Long Context Code Understanding* · [arXiv:2406.06025](https://arxiv.org/abs/2406.06025) (2024)
+- DS-1000 — *A Natural and Reliable Benchmark for Data Science Code Generation* · [arXiv:2211.11501](https://arxiv.org/abs/2211.11501) (2023)
+- CodeRAG-Bench — *Can Retrieval Augment Code Generation?* · [arXiv:2406.14497](https://arxiv.org/abs/2406.14497) (2024)
+
+**Vectors & retrieval**
+- TurboQuant — *Online Vector Quantization with Near-optimal Distortion Rate* · [arXiv:2504.19874](https://arxiv.org/abs/2504.19874) (Google Research, 2025); implemented by [`turbovec`](https://github.com/RyanCodrai/turbovec)
+- [FAISS](https://github.com/facebookresearch/faiss) — the similarity-search library used as the speed/storage baseline above
+- [FastEmbed](https://github.com/qdrant/fastembed) with [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) — the default on-device embedder
+- [PageIndex](https://github.com/VectifyAI/PageIndex) — inspiration for the LLM tree-reasoning mode
+
+**Protocol & comparable tools**
+- [Model Context Protocol](https://modelcontextprotocol.io) — the MCP standard
+- [Context7](https://github.com/upstash/context7) · [Neuledge Context](https://github.com/neuledge/context)
 
 License: MIT.
