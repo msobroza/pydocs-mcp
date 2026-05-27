@@ -673,7 +673,7 @@ class FakeLlmClient:
 # ── File-watcher fake (spec §6 R6 — avoid real filesystem flakiness) ──
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class _FakeFsEvent:
     """Minimal stand-in for `watchdog.events.FileSystemEvent`.
 
@@ -709,10 +709,12 @@ class FakeObserver:
     def stop(self) -> None:
         self.started = False
 
-    def join(self, timeout: float | None = None) -> None:  # noqa: ARG002
+    def join(self, timeout: float | None = None) -> None:
         # No background thread to join in the fake; real Observer.join()
         # is a blocking wait. Idempotent no-op preserves the call-site
-        # contract `FileWatcher.run_until_cancelled` relies on.
+        # contract `FileWatcher.run_until_cancelled` relies on. The
+        # `timeout` arg is unused here but kept in the signature so
+        # callers don't see a Liskov-style narrowing vs the real Observer.
         return None
 
     def schedule(self, handler: object, path: str, recursive: bool = False) -> object:
