@@ -37,6 +37,13 @@ from typing import TYPE_CHECKING, Literal
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
+# Re-export the shared constant for backward compatibility — fetchers
+# (chunk_fetcher / member_fetcher / dense_fetcher) historically import
+# ``PRE_FILTER_SCRATCH_KEY`` from this module. Its canonical home is now
+# ``_constants.py`` so the value can be shared without pulling the rest
+# of pre_filter's module surface in.
+from pydocs_mcp.retrieval.steps._constants import PRE_FILTER_SCRATCH_KEY
+
 if TYPE_CHECKING:
     from pydocs_mcp.models import SearchScope
     from pydocs_mcp.storage.filters import Filter
@@ -54,8 +61,6 @@ if TYPE_CHECKING:
 # its own. Per CLAUDE.md §"Default values: single source of truth".
 _DEFAULT_SCHEMA_NAME = "chunk"
 _DEFAULT_TARGET_FIELD: Literal["chunk", "member"] = "chunk"
-
-PRE_FILTER_SCRATCH_KEY = "pre_filter.result"
 
 
 @dataclass(frozen=True, slots=True)

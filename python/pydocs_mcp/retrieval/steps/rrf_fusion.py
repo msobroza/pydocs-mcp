@@ -22,17 +22,12 @@ from dataclasses import dataclass, field, replace
 from pydocs_mcp.models import Chunk, ChunkList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+from pydocs_mcp.retrieval.steps._constants import DEFAULT_BRANCH_KEYS
 
 # WHY: literature default for RRF (Cormack et al. 2009). Single source of
 # truth — referenced from RRFResultFuser default, RRFFusionStep field
 # default, and from_dict fallback. Bumping touches one line, not three.
 _DEFAULT_K = 60
-
-# WHY: shipped default branch keys match the hybrid pipeline preset
-# (bm25 branch + dense branch publish under these names). Configurable
-# via YAML when other branch labels are wired in (e.g., lexical-only
-# fallback or a third dense model).
-_DEFAULT_BRANCH_KEYS: tuple[str, ...] = ("bm25.ranked", "dense.ranked")
 
 
 def _rrf_fuse(
@@ -105,7 +100,7 @@ class RRFFusionStep(RetrieverStep):
 
     k: int = field(default=_DEFAULT_K, kw_only=True)
     branch_keys: tuple[str, ...] = field(
-        default=_DEFAULT_BRANCH_KEYS, kw_only=True,
+        default=DEFAULT_BRANCH_KEYS, kw_only=True,
     )
     name: str = field(default="rrf_fusion", kw_only=True)
 
@@ -131,7 +126,7 @@ class RRFFusionStep(RetrieverStep):
         d: dict = {"type": "rrf_fusion"}
         if self.k != _DEFAULT_K:
             d["k"] = self.k
-        if self.branch_keys != _DEFAULT_BRANCH_KEYS:
+        if self.branch_keys != DEFAULT_BRANCH_KEYS:
             d["branch_keys"] = list(self.branch_keys)
         return d
 
@@ -139,7 +134,7 @@ class RRFFusionStep(RetrieverStep):
     def from_dict(cls, data: dict, context: BuildContext) -> "RRFFusionStep":
         return cls(
             k=data.get("k", _DEFAULT_K),
-            branch_keys=tuple(data.get("branch_keys", _DEFAULT_BRANCH_KEYS)),
+            branch_keys=tuple(data.get("branch_keys", DEFAULT_BRANCH_KEYS)),
         )
 
 
