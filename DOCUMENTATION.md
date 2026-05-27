@@ -209,6 +209,95 @@ and pinning them keeps MCP clients stable across server retunes (see
 
 ---
 
+## Live re-indexing
+
+The file-system watcher re-triggers indexing on edits so subsequent
+queries see fresh data. Two modes are available, each tuned for a
+different workflow:
+
+```bash
+pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients connected over stdio)
+pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh for CLI `search` / `lookup`)
+```
+
+Use `serve --watch` when an AI client (Claude Code, Cursor, Continue.dev)
+is connected over stdio and you want the index to refresh as you edit.
+Use `watch` when you don't need an MCP server running — for example, you
+prefer the CLI `search` / `lookup` commands, or you want to keep the
+index fresh from an IDE-driven workflow without leaving an idle FastMCP
+stdio process. Both modes share the same YAML knobs under `serve.watch.*`.
+
+Without either mode, the server (or `pydocs-mcp index`) indexes once and
+exits — today's behavior, unchanged.
+
+### Install
+
+The watcher uses `watchdog`, which ships as an optional extra:
+
+```bash
+pip install pydocs-mcp[watch]
+pydocs-mcp serve . --watch    # or:
+pydocs-mcp watch .
+```
+
+Without the `[watch]` extras, both `pydocs-mcp serve --watch` and
+`pydocs-mcp watch` exit with an actionable install hint. Default
+`pydocs-mcp serve` (no `--watch`) does not require `watchdog`.
+
+### How it works
+
+1. The watcher monitors the project root (NOT `site-packages/` —
+   dependency changes are rare and user-initiated; re-run
+   `pydocs-mcp index .` after `pip install`).
+2. File-system events for paths matching `extensions` AND not matching
+   any `ignore_globs` pattern are queued.
+3. Events are **debounced** by `debounce_ms` — N edits within the
+   window collapse into a single reindex. Editor atomic-save sequences
+   (temp create → delete → rename) naturally fall under the same
+   trigger.
+4. Edits arriving during an in-flight reindex schedule **exactly one**
+   follow-up reindex (no thundering herd from `git checkout` /
+   `git rebase` rewrites).
+5. The two-level cache (`packages.content_hash` + `chunks.content_hash`)
+   makes the no-change case <100 ms; only modified packages are
+   re-extracted, only added/changed chunks are re-embedded.
+
+### YAML knobs (`serve.watch.*`)
+
+All tunables live in YAML — no MCP tool params change (the MCP
+surface stays at the fixed 2 tools: `search`, `lookup`). The CLI
+`--watch` flag overrides `enabled` at runtime.
+
+```yaml
+# pydocs-mcp.yaml
+serve:
+  watch:
+    enabled: false              # CLI --watch overrides this at runtime
+    debounce_ms: 500            # 1 .. 60_000 ms; 500ms is editor-safe
+    extensions: [".py", ".md", ".ipynb"]
+    ignore_globs:
+      - "**/__pycache__/**"
+      - "**/.git/**"
+      - "**/.venv/**"
+      - "**/node_modules/**"
+      - "**/.pytest_cache/**"
+      - "**/*.pyc"
+```
+
+### Trade-offs
+
+- **Memory + one OS event handle** for the watcher process — small,
+  but headless / CI deployments that never edit code should leave
+  `--watch` off.
+- **Brief query-latency hit during reindex** — SQLite WAL mode allows
+  concurrent readers, so MCP queries continue serving stale-but-correct
+  data while the reindex transaction commits.
+- **Reindex failures are logged but do not crash the MCP server** —
+  the server keeps serving the previous index. Check the logs if
+  results look stale.
+
+---
+
 ## Reference graph
 
 At indexing time the AST walker captures **`CALLS` / `IMPORTS` / `INHERITS`**

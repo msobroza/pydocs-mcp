@@ -670,8 +670,71 @@ class FakeLlmClient:
         )
 
 
+# ── File-watcher fake (spec §6 R6 — avoid real filesystem flakiness) ──
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeFsEvent:
+    """Minimal stand-in for `watchdog.events.FileSystemEvent`.
+
+    The real event has many fields (`is_directory`, `event_type`, etc.);
+    `FileWatcher` only needs `src_path`. Keep the fake minimal so we
+    don't accidentally couple tests to fields the production code
+    doesn't read.
+    """
+
+    src_path: str
+
+
+class FakeObserver:
+    """In-memory `watchdog.observers.Observer` stand-in.
+
+    `FileWatcher` accepts an `observer_factory` so tests can inject this
+    in place of the real `Observer`. Synchronous event injection via
+    `.fire(path)` — no native thread, no FSEvents/inotify involved, so
+    tests stay fast (<1ms per event) and deterministic.
+
+    Handlers are stored by-path so a test can target one watched dir;
+    `fire(path)` walks the handlers and invokes `on_any_event(event)`
+    on each — matching the real watchdog dispatch contract.
+    """
+
+    def __init__(self) -> None:
+        self.started = False
+        self._handlers: list[tuple[object, str, bool]] = []
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.started = False
+
+    def join(self, timeout: float | None = None) -> None:
+        # No background thread to join in the fake; real Observer.join()
+        # is a blocking wait. Idempotent no-op preserves the call-site
+        # contract `FileWatcher.run_until_cancelled` relies on. The
+        # `timeout` arg is unused here but kept in the signature so
+        # callers don't see a Liskov-style narrowing vs the real Observer.
+        return None
+
+    def schedule(self, handler: object, path: str, recursive: bool = False) -> object:
+        self._handlers.append((handler, path, recursive))
+        return object()  # real watchdog returns an `ObservedWatch`
+
+    def fire(self, path: str) -> None:
+        """Inject a synthetic event with `src_path=path` into every
+        registered handler. Tests call this to drive the watcher
+        deterministically."""
+        event = _FakeFsEvent(src_path=path)
+        for handler, _root, _recursive in self._handlers:
+            on_any = getattr(handler, "on_any_event", None)
+            if on_any is not None:
+                on_any(event)
+
+
 __all__ = (
     "FakeLlmClient",
+    "FakeObserver",
     "FakeUnitOfWork",
     "InMemoryChunkStore",
     "InMemoryDocumentTreeStore",

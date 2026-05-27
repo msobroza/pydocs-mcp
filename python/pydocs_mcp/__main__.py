@@ -24,8 +24,13 @@ import asyncio
 import logging
 import sys
 import traceback
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pydocs_mcp.retrieval.config import WatchConfig
+    from pydocs_mcp.serve.watcher import FileWatcher
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.db import (
@@ -74,7 +79,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Verbose logging + traceback on failure.",
     )
 
-    for cmd, hlp in [("serve", "Index + start MCP"), ("index", "Index only")]:
+    # ``watch`` is the standalone watcher counterpart to ``serve --watch``:
+    # the whole subcommand IS watch mode (it does NOT accept ``--watch``,
+    # which would be redundant noise). Shares every other knob with the
+    # ``serve`` / ``index`` family so operators don't relearn flags when
+    # picking between the two modes.
+    for cmd, hlp in [
+        ("serve", "Index + start MCP"),
+        ("index", "Index only"),
+        ("watch", "Index + watch project for changes (no MCP server)"),
+    ]:
         sp = sub.add_parser(cmd, help=hlp)
         sp.add_argument("project", nargs="?", default=".")
         # default=None so the YAML-configured inspect_depth wins when the
@@ -97,6 +111,12 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Don't import deps. Read .py files from site-packages instead. "
                  "Faster, safer, no side-effects. Uses the same parser as project source.",
         )
+        if cmd == "serve":
+            sp.add_argument(
+                "--watch", action="store_true",
+                help="Watch the project for changes and reindex on edits. "
+                     "Requires the 'watch' extras: pip install pydocs-mcp[watch]",
+            )
 
     # sub-PR #6: replace query/api with 2 tools matching the MCP surface.
     sp_search = sub.add_parser("search", help="Full-text search over indexed docs/code")
@@ -394,6 +414,108 @@ async def _run_serve_indexing(args: argparse.Namespace) -> None:
     await _run_indexing(args)
 
 
+def _build_watcher_and_callback(
+    args: argparse.Namespace, watch_cfg: "WatchConfig",
+) -> tuple["FileWatcher", Callable[[], Awaitable[None]]]:
+    """Build the ``FileWatcher`` + ``on_change`` callback shared by
+    ``serve --watch`` and the standalone ``watch`` subcommand.
+
+    Single source of truth for watcher construction so the two modes can
+    only differ in whether they ALSO run an MCP server. Lifted out of
+    ``_run_watch_loop`` to keep the two consumers in sync — bug-fixes
+    or YAML-knob additions land here and reach both modes automatically.
+    """
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    project, _db = _project_and_db(args)
+    watcher = FileWatcher(
+        root=project,
+        extensions=tuple(watch_cfg.extensions),
+        ignore_globs=tuple(watch_cfg.ignore_globs),
+        debounce_ms=watch_cfg.debounce_ms,
+    )
+
+    async def _on_change() -> None:
+        # Reindex via the same Phase 1 helper used at startup. Cache
+        # makes the no-change case <100ms (spec §2).
+        try:
+            await _run_indexing(args)
+        except Exception as exc:  # noqa: BLE001 -- watcher-loop boundary
+            # WHY: a reindex failure during the watch loop should NOT
+            # take down the consumer (MCP server in --watch mode; the
+            # whole process in standalone watch mode). Log + keep
+            # serving stale data instead.
+            log.error("watch: reindex failed: %s", exc)
+
+    return watcher, _on_change
+
+
+async def _run_watch_loop(
+    args: argparse.Namespace, *, db_path: Path | None = None,
+) -> None:
+    """Run the MCP server (Phase 2) AND the file watcher concurrently.
+
+    Spec §4.1 deliverable 5: ``--watch`` adds a third element to
+    ``_cmd_serve`` — the watcher asyncio task. The MCP server still runs
+    on the main thread (CQ-1 SIGINT delivery preserved); the watcher
+    runs on the asyncio loop in a worker thread via ``asyncio.to_thread``.
+
+    Try/finally guarantees the watcher task is cancelled regardless of
+    how ``run(...)`` exits (KeyboardInterrupt, RuntimeError, etc.) —
+    pins Risk R4 (no orphan Observer on crash) + spec Decision G.
+    """
+    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.server import run
+
+    project, resolved_db = _project_and_db(args)
+    if db_path is None:
+        db_path = resolved_db
+
+    config = AppConfig.load(explicit_path=getattr(args, "config", None))
+    watch_cfg = config.serve.watch
+
+    watcher, on_change = _build_watcher_and_callback(args, watch_cfg)
+
+    watcher_task = asyncio.create_task(watcher.run_until_cancelled(on_change))
+    log.info("watch: started (debounce=%dms, root=%s)", watch_cfg.debounce_ms, project)
+    try:
+        # ``run(...)`` is blocking; offload to a worker thread so the
+        # watcher_task keeps draining events on the asyncio loop.
+        await asyncio.to_thread(run, db_path, config_path=getattr(args, "config", None))
+    finally:
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning("watch: watcher task exited with %s", exc)
+
+
+async def _run_watch_only(args: argparse.Namespace) -> None:
+    """Run only the file watcher — no MCP server.
+
+    Used by the standalone ``pydocs-mcp watch`` subcommand for operators
+    who want a fresh on-disk index for CLI ``search`` / ``lookup`` calls
+    without keeping an idle FastMCP stdio server running. Blocks on
+    ``watcher.run_until_cancelled`` until the task is cancelled
+    (KeyboardInterrupt-driven cancellation propagates through
+    ``asyncio.run`` in ``_cmd_watch``).
+    """
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    config = AppConfig.load(explicit_path=getattr(args, "config", None))
+    watch_cfg = config.serve.watch
+
+    watcher, on_change = _build_watcher_and_callback(args, watch_cfg)
+    project, _db = _project_and_db(args)
+    log.info(
+        "watch (CLI-only): started (debounce=%dms, root=%s, MCP server: off)",
+        watch_cfg.debounce_ms, project,
+    )
+    await watcher.run_until_cancelled(on_change)
+
+
 async def _run_search(args: argparse.Namespace) -> None:
     """Mirror the MCP ``search`` tool: Pydantic input + same pipelines +
     same rendering. kind='any' runs chunks and members in parallel (§8)."""
@@ -504,19 +626,84 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     code = _run_cmd(_run_serve_indexing(args), verbose=args.verbose)
     if code != 0:
         return code
-    # Phase 2 — blocking MCP server. ``server.run`` calls
-    # ``anyio.run(self.run_stdio_async)`` internally, which starts its own
-    # event loop. Running that inside ``asyncio.to_thread`` would dispatch
-    # it to a worker thread, but Python only delivers SIGINT to the main
-    # thread and ``asyncio.to_thread`` cannot cancel a running thread —
-    # so Ctrl+C against ``pydocs-mcp serve`` would not interrupt cleanly.
-    # Run on the main thread so the default SIGINT handler reaches the
-    # blocking loop. The try / except mirrors ``_run_cmd``'s policy.
-    from pydocs_mcp.server import run
 
     _project, db_path = _project_and_db(args)
+
+    if getattr(args, "watch", False):
+        # Phase 2 (--watch path): server + watcher concurrently via
+        # ``_run_watch_loop``. ``run(...)`` is offloaded to a worker
+        # thread inside ``_run_watch_loop`` so the watcher's asyncio
+        # consumer keeps draining events.
+        #
+        # WHY this differs from the no-watch path: without `--watch`,
+        # `run(...)` is the only thing happening on the main thread, so
+        # SIGINT reaches it directly. With `--watch`, the asyncio loop
+        # is also running here, so the loop owns SIGINT; `run(...)`
+        # exits via thread-pool unwind when the loop is cancelled.
+        try:
+            asyncio.run(_run_watch_loop(args, db_path=db_path))
+            return 0
+        except KeyboardInterrupt:
+            return 0
+        except Exception as exc:  # noqa: BLE001 -- intentional top-level CLI boundary
+            print(f"Error: {exc}", file=sys.stderr)
+            if args.verbose:
+                traceback.print_exc(file=sys.stderr)
+                log.exception("CLI command failed")
+            else:
+                print("(re-run with --verbose to see the traceback)", file=sys.stderr)
+                log.error("CLI command failed: %s", exc)
+            return 1
+
+    # Phase 2 (no-watch path) — unchanged from today.
+    # ``server.run`` calls ``anyio.run(self.run_stdio_async)`` internally,
+    # which starts its own event loop. Running that inside
+    # ``asyncio.to_thread`` would dispatch it to a worker thread, but
+    # Python only delivers SIGINT to the main thread and
+    # ``asyncio.to_thread`` cannot cancel a running thread — so Ctrl+C
+    # against ``pydocs-mcp serve`` would not interrupt cleanly. Run on
+    # the main thread so the default SIGINT handler reaches the blocking
+    # loop. The try / except mirrors ``_run_cmd``'s policy.
+    from pydocs_mcp.server import run
+
     try:
         run(db_path, config_path=getattr(args, "config", None))
+        return 0
+    except KeyboardInterrupt:
+        # Graceful shutdown via Ctrl+C — not an error.
+        return 0
+    except Exception as exc:  # noqa: BLE001 -- intentional top-level CLI boundary
+        print(f"Error: {exc}", file=sys.stderr)
+        if args.verbose:
+            traceback.print_exc(file=sys.stderr)
+            log.exception("CLI command failed")
+        else:
+            print("(re-run with --verbose to see the traceback)", file=sys.stderr)
+            log.error("CLI command failed: %s", exc)
+        return 1
+
+
+def _cmd_watch(args: argparse.Namespace) -> int:
+    """Standalone watcher mode: index once + watch + reindex on edits.
+
+    No MCP server runs in this path — for users who want fresh index
+    state without an idle FastMCP stdio process. Same two-phase shape
+    as ``_cmd_serve`` (initial index, then loop) but Phase 2 here is
+    the watcher loop only.
+    """
+    # Phase 1: initial indexing (same as ``serve`` / ``index`` does at
+    # startup). Routes through ``_run_cmd`` so the --verbose / traceback
+    # policy applies uniformly.
+    code = _run_cmd(_run_serve_indexing(args), verbose=args.verbose)
+    if code != 0:
+        return code
+
+    # Phase 2 (watcher-only) — own asyncio.run so SIGINT (KeyboardInterrupt)
+    # propagates through the asyncio loop and cancels the watcher's
+    # ``run_until_cancelled``, which then tears down the Observer via
+    # the try/finally inside ``FileWatcher.run_until_cancelled``.
+    try:
+        asyncio.run(_run_watch_only(args))
         return 0
     except KeyboardInterrupt:
         # Graceful shutdown via Ctrl+C — not an error.
@@ -546,6 +733,7 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
 _CMD_TABLE = {
     "serve":  _cmd_serve,
     "index":  _cmd_index,
+    "watch":  _cmd_watch,
     "search": _cmd_search,
     "lookup": _cmd_lookup,
 }

@@ -52,3 +52,37 @@ def test_jinja2_in_main_deps() -> None:
     assert any("jinja2" in d.lower() for d in main_deps), (
         f"jinja2 not in main dependencies: {main_deps}"
     )
+
+
+def test_watch_extras_group_present() -> None:
+    """AC-9: ``watchdog`` ships behind ``[watch]`` extras, not main deps."""
+    cfg = _load()
+    extras = cfg["project"].get("optional-dependencies", {})
+    assert "watch" in extras, (
+        f"watch extras group missing. Got: {list(extras)}"
+    )
+    watch_deps = extras["watch"]
+    assert any("watchdog" in d for d in watch_deps), (
+        f"watchdog not in watch extras: {watch_deps}"
+    )
+
+
+def test_watchdog_not_in_main_dependencies() -> None:
+    """AC-9: ``watchdog`` is opt-in via ``[watch]`` — never pulled by default
+    ``pip install pydocs-mcp``."""
+    cfg = _load()
+    main_deps = cfg["project"]["dependencies"]
+    assert not any("watchdog" in d for d in main_deps), (
+        f"watchdog leaked into main dependencies: {main_deps}"
+    )
+
+
+def test_watch_extras_pins_watchdog_version_range() -> None:
+    """Pin the version range so a future watchdog 6.x breaking change
+    doesn't silently break ``--watch``."""
+    cfg = _load()
+    watch_deps = cfg["project"]["optional-dependencies"]["watch"]
+    spec = next(d for d in watch_deps if "watchdog" in d)
+    assert ">=4.0" in spec and "<6.0" in spec, (
+        f"watchdog spec must pin >=4.0,<6.0; got {spec!r}"
+    )

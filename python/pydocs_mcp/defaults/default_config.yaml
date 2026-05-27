@@ -63,6 +63,25 @@ search:
     default_limit: 10
     max_limit: 1000
 
+# File-watcher tunables for `pydocs-mcp serve --watch` (CLI flag overrides
+# `enabled` — leave it false here so plain `pydocs-mcp serve` is identical
+# to today). Debounce naturally collapses editor atomic-save sequences
+# (temp create → delete → rename → 1 reindex). Ignore globs default-skip
+# the high-churn paths that would otherwise produce false-positive
+# reindexes. Requires `pip install pydocs-mcp[watch]`.
+serve:
+  watch:
+    enabled: false
+    debounce_ms: 500
+    extensions: [".py", ".md", ".ipynb"]
+    ignore_globs:
+      - "**/__pycache__/**"
+      - "**/.git/**"
+      - "**/.venv/**"
+      - "**/node_modules/**"
+      - "**/.pytest_cache/**"
+      - "**/*.pyc"
+
 # Embedding + vector-quantization (spec §5.10).
 embedding:
   provider:    fastembed
