@@ -119,37 +119,86 @@ def _build_parser() -> argparse.ArgumentParser:
             )
 
     # sub-PR #6: replace query/api with 2 tools matching the MCP surface.
-    sp_search = sub.add_parser("search", help="Full-text search over indexed docs/code")
-    sp_search.add_argument("query", help="Search terms (space-separated)")
+    sp_search = sub.add_parser(
+        "search",
+        help="Hybrid keyword + semantic search over project + deps",
+        description=(
+            "Hybrid keyword + semantic search across your project's source AND every "
+            "installed dependency (docs + code), ranked by BM25 plus dense embeddings. "
+            "Use --package __project__ or --scope project to restrict to YOUR code, "
+            "not a library."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  pydocs-mcp search 'batch inference' --kind docs\n"
+            "  pydocs-mcp search HTTPBasicAuth --kind api\n"
+            "  pydocs-mcp search 'retry logic' --package requests\n"
+            "  pydocs-mcp search parser --scope project\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sp_search.add_argument("query", help="Search terms (space-separated; prose AND identifiers work)")
     sp_search.add_argument(
         "--kind", choices=["docs", "api", "any"], default="any",
-        help="Which index to search (default: any = both)",
+        help="Which index to search: 'docs' = prose / README, 'api' = functions / classes, 'any' = both (default).",
     )
     sp_search.add_argument(
-        "-p", "--package", default="", help="Restrict to one package",
+        "-p", "--package", dest="package", default="",
+        help='Restrict to one package (e.g. "fastapi"). Use "__project__" for YOUR code, not a library. Default: all packages.',
     )
     sp_search.add_argument(
         "--scope", choices=["project", "deps", "all"], default="all",
+        help='Restrict by scope: "project" = your code only, "deps" = installed deps only, "all" = both (default). Use "project" when the user asks about THEIR code.',
     )
-    sp_search.add_argument("--limit", type=int, default=10)
-    sp_search.add_argument("--project-dir", dest="project", default=".")
+    sp_search.add_argument(
+        "--limit", type=int, default=10,
+        help="Max number of results (1-1000, default: 10).",
+    )
+    sp_search.add_argument(
+        "--project-dir", dest="project", default=".",
+        help="Path to the project root (default: current directory). Determines which cache database is loaded.",
+    )
     sp_search.add_argument("--no-rust", **_no_rust)
     sp_search.add_argument("--cache-dir", **_cache_dir)
     sp_search.add_argument("-v", "--verbose", **_verbose)
 
     sp_lookup = sub.add_parser(
-        "lookup", help="Navigate to a specific named target (package, module, class, method)",
+        "lookup",
+        help="Navigate to a known symbol + walk its reference graph",
+        description=(
+            "Navigate to a known symbol (dotted path) and optionally traverse its "
+            "reference graph — callers, callees, base classes. Use this when you "
+            "know the exact target; use 'search' when you only have a keyword or topic."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  pydocs-mcp lookup                                                           # list all indexed packages\n"
+            "  pydocs-mcp lookup fastapi                                                   # package overview\n"
+            "  pydocs-mcp lookup fastapi.routing.APIRouter                                 # class + members\n"
+            "  pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers   # who calls this method\n"
+            "  pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits               # base classes\n"
+            "  pydocs-mcp lookup __project__.my_module.MyClass                             # YOUR class, not a library\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sp_lookup.add_argument(
         "target", nargs="?", default="",
-        help="Dotted path; empty = list all indexed packages",
+        help='Dotted path (e.g. "fastapi.routing.APIRouter"). Use "__project__.<module>.<symbol>" for YOUR code. Empty = list all indexed packages.',
     )
     sp_lookup.add_argument(
-        "--show",
-        choices=["default", "tree", "callers", "callees", "inherits"],
-        default="default",
+        "--show", choices=["default", "tree", "callers", "callees", "inherits"], default="default",
+        help=(
+            "What to show: 'default' = symbol summary + immediate children (start here); "
+            "'tree' = full nested subtree (use when 'default' is too shallow); "
+            "'callers' = who references this — use to answer 'who uses X?'; "
+            "'callees' = what this calls — use to answer 'what does X depend on?'; "
+            "'inherits' = base classes / interface chain — use to answer 'what does X extend?'."
+        ),
     )
-    sp_lookup.add_argument("--project-dir", dest="project", default=".")
+    sp_lookup.add_argument(
+        "--project-dir", dest="project", default=".",
+        help="Path to the project root (default: current directory). Determines which cache database is loaded.",
+    )
     sp_lookup.add_argument("--no-rust", **_no_rust)
     sp_lookup.add_argument("--cache-dir", **_cache_dir)
     sp_lookup.add_argument("-v", "--verbose", **_verbose)
