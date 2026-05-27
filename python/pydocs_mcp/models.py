@@ -438,8 +438,16 @@ class PackageDoc:
     members: tuple[ModuleMember, ...]
 
 
-# S7: ``IndexingStats`` lives next to its sole producer
-# (``ProjectIndexer.index_project``) in the application layer. The
-# import below is a re-export shim — ``from pydocs_mcp.models import
-# IndexingStats`` keeps working for callers that learned the old path.
-from pydocs_mcp.application.indexing_service import IndexingStats  # noqa: E402, F401
+# Backward-compatibility shim for ``from pydocs_mcp.models import IndexingStats``.
+# The canonical home is :class:`pydocs_mcp.application.indexing_service.IndexingStats`.
+# Using PEP 562 ``__getattr__`` keeps the import lazy so models.py stays a leaf
+# in the import graph (no edge to application, which would close a cycle through
+# storage.filters → storage.protocols → models → application → retrieval →
+# storage.protocols). The shim resolves on first attribute access from outside
+# the module; existing ``from pydocs_mcp.models import IndexingStats`` callers
+# see no behavior change.
+def __getattr__(name: str):
+    if name == "IndexingStats":
+        from pydocs_mcp.application.indexing_service import IndexingStats
+        return IndexingStats
+    raise AttributeError(f"module 'pydocs_mcp.models' has no attribute {name!r}")
