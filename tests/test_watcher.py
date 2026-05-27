@@ -63,3 +63,48 @@ def test_watcher_construction_succeeds_when_watchdog_present(tmp_path: Path) -> 
     assert fw.root == tmp_path
     assert fw.extensions == (".py",)
     assert fw.debounce_ms == 500
+
+
+def test_fake_observer_injects_events_synchronously() -> None:
+    """The FakeObserver test helper records start/stop/schedule calls
+    and exposes a `.fire(path)` hook tests can call to inject events
+    without filesystem timing nondeterminism."""
+    from tests._fakes import FakeObserver
+
+    obs = FakeObserver()
+    assert not obs.started
+    obs.start()
+    assert obs.started
+
+    fired: list[str] = []
+
+    class _Handler:
+        def on_any_event(self, event):
+            fired.append(event.src_path)
+
+    obs.schedule(_Handler(), "/tmp/some/dir", recursive=True)
+    obs.fire("/tmp/some/dir/file.py")
+    assert fired == ["/tmp/some/dir/file.py"]
+
+    obs.stop()
+    assert not obs.started
+    obs.join()  # idempotent no-op
+
+
+def test_fake_observer_fire_event_has_src_path_attr() -> None:
+    """`fire(path)` synthesizes an event with the `src_path` attr the
+    watchdog handler expects (mirrors `watchdog.events.FileSystemEvent`)."""
+    from tests._fakes import FakeObserver
+
+    obs = FakeObserver()
+    obs.start()
+    captured: list[object] = []
+
+    class _Handler:
+        def on_any_event(self, event):
+            captured.append(event)
+
+    obs.schedule(_Handler(), "/x", recursive=True)
+    obs.fire("/x/a.py")
+    assert hasattr(captured[0], "src_path")
+    assert captured[0].src_path == "/x/a.py"
