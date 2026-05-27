@@ -55,7 +55,7 @@ pydocs-mcp -v serve .
 ## Tests & Lint
 
 ```bash
-# Python suite (1199 unit + 141 benchmark tests on the current main)
+# Python suite (1367 unit + 283 benchmark tests on the current main)
 pytest -q
 PYTHONPATH=benchmarks/src pytest benchmarks/tests/ -q
 
