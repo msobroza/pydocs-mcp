@@ -1,8 +1,6 @@
 """AC-8: ``serve.watch.*`` pydantic sub-model on ``AppConfig``."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from pydocs_mcp.retrieval.config import AppConfig, ServeConfig, WatchConfig
