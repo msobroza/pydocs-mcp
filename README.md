@@ -21,13 +21,21 @@ machine, in seconds. Your agent connects over MCP and gets answers grounded in
   `site-packages`, so your agent stops inventing APIs from some older release.
 - **Private & offline.** Everything runs locally — no API keys, no uploads, no
   rate limits, no per-query fees.
-- **Finds code three ways.** Keyword, meaning, and LLM reasoning — on their own
-  or fused into one ranked answer.
+- **Three ways to find code.** Keyword, meaning, and LLM reasoning (see
+  [How it works](#how-it-works)) — on their own or fused into one ranked answer.
 - **Knows how your code connects.** Ask *"what calls this?"*, *"what does it
   call?"*, or *"what does this class inherit?"* — across your project and every
   dependency.
-- **Fast.** A Rust core indexes in seconds and skips unchanged code on re-index
-  in under 100 ms.
+- **Lean, not bloated.** Minimal dependencies — **no PyTorch, no FAISS**. A small
+  local ONNX embedder plus the Rust [TurboQuant](https://arxiv.org/abs/2504.19874)
+  vector store ([`turbovec`](https://github.com/RyanCodrai/turbovec)), which packs
+  embeddings **~16× smaller than float32** (a 1536-dim vector drops from 6,144 to
+  384 bytes; a 10M-doc corpus fits in 4 GB instead of 31 GB) and benchmarks
+  **faster than FAISS FastScan**. The on-disk index stays tiny and search stays
+  quick.
+- **Cheap to keep current.** Edit a doc and only the *changed* chunks are
+  re-embedded — **partial re-ingestion**, not a full rebuild — while unchanged
+  packages are skipped in under 100 ms. A Rust core does the heavy lifting.
 
 ## How it works
 
@@ -35,13 +43,15 @@ Three steps, all on your machine (see the diagram above):
 
 1. **Index** — pydocs-mcp scans your project and installed deps into a local
    SQLite database (code chunks, metadata, and a graph of how everything
-   references everything else) plus a small vector file for meaning-based search.
+   references everything else) plus a compact TurboQuant `.tq` vector file for
+   meaning-based search. Re-running is cheap: unchanged packages are skipped, and
+   when a file *does* change, only its changed chunks are re-embedded.
 2. **Search** — each query can use three complementary modes and fuse them into
    one ranked list:
    - **Keyword** — instant, exact matches for names, error strings, and
      signatures.
-   - **Meaning** — finds the right code even when your words differ from the
-     docs', via a small embedding model that runs locally.
+   - **Meaning** — dense embeddings find the right code even when your words
+     differ from the docs', via a small model that runs locally.
    - **Reasoning** — for broad or structural questions, an LLM walks your code's
      map (titles + summaries, no embeddings) to pick the best spots.
 3. **Answer** — results flow back to your agent through two simple tools:
@@ -80,11 +90,26 @@ install troubleshooting (including the `libopenblas` fallback) is in
 
 ## How it compares
 
-pydocs-mcp is **local, offline, version-matched to your install, Python-focused,
-and reference-graph-aware**. **Context7** is a hosted multi-language doc service;
-**Neuledge** is a local-first multi-language registry. They aren't mutually
-exclusive — an agent can mount all three and route by intent. Full side-by-side
-table: [DOCUMENTATION.md](DOCUMENTATION.md#how-it-compares-context7--neuledge).
+pydocs-mcp, **Context7**, and **Neuledge Context** all feed docs to an AI agent
+over MCP, but optimize for different things. They aren't mutually exclusive — an
+agent can mount all three and route by intent.
+
+| | **pydocs-mcp** | **Context7** | **Neuledge Context** |
+|---|---|---|---|
+| **Deployment** | Local stdio MCP server | Hosted MCP (`mcp.context7.com`) | Local stdio MCP server |
+| **Doc source** | Your installed Python deps + your own project, indexed in place | Curated community docs hosted by Upstash | Community registry (~100+ libraries), pulled then queried locally |
+| **Version match** | Exactly what's in your `site-packages` — automatic | Library + version chosen in the prompt | Latest from the registry |
+| **Languages** | Python | Multi-language | Multi-language (~100+ libraries) |
+| **Retrieval** | Keyword (BM25) + dense embeddings + LLM tree reasoning, fused via RRF or weighted scores | Not publicly documented | BM25 over SQLite FTS5 |
+| **Code-structure queries** | Reference graph — `lookup(show=callers\|callees\|inherits)` | None (doc retrieval only) | None (doc retrieval only) |
+| **Indexes your code** | Yes — under the `__project__` package | No | No |
+| **Privacy** | Fully offline with the default embedder — zero network calls | Queries hit Upstash; OAuth + API key | Local once packages are downloaded |
+| **Dependencies** | Lean — no PyTorch, no FAISS (Rust TurboQuant store + small ONNX embedder) | Hosted service (nothing to install) | Local service |
+| **Cost** | **$0** — OSS (MIT); no keys, limits, or fees | Free tier (rate-limited) + paid plans | **$0** — OSS (Apache-2.0) |
+
+**In short:** choose pydocs-mcp for offline, version-matched Python retrieval
+where you also navigate code structure; Context7 for hosted, multi-language docs;
+Neuledge for a local-first multi-language registry.
 
 ## Benchmarked, not hand-waved
 
