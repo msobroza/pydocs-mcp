@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
@@ -410,18 +411,31 @@ def _row_to_package(row) -> Package:
 # ── Filter adapter ───────────────────────────────────────────────────────
 
 
+# Safe-column whitelists per table (spec §5.3) — declared before the adapter
+# classes so they can reference these as dataclass-field defaults.
+CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
+_PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
+_MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
+
+
 @dataclass(frozen=True, slots=True)
-class SqliteFilterAdapter:
-    """Translates a Filter tree into a (WHERE-fragment, params) pair for SQLite.
+class _SqliteFilterTranslator:
+    """Internal helper: translate a ``Filter`` tree into ``(where, params)`` for one table.
 
     Gated by a ``safe_columns`` whitelist — any field not in the set raises
     ``ValueError`` before the column name is ever interpolated into SQL
-    (spec §5.3, AC #7). ``Any_`` / ``Not`` are out of scope for sub-PR #3.
+    (spec §5.3, AC #7). ``Any_`` / ``Not`` are out of scope.
 
     ``column_prefix`` is prepended verbatim to every column reference in the
     emitted SQL (e.g. ``"c."`` for the ``chunks_fts JOIN chunks`` query used
     by :class:`SqliteVectorStore`). The safe-column check always runs on the
     raw/unprefixed name.
+
+    INTERNAL — repositories instantiate this directly for per-table queries
+    (packages / chunks / module_members / chunks_fts). The retrieval-time,
+    Protocol-conforming public surface is :class:`SqliteFilterAdapter`,
+    which composes ``_SqliteFilterTranslator`` instances internally and
+    dispatches on ``target_field``.
     """
 
     safe_columns: frozenset[str]
@@ -476,10 +490,52 @@ class SqliteFilterAdapter:
             )
 
 
-# Safe-column whitelists per table (spec §5.3)
-CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
-_PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
-_MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
+@dataclass(frozen=True, slots=True)
+class SqliteFilterAdapter:
+    """Protocol-conforming public adapter — dispatches on ``target_field``.
+
+    Implements :class:`~pydocs_mcp.storage.protocols.FilterAdapter`:
+    ``adapt(tree, *, target_field) -> (where, params_tuple)``. Stores BOTH
+    the chunk-side and member-side column whitelists + prefix so the
+    composition root wires ONE adapter into ``BuildContext`` and the
+    retrieval steps pick the right shape at call time via the kwarg.
+
+    The chunk side uses ``column_prefix='c.'`` because the chunk-fetcher
+    SQL joins ``chunks_fts m JOIN chunks c ON c.id = m.rowid`` — unqualified
+    references would be ambiguous between the duplicated FTS5 + chunks
+    columns. The member side has no JOIN and uses bare column names.
+
+    Each ``adapt`` call internally builds a frozen
+    :class:`_SqliteFilterTranslator` so the per-table whitelist check
+    still runs and the safe-column ValueError still surfaces to callers.
+    """
+
+    chunk_columns: frozenset[str] = CHUNK_COLUMNS
+    member_columns: frozenset[str] = _MEMBER_COLUMNS
+    chunk_column_prefix: str = "c."
+
+    def adapt(
+        self,
+        tree: Filter,
+        *,
+        target_field: Literal["chunk", "member"],
+    ) -> tuple[str, tuple[Any, ...]]:
+        if target_field == "chunk":
+            translator = _SqliteFilterTranslator(
+                safe_columns=self.chunk_columns,
+                column_prefix=self.chunk_column_prefix,
+            )
+        elif target_field == "member":
+            translator = _SqliteFilterTranslator(
+                safe_columns=self.member_columns,
+                column_prefix="",
+            )
+        else:
+            raise ValueError(
+                f"target_field must be 'chunk' or 'member', got {target_field!r}",
+            )
+        where, params = translator.adapt(tree)
+        return where, tuple(params)
 
 
 def _resolve_filter(filter: Filter | Mapping | None):
@@ -499,8 +555,8 @@ class SqlitePackageRepository:
     """PackageStore backed by the 'packages' SQLite table (spec §5.3)."""
 
     provider: ConnectionProvider
-    filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=_PACKAGE_COLUMNS)
+    filter_adapter: _SqliteFilterTranslator = field(
+        default_factory=lambda: _SqliteFilterTranslator(safe_columns=_PACKAGE_COLUMNS)
     )
 
     async def upsert(self, package: Package) -> None:
@@ -596,8 +652,8 @@ class SqliteChunkRepository:
     """
 
     provider: ConnectionProvider
-    filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=CHUNK_COLUMNS)
+    filter_adapter: _SqliteFilterTranslator = field(
+        default_factory=lambda: _SqliteFilterTranslator(safe_columns=CHUNK_COLUMNS)
     )
 
     async def upsert(self, chunks: Iterable[Chunk]) -> None:
@@ -749,8 +805,8 @@ class SqliteVectorStore:
     """
 
     provider: ConnectionProvider
-    filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(
+    filter_adapter: _SqliteFilterTranslator = field(
+        default_factory=lambda: _SqliteFilterTranslator(
             safe_columns=CHUNK_COLUMNS, column_prefix="c.",
         )
     )
@@ -821,8 +877,8 @@ class SqliteModuleMemberRepository:
     """
 
     provider: ConnectionProvider
-    filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
+    filter_adapter: _SqliteFilterTranslator = field(
+        default_factory=lambda: _SqliteFilterTranslator(safe_columns=_MEMBER_COLUMNS)
     )
 
     async def upsert_many(self, members: Iterable[ModuleMember]) -> None:

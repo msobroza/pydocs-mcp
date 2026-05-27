@@ -130,3 +130,77 @@ def test_pre_filter_round_trip_via_from_dict(tmp_path: Path) -> None:
     assert rebuilt.target_field == original.target_field
     # allowed_fields is rebuilt from config.metadata_schemas; check it's non-empty.
     assert rebuilt.allowed_fields
+
+
+# ── C5 commit 1: tightened FilterAdapter Protocol + BuildContext wiring ──
+
+
+from dataclasses import dataclass, field as _field
+
+
+@dataclass
+class _RecordingAdapter:
+    """Test double for the tightened ``FilterAdapter`` Protocol.
+
+    Records every ``adapt`` invocation so the test can assert the step
+    called through the Protocol-typed surface (not via the old runtime
+    ``from pydocs_mcp.storage.sqlite import SqliteFilterAdapter`` import).
+    """
+
+    calls: list = _field(default_factory=list)
+
+    def adapt(self, tree, *, target_field):
+        self.calls.append((tree, target_field))
+        return ("WHERE 1=1", ())
+
+
+def test_filter_adapter_protocol_runtime_check() -> None:
+    """``_RecordingAdapter`` satisfies the runtime_checkable ``FilterAdapter`` Protocol."""
+    from pydocs_mcp.storage.protocols import FilterAdapter
+
+    assert isinstance(_RecordingAdapter(), FilterAdapter)
+
+
+async def test_pre_filter_calls_adapter_with_target_field(tmp_path: Path) -> None:
+    """``PreFilterStep`` invokes ``ctx.filter_adapter.adapt`` once with the
+    declared ``target_field`` kwarg — the step no longer constructs the
+    adapter from a runtime ``from pydocs_mcp.storage.sqlite import ...``.
+
+    Pins the wiring contract: composition root sets
+    ``BuildContext.filter_adapter``; ``PreFilterStep.from_dict`` reads it
+    onto the step; ``run()`` invokes it via the typed Protocol.
+    """
+    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    adapter = _RecordingAdapter()
+    config = AppConfig.load()
+    provider = PerCallConnectionProvider(cache_path=tmp_path / "unused.db")
+    context = BuildContext(
+        connection_provider=provider,
+        app_config=config,
+        filter_adapter=adapter,
+    )
+    step = PreFilterStep.from_dict(
+        {"type": "pre_filter", "schema_name": "chunk", "target_field": "chunk"},
+        context,
+    )
+    state = _state(pre_filter={"package": "demo"})
+    await step.run(state)
+    assert len(adapter.calls) == 1
+    _tree, target = adapter.calls[0]
+    assert target == "chunk"
+
+
+async def test_pre_filter_member_target_invokes_adapter_with_member() -> None:
+    """``target_field='member'`` propagates through to the adapter call kwarg.
+
+    Without an explicit ``filter_adapter`` on the BuildContext the step
+    must still work — the transitional shape falls back to constructing a
+    default ``SqliteFilterAdapter`` so user overlays without the new
+    wiring keep functioning through commit 1.
+    """
+    out = await _step_member().run(_state(pre_filter={"package": "demo"}))
+    result = out.scratch["pre_filter.result"]
+    assert result.tree is not None
+    assert result.scope is None

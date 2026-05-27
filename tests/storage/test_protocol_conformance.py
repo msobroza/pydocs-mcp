@@ -40,7 +40,8 @@ def test_per_call_connection_provider_conforms(tmp_path):
 
 
 def test_sqlite_filter_adapter_conforms():
-    adapter = SqliteFilterAdapter(safe_columns=frozenset({"package"}))
+    """The public ``SqliteFilterAdapter`` satisfies the tightened C5 Protocol."""
+    adapter = SqliteFilterAdapter()
     assert isinstance(adapter, FilterAdapter)
 
 

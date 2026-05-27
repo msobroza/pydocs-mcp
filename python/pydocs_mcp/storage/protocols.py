@@ -149,7 +149,31 @@ class HybridSearchable(Protocol):
 
 @runtime_checkable
 class FilterAdapter(Protocol):
-    def adapt(self, filter: Filter) -> Any: ...
+    """Translate a backend-neutral Filter tree to a backend-specific query fragment.
+
+    Concrete impls live in the storage layer; the composition root wires
+    them into :class:`~pydocs_mcp.retrieval.serialization.BuildContext` so
+    retrieval steps (``PreFilterStep``, ``ChunkFetcherStep``,
+    ``MemberFetcherStep``) call the typed Protocol instead of importing
+    the SQLite-specific adapter at runtime. For SQL backends ``adapt``
+    returns ``(where_clause, positional_params)``; for Cypher / Mongo /
+    other backends the shape varies — the fetcher that consumes the
+    output knows the backend's expected query-string format.
+
+    ``target_field`` distinguishes the table-specific column whitelist +
+    prefix the adapter should use: ``"chunk"`` for ``chunks_fts JOIN
+    chunks`` style queries (prefixed columns), ``"member"`` for
+    ``module_members`` (bare column names). Concrete adapters store both
+    whitelists internally and dispatch at ``adapt`` time so the
+    composition root wires a SINGLE adapter into BuildContext.
+    """
+
+    def adapt(
+        self,
+        tree: Filter,
+        *,
+        target_field: Literal["chunk", "member"],
+    ) -> tuple[str, tuple[Any, ...]]: ...
 
 
 @runtime_checkable

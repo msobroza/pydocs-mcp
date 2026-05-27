@@ -30,6 +30,7 @@ from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 if TYPE_CHECKING:
     from pydocs_mcp.models import SearchScope
     from pydocs_mcp.storage.filters import Filter
+    from pydocs_mcp.storage.protocols import FilterAdapter
 
 # Deferred storage / filter_helpers imports: a top-level
 # ``from pydocs_mcp.storage.filters import format_registry`` triggers a
@@ -72,13 +73,29 @@ class PreFilterResult:
 @step_registry.register("pre_filter")
 @dataclass(frozen=True, slots=True)
 class PreFilterStep(RetrieverStep):
-    """Parse + validate pre_filter once; share typed result via ``state.scratch``."""
+    """Parse + validate pre_filter once; share typed result via ``state.scratch``.
+
+    The :class:`~pydocs_mcp.storage.protocols.FilterAdapter` Protocol
+    instance is read off the ambient :class:`BuildContext` at
+    ``from_dict`` time and stored on the step. ``run`` calls the typed
+    Protocol surface (``adapter.adapt(tree, target_field=...)``) — no
+    runtime ``from pydocs_mcp.storage.sqlite import ...`` reach-through
+    (closes the hexagonal leak from sub-PR #5).
+
+    When constructed directly (without going through ``from_dict``) the
+    ``filter_adapter`` defaults to ``None``; ``run`` then lazy-imports
+    :class:`pydocs_mcp.storage.sqlite.SqliteFilterAdapter` once as a
+    compatibility shim so isolated unit tests + user-overlay scripts
+    keep working through commit 1 of C5. Commit 2 will tighten this to
+    require explicit wiring.
+    """
 
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     schema_name: str = field(default=_DEFAULT_SCHEMA_NAME, kw_only=True)
     target_field: Literal["chunk", "member"] = field(
         default=_DEFAULT_TARGET_FIELD, kw_only=True,
     )
+    filter_adapter: "FilterAdapter | None" = field(default=None, kw_only=True)
     name: str = field(default="pre_filter", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -100,20 +117,19 @@ class PreFilterStep(RetrieverStep):
         tree, scope = _split_scope(tree)
 
         filter_sql = ""
-        filter_params: list = []
+        filter_params: tuple[Any, ...] = ()
         if tree is not None:
-            from pydocs_mcp.storage.sqlite import (
-                _MEMBER_COLUMNS,
-                CHUNK_COLUMNS,
-                SqliteFilterAdapter,
+            adapter = self.filter_adapter
+            if adapter is None:
+                # Compatibility shim — isolated unit tests + user-overlay
+                # scripts that construct the step directly (bypassing
+                # ``from_dict``) keep working. Commit 2 of C5 drops this
+                # fallback and requires ``ctx.filter_adapter`` to be wired.
+                from pydocs_mcp.storage.sqlite import SqliteFilterAdapter as _Fallback
+                adapter = _Fallback()
+            filter_sql, filter_params = adapter.adapt(
+                tree, target_field=self.target_field,
             )
-            if self.target_field == "chunk":
-                adapter = SqliteFilterAdapter(
-                    safe_columns=CHUNK_COLUMNS, column_prefix="c.",
-                )
-            else:
-                adapter = SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
-            filter_sql, filter_params = adapter.adapt(tree)
 
         # Write typed result to state.scratch under the canonical
         # ``<step_name>.<field>`` key. The dict mutation is intentional —
@@ -150,6 +166,7 @@ class PreFilterStep(RetrieverStep):
             allowed_fields=allowed,
             schema_name=schema_name,
             target_field=target_field,
+            filter_adapter=context.filter_adapter,
         )
 
 
