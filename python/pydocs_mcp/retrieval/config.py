@@ -222,6 +222,65 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+# Single source of truth for the debounce bounds (CLAUDE.md §"Default
+# values: single source of truth"). Used both for the pydantic Field
+# default AND the cross-field validator's ceiling check below.
+_DEFAULT_WATCH_DEBOUNCE_MS = 500
+_MAX_WATCH_DEBOUNCE_MS = 60_000
+
+
+class WatchConfig(BaseModel):
+    """File-watcher tunables for ``pydocs-mcp serve --watch``.
+
+    Per CLAUDE.md §"MCP API surface vs YAML configuration": these are
+    deployment-time knobs, NOT MCP tool params. The MCP surface stays at
+    the fixed 2 tools (``search``, ``lookup``); ``--watch`` is the only
+    CLI flag and it overrides ``enabled``.
+
+    ``debounce_ms`` is bounded: zero/negative would fire on every byte
+    of a slow-write editor (atomic-save sequences fire 2-3 events per
+    save — debounce naturally collapses them); >60_000 ms means the
+    user is better off re-running ``pydocs-mcp index .`` manually
+    (spec §6 R7).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    debounce_ms: int = Field(default=_DEFAULT_WATCH_DEBOUNCE_MS, ge=1)
+    # tuple so dataclass-style sharing across threads stays immutable
+    extensions: tuple[str, ...] = (".py", ".md", ".ipynb")
+    ignore_globs: tuple[str, ...] = (
+        "**/__pycache__/**",
+        "**/.git/**",
+        "**/.venv/**",
+        "**/node_modules/**",
+        "**/.pytest_cache/**",
+        "**/*.pyc",
+    )
+
+    @model_validator(mode="after")
+    def _validate_debounce_bound(self) -> "WatchConfig":
+        if self.debounce_ms >= _MAX_WATCH_DEBOUNCE_MS:
+            raise ValueError(
+                f"serve.watch.debounce_ms={self.debounce_ms} must be "
+                f"< {_MAX_WATCH_DEBOUNCE_MS} ms. Larger values defeat "
+                "the purpose of a live watcher; re-run "
+                "`pydocs-mcp index .` manually instead."
+            )
+        return self
+
+
+class ServeConfig(BaseModel):
+    """Namespace for ``serve``-command tunables (parity with ``search`` /
+    ``reference_graph``). Only ``watch`` lives here today; future serve-
+    side knobs (HTTP transport options, etc.) get an obvious home."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    watch: WatchConfig = Field(default_factory=WatchConfig)
+
+
 # Known-model dim lookup. Add entries as the model-selection follow-up
 # PR locks in benchmarked models. Models not in this table skip the
 # check (caller is on the hook).
@@ -360,6 +419,11 @@ class AppConfig(BaseSettings):
     # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
     # surface stays fixed; only deployment-time bounds are configurable.
     search: SearchConfig = Field(default_factory=SearchConfig)
+    # Serve-command tunables (file watcher today; future HTTP transport
+    # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
+    # configuration": CLI ``--watch`` overrides ``serve.watch.enabled``;
+    # no MCP tool param. The MCP surface (search, lookup) stays fixed.
+    serve: ServeConfig = Field(default_factory=ServeConfig)
     # Hybrid-search foundation (spec §5.10): embedding provider /
     # model / dim / batch / TurboQuant bit-width. Consumed by
     # ``build_embedder()`` and ``EmbedChunksStage`` later in the
