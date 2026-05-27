@@ -140,31 +140,67 @@ class FileWatcher:
         queue: asyncio.Queue,
         on_change: Callable[[], Awaitable[None]],
     ) -> None:
-        """Consume queued events, debounce, fire `on_change` per spec Decision E.
+        """Consume queued events; debounce + coalesce per spec Decision E.
 
-        Debounce algorithm: pop the first event, then repeatedly wait
-        `debounce_ms` more — if another event arrives during the wait,
-        reset the timer (the wait coalesces it). Once the timer expires
-        without a new event, fire `on_change`.
+        Concurrency model:
+        - Only one `on_change()` runs at a time (`reindex_lock`).
+        - Events arriving while the lock is held set `pending["flag"]=True`
+          so a single follow-up reindex fires after the current one releases.
+        - Burst events during an in-flight reindex coalesce to ONE
+          follow-up regardless of count (AC-5).
         """
         debounce_s = self.debounce_ms / 1000.0
+        reindex_lock = asyncio.Lock()
+        # Mutable closure state — `_consume` is the single async consumer,
+        # so no cross-task aliasing concerns. The `_trigger_with_followup`
+        # coroutine is scheduled via `asyncio.create_task` from this same
+        # consumer, so writes to `pending["flag"]` are serialized through
+        # the event loop.
+        pending = {"flag": False}
+        # Strong refs to spawned trigger tasks — without holding these,
+        # the event loop may garbage-collect a pending task and emit
+        # "Task was destroyed but it is pending" warnings. The set
+        # discards each task when it completes via `add_done_callback`.
+        bg_tasks: set[asyncio.Task] = set()
+
+        async def _drain_and_fire(paths: list[Path]) -> None:
+            self._log_trigger(paths)
+            await on_change()
+
+        async def _trigger_with_followup(paths: list[Path]) -> None:
+            # If a reindex is in flight, just set the pending flag; the
+            # in-flight reindex's post-fire check will schedule the follow-up.
+            if reindex_lock.locked():
+                pending["flag"] = True
+                log.debug("watch: in-flight reindex; queued follow-up")
+                return
+            async with reindex_lock:
+                await _drain_and_fire(paths)
+                # Drain any events queued during the reindex by setting the flag.
+                if pending["flag"]:
+                    pending["flag"] = False
+                    log.info("watch: in-flight follow-up reindex firing")
+                    await _drain_and_fire([])
+
         while True:
-            # Block until something arrives — no work to do otherwise.
             first_path = await queue.get()
             pending_paths: list[Path] = [first_path]
-
-            # Debounce loop — extend the window every time a new event
-            # lands during the wait. Exits when wait_for times out
-            # without seeing an event.
             while True:
                 try:
                     nxt = await asyncio.wait_for(queue.get(), timeout=debounce_s)
                     pending_paths.append(nxt)
                 except asyncio.TimeoutError:
                     break
-
-            self._log_trigger(pending_paths)
-            await on_change()
+            # Fire-and-forget so the consumer loop can immediately resume
+            # draining queue events into `pending["flag"]` while the
+            # current reindex runs. Hold a strong ref in `bg_tasks` to
+            # prevent the event loop from GC-ing the pending task.
+            task = asyncio.create_task(
+                _trigger_with_followup(pending_paths),
+                name="watcher-trigger",
+            )
+            bg_tasks.add(task)
+            task.add_done_callback(bg_tasks.discard)
 
     def _log_trigger(self, paths: list[Path]) -> None:
         """Log the trigger paths (cap at 3 + a count to keep logs sane).

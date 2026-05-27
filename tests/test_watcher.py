@@ -363,3 +363,101 @@ async def test_watcher_two_bursts_separated_by_idle_produce_two_callbacks(
         await task
     except asyncio.CancelledError:
         pass
+
+
+async def test_watcher_coalesces_during_in_flight_reindex(tmp_path: Path) -> None:
+    """AC-5: events arriving during a long-running reindex schedule
+    exactly ONE follow-up reindex — burst events during the in-flight
+    callback do not multiply."""
+    from tests._fakes import FakeObserver
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=20,
+        observer_factory=lambda: fake,
+    )
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+    fire_count = 0
+
+    async def _slow_on_change() -> None:
+        nonlocal fire_count
+        fire_count += 1
+        in_flight.set()
+        # Block here so the test can fire more events while we're "indexing".
+        await release.wait()
+        in_flight.clear()
+
+    task = asyncio.create_task(fw.run_until_cancelled(_slow_on_change))
+    await asyncio.sleep(0.01)
+
+    # Trigger the first reindex.
+    fake.fire(str(tmp_path / "a.py"))
+    await asyncio.wait_for(in_flight.wait(), timeout=1.0)
+    assert fire_count == 1
+
+    # Now fire 5 more events while the first callback is still blocked.
+    # Coalesce contract: these should schedule exactly ONE follow-up.
+    for i in range(5):
+        fake.fire(str(tmp_path / f"b{i}.py"))
+
+    # Release the first reindex.
+    release.set()
+    # The follow-up should fire exactly once, then no more.
+    await asyncio.sleep(0.15)
+    assert fire_count == 2, (
+        f"expected exactly 1 follow-up reindex; saw {fire_count - 1} extra"
+    )
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_watcher_no_two_reindexes_overlap(tmp_path: Path) -> None:
+    """Sibling pin to AC-5: two reindexes cannot run simultaneously."""
+    from tests._fakes import FakeObserver
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: fake,
+    )
+
+    overlap_observed = False
+    active = 0
+
+    async def _on_change() -> None:
+        nonlocal active, overlap_observed
+        active += 1
+        if active > 1:
+            overlap_observed = True
+        await asyncio.sleep(0.05)
+        active -= 1
+
+    task = asyncio.create_task(fw.run_until_cancelled(_on_change))
+    await asyncio.sleep(0.01)
+
+    fake.fire(str(tmp_path / "a.py"))
+    await asyncio.sleep(0.02)
+    fake.fire(str(tmp_path / "b.py"))
+    await asyncio.sleep(0.2)
+
+    assert not overlap_observed
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
