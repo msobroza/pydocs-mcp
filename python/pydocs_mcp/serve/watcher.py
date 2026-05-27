@@ -154,9 +154,14 @@ class FileWatcher:
         # Mutable closure state — `_consume` is the single async consumer,
         # so no cross-task aliasing concerns. The `_trigger_with_followup`
         # coroutine is scheduled via `asyncio.create_task` from this same
-        # consumer, so writes to `pending["flag"]` are serialized through
-        # the event loop.
-        pending = {"flag": False}
+        # consumer, so writes are serialized through the event loop.
+        #
+        # `deferred_paths` accumulates the paths from every trigger that
+        # arrived while a reindex was in flight — the follow-up reindex
+        # then carries the full path list into `_log_trigger`, so the
+        # operator's log line names the files that motivated the
+        # follow-up (not an empty list).
+        deferred_paths: list[Path] = []
         # Strong refs to spawned trigger tasks — without holding these,
         # the event loop may garbage-collect a pending task and emit
         # "Task was destroyed but it is pending" warnings. The set
@@ -168,19 +173,24 @@ class FileWatcher:
             await on_change()
 
         async def _trigger_with_followup(paths: list[Path]) -> None:
-            # If a reindex is in flight, just set the pending flag; the
-            # in-flight reindex's post-fire check will schedule the follow-up.
+            # If a reindex is in flight, accumulate the paths so the
+            # in-flight reindex's post-fire drain can carry them into the
+            # follow-up log line.
             if reindex_lock.locked():
-                pending["flag"] = True
+                deferred_paths.extend(paths)
                 log.debug("watch: in-flight reindex; queued follow-up")
                 return
             async with reindex_lock:
                 await _drain_and_fire(paths)
-                # Drain any events queued during the reindex by setting the flag.
-                if pending["flag"]:
-                    pending["flag"] = False
+                # `while` (not `if`): a continuously-edited workspace can
+                # queue more events DURING the follow-up reindex itself;
+                # keep draining until idle so we don't silently miss a
+                # burst that lands while we're still inside the lock.
+                while deferred_paths:
+                    follow_up = deferred_paths.copy()
+                    deferred_paths.clear()
                     log.info("watch: in-flight follow-up reindex firing")
-                    await _drain_and_fire([])
+                    await _drain_and_fire(follow_up)
 
         while True:
             first_path = await queue.get()
