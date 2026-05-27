@@ -23,14 +23,17 @@ class _FakeMCP:
     """Captures tool registrations from FastMCP without starting a server.
 
     Mirrors ``tests/test_server.py::FakeMCP`` so this test boots the exact
-    same composition path as the rest of the server test suite.
+    same composition path as the rest of the server test suite. Accepts
+    arbitrary kwargs on both construction (``instructions=``) and the
+    ``tool`` decorator (``annotations=``).
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, **kwargs: object) -> None:
         self.name = name
+        self.kwargs = kwargs
         self.tools: dict[str, object] = {}
 
-    def tool(self):
+    def tool(self, **kwargs: object):
         def decorator(fn):
             self.tools[fn.__name__] = fn
             return fn
@@ -68,7 +71,7 @@ def test_server_run_wires_real_ref_svc(tmp_path: Path, monkeypatch) -> None:
 
     fake_mcp = _FakeMCP("test")
     fake_mcp_module = MagicMock()
-    fake_mcp_module.FastMCP = lambda name: fake_mcp
+    fake_mcp_module.FastMCP = lambda name, **kwargs: fake_mcp
 
     with patch.dict(
         sys.modules,
@@ -76,6 +79,10 @@ def test_server_run_wires_real_ref_svc(tmp_path: Path, monkeypatch) -> None:
             "mcp": MagicMock(),
             "mcp.server": MagicMock(),
             "mcp.server.fastmcp": fake_mcp_module,
+            # ``server.run`` imports ``mcp.types.ToolAnnotations`` for the
+            # readOnly / idempotent / openWorld advisory hints attached to
+            # each MCP tool.
+            "mcp.types": MagicMock(),
         },
     ):
         from pydocs_mcp.server import run

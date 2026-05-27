@@ -25,13 +25,20 @@ def _arun(coro):
 
 
 class FakeMCP:
-    """Captures tool registrations from FastMCP without starting a server."""
+    """Captures tool registrations from FastMCP without starting a server.
 
-    def __init__(self, name: str) -> None:
+    Accepts the same construction shape as FastMCP — positional ``name`` plus
+    any kwargs (notably ``instructions=``). ``tool(**kwargs)`` swallows
+    annotation kwargs (``annotations=ToolAnnotations(...)``) so tests don't
+    need to track every advisory hint plumbed through the decorator.
+    """
+
+    def __init__(self, name: str, **kwargs: object) -> None:
         self.name = name
+        self.kwargs = kwargs
         self.tools: dict[str, object] = {}
 
-    def tool(self):
+    def tool(self, **kwargs: object):
         def decorator(fn):
             self.tools[fn.__name__] = fn
             return fn
@@ -89,7 +96,7 @@ def _run_server_capture_tools(db_path: Path):
     """Boot ``server.run`` with FakeMCP injected so we can call handlers."""
     fake_mcp = FakeMCP("test")
     fake_mcp_module = MagicMock()
-    fake_mcp_module.FastMCP = lambda name: fake_mcp
+    fake_mcp_module.FastMCP = lambda name, **kwargs: fake_mcp
 
     with patch.dict(
         sys.modules,
@@ -97,6 +104,11 @@ def _run_server_capture_tools(db_path: Path):
             "mcp": MagicMock(),
             "mcp.server": MagicMock(),
             "mcp.server.fastmcp": fake_mcp_module,
+            # ``server.run`` imports ``mcp.types.ToolAnnotations`` to attach
+            # readOnly / idempotent / openWorld hints to each tool. The fake
+            # module just needs to be importable here; FakeMCP swallows the
+            # ``annotations=`` kwarg without inspecting the value.
+            "mcp.types": MagicMock(),
         },
     ):
         from pydocs_mcp.server import run
@@ -381,7 +393,7 @@ def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
 
     fake_mcp = FakeMCP("test")
     fake_mcp_module = MagicMock()
-    fake_mcp_module.FastMCP = lambda name: fake_mcp
+    fake_mcp_module.FastMCP = lambda name, **kwargs: fake_mcp
 
     with patch.dict(
         sys.modules,
@@ -389,6 +401,7 @@ def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
             "mcp": MagicMock(),
             "mcp.server": MagicMock(),
             "mcp.server.fastmcp": fake_mcp_module,
+            "mcp.types": MagicMock(),
         },
     ):
         from pydocs_mcp.server import run

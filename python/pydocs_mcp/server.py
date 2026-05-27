@@ -77,6 +77,7 @@ def _build_search_query(payload: SearchInput) -> SearchQuery:
 def run(db_path: Path, config_path: Path | None = None) -> None:
     """Start the MCP server."""
     from mcp.server.fastmcp import FastMCP
+    from mcp.types import ToolAnnotations
 
     from pydocs_mcp.application import (
         ApiSearch,
@@ -112,9 +113,23 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     # ``ServiceUnavailableError`` in production.
     lookup_svc = build_sqlite_lookup_service(db_path, config=config)
 
-    mcp = FastMCP("pydocs-mcp")
+    # Session-level scope frame surfaced to MCP clients. Tells the AI when
+    # to reach for pydocs-mcp (installed libraries, user's project code
+    # under the ``__project__`` sentinel, call graph) versus other tools,
+    # and pins the fixed 2-tool surface so the AI doesn't try to synthesize
+    # list_packages / get_doc handlers that don't exist.
+    mcp = FastMCP(
+        "pydocs-mcp",
+        instructions="""pydocs-mcp indexes your current project's source code AND every installed dependency into a local hybrid (BM25 + dense embeddings) index. Use this server before web search whenever the user asks about: an installed library's API, a function/class in their own project, who-calls-what / call graph navigation, or `__project__` modules. The surface is two tools only — `search` and `lookup` — pick `search` for keyword/topic queries and `lookup` for known dotted paths or reference-graph traversal. Do NOT use for: refactoring, writing new code from scratch, runtime debugging, or libraries that aren't installed in this project (use Context7 or web search for those).""",  # noqa: E501
+    )
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        )
+    )
     async def search(
         query: str,
         kind: str = "any",
@@ -122,24 +137,32 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         scope: str = "all",
         limit: int = 10,
     ) -> str:
-        """Full-text search over indexed docs and code (BM25 ranked).
+        """Hybrid keyword + semantic search across your project's source AND every installed dependency (docs + code).
 
-        Use when the user describes a topic or keyword, not a specific target.
+        When to use this tool:
+          - Topic, keyword, concept, or partial name (you don't know the exact dotted path)
+          - "How do I do X" / "Where is the code for X" style questions
+          - Use `lookup` instead if you know the exact dotted path OR want to walk the code graph
 
         Params:
-          query:   search terms (space-separated)
-          kind:    "docs" (prose/README) | "api" (functions/classes) | "any" (default)
-          package: restrict to one package (e.g. "fastapi"); "" = all; "__project__" = your code
-          scope:   "project" | "deps" | "all" (default)
-          limit:   1–1000, default 10
+          query:   search terms (space-separated; both prose and identifiers work)
+          kind:    "docs" (prose / README chunks) | "api" (functions / classes) | "any" (default)
+          package: restrict to one package (e.g. "fastapi"). Use "__project__" for the USER's
+                   code, not a library. "" = all packages.
+          scope:   "project" (user's code only) | "deps" (installed deps only) | "all" (default).
+                   Use scope="project" or package="__project__" when the user asks about THEIR
+                   code, not a library — this is the most common routing mistake to avoid.
+          limit:   max results 1-1000, default 10.
 
         Examples:
           search(query="batch inference", kind="docs")
           search(query="HTTPBasicAuth", kind="api")
           search(query="retry logic", package="requests")
-          search(query="parser", scope="project")
+          search(query="our parser", scope="project")
+          search(query="ValidationError", package="__project__")
 
-        For a specific known target (package, module, class, method), use lookup.
+        Returns markdown with up to `limit` ranked hits, each block carrying
+        package, module path, and a code/docs excerpt.
         """
         payload = SearchInput(
             query=query, kind=kind, package=package, scope=scope, limit=limit,
@@ -152,11 +175,20 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             log.exception("search failed unexpectedly")
             raise ServiceUnavailableError(f"search failed: {e}") from e
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        )
+    )
     async def lookup(target: str = "", show: str = "default") -> str:
-        """Navigate to a specific named package/module/symbol; show its info or references.
+        """Navigate to a known symbol (dotted path) and optionally traverse its reference graph — callers, callees, base classes.
 
-        Use when the user names an exact target.
+        When to use this tool:
+          - You know the exact dotted path of a package / module / class / method
+          - You want to walk the code graph from a known symbol (who calls X, what X calls)
+          - Use `search` instead if you only have a keyword, topic, or partial name
 
         Params:
           target: dotted path
@@ -165,10 +197,14 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
             "fastapi.routing"                           → module tree
             "fastapi.routing.APIRouter"                 → class + children
             "fastapi.routing.APIRouter.include_router"  → method details
-          show: "default" | "tree" (full subtree)
-                | "callers" (who calls this)
-                | "callees" (what this calls)
-                | "inherits" (base classes)
+            "__project__.my_module.MyClass"             → YOUR class (not a library)
+
+          show:
+            "default"  → symbol summary + immediate children (start here)
+            "tree"     → full nested subtree (use when "default" is too shallow)
+            "callers"  → every site that calls/references this symbol — use to answer "who uses X?"
+            "callees"  → every symbol this calls — use to answer "what does X depend on?"
+            "inherits" → base classes and interface chain — use to answer "what does X extend?"
 
         Examples:
           lookup(target="")
@@ -176,7 +212,9 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
           lookup(target="fastapi.routing.APIRouter.include_router", show="callers")
           lookup(target="requests.auth.HTTPBasicAuth", show="inherits")
 
-        For keyword/topic search, use search.
+        Returns markdown — exact shape varies by `show` mode (a summary block
+        for "default", a tree for "tree", a list of caller / callee entries
+        for the graph modes).
         """
         payload = LookupInput(target=target, show=show)
         try:
