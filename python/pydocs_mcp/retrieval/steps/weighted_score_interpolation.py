@@ -52,10 +52,13 @@ class WeightedScoreInterpolationStep(RetrieverStep):
     absent from ``state.scratch``, :class:`KeyError` is raised with a
     diagnostic listing the missing key and the available scratch keys.
     This is louder than :class:`RRFFusionStep`'s graceful skip on
-    purpose: a missing branch usually means an upstream pipeline
-    misconfiguration (e.g., ``TopKFilterStep`` forgot to ``publish_to``
-    the matching name), and silently degrading the fusion would hide
-    the bug behind worse retrieval quality.
+    purpose (spec S31): a missing branch usually means an upstream
+    pipeline misconfiguration (e.g., ``TopKFilterStep`` forgot to
+    ``publish_to`` the matching name), and silently degrading the
+    fusion would hide the bug behind worse retrieval quality. RRF can
+    afford to skip because its reciprocal-rank sum composes additively;
+    the weighted blend cannot, because dropping a configured branch
+    changes the effective weight distribution across the survivors.
 
     Reads ``state.scratch[<branch>.ranked]`` keys (same convention RRF
     uses) — each branch payload is either a :class:`ChunkList` (has

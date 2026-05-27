@@ -640,7 +640,14 @@ class SqlitePackageRepository:
 # FTS5 reserves these tokens as boolean operators — unquoted query terms may
 # use them directly. Any other word is OR-joined and double-quoted so that
 # punctuation / hyphenation in user terms does not crash the parser.
-_FTS_OPS = frozenset({"OR", "AND", "NOT"})
+#
+# Single source of truth (spec S6): :mod:`pydocs_mcp.retrieval.steps.chunk_fetcher`
+# imports this set so the two ``_build_fts_match_query`` implementations
+# share one operator vocabulary instead of two near-duplicate literals
+# that drift over time (AC17 byte-parity hinges on this staying unified).
+# ``NEAR`` is included since FTS5 accepts it as a top-level operator even
+# though the chunk fetcher is more likely to see it than the legacy store.
+_FTS_OPS: frozenset[str] = frozenset({"AND", "OR", "NOT", "NEAR"})
 
 
 @dataclass(frozen=True, slots=True)

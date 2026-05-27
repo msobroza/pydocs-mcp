@@ -341,6 +341,21 @@ class LookupService:
         parse); if the Null impl is wired ``exists`` returns ``False``
         and we fall through to ``PackageLookup.find_module`` — the
         no-tree-index deployment still resolves modules.
+
+        Example (spec S30) — target ``"fastapi.routing.APIRouter.include_router"``:
+
+        * Caller (:meth:`LookupTarget.parse`) splits to
+          ``parts = ["fastapi", "routing", "APIRouter", "include_router"]``
+          and dispatches ``package = "fastapi"``.
+        * If only ``fastapi.routing`` is indexed (the class + method are NOT
+          separate modules in the tree), this walk tries ``i=4`` → ``i=3``
+          → ``i=2`` and matches at ``i=2`` with ``module_id = "fastapi.routing"``.
+        * Returns ``("fastapi.routing", 2)`` — ``consumed == 2`` indexes
+          INTO ``parts`` so the caller's ``symbol_path`` becomes
+          ``parts[2:] = ("APIRouter", "include_router")``. Note that
+          ``consumed`` is the prefix LENGTH (including the package name
+          slot at ``parts[0]``), NOT ``len(module.split('.'))`` of just
+          the post-package suffix.
         """
         for i in range(len(parts), 0, -1):
             candidate = ".".join(parts[:i])

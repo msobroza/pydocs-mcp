@@ -337,9 +337,9 @@ class Embedder(Protocol):
     """One embedder serves both query-time and ingestion-time work.
 
     Spec §5.2 — concrete classes return their natural shape:
-    single-vector embedders (FastEmbed, OpenAI, BGE) return Vector
-    (1D np.ndarray, float32); future ColBERT-style embedders return
-    MultiVector (list of 1D np.ndarrays). Use
+    single-vector embedders (FastEmbed, OpenAI, BGE) return ``np.ndarray``
+    (1D, float32); future ColBERT-style embedders return ``MultiVector``
+    (list of 1D ``np.ndarray``\\ s). Use
     `pydocs_mcp.models.is_multi_vector(emb)` to disambiguate.
     """
     # Defaults make the attributes discoverable via hasattr(Embedder, ...)

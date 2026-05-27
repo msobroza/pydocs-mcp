@@ -338,11 +338,12 @@ class IndexingService:
         """Re-resolve OTHER packages' refs against this package's qnames.
 
         Spec C1 — delegates to :meth:`ReferenceStore.resolve_unresolved`
-        on the UoW. Replaces the historical reach-through into
-        :attr:`SqliteUnitOfWork._held_conn`: the Protocol now owns the
-        bulk-fixup contract, so any backend (SQLite today, Postgres /
-        DuckDB later) satisfies this code path without service-side
-        changes.
+        on the UoW. Replaces the historical backend-specific
+        held-connection reach-through: the Protocol now owns the
+        bulk-fixup contract and the filter adapter materialises the
+        WHERE clause (so any backend — SQLite today, Postgres / DuckDB
+        later — satisfies this code path without service-side changes;
+        spec S33: this method does not name a concrete adapter).
 
         Scope: this only implements Rule B (exact qname match). Rules A
         (alias rewrite) / C (suffix) / D (ambiguous) / E (no match) are

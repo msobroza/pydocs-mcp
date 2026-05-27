@@ -41,7 +41,18 @@ def _rrf_fuse(
     Returns ranked Chunks with ``relevance`` overwritten by the RRF score.
     Items are de-duped by ``id``; chunks with ``id is None`` are dropped
     (no stable dedupe key — silently skipping is safer than letting them
-    inflate scores under ``id()`` collisions across lists).
+    inflate scores under ``id()`` collisions across lists). Callers MUST
+    NOT rely on the relative ordering of dropped sentinel chunks across
+    multiple invocations: only the surviving ranked chunks have stable
+    ordering.
+
+    Asymmetry with :class:`WeightedScoreInterpolationStep` is intentional
+    (spec S31): RRF silently skips both ``id is None`` chunks AND missing
+    branches (graceful degradation under upstream filtering noise), while
+    the weighted step raises :class:`KeyError` for a missing branch. RRF
+    composes additively, so a missing branch just lowers a chunk's total
+    without corrupting the ranking; the weighted step needs every
+    configured branch present to form a well-defined linear combination.
 
     First-seen wins on the stored representative so retriever_name /
     relevance from the earliest branch survives the merge — matches the
@@ -96,6 +107,12 @@ class RRFFusionStep(RetrieverStep):
     ``state.candidates`` as a ChunkList. Returns the input state unchanged
     when no branch produced output — keeps the pipeline robust to early
     short-circuits in parallel branches.
+
+    **Lenient on missing branches** — quietly the inverse of
+    :class:`~pydocs_mcp.retrieval.steps.weighted_score_interpolation.WeightedScoreInterpolationStep`,
+    which raises :class:`KeyError` instead. The asymmetry is intentional
+    (spec S31): RRF wants resilience to upstream filtering noise; the
+    weighted step needs every branch present to form the linear blend.
     """
 
     k: int = field(default=_DEFAULT_K, kw_only=True)

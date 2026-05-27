@@ -22,9 +22,12 @@ from pydantic.dataclasses import dataclass as pyd_dataclass
 # ── Embedding types (spec §5.1) ──────────────────────────────────────────
 # Aligned with FastEmbed (https://github.com/qdrant/fastembed):
 #
-#   Vector       = 1D np.ndarray, shape (dim,), dtype=float32.
+#   np.ndarray   = 1D, shape (dim,), dtype=float32.
 #                  What TextEmbedding.embed() yields per document; what
 #                  OpenAI returns; what TurboQuant IdMapIndex consumes.
+#                  Spec S12: we no longer expose a ``Vector`` alias — call
+#                  sites use ``np.ndarray`` directly so the type-checker
+#                  and IDE tooling agree on the canonical name.
 #
 #   MultiVector  = list[np.ndarray] — one 1D vector per token, ColBERT
 #                  late-interaction shape. NOT persisted this PR (single-
@@ -36,9 +39,8 @@ from pydantic.dataclasses import dataclass as pyd_dataclass
 # .values numpy arrays. NOT in the Embedding union this PR; defined here
 # so a future sparse-retrieval PR can extend Embedding without breaking
 # changes.
-Vector = np.ndarray
 MultiVector = list[np.ndarray]
-Embedding = Vector | MultiVector
+Embedding = np.ndarray | MultiVector
 
 
 @runtime_checkable

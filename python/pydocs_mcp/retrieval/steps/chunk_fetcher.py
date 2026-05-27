@@ -55,16 +55,24 @@ if TYPE_CHECKING:
 # Build the FTS5 MATCH expression the same way SqliteVectorStore does so
 # observable behavior matches: short tokens are dropped, "OR" joins
 # remaining quoted terms, FTS5 operators in the raw input are preserved.
-_FTS_OPS = frozenset({"AND", "OR", "NOT", "NEAR"})
+#
+# Spec S6: ``_FTS_OPS`` lives in :mod:`pydocs_mcp.storage.sqlite` as the
+# single source of truth — both ``_build_fts_match_query`` implementations
+# share the same frozenset so the operator vocabulary cannot drift over
+# time (AC17 byte-parity hinges on this staying unified). The import is
+# deferred to call time for the same circular-import reason that gates
+# the other storage imports in this module (see the comment block above).
 
 
 def _build_fts_match_query(terms: str) -> str | None:
     """Shape raw user terms into an FTS5 MATCH expression.
 
     Mirror of :func:`pydocs_mcp.storage.sqlite._build_fts_match_query`.
-    Kept in sync intentionally — when the storage layer's query shaping
-    changes, this needs to change with it (parity verified by AC17 baseline).
+    Reuses ``_FTS_OPS`` from the storage module so the operator vocabulary
+    stays unified (AC17 byte-parity).
     """
+    from pydocs_mcp.storage.sqlite import _FTS_OPS
+
     tokens = terms.split()
     if any(t in _FTS_OPS for t in tokens):
         return terms
