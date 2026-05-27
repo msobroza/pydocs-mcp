@@ -139,12 +139,16 @@ class LlmTreeReasoningStep(RetrieverStep):
                 # InMemoryReferenceStore and SqliteReferenceStore).
                 #
                 # Performance: asyncio.gather fans the per-qname lookups
-                # out concurrently. Typical N is 5-20 and each call hits
-                # SQLite, so concurrent dispatch cuts wall-clock latency
-                # by ~Nx vs the serial for-loop this replaces. Dedup +
-                # per-target neighbors cap still apply downstream, on
-                # the gathered results, so observable output is
-                # unchanged.
+                # out concurrently. Note — when running through the
+                # SqliteUnitOfWork, the underlying find_by_name calls
+                # serialize on the UoW's held-connection asyncio.Lock,
+                # so the wall-clock win here comes from overlapping
+                # asyncio.to_thread dispatch overhead rather than from
+                # parallel SQLite queries. For non-UoW callers (e.g.
+                # in-memory test stores, or a future Postgres adapter
+                # with multiple connections), the queries can truly run
+                # in parallel. Dedup + per-target neighbors cap still
+                # apply downstream so observable output is unchanged.
                 caller_lists = await asyncio.gather(
                     *(uow.references.find_by_name(qname) for qname in picked),
                 )

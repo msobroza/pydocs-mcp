@@ -28,6 +28,16 @@ _SUBMODULE_RE = re.compile(r"\A([A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*)?\Z")
 # inspecting giant modules (e.g. ``numpy``) can't bloat the MCP response.
 _MAX_MEMBERS: int = 50
 
+# Single source of truth for the narrowed-from-broad ``except`` clause used
+# by both the ``inspect.getmembers`` site and the ``pkgutil.iter_modules``
+# fallback site below. Originally widened to ``except Exception`` for
+# byte-parity with the pre-PR server.py handler; the narrow tuple lets
+# real bugs (ValueError, KeyError, TypeError, …) propagate so they surface
+# in tests instead of being silently swallowed.
+_BENIGN_INSPECT_EXCEPTIONS = (
+    AttributeError, ImportError, OSError, RuntimeError,
+)
+
 
 def _validate_submodule(submodule: str) -> bool:
     """Return True if submodule is a safe dotted identifier (or empty)."""
@@ -85,13 +95,10 @@ class ModuleInspector:
                 items.append(f"{kind} {name}{sig}\n    {doc}")
                 if len(items) >= _MAX_MEMBERS:
                     break
-        except (AttributeError, ImportError, OSError, RuntimeError):
-            # Narrowed from ``except Exception``. Custom-DSL libs raise
-            # these from ``inspect.getmembers`` (broken __getattr__, lazy
-            # import shims, FS-backed descriptors, RuntimeError property
-            # guards). Real bugs (ValueError, KeyError, TypeError, ...)
-            # propagate so they surface in tests instead of being
-            # silently swallowed.
+        except _BENIGN_INSPECT_EXCEPTIONS:
+            # Custom-DSL libs raise these from ``inspect.getmembers``
+            # (broken __getattr__, lazy import shims, FS-backed
+            # descriptors, RuntimeError property guards).
             pass
 
         if not items and hasattr(mod, "__path__"):
@@ -101,11 +108,9 @@ class ModuleInspector:
                     if not s.startswith("_")
                 ]
                 return f"# {target}\nSubmodules: {', '.join(subs)}"
-            except (AttributeError, ImportError, OSError, RuntimeError):
-                # Narrowed from ``except Exception``. Same rationale as
-                # the getmembers site above — these are the failure
-                # modes that occur with broken / lazy / FS-backed
-                # packages; other exceptions are real bugs.
+            except _BENIGN_INSPECT_EXCEPTIONS:
+                # Same rationale as the getmembers site above — broken /
+                # lazy / FS-backed packages raise these.
                 pass
 
         return (

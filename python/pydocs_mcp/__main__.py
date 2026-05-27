@@ -387,19 +387,15 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     )
 
 
-async def _run_serve(args: argparse.Namespace) -> None:
-    """Drive the indexing phase, then hand off to the MCP server loop.
+async def _run_serve_indexing(args: argparse.Namespace) -> None:
+    """Async indexing phase of ``serve`` — runs before the MCP server boots.
 
-    Server startup remains synchronous (``server.run``) — the coroutine
-    awaits the indexing build-up, then schedules the blocking server via
-    ``asyncio.to_thread`` so the event loop owns both phases and uncaught
-    errors propagate through the single ``_run_cmd`` boundary.
+    Split out from the blocking ``server.run`` call so the indexing build-up
+    can route through ``_run_cmd``'s ``--verbose`` / traceback policy while
+    the MCP server itself runs on the main thread (see ``_cmd_serve`` for
+    the SIGINT rationale).
     """
-    from pydocs_mcp.server import run
-
     await _run_indexing(args)
-    _project, db_path = _project_and_db(args)
-    await asyncio.to_thread(run, db_path, config_path=getattr(args, "config", None))
 
 
 async def _run_search(args: argparse.Namespace) -> None:
@@ -507,7 +503,37 @@ def _cmd_index(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
-    return _run_cmd(_run_serve(args), verbose=args.verbose)
+    # Phase 1 — async indexing through ``_run_cmd`` so the verbose /
+    # traceback policy applies to indexing failures uniformly.
+    code = _run_cmd(_run_serve_indexing(args), verbose=args.verbose)
+    if code != 0:
+        return code
+    # Phase 2 — blocking MCP server. ``server.run`` calls
+    # ``anyio.run(self.run_stdio_async)`` internally, which starts its own
+    # event loop. Running that inside ``asyncio.to_thread`` would dispatch
+    # it to a worker thread, but Python only delivers SIGINT to the main
+    # thread and ``asyncio.to_thread`` cannot cancel a running thread —
+    # so Ctrl+C against ``pydocs-mcp serve`` would not interrupt cleanly.
+    # Run on the main thread so the default SIGINT handler reaches the
+    # blocking loop. The try / except mirrors ``_run_cmd``'s policy.
+    from pydocs_mcp.server import run
+
+    _project, db_path = _project_and_db(args)
+    try:
+        run(db_path, config_path=getattr(args, "config", None))
+        return 0
+    except KeyboardInterrupt:
+        # Graceful shutdown via Ctrl+C — not an error.
+        return 0
+    except Exception as exc:  # noqa: BLE001 -- CLI top-level (AC #16)
+        print(f"Error: {exc}", file=sys.stderr)
+        if args.verbose:
+            traceback.print_exc(file=sys.stderr)
+            log.exception("CLI command failed")
+        else:
+            print("(re-run with --verbose to see the traceback)", file=sys.stderr)
+            log.error("CLI command failed: %s", exc)
+        return 1
 
 
 def _cmd_search(args: argparse.Namespace) -> int:
