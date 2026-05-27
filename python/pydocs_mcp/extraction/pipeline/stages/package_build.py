@@ -17,7 +17,7 @@ from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
 from pydocs_mcp.extraction.serialization import stage_registry
-from pydocs_mcp.models import Package, PackageOrigin
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Package, PackageOrigin
 
 
 @stage_registry.register("package_build")
@@ -37,7 +37,7 @@ class PackageBuildStage:
     def _project_package(self, state: IngestionState) -> Package:
         target = Path(str(state.files.target))
         return Package(
-            name="__project__",
+            name=PROJECT_PACKAGE_NAME,
             version="local",
             summary=f"Project: {target.name}",
             homepage="",

@@ -21,6 +21,7 @@ from pydocs_mcp.extraction.pipeline.ingestion import (
     IngestionState,
     TargetKind,
 )
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +42,7 @@ class PipelineChunkExtractor:
             files=FileBundle(
                 target=project_dir,
                 target_kind=TargetKind.PROJECT,
-                package_name="__project__",
+                package_name=PROJECT_PACKAGE_NAME,
             ),
         )))
 

@@ -6,18 +6,14 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.application.indexing_service import IndexingService, IndexingStats
 from pydocs_mcp.application.protocols import (
     ChunkExtractor,
     DependencyResolver,
     MemberExtractor,
 )
 from pydocs_mcp.storage.protocols import UnitOfWork
-
-if TYPE_CHECKING:
-    from pydocs_mcp.models import IndexingStats
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -45,9 +41,7 @@ class ProjectIndexer:
         force: bool = False,
         include_project_source: bool = True,
         workers: int = 1,
-    ) -> "IndexingStats":
-        from pydocs_mcp.models import IndexingStats
-
+    ) -> IndexingStats:
         stats = IndexingStats()
         if force:
             await self.indexing_service.clear_all()
@@ -68,7 +62,7 @@ class ProjectIndexer:
         return stats
 
     async def _index_project_source(
-        self, project_dir: Path, stats: "IndexingStats",
+        self, project_dir: Path, stats: IndexingStats,
     ) -> None:
         result = await self.chunk_extractor.extract_from_project(project_dir)
         pkg = result.package
@@ -91,7 +85,7 @@ class ProjectIndexer:
         )
 
     async def _index_one_dependency(
-        self, dep_name: str, stats: "IndexingStats",
+        self, dep_name: str, stats: IndexingStats,
     ) -> None:
         try:
             result = await self.chunk_extractor.extract_from_dependency(dep_name)

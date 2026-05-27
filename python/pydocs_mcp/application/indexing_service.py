@@ -55,6 +55,24 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+# S7: ``IndexingStats`` lives next to its sole producer
+# (``ProjectIndexer.index_project``) — it accumulates write-side counters
+# while the indexer iterates over packages, so it belongs in the
+# application layer alongside the service that mutates it.
+# ``pydocs_mcp.models.IndexingStats`` is a re-export shim that binds to
+# this exact class object.
+@dataclass(slots=True)
+class IndexingStats:
+    """Mutable accumulator for :meth:`ProjectIndexer.index_project`
+    (spec §5.3). Deliberately NOT frozen — the service mutates these counters
+    while iterating over packages. `slots=True` still guards against typos
+    (e.g. ``stats.indexxed += 1``) by rejecting unknown attributes."""
+    project_indexed: bool = False
+    indexed: int = 0
+    cached: int = 0
+    failed: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class IndexingService:
     """Coordinates atomic write-side indexing through a UnitOfWork (spec §5.6).

@@ -27,6 +27,7 @@ from pydocs_mcp.application import (
 from pydocs_mcp.application.formatting import render_top_composite
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
     ChunkFilterField,
     SearchQuery,
     SearchScope,
@@ -57,7 +58,7 @@ def _normalize_pkg_filter_value(package: str) -> str:
     """PyPI names like 'Flask-Login' are stored as 'flask_login' in the DB.
     ``__project__`` is a sentinel — leave intact."""
     pkg = package.strip()
-    return pkg if pkg == "__project__" else normalize_package_name(pkg)
+    return pkg if pkg == PROJECT_PACKAGE_NAME else normalize_package_name(pkg)
 
 
 def _build_search_query(payload: SearchInput) -> SearchQuery:

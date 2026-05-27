@@ -15,6 +15,17 @@ from typing import Any, Literal
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.filters import (
+    All,
+    Any_,
+    FieldEq,
+    FieldIn,
+    FieldLike,
+    Filter,
+    MetadataFilterFormat,
+    Not,
+    format_registry,
+)
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -26,17 +37,6 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
-from pydocs_mcp.storage.filters import (
-    All,
-    Any_,
-    FieldEq,
-    FieldIn,
-    FieldLike,
-    Filter,
-    MetadataFilterFormat,
-    Not,
-    format_registry,
-)
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork

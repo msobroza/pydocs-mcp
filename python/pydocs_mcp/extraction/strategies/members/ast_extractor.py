@@ -27,7 +27,11 @@ from pydocs_mcp.extraction.strategies._dep_helpers import (
     find_installed_distribution,
     find_site_packages_root,
 )
-from pydocs_mcp.models import ModuleMember, ModuleMemberFilterField
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    ModuleMember,
+    ModuleMemberFilterField,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +39,7 @@ class AstMemberExtractor:
     async def extract_from_project(
         self, project_dir: Path,
     ) -> tuple[ModuleMember, ...]:
-        return await asyncio.to_thread(self._parse_dir, project_dir, "__project__")
+        return await asyncio.to_thread(self._parse_dir, project_dir, PROJECT_PACKAGE_NAME)
 
     async def extract_from_dependency(
         self, dep_name: str,

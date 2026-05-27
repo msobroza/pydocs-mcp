@@ -5,6 +5,12 @@ docs/superpowers/specs/2026-04-19-sub-pr-1-naming-and-models-design.md §5.
 
 All dataclasses are frozen + slotted. All enums subclass enum.StrEnum so values
 round-trip through SQLite TEXT columns and JSON without glue code.
+
+Filter-tree value objects + ``format_registry`` live in
+:mod:`pydocs_mcp.filters` (post-PR-C Task 20 / S32). The dependency
+direction is one-way: ``models → pydocs_mcp.filters``. Because the new
+filters module has no internal imports, ``models`` can reach it at
+module load — no lazy-import workaround needed.
 """
 from __future__ import annotations
 
@@ -18,6 +24,14 @@ from typing import Any, ClassVar, Protocol, runtime_checkable
 import numpy as np
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pyd_dataclass
+
+from pydocs_mcp.filters import MetadataFilterFormat, format_registry
+
+# S5: single source of truth for the special package name that identifies
+# project-source chunks/members/trees inside the indexer. Every call
+# site (extraction stages, retrieval filters, server.py, tests) reaches
+# the literal through this constant.
+PROJECT_PACKAGE_NAME = "__project__"
 
 # ── Embedding types (spec §5.1) ──────────────────────────────────────────
 # Aligned with FastEmbed (https://github.com/qdrant/fastembed):
@@ -102,12 +116,10 @@ class SearchScope(StrEnum):
     ALL               = "all"
 
 
-class MetadataFilterFormat(StrEnum):
-    MULTIFIELD    = "multifield"
-    FILTER_TREE   = "filter_tree"
-    CHROMADB      = "chromadb"
-    ELASTICSEARCH = "elasticsearch"
-    QDRANT        = "qdrant"
+# ``MetadataFilterFormat`` is re-exported from :mod:`pydocs_mcp.filters` at
+# the top of this module so ``from pydocs_mcp.models import
+# MetadataFilterFormat`` keeps working. The canonical definition lives in
+# ``pydocs_mcp/filters.py``; there is exactly one enum class.
 
 
 class ChunkFilterField(StrEnum):
@@ -366,10 +378,11 @@ class SearchQuery:
     `pre_filter` and `post_filter` are native mappings in the format
     named by `pre_filter_format` / `post_filter_format`. Syntax is
     validated at construction time against
-    `pydocs_mcp.storage.filters.format_registry` (spec §5.5, AC #12).
-    The filter-registry import is deferred inside the validator body so
-    that `storage.filters` — which does not import from `models.py` —
-    can keep importing safely.
+    :data:`pydocs_mcp.filters.format_registry` (spec §5.5, AC #12).
+    The dependency direction is one-way: ``models → pydocs_mcp.filters``
+    (the top-level ``pydocs_mcp.filters`` module has no internal
+    imports, so the registry is reachable at module load — no
+    lazy-import workaround needed).
     """
     terms: str
     max_results: int = 8
@@ -395,12 +408,6 @@ class SearchQuery:
 
     @model_validator(mode="after")
     def _validate_filter_syntax(self) -> "SearchQuery":
-        # Lazy import to avoid any risk of a circular import at module load:
-        # storage.filters does not import from models, but keeping the import
-        # inside the validator body is the cleanest way to keep the direction
-        # of dependency one-way (models ← storage.filters).
-        from pydocs_mcp.storage.filters import format_registry
-
         for raw_filter, fmt in (
             (self.pre_filter, self.pre_filter_format),
             (self.post_filter, self.post_filter_format),
@@ -431,13 +438,8 @@ class PackageDoc:
     members: tuple[ModuleMember, ...]
 
 
-@dataclass(slots=True)
-class IndexingStats:
-    """Mutable accumulator for :meth:`ProjectIndexer.index_project`
-    (spec §5.3). Deliberately NOT frozen — the service mutates these counters
-    while iterating over packages. `slots=True` still guards against typos
-    (e.g. ``stats.indexxed += 1``) by rejecting unknown attributes."""
-    project_indexed: bool = False
-    indexed: int = 0
-    cached: int = 0
-    failed: int = 0
+# S7: ``IndexingStats`` lives next to its sole producer
+# (``ProjectIndexer.index_project``) in the application layer. The
+# import below is a re-export shim — ``from pydocs_mcp.models import
+# IndexingStats`` keeps working for callers that learned the old path.
+from pydocs_mcp.application.indexing_service import IndexingStats  # noqa: E402, F401
