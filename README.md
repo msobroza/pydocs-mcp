@@ -129,4 +129,21 @@ with confidence intervals and plots. See
 - **[INSTALL.md](INSTALL.md)** — installation & troubleshooting.
 - **[CLAUDE.md](CLAUDE.md)** — architecture & contributor guide.
 
+## Sources & references
+
+**Benchmarks**
+- RepoQA — *Evaluating Long Context Code Understanding* · [arXiv:2406.06025](https://arxiv.org/abs/2406.06025) (2024)
+- DS-1000 — *A Natural and Reliable Benchmark for Data Science Code Generation* · [arXiv:2211.11501](https://arxiv.org/abs/2211.11501) (2023)
+- CodeRAG-Bench — *Can Retrieval Augment Code Generation?* · [arXiv:2406.14497](https://arxiv.org/abs/2406.14497) (2024)
+
+**Vectors & retrieval**
+- TurboQuant — *Online Vector Quantization with Near-optimal Distortion Rate* · [arXiv:2504.19874](https://arxiv.org/abs/2504.19874) (Google Research, 2025); implemented by [`turbovec`](https://github.com/RyanCodrai/turbovec)
+- [FAISS](https://github.com/facebookresearch/faiss) — the similarity-search library used as the speed/storage baseline above
+- [FastEmbed](https://github.com/qdrant/fastembed) with [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) — the default on-device embedder
+- [PageIndex](https://github.com/VectifyAI/PageIndex) — inspiration for the LLM tree-reasoning mode
+
+**Protocol & comparable tools**
+- [Model Context Protocol](https://modelcontextprotocol.io) — the MCP standard
+- [Context7](https://github.com/upstash/context7) · [Neuledge Context](https://github.com/neuledge/context)
+
 License: MIT.
