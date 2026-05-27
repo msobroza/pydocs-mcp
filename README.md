@@ -5,6 +5,8 @@ version-matched code retrieval — keyword (BM25) and semantic (dense) search,
 fused into one hybrid ranking — over the exact versions of every dependency
 installed on your machine.**
 
+![pydocs-mcp architecture overview: your project source and installed Python libraries are indexed into a SQLite database (chunks, metadata, reference graph) plus a TurboQuant .tq vector file; an AI coding assistant's query runs through keyword (BM25) and vector search fused together — with a tree-navigating mode over the code map — then a result ranker returns version-aware answers, all locally with no API keys or network upload.](assets/pydocs-mcp-overview.png)
+
 Your AI assistant remembers `requests` 2.28. You have 2.31 installed. It writes
 code calling a kwarg that was renamed two versions ago — and you spend twenty
 minutes debugging a failing test. The fix isn't a smarter prompt; it's giving
