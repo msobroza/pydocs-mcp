@@ -83,6 +83,22 @@ pydocs-mcp search "batch inference"           # the same search, from the CLI
 pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 ```
 
+### Live re-indexing (optional)
+
+If you edit code while the MCP server is running, pass `--watch` to keep
+the index fresh as you save files. Edits to `.py`, `.md`, and `.ipynb`
+files trigger a debounced reindex; the next `search` / `lookup` call
+sees the updated content.
+
+```bash
+pip install 'pydocs-mcp[watch]'
+pydocs-mcp serve . --watch
+```
+
+Debounce, file extensions, and ignored paths are tunable via
+`serve.watch.*` in your `pydocs-mcp.yaml` (see
+[DOCUMENTATION.md](DOCUMENTATION.md#live-re-indexing)).
+
 Point Claude Code, Cursor, or Continue.dev at it over stdio — copy-paste client
 configs are in [DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration), and
 install troubleshooting (including the `libopenblas` fallback) is in
