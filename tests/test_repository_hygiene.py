@@ -50,3 +50,35 @@ def test_pyproject_uses_pep639_license_form() -> None:
     assert "LICENSE" in license_files, (
         f"LICENSE must be in license-files; got {license_files}"
     )
+
+
+def test_py_typed_marker_exists() -> None:
+    """P1-2: PEP 561 py.typed marker so downstream type-checkers
+    use our type hints instead of silently inferring Any."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    marker = root / "python" / "pydocs_mcp" / "py.typed"
+    assert marker.is_file(), (
+        f"py.typed marker missing at {marker}. "
+        "PEP 561 requires this file for downstream type-checkers to "
+        "trust the annotations in this package."
+    )
+
+
+def test_pyproject_includes_py_typed_in_maturin() -> None:
+    """P1-2: maturin must bundle py.typed into the wheel.
+
+    Without this, `pip install pydocs-mcp` ships the wheel WITHOUT
+    py.typed and downstream type-checkers still see Any.
+    """
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    maturin = pyproject.get("tool", {}).get("maturin", {})
+    include = maturin.get("include", [])
+    assert any("py.typed" in entry for entry in include), (
+        f"tool.maturin.include must list py.typed; got {include}"
+    )

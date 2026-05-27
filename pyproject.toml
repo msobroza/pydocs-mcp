@@ -25,6 +25,7 @@ module-name = "pydocs_mcp._native"
 python-source = "python"
 compatibility = "manylinux2014"
 include = [
+  "python/pydocs_mcp/py.typed",
   "python/pydocs_mcp/defaults/*.yaml",
   "python/pydocs_mcp/defaults/*.json",
   "python/pydocs_mcp/pipelines/*.yaml",
