@@ -5,12 +5,15 @@ package.module / package.module.symbol) to the right backing service:
 ``PackageLookup`` for package metadata, ``TreeService`` for file
 structure, ``ReferenceService`` for the call graph.
 
-Service deps are mandatory (post-I9 refactor).  Deployments that don't
-index trees or references wire :class:`NullTreeService` /
-:class:`NullReferenceService` (see :mod:`null_services`) — those Null
-impls raise ``ServiceUnavailableError`` with the YAML-anchored
-``reference_graph.capture.enabled`` pointer so end users hitting the
-failure mode can fix it without reading release notes.
+Service deps are mandatory (post-I9 refactor).  Production composition
+root (:mod:`pydocs_mcp.storage.factories`) always wires the real
+:class:`TreeService` / :class:`ReferenceService`; the
+:class:`NullTreeService` / :class:`NullReferenceService` stand-ins in
+:mod:`null_services` exist as ready substitutes and are wired today
+only by tests.  When they are wired, the Null impls raise
+``ServiceUnavailableError`` with a YAML-anchored pointer (e.g.
+``reference_graph.capture.enabled``) so end users hitting the failure
+mode can fix it without reading release notes.
 
 Internal structure:
 
@@ -19,8 +22,8 @@ Internal structure:
   parsed target shape (I1).
 - :data:`_REF_GETTERS` — dispatch table mapping ``show`` strings to
   ``ref_svc`` calls; replaces a 6-level nested if/elif (I8).
-- :data:`_REFERENCE_GRAPH_DISABLED_MSG` / :data:`_MODULE_ID_VARIANTS` —
-  module-level constants (S20, S4) — single source of truth.
+- :data:`_MODULE_ID_VARIANTS` — module-level constant (S4) — single
+  source of truth for the dotted-prefix probe suffixes.
 """
 from __future__ import annotations
 
@@ -39,9 +42,6 @@ from pydocs_mcp.application.mcp_errors import (
     NotFoundError,
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput
-from pydocs_mcp.application.null_services import (
-    _REFERENCE_GRAPH_DISABLED_MSG,  # noqa: F401 -- re-exported for callers asserting on the constant
-)
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 
@@ -187,10 +187,17 @@ _TREE_SHOWS: frozenset[str] = frozenset({"default", "tree"})
 class LookupService:
     """Routes lookup targets to the right backing service.
 
-    Post-I9: ``tree_svc`` and ``ref_svc`` are mandatory.  Deployments
-    without trees / references wire ``NullTreeService`` /
-    ``NullReferenceService`` (see :mod:`null_services`).  No more
-    ``if X is None:`` guards in the dispatcher.
+    Post-I9: ``tree_svc`` and ``ref_svc`` are mandatory parameters —
+    no more ``if X is None:`` guards in the dispatcher.  The Null
+    impls in :mod:`pydocs_mcp.application.null_services` exist as
+    ready stand-ins that preserve the user-visible
+    ``ServiceUnavailableError`` contract; today only test code wires
+    them.  Production composition root
+    (:mod:`pydocs_mcp.storage.factories`) always wires the real
+    :class:`TreeService` / :class:`ReferenceService`.  A future
+    deployment that opts out of tree indexing or reference capture
+    (via YAML config) could swap the Null impls in at the composition
+    root without touching this class.
     """
 
     package_lookup: PackageLookup

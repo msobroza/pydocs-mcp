@@ -45,8 +45,16 @@ _REFERENCE_GRAPH_DISABLED_MSG = (
     "reference graph not configured "
     "(check reference_graph.capture.enabled in YAML config)"
 )
+# Parallel YAML-anchored hint for the tree-index failure mode.  Document
+# trees are built by the default ingestion pipeline today (no opt-out
+# switch yet), so the actionable hint points at re-indexing rather than
+# a YAML toggle.  Mirrors ``_REFERENCE_GRAPH_DISABLED_MSG``: give the
+# user a concrete next step, not just "unavailable".
 _TREE_INDEX_DISABLED_MSG = (
-    "document tree index not configured — module tree unavailable"
+    "module tree unavailable for this deployment "
+    "(NullTreeService is wired; document trees are not indexed). "
+    "Re-index with the default ingestion pipeline (which builds trees) "
+    "to enable tree-based lookups."
 )
 
 
