@@ -11,9 +11,21 @@ from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.filters import (
+    All,
+    Any_,
+    FieldEq,
+    FieldIn,
+    FieldLike,
+    Filter,
+    MetadataFilterFormat,
+    Not,
+    format_registry,
+)
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -25,18 +37,8 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
-from pydocs_mcp.storage.filters import (
-    All,
-    Any_,
-    FieldEq,
-    FieldIn,
-    FieldLike,
-    Filter,
-    MetadataFilterFormat,
-    Not,
-    format_registry,
-)
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 log = logging.getLogger("pydocs-mcp")
@@ -93,8 +95,8 @@ class SqliteUnitOfWork:
     repository attributes would each open their own connection and
     atomicity would be lost), and exposes ``packages`` / ``chunks`` /
     ``module_members`` / ``trees`` / ``references`` as attributes.
-    Sub-PR #5b adds ``references`` as the 5th repo attribute (the
-    cross-node reference-graph store).
+    The ``references`` attribute is the cross-node reference-graph store
+    (CALLS / IMPORTS / INHERITS / MENTIONS edges).
 
     The ``asyncio.Lock`` lives on the instance and is exposed via the
     ContextVar so ``_maybe_acquire`` can serialise concurrent repo calls
@@ -131,6 +133,14 @@ class SqliteUnitOfWork:
     _module_members: SqliteModuleMemberRepository | None = field(default=None, init=False, repr=False)
     _trees: SqliteDocumentTreeStore | None = field(default=None, init=False, repr=False)
     _references: SqliteReferenceStore | None = field(default=None, init=False, repr=False)
+    # Spec S15: ``uow.vectors`` is always present; the SQLite-only UoW
+    # exposes a :class:`NullVectorStore` so application code does not
+    # need to ``getattr(uow, "vectors", None)`` guards. The composite
+    # SQLite + TurboQuant wiring overrides this via attribute
+    # delegation (see :class:`CompositeUnitOfWork.__getattr__`).
+    vectors: NullVectorStore = field(
+        default_factory=NullVectorStore, init=False, repr=False,
+    )
 
     async def __aenter__(self) -> SqliteUnitOfWork:
         # Re-entrance guard — entering twice would silently leak the first
@@ -218,6 +228,22 @@ class SqliteUnitOfWork:
             raise UnitOfWorkNotEnteredError("rollback")
         await asyncio.to_thread(self._held_conn.rollback)
         self._committed = False
+
+    async def delete_all(self) -> None:
+        """Wipe every row across every store on this UoW (spec I3).
+
+        Ordered: children first (chunks / module_members / trees /
+        references), then parents (packages); finally :meth:`clear_all`
+        on ``vectors`` (which may be a :class:`NullVectorStore`). All
+        statements run on the held connection — the surrounding UoW
+        transaction is what makes the sweep atomic.
+        """
+        await self.chunks.delete_all()
+        await self.module_members.delete_all()
+        await self.trees.delete_all()
+        await self.references.delete_all()
+        await self.packages.delete_all()
+        await self.vectors.clear_all()
 
     @property
     def packages(self) -> SqlitePackageRepository:
@@ -385,18 +411,31 @@ def _row_to_package(row) -> Package:
 # ── Filter adapter ───────────────────────────────────────────────────────
 
 
+# Safe-column whitelists per table (spec §5.3) — declared before the adapter
+# classes so they can reference these as dataclass-field defaults.
+CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
+_PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
+_MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
+
+
 @dataclass(frozen=True, slots=True)
-class SqliteFilterAdapter:
-    """Translates a Filter tree into a (WHERE-fragment, params) pair for SQLite.
+class _SqliteFilterTranslator:
+    """Internal helper: translate a ``Filter`` tree into ``(where, params)`` for one table.
 
     Gated by a ``safe_columns`` whitelist — any field not in the set raises
     ``ValueError`` before the column name is ever interpolated into SQL
-    (spec §5.3, AC #7). ``Any_`` / ``Not`` are out of scope for sub-PR #3.
+    (spec §5.3, AC #7). ``Any_`` / ``Not`` are out of scope.
 
     ``column_prefix`` is prepended verbatim to every column reference in the
     emitted SQL (e.g. ``"c."`` for the ``chunks_fts JOIN chunks`` query used
     by :class:`SqliteVectorStore`). The safe-column check always runs on the
     raw/unprefixed name.
+
+    INTERNAL — repositories instantiate this directly for per-table queries
+    (packages / chunks / module_members / chunks_fts). The retrieval-time,
+    Protocol-conforming public surface is :class:`SqliteFilterAdapter`,
+    which composes ``_SqliteFilterTranslator`` instances internally and
+    dispatches on ``target_field``.
     """
 
     safe_columns: frozenset[str]
@@ -451,10 +490,52 @@ class SqliteFilterAdapter:
             )
 
 
-# Safe-column whitelists per table (spec §5.3)
-CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
-_PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
-_MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
+@dataclass(frozen=True, slots=True)
+class SqliteFilterAdapter:
+    """Protocol-conforming public adapter — dispatches on ``target_field``.
+
+    Implements :class:`~pydocs_mcp.storage.protocols.FilterAdapter`:
+    ``adapt(tree, *, target_field) -> (where, params_tuple)``. Stores BOTH
+    the chunk-side and member-side column whitelists + prefix so the
+    composition root wires ONE adapter into ``BuildContext`` and the
+    retrieval steps pick the right shape at call time via the kwarg.
+
+    The chunk side uses ``column_prefix='c.'`` because the chunk-fetcher
+    SQL joins ``chunks_fts m JOIN chunks c ON c.id = m.rowid`` — unqualified
+    references would be ambiguous between the duplicated FTS5 + chunks
+    columns. The member side has no JOIN and uses bare column names.
+
+    Each ``adapt`` call internally builds a frozen
+    :class:`_SqliteFilterTranslator` so the per-table whitelist check
+    still runs and the safe-column ValueError still surfaces to callers.
+    """
+
+    chunk_columns: frozenset[str] = CHUNK_COLUMNS
+    member_columns: frozenset[str] = _MEMBER_COLUMNS
+    chunk_column_prefix: str = "c."
+
+    def adapt(
+        self,
+        tree: Filter,
+        *,
+        target_field: Literal["chunk", "member"],
+    ) -> tuple[str, tuple[Any, ...]]:
+        if target_field == "chunk":
+            translator = _SqliteFilterTranslator(
+                safe_columns=self.chunk_columns,
+                column_prefix=self.chunk_column_prefix,
+            )
+        elif target_field == "member":
+            translator = _SqliteFilterTranslator(
+                safe_columns=self.member_columns,
+                column_prefix="",
+            )
+        else:
+            raise ValueError(
+                f"target_field must be 'chunk' or 'member', got {target_field!r}",
+            )
+        where, params = translator.adapt(tree)
+        return where, tuple(params)
 
 
 def _resolve_filter(filter: Filter | Mapping | None):
@@ -474,8 +555,8 @@ class SqlitePackageRepository:
     """PackageStore backed by the 'packages' SQLite table (spec §5.3)."""
 
     provider: ConnectionProvider
-    filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=_PACKAGE_COLUMNS)
+    filter_adapter: _SqliteFilterTranslator = field(
+        default_factory=lambda: _SqliteFilterTranslator(safe_columns=_PACKAGE_COLUMNS)
     )
 
     async def upsert(self, package: Package) -> None:
@@ -547,6 +628,11 @@ class SqlitePackageRepository:
             )
         return row[0]
 
+    async def delete_all(self) -> None:
+        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(conn.execute, "DELETE FROM packages")
+
 
 # ── Chunk repository ─────────────────────────────────────────────────────
 
@@ -554,7 +640,14 @@ class SqlitePackageRepository:
 # FTS5 reserves these tokens as boolean operators — unquoted query terms may
 # use them directly. Any other word is OR-joined and double-quoted so that
 # punctuation / hyphenation in user terms does not crash the parser.
-_FTS_OPS = frozenset({"OR", "AND", "NOT"})
+#
+# Single source of truth (spec S6): :mod:`pydocs_mcp.retrieval.steps.chunk_fetcher`
+# imports this set so the two ``_build_fts_match_query`` implementations
+# share one operator vocabulary instead of two near-duplicate literals
+# that drift over time (AC17 byte-parity hinges on this staying unified).
+# ``NEAR`` is included since FTS5 accepts it as a top-level operator even
+# though the chunk fetcher is more likely to see it than the legacy store.
+_FTS_OPS: frozenset[str] = frozenset({"AND", "OR", "NOT", "NEAR"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,8 +659,8 @@ class SqliteChunkRepository:
     """
 
     provider: ConnectionProvider
-    filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=CHUNK_COLUMNS)
+    filter_adapter: _SqliteFilterTranslator = field(
+        default_factory=lambda: _SqliteFilterTranslator(safe_columns=CHUNK_COLUMNS)
     )
 
     async def upsert(self, chunks: Iterable[Chunk]) -> None:
@@ -681,6 +774,11 @@ class SqliteChunkRepository:
                 rows,
             )
 
+    async def delete_all(self) -> None:
+        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(conn.execute, "DELETE FROM chunks")
+
 
 # ── Vector store (FTS5 text search) ──────────────────────────────────────
 
@@ -714,8 +812,8 @@ class SqliteVectorStore:
     """
 
     provider: ConnectionProvider
-    filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(
+    filter_adapter: _SqliteFilterTranslator = field(
+        default_factory=lambda: _SqliteFilterTranslator(
             safe_columns=CHUNK_COLUMNS, column_prefix="c.",
         )
     )
@@ -786,8 +884,8 @@ class SqliteModuleMemberRepository:
     """
 
     provider: ConnectionProvider
-    filter_adapter: SqliteFilterAdapter = field(
-        default_factory=lambda: SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
+    filter_adapter: _SqliteFilterTranslator = field(
+        default_factory=lambda: _SqliteFilterTranslator(safe_columns=_MEMBER_COLUMNS)
     )
 
     async def upsert_many(self, members: Iterable[ModuleMember]) -> None:
@@ -847,6 +945,11 @@ class SqliteModuleMemberRepository:
                 lambda: conn.execute(sql, params).fetchone()
             )
         return row[0]
+
+    async def delete_all(self) -> None:
+        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(conn.execute, "DELETE FROM module_members")
 
 
 # ── Document tree store ──────────────────────────────────────────────────
@@ -1108,6 +1211,30 @@ class SqliteReferenceStore:
             await asyncio.to_thread(
                 conn.execute, "DELETE FROM node_references",
             )
+
+    async def resolve_unresolved(self, qnames: Iterable[str]) -> int:
+        """Flip ``to_node_id = to_name`` for matching unresolved rows (spec C1).
+
+        Replaces the historical ``_held_conn`` reach-through in
+        :class:`IndexingService._reresolve_cross_package`. Looping in
+        Python (rather than ``IN (...)`` with bind) matches the previous
+        implementation byte-for-byte and keeps each statement bound to
+        ``ix_refs_to_name`` for O(log n) lookups on the 100k-row table.
+        """
+        qset = tuple({q for q in qnames if q})
+        if not qset:
+            return 0
+        rows_updated = 0
+        async with _maybe_acquire(self.provider) as conn:
+            for qname in qset:
+                cur = await asyncio.to_thread(
+                    conn.execute,
+                    "UPDATE node_references SET to_node_id = ? "
+                    "WHERE to_node_id IS NULL AND to_name = ?",
+                    (qname, qname),
+                )
+                rows_updated += cur.rowcount or 0
+        return rows_updated
 
 
 def _row_to_node_reference(row) -> NodeReference:

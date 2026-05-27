@@ -9,7 +9,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
+from pydocs_mcp.extraction.pipeline.ingestion import (
+    ChunkBundle,
+    FileBundle,
+    IngestionState,
+    TargetKind,
+)
 from pydocs_mcp.extraction.pipeline.stages.load_existing_chunk_hashes import (
     LoadExistingChunkHashesStage,
 )
@@ -54,10 +59,11 @@ async def test_load_populates_existing_chunk_hashes(tmp_path: Path) -> None:
 
     # Run the stage
     state = IngestionState(
-        target=Path("demo"),
-        target_kind=TargetKind.DEPENDENCY,
+        files=FileBundle(target=Path("demo"), target_kind=TargetKind.DEPENDENCY),
+        chunks=ChunkBundle(
+            chunks=(Chunk(text="anything", metadata={"package": "demo"}),),
+        ),  # presence triggers load
         package=_pkg("demo"),
-        chunks=(Chunk(text="anything", metadata={"package": "demo"}),),  # presence triggers load
     )
     stage = LoadExistingChunkHashesStage(uow_factory=factory)
     out = await stage.run(state)
@@ -72,15 +78,14 @@ async def test_load_populates_existing_chunk_hashes(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_load_no_op_when_no_chunks(tmp_path: Path) -> None:
-    """No state.chunks → no read."""
+    """No state.chunks.chunks → no read."""
     db_path = tmp_path / "cache.db"
     open_index_database(db_path).close()
     factory = build_sqlite_uow_factory(db_path)
     state = IngestionState(
-        target=Path("demo"),
-        target_kind=TargetKind.DEPENDENCY,
+        files=FileBundle(target=Path("demo"), target_kind=TargetKind.DEPENDENCY),
+        chunks=ChunkBundle(chunks=()),
         package=_pkg("demo"),
-        chunks=(),
     )
     stage = LoadExistingChunkHashesStage(uow_factory=factory)
     out = await stage.run(state)
@@ -91,10 +96,11 @@ async def test_load_no_op_when_no_chunks(tmp_path: Path) -> None:
 async def test_load_no_op_when_uow_factory_none(tmp_path: Path) -> None:
     """Test-path: no composition root → uow_factory=None → stage skips DB."""
     state = IngestionState(
-        target=Path("demo"),
-        target_kind=TargetKind.DEPENDENCY,
+        files=FileBundle(target=Path("demo"), target_kind=TargetKind.DEPENDENCY),
+        chunks=ChunkBundle(
+            chunks=(Chunk(text="x", metadata={"package": "demo"}),),
+        ),
         package=_pkg("demo"),
-        chunks=(Chunk(text="x", metadata={"package": "demo"}),),
     )
     stage = LoadExistingChunkHashesStage(uow_factory=None)
     out = await stage.run(state)
@@ -119,9 +125,11 @@ async def test_load_excludes_null_content_hash_rows(tmp_path: Path) -> None:
 
     factory = build_sqlite_uow_factory(db_path)
     state = IngestionState(
-        target=Path("demo"), target_kind=TargetKind.DEPENDENCY,
+        files=FileBundle(target=Path("demo"), target_kind=TargetKind.DEPENDENCY),
+        chunks=ChunkBundle(
+            chunks=(Chunk(text="x", metadata={"package": "demo"}),),
+        ),
         package=_pkg("demo"),
-        chunks=(Chunk(text="x", metadata={"package": "demo"}),),
     )
     stage = LoadExistingChunkHashesStage(uow_factory=factory)
     out = await stage.run(state)

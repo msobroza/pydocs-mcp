@@ -7,7 +7,7 @@ here at retrieval/ top level to avoid a circular import chain through
 """
 from __future__ import annotations
 
-from pydocs_mcp.models import ChunkFilterField, SearchScope
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ChunkFilterField, SearchScope
 from pydocs_mcp.storage.filters import (
     All,
     FieldEq,
@@ -16,8 +16,6 @@ from pydocs_mcp.storage.filters import (
     Filter,
     MetadataSchema,
 )
-
-_PROJECT = "__project__"
 
 
 def _split_scope(tree: Filter) -> tuple[Filter | None, frozenset[SearchScope] | None]:
@@ -66,9 +64,9 @@ def _matches_scope(package: str, scope: frozenset[SearchScope]) -> bool:
     for s in scope:
         if s is SearchScope.ALL:
             return True
-        if s is SearchScope.PROJECT_ONLY and package == _PROJECT:
+        if s is SearchScope.PROJECT_ONLY and package == PROJECT_PACKAGE_NAME:
             return True
-        if s is SearchScope.DEPENDENCIES_ONLY and package != _PROJECT:
+        if s is SearchScope.DEPENDENCIES_ONLY and package != PROJECT_PACKAGE_NAME:
             return True
     return False
 
@@ -79,7 +77,6 @@ def _schema_from_fields(fields: frozenset[str]) -> MetadataSchema:
 
 
 __all__ = (
-    "_PROJECT",
     "_matches_scope",
     "_schema_from_fields",
     "_split_scope",

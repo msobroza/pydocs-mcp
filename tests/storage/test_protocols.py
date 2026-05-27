@@ -79,8 +79,9 @@ def test_document_tree_store_save_many_signature_has_package_kwarg():
 
 
 def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
-    """§14.2 — UoW Protocol exposes packages/chunks/module_members/trees/references
-    AND defines __aenter__/__aexit__/commit/rollback."""
+    """§14.2 + spec I3/S15 — UoW Protocol exposes the five repos,
+    ``vectors`` (always present), context-manager hooks, AND ``delete_all``.
+    """
     from pydocs_mcp.storage.protocols import UnitOfWork
 
     class FakeUow:
@@ -89,10 +90,12 @@ def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
         module_members = None
         trees = None
         references = None  # sub-PR #5b — 5th repo attribute
+        vectors = None  # spec S15 — always-present (may be NullVectorStore)
         async def __aenter__(self): return self
         async def __aexit__(self, exc_type, exc, tb): return False
         async def commit(self): pass
         async def rollback(self): pass
+        async def delete_all(self): pass  # spec I3
         async def begin(self): yield
 
     assert isinstance(FakeUow(), UnitOfWork)

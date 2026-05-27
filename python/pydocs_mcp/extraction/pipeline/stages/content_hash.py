@@ -1,4 +1,4 @@
-"""ContentHashStage — fills ``state.content_hash``, the package-level hash.
+"""ContentHashStage — fills ``state.files.content_hash``, the package-level hash.
 
 The package hash drives whole-package cache invalidation. Per-node
 ``DocumentNode.content_hash`` values are computed inside each chunker
@@ -20,8 +20,9 @@ class ContentHashStage:
     name: str = "content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        h = await asyncio.to_thread(self._hash, list(state.paths))
-        return replace(state, content_hash=h)
+        h = await asyncio.to_thread(self._hash, list(state.files.paths))
+        new_files = replace(state.files, content_hash=h)
+        return replace(state, files=new_files)
 
     def _hash(self, paths: list[str]) -> str:
         # Deferred so _fast's native/fallback choice is resolved lazily.

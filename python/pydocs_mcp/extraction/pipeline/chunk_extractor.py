@@ -16,10 +16,12 @@ from pathlib import Path
 from pydocs_mcp.application.protocols import ExtractionResult
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.extraction.pipeline.ingestion import (
+    FileBundle,
     IngestionPipeline,
     IngestionState,
     TargetKind,
 )
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,21 +39,26 @@ class PipelineChunkExtractor:
         self, project_dir: Path,
     ) -> ExtractionResult:
         return self._unwrap(await self.pipeline.run(IngestionState(
-            target=project_dir,
-            target_kind=TargetKind.PROJECT,
-            package_name="__project__",
+            files=FileBundle(
+                target=project_dir,
+                target_kind=TargetKind.PROJECT,
+                package_name=PROJECT_PACKAGE_NAME,
+            ),
         )))
 
     async def extract_from_dependency(
         self, dep_name: str,
     ) -> ExtractionResult:
+        # Normalise once here (mirrors PackageBuildStage) so chunks +
+        # trees share the canonical module prefix before the package
+        # metadata is synthesized.
+        pkg_name = normalize_package_name(dep_name)
         return self._unwrap(await self.pipeline.run(IngestionState(
-            target=dep_name,
-            target_kind=TargetKind.DEPENDENCY,
-            # Normalise once here (mirrors PackageBuildStage) so chunks +
-            # trees share the canonical module prefix before the package
-            # metadata is synthesized.
-            package_name=normalize_package_name(dep_name),
+            files=FileBundle(
+                target=dep_name,
+                target_kind=TargetKind.DEPENDENCY,
+                package_name=pkg_name,
+            ),
         )))
 
     @staticmethod
@@ -62,12 +69,12 @@ class PipelineChunkExtractor:
                 "(missing package_build stage?)",
             )
         return ExtractionResult(
-            chunks=state.chunks,
-            trees=state.trees,
+            chunks=state.chunks.chunks,
+            trees=state.chunks.trees,
             package=state.package,
-            references=state.references,
-            reference_aliases=state.reference_aliases,
-            class_attribute_types=state.class_attribute_types,
+            references=state.refs.references,
+            reference_aliases=state.refs.reference_aliases,
+            class_attribute_types=state.refs.class_attribute_types,
         )
 
 

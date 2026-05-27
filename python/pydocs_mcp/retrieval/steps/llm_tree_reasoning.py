@@ -16,13 +16,19 @@ fuse this branch with hybrid branches by name.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pydocs_mcp.extraction.model import DocumentNode
-from pydocs_mcp.models import Chunk, ChunkFilterField, ChunkList
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    Chunk,
+    ChunkFilterField,
+    ChunkList,
+)
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.prompts import render_prompt
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
@@ -36,11 +42,6 @@ _DEFAULT_PROMPT_TEMPLATE = "tree_reasoning_pydocs_v1"
 _DEFAULT_OUTPUT_SCRATCH_KEY = "tree.ranked"
 _DEFAULT_REFERENCE_NEIGHBORS_LIMIT = 5
 _DEFAULT_NAME = "llm_tree_reasoning"
-
-# WHY: spec §"Scope: __project__ only" — dependencies stay in BM25 /
-# dense paths; this step never reads dep trees. Hardcoded because the
-# scoping decision IS the step's contract, not a tunable.
-_PROJECT_PACKAGE = "__project__"
 
 
 @step_registry.register("llm_tree_reasoning")
@@ -74,7 +75,7 @@ class LlmTreeReasoningStep(RetrieverStep):
             # (Protocol §12.2). Iterate over .values() so the rest of
             # the step works on the trees themselves, not the keys.
             trees_by_module = await uow.trees.load_all_in_package(
-                _PROJECT_PACKAGE,
+                PROJECT_PACKAGE_NAME,
             )
             if not trees_by_module:
                 return state
@@ -104,7 +105,7 @@ class LlmTreeReasoningStep(RetrieverStep):
             # of project chunks and filtering in Python keeps the step
             # independent of repository-specific filter syntax.
             all_chunks = await uow.chunks.list(
-                filter={ChunkFilterField.PACKAGE.value: _PROJECT_PACKAGE},
+                filter={ChunkFilterField.PACKAGE.value: PROJECT_PACKAGE_NAME},
             )
             picked_set = set(picked)
             matched = tuple(
@@ -136,10 +137,24 @@ class LlmTreeReasoningStep(RetrieverStep):
                 # operator. Iterating with one call per picked qname keeps
                 # this step pure against the Protocol (same shape as
                 # InMemoryReferenceStore and SqliteReferenceStore).
+                #
+                # Performance: asyncio.gather fans the per-qname lookups
+                # out concurrently. Note — when running through the
+                # SqliteUnitOfWork, the underlying find_by_name calls
+                # serialize on the UoW's held-connection asyncio.Lock,
+                # so the wall-clock win here comes from overlapping
+                # asyncio.to_thread dispatch overhead rather than from
+                # parallel SQLite queries. For non-UoW callers (e.g.
+                # in-memory test stores, or a future Postgres adapter
+                # with multiple connections), the queries can truly run
+                # in parallel. Dedup + per-target neighbors cap still
+                # apply downstream so observable output is unchanged.
+                caller_lists = await asyncio.gather(
+                    *(uow.references.find_by_name(qname) for qname in picked),
+                )
                 surfaced: list = []
                 seen: set[tuple[str, str, str, str]] = set()
-                for qname in picked:
-                    callers = await uow.references.find_by_name(qname)
+                for callers in caller_lists:
                     # Apply per-node neighbors cap before deduping so the
                     # bound is per-target, not global.
                     for ref in callers[: self.reference_neighbors_limit]:

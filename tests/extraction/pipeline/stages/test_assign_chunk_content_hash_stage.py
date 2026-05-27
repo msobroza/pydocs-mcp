@@ -11,7 +11,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
+from pydocs_mcp.extraction.pipeline.ingestion import (
+    ChunkBundle,
+    FileBundle,
+    IngestionState,
+    TargetKind,
+)
 from pydocs_mcp.extraction.pipeline.stages.assign_chunk_content_hash import (
     AssignChunkContentHashStage,
 )
@@ -21,9 +26,8 @@ from pydocs_mcp.models import Chunk, compute_chunk_content_hash
 def _state(chunks: tuple[Chunk, ...] = ()) -> IngestionState:
     """Minimal IngestionState — only the fields the stage actually touches."""
     return IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        chunks=chunks,
+        files=FileBundle(target=Path("."), target_kind=TargetKind.PROJECT),
+        chunks=ChunkBundle(chunks=chunks),
     )
 
 
@@ -38,7 +42,7 @@ async def test_assign_rewrites_chunk_hashes_with_pipeline_slot() -> None:
     stage = AssignChunkContentHashStage(pipeline_hash=pipeline_hash)
     out = await stage.run(state)
 
-    assert len(out.chunks) == 2
+    assert len(out.chunks.chunks) == 2
     expected_h0 = compute_chunk_content_hash(
         package="demo", module="m", title="t1", text="alpha",
         pipeline_hash=pipeline_hash,
@@ -47,13 +51,13 @@ async def test_assign_rewrites_chunk_hashes_with_pipeline_slot() -> None:
         package="demo", module="m", title="t2", text="beta",
         pipeline_hash=pipeline_hash,
     )
-    assert out.chunks[0].content_hash == expected_h0
-    assert out.chunks[1].content_hash == expected_h1
+    assert out.chunks.chunks[0].content_hash == expected_h0
+    assert out.chunks.chunks[1].content_hash == expected_h1
     # Pre-rewrite the hash was pipeline-blind (no pipeline_hash slot)
     blind = compute_chunk_content_hash(
         package="demo", module="m", title="t1", text="alpha",
     )
-    assert out.chunks[0].content_hash != blind
+    assert out.chunks.chunks[0].content_hash != blind
 
 
 @pytest.mark.asyncio
@@ -63,7 +67,7 @@ async def test_assign_no_op_when_pipeline_hash_empty() -> None:
     state = _state(chunks)
     stage = AssignChunkContentHashStage(pipeline_hash="")  # default
     out = await stage.run(state)
-    assert out.chunks[0].content_hash == chunks[0].content_hash  # unchanged
+    assert out.chunks.chunks[0].content_hash == chunks[0].content_hash  # unchanged
 
 
 @pytest.mark.asyncio
@@ -71,7 +75,7 @@ async def test_assign_no_op_on_empty_chunks() -> None:
     state = _state(())
     stage = AssignChunkContentHashStage(pipeline_hash="some-id")
     out = await stage.run(state)
-    assert out.chunks == ()
+    assert out.chunks.chunks == ()
 
 
 def test_assign_from_dict_reads_pipeline_hash_from_context() -> None:

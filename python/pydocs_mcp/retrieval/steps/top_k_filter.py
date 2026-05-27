@@ -67,13 +67,20 @@ class TopKFilterStep(RetrieverStep):
             new_candidates = ModuleMemberList(items=new_items)
         else:
             return state
-        new_state = replace(state, candidates=new_candidates)
         if self.publish_to is not None:
-            # scratch is mutable even inside the frozen state (see
-            # RetrieverState docstring). Publish the same ChunkList /
-            # ModuleMemberList payload that landed in state.candidates.
-            new_state.scratch[self.publish_to] = new_candidates
-        return new_state
+            # Use ``dataclasses.replace`` with a fresh scratch dict so the
+            # caller's input ``state.scratch`` is never aliased through.
+            # Required for safe composition inside ``ParallelStep``:
+            # without this, a TopKFilterStep inside a branch would mutate
+            # the branch's input scratch (already a copy) but the in-place
+            # writes would still violate the narrowed "no in-place
+            # mutation" contract for any step that may run in parallel.
+            # See RetrieverState docstring §"Mutation contract".
+            new_scratch = {**state.scratch, self.publish_to: new_candidates}
+            return replace(
+                state, candidates=new_candidates, scratch=new_scratch,
+            )
+        return replace(state, candidates=new_candidates)
 
     def to_dict(self) -> dict:
         d: dict = {"type": "top_k_filter"}

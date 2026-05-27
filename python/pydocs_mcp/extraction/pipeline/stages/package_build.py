@@ -1,4 +1,4 @@
-"""PackageBuildStage — fills ``state.package``; branches on ``target_kind``.
+"""PackageBuildStage — fills ``state.package``; branches on ``state.files.target_kind``.
 
 PROJECT path produces the canonical ``Package(name="__project__", ...)``
 consumed by :class:`ProjectIndexer`. DEPENDENCY path walks
@@ -17,7 +17,7 @@ from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
 from pydocs_mcp.extraction.serialization import stage_registry
-from pydocs_mcp.models import Package, PackageOrigin
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Package, PackageOrigin
 
 
 @stage_registry.register("package_build")
@@ -30,19 +30,19 @@ class PackageBuildStage:
         return replace(state, package=pkg)
 
     def _build(self, state: IngestionState) -> Package:
-        if state.target_kind is TargetKind.PROJECT:
+        if state.files.target_kind is TargetKind.PROJECT:
             return self._project_package(state)
         return self._dep_package(state)
 
     def _project_package(self, state: IngestionState) -> Package:
-        target = Path(str(state.target))
+        target = Path(str(state.files.target))
         return Package(
-            name="__project__",
+            name=PROJECT_PACKAGE_NAME,
             version="local",
             summary=f"Project: {target.name}",
             homepage="",
             dependencies=(),
-            content_hash=state.content_hash,
+            content_hash=state.files.content_hash,
             origin=PackageOrigin.PROJECT,
         )
 
@@ -53,7 +53,7 @@ class PackageBuildStage:
         from pydocs_mcp.extraction.strategies._dep_helpers import (
             find_installed_distribution,
         )
-        dep_name = str(state.target)
+        dep_name = str(state.files.target)
         dist = find_installed_distribution(dep_name)
         if dist is None:
             raise LookupError(f"dependency {dep_name!r} is not installed")
@@ -71,7 +71,7 @@ class PackageBuildStage:
             summary=summary,
             homepage=homepage,
             dependencies=deps,
-            content_hash=state.content_hash,
+            content_hash=state.files.content_hash,
             origin=PackageOrigin.DEPENDENCY,
         )
 

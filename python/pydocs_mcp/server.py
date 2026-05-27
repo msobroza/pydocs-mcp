@@ -24,11 +24,12 @@ from pydocs_mcp.application import (
     SearchInput,
     ServiceUnavailableError,
 )
+from pydocs_mcp.application.formatting import render_top_composite
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
     ChunkFilterField,
     SearchQuery,
-    SearchResponse,
     SearchScope,
 )
 
@@ -57,7 +58,7 @@ def _normalize_pkg_filter_value(package: str) -> str:
     """PyPI names like 'Flask-Login' are stored as 'flask_login' in the DB.
     ``__project__`` is a sentinel — leave intact."""
     pkg = package.strip()
-    return pkg if pkg == "__project__" else normalize_package_name(pkg)
+    return pkg if pkg == PROJECT_PACKAGE_NAME else normalize_package_name(pkg)
 
 
 def _build_search_query(payload: SearchInput) -> SearchQuery:
@@ -68,15 +69,6 @@ def _build_search_query(payload: SearchInput) -> SearchQuery:
     if payload.package:
         pre_filter[ChunkFilterField.PACKAGE.value] = _normalize_pkg_filter_value(payload.package)
     return SearchQuery(terms=payload.query, pre_filter=pre_filter)
-
-
-def _render_search_response(response: SearchResponse, empty_msg: str) -> str:
-    """The pipeline's TokenBudgetStep wraps the final output as a
-    single composite chunk, so ``items[0].text`` is the formatted body."""
-    result = response.result
-    if result is None or not result.items:
-        return empty_msg
-    return result.items[0].text
 
 
 # ── server ────────────────────────────────────────────────────────────────
@@ -216,16 +208,18 @@ async def _do_search(
     query = _build_search_query(payload)
     if payload.kind == "docs":
         response = await search_docs_svc.search(query)
-        return _render_search_response(response, empty_msg="No matches found.")
+        return render_top_composite(response, empty_msg="No matches found.")
     if payload.kind == "api":
         response = await search_api_svc.search(query)
-        return _render_search_response(response, empty_msg="No symbols found.")
+        return render_top_composite(response, empty_msg="No symbols found.")
     # kind == "any" — run both pipelines concurrently, concatenate rendered outputs (§8).
+    # Pass empty_msg="" so an empty half does NOT inject a "No matches" line
+    # into the joined output — the final fallback below handles the all-empty case.
     chunk_resp, member_resp = await asyncio.gather(
         search_docs_svc.search(query),
         search_api_svc.search(query),
     )
-    chunk_text = _render_search_response(chunk_resp, empty_msg="")
-    member_text = _render_search_response(member_resp, empty_msg="")
+    chunk_text = render_top_composite(chunk_resp, empty_msg="")
+    member_text = render_top_composite(member_resp, empty_msg="")
     parts = [p for p in (chunk_text, member_text) if p]
     return "\n\n".join(parts) if parts else "No matches found."

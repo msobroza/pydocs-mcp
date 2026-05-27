@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, replace
 from pydocs_mcp.models import ChunkList, is_multi_vector
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
-from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
+from pydocs_mcp.retrieval.steps.pre_filter import PRE_FILTER_SCRATCH_KEY, PreFilterResult
 from pydocs_mcp.storage.protocols import Embedder, VectorSearchable
 
 # WHY: single source of truth for the fetch-side default — referenced by
@@ -81,7 +81,7 @@ class DenseFetcherStep(RetrieverStep):
         # it just sees the unrestricted candidate set.
         filter_tree = None
         if state.query.pre_filter is not None:
-            result = state.scratch.get("pre_filter.result")
+            result = state.scratch.get(PRE_FILTER_SCRATCH_KEY)
             if isinstance(result, PreFilterResult):
                 filter_tree = result.tree
 

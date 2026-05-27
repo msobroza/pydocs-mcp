@@ -30,6 +30,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 
 from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 
 
 def build_package_tree(
@@ -50,7 +51,7 @@ def build_package_tree(
     Passing ``current_prefix=""`` makes the trie root accept any first
     segment, which is the desired semantics for the project root.
     """
-    initial_prefix = "" if package == "__project__" else package
+    initial_prefix = "" if package == PROJECT_PACKAGE_NAME else package
     children = _build_tree_nodes(trees, current_prefix=initial_prefix)
     return DocumentNode(
         node_id=package,

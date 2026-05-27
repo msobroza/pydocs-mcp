@@ -1,4 +1,4 @@
-"""FileReadStage — fills ``state.file_contents`` via parallel Rust read.
+"""FileReadStage — fills ``state.files.file_contents`` via parallel Rust read.
 
 Wraps ``_fast.read_files_parallel`` under ``asyncio.to_thread`` — the
 underlying Rayon iterator is CPU-bound on large projects, so offloading
@@ -20,8 +20,9 @@ class FileReadStage:
     name: str = "file_read"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        contents = await asyncio.to_thread(self._read, list(state.paths))
-        return replace(state, file_contents=tuple(contents))
+        contents = await asyncio.to_thread(self._read, list(state.files.paths))
+        new_files = replace(state.files, file_contents=tuple(contents))
+        return replace(state, files=new_files)
 
     def _read(self, paths: list[str]) -> list[tuple[str, str]]:
         # Deferred so _fast's native/fallback choice is resolved lazily.

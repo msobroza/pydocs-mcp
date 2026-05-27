@@ -1,4 +1,4 @@
-"""FlattenStage — fills ``state.chunks`` by walking each tree.
+"""FlattenStage — fills ``state.chunks.chunks`` by walking each tree.
 
 Thin wrapper — the walking / direct-text rule lives in
 :mod:`pydocs_mcp.extraction.model.tree_flatten`; this stage just
@@ -23,12 +23,13 @@ class FlattenStage:
 
     async def run(self, state: IngestionState) -> IngestionState:
         chunks = await asyncio.to_thread(self._flatten_all, state)
-        return replace(state, chunks=tuple(chunks))
+        new_chunks = replace(state.chunks, chunks=tuple(chunks))
+        return replace(state, chunks=new_chunks)
 
     def _flatten_all(self, state: IngestionState) -> list[Chunk]:
         out: list[Chunk] = []
-        for tree in state.trees:
-            out.extend(flatten_to_chunks(tree, package=state.package_name))
+        for tree in state.chunks.trees:
+            out.extend(flatten_to_chunks(tree, package=state.files.package_name))
         return out
 
     @classmethod

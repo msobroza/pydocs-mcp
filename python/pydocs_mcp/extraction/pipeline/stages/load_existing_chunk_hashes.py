@@ -34,7 +34,11 @@ class LoadExistingChunkHashesStage:
         # No chunks → nothing for the downstream embed gate to skip;
         # no factory → test path with no composition root;
         # no package → nothing to scope the query to.
-        if not state.chunks or self.uow_factory is None or state.package is None:
+        if (
+            not state.chunks.chunks
+            or self.uow_factory is None
+            or state.package is None
+        ):
             return state
         async with self.uow_factory() as uow:
             pairs = await uow.chunks.list_id_hash_pairs(

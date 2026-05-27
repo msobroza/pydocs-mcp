@@ -167,12 +167,13 @@ async def test_dense_fetcher_with_pre_filter_restricts_results(
             ),
         )
         # Simulate PreFilterStep having run upstream — write a typed result
-        # that restricts the allowlist to ``demo``-package chunks.
+        # that restricts the allowlist to ``demo``-package chunks. Post-C5
+        # commit 2 the result carries only ``tree`` + ``scope``; the
+        # dense fetcher consumes ``tree`` directly through
+        # ``VectorSearchable.vector_search(filter=...)``.
         state.scratch["pre_filter.result"] = PreFilterResult(
             tree=FieldEq("package", "demo"),
             scope=None,
-            sql='"package" = ?',
-            params=("demo",),
         )
         out = await step.run(state)
 

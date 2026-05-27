@@ -20,6 +20,15 @@ class DocsSearch:
     ``chunk_search_ranked.yaml``-style presets that omit the formatter).
     Avoids the silent-empty-results footgun if a deployment overlays the
     ranked preset onto the MCP server.
+
+    NOTE (spec S21): this class and :class:`ApiSearch` are intentionally
+    near-duplicate thin wrappers. Keeping them as two separate classes
+    instead of one parameterized ``PipelineSearchService`` is deliberate
+    — the duplication is grep-friendly (a developer looking for "where
+    do chunk searches happen" finds exactly :class:`DocsSearch`) and
+    avoids over-parameterization. If a third near-identical service
+    appears in the future, that's the trigger to parameterize into a
+    shared base class — not now.
     """
 
     chunk_pipeline: CodeRetrieverPipeline

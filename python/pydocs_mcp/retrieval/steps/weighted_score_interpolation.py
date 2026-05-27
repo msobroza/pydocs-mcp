@@ -23,17 +23,12 @@ from typing import Any
 from pydocs_mcp.models import Chunk, ChunkList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+from pydocs_mcp.retrieval.steps._constants import DEFAULT_BRANCH_KEYS
 
 # WHY: equal-weight 50/50 between BM25 and dense is the literature-standard
 # starting point for two-branch hybrid retrieval. Single source of truth —
 # referenced from the field default, to_dict diff, and from_dict fallback.
 _DEFAULT_WEIGHTS: tuple[float, ...] = (0.5, 0.5)
-
-# WHY: shipped default branch keys match the hybrid pipeline preset
-# (bm25 branch + dense branch publish under these names via
-# TopKFilterStep.publish_to). Configurable via YAML when other branch
-# labels are wired in.
-_DEFAULT_BRANCH_KEYS: tuple[str, ...] = ("bm25.ranked", "dense.ranked")
 
 # WHY: floating-point tolerance on the weights-sum check. Sums of
 # config-supplied floats accumulate rounding error (e.g. 0.1 + 0.2 + 0.7
@@ -57,10 +52,13 @@ class WeightedScoreInterpolationStep(RetrieverStep):
     absent from ``state.scratch``, :class:`KeyError` is raised with a
     diagnostic listing the missing key and the available scratch keys.
     This is louder than :class:`RRFFusionStep`'s graceful skip on
-    purpose: a missing branch usually means an upstream pipeline
-    misconfiguration (e.g., ``TopKFilterStep`` forgot to ``publish_to``
-    the matching name), and silently degrading the fusion would hide
-    the bug behind worse retrieval quality.
+    purpose (spec S31): a missing branch usually means an upstream
+    pipeline misconfiguration (e.g., ``TopKFilterStep`` forgot to
+    ``publish_to`` the matching name), and silently degrading the
+    fusion would hide the bug behind worse retrieval quality. RRF can
+    afford to skip because its reciprocal-rank sum composes additively;
+    the weighted blend cannot, because dropping a configured branch
+    changes the effective weight distribution across the survivors.
 
     Reads ``state.scratch[<branch>.ranked]`` keys (same convention RRF
     uses) — each branch payload is either a :class:`ChunkList` (has
@@ -68,7 +66,7 @@ class WeightedScoreInterpolationStep(RetrieverStep):
     """
 
     weights: tuple[float, ...] = field(default=_DEFAULT_WEIGHTS, kw_only=True)
-    branch_keys: tuple[str, ...] = field(default=_DEFAULT_BRANCH_KEYS, kw_only=True)
+    branch_keys: tuple[str, ...] = field(default=DEFAULT_BRANCH_KEYS, kw_only=True)
     publish_to: str | None = field(default=None, kw_only=True)
     name: str = field(default=_DEFAULT_NAME, kw_only=True)
 
@@ -152,7 +150,7 @@ class WeightedScoreInterpolationStep(RetrieverStep):
         out: dict[str, Any] = {"type": "weighted_score_interpolation"}
         if self.weights != _DEFAULT_WEIGHTS:
             out["weights"] = list(self.weights)
-        if self.branch_keys != _DEFAULT_BRANCH_KEYS:
+        if self.branch_keys != DEFAULT_BRANCH_KEYS:
             out["branch_keys"] = list(self.branch_keys)
         if self.publish_to is not None:
             out["publish_to"] = self.publish_to
@@ -174,7 +172,7 @@ class WeightedScoreInterpolationStep(RetrieverStep):
             )
         return cls(
             weights=weights,
-            branch_keys=tuple(data.get("branch_keys", _DEFAULT_BRANCH_KEYS)),
+            branch_keys=tuple(data.get("branch_keys", DEFAULT_BRANCH_KEYS)),
             publish_to=data.get("publish_to"),
             name=data.get("name", _DEFAULT_NAME),
         )

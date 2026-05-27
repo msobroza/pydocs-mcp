@@ -5,7 +5,7 @@ Pins the 7-stage behavior (sub-PR #5b added ``reference_capture``):
   7 stage types are discoverable by ``stage_registry.names()``.
 - Each stage returns a NEW :class:`IngestionState` (via ``dataclasses.replace``)
   — never mutates in place.
-- ``FileDiscoveryStage`` / ``PackageBuildStage`` branch on ``state.target_kind``
+- ``FileDiscoveryStage`` / ``PackageBuildStage`` branch on ``state.files.target_kind``
   — one stage instance handles both PROJECT and DEPENDENCY modes.
 - ``ChunkingStage`` enforces AC #27 per-file failure isolation: if one chunker
   raises, remaining files still process and a warning is logged.
@@ -23,6 +23,7 @@ import pytest
 from pydocs_mcp.extraction.config import ChunkingConfig, ExtractionConfig
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.pipeline import IngestionState, TargetKind
+from pydocs_mcp.extraction.pipeline.ingestion import ChunkBundle, FileBundle
 from pydocs_mcp.extraction.serialization import chunker_registry, stage_registry
 from pydocs_mcp.extraction.pipeline.stages import (
     ChunkingStage,
@@ -101,14 +102,16 @@ async def test_file_discovery_branches_on_project_target(tmp_path: Path) -> None
     stage = FileDiscoveryStage(
         project_discoverer=project_disc, dep_discoverer=dep_disc,
     )
-    state = IngestionState(target=tmp_path, target_kind=TargetKind.PROJECT)
+    state = IngestionState(
+        files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
+    )
 
     out = await stage.run(state)
 
     assert [c[0] for c in project_disc.calls] == ["project"]
     assert dep_disc.calls == []  # dep branch NOT taken
-    assert out.paths == (str(tmp_path / "a.py"),)
-    assert out.root == tmp_path
+    assert out.files.paths == (str(tmp_path / "a.py"),)
+    assert out.files.root == tmp_path
 
 
 @pytest.mark.asyncio
@@ -120,14 +123,16 @@ async def test_file_discovery_branches_on_dependency_target() -> None:
     stage = FileDiscoveryStage(
         project_discoverer=project_disc, dep_discoverer=dep_disc,
     )
-    state = IngestionState(target="foo", target_kind=TargetKind.DEPENDENCY)
+    state = IngestionState(
+        files=FileBundle(target="foo", target_kind=TargetKind.DEPENDENCY),
+    )
 
     out = await stage.run(state)
 
     assert [c[0] for c in dep_disc.calls] == ["dep"]
     assert project_disc.calls == []
-    assert out.paths == ("/pkgs/foo/mod.py",)
-    assert out.root == Path("/pkgs")
+    assert out.files.paths == ("/pkgs/foo/mod.py",)
+    assert out.files.root == Path("/pkgs")
 
 
 def test_file_discovery_from_dict_builds_both_discoverers() -> None:
@@ -145,7 +150,7 @@ def test_file_discovery_from_dict_builds_both_discoverers() -> None:
 
 @pytest.mark.asyncio
 async def test_file_read_reads_file_contents(tmp_path: Path) -> None:
-    """Reads each path's contents and fills state.file_contents as (path, src) tuples."""
+    """Reads each path's contents and fills state.files.file_contents as (path, src) tuples."""
     f1 = tmp_path / "a.py"
     f1.write_text("x = 1\n")
     f2 = tmp_path / "b.py"
@@ -153,14 +158,17 @@ async def test_file_read_reads_file_contents(tmp_path: Path) -> None:
 
     stage = FileReadStage()
     state = IngestionState(
-        target=tmp_path, target_kind=TargetKind.PROJECT,
-        paths=(str(f1), str(f2)),
+        files=FileBundle(
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            paths=(str(f1), str(f2)),
+        ),
     )
 
     out = await stage.run(state)
 
     # Normalize by path so test doesn't depend on iteration order.
-    got = dict(out.file_contents)
+    got = dict(out.files.file_contents)
     assert got[str(f1)] == "x = 1\n"
     assert got[str(f2)] == "y = 2\n"
 
@@ -170,11 +178,13 @@ async def test_file_read_with_empty_paths_returns_empty(tmp_path: Path) -> None:
     """No paths → no file_contents; no crash on the empty-input edge case."""
     stage = FileReadStage()
     state = IngestionState(
-        target=tmp_path, target_kind=TargetKind.PROJECT, paths=(),
+        files=FileBundle(
+            target=tmp_path, target_kind=TargetKind.PROJECT, paths=(),
+        ),
     )
 
     out = await stage.run(state)
-    assert out.file_contents == ()
+    assert out.files.file_contents == ()
 
 
 # ── ChunkingStage ──────────────────────────────────────────────────────────
@@ -184,17 +194,19 @@ async def test_chunking_dispatches_by_extension(tmp_path: Path) -> None:
     """``.py`` file goes through AstPythonChunker (registered in chunker_registry)."""
     stage = ChunkingStage(chunking_config=ChunkingConfig())
     state = IngestionState(
-        target=tmp_path,
-        target_kind=TargetKind.PROJECT,
-        package_name="__project__",
-        root=tmp_path,
-        file_contents=((str(tmp_path / "m.py"), 'x = 1\n'),),
+        files=FileBundle(
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            package_name="__project__",
+            root=tmp_path,
+            file_contents=((str(tmp_path / "m.py"), 'x = 1\n'),),
+        ),
     )
 
     out = await stage.run(state)
 
-    assert len(out.trees) == 1
-    tree = out.trees[0]
+    assert len(out.chunks.trees) == 1
+    tree = out.chunks.trees[0]
     assert isinstance(tree, DocumentNode)
     assert tree.kind == NodeKind.MODULE
 
@@ -205,15 +217,17 @@ async def test_chunking_skips_unknown_extensions(tmp_path: Path) -> None:
     pipeline produces zero trees for it but no error."""
     stage = ChunkingStage(chunking_config=ChunkingConfig())
     state = IngestionState(
-        target=tmp_path,
-        target_kind=TargetKind.PROJECT,
-        package_name="__project__",
-        root=tmp_path,
-        file_contents=(("/unused/foo.unknown-ext", "anything\n"),),
+        files=FileBundle(
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            package_name="__project__",
+            root=tmp_path,
+            file_contents=(("/unused/foo.unknown-ext", "anything\n"),),
+        ),
     )
 
     out = await stage.run(state)
-    assert out.trees == ()
+    assert out.chunks.trees == ()
 
 
 @pytest.mark.asyncio
@@ -237,14 +251,16 @@ async def test_chunking_per_file_failure_isolation(
     try:
         stage = ChunkingStage(chunking_config=ChunkingConfig())
         state = IngestionState(
-            target=tmp_path,
-            target_kind=TargetKind.PROJECT,
-            package_name="__project__",
-            root=tmp_path,
-            file_contents=(
-                ("/proj/ok.py", "x = 1\n"),       # succeeds
-                ("/proj/bad.bomb", "payload\n"),  # raises; must be caught
-                ("/proj/also.py", "y = 2\n"),     # succeeds AFTER the failure
+            files=FileBundle(
+                target=tmp_path,
+                target_kind=TargetKind.PROJECT,
+                package_name="__project__",
+                root=tmp_path,
+                file_contents=(
+                    ("/proj/ok.py", "x = 1\n"),       # succeeds
+                    ("/proj/bad.bomb", "payload\n"),  # raises; must be caught
+                    ("/proj/also.py", "y = 2\n"),     # succeeds AFTER the failure
+                ),
             ),
         )
 
@@ -252,7 +268,7 @@ async def test_chunking_per_file_failure_isolation(
             out = await stage.run(state)
 
         # Two successes despite the middle file raising.
-        assert len(out.trees) == 2
+        assert len(out.chunks.trees) == 2
         # Warning mentions the failing path so operators can debug.
         assert any("bad.bomb" in rec.message for rec in caplog.records)
     finally:
@@ -264,15 +280,17 @@ async def test_chunking_skips_empty_source_files(tmp_path: Path) -> None:
     """Empty content → no tree emitted (nothing to parse)."""
     stage = ChunkingStage(chunking_config=ChunkingConfig())
     state = IngestionState(
-        target=tmp_path,
-        target_kind=TargetKind.PROJECT,
-        package_name="__project__",
-        root=tmp_path,
-        file_contents=(("/proj/empty.py", ""),),
+        files=FileBundle(
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            package_name="__project__",
+            root=tmp_path,
+            file_contents=(("/proj/empty.py", ""),),
+        ),
     )
 
     out = await stage.run(state)
-    assert out.trees == ()
+    assert out.chunks.trees == ()
 
 
 # ── FlattenStage ───────────────────────────────────────────────────────────
@@ -298,25 +316,28 @@ async def test_flatten_emits_chunks_from_trees(tmp_path: Path) -> None:
     stage = FlattenStage()
     trees = (_leaf_node("m1", "hello"), _leaf_node("m2", "world"))
     state = IngestionState(
-        target=tmp_path,
-        target_kind=TargetKind.PROJECT,
-        package_name="__project__",
-        trees=trees,
+        files=FileBundle(
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            package_name="__project__",
+        ),
+        chunks=ChunkBundle(trees=trees),
     )
 
     out = await stage.run(state)
-    assert len(out.chunks) == 2
-    assert {c.text for c in out.chunks} == {"hello", "world"}
+    assert len(out.chunks.chunks) == 2
+    assert {c.text for c in out.chunks.chunks} == {"hello", "world"}
 
 
 @pytest.mark.asyncio
 async def test_flatten_with_empty_trees_yields_empty_chunks(tmp_path: Path) -> None:
     stage = FlattenStage()
     state = IngestionState(
-        target=tmp_path, target_kind=TargetKind.PROJECT, trees=(),
+        files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
+        chunks=ChunkBundle(trees=()),
     )
     out = await stage.run(state)
-    assert out.chunks == ()
+    assert out.chunks.chunks == ()
 
 
 # ── ContentHashStage ───────────────────────────────────────────────────────
@@ -330,16 +351,17 @@ async def test_content_hash_produces_stable_string(tmp_path: Path) -> None:
 
     stage = ContentHashStage()
     state = IngestionState(
-        target=tmp_path, target_kind=TargetKind.PROJECT,
-        paths=(str(f),),
+        files=FileBundle(
+            target=tmp_path, target_kind=TargetKind.PROJECT, paths=(str(f),),
+        ),
     )
 
     out1 = await stage.run(state)
     out2 = await stage.run(state)
 
-    assert isinstance(out1.content_hash, str)
-    assert out1.content_hash != ""
-    assert out1.content_hash == out2.content_hash
+    assert isinstance(out1.files.content_hash, str)
+    assert out1.files.content_hash != ""
+    assert out1.files.content_hash == out2.files.content_hash
 
 
 # ── PackageBuildStage ──────────────────────────────────────────────────────
@@ -349,9 +371,11 @@ async def test_package_build_project_branch(tmp_path: Path) -> None:
     """PROJECT target builds a Package(name='__project__', origin=PROJECT, ...) ."""
     stage = PackageBuildStage()
     state = IngestionState(
-        target=tmp_path,
-        target_kind=TargetKind.PROJECT,
-        content_hash="abc123",
+        files=FileBundle(
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            content_hash="abc123",
+        ),
     )
 
     out = await stage.run(state)
@@ -371,9 +395,11 @@ async def test_package_build_dependency_missing_raises_lookup_error() -> None:
     the stage itself surfaces the failure rather than silently returning None."""
     stage = PackageBuildStage()
     state = IngestionState(
-        target="definitely-not-installed-pkg-zzz-2026",
-        target_kind=TargetKind.DEPENDENCY,
-        content_hash="deadbeef",
+        files=FileBundle(
+            target="definitely-not-installed-pkg-zzz-2026",
+            target_kind=TargetKind.DEPENDENCY,
+            content_hash="deadbeef",
+        ),
     )
 
     with pytest.raises(LookupError):
@@ -410,9 +436,11 @@ async def test_package_build_dependency_branch_with_fake_dist(
 
     stage = PackageBuildStage()
     state = IngestionState(
-        target="foo-bar",
-        target_kind=TargetKind.DEPENDENCY,
-        content_hash="cafef00d",
+        files=FileBundle(
+            target="foo-bar",
+            target_kind=TargetKind.DEPENDENCY,
+            content_hash="cafef00d",
+        ),
     )
 
     out = await stage.run(state)
@@ -506,19 +534,21 @@ async def test_stages_return_new_state_without_mutating_input(
 ) -> None:
     """Stages use ``dataclasses.replace`` to build a new state — the input
     state is NOT mutated. Regression guard against a stage accidentally
-    doing ``state.paths = ...`` (frozen → AttributeError today, but
+    doing ``state.files = ...`` (frozen → AttributeError today, but
     tomorrow's contributor shouldn't have to re-discover why)."""
     stage = FileReadStage()
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     before = IngestionState(
-        target=tmp_path, target_kind=TargetKind.PROJECT, paths=(str(f),),
+        files=FileBundle(
+            target=tmp_path, target_kind=TargetKind.PROJECT, paths=(str(f),),
+        ),
     )
     after = await stage.run(before)
 
     # Input untouched
-    assert before.file_contents == ()
+    assert before.files.file_contents == ()
     # Output has the new field
-    assert after.file_contents != ()
+    assert after.files.file_contents != ()
     # Distinct instance
     assert before is not after

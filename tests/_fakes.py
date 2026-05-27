@@ -37,6 +37,7 @@ from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import ChatMessage
 
 
@@ -95,6 +96,9 @@ class InMemoryDocumentTreeStore:
         # iterates ``.values()``) and by the new LlmTreeReasoningStep
         # (which iterates ``.values()`` too). Empty package → empty dict
         # (not None) so callers can unconditionally iterate.
+        # Spec C1: also recorded in ``calls`` so tests asserting on
+        # cross-package re-resolution can pin the read shape.
+        self.calls.append(_Call("load_all_in_package", package))
         return {t.qualified_name: t for t in self.by_package.get(package, ())}
 
     async def exists(self, package, module):
@@ -157,6 +161,11 @@ class InMemoryPackageStore:
         if isinstance(filter, dict) and "name" in filter:
             return 1 if filter["name"] in self.items else 0
         return len(self.items)
+
+    async def delete_all(self) -> None:
+        """Wipe every package row — Protocol-symmetric with the SQLite repo."""
+        self.calls.append(_Call("delete_all", None))
+        self.items.clear()
 
 
 @dataclass
@@ -249,6 +258,11 @@ class InMemoryChunkStore:
             pkg = c.metadata.get("package", "")
             self.by_package.setdefault(pkg, []).append(stored)
 
+    async def delete_all(self) -> None:
+        """Wipe every chunk row — Protocol-symmetric with the SQLite repo."""
+        self.calls.append(_Call("delete_all", None))
+        self.by_package.clear()
+
 
 @dataclass
 class InMemoryModuleMemberStore:
@@ -290,6 +304,11 @@ class InMemoryModuleMemberStore:
         if isinstance(filter, dict) and "package" in filter:
             return len(self.by_package.get(filter["package"], []))
         return sum(len(v) for v in self.by_package.values())
+
+    async def delete_all(self) -> None:
+        """Wipe every module-member row — Protocol-symmetric with the SQLite repo."""
+        self.calls.append(_Call("delete_all", None))
+        self.by_package.clear()
 
 
 # ── Reference store ──────────────────────────────────────────────────────
@@ -365,6 +384,39 @@ class InMemoryReferenceStore:
         self.calls.append(_Call("delete_all", None))
         self.by_package.clear()
 
+    async def resolve_unresolved(self, qnames) -> int:
+        """In-memory mirror of SqliteReferenceStore.resolve_unresolved (spec C1).
+
+        Flips ``to_node_id = to_name`` for every row whose ``to_node_id``
+        is None and whose ``to_name`` is in ``qnames``. Returns the
+        number of rows updated. Required so :class:`IndexingService`'s
+        cross-package re-resolution sweep (now Protocol-driven) exercises
+        the same code path against fakes as against the real SQLite store.
+        """
+        qset = {q for q in qnames if q}
+        self.calls.append(_Call("resolve_unresolved", qset))
+        if not qset:
+            return 0
+        rows_updated = 0
+        for pkg, rows in self.by_package.items():
+            new_rows: list[NodeReference] = []
+            for r in rows:
+                if r.to_node_id is None and r.to_name in qset:
+                    new_rows.append(
+                        NodeReference(
+                            from_package=r.from_package,
+                            from_node_id=r.from_node_id,
+                            to_name=r.to_name,
+                            to_node_id=r.to_name,
+                            kind=r.kind,
+                        )
+                    )
+                    rows_updated += 1
+                else:
+                    new_rows.append(r)
+            self.by_package[pkg] = new_rows
+        return rows_updated
+
 
 # ── FakeUnitOfWork ───────────────────────────────────────────────────────
 
@@ -398,6 +450,11 @@ class FakeUnitOfWork:
     module_members_store: InMemoryModuleMemberStore  = field(default_factory=InMemoryModuleMemberStore)
     trees_store:          InMemoryDocumentTreeStore  = field(default_factory=InMemoryDocumentTreeStore)
     references_store:     InMemoryReferenceStore     = field(default_factory=InMemoryReferenceStore)
+    # Spec S15: ``vectors`` is always present; tests get a
+    # :class:`NullVectorStore` by default. Override via
+    # :func:`make_fake_uow_factory(vectors=...)` when a test needs to
+    # observe vector writes.
+    vectors_store:        Any = field(default_factory=NullVectorStore)
     committed:   bool = False
     rolled_back: bool = False
     _entered:    bool = False
@@ -409,6 +466,7 @@ class FakeUnitOfWork:
     module_members: Any = field(init=False, repr=False)
     trees:          Any = field(init=False, repr=False)
     references:     Any = field(init=False, repr=False)
+    vectors:        Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.packages       = _NotEnteredProxy("packages")
@@ -416,6 +474,11 @@ class FakeUnitOfWork:
         self.module_members = _NotEnteredProxy("module_members")
         self.trees          = _NotEnteredProxy("trees")
         self.references     = _NotEnteredProxy("references")
+        # ``vectors`` is always-present per spec S15, even outside the
+        # context — application code should never need to branch on
+        # backend identity. Tests that want the not-entered guard can
+        # call methods on the proxied repos instead.
+        self.vectors        = self.vectors_store
 
     async def __aenter__(self) -> FakeUnitOfWork:
         if self._entered:
@@ -427,6 +490,7 @@ class FakeUnitOfWork:
         self.module_members = self.module_members_store
         self.trees          = self.trees_store
         self.references     = self.references_store
+        self.vectors        = self.vectors_store
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
@@ -439,6 +503,7 @@ class FakeUnitOfWork:
         self.module_members = _NotEnteredProxy("module_members")
         self.trees          = _NotEnteredProxy("trees")
         self.references     = _NotEnteredProxy("references")
+        self.vectors        = self.vectors_store  # always-present (spec S15)
         return False
 
     async def commit(self) -> None:
@@ -446,6 +511,22 @@ class FakeUnitOfWork:
 
     async def rollback(self) -> None:
         self.rolled_back = True
+
+    async def delete_all(self) -> None:
+        """Mirror of :meth:`SqliteUnitOfWork.delete_all` (spec I3).
+
+        Drives every per-store wipe via the underlying ``*_store``
+        attributes (not the proxied accessors) so the method works
+        regardless of whether the ``async with`` swap has happened —
+        though in practice it's only ever called from inside the
+        context manager.
+        """
+        await self.chunks_store.delete(None)
+        await self.module_members_store.delete(None)
+        await self.trees_store.delete_all()
+        await self.references_store.delete_all()
+        await self.packages_store.delete(None)
+        await self.vectors_store.clear_all()
 
 
 # ── Service-test factory ─────────────────────────────────────────────────
@@ -458,6 +539,7 @@ def make_fake_uow_factory(
     module_members: InMemoryModuleMemberStore | None = None,
     trees: InMemoryDocumentTreeStore | None = None,
     references: InMemoryReferenceStore | None = None,
+    vectors: Any = None,
 ) -> Callable[[], FakeUnitOfWork]:
     """Build a Callable[[], FakeUnitOfWork] for service-test wiring (spec §9).
 
@@ -468,15 +550,17 @@ def make_fake_uow_factory(
     calls — write-then-read patterns work as expected).
 
     All kwargs default to a fresh empty InMemory* — pass only the ones
-    you need to seed. Sub-PR #5b: adds the ``references=`` kwarg so #5b's
-    service tests can seed cross-node reference data the same way they
-    seed packages / chunks / etc.
+    you need to seed. Spec S15: ``vectors`` defaults to
+    :class:`NullVectorStore` so ``uow.vectors`` is always present
+    without requiring per-test wiring; pass a custom Null/Spy when a
+    test needs to observe vector writes.
     """
     pkgs = packages or InMemoryPackageStore()
     chs  = chunks   or InMemoryChunkStore()
     mms  = module_members or InMemoryModuleMemberStore()
     trs  = trees    or InMemoryDocumentTreeStore()
     rfs  = references or InMemoryReferenceStore()
+    vec  = vectors if vectors is not None else NullVectorStore()
 
     def factory() -> FakeUnitOfWork:
         return FakeUnitOfWork(
@@ -485,6 +569,7 @@ def make_fake_uow_factory(
             module_members_store=mms,
             trees_store=trs,
             references_store=rfs,
+            vectors_store=vec,
         )
     return factory
 

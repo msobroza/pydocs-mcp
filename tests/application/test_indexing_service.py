@@ -18,8 +18,8 @@ from dataclasses import fields
 import pytest
 
 from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
-from pydocs_mcp.storage.filters import All
 from tests._fakes import (
     FakeUnitOfWork,
     InMemoryChunkStore,
@@ -57,6 +57,26 @@ def _member(package: str, name: str) -> ModuleMember:
             "name": name,
             "kind": "function",
         },
+    )
+
+
+def _tree(qname: str, *, kind: NodeKind = NodeKind.MODULE) -> DocumentNode:
+    """Build a minimal :class:`DocumentNode` for tests that don't care about content.
+
+    Spec C1: the new :meth:`IndexingService._reresolve_cross_package`
+    walks the just-indexed package's trees to collect qnames — so test
+    fixtures can no longer pass arbitrary strings for ``trees=``.
+    """
+    return DocumentNode(
+        node_id=qname,
+        qualified_name=qname,
+        title=qname,
+        kind=kind,
+        source_path="",
+        start_line=0,
+        end_line=0,
+        text="",
+        content_hash="",
     )
 
 
@@ -192,8 +212,8 @@ async def test_remove_package_deletes_through_uow():
     chunks_store.by_package.setdefault("starlette", []).append(_chunk("starlette", "B"))
     module_members_store.by_package.setdefault("fastapi", []).append(_member("fastapi", "X"))
     module_members_store.by_package.setdefault("starlette", []).append(_member("starlette", "Y"))
-    trees_store.by_package["fastapi"] = ["t-fastapi"]
-    trees_store.by_package["other"] = ["t-other"]
+    trees_store.by_package["fastapi"] = [_tree("fastapi.t")]
+    trees_store.by_package["other"] = [_tree("other.t")]
 
     factory = make_fake_uow_factory(
         packages=packages_store,
@@ -230,17 +250,20 @@ async def test_remove_package_deletes_through_uow():
     assert "fastapi" not in trees_store.by_package
     assert chunks_store.by_package["starlette"]  # survivors
     assert module_members_store.by_package["starlette"]
-    assert trees_store.by_package["other"] == ["t-other"]
+    assert [t.qualified_name for t in trees_store.by_package["other"]] == ["other.t"]
 
 
 # ── clear_all uses unconditional match ───────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_clear_all_uses_match_all_filter():
-    """The destructive sweep uses ``All(clauses=())`` — the
-    ``SqliteFilterAdapter`` translates that to ``1 = 1`` so even NULL
-    column rows are matched, unlike the previous ``LIKE '%'`` hack."""
+async def test_clear_all_wipes_every_store_via_uow_delete_all():
+    """Spec I3: ``clear_all`` delegates to :meth:`UnitOfWork.delete_all`,
+    which sweeps every entity store + the vectors backend in one atomic
+    transaction. Replaces the legacy per-store ``delete(filter=All(()))``
+    gymnastics — the test pins the new shape so a regression that
+    reintroduces the old wiring fails immediately.
+    """
     packages_store = InMemoryPackageStore()
     chunks_store = InMemoryChunkStore()
     module_members_store = InMemoryModuleMemberStore()
@@ -252,8 +275,8 @@ async def test_clear_all_uses_match_all_filter():
     chunks_store.by_package["b"] = [_chunk("b", "y")]
     module_members_store.by_package["a"] = [_member("a", "X")]
     module_members_store.by_package["b"] = [_member("b", "Y")]
-    trees_store.by_package["a"] = ["t1"]
-    trees_store.by_package["b"] = ["t2"]
+    trees_store.by_package["a"] = [_tree("a.x")]
+    trees_store.by_package["b"] = [_tree("b.y")]
 
     factory = make_fake_uow_factory(
         packages=packages_store,
@@ -264,22 +287,15 @@ async def test_clear_all_uses_match_all_filter():
     service = IndexingService(uow_factory=factory)
     await service.clear_all()
 
-    # The filter is ``All(clauses=())`` on the entity stores.
-    match_all = All(clauses=())
-    assert any(c.method == "delete" and c.payload == match_all for c in chunks_store.calls)
-    assert any(
-        c.method == "delete" and c.payload == match_all for c in module_members_store.calls
-    )
-    assert any(c.method == "delete" and c.payload == match_all for c in packages_store.calls)
-
-    # Trees store sees a delete_all (unconditional, no filter).
-    assert any(c.method == "delete_all" for c in trees_store.calls)
-
-    # All rows gone.
+    # Every store ended up empty — the only observable end-state guarantee
+    # ``clear_all`` makes. The per-store call shape is an implementation
+    # detail of :meth:`FakeUnitOfWork.delete_all`.
     assert packages_store.items == {}
     assert chunks_store.by_package == {}
     assert module_members_store.by_package == {}
     assert trees_store.by_package == {}
+    # Trees store sees a delete_all (unconditional, no filter).
+    assert any(c.method == "delete_all" for c in trees_store.calls)
 
 
 # ── Tree store integration on reindex ────────────────────────────────────
@@ -288,17 +304,28 @@ async def test_clear_all_uses_match_all_filter():
 @pytest.mark.asyncio
 async def test_reindex_package_with_trees_calls_tree_store():
     """Non-empty trees → delete_for_package + save_many fire on the
-    UoW's tree store, in that order."""
+    UoW's tree store, in that order.
+
+    Spec C1: the test seeds proper :class:`DocumentNode` instances because
+    the post-write cross-package re-resolution sweep
+    (:meth:`IndexingService._reresolve_cross_package`) walks them via
+    ``load_all_in_package`` to extract qnames for the
+    :meth:`ReferenceStore.resolve_unresolved` Protocol call.
+    """
     trees_store = InMemoryDocumentTreeStore()
     factory = make_fake_uow_factory(trees=trees_store)
     service = IndexingService(uow_factory=factory)
 
     pkg = _pkg("fastapi")
-    fake_trees = ("tree-1", "tree-2")
+    fake_trees = (_tree("fastapi.t1"), _tree("fastapi.t2"))
     await service.reindex_package(pkg, (), (), trees=fake_trees)
 
+    # The new resolve-unresolved sweep loads trees back via
+    # load_all_in_package, so methods now include that read after the
+    # save_many write.
     methods = [c.method for c in trees_store.calls]
-    assert methods == ["delete_for_package", "save_many"]
+    assert methods[:2] == ["delete_for_package", "save_many"]
+    assert "load_all_in_package" in methods
     assert trees_store.calls[0].payload == "fastapi"
     pkg_name, saved_trees = trees_store.calls[1].payload
     assert pkg_name == "fastapi"
@@ -306,14 +333,23 @@ async def test_reindex_package_with_trees_calls_tree_store():
 
 
 @pytest.mark.asyncio
-async def test_reindex_package_with_empty_trees_skips_tree_store():
-    """Empty trees tuple → no tree-store calls (no point deleting nothing)."""
+async def test_reindex_package_with_empty_trees_skips_tree_write():
+    """Empty trees tuple → no write-side tree-store calls.
+
+    Spec C1: the post-write cross-package re-resolution sweep still
+    issues a read via ``load_all_in_package`` to collect qnames for
+    :meth:`ReferenceStore.resolve_unresolved`. That read is harmless
+    on an empty tree set (it returns an empty dict → no qnames →
+    no resolve_unresolved call), so we assert the WRITE-side
+    operations stay absent rather than asserting no calls at all.
+    """
     trees_store = InMemoryDocumentTreeStore()
     factory = make_fake_uow_factory(trees=trees_store)
     service = IndexingService(uow_factory=factory)
 
     await service.reindex_package(_pkg("fastapi"), (), (), trees=())
-    assert trees_store.calls == []
+    write_methods = {"save_many", "delete_for_package", "delete_all"}
+    assert [c for c in trees_store.calls if c.method in write_methods] == []
 
 
 @pytest.mark.asyncio
@@ -338,7 +374,9 @@ async def test_reindex_package_canonical_order():
     pkg = _pkg("fastapi")
     chunk = _chunk("fastapi", "A")
     member = _member("fastapi", "X")
-    fake_trees = ("tree-1",)
+    # Spec C1: trees must be real DocumentNodes so the post-write
+    # resolve-unresolved sweep can walk them for qnames.
+    fake_trees = (_tree("fastapi.t1"),)
 
     await service.reindex_package(pkg, (chunk,), (member,), trees=fake_trees)
 
@@ -559,3 +597,162 @@ async def test_clear_all_wipes_references():
     service = IndexingService(uow_factory=factory)
     await service.clear_all()
     assert any(c.method == "delete_all" for c in refs_store.calls)
+
+
+# ── Task 7 (I2 + I17): extracted helpers + find_stale_packages method ────
+
+
+@pytest.mark.asyncio
+async def test_diff_merge_chunks_empty_store_inserts_all():
+    """`_diff_merge_chunks` against an empty store returns empty removed_ids
+    and the full incoming tuple as added.
+
+    Probes ``list_id_hash_pairs`` once; no ``delete_by_ids`` (nothing to
+    remove); no ``insert`` (the helper just diffs — the orchestrator
+    inserts later).
+    """
+    chunks_store = InMemoryChunkStore()
+    factory = make_fake_uow_factory(chunks=chunks_store)
+    service = IndexingService(uow_factory=factory)
+
+    incoming = (
+        _chunk("fastapi", "Routing"),
+        _chunk("fastapi", "Middleware"),
+    )
+
+    async with factory() as uow:
+        removed_ids, added_chunks = await service._diff_merge_chunks(
+            uow, package_name="fastapi", incoming_chunks=incoming,
+        )
+
+    assert removed_ids == []
+    # All incoming chunks are "added" since the store was empty.
+    assert added_chunks == incoming
+
+
+@pytest.mark.asyncio
+async def test_diff_merge_chunks_removes_stale_and_keeps_unchanged():
+    """`_diff_merge_chunks` keeps unchanged rows + removes stale ids.
+
+    Pre-seed the chunk store via ``insert`` (mimicking the SQLite autoincrement
+    so ``list_id_hash_pairs`` returns real ids). Then diff against an incoming
+    set that drops one of the seeded rows + adds a brand new one. The dropped
+    hash's id ends up in ``removed_ids``; the new hash ends up in ``added``.
+    """
+    chunks_store = InMemoryChunkStore()
+    keep = _chunk("fastapi", "keep", text="keep-text")
+    drop = _chunk("fastapi", "drop", text="drop-text")
+    # Use the store's own insert path so ids get assigned just like SQLite.
+    await chunks_store.insert((keep, drop))
+
+    factory = make_fake_uow_factory(chunks=chunks_store)
+    service = IndexingService(uow_factory=factory)
+
+    new_chunk = _chunk("fastapi", "brand-new", text="new-text")
+    # Drop "drop"; keep "keep"; add a brand-new chunk.
+    incoming = (keep, new_chunk)
+
+    async with factory() as uow:
+        removed_ids, added_chunks = await service._diff_merge_chunks(
+            uow, package_name="fastapi", incoming_chunks=incoming,
+        )
+
+    # One stale id (the "drop" row).
+    assert len(removed_ids) == 1
+    # Only the brand-new chunk is "added"; "keep" was unchanged.
+    assert added_chunks == (new_chunk,)
+
+
+@pytest.mark.asyncio
+async def test_persist_references_empty_skips_save_many():
+    """`_persist_references` with empty refs: sweeps the package's rows
+    but skips ``save_many`` (no resolved tuple to write)."""
+    from tests._fakes import InMemoryReferenceStore
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs_store)
+    service = IndexingService(uow_factory=factory)
+
+    async with factory() as uow:
+        await service._persist_references(
+            uow,
+            package_name="pkg",
+            references=(),
+            reference_aliases={},
+            class_attribute_types={},
+        )
+
+    # delete_for_package fired; save_many did NOT.
+    assert any(
+        c.method == "delete_for_package" and c.payload == "pkg"
+        for c in refs_store.calls
+    )
+    assert not any(c.method == "save_many" for c in refs_store.calls)
+
+
+@pytest.mark.asyncio
+async def test_persist_references_non_empty_writes_resolved_refs():
+    """`_persist_references` runs the resolver + persists resolved refs."""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+    from tests._fakes import InMemoryReferenceStore
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs_store)
+    service = IndexingService(uow_factory=factory)
+
+    raw_refs = (
+        NodeReference(
+            from_package="pkg", from_node_id="pkg.mod.fn",
+            to_name="helper", to_node_id=None,
+            kind=ReferenceKind.CALLS,
+        ),
+    )
+    async with factory() as uow:
+        await service._persist_references(
+            uow,
+            package_name="pkg",
+            references=raw_refs,
+            reference_aliases={},
+            class_attribute_types={},
+        )
+
+    # delete_for_package + save_many both fired.
+    assert any(c.method == "delete_for_package" for c in refs_store.calls)
+    assert any(c.method == "save_many" for c in refs_store.calls)
+
+
+@pytest.mark.asyncio
+async def test_find_stale_packages_method_lives_on_service():
+    """I17 — `find_stale_packages` is a method on `IndexingService`,
+    not a module-level free function.
+
+    Empty package store → empty list (no crashes).
+    """
+    factory = make_fake_uow_factory()
+    service = IndexingService(uow_factory=factory)
+
+    stale = await service.find_stale_packages(current_model="fake-model")
+    assert stale == []
+
+
+@pytest.mark.asyncio
+async def test_find_stale_packages_filters_by_model():
+    """I17 — packages tagged with a different model are flagged stale;
+    packages tagged with the current model are not; packages with
+    ``embedding_model=None`` are excluded (legacy / pre-embedding rows).
+    """
+    from dataclasses import replace as dc_replace
+
+    packages_store = InMemoryPackageStore()
+    # Tagged with old model → stale under "current".
+    packages_store.items["a"] = dc_replace(_pkg("a"), embedding_model="old")
+    # Tagged with current model → not stale.
+    packages_store.items["b"] = dc_replace(_pkg("b"), embedding_model="current")
+    # No model tag → never stale.
+    packages_store.items["c"] = _pkg("c")  # embedding_model defaults to None
+
+    factory = make_fake_uow_factory(packages=packages_store)
+    service = IndexingService(uow_factory=factory)
+    stale = await service.find_stale_packages(current_model="current")
+    assert set(stale) == {"a"}

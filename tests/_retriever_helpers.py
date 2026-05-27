@@ -23,6 +23,7 @@ from typing import Any
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
     Chunk,
     ChunkFilterField,
     ModuleMember,
@@ -128,9 +129,9 @@ def retrieve_chunks(
     provider = build_connection_provider(path)
 
     # Only push the single-equality package filter into the step —
-    # SearchScope is encoded as either "__project__" or a NOT-equals clause in
-    # SQL, which the multifield format can't express. We apply scope + topic
-    # post-hoc on the returned items below.
+    # SearchScope is encoded as either PROJECT_PACKAGE_NAME or a NOT-equals
+    # clause in SQL, which the multifield format can't express. We apply scope
+    # + topic post-hoc on the returned items below.
     pre_filter: dict[str, Any] = {}
     if pkg is not None:
         pre_filter[ChunkFilterField.PACKAGE.value] = pkg
@@ -174,9 +175,9 @@ def retrieve_chunks(
         chunk_title = md.get(ChunkFilterField.TITLE.value, "")
         if pkg is not None and chunk_pkg != pkg:
             continue
-        if internal is True and chunk_pkg != "__project__":
+        if internal is True and chunk_pkg != PROJECT_PACKAGE_NAME:
             continue
-        if internal is False and chunk_pkg == "__project__":
+        if internal is False and chunk_pkg == PROJECT_PACKAGE_NAME:
             continue
         if topic and topic.lower() not in (chunk_title or "").lower():
             continue
@@ -248,9 +249,9 @@ def retrieve_module_members(
         member_pkg = md.get(ModuleMemberFilterField.PACKAGE.value, "")
         if pkg is not None and member_pkg != pkg:
             continue
-        if internal is True and member_pkg != "__project__":
+        if internal is True and member_pkg != PROJECT_PACKAGE_NAME:
             continue
-        if internal is False and member_pkg == "__project__":
+        if internal is False and member_pkg == PROJECT_PACKAGE_NAME:
             continue
         out.append({
             "pkg": member_pkg,

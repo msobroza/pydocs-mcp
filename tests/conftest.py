@@ -62,6 +62,7 @@ from pydocs_mcp.extraction import (
     flatten_to_chunks,
 )
 from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
     Chunk,
     ChunkFilterField,
     ModuleMember,
@@ -83,13 +84,13 @@ def conn(tmp_path):
 
     write_package_sync(
         db_path,
-        name="__project__", version="0.1", summary="Test project",
+        name=PROJECT_PACKAGE_NAME, version="0.1", summary="Test project",
         content_hash="aaa", origin=PackageOrigin.PROJECT,
         chunks=(
             Chunk(
                 text="Compute the fibonacci sequence for n",
                 metadata={
-                    ChunkFilterField.PACKAGE.value: "__project__",
+                    ChunkFilterField.PACKAGE.value: PROJECT_PACKAGE_NAME,
                     ChunkFilterField.TITLE.value: "fibonacci",
                     ChunkFilterField.ORIGIN.value: "project_code_section",
                 },
@@ -97,7 +98,7 @@ def conn(tmp_path):
             Chunk(
                 text="Project overview and fibonacci examples",
                 metadata={
-                    ChunkFilterField.PACKAGE.value: "__project__",
+                    ChunkFilterField.PACKAGE.value: PROJECT_PACKAGE_NAME,
                     ChunkFilterField.TITLE.value: "README",
                     ChunkFilterField.ORIGIN.value: "project_module_doc",
                 },
@@ -106,7 +107,7 @@ def conn(tmp_path):
         module_members=(
             ModuleMember(
                 metadata={
-                    ModuleMemberFilterField.PACKAGE.value: "__project__",
+                    ModuleMemberFilterField.PACKAGE.value: PROJECT_PACKAGE_NAME,
                     ModuleMemberFilterField.MODULE.value: "myapp.utils",
                     ModuleMemberFilterField.NAME.value: "fibonacci",
                     ModuleMemberFilterField.KIND.value: "function",

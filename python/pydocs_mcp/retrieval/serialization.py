@@ -13,13 +13,12 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
     from pydocs_mcp.storage.protocols import (
         Embedder,
+        FilterAdapter,
         LlmClient,
+        ModuleMemberStore,
         TextSearchable,
         UnitOfWork,
         VectorSearchable,
-    )
-    from pydocs_mcp.storage.sqlite import (
-        SqliteModuleMemberRepository,
     )
 
 
@@ -140,9 +139,22 @@ class BuildContext:
     step_registry: ComponentRegistry = field(default_factory=lambda: step_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
     vector_store: "TextSearchable | VectorSearchable | None" = None
-    module_member_store: "SqliteModuleMemberRepository | None" = None
+    # Spec I21: typed as the :class:`ModuleMemberStore` Protocol (not
+    # the concrete ``SqliteModuleMemberRepository``) so a future
+    # Postgres / DuckDB adapter can satisfy this field without
+    # touching the BuildContext type signature.
+    module_member_store: "ModuleMemberStore | None" = None
     app_config: "AppConfig | None" = None
     embedder: "Embedder | None" = None
     uow_factory: "Callable[[], UnitOfWork] | None" = None
     llm_client: "LlmClient | None" = None
     pipeline_hash: str = ""
+    # Spec C5: tightened ``FilterAdapter`` Protocol — composition root wires
+    # a SQLite-specific adapter here so ``PreFilterStep`` (and downstream
+    # fetchers, post-C5 commit 2) call the typed Protocol instead of
+    # importing :class:`pydocs_mcp.storage.sqlite.SqliteFilterAdapter` at
+    # ``step.run`` time. Optional at the type level so isolated unit tests
+    # can instantiate a minimal context; ``from_dict`` decoders raise when
+    # the dep is missing (transitional shape — commit 1 falls back to a
+    # default-constructed adapter; commit 2 will require explicit wiring).
+    filter_adapter: "FilterAdapter | None" = None

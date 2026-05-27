@@ -14,6 +14,12 @@ class ApiSearch:
     Mirrors :class:`DocsSearch` but for the module-member pipeline:
     deliberately thin and substitutes an empty ``ModuleMemberList`` when
     the pipeline returns no result.
+
+    NOTE (spec S21): this class and :class:`DocsSearch` are intentionally
+    near-duplicate thin wrappers — see the longer note on
+    :class:`DocsSearch` for the rationale. Briefly: the duplication is
+    grep-friendly and avoids over-parameterization; a third near-identical
+    service is the trigger to factor out a shared base, not the second.
     """
 
     member_pipeline: CodeRetrieverPipeline

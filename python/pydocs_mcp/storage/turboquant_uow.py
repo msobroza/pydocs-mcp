@@ -156,6 +156,16 @@ class TurboQuantUnitOfWork:
         )
         self._dirty = True
 
+    async def delete_all(self) -> None:
+        """Satisfy :meth:`UnitOfWork.delete_all` (spec I3) by delegating to clear_all.
+
+        The vector backend has only one table-equivalent (the
+        ``IdMapIndex``), so a UoW-level wipe is exactly the in-memory
+        index reset already exposed as :meth:`clear_all`. Distinct
+        method name keeps the Protocol surface uniform across backends.
+        """
+        await self.clear_all()
+
     async def commit(self) -> None:
         """Persist in-memory index to ``<path>.tmp`` then atomic-rename.
 

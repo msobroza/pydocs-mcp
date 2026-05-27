@@ -18,14 +18,31 @@ Scratch key follows the ``<step_name>.<field>`` convention documented on
 
 No backward-compat fallback — all shipped YAML pipelines include this
 step BEFORE the fetcher. User overlays that omit it break loudly.
+
+Post-C5 commit 2: ``PreFilterResult`` is backend-neutral — only ``tree``
+and ``scope``. Each fetcher
+(:class:`pydocs_mcp.retrieval.steps.chunk_fetcher.ChunkFetcherStep`,
+:class:`pydocs_mcp.retrieval.steps.member_fetcher.MemberFetcherStep`)
+calls ``ctx.filter_adapter.adapt(pf.tree, target_field=...)`` itself
+when it needs to materialize the backend-specific query fragment. The
+:mod:`dense_fetcher` step already consumed ``pf.tree`` directly through
+``VectorSearchable.vector_search(filter=...)`` so no migration is
+needed there.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Literal
 
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+
+# Re-export the shared constant for backward compatibility — fetchers
+# (chunk_fetcher / member_fetcher / dense_fetcher) historically import
+# ``PRE_FILTER_SCRATCH_KEY`` from this module. Its canonical home is now
+# ``_constants.py`` so the value can be shared without pulling the rest
+# of pre_filter's module surface in.
+from pydocs_mcp.retrieval.steps._constants import PRE_FILTER_SCRATCH_KEY
 
 if TYPE_CHECKING:
     from pydocs_mcp.models import SearchScope
@@ -50,29 +67,39 @@ _DEFAULT_TARGET_FIELD: Literal["chunk", "member"] = "chunk"
 class PreFilterResult:
     """Typed result emitted by :class:`PreFilterStep` into ``state.scratch["pre_filter.result"]``.
 
-    Fetchers downstream read these fields without re-parsing the raw
-    ``SearchQuery.pre_filter`` mapping.
+    Backend-neutral — fetchers translate ``tree`` to the backend's
+    query language via :class:`~pydocs_mcp.storage.protocols.FilterAdapter`
+    when they need to execute. Post-C5 commit 2 drops the SQL-shaped
+    ``sql`` / ``params`` fields the legacy shape carried; storage
+    leakage out of this dataclass was the hexagonal seam C5 sealed.
 
     Fields:
     - ``tree``: the parsed (post-scope-split) filter tree, or ``None`` if
       the entire filter collapsed to the scope clause.
     - ``scope``: a ``frozenset[SearchScope]`` extracted from the filter,
       or ``None`` if no scope clause was present.
-    - ``sql``: the SQL ``WHERE``-clause fragment built by
-      :class:`SqliteFilterAdapter`. Empty string when ``tree`` is ``None``.
-    - ``params``: positional SQL parameters paired with ``sql``.
-      Immutable tuple — the frozen dataclass keeps the contract truthful.
     """
     tree: "Filter | None"
     scope: "frozenset[SearchScope] | None"
-    sql: str
-    params: tuple[Any, ...]
 
 
 @step_registry.register("pre_filter")
 @dataclass(frozen=True, slots=True)
 class PreFilterStep(RetrieverStep):
-    """Parse + validate pre_filter once; share typed result via ``state.scratch``."""
+    """Parse + validate pre_filter once; share typed result via ``state.scratch``.
+
+    Post-C5 commit 2: no longer materializes the SQL fragment. The
+    typed :class:`PreFilterResult` carries only ``tree`` + ``scope``;
+    each downstream fetcher
+    (:class:`pydocs_mcp.retrieval.steps.chunk_fetcher.ChunkFetcherStep`,
+    :class:`pydocs_mcp.retrieval.steps.member_fetcher.MemberFetcherStep`)
+    calls ``ctx.filter_adapter.adapt(tree, target_field=...)`` itself
+    when it needs the backend-specific query fragment.
+
+    The ``target_field`` field is retained as a step-shape declaration
+    so the YAML still reflects the downstream fetcher's intent and
+    the pre-filter validates against the right schema.
+    """
 
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     schema_name: str = field(default=_DEFAULT_SCHEMA_NAME, kw_only=True)
@@ -99,33 +126,17 @@ class PreFilterStep(RetrieverStep):
         _schema_from_fields(self.allowed_fields).validate(tree)
         tree, scope = _split_scope(tree)
 
-        filter_sql = ""
-        filter_params: list = []
-        if tree is not None:
-            from pydocs_mcp.storage.sqlite import (
-                _MEMBER_COLUMNS,
-                CHUNK_COLUMNS,
-                SqliteFilterAdapter,
-            )
-            if self.target_field == "chunk":
-                adapter = SqliteFilterAdapter(
-                    safe_columns=CHUNK_COLUMNS, column_prefix="c.",
-                )
-            else:
-                adapter = SqliteFilterAdapter(safe_columns=_MEMBER_COLUMNS)
-            filter_sql, filter_params = adapter.adapt(tree)
-
-        # Write typed result to state.scratch under the canonical
-        # ``<step_name>.<field>`` key. The dict mutation is intentional —
-        # RetrieverState is frozen but the scratch dict is mutable by its
-        # documented contract (see ``RetrieverState.scratch`` docstring).
-        state.scratch["pre_filter.result"] = PreFilterResult(
-            tree=tree,
-            scope=scope,
-            sql=filter_sql,
-            params=tuple(filter_params),
-        )
-        return state
+        # Use ``dataclasses.replace`` with a fresh scratch dict instead of
+        # mutating ``state.scratch`` in place — the latter relied on the
+        # mutable-dict contract of RetrieverState.scratch but couples the
+        # step to that mutability. With the new typed shape the step
+        # produces exactly one dict entry; ``replace`` keeps the frozen
+        # contract honest. (RetrieverState IS frozen.)
+        new_scratch = {
+            **state.scratch,
+            PRE_FILTER_SCRATCH_KEY: PreFilterResult(tree=tree, scope=scope),
+        }
+        return replace(state, scratch=new_scratch)
 
     def to_dict(self) -> dict:
         return {
@@ -153,4 +164,4 @@ class PreFilterStep(RetrieverStep):
         )
 
 
-__all__ = ("PreFilterResult", "PreFilterStep")
+__all__ = ("PRE_FILTER_SCRATCH_KEY", "PreFilterResult", "PreFilterStep")

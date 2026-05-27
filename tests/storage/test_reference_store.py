@@ -143,3 +143,50 @@ async def test_save_many_inside_uow_shares_connection(tmp_path):
     store = SqliteReferenceStore(provider=provider)
     rows = await store.find_by_name("other.symbol")
     assert len(rows) == 1
+
+
+# ── resolve_unresolved (spec C1 — Protocol-level cross-package bulk fixup) ──
+
+
+@pytest.mark.asyncio
+async def test_resolve_unresolved_updates_matching_rows(provider):
+    """resolve_unresolved flips ``to_node_id`` for matching unresolved rows."""
+    store = SqliteReferenceStore(provider=provider)
+    unresolved = _ref(
+        from_node_id="pkg.mod.f",
+        to_name="other.target",
+        to_node_id=None,
+        kind=ReferenceKind.CALLS,
+    )
+    await store.save_many([unresolved], package="pkg")
+
+    rows = await store.resolve_unresolved({"other.target"})
+    assert rows == 1
+
+    callers = await store.find_by_name("other.target")
+    assert len(callers) == 1
+    assert callers[0].to_node_id == "other.target"
+
+
+@pytest.mark.asyncio
+async def test_resolve_unresolved_skips_already_resolved(provider):
+    """Already-resolved rows are left untouched (idempotent)."""
+    store = SqliteReferenceStore(provider=provider)
+    resolved = _ref(
+        from_node_id="pkg.mod.f",
+        to_name="target",
+        to_node_id="target",  # already resolved
+        kind=ReferenceKind.CALLS,
+    )
+    await store.save_many([resolved], package="pkg")
+    rows = await store.resolve_unresolved({"target"})
+    assert rows == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_unresolved_empty_set_is_noop(provider):
+    """Empty qname set → 0 rows without touching the DB."""
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many([_ref(to_name="x", to_node_id=None)], package="pkg")
+    rows = await store.resolve_unresolved(set())
+    assert rows == 0

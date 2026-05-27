@@ -10,12 +10,15 @@ candidates carry ``relevance=None`` and downstream
 Pre-filter pushdown: when ``state.query.pre_filter`` is set,
 :class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterStep` MUST run
 upstream and write a typed
-:class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterResult` to
-``state.scratch["pre_filter.result"]``. The fetcher consumes the pre-built SQL
-pushdown clause + scope set directly; it does not re-parse the raw
-filter mapping. If the scratch key is missing while the query carries a
-filter, the fetcher raises a clear ``RuntimeError`` pointing at the
-canonical YAML shape.
+:class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterResult`
+(``tree`` + ``scope``) to
+``state.scratch["pre_filter.result"]``. The fetcher reads the parsed
+tree, materializes it via
+:class:`pydocs_mcp.storage.protocols.FilterAdapter` (wired through
+:attr:`BuildContext.filter_adapter`), and pushes the resulting WHERE
+clause into the ``module_members`` SELECT. If the scratch key is
+missing while the query carries a filter, the fetcher raises a clear
+``RuntimeError`` pointing at the canonical YAML shape.
 
 Mirrors the LIKE query shape the legacy ``LikeMemberRetriever`` used
 (deleted in Task 9) but pushes the substring match down to SQL instead
@@ -27,6 +30,7 @@ import asyncio
 import json
 import sqlite3
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.models import (
     ModuleMember,
@@ -38,6 +42,9 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+
+if TYPE_CHECKING:
+    from pydocs_mcp.storage.protocols import FilterAdapter
 
 # Deferred storage / filter_helpers imports — see
 # :mod:`pydocs_mcp.retrieval.steps.chunk_fetcher` for the rationale.
@@ -83,6 +90,7 @@ class MemberFetcherStep(RetrieverStep):
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     limit: int = field(default=_DEFAULT_LIMIT, kw_only=True)
     retriever_name: str = field(default=_DEFAULT_RETRIEVER_NAME, kw_only=True)
+    filter_adapter: "FilterAdapter | None" = field(default=None, kw_only=True)
     name: str = field(default="member_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -93,29 +101,34 @@ class MemberFetcherStep(RetrieverStep):
         # Read PreFilterStep's typed result from scratch. Same contract as
         # ChunkFetcherStep — PreFilterStep MUST run upstream when
         # query.pre_filter is set; the fetcher does not re-parse the raw
-        # mapping.
-        from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
+        # mapping. Post-C5 commit 2 the typed result carries only
+        # ``tree`` + ``scope``; the fetcher itself calls
+        # ``ctx.filter_adapter.adapt`` to materialize the WHERE fragment.
+        from pydocs_mcp.retrieval.steps.pre_filter import (
+            PRE_FILTER_SCRATCH_KEY,
+            PreFilterResult,
+        )
 
         filter_sql = ""
-        filter_params: list = []
+        filter_params: tuple = ()
         scope: frozenset[SearchScope] | None = None
 
         if state.query.pre_filter is not None:
-            result = state.scratch.get("pre_filter.result")
+            result = state.scratch.get(PRE_FILTER_SCRATCH_KEY)
             if not isinstance(result, PreFilterResult):
                 raise RuntimeError(
                     "MemberFetcherStep: state.query.pre_filter is set but "
-                    "state.scratch['pre_filter.result'] is missing. The "
-                    "pipeline must include the 'pre_filter' step before "
+                    f"state.scratch[{PRE_FILTER_SCRATCH_KEY!r}] is missing. "
+                    "The pipeline must include the 'pre_filter' step before "
                     "'member_fetcher'. See pipelines/member_search.yaml "
                     "for the canonical shape.",
                 )
-            filter_sql = result.sql
-            filter_params = list(result.params)
             scope = result.scope
+            if result.tree is not None:
+                filter_sql, filter_params = self._build_where_clause(result.tree)
 
         rows = await asyncio.to_thread(
-            self._fetch_sync, filter_sql, filter_params,
+            self._fetch_sync, filter_sql, list(filter_params),
         )
         members = tuple(_row_to_candidate(row, self.retriever_name) for row in rows)
         # Apply LIKE-style substring match in-process (matches legacy
@@ -135,6 +148,20 @@ class MemberFetcherStep(RetrieverStep):
                 )
             )
         return replace(state, candidates=ModuleMemberList(items=members))
+
+    def _build_where_clause(self, tree) -> tuple[str, tuple]:
+        """Materialize a parsed filter tree to (WHERE-fragment, params).
+
+        Mirrors :meth:`ChunkFetcherStep._build_where_clause` but uses
+        ``target_field='member'`` so the adapter picks the
+        ``module_members`` whitelist (and the bare-column prefix, since
+        member queries are not joined).
+        """
+        adapter = self.filter_adapter
+        if adapter is None:
+            from pydocs_mcp.storage.sqlite import SqliteFilterAdapter as _Fallback
+            adapter = _Fallback()
+        return adapter.adapt(tree, target_field="member")
 
     def _fetch_sync(
         self, filter_sql: str, filter_params: list,
@@ -177,6 +204,7 @@ class MemberFetcherStep(RetrieverStep):
             allowed_fields=allowed,
             limit=data.get("limit", _DEFAULT_LIMIT),
             retriever_name=data.get("retriever_name", _DEFAULT_RETRIEVER_NAME),
+            filter_adapter=context.filter_adapter,
         )
 
     def to_dict(self) -> dict:

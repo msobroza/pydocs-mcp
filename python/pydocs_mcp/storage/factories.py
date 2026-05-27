@@ -25,9 +25,9 @@ from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
 from pydocs_mcp.storage.sqlite import (
     CHUNK_COLUMNS,
-    SqliteFilterAdapter,
     SqliteUnitOfWork,
     _maybe_acquire,
+    _SqliteFilterTranslator,
     row_to_chunk,
 )
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
@@ -100,7 +100,7 @@ def build_composite_uow_factory(
     commits first; rollback walks in reverse).
     """
     def _make() -> CompositeUnitOfWork:
-        return CompositeUnitOfWork([f() for f in children])
+        return CompositeUnitOfWork(*(f() for f in children))
     return _make
 
 
@@ -136,7 +136,7 @@ def build_sqlite_candidate_id_resolver(
     without touching the store class.
     """
     provider = build_connection_provider(db_path)
-    adapter = SqliteFilterAdapter(safe_columns=CHUNK_COLUMNS)
+    adapter = _SqliteFilterTranslator(safe_columns=CHUNK_COLUMNS)
 
     async def resolve(filter_tree: Filter) -> np.ndarray:
         sql_clause, params = adapter.adapt(filter_tree)
