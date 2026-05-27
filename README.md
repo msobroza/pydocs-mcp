@@ -1,7 +1,7 @@
 # pydocs-mcp
 
 **Local, version-aware code & docs search for your AI coding agent — over the
-exact library versions installed on your machine. No cloud, no API keys.**
+exact library versions installed on your machine.**
 
 ![pydocs-mcp architecture overview: your project source and installed Python libraries are indexed into a SQLite database (chunks, metadata, reference graph) plus a TurboQuant .tq vector file; an AI coding assistant's query runs through keyword (BM25) and vector search fused together — with a tree-navigating mode over the code map — then a result ranker returns version-aware answers, all locally with no API keys or network upload.](assets/pydocs-mcp-overview.png)
 
