@@ -94,39 +94,20 @@ class IndexingService:
         for cross-method ``self.X.Y`` inference. The resolver runs inside
         this method using the cross-package qname universe loaded from
         ``uow.trees`` (so it sees the just-upserted trees).
+
+        Implementation: a thin orchestrator over :meth:`_diff_merge_chunks`
+        (chunk diff + stale-vector cleanup) and :meth:`_persist_references`
+        (sweep + resolve + save + cross-package re-resolution). Each helper
+        is independently testable; the orchestrator reads as a sequence of
+        named writes under one UoW (Task 7 I2).
         """
         # Enum-typed filter keys are the single source of truth the
         # safe-columns whitelist also derives from; the ``packages`` table
         # keys on ``name`` (no matching enum), so that one stays literal.
         async with self.uow_factory() as uow:
-            # === BEGIN diff-merge for chunks (AC-3 + AC-8 + AC-9) ===
-            # Replaces the legacy ``chunks.delete + chunks.upsert`` pair.
-            # We diff incoming chunks against the persisted snapshot by
-            # ``content_hash``: keep unchanged rows + their vectors, drop
-            # only the rows that disappeared, insert only the genuinely
-            # new chunks. Pre-migration NULL-hash rows always count as
-            # 'removed' so they self-heal on the first reindex per
-            # package (spec AC-8).
-            existing_pairs = await uow.chunks.list_id_hash_pairs(
-                filter={ChunkFilterField.PACKAGE.value: package.name},
+            removed_ids, added_chunks = await self._diff_merge_chunks(
+                uow, package_name=package.name, incoming_chunks=chunks,
             )
-            incoming_hashes = {c.content_hash for c in chunks}
-            existing_by_hash = {h: cid for cid, h in existing_pairs if h}
-            removed_ids = [
-                cid for cid, h in existing_pairs
-                if not h or h not in incoming_hashes
-            ]
-            added_chunks = tuple(
-                c for c in chunks if c.content_hash not in existing_by_hash
-            )
-
-            if removed_ids:
-                await uow.chunks.delete_by_ids(removed_ids)
-                # ``uow.vectors`` is always present (spec S15). The
-                # SQLite-only deployment routes through
-                # :class:`NullVectorStore`, whose ``remove_vectors`` is
-                # a silent no-op.
-                await uow.vectors.remove_vectors(removed_ids)
 
             await uow.module_members.delete(
                 filter={ModuleMemberFilterField.PACKAGE.value: package.name},
@@ -141,7 +122,6 @@ class IndexingService:
                 # their existing vectors (no re-add); removed chunks'
                 # vectors were wiped above.
                 await self._maybe_write_vectors(uow, package, added_chunks)
-            # === END diff-merge ===
             # Tree persistence happens between chunks and members so
             # FK-like post-conditions line up if a future schema adds them.
             if trees:
@@ -149,29 +129,95 @@ class IndexingService:
                 await uow.trees.save_many(tuple(trees), package=package.name)
             await uow.module_members.upsert_many(module_members)
 
-            # References. Always sweep this package's existing rows
-            # first, then write the freshly-resolved ones (empty
-            # ``references`` = sweep only, leaves a clean row set for
-            # the next call).
-            await uow.references.delete_for_package(package.name)
-            if references:
-                resolved = await self._resolve_references(
-                    uow,
-                    references,
-                    reference_aliases or {},
-                    class_attribute_types or {},
-                )
-                await uow.references.save_many(
-                    resolved, package=package.name,
-                )
-
-            # AC #6.5 — cross-package re-resolution. After writing this
-            # package's rows, flip OTHER packages' previously-unresolved
-            # refs whose ``to_name`` is now an exact qname inside the
-            # just-indexed package's universe.
-            await self._reresolve_cross_package(uow, package.name)
+            await self._persist_references(
+                uow,
+                package_name=package.name,
+                references=references,
+                reference_aliases=reference_aliases or {},
+                class_attribute_types=class_attribute_types or {},
+            )
 
             await uow.commit()
+
+    async def _diff_merge_chunks(
+        self,
+        uow: UnitOfWork,
+        *,
+        package_name: str,
+        incoming_chunks: tuple[Chunk, ...],
+    ) -> tuple[list[int], tuple[Chunk, ...]]:
+        """Compute the chunk diff + apply stale-side cleanup (AC-3 + AC-8 + AC-9).
+
+        Replaces the legacy ``chunks.delete + chunks.upsert`` pair. Diffs
+        ``incoming_chunks`` against the persisted snapshot via
+        ``content_hash``: keep unchanged rows + their vectors, drop only
+        rows that disappeared (and their vectors), and return the
+        genuinely new rows for the caller to insert. Pre-migration
+        NULL-hash rows always count as 'removed' so they self-heal on
+        the first reindex per package (spec AC-8).
+
+        Returns ``(removed_ids, added_chunks)``. The caller is responsible
+        for inserting ``added_chunks`` and forwarding their embeddings —
+        keeping the insert here would couple the diff to the vector path
+        and complicate the orchestrator's read flow.
+
+        ``uow.vectors`` is always present (spec S15). SQLite-only
+        deployments route through :class:`NullVectorStore`, whose
+        ``remove_vectors`` is a silent no-op.
+        """
+        existing_pairs = await uow.chunks.list_id_hash_pairs(
+            filter={ChunkFilterField.PACKAGE.value: package_name},
+        )
+        incoming_hashes = {c.content_hash for c in incoming_chunks}
+        existing_by_hash = {h: cid for cid, h in existing_pairs if h}
+        removed_ids = [
+            cid for cid, h in existing_pairs
+            if not h or h not in incoming_hashes
+        ]
+        added_chunks = tuple(
+            c for c in incoming_chunks if c.content_hash not in existing_by_hash
+        )
+
+        if removed_ids:
+            await uow.chunks.delete_by_ids(removed_ids)
+            await uow.vectors.remove_vectors(removed_ids)
+
+        return removed_ids, added_chunks
+
+    async def _persist_references(
+        self,
+        uow: UnitOfWork,
+        *,
+        package_name: str,
+        references: Sequence["NodeReference"],
+        reference_aliases: dict[str, dict[str, str]],
+        class_attribute_types: dict[str, dict[str, str]],
+    ) -> None:
+        """Atomic references rewrite for one package (sub-PR #5b + AC #6.5).
+
+        Always sweeps this package's existing rows first, then writes the
+        freshly-resolved ones (empty ``references`` = sweep only, leaves
+        a clean row set for the next call). After writing, flips OTHER
+        packages' previously-unresolved refs whose ``to_name`` is now an
+        exact qname inside the just-indexed package's universe (AC #6.5).
+        """
+        await uow.references.delete_for_package(package_name)
+        if references:
+            resolved = await self._resolve_references(
+                uow,
+                references,
+                reference_aliases,
+                class_attribute_types,
+            )
+            await uow.references.save_many(
+                resolved, package=package_name,
+            )
+
+        # AC #6.5 — cross-package re-resolution. After writing this
+        # package's rows, flip OTHER packages' previously-unresolved
+        # refs whose ``to_name`` is now an exact qname inside the
+        # just-indexed package's universe.
+        await self._reresolve_cross_package(uow, package_name)
 
     async def _maybe_write_vectors(
         self,
@@ -360,6 +406,37 @@ class IndexingService:
             await uow.delete_all()
             await uow.commit()
 
+    async def find_stale_packages(self, *, current_model: str) -> list[str]:
+        """Return packages whose stored ``embedding_model`` differs from
+        ``current_model``.
+
+        Task 7 (I17): the legacy free function
+        :func:`find_packages_with_stale_embeddings` is now a thin wrapper
+        around this method, making the ``uow_factory`` dependency
+        explicit on the service rather than implicit on a module-level
+        callable.
+
+        Used at startup (see ``__main__._run_indexing``) to detect when
+        the YAML's ``embedding.model_name`` has changed since the last
+        index pass. The composition root clears each returned package's
+        ``content_hash`` so the next sweep re-extracts + re-embeds them
+        via the existing hash-skip code path — no manual cache surgery.
+
+        Packages with ``embedding_model is None`` are intentionally NOT
+        flagged stale: they predate the embedding feature (no vectors in
+        the .tq sidecar to mismatch) and will pick up a model tag on
+        their next natural reindex. Flipping them here would trigger a
+        blanket re-extract on every model rename for callers who haven't
+        enabled embeddings yet.
+        """
+        async with self.uow_factory() as uow:
+            all_pkgs = await uow.packages.list()
+        return [
+            p.name for p in all_pkgs
+            if p.embedding_model is not None
+            and p.embedding_model != current_model
+        ]
+
 
 def _add_qnames(node: "DocumentNode", out: set[str]) -> None:
     """Walk a DocumentNode tree, collect every qualified_name into ``out``."""
@@ -373,25 +450,16 @@ async def find_packages_with_stale_embeddings(
     uow_factory: Callable[[], UnitOfWork],
     current_model: str,
 ) -> list[str]:
-    """Return packages whose stored ``embedding_model`` differs from ``current_model``.
+    """Thin backwards-compat wrapper around :meth:`IndexingService.find_stale_packages`.
 
-    Used at startup (see ``__main__._run_indexing``) to detect when the
-    YAML's ``embedding.model_name`` has changed since the last index
-    pass. The composition root clears each returned package's
-    ``content_hash`` so the next sweep re-extracts + re-embeds them via
-    the existing hash-skip code path — no manual cache surgery.
-
-    Packages with ``embedding_model is None`` are intentionally NOT
-    flagged stale: they predate the embedding feature (no vectors in
-    the .tq sidecar to mismatch) and will pick up a model tag on their
-    next natural reindex. Flipping them here would trigger a blanket
-    re-extract on every model rename for callers who haven't enabled
-    embeddings yet.
+    Task 7 (I17): the canonical staleness check now lives as a method on
+    :class:`IndexingService`, making the ``uow_factory`` dependency
+    explicit on the service rather than implicit on this module-level
+    callable. This wrapper exists so legacy callers that hold only a
+    ``uow_factory`` (and not yet an :class:`IndexingService`) continue to
+    work without churning callsites — but new code should use
+    ``IndexingService(uow_factory=...).find_stale_packages(...)``.
     """
-    async with uow_factory() as uow:
-        all_pkgs = await uow.packages.list()
-    return [
-        p.name for p in all_pkgs
-        if p.embedding_model is not None
-        and p.embedding_model != current_model
-    ]
+    return await IndexingService(uow_factory=uow_factory).find_stale_packages(
+        current_model=current_model,
+    )

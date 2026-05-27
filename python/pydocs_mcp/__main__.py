@@ -273,6 +273,9 @@ async def _run_indexing(args: argparse.Namespace) -> None:
             "they will be re-extracted this run", len(repaired),
         )
 
+    from pydocs_mcp.application.indexing_service import IndexingService
+    indexing_service = IndexingService(uow_factory=uow_factory)
+
     # Detect a model rename in YAML — packages tagged with the old
     # ``embedding_model`` carry vectors that the new model cannot match
     # at query time (different vector space). Clearing ``content_hash``
@@ -282,11 +285,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     if not args.force:
         from dataclasses import replace as dc_replace
 
-        from pydocs_mcp.application.indexing_service import (
-            find_packages_with_stale_embeddings,
-        )
-        stale_pkg_names = await find_packages_with_stale_embeddings(
-            uow_factory=uow_factory,
+        stale_pkg_names = await indexing_service.find_stale_packages(
             current_model=config.embedding.model_name,
         )
         if stale_pkg_names:
@@ -306,9 +305,6 @@ async def _run_indexing(args: argparse.Namespace) -> None:
                             dc_replace(pkg, content_hash=""),
                         )
                 await uow.commit()
-
-    from pydocs_mcp.application.indexing_service import IndexingService
-    indexing_service = IndexingService(uow_factory=uow_factory)
 
     # Construct the embedder once at startup so the rest of the pipeline
     # can share it. Failing here (e.g., OPENAI_API_KEY missing) surfaces

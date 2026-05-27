@@ -597,3 +597,162 @@ async def test_clear_all_wipes_references():
     service = IndexingService(uow_factory=factory)
     await service.clear_all()
     assert any(c.method == "delete_all" for c in refs_store.calls)
+
+
+# ── Task 7 (I2 + I17): extracted helpers + find_stale_packages method ────
+
+
+@pytest.mark.asyncio
+async def test_diff_merge_chunks_empty_store_inserts_all():
+    """`_diff_merge_chunks` against an empty store returns empty removed_ids
+    and the full incoming tuple as added.
+
+    Probes ``list_id_hash_pairs`` once; no ``delete_by_ids`` (nothing to
+    remove); no ``insert`` (the helper just diffs — the orchestrator
+    inserts later).
+    """
+    chunks_store = InMemoryChunkStore()
+    factory = make_fake_uow_factory(chunks=chunks_store)
+    service = IndexingService(uow_factory=factory)
+
+    incoming = (
+        _chunk("fastapi", "Routing"),
+        _chunk("fastapi", "Middleware"),
+    )
+
+    async with factory() as uow:
+        removed_ids, added_chunks = await service._diff_merge_chunks(
+            uow, package_name="fastapi", incoming_chunks=incoming,
+        )
+
+    assert removed_ids == []
+    # All incoming chunks are "added" since the store was empty.
+    assert added_chunks == incoming
+
+
+@pytest.mark.asyncio
+async def test_diff_merge_chunks_removes_stale_and_keeps_unchanged():
+    """`_diff_merge_chunks` keeps unchanged rows + removes stale ids.
+
+    Pre-seed the chunk store via ``insert`` (mimicking the SQLite autoincrement
+    so ``list_id_hash_pairs`` returns real ids). Then diff against an incoming
+    set that drops one of the seeded rows + adds a brand new one. The dropped
+    hash's id ends up in ``removed_ids``; the new hash ends up in ``added``.
+    """
+    chunks_store = InMemoryChunkStore()
+    keep = _chunk("fastapi", "keep", text="keep-text")
+    drop = _chunk("fastapi", "drop", text="drop-text")
+    # Use the store's own insert path so ids get assigned just like SQLite.
+    await chunks_store.insert((keep, drop))
+
+    factory = make_fake_uow_factory(chunks=chunks_store)
+    service = IndexingService(uow_factory=factory)
+
+    new_chunk = _chunk("fastapi", "brand-new", text="new-text")
+    # Drop "drop"; keep "keep"; add a brand-new chunk.
+    incoming = (keep, new_chunk)
+
+    async with factory() as uow:
+        removed_ids, added_chunks = await service._diff_merge_chunks(
+            uow, package_name="fastapi", incoming_chunks=incoming,
+        )
+
+    # One stale id (the "drop" row).
+    assert len(removed_ids) == 1
+    # Only the brand-new chunk is "added"; "keep" was unchanged.
+    assert added_chunks == (new_chunk,)
+
+
+@pytest.mark.asyncio
+async def test_persist_references_empty_skips_save_many():
+    """`_persist_references` with empty refs: sweeps the package's rows
+    but skips ``save_many`` (no resolved tuple to write)."""
+    from tests._fakes import InMemoryReferenceStore
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs_store)
+    service = IndexingService(uow_factory=factory)
+
+    async with factory() as uow:
+        await service._persist_references(
+            uow,
+            package_name="pkg",
+            references=(),
+            reference_aliases={},
+            class_attribute_types={},
+        )
+
+    # delete_for_package fired; save_many did NOT.
+    assert any(
+        c.method == "delete_for_package" and c.payload == "pkg"
+        for c in refs_store.calls
+    )
+    assert not any(c.method == "save_many" for c in refs_store.calls)
+
+
+@pytest.mark.asyncio
+async def test_persist_references_non_empty_writes_resolved_refs():
+    """`_persist_references` runs the resolver + persists resolved refs."""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+    from tests._fakes import InMemoryReferenceStore
+
+    refs_store = InMemoryReferenceStore()
+    factory = make_fake_uow_factory(references=refs_store)
+    service = IndexingService(uow_factory=factory)
+
+    raw_refs = (
+        NodeReference(
+            from_package="pkg", from_node_id="pkg.mod.fn",
+            to_name="helper", to_node_id=None,
+            kind=ReferenceKind.CALLS,
+        ),
+    )
+    async with factory() as uow:
+        await service._persist_references(
+            uow,
+            package_name="pkg",
+            references=raw_refs,
+            reference_aliases={},
+            class_attribute_types={},
+        )
+
+    # delete_for_package + save_many both fired.
+    assert any(c.method == "delete_for_package" for c in refs_store.calls)
+    assert any(c.method == "save_many" for c in refs_store.calls)
+
+
+@pytest.mark.asyncio
+async def test_find_stale_packages_method_lives_on_service():
+    """I17 — `find_stale_packages` is a method on `IndexingService`,
+    not a module-level free function.
+
+    Empty package store → empty list (no crashes).
+    """
+    factory = make_fake_uow_factory()
+    service = IndexingService(uow_factory=factory)
+
+    stale = await service.find_stale_packages(current_model="fake-model")
+    assert stale == []
+
+
+@pytest.mark.asyncio
+async def test_find_stale_packages_filters_by_model():
+    """I17 — packages tagged with a different model are flagged stale;
+    packages tagged with the current model are not; packages with
+    ``embedding_model=None`` are excluded (legacy / pre-embedding rows).
+    """
+    from dataclasses import replace as dc_replace
+
+    packages_store = InMemoryPackageStore()
+    # Tagged with old model → stale under "current".
+    packages_store.items["a"] = dc_replace(_pkg("a"), embedding_model="old")
+    # Tagged with current model → not stale.
+    packages_store.items["b"] = dc_replace(_pkg("b"), embedding_model="current")
+    # No model tag → never stale.
+    packages_store.items["c"] = _pkg("c")  # embedding_model defaults to None
+
+    factory = make_fake_uow_factory(packages=packages_store)
+    service = IndexingService(uow_factory=factory)
+    stale = await service.find_stale_packages(current_model="current")
+    assert set(stale) == {"a"}
