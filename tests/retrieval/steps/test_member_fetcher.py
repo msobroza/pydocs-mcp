@@ -98,9 +98,13 @@ async def test_member_fetcher_reads_pre_filter_from_scratch(populated_db: Path) 
     state = RetrieverState(
         query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
     )
-    # Simulate PreFilterStep having run upstream.
+    # Simulate PreFilterStep having run upstream. Post-C5 commit 2 the
+    # typed result carries only ``tree`` + ``scope``; the fetcher itself
+    # calls ``ctx.filter_adapter.adapt`` to materialize SQL — so the
+    # tree is what matters here, not a pre-computed SQL fragment.
+    from pydocs_mcp.storage.filters import FieldEq
     state.scratch["pre_filter.result"] = PreFilterResult(
-        tree=None, scope=None, sql="package = ?", params=("demo",),
+        tree=FieldEq(field="package", value="demo"), scope=None,
     )
     out = await step.run(state)
     # The fetcher used the pre-built SQL pushdown, didn't re-parse query.pre_filter.

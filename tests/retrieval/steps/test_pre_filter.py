@@ -71,9 +71,12 @@ async def test_pre_filter_writes_typed_result_when_filter_present() -> None:
     result = out.scratch["pre_filter.result"]
     assert isinstance(result, PreFilterResult)
     assert is_dataclass(result)
-    # SQL pushdown clause is non-empty (LIKE / equality on 'package').
-    assert result.sql
+    # Post-C5 commit 2: PreFilterResult is backend-neutral (tree + scope).
+    # Fetchers translate the tree to SQL themselves via
+    # ``BuildContext.filter_adapter``; the recording-adapter test in
+    # commit 1 pins the adapter is invoked with the right target_field.
     assert result.tree is not None
+    assert result.scope is None
 
 
 async def test_pre_filter_invalid_format_raises() -> None:
@@ -94,15 +97,22 @@ async def test_pre_filter_scope_split_into_typed_field() -> None:
     assert SearchScope.PROJECT_ONLY in result.scope
 
 
-async def test_pre_filter_member_target_uses_member_columns() -> None:
-    """target_field='member' → SQL adapter uses _MEMBER_COLUMNS (no 'c.' prefix)."""
-    out = await _step_member().run(_state(pre_filter={"package": "demo"}))
+async def test_pre_filter_member_target_propagates_to_step_field() -> None:
+    """target_field='member' is preserved on the resulting step.
+
+    Post-C5 commit 2: ``PreFilterResult`` no longer pre-computes SQL.
+    The MemberFetcherStep downstream calls
+    ``ctx.filter_adapter.adapt(tree, target_field='member')`` itself
+    via :meth:`MemberFetcherStep._build_where_clause` — the
+    chunk-vs-member dispatch is owned by each fetcher, not the
+    pre-filter step. This test only pins that ``target_field='member'``
+    survives in the step config and produces a parsable tree.
+    """
+    step = _step_member()
+    assert step.target_field == "member"
+    out = await step.run(_state(pre_filter={"package": "demo"}))
     result = out.scratch["pre_filter.result"]
-    assert result.sql  # non-empty
-    # Chunk SQL has 'c.package'; member SQL has bare 'package'. Both contain
-    # the column name, but only the chunk variant has the 'c.' prefix.
-    assert "c.package" not in result.sql
-    assert "package" in result.sql
+    assert result.tree is not None
 
 
 def test_pre_filter_to_dict_shape() -> None:
@@ -161,14 +171,13 @@ def test_filter_adapter_protocol_runtime_check() -> None:
     assert isinstance(_RecordingAdapter(), FilterAdapter)
 
 
-async def test_pre_filter_calls_adapter_with_target_field(tmp_path: Path) -> None:
-    """``PreFilterStep`` invokes ``ctx.filter_adapter.adapt`` once with the
-    declared ``target_field`` kwarg — the step no longer constructs the
-    adapter from a runtime ``from pydocs_mcp.storage.sqlite import ...``.
+async def test_pre_filter_does_not_call_adapter(tmp_path: Path) -> None:
+    """Post-C5 commit 2: ``PreFilterStep.run`` is backend-neutral.
 
-    Pins the wiring contract: composition root sets
-    ``BuildContext.filter_adapter``; ``PreFilterStep.from_dict`` reads it
-    onto the step; ``run()`` invokes it via the typed Protocol.
+    The adapter is invoked by the downstream fetchers
+    (``ChunkFetcherStep`` / ``MemberFetcherStep``), NOT by the
+    pre-filter step. Pinning this prevents the SQL materialization
+    from drifting back into the step.
     """
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.serialization import BuildContext
@@ -187,9 +196,8 @@ async def test_pre_filter_calls_adapter_with_target_field(tmp_path: Path) -> Non
     )
     state = _state(pre_filter={"package": "demo"})
     await step.run(state)
-    assert len(adapter.calls) == 1
-    _tree, target = adapter.calls[0]
-    assert target == "chunk"
+    # The fetcher will call the adapter; the pre-filter step does not.
+    assert adapter.calls == []
 
 
 async def test_pre_filter_member_target_invokes_adapter_with_member() -> None:
@@ -204,3 +212,16 @@ async def test_pre_filter_member_target_invokes_adapter_with_member() -> None:
     result = out.scratch["pre_filter.result"]
     assert result.tree is not None
     assert result.scope is None
+
+
+def test_pre_filter_result_has_no_sql_field() -> None:
+    """C5 commit 2: ``PreFilterResult`` is backend-neutral (only ``tree`` + ``scope``).
+
+    Fetchers translate the tree to backend-specific query fragments via
+    ``BuildContext.filter_adapter`` at fetch time — the pre-filter step
+    no longer pre-computes a SQL fragment.
+    """
+    field_names = {f.name for f in PreFilterResult.__dataclass_fields__.values()}
+    assert "sql" not in field_names
+    assert "params" not in field_names
+    assert field_names == {"tree", "scope"}

@@ -7,12 +7,15 @@ normalization, no top-K cutoff, no rendering.
 Pre-filter pushdown: when ``state.query.pre_filter`` is set,
 :class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterStep` MUST run
 upstream and write a typed
-:class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterResult` to
-``state.scratch["pre_filter.result"]``. The fetcher consumes the pre-built SQL
-pushdown clause + scope set directly; it does not re-parse the raw
-filter mapping. If the scratch key is missing while the query carries a
-filter, the fetcher raises a clear ``RuntimeError`` pointing at the
-canonical YAML shape.
+:class:`~pydocs_mcp.retrieval.steps.pre_filter.PreFilterResult`
+(``tree`` + ``scope``) to
+``state.scratch["pre_filter.result"]``. The fetcher reads the parsed
+tree, materializes it to the backend's query fragment via
+:class:`pydocs_mcp.storage.protocols.FilterAdapter` (wired through
+:attr:`BuildContext.filter_adapter`), and pushes the resulting WHERE
+clause into the FTS5 JOIN. If the scratch key is missing while the
+query carries a filter, the fetcher raises a clear ``RuntimeError``
+pointing at the canonical YAML shape.
 
 Mirrors the FTS5 SQL in :mod:`pydocs_mcp.storage.sqlite.SqliteVectorStore`
 but deliberately does NOT flip the sign of FTS5's negative rank — that's
@@ -26,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.models import (
     Chunk,
@@ -36,6 +40,9 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+
+if TYPE_CHECKING:
+    from pydocs_mcp.storage.protocols import FilterAdapter
 
 # Deferred storage / filter_helpers imports: a top-level
 # ``from pydocs_mcp.storage.filters import Filter`` (or
@@ -110,6 +117,7 @@ class ChunkFetcherStep(RetrieverStep):
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     limit: int = field(default=_DEFAULT_LIMIT, kw_only=True)
     retriever_name: str = field(default=_DEFAULT_RETRIEVER_NAME, kw_only=True)
+    filter_adapter: "FilterAdapter | None" = field(default=None, kw_only=True)
     name: str = field(default="chunk_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -119,31 +127,35 @@ class ChunkFetcherStep(RetrieverStep):
 
         # Read PreFilterStep's typed result from scratch. PreFilterStep MUST
         # run upstream when query.pre_filter is set — the fetcher does not
-        # re-parse the raw filter mapping. When no filter is set on the
-        # query, no PreFilterStep work needs to have happened; we just use
-        # empty SQL pushdown.
-        from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
+        # re-parse the raw filter mapping. Post-C5 commit 2 the typed
+        # result carries only ``tree`` + ``scope``; the fetcher itself
+        # calls ``ctx.filter_adapter.adapt`` to materialize the
+        # backend-specific WHERE fragment.
+        from pydocs_mcp.retrieval.steps.pre_filter import (
+            PRE_FILTER_SCRATCH_KEY,
+            PreFilterResult,
+        )
 
         filter_sql = ""
-        filter_params: list = []
+        filter_params: tuple = ()
         scope: frozenset[SearchScope] | None = None
 
         if state.query.pre_filter is not None:
-            result = state.scratch.get("pre_filter.result")
+            result = state.scratch.get(PRE_FILTER_SCRATCH_KEY)
             if not isinstance(result, PreFilterResult):
                 raise RuntimeError(
                     "ChunkFetcherStep: state.query.pre_filter is set but "
-                    "state.scratch['pre_filter.result'] is missing. The "
-                    "pipeline must include the 'pre_filter' step before "
+                    f"state.scratch[{PRE_FILTER_SCRATCH_KEY!r}] is missing. "
+                    "The pipeline must include the 'pre_filter' step before "
                     "'chunk_fetcher'. See pipelines/chunk_search.yaml for "
                     "the canonical shape.",
                 )
-            filter_sql = result.sql
-            filter_params = list(result.params)
             scope = result.scope
+            if result.tree is not None:
+                filter_sql, filter_params = self._build_where_clause(result.tree)
 
         rows = await asyncio.to_thread(
-            self._fetch_sync, fulltext, filter_sql, filter_params,
+            self._fetch_sync, fulltext, filter_sql, list(filter_params),
         )
         chunks = tuple(
             _row_to_candidate(row, self.retriever_name) for row in rows
@@ -157,6 +169,27 @@ class ChunkFetcherStep(RetrieverStep):
                 if _matches_scope(c.metadata.get(ChunkFilterField.PACKAGE.value, ""), scope)
             )
         return replace(state, candidates=ChunkList(items=chunks))
+
+    def _build_where_clause(self, tree) -> tuple[str, tuple]:
+        """Materialize a parsed filter tree to (WHERE-fragment, params).
+
+        Calls the :class:`~pydocs_mcp.storage.protocols.FilterAdapter`
+        Protocol — no runtime ``from pydocs_mcp.storage.sqlite import ...``
+        inside the fetcher. The composition root wires
+        :class:`pydocs_mcp.storage.sqlite.SqliteFilterAdapter` into
+        ``BuildContext.filter_adapter``; ``from_dict`` reads it onto
+        the step.
+
+        When the step is constructed directly (bypassing ``from_dict``)
+        the fallback constructs a default ``SqliteFilterAdapter`` so
+        ad-hoc test scaffolding keeps working. Production paths always
+        go through ``from_dict`` so the wired adapter is used.
+        """
+        adapter = self.filter_adapter
+        if adapter is None:
+            from pydocs_mcp.storage.sqlite import SqliteFilterAdapter as _Fallback
+            adapter = _Fallback()
+        return adapter.adapt(tree, target_field="chunk")
 
     def _fetch_sync(
         self, fulltext: str, filter_sql: str, filter_params: list,
@@ -199,6 +232,7 @@ class ChunkFetcherStep(RetrieverStep):
             allowed_fields=allowed,
             limit=data.get("limit", _DEFAULT_LIMIT),
             retriever_name=data.get("retriever_name", _DEFAULT_RETRIEVER_NAME),
+            filter_adapter=context.filter_adapter,
         )
 
     def to_dict(self) -> dict:
