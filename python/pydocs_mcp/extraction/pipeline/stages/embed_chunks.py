@@ -57,12 +57,17 @@ class EmbedChunksStage:
             )
 
     async def run(self, state: IngestionState) -> IngestionState:
-        if not state.chunks:
+        # I7 commit 2 — read chunks from ChunkBundle, fall back to flat.
+        chunks_in = (
+            state.chunks_bundle.chunks if state.chunks_bundle.chunks
+            else state.chunks
+        )
+        if not chunks_in:
             return state
 
         skip = state.existing_chunk_hashes or {}
         chunks_to_embed = tuple(
-            c for c in state.chunks if c.content_hash not in skip
+            c for c in chunks_in if c.content_hash not in skip
         )
 
         # Always stamp the package with embedder identity, even if no chunks
@@ -96,15 +101,20 @@ class EmbedChunksStage:
             strict=True,
         ))
 
-        # Splice embeddings back into state.chunks at the right positions;
+        # Splice embeddings back into chunks at the right positions;
         # skipped chunks (not in embedded_by_hash) come out with their
         # existing embedding (typically None — their vector lives in TQ).
         new_chunks = tuple(
             replace(c, embedding=embedded_by_hash[c.content_hash])
             if c.content_hash in embedded_by_hash else c
-            for c in state.chunks
+            for c in chunks_in
         )
-        return replace(state, chunks=new_chunks, package=new_package)
+        # I7 commit 2 — write to ChunkBundle AND mirror to legacy flat.
+        new_chunks_bundle = replace(state.chunks_bundle, chunks=new_chunks)
+        return replace(
+            state, chunks_bundle=new_chunks_bundle, chunks=new_chunks,
+            package=new_package,
+        )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], context: Any) -> "EmbedChunksStage":

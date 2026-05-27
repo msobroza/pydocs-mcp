@@ -32,7 +32,11 @@ class FileDiscoveryStage:
 
     async def run(self, state: IngestionState) -> IngestionState:
         paths, root = await asyncio.to_thread(self._discover, state)
-        return replace(state, paths=tuple(paths), root=root)
+        # I7 commit 2 — write to the FileBundle. Mirror to the legacy flat
+        # fields too so callers still observing ``state.paths`` /
+        # ``state.root`` keep working until commit 3.
+        new_files = replace(state.files, paths=tuple(paths), root=root)
+        return replace(state, files=new_files, paths=tuple(paths), root=root)
 
     def _discover(self, state: IngestionState) -> tuple[list[str], Path]:
         if state.target_kind is TargetKind.PROJECT:

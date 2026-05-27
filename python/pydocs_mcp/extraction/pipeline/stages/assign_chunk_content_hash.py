@@ -30,7 +30,12 @@ class AssignChunkContentHashStage:
     name: str = "assign_chunk_content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        if not state.chunks or not self.pipeline_hash:
+        # I7 commit 2 — read chunks from ChunkBundle, fall back to flat.
+        chunks_in = (
+            state.chunks_bundle.chunks if state.chunks_bundle.chunks
+            else state.chunks
+        )
+        if not chunks_in or not self.pipeline_hash:
             return state
         new_chunks = tuple(
             replace(
@@ -43,9 +48,11 @@ class AssignChunkContentHashStage:
                     pipeline_hash=self.pipeline_hash,
                 ),
             )
-            for c in state.chunks
+            for c in chunks_in
         )
-        return replace(state, chunks=new_chunks)
+        # Write to both bundle AND legacy flat; commit 3 drops the flat.
+        new_chunks_bundle = replace(state.chunks_bundle, chunks=new_chunks)
+        return replace(state, chunks_bundle=new_chunks_bundle, chunks=new_chunks)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], context: Any) -> "AssignChunkContentHashStage":

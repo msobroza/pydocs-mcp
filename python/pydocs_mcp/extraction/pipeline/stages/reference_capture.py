@@ -30,9 +30,13 @@ import ast
 import asyncio
 import logging
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
-from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
+from pydocs_mcp.extraction.pipeline.ingestion import (
+    IngestionState,
+    ReferenceBundle,
+)
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
@@ -67,11 +71,14 @@ class ReferenceCaptureStage:
     async def run(self, state: IngestionState) -> IngestionState:
         cfg = _get_capture_config()
         if not cfg.enabled:
-            # Short-circuit — capture disabled by YAML. Leave state.references,
-            # state.reference_aliases and state.class_attribute_types at their
-            # defaults (empty tuple / empty dicts).
+            # Short-circuit — capture disabled by YAML. Reset both the new
+            # ReferenceBundle and the legacy flat fields to their
+            # defaults so a re-run from a state with prior captures
+            # doesn't keep stale values.
+            # I7 commit 2 — write to both ReferenceBundle and legacy flat.
             return replace(
                 state,
+                refs=ReferenceBundle(),
                 references=(),
                 reference_aliases={},
                 class_attribute_types={},
@@ -80,9 +87,17 @@ class ReferenceCaptureStage:
         refs, aliases, attr_types = await asyncio.to_thread(
             self._capture_all, state, allowed,
         )
+        refs_tuple = tuple(refs)
+        # I7 commit 2 — write to ReferenceBundle AND mirror to legacy flat.
+        new_refs_bundle = ReferenceBundle(
+            references=refs_tuple,
+            reference_aliases=aliases,
+            class_attribute_types=attr_types,
+        )
         return replace(
             state,
-            references=tuple(refs),
+            refs=new_refs_bundle,
+            references=refs_tuple,
             reference_aliases=aliases,
             class_attribute_types=attr_types,
         )
@@ -102,7 +117,15 @@ class ReferenceCaptureStage:
             capture_self_attribute_types,
         )
         collector = ReferenceCollector()
-        for path, source in state.file_contents:
+        # I7 commit 2 — read file_contents/package_name/root from the
+        # FileBundle when populated, fall back to legacy flat fields.
+        file_contents = (
+            state.files.file_contents if state.files.file_contents
+            else state.file_contents
+        )
+        package_name = state.files.package_name or state.package_name
+        root = state.files.root if state.files.root != Path(".") else state.root
+        for path, source in file_contents:
             if not source:
                 continue
             # Python branch — AST capture for calls/imports/inherits.
@@ -116,7 +139,7 @@ class ReferenceCaptureStage:
                     )
                     continue
                 try:
-                    module_qname = _module_from_path(path, state.root)
+                    module_qname = _module_from_path(path, root)
                     # capture_imports always runs — it populates collector.aliases,
                     # which the resolver consumes regardless of whether IMPORTS
                     # rows survive the kinds filter below. We drop the IMPORTS
@@ -125,7 +148,7 @@ class ReferenceCaptureStage:
                     # and must be preserved (spec §5.3 / Task 3 of sub-PR #5c).
                     capture_imports(
                         tree.body,
-                        from_package=state.package_name,
+                        from_package=package_name,
                         module_qname=module_qname,
                         collector=collector,
                     )
@@ -137,7 +160,7 @@ class ReferenceCaptureStage:
                             ):
                                 capture_calls(
                                     stmt.body,
-                                    from_package=state.package_name,
+                                    from_package=package_name,
                                     from_node_id=f"{module_qname}.{stmt.name}",
                                     collector=collector,
                                 )
@@ -146,7 +169,7 @@ class ReferenceCaptureStage:
                                 if "inherits" in allowed:
                                     capture_inherits(
                                         list(stmt.bases),
-                                        from_package=state.package_name,
+                                        from_package=package_name,
                                         class_qname=class_qname,
                                         collector=collector,
                                     )
@@ -169,7 +192,7 @@ class ReferenceCaptureStage:
                                         ):
                                             capture_calls(
                                                 m.body,
-                                                from_package=state.package_name,
+                                                from_package=package_name,
                                                 from_node_id=f"{class_qname}.{m.name}",
                                                 collector=collector,
                                             )
@@ -182,10 +205,10 @@ class ReferenceCaptureStage:
             # capture, opt-in per spec §5.3).
             if path.endswith(".md") and "mentions" in allowed:
                 try:
-                    from_node_id = _module_from_path(path, state.root)
+                    from_node_id = _module_from_path(path, root)
                     capture_mentions(
                         source,
-                        from_package=state.package_name,
+                        from_package=package_name,
                         from_node_id=from_node_id,
                         collector=collector,
                     )

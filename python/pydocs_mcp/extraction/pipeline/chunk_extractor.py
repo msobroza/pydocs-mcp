@@ -16,6 +16,7 @@ from pathlib import Path
 from pydocs_mcp.application.protocols import ExtractionResult
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.extraction.pipeline.ingestion import (
+    FileBundle,
     IngestionPipeline,
     IngestionState,
     TargetKind,
@@ -36,22 +37,36 @@ class PipelineChunkExtractor:
     async def extract_from_project(
         self, project_dir: Path,
     ) -> ExtractionResult:
+        # I7 commit 2 — populate the FileBundle entry-point fields alongside
+        # the legacy flat ones. Stages downstream may read either side until
+        # commit 3 drops the flat duplicates.
         return self._unwrap(await self.pipeline.run(IngestionState(
             target=project_dir,
             target_kind=TargetKind.PROJECT,
             package_name="__project__",
+            files=FileBundle(
+                target=project_dir,
+                target_kind=TargetKind.PROJECT,
+                package_name="__project__",
+            ),
         )))
 
     async def extract_from_dependency(
         self, dep_name: str,
     ) -> ExtractionResult:
+        # Normalise once here (mirrors PackageBuildStage) so chunks +
+        # trees share the canonical module prefix before the package
+        # metadata is synthesized.
+        pkg_name = normalize_package_name(dep_name)
         return self._unwrap(await self.pipeline.run(IngestionState(
             target=dep_name,
             target_kind=TargetKind.DEPENDENCY,
-            # Normalise once here (mirrors PackageBuildStage) so chunks +
-            # trees share the canonical module prefix before the package
-            # metadata is synthesized.
-            package_name=normalize_package_name(dep_name),
+            package_name=pkg_name,
+            files=FileBundle(
+                target=dep_name,
+                target_kind=TargetKind.DEPENDENCY,
+                package_name=pkg_name,
+            ),
         )))
 
     @staticmethod

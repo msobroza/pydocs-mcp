@@ -20,8 +20,13 @@ class ContentHashStage:
     name: str = "content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        h = await asyncio.to_thread(self._hash, list(state.paths))
-        return replace(state, content_hash=h)
+        # I7 commit 2 — read paths from the FileBundle, fall back to the
+        # legacy flat field for tests that haven't migrated. Write to both
+        # the bundle AND the flat field; commit 3 drops the flat duplicate.
+        paths = state.files.paths if state.files.paths else state.paths
+        h = await asyncio.to_thread(self._hash, list(paths))
+        new_files = replace(state.files, content_hash=h)
+        return replace(state, files=new_files, content_hash=h)
 
     def _hash(self, paths: list[str]) -> str:
         # Deferred so _fast's native/fallback choice is resolved lazily.

@@ -20,8 +20,16 @@ class FileReadStage:
     name: str = "file_read"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        contents = await asyncio.to_thread(self._read, list(state.paths))
-        return replace(state, file_contents=tuple(contents))
+        # I7 commit 2 — read paths from the FileBundle (populated by
+        # ``FileDiscoveryStage``); fall back to the legacy flat field for
+        # tests / callers that haven't migrated. Write the result to both
+        # the bundle AND the legacy flat field — the mirror write is
+        # retained until commit 3 drops the flat field.
+        paths = state.files.paths if state.files.paths else state.paths
+        contents = await asyncio.to_thread(self._read, list(paths))
+        contents_tuple = tuple(contents)
+        new_files = replace(state.files, file_contents=contents_tuple)
+        return replace(state, files=new_files, file_contents=contents_tuple)
 
     def _read(self, paths: list[str]) -> list[tuple[str, str]]:
         # Deferred so _fast's native/fallback choice is resolved lazily.
