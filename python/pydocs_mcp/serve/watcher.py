@@ -42,8 +42,8 @@ def _load_watchdog():
     the no-extras case without touching the actual site-packages tree.
     """
     try:
-        from watchdog.events import FileSystemEventHandler  # noqa: F401
-        from watchdog.observers import Observer  # noqa: F401
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
     except ImportError as exc:
         raise ServiceUnavailableError(_INSTALL_HINT) from exc
     return Observer, FileSystemEventHandler
