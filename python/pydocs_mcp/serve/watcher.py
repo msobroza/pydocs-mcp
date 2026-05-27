@@ -19,6 +19,7 @@ the consumer side sees the event on the right thread.
 """
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import logging
 from collections.abc import Awaitable, Callable
@@ -80,11 +81,15 @@ class FileWatcher:
         """Pure-function event filter — returns True iff the path is
         a candidate for triggering a reindex.
 
-        Returns False for: directory events (no extension match),
-        non-watched extensions, paths matching any `ignore_globs`
-        pattern. Used by the watchdog event handler before queueing.
+        Extensions are compared case-insensitively (path.suffix.lower())
+        so editors that save as `Setup.PY` on case-insensitive filesystems
+        (macOS APFS / Windows NTFS by default) still trigger reindex.
+        Defaults in WatchConfig are lowercase by convention.
+
+        Returns False for: non-watched extensions, paths matching any
+        `ignore_globs` pattern.
         """
-        if path.suffix not in self.extensions:
+        if path.suffix.lower() not in self.extensions:
             return False
         path_str = str(path)
         for pattern in self.ignore_globs:
@@ -95,12 +100,53 @@ class FileWatcher:
     async def run_until_cancelled(
         self, on_change: Callable[[], Awaitable[None]],
     ) -> None:
-        """Start the observer, consume events, fire `on_change` on debounce.
+        """Start the observer, consume filtered events, fire `on_change`.
 
-        Cancelling the parent task (via `asyncio.Task.cancel()` or a
-        propagated `KeyboardInterrupt`) stops the observer and unwinds
-        cleanly. See spec Decisions E + G.
-
-        Stub for now — wired in later tasks.
+        Cancelling the parent task stops the observer and unwinds cleanly.
+        See spec Decisions E + G.
         """
-        raise NotImplementedError("filled in by later TDD task")
+        _, FileSystemEventHandler = _load_watchdog()
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Path] = asyncio.Queue()
+
+        watcher_self = self
+
+        class _Handler(FileSystemEventHandler):
+            def on_any_event(self, event) -> None:  # noqa: ANN001
+                # WHY: `watchdog` calls this from its own native thread.
+                # `loop.call_soon_threadsafe(queue.put_nowait, ...)` is the
+                # documented bridge — never `queue.put_nowait` directly,
+                # which would race the asyncio side.
+                path = Path(event.src_path)
+                if not watcher_self._matches(path):
+                    return
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, path)
+                except RuntimeError:
+                    # Loop closed — observer is being torn down. Drop event.
+                    pass
+
+        observer = self.observer_factory()  # type: ignore[misc]
+        observer.schedule(_Handler(), str(self.root), recursive=True)
+        observer.start()
+        try:
+            await self._consume(queue, on_change)
+        finally:
+            observer.stop()
+            observer.join(timeout=2.0)
+
+    async def _consume(
+        self,
+        queue: asyncio.Queue,
+        on_change: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Consume queued events, fire `on_change` per spec Decision E.
+
+        Filled in over subsequent tasks (debounce + in-flight coalesce);
+        this version just calls `on_change` on every event so the
+        extension / ignore-glob filter can be pinned first.
+        """
+        while True:
+            path = await queue.get()
+            log.info("watch: reindex triggered by %s", path)
+            await on_change()

@@ -6,6 +6,7 @@ thread is involved, so tests stay fast and deterministic.
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -108,3 +109,127 @@ def test_fake_observer_fire_event_has_src_path_attr() -> None:
     obs.fire("/x/a.py")
     assert hasattr(captured[0], "src_path")
     assert captured[0].src_path == "/x/a.py"
+
+
+async def test_watcher_filters_unrelated_events(tmp_path: Path) -> None:
+    """AC-3: `.pyc`, `__pycache__/`, `.git/` events do NOT trigger callback."""
+    from tests._fakes import FakeObserver
+
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py", ".md", ".ipynb"),
+        ignore_globs=(
+            "**/__pycache__/**",
+            "**/.git/**",
+            "**/*.pyc",
+        ),
+        debounce_ms=10,  # short for fast tests
+        observer_factory=lambda: fake,
+    )
+
+    fire_count = 0
+
+    async def _on_change() -> None:
+        nonlocal fire_count
+        fire_count += 1
+
+    task = asyncio.create_task(fw.run_until_cancelled(_on_change))
+    # Give the watcher one tick to start the observer + register the handler.
+    await asyncio.sleep(0.01)
+
+    # These should ALL be filtered out:
+    fake.fire(str(tmp_path / "x.pyc"))                       # bad extension
+    fake.fire(str(tmp_path / "__pycache__" / "x.cpython.pyc"))  # ignore
+    fake.fire(str(tmp_path / ".git" / "HEAD"))                  # ignore
+    fake.fire(str(tmp_path / "x.png"))                          # bad ext
+
+    # Wait past debounce; no callback should fire.
+    await asyncio.sleep(0.05)
+    assert fire_count == 0
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_watcher_fires_on_matching_extension(tmp_path: Path) -> None:
+    """The positive case: a `.py` edit fires exactly one callback."""
+    from tests._fakes import FakeObserver
+
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: fake,
+    )
+
+    fire_count = 0
+
+    async def _on_change() -> None:
+        nonlocal fire_count
+        fire_count += 1
+
+    task = asyncio.create_task(fw.run_until_cancelled(_on_change))
+    await asyncio.sleep(0.01)
+
+    fake.fire(str(tmp_path / "app.py"))
+    await asyncio.sleep(0.05)
+    assert fire_count == 1
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_watcher_matches_extension_case_insensitively(tmp_path: Path) -> None:
+    """Regression test for the case-sensitivity bug flagged by code-quality
+    and gstack reviewers on the FileWatcher skeleton.
+
+    macOS APFS and Windows NTFS are case-insensitive by default but
+    case-preserving — an editor saving as `Setup.PY` would silently miss
+    reindex with case-sensitive `path.suffix in self.extensions`.
+    Fix: `path.suffix.lower() not in self.extensions` (defaults are
+    already lowercase by convention)."""
+    from tests._fakes import FakeObserver
+
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: fake,
+    )
+
+    fire_count = 0
+
+    async def _on_change() -> None:
+        nonlocal fire_count
+        fire_count += 1
+
+    task = asyncio.create_task(fw.run_until_cancelled(_on_change))
+    await asyncio.sleep(0.01)
+
+    fake.fire(str(tmp_path / "Setup.PY"))  # uppercase extension
+    fake.fire(str(tmp_path / "Module.Py"))  # mixed-case extension
+    await asyncio.sleep(0.05)
+    assert fire_count == 2  # both should match
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
