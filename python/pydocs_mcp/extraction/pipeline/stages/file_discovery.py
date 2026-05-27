@@ -1,8 +1,8 @@
-"""FileDiscoveryStage — fills ``state.paths`` + ``state.root``.
+"""FileDiscoveryStage — fills ``state.files.paths`` + ``state.files.root``.
 
 Target-kind branch lives here. Holding BOTH discoverers (project and
-dependency) and picking at runtime on ``state.target_kind`` keeps the
-pipeline one-dimensional — the alternative (two pipelines, one per
+dependency) and picking at runtime on ``state.files.target_kind`` keeps
+the pipeline one-dimensional — the alternative (two pipelines, one per
 kind) would duplicate the shared middle four stages and force callers
 to pick (spec decision #19).
 """
@@ -32,16 +32,13 @@ class FileDiscoveryStage:
 
     async def run(self, state: IngestionState) -> IngestionState:
         paths, root = await asyncio.to_thread(self._discover, state)
-        # I7 commit 2 — write to the FileBundle. Mirror to the legacy flat
-        # fields too so callers still observing ``state.paths`` /
-        # ``state.root`` keep working until commit 3.
         new_files = replace(state.files, paths=tuple(paths), root=root)
-        return replace(state, files=new_files, paths=tuple(paths), root=root)
+        return replace(state, files=new_files)
 
     def _discover(self, state: IngestionState) -> tuple[list[str], Path]:
-        if state.target_kind is TargetKind.PROJECT:
-            return self.project_discoverer.discover(Path(str(state.target)))
-        return self.dep_discoverer.discover(str(state.target))
+        if state.files.target_kind is TargetKind.PROJECT:
+            return self.project_discoverer.discover(Path(str(state.files.target)))
+        return self.dep_discoverer.discover(str(state.files.target))
 
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> "FileDiscoveryStage":

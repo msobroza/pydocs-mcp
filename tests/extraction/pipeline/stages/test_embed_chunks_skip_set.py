@@ -4,7 +4,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
+from pydocs_mcp.extraction.pipeline.ingestion import (
+    ChunkBundle,
+    FileBundle,
+    IngestionState,
+    TargetKind,
+)
 from pydocs_mcp.extraction.pipeline.stages.embed_chunks import EmbedChunksStage
 from pydocs_mcp.models import Chunk, Package, PackageOrigin
 
@@ -37,8 +42,9 @@ class _CountingEmbedder:
 
 def _state(chunks: tuple[Chunk, ...], skip: dict | None) -> IngestionState:
     return IngestionState(
-        target=Path("demo"), target_kind=TargetKind.DEPENDENCY,
-        package=_pkg("demo"), chunks=chunks,
+        files=FileBundle(target=Path("demo"), target_kind=TargetKind.DEPENDENCY),
+        chunks=ChunkBundle(chunks=chunks),
+        package=_pkg("demo"),
         existing_chunk_hashes=skip,
     )
 
@@ -55,7 +61,7 @@ async def test_skip_set_empty_embeds_all_chunks() -> None:
     state = _state(chunks, skip=None)
     out = await stage.run(state)
     assert embedder.call_count == 2
-    assert all(c.embedding is not None for c in out.chunks)
+    assert all(c.embedding is not None for c in out.chunks.chunks)
 
 
 @pytest.mark.asyncio
@@ -72,7 +78,7 @@ async def test_skip_set_all_match_no_embedder_call() -> None:
     out = await stage.run(state)
     assert embedder.call_count == 0
     # Chunks come out with embedding=None (their existing TQ vectors stay valid)
-    assert all(c.embedding is None for c in out.chunks)
+    assert all(c.embedding is None for c in out.chunks.chunks)
 
 
 @pytest.mark.asyncio
@@ -90,8 +96,8 @@ async def test_skip_set_partial_embeds_only_missing() -> None:
     assert embedder.call_count == 1
     assert embedder.last_texts == ["changed"]
     # First chunk: embedding=None (skipped); second: embedded
-    assert out.chunks[0].embedding is None
-    assert out.chunks[1].embedding is not None
+    assert out.chunks.chunks[0].embedding is None
+    assert out.chunks.chunks[1].embedding is not None
 
 
 @pytest.mark.asyncio

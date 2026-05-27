@@ -1,13 +1,14 @@
 """ReferenceCaptureStage — captures cross-node references from ``.py`` files.
 
-Re-parses each ``.py`` file in ``state.file_contents`` (cheap —
+Re-parses each ``.py`` file in ``state.files.file_contents`` (cheap —
 ``ast.parse`` is ~ms per file) and runs ``capture_imports`` /
 ``capture_calls`` / ``capture_inherits`` from
 :mod:`pydocs_mcp.extraction.strategies.references`. Stores the
-unresolved tuple on ``state.references``, the per-module alias table on
-``state.reference_aliases``, and the per-class ``self.X`` attribute-type
-table on ``state.class_attribute_types``. The resolver pass runs later
-inside ``IndexingService.reindex_package`` (where it has access to the
+unresolved tuple on ``state.refs.references``, the per-module alias
+table on ``state.refs.reference_aliases``, and the per-class ``self.X``
+attribute-type table on ``state.refs.class_attribute_types``. The
+resolver pass runs later inside
+``IndexingService.reindex_package`` (where it has access to the
 cross-package qname universe via ``uow.trees``).
 
 Per-file isolation: a ``SyntaxError`` or other ``Exception`` on one
@@ -30,7 +31,6 @@ import ast
 import asyncio
 import logging
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import (
@@ -71,36 +71,20 @@ class ReferenceCaptureStage:
     async def run(self, state: IngestionState) -> IngestionState:
         cfg = _get_capture_config()
         if not cfg.enabled:
-            # Short-circuit — capture disabled by YAML. Reset both the new
-            # ReferenceBundle and the legacy flat fields to their
-            # defaults so a re-run from a state with prior captures
+            # Short-circuit — capture disabled by YAML. Reset the
+            # ReferenceBundle so a re-run from a state with prior captures
             # doesn't keep stale values.
-            # I7 commit 2 — write to both ReferenceBundle and legacy flat.
-            return replace(
-                state,
-                refs=ReferenceBundle(),
-                references=(),
-                reference_aliases={},
-                class_attribute_types={},
-            )
+            return replace(state, refs=ReferenceBundle())
         allowed = set(cfg.kinds)
         refs, aliases, attr_types = await asyncio.to_thread(
             self._capture_all, state, allowed,
         )
-        refs_tuple = tuple(refs)
-        # I7 commit 2 — write to ReferenceBundle AND mirror to legacy flat.
         new_refs_bundle = ReferenceBundle(
-            references=refs_tuple,
+            references=tuple(refs),
             reference_aliases=aliases,
             class_attribute_types=attr_types,
         )
-        return replace(
-            state,
-            refs=new_refs_bundle,
-            references=refs_tuple,
-            reference_aliases=aliases,
-            class_attribute_types=attr_types,
-        )
+        return replace(state, refs=new_refs_bundle)
 
     def _capture_all(
         self, state: IngestionState, allowed: set[str],
@@ -117,14 +101,9 @@ class ReferenceCaptureStage:
             capture_self_attribute_types,
         )
         collector = ReferenceCollector()
-        # I7 commit 2 — read file_contents/package_name/root from the
-        # FileBundle when populated, fall back to legacy flat fields.
-        file_contents = (
-            state.files.file_contents if state.files.file_contents
-            else state.file_contents
-        )
-        package_name = state.files.package_name or state.package_name
-        root = state.files.root if state.files.root != Path(".") else state.root
+        file_contents = state.files.file_contents
+        package_name = state.files.package_name
+        root = state.files.root
         for path, source in file_contents:
             if not source:
                 continue

@@ -7,26 +7,22 @@ and ``PackageBuildStage`` branch on :attr:`IngestionState.target_kind`.
 That keeps ``__main__.py`` / ``ProjectIndexer`` from having two
 near-duplicate write paths (spec §7.1).
 
-The reference-capture stage populates :attr:`IngestionState.references` +
-:attr:`IngestionState.reference_aliases` via
+:class:`IngestionState` is a thin envelope around three value-object
+bundles:
+
+* :class:`FileBundle` — discovery + file-read + content-hash outputs
+  (``target`` / ``target_kind`` / ``package_name`` / ``root`` / ``paths``
+  / ``file_contents`` / ``content_hash``).
+* :class:`ChunkBundle` — chunking + flatten outputs (``trees`` and the
+  flat ``chunks`` tuple).
+* :class:`ReferenceBundle` — reference-capture outputs
+  (``references`` / ``reference_aliases`` / ``class_attribute_types``).
+
+The reference-capture stage populates ``state.refs`` via
 :class:`~pydocs_mcp.extraction.pipeline.stages.ReferenceCaptureStage`,
 which runs after chunking and before flatten. The resolver pass lives
 later inside ``IndexingService.reindex_package`` so it has access to the
 cross-package qname universe via ``uow.trees``.
-
-Cleanup-PR I7 (3-commit transition): :class:`IngestionState` is being
-reshaped from a flat record into three value-object bundles
-(:class:`FileBundle`, :class:`ChunkBundle`, :class:`ReferenceBundle`).
-
-* Commit 1 (this commit) — introduces the three bundle types alongside
-  the existing flat fields. Nothing reads/writes the bundles yet; they
-  exist as default-constructed companions so commit 2 can migrate
-  stages one at a time without breaking the suite.
-* Commit 2 — every :class:`IngestionStage` reads/writes via the bundles
-  and mirrors writes to the flat fields so this commit's external API
-  stays intact through the migration window.
-* Commit 3 — flat fields drop; the bundle field ``chunks_bundle`` is
-  renamed to ``chunks`` (the flat-field name freed in step 3).
 """
 from __future__ import annotations
 
@@ -45,11 +41,10 @@ class TargetKind(StrEnum):
     DEPENDENCY = "dependency"
 
 
-# Cleanup-PR I7 — bundle value objects. Each holds one stage-group's
-# slice of the previously flat :class:`IngestionState`. Shapes mirror
-# the legacy flat fields one-to-one so commit 2's stage-by-stage
-# migration is a pure field-access change rather than a wire-format
-# rewrite.
+# Bundle value objects. Each holds one stage-group's slice of the
+# pipeline state. Splitting :class:`IngestionState` into bundles keeps
+# stage signatures honest about the slice they touch and stops the
+# state from growing into a god object.
 
 @dataclass(frozen=True, slots=True)
 class FileBundle:
@@ -115,59 +110,36 @@ class IngestionState:
     rather than mutating in place — mirrors ``retrieval.PipelineState``
     so the same composition rules apply on the write side.
 
-    ``target`` is either a ``Path`` (project directory) or a ``str``
-    (PyPI distribution name) — the discriminator is :attr:`target_kind`,
-    not Python's ``isinstance`` check, so both arms stay explicit.
+    The state is a thin envelope around three value-object bundles plus
+    two orthogonal scalars:
 
-    **I7 commit 1 of 3:** the three bundle fields (``files`` /
-    ``chunks_bundle`` / ``refs``) default-construct alongside the legacy
-    flat fields. No stage reads them yet; commit 2 migrates stages
-    one-by-one with mirror writes; commit 3 drops the legacy fields and
-    renames ``chunks_bundle`` → ``chunks``.
+    * :attr:`files` — :class:`FileBundle` with discovery + file-read +
+      content-hash outputs (carries ``target`` / ``target_kind`` /
+      ``package_name`` so target-kind branching inside stages reads
+      ``state.files.target_kind``; ``target`` is either a ``Path`` for
+      project mode or a ``str`` distribution name for dependency mode).
+    * :attr:`chunks` — :class:`ChunkBundle` with the per-file trees and
+      the flat chunk list.
+    * :attr:`refs` — :class:`ReferenceBundle` with the captured
+      cross-node references + alias tables.
+
+    Two scalars don't fit any bundle and stay top-level:
+
+    * :attr:`package` — set by :class:`PackageBuildStage`; consumed by
+      :class:`IndexingService.reindex_package`.
+    * :attr:`existing_chunk_hashes` — populated by
+      :class:`LoadExistingChunkHashesStage` and consumed by
+      :class:`EmbedChunksStage` to skip re-embedding chunks whose
+      pipeline-aware content_hash already lives in the DB
+      (spec Decision 5). ``None`` distinguishes "stage didn't run"
+      from ``{}`` ("ran and found nothing already cached").
     """
 
-    target:        Path | str
-    target_kind:   TargetKind
-    package_name:  str                              = ""
-    root:          Path                             = field(default_factory=lambda: Path("."))
-    paths:         tuple[str, ...]                  = ()
-    file_contents: tuple[tuple[str, str], ...]      = ()
-    trees:         tuple["DocumentNode", ...]       = ()
-    chunks:        tuple["Chunk", ...]              = ()
-    content_hash:  str                              = ""
-    package:       "Package | None"                 = None
-    # Sub-PR #5b — populated by :class:`ReferenceCaptureStage`. Kept here
-    # (not in extra_metadata) so it's a typed first-class field; the
-    # resolver pass in :class:`IndexingService.reindex_package` reads
-    # both ``references`` and ``reference_aliases`` together.
-    references:    tuple[Any, ...]                  = ()
-    # Sub-PR #5b — per-module alias table captured alongside references.
-    # Forwarded to the resolver inside ``IndexingService.reindex_package``;
-    # carried as a dict because alias semantics are sparse + per-module and
-    # don't fit a flat tuple.
-    reference_aliases: dict[str, dict[str, str]]    = field(default_factory=dict)
-    # Sub-PR #5d — per-class ``self.X`` attribute types captured from
-    # ``__init__`` bodies. Same shape as ``reference_aliases`` but keyed
-    # by class qname instead of module qname; consumed by the resolver's
-    # Rule 0 to rewrite ``self.X.Y`` → ``<type>.Y`` before Rule 5.
-    class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
-    # Hash → SQLite-id map of chunks already persisted for ``package``.
-    # Populated by :class:`LoadExistingChunkHashesStage` from
-    # ``uow.chunks.list_id_hash_pairs`` and consumed by
-    # :class:`EmbedChunksStage` to skip embedding chunks whose
-    # pipeline-aware content_hash already lives in the DB (spec Decision 5).
-    # ``None`` means "stage didn't run / no factory" — distinct from ``{}``
-    # which means "ran and found nothing already cached".
+    files:         FileBundle
+    chunks:        ChunkBundle                   = field(default_factory=ChunkBundle)
+    refs:          ReferenceBundle               = field(default_factory=ReferenceBundle)
+    package:       "Package | None"              = None
     existing_chunk_hashes: dict[str, int] | None = None
-
-    # I7 commit 1 of 3 — new bundle fields, default-constructed. Stages
-    # still read/write the legacy flat fields above; commit 2 migrates
-    # them. The bundle named ``chunks_bundle`` collides with the legacy
-    # flat field ``chunks`` only by intent — commit 3 drops the flat one
-    # and renames this bundle to its final name.
-    files:         FileBundle                       = field(default_factory=FileBundle)
-    chunks_bundle: ChunkBundle                      = field(default_factory=ChunkBundle)
-    refs:          ReferenceBundle                  = field(default_factory=ReferenceBundle)
 
 
 @runtime_checkable
@@ -187,8 +159,8 @@ class IngestionPipeline:
 
     No routing built in — branching on ``target_kind`` happens INSIDE
     individual stages (e.g. ``FileDiscoveryStage`` calls the project or
-    dependency discoverer based on ``state.target_kind``). Keeps the
-    pipeline type one-dimensional: just a linear chain of stages.
+    dependency discoverer based on ``state.files.target_kind``). Keeps
+    the pipeline type one-dimensional: just a linear chain of stages.
     """
 
     stages: tuple[IngestionStage, ...]

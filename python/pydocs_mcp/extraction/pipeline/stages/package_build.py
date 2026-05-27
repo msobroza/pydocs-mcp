@@ -1,4 +1,4 @@
-"""PackageBuildStage — fills ``state.package``; branches on ``target_kind``.
+"""PackageBuildStage — fills ``state.package``; branches on ``state.files.target_kind``.
 
 PROJECT path produces the canonical ``Package(name="__project__", ...)``
 consumed by :class:`ProjectIndexer`. DEPENDENCY path walks
@@ -30,28 +30,19 @@ class PackageBuildStage:
         return replace(state, package=pkg)
 
     def _build(self, state: IngestionState) -> Package:
-        # I7 commit 2 — target_kind is a required positional field on the
-        # state itself, so the flat reading is also the authoritative
-        # source. The bundle field has a default that can't be trusted
-        # without an entry-point that always populates it; commit 3 makes
-        # the bundle the sole source.
-        if state.target_kind is TargetKind.PROJECT:
+        if state.files.target_kind is TargetKind.PROJECT:
             return self._project_package(state)
         return self._dep_package(state)
 
     def _project_package(self, state: IngestionState) -> Package:
-        # I7 commit 2 — read content_hash from FileBundle when populated,
-        # fall back to flat. target stays read from the flat field
-        # (required + always populated by the entry-point).
-        target = Path(str(state.target))
-        content_hash = state.files.content_hash or state.content_hash
+        target = Path(str(state.files.target))
         return Package(
             name="__project__",
             version="local",
             summary=f"Project: {target.name}",
             homepage="",
             dependencies=(),
-            content_hash=content_hash,
+            content_hash=state.files.content_hash,
             origin=PackageOrigin.PROJECT,
         )
 
@@ -62,9 +53,7 @@ class PackageBuildStage:
         from pydocs_mcp.extraction.strategies._dep_helpers import (
             find_installed_distribution,
         )
-        dep_name = str(state.target)
-        # I7 commit 2 — read content_hash from FileBundle when populated.
-        content_hash = state.files.content_hash or state.content_hash
+        dep_name = str(state.files.target)
         dist = find_installed_distribution(dep_name)
         if dist is None:
             raise LookupError(f"dependency {dep_name!r} is not installed")
@@ -82,7 +71,7 @@ class PackageBuildStage:
             summary=summary,
             homepage=homepage,
             dependencies=deps,
-            content_hash=content_hash,
+            content_hash=state.files.content_hash,
             origin=PackageOrigin.DEPENDENCY,
         )
 

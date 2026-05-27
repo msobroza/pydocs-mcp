@@ -1,9 +1,10 @@
 """AssignChunkContentHashStage — rewrite chunk content_hash with pipeline-aware version.
 
-Slotted after chunking + flatten (state.chunks populated with pipeline-blind
-auto-hashes) and before LoadExistingChunkHashesStage (which needs the
-pipeline-aware hash to match SQLite). Reads pipeline_hash from BuildContext
-at from_dict time and uses it to rewrite each chunk's content_hash.
+Slotted after chunking + flatten (state.chunks.chunks populated with
+pipeline-blind auto-hashes) and before LoadExistingChunkHashesStage
+(which needs the pipeline-aware hash to match SQLite). Reads
+pipeline_hash from BuildContext at from_dict time and uses it to rewrite
+each chunk's content_hash.
 
 Per spec Decision 4: pipeline_hash captures embedder identity + raw bytes
 of ingestion.yaml. Any embedder swap or YAML edit invalidates every chunk's
@@ -30,12 +31,7 @@ class AssignChunkContentHashStage:
     name: str = "assign_chunk_content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        # I7 commit 2 — read chunks from ChunkBundle, fall back to flat.
-        chunks_in = (
-            state.chunks_bundle.chunks if state.chunks_bundle.chunks
-            else state.chunks
-        )
-        if not chunks_in or not self.pipeline_hash:
+        if not state.chunks.chunks or not self.pipeline_hash:
             return state
         new_chunks = tuple(
             replace(
@@ -48,11 +44,10 @@ class AssignChunkContentHashStage:
                     pipeline_hash=self.pipeline_hash,
                 ),
             )
-            for c in chunks_in
+            for c in state.chunks.chunks
         )
-        # Write to both bundle AND legacy flat; commit 3 drops the flat.
-        new_chunks_bundle = replace(state.chunks_bundle, chunks=new_chunks)
-        return replace(state, chunks_bundle=new_chunks_bundle, chunks=new_chunks)
+        new_chunks_bundle = replace(state.chunks, chunks=new_chunks)
+        return replace(state, chunks=new_chunks_bundle)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], context: Any) -> "AssignChunkContentHashStage":

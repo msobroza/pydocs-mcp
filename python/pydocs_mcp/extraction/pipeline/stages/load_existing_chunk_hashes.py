@@ -34,12 +34,11 @@ class LoadExistingChunkHashesStage:
         # No chunks → nothing for the downstream embed gate to skip;
         # no factory → test path with no composition root;
         # no package → nothing to scope the query to.
-        # I7 commit 2 — read chunks from ChunkBundle, fall back to flat.
-        chunks_in = (
-            state.chunks_bundle.chunks if state.chunks_bundle.chunks
-            else state.chunks
-        )
-        if not chunks_in or self.uow_factory is None or state.package is None:
+        if (
+            not state.chunks.chunks
+            or self.uow_factory is None
+            or state.package is None
+        ):
             return state
         async with self.uow_factory() as uow:
             pairs = await uow.chunks.list_id_hash_pairs(

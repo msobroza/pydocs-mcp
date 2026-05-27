@@ -1,4 +1,4 @@
-"""ReferenceCaptureStage runs over Python files, populates state.references."""
+"""ReferenceCaptureStage runs over Python files, populates state.refs."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,34 +6,45 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.extraction.pipeline.stages import reference_capture as stages_mod
-from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
+from pydocs_mcp.extraction.pipeline.ingestion import (
+    FileBundle,
+    IngestionState,
+    TargetKind,
+)
 from pydocs_mcp.extraction.pipeline.stages import ReferenceCaptureStage
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
 
 
-@pytest.mark.asyncio
-async def test_capture_stage_emits_refs_for_python_files():
-    """The stage walks state.file_contents (.py only) and fills
-    state.references with unresolved tuples."""
-    stage = ReferenceCaptureStage()
-    state = IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        package_name="pkg",
-        root=Path("."),
-        file_contents=(
-            (
-                "pkg/mod.py",
-                "from helpers import compute as do_it\n"
-                "def runner():\n"
-                "    return do_it(42)\n",
-            ),
+def _state(file_contents: tuple[tuple[str, str], ...]) -> IngestionState:
+    """Helper — build an IngestionState with a populated FileBundle."""
+    return IngestionState(
+        files=FileBundle(
+            target=Path("."),
+            target_kind=TargetKind.PROJECT,
+            package_name="pkg",
+            root=Path("."),
+            file_contents=file_contents,
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_capture_stage_emits_refs_for_python_files():
+    """The stage walks state.files.file_contents (.py only) and fills
+    state.refs.references with unresolved tuples."""
+    stage = ReferenceCaptureStage()
+    state = _state((
+        (
+            "pkg/mod.py",
+            "from helpers import compute as do_it\n"
+            "def runner():\n"
+            "    return do_it(42)\n",
+        ),
+    ))
     new_state = await stage.run(state)
     # Expect at least one IMPORTS edge (from-import) + one CALLS edge.
-    kinds = {r.kind for r in new_state.references}
+    kinds = {r.kind for r in new_state.refs.references}
     assert ReferenceKind.IMPORTS in kinds
     assert ReferenceKind.CALLS in kinds
 
@@ -42,40 +53,28 @@ async def test_capture_stage_emits_refs_for_python_files():
 async def test_capture_stage_skips_non_python_files():
     """Markdown / notebook files don't go through the Python capture path."""
     stage = ReferenceCaptureStage()
-    state = IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        package_name="pkg",
-        root=Path("."),
-        file_contents=(
-            ("README.md", "# A doc\nWith `pkg.func` text\n"),
-            ("nb.ipynb", "{}"),
-        ),
-    )
+    state = _state((
+        ("README.md", "# A doc\nWith `pkg.func` text\n"),
+        ("nb.ipynb", "{}"),
+    ))
     new_state = await stage.run(state)
-    assert new_state.references == ()
+    assert new_state.refs.references == ()
 
 
 @pytest.mark.asyncio
 async def test_capture_stage_continues_on_per_file_error():
     """Spec §7.1 + AC #27 — one broken file does not abort the whole stage."""
     stage = ReferenceCaptureStage()
-    state = IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        package_name="pkg",
-        root=Path("."),
-        file_contents=(
-            ("pkg/bad.py", "def broken( syntax error\n"),
-            (
-                "pkg/good.py",
-                "def fn(): return helper()\n",
-            ),
+    state = _state((
+        ("pkg/bad.py", "def broken( syntax error\n"),
+        (
+            "pkg/good.py",
+            "def fn(): return helper()\n",
         ),
-    )
+    ))
     new_state = await stage.run(state)
     # The good file's CALLS edge survives despite the broken sibling.
-    assert any(r.to_name == "helper" for r in new_state.references)
+    assert any(r.to_name == "helper" for r in new_state.refs.references)
 
 
 @pytest.mark.asyncio
@@ -91,23 +90,17 @@ async def test_capture_stage_no_ops_when_capture_disabled(monkeypatch):
         ReferenceCaptureConfig(enabled=False),
     )
     stage = ReferenceCaptureStage()
-    state = IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        package_name="pkg",
-        root=Path("."),
-        file_contents=(
-            (
-                "pkg/mod.py",
-                "from helpers import compute as do_it\n"
-                "def runner():\n"
-                "    return do_it(42)\n",
-            ),
+    state = _state((
+        (
+            "pkg/mod.py",
+            "from helpers import compute as do_it\n"
+            "def runner():\n"
+            "    return do_it(42)\n",
         ),
-    )
+    ))
     new_state = await stage.run(state)
-    assert new_state.references == ()
-    assert new_state.reference_aliases == {}
+    assert new_state.refs.references == ()
+    assert new_state.refs.reference_aliases == {}
 
 
 @pytest.mark.asyncio
@@ -127,30 +120,24 @@ async def test_capture_stage_kinds_filter_drops_imports_but_keeps_aliases(
         ReferenceCaptureConfig(enabled=True, kinds=["calls"]),
     )
     stage = ReferenceCaptureStage()
-    state = IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        package_name="pkg",
-        root=Path("."),
-        file_contents=(
-            (
-                "pkg/mod.py",
-                "from helpers import compute as do_it\n"
-                "class Base: pass\n"
-                "class Child(Base):\n"
-                "    def fn(self):\n"
-                "        return do_it(42)\n",
-            ),
+    state = _state((
+        (
+            "pkg/mod.py",
+            "from helpers import compute as do_it\n"
+            "class Base: pass\n"
+            "class Child(Base):\n"
+            "    def fn(self):\n"
+            "        return do_it(42)\n",
         ),
-    )
+    ))
     new_state = await stage.run(state)
-    kinds = {r.kind for r in new_state.references}
+    kinds = {r.kind for r in new_state.refs.references}
     # IMPORTS and INHERITS rows filtered out; CALLS kept.
     assert ReferenceKind.IMPORTS not in kinds
     assert ReferenceKind.INHERITS not in kinds
     assert ReferenceKind.CALLS in kinds
     # The alias table survives the filter — resolver needs it later.
-    assert new_state.reference_aliases.get("pkg.mod", {}).get("do_it") == (
+    assert new_state.refs.reference_aliases.get("pkg.mod", {}).get("do_it") == (
         "helpers.compute"
     )
 
@@ -189,23 +176,17 @@ async def test_capture_stage_emits_mentions_for_markdown_when_kinds_include_ment
         ),
     )
     stage = ReferenceCaptureStage()
-    state = IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        package_name="pkg",
-        root=Path("."),
-        file_contents=(
-            (
-                "pkg/README.md",
-                "# Docs\n"
-                "See `pkg.helpers.compute` for the entry point.\n"
-                "Also mentions `pkg.utils.runner`.\n",
-            ),
+    state = _state((
+        (
+            "pkg/README.md",
+            "# Docs\n"
+            "See `pkg.helpers.compute` for the entry point.\n"
+            "Also mentions `pkg.utils.runner`.\n",
         ),
-    )
+    ))
     new_state = await stage.run(state)
     mentions = [
-        r for r in new_state.references if r.kind == ReferenceKind.MENTIONS
+        r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS
     ]
     names = {r.to_name for r in mentions}
     assert {"pkg.helpers.compute", "pkg.utils.runner"} <= names
@@ -224,20 +205,14 @@ async def test_capture_stage_skips_mentions_when_not_in_kinds(monkeypatch):
         ),
     )
     stage = ReferenceCaptureStage()
-    state = IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        package_name="pkg",
-        root=Path("."),
-        file_contents=(
-            (
-                "pkg/README.md",
-                "See `pkg.helpers.compute` and `pkg.utils.runner`.\n",
-            ),
+    state = _state((
+        (
+            "pkg/README.md",
+            "See `pkg.helpers.compute` and `pkg.utils.runner`.\n",
         ),
-    )
+    ))
     new_state = await stage.run(state)
     mentions = [
-        r for r in new_state.references if r.kind == ReferenceKind.MENTIONS
+        r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS
     ]
     assert mentions == []

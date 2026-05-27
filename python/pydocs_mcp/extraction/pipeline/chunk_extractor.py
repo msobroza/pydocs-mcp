@@ -37,13 +37,7 @@ class PipelineChunkExtractor:
     async def extract_from_project(
         self, project_dir: Path,
     ) -> ExtractionResult:
-        # I7 commit 2 — populate the FileBundle entry-point fields alongside
-        # the legacy flat ones. Stages downstream may read either side until
-        # commit 3 drops the flat duplicates.
         return self._unwrap(await self.pipeline.run(IngestionState(
-            target=project_dir,
-            target_kind=TargetKind.PROJECT,
-            package_name="__project__",
             files=FileBundle(
                 target=project_dir,
                 target_kind=TargetKind.PROJECT,
@@ -59,9 +53,6 @@ class PipelineChunkExtractor:
         # metadata is synthesized.
         pkg_name = normalize_package_name(dep_name)
         return self._unwrap(await self.pipeline.run(IngestionState(
-            target=dep_name,
-            target_kind=TargetKind.DEPENDENCY,
-            package_name=pkg_name,
             files=FileBundle(
                 target=dep_name,
                 target_kind=TargetKind.DEPENDENCY,
@@ -77,12 +68,12 @@ class PipelineChunkExtractor:
                 "(missing package_build stage?)",
             )
         return ExtractionResult(
-            chunks=state.chunks,
-            trees=state.trees,
+            chunks=state.chunks.chunks,
+            trees=state.chunks.trees,
             package=state.package,
-            references=state.references,
-            reference_aliases=state.reference_aliases,
-            class_attribute_types=state.class_attribute_types,
+            references=state.refs.references,
+            reference_aliases=state.refs.reference_aliases,
+            class_attribute_types=state.refs.class_attribute_types,
         )
 
 

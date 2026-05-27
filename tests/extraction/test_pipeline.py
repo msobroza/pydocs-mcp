@@ -12,6 +12,11 @@ from pydocs_mcp.extraction.pipeline import (
     IngestionState,
     TargetKind,
 )
+from pydocs_mcp.extraction.pipeline.ingestion import (
+    ChunkBundle,
+    FileBundle,
+    ReferenceBundle,
+)
 
 
 def test_target_kind_values():
@@ -25,42 +30,61 @@ def test_target_kind_values():
 
 def test_ingestion_state_frozen_rejects_mutation():
     """Frozen dataclass → attribute assignment must raise."""
-    state = IngestionState(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT)
+    state = IngestionState(
+        files=FileBundle(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT),
+    )
     with pytest.raises(FrozenInstanceError):
-        state.paths = ("other.py",)  # type: ignore[misc]
+        state.files = FileBundle()  # type: ignore[misc]
 
 
 def test_ingestion_state_slots_blocks_extra_attrs():
     """slots=True → assigning an unknown attribute must raise AttributeError."""
-    state = IngestionState(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT)
+    state = IngestionState(
+        files=FileBundle(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT),
+    )
     with pytest.raises(AttributeError):
         object.__setattr__(state, "bogus_attr", 123)
 
 
 def test_ingestion_state_defaults():
-    """Bare-minimum construction leaves everything at sensible empty defaults."""
-    state = IngestionState(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT)
-    assert state.package_name == ""
-    assert state.root == Path(".")
-    assert state.paths == ()
-    assert state.file_contents == ()
-    assert state.trees == ()
-    assert state.chunks == ()
-    assert state.content_hash == ""
+    """Bare-minimum construction leaves the bundles at their empty defaults."""
+    state = IngestionState(
+        files=FileBundle(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT),
+    )
+    # Files bundle carries the entry-point fields.
+    assert state.files.target == Path("/tmp/x")
+    assert state.files.target_kind is TargetKind.PROJECT
+    assert state.files.package_name == ""
+    assert state.files.root == Path(".")
+    assert state.files.paths == ()
+    assert state.files.file_contents == ()
+    assert state.files.content_hash == ""
+    # Chunks + refs default-construct.
+    assert isinstance(state.chunks, ChunkBundle)
+    assert state.chunks.trees == ()
+    assert state.chunks.chunks == ()
+    assert isinstance(state.refs, ReferenceBundle)
+    assert state.refs.references == ()
+    # Orthogonal scalars.
     assert state.package is None
+    assert state.existing_chunk_hashes is None
 
 
 def test_ingestion_state_references_defaults_to_empty_tuple():
-    """Sub-PR #5b seam — ``references`` is reserved but empty in #5."""
-    state = IngestionState(target="requests", target_kind=TargetKind.DEPENDENCY)
-    assert state.references == ()
-    assert isinstance(state.references, tuple)
+    """Sub-PR #5b seam — refs.references is reserved but empty by default."""
+    state = IngestionState(
+        files=FileBundle(target="requests", target_kind=TargetKind.DEPENDENCY),
+    )
+    assert state.refs.references == ()
+    assert isinstance(state.refs.references, tuple)
 
 
 async def test_empty_pipeline_returns_input_unchanged():
     """Identity pipeline — no stages → state passes through untouched."""
     pipeline = IngestionPipeline(stages=())
-    initial = IngestionState(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT)
+    initial = IngestionState(
+        files=FileBundle(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT),
+    )
     out = await pipeline.run(initial)
     assert out is initial
 
@@ -73,15 +97,20 @@ async def test_pipeline_threads_state_forward_through_stages():
             self._added = added
 
         async def run(self, state: IngestionState) -> IngestionState:
-            return replace(state, paths=state.paths + (self._added,))
+            new_files = replace(
+                state.files, paths=state.files.paths + (self._added,),
+            )
+            return replace(state, files=new_files)
 
     s1 = AppendPathStage("a.py")
     s2 = AppendPathStage("b.py")
     pipeline = IngestionPipeline(stages=(s1, s2))
 
-    initial = IngestionState(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT)
+    initial = IngestionState(
+        files=FileBundle(target=Path("/tmp/x"), target_kind=TargetKind.PROJECT),
+    )
     out = await pipeline.run(initial)
-    assert out.paths == ("a.py", "b.py")
+    assert out.files.paths == ("a.py", "b.py")
 
 
 def test_ingestion_stage_protocol_is_runtime_checkable():
@@ -106,9 +135,11 @@ def test_ingestion_stage_protocol_rejects_non_conforming():
 
 def test_ingestion_state_accepts_dependency_string_target():
     """target_kind=DEPENDENCY pairs with a str target (PyPI distribution name)."""
-    state = IngestionState(target="requests", target_kind=TargetKind.DEPENDENCY)
-    assert state.target == "requests"
-    assert state.target_kind is TargetKind.DEPENDENCY
+    state = IngestionState(
+        files=FileBundle(target="requests", target_kind=TargetKind.DEPENDENCY),
+    )
+    assert state.files.target == "requests"
+    assert state.files.target_kind is TargetKind.DEPENDENCY
 
 
 def test_ingestion_pipeline_is_frozen():

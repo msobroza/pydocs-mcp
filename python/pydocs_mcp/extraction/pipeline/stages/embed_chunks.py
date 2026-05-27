@@ -1,4 +1,4 @@
-"""EmbedChunksStage — batch-embed ``state.chunks`` during ingestion (AC-23).
+"""EmbedChunksStage — batch-embed ``state.chunks.chunks`` during ingestion (AC-23).
 
 Slots between :class:`FlattenStage` and :class:`ContentHashStage` in the
 shipped ``pipelines/ingestion.yaml`` (wired by Task 24): once flatten has
@@ -34,12 +34,12 @@ _DEFAULT_BATCH_SIZE = 32
 @stage_registry.register("embed_chunks")
 @dataclass(frozen=True, slots=True)
 class EmbedChunksStage:
-    """Compute embeddings for every chunk in ``state.chunks``.
+    """Compute embeddings for every chunk in ``state.chunks.chunks``.
 
     Calls :meth:`Embedder.embed_chunks` once per ``batch_size``-sized slice
-    of ``state.chunks`` and returns a new :class:`IngestionState` whose
-    ``chunks`` tuple carries the freshly computed vectors. The order of
-    chunks is preserved.
+    of ``state.chunks.chunks`` and returns a new :class:`IngestionState`
+    whose chunks bundle carries the freshly computed vectors. The order
+    of chunks is preserved.
     """
 
     embedder: Embedder
@@ -57,17 +57,12 @@ class EmbedChunksStage:
             )
 
     async def run(self, state: IngestionState) -> IngestionState:
-        # I7 commit 2 — read chunks from ChunkBundle, fall back to flat.
-        chunks_in = (
-            state.chunks_bundle.chunks if state.chunks_bundle.chunks
-            else state.chunks
-        )
-        if not chunks_in:
+        if not state.chunks.chunks:
             return state
 
         skip = state.existing_chunk_hashes or {}
         chunks_to_embed = tuple(
-            c for c in chunks_in if c.content_hash not in skip
+            c for c in state.chunks.chunks if c.content_hash not in skip
         )
 
         # Always stamp the package with embedder identity, even if no chunks
@@ -107,14 +102,10 @@ class EmbedChunksStage:
         new_chunks = tuple(
             replace(c, embedding=embedded_by_hash[c.content_hash])
             if c.content_hash in embedded_by_hash else c
-            for c in chunks_in
+            for c in state.chunks.chunks
         )
-        # I7 commit 2 — write to ChunkBundle AND mirror to legacy flat.
-        new_chunks_bundle = replace(state.chunks_bundle, chunks=new_chunks)
-        return replace(
-            state, chunks_bundle=new_chunks_bundle, chunks=new_chunks,
-            package=new_package,
-        )
+        new_chunks_bundle = replace(state.chunks, chunks=new_chunks)
+        return replace(state, chunks=new_chunks_bundle, package=new_package)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], context: Any) -> "EmbedChunksStage":

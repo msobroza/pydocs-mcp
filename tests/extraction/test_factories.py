@@ -31,6 +31,10 @@ from pydocs_mcp.extraction.pipeline import (
     IngestionState,
     TargetKind,
 )
+from pydocs_mcp.extraction.pipeline.ingestion import (
+    ChunkBundle,
+    FileBundle,
+)
 from pydocs_mcp.extraction.pipeline.stages import (
     AssignChunkContentHashStage,
     ChunkingStage,
@@ -170,14 +174,10 @@ class _FakePipeline:
     canned_state: IngestionState
 
     async def run(self, state: IngestionState) -> IngestionState:
-        # Preserve the caller's target / kind / package_name so tests can
-        # assert on dispatching behaviour, but layer the canned outputs on top.
-        return replace(
-            self.canned_state,
-            target=state.target,
-            target_kind=state.target_kind,
-            package_name=state.package_name,
-        )
+        # Preserve the caller's FileBundle (target / target_kind / package_name)
+        # so tests can assert on dispatching behaviour, but layer the canned
+        # outputs on top.
+        return replace(self.canned_state, files=state.files)
 
 
 def _fake_package(name: str = "__project__") -> Package:
@@ -192,8 +192,9 @@ async def test_pipeline_chunk_extractor_extract_from_project(tmp_path: Path) -> 
     """PROJECT target_kind is wired through and package is unwrapped."""
     pkg = _fake_package("__project__")
     fake = _FakePipeline(canned_state=IngestionState(
-        target=tmp_path, target_kind=TargetKind.PROJECT,
-        chunks=(), trees=(), package=pkg,
+        files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
+        chunks=ChunkBundle(),
+        package=pkg,
     ))
     extractor = PipelineChunkExtractor(pipeline=fake)  # type: ignore[arg-type]
     result = await extractor.extract_from_project(tmp_path)
@@ -218,10 +219,10 @@ async def test_pipeline_chunk_extractor_extract_from_dependency() -> None:
     extractor = PipelineChunkExtractor(pipeline=_CaptureFake())  # type: ignore[arg-type]
     result = await extractor.extract_from_dependency("My-Dep")
     assert result.package is pkg
-    assert captured["in"].target == "My-Dep"
-    assert captured["in"].target_kind is TargetKind.DEPENDENCY
+    assert captured["in"].files.target == "My-Dep"
+    assert captured["in"].files.target_kind is TargetKind.DEPENDENCY
     # ``normalize_package_name`` lowercases + swaps '-' for '_'.
-    assert captured["in"].package_name == "my_dep"
+    assert captured["in"].files.package_name == "my_dep"
 
 
 @pytest.mark.asyncio
@@ -229,7 +230,8 @@ async def test_pipeline_chunk_extractor_raises_if_package_missing(tmp_path: Path
     """A pipeline that forgets ``package_build`` leaves ``state.package=None``
     — the extractor must fail loud rather than return a malformed tuple."""
     fake = _FakePipeline(canned_state=IngestionState(
-        target=tmp_path, target_kind=TargetKind.PROJECT, package=None,
+        files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
+        package=None,
     ))
     extractor = PipelineChunkExtractor(pipeline=fake)  # type: ignore[arg-type]
     with pytest.raises(RuntimeError, match="did not populate state.package"):

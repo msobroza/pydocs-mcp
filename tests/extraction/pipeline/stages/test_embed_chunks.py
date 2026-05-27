@@ -6,7 +6,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
+from pydocs_mcp.extraction.pipeline.ingestion import (
+    ChunkBundle,
+    FileBundle,
+    IngestionState,
+    TargetKind,
+)
 from pydocs_mcp.extraction.pipeline.stages.embed_chunks import EmbedChunksStage
 from pydocs_mcp.models import Chunk, Package, PackageOrigin
 from tests._fakes import MockEmbedder
@@ -17,17 +22,15 @@ def _state(
     *,
     package: Package | None = None,
 ) -> IngestionState:
-    """IngestionState requires target + target_kind — supply minimal stubs.
+    """IngestionState wraps a FileBundle + ChunkBundle — supply minimal stubs.
 
-    The stage under test only reads/writes ``state.chunks`` and
-    ``state.package``; the other fields are inert here and provide just
-    enough shape to satisfy ``IngestionState``'s required positional
-    fields.
+    The stage under test only reads ``state.chunks.chunks`` and
+    ``state.package``; the FileBundle is inert here and provides just
+    enough shape to satisfy the dataclass.
     """
     return IngestionState(
-        target=Path("."),
-        target_kind=TargetKind.PROJECT,
-        chunks=chunks,
+        files=FileBundle(target=Path("."), target_kind=TargetKind.PROJECT),
+        chunks=ChunkBundle(chunks=chunks),
         package=package,
     )
 
@@ -44,12 +47,12 @@ async def test_embed_chunks_populates_every_chunk_embedding() -> None:
     )
     stage = EmbedChunksStage(embedder=embedder, batch_size=2)
     out = await stage.run(state)
-    assert len(out.chunks) == 3
-    for c in out.chunks:
+    assert len(out.chunks.chunks) == 3
+    for c in out.chunks.chunks:
         assert isinstance(c.embedding, np.ndarray)
         assert c.embedding.shape == (4,)
     expected_alpha = await embedder.embed_query("alpha")
-    assert np.array_equal(out.chunks[0].embedding, expected_alpha)
+    assert np.array_equal(out.chunks.chunks[0].embedding, expected_alpha)
 
 
 @pytest.mark.asyncio
@@ -58,7 +61,7 @@ async def test_embed_chunks_empty_state_no_op() -> None:
     state = _state(chunks=())
     stage = EmbedChunksStage(embedder=embedder, batch_size=2)
     out = await stage.run(state)
-    assert out.chunks == ()
+    assert out.chunks.chunks == ()
 
 
 @pytest.mark.asyncio
@@ -73,10 +76,10 @@ async def test_embed_chunks_preserves_chunk_fields_other_than_embedding() -> Non
     )
     stage = EmbedChunksStage(embedder=embedder)
     out = await stage.run(state)
-    assert out.chunks[0].text == "hello"
-    assert out.chunks[0].id == 42
-    assert out.chunks[0].metadata["package"] == "x"
-    assert isinstance(out.chunks[0].embedding, np.ndarray)
+    assert out.chunks.chunks[0].text == "hello"
+    assert out.chunks.chunks[0].id == 42
+    assert out.chunks.chunks[0].metadata["package"] == "x"
+    assert isinstance(out.chunks.chunks[0].embedding, np.ndarray)
 
 
 @pytest.mark.asyncio
@@ -109,8 +112,8 @@ async def test_embed_chunks_batches_inputs() -> None:
     assert embedder.calls[0] == ("c0", "c1")
     assert embedder.calls[1] == ("c2", "c3")
     assert embedder.calls[2] == ("c4",)
-    assert len(out.chunks) == 5
-    for c in out.chunks:
+    assert len(out.chunks.chunks) == 5
+    for c in out.chunks.chunks:
         assert isinstance(c.embedding, np.ndarray)
 
 
