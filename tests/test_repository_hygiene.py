@@ -328,3 +328,105 @@ def test_ci_uses_uv_sync_frozen() -> None:
             f"(found in line: {stripped!r}); "
             f"use `uv sync --frozen` (lockfile-pinned) instead"
         )
+
+
+def test_null_handler_attached_at_package_root() -> None:
+    """P2-3: pydocs-mcp installs a NullHandler at the package logger so
+    library consumers who haven't configured logging don't see
+    "No handlers could be found" warnings on first log call.
+
+    See PEP 282 / Python Logging HOWTO ("Configuring Logging for a Library").
+    """
+    import logging
+
+    import pydocs_mcp  # import triggers the NullHandler attach in __init__.py
+
+    # Touch the module so static analysers can't strip the import.
+    assert pydocs_mcp.__name__ == "pydocs_mcp"
+
+    package_logger = logging.getLogger("pydocs_mcp")
+    has_null_handler = any(isinstance(h, logging.NullHandler) for h in package_logger.handlers)
+    assert has_null_handler, (
+        f"pydocs_mcp.__init__ must attach a logging.NullHandler at the "
+        f"package logger; got handlers={package_logger.handlers}"
+    )
+
+
+def test_contributing_md_present() -> None:
+    """P2-4: CONTRIBUTING.md guides external contributors."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    cm = root / "CONTRIBUTING.md"
+    assert cm.is_file(), "CONTRIBUTING.md required at repo root (P2-4)"
+    text = cm.read_text(encoding="utf-8")
+    # Must reference the actual Makefile targets contributors will use.
+    assert "make install" in text
+    assert "make test" in text
+    # Cross-link to the security policy.
+    assert "SECURITY.md" in text
+
+
+def test_security_md_present() -> None:
+    """P2-4: SECURITY.md publishes the vulnerability-reporting flow.
+
+    GitHub renders this into a "Report a vulnerability" tab on the
+    repository page when properly named.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sm = root / "SECURITY.md"
+    assert sm.is_file(), "SECURITY.md required at repo root (P2-4)"
+    text = sm.read_text(encoding="utf-8")
+    # Point at GitHub private vulnerability reporting.
+    assert "security/advisories" in text
+    # SLA commitments.
+    assert "72 hours" in text or "72h" in text or "72-hour" in text
+
+
+def test_release_yml_syncs_version_from_tag() -> None:
+    """P2-5: release.yml extracts the version from the pushed tag and
+    sed-updates both Cargo.toml and pyproject.toml before each build
+    job. Single-source-of-truth = the git tag at release time.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    release_yml = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    # Sync step must be conditional on a v-prefixed tag push.
+    assert "refs/tags/v" in release_yml, (
+        "release.yml must guard the version-sync step on a v-prefixed tag"
+    )
+    # And update BOTH version files.
+    assert "Cargo.toml" in release_yml and "sed" in release_yml
+    assert "pyproject.toml" in release_yml
+    # Across all 4 build jobs (linux + macos + windows + sdist). The plan's
+    # survey found 4 build jobs; if a future PR adds another, the count
+    # should grow — this assertion catches regressions either way.
+    occurrences = release_yml.count("Sync version from tag")
+    assert occurrences >= 4, (
+        f"expected the sync step in every build job (>= 4 occurrences); got {occurrences}"
+    )
+
+
+def test_pip_audit_job_present_in_ci() -> None:
+    """P2-2: ci.yml has a `security` job that runs pip-audit against
+    the uv.lock-derived dependency tree, so a vulnerable transitive
+    can't ship to PyPI undetected.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ci_yml = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    # The security job is present (named `security:` at job level).
+    assert "\n  security:\n" in ci_yml, (
+        "ci.yml must declare a `security:` job (P2-2). "
+        "Add `security:` as a sibling to `python:` / `rust:`."
+    )
+    # Runs pip-audit (any invocation form is fine: pip-audit, uvx pip-audit, etc.).
+    assert "pip-audit" in ci_yml, "ci.yml security job must run pip-audit"
+    # In strict mode — advisories on indirect/transitive deps fail too.
+    assert "--strict" in ci_yml, "pip-audit must run in --strict mode so transitive CVEs fail CI"

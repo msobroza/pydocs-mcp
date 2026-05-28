@@ -195,3 +195,27 @@ jobs:
           source .venv/bin/activate
           maturin develop --release
           python -m pytest tests/test_parity.py -v
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      # WHY: two-step `uv export` -> `uvx pip-audit` avoids bash process
+      # substitution so the job would Windows-port cleanly if we ever
+      # cross-OS it. `--no-emit-project` keeps the auditor focused on
+      # third-party advisories (the project itself isn't published on PyPI
+      # during CI — it would be self-referential).
+      - name: Export locked deps
+        run: uv export --frozen --no-emit-project --format requirements-txt > requirements-audit.txt
+
+      # WHY: --strict makes the only passing outcome "no advisories found";
+      # advisories on transitive deps also fail. If pip-audit reports a CVE,
+      # the fix is either a dep bump or `--ignore-vuln <GHSA-...>` with an
+      # inline WHY explaining why the advisory doesn't materially affect us.
+      - name: pip-audit
+        run: uvx pip-audit --strict --requirement requirements-audit.txt
