@@ -12,7 +12,7 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 5  # v5 adds ``packages.embedding_model`` TEXT on top of v4
+SCHEMA_VERSION = 6  # v6 adds ``chunk_multi_vector_ids`` (late-interaction id-mapping)
 
 _DDL = """
     CREATE TABLE packages (
@@ -52,6 +52,13 @@ _DDL = """
         kind           TEXT NOT NULL,
         PRIMARY KEY (from_package, from_node_id, to_name, kind)
     );
+    CREATE TABLE chunk_multi_vector_ids (
+        chunk_id      INTEGER PRIMARY KEY,
+        plaid_doc_id  INTEGER NOT NULL UNIQUE,
+        package       TEXT    NOT NULL,
+        pipeline_hash TEXT    NOT NULL,
+        FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+    );
     CREATE INDEX ix_chunks_package         ON chunks(package);
     CREATE INDEX ix_chunks_module          ON chunks(module);
     CREATE INDEX ix_module_members_package ON module_members(package);
@@ -60,6 +67,8 @@ _DDL = """
     CREATE INDEX ix_refs_from              ON node_references(from_package, from_node_id);
     CREATE INDEX ix_refs_to_name           ON node_references(to_name);
     CREATE INDEX ix_refs_to_node           ON node_references(to_node_id);
+    CREATE INDEX idx_cmv_plaid_doc_id      ON chunk_multi_vector_ids(plaid_doc_id);
+    CREATE INDEX idx_cmv_package           ON chunk_multi_vector_ids(package);
 """
 
 # Tables we know about — dropped on a version mismatch so earlier schemas
@@ -72,6 +81,7 @@ _KNOWN_TABLES = (
     "symbols",
     "document_trees",
     "node_references",
+    "chunk_multi_vector_ids",  # new in v6
 )
 
 
@@ -177,14 +187,44 @@ def _apply_v5_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "packages", "embedding_model TEXT")
 
 
+def _apply_v6_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply every additive change that makes up the v6 shape.
+
+    Adds ``chunk_multi_vector_ids`` (id-mapping between ``chunks.id`` and
+    fast-plaid's auto-assigned ``plaid_doc_id``) plus its two indices. The
+    table starts empty — rows are populated by the late-interaction indexing
+    pipeline on next index. Mirrors the v3/v4 pattern: ``CREATE TABLE IF NOT
+    EXISTS`` + ``CREATE INDEX IF NOT EXISTS`` keeps the sweep safe to re-run
+    as a v6-on-open drift-recovery pass.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chunk_multi_vector_ids ("
+        "chunk_id INTEGER PRIMARY KEY, "
+        "plaid_doc_id INTEGER NOT NULL UNIQUE, "
+        "package TEXT NOT NULL, "
+        "pipeline_hash TEXT NOT NULL, "
+        "FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cmv_plaid_doc_id "
+        "ON chunk_multi_vector_ids(plaid_doc_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cmv_package "
+        "ON chunk_multi_vector_ids(package)"
+    )
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
-    - v5 already: re-run v3+v4+v5 sweeps (additive, idempotent; drift recovery).
-    - v4 → v5: additive forward migration (ALTER TABLE packages ADD COLUMN
-      embedding_model); rows in all existing tables survive.
-    - v3 → v4 → v5: walk all forward migrations in order.
-    - v2 → v3 → v4 → v5: walk all forward migrations in order.
+    - v6 already: re-run v3+v4+v5+v6 sweeps (additive, idempotent; drift recovery).
+    - v5 → v6: wipe-and-recreate. v6 adds the ``chunk_multi_vector_ids`` id-mapping
+      table whose rows are derived from re-indexing; no data to preserve in the
+      mapping itself, and wiping forces a fresh fast-plaid index build.
+    - v4 → v5 → v6: additive (ALTER + new tables); rows in existing tables survive.
+    - v3 → v4 → v5 → v6: walk all forward migrations in order.
+    - v2 → v3 → v4 → v5 → v6: walk all forward migrations in order.
     - Any other mismatch: drop every known table and recreate from current DDL.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,32 +235,35 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v5 — re-run additive sweeps for drift recovery.
+        # v6 — re-run additive sweeps for drift recovery.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
+        _apply_v6_additions(conn)
     elif current == 4:
-        # v4 → v5 — additive. Rerun the v3/v4 idempotent sweeps first to
+        # v4 → v5 → v6 — additive. Rerun the v3/v4 idempotent sweeps first to
         # repair any drift in legacy v4-stamped DBs before stamping forward.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
+        _apply_v6_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 3:
-        # v3 → v4 → v5 — additive. We also re-run the v3 sweep first because some
-        # legacy v3-stamped DBs (rebase artefacts between sub-PR #5 and #6)
-        # lack ``document_trees`` / ``content_hash`` / ``local_path`` despite
-        # the stamp; rerunning the idempotent v3 sweep repairs that drift
-        # before stamping forward.
+        # v3 → v4 → v5 → v6 — additive. We also re-run the v3 sweep first because
+        # some legacy v3-stamped DBs lack ``document_trees`` / ``content_hash`` /
+        # ``local_path`` despite the stamp; rerunning the idempotent v3 sweep
+        # repairs that drift before stamping forward.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
+        _apply_v6_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 2:
-        # v2 → v3 → v4 → v5 — walk every forward migration in order.
+        # v2 → v3 → v4 → v5 → v6 — walk every forward migration in order.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
+        _apply_v6_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     else:
         _drop_all_known_tables(conn)
