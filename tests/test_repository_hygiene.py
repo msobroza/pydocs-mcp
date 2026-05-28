@@ -82,3 +82,36 @@ def test_pyproject_includes_py_typed_in_maturin() -> None:
     assert any("py.typed" in entry for entry in include), (
         f"tool.maturin.include must list py.typed; got {include}"
     )
+
+
+def test_public_api_all_declared() -> None:
+    """P1-6: __init__.py declares __all__ + the public exception hierarchy."""
+    import pydocs_mcp
+
+    assert hasattr(pydocs_mcp, "__all__"), "__init__.py must declare __all__"
+    assert hasattr(pydocs_mcp, "__version__")
+
+    # Public exception hierarchy — these are what embedders catch.
+    assert hasattr(pydocs_mcp, "PydocsMCPError")
+    assert hasattr(pydocs_mcp, "MCPToolError")
+    assert hasattr(pydocs_mcp, "InvalidArgumentError")
+    assert hasattr(pydocs_mcp, "NotFoundError")
+    assert hasattr(pydocs_mcp, "ServiceUnavailableError")
+
+
+def test_all_entries_are_importable() -> None:
+    """Every name in __all__ must resolve. Prevents __all__ from
+    silently listing typos / removed symbols."""
+    import pydocs_mcp
+
+    for name in pydocs_mcp.__all__:
+        assert hasattr(pydocs_mcp, name), (
+            f"__all__ lists {name!r} but pydocs_mcp has no such attribute"
+        )
+
+
+def test_all_entries_unique() -> None:
+    """No duplicate names in __all__."""
+    import pydocs_mcp
+
+    assert len(pydocs_mcp.__all__) == len(set(pydocs_mcp.__all__))
