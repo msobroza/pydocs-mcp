@@ -1,4 +1,5 @@
 """AC-8: shipped defaults include the new ``serve.watch.*`` keys."""
+
 from __future__ import annotations
 
 import importlib.resources
@@ -21,9 +22,7 @@ def _clean_config_env(monkeypatch, tmp_path):
 
 
 def _shipped_yaml() -> dict:
-    p = Path(str(importlib.resources.files("pydocs_mcp.defaults").joinpath(
-        "default_config.yaml"
-    )))
+    p = Path(str(importlib.resources.files("pydocs_mcp.defaults").joinpath("default_config.yaml")))
     return yaml.safe_load(p.read_text(encoding="utf-8"))
 
 
@@ -50,12 +49,7 @@ def test_app_config_load_picks_up_yaml_overrides(tmp_path: Path) -> None:
     type promised by ``WatchConfig`` regardless of whether YAML wrote a list).
     """
     overlay = tmp_path / "pydocs-mcp.yaml"
-    overlay.write_text(
-        "serve:\n"
-        "  watch:\n"
-        "    enabled: true\n"
-        "    debounce_ms: 1234\n"
-    )
+    overlay.write_text("serve:\n  watch:\n    enabled: true\n    debounce_ms: 1234\n")
     cfg = AppConfig.load(explicit_path=overlay)
     assert cfg.serve.watch.enabled is True
     assert cfg.serve.watch.debounce_ms == 1234

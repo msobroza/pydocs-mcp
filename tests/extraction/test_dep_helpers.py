@@ -9,6 +9,7 @@ Pins:
 - ``_extract_by_import`` is re-exported (smoke): callable, and uses the
   deferred ``pydocs_mcp.indexer`` imports without blowing up at module load.
 """
+
 from __future__ import annotations
 
 import importlib.metadata
@@ -20,6 +21,7 @@ from pydocs_mcp.extraction.strategies import _dep_helpers
 
 
 # ── find_installed_distribution ───────────────────────────────────────────
+
 
 def test_find_installed_distribution_known_pkg_returns_dist() -> None:
     """pytest is in dev deps — must be resolvable."""
@@ -42,13 +44,11 @@ def test_find_installed_distribution_handles_hyphen_underscore_normalisation() -
 
 
 def test_find_installed_distribution_unknown_returns_none() -> None:
-    assert (
-        _dep_helpers.find_installed_distribution("nonexistent-xyz-pkg-2026")
-        is None
-    )
+    assert _dep_helpers.find_installed_distribution("nonexistent-xyz-pkg-2026") is None
 
 
 # ── find_site_packages_root ───────────────────────────────────────────────
+
 
 def test_find_site_packages_root_walks_up_to_site_packages(tmp_path: Path) -> None:
     fake_sp = tmp_path / "site-packages"
@@ -93,6 +93,7 @@ def test_find_site_packages_root_uses_pytest_for_smoke() -> None:
 
 # ── _extract_by_import smoke ──────────────────────────────────────────────
 
+
 def test_extract_by_import_is_callable() -> None:
     """_extract_by_import is exported and callable. Smoke-only — deeper
     behavior is exercised by InspectMemberExtractor tests."""
@@ -100,6 +101,7 @@ def test_extract_by_import_is_callable() -> None:
 
 
 # ── re-export surface ─────────────────────────────────────────────────────
+
 
 def test_module_surface_matches_all() -> None:
     """Guards against accidental renames of the public helpers."""

@@ -1,4 +1,5 @@
 """Package.embedding_model dataclass field (Task 7 + AC-11)."""
+
 from pydocs_mcp.models import Package, PackageOrigin
 
 

@@ -1,6 +1,7 @@
 """Pin ast_equivalent: tolerant to whitespace + comments, strict on body,
 never raises on malformed input (gold-matching path must not bring down a
 whole eval run because one chunk had a stray paren)."""
+
 from __future__ import annotations
 
 from benchmarks.eval.ast_match import ast_equivalent

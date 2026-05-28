@@ -15,6 +15,7 @@ A controlled failure is triggered by pointing ``--cache-dir`` at a
 non-existent directory; the run is expected to fail with a non-zero exit
 code, and the assertions then check what stderr looks like.
 """
+
 from __future__ import annotations
 
 import os
@@ -48,29 +49,31 @@ def _run_cli(*argv: str) -> subprocess.CompletedProcess[str]:
 def test_cli_verbose_shows_traceback(tmp_path: Path) -> None:
     # Trigger a controlled failure by pointing at a nonexistent cache dir.
     result = _run_cli(
-        "search", "x",
-        "--cache-dir", str(tmp_path / "nonexistent"),
+        "search",
+        "x",
+        "--cache-dir",
+        str(tmp_path / "nonexistent"),
         "-v",
     )
     # CQ-2: assert the trigger condition explicitly. A bare ``if rc != 0``
     # silently passes if the CLI ever stops failing on the trigger, hiding
     # any regression in the stderr-content contract this test pins.
     assert result.returncode != 0, (
-        f"expected nonzero exit; got stdout={result.stdout!r} "
-        f"stderr={result.stderr!r}"
+        f"expected nonzero exit; got stdout={result.stdout!r} stderr={result.stderr!r}"
     )
     assert "Traceback" in result.stderr
 
 
 def test_cli_no_verbose_omits_traceback(tmp_path: Path) -> None:
     result = _run_cli(
-        "search", "x",
-        "--cache-dir", str(tmp_path / "nonexistent"),
+        "search",
+        "x",
+        "--cache-dir",
+        str(tmp_path / "nonexistent"),
     )
     # CQ-2: see test_cli_verbose_shows_traceback for the rationale.
     assert result.returncode != 0, (
-        f"expected nonzero exit; got stdout={result.stdout!r} "
-        f"stderr={result.stderr!r}"
+        f"expected nonzero exit; got stdout={result.stdout!r} stderr={result.stderr!r}"
     )
     assert "Traceback" not in result.stderr
     assert "re-run with --verbose" in result.stderr

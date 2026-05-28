@@ -12,6 +12,7 @@ Pins the module-path trie assembly rules:
   ``sorted()`` order so callers get a stable arborescence regardless of
   dict iteration order.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.model import (
@@ -151,6 +152,7 @@ def test_children_are_tuple_immutable() -> None:
     assert isinstance(root2.children, tuple)
     assert isinstance(root2.children[0].children, tuple)
 
+
 def test_project_root_admits_modules_without_project_prefix() -> None:
     """F6: project chunkers produce qualified_names like 'myapp.utils'
     (NO '__project__.' prefix because __project__ is a virtual sentinel,
@@ -158,8 +160,8 @@ def test_project_root_admits_modules_without_project_prefix() -> None:
     dropped every module on the floor because none startswith
     '__project__.'. The virtual-root path admits any first segment."""
     trees = {
-        "myapp":          _module("myapp"),
-        "myapp.utils":    _module("myapp.utils"),
+        "myapp": _module("myapp"),
+        "myapp.utils": _module("myapp.utils"),
         "tests.test_foo": _module("tests.test_foo"),
     }
     root = build_package_tree("__project__", trees)
@@ -183,4 +185,3 @@ def test_project_root_with_single_module_emits_module_leaf() -> None:
     [child] = root.children
     assert child.kind is NodeKind.MODULE
     assert child.qualified_name == "loner"
-

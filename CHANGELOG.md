@@ -24,14 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ruff `target-version` bumped to `py311` (matches `requires-python`).
 - Ruff `select` expanded with `B`, `UP`, `S`, `SIM`, `RUF`, `C901`, `PT`, `PTH`.
 
-### Known issues
-- Six extraction / IO tests are skipped on Windows pending POSIX-vs-Windows
-  path-separator handling work. Tracked as a follow-up; the release wheel
-  build matrix is unaffected — only the CI test job for Windows surfaces
-  the skips. The affected tests live under
-  `tests/extraction/pipeline/test_stages_use_bundles.py`,
-  `tests/extraction/test_members.py`, `tests/extraction/test_stages.py`,
-  and `tests/retrieval/test_config.py`.
+### Fixed
+- Cross-platform path-separator / encoding / newline handling in six
+  extraction / IO tests so they execute on Windows as well as POSIX hosts.
+  Assertions now compare via `Path.as_posix()` (test fixtures previously
+  embedded forward slashes in `str(Path)` comparisons), test fixtures
+  pin UTF-8 explicitly when writing test files with non-ASCII content
+  (`write_text(..., encoding="utf-8")`) and use `write_bytes` to avoid
+  Windows CRLF translation on the file-read round-trip.
 
 ## [0.2.0]
 

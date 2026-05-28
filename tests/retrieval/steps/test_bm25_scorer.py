@@ -1,4 +1,5 @@
 """BM25ScorerStep tests — normalizes FTS5 rank into positive relevance scores."""
+
 from __future__ import annotations
 
 from pydocs_mcp.models import (
@@ -59,9 +60,9 @@ async def test_scorer_skips_member_candidates() -> None:
     """LIKE-based member candidates have no BM25 rank to flip → pass through."""
     state = RetrieverState(
         query=SearchQuery(terms="x", max_results=10),
-        candidates=ModuleMemberList(items=(
-            ModuleMember(metadata={"name": "f", "kind": "function"}, relevance=None),
-        )),
+        candidates=ModuleMemberList(
+            items=(ModuleMember(metadata={"name": "f", "kind": "function"}, relevance=None),)
+        ),
     )
     out = await BM25ScorerStep(name="score").run(state)
     assert isinstance(out.candidates, ModuleMemberList)

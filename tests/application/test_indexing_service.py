@@ -11,6 +11,7 @@ opens a UoW per call and writes through it. ``begin()`` is gone
 everywhere; the legacy two-shape construction (5 stores OR a UoW) is
 collapsed to one.
 """
+
 from __future__ import annotations
 
 from dataclasses import fields
@@ -153,6 +154,7 @@ async def test_reindex_package_rolls_back_on_exception():
     we hook the bomb on ``insert`` so the failure lands inside the
     transaction body the same way as before.
     """
+
     # Build a chunk store that explodes on insert. We swap it into the
     # shared store set, so the factory returns UoWs wired to the bomb.
     class _BoomChunkStore(InMemoryChunkStore):
@@ -239,8 +241,7 @@ async def test_remove_package_deletes_through_uow():
 
     # Trees store: delete_for_package fires unconditionally.
     assert any(
-        c.method == "delete_for_package" and c.payload == "fastapi"
-        for c in trees_store.calls
+        c.method == "delete_for_package" and c.payload == "fastapi" for c in trees_store.calls
     )
 
     # Only fastapi rows removed; cross-package isolation holds.
@@ -413,11 +414,15 @@ async def test_reindex_package_accepts_references_placeholder():
     factory = make_fake_uow_factory()
     service = IndexingService(uow_factory=factory)
     await service.reindex_package(
-        _pkg("fastapi"), (), (),
+        _pkg("fastapi"),
+        (),
+        (),
         references=(
             NodeReference(
-                from_package="fastapi", from_node_id="fastapi.mod.fn",
-                to_name="some_target", to_node_id=None,
+                from_package="fastapi",
+                from_node_id="fastapi.mod.fn",
+                to_name="some_target",
+                to_node_id=None,
                 kind=ReferenceKind.CALLS,
             ),
         ),
@@ -487,13 +492,18 @@ async def test_reindex_package_writes_references_via_uow():
     pkg = _pkg("pkg")
     raw_refs = (
         NodeReference(
-            from_package="pkg", from_node_id="pkg.mod.fn",
-            to_name="helper", to_node_id=None,
+            from_package="pkg",
+            from_node_id="pkg.mod.fn",
+            to_name="helper",
+            to_node_id=None,
             kind=ReferenceKind.CALLS,
         ),
     )
     await service.reindex_package(
-        pkg, chunks=(), module_members=(), trees=(),
+        pkg,
+        chunks=(),
+        module_members=(),
+        trees=(),
         references=raw_refs,
     )
     # save_many was called with the resolved tuple. Even though no trees
@@ -517,18 +527,21 @@ async def test_reindex_package_runs_resolver_when_aliases_provided():
     tree = DocumentNode(
         node_id="pkg.helpers.compute",
         qualified_name="pkg.helpers.compute",
-        title="compute", kind=NodeKind.FUNCTION,
-        source_path="pkg/helpers.py", start_line=1, end_line=2,
-        text="def compute(): ...", content_hash="h",
+        title="compute",
+        kind=NodeKind.FUNCTION,
+        source_path="pkg/helpers.py",
+        start_line=1,
+        end_line=2,
+        text="def compute(): ...",
+        content_hash="h",
     )
     trees_store = InMemoryDocumentTreeStore()
     trees_store.by_package["pkg"] = [tree]
+
     # Also expose via load_all_in_package — the resolver loads from there.
     async def load_all_in_package(package, *, _store=trees_store):
-        return {
-            n.qualified_name: n
-            for n in _store.by_package.get(package, [])
-        }
+        return {n.qualified_name: n for n in _store.by_package.get(package, [])}
+
     trees_store.load_all_in_package = load_all_in_package  # type: ignore
 
     refs_store = InMemoryReferenceStore()
@@ -537,16 +550,22 @@ async def test_reindex_package_runs_resolver_when_aliases_provided():
 
     raw_refs = (
         NodeReference(
-            from_package="pkg", from_node_id="pkg.utils.runner",
-            to_name="do_it", to_node_id=None,
+            from_package="pkg",
+            from_node_id="pkg.utils.runner",
+            to_name="do_it",
+            to_node_id=None,
             kind=ReferenceKind.CALLS,
         ),
     )
     aliases = {"pkg.utils": {"do_it": "pkg.helpers.compute"}}
 
     await service.reindex_package(
-        _pkg("pkg"), chunks=(), module_members=(), trees=(),
-        references=raw_refs, reference_aliases=aliases,
+        _pkg("pkg"),
+        chunks=(),
+        module_members=(),
+        trees=(),
+        references=raw_refs,
+        reference_aliases=aliases,
     )
 
     # save_many got the resolved ref — to_node_id is filled in.
@@ -565,7 +584,10 @@ async def test_reindex_package_writes_zero_refs_when_disabled():
     factory = make_fake_uow_factory(references=refs_store)
     service = IndexingService(uow_factory=factory)
     await service.reindex_package(
-        _pkg("pkg"), chunks=(), module_members=(), trees=(),
+        _pkg("pkg"),
+        chunks=(),
+        module_members=(),
+        trees=(),
         references=(),
     )
     # No save_many call recorded (the service skips when refs is empty).
@@ -581,10 +603,7 @@ async def test_remove_package_clears_references():
     factory = make_fake_uow_factory(references=refs_store)
     service = IndexingService(uow_factory=factory)
     await service.remove_package("pkg")
-    assert any(
-        c.method == "delete_for_package" and c.payload == "pkg"
-        for c in refs_store.calls
-    )
+    assert any(c.method == "delete_for_package" and c.payload == "pkg" for c in refs_store.calls)
 
 
 @pytest.mark.asyncio
@@ -622,7 +641,9 @@ async def test_diff_merge_chunks_empty_store_inserts_all():
 
     async with factory() as uow:
         removed_ids, added_chunks = await service._diff_merge_chunks(
-            uow, package_name="fastapi", incoming_chunks=incoming,
+            uow,
+            package_name="fastapi",
+            incoming_chunks=incoming,
         )
 
     assert removed_ids == []
@@ -654,7 +675,9 @@ async def test_diff_merge_chunks_removes_stale_and_keeps_unchanged():
 
     async with factory() as uow:
         removed_ids, added_chunks = await service._diff_merge_chunks(
-            uow, package_name="fastapi", incoming_chunks=incoming,
+            uow,
+            package_name="fastapi",
+            incoming_chunks=incoming,
         )
 
     # One stale id (the "drop" row).
@@ -683,10 +706,7 @@ async def test_persist_references_empty_skips_save_many():
         )
 
     # delete_for_package fired; save_many did NOT.
-    assert any(
-        c.method == "delete_for_package" and c.payload == "pkg"
-        for c in refs_store.calls
-    )
+    assert any(c.method == "delete_for_package" and c.payload == "pkg" for c in refs_store.calls)
     assert not any(c.method == "save_many" for c in refs_store.calls)
 
 
@@ -703,8 +723,10 @@ async def test_persist_references_non_empty_writes_resolved_refs():
 
     raw_refs = (
         NodeReference(
-            from_package="pkg", from_node_id="pkg.mod.fn",
-            to_name="helper", to_node_id=None,
+            from_package="pkg",
+            from_node_id="pkg.mod.fn",
+            to_name="helper",
+            to_node_id=None,
             kind=ReferenceKind.CALLS,
         ),
     )

@@ -1,4 +1,5 @@
 """Pin re-exports from pydocs_mcp.storage (sub-PR #5a follow-up)."""
+
 from __future__ import annotations
 
 

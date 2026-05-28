@@ -14,6 +14,7 @@ The library-filter half drives ``Ds1000Dataset`` directly (the same object
 ``index()``) + a FAKE 1-task dataset, both registered ad-hoc so the global
 registries stay clean — mirrors ``test_runner_smoke.py``'s fakes.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,7 +51,8 @@ async def test_library_filter_reduces_task_count_and_retains_only_pandas() -> No
     assert len(all_tasks) == 8  # fixture sanity check
 
     filtered = Ds1000Dataset(
-        fixture_path=_FIXTURE, library_filter=("pandas",),
+        fixture_path=_FIXTURE,
+        library_filter=("pandas",),
     )
     pandas_tasks = [t async for t in filtered.tasks()]
     assert len(pandas_tasks) == 3
@@ -65,7 +67,9 @@ async def test_library_filter_via_registry_build_kwarg() -> None:
     confirm the kwarg lands on ``library_filter``.
     """
     dataset = dataset_registry.build(
-        "ds1000", fixture_path=_FIXTURE, library_filter=("numpy",),
+        "ds1000",
+        fixture_path=_FIXTURE,
+        library_filter=("numpy",),
     )
     tasks = [t async for t in dataset.tasks()]
     assert len(tasks) == 2
@@ -121,8 +125,10 @@ def test_corpus_dir_missing_dir_fast_fails(tmp_path: Path) -> None:
     bad_dir = tmp_path / "does-not-exist"
     argv = [
         "prog",
-        "--configs", "x.yaml",
-        "--corpus-dir", str(bad_dir),
+        "--configs",
+        "x.yaml",
+        "--corpus-dir",
+        str(bad_dir),
     ]
     orig_argv = sys.argv
     sys.argv = argv
@@ -152,7 +158,9 @@ class _CorpusRecordingSystem:
         self.received_dirs.append(corpus_dir)
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return (RetrievedItem(rank=1, text="x", source_path="s"),)
 

@@ -3,11 +3,13 @@
 These tests are skipped if the Rust extension is not compiled.
 Run with: maturin develop --release && pytest tests/test_parity.py -v
 """
+
 import os
 import pytest
 
 try:
     from pydocs_mcp import _native as rust
+
     RUST_AVAILABLE = True
 except ImportError:
     RUST_AVAILABLE = False

@@ -18,6 +18,7 @@ exercise the SAME loader (``Ds1000Dataset(fixture_path=...)``) the real
 runs use, so any drift between this fixture's shape and the loader's
 expectations fails here.
 """
+
 from __future__ import annotations
 
 from collections import Counter

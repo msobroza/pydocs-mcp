@@ -6,6 +6,7 @@ Pins that the SQLite adapters and the retrieval-side
 a method or an adapter loses one — much earlier than the integration
 tests would.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.db import open_index_database

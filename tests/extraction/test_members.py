@@ -15,10 +15,10 @@ Spec §9.1 ``AstMemberExtractor.extract_from_project(project_dir)`` is the
 entrypoint. Signature matches sub-PR #4's ``MemberExtractor`` Protocol —
 ``tuple[ModuleMember, ...]`` return.
 """
+
 from __future__ import annotations
 
 import asyncio
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,14 +56,15 @@ def _private():
 
 @pytest.fixture
 def simple_project(tmp_path: Path) -> Path:
-    (tmp_path / "mod.py").write_text(_SIMPLE_MODULE)
+    # ``encoding="utf-8"`` is explicit — Python on Windows defaults to
+    # cp1252, which mangles the em-dash (U+2014) above into byte 0x97.
+    # Rust's ``read_files_parallel`` strictly requires UTF-8 and silently
+    # returns "" on decode failure, so the symbol walk would otherwise
+    # see an empty module and yield zero members on Windows.
+    (tmp_path / "mod.py").write_text(_SIMPLE_MODULE, encoding="utf-8")
     return tmp_path
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 @pytest.mark.asyncio
 async def test_ast_project_extraction_yields_module_members(
     simple_project: Path,
@@ -118,19 +119,17 @@ class _FakeDist:
         return self.site_packages / str(f)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 @pytest.mark.asyncio
 async def test_ast_dependency_extraction_yields_members(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Fake Distribution-stub with one .py file → members tagged with the
     dep-normalized package name."""
     sp = tmp_path / "site-packages"
     (sp / "foo").mkdir(parents=True)
-    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE)
+    # ``encoding="utf-8"`` — see ``simple_project`` fixture for rationale.
+    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE, encoding="utf-8")
 
     dist = _FakeDist(site_packages=sp, rel_files=("foo/__init__.py",))
     monkeypatch.setattr(
@@ -168,7 +167,8 @@ async def test_ast_dependency_missing_returns_empty(
 
 @pytest.mark.asyncio
 async def test_ast_dependency_no_py_files_returns_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A dist whose files are .so / .md only → empty tuple (no py to parse)."""
     dist = _FakeDist(site_packages=tmp_path, rel_files=("foo/ext.so",))
@@ -183,7 +183,8 @@ async def test_ast_dependency_no_py_files_returns_empty(
 
 @pytest.mark.asyncio
 async def test_ast_dependency_normalizes_hyphens_to_underscores(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Dep ``some-pkg`` → package metadata key ``some_pkg`` (PEP 503)."""
     sp = tmp_path / "site-packages"
@@ -202,13 +203,11 @@ async def test_ast_dependency_normalizes_hyphens_to_underscores(
     extractor = AstMemberExtractor()
     members = await extractor.extract_from_dependency("some-pkg")
 
-    assert all(
-        m.metadata[ModuleMemberFilterField.PACKAGE.value] == "some_pkg"
-        for m in members
-    )
+    assert all(m.metadata[ModuleMemberFilterField.PACKAGE.value] == "some_pkg" for m in members)
 
 
 # ── InspectMemberExtractor ────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_inspect_extract_from_project_delegates_to_ast_fallback(
@@ -226,19 +225,17 @@ async def test_inspect_extract_from_project_delegates_to_ast_fallback(
     assert ast_members == inspect_members
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 @pytest.mark.asyncio
 async def test_inspect_dependency_falls_back_to_ast_on_import_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Inspect mode: any exception during ``_extract_by_import`` triggers
     fallback to the composed AST extractor (spec §9.2)."""
     sp = tmp_path / "site-packages"
     (sp / "foo").mkdir(parents=True)
-    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE)
+    # ``encoding="utf-8"`` — see ``simple_project`` fixture for rationale.
+    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE, encoding="utf-8")
     dist = _FakeDist(site_packages=sp, rel_files=("foo/__init__.py",))
 
     monkeypatch.setattr(
@@ -258,7 +255,8 @@ async def test_inspect_dependency_falls_back_to_ast_on_import_error(
         raise RuntimeError("simulated import failure")
 
     monkeypatch.setattr(
-        "pydocs_mcp.extraction.strategies.members.inspect_extractor._extract_by_import", _boom,
+        "pydocs_mcp.extraction.strategies.members.inspect_extractor._extract_by_import",
+        _boom,
     )
 
     ast_extractor = AstMemberExtractor()
@@ -277,12 +275,14 @@ async def test_inspect_dependency_uses_live_import_when_available(
     """Happy path: ``_extract_by_import`` succeeds; its ``symbols`` list
     flows through unchanged."""
     fake_members = (
-        ModuleMember(metadata={
-            ModuleMemberFilterField.PACKAGE.value: "bar",
-            ModuleMemberFilterField.MODULE.value: "bar",
-            ModuleMemberFilterField.NAME.value: "api",
-            ModuleMemberFilterField.KIND.value: "function",
-        }),
+        ModuleMember(
+            metadata={
+                ModuleMemberFilterField.PACKAGE.value: "bar",
+                ModuleMemberFilterField.MODULE.value: "bar",
+                ModuleMemberFilterField.NAME.value: "api",
+                ModuleMemberFilterField.KIND.value: "function",
+            }
+        ),
     )
 
     class _Dist:
@@ -330,6 +330,7 @@ async def test_inspect_dependency_missing_returns_empty(
 
 # ── Dataclass invariants ──────────────────────────────────────────────────
 
+
 def test_ast_member_extractor_is_frozen_slotted() -> None:
     extractor = AstMemberExtractor()
     # Empty frozen+slots dataclasses raise TypeError (super(type, obj) path)
@@ -369,14 +370,20 @@ def test_dep_helpers_collect_symbols_enforces_per_module_cap() -> None:
     # Pump >cap public functions onto the synthetic module so the
     # collected count exceeds the limit if the cap is dropped.
     for i in range(50):
+
         def _f(_=i):
             pass
+
         _f.__name__ = f"fn{i}"
         setattr(mod, f"fn{i}", _f)
 
     symbols: list = []
     _collect_symbols(
-        mod, "hugemod", "hugemod", symbols, remaining_depth=1,
+        mod,
+        "hugemod",
+        "hugemod",
+        symbols,
+        remaining_depth=1,
         members_per_module_cap=10,  # tighter cap so the assertion is unambiguous
     )
     assert len(symbols) == 10, (
@@ -389,8 +396,10 @@ def test_dep_helpers_truncate_signature_to_max_chars() -> None:
     before persisting; the refactor dropped that. Confirm the
     MAX_SIGNATURE_CHARS limit is applied with an ellipsis marker."""
     from pydocs_mcp.extraction.strategies._dep_helpers import (
-        MAX_SIGNATURE_CHARS, _truncate,
+        MAX_SIGNATURE_CHARS,
+        _truncate,
     )
+
     raw = "(" + ", ".join(f"arg{i}: int = 0" for i in range(50)) + ")"
     assert len(raw) > MAX_SIGNATURE_CHARS
     capped = _truncate(raw, MAX_SIGNATURE_CHARS)
@@ -401,8 +410,10 @@ def test_dep_helpers_truncate_signature_to_max_chars() -> None:
 def test_dep_helpers_truncate_docstring_to_max_chars() -> None:
     """F12 (docstring branch): docstrings get the same treatment."""
     from pydocs_mcp.extraction.strategies._dep_helpers import (
-        MAX_DOCSTRING_CHARS, _truncate,
+        MAX_DOCSTRING_CHARS,
+        _truncate,
     )
+
     raw = "Docstring line.\n" * 200  # >> 1024 chars
     assert len(raw) > MAX_DOCSTRING_CHARS
     capped = _truncate(raw, MAX_DOCSTRING_CHARS)
@@ -413,6 +424,7 @@ def test_dep_helpers_truncate_docstring_to_max_chars() -> None:
 def test_dep_helpers_truncate_under_limit_unchanged() -> None:
     """Short strings pass through identically (no ellipsis appended)."""
     from pydocs_mcp.extraction.strategies._dep_helpers import _truncate
+
     assert _truncate("short", 100) == "short"
     assert _truncate("", 100) == ""
 
@@ -443,12 +455,8 @@ async def test_ast_project_skips_excluded_dirs_post_walk(tmp_path: Path) -> None
     names = {m.metadata[ModuleMemberFilterField.NAME.value] for m in members}
 
     assert "kept" in names, "real project module must be picked up"
-    assert "leaked" not in names, (
-        "site-packages content leaked into member index — F14 regression"
-    )
-    assert "target_leaked" not in names, (
-        "target/ content leaked into member index — F14 regression"
-    )
+    assert "leaked" not in names, "site-packages content leaked into member index — F14 regression"
+    assert "target_leaked" not in names, "target/ content leaked into member index — F14 regression"
 
 
 def test_path_under_excluded_helper_unit() -> None:

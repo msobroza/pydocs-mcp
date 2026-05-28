@@ -17,6 +17,7 @@ Python-only capture today. Markdown / notebook chunkers do NOT emit
 references (per spec Decision 7). MENTIONS edges land via the markdown
 chunker's separate capture path.
 """
+
 from __future__ import annotations
 
 import ast
@@ -124,13 +125,15 @@ def capture_calls(
             continue
         if to_name is None:
             continue  # dropped — non-dotted shape
-        collector.add(NodeReference(
-            from_package=from_package,
-            from_node_id=from_node_id,
-            to_name=to_name,
-            to_node_id=None,
-            kind=ReferenceKind.CALLS,
-        ))
+        collector.add(
+            NodeReference(
+                from_package=from_package,
+                from_node_id=from_node_id,
+                to_name=to_name,
+                to_node_id=None,
+                kind=ReferenceKind.CALLS,
+            )
+        )
 
 
 def capture_imports(
@@ -153,26 +156,30 @@ def capture_imports(
         if isinstance(stmt, ast.Import):
             for alias in stmt.names:
                 to_name = alias.name
-                collector.add(NodeReference(
-                    from_package=from_package,
-                    from_node_id=module_qname,
-                    to_name=to_name,
-                    to_node_id=None,
-                    kind=ReferenceKind.IMPORTS,
-                ))
+                collector.add(
+                    NodeReference(
+                        from_package=from_package,
+                        from_node_id=module_qname,
+                        to_name=to_name,
+                        to_node_id=None,
+                        kind=ReferenceKind.IMPORTS,
+                    )
+                )
                 if alias.asname:
                     aliases[alias.asname] = to_name
         elif isinstance(stmt, ast.ImportFrom):
             module = stmt.module or ""
             for alias in stmt.names:
                 to_name = f"{module}.{alias.name}" if module else alias.name
-                collector.add(NodeReference(
-                    from_package=from_package,
-                    from_node_id=module_qname,
-                    to_name=to_name,
-                    to_node_id=None,
-                    kind=ReferenceKind.IMPORTS,
-                ))
+                collector.add(
+                    NodeReference(
+                        from_package=from_package,
+                        from_node_id=module_qname,
+                        to_name=to_name,
+                        to_node_id=None,
+                        kind=ReferenceKind.IMPORTS,
+                    )
+                )
                 alias_key = alias.asname or alias.name
                 aliases[alias_key] = to_name
 
@@ -193,13 +200,15 @@ def capture_inherits(
             continue
         if to_name is None:
             continue
-        collector.add(NodeReference(
-            from_package=from_package,
-            from_node_id=class_qname,
-            to_name=to_name,
-            to_node_id=None,
-            kind=ReferenceKind.INHERITS,
-        ))
+        collector.add(
+            NodeReference(
+                from_package=from_package,
+                from_node_id=class_qname,
+                to_name=to_name,
+                to_node_id=None,
+                kind=ReferenceKind.INHERITS,
+            )
+        )
 
 
 def capture_self_attribute_types(cls: ast.ClassDef) -> dict[str, str]:
@@ -321,10 +330,7 @@ def _init_body_attribute_types(
 def _find_init(cls: ast.ClassDef) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """Return the class's ``__init__`` method node, or None."""
     for stmt in cls.body:
-        if (
-            isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and stmt.name == "__init__"
-        ):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "__init__":
             return stmt
     return None
 
@@ -367,10 +373,12 @@ def capture_mentions(
         seen.add(to_name)
         if len(to_name) > _MAX_TO_NAME_CHARS:
             to_name = to_name[: _MAX_TO_NAME_CHARS - 1] + "…"
-        collector.add(NodeReference(
-            from_package=from_package,
-            from_node_id=from_node_id,
-            to_name=to_name,
-            to_node_id=None,
-            kind=ReferenceKind.MENTIONS,
-        ))
+        collector.add(
+            NodeReference(
+                from_package=from_package,
+                from_node_id=from_node_id,
+                to_name=to_name,
+                to_node_id=None,
+                kind=ReferenceKind.MENTIONS,
+            )
+        )

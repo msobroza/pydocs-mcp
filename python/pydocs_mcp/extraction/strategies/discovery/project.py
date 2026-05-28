@@ -14,6 +14,7 @@ inspect-mode imports (spec decision #6b). Users narrow the extension
 allowlist via YAML; users cannot widen or shrink the directory
 blocklist.
 """
+
 from __future__ import annotations
 
 import os

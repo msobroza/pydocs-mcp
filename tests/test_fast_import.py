@@ -1,4 +1,5 @@
 """Tests for _fast.py import logic — covers both Rust and fallback paths."""
+
 import importlib
 import sys
 from unittest.mock import patch
@@ -14,6 +15,7 @@ def test_fallback_path_when_native_unavailable():
     # Block _native import
     with patch.dict(sys.modules, {"pydocs_mcp._native": None}):
         import pydocs_mcp._fast as fast_mod
+
         importlib.reload(fast_mod)
         assert fast_mod.RUST_AVAILABLE is False
         # Functions should still work
@@ -30,6 +32,7 @@ def test_fallback_path_when_native_unavailable():
 def test_native_path_when_available():
     """When _native is importable, RUST_AVAILABLE should be True (if compiled)."""
     import pydocs_mcp._fast as fast_mod
+
     # This test verifies whichever path is active in this environment
     assert isinstance(fast_mod.RUST_AVAILABLE, bool)
     assert callable(fast_mod.walk_py_files)
@@ -46,8 +49,13 @@ def test_disable_rust_swaps_to_fallback():
         assert fast_mod.RUST_AVAILABLE is False
         # Every exported function must point to the fallback implementation
         for name in (
-            "walk_py_files", "hash_files", "parse_py_file",
-            "extract_module_doc", "read_file", "read_files_parallel", "ParsedMember",
+            "walk_py_files",
+            "hash_files",
+            "parse_py_file",
+            "extract_module_doc",
+            "read_file",
+            "read_files_parallel",
+            "ParsedMember",
         ):
             assert getattr(fast_mod, name) is getattr(_fallback, name), (
                 f"{name} was not replaced by fallback"

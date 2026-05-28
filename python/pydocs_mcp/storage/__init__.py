@@ -1,4 +1,5 @@
 """Storage subpackage — protocols + SQLite adapters + filters."""
+
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.filters import (
     All,
@@ -39,15 +40,36 @@ from pydocs_mcp.storage.sqlite import (
 )
 
 __all__ = [
-    "All", "Any_", "ChunkStore", "DocumentTreeStore", "FieldEq", "FieldIn",
-    "FieldLike", "FieldSpec", "Filter", "FilterAdapter", "FilterFormat",
-    "HybridSearchable", "MetadataFilterFormat", "MetadataSchema",
-    "ModuleMemberStore", "MultiFieldFormat", "Not", "PackageStore",
+    "All",
+    "Any_",
+    "ChunkStore",
+    "DocumentTreeStore",
+    "FieldEq",
+    "FieldIn",
+    "FieldLike",
+    "FieldSpec",
+    "Filter",
+    "FilterAdapter",
+    "FilterFormat",
+    "HybridSearchable",
+    "MetadataFilterFormat",
+    "MetadataSchema",
+    "ModuleMemberStore",
+    "MultiFieldFormat",
+    "Not",
+    "PackageStore",
     "ReferenceStore",
-    "SqliteChunkRepository", "SqliteDocumentTreeStore", "SqliteFilterAdapter",
-    "SqliteModuleMemberRepository", "SqlitePackageRepository",
+    "SqliteChunkRepository",
+    "SqliteDocumentTreeStore",
+    "SqliteFilterAdapter",
+    "SqliteModuleMemberRepository",
+    "SqlitePackageRepository",
     "SqliteReferenceStore",
-    "SqliteUnitOfWork", "SqliteVectorStore",
-    "TextSearchable", "UnitOfWork", "UnitOfWorkNotEnteredError",
-    "VectorSearchable", "format_registry",
+    "SqliteUnitOfWork",
+    "SqliteVectorStore",
+    "TextSearchable",
+    "UnitOfWork",
+    "UnitOfWorkNotEnteredError",
+    "VectorSearchable",
+    "format_registry",
 ]

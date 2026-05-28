@@ -20,6 +20,7 @@ The callback shape mirrors ``_longest_indexed_module``: it returns
 the value object to ``LookupService`` so the parse logic stays
 testable in isolation.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -34,6 +35,7 @@ from pydocs_mcp.application.lookup_service import LookupTarget
 async def test_parse_empty_target_returns_empty_value_object() -> None:
     """Empty target → package=None, module=None.  Downstream dispatch
     reads this as "list all indexed packages"."""
+
     async def longest_module(_pkg, _parts):  # pragma: no cover — never called
         return None
 
@@ -75,6 +77,7 @@ async def test_parse_module_symbol_splits_symbol_path() -> None:
     """``fastapi.routing.APIRouter.include_router`` with a module match
     for ``fastapi.routing`` (2 input parts) leaves ``APIRouter,
     include_router`` as the symbol path."""
+
     async def longest_module(pkg, parts):
         # Mirror _longest_indexed_module's return shape: (module_id, n_consumed).
         assert pkg == "fastapi"
@@ -95,6 +98,7 @@ async def test_parse_module_symbol_splits_symbol_path() -> None:
 async def test_parse_module_only_no_symbol_path() -> None:
     """``fastapi.routing`` resolves to a module with no trailing symbol
     parts → empty ``symbol_path``."""
+
     async def longest_module(_pkg, _parts):
         return ("fastapi.routing", 2)
 
@@ -114,11 +118,13 @@ async def test_parse_no_module_match_keeps_package_and_clears_module() -> None:
     (LookupService) raises ``NotFoundError`` with the user's original
     target string.  ``LookupTarget`` itself just returns the no-match
     shape so the dispatcher can branch on it."""
+
     async def longest_module(pkg, parts):
         return None
 
     t = await LookupTarget.parse(
-        "fastapi.unknown_module.thing", longest_module=longest_module,
+        "fastapi.unknown_module.thing",
+        longest_module=longest_module,
     )
     assert t.package == "fastapi"
     assert t.module is None
@@ -142,6 +148,7 @@ async def test_parse_preserves_synthetic_suffix_in_module_id() -> None:
     full id WITH the suffix; ``consumed`` reflects the user's input
     parts (NOT ``len(module.split("."))``), so a downstream symbol-path
     slice doesn't discard a trailing symbol part the user typed."""
+
     async def longest_module(_pkg, _parts):
         # User typed two parts: "docs", "guide".  The matched module id
         # is "docs.guide.md" (3 dotted segments after suffix) but
@@ -163,11 +170,13 @@ async def test_lookup_target_is_frozen_and_hashable() -> None:
     """``LookupTarget`` is a value object — frozen dataclass with slots.
     Hashable so callers can use it as a dict key for caching or
     deduplication."""
+
     async def longest_module(_pkg, _parts):
         return ("fastapi.routing", 2)
 
     t = await LookupTarget.parse(
-        "fastapi.routing.X", longest_module=longest_module,
+        "fastapi.routing.X",
+        longest_module=longest_module,
     )
     # Frozen — assignment raises AttributeError.
     with pytest.raises(AttributeError):

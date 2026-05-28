@@ -4,6 +4,7 @@
 stage to invoke when it matches. The two types live together because
 ``RouteCase`` is exclusively a constructor argument of ``RouteStep``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

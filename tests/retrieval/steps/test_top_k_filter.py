@@ -1,4 +1,5 @@
 """TopKFilterStep tests — uniform top-K cutoff for chunks and members."""
+
 from __future__ import annotations
 
 from pydocs_mcp.models import (
@@ -13,10 +14,12 @@ from pydocs_mcp.retrieval.steps.top_k_filter import TopKFilterStep
 
 
 def _chunks_with_relevance(*rels: float) -> ChunkList:
-    return ChunkList(items=tuple(
-        Chunk(text=f"f{i}", relevance=r, metadata={"title": f"t{i}"})
-        for i, r in enumerate(rels)
-    ))
+    return ChunkList(
+        items=tuple(
+            Chunk(text=f"f{i}", relevance=r, metadata={"title": f"t{i}"})
+            for i, r in enumerate(rels)
+        )
+    )
 
 
 def _state(candidates) -> RetrieverState:
@@ -45,10 +48,11 @@ async def test_topk_fallback_to_source_order_when_no_relevance() -> None:
     """If no candidate carries a relevance value (no scorer ran upstream),
     keep source order and take the first K.
     """
-    chunks = ChunkList(items=tuple(
-        Chunk(text=f"f{i}", relevance=None, metadata={"title": f"t{i}"})
-        for i in range(5)
-    ))
+    chunks = ChunkList(
+        items=tuple(
+            Chunk(text=f"f{i}", relevance=None, metadata={"title": f"t{i}"}) for i in range(5)
+        )
+    )
     step = TopKFilterStep(name="topk", k=3)
     out = await step.run(_state(chunks))
     assert isinstance(out.candidates, ChunkList)
@@ -57,10 +61,9 @@ async def test_topk_fallback_to_source_order_when_no_relevance() -> None:
 
 
 async def test_topk_works_on_members() -> None:
-    members = ModuleMemberList(items=tuple(
-        ModuleMember(metadata={"name": f"f{i}", "kind": "function"})
-        for i in range(5)
-    ))
+    members = ModuleMemberList(
+        items=tuple(ModuleMember(metadata={"name": f"f{i}", "kind": "function"}) for i in range(5))
+    )
     step = TopKFilterStep(name="topk", k=2)
     out = await step.run(_state(members))
     assert isinstance(out.candidates, ModuleMemberList)

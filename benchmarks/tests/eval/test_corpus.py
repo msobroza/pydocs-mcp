@@ -7,6 +7,7 @@ can run on a realistic project layout (spec §4.8). Each call must produce
 an *isolated* directory — the runner does ``shutil.rmtree`` between tasks,
 so two consecutive calls must not collide on the same path.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

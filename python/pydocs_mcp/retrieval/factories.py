@@ -7,6 +7,7 @@ Both the MCP server (``server.py``) and the CLI query/api subcommands
 exposes a single factory they both call so the retrieval-side composition
 lives in one place and cannot drift between the two entry points.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

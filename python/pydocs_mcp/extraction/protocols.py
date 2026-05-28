@@ -24,6 +24,7 @@ The dict-lookup selector (``chunker_registry`` in
 ``ChunkerSelector`` Protocol — a dict keyed by extension is the typed
 surface; wrapping it adds zero value (spec §5 "modules NOT created").
 """
+
 from __future__ import annotations
 
 from pathlib import Path

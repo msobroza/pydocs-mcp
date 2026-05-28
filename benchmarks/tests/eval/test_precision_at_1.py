@@ -5,6 +5,7 @@ Routes through ``is_relevant`` so it covers both DS-1000 (resolved set)
 and RepoQA (ast_body fallback) with no per-metric branching. Hermetic: no
 ``pydocs_mcp`` import.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -33,9 +34,7 @@ def _repoqa_task(body: str | None) -> EvalTask:
 
 
 def _item(rank: int, chunk_id: int) -> RetrievedItem:
-    return RetrievedItem(
-        rank=rank, text="x", source_path="p", chunk_id=chunk_id
-    )
+    return RetrievedItem(rank=rank, text="x", source_path="p", chunk_id=chunk_id)
 
 
 def test_top1_relevant_via_resolved_set_returns_1_0() -> None:
@@ -66,8 +65,7 @@ def test_repoqa_top1_match_returns_1_0() -> None:
 def test_repoqa_top1_no_match_returns_0_0() -> None:
     gold = "def f(): return 1"
     task = _repoqa_task(gold)
-    retrieved = (RetrievedItem(rank=1, text="def g(): return 2",
-                               source_path="p"),)
+    retrieved = (RetrievedItem(rank=1, text="def g(): return 2", source_path="p"),)
     assert Precision1().compute(task, retrieved) == 0.0
 
 

@@ -5,6 +5,7 @@ list) when present, falling back to ``state.result`` for backward
 compatibility with code that hasn't migrated to the
 candidates/result split.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace

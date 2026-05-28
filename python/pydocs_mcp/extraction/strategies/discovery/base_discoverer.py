@@ -6,6 +6,7 @@ place. Project and dependency discovery have different inputs (path
 vs. distribution name) so they're separate Protocols rather than one
 parameterized abstraction.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.protocols import (

@@ -4,6 +4,7 @@ Post sub-PR #5 + #6 rebase: indexer.py has been deleted; extraction logic
 now lives in the ``extraction/`` subpackage. Fixtures here use the new
 ``PipelineChunkExtractor`` + ``AstMemberExtractor`` strategy classes.
 """
+
 import asyncio
 from pathlib import Path
 
@@ -50,6 +51,7 @@ def _patch_build_llm_client_with_fake(monkeypatch):
         _fake_build_llm_client,
     )
 
+
 from pydocs_mcp.db import (
     open_index_database,
     rebuild_fulltext_index,
@@ -84,8 +86,11 @@ def conn(tmp_path):
 
     write_package_sync(
         db_path,
-        name=PROJECT_PACKAGE_NAME, version="0.1", summary="Test project",
-        content_hash="aaa", origin=PackageOrigin.PROJECT,
+        name=PROJECT_PACKAGE_NAME,
+        version="0.1",
+        summary="Test project",
+        content_hash="aaa",
+        origin=PackageOrigin.PROJECT,
         chunks=(
             Chunk(
                 text="Compute the fibonacci sequence for n",
@@ -122,7 +127,9 @@ def conn(tmp_path):
 
     write_package_sync(
         db_path,
-        name="requests", version="2.28", summary="HTTP library",
+        name="requests",
+        version="2.28",
+        summary="HTTP library",
         content_hash="bbb",
         chunks=(
             Chunk(
@@ -152,7 +159,9 @@ def conn(tmp_path):
 
     write_package_sync(
         db_path,
-        name="sqlalchemy", version="2.0", summary="Database toolkit",
+        name="sqlalchemy",
+        version="2.0",
+        summary="Database toolkit",
         content_hash="ccc",
         chunks=(
             Chunk(
@@ -191,7 +200,9 @@ FAKE_PROJECT = FIXTURES_DIR / "fake_project"
 PACKAGES_DIR = FIXTURES_DIR / "packages"
 
 
-def _extract_package_fixture(name: str, pkg_dir: Path) -> tuple[tuple[Chunk, ...], tuple[ModuleMember, ...]]:
+def _extract_package_fixture(
+    name: str, pkg_dir: Path
+) -> tuple[tuple[Chunk, ...], tuple[ModuleMember, ...]]:
     """Static-parse a fixture package directory into (chunks, members).
 
     Uses AstPythonChunker directly on every .py file under pkg_dir; mirrors
@@ -210,6 +221,7 @@ def _extract_package_fixture(name: str, pkg_dir: Path) -> tuple[tuple[Chunk, ...
         chunks_acc.extend(flatten_to_chunks(tree, package=name))
         # Extract member symbols via AST walk on top-level + class methods.
         import ast
+
         try:
             ast_tree = ast.parse(source)
         except SyntaxError:
@@ -220,16 +232,20 @@ def _extract_package_fixture(name: str, pkg_dir: Path) -> tuple[tuple[Chunk, ...
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 kind = "class" if isinstance(stmt, ast.ClassDef) else "function"
                 doc = ast.get_docstring(stmt) or ""
-                members_acc.append(ModuleMember(metadata={
-                    ModuleMemberFilterField.PACKAGE.value: name,
-                    ModuleMemberFilterField.MODULE.value: module,
-                    ModuleMemberFilterField.NAME.value: stmt.name,
-                    ModuleMemberFilterField.KIND.value: kind,
-                    "signature": "",
-                    "return_annotation": "",
-                    "parameters": (),
-                    "docstring": doc,
-                }))
+                members_acc.append(
+                    ModuleMember(
+                        metadata={
+                            ModuleMemberFilterField.PACKAGE.value: name,
+                            ModuleMemberFilterField.MODULE.value: module,
+                            ModuleMemberFilterField.NAME.value: stmt.name,
+                            ModuleMemberFilterField.KIND.value: kind,
+                            "signature": "",
+                            "return_annotation": "",
+                            "parameters": (),
+                            "docstring": doc,
+                        }
+                    )
+                )
     return tuple(chunks_acc), tuple(members_acc)
 
 
@@ -256,6 +272,7 @@ def integration_conn(tmp_path):
         # in-memory fake is enough to satisfy the wiring contract without
         # interfering with this fixture's diff-merge semantics.
         from tests._fakes import MockEmbedder, make_fake_uow_factory
+
         pipeline = build_ingestion_pipeline(
             AppConfig(),
             embedder=MockEmbedder(),

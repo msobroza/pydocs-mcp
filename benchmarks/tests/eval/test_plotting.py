@@ -3,6 +3,7 @@
 Headless matplotlib — backend forced to ``Agg`` before pyplot imports so the
 tests don't spin up a GUI toolkit on developer machines or in CI.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,6 +25,7 @@ from matplotlib.container import BarContainer
 
 def _bar_containers(ax) -> list[BarContainer]:
     return [c for c in ax.containers if isinstance(c, BarContainer)]
+
 
 from benchmarks.eval.plotting import (
     BaselineRecord,
@@ -50,12 +52,12 @@ def _baseline_payload(**overrides: object) -> dict[str, object]:
         "label": "real-100-needles",
         "tasks_ran": 100,
         "metrics": {
-            "recall@1":  {"mean": 0.14,  "ci_low": 0.07,  "ci_high": 0.21},
-            "recall@5":  {"mean": 0.17,  "ci_low": 0.10,  "ci_high": 0.24},
-            "recall@10": {"mean": 0.18,  "ci_low": 0.11,  "ci_high": 0.26},
-            "mrr":       {"mean": 0.152, "ci_low": 0.088, "ci_high": 0.218},
-            "indexing_seconds": {"p50": 7.45,  "p95": 53.70, "p99": 62.23},
-            "search_seconds":   {"p50": 0.021, "p95": 0.098, "p99": 0.279},
+            "recall@1": {"mean": 0.14, "ci_low": 0.07, "ci_high": 0.21},
+            "recall@5": {"mean": 0.17, "ci_low": 0.10, "ci_high": 0.24},
+            "recall@10": {"mean": 0.18, "ci_low": 0.11, "ci_high": 0.26},
+            "mrr": {"mean": 0.152, "ci_low": 0.088, "ci_high": 0.218},
+            "indexing_seconds": {"p50": 7.45, "p95": 53.70, "p99": 62.23},
+            "search_seconds": {"p50": 0.021, "p95": 0.098, "p99": 0.279},
         },
         "captured_at": "2026-05-23T20:45:29+00:00",
         "git_sha": "0123456789abcdef0123",
@@ -151,7 +153,8 @@ def test_plot_baselines_groups_two_systems_side_by_side(tmp_path: Path) -> None:
     )
     dense = BaselineRecord.from_path(
         _write_baseline(
-            tmp_path, "dense",
+            tmp_path,
+            "dense",
             config="dense_v1",
             metrics={
                 "recall@1": {"mean": 0.30, "ci_low": 0.22, "ci_high": 0.38},
@@ -236,7 +239,8 @@ def test_plot_baselines_rejects_mixed_datasets(tmp_path: Path) -> None:
     real = BaselineRecord.from_path(_write_baseline(tmp_path, "real"))
     fixture = BaselineRecord.from_path(
         _write_baseline(
-            tmp_path, "fixture",
+            tmp_path,
+            "fixture",
             dataset="repoqa-fixture-python",
             tasks_ran=5,
         ),
@@ -272,11 +276,15 @@ def test_cli_main_writes_output(tmp_path: Path, capsys: pytest.CaptureFixture) -
 
     path = _write_baseline(tmp_path, "cli")
     output = tmp_path / "cli.png"
-    rc = _cli_main([
-        str(path),
-        "--output", str(output),
-        "--metrics", "recall@1,recall@10",
-    ])
+    rc = _cli_main(
+        [
+            str(path),
+            "--output",
+            str(output),
+            "--metrics",
+            "recall@1,recall@10",
+        ]
+    )
     assert rc == 0
     assert output.exists()
     captured = capsys.readouterr()
@@ -343,7 +351,8 @@ def test_plot_timings_rejects_mixed_datasets(tmp_path: Path) -> None:
     real = BaselineRecord.from_path(_write_baseline(tmp_path, "real_t"))
     fixture = BaselineRecord.from_path(
         _write_baseline(
-            tmp_path, "fixture_t",
+            tmp_path,
+            "fixture_t",
             dataset="repoqa-fixture-python",
             tasks_ran=5,
         ),
@@ -371,17 +380,21 @@ def test_format_seconds_picks_unit_by_magnitude() -> None:
 
 
 def test_cli_main_timings_mode_writes_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     from benchmarks.eval.plotting import _cli_main
 
     path = _write_baseline(tmp_path, "cli_t")
     output = tmp_path / "cli_t.png"
-    rc = _cli_main([
-        str(path),
-        "--output", str(output),
-        "--timings",
-    ])
+    rc = _cli_main(
+        [
+            str(path),
+            "--output",
+            str(output),
+            "--timings",
+        ]
+    )
     assert rc == 0
     assert output.exists()
     assert "Saved" in capsys.readouterr().out
@@ -429,7 +442,8 @@ def test_scatter_rejects_mixed_datasets(tmp_path: Path) -> None:
     real = BaselineRecord.from_path(_write_baseline(tmp_path, "real_s"))
     fixture = BaselineRecord.from_path(
         _write_baseline(
-            tmp_path, "fixture_s",
+            tmp_path,
+            "fixture_s",
             dataset="repoqa-fixture-python",
             tasks_ran=5,
         ),
@@ -477,18 +491,23 @@ def test_scatter_raises_when_no_baseline_has_metric(tmp_path: Path) -> None:
 
 
 def test_cli_main_scatter_mode_writes_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     from benchmarks.eval.plotting import _cli_main
 
     path = _write_baseline(tmp_path, "cli_s")
     output = tmp_path / "cli_s.png"
-    rc = _cli_main([
-        str(path),
-        "--output", str(output),
-        "--scatter",
-        "--scatter-metric", "recall@5",
-    ])
+    rc = _cli_main(
+        [
+            str(path),
+            "--output",
+            str(output),
+            "--scatter",
+            "--scatter-metric",
+            "recall@5",
+        ]
+    )
     assert rc == 0
     assert output.exists()
     assert "Saved" in capsys.readouterr().out
@@ -499,8 +518,12 @@ def test_cli_main_timings_and_scatter_mutually_exclusive(tmp_path: Path) -> None
 
     path = _write_baseline(tmp_path, "cli_excl")
     with pytest.raises(SystemExit):
-        _cli_main([
-            str(path),
-            "--output", str(tmp_path / "out.png"),
-            "--timings", "--scatter",
-        ])
+        _cli_main(
+            [
+                str(path),
+                "--output",
+                str(tmp_path / "out.png"),
+                "--timings",
+                "--scatter",
+            ]
+        )

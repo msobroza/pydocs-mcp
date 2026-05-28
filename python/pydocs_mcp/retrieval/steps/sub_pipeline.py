@@ -8,6 +8,7 @@ The adapter class has been removed; only the YAML decoder remains so
 existing ``{"type": "sub_pipeline", "pipeline": {...}}`` YAML keeps
 loading.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
@@ -31,7 +32,9 @@ class _SubPipelineDecoder:
         _depth: int = 0,
     ) -> CodeRetrieverPipeline:
         return CodeRetrieverPipeline.from_dict(
-            data["pipeline"], context, _depth=_depth + 1,
+            data["pipeline"],
+            context,
+            _depth=_depth + 1,
         )
 
 

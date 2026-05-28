@@ -6,6 +6,7 @@ every entity store atomically (within the single transaction). Lets
 makes a hypothetical Postgres / DuckDB adapter only need to satisfy
 this Protocol method.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -63,8 +64,12 @@ async def test_sqlite_uow_delete_all_wipes_every_table(tmp_path):
     async with SqliteUnitOfWork(provider=provider) as uow:
         await uow.packages.upsert(
             Package(
-                name="p", version="1", summary="", homepage="",
-                dependencies=(), content_hash="h",
+                name="p",
+                version="1",
+                summary="",
+                homepage="",
+                dependencies=(),
+                content_hash="h",
                 origin=PackageOrigin.DEPENDENCY,
             ),
         )
@@ -117,7 +122,9 @@ async def test_uow_delete_all_wipes_every_store():
         _make_member(package="p", module="p.m", name="f"),
     )
     uow_factory = make_fake_uow_factory(
-        packages=pkgs, chunks=chunks, module_members=members,
+        packages=pkgs,
+        chunks=chunks,
+        module_members=members,
     )
 
     async with uow_factory() as uow:

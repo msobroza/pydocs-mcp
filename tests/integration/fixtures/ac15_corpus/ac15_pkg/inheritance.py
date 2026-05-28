@@ -1,4 +1,5 @@
 """Inheritance graph. Exercises Rule B + INHERITS edges."""
+
 from __future__ import annotations
 
 

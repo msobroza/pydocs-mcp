@@ -1,4 +1,5 @@
 """Reference capture tests on AstPythonChunker (spec §7.1, AC #5/#7/#9/#10/#16)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,10 +26,7 @@ def _build(source: str) -> tuple[list, AstPythonChunker]:
 
 def test_calls_emits_one_edge_for_bare_function_call():
     """AC #5 — `def runner(): return do_it(42)` emits 1 CALLS edge."""
-    refs, _ = _build(
-        "def runner():\n"
-        "    return do_it(42)\n"
-    )
+    refs, _ = _build("def runner():\n    return do_it(42)\n")
     calls = [r for r in refs if r.kind == ReferenceKind.CALLS]
     assert len(calls) == 1
     assert calls[0].from_node_id == "pkg.mod.runner"
@@ -36,10 +34,7 @@ def test_calls_emits_one_edge_for_bare_function_call():
 
 
 def test_calls_captures_dotted_attribute_call():
-    refs, _ = _build(
-        "def runner():\n"
-        "    return os.path.join('a', 'b')\n"
-    )
+    refs, _ = _build("def runner():\n    return os.path.join('a', 'b')\n")
     calls = [r for r in refs if r.kind == ReferenceKind.CALLS]
     assert len(calls) == 1
     assert calls[0].to_name == "os.path.join"
@@ -49,11 +44,7 @@ def test_calls_short_circuits_self_dot_prefix():
     """AC #9 — self.X.Y captured as to_name='self.X.Y', NOT short-circuited
     at the capturer level (the resolver short-circuits it at Rule 5).
     The capturer still emits the candidate so the resolver controls policy."""
-    refs, _ = _build(
-        "class A:\n"
-        "    def m(self):\n"
-        "        return self.client.fetch(self.url)\n"
-    )
+    refs, _ = _build("class A:\n    def m(self):\n        return self.client.fetch(self.url)\n")
     calls = [r for r in refs if r.kind == ReferenceKind.CALLS]
     # `self.client.fetch` is one CALL. self.url is an Attribute, not a Call.
     self_calls = [r for r in calls if r.to_name.startswith("self.")]
@@ -63,8 +54,7 @@ def test_calls_short_circuits_self_dot_prefix():
 def test_calls_drops_non_dotted_shapes():
     """AC #16 — canonical_dotted returns None for Call(Call(...).x); dropped silently."""
     refs, _ = _build(
-        "def runner():\n"
-        "    return get_factory()()  # Call(Call) — not dotted-shaped\n"
+        "def runner():\n    return get_factory()()  # Call(Call) — not dotted-shaped\n"
     )
     calls = [r for r in refs if r.kind == ReferenceKind.CALLS]
     # `get_factory` IS captured (it's the inner Call's func, a Name).
@@ -77,9 +67,7 @@ def test_calls_drops_non_dotted_shapes():
 
 def test_imports_emits_one_edge_per_name_in_import():
     """`import a, b` → 2 IMPORTS edges; from_node_id = the module qname."""
-    refs, _ = _build(
-        "import os, sys\n"
-    )
+    refs, _ = _build("import os, sys\n")
     imports = [r for r in refs if r.kind == ReferenceKind.IMPORTS]
     names = {r.to_name for r in imports}
     assert names == {"os", "sys"}
@@ -89,9 +77,7 @@ def test_imports_emits_one_edge_per_name_in_import():
 
 def test_imports_from_emits_one_edge_per_imported_name():
     """`from helpers import a, b` → 2 IMPORTS edges with full dotted to_name."""
-    refs, _ = _build(
-        "from helpers import a, b\n"
-    )
+    refs, _ = _build("from helpers import a, b\n")
     imports = [r for r in refs if r.kind == ReferenceKind.IMPORTS]
     names = {r.to_name for r in imports}
     assert names == {"helpers.a", "helpers.b"}
@@ -99,22 +85,14 @@ def test_imports_from_emits_one_edge_per_imported_name():
 
 def test_inherits_emits_one_edge_per_base_class():
     """AC #7 — `class Sub(Base, Mixin):` → 2 INHERITS edges."""
-    refs, _ = _build(
-        "class Base: ...\n"
-        "class Mixin: ...\n"
-        "class Sub(Base, Mixin):\n"
-        "    pass\n"
-    )
+    refs, _ = _build("class Base: ...\nclass Mixin: ...\nclass Sub(Base, Mixin):\n    pass\n")
     inherits = [r for r in refs if r.kind == ReferenceKind.INHERITS]
     sub_inherits = [r for r in inherits if r.from_node_id == "pkg.mod.Sub"]
     assert {r.to_name for r in sub_inherits} == {"Base", "Mixin"}
 
 
 def test_inherits_captures_dotted_base():
-    refs, _ = _build(
-        "class S(framework.View):\n"
-        "    pass\n"
-    )
+    refs, _ = _build("class S(framework.View):\n    pass\n")
     inherits = [r for r in refs if r.kind == ReferenceKind.INHERITS]
     assert any(r.to_name == "framework.View" for r in inherits)
 
@@ -162,10 +140,10 @@ def test_capture_mentions_matches_backtick_quoted_dotted_names():
         ReferenceCollector,
         capture_mentions,
     )
+
     collector = ReferenceCollector()
     capture_mentions(
-        "See `pkg.helpers.compute` for details.\n"
-        "Also `other.mod.fn` does X.\n",
+        "See `pkg.helpers.compute` for details.\nAlso `other.mod.fn` does X.\n",
         from_package="pkg",
         from_node_id="pkg.docs.readme",
         collector=collector,
@@ -186,10 +164,10 @@ def test_capture_mentions_ignores_bare_identifiers():
         ReferenceCollector,
         capture_mentions,
     )
+
     collector = ReferenceCollector()
     capture_mentions(
-        "Calling `compute` directly is fine.\n"
-        "But `foo` and `bar` are bare.\n",
+        "Calling `compute` directly is fine.\nBut `foo` and `bar` are bare.\n",
         from_package="pkg",
         from_node_id="pkg.docs.readme",
         collector=collector,
@@ -205,6 +183,7 @@ def test_capture_mentions_dedupes_per_chunk():
         ReferenceCollector,
         capture_mentions,
     )
+
     collector = ReferenceCollector()
     capture_mentions(
         "Use `pkg.helpers.compute` here.\n"
@@ -226,6 +205,7 @@ def test_capture_mentions_emits_kind_mentions():
         ReferenceCollector,
         capture_mentions,
     )
+
     collector = ReferenceCollector()
     capture_mentions(
         "Reference `a.b.c` and `x.y`.\n",

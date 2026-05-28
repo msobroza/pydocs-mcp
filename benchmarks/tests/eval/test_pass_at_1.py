@@ -1,5 +1,6 @@
 """Pin PassAt1Needle: AST-match on the top-1 retrieved item only. RepoQA's
 "needle-in-the-haystack" pass criterion (spec §4.11)."""
+
 from __future__ import annotations
 
 from pathlib import Path

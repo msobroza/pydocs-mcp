@@ -1,4 +1,5 @@
 """Tests for PerCallConnectionProvider."""
+
 from __future__ import annotations
 
 import sqlite3

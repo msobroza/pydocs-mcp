@@ -6,6 +6,7 @@ sibling function rather than retrofitting a Protocol.
 
 Reference: https://en.wikipedia.org/wiki/Bootstrapping_(statistics)
 """
+
 from __future__ import annotations
 
 import random
@@ -43,9 +44,7 @@ def mean_with_bootstrap_ci(
     # samples with replacement in one C-level call, replacing what would
     # otherwise be n_resamples × n Python-level ``randrange`` invocations.
     rng = random.Random(seed)
-    resample_means = sorted(
-        sum(rng.choices(values, k=n)) / n for _ in range(n_resamples)
-    )
+    resample_means = sorted(sum(rng.choices(values, k=n)) / n for _ in range(n_resamples))
 
     # WHY: symmetric inclusive percentile — 25 samples trimmed each tail at
     # n=1000, n=2.5%. ``high = n - 1 - low`` mirrors ``low`` around the median
@@ -137,4 +136,3 @@ def percentile(values: Sequence[float], q: float) -> float:
         return s[-1]
     frac = k - f
     return s[f] + frac * (s[f + 1] - s[f])
-

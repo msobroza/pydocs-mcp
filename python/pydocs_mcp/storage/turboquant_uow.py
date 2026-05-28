@@ -11,6 +11,7 @@ Multi-vector inputs raise NotImplementedError this PR; the typed
 ``Embedding`` union accepts them but persistence is deferred to a
 future PR that adds a ``chunk_vectors`` side-table.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -151,7 +152,9 @@ class TurboQuantUnitOfWork:
                 "TurboQuantUnitOfWork.clear_all called outside async with",
             )
         self._index = await asyncio.to_thread(
-            IdMapIndex, dim=self._dim, bit_width=self._bit_width,
+            IdMapIndex,
+            dim=self._dim,
+            bit_width=self._bit_width,
         )
         self._dirty = True
 

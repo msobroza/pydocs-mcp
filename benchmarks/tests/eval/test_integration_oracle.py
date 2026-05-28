@@ -6,6 +6,7 @@ body as the top hit, the bug is in the harness itself — the matcher,
 the scorer, or the runner orchestration. The actual systems' scores are
 validated by real benchmark runs; this test guards the SCAFFOLDING.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -13,6 +13,7 @@ Asserts:
   - a system that is NOT ``HasGoldResolver`` is a strict no-op (the task
     object is returned unchanged — RepoQA path preserved).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,9 +40,7 @@ class _FakeResolver:
 
     result: frozenset[str]
 
-    async def resolve(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> frozenset[str]:
+    async def resolve(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> frozenset[str]:
         return self.result
 
 
@@ -70,9 +69,7 @@ class _AssertingMetric:
 
     name: str = "asserts-resolved"
 
-    def compute(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> float:
+    def compute(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> float:
         assert "resolved_chunk_ids" in task.gold.extra
         assert task.gold.extra["resolved_chunk_ids"] == _KNOWN
         return 1.0
@@ -93,9 +90,7 @@ def _task() -> EvalTask:
 
 async def test_inject_populates_resolved_chunk_ids_on_fresh_task() -> None:
     original = _task()
-    augmented = await _resolve_and_inject(
-        _SystemWithResolver(), original, retrieved=()
-    )
+    augmented = await _resolve_and_inject(_SystemWithResolver(), original, retrieved=())
 
     # Fresh task object (frozen gold -> dataclasses.replace, not mutation).
     assert augmented is not original
@@ -107,9 +102,7 @@ async def test_inject_populates_resolved_chunk_ids_on_fresh_task() -> None:
 
 
 async def test_injected_set_is_what_the_metric_receives() -> None:
-    augmented = await _resolve_and_inject(
-        _SystemWithResolver(), _task(), retrieved=()
-    )
+    augmented = await _resolve_and_inject(_SystemWithResolver(), _task(), retrieved=())
     scorer = Scorer(metrics=(_AssertingMetric(),))
     # The asserting metric raises if ``resolved_chunk_ids`` is missing/wrong.
     scores = scorer.score(augmented, ())
@@ -118,9 +111,7 @@ async def test_injected_set_is_what_the_metric_receives() -> None:
 
 async def test_non_resolver_system_is_noop() -> None:
     original = _task()
-    augmented = await _resolve_and_inject(
-        _SystemWithoutResolver(), original, retrieved=()
-    )
+    augmented = await _resolve_and_inject(_SystemWithoutResolver(), original, retrieved=())
     # Identity preserved — RepoQA systems flow through unchanged.
     assert augmented is original
     assert "resolved_chunk_ids" not in augmented.gold.extra

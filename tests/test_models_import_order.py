@@ -2,6 +2,7 @@
 as a cold first-touch entry. Task 20's S7 shim previously closed a cycle that
 made this fail; the PEP 562 __getattr__ fix keeps models.py a leaf in the
 import graph."""
+
 import subprocess
 import sys
 

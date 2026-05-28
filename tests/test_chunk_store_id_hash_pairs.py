@@ -5,6 +5,7 @@ delete_by_ids removes only specific rows (vs delete(package=X) which wipes
 the whole package). insert is the additive path (vs upsert's silent
 overwrite).
 """
+
 from pathlib import Path
 
 import pytest
@@ -47,11 +48,13 @@ async def test_delete_by_ids_removes_only_requested(tmp_path: Path) -> None:
     factory = build_sqlite_uow_factory(db_path)
 
     async with factory() as uow:
-        await uow.chunks.insert((
-            Chunk(text="a", metadata={"package": "demo", "title": "t1"}),
-            Chunk(text="b", metadata={"package": "demo", "title": "t2"}),
-            Chunk(text="c", metadata={"package": "demo", "title": "t3"}),
-        ))
+        await uow.chunks.insert(
+            (
+                Chunk(text="a", metadata={"package": "demo", "title": "t1"}),
+                Chunk(text="b", metadata={"package": "demo", "title": "t2"}),
+                Chunk(text="c", metadata={"package": "demo", "title": "t3"}),
+            )
+        )
         await uow.commit()
 
     async with factory() as uow:
@@ -94,13 +97,13 @@ async def test_list_id_hash_pairs_returns_null_for_pre_migration_rows(tmp_path: 
     self-heal on the first reindex per package (spec AC-8).
     """
     import sqlite3
+
     db_path = tmp_path / "cache.db"
     open_index_database(db_path).close()
     # Insert a row directly via legacy SQL (no content_hash column populated)
     conn = sqlite3.connect(str(db_path))
     conn.execute(
-        "INSERT INTO chunks (package, module, title, text, origin) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (package, module, title, text, origin) VALUES (?, ?, ?, ?, ?)",
         ("demo", "m", "t", "legacy text", "doc"),
     )
     conn.commit()

@@ -1,4 +1,5 @@
 """ReferenceCaptureStage runs over Python files, populates state.refs."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -34,14 +35,14 @@ async def test_capture_stage_emits_refs_for_python_files():
     """The stage walks state.files.file_contents (.py only) and fills
     state.refs.references with unresolved tuples."""
     stage = ReferenceCaptureStage()
-    state = _state((
+    state = _state(
         (
-            "pkg/mod.py",
-            "from helpers import compute as do_it\n"
-            "def runner():\n"
-            "    return do_it(42)\n",
-        ),
-    ))
+            (
+                "pkg/mod.py",
+                "from helpers import compute as do_it\ndef runner():\n    return do_it(42)\n",
+            ),
+        )
+    )
     new_state = await stage.run(state)
     # Expect at least one IMPORTS edge (from-import) + one CALLS edge.
     kinds = {r.kind for r in new_state.refs.references}
@@ -53,10 +54,12 @@ async def test_capture_stage_emits_refs_for_python_files():
 async def test_capture_stage_skips_non_python_files():
     """Markdown / notebook files don't go through the Python capture path."""
     stage = ReferenceCaptureStage()
-    state = _state((
-        ("README.md", "# A doc\nWith `pkg.func` text\n"),
-        ("nb.ipynb", "{}"),
-    ))
+    state = _state(
+        (
+            ("README.md", "# A doc\nWith `pkg.func` text\n"),
+            ("nb.ipynb", "{}"),
+        )
+    )
     new_state = await stage.run(state)
     assert new_state.refs.references == ()
 
@@ -65,13 +68,15 @@ async def test_capture_stage_skips_non_python_files():
 async def test_capture_stage_continues_on_per_file_error():
     """Spec §7.1 + AC #27 — one broken file does not abort the whole stage."""
     stage = ReferenceCaptureStage()
-    state = _state((
-        ("pkg/bad.py", "def broken( syntax error\n"),
+    state = _state(
         (
-            "pkg/good.py",
-            "def fn(): return helper()\n",
-        ),
-    ))
+            ("pkg/bad.py", "def broken( syntax error\n"),
+            (
+                "pkg/good.py",
+                "def fn(): return helper()\n",
+            ),
+        )
+    )
     new_state = await stage.run(state)
     # The good file's CALLS edge survives despite the broken sibling.
     assert any(r.to_name == "helper" for r in new_state.refs.references)
@@ -90,14 +95,14 @@ async def test_capture_stage_no_ops_when_capture_disabled(monkeypatch):
         ReferenceCaptureConfig(enabled=False),
     )
     stage = ReferenceCaptureStage()
-    state = _state((
+    state = _state(
         (
-            "pkg/mod.py",
-            "from helpers import compute as do_it\n"
-            "def runner():\n"
-            "    return do_it(42)\n",
-        ),
-    ))
+            (
+                "pkg/mod.py",
+                "from helpers import compute as do_it\ndef runner():\n    return do_it(42)\n",
+            ),
+        )
+    )
     new_state = await stage.run(state)
     assert new_state.refs.references == ()
     assert new_state.refs.reference_aliases == {}
@@ -120,16 +125,18 @@ async def test_capture_stage_kinds_filter_drops_imports_but_keeps_aliases(
         ReferenceCaptureConfig(enabled=True, kinds=["calls"]),
     )
     stage = ReferenceCaptureStage()
-    state = _state((
+    state = _state(
         (
-            "pkg/mod.py",
-            "from helpers import compute as do_it\n"
-            "class Base: pass\n"
-            "class Child(Base):\n"
-            "    def fn(self):\n"
-            "        return do_it(42)\n",
-        ),
-    ))
+            (
+                "pkg/mod.py",
+                "from helpers import compute as do_it\n"
+                "class Base: pass\n"
+                "class Child(Base):\n"
+                "    def fn(self):\n"
+                "        return do_it(42)\n",
+            ),
+        )
+    )
     new_state = await stage.run(state)
     kinds = {r.kind for r in new_state.refs.references}
     # IMPORTS and INHERITS rows filtered out; CALLS kept.
@@ -137,9 +144,7 @@ async def test_capture_stage_kinds_filter_drops_imports_but_keeps_aliases(
     assert ReferenceKind.INHERITS not in kinds
     assert ReferenceKind.CALLS in kinds
     # The alias table survives the filter — resolver needs it later.
-    assert new_state.refs.reference_aliases.get("pkg.mod", {}).get("do_it") == (
-        "helpers.compute"
-    )
+    assert new_state.refs.reference_aliases.get("pkg.mod", {}).get("do_it") == ("helpers.compute")
 
 
 def test_get_capture_config_returns_safe_default():
@@ -176,18 +181,18 @@ async def test_capture_stage_emits_mentions_for_markdown_when_kinds_include_ment
         ),
     )
     stage = ReferenceCaptureStage()
-    state = _state((
+    state = _state(
         (
-            "pkg/README.md",
-            "# Docs\n"
-            "See `pkg.helpers.compute` for the entry point.\n"
-            "Also mentions `pkg.utils.runner`.\n",
-        ),
-    ))
+            (
+                "pkg/README.md",
+                "# Docs\n"
+                "See `pkg.helpers.compute` for the entry point.\n"
+                "Also mentions `pkg.utils.runner`.\n",
+            ),
+        )
+    )
     new_state = await stage.run(state)
-    mentions = [
-        r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS
-    ]
+    mentions = [r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS]
     names = {r.to_name for r in mentions}
     assert {"pkg.helpers.compute", "pkg.utils.runner"} <= names
 
@@ -205,14 +210,14 @@ async def test_capture_stage_skips_mentions_when_not_in_kinds(monkeypatch):
         ),
     )
     stage = ReferenceCaptureStage()
-    state = _state((
+    state = _state(
         (
-            "pkg/README.md",
-            "See `pkg.helpers.compute` and `pkg.utils.runner`.\n",
-        ),
-    ))
+            (
+                "pkg/README.md",
+                "See `pkg.helpers.compute` and `pkg.utils.runner`.\n",
+            ),
+        )
+    )
     new_state = await stage.run(state)
-    mentions = [
-        r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS
-    ]
+    mentions = [r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS]
     assert mentions == []

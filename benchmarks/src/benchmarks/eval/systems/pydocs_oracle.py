@@ -28,6 +28,7 @@ pipeline scaffolding verbatim so the inherited ``search()`` /
 deferred HF loader fires. Both ``datasets`` and ``pydocs_mcp`` imports stay
 DEFERRED inside ``index()`` so this module imports without either.
 """
+
 from __future__ import annotations
 
 import os

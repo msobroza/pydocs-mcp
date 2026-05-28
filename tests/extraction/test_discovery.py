@@ -14,6 +14,7 @@ Decision #6b: directory blocklist cannot be widened/narrowed — it's a module
 constant. These tests pin that invariant by asserting presence of common
 blocklist entries in output filtering.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ from pydocs_mcp.extraction.strategies.discovery import (
 
 
 # ── ProjectFileDiscoverer ─────────────────────────────────────────────────
+
 
 def test_project_discovers_py_md_ipynb(tmp_path: Path) -> None:
     """Default allowlist picks up all three supported extensions."""
@@ -60,8 +62,16 @@ def test_project_prunes_excluded_dirs(tmp_path: Path) -> None:
     """.venv, .git, node_modules, __pycache__, site-packages, etc. are HARDCODED
     excluded — never descended into, regardless of YAML config."""
     (tmp_path / "keep.py").write_text("\n")
-    for excluded in (".venv", ".git", "node_modules", "__pycache__",
-                     ".mypy_cache", "site-packages", "build", "dist"):
+    for excluded in (
+        ".venv",
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        "site-packages",
+        "build",
+        "dist",
+    ):
         (tmp_path / excluded).mkdir()
         (tmp_path / excluded / "secret.py").write_text("\n")
 
@@ -119,10 +129,12 @@ def test_project_nested_dirs_walked(tmp_path: Path) -> None:
 
 # ── DependencyFileDiscoverer ──────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class _FakeFile:
     """Stub for ``importlib.metadata.PackagePath`` — stringifies as posix path,
     locate_file returns absolute path under site-packages."""
+
     rel: str
     dist: _FakeDist
 
@@ -134,6 +146,7 @@ class _FakeFile:
 class _FakeDist:
     """Stub for ``importlib.metadata.Distribution`` — exposes ``files`` +
     ``locate_file`` which is what DependencyFileDiscoverer needs."""
+
     site_packages: Path
     rel_files: tuple[str, ...]
 
@@ -165,17 +178,21 @@ def test_dependency_missing_returns_empty_default_root(tmp_path: Path) -> None:
 
 
 def test_dependency_lists_dist_files_filters_by_extension(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Only .py/.md/.ipynb files under the distribution survive extension filter."""
-    dist = _make_fake_dist(tmp_path, (
-        "foo/__init__.py",
-        "foo/mod.py",
-        "foo/README.md",
-        "foo/notebook.ipynb",
-        "foo/binary.so",  # excluded by default allowlist
-        "foo/secret.env",  # excluded by default allowlist
-    ))
+    dist = _make_fake_dist(
+        tmp_path,
+        (
+            "foo/__init__.py",
+            "foo/mod.py",
+            "foo/README.md",
+            "foo/notebook.ipynb",
+            "foo/binary.so",  # excluded by default allowlist
+            "foo/secret.env",  # excluded by default allowlist
+        ),
+    )
     monkeypatch.setattr(
         "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
         lambda name: dist,
@@ -194,17 +211,21 @@ def test_dependency_lists_dist_files_filters_by_extension(
 
 
 def test_dependency_excludes_files_under_blocklisted_dirs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Files whose relpath crosses a hardcoded-excluded directory name are
     filtered out — e.g., a wheel that accidentally shipped ``foo/.git/hook.py``
     never leaks into the index."""
-    dist = _make_fake_dist(tmp_path, (
-        "foo/real.py",
-        "foo/.git/hook.py",
-        "foo/__pycache__/cached.py",
-        "foo/node_modules/pkg.py",
-    ))
+    dist = _make_fake_dist(
+        tmp_path,
+        (
+            "foo/real.py",
+            "foo/.git/hook.py",
+            "foo/__pycache__/cached.py",
+            "foo/node_modules/pkg.py",
+        ),
+    )
     monkeypatch.setattr(
         "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
         lambda name: dist,
@@ -222,7 +243,8 @@ def test_dependency_excludes_files_under_blocklisted_dirs(
 
 
 def test_dependency_respects_max_file_size_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Oversized shipped doc / source file is filtered just like project code."""
     dist = _make_fake_dist(tmp_path, ("foo/huge.py", "foo/small.py"))
@@ -245,12 +267,18 @@ def test_dependency_respects_max_file_size_bytes(
 
 
 def test_dependency_paths_sorted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Output ordering pinned deterministic (sorted)."""
-    dist = _make_fake_dist(tmp_path, (
-        "foo/z.py", "foo/a.py", "foo/m.py",
-    ))
+    dist = _make_fake_dist(
+        tmp_path,
+        (
+            "foo/z.py",
+            "foo/a.py",
+            "foo/m.py",
+        ),
+    )
     monkeypatch.setattr(
         "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
         lambda name: dist,
@@ -267,7 +295,8 @@ def test_dependency_paths_sorted(
 
 
 def test_dependency_empty_files_returns_default_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Distribution with no matching files → empty paths + default root sentinel.
     (Exercises the ``paths[0]`` guard in DependencyFileDiscoverer.)"""
@@ -283,6 +312,7 @@ def test_dependency_empty_files_returns_default_root(
 
 
 # ── Protocol conformance ──────────────────────────────────────────────────
+
 
 def test_both_discoverers_are_frozen_slotted() -> None:
     """Frozen + slots keep the dataclasses hashable / immutable (spec §3b)."""
@@ -307,8 +337,10 @@ def test_discoverers_satisfy_protocol_surface() -> None:
     )
 
     assert isinstance(
-        ProjectFileDiscoverer(scope=DiscoveryScopeConfig()), ProjectProto,
+        ProjectFileDiscoverer(scope=DiscoveryScopeConfig()),
+        ProjectProto,
     )
     assert isinstance(
-        DependencyFileDiscoverer(scope=DiscoveryScopeConfig()), DependencyProto,
+        DependencyFileDiscoverer(scope=DiscoveryScopeConfig()),
+        DependencyProto,
     )

@@ -14,6 +14,7 @@ Exposes:
 - ``PipelineState`` — historical alias for :class:`RetrieverState`, kept so
   existing predicates / tests that imported the name keep working.
 """
+
 from pydocs_mcp.retrieval.pipeline.base import RetrieverPipeline, RetrieverStep
 from pydocs_mcp.retrieval.pipeline.code_pipeline import (
     _MAX_PIPELINE_DEPTH,

@@ -14,6 +14,7 @@ via the six ``@stage_registry.register(...)`` decorators; without that
 import :func:`load_ingestion_pipeline` would raise ``KeyError`` on the
 first stage lookup.
 """
+
 from __future__ import annotations
 
 import importlib.resources
@@ -102,6 +103,7 @@ def load_ingestion_pipeline(
     # dataclass's required ``connection_provider`` field. A ``None``
     # stand-in is acceptable because no extraction stage dereferences it.
     from pydocs_mcp.retrieval.serialization import BuildContext
+
     context = BuildContext(  # type: ignore[arg-type]
         connection_provider=None,
         app_config=cfg,
@@ -151,7 +153,8 @@ def build_ingestion_pipeline(
 
 
 def _resolve_ingestion_pipeline_path(
-    path: Path, cfg: AppConfig,
+    path: Path,
+    cfg: AppConfig,
 ) -> Path:
     """Resolve ``path`` through retrieval's shared pipeline_path allowlist.
 
@@ -164,6 +167,7 @@ def _resolve_ingestion_pipeline_path(
     # + retrievers via its own side-effect imports; deferring keeps ``extraction``
     # importable from contexts that don't need retrieval's registry fully warmed.
     from pydocs_mcp.retrieval.config import _resolve_pipeline_path
+
     user_config_path = cfg._user_config_path() if hasattr(cfg, "_user_config_path") else None
     return _resolve_pipeline_path(path, user_config_path)
 

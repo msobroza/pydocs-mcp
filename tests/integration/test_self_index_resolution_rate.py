@@ -33,6 +33,7 @@ The corpus exercises every resolver rule:
 - Cross-module composition: ``orchestrator.py`` ties everything together
   so the resolver has to walk through multiple packages in one project.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -99,8 +100,11 @@ async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
     # shipped pipeline by default; thread MockEmbedder + the real SQLite
     # UoW factory so the strict from_dict gates in both stages are met.
     from tests._fakes import MockEmbedder
+
     pipeline = build_ingestion_pipeline(
-        AppConfig.load(), embedder=MockEmbedder(), uow_factory=uow_factory,
+        AppConfig.load(),
+        embedder=MockEmbedder(),
+        uow_factory=uow_factory,
     )
 
     orchestrator = ProjectIndexer(
@@ -133,8 +137,7 @@ async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM node_references WHERE kind='calls'",
         ).fetchone()[0]
         resolved = conn.execute(
-            "SELECT COUNT(*) FROM node_references "
-            "WHERE kind='calls' AND to_node_id IS NOT NULL",
+            "SELECT COUNT(*) FROM node_references WHERE kind='calls' AND to_node_id IS NOT NULL",
         ).fetchone()[0]
 
     rate = (resolved / total) if total else 0.0

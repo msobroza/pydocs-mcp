@@ -17,6 +17,7 @@ between this node's start and its first child's start. ``STRUCTURAL_ONLY_KINDS``
 (PACKAGE, SUBPACKAGE) never carry text — they're path scaffolding produced
 by ``build_package_tree``.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -26,25 +27,27 @@ from typing import Any
 
 
 class NodeKind(StrEnum):
-    PACKAGE                = "package"
-    SUBPACKAGE             = "subpackage"
-    MODULE                 = "module"
-    IMPORT_BLOCK           = "import_block"
-    CLASS                  = "class"
-    FUNCTION               = "function"
-    METHOD                 = "method"
-    MARKDOWN_HEADING       = "markdown_heading"
+    PACKAGE = "package"
+    SUBPACKAGE = "subpackage"
+    MODULE = "module"
+    IMPORT_BLOCK = "import_block"
+    CLASS = "class"
+    FUNCTION = "function"
+    METHOD = "method"
+    MARKDOWN_HEADING = "markdown_heading"
     NOTEBOOK_MARKDOWN_CELL = "notebook_markdown_cell"
-    NOTEBOOK_CODE_CELL     = "notebook_code_cell"
-    CODE_EXAMPLE           = "code_example"
+    NOTEBOOK_CODE_CELL = "notebook_code_cell"
+    CODE_EXAMPLE = "code_example"
 
 
 # Pure path scaffolding — never persisted in document_trees, never flattened
 # to Chunks. Only appear in the arborescence assembled by build_package_tree.
-STRUCTURAL_ONLY_KINDS: frozenset[NodeKind] = frozenset({
-    NodeKind.PACKAGE,
-    NodeKind.SUBPACKAGE,
-})
+STRUCTURAL_ONLY_KINDS: frozenset[NodeKind] = frozenset(
+    {
+        NodeKind.PACKAGE,
+        NodeKind.SUBPACKAGE,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,21 +59,21 @@ class DocumentNode:
     immutable and safely shareable across async tasks.
     """
 
-    node_id:         str
-    qualified_name:  str
-    title:           str
-    kind:            NodeKind
-    source_path:     str
-    start_line:      int
-    end_line:        int
-    text:            str
-    content_hash:    str
-    summary:         str                 = ""
-    extra_metadata:  Mapping[str, Any]   = field(default_factory=dict)
-    parent_id:       str | None          = None
+    node_id: str
+    qualified_name: str
+    title: str
+    kind: NodeKind
+    source_path: str
+    start_line: int
+    end_line: int
+    text: str
+    content_hash: str
+    summary: str = ""
+    extra_metadata: Mapping[str, Any] = field(default_factory=dict)
+    parent_id: str | None = None
     # Self-reference is stringified by `from __future__ import annotations`;
     # no explicit quotes needed.
-    children:        tuple[DocumentNode, ...] = ()
+    children: tuple[DocumentNode, ...] = ()
 
     def to_pageindex_json(self) -> dict[str, Any]:
         """Serialize as PageIndex-style JSON dict (spec §4.3).
@@ -101,6 +104,7 @@ class DocumentNode:
         (level-order); siblings tie-break left-to-right.
         """
         from collections import deque
+
         if self.qualified_name == target:
             return self
         queue: deque[DocumentNode] = deque(self.children)

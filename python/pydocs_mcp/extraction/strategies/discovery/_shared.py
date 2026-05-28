@@ -6,6 +6,7 @@ inside the hardcoded blocklist of directory names (.git, .venv, etc.).
 These helpers live here so the two implementations stay byte-identical
 on their pruning policy.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

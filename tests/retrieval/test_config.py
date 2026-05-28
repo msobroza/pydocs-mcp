@@ -1,9 +1,9 @@
 """Tests for AppConfig YAML layering + PipelineRouteEntry validator (spec §5.9)."""
+
 from __future__ import annotations
 
 import importlib.resources
 import os
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -38,13 +38,17 @@ def test_appconfig_user_yaml_overlays_shipped_baseline(tmp_path):
     """User YAML overrides selected keys; unmentioned keys keep shipped values."""
     user_file = tmp_path / "pydocs-mcp.yaml"
     user_file.write_text(
-        "metadata_schemas:\n"
-        "  chunk: [package, scope, origin, title, module, language]\n"
+        "metadata_schemas:\n  chunk: [package, scope, origin, title, module, language]\n"
     )
     config = AppConfig.load(explicit_path=user_file)
     # Overlay replaces the chunk schema wholesale
     assert config.metadata_schemas["chunk"] == (
-        "package", "scope", "origin", "title", "module", "language",
+        "package",
+        "scope",
+        "origin",
+        "title",
+        "module",
+        "language",
     )
     # The member schema stays at the shipped default
     assert config.metadata_schemas["member"] == ("package", "scope", "module", "name", "kind")
@@ -100,7 +104,9 @@ def test_pipeline_route_entry_default_only_is_valid():
 def test_pipeline_route_entry_rejects_both_predicate_and_default():
     with pytest.raises(ValidationError, match="exactly one of predicate or default"):
         PipelineRouteEntry(
-            predicate="always", default=True, pipeline_path=Path("pipelines/x.yaml"),
+            predicate="always",
+            default=True,
+            pipeline_path=Path("pipelines/x.yaml"),
         )
 
 
@@ -192,15 +198,12 @@ def test_pipeline_path_user_local_pipelines_overrides_shipped(tmp_path):
     local_override = local_pipelines / "chunk_search.yaml"
     local_override.write_text("name: custom\nstages: []\n")
     resolved = _resolve_pipeline_path(
-        Path("pipelines/chunk_search.yaml"), user_config_path=user_cfg_file,
+        Path("pipelines/chunk_search.yaml"),
+        user_config_path=user_cfg_file,
     )
     assert resolved == local_override.resolve()
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 def test_pipeline_path_falls_back_to_shipped_when_user_local_missing(tmp_path):
     """If the user has a pydocs-mcp.yaml but no local ``./pipelines/`` dir,
     ``pipelines/foo.yaml`` still resolves to the shipped bundle (no regression)."""
@@ -210,10 +213,14 @@ def test_pipeline_path_falls_back_to_shipped_when_user_local_missing(tmp_path):
     user_cfg_file.write_text("log_level: info\n")
     # No local pipelines/ subdir — falls through to shipped
     resolved = _resolve_pipeline_path(
-        Path("pipelines/chunk_search.yaml"), user_config_path=user_cfg_file,
+        Path("pipelines/chunk_search.yaml"),
+        user_config_path=user_cfg_file,
     )
     assert resolved.name == "chunk_search.yaml"
-    assert "pydocs_mcp/pipelines" in str(resolved)
+    # ``as_posix`` normalises ``\`` on Windows so the forward-slash substring
+    # assertion is platform-neutral. ``str(Path)`` would emit ``\`` separators
+    # on Windows and miss the ``pydocs_mcp/pipelines`` literal.
+    assert "pydocs_mcp/pipelines" in resolved.as_posix()
 
 
 def test_pipeline_path_legacy_presets_prefix_raises_migration_error(tmp_path):
@@ -244,7 +251,9 @@ def test_appconfig_includes_extraction_defaults():
     assert config.extraction.chunking.markdown.max_heading_level == 3
     assert config.extraction.chunking.notebook.include_outputs is False
     assert config.extraction.discovery.project.include_extensions == [
-        ".py", ".md", ".ipynb",
+        ".py",
+        ".md",
+        ".ipynb",
     ]
     assert config.extraction.discovery.project.max_file_size_bytes == 500_000
     assert config.extraction.discovery.dependency.max_file_size_bytes == 500_000
@@ -273,7 +282,9 @@ def test_appconfig_extraction_yaml_round_trips(tmp_path):
     # Untouched — still at shipped defaults.
     assert config.extraction.chunking.markdown.min_heading_level == 1
     assert config.extraction.discovery.project.include_extensions == [
-        ".py", ".md", ".ipynb",
+        ".py",
+        ".md",
+        ".ipynb",
     ]
     assert config.extraction.members.members_per_module_cap == 120
 

@@ -14,6 +14,7 @@ tests that exercise the build path live alongside the dense steps' own
 test modules. These tests only assert "the YAML the project ships parses
 and has the right shape".
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,10 +22,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-PIPELINES_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "python" / "pydocs_mcp" / "pipelines"
-)
+PIPELINES_DIR = Path(__file__).resolve().parents[2] / "python" / "pydocs_mcp" / "pipelines"
 
 NEW_PRESETS = (
     "chunk_search_dense.yaml",

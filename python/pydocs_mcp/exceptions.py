@@ -8,6 +8,7 @@ Concrete exception classes (``MCPToolError``, ``UnitOfWorkNotEnteredError``,
 ``PipelineLoadError``, ...) live in their respective modules close to the
 code that raises them; only the root + the rule lives here.
 """
+
 from __future__ import annotations
 
 

@@ -7,6 +7,7 @@ Also pins the failure path: if ``System.index`` raises, the run is
 closed with ``status="failed"`` and the exception propagates cleanly
 without leaving an unclosed file.
 """
+
 from __future__ import annotations
 
 import json
@@ -250,13 +251,8 @@ async def test_runner_emits_latency_metrics(tmp_path: Path) -> None:
 
     files = sorted(jsonl_dir.glob("*.jsonl"))
     assert len(files) == 1
-    lines = [
-        json.loads(line)
-        for line in files[0].read_text().splitlines() if line.strip()
-    ]
-    metric_names = {
-        line["name"] for line in lines if line.get("_event") == "metric"
-    }
+    lines = [json.loads(line) for line in files[0].read_text().splitlines() if line.strip()]
+    metric_names = {line["name"] for line in lines if line.get("_event") == "metric"}
     assert "indexing_seconds" in metric_names
     assert "search_seconds" in metric_names
     assert "indexing_seconds_p50" in metric_names

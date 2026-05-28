@@ -6,6 +6,7 @@ contract — row count, query-stripping, gold shape (both ``doc_ids`` and
 ``doc_contents``), library / perturbation filters, and library-name
 normalization to PyPI-canonical lowercase.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -61,9 +62,7 @@ async def test_query_stripping_preserves_in_body_answer_label() -> None:
     tasks = [t async for t in dataset.tasks()]
     # The merge row (perturbation_origin_id=5) carries an in-body "DataFrame A:"
     # label in its question, plus a trailing line-leading "A:\n<code>" answer.
-    merge_tasks = [
-        t for t in tasks if t.metadata["perturbation_origin_id"] == "5"
-    ]
+    merge_tasks = [t for t in tasks if t.metadata["perturbation_origin_id"] == "5"]
     assert merge_tasks, "fixture must include the merge row (origin_id=5)"
     merge_task = merge_tasks[0]
     # The in-body label must survive — the question was not truncated.
@@ -92,7 +91,8 @@ async def test_library_filter_normalizes_title_case_input() -> None:
     lowercase form."""
     for filter_value in (("Pandas",), ("pandas",), ("PANDAS",)):
         dataset = Ds1000Dataset(
-            fixture_path=FIXTURE_PATH, library_filter=filter_value,
+            fixture_path=FIXTURE_PATH,
+            library_filter=filter_value,
         )
         tasks = [t async for t in dataset.tasks()]
         assert len(tasks) == 3, f"{filter_value!r} should match 3 pandas rows"
@@ -106,7 +106,8 @@ async def test_library_filter_normalizes_alias_input() -> None:
     one sklearn fixture row."""
     for filter_value in (("Sklearn",), ("scikit-learn",)):
         dataset = Ds1000Dataset(
-            fixture_path=FIXTURE_PATH, library_filter=filter_value,
+            fixture_path=FIXTURE_PATH,
+            library_filter=filter_value,
         )
         tasks = [t async for t in dataset.tasks()]
         assert len(tasks) == 1, f"{filter_value!r} should match the sklearn row"
@@ -118,7 +119,8 @@ async def test_library_filter_mixed_case_multi_element() -> None:
     comparing. ``("Pandas", "NUMPY")`` selects the union of the 3 pandas +
     2 numpy rows (5 total), each tagged with the normalized lowercase form."""
     dataset = Ds1000Dataset(
-        fixture_path=FIXTURE_PATH, library_filter=("Pandas", "NUMPY"),
+        fixture_path=FIXTURE_PATH,
+        library_filter=("Pandas", "NUMPY"),
     )
     tasks = [t async for t in dataset.tasks()]
     assert len(tasks) == 5
@@ -132,7 +134,8 @@ async def test_library_filter_multi_element_selects_union_of_libraries() -> None
     tagged with one of the two requested libraries (guards against
     off-by-one in the filter loop)."""
     dataset = Ds1000Dataset(
-        fixture_path=FIXTURE_PATH, library_filter=("pandas", "numpy"),
+        fixture_path=FIXTURE_PATH,
+        library_filter=("pandas", "numpy"),
     )
     tasks = [t async for t in dataset.tasks()]
     assert len(tasks) == 5
@@ -145,13 +148,12 @@ async def test_perturbation_filter_slices_rows() -> None:
     ``("Origin",)`` returns the Origin subset."""
     dataset_all = Ds1000Dataset(fixture_path=FIXTURE_PATH)
     all_tasks = [t async for t in dataset_all.tasks()]
-    origin_count = sum(
-        1 for t in all_tasks if t.metadata.get("perturbation_type") == "Origin"
-    )
+    origin_count = sum(1 for t in all_tasks if t.metadata.get("perturbation_type") == "Origin")
     assert origin_count > 0  # Sanity-check that the fixture exercises the filter.
 
     dataset_origin = Ds1000Dataset(
-        fixture_path=FIXTURE_PATH, perturbation_filter=("Origin",),
+        fixture_path=FIXTURE_PATH,
+        perturbation_filter=("Origin",),
     )
     origin_tasks = [t async for t in dataset_origin.tasks()]
     assert len(origin_tasks) == origin_count
@@ -167,7 +169,8 @@ async def test_gold_has_doc_ids_and_doc_contents_aligned() -> None:
     tasks = [t async for t in dataset.tasks()]
     # At least one fixture row has multi-doc gold (>1 entry under "docs").
     multi_doc = [
-        t for t in tasks
+        t
+        for t in tasks
         if len(t.gold.extra["doc_ids"]) > 1  # type: ignore[index]
     ]
     assert multi_doc, "fixture must include >=1 row with multi-doc gold"
@@ -198,6 +201,7 @@ async def test_library_name_normalized_to_lowercase() -> None:
     # The fixture may not include a pytorch row (count constraint: 3+2+1+1+1=8),
     # so verify the normalization map directly.
     from benchmarks.eval.datasets.ds1000 import _LIBRARY_NORMALIZATION
+
     assert _LIBRARY_NORMALIZATION["Pytorch"] == "torch"
     assert _LIBRARY_NORMALIZATION["Pandas"] == "pandas"
     assert _LIBRARY_NORMALIZATION["Scikit-learn"] == "scikit-learn"
@@ -218,6 +222,7 @@ def test_dataset_is_registered_under_ds1000() -> None:
     the runner looks the loader up by name (``"ds1000"``)."""
     # Force-import the package so the decorator fires.
     import benchmarks.eval.datasets
+
     assert "ds1000" in dataset_registry.names()
 
 

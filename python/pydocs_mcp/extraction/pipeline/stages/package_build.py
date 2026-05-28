@@ -8,6 +8,7 @@ non-fatal skip one level up (declared-but-not-installed deps are common
 during local development; the stage keeps its contract honest by
 raising).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -53,6 +54,7 @@ class PackageBuildStage:
         from pydocs_mcp.extraction.strategies._dep_helpers import (
             find_installed_distribution,
         )
+
         dep_name = str(state.files.target)
         dist = find_installed_distribution(dep_name)
         if dist is None:
@@ -62,9 +64,7 @@ class PackageBuildStage:
         version = dist.metadata["Version"] or "?"
         summary = dist.metadata["Summary"] or ""
         homepage = dist.metadata["Home-page"] or ""
-        deps = tuple(
-            r.split(";")[0].strip() for r in (dist.requires or [])[:50]
-        )
+        deps = tuple(r.split(";")[0].strip() for r in (dist.requires or [])[:50])
         return Package(
             name=name,
             version=version,

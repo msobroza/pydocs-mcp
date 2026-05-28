@@ -12,6 +12,7 @@ decisions for Task 4:
 7. to_dict emits {type, schema_name, target_field}.
 8. from_dict round-trip via BuildContext rebuilds an equivalent step.
 """
+
 from __future__ import annotations
 
 from dataclasses import is_dataclass

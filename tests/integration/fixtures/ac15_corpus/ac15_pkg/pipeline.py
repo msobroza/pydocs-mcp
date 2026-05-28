@@ -1,5 +1,6 @@
 """Pipeline class with self-attribute calls. Exercises Rule 0 (self.X.Y rewrite)
 + Rule 5 (self-method short-circuit)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

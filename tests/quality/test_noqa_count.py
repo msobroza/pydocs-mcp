@@ -12,6 +12,7 @@ small buffer above that to accommodate the existing per-file containment
 catches in extraction/strategies/* that pre-date this audit. The
 threshold is a CEILING — it must never silently grow.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -61,7 +62,8 @@ def test_noqa_ble001_count_below_threshold() -> None:
     matches: list[tuple[Path, int, str]] = []
     for path in _iter_python_files(_PACKAGE_ROOT):
         for lineno, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1,
+            path.read_text(encoding="utf-8").splitlines(),
+            start=1,
         ):
             if _NOQA_MARKER in line and "except" in line:
                 matches.append((path, lineno, line.strip()))

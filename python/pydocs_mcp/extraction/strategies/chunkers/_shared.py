@@ -5,6 +5,7 @@ implementation; this module is reserved for utilities multiple chunkers
 genuinely depend on (CommonMark fence regex, path/qname helpers, hash
 + summary primitives, fallback MODULE node).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -93,9 +94,7 @@ def _content_hash(text: str, kind: NodeKind, title: str) -> str:
     incremental re-index — identical inputs produce identical hashes
     across processes (hashlib is deterministic unlike Python ``hash()``)."""
     # md5 used as a non-cryptographic content fingerprint, not a security hash.
-    h = hashlib.md5(
-        f"{kind.value}:{title}:{text}".encode(), usedforsecurity=False
-    ).hexdigest()
+    h = hashlib.md5(f"{kind.value}:{title}:{text}".encode(), usedforsecurity=False).hexdigest()
     return h[:12]
 
 
@@ -109,7 +108,10 @@ def _docstring_summary(doc: str) -> str:
 
 
 def _fallback_module_node(
-    module: str, path: str, content: str, root: Path,
+    module: str,
+    path: str,
+    content: str,
+    root: Path,
 ) -> DocumentNode:
     """Single-node MODULE tree for unparsable files — the file still gets
     one chunk keyed by its full source. Used by AstPythonChunker on

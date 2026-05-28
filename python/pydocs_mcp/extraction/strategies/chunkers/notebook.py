@@ -6,6 +6,7 @@ stderr or base64 image data, and pollute FTS). Malformed JSON falls
 back to a single MODULE carrying the raw file content, so an unreadable
 notebook still produces a searchable chunk (spec §8.3).
 """
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,11 @@ class NotebookChunker:
     include_outputs: bool = False
 
     def build_tree(
-        self, path: str, content: str, package: str, root: Path,
+        self,
+        path: str,
+        content: str,
+        package: str,
+        root: Path,
     ) -> DocumentNode:
         module = _module_from_doc_path(path, root)
         rel = _relpath(path, root)
@@ -41,7 +46,11 @@ class NotebookChunker:
             return _fallback_module_node(module, path, content, root)
         children = tuple(
             _notebook_cell_node(
-                cell, i, module, rel, include_outputs=self.include_outputs,
+                cell,
+                i,
+                module,
+                rel,
+                include_outputs=self.include_outputs,
             )
             for i, cell in enumerate(cells)
         )
@@ -87,8 +96,12 @@ def _safe_load_cells(content: str, path: str) -> list[dict] | None:
 
 
 def _notebook_cell_node(
-    cell: dict, index: int, module: str, rel: str,
-    *, include_outputs: bool,
+    cell: dict,
+    index: int,
+    module: str,
+    rel: str,
+    *,
+    include_outputs: bool,
 ) -> DocumentNode:
     """Build one MARKDOWN / CODE cell node keyed by ``module#cell-{index}``."""
     cell_type = cell.get("cell_type", "")

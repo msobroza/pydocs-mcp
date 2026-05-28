@@ -1,4 +1,5 @@
 """TopKFilterStep.publish_to writes its output to state.scratch (AC-20)."""
+
 from __future__ import annotations
 
 import pytest
@@ -11,11 +12,13 @@ from pydocs_mcp.retrieval.steps.top_k_filter import TopKFilterStep
 def _state_with_candidates() -> RetrieverState:
     return RetrieverState(
         query=SearchQuery(terms="x", max_results=10),
-        candidates=ChunkList(items=(
-            Chunk(text="a", id=1, relevance=0.9),
-            Chunk(text="b", id=2, relevance=0.7),
-            Chunk(text="c", id=3, relevance=0.5),
-        )),
+        candidates=ChunkList(
+            items=(
+                Chunk(text="a", id=1, relevance=0.9),
+                Chunk(text="b", id=2, relevance=0.7),
+                Chunk(text="c", id=3, relevance=0.5),
+            )
+        ),
     )
 
 
@@ -35,11 +38,7 @@ async def test_publish_to_writes_topk_to_scratch() -> None:
     out = await step.run(state)
     assert "bm25.ranked" in out.scratch
     payload = out.scratch["bm25.ranked"]
-    items = (
-        tuple(payload.items)
-        if hasattr(payload, "items")
-        else tuple(payload)
-    )
+    items = tuple(payload.items) if hasattr(payload, "items") else tuple(payload)
     assert len(items) == 2
     assert items[0].id == 1
     assert items[1].id == 2

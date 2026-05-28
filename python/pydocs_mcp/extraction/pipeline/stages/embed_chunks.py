@@ -17,6 +17,7 @@ set; production wiring constructs an :class:`Embedder` once at
 server / CLI startup (via ``build_embedder(cfg)``) and threads it into
 the :class:`BuildContext`. Tests pass a :class:`MockEmbedder`.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -61,9 +62,7 @@ class EmbedChunksStage:
             return state
 
         skip = state.existing_chunk_hashes or {}
-        chunks_to_embed = tuple(
-            c for c in state.chunks.chunks if c.content_hash not in skip
-        )
+        chunks_to_embed = tuple(c for c in state.chunks.chunks if c.content_hash not in skip)
 
         # Always stamp the package with embedder identity, even if no chunks
         # need re-embedding — so ``find_packages_with_stale_embeddings``
@@ -71,7 +70,8 @@ class EmbedChunksStage:
         new_package = state.package
         if state.package is not None:
             new_package = replace(
-                state.package, embedding_model=self.embedder.model_name,
+                state.package,
+                embedding_model=self.embedder.model_name,
             )
 
         if not chunks_to_embed:
@@ -82,7 +82,7 @@ class EmbedChunksStage:
         # Embed only the chunks not in the skip set
         embeddings: list[Embedding] = []
         for i in range(0, len(chunks_to_embed), self.batch_size):
-            batch = chunks_to_embed[i:i + self.batch_size]
+            batch = chunks_to_embed[i : i + self.batch_size]
             embs = await self.embedder.embed_chunks(
                 tuple(c.text for c in batch),
             )
@@ -90,18 +90,21 @@ class EmbedChunksStage:
 
         # strict=True surfaces buggy Embedders that return the wrong
         # number of vectors instead of silently truncating chunks_to_embed.
-        embedded_by_hash = dict(zip(
-            (c.content_hash for c in chunks_to_embed),
-            embeddings,
-            strict=True,
-        ))
+        embedded_by_hash = dict(
+            zip(
+                (c.content_hash for c in chunks_to_embed),
+                embeddings,
+                strict=True,
+            )
+        )
 
         # Splice embeddings back into chunks at the right positions;
         # skipped chunks (not in embedded_by_hash) come out with their
         # existing embedding (typically None — their vector lives in TQ).
         new_chunks = tuple(
             replace(c, embedding=embedded_by_hash[c.content_hash])
-            if c.content_hash in embedded_by_hash else c
+            if c.content_hash in embedded_by_hash
+            else c
             for c in state.chunks.chunks
         )
         new_chunks_bundle = replace(state.chunks, chunks=new_chunks)

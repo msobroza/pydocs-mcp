@@ -22,6 +22,7 @@ rootdir-detect at ``benchmarks/`` and resolve ``tests`` to
 import. A small local class avoids that namespace clash without
 needing custom rootdir / pythonpath plumbing.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -51,7 +52,8 @@ class _BenchmarkMockEmbedder:
         return self._derive(text)
 
     async def embed_chunks(
-        self, texts: Sequence[str],
+        self,
+        texts: Sequence[str],
     ) -> tuple[np.ndarray, ...]:
         return tuple(self._derive(t) for t in texts)
 

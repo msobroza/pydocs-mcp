@@ -21,6 +21,7 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
     ``max_chars - total > 100`` chars remain, the piece is truncated and
     appended; otherwise nothing extra is emitted.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
@@ -95,9 +96,7 @@ def format_packages_list(packages: tuple[Package, ...]) -> str:
     Cap at ``LIST_PACKAGES_MAX`` packages.
     """
     sorted_pkgs = sorted(packages[:LIST_PACKAGES_MAX], key=lambda p: p.name)
-    return "\n".join(
-        f"- {p.name} {p.version} — {p.summary}" for p in sorted_pkgs
-    )
+    return "\n".join(f"- {p.name} {p.version} — {p.summary}" for p in sorted_pkgs)
 
 
 def format_package_doc(doc: PackageDoc) -> str:
@@ -171,9 +170,9 @@ def format_members_markdown_within_budget(
 # call sites and makes the §A.1 shape one edit away if the vocabulary
 # changes (e.g., MENTIONS → "Mentions of X").
 _SHOW_VOCAB: dict[str, tuple[str, str]] = {
-    "callers":  ("Callers of", "caller"),
-    "callees":  ("Callees of", "callee"),
-    "inherits": ("Bases of",   "base"),
+    "callers": ("Callers of", "caller"),
+    "callees": ("Callees of", "callee"),
+    "inherits": ("Bases of", "base"),
 }
 
 

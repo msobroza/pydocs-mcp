@@ -7,6 +7,7 @@ subclass that defaults the flag on. This variant's ``search()`` prefers
 the budgeted 1-item composite (``state.result``) so pydocs emits one blob
 like Context7/Neuledge for a fair cross-system recall@1.
 """
+
 from __future__ import annotations
 
 # WHY: importing the package fires the ``@system_registry.register``

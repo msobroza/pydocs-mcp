@@ -9,6 +9,7 @@ hermetic. Introspection runs against real stdlib modules (``json``,
 ``asyncio``) — that keeps the genuine ``importlib`` + ``inspect`` path
 under test without needing a real package store.
 """
+
 from __future__ import annotations
 
 import re
@@ -35,8 +36,11 @@ def _pkg(name: str) -> Package:
     )
 
 
-def _service(packages: dict[str, Package] | None = None) -> tuple[
-    ModuleInspector, InMemoryPackageStore,
+def _service(
+    packages: dict[str, Package] | None = None,
+) -> tuple[
+    ModuleInspector,
+    InMemoryPackageStore,
 ]:
     store = InMemoryPackageStore(items=dict(packages or {}))
     svc = ModuleInspector(uow_factory=make_fake_uow_factory(packages=store))
@@ -52,10 +56,7 @@ async def test_inspect_unindexed_package() -> None:
 
     result = await svc.inspect("ghost")
 
-    assert result == (
-        "'ghost' is not indexed. "
-        "Use lookup(target='') to see available packages."
-    )
+    assert result == ("'ghost' is not indexed. Use lookup(target='') to see available packages.")
     assert sum(1 for c in store.calls if c.method == "get") == 1
 
 
@@ -69,10 +70,7 @@ async def test_inspect_invalid_submodule() -> None:
     # Mirror the production f-string exactly: the value is wrapped in
     # literal single quotes — no escaping, since the input itself
     # contains a quote.
-    expected = (
-        f"Invalid submodule '{bad}'. "
-        "Use only letters, digits, underscores, and dots."
-    )
+    expected = f"Invalid submodule '{bad}'. Use only letters, digits, underscores, and dots."
     assert result == expected
 
 
@@ -131,8 +129,9 @@ async def test_inspect_normalizes_package_name() -> None:
 def test_service_is_frozen_slotted_dataclass() -> None:
     svc, _ = _service()
     import dataclasses
+
     with pytest.raises(dataclasses.FrozenInstanceError):
-        svc.uow_factory = (lambda: None)  # type: ignore[misc]
+        svc.uow_factory = lambda: None  # type: ignore[misc]
     assert not hasattr(svc, "__dict__")
 
 

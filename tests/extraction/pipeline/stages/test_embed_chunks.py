@@ -1,4 +1,5 @@
 """EmbedChunksStage populates Chunk.embedding (AC-23)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -70,9 +71,7 @@ async def test_embed_chunks_preserves_chunk_fields_other_than_embedding() -> Non
     text/id/metadata must round-trip unchanged."""
     embedder = MockEmbedder(dim=4)
     state = _state(
-        chunks=(
-            Chunk(text="hello", id=42, metadata={"package": "x"}),
-        ),
+        chunks=(Chunk(text="hello", id=42, metadata={"package": "x"}),),
     )
     stage = EmbedChunksStage(embedder=embedder)
     out = await stage.run(state)
@@ -178,11 +177,13 @@ async def test_embed_chunks_strict_zip_raises_on_embedder_mismatch() -> None:
             # Return ONE FEWER embedding than requested — buggy Embedder
             return tuple(np.zeros(4, dtype=np.float32) for _ in texts[:-1])
 
-    state = _state((
-        Chunk(text="alpha", id=1),
-        Chunk(text="beta", id=2),
-        Chunk(text="gamma", id=3),
-    ))
+    state = _state(
+        (
+            Chunk(text="alpha", id=1),
+            Chunk(text="beta", id=2),
+            Chunk(text="gamma", id=3),
+        )
+    )
     stage = EmbedChunksStage(embedder=_TruncatingEmbedder(), batch_size=10)
     with pytest.raises(ValueError):  # strict=True raises
         await stage.run(state)

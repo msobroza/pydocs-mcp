@@ -4,6 +4,7 @@ Wraps ``_fast.read_files_parallel`` under ``asyncio.to_thread`` — the
 underlying Rayon iterator is CPU-bound on large projects, so offloading
 keeps the event loop responsive.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,7 @@ class FileReadStage:
     def _read(self, paths: list[str]) -> list[tuple[str, str]]:
         # Deferred so _fast's native/fallback choice is resolved lazily.
         from pydocs_mcp._fast import read_files_parallel
+
         return list(read_files_parallel(paths))
 
     @classmethod

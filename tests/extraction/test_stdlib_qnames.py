@@ -1,4 +1,5 @@
 """Pin stdlib_qnames.json bundle (sub-PR follow-up to #5c)."""
+
 from __future__ import annotations
 
 import json
@@ -7,6 +8,7 @@ import json
 def _load() -> dict:
     """Load the bundled JSON via importlib.resources for path-independence."""
     from importlib.resources import files
+
     text = files("pydocs_mcp.defaults").joinpath("stdlib_qnames.json").read_text(encoding="utf-8")
     return json.loads(text)
 

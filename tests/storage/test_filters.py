@@ -1,4 +1,5 @@
 """Tests for Filter tree + MultiFieldFormat + MetadataSchema (spec §5.1, AC #4/#5/#6)."""
+
 from __future__ import annotations
 
 import pytest
@@ -138,10 +139,12 @@ def test_register_format_helper_adds_and_unregisters():
 
 
 def test_all_filter_composition():
-    tree = All(clauses=(
-        FieldEq(field="package", value="fastapi"),
-        FieldLike(field="title", substring="route"),
-    ))
+    tree = All(
+        clauses=(
+            FieldEq(field="package", value="fastapi"),
+            FieldLike(field="title", substring="route"),
+        )
+    )
     assert len(tree.clauses) == 2
 
 

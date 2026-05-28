@@ -1,4 +1,5 @@
 """Tests for IngestionPipeline + IngestionState + TargetKind (spec §7.1)."""
+
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
@@ -98,7 +99,8 @@ async def test_pipeline_threads_state_forward_through_stages():
 
         async def run(self, state: IngestionState) -> IngestionState:
             new_files = replace(
-                state.files, paths=state.files.paths + (self._added,),
+                state.files,
+                paths=state.files.paths + (self._added,),
             )
             return replace(state, files=new_files)
 

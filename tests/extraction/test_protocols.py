@@ -1,4 +1,5 @@
 """Smoke tests for extraction Protocols (sub-PR #5)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -37,6 +38,7 @@ def test_chunker_conforming_instance_exposes_from_config_classmethod():
     (AstPythonChunker, HeadingMarkdownChunker, NotebookChunker) all satisfy
     this; this test pins it so a 4th chunker can't silently skip it.
     """
+
     class _ConformingChunker:
         def build_tree(self, path, content, package, root):
             return _FakeDocumentNode()
@@ -50,7 +52,8 @@ def test_chunker_conforming_instance_exposes_from_config_classmethod():
     assert callable(_ConformingChunker.from_config)
     # classmethod descriptor (not plain method or staticmethod)
     assert isinstance(
-        _ConformingChunker.__dict__["from_config"], classmethod,
+        _ConformingChunker.__dict__["from_config"],
+        classmethod,
     )
 
 

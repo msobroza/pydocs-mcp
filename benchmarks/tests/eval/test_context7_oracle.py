@@ -14,6 +14,7 @@ Two axes are covered:
 
 Network is BLOCKED — the Context7Client is fully mocked (no live HTTP).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -49,7 +50,8 @@ class _RecordingClient:
 
 @pytest.mark.asyncio
 async def test_oracle_mode_skips_resolve_library_id(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     client = _RecordingClient()
     import benchmarks.eval.systems.context7 as c7
@@ -78,7 +80,8 @@ async def test_oracle_mode_skips_resolve_library_id(
 
 @pytest.mark.asyncio
 async def test_default_mode_calls_resolve_and_caches(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     client = _RecordingClient(resolved="/pandas-dev/pandas")
     import benchmarks.eval.systems.context7 as c7

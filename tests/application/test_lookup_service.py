@@ -10,6 +10,7 @@ the no-backing-service path now pass ``NullTreeService()`` /
 ``NullReferenceService()`` — same user-visible error contract, no
 ``is None`` branches in production code.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -84,7 +85,8 @@ async def test_lookup_empty_target_returns_package_list(
 
 @pytest.mark.asyncio
 async def test_lookup_package_only_returns_package_doc(
-    package_lookup_mock: MagicMock, fake_package: Package,
+    package_lookup_mock: MagicMock,
+    fake_package: Package,
 ) -> None:
     doc = PackageDoc(package=fake_package, chunks=(), members=())
     package_lookup_mock.get_package_doc = AsyncMock(return_value=doc)
@@ -165,9 +167,7 @@ async def test_longest_indexed_module_falls_back_to_find_module(
         tree_svc=_null_tree(),
         ref_svc=_null_ref(),
     )
-    match = await svc._longest_indexed_module(
-        "fastapi", ["fastapi", "routing", "APIRouter"]
-    )
+    match = await svc._longest_indexed_module("fastapi", ["fastapi", "routing", "APIRouter"])
     assert match == ("fastapi.routing", 2)
 
 
@@ -180,9 +180,7 @@ async def test_longest_indexed_module_returns_none_when_nothing_matches(
         tree_svc=_null_tree(),
         ref_svc=_null_ref(),
     )
-    match = await svc._longest_indexed_module(
-        "fastapi", ["fastapi", "nonexistent", "foo"]
-    )
+    match = await svc._longest_indexed_module("fastapi", ["fastapi", "nonexistent", "foo"])
     assert match is None
 
 
@@ -264,9 +262,7 @@ async def test_module_lookup_with_tree_svc_returns_rendered_tree(
     package_lookup_mock: MagicMock,
 ) -> None:
     fake_tree = MagicMock()
-    fake_tree.to_pageindex_json = MagicMock(
-        return_value={"title": "routing", "nodes": []}
-    )
+    fake_tree.to_pageindex_json = MagicMock(return_value={"title": "routing", "nodes": []})
     tree_svc = MagicMock()
     tree_svc.exists = AsyncMock(return_value=True)
     tree_svc.get_tree = AsyncMock(return_value=fake_tree)
@@ -335,9 +331,7 @@ async def test_show_callers_with_null_ref_svc_raises_service_unavailable(
         ref_svc=_null_ref(),
     )
     with pytest.raises(ServiceUnavailableError):
-        await svc.lookup(
-            LookupInput(target="fastapi.routing.X", show="callers")
-        )
+        await svc.lookup(LookupInput(target="fastapi.routing.X", show="callers"))
 
 
 @pytest.mark.asyncio
@@ -356,9 +350,7 @@ async def test_show_inherits_on_non_class_raises_invalid_argument(
         ref_svc=_null_ref(),
     )
     with pytest.raises(InvalidArgumentError) as exc:
-        await svc.lookup(
-            LookupInput(target="fastapi.routing.X.y", show="inherits")
-        )
+        await svc.lookup(LookupInput(target="fastapi.routing.X.y", show="inherits"))
     assert "class" in str(exc.value).lower()
 
 
@@ -403,15 +395,16 @@ async def test_show_inherits_on_class_routes_through_ref_svc(
     ref_svc.find_by_name = AsyncMock(return_value=base_refs)
 
     svc = LookupService(
-        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
     )
-    out = await svc.lookup(
-        LookupInput(target="fastapi.routing.X", show="inherits")
-    )
+    out = await svc.lookup(LookupInput(target="fastapi.routing.X", show="inherits"))
     assert "BaseAuth" in out
     assert "Mixin" in out
     ref_svc.find_by_name.assert_awaited_once_with(
-        "fastapi.routing.X", kind=ReferenceKind.INHERITS,
+        "fastapi.routing.X",
+        kind=ReferenceKind.INHERITS,
     )
 
 
@@ -434,14 +427,15 @@ async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
     ref_svc.find_by_name = AsyncMock(return_value=())
 
     svc = LookupService(
-        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
     )
-    out = await svc.lookup(
-        LookupInput(target="fastapi.routing.X", show="inherits")
-    )
+    out = await svc.lookup(LookupInput(target="fastapi.routing.X", show="inherits"))
     assert "No bases found." in out
     ref_svc.find_by_name.assert_awaited_once_with(
-        "fastapi.routing.X", kind=ReferenceKind.INHERITS,
+        "fastapi.routing.X",
+        kind=ReferenceKind.INHERITS,
     )
 
 
@@ -474,11 +468,11 @@ async def test_show_callers_with_ref_svc_renders_refs(
     ref_svc.callers = AsyncMock(return_value=(ref,))
 
     svc = LookupService(
-        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
     )
-    out = await svc.lookup(
-        LookupInput(target="fastapi.routing.X.y", show="callers")
-    )
+    out = await svc.lookup(LookupInput(target="fastapi.routing.X.y", show="callers"))
     assert "caller.mod.a" in out
     assert "fastapi.routing.X.y" in out
     ref_svc.callers.assert_awaited_once_with("fastapi", "fastapi.routing.X.y")
@@ -503,11 +497,11 @@ async def test_show_callees_with_ref_svc_invokes_callees_method(
     ref_svc.callees = AsyncMock(return_value=())
 
     svc = LookupService(
-        package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc,
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
     )
-    out = await svc.lookup(
-        LookupInput(target="fastapi.routing.X.y", show="callees")
-    )
+    out = await svc.lookup(LookupInput(target="fastapi.routing.X.y", show="callees"))
     assert out.startswith("# Callees of `fastapi.routing.X.y`\n")
     assert "No callees found." in out
     ref_svc.callees.assert_awaited_once_with("fastapi", "fastapi.routing.X.y")
@@ -531,9 +525,7 @@ async def test_show_tree_on_symbol_returns_node_json(
         tree_svc=tree_svc,
         ref_svc=_null_ref(),
     )
-    out = await svc.lookup(
-        LookupInput(target="fastapi.routing.APIRouter", show="tree")
-    )
+    out = await svc.lookup(LookupInput(target="fastapi.routing.APIRouter", show="tree"))
     assert "APIRouter" in out
     assert "include_router" in out
 
@@ -602,9 +594,7 @@ async def test_symbol_lookup_inherits_class_check_runs_before_ref_call(
         ref_svc=ref_svc,
     )
     with pytest.raises(InvalidArgumentError) as exc:
-        await svc.lookup(
-            LookupInput(target="pkg.mod.func", show="inherits")
-        )
+        await svc.lookup(LookupInput(target="pkg.mod.func", show="inherits"))
     assert "class" in str(exc.value).lower()
     # ref_svc was never reached — class-check fires first.
     ref_svc.find_by_name.assert_not_awaited()
@@ -650,9 +640,7 @@ async def test_null_ref_svc_callers_raises_yaml_anchored_message(
         ref_svc=_null_ref(),
     )
     with pytest.raises(ServiceUnavailableError) as exc:
-        await svc.lookup(
-            LookupInput(target="pkg.mod.f", show="callers")
-        )
+        await svc.lookup(LookupInput(target="pkg.mod.f", show="callers"))
     assert "reference_graph.capture.enabled" in str(exc.value)
 
 
@@ -664,4 +652,5 @@ async def test_ref_getters_table_has_three_keys() -> None:
     schema without a matching table entry would fall through to
     InvalidArgumentError, which the symmetric test above catches)."""
     from pydocs_mcp.application.lookup_service import _REF_GETTERS
+
     assert set(_REF_GETTERS) == {"callers", "callees", "inherits"}

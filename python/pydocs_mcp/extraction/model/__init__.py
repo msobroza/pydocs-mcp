@@ -2,6 +2,7 @@
 :class:`NodeKind`, the tree-to-chunks flatten helper, and the package
 tree builder.
 """
+
 from pydocs_mcp.extraction.model.document_node import (
     STRUCTURAL_ONLY_KINDS,
     DocumentNode,

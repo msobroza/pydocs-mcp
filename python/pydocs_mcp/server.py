@@ -11,6 +11,7 @@ Error policy (§5.2):
 - Blanket ``try/except Exception: return "..."`` is forbidden. Unexpected
   exceptions are re-raised wrapped in :class:`ServiceUnavailableError`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -165,7 +166,11 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
         package, module path, and a code/docs excerpt.
         """
         payload = SearchInput(
-            query=query, kind=kind, package=package, scope=scope, limit=limit,
+            query=query,
+            kind=kind,
+            package=package,
+            scope=scope,
+            limit=limit,
         )
         try:
             return await _do_search(payload, search_docs_svc, search_api_svc)

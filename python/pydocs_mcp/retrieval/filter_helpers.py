@@ -5,6 +5,7 @@ their fetch step, so the scope split + schema validation helpers live
 here at retrieval/ top level to avoid a circular import chain through
 ``storage.filters`` → ``extraction`` → ``retrieval.steps``.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ChunkFilterField, SearchScope

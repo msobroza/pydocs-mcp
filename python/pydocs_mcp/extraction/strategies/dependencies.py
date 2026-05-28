@@ -6,6 +6,7 @@ clean — pure functions, no I/O beyond file reads — so we wrap rather than
 rewrite it. Alternative strategies (poetry.lock / pdm.lock / uv resolution /
 graph-aware dependency walking) are future work.
 """
+
 from __future__ import annotations
 
 import asyncio

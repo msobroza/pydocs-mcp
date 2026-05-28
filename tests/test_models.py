@@ -3,6 +3,7 @@
 Per sub-PR #1 spec §5, every enum subclasses enum.StrEnum and values round-trip
 through SQLite TEXT columns, YAML, and JSON without glue code.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,49 +45,52 @@ from pydocs_mcp.storage.sqlite import (
 )
 
 
-@pytest.mark.parametrize("enum_cls,value", [
-    (ChunkOrigin, "project_module_doc"),
-    (ChunkOrigin, "project_code_section"),
-    (ChunkOrigin, "dependency_code_section"),
-    (ChunkOrigin, "dependency_doc_file"),
-    (ChunkOrigin, "dependency_readme"),
-    (ChunkOrigin, "dependency_module_doc"),
-    (ChunkOrigin, "composite_output"),
-    # sub-PR #5 §4.2: tree-derived chunk origins emitted by DocumentNode
-    # extraction strategies (AST defs, Markdown sections, notebook cells).
-    # CODE_EXAMPLE chunks inherit parent origin (python_def or markdown_section).
-    (ChunkOrigin, "python_def"),
-    (ChunkOrigin, "markdown_section"),
-    (ChunkOrigin, "notebook_markdown_cell"),
-    (ChunkOrigin, "notebook_code_cell"),
-    (MemberKind, "function"),
-    (MemberKind, "class"),
-    (MemberKind, "method"),
-    (PackageOrigin, "project"),
-    (PackageOrigin, "dependency"),
-    (SearchScope, "project_only"),
-    (SearchScope, "dependencies_only"),
-    (SearchScope, "all"),
-    (MetadataFilterFormat, "multifield"),
-    (MetadataFilterFormat, "filter_tree"),
-    (MetadataFilterFormat, "chromadb"),
-    (MetadataFilterFormat, "elasticsearch"),
-    (MetadataFilterFormat, "qdrant"),
-    (ChunkFilterField, "package"),
-    (ChunkFilterField, "title"),
-    (ChunkFilterField, "origin"),
-    (ChunkFilterField, "module"),
-    (ChunkFilterField, "scope"),
-    # sub-PR #5 §4.5: filter keys for reference-graph / deduplication
-    # queries — source_path lets consumers select by file, content_hash
-    # lets them deduplicate tree-derived chunks across re-indexes.
-    (ChunkFilterField, "source_path"),
-    (ChunkFilterField, "content_hash"),
-    (ModuleMemberFilterField, "package"),
-    (ModuleMemberFilterField, "module"),
-    (ModuleMemberFilterField, "name"),
-    (ModuleMemberFilterField, "kind"),
-])
+@pytest.mark.parametrize(
+    "enum_cls,value",
+    [
+        (ChunkOrigin, "project_module_doc"),
+        (ChunkOrigin, "project_code_section"),
+        (ChunkOrigin, "dependency_code_section"),
+        (ChunkOrigin, "dependency_doc_file"),
+        (ChunkOrigin, "dependency_readme"),
+        (ChunkOrigin, "dependency_module_doc"),
+        (ChunkOrigin, "composite_output"),
+        # sub-PR #5 §4.2: tree-derived chunk origins emitted by DocumentNode
+        # extraction strategies (AST defs, Markdown sections, notebook cells).
+        # CODE_EXAMPLE chunks inherit parent origin (python_def or markdown_section).
+        (ChunkOrigin, "python_def"),
+        (ChunkOrigin, "markdown_section"),
+        (ChunkOrigin, "notebook_markdown_cell"),
+        (ChunkOrigin, "notebook_code_cell"),
+        (MemberKind, "function"),
+        (MemberKind, "class"),
+        (MemberKind, "method"),
+        (PackageOrigin, "project"),
+        (PackageOrigin, "dependency"),
+        (SearchScope, "project_only"),
+        (SearchScope, "dependencies_only"),
+        (SearchScope, "all"),
+        (MetadataFilterFormat, "multifield"),
+        (MetadataFilterFormat, "filter_tree"),
+        (MetadataFilterFormat, "chromadb"),
+        (MetadataFilterFormat, "elasticsearch"),
+        (MetadataFilterFormat, "qdrant"),
+        (ChunkFilterField, "package"),
+        (ChunkFilterField, "title"),
+        (ChunkFilterField, "origin"),
+        (ChunkFilterField, "module"),
+        (ChunkFilterField, "scope"),
+        # sub-PR #5 §4.5: filter keys for reference-graph / deduplication
+        # queries — source_path lets consumers select by file, content_hash
+        # lets them deduplicate tree-derived chunks across re-indexes.
+        (ChunkFilterField, "source_path"),
+        (ChunkFilterField, "content_hash"),
+        (ModuleMemberFilterField, "package"),
+        (ModuleMemberFilterField, "module"),
+        (ModuleMemberFilterField, "name"),
+        (ModuleMemberFilterField, "kind"),
+    ],
+)
 def test_enum_value_roundtrip(enum_cls, value):
     """Every enum value round-trips: str ↔ enum member."""
     member = enum_cls(value)
@@ -124,8 +128,13 @@ def test_package_construction():
 
 def test_package_is_frozen():
     pkg = Package(
-        name="fastapi", version="0.1", summary="", homepage="",
-        dependencies=(), content_hash="h", origin=PackageOrigin.DEPENDENCY,
+        name="fastapi",
+        version="0.1",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",
+        origin=PackageOrigin.DEPENDENCY,
     )
     with pytest.raises(Exception):
         pkg.name = "other"
@@ -320,8 +329,7 @@ def test_schema_version_upgrade_rebuilds(tmp_path):
     con2 = open_index_database(db_file)
     version = con2.execute("PRAGMA user_version").fetchone()[0]
     tables = {
-        r[0]
-        for r in con2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        r[0] for r in con2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     con2.close()
 
@@ -376,8 +384,12 @@ def test_module_member_row_roundtrip():
 
 def test_package_row_roundtrip():
     pkg = Package(
-        name="fastapi", version="0.1", summary="", homepage="",
-        dependencies=("starlette",), content_hash="h",
+        name="fastapi",
+        version="0.1",
+        summary="",
+        homepage="",
+        dependencies=("starlette",),
+        content_hash="h",
         origin=PackageOrigin.DEPENDENCY,
     )
     row = _package_to_row(pkg)
@@ -391,6 +403,7 @@ def test_row_to_chunk_raises_on_missing_column():
     returning a ``Chunk`` with ``None`` / empty-string columns filled in.
     """
     import pytest
+
     # Dict intentionally missing the ``package`` column — simulates schema drift.
     bad_row = {
         "id": 1,
@@ -406,6 +419,7 @@ def test_row_to_chunk_raises_on_missing_column():
 # PackageDoc (spec §5.1) — frozen value object carrying the 3 query results
 # consumed by PackageLookup.get_package_doc in sub-PR #4.
 # ---------------------------------------------------------------------------
+
 
 def _sample_package() -> Package:
     return Package(
@@ -468,6 +482,7 @@ def test_package_doc_empty_collections():
 # ---------------------------------------------------------------------------
 # IndexingStats (spec §5.3) — mutable accumulator for ProjectIndexer.
 # ---------------------------------------------------------------------------
+
 
 def test_indexing_stats_defaults():
     """Fresh stats start at zero / False so callers can increment freely."""

@@ -17,6 +17,7 @@ frozenset from the no-op resolver), so "key present" is not a reliable
 DS-1000 signal. ``ast_body is None`` is — it's a property of the gold, not
 of which systems happened to run a resolver.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -45,9 +46,7 @@ def is_relevant(item: RetrievedItem, task: EvalTask) -> bool:
     return _item_key(item) in resolved
 
 
-def first_relevant_rank(
-    retrieved: Sequence[RetrievedItem], task: EvalTask
-) -> int | None:
+def first_relevant_rank(retrieved: Sequence[RetrievedItem], task: EvalTask) -> int | None:
     """1-indexed rank of the first relevant item, or None.
 
     Same discriminator as ``is_relevant``: RepoQA delegates to

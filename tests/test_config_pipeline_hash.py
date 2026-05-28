@@ -5,6 +5,7 @@ raw ingestion YAML bytes. Any change to embedder model/dim/bit_width OR
 any edit to the YAML invalidates the hash → diff-merge sees all chunks
 as added → full re-embed via the existing path.
 """
+
 from pathlib import Path
 
 from pydocs_mcp.retrieval.config import AppConfig, EmbeddingConfig
@@ -13,10 +14,18 @@ from pydocs_mcp.retrieval.config import AppConfig, EmbeddingConfig
 def test_compute_pipeline_hash_deterministic() -> None:
     """Same EmbeddingConfig fields → same hash."""
     cfg1 = EmbeddingConfig(
-        provider="fastembed", model_name="m", dim=8, batch_size=16, bit_width=4,
+        provider="fastembed",
+        model_name="m",
+        dim=8,
+        batch_size=16,
+        bit_width=4,
     )
     cfg2 = EmbeddingConfig(
-        provider="fastembed", model_name="m", dim=8, batch_size=16, bit_width=4,
+        provider="fastembed",
+        model_name="m",
+        dim=8,
+        batch_size=16,
+        bit_width=4,
     )
     assert cfg1.compute_pipeline_hash() == cfg2.compute_pipeline_hash()
     assert len(cfg1.compute_pipeline_hash()) == 64  # SHA-256 hex
@@ -25,10 +34,18 @@ def test_compute_pipeline_hash_deterministic() -> None:
 def test_compute_pipeline_hash_excludes_batch_size() -> None:
     """batch_size affects throughput, not vector identity → not in hash."""
     cfg1 = EmbeddingConfig(
-        provider="fastembed", model_name="m", dim=8, batch_size=16, bit_width=4,
+        provider="fastembed",
+        model_name="m",
+        dim=8,
+        batch_size=16,
+        bit_width=4,
     )
     cfg2 = EmbeddingConfig(
-        provider="fastembed", model_name="m", dim=8, batch_size=64, bit_width=4,
+        provider="fastembed",
+        model_name="m",
+        dim=8,
+        batch_size=64,
+        bit_width=4,
     )
     assert cfg1.compute_pipeline_hash() == cfg2.compute_pipeline_hash()
 
@@ -36,20 +53,36 @@ def test_compute_pipeline_hash_excludes_batch_size() -> None:
 def test_compute_pipeline_hash_changes_on_model_swap() -> None:
     """Different model_name → different hash."""
     cfg1 = EmbeddingConfig(
-        provider="fastembed", model_name="model-A", dim=8, batch_size=16, bit_width=4,
+        provider="fastembed",
+        model_name="model-A",
+        dim=8,
+        batch_size=16,
+        bit_width=4,
     )
     cfg2 = EmbeddingConfig(
-        provider="fastembed", model_name="model-B", dim=8, batch_size=16, bit_width=4,
+        provider="fastembed",
+        model_name="model-B",
+        dim=8,
+        batch_size=16,
+        bit_width=4,
     )
     assert cfg1.compute_pipeline_hash() != cfg2.compute_pipeline_hash()
 
 
 def test_compute_pipeline_hash_changes_on_dim_change() -> None:
     cfg1 = EmbeddingConfig(
-        provider="fastembed", model_name="m", dim=8, batch_size=16, bit_width=4,
+        provider="fastembed",
+        model_name="m",
+        dim=8,
+        batch_size=16,
+        bit_width=4,
     )
     cfg2 = EmbeddingConfig(
-        provider="fastembed", model_name="m", dim=16, batch_size=16, bit_width=4,
+        provider="fastembed",
+        model_name="m",
+        dim=16,
+        batch_size=16,
+        bit_width=4,
     )
     assert cfg1.compute_pipeline_hash() != cfg2.compute_pipeline_hash()
 

@@ -1,4 +1,5 @@
 """Named-predicate registry for Conditional/Route stages (spec §5.4)."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -25,8 +26,7 @@ class PredicateRegistry:
             return self._predicates[name]
         except KeyError as e:
             raise KeyError(
-                f"no predicate named {name!r}; "
-                f"registered: {sorted(self._predicates)}"
+                f"no predicate named {name!r}; registered: {sorted(self._predicates)}"
             ) from e
 
     def names(self) -> tuple[str, ...]:
@@ -50,6 +50,7 @@ def predicate(name: str, *, registry: PredicateRegistry = default_predicate_regi
     def decorator(fn: PipelinePredicate) -> PipelinePredicate:
         registry.register(name, fn)
         return fn
+
     return decorator
 
 

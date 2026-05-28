@@ -26,6 +26,7 @@ agree on package names), and exposes both ``doc_ids`` and
 ``doc_contents`` on the gold so exact-match (oracle) and fuzzy-match
 (native) ground-truth resolvers can each pick the form they need.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -91,6 +92,7 @@ def _split_sort_key(row: dict[str, Any]) -> str:
     joined = "|".join(doc_ids)
     return joined if joined else str(row.get("prompt", ""))
 
+
 # Markers inside the canonical-solution block to strip from the NL
 # question after the ``A:`` split.
 _SOLUTION_MARKERS: tuple[str, ...] = (
@@ -130,7 +132,9 @@ class Ds1000Dataset:
         default_factory=lambda: Path("~/.cache/pydocs-mcp/ds1000").expanduser(),
     )
     _rows_cache: list[dict[str, Any]] | None = field(
-        default=None, init=False, repr=False,
+        default=None,
+        init=False,
+        repr=False,
     )
 
     def __post_init__(self) -> None:
@@ -190,9 +194,7 @@ class Ds1000Dataset:
         # ``"PANDAS"`` and ``"Sklearn"`` / ``"scikit-learn"`` all behave
         # identically.
         normalized_filter = (
-            {_normalize_library(x) for x in self.library_filter}
-            if self.library_filter
-            else None
+            {_normalize_library(x) for x in self.library_filter} if self.library_filter else None
         )
         filtered: list[dict[str, Any]] = []
         for row in rows:

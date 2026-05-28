@@ -18,8 +18,7 @@ class SamplingParams:
         List of strings that stop generation when produced.
     """
 
-    def __init__(self, temperature=1.0, top_p=1.0, top_k=-1,
-                 max_tokens=16, stop=None):
+    def __init__(self, temperature=1.0, top_p=1.0, top_k=-1, max_tokens=16, stop=None):
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k

@@ -1,4 +1,5 @@
 """SQLite storage adapters — UnitOfWork, Repositories, VectorStore, FilterAdapter."""
+
 from __future__ import annotations
 
 import asyncio
@@ -49,7 +50,8 @@ log = logging.getLogger("pydocs-mcp")
 # would otherwise race two worker threads on the same sqlite3.Connection
 # (undefined behaviour: interleaved SQL / corrupted transaction state).
 _sqlite_transaction: ContextVar[tuple[sqlite3.Connection, asyncio.Lock] | None] = ContextVar(
-    "_sqlite_transaction", default=None,
+    "_sqlite_transaction",
+    default=None,
 )
 
 
@@ -125,12 +127,16 @@ class SqliteUnitOfWork:
     _committed: bool = field(default=False, init=False, repr=False)
     _held_conn: sqlite3.Connection | None = field(default=None, init=False, repr=False)
     _acquire_cm: AbstractAsyncContextManager[sqlite3.Connection] | None = field(
-        default=None, init=False, repr=False,
+        default=None,
+        init=False,
+        repr=False,
     )
     _ctx_token: contextvars.Token | None = field(default=None, init=False, repr=False)
     _packages: SqlitePackageRepository | None = field(default=None, init=False, repr=False)
     _chunks: SqliteChunkRepository | None = field(default=None, init=False, repr=False)
-    _module_members: SqliteModuleMemberRepository | None = field(default=None, init=False, repr=False)
+    _module_members: SqliteModuleMemberRepository | None = field(
+        default=None, init=False, repr=False
+    )
     _trees: SqliteDocumentTreeStore | None = field(default=None, init=False, repr=False)
     _references: SqliteReferenceStore | None = field(default=None, init=False, repr=False)
     # Spec S15: ``uow.vectors`` is always present; the SQLite-only UoW
@@ -139,7 +145,9 @@ class SqliteUnitOfWork:
     # SQLite + TurboQuant wiring overrides this via attribute
     # delegation (see :class:`CompositeUnitOfWork.__getattr__`).
     vectors: NullVectorStore = field(
-        default_factory=NullVectorStore, init=False, repr=False,
+        default_factory=NullVectorStore,
+        init=False,
+        repr=False,
     )
 
     async def __aenter__(self) -> SqliteUnitOfWork:
@@ -282,10 +290,10 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
     return {
         "id": c.id,
         "package": md.get(ChunkFilterField.PACKAGE.value, ""),
-        "module":  md.get(ChunkFilterField.MODULE.value, ""),
-        "title":   md.get(ChunkFilterField.TITLE.value, ""),
-        "text":    c.text,
-        "origin":  md.get(ChunkFilterField.ORIGIN.value, ""),
+        "module": md.get(ChunkFilterField.MODULE.value, ""),
+        "title": md.get(ChunkFilterField.TITLE.value, ""),
+        "text": c.text,
+        "origin": md.get(ChunkFilterField.ORIGIN.value, ""),
         "content_hash": c.content_hash,
     }
 
@@ -334,14 +342,14 @@ def _module_member_to_row(m: ModuleMember) -> dict[str, object]:
     )
     return {
         "id": m.id,
-        "package":           md.get(ModuleMemberFilterField.PACKAGE.value, ""),
-        "module":            md.get(ModuleMemberFilterField.MODULE.value, ""),
-        "name":              md.get(ModuleMemberFilterField.NAME.value, ""),
-        "kind":              md.get(ModuleMemberFilterField.KIND.value, ""),
-        "signature":         md.get("signature", ""),
+        "package": md.get(ModuleMemberFilterField.PACKAGE.value, ""),
+        "module": md.get(ModuleMemberFilterField.MODULE.value, ""),
+        "name": md.get(ModuleMemberFilterField.NAME.value, ""),
+        "kind": md.get(ModuleMemberFilterField.KIND.value, ""),
+        "signature": md.get("signature", ""),
         "return_annotation": md.get("return_annotation", ""),
-        "parameters":        params_json,
-        "docstring":         md.get("docstring", ""),
+        "parameters": params_json,
+        "docstring": md.get("docstring", ""),
     }
 
 
@@ -358,13 +366,13 @@ def _row_to_module_member(row) -> ModuleMember:
     )
     metadata = {
         ModuleMemberFilterField.PACKAGE.value: row["package"] or "",
-        ModuleMemberFilterField.MODULE.value:  row["module"] or "",
-        ModuleMemberFilterField.NAME.value:    row["name"] or "",
-        ModuleMemberFilterField.KIND.value:    row["kind"] or "",
-        "signature":         row["signature"] or "",
+        ModuleMemberFilterField.MODULE.value: row["module"] or "",
+        ModuleMemberFilterField.NAME.value: row["name"] or "",
+        ModuleMemberFilterField.KIND.value: row["kind"] or "",
+        "signature": row["signature"] or "",
         "return_annotation": row["return_annotation"] or "",
-        "parameters":        params,
-        "docstring":         row["docstring"] or "",
+        "parameters": params,
+        "docstring": row["docstring"] or "",
     }
     return ModuleMember(id=row["id"], metadata=metadata)
 
@@ -458,12 +466,7 @@ class _SqliteFilterTranslator:
             # ``my_module`` only matches ``my_module`` and not ``myXmodule``.
             # Backslash goes first so later replacements can introduce their
             # own escape prefix without being double-escaped.
-            escaped = (
-                f.substring
-                .replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_")
-            )
+            escaped = f.substring.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             return f"{self.column_prefix}{f.field} LIKE ? ESCAPE '\\'", [f"%{escaped}%"]
         if isinstance(f, All):
             # Empty ``All`` is the explicit "match everything" signal — used by
@@ -485,9 +488,7 @@ class _SqliteFilterTranslator:
 
     def _check(self, column: str) -> None:
         if column not in self.safe_columns:
-            raise ValueError(
-                f"column {column!r} not in safe_columns {sorted(self.safe_columns)}"
-            )
+            raise ValueError(f"column {column!r} not in safe_columns {sorted(self.safe_columns)}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -579,14 +580,14 @@ class SqlitePackageRepository:
     async def get(self, name: str) -> Package | None:
         async with _maybe_acquire(self.provider) as conn:
             row = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT * FROM packages WHERE name=?", (name,)
-                ).fetchone()
+                lambda: conn.execute("SELECT * FROM packages WHERE name=?", (name,)).fetchone()
             )
         return _row_to_package(row) if row else None
 
     async def list(
-        self, filter: Filter | Mapping | None = None, limit: int | None = None,
+        self,
+        filter: Filter | Mapping | None = None,
+        limit: int | None = None,
     ) -> list[Package]:
         tree = _resolve_filter(filter)
         where, params = "", []
@@ -599,9 +600,7 @@ class SqlitePackageRepository:
             sql += " LIMIT ?"
             params.append(limit)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchall()
-            )
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return [_row_to_package(r) for r in rows]
 
     async def delete(self, filter: Filter | Mapping) -> int:
@@ -623,9 +622,7 @@ class SqlitePackageRepository:
             where, params = self.filter_adapter.adapt(tree)
             sql += f" WHERE {where}"
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchone()
-            )
+            row = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchone())
         return row[0]
 
     async def delete_all(self) -> None:
@@ -676,7 +673,9 @@ class SqliteChunkRepository:
             )
 
     async def list(
-        self, filter: Filter | Mapping | None = None, limit: int | None = None,
+        self,
+        filter: Filter | Mapping | None = None,
+        limit: int | None = None,
     ) -> list[Chunk]:
         tree = _resolve_filter(filter)
         where, params = "", []
@@ -689,9 +688,7 @@ class SqliteChunkRepository:
             sql += " LIMIT ?"
             params.append(limit)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchall()
-            )
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return [row_to_chunk(r) for r in rows]
 
     async def delete(self, filter: Filter | Mapping) -> int:
@@ -713,9 +710,7 @@ class SqliteChunkRepository:
             where, params = self.filter_adapter.adapt(tree)
             sql += f" WHERE {where}"
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchone()
-            )
+            row = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchone())
         return row[0]
 
     async def rebuild_index(self) -> None:
@@ -727,7 +722,9 @@ class SqliteChunkRepository:
             )
 
     async def list_id_hash_pairs(
-        self, *, filter: Filter | Mapping | None = None,
+        self,
+        *,
+        filter: Filter | Mapping | None = None,
     ) -> tuple[tuple[int, str | None], ...]:
         tree = _resolve_filter(filter)
         where, params = "", []
@@ -737,9 +734,7 @@ class SqliteChunkRepository:
         if where:
             sql += f" WHERE {where}"
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchall()
-            )
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return tuple((row["id"], row["content_hash"]) for row in rows)
 
     async def delete_by_ids(self, ids: Sequence[int]) -> None:
@@ -750,7 +745,7 @@ class SqliteChunkRepository:
         # well under both and limits per-statement parsing cost).
         async with _maybe_acquire(self.provider) as conn:
             for i in range(0, len(ids), 500):
-                batch = ids[i:i + 500]
+                batch = ids[i : i + 500]
                 placeholders = ",".join("?" * len(batch))
                 await asyncio.to_thread(
                     conn.execute,
@@ -814,7 +809,8 @@ class SqliteVectorStore:
     provider: ConnectionProvider
     filter_adapter: _SqliteFilterTranslator = field(
         default_factory=lambda: _SqliteFilterTranslator(
-            safe_columns=CHUNK_COLUMNS, column_prefix="c.",
+            safe_columns=CHUNK_COLUMNS,
+            column_prefix="c.",
         )
     )
     retriever_name: str = "bm25_chunk"
@@ -852,9 +848,7 @@ class SqliteVectorStore:
         )
 
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchall()
-            )
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
 
         items: list[Chunk] = []
         for row in rows:
@@ -904,7 +898,9 @@ class SqliteModuleMemberRepository:
             )
 
     async def list(
-        self, filter: Filter | Mapping | None = None, limit: int | None = None,
+        self,
+        filter: Filter | Mapping | None = None,
+        limit: int | None = None,
     ) -> list[ModuleMember]:
         tree = _resolve_filter(filter)
         where, params = "", []
@@ -917,9 +913,7 @@ class SqliteModuleMemberRepository:
             sql += " LIMIT ?"
             params.append(limit)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchall()
-            )
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return [_row_to_module_member(r) for r in rows]
 
     async def delete(self, filter: Filter | Mapping) -> int:
@@ -941,9 +935,7 @@ class SqliteModuleMemberRepository:
             where, params = self.filter_adapter.adapt(tree)
             sql += f" WHERE {where}"
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchone()
-            )
+            row = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchone())
         return row[0]
 
     async def delete_all(self) -> None:
@@ -1042,7 +1034,10 @@ class SqliteDocumentTreeStore:
         return row is not None
 
     async def delete_for_package(
-        self, package: str, *, uow: UnitOfWork | None = None,
+        self,
+        package: str,
+        *,
+        uow: UnitOfWork | None = None,
     ) -> None:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
@@ -1054,7 +1049,8 @@ class SqliteDocumentTreeStore:
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
-                conn.execute, "DELETE FROM document_trees",
+                conn.execute,
+                "DELETE FROM document_trees",
             )
 
 
@@ -1065,19 +1061,19 @@ def _serialize_tree_to_json(node: DocumentNode) -> str:
 
 def _node_to_dict(node: DocumentNode) -> dict:
     return {
-        "node_id":        node.node_id,
+        "node_id": node.node_id,
         "qualified_name": node.qualified_name,
-        "title":          node.title,
-        "kind":           node.kind.value,
-        "source_path":    node.source_path,
-        "start_line":     node.start_line,
-        "end_line":       node.end_line,
-        "text":           node.text,
-        "content_hash":   node.content_hash,
-        "summary":        node.summary,
+        "title": node.title,
+        "kind": node.kind.value,
+        "source_path": node.source_path,
+        "start_line": node.start_line,
+        "end_line": node.end_line,
+        "text": node.text,
+        "content_hash": node.content_hash,
+        "summary": node.summary,
         "extra_metadata": dict(node.extra_metadata),
-        "parent_id":      node.parent_id,
-        "children":       [_node_to_dict(c) for c in node.children],
+        "parent_id": node.parent_id,
+        "children": [_node_to_dict(c) for c in node.children],
     }
 
 
@@ -1129,8 +1125,7 @@ class SqliteReferenceStore:
         uow: UnitOfWork | None = None,
     ) -> None:
         rows = [
-            (r.from_package, r.from_node_id, r.to_name, r.to_node_id, str(r.kind))
-            for r in refs
+            (r.from_package, r.from_node_id, r.to_name, r.to_node_id, str(r.kind)) for r in refs
         ]
         if not rows:
             return
@@ -1146,7 +1141,9 @@ class SqliteReferenceStore:
             )
 
     async def find_callers(
-        self, *, target_node_id: str,
+        self,
+        *,
+        target_node_id: str,
     ) -> list[NodeReference]:
         async with _maybe_acquire(self.provider) as conn:
             rows = await asyncio.to_thread(
@@ -1159,7 +1156,9 @@ class SqliteReferenceStore:
         return [_row_to_node_reference(r) for r in rows]
 
     async def find_callees(
-        self, *, from_node_id: str,
+        self,
+        *,
+        from_node_id: str,
     ) -> list[NodeReference]:
         async with _maybe_acquire(self.provider) as conn:
             rows = await asyncio.to_thread(
@@ -1189,13 +1188,14 @@ class SqliteReferenceStore:
             )
             params = (to_name, str(kind))
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchall()
-            )
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return [_row_to_node_reference(r) for r in rows]
 
     async def delete_for_package(
-        self, package: str, *, uow: UnitOfWork | None = None,
+        self,
+        package: str,
+        *,
+        uow: UnitOfWork | None = None,
     ) -> None:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
@@ -1205,11 +1205,14 @@ class SqliteReferenceStore:
             )
 
     async def delete_all(
-        self, *, uow: UnitOfWork | None = None,
+        self,
+        *,
+        uow: UnitOfWork | None = None,
     ) -> None:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
-                conn.execute, "DELETE FROM node_references",
+                conn.execute,
+                "DELETE FROM node_references",
             )
 
     async def resolve_unresolved(self, qnames: Iterable[str]) -> int:
@@ -1242,6 +1245,6 @@ def _row_to_node_reference(row) -> NodeReference:
         from_package=row["from_package"] or "",
         from_node_id=row["from_node_id"] or "",
         to_name=row["to_name"] or "",
-        to_node_id=row["to_node_id"],            # NULL → None
+        to_node_id=row["to_node_id"],  # NULL → None
         kind=ReferenceKind(row["kind"]),
     )

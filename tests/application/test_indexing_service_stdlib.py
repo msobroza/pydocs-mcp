@@ -1,4 +1,5 @@
 """IndexingService merges stdlib qnames into resolver universe (AC #15 follow-up)."""
+
 from __future__ import annotations
 
 import pytest
@@ -25,9 +26,15 @@ async def test_reindex_resolves_stdlib_call_target(tmp_path, monkeypatch):
 
     # Seed an unresolved CALL referencing os.path.join.
     from pydocs_mcp.models import Package, PackageOrigin
+
     pkg = Package(
-        name="myproj", version="0.1", summary="", homepage="",
-        dependencies=(), content_hash="h", origin=PackageOrigin.PROJECT,
+        name="myproj",
+        version="0.1",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",
+        origin=PackageOrigin.PROJECT,
     )
     raw = (
         NodeReference(
@@ -44,7 +51,10 @@ async def test_reindex_resolves_stdlib_call_target(tmp_path, monkeypatch):
     stdlib_mod._set_resolver_config(ReferenceResolverConfig(include_stdlib=True))
     try:
         await indexing.reindex_package(
-            pkg, chunks=(), module_members=(), trees=(),
+            pkg,
+            chunks=(),
+            module_members=(),
+            trees=(),
             references=raw,
         )
         callers = await ref_svc.callers("os", "os.path.join")
@@ -74,9 +84,15 @@ async def test_reindex_skips_stdlib_when_include_stdlib_false(tmp_path):
     ref_svc = ReferenceService(uow_factory=uow_factory)
 
     from pydocs_mcp.models import Package, PackageOrigin
+
     pkg = Package(
-        name="myproj", version="0.1", summary="", homepage="",
-        dependencies=(), content_hash="h", origin=PackageOrigin.PROJECT,
+        name="myproj",
+        version="0.1",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",
+        origin=PackageOrigin.PROJECT,
     )
     raw = (
         NodeReference(
@@ -92,7 +108,10 @@ async def test_reindex_skips_stdlib_when_include_stdlib_false(tmp_path):
     stdlib_mod._set_resolver_config(ReferenceResolverConfig(include_stdlib=False))
     try:
         await indexing.reindex_package(
-            pkg, chunks=(), module_members=(), trees=(),
+            pkg,
+            chunks=(),
+            module_members=(),
+            trees=(),
             references=raw,
         )
         # Cross-package callers query — should return nothing because the

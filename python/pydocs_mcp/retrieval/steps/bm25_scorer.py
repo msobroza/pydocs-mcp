@@ -12,6 +12,7 @@ score from fetch is what makes that composition possible.
 Member candidates (LIKE-fetched, see :class:`MemberFetcherStep` in
 Task 5) carry no BM25 rank, so this step is a no-op for them.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace

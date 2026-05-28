@@ -1,4 +1,5 @@
 """TurboQuantVectorStore.vector_search with allowlist + hydration (AC-3, AC-4)."""
+
 from __future__ import annotations
 
 import inspect
@@ -42,7 +43,9 @@ async def _populate_index(tmp_path: Path) -> tuple[Path, dict[int, str]]:
         _vec(0.0, 0.0, 0.0, 1.0),
     ]
     async with TurboQuantUnitOfWork(
-        index_path=tq, dim=_DIM, bit_width=_BIT_WIDTH,
+        index_path=tq,
+        dim=_DIM,
+        bit_width=_BIT_WIDTH,
     ) as uow:
         await uow.add_vectors(list(id_to_text.keys()), embeddings)
         await uow.commit()
@@ -59,7 +62,9 @@ async def test_vector_search_returns_up_to_k_chunks(tmp_path: Path) -> None:
         return np.asarray(list(id_to_text.keys()), dtype=np.uint64)
 
     async with TurboQuantUnitOfWork(
-        index_path=tq, dim=_DIM, bit_width=_BIT_WIDTH,
+        index_path=tq,
+        dim=_DIM,
+        bit_width=_BIT_WIDTH,
     ) as uow:
         store = TurboQuantVectorStore(
             uow=uow,
@@ -95,7 +100,9 @@ async def test_vector_search_with_filter_restricts_to_allowlist(
         return tuple(Chunk(text=id_to_text[int(i)], id=int(i)) for i in ids)
 
     async with TurboQuantUnitOfWork(
-        index_path=tq, dim=_DIM, bit_width=_BIT_WIDTH,
+        index_path=tq,
+        dim=_DIM,
+        bit_width=_BIT_WIDTH,
     ) as uow:
         store = TurboQuantVectorStore(
             uow=uow,

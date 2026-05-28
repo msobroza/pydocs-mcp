@@ -4,6 +4,7 @@ Mirrors spec §4.1 deliverable 6. The `FakeObserver` injected into
 `FileWatcher` lets us drive events synchronously — no real `watchdog`
 thread is involved, so tests stay fast and deterministic.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -141,10 +142,10 @@ async def test_watcher_filters_unrelated_events(tmp_path: Path) -> None:
     await asyncio.sleep(0.01)
 
     # These should ALL be filtered out:
-    fake.fire(str(tmp_path / "x.pyc"))                       # bad extension
+    fake.fire(str(tmp_path / "x.pyc"))  # bad extension
     fake.fire(str(tmp_path / "__pycache__" / "x.cpython.pyc"))  # ignore
-    fake.fire(str(tmp_path / ".git" / "HEAD"))                  # ignore
-    fake.fire(str(tmp_path / "x.png"))                          # bad ext
+    fake.fire(str(tmp_path / ".git" / "HEAD"))  # ignore
+    fake.fire(str(tmp_path / "x.png"))  # bad ext
 
     # Wait past debounce; no callback should fire.
     await asyncio.sleep(0.05)
@@ -312,7 +313,7 @@ async def test_watcher_fires_after_debounce_window(tmp_path: Path) -> None:
     elapsed = times[0] - start
     # 30ms debounce, allow 100ms slack for test-host scheduling jitter.
     assert 0.025 <= elapsed <= 0.130, (
-        f"callback fired at {elapsed*1000:.1f}ms; expected ~30ms debounce"
+        f"callback fired at {elapsed * 1000:.1f}ms; expected ~30ms debounce"
     )
 
     task.cancel()
@@ -410,9 +411,7 @@ async def test_watcher_coalesces_during_in_flight_reindex(tmp_path: Path) -> Non
     release.set()
     # The follow-up should fire exactly once, then no more.
     await asyncio.sleep(0.15)
-    assert fire_count == 2, (
-        f"expected exactly 1 follow-up reindex; saw {fire_count - 1} extra"
-    )
+    assert fire_count == 2, f"expected exactly 1 follow-up reindex; saw {fire_count - 1} extra"
 
     task.cancel()
     try:

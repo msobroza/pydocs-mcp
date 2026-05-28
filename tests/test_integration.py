@@ -3,6 +3,7 @@
 Uses stripped snapshots of sklearn, vllm, and langgraph indexed with the real
 parser, plus a fake project that references them.
 """
+
 import pytest
 from tests._retriever_helpers import retrieve_chunks, retrieve_module_members
 
@@ -78,9 +79,7 @@ def test_scope_unscoped_search_returns_project_and_deps(integration_conn):
 
 
 def test_scope_topic_filter_combined_with_internal(integration_conn):
-    results = retrieve_chunks(
-        integration_conn, "pipeline", internal=True, topic="pipeline"
-    )
+    results = retrieve_chunks(integration_conn, "pipeline", internal=True, topic="pipeline")
     assert all(r["pkg"] == "__project__" for r in results)
 
 

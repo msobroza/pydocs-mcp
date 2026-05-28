@@ -1,4 +1,5 @@
 """Tests for internal/topic parameters on retrieve_chunks and retrieve_module_members."""
+
 import sqlite3
 import pytest
 from pydocs_mcp.db import open_index_database
@@ -125,7 +126,16 @@ class TestSearchSymbolsLikeEscaping:
         c.execute(
             "INSERT INTO module_members(package,module,kind,name,signature,docstring,parameters,return_annotation) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            ("mypkg", "mypkg.mod", "function", "unrelated", "()", "Unrelated function.", "[]", "None"),
+            (
+                "mypkg",
+                "mypkg.mod",
+                "function",
+                "unrelated",
+                "()",
+                "Unrelated function.",
+                "[]",
+                "None",
+            ),
         )
         c.commit()
         return c

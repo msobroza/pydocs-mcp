@@ -19,6 +19,7 @@ Two coverage points:
    caches) stay out of the stale list — flipping them on a model rename
    would re-extract every previously-unindexed dependency unnecessarily.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -74,7 +75,10 @@ async def test_indexed_package_records_embedding_model(tmp_path: Path) -> None:
     tq_path = tmp_path / "x.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
 
@@ -104,38 +108,47 @@ async def test_model_change_detected_via_stored_embedding_model(
     tq_path = tmp_path / "x.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
 
     await svc.reindex_package(
         _pkg("pkg-a", embedding_model="model-A"),
-        (Chunk(
-            text="a",
-            embedding=_vec(0.1, 0.2),
-            metadata={"package": "pkg-a", "title": "a"},
-        ),),
+        (
+            Chunk(
+                text="a",
+                embedding=_vec(0.1, 0.2),
+                metadata={"package": "pkg-a", "title": "a"},
+            ),
+        ),
         module_members=(),
     )
     await svc.reindex_package(
         _pkg("pkg-b", embedding_model="model-A"),
-        (Chunk(
-            text="b",
-            embedding=_vec(0.3, 0.4),
-            metadata={"package": "pkg-b", "title": "b"},
-        ),),
+        (
+            Chunk(
+                text="b",
+                embedding=_vec(0.3, 0.4),
+                metadata={"package": "pkg-b", "title": "b"},
+            ),
+        ),
         module_members=(),
     )
 
     # Model changed → both packages flagged stale.
     stale = await find_packages_with_stale_embeddings(
-        uow_factory=factory, current_model="model-B",
+        uow_factory=factory,
+        current_model="model-B",
     )
     assert set(stale) == {"pkg-a", "pkg-b"}
 
     # Same model → empty list (no spurious re-embeds).
     stale_no_change = await find_packages_with_stale_embeddings(
-        uow_factory=factory, current_model="model-A",
+        uow_factory=factory,
+        current_model="model-A",
     )
     assert stale_no_change == []
 
@@ -155,7 +168,10 @@ async def test_legacy_packages_with_no_embedding_model_are_not_stale(
     tq_path = tmp_path / "x.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
 
@@ -166,6 +182,7 @@ async def test_legacy_packages_with_no_embedding_model_are_not_stale(
     )
 
     stale = await find_packages_with_stale_embeddings(
-        uow_factory=factory, current_model="model-X",
+        uow_factory=factory,
+        current_model="model-X",
     )
     assert stale == []

@@ -11,6 +11,7 @@ responsible for ``shutil.rmtree(base)`` when done. The runner does this
 inside a try/finally around the per-task ``system.index`` / ``search``
 loop so a crash in one task can't leak the corpus for the next one.
 """
+
 from __future__ import annotations
 
 import tempfile

@@ -12,6 +12,7 @@ If this regresses, the MCP server's ``lookup(show="callers"|"callees"|
 "inherits")`` tool will silently degrade to ``ServiceUnavailableError``
 in production — defeating the entire user-visible payoff of #5c.
 """
+
 from __future__ import annotations
 
 import sys
@@ -37,6 +38,7 @@ class _FakeMCP:
         def decorator(fn):
             self.tools[fn.__name__] = fn
             return fn
+
         return decorator
 
     def run(self, transport: str | None = None) -> None:

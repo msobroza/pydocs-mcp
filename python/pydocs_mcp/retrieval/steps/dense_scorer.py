@@ -7,6 +7,7 @@ Mirrors BM25ScorerStep's shape:
   candidate.embedding using numpy linalg.
 - Writes the scores back to state.candidates with updated relevance.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace

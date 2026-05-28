@@ -6,6 +6,7 @@ set membership of ``_item_key(item)`` in
 injects between ``search()`` and scoring). Task 4 extends this with an
 ``ast_body`` fallback for RepoQA — NOT exercised here.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,5 @@
 """AC-1: LlmClient Protocol exposes both async chat() and chat_sync()."""
+
 from __future__ import annotations
 
 import inspect
@@ -29,5 +30,6 @@ def test_llm_client_protocol_has_model_name() -> None:
     """LlmClient declares model_name so callers can identify the provider
     without peeking into the concrete class."""
     import pydocs_mcp.storage.protocols as proto_module
+
     src = inspect.getsource(proto_module)
     assert "model_name: str" in src

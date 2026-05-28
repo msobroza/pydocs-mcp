@@ -1,4 +1,5 @@
 """Uses stdlib. Exercises Rule B against the bundled stdlib qname universe."""
+
 from __future__ import annotations
 
 import asyncio

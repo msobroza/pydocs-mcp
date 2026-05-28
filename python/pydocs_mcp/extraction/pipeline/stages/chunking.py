@@ -5,6 +5,7 @@ abort ingestion of the whole project. Unknown extensions are dropped
 silently — the dispatch policy is ``chunker_registry[ext]`` and missing
 registrations are a wiring concern, not a per-run error.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,7 +45,10 @@ class ChunkingStage:
         return trees
 
     def _chunk_one(
-        self, path: str, source: str, state: IngestionState,
+        self,
+        path: str,
+        source: str,
+        state: IngestionState,
     ) -> DocumentNode | None:
         if not source:
             return None
@@ -55,7 +59,10 @@ class ChunkingStage:
         chunker = chunker_cls.from_config(self.chunking_config)
         try:
             return chunker.build_tree(
-                path, source, state.files.package_name, state.files.root,
+                path,
+                source,
+                state.files.package_name,
+                state.files.root,
             )
         except Exception as exc:
             log.warning("chunker %s failed on %s: %s", ext, path, exc)

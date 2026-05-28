@@ -15,6 +15,7 @@ cleanest dependency direction.
 Adding a new provider = one new module + one new branch in
 ``build_llm_client``.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.retrieval.config import LlmConfig
@@ -31,6 +32,7 @@ def build_llm_client(cfg: LlmConfig) -> LlmClient:
         from pydocs_mcp.retrieval.llm_clients.openai import (
             OpenAiLlmClient,
         )
+
         return OpenAiLlmClient(
             model_name=cfg.model_name,
             api_key=cfg.api_key,

@@ -1,4 +1,5 @@
 """AC-8: include_references=True populates scratch['tree.ranked.refs']."""
+
 from __future__ import annotations
 
 import json
@@ -22,36 +23,60 @@ from tests._fakes import (
 
 def _tree() -> DocumentNode:
     return DocumentNode(
-        node_id="r", qualified_name="proj.foo", title="foo",
-        kind=NodeKind.FUNCTION, source_path="f.py", start_line=1, end_line=5,
-        text="foo body", content_hash="", summary="foo summary",
-        extra_metadata={}, parent_id=None, children=(),
+        node_id="r",
+        qualified_name="proj.foo",
+        title="foo",
+        kind=NodeKind.FUNCTION,
+        source_path="f.py",
+        start_line=1,
+        end_line=5,
+        text="foo body",
+        content_hash="",
+        summary="foo summary",
+        extra_metadata={},
+        parent_id=None,
+        children=(),
     )
 
 
 def _state(q: str) -> RetrieverState:
     return RetrieverState(
         query=SearchQuery(terms=q, max_results=10),
-        candidates=None, result=None, scratch={},
+        candidates=None,
+        result=None,
+        scratch={},
     )
 
 
 @pytest.mark.asyncio
 async def test_include_references_off_skips_refs_lookup() -> None:
     """Default off — no .refs scratch key written, no reference reads."""
-    llm = FakeLlmClient(responses={
-        "q": json.dumps({"thinking": "", "node_list": ["proj.foo"]}),
-    })
+    llm = FakeLlmClient(
+        responses={
+            "q": json.dumps({"thinking": "", "node_list": ["proj.foo"]}),
+        }
+    )
     refs = [
         NodeReference(
-            from_package="__project__", from_node_id="bar-node",
-            to_name="proj.foo", to_node_id=None, kind=ReferenceKind.CALLS,
+            from_package="__project__",
+            from_node_id="bar-node",
+            to_name="proj.foo",
+            to_node_id=None,
+            kind=ReferenceKind.CALLS,
         ),
     ]
     chunk_store = InMemoryChunkStore()
-    await chunk_store.upsert((Chunk(text="foo body", metadata={
-        "qualified_name": "proj.foo", "package": "__project__",
-    }),))
+    await chunk_store.upsert(
+        (
+            Chunk(
+                text="foo body",
+                metadata={
+                    "qualified_name": "proj.foo",
+                    "package": "__project__",
+                },
+            ),
+        )
+    )
     ref_store = InMemoryReferenceStore()
     await ref_store.save_many(refs, package="__project__")
     uow_factory = make_fake_uow_factory(
@@ -60,7 +85,8 @@ async def test_include_references_off_skips_refs_lookup() -> None:
         references=ref_store,
     )
     step = LlmTreeReasoningStep(
-        llm_client=llm, uow_factory=uow_factory,
+        llm_client=llm,
+        uow_factory=uow_factory,
         include_references=False,  # default
     )
     out = await step.run(_state("q"))
@@ -68,33 +94,46 @@ async def test_include_references_off_skips_refs_lookup() -> None:
     assert "tree.ranked.refs" not in out.scratch
     # And no reference lookups happened — the contract is "stay silent".
     assert not any(
-        c.method in {"find_by_name", "find_callers", "find_callees"}
-        for c in ref_store.calls
+        c.method in {"find_by_name", "find_callers", "find_callees"} for c in ref_store.calls
     )
 
 
 @pytest.mark.asyncio
 async def test_include_references_on_writes_refs_scratch() -> None:
     """Opt-in — .refs scratch key carries callers of every picked node."""
-    llm = FakeLlmClient(responses={
-        "q": json.dumps({"thinking": "", "node_list": ["proj.foo"]}),
-    })
+    llm = FakeLlmClient(
+        responses={
+            "q": json.dumps({"thinking": "", "node_list": ["proj.foo"]}),
+        }
+    )
     refs = [
         NodeReference(
-            from_package="__project__", from_node_id="bar-node",
-            to_name="proj.foo", to_node_id=None,
+            from_package="__project__",
+            from_node_id="bar-node",
+            to_name="proj.foo",
+            to_node_id=None,
             kind=ReferenceKind.CALLS,
         ),
         NodeReference(
-            from_package="__project__", from_node_id="baz-node",
-            to_name="proj.foo", to_node_id=None,
+            from_package="__project__",
+            from_node_id="baz-node",
+            to_name="proj.foo",
+            to_node_id=None,
             kind=ReferenceKind.CALLS,
         ),
     ]
     chunk_store = InMemoryChunkStore()
-    await chunk_store.upsert((Chunk(text="foo body", metadata={
-        "qualified_name": "proj.foo", "package": "__project__",
-    }),))
+    await chunk_store.upsert(
+        (
+            Chunk(
+                text="foo body",
+                metadata={
+                    "qualified_name": "proj.foo",
+                    "package": "__project__",
+                },
+            ),
+        )
+    )
     ref_store = InMemoryReferenceStore()
     await ref_store.save_many(refs, package="__project__")
     uow_factory = make_fake_uow_factory(
@@ -103,7 +142,8 @@ async def test_include_references_on_writes_refs_scratch() -> None:
         references=ref_store,
     )
     step = LlmTreeReasoningStep(
-        llm_client=llm, uow_factory=uow_factory,
+        llm_client=llm,
+        uow_factory=uow_factory,
         include_references=True,
         reference_neighbors_limit=5,
     )

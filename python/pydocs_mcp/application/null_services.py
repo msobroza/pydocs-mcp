@@ -30,6 +30,7 @@ parameters accept them without a Protocol declaration.  Mypy /
 pyright see the same method signatures; runtime sees the same
 ``async def`` returns.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,8 +43,7 @@ from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
 # (``reference_graph.capture.enabled``) so they don't need to read
 # release notes or grep the docs.
 _REFERENCE_GRAPH_DISABLED_MSG = (
-    "reference graph not configured "
-    "(check reference_graph.capture.enabled in YAML config)"
+    "reference graph not configured (check reference_graph.capture.enabled in YAML config)"
 )
 # Parallel YAML-anchored hint for the tree-index failure mode.  Document
 # trees are built by the default ingestion pipeline today (no opt-out

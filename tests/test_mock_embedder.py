@@ -1,4 +1,5 @@
 """MockEmbedder satisfies Embedder Protocol + returns np.ndarray (AC-27)."""
+
 import numpy as np
 import pytest
 

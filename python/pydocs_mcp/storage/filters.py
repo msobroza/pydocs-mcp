@@ -8,6 +8,7 @@ unchanged. New code should prefer ``from pydocs_mcp.filters import ...``.
 The shim re-exports the SAME object identities — the ``format_registry``
 imported here IS the canonical mapping; nothing is copied or rebuilt.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.filters import (

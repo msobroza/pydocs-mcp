@@ -1,4 +1,5 @@
 """AC #11 + #12 — UPSERT semantics + canonical_dotted stability."""
+
 from __future__ import annotations
 
 import pytest
@@ -14,8 +15,13 @@ from pydocs_mcp.storage.node_reference import NodeReference
 
 def _pkg(name: str) -> Package:
     return Package(
-        name=name, version="0.1", summary="", homepage="",
-        dependencies=(), content_hash="h", origin=PackageOrigin.DEPENDENCY,
+        name=name,
+        version="0.1",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",
+        origin=PackageOrigin.DEPENDENCY,
     )
 
 
@@ -29,16 +35,25 @@ async def test_pk_collision_does_not_crash_on_reindex(tmp_path):
     ref_svc = ReferenceService(uow_factory=uow_factory)
 
     ref = NodeReference(
-        from_package="pkg", from_node_id="pkg.a", to_name="requests.get",
-        to_node_id=None, kind=ReferenceKind.CALLS,
+        from_package="pkg",
+        from_node_id="pkg.a",
+        to_name="requests.get",
+        to_node_id=None,
+        kind=ReferenceKind.CALLS,
     )
     await indexing.reindex_package(
-        _pkg("pkg"), chunks=(), module_members=(), trees=(),
+        _pkg("pkg"),
+        chunks=(),
+        module_members=(),
+        trees=(),
         references=(ref,),
     )
     # Re-index the same package — same PK row.
     await indexing.reindex_package(
-        _pkg("pkg"), chunks=(), module_members=(), trees=(),
+        _pkg("pkg"),
+        chunks=(),
+        module_members=(),
+        trees=(),
         references=(ref,),
     )
     rows = await ref_svc.find_by_name("requests.get")

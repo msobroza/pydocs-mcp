@@ -12,6 +12,7 @@ bounds, not feature toggles. ``configure_from_app_config`` is the single
 wire that pushes the YAML-loaded ``AppConfig`` into the module-level
 slots those validators read at runtime.
 """
+
 from __future__ import annotations
 
 import re
@@ -166,8 +167,7 @@ class SearchInput(BaseModel):
         # being frozen at class-definition time.
         if v > _SEARCH_LIMIT_MAX:
             raise ValueError(
-                f"limit must be <= {_SEARCH_LIMIT_MAX} "
-                f"(configured via search.output.max_limit)"
+                f"limit must be <= {_SEARCH_LIMIT_MAX} (configured via search.output.max_limit)"
             )
         return v
 
@@ -175,9 +175,7 @@ class SearchInput(BaseModel):
     @classmethod
     def _check_package(cls, v: str) -> str:
         if v and not _PACKAGE_RE.match(v):
-            raise ValueError(
-                "package must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ or be '__project__'"
-            )
+            raise ValueError("package must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ or be '__project__'")
         return v
 
 

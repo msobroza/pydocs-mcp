@@ -1,4 +1,5 @@
 """AC-2: LlmConfig sub-model + AppConfig.llm wiring + YAML overlay."""
+
 from __future__ import annotations
 
 import tempfile

@@ -1,4 +1,5 @@
 """AC-13: is_long_query predicate gates ConditionalStep on query length."""
+
 from __future__ import annotations
 
 import pytest

@@ -5,6 +5,7 @@ Reads the indexed-package row through ``uow.packages.get(...)`` inside
 ``async with self.uow_factory() as uow:`` — the UoW Protocol guarantees
 ``packages`` is valid inside the context (spec §14.2 of #5b spec).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -35,7 +36,10 @@ _MAX_MEMBERS: int = 50
 # real bugs (ValueError, KeyError, TypeError, …) propagate so they surface
 # in tests instead of being silently swallowed.
 _BENIGN_INSPECT_EXCEPTIONS = (
-    AttributeError, ImportError, OSError, RuntimeError,
+    AttributeError,
+    ImportError,
+    OSError,
+    RuntimeError,
 )
 
 
@@ -59,14 +63,10 @@ class ModuleInspector:
         async with self.uow_factory() as uow:
             pkg = await uow.packages.get(pkg_name)
         if pkg is None:
-            return (
-                f"'{package}' is not indexed. "
-                "Use lookup(target='') to see available packages."
-            )
+            return f"'{package}' is not indexed. Use lookup(target='') to see available packages."
         if submodule and not _validate_submodule(submodule):
             return (
-                f"Invalid submodule '{submodule}'. "
-                "Use only letters, digits, underscores, and dots."
+                f"Invalid submodule '{submodule}'. Use only letters, digits, underscores, and dots."
             )
         target = pkg_name + (f".{submodule}" if submodule else "")
         # Offload to a worker thread: importlib + inspect may block on disk
@@ -104,8 +104,7 @@ class ModuleInspector:
         if not items and hasattr(mod, "__path__"):
             try:
                 subs = [
-                    s for _, s, _ in pkgutil.iter_modules(mod.__path__)
-                    if not s.startswith("_")
+                    s for _, s, _ in pkgutil.iter_modules(mod.__path__) if not s.startswith("_")
                 ]
                 return f"# {target}\nSubmodules: {', '.join(subs)}"
             except _BENIGN_INSPECT_EXCEPTIONS:
@@ -113,6 +112,4 @@ class ModuleInspector:
                 # lazy / FS-backed packages raise these.
                 pass
 
-        return (
-            f"# {target}\n\n" + "\n\n".join(items)
-        ) if items else f"No API in '{target}'."
+        return (f"# {target}\n\n" + "\n\n".join(items)) if items else f"No API in '{target}'."

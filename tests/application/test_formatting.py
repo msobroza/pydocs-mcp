@@ -5,6 +5,7 @@ byte-parity contract from sub-PR #2 AC #21 — a change that breaks composite
 output bytes (double newline between blocks, trailing newline, etc.) will
 regress the parity golden tests too.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.application.formatting import (
@@ -28,32 +29,27 @@ from pydocs_mcp.models import (
 
 def test_format_chunks_markdown_single_newline_between_title_and_body():
     """`## TITLE\\nBODY\\n` — single \\n between heading and body (AC #21)."""
-    chunks = (
-        Chunk(text="hello world", metadata={ChunkFilterField.TITLE.value: "Greeting"}),
-    )
+    chunks = (Chunk(text="hello world", metadata={ChunkFilterField.TITLE.value: "Greeting"}),)
     out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
     # Shape: `## Greeting\nhello world\n`
     assert out.startswith("## Greeting\n"), f"missing single-newline header: {out[:30]!r}"
     # No double newline after "## Greeting\n"
-    after_header = out[len("## Greeting\n"):]
-    assert not after_header.startswith("\n"), \
+    after_header = out[len("## Greeting\n") :]
+    assert not after_header.startswith("\n"), (
         f"double-newline regression at title-body boundary: {out!r}"
+    )
 
 
 def test_format_chunks_markdown_preserves_trailing_newline():
     """Trailing \\n preserved — the old `format_within_budget` did NOT rstrip."""
-    chunks = (
-        Chunk(text="body", metadata={ChunkFilterField.TITLE.value: "T"}),
-    )
+    chunks = (Chunk(text="body", metadata={ChunkFilterField.TITLE.value: "T"}),)
     out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
     assert out.endswith("\n"), f"trailing newline stripped: {out[-10:]!r}"
 
 
 def test_format_chunks_markdown_no_rstrip_on_body():
     """Body whitespace is preserved verbatim — no rstrip() anywhere."""
-    chunks = (
-        Chunk(text="body-with-trailing-ws   ", metadata={ChunkFilterField.TITLE.value: "T"}),
-    )
+    chunks = (Chunk(text="body-with-trailing-ws   ", metadata={ChunkFilterField.TITLE.value: "T"}),)
     out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
     # The trailing spaces must appear BEFORE the final "\n"
     assert "body-with-trailing-ws   \n" in out, f"rstrip regression: {out!r}"
@@ -75,8 +71,7 @@ def test_format_chunks_markdown_budget_truncation_stops_emitting():
     """Once the budget (budget_tokens * 4 chars) is exceeded, later chunks
     are dropped — the loop breaks."""
     chunks = tuple(
-        Chunk(text="x" * 20, metadata={ChunkFilterField.TITLE.value: f"T{i}"})
-        for i in range(100)
+        Chunk(text="x" * 20, metadata={ChunkFilterField.TITLE.value: f"T{i}"}) for i in range(100)
     )
     # budget_tokens=50 => max_chars=200; each piece is ~30 chars; only ~6 fit.
     out = format_chunks_markdown_within_budget(chunks, budget_tokens=50)
@@ -129,52 +124,61 @@ def test_format_chunks_markdown_none_text_treated_as_empty():
 
 
 def test_format_members_markdown_basic_shape():
-    m = ModuleMember(metadata={
-        ModuleMemberFilterField.PACKAGE.value: "fastapi",
-        ModuleMemberFilterField.MODULE.value: "fastapi.routing",
-        ModuleMemberFilterField.NAME.value: "APIRouter",
-        ModuleMemberFilterField.KIND.value: "class",
-        "signature": "(prefix: str = '')",
-        "docstring": "Groups endpoints.",
-    })
+    m = ModuleMember(
+        metadata={
+            ModuleMemberFilterField.PACKAGE.value: "fastapi",
+            ModuleMemberFilterField.MODULE.value: "fastapi.routing",
+            ModuleMemberFilterField.NAME.value: "APIRouter",
+            ModuleMemberFilterField.KIND.value: "class",
+            "signature": "(prefix: str = '')",
+            "docstring": "Groups endpoints.",
+        }
+    )
     out = format_members_markdown_within_budget((m,), budget_tokens=1000)
-    assert out == "**[fastapi] fastapi.routing.APIRouter(prefix: str = '')** (class)\nGroups endpoints.\n"
+    assert (
+        out
+        == "**[fastapi] fastapi.routing.APIRouter(prefix: str = '')** (class)\nGroups endpoints.\n"
+    )
 
 
 def test_format_members_markdown_double_newline_between_blocks():
-    m1 = ModuleMember(metadata={
-        ModuleMemberFilterField.PACKAGE.value: "p",
-        ModuleMemberFilterField.MODULE.value: "m",
-        ModuleMemberFilterField.NAME.value: "A",
-        ModuleMemberFilterField.KIND.value: "class",
-        "signature": "()",
-        "docstring": "one",
-    })
-    m2 = ModuleMember(metadata={
-        ModuleMemberFilterField.PACKAGE.value: "p",
-        ModuleMemberFilterField.MODULE.value: "m",
-        ModuleMemberFilterField.NAME.value: "B",
-        ModuleMemberFilterField.KIND.value: "class",
-        "signature": "()",
-        "docstring": "two",
-    })
+    m1 = ModuleMember(
+        metadata={
+            ModuleMemberFilterField.PACKAGE.value: "p",
+            ModuleMemberFilterField.MODULE.value: "m",
+            ModuleMemberFilterField.NAME.value: "A",
+            ModuleMemberFilterField.KIND.value: "class",
+            "signature": "()",
+            "docstring": "one",
+        }
+    )
+    m2 = ModuleMember(
+        metadata={
+            ModuleMemberFilterField.PACKAGE.value: "p",
+            ModuleMemberFilterField.MODULE.value: "m",
+            ModuleMemberFilterField.NAME.value: "B",
+            ModuleMemberFilterField.KIND.value: "class",
+            "signature": "()",
+            "docstring": "two",
+        }
+    )
     out = format_members_markdown_within_budget((m1, m2), budget_tokens=1000)
-    assert out == (
-        "**[p] m.A()** (class)\none\n"
-        "\n"
-        "**[p] m.B()** (class)\ntwo\n"
-    ), f"members between-block separator broke: {out!r}"
+    assert out == ("**[p] m.A()** (class)\none\n\n**[p] m.B()** (class)\ntwo\n"), (
+        f"members between-block separator broke: {out!r}"
+    )
 
 
 def test_format_members_markdown_preserves_trailing_newline():
-    m = ModuleMember(metadata={
-        ModuleMemberFilterField.PACKAGE.value: "p",
-        ModuleMemberFilterField.MODULE.value: "m",
-        ModuleMemberFilterField.NAME.value: "A",
-        ModuleMemberFilterField.KIND.value: "class",
-        "signature": "()",
-        "docstring": "body",
-    })
+    m = ModuleMember(
+        metadata={
+            ModuleMemberFilterField.PACKAGE.value: "p",
+            ModuleMemberFilterField.MODULE.value: "m",
+            ModuleMemberFilterField.NAME.value: "A",
+            ModuleMemberFilterField.KIND.value: "class",
+            "signature": "()",
+            "docstring": "body",
+        }
+    )
     out = format_members_markdown_within_budget((m,), budget_tokens=1000)
     assert out.endswith("\n")
 
@@ -185,14 +189,16 @@ def test_format_members_markdown_empty_tuple_returns_empty_string():
 
 def test_format_members_markdown_budget_truncation():
     members = tuple(
-        ModuleMember(metadata={
-            ModuleMemberFilterField.PACKAGE.value: "pkg",
-            ModuleMemberFilterField.MODULE.value: "mod",
-            ModuleMemberFilterField.NAME.value: f"F{i}",
-            ModuleMemberFilterField.KIND.value: "function",
-            "signature": "(x)",
-            "docstring": "d" * 30,
-        })
+        ModuleMember(
+            metadata={
+                ModuleMemberFilterField.PACKAGE.value: "pkg",
+                ModuleMemberFilterField.MODULE.value: "mod",
+                ModuleMemberFilterField.NAME.value: f"F{i}",
+                ModuleMemberFilterField.KIND.value: "function",
+                "signature": "(x)",
+                "docstring": "d" * 30,
+            }
+        )
         for i in range(100)
     )
     out = format_members_markdown_within_budget(members, budget_tokens=50)  # 200 chars
@@ -213,10 +219,12 @@ _DUMMY_QUERY = SearchQuery(terms="anything")
 def test_render_top_composite_returns_first_item_text():
     """The first chunk's ``.text`` is the formatted body (composite output)."""
     response = SearchResponse(
-        result=ChunkList(items=(
-            Chunk(text="winner-body", metadata={ChunkFilterField.TITLE.value: "T"}),
-            Chunk(text="loser-body", metadata={ChunkFilterField.TITLE.value: "T2"}),
-        )),
+        result=ChunkList(
+            items=(
+                Chunk(text="winner-body", metadata={ChunkFilterField.TITLE.value: "T"}),
+                Chunk(text="loser-body", metadata={ChunkFilterField.TITLE.value: "T2"}),
+            )
+        ),
         query=_DUMMY_QUERY,
     )
     assert render_top_composite(response) == "winner-body"

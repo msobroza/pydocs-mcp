@@ -22,6 +22,7 @@ shape production callers in ``storage/sqlite.py``,
 ``retrieval/steps/*.py``, and ``extraction/pipeline/stages/*.py``
 already use.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -59,7 +60,11 @@ def test_chunk_from_test_inputs_auto_computes_hash() -> None:
 
 def test_chunk_from_test_inputs_accepts_optional_id() -> None:
     chunk = Chunk.from_test_inputs(
-        package="p", module="m", title="t", text="x", id=42,
+        package="p",
+        module="m",
+        title="t",
+        text="x",
+        id=42,
     )
     assert chunk.id == 42
 
@@ -68,11 +73,17 @@ def test_chunk_from_test_inputs_accepts_pipeline_hash() -> None:
     """``pipeline_hash`` participates in the SHA-256 just like in
     production — bumping it changes the hash for the same chunk text."""
     chunk_a = Chunk.from_test_inputs(
-        package="p", module="m", title="t", text="x",
+        package="p",
+        module="m",
+        title="t",
+        text="x",
         pipeline_hash="pipeline-A",
     )
     chunk_b = Chunk.from_test_inputs(
-        package="p", module="m", title="t", text="x",
+        package="p",
+        module="m",
+        title="t",
+        text="x",
         pipeline_hash="pipeline-B",
     )
     assert chunk_a.content_hash != chunk_b.content_hash
@@ -81,8 +92,7 @@ def test_chunk_from_test_inputs_accepts_pipeline_hash() -> None:
 def test_chunk_explicit_content_hash_is_respected() -> None:
     """Production callers pass ``content_hash`` explicitly; the value
     is honoured verbatim, no auto-compute on top."""
-    chunk = Chunk(text="hello", content_hash="explicit-hash",
-                  metadata={"package": "p"})
+    chunk = Chunk(text="hello", content_hash="explicit-hash", metadata={"package": "p"})
     assert chunk.content_hash == "explicit-hash"
 
 
@@ -152,8 +162,7 @@ def test_chunk_legacy_relevance_fields_still_work() -> None:
 
 
 def test_embedding_provenance_value_object() -> None:
-    prov = EmbeddingProvenance(model_name="BAAI/bge-small-en-v1.5",
-                                content_hash="h")
+    prov = EmbeddingProvenance(model_name="BAAI/bge-small-en-v1.5", content_hash="h")
     assert prov.model_name == "BAAI/bge-small-en-v1.5"
     assert prov.content_hash == "h"
 
@@ -181,7 +190,8 @@ def test_package_provenance_default_is_none() -> None:
 
 def test_package_with_explicit_provenance() -> None:
     prov = EmbeddingProvenance(
-        model_name="BAAI/bge-small-en-v1.5", content_hash="pkg-h",
+        model_name="BAAI/bge-small-en-v1.5",
+        content_hash="pkg-h",
     )
     pkg = Package(
         name="demo",

@@ -1,4 +1,5 @@
 """Component registries + BuildContext for config-driven pipeline assembly."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -42,6 +43,7 @@ class ComponentRegistry(Generic[C]):
             self._types[type_name] = cls
             self._forwards_depth[type_name] = _from_dict_accepts_depth(cls)
             return cls
+
         return decorator
 
     def build(self, data: Mapping, context: BuildContext, _depth: int = 0) -> C:
@@ -50,8 +52,7 @@ class ComponentRegistry(Generic[C]):
             cls = self._types[type_name]
         except KeyError as e:
             raise KeyError(
-                f"unknown component type {type_name!r}; "
-                f"known: {sorted(self._types)}"
+                f"unknown component type {type_name!r}; known: {sorted(self._types)}"
             ) from e
         from_dict = cls.from_dict
         # Only stages need the depth counter — retrievers / formatters do not
@@ -98,6 +99,7 @@ formatter_registry: ComponentRegistry = ComponentRegistry()
 def _default_predicate_registry():
     """Lazy import to avoid circular dep — route_predicates module imports from here."""
     from pydocs_mcp.retrieval.route_predicates import default_predicate_registry
+
     return default_predicate_registry
 
 

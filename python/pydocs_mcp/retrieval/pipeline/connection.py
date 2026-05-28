@@ -6,6 +6,7 @@ retrieval pipeline. The provider is a small concrete adapter — not part of
 the protocol churn — so it lives next to the pipeline base classes rather
 than in any deletable "legacy" module.
 """
+
 from __future__ import annotations
 
 import asyncio

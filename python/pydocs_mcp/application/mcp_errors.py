@@ -3,6 +3,7 @@
 Handlers raise these instead of returning error strings. FastMCP maps
 them to JSON-RPC error responses; see spec §5.3 for the code mapping.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.exceptions import PydocsMCPError

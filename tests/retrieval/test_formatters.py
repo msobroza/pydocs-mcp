@@ -1,4 +1,5 @@
 """Tests for ChunkFormatter + ModuleMemberFormatter."""
+
 from __future__ import annotations
 
 from pydocs_mcp.models import (
@@ -33,14 +34,16 @@ def test_chunk_markdown_formatter_empty_title_ok():
 
 def test_member_markdown_formatter_renders_fields():
     f = ModuleMemberFormatter()
-    m = ModuleMember(metadata={
-        ModuleMemberFilterField.PACKAGE.value: "fastapi",
-        ModuleMemberFilterField.MODULE.value: "fastapi.routing",
-        ModuleMemberFilterField.NAME.value: "APIRouter",
-        ModuleMemberFilterField.KIND.value: MemberKind.CLASS.value,
-        "signature": "(prefix: str = '')",
-        "docstring": "Groups endpoints.",
-    })
+    m = ModuleMember(
+        metadata={
+            ModuleMemberFilterField.PACKAGE.value: "fastapi",
+            ModuleMemberFilterField.MODULE.value: "fastapi.routing",
+            ModuleMemberFilterField.NAME.value: "APIRouter",
+            ModuleMemberFilterField.KIND.value: MemberKind.CLASS.value,
+            "signature": "(prefix: str = '')",
+            "docstring": "Groups endpoints.",
+        }
+    )
     result = f.format(m)
     assert "[fastapi]" in result
     assert "fastapi.routing.APIRouter" in result

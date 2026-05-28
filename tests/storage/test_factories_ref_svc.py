@@ -11,6 +11,7 @@ These two assertions are the user-visible payoff of #5c:
 If either regresses, the lookup tool's ``show="callers"|"callees"`` mode
 silently degrades back to ``ServiceUnavailableError``.
 """
+
 from __future__ import annotations
 
 

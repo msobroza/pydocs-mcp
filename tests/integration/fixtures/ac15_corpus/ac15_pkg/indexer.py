@@ -1,4 +1,5 @@
 """Indexer class with self.X.Y patterns. Exercises Rule 0."""
+
 from __future__ import annotations
 
 from ac15_pkg.pipeline import Pipeline
@@ -9,7 +10,7 @@ class Indexer:
     """Test class for self.X.Y rewrite (Rule 0)."""
 
     def __init__(self, pipeline: Pipeline) -> None:
-        self.pipeline = pipeline      # self.pipeline: Pipeline
+        self.pipeline = pipeline  # self.pipeline: Pipeline
         self.cache: dict[str, int] = {}
 
     def index_pair(self, name: str, a: int, b: int) -> int:

@@ -10,6 +10,7 @@ from the extraction-side ``IngestionStage`` Protocol at
 ``pydocs_mcp/extraction/pipeline/ingestion.py``. Different pipelines,
 different state shapes, different contracts.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -31,10 +32,30 @@ class RetrieverStep(ABC):
     accept arbitrary attribute assignment). The frozen contract still
     propagates from the parent but slots does not.
     """
+
     name: str
 
     @abstractmethod
     async def run(self, state: RetrieverState) -> RetrieverState: ...
+
+    def to_dict(self) -> dict:
+        """Serialize the step to a YAML-loadable dict.
+
+        Default raises ``NotImplementedError`` so subclasses opt in
+        explicitly; ``@abstractmethod`` would force every nested
+        ``@dataclass`` subclass (including ``RetrieverPipeline``) to
+        re-declare the method even when its serialization is owned by
+        a higher-level wrapper. Every concrete shipped step under
+        ``retrieval/steps/`` overrides this; the declaration here
+        codifies the contract that ``ParallelStep`` / ``RouteStep`` /
+        ``ConditionalStep`` / ``TokenBudgetStep`` already rely on when
+        they call ``step.to_dict()`` on nested children.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement to_dict() — see "
+            f"existing concrete steps under retrieval/steps/ for the "
+            f"shape ({{'type': '<name>', ...}})."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +79,7 @@ class RetrieverPipeline(RetrieverStep):
         chunk_pipeline["fetch"]  # -> ChunkFetcherStep
         chunk_pipeline.step_names  # -> ("fetch", "score", "topk", "budget")
     """
+
     steps: tuple[tuple[str, RetrieverStep], ...]
 
     def __post_init__(self) -> None:

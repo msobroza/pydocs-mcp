@@ -1,4 +1,5 @@
 """CompositeUnitOfWork dispatch + attribute proxying + rollback (AC-9, AC-10)."""
+
 from dataclasses import dataclass, field
 from typing import Any
 

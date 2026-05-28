@@ -3,6 +3,7 @@
 constructible by name; the metric/dataset/tracker registries stay
 disjoint (so a system name can't shadow a tracker etc.).
 """
+
 from __future__ import annotations
 
 from benchmarks.eval.serialization import (

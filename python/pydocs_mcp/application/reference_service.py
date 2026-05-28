@@ -9,6 +9,7 @@ rollback is a no-op for read-only paths.
 flips ``LookupService._symbol_lookup`` to invoke it for
 ``show="callers"|"callees"``.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -40,7 +41,9 @@ class ReferenceService:
     uow_factory: Callable[[], UnitOfWork]
 
     async def callers(
-        self, package: str, target_node_qname: str,
+        self,
+        package: str,
+        target_node_qname: str,
     ) -> tuple[NodeReference, ...]:
         """Return every ref whose ``to_node_id == target_node_qname``.
 
@@ -57,7 +60,9 @@ class ReferenceService:
         return tuple(rows)
 
     async def callees(
-        self, package: str, from_node_qname: str,
+        self,
+        package: str,
+        from_node_qname: str,
     ) -> tuple[NodeReference, ...]:
         """Return every ref originating from ``from_node_qname``.
 
@@ -71,7 +76,10 @@ class ReferenceService:
         return tuple(rows)
 
     async def find_by_name(
-        self, name: str, *, kind: ReferenceKind | None = None,
+        self,
+        name: str,
+        *,
+        kind: ReferenceKind | None = None,
     ) -> tuple[NodeReference, ...]:
         """Find every ref whose ``to_name == name`` (queryable for both
         resolved AND unresolved edges — that's the whole point of keeping

@@ -14,6 +14,7 @@ can be reused by code paths that aren't structured as RetrieverSteps.
 Reference: Cormack, Clarke, Buettcher 2009 — *Reciprocal Rank Fusion
 outperforms Condorcet and individual Rank Learning Methods*.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -66,10 +67,7 @@ def _rrf_fuse(
                 continue
             scores[chunk.id] = scores.get(chunk.id, 0.0) + 1.0 / (k + rank)
             representatives.setdefault(chunk.id, chunk)
-    fused = [
-        replace(representatives[chunk_id], relevance=scores[chunk_id])
-        for chunk_id in scores
-    ]
+    fused = [replace(representatives[chunk_id], relevance=scores[chunk_id]) for chunk_id in scores]
     fused.sort(key=lambda c: c.relevance or 0.0, reverse=True)
     if limit is not None:
         fused = fused[:limit]
@@ -117,7 +115,8 @@ class RRFFusionStep(RetrieverStep):
 
     k: int = field(default=_DEFAULT_K, kw_only=True)
     branch_keys: tuple[str, ...] = field(
-        default=DEFAULT_BRANCH_KEYS, kw_only=True,
+        default=DEFAULT_BRANCH_KEYS,
+        kw_only=True,
     )
     name: str = field(default="rrf_fusion", kw_only=True)
 
@@ -127,11 +126,7 @@ class RRFFusionStep(RetrieverStep):
             payload = state.scratch.get(key)
             if payload is None:
                 continue
-            items = (
-                tuple(payload.items)
-                if hasattr(payload, "items")
-                else tuple(payload)
-            )
+            items = tuple(payload.items) if hasattr(payload, "items") else tuple(payload)
             if items:
                 ranked_lists.append(items)
         if not ranked_lists:

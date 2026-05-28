@@ -14,12 +14,22 @@ Atomicity limitation: NOT strict cross-backend ACID. The startup
 integrity check (compare chunks.count to IdMapIndex.size()) detects
 post-crash mismatches and forces re-embed of affected packages.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+
+if TYPE_CHECKING:
+    from pydocs_mcp.storage.protocols import (
+        ChunkStore,
+        DocumentTreeStore,
+        ModuleMemberStore,
+        PackageStore,
+        ReferenceStore,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +150,8 @@ class CompositeUnitOfWork:
                 first_exc = exc
                 logger.error(
                     "CompositeUnitOfWork commit failed on %r: %r",
-                    child, exc,
+                    child,
+                    exc,
                 )
                 break
         if first_exc is not None:
@@ -151,7 +162,8 @@ class CompositeUnitOfWork:
                     logger.warning(
                         "Best-effort rollback raised on %r: %r — original "
                         "commit failure NOT masked.",
-                        child, rb_exc,
+                        child,
+                        rb_exc,
                     )
             raise first_exc
 
@@ -162,7 +174,8 @@ class CompositeUnitOfWork:
             except Exception as exc:
                 logger.warning(
                     "CompositeUnitOfWork.rollback raised on %r: %r",
-                    child, exc,
+                    child,
+                    exc,
                 )
 
     async def delete_all(self) -> None:
@@ -180,6 +193,42 @@ class CompositeUnitOfWork:
                 continue
             await child.delete_all()
 
+    # Explicit @property dispatch for the six UnitOfWork attrs. The
+    # runtime ``__getattr__`` below still resolves arbitrary delegation,
+    # but mypy's structural-subtype check (``Callable[[], CompositeUnitOfWork]``
+    # consumed by something expecting ``Callable[[], UnitOfWork]``) walks
+    # the *class* level — which doesn't see ``__getattr__`` fallbacks.
+    # Declaring these properties surfaces the UnitOfWork contract on the
+    # class so the subtype check passes and ``isinstance(uow, UnitOfWork)``
+    # works without a runtime ``hasattr`` walk through __getattr__.
+    @property
+    def packages(self) -> PackageStore:
+        return cast("PackageStore", self._attr_map["packages"])
+
+    @property
+    def chunks(self) -> ChunkStore:
+        return cast("ChunkStore", self._attr_map["chunks"])
+
+    @property
+    def module_members(self) -> ModuleMemberStore:
+        return cast("ModuleMemberStore", self._attr_map["module_members"])
+
+    @property
+    def trees(self) -> DocumentTreeStore:
+        return cast("DocumentTreeStore", self._attr_map["trees"])
+
+    @property
+    def references(self) -> ReferenceStore:
+        return cast("ReferenceStore", self._attr_map["references"])
+
+    @property
+    def vectors(self) -> Any:
+        # Typed ``Any`` here (not a specific VectorStore Protocol) so the
+        # NullVectorStore fallback + the real TurboQuant backend share a
+        # single declared shape. Mirrors the ``vectors: object`` field on
+        # the UnitOfWork Protocol itself.
+        return self._attr_map["vectors"]
+
     def __getattr__(self, name: str) -> Any:
         """Delegate attribute access via the cached owner map (spec S26).
 
@@ -189,6 +238,11 @@ class CompositeUnitOfWork:
         same AttributeError shape as Python's default to keep
         duck-typing and ``getattr(obj, name, default)`` callers
         compatible.
+
+        Note: the six dispatch attrs (``packages`` etc.) are declared
+        as ``@property`` above, so they never reach ``__getattr__`` at
+        runtime — properties take precedence. This fallback covers
+        any future store names not yet promoted to a property.
         """
         # Guard against pickling / deepcopy paths where __getattr__
         # fires before __init__ has set _attr_map.

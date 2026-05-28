@@ -9,6 +9,7 @@ No per-module cap lives on this class:
 responsibility (downstream stage, out of scope). The extractor emits
 every member it parses; upstream code truncates.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,12 +38,14 @@ from pydocs_mcp.models import (
 @dataclass(frozen=True, slots=True)
 class AstMemberExtractor:
     async def extract_from_project(
-        self, project_dir: Path,
+        self,
+        project_dir: Path,
     ) -> tuple[ModuleMember, ...]:
         return await asyncio.to_thread(self._parse_dir, project_dir, PROJECT_PACKAGE_NAME)
 
     async def extract_from_dependency(
-        self, dep_name: str,
+        self,
+        dep_name: str,
     ) -> tuple[ModuleMember, ...]:
         return await asyncio.to_thread(self._dep_sync, dep_name)
 
@@ -53,11 +56,7 @@ class AstMemberExtractor:
         dist = find_installed_distribution(dep_name)
         if dist is None:
             return ()
-        py_files = [
-            str(dist.locate_file(f))
-            for f in (dist.files or [])
-            if str(f).endswith(".py")
-        ]
+        py_files = [str(dist.locate_file(f)) for f in (dist.files or []) if str(f).endswith(".py")]
         if not py_files:
             return ()
         root_str = find_site_packages_root(py_files[0])
@@ -80,7 +79,10 @@ class AstMemberExtractor:
         return self._parse_files(package, py_files, root)
 
     def _parse_files(
-        self, package: str, paths: list[str], root: Path,
+        self,
+        package: str,
+        paths: list[str],
+        root: Path,
     ) -> tuple[ModuleMember, ...]:
         # Deferred import so test-time module-level imports of this file don't
         # pull in the Rust native module when not strictly needed.
@@ -94,23 +96,21 @@ class AstMemberExtractor:
                 rel = os.path.relpath(filepath, str(root))
             except ValueError:
                 continue
-            module = (
-                rel.replace(os.sep, ".")
-                .removesuffix(".py")
-                .replace(".__init__", "")
-            )
+            module = rel.replace(os.sep, ".").removesuffix(".py").replace(".__init__", "")
             for symbol in parse_py_file(source):
                 members.append(
-                    ModuleMember(metadata={
-                        ModuleMemberFilterField.PACKAGE.value: package,
-                        ModuleMemberFilterField.MODULE.value: module,
-                        ModuleMemberFilterField.NAME.value: symbol.name,
-                        ModuleMemberFilterField.KIND.value: symbol.kind,
-                        "signature": symbol.signature,
-                        "return_annotation": "",
-                        "parameters": (),
-                        "docstring": symbol.docstring,
-                    })
+                    ModuleMember(
+                        metadata={
+                            ModuleMemberFilterField.PACKAGE.value: package,
+                            ModuleMemberFilterField.MODULE.value: module,
+                            ModuleMemberFilterField.NAME.value: symbol.name,
+                            ModuleMemberFilterField.KIND.value: symbol.kind,
+                            "signature": symbol.signature,
+                            "return_annotation": "",
+                            "parameters": (),
+                            "docstring": symbol.docstring,
+                        }
+                    )
                 )
         return tuple(members)
 

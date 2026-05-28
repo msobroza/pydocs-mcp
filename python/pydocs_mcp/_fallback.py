@@ -2,6 +2,7 @@
 Pure Python fallbacks for Rust functions.
 Used when the Rust extension is not installed (pip install without Rust toolchain).
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -18,9 +19,20 @@ from pydocs_mcp.constants import (
 )
 
 SKIP_DIRS = {
-    ".git", ".venv", "venv", "__pycache__", "node_modules",
-    ".tox", ".eggs", "build", "dist", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", "htmlcov", ".nox",
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    ".tox",
+    ".eggs",
+    "build",
+    "dist",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "htmlcov",
+    ".nox",
 }
 
 
@@ -62,7 +74,7 @@ class ParsedMember:
 def parse_py_file(source: str) -> list[ParsedMember]:
     """Extract top-level functions and classes using regex."""
     def_re = re.compile(
-        r'^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:',
+        r"^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:",
         re.MULTILINE,
     )
     doc_re = re.compile(r'(?s)^(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
@@ -74,11 +86,13 @@ def parse_py_file(source: str) -> list[ParsedMember]:
             continue
 
         # Look for docstring immediately after the definition (colon consumed by regex).
-        rest = source[m.end():][:DOCSTRING_LOOKAHEAD].lstrip()
+        rest = source[m.end() :][:DOCSTRING_LOOKAHEAD].lstrip()
         docstring = ""
         doc_match = doc_re.match(rest)
         if doc_match:
-            docstring = (doc_match.group(1) or doc_match.group(2) or "").strip()[:FUNC_DOCSTRING_MAX]
+            docstring = (doc_match.group(1) or doc_match.group(2) or "").strip()[
+                :FUNC_DOCSTRING_MAX
+            ]
 
         members.append(ParsedMember(name, kind, f"({sig.strip()})", docstring))
     return members

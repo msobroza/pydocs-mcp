@@ -17,6 +17,7 @@ Tests assert (1) the files ship in ``python/pydocs_mcp/pipelines/`` and
 (2) ``CodeRetrieverPipeline.from_dict`` accepts each preset and the
 result round-trips through ``to_dict`` with the right number of steps.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

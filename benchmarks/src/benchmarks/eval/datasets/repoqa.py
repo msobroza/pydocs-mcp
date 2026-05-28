@@ -4,6 +4,7 @@ RepoQA is distributed as a single gzipped JSON file from
 ``evalplus/repoqa_release`` GitHub Releases. Stdlib-only — no
 ``datasets`` / ``huggingface-hub`` dependency.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -54,7 +55,9 @@ class RepoQADataset:
     )
     language: str = "python"
     _rows_cache: list[dict[str, Any]] | None = field(
-        default=None, init=False, repr=False,
+        default=None,
+        init=False,
+        repr=False,
     )
 
     def __post_init__(self) -> None:
@@ -126,13 +129,15 @@ def _flatten_needles(repos: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for repo_entry in repos:
         for needle in repo_entry["needles"]:
-            rows.append({
-                "repo": repo_entry["repo"],
-                "commit_sha": repo_entry["commit_sha"],
-                "topic": repo_entry["topic"],
-                "content": repo_entry["content"],
-                "needle": needle,
-            })
+            rows.append(
+                {
+                    "repo": repo_entry["repo"],
+                    "commit_sha": repo_entry["commit_sha"],
+                    "topic": repo_entry["topic"],
+                    "content": repo_entry["content"],
+                    "needle": needle,
+                }
+            )
     return rows
 
 
@@ -140,7 +145,9 @@ def _row_to_task(row: dict[str, Any]) -> EvalTask:
     needle = row["needle"]
     content: Mapping[str, str] = dict(row["content"])
     needle_body = _extract_body(
-        content[needle["path"]], needle["start_line"], needle["end_line"],
+        content[needle["path"]],
+        needle["start_line"],
+        needle["end_line"],
     )
     repo_id = f"{row['repo']}@{row['commit_sha'][:7]}"
     return EvalTask(

@@ -1,4 +1,5 @@
 """pyproject.toml declares main + extras correctly (Task 6 + AC-16)."""
+
 from pathlib import Path
 
 import tomllib
@@ -39,9 +40,7 @@ def test_openai_in_main_deps_not_optional() -> None:
     """AC-14: openai is a required dep, not an extra."""
     cfg = _load()
     main_deps = cfg["project"]["dependencies"]
-    assert any("openai" in d for d in main_deps), (
-        f"openai not in main dependencies: {main_deps}"
-    )
+    assert any("openai" in d for d in main_deps), f"openai not in main dependencies: {main_deps}"
 
 
 def test_jinja2_in_main_deps() -> None:
@@ -58,13 +57,9 @@ def test_watch_extras_group_present() -> None:
     """AC-9: ``watchdog`` ships behind ``[watch]`` extras, not main deps."""
     cfg = _load()
     extras = cfg["project"].get("optional-dependencies", {})
-    assert "watch" in extras, (
-        f"watch extras group missing. Got: {list(extras)}"
-    )
+    assert "watch" in extras, f"watch extras group missing. Got: {list(extras)}"
     watch_deps = extras["watch"]
-    assert any("watchdog" in d for d in watch_deps), (
-        f"watchdog not in watch extras: {watch_deps}"
-    )
+    assert any("watchdog" in d for d in watch_deps), f"watchdog not in watch extras: {watch_deps}"
 
 
 def test_watchdog_not_in_main_dependencies() -> None:
@@ -83,6 +78,4 @@ def test_watch_extras_pins_watchdog_version_range() -> None:
     cfg = _load()
     watch_deps = cfg["project"]["optional-dependencies"]["watch"]
     spec = next(d for d in watch_deps if "watchdog" in d)
-    assert ">=4.0" in spec and "<6.0" in spec, (
-        f"watchdog spec must pin >=4.0,<6.0; got {spec!r}"
-    )
+    assert ">=4.0" in spec and "<6.0" in spec, f"watchdog spec must pin >=4.0,<6.0; got {spec!r}"

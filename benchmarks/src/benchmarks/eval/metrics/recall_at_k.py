@@ -1,4 +1,5 @@
 """recall@k — 1.0 iff gold appears in the top-k retrieved (spec §4.11)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,9 +23,7 @@ class RecallAtK:
         # live in the same run without colliding on the aggregation key.
         return f"recall@{self.k}"
 
-    def compute(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> float:
+    def compute(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> float:
         # WHY: relevance comes from the single ``first_relevant_rank`` helper
         # (RepoQA -> ast match; DS-1000 -> resolved-set scan), so this metric
         # never branches on dataset. RepoQA stays byte-identical.

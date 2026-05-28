@@ -1,4 +1,5 @@
 """Integration test against real OpenAI. Skipped without OPENAI_API_KEY."""
+
 from __future__ import annotations
 
 import json

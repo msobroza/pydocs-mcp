@@ -4,6 +4,7 @@ These tests use a minimal fake pipeline that structurally mimics
 CodeRetrieverPipeline's .run() coroutine. No SQLite, no real stages — the
 service is a pure dispatch layer so the tests exercise dispatch only.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -126,9 +127,7 @@ async def test_search_threads_duration_ms_from_state() -> None:
 @pytest.mark.asyncio
 async def test_search_propagates_pipeline_exception() -> None:
     query = SearchQuery(terms="boom")
-    service = DocsSearch(
-        chunk_pipeline=RaisingPipeline(exc=RuntimeError("pipeline failed"))
-    )
+    service = DocsSearch(chunk_pipeline=RaisingPipeline(exc=RuntimeError("pipeline failed")))
 
     with pytest.raises(RuntimeError, match="pipeline failed"):
         await service.search(query)
@@ -136,9 +135,7 @@ async def test_search_propagates_pipeline_exception() -> None:
 
 def test_service_is_frozen_slotted_dataclass() -> None:
     service = DocsSearch(
-        chunk_pipeline=FakeChunkPipeline(
-            state=PipelineState(query=SearchQuery(terms="x"))
-        )
+        chunk_pipeline=FakeChunkPipeline(state=PipelineState(query=SearchQuery(terms="x")))
     )
     # Frozen: attribute re-assignment is forbidden.
     with pytest.raises((AttributeError, Exception)):

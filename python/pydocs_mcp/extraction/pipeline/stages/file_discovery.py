@@ -6,6 +6,7 @@ the pipeline one-dimensional — the alternative (two pipelines, one per
 kind) would duplicate the shared middle four stages and force callers
 to pick (spec decision #19).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -49,6 +50,7 @@ class FileDiscoveryStage:
             DependencyFileDiscoverer,
             ProjectFileDiscoverer,
         )
+
         disc = context.app_config.extraction.discovery
         return cls(
             project_discoverer=ProjectFileDiscoverer(scope=disc.project),

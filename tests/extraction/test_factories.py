@@ -18,6 +18,7 @@ Pins spec §7.3 + §7.4 + AC #33 + AC #19:
   raises ``RuntimeError`` so mis-configured pipelines fail loud.
 - Public API surface (``__all__``) is importable end-to-end.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -60,9 +61,11 @@ from tests._fakes import MockEmbedder, make_fake_uow_factory
 
 import importlib.resources
 
-_BUNDLED_INGESTION = Path(str(
-    importlib.resources.files("pydocs_mcp.pipelines").joinpath("ingestion.yaml"),
-))
+_BUNDLED_INGESTION = Path(
+    str(
+        importlib.resources.files("pydocs_mcp.pipelines").joinpath("ingestion.yaml"),
+    )
+)
 
 
 def _app_config() -> AppConfig:
@@ -72,6 +75,7 @@ def _app_config() -> AppConfig:
 
 
 # ── load_ingestion_pipeline ────────────────────────────────────────────────
+
 
 def test_load_ingestion_pipeline_success() -> None:
     """Shipped preset loads into a 10-stage pipeline of the expected types.
@@ -96,10 +100,16 @@ def test_load_ingestion_pipeline_success() -> None:
     assert isinstance(pipeline, IngestionPipeline)
     assert len(pipeline.stages) == 10
     expected_types = [
-        FileDiscoveryStage, FileReadStage, ChunkingStage,
-        ReferenceCaptureStage, FlattenStage,
-        AssignChunkContentHashStage, LoadExistingChunkHashesStage,
-        EmbedChunksStage, ContentHashStage, PackageBuildStage,
+        FileDiscoveryStage,
+        FileReadStage,
+        ChunkingStage,
+        ReferenceCaptureStage,
+        FlattenStage,
+        AssignChunkContentHashStage,
+        LoadExistingChunkHashesStage,
+        EmbedChunksStage,
+        ContentHashStage,
+        PackageBuildStage,
     ]
     for stage, exp in zip(pipeline.stages, expected_types, strict=True):
         assert isinstance(stage, exp)
@@ -136,12 +146,15 @@ def test_load_ingestion_pipeline_missing_stages_key_raises(tmp_path: Path) -> No
 
 # ── build_ingestion_pipeline ───────────────────────────────────────────────
 
+
 def test_build_ingestion_pipeline_uses_bundled_preset_when_config_none() -> None:
     """Default config has ``pipeline_path=None`` → build falls back to shipped YAML."""
     cfg = _app_config()
     assert cfg.extraction.ingestion.pipeline_path is None
     pipeline = build_ingestion_pipeline(
-        cfg, embedder=MockEmbedder(), uow_factory=make_fake_uow_factory(),
+        cfg,
+        embedder=MockEmbedder(),
+        uow_factory=make_fake_uow_factory(),
     )
     assert isinstance(pipeline, IngestionPipeline)
     assert len(pipeline.stages) == 10
@@ -166,6 +179,7 @@ def test_build_ingestion_pipeline_uses_custom_path_when_provided(tmp_path: Path)
 
 # ── PipelineChunkExtractor ─────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class _FakePipeline:
     """Fake IngestionPipeline — records the state it received and returns a
@@ -182,8 +196,13 @@ class _FakePipeline:
 
 def _fake_package(name: str = "__project__") -> Package:
     return Package(
-        name=name, version="1.0", summary="", homepage="",
-        dependencies=(), content_hash="h", origin=PackageOrigin.PROJECT,
+        name=name,
+        version="1.0",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",
+        origin=PackageOrigin.PROJECT,
     )
 
 
@@ -191,11 +210,13 @@ def _fake_package(name: str = "__project__") -> Package:
 async def test_pipeline_chunk_extractor_extract_from_project(tmp_path: Path) -> None:
     """PROJECT target_kind is wired through and package is unwrapped."""
     pkg = _fake_package("__project__")
-    fake = _FakePipeline(canned_state=IngestionState(
-        files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
-        chunks=ChunkBundle(),
-        package=pkg,
-    ))
+    fake = _FakePipeline(
+        canned_state=IngestionState(
+            files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
+            chunks=ChunkBundle(),
+            package=pkg,
+        )
+    )
     extractor = PipelineChunkExtractor(pipeline=fake)  # type: ignore[arg-type]
     result = await extractor.extract_from_project(tmp_path)
     assert result.chunks == ()
@@ -229,10 +250,12 @@ async def test_pipeline_chunk_extractor_extract_from_dependency() -> None:
 async def test_pipeline_chunk_extractor_raises_if_package_missing(tmp_path: Path) -> None:
     """A pipeline that forgets ``package_build`` leaves ``state.package=None``
     — the extractor must fail loud rather than return a malformed tuple."""
-    fake = _FakePipeline(canned_state=IngestionState(
-        files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
-        package=None,
-    ))
+    fake = _FakePipeline(
+        canned_state=IngestionState(
+            files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
+            package=None,
+        )
+    )
     extractor = PipelineChunkExtractor(pipeline=fake)  # type: ignore[arg-type]
     with pytest.raises(RuntimeError, match="did not populate state.package"):
         await extractor.extract_from_project(tmp_path)
@@ -240,23 +263,40 @@ async def test_pipeline_chunk_extractor_raises_if_package_missing(tmp_path: Path
 
 # ── Public API smoke ───────────────────────────────────────────────────────
 
+
 def test_public_api_smoke() -> None:
     """Every name in ``extraction.__all__`` is importable from the subpackage."""
     import pydocs_mcp.extraction as mod
 
     expected = {
-        "AstPythonChunker", "HeadingMarkdownChunker", "NotebookChunker",
-        "ProjectFileDiscoverer", "DependencyFileDiscoverer",
-        "AstMemberExtractor", "InspectMemberExtractor",
+        "AstPythonChunker",
+        "HeadingMarkdownChunker",
+        "NotebookChunker",
+        "ProjectFileDiscoverer",
+        "DependencyFileDiscoverer",
+        "AstMemberExtractor",
+        "InspectMemberExtractor",
         "StaticDependencyResolver",
-        "IngestionPipeline", "IngestionState", "IngestionStage", "TargetKind",
-        "FileDiscoveryStage", "FileReadStage", "ChunkingStage",
-        "FlattenStage", "ContentHashStage", "PackageBuildStage",
-        "DocumentNode", "NodeKind", "STRUCTURAL_ONLY_KINDS",
+        "IngestionPipeline",
+        "IngestionState",
+        "IngestionStage",
+        "TargetKind",
+        "FileDiscoveryStage",
+        "FileReadStage",
+        "ChunkingStage",
+        "FlattenStage",
+        "ContentHashStage",
+        "PackageBuildStage",
+        "DocumentNode",
+        "NodeKind",
+        "STRUCTURAL_ONLY_KINDS",
         "PipelineChunkExtractor",
-        "build_package_tree", "build_ingestion_pipeline", "load_ingestion_pipeline",
+        "build_package_tree",
+        "build_ingestion_pipeline",
+        "load_ingestion_pipeline",
         "flatten_to_chunks",
-        "stage_registry", "chunker_registry",
+        "stage_registry",
+        "chunker_registry",
     }
     assert expected.issubset(set(mod.__all__))
     for name in expected:

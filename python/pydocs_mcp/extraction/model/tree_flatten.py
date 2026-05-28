@@ -15,6 +15,7 @@ Each emitted Chunk carries (spec §4.4):
 CODE_EXAMPLE nodes inherit their parent's origin (spec §4.2): a code example
 under a FUNCTION is PYTHON_DEF; under a MARKDOWN_HEADING it's MARKDOWN_SECTION.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.model.document_node import (
@@ -27,14 +28,14 @@ from pydocs_mcp.models import Chunk, ChunkFilterField, ChunkOrigin
 # NodeKind -> ChunkOrigin mapping (spec §4.2). CODE_EXAMPLE is deliberately
 # absent — it inherits the parent node's origin at emission time.
 _KIND_TO_ORIGIN: dict[NodeKind, ChunkOrigin] = {
-    NodeKind.MODULE:                 ChunkOrigin.PYTHON_DEF,
-    NodeKind.IMPORT_BLOCK:           ChunkOrigin.PYTHON_DEF,
-    NodeKind.CLASS:                  ChunkOrigin.PYTHON_DEF,
-    NodeKind.FUNCTION:               ChunkOrigin.PYTHON_DEF,
-    NodeKind.METHOD:                 ChunkOrigin.PYTHON_DEF,
-    NodeKind.MARKDOWN_HEADING:       ChunkOrigin.MARKDOWN_SECTION,
+    NodeKind.MODULE: ChunkOrigin.PYTHON_DEF,
+    NodeKind.IMPORT_BLOCK: ChunkOrigin.PYTHON_DEF,
+    NodeKind.CLASS: ChunkOrigin.PYTHON_DEF,
+    NodeKind.FUNCTION: ChunkOrigin.PYTHON_DEF,
+    NodeKind.METHOD: ChunkOrigin.PYTHON_DEF,
+    NodeKind.MARKDOWN_HEADING: ChunkOrigin.MARKDOWN_SECTION,
     NodeKind.NOTEBOOK_MARKDOWN_CELL: ChunkOrigin.NOTEBOOK_MARKDOWN_CELL,
-    NodeKind.NOTEBOOK_CODE_CELL:     ChunkOrigin.NOTEBOOK_CODE_CELL,
+    NodeKind.NOTEBOOK_CODE_CELL: ChunkOrigin.NOTEBOOK_CODE_CELL,
 }
 
 
@@ -72,14 +73,12 @@ def _visit(
 
 
 def _should_emit(node: DocumentNode) -> bool:
-    return (
-        node.kind not in STRUCTURAL_ONLY_KINDS
-        and bool(node.text.strip())
-    )
+    return node.kind not in STRUCTURAL_ONLY_KINDS and bool(node.text.strip())
 
 
 def _origin_for_node(
-    node: DocumentNode, parent_origin: ChunkOrigin | None,
+    node: DocumentNode,
+    parent_origin: ChunkOrigin | None,
 ) -> ChunkOrigin | None:
     if node.kind == NodeKind.CODE_EXAMPLE:
         return parent_origin
@@ -93,9 +92,9 @@ def _node_to_chunk(
     current_module: str | None,
 ) -> Chunk:
     metadata: dict[str, object] = {
-        ChunkFilterField.PACKAGE.value:      package,
-        ChunkFilterField.TITLE.value:        node.title,
-        ChunkFilterField.SOURCE_PATH.value:  node.source_path,
+        ChunkFilterField.PACKAGE.value: package,
+        ChunkFilterField.TITLE.value: node.title,
+        ChunkFilterField.SOURCE_PATH.value: node.source_path,
         ChunkFilterField.CONTENT_HASH.value: node.content_hash,
         # ``kind`` lives under a plain string key (spec §4.4 table — extra_metadata
         # column); there is no ChunkFilterField.KIND enum member. Consumers that
@@ -118,9 +117,7 @@ def _node_to_chunk(
     # 3. The node's own ``qualified_name`` — only reached for orphan trees
     #    where this node IS the root and isn't a MODULE (rare; preserves
     #    pre-fix behavior for trees that bypass the MODULE wrapper).
-    explicit_module = (
-        node.extra_metadata.get("module") if node.extra_metadata else None
-    )
+    explicit_module = node.extra_metadata.get("module") if node.extra_metadata else None
     metadata[ChunkFilterField.MODULE.value] = (
         explicit_module or current_module or node.qualified_name
     )

@@ -6,6 +6,7 @@ The reporter is the human-facing summary that lands as an MLflow artifact
 + a stdout block at the end of every sweep. Tests pin the table shape so
 a downstream regression-diff script (Task 8) can parse it reliably.
 """
+
 from __future__ import annotations
 
 from benchmarks.eval.report import format_report
@@ -101,7 +102,9 @@ def test_format_report_handles_single_column() -> None:
         },
     }
     report = format_report(
-        sweep_results=single, dataset_name="repoqa", n_tasks=4,
+        sweep_results=single,
+        dataset_name="repoqa",
+        n_tasks=4,
     )
     assert "pydocs-mcp / baseline" in report
     assert "50.0% [30.0%, 70.0%]" in report
@@ -125,7 +128,8 @@ def test_format_report_renders_latency_cells_as_percentile_triple() -> None:
     ``_seconds`` suffix (spec §5.5).
     """
     results: dict[
-        tuple[str, str], dict[str, tuple[float, float, float]],
+        tuple[str, str],
+        dict[str, tuple[float, float, float]],
     ] = {
         ("pydocs-mcp", "baseline"): {
             "recall@1": (0.6, 0.4, 0.8),
@@ -138,7 +142,9 @@ def test_format_report_renders_latency_cells_as_percentile_triple() -> None:
         },
     }
     out = format_report(
-        sweep_results=results, dataset_name="repoqa-fixture", n_tasks=5,
+        sweep_results=results,
+        dataset_name="repoqa-fixture",
+        n_tasks=5,
     )
     # Quality row keeps percent + CI rendering.
     assert "60.0% [40.0%, 80.0%]" in out
@@ -152,7 +158,8 @@ def test_format_report_includes_latency_rows_after_quality() -> None:
     scanning top-down see the headline quality numbers first.
     """
     results: dict[
-        tuple[str, str], dict[str, tuple[float, float, float]],
+        tuple[str, str],
+        dict[str, tuple[float, float, float]],
     ] = {
         ("pydocs-mcp", "baseline"): {
             "recall@1": (0.6, 0.4, 0.8),
@@ -165,7 +172,9 @@ def test_format_report_includes_latency_rows_after_quality() -> None:
         },
     }
     out = format_report(
-        sweep_results=results, dataset_name="repoqa-fixture", n_tasks=5,
+        sweep_results=results,
+        dataset_name="repoqa-fixture",
+        n_tasks=5,
     )
     # WHY: pass@1-needle is the last quality metric in DEFAULT_METRIC_SPECS;
     # indexing_seconds is the first latency key. The first must appear

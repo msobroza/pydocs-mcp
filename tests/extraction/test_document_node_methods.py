@@ -9,6 +9,7 @@ Pins spec §4.3 serialization contract used by LookupService:
   is iterative (no recursion-limit hit on a 1000-deep tree), and returns
   ``None`` on miss.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind

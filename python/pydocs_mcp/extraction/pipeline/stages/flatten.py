@@ -4,6 +4,7 @@ Thin wrapper — the walking / direct-text rule lives in
 :mod:`pydocs_mcp.extraction.model.tree_flatten`; this stage just
 concatenates per-tree results in pipeline order.
 """
+
 from __future__ import annotations
 
 import asyncio

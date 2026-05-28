@@ -17,6 +17,7 @@ Covers:
 - Absolute file path + ``root`` yields dotted module name.
 - Fenced code block language tag captured in ``extra_metadata["language"]``.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,8 +28,9 @@ from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import chunker_registry
 
 
-def _build(content: str, *, path: str = "pkg/mod.py", package: str = "pkg",
-           root: Path | None = None) -> DocumentNode:
+def _build(
+    content: str, *, path: str = "pkg/mod.py", package: str = "pkg", root: Path | None = None
+) -> DocumentNode:
     """Run the chunker on inline content and return the MODULE root."""
     root = root if root is not None else Path("/tmp/fake_root")
     return AstPythonChunker().build_tree(
@@ -39,8 +41,11 @@ def _build(content: str, *, path: str = "pkg/mod.py", package: str = "pkg",
     )
 
 
-def _find_child(root: DocumentNode, kind: NodeKind, title: str | None = None,
-                ) -> DocumentNode | None:
+def _find_child(
+    root: DocumentNode,
+    kind: NodeKind,
+    title: str | None = None,
+) -> DocumentNode | None:
     for c in root.children:
         if c.kind == kind and (title is None or c.title == title):
             return c
@@ -48,6 +53,7 @@ def _find_child(root: DocumentNode, kind: NodeKind, title: str | None = None,
 
 
 # ── 1. Parse success: simple module + function ─────────────────────────────
+
 
 def test_parse_success_yields_module_with_function_child(tmp_path: Path) -> None:
     src = '"""Module doc."""\n\ndef foo():\n    """Foo doc."""\n    return 1\n'
@@ -61,6 +67,7 @@ def test_parse_success_yields_module_with_function_child(tmp_path: Path) -> None
 
 # ── 2. SyntaxError fallback → MODULE-only with full source ─────────────────
 
+
 def test_syntax_error_falls_back_to_full_source_module(tmp_path: Path) -> None:
     src = "def broken(:\n    pass\n"
     root = _build(src, root=tmp_path)
@@ -70,6 +77,7 @@ def test_syntax_error_falls_back_to_full_source_module(tmp_path: Path) -> None:
 
 
 # ── 3. Import grouping → IMPORT_BLOCK ──────────────────────────────────────
+
 
 def test_imports_grouped_into_import_block(tmp_path: Path) -> None:
     src = "import os\nfrom sys import path\n\ndef f():\n    pass\n"
@@ -89,28 +97,28 @@ def test_scattered_imports_split_into_separate_import_blocks(tmp_path: Path) -> 
     single block's text swallowed the constant + the function body
     between the two import runs."""
     src = (
-        "import os\n"            # line 1 — first run
-        "import sys\n"           # line 2 — first run
+        "import os\n"  # line 1 — first run
+        "import sys\n"  # line 2 — first run
         "\n"
-        "CONST = 42\n"           # line 4 — non-import
+        "CONST = 42\n"  # line 4 — non-import
         "\n"
-        "def helper():\n"        # lines 6-7 — non-import
+        "def helper():\n"  # lines 6-7 — non-import
         "    return CONST\n"
         "\n"
-        "import json\n"          # line 9 — second run (lazy)
+        "import json\n"  # line 9 — second run (lazy)
         "from typing import Any\n"  # line 10 — second run
     )
     root = _build(src, root=tmp_path)
     blocks = [c for c in root.children if c.kind == NodeKind.IMPORT_BLOCK]
     assert len(blocks) == 2, (
-        f"expected 2 IMPORT_BLOCK runs, got {len(blocks)} — scattered imports "
-        f"got coalesced again"
+        f"expected 2 IMPORT_BLOCK runs, got {len(blocks)} — scattered imports got coalesced again"
     )
     # First run: lines 1-2, both stdlib imports, no swallowed code.
     assert blocks[0].text.splitlines() == ["import os", "import sys"]
     # Second run: lines 9-10, no swallowed CONST/helper.
     assert blocks[1].text.splitlines() == [
-        "import json", "from typing import Any",
+        "import json",
+        "from typing import Any",
     ]
     # Synthetic ids must be unique so DocumentTreeStore doesn't collide on
     # them in any future per-node persistence path.
@@ -119,15 +127,16 @@ def test_scattered_imports_split_into_separate_import_blocks(tmp_path: Path) -> 
 
 # ── 4. Class with methods → CLASS + METHOD children, direct text stops ────
 
+
 def test_class_with_methods_has_method_children_and_split_text(tmp_path: Path) -> None:
     src = (
-        'class Foo:\n'
+        "class Foo:\n"
         '    """Foo doc."""\n'
-        '    attr = 1\n'
-        '    def bar(self):\n'
-        '        return 2\n'
-        '    def baz(self):\n'
-        '        return 3\n'
+        "    attr = 1\n"
+        "    def bar(self):\n"
+        "        return 2\n"
+        "    def baz(self):\n"
+        "        return 3\n"
     )
     root = _build(src, root=tmp_path)
     cls = _find_child(root, NodeKind.CLASS)
@@ -144,6 +153,7 @@ def test_class_with_methods_has_method_children_and_split_text(tmp_path: Path) -
 
 # ── 5. Module docstring → MODULE.text (direct-text rule) ───────────────────
 
+
 def test_module_docstring_becomes_module_text(tmp_path: Path) -> None:
     src = '"""This is the module docstring."""\n\ndef f():\n    pass\n'
     root = _build(src, root=tmp_path)
@@ -151,6 +161,7 @@ def test_module_docstring_becomes_module_text(tmp_path: Path) -> None:
 
 
 # ── 6. Function docstring → extra_metadata ─────────────────────────────────
+
 
 def test_function_docstring_stored_in_extra_metadata(tmp_path: Path) -> None:
     src = 'def f():\n    """Hello doc."""\n    return None\n'
@@ -163,15 +174,9 @@ def test_function_docstring_stored_in_extra_metadata(tmp_path: Path) -> None:
 
 # ── 7. Fenced code block in module docstring → CODE_EXAMPLE child of MODULE
 
+
 def test_module_docstring_fenced_block_yields_code_example(tmp_path: Path) -> None:
-    src = (
-        '"""Module doc.\n'
-        '\n'
-        '```python\n'
-        'x = 1\n'
-        '```\n'
-        '"""\n'
-    )
+    src = '"""Module doc.\n\n```python\nx = 1\n```\n"""\n'
     root = _build(src, root=tmp_path)
     examples = [c for c in root.children if c.kind == NodeKind.CODE_EXAMPLE]
     assert len(examples) == 1
@@ -181,17 +186,9 @@ def test_module_docstring_fenced_block_yields_code_example(tmp_path: Path) -> No
 
 # ── 8. Fenced code block in function docstring → CODE_EXAMPLE child of FUNC
 
+
 def test_function_docstring_fenced_block_yields_code_example(tmp_path: Path) -> None:
-    src = (
-        'def f():\n'
-        '    """Func.\n'
-        '\n'
-        '    ```python\n'
-        '    print(1)\n'
-        '    ```\n'
-        '    """\n'
-        '    return 1\n'
-    )
+    src = 'def f():\n    """Func.\n\n    ```python\n    print(1)\n    ```\n    """\n    return 1\n'
     root = _build(src, root=tmp_path)
     func = _find_child(root, NodeKind.FUNCTION)
     assert func is not None
@@ -202,14 +199,9 @@ def test_function_docstring_fenced_block_yields_code_example(tmp_path: Path) -> 
 
 # ── 9. qualified_name is dotted: module, module.func, module.Class.method ──
 
+
 def test_qualified_names_are_dotted(tmp_path: Path) -> None:
-    src = (
-        'def f():\n'
-        '    pass\n'
-        'class C:\n'
-        '    def m(self):\n'
-        '        pass\n'
-    )
+    src = "def f():\n    pass\nclass C:\n    def m(self):\n        pass\n"
     root = _build(src, path="pkg/mod.py", root=tmp_path)
     assert root.qualified_name == "pkg.mod"
     func = _find_child(root, NodeKind.FUNCTION, "def f()")
@@ -222,6 +214,7 @@ def test_qualified_names_are_dotted(tmp_path: Path) -> None:
 
 # ── 10. content_hash stable across runs for the same input ─────────────────
 
+
 def test_content_hash_is_deterministic(tmp_path: Path) -> None:
     src = '"""same doc."""\n'
     a = _build(src, path="pkg/mod.py", root=tmp_path)
@@ -232,6 +225,7 @@ def test_content_hash_is_deterministic(tmp_path: Path) -> None:
 
 # ── 11. from_config(ChunkingConfig()) returns an instance ──────────────────
 
+
 def test_from_config_returns_instance() -> None:
     inst = AstPythonChunker.from_config(ChunkingConfig())
     assert isinstance(inst, AstPythonChunker)
@@ -239,11 +233,13 @@ def test_from_config_returns_instance() -> None:
 
 # ── 12. Decorator registered AstPythonChunker under ".py" at import ────────
 
+
 def test_decorator_registered_at_import() -> None:
     assert chunker_registry[".py"] is AstPythonChunker
 
 
 # ── 13. Async-def function → title starts with "async def" ─────────────────
+
 
 def test_async_function_title_has_async_prefix(tmp_path: Path) -> None:
     src = "async def f():\n    return 1\n"
@@ -255,6 +251,7 @@ def test_async_function_title_has_async_prefix(tmp_path: Path) -> None:
 
 # ── 14. Class bases → inherits_from tuple ──────────────────────────────────
 
+
 def test_class_inherits_from_captured(tmp_path: Path) -> None:
     src = "class Foo(Bar, Baz):\n    pass\n"
     root = _build(src, root=tmp_path)
@@ -264,6 +261,7 @@ def test_class_inherits_from_captured(tmp_path: Path) -> None:
 
 
 # ── 15. Absolute path + root resolves to dotted module name ────────────────
+
 
 def test_absolute_path_with_root_yields_dotted_module(tmp_path: Path) -> None:
     file_path = tmp_path / "pkg" / "sub" / "mod.py"
@@ -280,17 +278,9 @@ def test_absolute_path_with_root_yields_dotted_module(tmp_path: Path) -> None:
 
 # ── 16. Fenced code block language tag captured ────────────────────────────
 
+
 def test_fenced_block_language_tag_captured(tmp_path: Path) -> None:
-    src = (
-        'def f():\n'
-        '    """Doc.\n'
-        '\n'
-        '    ```bash\n'
-        '    echo hi\n'
-        '    ```\n'
-        '    """\n'
-        '    pass\n'
-    )
+    src = 'def f():\n    """Doc.\n\n    ```bash\n    echo hi\n    ```\n    """\n    pass\n'
     root = _build(src, root=tmp_path)
     func = _find_child(root, NodeKind.FUNCTION)
     assert func is not None
@@ -299,6 +289,7 @@ def test_fenced_block_language_tag_captured(tmp_path: Path) -> None:
 
 
 # ── 17. Bare __init__.py → dotted module = package path (no "__init__") ───
+
 
 def test_init_py_drops_init_suffix(tmp_path: Path) -> None:
     init_path = tmp_path / "pkg" / "sub" / "__init__.py"
@@ -318,6 +309,7 @@ def test_init_py_drops_init_suffix(tmp_path: Path) -> None:
 
 # ── 18. Empty file is handled gracefully (no children, MODULE only) ────────
 
+
 def test_empty_file_yields_module_only(tmp_path: Path) -> None:
     root = _build("", root=tmp_path)
     assert root.kind == NodeKind.MODULE
@@ -331,12 +323,12 @@ def test_scattered_imports_children_in_source_order(tmp_path: Path) -> None:
     the second import run got hoisted above the def it follows in
     source."""
     src = (
-        "import os\n"            # line 1 — run1
+        "import os\n"  # line 1 — run1
         "\n"
-        "def helper():\n"        # line 3 — def
+        "def helper():\n"  # line 3 — def
         "    return 1\n"
         "\n"
-        "import json\n"          # line 6 — run2 (BELOW the def)
+        "import json\n"  # line 6 — run2 (BELOW the def)
     )
     root = _build(src, root=tmp_path)
     # Filter to top-level structural children only — start_lines must
@@ -358,13 +350,13 @@ def test_scattered_imports_three_runs(tmp_path: Path) -> None:
     """T1: F22 only pinned the 2-run case. Three runs catches a regression
     where suffix_counter wraps or doesn't increment past 1."""
     src = (
-        "import a\n"                # line 1 — run1
+        "import a\n"  # line 1 — run1
         "\n"
-        "x = 1\n"                   # line 3 — non-import
-        "import b\n"                # line 4 — run2
+        "x = 1\n"  # line 3 — non-import
+        "import b\n"  # line 4 — run2
         "\n"
-        "y = 2\n"                   # line 6 — non-import
-        "import c\n"                # line 7 — run3
+        "y = 2\n"  # line 6 — non-import
+        "import c\n"  # line 7 — run3
     )
     root = _build(src, root=tmp_path)
     blocks = [c for c in root.children if c.kind == NodeKind.IMPORT_BLOCK]

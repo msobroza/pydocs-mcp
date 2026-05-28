@@ -14,6 +14,7 @@ types remain here:
 ``ModuleMemberRetriever`` Protocols were deleted in Task 9 once the
 ``retrievers/`` directory and ``pipeline_legacy.py`` went away.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -60,4 +61,5 @@ class ConnectionProvider(Protocol):
 @runtime_checkable
 class ResultFormatter(Protocol):
     """Renders one result (Chunk or ModuleMember) as a string payload."""
+
     def format(self, result: Chunk | ModuleMember) -> str: ...

@@ -5,6 +5,7 @@ predicate, so it covers RepoQA (ast match) and DS-1000 (resolved set) with
 no per-metric branching. For single-item systems this collapses to the
 same value as ``recall@1``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,7 +21,5 @@ from ._relevance import is_relevant
 class Precision1:
     name: str = "precision@1"
 
-    def compute(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> float:
+    def compute(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> float:
         return 1.0 if retrieved and is_relevant(retrieved[0], task) else 0.0

@@ -1,4 +1,5 @@
 """Tests for PackageLookup — post-#5a-2 uow_factory shape (spec §3.1)."""
+
 from __future__ import annotations
 
 import pytest
@@ -25,9 +26,12 @@ from tests._fakes import (
 
 def _pkg(name: str) -> Package:
     return Package(
-        name=name, version="1.0.0",
-        summary=f"{name} summary", homepage="",
-        dependencies=(), content_hash="deadbeef",
+        name=name,
+        version="1.0.0",
+        summary=f"{name} summary",
+        homepage="",
+        dependencies=(),
+        content_hash="deadbeef",
         origin=PackageOrigin.DEPENDENCY,
     )
 
@@ -59,7 +63,10 @@ def _service(
     chunks: list[Chunk] | None = None,
     members: list[ModuleMember] | None = None,
 ) -> tuple[
-    PackageLookup, InMemoryPackageStore, InMemoryChunkStore, InMemoryModuleMemberStore,
+    PackageLookup,
+    InMemoryPackageStore,
+    InMemoryChunkStore,
+    InMemoryModuleMemberStore,
 ]:
     pkg_store = InMemoryPackageStore(items=dict(packages or {}))
     chunk_store = InMemoryChunkStore()
@@ -71,7 +78,9 @@ def _service(
         pkg = m.metadata.get("package", "")
         member_store.by_package.setdefault(pkg, []).append(m)
     factory = make_fake_uow_factory(
-        packages=pkg_store, chunks=chunk_store, module_members=member_store,
+        packages=pkg_store,
+        chunks=chunk_store,
+        module_members=member_store,
     )
     svc = PackageLookup(uow_factory=factory)
     return svc, pkg_store, chunk_store, member_store
@@ -112,7 +121,9 @@ async def test_get_package_doc_composes_all_three_stores() -> None:
     chunks = [_chunk("foo", "overview"), _chunk("foo", "api")]
     members = [_member("foo", "run"), _member("foo", "init")]
     svc, _, chunk_store, member_store = _service(
-        packages={"foo": pkg}, chunks=chunks, members=members,
+        packages={"foo": pkg},
+        chunks=chunks,
+        members=members,
     )
     result = await svc.get_package_doc("foo")
     assert isinstance(result, PackageDoc)
@@ -139,8 +150,9 @@ async def test_get_package_doc_passes_enum_filter_keys() -> None:
 def test_service_is_frozen_slotted_dataclass() -> None:
     svc, _, _, _ = _service()
     import dataclasses
+
     with pytest.raises(dataclasses.FrozenInstanceError):
-        svc.uow_factory = (lambda: None)  # type: ignore[misc]
+        svc.uow_factory = lambda: None  # type: ignore[misc]
     assert not hasattr(svc, "__dict__")
 
 

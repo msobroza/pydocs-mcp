@@ -5,6 +5,7 @@ extends it to pin every NeuledgeClient code path: SSE parsing, the MCP
 initialize handshake, tool-call success / error / HTTP-error branches,
 and the NeuledgeSystem index → search → teardown lifecycle.
 """
+
 from __future__ import annotations
 
 import json
@@ -26,10 +27,7 @@ from pydocs_mcp.retrieval.config import AppConfig
 
 
 def test_parse_sse_json_extracts_data_line():
-    body = (
-        "event: message\n"
-        'data: {"result": {"ok": true}, "jsonrpc": "2.0", "id": 1}\n'
-    )
+    body = 'event: message\ndata: {"result": {"ok": true}, "jsonrpc": "2.0", "id": 1}\n'
     assert _parse_sse_json(body) == {
         "result": {"ok": True},
         "jsonrpc": "2.0",
@@ -155,12 +153,18 @@ async def test_get_docs_returns_concatenated_text(
         monkeypatch,
         responses=[
             _StubResponse({"result": {}}),  # initialize
-            _StubResponse({}),               # initialized notification
-            _StubResponse({"result": {"content": [
-                {"type": "text", "text": "para 1"},
-                {"type": "text", "text": "para 2"},
-                {"type": "image", "data": "base64"},  # filtered
-            ]}}),
+            _StubResponse({}),  # initialized notification
+            _StubResponse(
+                {
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": "para 1"},
+                            {"type": "text", "text": "para 2"},
+                            {"type": "image", "data": "base64"},  # filtered
+                        ]
+                    }
+                }
+            ),
         ],
     )
     async with client:
@@ -177,10 +181,14 @@ async def test_call_tool_raises_on_tool_error_flag(
         responses=[
             _StubResponse({"result": {}}),
             _StubResponse({}),
-            _StubResponse({"result": {
-                "isError": True,
-                "content": [{"text": "library not found"}],
-            }}),
+            _StubResponse(
+                {
+                    "result": {
+                        "isError": True,
+                        "content": [{"text": "library not found"}],
+                    }
+                }
+            ),
         ],
     )
     async with client:
@@ -213,7 +221,8 @@ async def test_call_tool_wraps_http_status_error(
         {"result": {}},
         status_code=500,
         raise_status=httpx.HTTPStatusError(
-            "500", request=httpx.Request("POST", "http://stub"),
+            "500",
+            request=httpx.Request("POST", "http://stub"),
             response=httpx.Response(500),
         ),
     )
@@ -269,7 +278,8 @@ class _StubNeuledgeClient:
 
 @pytest.mark.asyncio
 async def test_system_index_opens_client(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     stub = _StubNeuledgeClient()
     import benchmarks.eval.systems.neuledge as nl
@@ -283,7 +293,8 @@ async def test_system_index_opens_client(
 
 @pytest.mark.asyncio
 async def test_system_search_returns_one_item_with_library_metadata(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     stub = _StubNeuledgeClient(docs="merging dataframes\n…")
     import benchmarks.eval.systems.neuledge as nl
@@ -302,7 +313,8 @@ async def test_system_search_returns_one_item_with_library_metadata(
 
 @pytest.mark.asyncio
 async def test_system_search_returns_empty_tuple_on_empty_docs(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     stub = _StubNeuledgeClient(docs="")
     import benchmarks.eval.systems.neuledge as nl
@@ -336,7 +348,8 @@ async def test_system_search_raises_when_index_not_called(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_system_teardown_closes_client_and_clears_field(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     stub = _StubNeuledgeClient()
     import benchmarks.eval.systems.neuledge as nl

@@ -25,6 +25,7 @@ Sibling of :class:`RetrieverPipeline` in :mod:`pydocs_mcp.retrieval.pipeline.bas
 Both subclass :class:`RetrieverStep`, so they compose uniformly under
 ``RouteStep`` and friends.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -88,9 +89,7 @@ class CodeRetrieverPipeline(RetrieverStep):
         # ``CodeRetrieverPipeline.from_dict`` cleanly.
         return {
             "name": self.name,
-            "steps": [
-                _step_to_dict(stage, idx) for idx, stage in enumerate(self.stages)
-            ],
+            "steps": [_step_to_dict(stage, idx) for idx, stage in enumerate(self.stages)],
         }
 
     @classmethod
@@ -101,9 +100,7 @@ class CodeRetrieverPipeline(RetrieverStep):
         _depth: int = 0,
     ) -> CodeRetrieverPipeline:
         if _depth > _MAX_PIPELINE_DEPTH:
-            raise ValueError(
-                f"pipeline nesting exceeds max depth of {_MAX_PIPELINE_DEPTH}"
-            )
+            raise ValueError(f"pipeline nesting exceeds max depth of {_MAX_PIPELINE_DEPTH}")
         # Reject the legacy ``stages:`` schema with a migration error so
         # users get a clear diagnostic instead of a confusing "missing
         # 'steps' key" KeyError.
@@ -147,7 +144,9 @@ def _step_to_dict(stage: object, idx: int) -> dict:
 
 
 def _step_from_dict(
-    step: dict, context: BuildContext, _depth: int,
+    step: dict,
+    context: BuildContext,
+    _depth: int,
 ) -> object:
     """Build a single stage from the ``{name, type, params}`` entry shape.
 

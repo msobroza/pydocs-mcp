@@ -1,4 +1,5 @@
 """Dependency resolution: find and parse all pyproject.toml and requirements files."""
+
 from __future__ import annotations
 
 import logging
@@ -9,11 +10,24 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Directories that never contain meaningful project dependencies
-_SKIP_DIRS = frozenset({
-    ".git", ".venv", "venv", "__pycache__", "node_modules",
-    ".tox", ".eggs", "build", "dist", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", "htmlcov", ".nox",
-})
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "__pycache__",
+        "node_modules",
+        ".tox",
+        ".eggs",
+        "build",
+        "dist",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "htmlcov",
+        ".nox",
+    }
+)
 
 
 def normalize_package_name(raw: str) -> str:
@@ -53,6 +67,7 @@ def parse_pyproject_dependencies(path: str) -> list[str]:
     pyproject_path = Path(path)
     try:
         import tomllib
+
         with pyproject_path.open("rb") as f:
             data = tomllib.load(f)
         deps = data.get("project", {}).get("dependencies", [])
@@ -65,7 +80,7 @@ def parse_pyproject_dependencies(path: str) -> list[str]:
     try:
         with pyproject_path.open(encoding="utf-8", errors="ignore") as f:
             text = f.read()
-        m = re.search(r'\[project\].*?dependencies\s*=\s*\[(.*?)\]', text, re.S)
+        m = re.search(r"\[project\].*?dependencies\s*=\s*\[(.*?)\]", text, re.S)
         if not m:
             return []
         return [normalize_package_name(item) for item in re.findall(r'"([^"]+)"', m.group(1))]

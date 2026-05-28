@@ -1,4 +1,5 @@
 """Schema v5 adds packages.embedding_model TEXT additively (AC-11)."""
+
 import sqlite3
 from pathlib import Path
 
@@ -68,12 +69,14 @@ def test_v4_to_v5_migration_lossless(tmp_path: Path) -> None:
     conn = sqlite3.connect(db_path)
     # Existing row preserved.
     row = conn.execute(
-        "SELECT name, version FROM packages WHERE name = ?", ("demo-pkg",),
+        "SELECT name, version FROM packages WHERE name = ?",
+        ("demo-pkg",),
     ).fetchone()
     assert row == ("demo-pkg", "1.0.0")
     # New column present + defaults to NULL on existing rows.
     embedding_model = conn.execute(
-        "SELECT embedding_model FROM packages WHERE name = ?", ("demo-pkg",),
+        "SELECT embedding_model FROM packages WHERE name = ?",
+        ("demo-pkg",),
     ).fetchone()[0]
     assert embedding_model is None
     # Version bumped.

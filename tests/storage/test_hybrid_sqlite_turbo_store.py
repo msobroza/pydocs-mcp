@@ -1,4 +1,5 @@
 """HybridSqliteTurboStore composes text + vector + fuser (spec §5.3)."""
+
 from collections.abc import Sequence
 
 import pytest
@@ -48,7 +49,9 @@ async def test_hybrid_search_runs_both_stores_concurrently_and_fuses() -> None:
         fuser=fuser,
     )
     results = await store.hybrid_search(
-        query_terms="alpha", query_vector=(0.1, 0.2), limit=10,
+        query_terms="alpha",
+        query_vector=(0.1, 0.2),
+        limit=10,
     )
     assert len(fuser.calls) == 1
     ranked_lists, limit = fuser.calls[0]

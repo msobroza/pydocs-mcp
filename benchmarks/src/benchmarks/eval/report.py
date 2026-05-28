@@ -10,6 +10,7 @@ Single function, no class — there is no plug-in axis to swap. If a
 second report format (HTML, JSON) is ever needed, add a sibling function
 rather than retrofitting a Protocol.
 """
+
 from __future__ import annotations
 
 # WHY: metric row order is part of the report contract — downstream
@@ -80,7 +81,8 @@ def _is_latency_metric(name: str) -> bool:
 
 
 def _format_cell(
-    metric_name: str, triple: tuple[float, float, float] | None,
+    metric_name: str,
+    triple: tuple[float, float, float] | None,
 ) -> str:
     if triple is None:
         # WHY: missing metric for a column is rendered as ``—`` rather than

@@ -4,6 +4,7 @@ Per spec Decision 4. The auto-computed hash from Chunk.__post_init__ is
 pipeline-blind (test ergonomics). Production overrides via this stage
 using BuildContext.pipeline_hash to capture embedder + YAML identity.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -44,18 +45,27 @@ async def test_assign_rewrites_chunk_hashes_with_pipeline_slot() -> None:
 
     assert len(out.chunks.chunks) == 2
     expected_h0 = compute_chunk_content_hash(
-        package="demo", module="m", title="t1", text="alpha",
+        package="demo",
+        module="m",
+        title="t1",
+        text="alpha",
         pipeline_hash=pipeline_hash,
     )
     expected_h1 = compute_chunk_content_hash(
-        package="demo", module="m", title="t2", text="beta",
+        package="demo",
+        module="m",
+        title="t2",
+        text="beta",
         pipeline_hash=pipeline_hash,
     )
     assert out.chunks.chunks[0].content_hash == expected_h0
     assert out.chunks.chunks[1].content_hash == expected_h1
     # Pre-rewrite the hash was pipeline-blind (no pipeline_hash slot)
     blind = compute_chunk_content_hash(
-        package="demo", module="m", title="t1", text="alpha",
+        package="demo",
+        module="m",
+        title="t1",
+        text="alpha",
     )
     assert out.chunks.chunks[0].content_hash != blind
 

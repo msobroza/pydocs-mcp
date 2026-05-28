@@ -5,6 +5,7 @@ Concrete systems in ``benchmarks/eval/systems/`` implement the Protocol
 and are reachable through ``system_registry`` in ``serialization.py`` —
 the runner never imports the concretes directly.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -48,9 +49,7 @@ class System(Protocol):
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None: ...
 
-    async def search(
-        self, query: str, limit: int
-    ) -> tuple[RetrievedItem, ...]: ...
+    async def search(self, query: str, limit: int) -> tuple[RetrievedItem, ...]: ...
 
     async def teardown(self) -> None: ...
 

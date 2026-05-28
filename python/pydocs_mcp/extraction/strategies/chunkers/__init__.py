@@ -19,6 +19,7 @@ Re-exports the underscore-prefixed helpers
 (:func:`_module_from_path`, :func:`_python_package_root`) that external
 callers depend on — keeps stable imports across the split.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.strategies.chunkers.ast_python import (

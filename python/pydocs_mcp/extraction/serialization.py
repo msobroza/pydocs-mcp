@@ -13,6 +13,7 @@ decode and no type-name string to look up, so the :class:`ComponentRegistry`
 machinery (``from_dict`` forwarding, depth tracking) would be dead weight.
 Keys must include the leading dot (``".py"``, not ``"py"``).
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -58,9 +59,11 @@ def _register_chunker(ext: str):
     raises :class:`ValueError` — extension conflicts are a wiring bug we
     want to surface at import time, not at first extraction.
     """
+
     def deco(cls: type[Chunker]) -> type[Chunker]:
         if ext in chunker_registry:
             raise ValueError(f"chunker for {ext!r} already registered")
         chunker_registry[ext] = cls
         return cls
+
     return deco

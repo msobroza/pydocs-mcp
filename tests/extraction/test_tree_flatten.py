@@ -10,6 +10,7 @@ Pins the direct-text rule (spec §4.1.1) and required metadata keys (§4.4):
 - extra_metadata keys merge WITHOUT overwriting required keys
 - module metadata prefers extra_metadata["module"] over qualified_name
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
@@ -48,6 +49,7 @@ def _node(
 
 # ── direct-text rule ──────────────────────────────────────────────────────
 
+
 def test_package_node_skipped_structural_only() -> None:
     node = _node(kind=NodeKind.PACKAGE, text="some text we ignore")
     assert flatten_to_chunks(node, "pkg") == []
@@ -69,6 +71,7 @@ def test_module_with_whitespace_only_text_not_emitted() -> None:
 
 
 # ── basic emission + required metadata keys ──────────────────────────────
+
 
 def test_module_with_text_emits_single_chunk_with_required_metadata() -> None:
     node = _node(
@@ -108,6 +111,7 @@ def test_qualified_name_copied_to_metadata() -> None:
 
 
 # ── hierarchy / recursion ────────────────────────────────────────────────
+
 
 def test_nested_function_inside_module_emits_both() -> None:
     func = _node(
@@ -155,8 +159,7 @@ def test_class_with_methods_emits_hierarchy() -> None:
     assert kinds == [NodeKind.CLASS.value, NodeKind.METHOD.value, NodeKind.METHOD.value]
     # All emitted chunks from Python source get PYTHON_DEF origin.
     assert all(
-        c.metadata[ChunkFilterField.ORIGIN.value] == ChunkOrigin.PYTHON_DEF.value
-        for c in chunks
+        c.metadata[ChunkFilterField.ORIGIN.value] == ChunkOrigin.PYTHON_DEF.value for c in chunks
     )
 
 
@@ -181,6 +184,7 @@ def test_subpackage_scaffolding_does_not_block_descendant_emission() -> None:
 
 
 # ── CODE_EXAMPLE inherits parent origin ──────────────────────────────────
+
 
 def test_code_example_under_function_inherits_python_def_origin() -> None:
     example = _node(
@@ -242,6 +246,7 @@ def test_code_example_without_parent_has_no_origin() -> None:
 
 # ── MARKDOWN + NOTEBOOK origin mapping ───────────────────────────────────
 
+
 def test_markdown_heading_gets_markdown_section_origin() -> None:
     node = _node(
         kind=NodeKind.MARKDOWN_HEADING,
@@ -278,6 +283,7 @@ def test_notebook_cells_get_notebook_origins() -> None:
 
 
 # ── extra_metadata merging ───────────────────────────────────────────────
+
 
 def test_extra_metadata_keys_preserved_alongside_required_keys() -> None:
     node = _node(
@@ -470,9 +476,7 @@ def test_code_example_under_function_inherits_module_ancestor() -> None:
     )
     chunks = flatten_to_chunks(module, "pkg")
     by_kind = {c.metadata["kind"]: c for c in chunks}
-    assert by_kind[NodeKind.CODE_EXAMPLE.value].metadata[
-        ChunkFilterField.MODULE.value
-    ] == "pkg.mod"
+    assert by_kind[NodeKind.CODE_EXAMPLE.value].metadata[ChunkFilterField.MODULE.value] == "pkg.mod"
 
 
 def test_explicit_extra_metadata_module_still_wins_under_module_ancestor() -> None:
@@ -502,6 +506,7 @@ def test_explicit_extra_metadata_module_still_wins_under_module_ancestor() -> No
 
 
 # ── edge: empty tree / leaf skipping ──────────────────────────────────────
+
 
 def test_empty_intermediate_node_skipped_but_children_emit() -> None:
     """A MODULE with empty .text skips its own emission but children still emit."""

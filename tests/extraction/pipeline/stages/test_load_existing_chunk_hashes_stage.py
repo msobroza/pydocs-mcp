@@ -3,6 +3,7 @@
 Per spec Decision 5. Populates IngestionState.existing_chunk_hashes so
 EmbedChunksStage can skip embedding chunks whose hash is already in the DB.
 """
+
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -111,13 +112,13 @@ async def test_load_no_op_when_uow_factory_none(tmp_path: Path) -> None:
 async def test_load_excludes_null_content_hash_rows(tmp_path: Path) -> None:
     """Pre-migration NULL rows must NOT appear in the skip set (AC-8)."""
     import sqlite3
+
     db_path = tmp_path / "cache.db"
     open_index_database(db_path).close()
     # Insert a legacy NULL-hash row directly
     conn = sqlite3.connect(str(db_path))
     conn.execute(
-        "INSERT INTO chunks (package, module, title, text, origin) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (package, module, title, text, origin) VALUES (?, ?, ?, ?, ?)",
         ("demo", "m", "t", "legacy", "doc"),
     )
     conn.commit()

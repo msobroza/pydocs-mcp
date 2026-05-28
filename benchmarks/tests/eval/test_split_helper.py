@@ -11,6 +11,7 @@ The helper is the single source of truth for BOTH ``Ds1000Dataset`` and
 ``RepoQADataset`` — testing it directly (rather than only via either
 dataset) guards the contract regardless of which loader calls it.
 """
+
 from __future__ import annotations
 
 import pytest

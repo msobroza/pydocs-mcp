@@ -21,6 +21,7 @@ The 5 tests below pin:
      knob.  Post-I9 the Null impl replaces ``ref_svc=None``; the
      user-visible error contract is preserved.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -94,11 +95,11 @@ async def test_lookup_callers_renders_via_ref_svc() -> None:
     ref_svc.callers = AsyncMock(return_value=(ref,))
 
     svc = LookupService(
-        package_lookup=_pkg_lookup_mock(), tree_svc=tree_svc, ref_svc=ref_svc,
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
     )
-    out = await svc.lookup(
-        LookupInput(target="pkg.helpers.compute", show="callers")
-    )
+    out = await svc.lookup(LookupInput(target="pkg.helpers.compute", show="callers"))
 
     # 2-arg call per Decision C1.
     ref_svc.callers.assert_awaited_once_with("pkg", "pkg.helpers.compute")
@@ -129,11 +130,11 @@ async def test_lookup_callees_renders_via_ref_svc() -> None:
     ref_svc.callees = AsyncMock(return_value=(ref,))
 
     svc = LookupService(
-        package_lookup=_pkg_lookup_mock(), tree_svc=tree_svc, ref_svc=ref_svc,
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
     )
-    out = await svc.lookup(
-        LookupInput(target="pkg.helpers.compute", show="callees")
-    )
+    out = await svc.lookup(LookupInput(target="pkg.helpers.compute", show="callees"))
 
     ref_svc.callees.assert_awaited_once_with("pkg", "pkg.helpers.compute")
     assert out.startswith("# Callees of `pkg.helpers.compute`\n"), out
@@ -166,14 +167,15 @@ async def test_lookup_inherits_uses_find_by_name() -> None:
     ref_svc.find_by_name = AsyncMock(return_value=(base_ref,))
 
     svc = LookupService(
-        package_lookup=_pkg_lookup_mock(), tree_svc=tree_svc, ref_svc=ref_svc,
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
     )
-    out = await svc.lookup(
-        LookupInput(target="pkg.api.MyClass", show="inherits")
-    )
+    out = await svc.lookup(LookupInput(target="pkg.api.MyClass", show="inherits"))
 
     ref_svc.find_by_name.assert_awaited_once_with(
-        "pkg.api.MyClass", kind=ReferenceKind.INHERITS,
+        "pkg.api.MyClass",
+        kind=ReferenceKind.INHERITS,
     )
     assert out.startswith("# Bases of `pkg.api.MyClass`\n"), out
     assert "pkg.base.BaseModel" in out, out
@@ -199,9 +201,7 @@ async def test_lookup_callers_with_null_ref_svc_raises_with_yaml_message() -> No
         ref_svc=NullReferenceService(),
     )
     with pytest.raises(ServiceUnavailableError) as excinfo:
-        await svc.lookup(
-            LookupInput(target="pkg.helpers.compute", show="callers")
-        )
+        await svc.lookup(LookupInput(target="pkg.helpers.compute", show="callers"))
     msg = str(excinfo.value)
     assert "reference_graph.capture.enabled" in msg, msg
     assert "sub-PR #5b" not in msg, msg
@@ -223,11 +223,11 @@ async def test_lookup_callers_zero_rows_renders_empty_message() -> None:
     ref_svc.callers = AsyncMock(return_value=())
 
     svc = LookupService(
-        package_lookup=_pkg_lookup_mock(), tree_svc=tree_svc, ref_svc=ref_svc,
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
     )
-    out = await svc.lookup(
-        LookupInput(target="pkg.helpers.compute", show="callers")
-    )
+    out = await svc.lookup(LookupInput(target="pkg.helpers.compute", show="callers"))
 
     assert out.startswith("# Callers of `pkg.helpers.compute`\n"), out
     assert "No callers found." in out, out

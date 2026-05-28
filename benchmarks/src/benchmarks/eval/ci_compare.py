@@ -10,6 +10,7 @@ Exit codes:
     1 — regression detected; metric mean dropped > threshold below baseline.
     2 — input error (missing JSONL files, missing metric in JSONL).
 """
+
 from __future__ import annotations
 
 import argparse

@@ -1,4 +1,5 @@
 """HybridSqliteTurboStore — composes text + vector + ResultFuser (spec §5.3)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,7 @@ class HybridSqliteTurboStore:
     constructor change (the text/vector slots accept any TextSearchable
     / VectorSearchable, not just the SQLite / TurboQuant impls).
     """
+
     text: TextSearchable
     vector: VectorSearchable
     fuser: ResultFuser
@@ -45,7 +47,8 @@ class HybridSqliteTurboStore:
         vec_task = self.vector.vector_search(query_vector, limit, filter)
         text_results, vec_results = await asyncio.gather(text_task, vec_task)
         return await self.fuser.fuse(
-            [text_results, vec_results], limit=limit,
+            [text_results, vec_results],
+            limit=limit,
         )
 
 

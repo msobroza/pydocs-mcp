@@ -5,6 +5,7 @@ forbidden internal jargon. Resilient to whitespace + minor wording
 changes — future tightening of the prose is unblocked as long as the
 required signals survive.
 """
+
 from __future__ import annotations
 
 import re
@@ -39,12 +40,14 @@ def _mcp_tool_docstrings():
     # extract the docstrings as plain strings. This avoids re-invoking
     # the full ``run()`` factory.
     import inspect
+
     src = inspect.getsource(srv)
+
     # Extract @mcp.tool() decorated function docstrings via regex.
     def _extract_docstring(src_text: str, fn_name: str) -> str:
         # Match `async def fn_name(...):` then capture the next triple-
         # quoted block.
-        pattern = rf'async def {fn_name}\([^)]*\)[^:]*:\s*\"\"\"(.*?)\"\"\"'
+        pattern = rf"async def {fn_name}\([^)]*\)[^:]*:\s*\"\"\"(.*?)\"\"\""
         m = re.search(pattern, src_text, re.DOTALL)
         return m.group(1) if m else ""
 
@@ -54,7 +57,8 @@ def _mcp_tool_docstrings():
     # Server-level instructions: pull from the FastMCP() call.
     inst_match = re.search(
         r"FastMCP\([^)]*instructions\s*=\s*([\"']{1,3})(.*?)\1",
-        src, re.DOTALL,
+        src,
+        re.DOTALL,
     )
     server_instructions = inst_match.group(2) if inst_match else ""
 
@@ -130,9 +134,7 @@ def _cli_help(subcommand: str) -> str:
 
     parser = _build_parser()
     # argparse subparsers are stored on the parser._subparsers._group_actions[0].choices dict
-    subparsers_action = next(
-        a for a in parser._actions if hasattr(a, "choices") and a.choices
-    )
+    subparsers_action = next(a for a in parser._actions if hasattr(a, "choices") and a.choices)
     sub = subparsers_action.choices[subcommand]
     return sub.format_help()
 
@@ -206,4 +208,6 @@ def test_no_internal_jargon_in_any_description() -> None:
     ]
     for pattern in forbidden:
         m = re.search(pattern, blob)
-        assert m is None, f"forbidden jargon '{m.group()}' (pattern {pattern!r}) found in user-facing prose"
+        assert m is None, (
+            f"forbidden jargon '{m.group()}' (pattern {pattern!r}) found in user-facing prose"
+        )

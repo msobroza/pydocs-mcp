@@ -1,4 +1,5 @@
 """EmbedChunksStage skip-set gate (AC-1 + AC-2): only embed chunks not in the skip map."""
+
 from pathlib import Path
 
 import numpy as np
@@ -16,14 +17,19 @@ from pydocs_mcp.models import Chunk, Package, PackageOrigin
 
 def _pkg(name: str) -> Package:
     return Package(
-        name=name, version="1.0", summary="", homepage="",
-        dependencies=(), content_hash="h",
+        name=name,
+        version="1.0",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",
         origin=PackageOrigin.DEPENDENCY,
     )
 
 
 class _CountingEmbedder:
     """MockEmbedder variant that counts how many texts went through embed_chunks."""
+
     model_name = "counting-mock"
     dim = 8
 

@@ -1,6 +1,7 @@
 """Pin _Registry: decorator returns class unchanged; build() instantiates by
 name; unknown name raises KeyError listing the registered names so callers
 can fix the typo without grepping the codebase."""
+
 from __future__ import annotations
 
 import pytest

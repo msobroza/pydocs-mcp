@@ -17,6 +17,7 @@ We give the event handler a reference to the asyncio loop + queue and
 let it call `loop.call_soon_threadsafe(queue.put_nowait, path)` so
 the consumer side sees the event on the right thread.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,8 +33,7 @@ from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
 log = logging.getLogger("pydocs-mcp.watch")
 
 _INSTALL_HINT = (
-    "--watch requires the 'watch' extras. Install via:\n"
-    "    pip install pydocs-mcp[watch]"
+    "--watch requires the 'watch' extras. Install via:\n    pip install pydocs-mcp[watch]"
 )
 
 
@@ -98,12 +98,11 @@ class FileWatcher:
         if path.suffix.lower() not in self.extensions:
             return False
         path_str = str(path)
-        return not any(
-            fnmatch.fnmatch(path_str, pattern) for pattern in self.ignore_globs
-        )
+        return not any(fnmatch.fnmatch(path_str, pattern) for pattern in self.ignore_globs)
 
     async def run_until_cancelled(
-        self, on_change: Callable[[], Awaitable[None]],
+        self,
+        on_change: Callable[[], Awaitable[None]],
     ) -> None:
         """Start the observer, consume filtered events, fire `on_change`.
 

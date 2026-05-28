@@ -7,6 +7,7 @@ isolation, NO ``pydocs_mcp.server.run`` call ever happens. Used by
 operators who want a fresh index for CLI ``search`` / ``lookup``
 without keeping an idle FastMCP stdio process running.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,13 +58,13 @@ def test_cmd_watch_does_not_reference_mcp_run() -> None:
         "standalone watch path must not import the MCP server"
     )
     assert "asyncio.to_thread" not in combined, (
-        "standalone watch path must not run anything on to_thread "
-        "(only --watch + MCP path does)"
+        "standalone watch path must not run anything on to_thread (only --watch + MCP path does)"
     )
 
 
 def test_run_watch_only_uses_fakeobserver_without_mcp(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     """End-to-end: ``_run_watch_only`` runs the watcher to completion,
     without ever touching ``pydocs_mcp.server.run``.
@@ -87,12 +88,15 @@ def test_run_watch_only_uses_fakeobserver_without_mcp(
     from pydocs_mcp.serve import watcher as watcher_mod
 
     monkeypatch.setattr(
-        watcher_mod, "_load_watchdog", lambda: (lambda: fake_observer),
+        watcher_mod,
+        "_load_watchdog",
+        lambda: lambda: fake_observer,
     )
 
     # Stub server.run so any accidental import path doesn't actually
     # start FastMCP. Test asserts this is never called.
     import pydocs_mcp.server as srv
+
     server_calls: list[None] = []
 
     def _trip_wire(*args, **kwargs):
@@ -114,9 +118,7 @@ def test_run_watch_only_uses_fakeobserver_without_mcp(
     assert fake_observer.started is False, (
         "Observer.stop should be called when the task is cancelled"
     )
-    assert server_calls == [], (
-        "standalone watch must not call pydocs_mcp.server.run"
-    )
+    assert server_calls == [], "standalone watch must not call pydocs_mcp.server.run"
 
 
 def test_cmd_watch_registered_in_cmd_table() -> None:

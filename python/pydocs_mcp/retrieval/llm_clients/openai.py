@@ -15,6 +15,7 @@ Transient ``openai.RateLimitError`` is retried with exponential backoff
 (3 attempts total) so a 429 spike on one call doesn't kill the whole
 pipeline — persistent failures still surface on the final attempt.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,7 +46,7 @@ async def _with_retry_async(coro_factory: Callable[[], Awaitable[_T]]) -> _T:
             last_exc = exc
             if attempt + 1 == _RETRY_MAX:
                 raise
-            await asyncio.sleep(_RETRY_BACKOFF * (2 ** attempt))
+            await asyncio.sleep(_RETRY_BACKOFF * (2**attempt))
     assert last_exc is not None  # noqa: S101 — control-flow invariant; the loop body either returns or re-raises before this point
     raise last_exc
 
@@ -61,7 +62,7 @@ def _with_retry_sync(call_factory: Callable[[], _T]) -> _T:
                 raise
             # Sync path: blocking sleep — chat_sync() is itself blocking,
             # so this doesn't violate the async-context rule.
-            time.sleep(_RETRY_BACKOFF * (2 ** attempt))
+            time.sleep(_RETRY_BACKOFF * (2**attempt))
     assert last_exc is not None  # noqa: S101 — control-flow invariant; the loop body either returns or re-raises before this point
     raise last_exc
 

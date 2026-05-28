@@ -21,6 +21,7 @@ Module layout:
 The split mirrors the SOLID rule from CLAUDE.md (Single Responsibility):
 each file has one stage, one reason to change.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.pipeline.stages.assign_chunk_content_hash import (

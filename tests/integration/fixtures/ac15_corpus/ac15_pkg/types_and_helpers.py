@@ -1,4 +1,5 @@
 """Type aliases + simple helpers. Exercises Rule B (exact qname match)."""
+
 from __future__ import annotations
 
 from typing import TypeAlias

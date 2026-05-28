@@ -12,6 +12,7 @@ S32: filter-tree value objects + ``format_registry`` live in the
 top-level ``pydocs_mcp.filters`` module; ``pydocs_mcp.storage.filters``
 is a re-export shim so the historical import path keeps working.
 """
+
 from __future__ import annotations
 
 

@@ -1,4 +1,5 @@
 """Tests for TreeService — post-#5a-2 uow_factory shape (spec §3.1)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -25,8 +26,11 @@ def _module_tree(module: str) -> DocumentNode:
     )
 
 
-def _service(by_package: dict[str, list[DocumentNode]] | None = None) -> tuple[
-    TreeService, InMemoryDocumentTreeStore,
+def _service(
+    by_package: dict[str, list[DocumentNode]] | None = None,
+) -> tuple[
+    TreeService,
+    InMemoryDocumentTreeStore,
 ]:
     store = InMemoryDocumentTreeStore(by_package=dict(by_package or {}))
     svc = TreeService(uow_factory=make_fake_uow_factory(trees=store))
@@ -37,6 +41,7 @@ def _service(by_package: dict[str, list[DocumentNode]] | None = None) -> tuple[
 async def test_get_tree_returns_document_node_when_present():
     """spec §3.1 — TreeService.get_tree reads uow.trees.load."""
     tree = _module_tree("requests.adapters")
+
     # InMemoryDocumentTreeStore.load returns None by default; for this test
     # we monkey-patch the store's by_package to make load find it.
     # Simpler: subclass + override.
@@ -101,8 +106,9 @@ async def test_list_package_modules_unknown_returns_empty():
 
 def test_service_is_frozen_and_slotted():
     import dataclasses
+
     svc, _ = _service()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        svc.uow_factory = (lambda: None)  # type: ignore[misc]
+        svc.uow_factory = lambda: None  # type: ignore[misc]
     with pytest.raises((AttributeError, TypeError)):
         object.__setattr__(svc, "unknown_attr", 42)

@@ -1,4 +1,5 @@
 """AC-12: README + DOCUMENTATION.md document the `--watch` flag."""
+
 from __future__ import annotations
 
 import re
@@ -25,7 +26,8 @@ def test_documentation_md_has_live_reindexing_subsection() -> None:
     # case-insensitive substring so a stylistic tweak (subsection level)
     # doesn't break the test.
     assert re.search(
-        r"(?im)^#{2,4}\s+live re-?indexing", doc,
+        r"(?im)^#{2,4}\s+live re-?indexing",
+        doc,
     ), "DOCUMENTATION.md missing the 'Live re-indexing' subsection"
 
 
@@ -47,7 +49,8 @@ def test_readme_does_not_introduce_pr_jargon() -> None:
 
     result = subprocess.run(
         [
-            "bash", "-c",
+            "bash",
+            "-c",
             "find . -name 'README.md' "
             "-not -path '*/.venv/*' "
             "-not -path '*/.claude/*' "
@@ -58,7 +61,9 @@ def test_readme_does_not_introduce_pr_jargon() -> None:
             "PR #[0-9]+|sub-PR|#5[a-c]|trilogy|Task [0-9]+ of"
             "|PR-[A-Z][0-9.]+'",
         ],
-        cwd=ROOT, capture_output=True, text=True,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode != 0, (
         f"README jargon violations introduced by --watch docs:\n{result.stdout}"

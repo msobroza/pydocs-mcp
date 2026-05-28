@@ -20,8 +20,9 @@ class LLM:
         Model context length override.
     """
 
-    def __init__(self, model, tokenizer=None, tensor_parallel_size=1,
-                 dtype="auto", max_model_len=None):
+    def __init__(
+        self, model, tokenizer=None, tensor_parallel_size=1, dtype="auto", max_model_len=None
+    ):
         self.model = model
         self.tokenizer = tokenizer
         self.tensor_parallel_size = tensor_parallel_size

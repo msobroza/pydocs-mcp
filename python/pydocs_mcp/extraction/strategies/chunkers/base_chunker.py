@@ -5,6 +5,7 @@ The :class:`Chunker` Protocol lives in
 extraction-side contracts). This module re-exports it so each
 concrete-chunker file imports the contract from one obvious place.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.protocols import Chunker

@@ -25,6 +25,7 @@ server / CLI startup. A module-level constant is the right shape here
 because the stage's ``run`` is otherwise stateless and the config is
 process-global, not per-pipeline-invocation.
 """
+
 from __future__ import annotations
 
 import ast
@@ -77,7 +78,9 @@ class ReferenceCaptureStage:
             return replace(state, refs=ReferenceBundle())
         allowed = set(cfg.kinds)
         refs, aliases, attr_types = await asyncio.to_thread(
-            self._capture_all, state, allowed,
+            self._capture_all,
+            state,
+            allowed,
         )
         new_refs_bundle = ReferenceBundle(
             references=tuple(refs),
@@ -87,7 +90,9 @@ class ReferenceCaptureStage:
         return replace(state, refs=new_refs_bundle)
 
     def _capture_all(  # noqa: C901 — multi-kind reference capture (CALLS/IMPORTS/INHERITS/MENTIONS/ASSIGNS/ATTR-RESOLVE) is inherently branchy; splitting into per-kind helpers would just move the dispatch
-        self, state: IngestionState, allowed: set[str],
+        self,
+        state: IngestionState,
+        allowed: set[str],
     ) -> tuple[list[Any], dict[str, dict[str, str]], dict[str, dict[str, str]]]:
         # Deferred imports — strategies pull in ast + reference value objects
         # which are otherwise irrelevant at stage-registry construction time.
@@ -100,6 +105,7 @@ class ReferenceCaptureStage:
             capture_mentions,
             capture_self_attribute_types,
         )
+
         collector = ReferenceCollector()
         file_contents = state.files.file_contents
         package_name = state.files.package_name
@@ -114,7 +120,9 @@ class ReferenceCaptureStage:
                 except SyntaxError as exc:
                     # Per-file containment — same contract as ChunkingStage (AC #27).
                     log.warning(
-                        "reference_capture: ast.parse failed on %s: %s", path, exc,
+                        "reference_capture: ast.parse failed on %s: %s",
+                        path,
+                        exc,
                     )
                     continue
                 try:
@@ -167,7 +175,8 @@ class ReferenceCaptureStage:
                                     )
                                     for m in stmt.body:
                                         if isinstance(
-                                            m, (ast.FunctionDef, ast.AsyncFunctionDef),
+                                            m,
+                                            (ast.FunctionDef, ast.AsyncFunctionDef),
                                         ):
                                             capture_calls(
                                                 m.body,
@@ -193,7 +202,9 @@ class ReferenceCaptureStage:
                     )
                 except Exception as exc:
                     log.warning(
-                        "reference_capture (markdown) failed on %s: %s", path, exc,
+                        "reference_capture (markdown) failed on %s: %s",
+                        path,
+                        exc,
                     )
                 continue
         # Filter IMPORTS rows out of collector.refs if "imports" isn't allowed.

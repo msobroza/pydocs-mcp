@@ -1,4 +1,5 @@
 """Typed exceptions for the storage layer."""
+
 from __future__ import annotations
 
 from pydocs_mcp.exceptions import PydocsMCPError

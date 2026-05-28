@@ -1,4 +1,5 @@
 """RetrieverState — immutable typed state threaded through a RetrieverPipeline."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ class RetrieverState:
     - Renderer steps (``TokenBudgetStep``):
       read ``candidates``, write ``result``.
     """
+
     query: SearchQuery
     candidates: ChunkList | ModuleMemberList | None = None
     result: PipelineResultItem | None = None

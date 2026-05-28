@@ -13,6 +13,7 @@ Two ways a task counts as covered:
 Both empty/absent -> 0.0. This is a recall-of-ground-truth health signal,
 not a ranking-quality metric.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -27,9 +28,7 @@ from ..systems.base_system import RetrievedItem
 class Coverage:
     name: str = "coverage"
 
-    def compute(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> float:
+    def compute(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> float:
         if len(task.gold.extra.get("resolved_chunk_ids", ())) > 0:
             return 1.0
         return 1.0 if task.gold.extra.get("coverage_signal") else 0.0

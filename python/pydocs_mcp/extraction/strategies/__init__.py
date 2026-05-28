@@ -2,6 +2,7 @@
 discoverers, and the dependency resolver. Each module implements one
 Protocol declared in :mod:`pydocs_mcp.extraction.protocols`.
 """
+
 from pydocs_mcp.extraction.strategies.chunkers import (
     AstPythonChunker,
     HeadingMarkdownChunker,

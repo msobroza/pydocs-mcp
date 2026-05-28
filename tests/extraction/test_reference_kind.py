@@ -1,4 +1,5 @@
 """Pin ReferenceKind shape (spec §4.1)."""
+
 from __future__ import annotations
 
 from enum import StrEnum
@@ -18,7 +19,10 @@ def test_reference_kind_values_are_the_four_kinds() -> None:
     names captured from markdown. Joins the three AST-precise kinds
     (calls / imports / inherits) as the fourth wire value."""
     assert {k.value for k in ReferenceKind} == {
-        "calls", "imports", "inherits", "mentions",
+        "calls",
+        "imports",
+        "inherits",
+        "mentions",
     }
 
 

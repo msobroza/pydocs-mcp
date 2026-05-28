@@ -1,4 +1,5 @@
 """Pin the FakeUnitOfWork + InMemory* contract."""
+
 from __future__ import annotations
 
 import pytest
@@ -131,8 +132,13 @@ async def test_in_memory_package_store_records_calls():
     """§9.1 — InMemoryPackageStore.calls mirrors InMemoryDocumentTreeStore."""
     store = InMemoryPackageStore()
     pkg = Package(
-        name="x", version="0", summary="", homepage="",
-        dependencies=(), content_hash="", origin=PackageOrigin.DEPENDENCY,
+        name="x",
+        version="0",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="",
+        origin=PackageOrigin.DEPENDENCY,
     )
     await store.upsert(pkg)
     await store.get("x")
@@ -186,13 +192,23 @@ async def test_in_memory_reference_store_find_callers_cross_package():
     store = InMemoryReferenceStore()
     await store.save_many(
         [
-            _ref(from_package="pkg1", from_node_id="pkg1.a", to_node_id="t",
-                 to_name="t", kind=ReferenceKind.CALLS),
-            _ref(from_package="pkg2", from_node_id="pkg2.b", to_node_id="t",
-                 to_name="t", kind=ReferenceKind.CALLS),
+            _ref(
+                from_package="pkg1",
+                from_node_id="pkg1.a",
+                to_node_id="t",
+                to_name="t",
+                kind=ReferenceKind.CALLS,
+            ),
+            _ref(
+                from_package="pkg2",
+                from_node_id="pkg2.b",
+                to_node_id="t",
+                to_name="t",
+                kind=ReferenceKind.CALLS,
+            ),
         ],
         package="pkg1",  # save_many call only carries one package label, but
-                          # by_package stores by from_package of each ref
+        # by_package stores by from_package of each ref
     )
     callers = await store.find_callers(target_node_id="t")
     assert {r.from_package for r in callers} == {"pkg1", "pkg2"}
@@ -287,5 +303,6 @@ async def test_fake_uow_structurally_satisfies_widened_unit_of_work_protocol():
     Protocol shape (5 attributes, not 4). Catches forgotten swap-in/out
     of the new ``references`` attribute on a future re-shape."""
     from pydocs_mcp.storage.protocols import UnitOfWork
+
     uow = FakeUnitOfWork()
     assert isinstance(uow, UnitOfWork)

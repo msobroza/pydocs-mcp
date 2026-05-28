@@ -12,6 +12,7 @@ Invariants:
 - ``by_extension`` validator catches unsupported extensions.
 - ``ExtractionConfig`` round-trips via ``model_dump`` + re-construction.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -63,9 +64,7 @@ def test_excluded_dirs_is_module_level_frozenset():
     assert isinstance(_EXCLUDED_DIRS, frozenset)
     # Common noisy / secret-bearing directories.
     for d in (".git", ".venv", "site-packages", "node_modules", "__pycache__"):
-        assert d in _EXCLUDED_DIRS, (
-            f"{d!r} must be blocklisted (security / index-bloat invariant)"
-        )
+        assert d in _EXCLUDED_DIRS, f"{d!r} must be blocklisted (security / index-bloat invariant)"
 
 
 def test_discovery_scope_config_forbids_exclude_dirs():
@@ -110,8 +109,14 @@ def test_extraction_config_forbids_unknown_top_level_key():
 def test_every_model_forbids_extras():
     """Every nested model uses ``extra="forbid"`` — fail-fast on YAML typos."""
     for model in (
-        MarkdownConfig, NotebookConfig, ChunkingConfig, DiscoveryScopeConfig,
-        DiscoveryConfig, MembersConfig, IngestionConfig, ExtractionConfig,
+        MarkdownConfig,
+        NotebookConfig,
+        ChunkingConfig,
+        DiscoveryScopeConfig,
+        DiscoveryConfig,
+        MembersConfig,
+        IngestionConfig,
+        ExtractionConfig,
     ):
         with pytest.raises(ValidationError):
             model(bogus=1)  # type: ignore[call-arg]
@@ -144,10 +149,12 @@ def test_ingestion_pipeline_path_optional():
 
 # -- A3: ge=1 validators on MembersConfig ---------------------------
 
+
 def test_members_per_module_cap_zero_rejected():
     """A3: cap=0 fires on iter 0 and zeros the entire symbol index
     silently. Pydantic ge=1 must fail loud at YAML load time."""
     from pydantic import ValidationError
+
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         MembersConfig(members_per_module_cap=0)
 
@@ -156,6 +163,7 @@ def test_members_per_module_cap_negative_rejected():
     """Same guard for negative values (Pydantic int cast accepts them
     silently otherwise)."""
     from pydantic import ValidationError
+
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         MembersConfig(members_per_module_cap=-5)
 
@@ -164,6 +172,7 @@ def test_inspect_depth_zero_rejected():
     """A3: depth=0 means "no traversal" — index returns 0 symbols for
     every dep. Reject at load time."""
     from pydantic import ValidationError
+
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         MembersConfig(inspect_depth=0)
 
@@ -189,5 +198,6 @@ def test_signature_and_docstring_max_chars_tunable():
 def test_signature_max_chars_zero_rejected():
     """Same ge=1 floor as the cap — sig=0 truncates to a single ellipsis."""
     from pydantic import ValidationError
+
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         MembersConfig(signature_max_chars=0)

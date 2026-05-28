@@ -1,4 +1,5 @@
 """ProjectIndexer — write-side bootstrap orchestrator (spec §5.1, §5.3, post-#5a-2)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -62,7 +63,9 @@ class ProjectIndexer:
         return stats
 
     async def _index_project_source(
-        self, project_dir: Path, stats: IndexingStats,
+        self,
+        project_dir: Path,
+        stats: IndexingStats,
     ) -> None:
         result = await self.chunk_extractor.extract_from_project(project_dir)
         pkg = result.package
@@ -73,7 +76,10 @@ class ProjectIndexer:
             return
         members = await self.member_extractor.extract_from_project(project_dir)
         await self.indexing_service.reindex_package(
-            pkg, result.chunks, members, trees=result.trees,
+            pkg,
+            result.chunks,
+            members,
+            trees=result.trees,
             references=result.references,
             reference_aliases=result.reference_aliases,
             class_attribute_types=result.class_attribute_types,
@@ -81,11 +87,15 @@ class ProjectIndexer:
         stats.project_indexed = True
         log.info(
             "Project: %d chunks, %d symbols, %d trees",
-            len(result.chunks), len(members), len(result.trees),
+            len(result.chunks),
+            len(members),
+            len(result.trees),
         )
 
     async def _index_one_dependency(
-        self, dep_name: str, stats: IndexingStats,
+        self,
+        dep_name: str,
+        stats: IndexingStats,
     ) -> None:
         try:
             result = await self.chunk_extractor.extract_from_dependency(dep_name)
@@ -97,15 +107,23 @@ class ProjectIndexer:
                 return
             members = await self.member_extractor.extract_from_dependency(dep_name)
             await self.indexing_service.reindex_package(
-                pkg, result.chunks, members, trees=result.trees,
+                pkg,
+                result.chunks,
+                members,
+                trees=result.trees,
                 references=result.references,
                 reference_aliases=result.reference_aliases,
                 class_attribute_types=result.class_attribute_types,
             )
             stats.indexed += 1
-            log.info("  ok %s %s (%d chunks, %d syms, %d trees)",
-                     pkg.name, pkg.version,
-                     len(result.chunks), len(members), len(result.trees))
+            log.info(
+                "  ok %s %s (%d chunks, %d syms, %d trees)",
+                pkg.name,
+                pkg.version,
+                len(result.chunks),
+                len(members),
+                len(result.trees),
+            )
         except Exception as e:
             log.warning("  fail %s: %s", dep_name, e)
             stats.failed += 1

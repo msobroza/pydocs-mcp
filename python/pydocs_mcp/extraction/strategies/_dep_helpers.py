@@ -6,6 +6,7 @@ self-contained. Only :class:`InspectMemberExtractor` consumes the output —
 the function returns only ``symbols`` (no chunks, no package record);
 chunk extraction flows through the ingestion pipeline.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -20,14 +21,26 @@ from pydocs_mcp.models import ModuleMember, ModuleMemberFilterField
 
 log = logging.getLogger("pydocs-mcp")
 
-SKIP_IMPORT = frozenset({
-    "setuptools", "pip", "wheel", "pkg_resources",
-    "distutils", "_distutils_hack", "certifi",
-})
+SKIP_IMPORT = frozenset(
+    {
+        "setuptools",
+        "pip",
+        "wheel",
+        "pkg_resources",
+        "distutils",
+        "_distutils_hack",
+        "certifi",
+    }
+)
 IMPORT_ALIASES = {
-    "pillow": "PIL", "scikit-learn": "sklearn", "python-dateutil": "dateutil",
-    "pyyaml": "yaml", "beautifulsoup4": "bs4", "opencv-python": "cv2",
-    "opencv-python-headless": "cv2", "attrs": "attr",
+    "pillow": "PIL",
+    "scikit-learn": "sklearn",
+    "python-dateutil": "dateutil",
+    "pyyaml": "yaml",
+    "beautifulsoup4": "bs4",
+    "opencv-python": "cv2",
+    "opencv-python-headless": "cv2",
+    "attrs": "attr",
 }
 
 # Per-member text truncation + cap defaults. The pre-refactor inspect
@@ -109,7 +122,11 @@ def _extract_by_import(
 
     symbols: list[ModuleMember] = []
     _collect_symbols(
-        mod, pkg_name, import_name, symbols, depth,
+        mod,
+        pkg_name,
+        import_name,
+        symbols,
+        depth,
         members_per_module_cap=members_per_module_cap,
         signature_max_chars=signature_max_chars,
         docstring_max_chars=docstring_max_chars,
@@ -146,7 +163,8 @@ def _collect_symbols(
         if collected_in_this_module >= members_per_module_cap:
             log.debug(
                 "members_per_module_cap=%d reached for %s; truncating",
-                members_per_module_cap, module_path,
+                members_per_module_cap,
+                module_path,
             )
             break
         if name.startswith("_"):
@@ -157,16 +175,20 @@ def _collect_symbols(
             except (ValueError, TypeError):
                 sig = "(...)"
             kind = "class" if inspect.isclass(obj) else "function"
-            symbols.append(ModuleMember(metadata={
-                ModuleMemberFilterField.PACKAGE.value: pkg_name,
-                ModuleMemberFilterField.MODULE.value: module_path,
-                ModuleMemberFilterField.NAME.value: name,
-                ModuleMemberFilterField.KIND.value: kind,
-                "signature": _truncate(sig, signature_max_chars),
-                "return_annotation": "",
-                "parameters": (),
-                "docstring": _truncate(inspect.getdoc(obj) or "", docstring_max_chars),
-            }))
+            symbols.append(
+                ModuleMember(
+                    metadata={
+                        ModuleMemberFilterField.PACKAGE.value: pkg_name,
+                        ModuleMemberFilterField.MODULE.value: module_path,
+                        ModuleMemberFilterField.NAME.value: name,
+                        ModuleMemberFilterField.KIND.value: kind,
+                        "signature": _truncate(sig, signature_max_chars),
+                        "return_annotation": "",
+                        "parameters": (),
+                        "docstring": _truncate(inspect.getdoc(obj) or "", docstring_max_chars),
+                    }
+                )
+            )
             collected_in_this_module += 1
 
     if remaining_depth <= 1 or not hasattr(mod, "__path__"):
@@ -187,7 +209,11 @@ def _collect_symbols(
             log.debug("submodule import failed: %s", full_name)
             continue
         _collect_symbols(
-            submod, pkg_name, full_name, symbols, remaining_depth - 1,
+            submod,
+            pkg_name,
+            full_name,
+            symbols,
+            remaining_depth - 1,
             members_per_module_cap=members_per_module_cap,
             signature_max_chars=signature_max_chars,
             docstring_max_chars=docstring_max_chars,

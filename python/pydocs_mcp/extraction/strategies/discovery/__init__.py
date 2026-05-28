@@ -15,6 +15,7 @@ directory pruning (spec decision #6b). The Protocol types share names
 with the concrete classes; consumers that need the structural Protocol
 import from :mod:`.base_discoverer`.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.strategies.discovery.dependency import (
