@@ -328,3 +328,24 @@ def test_ci_uses_uv_sync_frozen() -> None:
             f"(found in line: {stripped!r}); "
             f"use `uv sync --frozen` (lockfile-pinned) instead"
         )
+
+
+def test_null_handler_attached_at_package_root() -> None:
+    """P2-3: pydocs-mcp installs a NullHandler at the package logger so
+    library consumers who haven't configured logging don't see
+    "No handlers could be found" warnings on first log call.
+
+    See PEP 282 / Python Logging HOWTO ("Configuring Logging for a Library").
+    """
+    import logging
+
+    import pydocs_mcp  # noqa: F401 -- import triggers the handler attach
+
+    package_logger = logging.getLogger("pydocs_mcp")
+    has_null_handler = any(
+        isinstance(h, logging.NullHandler) for h in package_logger.handlers
+    )
+    assert has_null_handler, (
+        f"pydocs_mcp.__init__ must attach a logging.NullHandler at the "
+        f"package logger; got handlers={package_logger.handlers}"
+    )

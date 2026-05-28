@@ -8,6 +8,15 @@ except PackageNotFoundError:  # not installed (e.g. running from a checkout
     # without an editable install). Fallback keeps imports working.
     __version__ = "0.0.0+unknown"
 
+# Library convention: attach a NullHandler at the package root so callers
+# who haven't configured logging don't see "No handlers could be found"
+# warnings on the first log call. Users who configure logging via
+# `logging.basicConfig()` or their own handlers see no behaviour change.
+# Underscore alias keeps `logging` out of `from pydocs_mcp import *`.
+import logging as _logging
+
+_logging.getLogger(__name__).addHandler(_logging.NullHandler())
+
 # Public exception hierarchy. Embedders can:
 #   try:
 #       result = pydocs_mcp_call()
