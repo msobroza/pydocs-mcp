@@ -576,6 +576,89 @@ patterns, MCP API rules, single-source-of-truth defaults) are in
 
 ---
 
+## Design patterns
+
+Beyond the hexagonal layout above, pydocs-mcp leans on a small set of
+named patterns that together explain *why* the codebase looks the way
+it does. Each one resolves a specific tradeoff and lives behind a
+recognizable file shape — once you spot the pattern, adding a new
+backend / step / service usually reduces to copying one of these.
+
+### Architectural patterns
+
+| Pattern | Where in the code | What it buys |
+|---|---|---|
+| **Hexagonal / Ports & Adapters** | `storage/protocols.py`, `application/protocols.py`, `retrieval/protocols.py` define the ports; `Sqlite*` / `TurboQuant*` / `HybridSqliteTurboStore` / `FastPlaidUnitOfWork` are the adapters. | Application code never imports a concrete `Sqlite*` type — swapping SQLite for Postgres / DuckDB / a hosted vector store is a pure adapter change, not a service rewrite. |
+| **Repository pattern** | One class per persisted entity: `SqlitePackageRepository`, `SqliteChunkRepository`, `SqliteModuleMemberRepository`, `SqliteDocumentTreeStore`, `SqliteReferenceRepository`. | Each entity's SQL lives in exactly one place. New columns mean editing one file. |
+| **Unit of Work + Composite UoW** | `SqliteUnitOfWork`, `TurboQuantUnitOfWork`, `FastPlaidUnitOfWork`, plus `CompositeUnitOfWork` (`storage/composite_uow.py`) that fans out to children. | Multi-store writes (chunks → vectors → multi-vectors → mapping table) commit or roll back atomically. Application services depend on `uow_factory: Callable[[], UnitOfWork]` and don't know which backends are wired. |
+| **Pipeline pattern (sklearn-shaped)** | `RetrieverPipeline = [(name, RetrieverStep), …]` for reads; `IngestionPipeline` + `IngestionStage` for writes. `Pipeline` IS a `Step`, so sub-pipelines nest without an adapter. | YAML presets compose by name. Parallel branches, fusion, re-rankers all land as new steps without touching existing ones. |
+| **Strategy pattern** | Chunkers (`AstPythonChunker`, etc.), member extractors (`AstMemberExtractor`, `InspectMemberExtractor`), dependency resolvers, single-vector embedders (`FastEmbedEmbedder`, `OpenAIEmbedder`), multi-vector embedders (`PyLateEmbedder`). | Swap behavior at the boundary that needs it. Each strategy is one file. |
+| **Composition root** | `server.py`, `__main__.py`, `storage/factories.py`. Everywhere else takes a closure. | Wiring decisions live in exactly three files. Every other module is testable in isolation. |
+| **Registry + decorator** | `@step_registry.register("name")`, `@stage_registry.register("name")`, `@predicate("name")`, `@formatter_registry.register("name")`. | Extensions become YAML-addressable with one decorator. The shipped `EXTENSIONS.md` menu IS the registry. |
+| **Substitution boundary** | `_fast.py` resolves to either the compiled Rust `_native` extension or the pure-Python `_fallback.py`. Identical signatures both sides. | The package works with or without the Rust extension; tests don't have to fork by build mode. |
+| **Null Object pattern** | `NullTreeService`, `NullReferenceService` (read-loud), `NullVectorStore`, `NullMultiVectorStore` (write-silent). Wired by the composition root when a backend is disabled. | `if x is not None:` guards disappear from every consumer. The Protocol field is *always* present; behavior just becomes a no-op or an actionable error. |
+| **Filter tree → Adapter (hexagonal seam)** | Retrieval emits backend-neutral `Filter` trees (`storage/filters.py`); the `FilterAdapter` Protocol translates to SQL at the storage boundary. The same tree feeds fast-plaid via the `subset=` argument for late-interaction. | No retrieval step ever imports `SqliteFilterAdapter` at runtime. Same tree, two backends, zero leakage. |
+
+### Code-level idioms
+
+- **Frozen + slots dataclasses for value objects and pipeline steps.**
+  `@dataclass(frozen=True, slots=True)` is the default; mutation
+  happens via `dataclasses.replace`, never in-place. This makes parallel
+  pipeline branches safe by construction — see `retrieval/steps/parallel.py`.
+- **Scratch hygiene under parallelism.** `RetrieverState.scratch` is the
+  documented escape hatch for per-step coordination. Steps that may run
+  inside a `ParallelStep` branch (today: `TopKFilterStep`, `PreFilterStep`,
+  `LateInteractionScorerStep`) build a fresh `dict(state.scratch)` and
+  return via `replace(state, scratch=new_scratch)` — never mutate the
+  input's scratch in place. The rule keeps branches from leaking into
+  each other.
+- **Single source of truth for defaults.** A module-level
+  `_DEFAULT_X = value` (e.g. `_DEFAULT_TOP_K = 100` in
+  `late_interaction_scorer.py`) is the canonical source; field defaults,
+  `to_dict` comparisons, and `from_dict` fallbacks all reference the
+  constant. Bumping the default touches one line, not three.
+- **Lazy imports for optional extras.** Heavy / optional deps
+  (`fast_plaid`, `torch`, `pylate`) are imported strictly inside the
+  methods that use them. A module-level `_FastPlaidCls` slot caches the
+  resolution; tests monkeypatch it to exercise the import-missing branch
+  without uninstalling the extra. Result: the default install never pays
+  the import cost of code paths it doesn't use.
+- **Async + `asyncio.to_thread` for CPU/I/O off the loop.** MCP handlers
+  are `async def`. Blocking SQLite calls, mmap loads, and Rust PyO3
+  inference all get offloaded via `await asyncio.to_thread(...)`. Never
+  `time.sleep` in async code; use `asyncio.sleep`.
+- **One responsibility per file.** One retrieval step per file under
+  `retrieval/steps/`; one ingestion stage per file under
+  `extraction/pipeline/stages/`; one repository per persisted entity.
+  Files stay short enough to hold in working memory while editing.
+- **Comments explain *why*, not *what*.** Code is self-documenting for
+  the what; comments call out non-obvious tradeoffs, workarounds, or
+  hidden invariants. References to internal task IDs / planning artifacts
+  die with the code that explained them — they don't accumulate in the
+  source tree.
+
+### Why this set, in one line each
+
+- **Hexagonal** — keep services testable; swap storage without rewriting.
+- **Repository / UoW / Composite UoW** — atomic multi-store writes
+  without coupling the writer to which backends are present.
+- **Pipeline / Strategy / Registry** — YAML-tunable behavior without
+  source edits; the same step composes across BM25, dense, late-interaction.
+- **Composition root** — wiring lives in three files, everything else
+  takes closures.
+- **Substitution boundary** — Rust optional, never required.
+- **Null Object** — Protocols stay non-optional; consumers never branch
+  on whether a backend is wired.
+- **Filter tree → Adapter** — late-interaction's SQLite + fast-plaid
+  coupling reuses the same seam BM25 + dense already used. No new
+  abstraction, just one more adapter behind a contract.
+
+The full contributor-facing rule set — naming conventions, async
+patterns, SSOT defaults, the MCP-API-vs-YAML rule, and the README
+jargon audit — lives in [CLAUDE.md](CLAUDE.md).
+
+---
+
 ## MCP client integration
 
 Start the server over stdio, then point your client at it.
