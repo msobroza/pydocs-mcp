@@ -1,0 +1,6 @@
+# RepoQA experiment — BM25 (FTS5) only. See benchmarks/EXPERIMENTS.md.
+# No embedder or LLM is used at search time (indexing still embeds chunks).
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_bm25.yaml

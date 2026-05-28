@@ -1,0 +1,27 @@
+# BM25-only ranked chunk search — RepoQA experiment suite.
+# max_results=10 so recall@10 sees a full top-10 (the shipped *_ranked
+# presets cap at 8). Referenced by ../repoqa_bm25.yaml.
+name: exp_bm25
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: chunk_fetcher
+    params:
+      schema_name: chunk
+  - name: score
+    type: bm25_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

@@ -578,17 +578,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--split",
-        choices=["all", "dev", "test"],
+        choices=["all", "dev", "test", "small_test"],
         default="all",
         help=(
-            "(ds1000-only) stratified-by-library dev/test split -> "
-            "Ds1000Dataset.split. `all` (default) yields every task; `dev` / "
-            "`test` partition each library independently (preserving its "
-            "corpus proportion) into a seeded dev head + test tail — tune on "
-            "`dev`, evaluate on held-out `test`. Passed as a kwarg ONLY when "
-            "!= `all`, so datasets that don't accept it (RepoQA) are "
-            "unaffected. Tune the fraction/seed via the dataclass defaults "
-            "(dev_fraction=0.2, split_seed=0)."
+            "stratified dataset split (both DS-1000 and RepoQA). `all` "
+            "(default) yields every task; `dev` / `test` partition each "
+            "stratum independently (preserving its corpus proportion) into a "
+            "seeded dev head + test tail — tune on `dev`, evaluate on held-out "
+            "`test`; `small_test` is a fixed-size (~30) stratified subsample "
+            "of `test` for fast iteration over the expensive (dense / hybrid "
+            "/ LLM-tree) sweeps. Stratified by library (DS-1000) or repo "
+            "(RepoQA) via the shared split helper. Passed as a kwarg ONLY when "
+            "!= `all`. Tune fraction/seed/size via the dataset dataclass "
+            "defaults (dev_fraction=0.2, split_seed=0, small_test_size=30)."
         ),
     )
     parser.add_argument(

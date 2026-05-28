@@ -39,3 +39,8 @@ benchmarks/results/
 
 # Claude Code — local settings, worktrees, session state
 .claude/
+
+# Secrets / local environment (e.g. OPENAI_API_KEY for tree-reasoning runs)
+.env
+.env.*
+!.env.example

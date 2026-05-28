@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from ..serialization import dataset_registry
-from ._split import stratified_split, validate_split
+from ._split import _DEFAULT_SMALL_TEST_SIZE, stratified_split, validate_split
 from .base_dataset import EvalTask, GoldAnswer
 
 # TODO: pin to SHA once HF network access verified. The HF API + the
@@ -128,6 +128,10 @@ class Ds1000Dataset:
     split: str = "all"
     dev_fraction: float = 0.2
     split_seed: int = 0
+    # ``small_test`` target size — a fixed-size stratified subsample of the
+    # held-out ``test`` tail for fast experiment iteration. Default from the
+    # shared split helper (single source of truth).
+    small_test_size: int = _DEFAULT_SMALL_TEST_SIZE
     cache_dir: Path = field(
         default_factory=lambda: Path("~/.cache/pydocs-mcp/ds1000").expanduser(),
     )
@@ -217,6 +221,7 @@ class Ds1000Dataset:
             split=self.split,
             dev_fraction=self.dev_fraction,
             seed=self.split_seed,
+            small_test_size=self.small_test_size,
             stratum_of=lambda r: _normalize_library(r.get("library", "")),
             sort_key=_split_sort_key,
         )

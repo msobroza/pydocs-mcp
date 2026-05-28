@@ -1,0 +1,21 @@
+# Vectorless LLM tree-reasoning, ranked output — RepoQA experiment suite.
+# The LLM is the only retrieval signal (no BM25, no dense). Requires an LLM
+# client (the `llm:` config + OPENAI_API_KEY) at search time. Mirrors the
+# shipped tree_only.yaml but drops the token_budget_formatter so the output
+# is a ranked candidate list (state.candidates) the recall@k / mrr metrics
+# can score. Referenced by ../repoqa_tree.yaml.
+name: exp_tree
+steps:
+  - name: tree_reasoning
+    type: llm_tree_reasoning
+    params:
+      prompt_template: tree_reasoning_pydocs_v1
+      output_scratch_key: candidates_inline
+  - name: promote_scratch_to_candidates
+    type: rrf_fusion
+    params:
+      branch_keys: [candidates_inline]
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

@@ -1,0 +1,35 @@
+# Hybrid BM25 + dense, weighted-score interpolation, equal weights
+# (0.5 BM25 / 0.5 dense) — RepoQA experiment suite. The literature-standard
+# balanced blend. Referenced by ../repoqa_hybrid_wsi_balanced.yaml.
+name: exp_hybrid_wsi_balanced
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: parallel
+    type: parallel_retrieval
+    params:
+      branches:
+        - name: bm25
+          steps:
+            - {name: fetch, type: chunk_fetcher, params: {schema_name: chunk}}
+            - {name: score, type: bm25_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: bm25.ranked}}
+        - name: dense
+          steps:
+            - {name: fetch, type: dense_fetcher, params: {}}
+            - {name: score, type: dense_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: dense.ranked}}
+  - name: fuse
+    type: weighted_score_interpolation
+    params:
+      branch_keys: [bm25.ranked, dense.ranked]
+      weights: [0.5, 0.5]
+  - name: limit
+    type: limit
+    params:
+      max_results: 10
