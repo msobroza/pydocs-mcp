@@ -295,19 +295,28 @@ class FastPlaidUnitOfWork:
 
     async def score(
         self,
-        query_embedding,
+        query_embedding: Sequence[np.ndarray],
         *,
-        subset_chunk_ids,
+        subset_chunk_ids: Sequence[int],
         top_k: int,
-    ):
+    ) -> tuple[tuple[int, float], ...]:
+        """Subset-filtered MaxSim score over the fast-plaid index.
+
+        The hexagonal seam between SQLite (FilterAdapter-produced subset)
+        and fast-plaid (MaxSim engine). Looks up ``plaid_doc_id``s for the
+        SQLite-filtered ``subset_chunk_ids`` via the
+        ``chunk_multi_vector_ids`` mapping table, packs the query
+        ``MultiVector`` into ``(1, n_q, dim)`` for fast-plaid's batched
+        search, then reverse-maps results to ``(chunk_id, score)`` pairs
+        so callers stay on the SQLite id space.
+        """
         if not self._entered or self._handle is None:
             raise UnitOfWorkNotEnteredError(
                 "FastPlaidUnitOfWork.score called outside async with",
             )
         if not subset_chunk_ids:
             return ()
-        import sqlite3
-
+        # Lazy import torch — keeps the optional-extra gated to the read path.
         import torch
         with sqlite3.connect(str(self.db_path)) as conn:
             placeholders = ",".join("?" for _ in subset_chunk_ids)
