@@ -76,7 +76,11 @@ def cache_path_for_project(project_dir: Path) -> Path:
     Each project gets its own ``.db`` file derived from its absolute path,
     so multiple projects never share state.
     """
-    slug = hashlib.md5(str(project_dir.resolve()).encode()).hexdigest()[:10]
+    # md5 used as a fast non-cryptographic path-fingerprint to derive a short
+    # per-project cache slug; usedforsecurity=False signals intent to ruff/bandit.
+    slug = hashlib.md5(
+        str(project_dir.resolve()).encode(), usedforsecurity=False
+    ).hexdigest()[:10]
     return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.db"
 
 
@@ -87,7 +91,10 @@ def turboquant_path_for_project(project_dir: Path) -> Path:
     ``.tq`` suffix instead of ``.db``. The two files live side-by-side so a
     ``--force`` cache clear deletes both (caller's responsibility).
     """
-    slug = hashlib.md5(str(project_dir.resolve()).encode()).hexdigest()[:10]
+    # See `cache_path_for_project` — same non-cryptographic slug derivation.
+    slug = hashlib.md5(
+        str(project_dir.resolve()).encode(), usedforsecurity=False
+    ).hexdigest()[:10]
     return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.tq"
 
 

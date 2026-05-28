@@ -148,11 +148,11 @@ class _CorpusRecordingSystem:
     name: str = "corpus-recorder"
     received_dirs: list[Path] = field(default_factory=list, init=False)
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         self.received_dirs.append(corpus_dir)
 
     async def search(
-        self, query: str, limit: int,  # noqa: ARG002
+        self, query: str, limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return (RetrievedItem(rank=1, text="x", source_path="s"),)
 

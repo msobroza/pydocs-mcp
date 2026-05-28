@@ -24,7 +24,7 @@ class TreeService:
 
     async def get_tree(
         self, package: str, module: str,
-    ) -> "DocumentNode | None":
+    ) -> DocumentNode | None:
         async with self.uow_factory() as uow:
             return await uow.trees.load(package, module)
 
@@ -34,6 +34,6 @@ class TreeService:
 
     async def list_package_modules(
         self, package: str,
-    ) -> dict[str, "DocumentNode"]:
+    ) -> dict[str, DocumentNode]:
         async with self.uow_factory() as uow:
             return await uow.trees.load_all_in_package(package)

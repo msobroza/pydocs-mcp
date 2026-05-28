@@ -76,7 +76,7 @@ class PackageBuildStage:
         )
 
     @classmethod
-    def from_dict(cls, data: dict, context: Any) -> "PackageBuildStage":
+    def from_dict(cls, data: dict, context: Any) -> PackageBuildStage:
         return cls()
 
     def to_dict(self) -> dict:

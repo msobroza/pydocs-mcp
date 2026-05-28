@@ -10,7 +10,6 @@ build/
 *.so
 .coverage
 coverage.xml
-uv.lock
 
 # Rust
 target/

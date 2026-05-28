@@ -186,7 +186,7 @@ class Package:
     # additive so existing Package(...) callers don't need to be migrated
     # in lock-step; future readers may prefer the grouped accessor when
     # both fields are required together.
-    provenance: "EmbeddingProvenance | None" = None
+    provenance: EmbeddingProvenance | None = None
 
 
 def compute_chunk_content_hash(
@@ -208,7 +208,7 @@ def compute_chunk_content_hash(
     """
     return hashlib.sha256(
         f"{package}\0{module}\0{title}\0{text}\0{pipeline_hash}"
-        .encode("utf-8"),
+        .encode(),
     ).hexdigest()
 
 
@@ -259,7 +259,7 @@ class Chunk:
     # S17: optional grouped form of (relevance, retriever_name). Default
     # is ``None`` because most paths still populate the flat fields
     # directly; the grouped form is opt-in via with_enrichment().
-    enrichment: "RetrievalEnrichment | None" = None
+    enrichment: RetrievalEnrichment | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
@@ -289,7 +289,7 @@ class Chunk:
         pipeline_hash: str = "",
         metadata: Mapping[str, Any] | None = None,
         **kwargs: Any,
-    ) -> "Chunk":
+    ) -> Chunk:
         """Test-only factory that builds a Chunk with an auto-computed
         ``content_hash`` derived from the supplied identity tuple
         (S2/S25).
@@ -331,7 +331,7 @@ class Chunk:
             **kwargs,
         )
 
-    def with_enrichment(self, enrichment: "RetrievalEnrichment") -> "Chunk":
+    def with_enrichment(self, enrichment: RetrievalEnrichment) -> Chunk:
         """Return a copy of this Chunk with the supplied retrieval-time
         enrichment attached. Non-mutating — the original Chunk is left
         untouched (S17).
@@ -407,7 +407,7 @@ class SearchQuery:
         return v
 
     @model_validator(mode="after")
-    def _validate_filter_syntax(self) -> "SearchQuery":
+    def _validate_filter_syntax(self) -> SearchQuery:
         for raw_filter, fmt in (
             (self.pre_filter, self.pre_filter_format),
             (self.post_filter, self.post_filter_format),

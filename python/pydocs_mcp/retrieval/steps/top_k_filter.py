@@ -91,7 +91,7 @@ class TopKFilterStep(RetrieverStep):
         return d
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "TopKFilterStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> TopKFilterStep:
         return cls(
             k=data.get("k", _DEFAULT_K),
             publish_to=data.get("publish_to"),

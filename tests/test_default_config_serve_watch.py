@@ -24,7 +24,7 @@ def _shipped_yaml() -> dict:
     p = Path(str(importlib.resources.files("pydocs_mcp.defaults").joinpath(
         "default_config.yaml"
     )))
-    return yaml.safe_load(p.read_text())
+    return yaml.safe_load(p.read_text(encoding="utf-8"))
 
 
 def test_serve_watch_keys_present_in_shipped_defaults() -> None:

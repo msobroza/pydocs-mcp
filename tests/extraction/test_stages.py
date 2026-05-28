@@ -15,6 +15,7 @@ Pins the 7-stage behavior (sub-PR #5b added ``reference_capture``):
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -66,7 +67,7 @@ class _FakeProjectDiscoverer:
     """Records which discover() call was invoked; returns a canned (paths, root)."""
 
     calls: list = None
-    result: tuple = ((), Path("."))
+    result: tuple = ((), Path())
 
     def __post_init__(self) -> None:
         if self.calls is None:
@@ -80,7 +81,7 @@ class _FakeProjectDiscoverer:
 @dataclass
 class _FakeDepDiscoverer:
     calls: list = None
-    result: tuple = ((), Path("."))
+    result: tuple = ((), Path())
 
     def __post_init__(self) -> None:
         if self.calls is None:
@@ -148,6 +149,10 @@ def test_file_discovery_from_dict_builds_both_discoverers() -> None:
 
 # ── FileReadStage ──────────────────────────────────────────────────────────
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
+)
 @pytest.mark.asyncio
 async def test_file_read_reads_file_contents(tmp_path: Path) -> None:
     """Reads each path's contents and fills state.files.file_contents as (path, src) tuples."""

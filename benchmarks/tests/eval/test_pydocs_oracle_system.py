@@ -22,7 +22,7 @@ import pytest
 from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
 from benchmarks.eval.gold_resolver import PydocsOracleGoldResolver, _item_key
 from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import PydocsOracleSystem  # noqa: F401 -- triggers registration
+from benchmarks.eval.systems import PydocsOracleSystem
 from pydocs_mcp.retrieval.config import AppConfig
 
 # WHY: 5 canned rows mimicking the HF ``library-documentation`` schema.

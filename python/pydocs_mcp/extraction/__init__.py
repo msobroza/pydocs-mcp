@@ -51,7 +51,7 @@ from pydocs_mcp.extraction.strategies import (
     StaticDependencyResolver,
 )
 
-__all__ = [
+__all__ = [  # noqa: RUF022 — intentionally grouped by concept (chunkers / discovery / members / pipeline / stages / domain / consumers / registries), not alphabetical
     # Concrete chunkers
     "AstPythonChunker",
     "HeadingMarkdownChunker",

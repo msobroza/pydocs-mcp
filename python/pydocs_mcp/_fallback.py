@@ -4,6 +4,7 @@ Used when the Rust extension is not installed (pip install without Rust toolchai
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -28,22 +29,23 @@ def walk_py_files(root: str) -> list[str]:
     result = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for f in filenames:
-            if f.endswith(".py"):
-                result.append(os.path.join(dirpath, f))
+        # os.walk yields string dirpath/filenames; build with str(Path(...) / ...)
+        # so the output matches the Rust counterpart byte-for-byte while staying
+        # PTH118-clean.
+        result.extend(str(Path(dirpath) / f) for f in filenames if f.endswith(".py"))
     result.sort()
     return result
 
 
 def hash_files(paths: list[str]) -> str:
     """Hash file paths + mtimes to detect changes."""
-    h = hashlib.md5()
+    # md5 used as a non-cryptographic content fingerprint for cache invalidation;
+    # usedforsecurity=False signals intent to ruff/bandit.
+    h = hashlib.md5(usedforsecurity=False)
     for p in paths:
         h.update(p.encode())
-        try:
-            h.update(str(os.stat(p).st_mtime_ns).encode())
-        except OSError:
-            pass
+        with contextlib.suppress(OSError):
+            h.update(str(Path(p).stat().st_mtime_ns).encode())
     return h.hexdigest()[:16]
 
 

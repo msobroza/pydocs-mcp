@@ -53,7 +53,7 @@ def test_allowed_extensions_is_frozenset():
     """``ALLOWED_EXTENSIONS`` must be a frozenset — so nobody's test can
     mutate it and silently widen the allowlist for other tests."""
     assert isinstance(ALLOWED_EXTENSIONS, frozenset)
-    assert ALLOWED_EXTENSIONS == frozenset({".py", ".md", ".ipynb"})
+    assert frozenset({".py", ".md", ".ipynb"}) == ALLOWED_EXTENSIONS
 
 
 def test_excluded_dirs_is_module_level_frozenset():

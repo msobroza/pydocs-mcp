@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import Context7System  # noqa: F401 -- triggers registration
+from benchmarks.eval.systems import Context7System
 from pydocs_mcp.retrieval.config import AppConfig
 
 
@@ -35,7 +35,7 @@ class _RecordingClient:
         self.resolve_calls: list[str] = []
         self._resolved = resolved
 
-    async def __aenter__(self) -> "_RecordingClient":
+    async def __aenter__(self) -> _RecordingClient:
         self.entered = True
         return self
 

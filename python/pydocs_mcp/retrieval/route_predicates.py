@@ -36,7 +36,7 @@ class PredicateRegistry:
         """Remove a predicate. Idempotent — no error if absent."""
         self._predicates.pop(name, None)
 
-    def copy(self) -> "PredicateRegistry":
+    def copy(self) -> PredicateRegistry:
         """Snapshot for test isolation. Modifications to the copy do
         not affect the original (predicate functions are immutable
         callables, so they are not deep-copied)."""

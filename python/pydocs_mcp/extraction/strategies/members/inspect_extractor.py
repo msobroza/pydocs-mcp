@@ -64,7 +64,7 @@ class InspectMemberExtractor:
             )
             symbols = record.get("symbols", ())
             return tuple(symbols)
-        except Exception as exc:  # noqa: BLE001 -- spec §9.2 fallback allowlist
+        except Exception as exc:
             log.debug(
                 "inspect import failed for %s: %s — AST fallback", dep_name, exc,
             )

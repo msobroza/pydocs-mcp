@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 import pytest
 from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import NeuledgeSystem  # noqa: F401 -- triggers registration
+from benchmarks.eval.systems import NeuledgeSystem
 from benchmarks.eval.systems.neuledge import (
     NeuledgeClient,
     NeuledgeError,
@@ -256,14 +256,14 @@ class _StubNeuledgeClient:
         self.entered = False
         self.exited = False
 
-    async def __aenter__(self) -> "_StubNeuledgeClient":
+    async def __aenter__(self) -> _StubNeuledgeClient:
         self.entered = True
         return self
 
     async def __aexit__(self, *_: object) -> None:
         self.exited = True
 
-    async def get_docs(self, library: str, topic: str) -> str:  # noqa: ARG002
+    async def get_docs(self, library: str, topic: str) -> str:
         return self._docs
 
 

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from pydocs_mcp.extraction.protocols import Chunker, IngestionStage
 
 
-stage_registry: "ComponentRegistry[IngestionStage]" = ComponentRegistry()
+stage_registry: ComponentRegistry[IngestionStage] = ComponentRegistry()
 """Decorator-populated registry for ``@stage_registry.register('type_name')``.
 
 Populated by side-effect import of ``extraction.pipeline.stages`` — the
@@ -32,7 +32,7 @@ module scope so importing the module registers them.
 """
 
 
-chunker_registry: dict[str, type["Chunker"]] = {}
+chunker_registry: dict[str, type[Chunker]] = {}
 """Extension → Chunker class. Populated by :func:`_register_chunker` decorator.
 
 Keys are lowercased file extensions with a leading dot (``".py"``, ``".md"``,
@@ -58,7 +58,7 @@ def _register_chunker(ext: str):
     raises :class:`ValueError` — extension conflicts are a wiring bug we
     want to surface at import time, not at first extraction.
     """
-    def deco(cls: type["Chunker"]) -> type["Chunker"]:
+    def deco(cls: type[Chunker]) -> type[Chunker]:
         if ext in chunker_registry:
             raise ValueError(f"chunker for {ext!r} already registered")
         chunker_registry[ext] = cls

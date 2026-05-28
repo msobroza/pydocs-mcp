@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -44,7 +43,7 @@ class TurboQuantUnitOfWork:
         self._index: IdMapIndex | None = None
         self._dirty = False
 
-    async def __aenter__(self) -> "TurboQuantUnitOfWork":
+    async def __aenter__(self) -> TurboQuantUnitOfWork:
         # ``IdMapIndex.load`` / constructor are sync PyO3 calls that perform
         # CPU + IO work (mmap a ``.tq`` file or zero-allocate dim*N bits).
         # Per CLAUDE.md §"Async Patterns", offload via asyncio.to_thread so
@@ -135,7 +134,7 @@ class TurboQuantUnitOfWork:
 
     def _remove_ids_sync(self, ids: Sequence[int]) -> None:
         """Sync inner loop for :meth:`remove_vectors` — runs in a worker thread."""
-        assert self._index is not None  # checked by caller
+        assert self._index is not None  # noqa: S101 — invariant checked by caller before scheduling this on the worker thread
         for chunk_id in ids:
             self._index.remove(chunk_id)
 
@@ -177,11 +176,11 @@ class TurboQuantUnitOfWork:
             return
         tmp = self._index_path.with_suffix(self._index_path.suffix + ".tmp")
         # ``IdMapIndex.write`` serializes the full index to disk — sync +
-        # IO-bound, offload per CLAUDE.md §"Async Patterns". ``os.replace``
+        # IO-bound, offload per CLAUDE.md §"Async Patterns". ``Path.replace``
         # itself is a single atomic syscall and is fast enough to leave on
         # the event loop.
         await asyncio.to_thread(self._index.write, str(tmp))
-        os.replace(tmp, self._index_path)
+        tmp.replace(self._index_path)
         self._dirty = False
 
     async def rollback(self) -> None:
@@ -213,7 +212,7 @@ class TurboQuantUnitOfWork:
         return self._index
 
     @property
-    def vectors(self) -> "TurboQuantUnitOfWork":
+    def vectors(self) -> TurboQuantUnitOfWork:
         """Self-reference under the canonical name expected by CompositeUnitOfWork.
 
         CompositeUnitOfWork delegates attribute access by name across children.

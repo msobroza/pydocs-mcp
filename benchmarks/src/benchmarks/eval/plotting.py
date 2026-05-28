@@ -98,7 +98,7 @@ class BaselineRecord:
     git_sha: str | None
 
     @classmethod
-    def from_path(cls, path: Path) -> "BaselineRecord":
+    def from_path(cls, path: Path) -> BaselineRecord:
         """Load a baseline JSON from disk."""
         data = json.loads(path.read_text())
         return cls(

@@ -62,10 +62,13 @@ jobs:
 
       # WHY: hybrid-search wired EmbedChunksStage into the shipped ingestion
       # pipeline by default, and the benchmark adapter calls build_embedder()
-      # at index time. fastembed is a required dep, so `.[dev]` already
-      # pulls in the FastEmbed runtime.
+      # at index time. fastembed is a required runtime dep, so installing the
+      # project pulls in the FastEmbed runtime. Dev deps moved to PEP 735
+      # [dependency-groups] (P1-5) — uv's `--group dev` is the explicit path.
       - name: Install pydocs-mcp + dev deps
-        run: uv pip install --system -e ".[dev]"
+        run: |
+          uv pip install --system -e .
+          uv pip install --system --group dev
 
       - name: Install benchmarks + all extras
         run: uv pip install --system -e "benchmarks[all]"

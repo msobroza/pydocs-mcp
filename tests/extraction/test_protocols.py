@@ -72,7 +72,7 @@ def test_project_file_discoverer_rejects_class_without_discover():
 def test_dependency_file_discoverer_runtime_checkable_accepts_discover():
     class _FakeDepDiscoverer:
         def discover(self, target: str) -> tuple[list[str], Path]:
-            return [], Path(".")
+            return [], Path()
 
     assert isinstance(_FakeDepDiscoverer(), DependencyFileDiscoverer)
 

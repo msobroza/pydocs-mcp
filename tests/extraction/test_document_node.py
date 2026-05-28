@@ -67,9 +67,9 @@ def test_node_kind_values_complete():
 def test_structural_only_kinds_is_frozenset_of_two():
     """Exactly PACKAGE + SUBPACKAGE — spec §4.1.1 scaffolding-only kinds."""
     assert isinstance(STRUCTURAL_ONLY_KINDS, frozenset)
-    assert STRUCTURAL_ONLY_KINDS == frozenset(
+    assert frozenset(
         {NodeKind.PACKAGE, NodeKind.SUBPACKAGE},
-    )
+    ) == STRUCTURAL_ONLY_KINDS
     assert len(STRUCTURAL_ONLY_KINDS) == 2
 
 

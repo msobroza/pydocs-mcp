@@ -19,7 +19,7 @@ def _task(extra: dict[str, object]) -> EvalTask:
         task_id="t",
         query="q",
         gold=GoldAnswer(extra=extra),
-        corpus_source=lambda: Path("."),
+        corpus_source=lambda: Path(),
     )
 
 

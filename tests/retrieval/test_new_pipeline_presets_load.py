@@ -38,7 +38,7 @@ NEW_PRESETS = (
 def test_preset_file_exists_and_parses(preset: str) -> None:
     path = PIPELINES_DIR / preset
     assert path.exists(), f"missing preset {preset}"
-    cfg = yaml.safe_load(path.read_text())
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert "name" in cfg
     assert "steps" in cfg
     assert len(cfg["steps"]) >= 2
@@ -46,7 +46,7 @@ def test_preset_file_exists_and_parses(preset: str) -> None:
 
 def test_hybrid_preset_has_parallel_then_rrf_fusion() -> None:
     cfg = yaml.safe_load(
-        (PIPELINES_DIR / "chunk_search_hybrid.yaml").read_text(),
+        (PIPELINES_DIR / "chunk_search_hybrid.yaml").read_text(encoding="utf-8"),
     )
     step_types = [s["type"] for s in cfg["steps"]]
     assert "parallel_retrieval" in step_types
@@ -56,7 +56,7 @@ def test_hybrid_preset_has_parallel_then_rrf_fusion() -> None:
 
 def test_dense_preset_uses_dense_fetcher_and_dense_scorer() -> None:
     cfg = yaml.safe_load(
-        (PIPELINES_DIR / "chunk_search_dense.yaml").read_text(),
+        (PIPELINES_DIR / "chunk_search_dense.yaml").read_text(encoding="utf-8"),
     )
     step_types = [s["type"] for s in cfg["steps"]]
     assert "dense_fetcher" in step_types
@@ -65,6 +65,6 @@ def test_dense_preset_uses_dense_fetcher_and_dense_scorer() -> None:
 
 def test_ranked_variants_drop_token_budget_formatter() -> None:
     for ranked in ("chunk_search_dense_ranked.yaml", "chunk_search_hybrid_ranked.yaml"):
-        cfg = yaml.safe_load((PIPELINES_DIR / ranked).read_text())
+        cfg = yaml.safe_load((PIPELINES_DIR / ranked).read_text(encoding="utf-8"))
         step_types = [s["type"] for s in cfg["steps"]]
         assert "token_budget_formatter" not in step_types

@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.retrieval.pipeline.base import RetrieverStep
 from pydocs_mcp.retrieval.pipeline.state import RetrieverState
 
@@ -45,7 +46,7 @@ if TYPE_CHECKING:
 _MAX_PIPELINE_DEPTH = 32
 
 
-class PipelineLoadError(ValueError):
+class PipelineLoadError(PydocsMCPError, ValueError):
     """Raised by :meth:`CodeRetrieverPipeline.from_dict` on YAML schema violations.
 
     The YAML schema uses ``steps:`` (each step requires a ``name:``). This
@@ -68,7 +69,7 @@ class CodeRetrieverPipeline(RetrieverStep):
 
     stages: tuple[RetrieverStep, ...] = ()
 
-    async def run(self, query_or_state: "SearchQuery | RetrieverState") -> RetrieverState:
+    async def run(self, query_or_state: SearchQuery | RetrieverState) -> RetrieverState:
         # Polymorphic entry: legacy callers pass a SearchQuery; nested use
         # (Pipeline-as-Step) passes an incoming RetrieverState that must be
         # threaded — not reset — through the inner stages.
@@ -96,9 +97,9 @@ class CodeRetrieverPipeline(RetrieverStep):
     def from_dict(
         cls,
         data: dict,
-        context: "BuildContext",
+        context: BuildContext,
         _depth: int = 0,
-    ) -> "CodeRetrieverPipeline":
+    ) -> CodeRetrieverPipeline:
         if _depth > _MAX_PIPELINE_DEPTH:
             raise ValueError(
                 f"pipeline nesting exceeds max depth of {_MAX_PIPELINE_DEPTH}"
@@ -146,7 +147,7 @@ def _step_to_dict(stage: object, idx: int) -> dict:
 
 
 def _step_from_dict(
-    step: dict, context: "BuildContext", _depth: int,
+    step: dict, context: BuildContext, _depth: int,
 ) -> object:
     """Build a single stage from the ``{name, type, params}`` entry shape.
 

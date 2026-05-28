@@ -1125,8 +1125,8 @@ class SqliteReferenceStore:
         self,
         refs: Iterable[NodeReference],
         *,
-        package: str,  # noqa: ARG002 -- caller convenience for logging
-        uow: UnitOfWork | None = None,  # noqa: ARG002 -- ambient via ContextVar
+        package: str,
+        uow: UnitOfWork | None = None,
     ) -> None:
         rows = [
             (r.from_package, r.from_node_id, r.to_name, r.to_node_id, str(r.kind))
@@ -1195,7 +1195,7 @@ class SqliteReferenceStore:
         return [_row_to_node_reference(r) for r in rows]
 
     async def delete_for_package(
-        self, package: str, *, uow: UnitOfWork | None = None,  # noqa: ARG002
+        self, package: str, *, uow: UnitOfWork | None = None,
     ) -> None:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
@@ -1205,7 +1205,7 @@ class SqliteReferenceStore:
             )
 
     async def delete_all(
-        self, *, uow: UnitOfWork | None = None,  # noqa: ARG002
+        self, *, uow: UnitOfWork | None = None,
     ) -> None:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(

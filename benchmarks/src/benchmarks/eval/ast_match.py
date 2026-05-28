@@ -14,14 +14,14 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Sequence
-from functools import lru_cache
+from functools import cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .systems.base_system import RetrievedItem
 
 
-@lru_cache(maxsize=None)
+@cache
 def _canonical_dump(source: str) -> str | None:
     """Return ``ast.dump(ast.parse(source))``, or None on SyntaxError."""
     try:
@@ -45,7 +45,7 @@ def ast_equivalent(a: str, b: str) -> bool:
 
 
 def find_first_match_rank(
-    retrieved: Sequence["RetrievedItem"], gold: str | None,
+    retrieved: Sequence[RetrievedItem], gold: str | None,
 ) -> int | None:
     """Return the 1-indexed rank of the first item AST-equivalent to ``gold``.
 

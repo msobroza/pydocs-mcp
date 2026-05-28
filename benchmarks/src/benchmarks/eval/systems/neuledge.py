@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -81,11 +81,11 @@ class NeuledgeClient:
     ):
         self._base_url = base_url
         self._timeout = timeout
-        self._http: Optional[httpx.AsyncClient] = None
+        self._http: httpx.AsyncClient | None = None
         self._request_id: int = 0
-        self._session_id: Optional[str] = None
+        self._session_id: str | None = None
 
-    async def __aenter__(self) -> "NeuledgeClient":
+    async def __aenter__(self) -> NeuledgeClient:
         self._http = httpx.AsyncClient(
             timeout=self._timeout,
             headers={"Accept": "application/json, text/event-stream"},
@@ -199,17 +199,17 @@ class NeuledgeSystem:
     # ``name@version`` identifier returned by ``context list``. Empty
     # default keeps construction cheap (and registry-buildable).
     library: str = ""
-    _client: "NeuledgeClient | None" = field(
+    _client: NeuledgeClient | None = field(
         default=None, init=False, repr=False,
     )
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         if self._client is None:
             self._client = NeuledgeClient(base_url=self.base_url)
             await self._client.__aenter__()
 
     async def search(
-        self, query: str, limit: int,  # noqa: ARG002 -- Neuledge returns one blob
+        self, query: str, limit: int,
     ) -> tuple[RetrievedItem, ...]:
         if self._client is None or not self.library:
             raise RuntimeError(
@@ -228,7 +228,7 @@ class NeuledgeSystem:
         )
 
     @property
-    def gold_resolver(self) -> "GoldResolver":
+    def gold_resolver(self) -> GoldResolver:
         # WHY: Neuledge returns a single concatenated blob from a
         # non-enumerable local MCP store — no chunk-id store to scan, so
         # ground-truth is fuzzy-matched against the retrieved blob (lazy),

@@ -73,11 +73,11 @@ class _FakeCompositeSystem:
 
     name: str = "pydocs-mcp-composite"
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         return None
 
     async def search(
-        self, query: str, limit: int,  # noqa: ARG002
+        self, query: str, limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return (
             RetrievedItem(
@@ -110,11 +110,11 @@ class _FakeContext7System:
     # fixture (and 0.0 on non-pandas rows) — either way it's a present float.
     last_resolved_library_id: str | None = "/pandas-dev/pandas"
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         return None
 
     async def search(
-        self, query: str, limit: int,  # noqa: ARG002
+        self, query: str, limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return (
             RetrievedItem(
@@ -138,11 +138,11 @@ class _FakeNeuledgeSystem:
     name: str = "neuledge"
     library: str = ""
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         return None
 
     async def search(
-        self, query: str, limit: int,  # noqa: ARG002
+        self, query: str, limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return (
             RetrievedItem(
@@ -163,11 +163,11 @@ class _FakeRankedSystem:
 
     name: str = "pydocs-mcp"
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         return None
 
     async def search(
-        self, query: str, limit: int,  # noqa: ARG002
+        self, query: str, limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return tuple(
             RetrievedItem(
@@ -201,11 +201,11 @@ class _FakeOracleSystem:
 
     name: str = "pydocs-oracle"
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         return None
 
     async def search(
-        self, query: str, limit: int,  # noqa: ARG002
+        self, query: str, limit: int,
     ) -> tuple[RetrievedItem, ...]:
         # These mirror the fixture's gold doc_id shape
         # (``pandas.api.synthetic_<n>.<Class>.<method>``) so a reader sees

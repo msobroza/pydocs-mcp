@@ -57,7 +57,7 @@ def test_disable_rust_swaps_to_fallback():
         mods_to_remove = [k for k in sys.modules if k.startswith("pydocs_mcp._fast")]
         for k in mods_to_remove:
             del sys.modules[k]
-        import pydocs_mcp._fast  # noqa: F811
+        import pydocs_mcp._fast
 
 
 def test_disable_rust_is_idempotent():
@@ -72,4 +72,4 @@ def test_disable_rust_is_idempotent():
         mods_to_remove = [k for k in sys.modules if k.startswith("pydocs_mcp._fast")]
         for k in mods_to_remove:
             del sys.modules[k]
-        import pydocs_mcp._fast  # noqa: F811
+        import pydocs_mcp._fast

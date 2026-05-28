@@ -217,7 +217,7 @@ def test_dataset_is_registered_under_ds1000() -> None:
     """Importing ``benchmarks.eval.datasets`` fires the registry decorator —
     the runner looks the loader up by name (``"ds1000"``)."""
     # Force-import the package so the decorator fires.
-    import benchmarks.eval.datasets  # noqa: F401
+    import benchmarks.eval.datasets
     assert "ds1000" in dataset_registry.names()
 
 

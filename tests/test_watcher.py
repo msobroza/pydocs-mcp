@@ -20,7 +20,7 @@ def test_watcher_module_importable() -> None:
     `watchdog` import lives inside `FileWatcher.__post_init__` /
     constructor only, so users who never touch `--watch` pay zero cost.
     """
-    from pydocs_mcp.serve import watcher  # noqa: F401
+    from pydocs_mcp.serve import watcher
 
 
 def test_watcher_construction_raises_when_watchdog_missing(monkeypatch) -> None:

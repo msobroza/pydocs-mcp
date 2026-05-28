@@ -93,7 +93,7 @@ class DenseFetcherStep(RetrieverStep):
         return replace(state, candidates=ChunkList(items=candidates))
 
     @classmethod
-    def from_dict(cls, data: Mapping, context: BuildContext) -> "DenseFetcherStep":
+    def from_dict(cls, data: Mapping, context: BuildContext) -> DenseFetcherStep:
         if context.vector_store is None or context.embedder is None:
             raise ValueError(
                 "DenseFetcherStep requires BuildContext.vector_store + "

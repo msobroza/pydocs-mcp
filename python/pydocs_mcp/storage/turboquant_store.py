@@ -78,8 +78,11 @@ class TurboQuantVectorStore:
 
         id_list = [int(i) for i in ids.tolist()]
         chunks = await self.chunk_hydrator(id_list)
+        # strict=True: ids/scores come from the same TurboQuant query
+        # response and have identical length by construction.
         id_to_score = {
-            int(i): float(s) for i, s in zip(ids.tolist(), scores.tolist())
+            int(i): float(s)
+            for i, s in zip(ids.tolist(), scores.tolist(), strict=True)
         }
         # Re-emit each hydrated Chunk with the score + retriever name
         # populated. Frozen dataclass, so we rebuild rather than mutate.
@@ -96,4 +99,4 @@ class TurboQuantVectorStore:
         )
 
 
-__all__ = ("TurboQuantVectorStore", "CandidateIdResolver", "ChunkHydrator")
+__all__ = ("CandidateIdResolver", "ChunkHydrator", "TurboQuantVectorStore")

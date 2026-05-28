@@ -7,13 +7,34 @@ name = "pydocs-mcp"
 version = "0.2.0"
 description = "Local Python docs MCP server, accelerated with Rust"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE", "LICENSE-third-party"]
 requires-python = ">=3.11"
 dependencies = ["mcp>=1.0", "pydantic>=2.0", "pydantic-settings>=2.0", "pyyaml>=6.0", "numpy>=1.26", "turbovec>=0.5,<1.0", "fastembed>=0.4,<1.0", "openai>=1.40,<2.0", "jinja2>=3.0,<4.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff", "pytest-asyncio>=0.23"]
+# User-facing extras only — installable via `pip install pydocs-mcp[<name>]`.
+# Developer-only dependencies live in [dependency-groups] (PEP 735) so they
+# stay out of wheel METADATA and can't be pulled in by end users.
 watch = ["watchdog>=4.0,<6.0"]
+
+[dependency-groups]
+# PEP 735 developer-only groups — explicit-only via
+# `uv pip install --group <name>` or `pip install --group <name>` (pip 25.1+).
+# These deps DO NOT ship in the wheel METADATA's Requires-Dist field.
+test = [
+    "pytest >= 7",
+    "pytest-cov >= 4",
+    "pytest-asyncio >= 0.23",
+]
+lint = [
+    "ruff",
+    "mypy >= 1.10",
+]
+dev = [
+    {include-group = "test"},
+    {include-group = "lint"},
+]
 
 [project.scripts]
 pydocs-mcp = "pydocs_mcp.__main__:main"
@@ -24,6 +45,7 @@ module-name = "pydocs_mcp._native"
 python-source = "python"
 compatibility = "manylinux2014"
 include = [
+  "python/pydocs_mcp/py.typed",
   "python/pydocs_mcp/defaults/*.yaml",
   "python/pydocs_mcp/defaults/*.json",
   "python/pydocs_mcp/pipelines/*.yaml",
@@ -37,12 +59,114 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
-ignore = ["E501", "E701"]
+select = [
+    "E", "W",     # pycodestyle
+    "F",          # Pyflakes
+    "I",          # isort
+    "B",          # flake8-bugbear
+    "UP",         # pyupgrade
+    "S",          # flake8-bandit (security)
+    "SIM",        # flake8-simplify
+    "RUF",        # Ruff-specific
+    "C901",       # McCabe complexity
+    "PT",         # flake8-pytest-style
+    "PTH",        # flake8-use-pathlib
+]
+ignore = [
+    "E501",     # line-too-long — opinionated, defer to formatter where it matters
+    "E701",     # compound statements on one line — used for short Protocols
+    "RUF001",   # ambiguous unicode in strings — math symbols (×, ∪) are intentional in benchmark labels
+    "RUF002",   # ambiguous unicode in docstrings — same (× appears in "K × N" capacity comments)
+    "RUF003",   # ambiguous unicode in comments — same
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["F401", "F811", "F841", "E402", "I001"]
-"python/pydocs_mcp/_fast.py" = ["F401", "I001"]
+# Test code is allowed to use bare asserts (S101), short-string secrets in
+# fixtures (S105/S106), broader pytest.raises (PT011/PT012), and the other
+# pytest-style relaxations below — these all reflect intentional test
+# conventions, not bugs.
+"tests/**"                       = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
+"benchmarks/tests/**"            = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
+# Benchmark eval scripts run pre-conditions via assert as a lightweight
+# precondition pattern; they're not security-sensitive code paths.
+# B905 (zip strict) and SIM105 (suppress vs try/except/pass) tolerated in
+# benchmark code where readability of the linear data-flow trumps the lint.
+"benchmarks/src/**"              = ["S101", "S311", "S324", "S603", "S607", "S608", "B905", "SIM105", "SIM102", "PTH207"]
+"python/pydocs_mcp/_fast.py"     = ["F401", "I001"]
+"python/pydocs_mcp/__main__.py"  = ["T201"]
+# The SQLite repositories build `WHERE {clause}` strings where {clause} comes
+# from the FilterAdapter — which only emits SQL fragments built from a
+# whitelisted column set (CHUNK_COLUMNS / MEMBER_COLUMNS / PACKAGE_COLUMNS)
+# and parameterized placeholders. The values flow through DB-API ?-bound
+# parameters; no user data is interpolated into the SQL text.
+"python/pydocs_mcp/storage/sqlite.py"     = ["S608"]
+"python/pydocs_mcp/storage/factories.py"  = ["S608"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["python/pydocs_mcp"]
+# Lenient initial baseline so the typecheck step ships green without a giant
+# cleanup PR. Ratchet plan: once green at the floor, flip
+# disallow_untyped_defs=true and clean up the surfaced errors in a follow-up.
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+disallow_untyped_defs = false
+
+# Rust/Python substitution boundary uses dynamic imports + `from ._native
+# import *` rebinds; mypy can't follow either branch coherently. The Protocol
+# contract is enforced at runtime (§"Fallback contract" in CLAUDE.md).
+[[tool.mypy.overrides]]
+module = ["pydocs_mcp._fallback", "pydocs_mcp._fast"]
+ignore_errors = true
+
+# Third-party packages without py.typed markers or inline stubs that the
+# typechecked subset of pydocs_mcp imports. follow_imports = skip means mypy
+# treats them as `Any` instead of erroring on every import site.
+# tests / benchmarks / 3rd-party-only-from-ignored-modules (mcp, watchdog,
+# openai) are NOT listed — adding them triggers `unused section` warnings.
+[[tool.mypy.overrides]]
+module = ["fastembed.*", "turbovec.*", "yaml.*", "numpy", "numpy.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+# Modules below carry real type tightenings deferred to the ratchet PR. The
+# common pattern: RetrieverState.candidates is typed as `object` for the union
+# `ChunkList | ModuleMemberList` (covariance escape hatch), so steps narrow it
+# with runtime isinstance checks mypy can't follow. A future PR will introduce
+# a proper Protocol-bound generic and remove these overrides one by one.
+# `__main__` is here because argparse's add_argument(**dict) has overload
+# resolution that mypy reports as arg-type mismatch on every call site —
+# spurious noise that drowns out real signal.
+[[tool.mypy.overrides]]
+module = [
+    "pydocs_mcp.__main__",
+    "pydocs_mcp.storage.sqlite",
+    "pydocs_mcp.storage.factories",
+    "pydocs_mcp.retrieval.config",
+    "pydocs_mcp.retrieval.serialization",
+    "pydocs_mcp.retrieval.llm_clients.openai",
+    "pydocs_mcp.retrieval.steps.*",
+    "pydocs_mcp.extraction.factories",
+    "pydocs_mcp.extraction.serialization",
+    "pydocs_mcp.extraction.pipeline.stages.*",
+    "pydocs_mcp.extraction.strategies.embedders.*",
+    "pydocs_mcp.application.indexing_service",
+    "pydocs_mcp.application.tree_service",
+    "pydocs_mcp.application.lookup_service",
+    "pydocs_mcp.application.package_lookup",
+    "pydocs_mcp.application.formatting",
+    "pydocs_mcp.storage.turboquant_store",
+    "pydocs_mcp.serve.watcher",
+    "pydocs_mcp.server",
+    "pydocs_mcp.filters",
+]
+ignore_errors = true

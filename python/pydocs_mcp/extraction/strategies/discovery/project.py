@@ -37,7 +37,7 @@ class ProjectFileDiscoverer:
                 ext = Path(name).suffix.lower()
                 if ext not in self.scope.include_extensions:
                     continue
-                full = os.path.join(dirpath, name)
+                full = str(Path(dirpath) / name)
                 if not _within_size_budget(full, self.scope.max_file_size_bytes):
                     continue
                 paths.append(full)

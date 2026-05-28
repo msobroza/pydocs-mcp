@@ -52,7 +52,7 @@ class LoadExistingChunkHashesStage:
         return replace(state, existing_chunk_hashes=existing)
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any], context: Any) -> "LoadExistingChunkHashesStage":
+    def from_dict(cls, data: Mapping[str, Any], context: Any) -> LoadExistingChunkHashesStage:
         uow_factory = getattr(context, "uow_factory", None)
         if uow_factory is None:
             raise ValueError(

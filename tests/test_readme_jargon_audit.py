@@ -29,7 +29,7 @@ def test_no_pr_jargon_in_readmes() -> None:
 
 def test_claude_md_includes_pr_letter_pattern_in_jargon_rule() -> None:
     """CLAUDE.md's README-jargon section's regex catches PR-[A-Z]N.M."""
-    claude_md = (ROOT / "CLAUDE.md").read_text()
+    claude_md = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     audit_block = claude_md.split("README files: no internal PR")[-1]
     audit_block = audit_block.split("Async Patterns")[0]
     assert "PR-[A-Z]" in audit_block

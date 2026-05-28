@@ -42,12 +42,12 @@ class _OracleTestSystem:
 
     name: str = "oracle-integration-test"
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         # WHY: oracle bypasses indexing entirely — the lookup table is the
         # entire "index". Nothing to do here.
         return None
 
-    async def search(self, query: str, limit: int) -> tuple[RetrievedItem, ...]:  # noqa: ARG002
+    async def search(self, query: str, limit: int) -> tuple[RetrievedItem, ...]:
         gold = _ORACLE_LOOKUP.get(query)
         if gold is None:
             # WHY: an unknown query means the test forgot to populate the

@@ -45,7 +45,7 @@ log = logging.getLogger("pydocs-mcp")
 class AstPythonChunker:
     def build_tree(
         self, path: str, content: str, package: str, root: Path,
-        ref_collector: "ReferenceCollector | None" = None,
+        ref_collector: ReferenceCollector | None = None,
     ) -> DocumentNode:
         module = _module_from_path(path, root)
         tree = _safe_parse(content, path)
@@ -61,7 +61,7 @@ class AstPythonChunker:
                     tree.body, from_package=package,
                     module_qname=module, collector=ref_collector,
                 )
-            except Exception as exc:  # noqa: BLE001 -- per-file containment
+            except Exception as exc:
                 log.warning(
                     "capture_imports failed on %s: %s", path, exc,
                 )
@@ -71,7 +71,7 @@ class AstPythonChunker:
         )
 
     @classmethod
-    def from_config(cls, cfg: ChunkingConfig) -> "AstPythonChunker":
+    def from_config(cls, cfg: ChunkingConfig) -> AstPythonChunker:
         return cls()
 
 
@@ -86,7 +86,7 @@ def _safe_parse(content: str, path: str) -> ast.Module | None:
 
 def _module_node_from_ast(
     tree: ast.Module, module: str, path: str, content: str, root: Path,
-    *, ref_collector: "ReferenceCollector | None" = None,
+    *, ref_collector: ReferenceCollector | None = None,
     package: str = "",
 ) -> DocumentNode:
     """Build the MODULE root + all children from a parsed ``ast.Module``."""
@@ -117,7 +117,7 @@ def _module_node_from_ast(
 
 def _extract_module_children(
     tree: ast.Module, module: str, lines: list[str], rel: str,
-    *, ref_collector: "ReferenceCollector | None" = None,
+    *, ref_collector: ReferenceCollector | None = None,
     package: str = "",
 ) -> list[DocumentNode]:
     """One IMPORT_BLOCK per contiguous import run + one FUNCTION / CLASS
@@ -128,12 +128,10 @@ def _extract_module_children(
     rely on line-sorted children.
     """
     children: list[DocumentNode] = []
-    suffix_counter = 0
-    for run in _consecutive_import_runs(tree.body):
+    for suffix_counter, run in enumerate(_consecutive_import_runs(tree.body)):
         children.append(_import_block_node(
             run, module, lines, rel, suffix=suffix_counter,
         ))
-        suffix_counter += 1
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             children.append(_function_node(
@@ -215,7 +213,7 @@ def _function_node(
     stmt: ast.FunctionDef | ast.AsyncFunctionDef,
     module: str, lines: list[str], rel: str,
     *, parent_id: str, kind: NodeKind,
-    ref_collector: "ReferenceCollector | None" = None,
+    ref_collector: ReferenceCollector | None = None,
     package: str = "",
 ) -> DocumentNode:
     """Shared FUNCTION / METHOD builder. ``kind`` + ``parent_id`` make
@@ -231,7 +229,7 @@ def _function_node(
                 stmt.body, from_package=package,
                 from_node_id=qname, collector=ref_collector,
             )
-        except Exception as exc:  # noqa: BLE001 -- per-function containment
+        except Exception as exc:
             log.warning("capture_calls failed on %s: %s", qname, exc)
     doc = ast.get_docstring(stmt) or ""
     start = stmt.lineno
@@ -260,7 +258,7 @@ def _function_node(
 
 def _class_node(
     stmt: ast.ClassDef, module: str, lines: list[str], rel: str,
-    *, ref_collector: "ReferenceCollector | None" = None,
+    *, ref_collector: ReferenceCollector | None = None,
     package: str = "",
 ) -> DocumentNode:
     """CLASS node with METHOD children. Direct text = class line through
@@ -275,7 +273,7 @@ def _class_node(
                 list(stmt.bases), from_package=package,
                 class_qname=qname, collector=ref_collector,
             )
-        except Exception as exc:  # noqa: BLE001 -- per-class containment
+        except Exception as exc:
             log.warning("capture_inherits failed on %s: %s", qname, exc)
     doc = ast.get_docstring(stmt) or ""
     method_stmts = [

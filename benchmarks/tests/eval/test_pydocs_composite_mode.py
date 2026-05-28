@@ -29,7 +29,7 @@ class _FakePipeline:
     def __init__(self, state: object) -> None:
         self._state = state
 
-    async def run(self, query: object) -> object:  # noqa: ARG002 -- query unused
+    async def run(self, query: object) -> object:
         return self._state
 
 

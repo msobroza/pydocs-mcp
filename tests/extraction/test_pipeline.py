@@ -55,7 +55,7 @@ def test_ingestion_state_defaults():
     assert state.files.target == Path("/tmp/x")
     assert state.files.target_kind is TargetKind.PROJECT
     assert state.files.package_name == ""
-    assert state.files.root == Path(".")
+    assert state.files.root == Path()
     assert state.files.paths == ()
     assert state.files.file_contents == ()
     assert state.files.content_hash == ""

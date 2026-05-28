@@ -127,7 +127,7 @@ async def test_self_index_calls_resolution_rate_floor(tmp_path: Path) -> None:
     # ReferenceService would force us to enumerate rows; raw SQL is
     # exactly what AC #15 measures.
     async with uow_factory() as uow:
-        conn = uow._held_conn  # noqa: SLF001 -- AC #15 raw-SQL probe
+        conn = uow._held_conn
         assert conn is not None, "UoW must hold a live connection"
         total = conn.execute(
             "SELECT COUNT(*) FROM node_references WHERE kind='calls'",

@@ -44,7 +44,7 @@ class ComponentRegistry(Generic[C]):
             return cls
         return decorator
 
-    def build(self, data: Mapping, context: "BuildContext", _depth: int = 0) -> C:
+    def build(self, data: Mapping, context: BuildContext, _depth: int = 0) -> C:
         type_name = data["type"]
         try:
             cls = self._types[type_name]
@@ -134,20 +134,20 @@ class BuildContext:
     ``AppConfig.compute_ingestion_pipeline_hash()`` once at startup.
     """
 
-    connection_provider: "ConnectionProvider | None" = None
-    predicate_registry: "PredicateRegistry" = field(default_factory=_default_predicate_registry)
+    connection_provider: ConnectionProvider | None = None
+    predicate_registry: PredicateRegistry = field(default_factory=_default_predicate_registry)
     step_registry: ComponentRegistry = field(default_factory=lambda: step_registry)
     formatter_registry: ComponentRegistry = field(default_factory=lambda: formatter_registry)
-    vector_store: "TextSearchable | VectorSearchable | None" = None
+    vector_store: TextSearchable | VectorSearchable | None = None
     # Spec I21: typed as the :class:`ModuleMemberStore` Protocol (not
     # the concrete ``SqliteModuleMemberRepository``) so a future
     # Postgres / DuckDB adapter can satisfy this field without
     # touching the BuildContext type signature.
-    module_member_store: "ModuleMemberStore | None" = None
-    app_config: "AppConfig | None" = None
-    embedder: "Embedder | None" = None
-    uow_factory: "Callable[[], UnitOfWork] | None" = None
-    llm_client: "LlmClient | None" = None
+    module_member_store: ModuleMemberStore | None = None
+    app_config: AppConfig | None = None
+    embedder: Embedder | None = None
+    uow_factory: Callable[[], UnitOfWork] | None = None
+    llm_client: LlmClient | None = None
     pipeline_hash: str = ""
     # Spec C5: tightened ``FilterAdapter`` Protocol — composition root wires
     # a SQLite-specific adapter here so ``PreFilterStep`` (and downstream
@@ -157,4 +157,4 @@ class BuildContext:
     # can instantiate a minimal context; ``from_dict`` decoders raise when
     # the dep is missing (transitional shape — commit 1 falls back to a
     # default-constructed adapter; commit 2 will require explicit wiring).
-    filter_adapter: "FilterAdapter | None" = None
+    filter_adapter: FilterAdapter | None = None

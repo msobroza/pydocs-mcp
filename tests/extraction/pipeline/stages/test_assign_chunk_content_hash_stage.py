@@ -26,7 +26,7 @@ from pydocs_mcp.models import Chunk, compute_chunk_content_hash
 def _state(chunks: tuple[Chunk, ...] = ()) -> IngestionState:
     """Minimal IngestionState — only the fields the stage actually touches."""
     return IngestionState(
-        files=FileBundle(target=Path("."), target_kind=TargetKind.PROJECT),
+        files=FileBundle(target=Path(), target_kind=TargetKind.PROJECT),
         chunks=ChunkBundle(chunks=chunks),
     )
 

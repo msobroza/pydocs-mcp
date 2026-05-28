@@ -39,7 +39,7 @@ class RaisingPipeline:
 
     exc: Exception
 
-    async def run(self, query: SearchQuery) -> PipelineState:  # noqa: ARG002
+    async def run(self, query: SearchQuery) -> PipelineState:
         raise self.exc
 
 

@@ -108,10 +108,10 @@ class _ExplodingSystem:
     name: str = "exploding"
     teardown_called: bool = field(default=False, init=False)
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         raise RuntimeError("synthetic indexing failure")
 
-    async def search(self, query: str, limit: int) -> tuple[object, ...]:  # noqa: ARG002 -- never reached
+    async def search(self, query: str, limit: int) -> tuple[object, ...]:
         raise AssertionError("should not be called after index failure")
 
     async def teardown(self) -> None:

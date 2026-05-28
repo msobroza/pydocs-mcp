@@ -194,7 +194,7 @@ class LlmTreeReasoningStep(RetrieverStep):
         cls,
         data: dict[str, Any],
         context: BuildContext,
-    ) -> "LlmTreeReasoningStep":
+    ) -> LlmTreeReasoningStep:
         # WHY: strict-gate at YAML-build time, not at first run() — a
         # missing llm_client / uow_factory is a wiring bug in the
         # composition root (server.py / __main__.py), not user input.

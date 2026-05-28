@@ -31,7 +31,7 @@ class DependencyFileDiscoverer:
     def discover(self, target: str) -> tuple[list[str], Path]:
         dist = find_installed_distribution(target)
         if dist is None:
-            return [], Path(".")
+            return [], Path()
         paths: list[str] = []
         for f in dist.files or []:
             rel_str = str(f)
@@ -45,7 +45,7 @@ class DependencyFileDiscoverer:
                 continue
             paths.append(full)
         paths.sort()
-        root = Path(find_site_packages_root(paths[0])) if paths else Path(".")
+        root = Path(find_site_packages_root(paths[0])) if paths else Path()
         return paths, root
 
 

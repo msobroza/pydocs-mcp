@@ -79,8 +79,8 @@ class PreFilterResult:
     - ``scope``: a ``frozenset[SearchScope]`` extracted from the filter,
       or ``None`` if no scope clause was present.
     """
-    tree: "Filter | None"
-    scope: "frozenset[SearchScope] | None"
+    tree: Filter | None
+    scope: frozenset[SearchScope] | None
 
 
 @step_registry.register("pre_filter")
@@ -148,7 +148,7 @@ class PreFilterStep(RetrieverStep):
     @classmethod
     def from_dict(
         cls, data: dict, context: BuildContext,
-    ) -> "PreFilterStep":
+    ) -> PreFilterStep:
         schema_name = data.get("schema_name", _DEFAULT_SCHEMA_NAME)
         if context.app_config is None:
             raise ValueError(

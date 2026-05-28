@@ -65,7 +65,7 @@ class PydocsOracleSystem(PydocsMcpSystem):
     # ``doc_content`` / a library field).
     rows_source: Callable[[], Iterable[Mapping]] | None = field(default=None)
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         # WHY: imports deferred so constructing the system (which the
         # registry does on a bare ``build()``) doesn't drag in the whole
         # ``pydocs_mcp.retrieval`` chain — and so the module imports even
@@ -177,7 +177,7 @@ class PydocsOracleSystem(PydocsMcpSystem):
         return list(dataset)
 
     @property
-    def gold_resolver(self) -> "GoldResolver":
+    def gold_resolver(self) -> GoldResolver:
         """Exact-match ground-truth resolver for oracle mode.
 
         Unlike the parent's fuzzy/composite split, the oracle always

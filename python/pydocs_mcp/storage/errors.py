@@ -1,8 +1,10 @@
 """Typed exceptions for the storage layer."""
 from __future__ import annotations
 
+from pydocs_mcp.exceptions import PydocsMCPError
 
-class UnitOfWorkNotEnteredError(RuntimeError):
+
+class UnitOfWorkNotEnteredError(PydocsMCPError, RuntimeError):
     """Raised when a UoW attribute is accessed outside ``async with``.
 
     Repository attributes on :class:`UnitOfWork` are only valid inside

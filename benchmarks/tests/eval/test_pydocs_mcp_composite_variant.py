@@ -11,7 +11,7 @@ from __future__ import annotations
 
 # WHY: importing the package fires the ``@system_registry.register``
 # decorators so the variant is present in ``names()``.
-import benchmarks.eval.systems  # noqa: F401 -- triggers registration
+import benchmarks.eval.systems
 from benchmarks.eval.serialization import system_registry
 from benchmarks.eval.systems.pydocs import (
     PydocsMcpCompositeSystem,

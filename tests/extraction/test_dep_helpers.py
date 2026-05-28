@@ -84,7 +84,7 @@ def test_find_site_packages_root_uses_pytest_for_smoke() -> None:
     ``dist-packages`` (unless pytest is vendored outside site-packages, in
     which case the fallback still returns a valid directory).
     """
-    import pytest as _pytest  # noqa: WPS433 — intentional local import
+    import pytest as _pytest
 
     root = _dep_helpers.find_site_packages_root(_pytest.__file__)
     assert Path(root).exists()

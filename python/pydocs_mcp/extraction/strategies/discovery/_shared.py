@@ -8,7 +8,7 @@ on their pruning policy.
 """
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
 from pydocs_mcp.extraction.config import path_under_excluded
 
@@ -16,12 +16,12 @@ from pydocs_mcp.extraction.config import path_under_excluded
 def _within_size_budget(path: str, max_bytes: int) -> bool:
     """Return ``True`` iff the file exists and its size ≤ ``max_bytes``.
 
-    Missing / unreadable files are dropped silently — ``os.getsize``
+    Missing / unreadable files are dropped silently — ``Path.stat``
     raising means the downstream reader would also fail, so there's no
     point surfacing an error here.
     """
     try:
-        return os.path.getsize(path) <= max_bytes
+        return Path(path).stat().st_size <= max_bytes
     except OSError:
         return False
 

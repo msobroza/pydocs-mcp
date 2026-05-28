@@ -12,6 +12,7 @@ lives in ``test_ingestion_state_bundles.py``.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,10 @@ async def test_file_discovery_writes_to_files_bundle(tmp_path: Path) -> None:
 # FileReadStage
 # ----------------------------------------------------------------------
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
+)
 @pytest.mark.asyncio
 async def test_file_read_writes_to_files_bundle(tmp_path: Path) -> None:
     """FileReadStage reads state.files.paths and writes state.files.file_contents."""

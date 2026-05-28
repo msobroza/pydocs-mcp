@@ -52,11 +52,11 @@ class PydocsMcpSystem:
     # False keeps the recall@k-friendly N-item behavior for RepoQA et al.
     composite_mode: bool = False
     _db_path: Path | None = field(default=None, init=False, repr=False)
-    _pipeline: "CodeRetrieverPipeline | None" = field(
+    _pipeline: CodeRetrieverPipeline | None = field(
         default=None, init=False, repr=False,
     )
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         # WHY: imports deferred so constructing the system (which the
         # registry does on a bare ``build()``) doesn't drag in the whole
         # ``pydocs_mcp.retrieval`` chain when only ``search()`` callers
@@ -208,7 +208,7 @@ class PydocsMcpSystem:
         return tuple(out)
 
     @property
-    def gold_resolver(self) -> "GoldResolver":
+    def gold_resolver(self) -> GoldResolver:
         """Per-system ground-truth resolver (opt into ``HasGoldResolver``).
 
         WHY a property (not a field): the choice depends on
@@ -303,7 +303,7 @@ class PydocsTreeOnlySystem(PydocsMcpSystem):
         default_factory=lambda: _pipelines_dir() / "tree_only.yaml",
     )
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         from pydocs_mcp.retrieval.config import AppConfig
 
         # WHY: ignore the runner's ``config`` and load our preset instead —
@@ -330,7 +330,7 @@ class PydocsTreeParallelSystem(PydocsMcpSystem):
         / "chunk_search_with_tree_reasoning_parallel.yaml",
     )
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         from pydocs_mcp.retrieval.config import AppConfig
 
         override = AppConfig.load(explicit_path=self._config_path)

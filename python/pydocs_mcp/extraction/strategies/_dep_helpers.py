@@ -104,7 +104,7 @@ def _extract_by_import(
     import_name = IMPORT_ALIASES.get(pkg_name, pkg_name)
     try:
         mod = importlib.import_module(import_name)
-    except Exception:  # noqa: BLE001 -- spec §9.2: live-import fallback allowlist
+    except Exception:
         return {"symbols": ()}
 
     symbols: list[ModuleMember] = []
@@ -138,7 +138,7 @@ def _collect_symbols(
     """
     try:
         members = inspect.getmembers(mod)
-    except Exception:  # noqa: BLE001 -- defensive; getmembers can raise on exotic modules
+    except Exception:
         return
 
     collected_in_this_module = 0
@@ -174,7 +174,7 @@ def _collect_symbols(
 
     try:
         submodules = list(pkgutil.iter_modules(mod.__path__))
-    except Exception:  # noqa: BLE001 -- iter_modules can blow up on namespace packages
+    except Exception:
         return
 
     for _finder, subname, _ispkg in submodules:
@@ -183,7 +183,7 @@ def _collect_symbols(
         full_name = f"{module_path}.{subname}"
         try:
             submod = importlib.import_module(full_name)
-        except Exception:  # noqa: BLE001 -- per-submodule failure is non-fatal
+        except Exception:
             log.debug("submodule import failed: %s", full_name)
             continue
         _collect_symbols(
@@ -205,7 +205,7 @@ def _truncate(text: str, limit: int) -> str:
 __all__ = (
     "IMPORT_ALIASES",
     "SKIP_IMPORT",
+    "_extract_by_import",
     "find_installed_distribution",
     "find_site_packages_root",
-    "_extract_by_import",
 )

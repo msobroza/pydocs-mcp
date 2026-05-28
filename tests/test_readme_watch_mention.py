@@ -8,19 +8,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_readme_mentions_watch_flag() -> None:
-    readme = (ROOT / "README.md").read_text()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "--watch" in readme, "README must mention the --watch CLI flag"
 
 
 def test_readme_mentions_watch_extras_install() -> None:
-    readme = (ROOT / "README.md").read_text()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     # Either the explicit `[watch]` extras OR a sentence pointing the
     # user at the install hint — surface area must be discoverable.
     assert "pydocs-mcp[watch]" in readme or "[watch]" in readme
 
 
 def test_documentation_md_has_live_reindexing_subsection() -> None:
-    doc = (ROOT / "DOCUMENTATION.md").read_text()
+    doc = (ROOT / "DOCUMENTATION.md").read_text(encoding="utf-8")
     # Heading style: existing subsections use `## ` or `### `. We pin a
     # case-insensitive substring so a stylistic tweak (subsection level)
     # doesn't break the test.
@@ -30,14 +30,14 @@ def test_documentation_md_has_live_reindexing_subsection() -> None:
 
 
 def test_documentation_md_describes_yaml_knobs() -> None:
-    doc = (ROOT / "DOCUMENTATION.md").read_text()
+    doc = (ROOT / "DOCUMENTATION.md").read_text(encoding="utf-8")
     assert "serve.watch" in doc
     assert "debounce_ms" in doc
     assert "ignore_globs" in doc
 
 
 def test_documentation_md_documents_install_hint() -> None:
-    doc = (ROOT / "DOCUMENTATION.md").read_text()
+    doc = (ROOT / "DOCUMENTATION.md").read_text(encoding="utf-8")
     assert "pip install pydocs-mcp[watch]" in doc
 
 

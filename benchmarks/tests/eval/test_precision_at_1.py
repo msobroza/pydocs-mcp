@@ -19,7 +19,7 @@ def _ds1000_task(resolved: frozenset[str]) -> EvalTask:
         task_id="t",
         query="q",
         gold=GoldAnswer(extra={"resolved_chunk_ids": resolved}),
-        corpus_source=lambda: Path("."),
+        corpus_source=lambda: Path(),
     )
 
 
@@ -28,7 +28,7 @@ def _repoqa_task(body: str | None) -> EvalTask:
         task_id="t",
         query="q",
         gold=GoldAnswer(ast_body=body),
-        corpus_source=lambda: Path("."),
+        corpus_source=lambda: Path(),
     )
 
 

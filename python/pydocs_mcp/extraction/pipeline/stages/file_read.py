@@ -30,7 +30,7 @@ class FileReadStage:
         return list(read_files_parallel(paths))
 
     @classmethod
-    def from_dict(cls, data: dict, context: Any) -> "FileReadStage":
+    def from_dict(cls, data: dict, context: Any) -> FileReadStage:
         return cls()
 
     def to_dict(self) -> dict:

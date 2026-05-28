@@ -60,7 +60,7 @@ class NotebookChunker:
         )
 
     @classmethod
-    def from_config(cls, cfg: ChunkingConfig) -> "NotebookChunker":
+    def from_config(cls, cfg: ChunkingConfig) -> NotebookChunker:
         return cls(include_outputs=cfg.notebook.include_outputs)
 
 

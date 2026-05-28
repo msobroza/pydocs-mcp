@@ -163,7 +163,7 @@ class WeightedScoreInterpolationStep(RetrieverStep):
         cls,
         data: dict[str, Any],
         context: BuildContext,
-    ) -> "WeightedScoreInterpolationStep":
+    ) -> WeightedScoreInterpolationStep:
         weights = tuple(data.get("weights", _DEFAULT_WEIGHTS))
         if abs(sum(weights) - 1.0) > _WEIGHT_SUM_TOLERANCE:
             raise ValueError(

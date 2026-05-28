@@ -17,7 +17,7 @@ def _build(source: str) -> tuple[list, AstPythonChunker]:
         path="pkg/mod.py",
         content=source,
         package="pkg",
-        root=Path("."),
+        root=Path(),
         ref_collector=collector,
     )
     return collector.refs, chunker
@@ -127,7 +127,7 @@ def test_collector_is_none_means_no_refs_captured():
         path="pkg/mod.py",
         content="def runner():\n    return do_it()\n",
         package="pkg",
-        root=Path("."),
+        root=Path(),
         # No ref_collector kwarg — falls through default None.
     )
     # Tree built successfully; we just have no way to observe captures

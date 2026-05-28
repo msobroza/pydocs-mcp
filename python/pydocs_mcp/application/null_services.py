@@ -73,15 +73,15 @@ class NullTreeService:
       iterate per-package can short-circuit naturally.
     """
 
-    async def get_tree(self, package: str, module: str):  # noqa: ARG002
+    async def get_tree(self, package: str, module: str):
         raise ServiceUnavailableError(_TREE_INDEX_DISABLED_MSG)
 
-    async def exists(self, package: str, module: str) -> bool:  # noqa: ARG002
+    async def exists(self, package: str, module: str) -> bool:
         # Non-raising on purpose — let _longest_indexed_module's
         # PackageLookup.find_module fallback path run unchanged.
         return False
 
-    async def list_package_modules(self, package: str) -> dict[str, object]:  # noqa: ARG002
+    async def list_package_modules(self, package: str) -> dict[str, object]:
         return {}
 
 

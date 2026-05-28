@@ -39,12 +39,12 @@ def test_validate_submodule_blocks_invalid_in_context(tmp_path):
     # Adversarial inputs that could cause issues via importlib
     bad_inputs = ["../evil", "a;drop", "a b", "a\x00b", "-evil", "evil-", ".routing", "routing.", "a..b"]
     for bad in bad_inputs:
-        assert not _validate_submodule(bad), f"Should reject: {repr(bad)}"
+        assert not _validate_submodule(bad), f"Should reject: {bad!r}"
 
     # Valid module path patterns
     good_inputs = ["", "routing", "a.b.c", "test_module", "my_pkg.sub"]
     for good in good_inputs:
-        assert _validate_submodule(good), f"Should accept: {repr(good)}"
+        assert _validate_submodule(good), f"Should accept: {good!r}"
 
 
 def test_validate_submodule_rejects_trailing_newline():

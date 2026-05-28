@@ -106,7 +106,7 @@ async def test_run_watch_loop_cancels_watcher_on_server_exit(tmp_path, monkeypat
     # plumbing tested separately by the existing test_main_cli.py suite.
     server_calls: list[None] = []
 
-    def _fake_run(db_path, config_path=None):  # noqa: ARG001
+    def _fake_run(db_path, config_path=None):
         server_calls.append(None)
         # Simulate the server running for ~50ms then "Ctrl+C" via return.
         import time
@@ -149,7 +149,7 @@ async def test_run_watch_loop_cancels_watcher_on_server_crash(tmp_path, monkeypa
 
     from pydocs_mcp.__main__ import _run_watch_loop
 
-    def _crashing_run(db_path, config_path=None):  # noqa: ARG001
+    def _crashing_run(db_path, config_path=None):
         raise RuntimeError("simulated server crash")
 
     monkeypatch.setattr("pydocs_mcp.server.run", _crashing_run)

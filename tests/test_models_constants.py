@@ -55,8 +55,8 @@ def test_filter_tree_value_objects_exported() -> None:
         FieldIn,
         FieldLike,
         FieldSpec,
-        Filter,  # noqa: F401  — Union type alias
-        FilterFormat,  # noqa: F401  — Protocol
+        Filter,
+        FilterFormat,
         MetadataFilterFormat,
         MetadataSchema,
         MultiFieldFormat,
