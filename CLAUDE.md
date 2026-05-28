@@ -16,6 +16,7 @@ Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this reposit
 - **Hybrid retrieval** — BM25 (FTS5) + dense embeddings (FastEmbed by default, OpenAI optional) fused via RRF. The vector store is `HybridSqliteTurboStore` (FTS5 + TurboQuant) coordinated through `CompositeUnitOfWork`.
 - **Chunk-level cache + atomic vector cleanup** — `chunks.content_hash` (SHA-256 of `package+module+title+text+pipeline_hash`) skips re-embedding unchanged chunks on reindex; `pipeline_hash` invalidates every chunk hash when the embedder or `ingestion.yaml` changes; `IndexingService.reindex_package` / `remove_package` / `clear_all` keep SQLite + TurboQuant coherent atomically through the UoW.
 - **LLM tree reasoning + weighted fusion** — opt-in retrieval steps (`weighted_score_interpolation`, `llm_tree_reasoning`) compose with the existing pipeline. Tuned via the `llm:` section in `AppConfig` (provider / model / temperature / max_tokens), mirroring `embedding:`. Three preset YAMLs ship under `python/pydocs_mcp/pipelines/` (`tree_only.yaml`, `chunk_search_with_tree_reasoning_parallel.yaml`, `chunk_search_with_tree_reasoning_after.yaml`).
+- **Late-interaction (ColBERT / PyLate) multi-vector retrieval** — opt-in via the `[late-interaction]` extra + `late_interaction.enabled: true` in YAML. fast-plaid is the multi-vector index backend; SQLite's `chunk_multi_vector_ids` table bridges `chunk_id` to fast-plaid's `plaid_doc_id`. Retrieval-side, the `late_interaction_scorer` step uses the existing `FilterAdapter` Protocol to scope MaxSim to a candidate subset.
 
 The MCP surface remains the fixed 2-tool `search` + `lookup` (see §"MCP API surface vs YAML configuration").
 
@@ -82,10 +83,10 @@ python/pydocs_mcp/
 │   ├── pipeline/    #   IngestionPipeline, stages, PipelineChunkExtractor
 │   └── model/       #   DocumentNode, NodeKind, tree helpers
 ├── application/   # Use-case services — IndexingService + ProjectIndexer + PackageLookup + DocsSearch + ApiSearch + ModuleInspector + ReferenceService + shared formatting helpers
-├── storage/       # Filter tree, Protocols, SQLite repositories + TurboQuant store + HybridSqliteTurboStore + SqliteUnitOfWork + TurboQuantUnitOfWork + CompositeUnitOfWork
+├── storage/       # Filter tree, Protocols, SQLite repositories + TurboQuant store + HybridSqliteTurboStore + SqliteUnitOfWork + TurboQuantUnitOfWork + FastPlaidUnitOfWork (opt-in, [late-interaction] extra) + CompositeUnitOfWork
 ├── retrieval/     # sklearn-style RetrieverPipeline + RetrieverStep ABC; one file per step under steps/; pipeline/ holds Step/Pipeline base + RetrieverState + ConnectionProvider; YAML config
 │   ├── pipeline/    #   RetrieverStep ABC, RetrieverPipeline, RetrieverState, PerCallConnectionProvider, CodeRetrieverPipeline (legacy entry-point shim)
-│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning
+│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning, late_interaction_scorer
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
 ├── pipelines/     # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
 └── server.py      # MCP handlers over services
@@ -114,7 +115,7 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
 - Entry point: `pydocs-mcp = "pydocs_mcp.__main__:main"`
-- DB has six tables: `packages`, `chunks` (+ `chunks_fts` FTS5 virtual table), `module_members`, `document_trees`, `node_references`. Dense vectors live in the `.tq` sidecar, NOT in SQLite.
+- DB has six tables: `packages`, `chunks` (+ `chunks_fts` FTS5 virtual table), `module_members`, `document_trees`, `node_references`. Dense vectors live in the `.tq` sidecar, NOT in SQLite. When the `[late-interaction]` extra is enabled, the `chunk_multi_vector_ids` mapping table bridges `chunk_id` ↔ fast-plaid `plaid_doc_id` (multi-vectors live in fast-plaid's on-disk index, NOT in SQLite).
 - FTS5 uses porter stemming + unicode61 tokenizer
 - The project code itself is indexed under the special package name `__project__`
 
