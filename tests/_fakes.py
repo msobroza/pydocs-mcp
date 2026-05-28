@@ -38,6 +38,7 @@ from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import ChatMessage
 
@@ -465,6 +466,10 @@ class FakeUnitOfWork:
     # :func:`make_fake_uow_factory(vectors=...)` when a test needs to
     # observe vector writes.
     vectors_store: Any = field(default_factory=NullVectorStore)
+    # Late-interaction: ``multi_vectors`` is always present too; tests
+    # get a :class:`NullMultiVectorStore` by default. Same override
+    # path as ``vectors_store`` via ``make_fake_uow_factory``.
+    multi_vectors_store: Any = field(default_factory=NullMultiVectorStore)
     committed: bool = False
     rolled_back: bool = False
     _entered: bool = False
@@ -477,6 +482,7 @@ class FakeUnitOfWork:
     trees: Any = field(init=False, repr=False)
     references: Any = field(init=False, repr=False)
     vectors: Any = field(init=False, repr=False)
+    multi_vectors: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.packages = _NotEnteredProxy("packages")
@@ -489,6 +495,9 @@ class FakeUnitOfWork:
         # backend identity. Tests that want the not-entered guard can
         # call methods on the proxied repos instead.
         self.vectors = self.vectors_store
+        # ``multi_vectors`` mirrors the always-present contract — the
+        # NullMultiVectorStore covers deployments without late-interaction.
+        self.multi_vectors = self.multi_vectors_store
 
     async def __aenter__(self) -> FakeUnitOfWork:
         if self._entered:
@@ -501,6 +510,7 @@ class FakeUnitOfWork:
         self.trees = self.trees_store
         self.references = self.references_store
         self.vectors = self.vectors_store
+        self.multi_vectors = self.multi_vectors_store
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
@@ -514,6 +524,7 @@ class FakeUnitOfWork:
         self.trees = _NotEnteredProxy("trees")
         self.references = _NotEnteredProxy("references")
         self.vectors = self.vectors_store  # always-present (spec S15)
+        self.multi_vectors = self.multi_vectors_store  # always-present
         return False
 
     async def commit(self) -> None:
@@ -537,6 +548,7 @@ class FakeUnitOfWork:
         await self.references_store.delete_all()
         await self.packages_store.delete(None)
         await self.vectors_store.clear_all()
+        await self.multi_vectors_store.clear_all()
 
 
 # ── Service-test factory ─────────────────────────────────────────────────
@@ -550,6 +562,7 @@ def make_fake_uow_factory(
     trees: InMemoryDocumentTreeStore | None = None,
     references: InMemoryReferenceStore | None = None,
     vectors: Any = None,
+    multi_vectors: Any = None,
 ) -> Callable[[], FakeUnitOfWork]:
     """Build a Callable[[], FakeUnitOfWork] for service-test wiring (spec §9).
 
@@ -563,7 +576,9 @@ def make_fake_uow_factory(
     you need to seed. Spec S15: ``vectors`` defaults to
     :class:`NullVectorStore` so ``uow.vectors`` is always present
     without requiring per-test wiring; pass a custom Null/Spy when a
-    test needs to observe vector writes.
+    test needs to observe vector writes. Late-interaction: same
+    default-injection contract for ``multi_vectors`` —
+    :class:`NullMultiVectorStore` is the standing default.
     """
     pkgs = packages or InMemoryPackageStore()
     chs = chunks or InMemoryChunkStore()
@@ -571,6 +586,7 @@ def make_fake_uow_factory(
     trs = trees or InMemoryDocumentTreeStore()
     rfs = references or InMemoryReferenceStore()
     vec = vectors if vectors is not None else NullVectorStore()
+    mv = multi_vectors if multi_vectors is not None else NullMultiVectorStore()
 
     def factory() -> FakeUnitOfWork:
         return FakeUnitOfWork(
@@ -580,6 +596,7 @@ def make_fake_uow_factory(
             trees_store=trs,
             references_store=rfs,
             vectors_store=vec,
+            multi_vectors_store=mv,
         )
 
     return factory

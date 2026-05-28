@@ -15,6 +15,7 @@ Module layout:
 - :mod:`.assign_chunk_content_hash` — :class:`AssignChunkContentHashStage`
 - :mod:`.load_existing_chunk_hashes` — :class:`LoadExistingChunkHashesStage`
 - :mod:`.embed_chunks` — :class:`EmbedChunksStage`
+- :mod:`.embed_chunks_multi_vector` — :class:`EmbedChunksMultiVectorStage`
 - :mod:`.content_hash` — :class:`ContentHashStage`
 - :mod:`.package_build` — :class:`PackageBuildStage`
 
@@ -31,6 +32,9 @@ from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.pipeline.stages.chunking import ChunkingStage
 from pydocs_mcp.extraction.pipeline.stages.content_hash import ContentHashStage
 from pydocs_mcp.extraction.pipeline.stages.embed_chunks import EmbedChunksStage
+from pydocs_mcp.extraction.pipeline.stages.embed_chunks_multi_vector import (
+    EmbedChunksMultiVectorStage,
+)
 from pydocs_mcp.extraction.pipeline.stages.file_discovery import FileDiscoveryStage
 from pydocs_mcp.extraction.pipeline.stages.file_read import FileReadStage
 from pydocs_mcp.extraction.pipeline.stages.flatten import FlattenStage
@@ -48,6 +52,7 @@ __all__ = (
     "AssignChunkContentHashStage",
     "ChunkingStage",
     "ContentHashStage",
+    "EmbedChunksMultiVectorStage",
     "EmbedChunksStage",
     "FileDiscoveryStage",
     "FileReadStage",

@@ -393,6 +393,49 @@ class LlmConfig(BaseModel):
     api_key: str | None = None  # None -> SDK reads OPENAI_API_KEY env var
 
 
+class LateInteractionConfig(BaseModel):
+    """Late-interaction (ColBERT / PyLate) embedder config.
+
+    Sibling of :class:`EmbeddingConfig` / :class:`LlmConfig`. Defaults to
+    ``enabled=False`` — opt-in. Consumed by
+    ``build_multi_vector_embedder(cfg)`` (lazy import of pylate) and
+    folded into ``ingestion_pipeline_hash`` when the active ingestion
+    pipeline references ``embed_chunks_multi_vector``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    provider: Literal["pylate"] = "pylate"
+    model_name: str = "lightonai/LateOn-Code"
+    embedding_dim: int = Field(default=128, ge=1)
+    document_length: int = Field(default=180, ge=8)
+    query_length: int = Field(default=32, ge=4)
+    pool_factor: int = Field(default=1, ge=1)
+    device: Literal["cpu", "cuda"] = "cpu"
+
+    @property
+    def dim(self) -> int:
+        # ``dim`` reads naturally in embedder code; ``embedding_dim``
+        # matches PyLate's kwarg. The property keeps both surfaces alive
+        # without storing the same value twice.
+        return self.embedding_dim
+
+    def compute_pipeline_hash(self) -> str:
+        identity = "|".join(
+            [
+                self.provider,
+                self.model_name,
+                str(self.embedding_dim),
+                str(self.document_length),
+                str(self.query_length),
+                str(self.pool_factor),
+                self.device,
+            ]
+        )
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 class AppConfig(BaseSettings):
     """Runtime configuration.
 
@@ -441,6 +484,14 @@ class AppConfig(BaseSettings):
     # is a pipeline-tuning knob, NOT an MCP tool param — the MCP surface
     # stays fixed.
     llm: LlmConfig = Field(default_factory=LlmConfig)
+    # Late-interaction (ColBERT / PyLate) embedder config. Sibling of
+    # ``embedding`` / ``llm``; consumed by ``build_multi_vector_embedder(cfg)``
+    # and folded into ``ingestion_pipeline_hash`` when the active ingestion
+    # pipeline references ``embed_chunks_multi_vector``. Defaults to
+    # ``enabled=False`` — opt-in only (spec Decision G).
+    late_interaction: LateInteractionConfig = Field(
+        default_factory=LateInteractionConfig,
+    )
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside
@@ -548,11 +599,17 @@ class AppConfig(BaseSettings):
 
         override = self.extraction.ingestion.pipeline_path
         ingestion_path = override if override is not None else _default_ingestion_pipeline_path()
-        return hashlib.sha256(
-            self.embedding.compute_pipeline_hash().encode("utf-8")
-            + b"|"
-            + ingestion_path.read_bytes()
-        ).hexdigest()
+        yaml_bytes = ingestion_path.read_bytes()
+        identity = self.embedding.compute_pipeline_hash().encode("utf-8")
+        # Late-interaction fold (Task 13 / Decision G): only mix the
+        # LateInteractionConfig identity in when the active YAML actually
+        # references the ``embed_chunks_multi_vector`` stage. Gating on the
+        # YAML bytes preserves the "default install hash is stable"
+        # invariant — a deployment that ships single-vector ingestion sees
+        # byte-identical hashes regardless of LateInteractionConfig defaults.
+        if b"embed_chunks_multi_vector" in yaml_bytes:
+            identity += b"|" + self.late_interaction.compute_pipeline_hash().encode("utf-8")
+        return hashlib.sha256(identity + b"|" + yaml_bytes).hexdigest()
 
     def compute_ingestion_pipeline_hash(self) -> str:
         """Method-form shim over :attr:`ingestion_pipeline_hash`.

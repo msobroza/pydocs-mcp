@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydocs_mcp.db import build_connection_provider
+from pydocs_mcp.extraction.strategies.embedders import build_multi_vector_embedder
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.retrieval.llm_clients import build_llm_client
 from pydocs_mcp.retrieval.serialization import BuildContext
@@ -39,6 +40,11 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
     — so paying for it at every retrieval composition is acceptable.
     """
     provider = build_connection_provider(db_path)
+    # Build the multi-vector (late-interaction) embedder once at startup so the
+    # downstream retrieval steps (and any pipeline-decoder ``from_dict`` hooks)
+    # consume it through the ambient context. Returns ``None`` when
+    # ``late_interaction.enabled=False`` — the shipped default — so a stock
+    # install never pays the pylate/torch import cost.
     return BuildContext(
         connection_provider=provider,
         vector_store=SqliteVectorStore(provider=provider),
@@ -46,4 +52,5 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
         app_config=config,
         llm_client=build_llm_client(config.llm),
         filter_adapter=SqliteFilterAdapter(),
+        multi_vector_embedder=build_multi_vector_embedder(config.late_interaction),
     )

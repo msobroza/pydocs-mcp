@@ -39,6 +39,7 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork
 
@@ -146,6 +147,15 @@ class SqliteUnitOfWork:
     # delegation (see :class:`CompositeUnitOfWork.__getattr__`).
     vectors: NullVectorStore = field(
         default_factory=NullVectorStore,
+        init=False,
+        repr=False,
+    )
+    # Late-interaction: ``uow.multi_vectors`` is always present too.
+    # The SQLite-only UoW exposes a :class:`NullMultiVectorStore`; a
+    # composition root that wires a fast-plaid backend overrides this
+    # via the same attribute-delegation path used for ``vectors``.
+    multi_vectors: NullMultiVectorStore = field(
+        default_factory=NullMultiVectorStore,
         init=False,
         repr=False,
     )
@@ -421,7 +431,7 @@ def _row_to_package(row) -> Package:
 
 # Safe-column whitelists per table (spec §5.3) — declared before the adapter
 # classes so they can reference these as dataclass-field defaults.
-CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
+CHUNK_COLUMNS = frozenset({"id", "package", "module", "origin", "title"})
 _PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
 _MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
 

@@ -295,7 +295,91 @@ def build_multi_vector_embedder(cfg: LateInteractionConfig) -> MultiVectorEmbedd
     raise ValueError(f"Unknown late-interaction provider: {cfg.provider!r}")
 ```
 
-### Decision B — multi-vector storage: dedicated SQLite-backed BLOB store, NOT the `.tq` `IdMapIndex`
+### Decision B — multi-vector storage: **fast-plaid** as UoW backend + SQLite **FilterAdapter** for subset filtering (REVISED)
+
+> **2026-05-28 update — design pivot.** The originally-recommended option
+> (**B2**, SQLite-BLOB store) is **superseded** by **B5 + FilterAdapter**.
+> The trade-off table and reasoning below are preserved for historical
+> context; the implementation contract is the **REVISED Recommendation**
+> immediately below. The downstream Architecture (§5), Acceptance
+> Criteria (§8), and Files-touched (§7) sections of this spec read in
+> light of the revised contract — concretely, every reference to
+> `chunk_vectors` SQLite table / `SqliteMultiVectorUnitOfWork` /
+> `load_matrices(ids)` is replaced by `chunk_multi_vector_ids` SQLite
+> table / `FastPlaidUnitOfWork` / `score(query, subset, top_k)`.
+
+**REVISED Recommendation:** Option **B5 with SQLite FilterAdapter coupling**.
+The multi-vector index is owned by `fast-plaid` (the Rust-backed PLAID
+engine that is already a transitive PyLate dep — choosing it here turns a
+transitive dep into a first-class one, no new top-level dep). SQLite owns
+the metadata: the existing `chunks` table plus a new
+`chunk_multi_vector_ids(chunk_id PK, plaid_doc_id INT UNIQUE, package,
+pipeline_hash)` id-mapping table. The hexagonal seam between the two is
+the existing `FilterAdapter` Protocol (CLAUDE.md §"`FilterAdapter`
+Protocol contract"): retrieval translates the `Filter` tree through
+`BuildContext.filter_adapter.adapt(tree, target_field="chunk")` → SQL
+WHERE → executes against SQLite to obtain the candidate `chunk_id` list,
+then joins through `chunk_multi_vector_ids` to obtain `plaid_doc_id`s,
+and finally calls `fast_plaid.search(queries, subset=plaid_doc_ids,
+top_k=K)` to score MaxSim within that subset. The subset narrows
+fast-plaid's PLAID scan to only the chunks SQLite says are eligible —
+both engines do what they do best, and the FilterAdapter contract that
+already keeps retrieval steps backend-neutral is the same contract that
+gates fast-plaid's `subset` input.
+
+Why this beats the originally-recommended **B2** (SQLite BLOB):
+
+1. **MaxSim engine quality.** fast-plaid implements full PLAID — IVF
+   centroids over token-vectors, residual decompression, GPU-friendly
+   MaxSim — written in Rust. The B2 numpy MaxSim re-rank works for
+   ~100-candidate sets but degrades fast above that; fast-plaid's
+   subset-filtered search keeps the recall-vs-cost knob in our hands
+   without us reimplementing PLAID.
+2. **fast-plaid IS already a transitive dep.** Choosing PyLate as the
+   embedder (Decision A) pulls `fast-plaid` in via `pylate` already.
+   Promoting it to a direct dep adds zero install footprint and removes
+   the lurking version-skew risk of depending on a transitive's API.
+3. **The "subset filtering from SQLite via FilterAdapter" pattern is
+   exactly the seam this codebase has already invested in.** The
+   `FilterAdapter` Protocol exists to let retrieval steps push
+   backend-neutral filter trees to whichever store can execute them.
+   SQLite executes the metadata side (package / kind / module
+   filters); fast-plaid executes the dense MaxSim side. Coupling
+   them through `subset=[ids]` is one new join + one new method
+   call, not a new architecture.
+4. **The B2 storage-blow-up risk is dodged.** B2's worst-case
+   `~920 MB/10k chunks` (Decision F's `pool_factor` lever
+   notwithstanding) was a real risk for laptop deployments.
+   fast-plaid quantizes residuals natively (IVF + 2-bit residuals are
+   the PLAID defaults), bringing the on-disk index well under that
+   even before `pool_factor`.
+5. **Atomicity is eventually-consistent, the SAME shape as
+   `TurboQuantUnitOfWork`.** SQLite is canonical: the
+   `chunk_multi_vector_ids` table is the source of truth for "which
+   chunks have a multi-vector vector." `FastPlaidUnitOfWork` mutates
+   the index directory in `commit()` only; a crash between SQLite
+   commit and fast-plaid commit leaves orphans, recoverable on next
+   reindex via `pipeline_hash` invalidation. This is the same
+   trade-off the shipped `TurboQuantUnitOfWork` accepts.
+
+What the B5 rejection in the original table called out:
+
+- *"New heavy service / index dependency"* — moot: fast-plaid is a
+  transitive PyLate dep, not a new top-level dep, and is a Rust crate
+  loaded into our process (no separate service to run).
+- *"Breaks the per-project sidecar files, no server deployment
+  model"* — moot: fast-plaid persists to a directory sidecar
+  (`~/.pydocs-mcp/{slug}.plaid/`) alongside the existing
+  `~/.pydocs-mcp/{slug}.db` SQLite file. Same deployment shape; one
+  more sidecar.
+- *"Heavy YAGNI for a local docs index"* — re-evaluated: the
+  re-ranker-only B2 design has a sub-millisecond MaxSim path for
+  ~100 candidates, but late-interaction's promise (better recall via
+  token-level matching) wants candidate sets larger than ~100 to be
+  worth the cost. B5 makes larger candidate sets affordable without
+  reimplementing PLAID.
+
+### Decision B (original, superseded) — multi-vector storage trade-off table for historical context
 
 **Question:** Where do the N-per-chunk token vectors live, and how is the
 `chunk → vectors` mapping persisted?

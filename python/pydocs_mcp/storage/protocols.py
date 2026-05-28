@@ -9,6 +9,8 @@ from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.node_reference import NodeReference
@@ -201,6 +203,12 @@ class UnitOfWork(Protocol):
     the composite SQLite + TurboQuant deployment exposes the real
     backend. Callers no longer need ``getattr(uow, "vectors", None)``
     guards.
+
+    Late-interaction: ``multi_vectors`` is ALWAYS present too — the
+    default deployment exposes a
+    :class:`~pydocs_mcp.storage.null_multi_vector_store.NullMultiVectorStore`,
+    deployments that enable ``late_interaction.enabled=true`` in YAML
+    swap in a real fast-plaid backend via the composition root.
     """
 
     packages: PackageStore
@@ -214,6 +222,10 @@ class UnitOfWork(Protocol):
     # contract is "clear_all() / add_vectors() / remove_vectors() —
     # all async no-op or real" and is enforced by the impls below.
     vectors: object
+    # The MultiVectorStore Protocol IS @runtime_checkable so the typed
+    # attribute can name it directly — unlike ``vectors`` which still
+    # uses ``object`` for the NullVectorStore precedent.
+    multi_vectors: MultiVectorStore
 
     async def __aenter__(self) -> UnitOfWork: ...
     async def __aexit__(self, exc_type, exc, tb) -> bool: ...
@@ -373,6 +385,65 @@ class Embedder(Protocol):
         self,
         texts: Sequence[str],
     ) -> tuple[Embedding, ...]: ...
+
+
+@runtime_checkable
+class MultiVectorEmbedder(Protocol):
+    """Late-interaction (ColBERT-style) embedder: one vector PER TOKEN.
+
+    Distinct from :class:`Embedder` (single pooled vector per text).
+    ``embed_query`` / ``embed_chunks`` each return a
+    ``MultiVector = list[np.ndarray]`` of length ``n_tokens`` — every
+    element is a 1-D float32 ``np.ndarray`` of length ``dim``. The outer
+    container is a Python ``list`` (NOT a stacked 2-D array) because
+    :func:`pydocs_mcp.models.is_multi_vector` disambiguates the
+    ``Embedding`` union via ``isinstance(emb, list)``.
+
+    Implementations MUST L2-normalize each token-vector before returning
+    so MaxSim's downstream dot-product IS the cosine — no per-query
+    renormalization in ``_maxsim`` (spec Decision C).
+    """
+
+    dim: int
+    model_name: str
+
+    async def embed_query(self, text: str) -> list[np.ndarray]: ...
+
+    async def embed_chunks(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[list[np.ndarray], ...]: ...
+
+
+@runtime_checkable
+class MultiVectorStore(Protocol):
+    """Typed contract for the multi-vector (token-matrix) backend.
+
+    Backend-neutral surface: callers identify chunks by ``chunk_id`` —
+    NOT by the backend-internal ``plaid_doc_id``. The concrete UoW
+    handles the id translation through the
+    ``chunk_multi_vector_ids`` SQLite mapping table inside the same
+    transaction as the ``chunks`` writes, so retrieval steps never see
+    the backend id space.
+    """
+
+    async def add_vectors(
+        self,
+        ids: Sequence[int],
+        embeddings: Sequence[list[np.ndarray]],
+    ) -> None: ...
+
+    async def remove_vectors(self, ids: Sequence[int]) -> None: ...
+
+    async def clear_all(self) -> None: ...
+
+    async def score(
+        self,
+        query_embedding: list[np.ndarray],
+        *,
+        subset_chunk_ids: Sequence[int],
+        top_k: int,
+    ) -> tuple[tuple[int, float], ...]: ...
 
 
 class ChatMessage(TypedDict):

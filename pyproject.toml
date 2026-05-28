@@ -17,6 +17,8 @@ dependencies = ["mcp>=1.0", "pydantic>=2.0", "pydantic-settings>=2.0", "pyyaml>=
 # Developer-only dependencies live in [dependency-groups] (PEP 735) so they
 # stay out of wheel METADATA and can't be pulled in by end users.
 watch = ["watchdog>=4.0,<6.0"]
+# Heavy (~1-5 GB with torch). Opt-in; default install stays ~90 MB.
+late-interaction = ["pylate>=1.0,<2.0", "fast-plaid>=1.4,<2.0"]
 
 [dependency-groups]
 # PEP 735 developer-only groups — explicit-only via
