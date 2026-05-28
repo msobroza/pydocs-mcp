@@ -1,0 +1,62 @@
+# BM25 + late-interaction (ColBERT/MaxSim) ranked chunk search — benchmark
+# experiment suite. Mirrors the shipped chunk_search_late_interaction_ranked
+# but with max_results=10 so recall@10 sees a full top-10 (the shipped ranked
+# preset caps at 8). Referenced by ../repoqa_late_interaction.yaml AND
+# ../ds1000_late_interaction.yaml.
+#
+# Requires the [late-interaction] extra and `late_interaction.enabled: true`
+# in the surrounding sweep config (the embedder + FastPlaidUnitOfWork are
+# wired by the composition root when that toggle is on).
+name: exp_late_interaction
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: parallel
+    type: parallel_retrieval
+    params:
+      branches:
+        - name: bm25
+          steps:
+            - name: fetch
+              type: chunk_fetcher
+              params:
+                schema_name: chunk
+            - name: score
+              type: bm25_scorer
+              params: {}
+            - name: filter
+              type: metadata_post_filter
+              params: {}
+            - name: topk
+              type: top_k_filter
+              params:
+                publish_to: bm25.ranked
+        - name: late
+          steps:
+            - name: fetch
+              type: chunk_fetcher
+              params:
+                schema_name: chunk
+            - name: score
+              type: bm25_scorer
+              params: {}
+            - name: filter
+              type: metadata_post_filter
+              params: {}
+            - name: topk
+              type: top_k_filter
+              params: {}
+            - name: rerank
+              type: late_interaction_scorer
+              params:
+                publish_to: late.ranked
+  - name: fuse
+    type: rrf_fusion
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

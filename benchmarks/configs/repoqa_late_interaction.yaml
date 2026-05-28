@@ -1,0 +1,17 @@
+# RepoQA experiment — BM25 + late-interaction (ColBERT/MaxSim) ranked,
+# fused via RRF. Pairs with repoqa_hybrid_rrf_k60.yaml (BM25 + single-vector
+# dense) so a delta against that baseline is attributable to swapping the
+# dense branch for late-interaction.
+#
+# Requires `pip install 'pydocs-mcp[late-interaction]'` (pulls pylate +
+# fast-plaid + sentence-transformers + torch; expect ~1-5 GB).
+late_interaction:
+  enabled: true
+
+pipelines:
+  ingestion:
+    - default: true
+      pipeline_path: pipelines/ingestion_late_interaction.yaml
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_late_interaction.yaml

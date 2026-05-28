@@ -13,7 +13,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydocs_mcp.db import build_connection_provider
-from pydocs_mcp.extraction.strategies.embedders import build_multi_vector_embedder
+from pydocs_mcp.extraction.strategies.embedders import (
+    build_embedder,
+    build_multi_vector_embedder,
+)
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.retrieval.llm_clients import build_llm_client
 from pydocs_mcp.retrieval.serialization import BuildContext
@@ -40,6 +43,14 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
     — so paying for it at every retrieval composition is acceptable.
     """
     provider = build_connection_provider(db_path)
+    # Wire the single-vector embedder so retrieval steps that need it
+    # (DenseFetcherStep, DenseScorerStep, LateInteractionScorerStep's
+    # query-side encode) find it in the ambient context. Without this,
+    # any pipeline that opts in to dense retrieval crashes at decode time
+    # with the actionable ValueError from ``DenseFetcherStep.from_dict``.
+    # Construction is cheap — FastEmbed's ONNX model only loads on first
+    # ``encode()`` call, so a BM25-only deployment still pays nothing.
+    embedder = build_embedder(config.embedding)
     # Build the multi-vector (late-interaction) embedder once at startup so the
     # downstream retrieval steps (and any pipeline-decoder ``from_dict`` hooks)
     # consume it through the ambient context. Returns ``None`` when
@@ -50,6 +61,7 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
         vector_store=SqliteVectorStore(provider=provider),
         module_member_store=SqliteModuleMemberRepository(provider=provider),
         app_config=config,
+        embedder=embedder,
         llm_client=build_llm_client(config.llm),
         filter_adapter=SqliteFilterAdapter(),
         multi_vector_embedder=build_multi_vector_embedder(config.late_interaction),
