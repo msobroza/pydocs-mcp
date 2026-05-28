@@ -67,62 +67,60 @@ hybrid-search and chunk-cache plans.
                     ┌──────────────────────────────────┐
                     │ PR-1: contracts                  │
                     │  MultiVectorEmbedder Protocol    │
+                    │  MultiVectorStore Protocol       │
                     │  LateInteractionConfig sub-model │
+                    │  BuildContext.multi_vector_embed │
                     │  FakeMultiVectorEmbedder         │
                     └──────────────┬───────────────────┘
                                    │
-            ┌──────────────────────┼──────────────────────┐
-            ▼                      ▼                      ▼
-  ┌──────────────────┐   ┌──────────────────────┐   (PR-1 lands first;
-  │ PR-2: storage    │   │ PR-3: embedder       │   PR-2 + PR-3 are
-  │  chunk_vectors   │   │  PyLateEmbedder      │   independent of each
-  │  schema v6       │   │  lazy factory        │   other and can land
-  │  SqliteMulti-    │   │  pylate optional     │   in either order)
-  │  VectorUnitOfWork│   │  extra in pyproject  │
-  └────────┬─────────┘   └──────────┬───────────┘
-           │                        │
-           └────────────┬───────────┘
-                        ▼
-          ┌──────────────────────────────┐
-          │ PR-4: ingestion              │
-          │  EmbedChunksMultiVectorStage │
-          │  ingestion_late_interaction  │
-          │   .yaml preset               │
-          │  pipeline_hash fold (Dec J)  │
-          └──────────────┬───────────────┘
-                         │
-                         ▼
-        ┌────────────────────────────────────┐
-        │ PR-5: retrieval step               │
-        │  LateInteractionScorerStep (MaxSim)│
-        │  BuildContext.multi_vector_embedder│
-        │  _maxsim core + step registry      │
-        └──────────────┬─────────────────────┘
-                       │
-                       ▼
-       ┌─────────────────────────────────────────┐
-       │ PR-6: composition root                  │
-       │  build_sqlite_plus_multi_vector_uow_    │
-       │   factory                               │
-       │  server.py / __main__.py / factories.py │
-       │   gated wiring (no torch import on      │
-       │   default path — AC-13)                 │
-       └──────────────┬──────────────────────────┘
-                      │
-                      ▼
-      ┌────────────────────────────────────────────┐
-      │ PR-7: presets + benchmark + docs           │
-      │  chunk_search_late_interaction.yaml        │
-      │  chunk_search_late_interaction_ranked.yaml │
-      │  PydocsLateInteractionSystem               │
-      │  default_config.yaml commented block       │
-      │  CLAUDE.md retrieval-step enumeration      │
-      └────────────────────────────────────────────┘
+                  ┌────────────────┴───────────────┐
+                  ▼                                ▼
+        ┌──────────────────┐            ┌──────────────────────┐
+        │ PR-2: storage    │            │ PR-3: embedder       │
+        │  chunk_vectors   │            │  PyLateEmbedder      │
+        │  schema v6       │            │  lazy factory        │
+        │  SqliteMulti-    │            │  pylate optional     │
+        │  VectorUnitOfWork│            │  extra in pyproject  │
+        └──────────────────┘            └──────────┬───────────┘
+                                                   │
+                              ┌────────────────────┴───────────────┐
+                              ▼                                    ▼
+                ┌──────────────────────────────┐    ┌────────────────────────────────┐
+                │ PR-4: ingestion              │    │ PR-5: retrieval step           │
+                │  EmbedChunksMultiVectorStage │    │ LateInteractionScorerStep      │
+                │  ingestion_late_interaction  │    │  (MaxSim)                      │
+                │   .yaml preset               │    │ _maxsim core + step registry   │
+                │  pipeline_hash fold (Dec J)  │    │                                │
+                │  _pipeline_uses_step_type    │    │ (consumes the BuildContext     │
+                │   shared helper              │    │  field landed in PR-1)         │
+                └──────────────┬───────────────┘    └────────────────┬───────────────┘
+                               │                                     │
+                               └──────────────────┬──────────────────┘
+                                                  ▼
+                                ┌─────────────────────────────────────────┐
+                                │ PR-6: composition root                  │
+                                │  build_vectors_uow_child +              │
+                                │   build_uow_factory (single dispatch)   │
+                                │  server.py / __main__.py /              │
+                                │   factories.py gated wiring             │
+                                │   (no torch import on default — AC-13)  │
+                                └──────────────────┬──────────────────────┘
+                                                   ▼
+                                ┌────────────────────────────────────────────┐
+                                │ PR-7: presets + benchmark + docs           │
+                                │  chunk_search_late_interaction.yaml        │
+                                │  chunk_search_late_interaction_ranked.yaml │
+                                │  PydocsLateInteractionSystem               │
+                                │  default_config.yaml commented block       │
+                                │  CLAUDE.md retrieval-step enumeration      │
+                                └────────────────────────────────────────────┘
 ```
 
-**Critical-path length:** 6 (PR-1 → PR-2 OR PR-3 → PR-4 → PR-5 → PR-6 →
-PR-7). PR-2 and PR-3 can be developed in parallel after PR-1 lands; the
-rest is strictly serial.
+**Critical-path length:** 5 (PR-1 → PR-3 → PR-4 OR PR-5 → PR-6 → PR-7).
+PR-2 and PR-3 can be developed in parallel after PR-1 lands. PR-4 and
+PR-5 can ALSO be developed in parallel after PR-3 + PR-1 land — PR-1
+ships the shared `BuildContext.multi_vector_embedder` field so PR-5 no
+longer waits on PR-4. PR-6 and PR-7 remain strictly serial.
 
 **Why inside-out?** Contracts (Protocols + typed config) land before
 adapters (storage + embedder concrete) so the adapters have a fixed target
@@ -1035,8 +1033,10 @@ After PR-1 lands:
    per task; per-task `/code-review` + `/review`; final code-reviewer
    subagent over the full PR diff before merge.
 3. Repeat for PR-3 through PR-7. PR-2 and PR-3 can run in parallel after
-   PR-1 lands (different worktrees or sequential is the implementer's
-   call); the rest is strictly serial.
+   PR-1 lands; PR-4 and PR-5 can ALSO run in parallel after PR-3 + PR-1
+   land (PR-1 ships the shared `BuildContext` field so the retrieval-
+   side step in PR-5 no longer waits on PR-4). PR-6 and PR-7 stay
+   strictly serial.
 4. After PR-7 merges: update `EXTENSIONS.md` (if such a tracker still
    exists at that point) to mark the late-interaction work shipped,
    mirroring the `[SHIPPED]` annotation the LLM-tree-reasoning PR
