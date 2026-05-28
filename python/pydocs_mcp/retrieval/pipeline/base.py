@@ -38,6 +38,25 @@ class RetrieverStep(ABC):
     @abstractmethod
     async def run(self, state: RetrieverState) -> RetrieverState: ...
 
+    def to_dict(self) -> dict:
+        """Serialize the step to a YAML-loadable dict.
+
+        Default raises ``NotImplementedError`` so subclasses opt in
+        explicitly; ``@abstractmethod`` would force every nested
+        ``@dataclass`` subclass (including ``RetrieverPipeline``) to
+        re-declare the method even when its serialization is owned by
+        a higher-level wrapper. Every concrete shipped step under
+        ``retrieval/steps/`` overrides this; the declaration here
+        codifies the contract that ``ParallelStep`` / ``RouteStep`` /
+        ``ConditionalStep`` / ``TokenBudgetStep`` already rely on when
+        they call ``step.to_dict()`` on nested children.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement to_dict() — see "
+            f"existing concrete steps under retrieval/steps/ for the "
+            f"shape ({{'type': '<name>', ...}})."
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class RetrieverPipeline(RetrieverStep):
