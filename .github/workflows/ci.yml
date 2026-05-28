@@ -65,6 +65,13 @@ jobs:
       - name: Lint
         run: ruff check python/ tests/
 
+      # WHY: 74% of files in python/pydocs_mcp/ carry type hints. With py.typed
+      # shipped, mypy must verify the annotations are coherent for downstream
+      # consumers. Lenient initial baseline (see [tool.mypy] in pyproject.toml);
+      # ratchet plan is to flip disallow_untyped_defs=true in a follow-up PR.
+      - name: Typecheck
+        run: mypy python/pydocs_mcp
+
       - name: Smoke-test out-of-tree pydocs_mcp imports
         # benchmarks/ is not under tests/, so a rename to an internal
         # pydocs_mcp module (e.g. storage/wiring.py -> storage/factories.py)

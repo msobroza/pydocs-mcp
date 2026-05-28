@@ -192,3 +192,24 @@ def test_ruff_select_includes_quality_rules() -> None:
     required = {"E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"}
     missing = required - set(select)
     assert not missing, f"ruff select missing: {missing}; current: {select}"
+
+
+def test_mypy_config_present() -> None:
+    """P1-3: [tool.mypy] section configured in pyproject.toml.
+
+    Lenient initial config (disallow_untyped_defs=False); ratchet plan
+    lives in the section's comment.
+    """
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    assert "mypy" in pyproject.get("tool", {}), (
+        "[tool.mypy] required (P1-3)"
+    )
+    mypy = pyproject["tool"]["mypy"]
+    assert mypy["python_version"] == "3.11"
+    files = mypy["files"]
+    assert isinstance(files, list)
+    assert any("pydocs_mcp" in f for f in files)

@@ -29,6 +29,7 @@ test = [
 ]
 lint = [
     "ruff",
+    "mypy >= 1.10",
 ]
 dev = [
     {include-group = "test"},
@@ -106,3 +107,66 @@ max-complexity = 12
 # parameters; no user data is interpolated into the SQL text.
 "python/pydocs_mcp/storage/sqlite.py"     = ["S608"]
 "python/pydocs_mcp/storage/factories.py"  = ["S608"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["python/pydocs_mcp"]
+# Lenient initial baseline so the typecheck step ships green without a giant
+# cleanup PR. Ratchet plan: once green at the floor, flip
+# disallow_untyped_defs=true and clean up the surfaced errors in a follow-up.
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+disallow_untyped_defs = false
+
+# Rust/Python substitution boundary uses dynamic imports + `from ._native
+# import *` rebinds; mypy can't follow either branch coherently. The Protocol
+# contract is enforced at runtime (§"Fallback contract" in CLAUDE.md).
+[[tool.mypy.overrides]]
+module = ["pydocs_mcp._fallback", "pydocs_mcp._fast"]
+ignore_errors = true
+
+# Third-party packages without py.typed markers or inline stubs that the
+# typechecked subset of pydocs_mcp imports. follow_imports = skip means mypy
+# treats them as `Any` instead of erroring on every import site.
+# tests / benchmarks / 3rd-party-only-from-ignored-modules (mcp, watchdog,
+# openai) are NOT listed — adding them triggers `unused section` warnings.
+[[tool.mypy.overrides]]
+module = ["fastembed.*", "turbovec.*", "yaml.*", "numpy", "numpy.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+# Modules below carry real type tightenings deferred to the ratchet PR. The
+# common pattern: RetrieverState.candidates is typed as `object` for the union
+# `ChunkList | ModuleMemberList` (covariance escape hatch), so steps narrow it
+# with runtime isinstance checks mypy can't follow. A future PR will introduce
+# a proper Protocol-bound generic and remove these overrides one by one.
+# `__main__` is here because argparse's add_argument(**dict) has overload
+# resolution that mypy reports as arg-type mismatch on every call site —
+# spurious noise that drowns out real signal.
+[[tool.mypy.overrides]]
+module = [
+    "pydocs_mcp.__main__",
+    "pydocs_mcp.storage.sqlite",
+    "pydocs_mcp.storage.factories",
+    "pydocs_mcp.retrieval.config",
+    "pydocs_mcp.retrieval.serialization",
+    "pydocs_mcp.retrieval.llm_clients.openai",
+    "pydocs_mcp.retrieval.steps.*",
+    "pydocs_mcp.extraction.factories",
+    "pydocs_mcp.extraction.serialization",
+    "pydocs_mcp.extraction.pipeline.stages.*",
+    "pydocs_mcp.extraction.strategies.embedders.*",
+    "pydocs_mcp.application.indexing_service",
+    "pydocs_mcp.application.tree_service",
+    "pydocs_mcp.application.lookup_service",
+    "pydocs_mcp.application.package_lookup",
+    "pydocs_mcp.application.formatting",
+    "pydocs_mcp.storage.turboquant_store",
+    "pydocs_mcp.serve.watcher",
+    "pydocs_mcp.server",
+    "pydocs_mcp.filters",
+]
+ignore_errors = true
