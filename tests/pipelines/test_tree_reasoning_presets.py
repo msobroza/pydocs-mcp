@@ -59,7 +59,7 @@ def test_preset_roundtrips_to_dict(preset: str, tmp_path: Path) -> None:
     from tests._fakes import FakeLlmClient, MockEmbedder, make_fake_uow_factory
 
     yaml_path = _shipped_pipelines_dir() / f"{preset}.yaml"
-    original = yaml.safe_load(yaml_path.read_text())
+    original = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
 
     base_ctx = build_retrieval_context(tmp_path / "x.db", AppConfig())
     ctx = dc_replace(

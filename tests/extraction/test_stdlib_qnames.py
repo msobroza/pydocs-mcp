@@ -7,7 +7,7 @@ import json
 def _load() -> dict:
     """Load the bundled JSON via importlib.resources for path-independence."""
     from importlib.resources import files
-    text = files("pydocs_mcp.defaults").joinpath("stdlib_qnames.json").read_text()
+    text = files("pydocs_mcp.defaults").joinpath("stdlib_qnames.json").read_text(encoding="utf-8")
     return json.loads(text)
 
 

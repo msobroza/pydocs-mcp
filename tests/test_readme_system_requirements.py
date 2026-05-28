@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_readme_mentions_libopenblas() -> None:
-    readme = (ROOT / "README.md").read_text()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "libopenblas-pthread-dev" in readme, (
         "README must document the libopenblas-pthread-dev system requirement"
     )
@@ -16,6 +16,6 @@ def test_install_md_exists() -> None:
 
 
 def test_install_md_mentions_libopenblas() -> None:
-    install = (ROOT / "INSTALL.md").read_text()
+    install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
     assert "libopenblas-pthread-dev" in install
     assert "apt-get" in install or "apt install" in install

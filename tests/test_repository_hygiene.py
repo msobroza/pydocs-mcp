@@ -4,7 +4,7 @@ def test_license_file_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     license_path = root / "LICENSE"
     assert license_path.is_file(), "LICENSE file must exist at repo root (P0-1)"
-    text = license_path.read_text()
+    text = license_path.read_text(encoding="utf-8")
     assert "MIT License" in text
     assert "Permission is hereby granted, free of charge" in text
 
@@ -21,7 +21,7 @@ def test_version_matches_pyproject() -> None:
     import pydocs_mcp
 
     root = Path(__file__).resolve().parents[1]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     declared = pyproject["project"]["version"]
     assert pydocs_mcp.__version__ == declared, (
         f"__version__ drift: pyproject={declared!r} vs pkg={pydocs_mcp.__version__!r}"
@@ -34,7 +34,7 @@ def test_pyproject_uses_pep639_license_form() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
 
     # SPDX string form (PEP 639), not the legacy `{ text = "MIT" }` table.
@@ -76,7 +76,7 @@ def test_pyproject_includes_py_typed_in_maturin() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     maturin = pyproject.get("tool", {}).get("maturin", {})
     include = maturin.get("include", [])
     assert any("py.typed" in entry for entry in include), (
@@ -131,7 +131,7 @@ def test_dependency_groups_defined() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert "dependency-groups" in pyproject, "PEP 735 [dependency-groups] section required"
     groups = pyproject["dependency-groups"]
@@ -151,7 +151,7 @@ def test_dev_deps_not_in_user_facing_extras() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     extras = pyproject["project"].get("optional-dependencies", {})
 
     # Either the dev extras group is gone entirely (preferred) OR — if
@@ -170,7 +170,7 @@ def test_ruff_target_version_matches_requires_python() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     requires_python = pyproject["project"]["requires-python"]
     ruff_target = pyproject["tool"]["ruff"]["target-version"]
 
@@ -186,7 +186,7 @@ def test_ruff_select_includes_quality_rules() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     select = pyproject["tool"]["ruff"]["lint"]["select"]
 
     required = {"E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"}
@@ -204,7 +204,7 @@ def test_mypy_config_present() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert "mypy" in pyproject.get("tool", {}), (
         "[tool.mypy] required (P1-3)"
     )
@@ -226,7 +226,7 @@ def test_ci_matrix_includes_macos_and_windows() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    ci_yml = (root / ".github" / "workflows" / "ci.yml").read_text()
+    ci_yml = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     # The matrix block should mention each OS we want covered.
     # Substring assertion stays robust to formatting changes.
@@ -242,7 +242,7 @@ def test_changelog_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     cl = root / "CHANGELOG.md"
     assert cl.is_file(), "CHANGELOG.md required at repo root (P2-1)"
-    text = cl.read_text()
+    text = cl.read_text(encoding="utf-8")
     assert "Keep a Changelog" in text or "keepachangelog.com" in text
 
 
@@ -253,7 +253,7 @@ def test_pre_commit_config_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     cfg = root / ".pre-commit-config.yaml"
     assert cfg.is_file(), ".pre-commit-config.yaml required (P2-5)"
-    text = cfg.read_text()
+    text = cfg.read_text(encoding="utf-8")
     assert "ruff-pre-commit" in text or "astral-sh/ruff-pre-commit" in text
 
 
@@ -264,7 +264,7 @@ def test_makefile_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     mk = root / "Makefile"
     assert mk.is_file(), "Makefile required at repo root (P2-6)"
-    text = mk.read_text()
+    text = mk.read_text(encoding="utf-8")
     for target in ("test", "lint", "format", "typecheck", "build", "clean"):
         assert f"\n{target}:" in text or text.startswith(f"{target}:"), (
             f"Makefile missing `{target}:` target"
@@ -278,7 +278,7 @@ def test_editorconfig_exists() -> None:
     root = Path(__file__).resolve().parents[1]
     ec = root / ".editorconfig"
     assert ec.is_file(), ".editorconfig required at repo root (P2-7)"
-    text = ec.read_text()
+    text = ec.read_text(encoding="utf-8")
     assert "root = true" in text
     assert "end_of_line = lf" in text
     assert "insert_final_newline = true" in text
@@ -300,5 +300,5 @@ def test_uv_lock_exists_and_pinned() -> None:
         "If uv lock has friction, mark this test skip with a WHY note."
     )
     # Sanity: lockfile pins at least the project + main runtime deps.
-    text = lock.read_text()
+    text = lock.read_text(encoding="utf-8")
     assert 'name = "pydocs-mcp"' in text or "pydocs-mcp" in text
