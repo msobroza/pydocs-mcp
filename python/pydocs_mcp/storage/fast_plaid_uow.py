@@ -17,14 +17,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Note: ``UnitOfWorkNotEnteredError`` is intentionally NOT imported here —
-# this module currently scaffolds lifecycle only. The follow-up that adds
-# ``add_vectors`` / ``remove_vectors`` / ``score`` will introduce the
-# guard checks that need it.
+import numpy as np
+
+from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,132 @@ class FastPlaidUnitOfWork:
         So our rollback is a flag flip.
         """
         self._dirty = False
+
+    async def add_vectors(
+        self,
+        ids: Sequence[int],
+        embeddings: Sequence[Sequence[np.ndarray]],
+    ) -> None:
+        """Append multi-vector docs to the sidecar and record the mapping.
+
+        Each ``embeddings[i]`` is a list of per-token (``dim``-sized)
+        ``np.ndarray`` vectors for chunk ``ids[i]``; we stack them into
+        a single ``(n_tokens, dim)`` tensor that ``fast_plaid`` ingests.
+        ``plaid_doc_id`` is assigned by appending: the next index after
+        ``MAX(plaid_doc_id)`` in ``chunk_multi_vector_ids``. This keeps
+        the mapping stable across reindexes — never reused, never
+        renumbered — which is what makes ``remove_vectors`` safe.
+        """
+        if not self._entered or self._handle is None:
+            raise UnitOfWorkNotEnteredError(
+                "FastPlaidUnitOfWork.add_vectors called outside async with",
+            )
+        if not ids:
+            return
+        # Lazy import torch — keeps the ``[late-interaction]`` extra gated
+        # to the write path that actually needs it (the import is ~1-2 GB
+        # of native libs we don't want to pay for at module-load time).
+        import torch
+        doc_tensors = [
+            torch.from_numpy(np.stack(emb, axis=0).astype(np.float32, copy=False))
+            for emb in embeddings
+        ]
+        with sqlite3.connect(str(self.db_path)) as conn:
+            # Probe current max plaid_doc_id; gives the offset N for the
+            # new batch. ``COALESCE(MAX(...)+1, 0)`` returns 0 on the
+            # empty-index path so the first batch always starts at 0.
+            row = conn.execute(
+                "SELECT COALESCE(MAX(plaid_doc_id) + 1, 0) FROM chunk_multi_vector_ids"
+            ).fetchone()
+            offset = int(row[0])
+            # fast-plaid contract: ``.create`` initializes an empty index
+            # with the first batch, ``.update`` appends to an existing
+            # one. Picking the wrong one raises — branch on offset.
+            await asyncio.to_thread(
+                self._handle.update if offset > 0 else self._handle.create,
+                doc_tensors,
+            )
+            packages = self._packages_for_chunks(conn, ids)
+            conn.executemany(
+                "INSERT OR REPLACE INTO chunk_multi_vector_ids "
+                "(chunk_id, plaid_doc_id, package, pipeline_hash) VALUES (?,?,?,?)",
+                [
+                    (cid, offset + i, packages.get(cid, ""), self.pipeline_hash)
+                    for i, cid in enumerate(ids)
+                ],
+            )
+            conn.commit()
+        self._dirty = True
+
+    @staticmethod
+    def _packages_for_chunks(
+        conn: sqlite3.Connection, ids: Iterable[int]
+    ) -> dict[int, str]:
+        ids_list = list(ids)
+        if not ids_list:
+            return {}
+        q = "SELECT id, package FROM chunks WHERE id IN ({})".format(
+            ",".join("?" for _ in ids_list),
+        )
+        return {row[0]: row[1] for row in conn.execute(q, ids_list)}
+
+    async def remove_vectors(self, ids: Sequence[int]) -> None:
+        """Soft-delete the fast-plaid slots and drop the mapping rows.
+
+        ``fast_plaid.delete(subset=[...])`` leaves the slots in place so
+        existing ``plaid_doc_id`` assignments stay stable — the slots
+        just stop matching at query time. Mapping-row removal is what
+        makes the chunks invisible from the SQL side.
+        """
+        if not self._entered or self._handle is None:
+            raise UnitOfWorkNotEnteredError(
+                "FastPlaidUnitOfWork.remove_vectors called outside async with",
+            )
+        if not ids:
+            return
+        with sqlite3.connect(str(self.db_path)) as conn:
+            placeholders = ",".join("?" for _ in ids)
+            plaid_ids = [
+                row[0]
+                for row in conn.execute(
+                    f"SELECT plaid_doc_id FROM chunk_multi_vector_ids "
+                    f"WHERE chunk_id IN ({placeholders})",
+                    list(ids),
+                )
+            ]
+            if plaid_ids:
+                await asyncio.to_thread(self._handle.delete, subset=plaid_ids)
+            conn.execute(
+                f"DELETE FROM chunk_multi_vector_ids "
+                f"WHERE chunk_id IN ({placeholders})",
+                list(ids),
+            )
+            conn.commit()
+        self._dirty = True
+
+    async def clear_all(self) -> None:
+        """Wipe every fast-plaid slot and every mapping row.
+
+        Matches ``HybridSqliteTurboStore.clear_all`` semantics for the
+        late-interaction backend: after this returns, the sidecar holds
+        no live vectors and ``chunk_multi_vector_ids`` is empty.
+        """
+        if not self._entered or self._handle is None:
+            raise UnitOfWorkNotEnteredError(
+                "FastPlaidUnitOfWork.clear_all called outside async with",
+            )
+        with sqlite3.connect(str(self.db_path)) as conn:
+            plaid_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT plaid_doc_id FROM chunk_multi_vector_ids"
+                )
+            ]
+            if plaid_ids:
+                await asyncio.to_thread(self._handle.delete, subset=plaid_ids)
+            conn.execute("DELETE FROM chunk_multi_vector_ids")
+            conn.commit()
+        self._dirty = True
 
 
 __all__ = ("FastPlaidUnitOfWork",)
