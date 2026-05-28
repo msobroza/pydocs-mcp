@@ -7,8 +7,8 @@ add a new module + one new branch + one new entry in dependencies.
 
 from __future__ import annotations
 
-from pydocs_mcp.retrieval.config import EmbeddingConfig
-from pydocs_mcp.storage.protocols import Embedder
+from pydocs_mcp.retrieval.config import EmbeddingConfig, LateInteractionConfig
+from pydocs_mcp.storage.protocols import Embedder, MultiVectorEmbedder
 
 
 def build_embedder(cfg: EmbeddingConfig) -> Embedder:
@@ -34,4 +34,27 @@ def build_embedder(cfg: EmbeddingConfig) -> Embedder:
     )
 
 
-__all__ = ("build_embedder",)
+def build_multi_vector_embedder(
+    cfg: LateInteractionConfig,
+) -> MultiVectorEmbedder | None:
+    """Construct the configured multi-vector embedder, or None when disabled.
+
+    Lazy import of the concrete class so a default install never loads
+    pylate / torch.
+    """
+    if not cfg.enabled:
+        return None
+    return _build_multi_vector_embedder_for_provider(cfg.provider, cfg)
+
+
+def _build_multi_vector_embedder_for_provider(
+    provider: str, cfg: LateInteractionConfig,
+) -> MultiVectorEmbedder:
+    if provider == "pylate":
+        from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder
+
+        return PyLateEmbedder.from_config(cfg)
+    raise ValueError(f"Unknown multi-vector embedder provider: {provider!r}")
+
+
+__all__ = ("build_embedder", "build_multi_vector_embedder")
