@@ -233,3 +233,52 @@ def test_ci_matrix_includes_macos_and_windows() -> None:
     assert "ubuntu-latest" in ci_yml, "Linux row must remain"
     assert re.search(r"macos-1[34]", ci_yml), "macos-13 or macos-14 row missing"
     assert "windows-latest" in ci_yml, "windows-latest row missing"
+
+
+def test_changelog_exists() -> None:
+    """P2-1: CHANGELOG.md follows Keep-a-Changelog format."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    cl = root / "CHANGELOG.md"
+    assert cl.is_file(), "CHANGELOG.md required at repo root (P2-1)"
+    text = cl.read_text()
+    assert "Keep a Changelog" in text or "keepachangelog.com" in text
+
+
+def test_pre_commit_config_exists() -> None:
+    """P2-5: .pre-commit-config.yaml configures ruff + yaml/toml hooks."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = root / ".pre-commit-config.yaml"
+    assert cfg.is_file(), ".pre-commit-config.yaml required (P2-5)"
+    text = cfg.read_text()
+    assert "ruff-pre-commit" in text or "astral-sh/ruff-pre-commit" in text
+
+
+def test_makefile_exists() -> None:
+    """P2-6: top-level Makefile orchestrates dev commands."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    mk = root / "Makefile"
+    assert mk.is_file(), "Makefile required at repo root (P2-6)"
+    text = mk.read_text()
+    for target in ("test", "lint", "format", "typecheck", "build", "clean"):
+        assert f"\n{target}:" in text or text.startswith(f"{target}:"), (
+            f"Makefile missing `{target}:` target"
+        )
+
+
+def test_editorconfig_exists() -> None:
+    """P2-7: .editorconfig enforces indent / EOL / final-newline cross-editor."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ec = root / ".editorconfig"
+    assert ec.is_file(), ".editorconfig required at repo root (P2-7)"
+    text = ec.read_text()
+    assert "root = true" in text
+    assert "end_of_line = lf" in text
+    assert "insert_final_newline = true" in text
