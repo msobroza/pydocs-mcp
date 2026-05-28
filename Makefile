@@ -13,7 +13,11 @@ test-rust:
 
 lint:
 	ruff check python/ tests/ benchmarks/
-	ruff format --check python/ tests/ benchmarks/
+# WHY: `ruff format` was never enforced historically; running it would
+# reformat ~389 files in one commit, an out-of-scope churn for the
+# audit-fix PR that landed `lint`. `make format` below still applies it
+# on demand. A follow-up PR will run `ruff format` repo-wide and add
+# the check back here in one commit.
 
 lint-rust:
 	cargo fmt --check
