@@ -34,13 +34,13 @@ _DS1000_FAILING_PROMPTS = [
 
 # Synthetic regression cases — each token shape FTS5 rejected pre-fix.
 _SYNTHETIC_PUNCT_QUERIES = [
-    "df.iloc[:, 0]",                    # comma + brackets
-    "np.array([1,2,3])",                # parens + commas
-    "pd.DataFrame(*args, **kwargs)",    # stars + parens + commas
-    'config["key"] = value',            # embedded double-quotes
-    "obj.attr = 'literal'",             # embedded single-quotes
-    "a:b c:d",                          # FTS5 column-qualifier syntax
-    '""""',                             # all double-quotes — degenerate but real
+    "df.iloc[:, 0]",  # comma + brackets
+    "np.array([1,2,3])",  # parens + commas
+    "pd.DataFrame(*args, **kwargs)",  # stars + parens + commas
+    'config["key"] = value',  # embedded double-quotes
+    "obj.attr = 'literal'",  # embedded single-quotes
+    "a:b c:d",  # FTS5 column-qualifier syntax
+    '""""',  # all double-quotes — degenerate but real
 ]
 
 
