@@ -16,11 +16,18 @@ from typing import TypeVar
 
 T = TypeVar("T")
 
-# The three accepted ``split`` values. Single source of truth: both
-# datasets' ``__post_init__`` validation and the runner's argparse
-# ``choices`` mirror this set (``"all"`` is the backward-compat default —
-# the whole filtered corpus, no partition).
-VALID_SPLITS: tuple[str, ...] = ("all", "dev", "test")
+# The accepted ``split`` values. Single source of truth: both datasets'
+# ``__post_init__`` validation and the runner's argparse ``choices`` mirror
+# this set (``"all"`` is the backward-compat default — the whole filtered
+# corpus, no partition).
+VALID_SPLITS: tuple[str, ...] = ("all", "dev", "test", "small_test")
+
+# Default target size for the ``small_test`` split — a fixed-size, stratified
+# subsample of the held-out ``test`` tail for fast experiment iteration over
+# the expensive (dense / hybrid / LLM-tree) sweeps. Single source of truth:
+# the datasets' ``small_test_size`` field default and ``stratified_split``'s
+# parameter default both read this constant.
+_DEFAULT_SMALL_TEST_SIZE = 30
 
 
 def validate_split(split: str) -> None:
@@ -44,6 +51,7 @@ def stratified_split(
     seed: int,
     stratum_of: Callable[[T], str],
     sort_key: Callable[[T], str],
+    small_test_size: int = _DEFAULT_SMALL_TEST_SIZE,
 ) -> list[T]:
     """Return only the rows belonging to ``split``.
 
@@ -51,7 +59,10 @@ def stratified_split(
     backward-compat default. For ``"dev"`` / ``"test"`` the rows are
     partitioned with a STRATIFIED scheme: each stratum (``stratum_of(row)``)
     is split independently into a ``dev`` head and a ``test`` tail, so both
-    slices preserve the corpus's per-stratum proportions.
+    slices preserve the corpus's per-stratum proportions. ``"small_test"``
+    is a fixed-size (``min(small_test_size, |test|)``) stratified SUBSAMPLE
+    of the ``test`` tail — a small, representative, held-out slice for fast
+    experiment iteration (``small_test`` ⊂ ``test``).
 
     Determinism contract: within each stratum group the rows are first
     STABLE-sorted by ``sort_key(row)`` (a deterministic, position-independent
@@ -63,6 +74,17 @@ def stratified_split(
     byte-identical across runs and load paths for a fixed ``seed``.
     ``n_dev = round(dev_fraction * len(group))`` (Python banker's rounding)
     rows go to ``dev``, the remainder to ``test``.
+
+    ``small_test`` apportions its ``min(small_test_size, |test|)`` rows
+    across strata by Hamilton's largest-remainder method (proportional
+    floors, then the leftover seats handed to the largest fractional
+    remainders, ties broken by sorted stratum key). This hits the target
+    size EXACTLY while preserving per-stratum proportions — a plain
+    ``round()`` per stratum would over- or under-shoot the target badly when
+    many strata round the same direction (e.g. 50 repos each rounding 0.6→1
+    yields 50, not 30). Rows are taken from the HEAD of each stratum's
+    already-shuffled ``test`` tail, so ``small_test`` is a deterministic
+    subset of ``test``.
     """
     validate_split(split)
     if split == "all":
@@ -75,16 +97,58 @@ def stratified_split(
     # One RNG, reused across groups — re-seeding per stratum would change
     # the draw sequence and break parity with the original inline split.
     rng = random.Random(seed)
-    selected: list[T] = []
     # Sort group keys so the RNG draw sequence is itself deterministic
     # across runs (dict insertion order already is, but pinning the
     # iteration order makes the determinism explicit and robust to a
-    # future change in row arrival order).
+    # future change in row arrival order). dev head + test tail are computed
+    # the same way for every split so the shuffle draw sequence — and hence
+    # dev/test membership — stays byte-identical to the original.
+    dev_rows: list[T] = []
+    test_by_stratum: dict[str, list[T]] = {}
     for stratum in sorted(groups):
         group = sorted(groups[stratum], key=sort_key)
         rng.shuffle(group)
         n_dev = round(dev_fraction * len(group))
-        dev_rows = group[:n_dev]
-        test_rows = group[n_dev:]
-        selected.extend(dev_rows if split == "dev" else test_rows)
-    return selected
+        dev_rows.extend(group[:n_dev])
+        test_by_stratum[stratum] = group[n_dev:]
+
+    if split == "dev":
+        return dev_rows
+    if split == "test":
+        return [
+            row for stratum in sorted(test_by_stratum)
+            for row in test_by_stratum[stratum]
+        ]
+    return _largest_remainder_subsample(test_by_stratum, target=small_test_size)
+
+
+def _largest_remainder_subsample(
+    test_by_stratum: dict[str, list[T]], *, target: int,
+) -> list[T]:
+    """Proportional fixed-size subsample of the per-stratum ``test`` tails.
+
+    Implements the ``small_test`` apportionment described in
+    :func:`stratified_split`: ``min(target, |test|)`` rows split across
+    strata in proportion to each stratum's ``test`` size via Hamilton's
+    largest-remainder method, taken from the head of each (already-shuffled)
+    tail. Deterministic — ties on the fractional remainder break by sorted
+    stratum key.
+    """
+    total = sum(len(rows) for rows in test_by_stratum.values())
+    if total == 0:
+        return []
+    target = min(target, total)
+    strata = sorted(test_by_stratum)
+    quotas = {s: target * len(test_by_stratum[s]) / total for s in strata}
+    counts = {s: int(quotas[s]) for s in strata}  # proportional floors
+    leftover = target - sum(counts.values())
+    # Hand the leftover seats to the largest fractional remainders; the
+    # ``(-(remainder), s)`` key makes the order — and so the membership —
+    # deterministic across runs.
+    by_remainder = sorted(strata, key=lambda s: (-(quotas[s] - counts[s]), s))
+    for stratum in by_remainder[:leftover]:
+        counts[stratum] += 1
+    return [
+        row for stratum in strata
+        for row in test_by_stratum[stratum][:counts[stratum]]
+    ]

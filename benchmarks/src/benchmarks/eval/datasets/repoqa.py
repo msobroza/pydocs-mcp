@@ -18,7 +18,7 @@ from typing import Any
 
 from ..corpus import materialize_corpus
 from ..serialization import dataset_registry
-from ._split import stratified_split, validate_split
+from ._split import _DEFAULT_SMALL_TEST_SIZE, stratified_split, validate_split
 from .base_dataset import EvalTask, GoldAnswer
 
 # WHY: the date-tagged GitHub release. To bump: download the new gz,
@@ -50,6 +50,11 @@ class RepoQADataset:
     split: str = "all"
     dev_fraction: float = 0.2
     split_seed: int = 0
+    # ``small_test`` target size — a fixed-size stratified subsample of the
+    # held-out ``test`` tail for fast experiment iteration over the expensive
+    # (dense / hybrid / LLM-tree) sweeps. Default from the shared split helper
+    # (single source of truth).
+    small_test_size: int = _DEFAULT_SMALL_TEST_SIZE
     cache_dir: Path = field(
         default_factory=lambda: Path("~/.cache/pydocs-mcp/repoqa").expanduser(),
     )
@@ -87,6 +92,7 @@ class RepoQADataset:
             split=self.split,
             dev_fraction=self.dev_fraction,
             seed=self.split_seed,
+            small_test_size=self.small_test_size,
             stratum_of=lambda r: r["repo"],
             sort_key=lambda r: f"{r['needle']['path']}::{r['needle']['name']}",
         )

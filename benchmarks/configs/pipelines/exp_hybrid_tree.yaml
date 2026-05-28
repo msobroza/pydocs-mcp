@@ -1,0 +1,56 @@
+# Hybrid BM25 + dense (RRF), then UNCONDITIONAL LLM tree-reasoning rerank
+# over the top-10 hybrid candidates, fused back in via RRF — RepoQA
+# experiment suite. Requires an embedder AND an LLM client (the `llm:`
+# config + OPENAI_API_KEY) at search time.
+#
+# Unlike the shipped chunk_search_with_tree_reasoning_after.yaml, the tree
+# step runs on EVERY query (no is_long_query conditional gate) so the
+# experiment actually exercises tree reasoning on RepoQA's short
+# function-description queries, and the token_budget_formatter is dropped so
+# the output is a ranked candidate list. The "reasonable k" the tree reasons
+# over is the top-10 set published by hybrid_publish.
+# Referenced by ../repoqa_hybrid_tree.yaml.
+name: exp_hybrid_tree
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: parallel
+    type: parallel_retrieval
+    params:
+      branches:
+        - name: bm25
+          steps:
+            - {name: fetch, type: chunk_fetcher, params: {schema_name: chunk}}
+            - {name: score, type: bm25_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: hybrid.bm25.ranked}}
+        - name: dense
+          steps:
+            - {name: fetch, type: dense_fetcher, params: {}}
+            - {name: score, type: dense_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: hybrid.dense.ranked}}
+  - name: hybrid_rrf
+    type: rrf_fusion
+    params:
+      branch_keys: [hybrid.bm25.ranked, hybrid.dense.ranked]
+  - name: hybrid_publish
+    type: top_k_filter
+    params:
+      k: 10
+      publish_to: hybrid.ranked
+  - name: tree_rerank
+    type: llm_tree_reasoning
+    params:
+      prompt_template: tree_reasoning_pydocs_v1
+  - name: final_fuse
+    type: rrf_fusion
+    params:
+      branch_keys: [hybrid.ranked, tree.ranked]
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

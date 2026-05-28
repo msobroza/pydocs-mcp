@@ -105,7 +105,40 @@ async def test_split_is_deterministic_under_fixed_seed() -> None:
 
 
 def test_invalid_split_raises_value_error() -> None:
-    """A ``split`` outside {all,dev,test} is a caller bug — rejected at
-    construction with a ``ValueError``."""
+    """A ``split`` outside {all,dev,test,small_test} is a caller bug —
+    rejected at construction with a ``ValueError``."""
     with pytest.raises(ValueError):
         RepoQADataset(fixture_path=FIXTURE_PATH, split="train")
+
+
+async def test_small_test_is_capped_subset_of_test() -> None:
+    """``split="small_test"`` yields a fixed-size stratified subsample of the
+    held-out ``test`` tail: a subset of ``test``, capped at
+    ``min(small_test_size, |test|)``."""
+    test_ids = await _task_ids(
+        RepoQADataset(fixture_path=FIXTURE_PATH, split="test"),
+    )
+    small_ids = await _task_ids(
+        RepoQADataset(
+            fixture_path=FIXTURE_PATH, split="small_test", small_test_size=1,
+        ),
+    )
+    assert small_ids <= test_ids  # subset of held-out test
+    assert len(small_ids) == min(1, len(test_ids))
+
+
+async def test_small_test_is_deterministic_under_fixed_seed() -> None:
+    """Two ``small_test`` loads with the same seed yield identical ids."""
+    first = await _task_ids(
+        RepoQADataset(
+            fixture_path=FIXTURE_PATH, split="small_test",
+            small_test_size=2, split_seed=0,
+        ),
+    )
+    second = await _task_ids(
+        RepoQADataset(
+            fixture_path=FIXTURE_PATH, split="small_test",
+            small_test_size=2, split_seed=0,
+        ),
+    )
+    assert first == second

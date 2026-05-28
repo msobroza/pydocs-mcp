@@ -1,0 +1,34 @@
+# Hybrid BM25 + dense, RRF fusion with k=60 (literature default) — RepoQA
+# experiment suite. The reference hybrid setting. Referenced by
+# ../repoqa_hybrid_rrf_k60.yaml.
+name: exp_hybrid_rrf_k60
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: parallel
+    type: parallel_retrieval
+    params:
+      branches:
+        - name: bm25
+          steps:
+            - {name: fetch, type: chunk_fetcher, params: {schema_name: chunk}}
+            - {name: score, type: bm25_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: bm25.ranked}}
+        - name: dense
+          steps:
+            - {name: fetch, type: dense_fetcher, params: {}}
+            - {name: score, type: dense_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: dense.ranked}}
+  - name: fuse
+    type: rrf_fusion
+    params:
+      k: 60
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

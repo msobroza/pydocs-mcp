@@ -99,7 +99,7 @@ def test_deterministic_under_fixed_seed() -> None:
 def test_empty_input_returns_empty() -> None:
     """Empty rows -> empty result for every split (no IndexError on the
     slice, no spurious group)."""
-    for split in ("all", "dev", "test"):
+    for split in ("all", "dev", "test", "small_test"):
         assert _split([], split) == []
 
 
@@ -119,3 +119,62 @@ def test_stratified_split_rejects_invalid_split() -> None:
     bad value)."""
     with pytest.raises(ValueError):
         _split(_rows(), "train")
+
+
+def _small_test(
+    rows: list[dict[str, object]], *, size: int, seed: int = 0,
+) -> list:
+    return stratified_split(
+        rows,
+        split="small_test",
+        dev_fraction=0.2,
+        seed=seed,
+        stratum_of=lambda r: r["stratum"],
+        sort_key=lambda r: r["key"],
+        small_test_size=size,
+    )
+
+
+def test_small_test_hits_target_size_exactly() -> None:
+    """``small_test`` apportions EXACTLY ``small_test_size`` rows when the
+    test tail is large enough — Hamilton's largest-remainder method, not a
+    per-stratum ``round()`` that would over/under-shoot the target."""
+    rows = _rows()  # test tail = 5 ("a") + 3 ("b") = 8
+    assert len(_small_test(rows, size=4)) == 4
+
+
+def test_small_test_is_subset_of_test() -> None:
+    """``small_test`` ⊂ ``test`` — it samples the held-out tail, never dev."""
+    rows = _rows()
+    test_keys = {r["key"] for r in _split(rows, "test")}
+    small_keys = {r["key"] for r in _small_test(rows, size=4)}
+    assert small_keys <= test_keys
+
+
+def test_small_test_is_stratified_proportionally() -> None:
+    """The subsample keeps both strata in proportion to their test tails
+    (5:3 -> 3:1 at size 4 via largest-remainder), never collapsing to one
+    stratum. Independent of seed — only WHICH rows are picked is seeded,
+    not HOW MANY per stratum."""
+    rows = _rows()
+    counts: dict[str, int] = {}
+    for r in _small_test(rows, size=4):
+        counts[r["stratum"]] = counts.get(r["stratum"], 0) + 1
+    assert counts == {"a": 3, "b": 1}
+
+
+def test_small_test_caps_at_test_size() -> None:
+    """A target larger than the test tail yields the WHOLE tail (never more,
+    never an IndexError) — ``min(size, |test|)``."""
+    rows = _rows()
+    test_keys = {r["key"] for r in _split(rows, "test")}
+    capped = _small_test(rows, size=10_000)
+    assert {r["key"] for r in capped} == test_keys
+
+
+def test_small_test_is_deterministic_under_fixed_seed() -> None:
+    """Same seed -> byte-identical subsample (order included)."""
+    rows = _rows()
+    first = [r["key"] for r in _small_test(rows, size=4, seed=7)]
+    second = [r["key"] for r in _small_test(rows, size=4, seed=7)]
+    assert first == second

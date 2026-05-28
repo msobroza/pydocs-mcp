@@ -1,0 +1,8 @@
+# RepoQA experiment — hybrid BM25+dense then LLM tree-reasoning rerank
+# over the top-10. REQUIRES OPENAI_API_KEY (the tree step calls the LLM per
+# query). Uses the default `llm:` config (openai / gpt-4o-mini).
+# See benchmarks/EXPERIMENTS.md.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_hybrid_tree.yaml

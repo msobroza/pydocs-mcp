@@ -10,6 +10,10 @@ Its purpose: A/B-test YAML pipeline tunings (`AppConfig`) on real benchmarks and
 record every `(system × config × dataset)` combination as one tracked run with
 comparable params, metrics, and artifacts.
 
+For a ready-to-run comparison of BM25 / dense / hybrid (RRF + weighted) / tree
+retrieval strategies on a small RepoQA slice (`--split small_test`), see
+[`EXPERIMENTS.md`](EXPERIMENTS.md).
+
 ```mermaid
 flowchart TB
     DS["Dataset loader<br/>(RepoQA · DS-1000)"]

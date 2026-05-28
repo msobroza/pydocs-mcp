@@ -1,0 +1,8 @@
+# RepoQA experiment — vectorless LLM tree-reasoning only.
+# REQUIRES OPENAI_API_KEY (the tree step calls the LLM per query).
+# Uses the default `llm:` config (openai / gpt-4o-mini).
+# See benchmarks/EXPERIMENTS.md.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_tree.yaml
