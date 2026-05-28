@@ -100,3 +100,22 @@ embedding:
 #   model_name: gpt-4o-mini
 #   temperature: 0.0
 #   max_tokens: 1024
+
+# Late-interaction (ColBERT / PyLate) embedder — sibling of `embedding` /
+# `llm`. Opt-in (enabled=false by default); when enabled, consumed by
+# `build_multi_vector_embedder(cfg)` (lazy pylate import) and folded into
+# `ingestion_pipeline_hash` when the active ingestion pipeline references
+# `embed_chunks_multi_vector`. Per CLAUDE.md §"MCP API surface vs YAML
+# configuration": late-interaction tuning is a pipeline knob, NOT an MCP
+# tool param — the MCP surface stays fixed.
+#
+# Uncomment to override:
+# late_interaction:
+#   enabled: false
+#   provider: pylate
+#   model_name: lightonai/LateOn-Code
+#   embedding_dim: 128
+#   document_length: 180
+#   query_length: 32
+#   pool_factor: 1
+#   device: cpu
