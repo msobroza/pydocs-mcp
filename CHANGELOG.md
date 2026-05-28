@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.2.0] — 2026-05-28
+
+### Added (late-interaction retrieval — ColBERT / PyLate via fast-plaid)
+
+- **Late-interaction (multi-vector / MaxSim) retrieval backend**, opt-in via
+  `pip install 'pydocs-mcp[late-interaction]'` + `late_interaction.enabled: true`
+  in YAML. Ships `lightonai/LateOn-Code` as the default model via PyLate
+  ([arXiv:2508.03555](https://arxiv.org/abs/2508.03555)) and scores MaxSim
+  through [fast-plaid](https://github.com/lightonai/fast-plaid) (PLAID —
+  [arXiv:2205.09707](https://arxiv.org/abs/2205.09707)).
+- **`chunk_multi_vector_ids` SQLite mapping table** (schema v6) bridges
+  `chunk_id` ↔ fast-plaid's auto-assigned `plaid_doc_id`. The existing
+  `FilterAdapter` Protocol scopes MaxSim to the SQLite-filtered candidate set
+  via fast-plaid's `subset=` parameter.
+- **Three new YAML presets** (`ingestion_late_interaction.yaml`,
+  `chunk_search_late_interaction.yaml`,
+  `chunk_search_late_interaction_ranked.yaml`) plus benchmark sweep configs
+  (`repoqa_hybrid_li_rrf.yaml`, `ds1000_hybrid_li_rrf.yaml`).
+- **`LateInteractionScorerStep` retrieval step** + `EmbedChunksMultiVectorStage`
+  ingestion stage + `FastPlaidUnitOfWork` storage adapter + `NullMultiVectorStore`
+  for the disabled deployment path.
+
+### Added (PyPI packaging polish)
+
+- `[project] authors`, `keywords`, `classifiers`, `[project.urls]` for PyPI
+  rendering. `Cargo.toml` version synced to `0.2.0`.
+
+### Fixed
+
+- `build_retrieval_context` now wires `BuildContext.embedder =
+  build_embedder(config.embedding)`. Any pipeline that referenced
+  `DenseFetcherStep` / `DenseScorerStep` previously crashed at decode time
+  with the actionable `ValueError`. FastEmbed's ONNX model stays lazy so the
+  BM25-only deployment still pays nothing at startup.
+
 ### Added (final P2 follow-ups — closes #14 audit findings)
 
 - `SECURITY.md` at repo root — GitHub-rendered private vulnerability reporting flow with 72h ack / 7d confirm / 30d fix SLAs.

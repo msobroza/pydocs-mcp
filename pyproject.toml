@@ -10,7 +10,49 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "LICENSE-third-party"]
 requires-python = ">=3.11"
+authors = [
+    {name = "Max Sobroza", email = "max.raphael@gmail.com"},
+]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "documentation",
+    "code-search",
+    "retrieval",
+    "ai-coding",
+    "claude-code",
+    "llm",
+    "bm25",
+    "colbert",
+    "late-interaction",
+    "rust",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
+]
 dependencies = ["mcp>=1.0", "pydantic>=2.0", "pydantic-settings>=2.0", "pyyaml>=6.0", "numpy>=1.26", "turbovec>=0.5,<1.0", "fastembed>=0.4,<1.0", "openai>=1.40,<2.0", "jinja2>=3.0,<4.0"]
+
+[project.urls]
+Homepage = "https://github.com/msobroza/pydocs-mcp"
+Repository = "https://github.com/msobroza/pydocs-mcp"
+Issues = "https://github.com/msobroza/pydocs-mcp/issues"
+Changelog = "https://github.com/msobroza/pydocs-mcp/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/msobroza/pydocs-mcp/blob/main/DOCUMENTATION.md"
 
 [project.optional-dependencies]
 # User-facing extras only — installable via `pip install pydocs-mcp[<name>]`.
