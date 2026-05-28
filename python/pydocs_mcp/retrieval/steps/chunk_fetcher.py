@@ -69,18 +69,30 @@ def _build_fts_match_query(terms: str) -> str | None:
     """Shape raw user terms into an FTS5 MATCH expression.
 
     Mirror of :func:`pydocs_mcp.storage.sqlite._build_fts_match_query`.
-    Reuses ``_FTS_OPS`` from the storage module so the operator vocabulary
-    stays unified (AC17 byte-parity).
+    Reuses ``_FTS_OPS`` and ``_FTS_PHRASE_SPECIAL`` from the storage
+    module so the operator vocabulary and the phrase-quote escape rule
+    stay unified across both copies (AC17 byte-parity).
+
+    Each whitespace-split token passes through ``_FTS_PHRASE_SPECIAL`` so
+    FTS5-reserved punctuation inside the token (commas, quotes, parens,
+    etc.) becomes whitespace and the substring re-splits into clean word
+    fragments — pre-fix a code-paste token like
+    ``temp=u\"\"\"probegenes,sampl`` crashed SQLite with
+    ``fts5: syntax error near ","``.
     """
-    from pydocs_mcp.storage.sqlite import _FTS_OPS
+    from pydocs_mcp.storage.sqlite import _FTS_OPS, _FTS_PHRASE_SPECIAL
 
     tokens = terms.split()
     if any(t in _FTS_OPS for t in tokens):
         return terms
-    words = [w for w in tokens if len(w) > 1]
-    if not words:
+    cleaned: list[str] = []
+    for t in tokens:
+        for sub in _FTS_PHRASE_SPECIAL.sub(" ", t).split():
+            if len(sub) > 1:
+                cleaned.append(sub)
+    if not cleaned:
         return None
-    return " OR ".join(f'"{w}"' for w in words)
+    return " OR ".join(f'"{w}"' for w in cleaned)
 
 
 # Mirror of ``SqliteVectorStore.text_search`` — but emit RAW negative
