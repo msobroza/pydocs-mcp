@@ -241,7 +241,22 @@ class CompositeUnitOfWork:
         # ``MultiVectorStore`` but the composite returns whatever the
         # owning child exposes (Null fallback or real fast-plaid
         # backend), so ``Any`` keeps the runtime polymorphism explicit.
-        return self._attr_map["multi_vectors"]
+        #
+        # Lazy Null fallback: unlike ``vectors`` (always populated by
+        # SqliteUnitOfWork's default NullVectorStore), no child carries
+        # a default ``multi_vectors`` attribute today. When the
+        # late-interaction backend is disabled, _build_attr_map leaves
+        # the key absent; substitute a NullMultiVectorStore so callers
+        # never see KeyError and the Null Object pattern stays uniform.
+        store = self._attr_map.get("multi_vectors")
+        if store is None:
+            from pydocs_mcp.storage.null_multi_vector_store import (
+                NullMultiVectorStore,
+            )
+
+            store = NullMultiVectorStore()
+            self._attr_map["multi_vectors"] = store
+        return store
 
     def __getattr__(self, name: str) -> Any:
         """Delegate attribute access via the cached owner map (spec S26).
