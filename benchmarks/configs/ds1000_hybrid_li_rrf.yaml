@@ -14,4 +14,4 @@ pipelines:
       pipeline_path: pipelines/ingestion_late_interaction.yaml
   chunk:
     - default: true
-      pipeline_path: pipelines/exp_late_interaction.yaml
+      pipeline_path: pipelines/exp_hybrid_li_rrf.yaml
