@@ -339,12 +339,13 @@ def test_null_handler_attached_at_package_root() -> None:
     """
     import logging
 
-    import pydocs_mcp  # noqa: F401 -- import triggers the handler attach
+    import pydocs_mcp  # import triggers the NullHandler attach in __init__.py
+
+    # Touch the module so static analysers can't strip the import.
+    assert pydocs_mcp.__name__ == "pydocs_mcp"
 
     package_logger = logging.getLogger("pydocs_mcp")
-    has_null_handler = any(
-        isinstance(h, logging.NullHandler) for h in package_logger.handlers
-    )
+    has_null_handler = any(isinstance(h, logging.NullHandler) for h in package_logger.handlers)
     assert has_null_handler, (
         f"pydocs_mcp.__init__ must attach a logging.NullHandler at the "
         f"package logger; got handlers={package_logger.handlers}"
@@ -406,8 +407,7 @@ def test_release_yml_syncs_version_from_tag() -> None:
     # should grow — this assertion catches regressions either way.
     occurrences = release_yml.count("Sync version from tag")
     assert occurrences >= 4, (
-        f"expected the sync step in every build job (>= 4 occurrences); "
-        f"got {occurrences}"
+        f"expected the sync step in every build job (>= 4 occurrences); got {occurrences}"
     )
 
 
@@ -427,10 +427,6 @@ def test_pip_audit_job_present_in_ci() -> None:
         "Add `security:` as a sibling to `python:` / `rust:`."
     )
     # Runs pip-audit (any invocation form is fine: pip-audit, uvx pip-audit, etc.).
-    assert "pip-audit" in ci_yml, (
-        "ci.yml security job must run pip-audit"
-    )
+    assert "pip-audit" in ci_yml, "ci.yml security job must run pip-audit"
     # In strict mode — advisories on indirect/transitive deps fail too.
-    assert "--strict" in ci_yml, (
-        "pip-audit must run in --strict mode so transitive CVEs fail CI"
-    )
+    assert "--strict" in ci_yml, "pip-audit must run in --strict mode so transitive CVEs fail CI"
