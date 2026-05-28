@@ -213,3 +213,23 @@ def test_mypy_config_present() -> None:
     files = mypy["files"]
     assert isinstance(files, list)
     assert any("pydocs_mcp" in f for f in files)
+
+
+def test_ci_matrix_includes_macos_and_windows() -> None:
+    """P1-4: ci.yml tests on macOS + Windows, not just Linux.
+
+    release.yml builds wheels for Linux + macOS + Windows; ci.yml
+    must test on the same matrix so broken non-Linux wheels can't
+    ship undetected.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ci_yml = (root / ".github" / "workflows" / "ci.yml").read_text()
+
+    # The matrix block should mention each OS we want covered.
+    # Substring assertion stays robust to formatting changes.
+    assert "ubuntu-latest" in ci_yml, "Linux row must remain"
+    assert re.search(r"macos-1[34]", ci_yml), "macos-13 or macos-14 row missing"
+    assert "windows-latest" in ci_yml, "windows-latest row missing"
