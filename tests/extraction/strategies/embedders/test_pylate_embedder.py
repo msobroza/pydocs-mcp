@@ -25,10 +25,14 @@ def _install_fake_pylate(monkeypatch):
             embedding_size,
             document_length,
             query_length,
-            pool_factor,
             device="cpu",
             **kw,
         ):
+            # ``pool_factor`` is intentionally accepted only via ``**kw``: it's
+            # an index-time PyLate parameter (``pylate.indexes.PLAID``), not a
+            # model-time one — ``models.ColBERT.__init__`` does not accept it
+            # on the installed pylate version. The dataclass field is kept on
+            # ``LateInteractionConfig`` for future fast-plaid index wiring.
             self._dim = embedding_size
 
         def encode(self, texts, is_query, convert_to_numpy=True, normalize_embeddings=True):

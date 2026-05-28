@@ -20,6 +20,7 @@ from pydocs_mcp.extraction.strategies.embedders import (
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.retrieval.llm_clients import build_llm_client
 from pydocs_mcp.retrieval.serialization import BuildContext
+from pydocs_mcp.storage.factories import build_uow_factory
 from pydocs_mcp.storage.sqlite import (
     SqliteFilterAdapter,
     SqliteModuleMemberRepository,
@@ -56,6 +57,14 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
     # consume it through the ambient context. Returns ``None`` when
     # ``late_interaction.enabled=False`` — the shipped default — so a stock
     # install never pays the pylate/torch import cost.
+    # Wire the UoW factory so retrieval steps that open transactions
+    # (``LateInteractionScorerStep``, future ``ReferenceServiceStep``,
+    # etc.) can call ``async with self.uow_factory() as uow`` and reach
+    # ``uow.multi_vectors`` / ``uow.references`` / ``uow.chunks``. The
+    # factory dispatches on ``config.late_interaction.enabled`` and
+    # returns a composite with ``FastPlaidUnitOfWork`` when enabled,
+    # otherwise a plain ``SqliteUnitOfWork`` + ``NullMultiVectorStore``.
+    uow_factory = build_uow_factory(config, db_path=db_path)
     return BuildContext(
         connection_provider=provider,
         vector_store=SqliteVectorStore(provider=provider),
@@ -65,4 +74,5 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
         llm_client=build_llm_client(config.llm),
         filter_adapter=SqliteFilterAdapter(),
         multi_vector_embedder=build_multi_vector_embedder(config.late_interaction),
+        uow_factory=uow_factory,
     )

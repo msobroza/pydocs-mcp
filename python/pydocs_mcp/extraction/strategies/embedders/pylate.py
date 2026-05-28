@@ -48,12 +48,18 @@ class PyLateEmbedder:
             pool_factor=cfg.pool_factor,
             device=cfg.device,
         )
+        # ``pool_factor`` is a PyLate INDEX-time parameter
+        # (``pylate.indexes.PLAID``), not a model-time one — it controls
+        # token pooling on stored vectors, applied when documents are
+        # added to the index. ``models.ColBERT.__init__`` does not accept
+        # it (verified on pylate==1.2.0 ColBERT signature). Keep
+        # ``cfg.pool_factor`` on the dataclass for future fast-plaid
+        # index wiring; just don't pass it here.
         self._model = models.ColBERT(
             model_name_or_path=cfg.model_name,
             embedding_size=cfg.embedding_dim,
             document_length=cfg.document_length,
             query_length=cfg.query_length,
-            pool_factor=cfg.pool_factor,
             device=cfg.device,
         )
         return self
