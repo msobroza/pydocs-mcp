@@ -9,6 +9,8 @@ from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.node_reference import NodeReference
@@ -373,6 +375,34 @@ class Embedder(Protocol):
         self,
         texts: Sequence[str],
     ) -> tuple[Embedding, ...]: ...
+
+
+@runtime_checkable
+class MultiVectorEmbedder(Protocol):
+    """Late-interaction (ColBERT-style) embedder: one vector PER TOKEN.
+
+    Distinct from :class:`Embedder` (single pooled vector per text).
+    ``embed_query`` / ``embed_chunks`` each return a
+    ``MultiVector = list[np.ndarray]`` of length ``n_tokens`` — every
+    element is a 1-D float32 ``np.ndarray`` of length ``dim``. The outer
+    container is a Python ``list`` (NOT a stacked 2-D array) because
+    :func:`pydocs_mcp.models.is_multi_vector` disambiguates the
+    ``Embedding`` union via ``isinstance(emb, list)``.
+
+    Implementations MUST L2-normalize each token-vector before returning
+    so MaxSim's downstream dot-product IS the cosine — no per-query
+    renormalization in ``_maxsim`` (spec Decision C).
+    """
+
+    dim: int
+    model_name: str
+
+    async def embed_query(self, text: str) -> list[np.ndarray]: ...
+
+    async def embed_chunks(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[list[np.ndarray], ...]: ...
 
 
 class ChatMessage(TypedDict):
