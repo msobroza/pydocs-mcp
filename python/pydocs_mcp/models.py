@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, ClassVar, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, TypeGuard, runtime_checkable
 
 import numpy as np
 from pydantic import ConfigDict, field_validator, model_validator
@@ -72,12 +72,18 @@ class SparseEmbedding(Protocol):
     values: np.ndarray  # float32
 
 
-def is_multi_vector(emb: Embedding) -> bool:
+def is_multi_vector(emb: Embedding) -> TypeGuard[MultiVector]:
     """True if `emb` is a multi-vector (list of 1D vectors, ColBERT-style).
 
     FastEmbed convention: single-vector embedders return `np.ndarray`;
     multi-vector embedders return `list[np.ndarray]`. The check is on
     the OUTER container type.
+
+    Annotated as :data:`TypeGuard` so callers can narrow the
+    ``Embedding`` union after the branch: the True branch narrows to
+    ``MultiVector`` (so ``emb[0]`` is ``np.ndarray``), and the False
+    branch narrows the remaining union to ``np.ndarray`` —
+    exactly what :class:`VectorSearchable.vector_search` requires.
     """
     return isinstance(emb, list)
 
