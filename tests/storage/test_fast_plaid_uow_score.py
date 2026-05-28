@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -21,7 +22,7 @@ class _PersistentFakeFastPlaid(_FakeFastPlaid):
     persistence by caching ``_matrices`` on the class keyed on the index path.
     """
 
-    _by_path: dict = {}
+    _by_path: ClassVar[dict] = {}
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)

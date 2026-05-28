@@ -246,7 +246,10 @@ class FastPlaidUnitOfWork:
         ids_list = list(ids)
         if not ids_list:
             return {}
-        q = "SELECT id, package FROM chunks WHERE id IN ({})".format(
+        # The `placeholders` substring is built from literal ``?`` characters only
+        # (one per id, not user input), so the IN-clause SQL is safe; the actual
+        # values bind through parameters. Same pattern as :class:`SqliteFilterAdapter`.
+        q = "SELECT id, package FROM chunks WHERE id IN ({})".format(  # noqa: S608
             ",".join("?" for _ in ids_list),
         )
         return {row[0]: row[1] for row in conn.execute(q, ids_list)}
@@ -267,10 +270,12 @@ class FastPlaidUnitOfWork:
             return
         with sqlite3.connect(str(self.db_path)) as conn:
             placeholders = ",".join("?" for _ in ids)
+            # ``placeholders`` is literal ``?`` chars (one per id); values
+            # are bound via the second arg to ``conn.execute``.
             plaid_ids = [
                 row[0]
                 for row in conn.execute(
-                    f"SELECT plaid_doc_id FROM chunk_multi_vector_ids "
+                    f"SELECT plaid_doc_id FROM chunk_multi_vector_ids "  # noqa: S608
                     f"WHERE chunk_id IN ({placeholders})",
                     list(ids),
                 )
@@ -278,7 +283,7 @@ class FastPlaidUnitOfWork:
             if plaid_ids:
                 await asyncio.to_thread(self._handle.delete, subset=plaid_ids)
             conn.execute(
-                f"DELETE FROM chunk_multi_vector_ids "
+                f"DELETE FROM chunk_multi_vector_ids "  # noqa: S608
                 f"WHERE chunk_id IN ({placeholders})",
                 list(ids),
             )
@@ -336,9 +341,11 @@ class FastPlaidUnitOfWork:
         import torch
         with sqlite3.connect(str(self.db_path)) as conn:
             placeholders = ",".join("?" for _ in subset_chunk_ids)
+            # ``placeholders`` is literal ``?`` chars (one per chunk_id);
+            # values bind via the second arg to ``conn.execute``.
             mapping = {
                 row[0]: row[1] for row in conn.execute(
-                    f"SELECT plaid_doc_id, chunk_id FROM chunk_multi_vector_ids "
+                    f"SELECT plaid_doc_id, chunk_id FROM chunk_multi_vector_ids "  # noqa: S608
                     f"WHERE chunk_id IN ({placeholders})",
                     list(subset_chunk_ids),
                 )
