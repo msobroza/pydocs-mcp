@@ -134,6 +134,47 @@ benchmarks (RepoQA, DS-1000) and head-to-head against Context7 and Neuledge —
 with confidence intervals and plots. See
 [benchmarks/README.md](benchmarks/README.md).
 
+## Late-interaction retrieval (planned, opt-in)
+
+A **late-interaction** (multi-vector / ColBERT-style) retrieval backend is
+designed to ship as an opt-in alternative to the default single-vector dense
+embedder. The default embedder produces one vector per chunk; a late-interaction
+model emits **one vector per token** and scores via ColBERT's **MaxSim** (sum
+over query tokens of the max cosine similarity to any document token) — higher
+recall on long, structurally distant queries at the cost of a heavier model and
+larger per-chunk storage.
+
+The default late-interaction model is
+[`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code),
+served via [PyLate](https://github.com/lightonai/pylate)
+([arXiv:2508.03555](https://arxiv.org/abs/2508.03555)). The feature stays
+strictly opt-in via a new `late_interaction:` config block plus a dedicated
+preset; the default install stays lean (no PyTorch, no `sentence-transformers`)
+and existing users see no behavioral change.
+
+Status: **in design.** See
+[`docs/superpowers/specs/2026-05-28-late-interaction-dense-retrieval-design.md`](docs/superpowers/specs/2026-05-28-late-interaction-dense-retrieval-design.md)
+for the design and
+[`docs/superpowers/plans/2026-05-28-late-interaction-dense-retrieval-plan.md`](docs/superpowers/plans/2026-05-28-late-interaction-dense-retrieval-plan.md)
+for the implementation roadmap.
+
+Planned opt-in shape (illustrative — once the feature ships):
+
+```yaml
+# pydocs-mcp.yaml
+late_interaction:
+  provider: pylate
+  model_name: lightonai/LateOn-Code
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/chunk_search_late_interaction.yaml
+```
+
+Enabling it will also require the optional extra:
+`pip install 'pydocs-mcp[late-interaction]'`.
+
 ## Learn more
 
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval
@@ -155,7 +196,8 @@ with confidence intervals and plots. See
 **Vectors & retrieval**
 - TurboQuant — *Online Vector Quantization with Near-optimal Distortion Rate* · [arXiv:2504.19874](https://arxiv.org/abs/2504.19874) (Google Research, 2025); implemented by [`turbovec`](https://github.com/RyanCodrai/turbovec)
 - [FAISS](https://github.com/facebookresearch/faiss) — the similarity-search library used as the speed/storage baseline above
-- [FastEmbed](https://github.com/qdrant/fastembed) with [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) — the default on-device embedder
+- [FastEmbed](https://github.com/qdrant/fastembed) with [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) — the default on-device embedder for the **single-vector** dense mode
+- [PyLate](https://github.com/lightonai/pylate) with [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) — the default model for the planned **late-interaction (multi-vector / MaxSim)** mode · *PyLate: Flexible Training and Retrieval for Late Interaction Models* · [arXiv:2508.03555](https://arxiv.org/abs/2508.03555) (LightOn, 2025)
 - [PageIndex](https://github.com/VectifyAI/PageIndex) — inspiration for the LLM tree-reasoning mode
 
 **Protocol & comparable tools**
