@@ -293,5 +293,51 @@ class FastPlaidUnitOfWork:
             conn.commit()
         self._dirty = True
 
+    async def score(
+        self,
+        query_embedding,
+        *,
+        subset_chunk_ids,
+        top_k: int,
+    ):
+        if not self._entered or self._handle is None:
+            raise UnitOfWorkNotEnteredError(
+                "FastPlaidUnitOfWork.score called outside async with",
+            )
+        if not subset_chunk_ids:
+            return ()
+        import sqlite3
+
+        import torch
+        with sqlite3.connect(str(self.db_path)) as conn:
+            placeholders = ",".join("?" for _ in subset_chunk_ids)
+            mapping = {
+                row[0]: row[1] for row in conn.execute(
+                    f"SELECT plaid_doc_id, chunk_id FROM chunk_multi_vector_ids "
+                    f"WHERE chunk_id IN ({placeholders})",
+                    list(subset_chunk_ids),
+                )
+            }
+        if not mapping:
+            return ()
+        # Pack the query MultiVector into shape (1, n_q, dim) — fast-plaid expects a batch.
+        q_stack = np.stack(list(query_embedding), axis=0).astype(np.float32, copy=False)
+        q_tensor = torch.from_numpy(q_stack).unsqueeze(0)
+        plaid_ids = list(mapping.keys())
+        raw = await asyncio.to_thread(
+            self._handle.search,
+            queries_embeddings=q_tensor,
+            top_k=top_k,
+            subset=plaid_ids,
+        )
+        # raw is list[list[(plaid_doc_id, score)]] — one inner list per query.
+        if not raw:
+            return ()
+        return tuple(
+            (mapping[plaid_id], float(score))
+            for (plaid_id, score) in raw[0]
+            if plaid_id in mapping
+        )
+
 
 __all__ = ("FastPlaidUnitOfWork",)
