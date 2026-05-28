@@ -242,6 +242,12 @@ class ChunkFetcherStep(RetrieverStep):
                 "ChunkFetcherStep requires BuildContext.app_config; "
                 "provide AppConfig at server/CLI startup."
             )
+        if context.connection_provider is None:
+            raise ValueError(
+                "ChunkFetcherStep requires BuildContext.connection_provider; "
+                "the composition root must wire a PerCallConnectionProvider "
+                "(see storage/factories.py)."
+            )
         allowed = frozenset(context.app_config.metadata_schemas[schema_name])
         return cls(
             provider=context.connection_provider,

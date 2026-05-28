@@ -135,3 +135,46 @@ async def test_member_fetcher_raises_if_pre_filter_set_but_scratch_missing(
     # No state.scratch['pre_filter.result'] — PreFilterStep didn't run.
     with pytest.raises(RuntimeError, match="pre_filter"):
         await step.run(state)
+
+
+def test_member_fetcher_keep_by_terms_drops_none_in_one_pass() -> None:
+    """Regression: the two-step filter (build None-tagged tuple, then
+    drop the Nones) widens the tuple element type to
+    ``ModuleMember | None``. The one-pass walrus-filter form keeps the
+    intermediate type as ``ModuleMember`` throughout, satisfying mypy
+    without ``# type: ignore``.
+
+    Pins the *behavior* (drops the non-matching member, keeps the
+    matcher) so the refactor from two-pass to one-pass walrus is
+    semantically a no-op.
+    """
+    from pydocs_mcp.retrieval.steps.member_fetcher import _keep_by_terms
+
+    keep = ModuleMember(
+        metadata={
+            ModuleMemberFilterField.NAME.value: "matchme",
+            ModuleMemberFilterField.PACKAGE.value: "p",
+            ModuleMemberFilterField.MODULE.value: "m",
+            ModuleMemberFilterField.KIND.value: MemberKind.FUNCTION.value,
+            "signature": "()",
+            "return_annotation": "",
+            "parameters": (),
+            "docstring": "",
+        },
+    )
+    drop = ModuleMember(
+        metadata={
+            ModuleMemberFilterField.NAME.value: "other",
+            ModuleMemberFilterField.PACKAGE.value: "p",
+            ModuleMemberFilterField.MODULE.value: "m",
+            ModuleMemberFilterField.KIND.value: MemberKind.FUNCTION.value,
+            "signature": "()",
+            "return_annotation": "",
+            "parameters": (),
+            "docstring": "",
+        },
+    )
+    members = (keep, drop)
+    # The one-pass form: equivalent semantics, narrower static type.
+    filtered = tuple(kept for m in members if (kept := _keep_by_terms(m, "match")) is not None)
+    assert filtered == (keep,)

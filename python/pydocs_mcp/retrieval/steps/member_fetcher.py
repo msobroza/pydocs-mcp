@@ -136,9 +136,11 @@ class MemberFetcherStep(RetrieverStep):
         members = tuple(_row_to_candidate(row, self.retriever_name) for row in rows)
         # Apply LIKE-style substring match in-process (matches legacy
         # LikeMemberRetriever's Python-side `needle in name or needle in
-        # docstring` post-filter).
-        members = tuple(_keep_by_terms(m, needle) for m in members)
-        members = tuple(m for m in members if m is not None)
+        # docstring` post-filter). Single-pass walrus form keeps the
+        # intermediate element type as ``ModuleMember`` (the two-step
+        # form widened to ``ModuleMember | None`` even though the second
+        # pass dropped the Nones — mypy correctly flagged that).
+        members = tuple(kept for m in members if (kept := _keep_by_terms(m, needle)) is not None)
         if scope is not None:
             # Lazy import — break the storage→extraction→retrieval.config→
             # retrieval.steps cycle (see module docstring).
@@ -205,6 +207,12 @@ class MemberFetcherStep(RetrieverStep):
             raise ValueError(
                 "MemberFetcherStep requires BuildContext.app_config; "
                 "provide AppConfig at server/CLI startup."
+            )
+        if context.connection_provider is None:
+            raise ValueError(
+                "MemberFetcherStep requires BuildContext.connection_provider; "
+                "the composition root must wire a PerCallConnectionProvider "
+                "(see storage/factories.py)."
             )
         allowed = frozenset(context.app_config.metadata_schemas[schema_name])
         return cls(
