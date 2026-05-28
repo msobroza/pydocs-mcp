@@ -52,6 +52,11 @@ _DDL = """
         kind           TEXT NOT NULL,
         PRIMARY KEY (from_package, from_node_id, to_name, kind)
     );
+    -- Note: ``PRAGMA foreign_keys`` is NOT enabled by ``open_index_database``,
+    -- so the FK CASCADE below is declarative-only documentation today. Per-package
+    -- cleanup is handled explicitly by ``remove_package`` / ``clear_all_packages``;
+    -- the FastPlaid wiring tasks extend those paths to DELETE from
+    -- ``chunk_multi_vector_ids`` alongside the existing per-table sweeps.
     CREATE TABLE chunk_multi_vector_ids (
         chunk_id      INTEGER PRIMARY KEY,
         plaid_doc_id  INTEGER NOT NULL UNIQUE,

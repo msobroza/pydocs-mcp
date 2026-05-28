@@ -1,4 +1,4 @@
-"""Schema v6: chunk_multi_vector_ids (id-mapping for fast-plaid) (AC-4 revised)."""
+"""Schema v6: chunk_multi_vector_ids — id-mapping table for fast-plaid."""
 from __future__ import annotations
 
 import sqlite3
