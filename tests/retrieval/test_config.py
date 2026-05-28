@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.resources
 import os
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -205,10 +204,6 @@ def test_pipeline_path_user_local_pipelines_overrides_shipped(tmp_path):
     assert resolved == local_override.resolve()
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 def test_pipeline_path_falls_back_to_shipped_when_user_local_missing(tmp_path):
     """If the user has a pydocs-mcp.yaml but no local ``./pipelines/`` dir,
     ``pipelines/foo.yaml`` still resolves to the shipped bundle (no regression)."""
@@ -222,7 +217,10 @@ def test_pipeline_path_falls_back_to_shipped_when_user_local_missing(tmp_path):
         user_config_path=user_cfg_file,
     )
     assert resolved.name == "chunk_search.yaml"
-    assert "pydocs_mcp/pipelines" in str(resolved)
+    # ``as_posix`` normalises ``\`` on Windows so the forward-slash substring
+    # assertion is platform-neutral. ``str(Path)`` would emit ``\`` separators
+    # on Windows and miss the ``pydocs_mcp/pipelines`` literal.
+    assert "pydocs_mcp/pipelines" in resolved.as_posix()
 
 
 def test_pipeline_path_legacy_presets_prefix_raises_migration_error(tmp_path):

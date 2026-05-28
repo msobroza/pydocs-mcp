@@ -19,7 +19,6 @@ entrypoint. Signature matches sub-PR #4's ``MemberExtractor`` Protocol —
 from __future__ import annotations
 
 import asyncio
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,14 +56,15 @@ def _private():
 
 @pytest.fixture
 def simple_project(tmp_path: Path) -> Path:
-    (tmp_path / "mod.py").write_text(_SIMPLE_MODULE)
+    # ``encoding="utf-8"`` is explicit — Python on Windows defaults to
+    # cp1252, which mangles the em-dash (U+2014) above into byte 0x97.
+    # Rust's ``read_files_parallel`` strictly requires UTF-8 and silently
+    # returns "" on decode failure, so the symbol walk would otherwise
+    # see an empty module and yield zero members on Windows.
+    (tmp_path / "mod.py").write_text(_SIMPLE_MODULE, encoding="utf-8")
     return tmp_path
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 @pytest.mark.asyncio
 async def test_ast_project_extraction_yields_module_members(
     simple_project: Path,
@@ -119,10 +119,6 @@ class _FakeDist:
         return self.site_packages / str(f)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 @pytest.mark.asyncio
 async def test_ast_dependency_extraction_yields_members(
     tmp_path: Path,
@@ -132,7 +128,8 @@ async def test_ast_dependency_extraction_yields_members(
     dep-normalized package name."""
     sp = tmp_path / "site-packages"
     (sp / "foo").mkdir(parents=True)
-    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE)
+    # ``encoding="utf-8"`` — see ``simple_project`` fixture for rationale.
+    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE, encoding="utf-8")
 
     dist = _FakeDist(site_packages=sp, rel_files=("foo/__init__.py",))
     monkeypatch.setattr(
@@ -228,10 +225,6 @@ async def test_inspect_extract_from_project_delegates_to_ast_fallback(
     assert ast_members == inspect_members
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 @pytest.mark.asyncio
 async def test_inspect_dependency_falls_back_to_ast_on_import_error(
     tmp_path: Path,
@@ -241,7 +234,8 @@ async def test_inspect_dependency_falls_back_to_ast_on_import_error(
     fallback to the composed AST extractor (spec §9.2)."""
     sp = tmp_path / "site-packages"
     (sp / "foo").mkdir(parents=True)
-    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE)
+    # ``encoding="utf-8"`` — see ``simple_project`` fixture for rationale.
+    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE, encoding="utf-8")
     dist = _FakeDist(site_packages=sp, rel_files=("foo/__init__.py",))
 
     monkeypatch.setattr(

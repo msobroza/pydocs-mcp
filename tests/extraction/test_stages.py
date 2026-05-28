@@ -16,7 +16,6 @@ Pins the 7-stage behavior (sub-PR #5b added ``reference_capture``):
 from __future__ import annotations
 
 import logging
-import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -155,17 +154,18 @@ def test_file_discovery_from_dict_builds_both_discoverers() -> None:
 # ── FileReadStage ──────────────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX-only path handling — Windows path-separator follow-up tracked",
-)
 @pytest.mark.asyncio
 async def test_file_read_reads_file_contents(tmp_path: Path) -> None:
     """Reads each path's contents and fills state.files.file_contents as (path, src) tuples."""
     f1 = tmp_path / "a.py"
-    f1.write_text("x = 1\n")
+    # ``write_bytes`` is used (not ``write_text``) so the on-disk newline is
+    # exactly ``\n`` on every OS — Python's text-mode ``write_text`` rewrites
+    # ``\n`` to ``\r\n`` on Windows, but the Rust ``read_files_parallel``
+    # returns the file bytes verbatim, so the round-trip assertion would
+    # otherwise mismatch by an extra ``\r``.
+    f1.write_bytes(b"x = 1\n")
     f2 = tmp_path / "b.py"
-    f2.write_text("y = 2\n")
+    f2.write_bytes(b"y = 2\n")
 
     stage = FileReadStage()
     state = IngestionState(
