@@ -167,6 +167,22 @@ class FastPlaidUnitOfWork:
         """
         self._dirty = False
 
+    @property
+    def multi_vectors(self) -> FastPlaidUnitOfWork:
+        """Self-reference so :class:`CompositeUnitOfWork`'s child-scan
+        finds the multi-vector store on this child.
+
+        ``FastPlaidUnitOfWork`` IS the :class:`MultiVectorStore` — it
+        implements the Protocol directly via ``add_vectors`` /
+        ``remove_vectors`` / ``clear_all`` / ``score``. Mirrors the
+        ``TurboQuantUnitOfWork.vectors`` precedent for the single-vector
+        path: a UoW that wraps a store also exposes itself under the
+        repo-attribute name so the composite's ``_DISPATCH_ATTRS`` scan
+        routes ``uow.multi_vectors`` to this instance instead of the
+        SQLite-side :class:`NullMultiVectorStore` placeholder.
+        """
+        return self
+
     async def add_vectors(
         self,
         ids: Sequence[int],

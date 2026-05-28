@@ -129,6 +129,71 @@ def build_sqlite_plus_turboquant_uow_factory(
     return build_composite_uow_factory([sqlite_factory, tq_factory])
 
 
+def build_uow_factory(
+    config: AppConfig,
+    *,
+    db_path: Path,
+    tq_path: Path | None = None,
+) -> Callable[[], CompositeUnitOfWork]:
+    """Single-dispatch composition for the per-deployment UoW.
+
+    Inspects ``config.late_interaction.enabled`` to decide whether to
+    wire a :class:`FastPlaidUnitOfWork` child alongside the canonical
+    :class:`SqliteUnitOfWork` (+ optional :class:`TurboQuantUnitOfWork`
+    when ``tq_path`` is provided). Late-interaction off (the shipped
+    default) returns a SQLite-only composite whose ``multi_vectors``
+    attribute resolves to :class:`NullMultiVectorStore` via the
+    SQLite UoW's default field — keeping the application surface
+    uniform regardless of backend.
+
+    The dispatch lives here (rather than in the composition roots) so
+    server.py / __main__.py / benchmarks pick up the right wiring by
+    swapping one factory call instead of N. Additive: the existing
+    ``build_sqlite_uow_factory`` /
+    ``build_sqlite_plus_turboquant_uow_factory`` factories stay; this
+    is the canonical entry point for new wiring.
+    """
+    db_path = Path(db_path)
+
+    sqlite_factory = build_sqlite_uow_factory(db_path)
+    children: list[Callable[[], object]] = [sqlite_factory]
+
+    if tq_path is not None:
+        tq_path_resolved = Path(tq_path)
+        embed = config.embedding
+        children.append(
+            lambda: TurboQuantUnitOfWork(
+                index_path=tq_path_resolved,
+                dim=embed.dim,
+                bit_width=embed.bit_width,
+            ),
+        )
+
+    if config.late_interaction.enabled:
+        # Lazy import keeps fast_plaid_uow's module-load cost off the
+        # default-install path — the file itself is import-cheap (its
+        # actual ``fast_plaid`` import is gated inside __aenter__) but
+        # the symmetry with how server.py + __main__.py currently
+        # import-on-demand keeps the dispatch self-contained.
+        from pydocs_mcp.storage.fast_plaid_uow import FastPlaidUnitOfWork
+
+        # Sidecar lives next to the SQLite DB, with the ``.plaid``
+        # suffix per the spec (mirrors the ``.tq`` TurboQuant sidecar).
+        sidecar = db_path.parent / f"{db_path.stem}.plaid"
+        pipeline_hash = config.ingestion_pipeline_hash
+        device = config.late_interaction.device
+        children.append(
+            lambda: FastPlaidUnitOfWork(
+                sidecar_path=sidecar,
+                db_path=db_path,
+                pipeline_hash=pipeline_hash,
+                device=device,
+            ),
+        )
+
+    return build_composite_uow_factory(children)
+
+
 def build_sqlite_candidate_id_resolver(
     db_path: Path,
 ) -> Callable[[Filter], Awaitable[np.ndarray]]:
