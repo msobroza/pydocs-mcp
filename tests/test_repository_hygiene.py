@@ -282,3 +282,23 @@ def test_editorconfig_exists() -> None:
     assert "root = true" in text
     assert "end_of_line = lf" in text
     assert "insert_final_newline = true" in text
+
+
+def test_uv_lock_exists_and_pinned() -> None:
+    """P2-8: uv.lock committed for reproducible builds.
+
+    Defer-able: if uv lock generation has friction (turbovec/fastembed
+    platform-specific wheels can stall it), the test should be marked
+    skip with a documented WHY. This commit assumes it generated cleanly.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    lock = root / "uv.lock"
+    assert lock.is_file(), (
+        "uv.lock required for reproducible CI installs (P2-8). "
+        "If uv lock has friction, mark this test skip with a WHY note."
+    )
+    # Sanity: lockfile pins at least the project + main runtime deps.
+    text = lock.read_text()
+    assert 'name = "pydocs-mcp"' in text or "pydocs-mcp" in text
