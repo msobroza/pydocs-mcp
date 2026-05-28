@@ -11,9 +11,9 @@ def _repo_root() -> Path:
 
 
 def test_default_config_documents_late_interaction_block() -> None:
-    text = (
-        _repo_root() / "python/pydocs_mcp/defaults/default_config.yaml"
-    ).read_text(encoding="utf-8")
+    text = (_repo_root() / "python/pydocs_mcp/defaults/default_config.yaml").read_text(
+        encoding="utf-8"
+    )
     assert "late_interaction" in text
 
 
@@ -39,9 +39,7 @@ def test_readme_no_internal_jargon() -> None:
         if excluded_parts.intersection(readme.parts):
             continue
         rel = readme.relative_to(_repo_root())
-        for lineno, line in enumerate(
-            readme.read_text(encoding="utf-8").splitlines(), start=1
-        ):
+        for lineno, line in enumerate(readme.read_text(encoding="utf-8").splitlines(), start=1):
             if pattern.search(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
 
