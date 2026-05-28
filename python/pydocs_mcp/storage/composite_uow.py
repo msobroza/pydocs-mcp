@@ -242,12 +242,14 @@ class CompositeUnitOfWork:
         # owning child exposes (Null fallback or real fast-plaid
         # backend), so ``Any`` keeps the runtime polymorphism explicit.
         #
-        # Lazy Null fallback: unlike ``vectors`` (always populated by
-        # SqliteUnitOfWork's default NullVectorStore), no child carries
-        # a default ``multi_vectors`` attribute today. When the
-        # late-interaction backend is disabled, _build_attr_map leaves
-        # the key absent; substitute a NullMultiVectorStore so callers
-        # never see KeyError and the Null Object pattern stays uniform.
+        # Defensive Null fallback: production composites always have
+        # ``multi_vectors`` populated by ``SqliteUnitOfWork``'s default
+        # ``NullMultiVectorStore`` field (symmetric to ``vectors``).
+        # This branch fires only for stub-composed UoWs in tests and
+        # for any future minimal composite whose children don't carry
+        # ``multi_vectors`` at all — substituting a fresh Null impl
+        # keeps the Null Object pattern uniform without surfacing a
+        # KeyError to callers.
         store = self._attr_map.get("multi_vectors")
         if store is None:
             from pydocs_mcp.storage.null_multi_vector_store import (
