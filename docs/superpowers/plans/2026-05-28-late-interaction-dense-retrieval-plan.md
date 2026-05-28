@@ -19,15 +19,16 @@ hybrid + RRF preset is unchanged; no MCP tool params change.
 (1073 lines, 10 locked Decisions A–J, 18 ACs).
 
 **Architecture (inside-out — matches PR order):** new `MultiVectorEmbedder`
-Protocol + `LateInteractionConfig` sub-model (contracts) → `chunk_vectors`
+Protocol + `MultiVectorStore` Protocol + `LateInteractionConfig` sub-model
++ `BuildContext.multi_vector_embedder` field (contracts) → `chunk_vectors`
 schema v6 + `SqliteMultiVectorUnitOfWork` (storage adapter) → `PyLateEmbedder`
 + `build_multi_vector_embedder(cfg)` lazy factory (embedder adapter) →
 `EmbedChunksMultiVectorStage` + `ingestion_late_interaction.yaml` (write
-path) → `LateInteractionScorerStep` + `BuildContext.multi_vector_embedder`
-+ `_maxsim` (retrieval step) → `build_sqlite_plus_multi_vector_uow_factory`
-+ `server.py` / `__main__.py` wiring (composition root) →
-`chunk_search_late_interaction{,_ranked}.yaml` + `PydocsLateInteractionSystem`
-+ docs (end-to-end + smoke benchmark).
+path; in parallel with) `LateInteractionScorerStep` + `_maxsim`
+(retrieval step) → single-dispatch `build_vectors_uow_child(config)` +
+`build_uow_factory(config)` + `server.py` / `__main__.py` wiring
+(composition root) → `chunk_search_late_interaction{,_ranked}.yaml`
++ `PydocsLateInteractionSystem` + docs (end-to-end + smoke benchmark).
 
 **Hard constraints (inherited from CLAUDE.md and the spec):**
 
@@ -385,7 +386,7 @@ extra), AC-14 (actionable ImportError when extra absent).
 
 - `tests/extraction/strategies/embedders/test_pylate_embedder.py`:
   - `test_pylate_embedder_satisfies_protocol_with_mocked_colbert` — patch `pylate.models.ColBERT` to a `MagicMock` that returns deterministic L2-normalized arrays from `.encode(...)`; `isinstance(obj, MultiVectorEmbedder)`.
-  - `test_pylate_embed_query_returns_2d_l2_normalized` — mocked `.encode([text], is_query=True, ...)` returns a `(nq, dim)` array; the embedder unwraps the `[0]`th item.
+  - `test_pylate_embed_query_returns_multivector_l2_normalized` — mocked `.encode([text], is_query=True, ...)` returns a `(nq, dim)` array; the embedder unwraps the `[0]`th item then unpacks its rows into a `MultiVector = list[np.ndarray]` (so `is_multi_vector(...)` returns True); each element is a 1-D `np.ndarray` of dtype `float32` and length `dim` with L2-norm `1.0`.
   - `test_pylate_constructor_passes_pool_factor_to_colbert` — instantiate with `pool_factor=2`; mocked `models.ColBERT(...)` is asserted via `call_args.kwargs["pool_factor"] == 2` (per Decision A, `pool_factor` is a `models.ColBERT(...)` constructor kwarg, NOT a `.encode()` kwarg).
   - `test_pylate_embed_chunks_passes_is_query_false` — assert `call_args.kwargs["is_query"] is False`.
   - `test_pylate_embedder_lazy_import_error_actionable` — block `pylate` from `sys.modules`, importing `pylate.py` raises the actionable `ImportError` naming `pip install 'pydocs-mcp[late-interaction]'`.

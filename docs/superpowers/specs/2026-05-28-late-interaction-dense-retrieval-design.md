@@ -225,6 +225,12 @@ class PyLateEmbedder:
     document_length: int                 # PyLate's own default 180 (NOT 256 / 512)
     query_length: int                    # PyLate's own default 32
     pool_factor: int                     # 1 = no token pooling; >1 trades recall for storage
+    # Constructed in __post_init__. Declared as a slot field with
+    # default=None so ``frozen=True`` + ``slots=True`` admits
+    # ``object.__setattr__`` for the real assignment. The Optional in
+    # the annotation is structural (covers the brief pre-__post_init__
+    # window inside the constructor); call sites can assume non-None.
+    _model: "models.ColBERT | None" = field(init=False, repr=False, default=None, compare=False)
 
     def __post_init__(self) -> None:
         # ``embedding_size`` is the PyLate kwarg for the projection dim
