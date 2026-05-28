@@ -121,13 +121,32 @@ python -m benchmarks.eval.plotting \
 
 Repeat for `ds1000_*.json`.
 
+## DS-1000 setup gate
+
+All DS-1000 sweeps need `benchmarks/fixtures/ds1000_reference_project`
+populated. The committed copy is a stub (a 5-line `__init__.py`); the
+real corpus comes from installing its `pyproject.toml`, which pins the
+pandas / numpy / scikit-learn / torch / tensorflow versions DS-1000 was
+authored against:
+
+```bash
+cd benchmarks/fixtures/ds1000_reference_project
+python -m venv .venv
+.venv/bin/pip install -e .
+```
+
+The materialized `site-packages/` is then what `pydocs-mcp` indexes
+when the runner is called with `--corpus-dir
+benchmarks/fixtures/ds1000_reference_project`. Without that flag, every
+DS-1000 task indexes the stub project and every metric is 0.
+
 ## Status
 
-| Sweep | Status |
-|---|---|
-| `repoqa_bm25` | in flight |
-| `repoqa_hybrid_li_rrf` | deferred (needs `[late-interaction]` extra) |
-| `repoqa_tree` | deferred (needs `OPENAI_API_KEY` in env) |
-| `ds1000_bm25` | blocked on FTS5 escape bug (see above) |
-| `ds1000_hybrid_li_rrf` | deferred (needs `[late-interaction]` extra) |
-| `ds1000_tree` | deferred (needs `OPENAI_API_KEY` in env) |
+| Sweep | Status | Blocker |
+|---|---|---|
+| `repoqa_bm25` | in flight | — |
+| `repoqa_hybrid_li_rrf` | in flight | — |
+| `repoqa_tree` | deferred | needs `OPENAI_API_KEY` |
+| `ds1000_bm25` | deferred | (1) reference project setup, (2) FTS5 escape bug |
+| `ds1000_hybrid_li_rrf` | deferred | (1) reference project setup, (2) FTS5 escape bug |
+| `ds1000_tree` | deferred | (1) reference project setup, (2) `OPENAI_API_KEY` |
