@@ -298,3 +298,33 @@ def test_uv_lock_exists_and_pinned() -> None:
     # Sanity: lockfile pins at least the project + main runtime deps.
     text = lock.read_text(encoding="utf-8")
     assert 'name = "pydocs-mcp"' in text or "pydocs-mcp" in text
+
+
+def test_ci_uses_uv_sync_frozen() -> None:
+    """P2-8 lockfile + Task 8: CI installs from uv.lock via `uv sync --frozen`.
+
+    Prevents a future PR from silently dropping back to
+    `uv pip install --system` (which resolves fresh each run and
+    defeats the lockfile). The rust job is intentionally exempt — it
+    has a different lifecycle (maturin develop on a hand-rolled venv).
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ci_yml = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "uv sync --frozen" in ci_yml, (
+        "ci.yml must use `uv sync --frozen` for lockfile reproducibility"
+    )
+    # And NOT fall back to pip-install --system in any `run:` line of the
+    # python job (the rust job is intentionally exempt — it needs a real
+    # venv). Match the actual command, not WHY-comment text that may
+    # explain the migration history.
+    for line in ci_yml.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue  # skip comments (they may cite the old command)
+        assert "uv pip install --system" not in stripped, (
+            f"ci.yml must not invoke `uv pip install --system` "
+            f"(found in line: {stripped!r}); "
+            f"use `uv sync --frozen` (lockfile-pinned) instead"
+        )

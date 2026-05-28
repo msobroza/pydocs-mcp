@@ -72,23 +72,28 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Install project + dev group
-        run: |
-          uv pip install --system -e .
-          uv pip install --system --group dev
+      # WHY: `uv sync --frozen` installs into a managed .venv directly
+      # from uv.lock, refusing to re-resolve. Previously the two
+      # `uv pip install --system` calls resolved fresh against PyPI on
+      # every run — uv.lock existed but did not gate anything, so a
+      # transitive patch release could redden CI silently. Subsequent
+      # CI commands wrap through `uv run` so they pick up the venv
+      # without an explicit `source .venv/bin/activate` step.
+      - name: Install project + dev group (frozen)
+        run: uv sync --frozen --group dev
 
       - name: Lint
-        run: ruff check python/ tests/
+        run: uv run ruff check python/ tests/
 
       - name: Format check
-        run: ruff format --check python/ tests/ benchmarks/
+        run: uv run ruff format --check python/ tests/ benchmarks/
 
       # WHY: 74% of files in python/pydocs_mcp/ carry type hints. With py.typed
       # shipped, mypy must verify the annotations are coherent for downstream
       # consumers. Lenient initial baseline (see [tool.mypy] in pyproject.toml);
       # ratchet plan is to flip disallow_untyped_defs=true in a follow-up PR.
       - name: Typecheck
-        run: mypy python/pydocs_mcp
+        run: uv run mypy python/pydocs_mcp
 
       - name: Smoke-test out-of-tree pydocs_mcp imports
         # benchmarks/ is not under tests/, so a rename to an internal
@@ -97,7 +102,7 @@ jobs:
         # import declared by the three benchmark entry files, *without*
         # executing their top-level code (pandas/httpx/rich aren't installed
         # in this job). Catches stale module paths + missing attributes.
-        run: python scripts/smoke_check_benchmark_imports.py
+        run: uv run python scripts/smoke_check_benchmark_imports.py
 
       # WHY: LD_PRELOAD forces the dynamic linker to load libopenblas.so.0
       # (CBLAS-enabled pthread variant) BEFORE turbovec/_turbovec.abi3.so
@@ -114,7 +119,7 @@ jobs:
         env:
           LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
         run: |
-          python -m pytest tests/ -v \
+          uv run python -m pytest tests/ -v \
             --ignore=tests/test_parity.py \
             --cov=pydocs_mcp \
             --cov-report=term-missing \
@@ -124,7 +129,7 @@ jobs:
       - name: Test with coverage (macOS / Windows)
         if: runner.os != 'Linux'
         run: |
-          python -m pytest tests/ -v --ignore=tests/test_parity.py --cov=pydocs_mcp --cov-report=term-missing --cov-fail-under=90
+          uv run python -m pytest tests/ -v --ignore=tests/test_parity.py --cov=pydocs_mcp --cov-report=term-missing --cov-fail-under=90
 
       - name: Upload coverage artifact
         # WHY: only one upload per run — pin to the Linux + 3.12 cell so
