@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         FilterAdapter,
         LlmClient,
         ModuleMemberStore,
+        MultiVectorEmbedder,
         TextSearchable,
         UnitOfWork,
         VectorSearchable,
@@ -160,3 +161,9 @@ class BuildContext:
     # the dep is missing (transitional shape — commit 1 falls back to a
     # default-constructed adapter; commit 2 will require explicit wiring).
     filter_adapter: FilterAdapter | None = None
+    # Late-interaction (ColBERT-style) embedder consumed by
+    # :class:`EmbedChunksMultiVectorStage`. Optional at the type level so
+    # deployments without late-interaction ingestion can leave it ``None``;
+    # the stage's ``from_dict`` raises a YAML-anchored error when it's
+    # missing (parity with the single-vector ``embedder`` gate).
+    multi_vector_embedder: MultiVectorEmbedder | None = None
