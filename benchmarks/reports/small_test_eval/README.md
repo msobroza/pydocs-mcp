@@ -23,18 +23,21 @@ measured numbers.
 
 ## Known surfaces discovered during this eval
 
-- **FTS5 punctuation escape gap** — DS-1000 prompts contain literal
-  triple-quoted Python (`u"""probegenes,sample..."""`) and single-quoted
-  module names (`'sklearn'`). `_build_fts_match_query` in
-  `python/pydocs_mcp/retrieval/steps/chunk_fetcher.py` wraps each
-  whitespace-split token in `"..."` but does not strip embedded `"`,
-  `,`, `(`, `)`, `*` from the token first — so 2 / 30 DS-1000 prompts
-  raise `sqlite3.OperationalError: fts5: syntax error near ","` and
-  abort the whole sweep. Affects production: any MCP `search` call
-  with one of those chars in the query crashes. Fix is ~5 lines, shipped
-  in a follow-up PR (the same `_build_fts_match_query` lives in
-  `storage/sqlite.py` under the AC17 byte-parity rule — both copies move
-  together).
+- **FTS5 punctuation escape gap (fixed in this PR, commit `55abe8b`)** —
+  DS-1000 prompts contain literal triple-quoted Python
+  (`u"""probegenes,sample..."""`) and single-quoted module names
+  (`'sklearn'`). Pre-fix `_build_fts_match_query` wrapped each
+  whitespace-split token in `"..."` but stripped nothing first, so 2 /
+  30 DS-1000 prompts raised `sqlite3.OperationalError: fts5: syntax
+  error near ","` and aborted the sweep. Affects production: any MCP
+  `search` call with one of those chars in the query crashed. The fix
+  is a positive regex filter (`[^\w.\-]+` → space) applied per token
+  before the phrase wrap — word chars + dots + hyphens survive
+  (preserves BM25 ranking on `pd.DataFrame` / `multi-index`); FTS5
+  specials collapse to whitespace. Lands in both
+  `chunk_fetcher.py` and `storage/sqlite.py` per the AC17 byte-parity
+  rule, with 11 new regression tests at
+  `tests/retrieval/steps/test_fts5_escape.py`.
 - **Per-task indexing cost dominates BM25/tree wall time** — the
   shipped `ingestion.yaml` runs `embed_chunks` (FastEmbed encode)
   unconditionally. BM25 and tree retrieval never read the dense vectors,
@@ -147,6 +150,6 @@ DS-1000 task indexes the stub project and every metric is 0.
 | `repoqa_bm25` | in flight | — |
 | `repoqa_hybrid_li_rrf` | in flight | — |
 | `repoqa_tree` | deferred | needs `OPENAI_API_KEY` |
-| `ds1000_bm25` | deferred | (1) reference project setup, (2) FTS5 escape bug |
-| `ds1000_hybrid_li_rrf` | deferred | (1) reference project setup, (2) FTS5 escape bug |
+| `ds1000_bm25` | deferred | reference project setup (FTS5 bug fixed) |
+| `ds1000_hybrid_li_rrf` | deferred | reference project setup (FTS5 bug fixed) |
 | `ds1000_tree` | deferred | (1) reference project setup, (2) `OPENAI_API_KEY` |
