@@ -409,3 +409,28 @@ def test_release_yml_syncs_version_from_tag() -> None:
         f"expected the sync step in every build job (>= 4 occurrences); "
         f"got {occurrences}"
     )
+
+
+def test_pip_audit_job_present_in_ci() -> None:
+    """P2-2: ci.yml has a `security` job that runs pip-audit against
+    the uv.lock-derived dependency tree, so a vulnerable transitive
+    can't ship to PyPI undetected.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ci_yml = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    # The security job is present (named `security:` at job level).
+    assert "\n  security:\n" in ci_yml, (
+        "ci.yml must declare a `security:` job (P2-2). "
+        "Add `security:` as a sibling to `python:` / `rust:`."
+    )
+    # Runs pip-audit (any invocation form is fine: pip-audit, uvx pip-audit, etc.).
+    assert "pip-audit" in ci_yml, (
+        "ci.yml security job must run pip-audit"
+    )
+    # In strict mode — advisories on indirect/transitive deps fail too.
+    assert "--strict" in ci_yml, (
+        "pip-audit must run in --strict mode so transitive CVEs fail CI"
+    )
