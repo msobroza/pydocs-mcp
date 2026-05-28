@@ -152,8 +152,12 @@ shape).
 **Files touched:**
 
 - Modify: `python/pydocs_mcp/storage/protocols.py` — add
-  `MultiVectorEmbedder` Protocol next to `Embedder`. Imports
-  `MultiVector` + `is_multi_vector` from `models.py` (both already
+  `MultiVectorEmbedder` Protocol next to `Embedder` AND add a
+  `MultiVectorStore(Protocol)` mirror of the existing `VectorStore` surface
+  (`add_vectors` / `remove_vectors` / `clear_all` / `load_matrices`) so
+  retrieval-side code (`LateInteractionScorerStep`) and storage-side code
+  (PR-2) both depend on a typed contract instead of `vectors: object`.
+  Imports `MultiVector` + `is_multi_vector` from `models.py` (both already
   present).
 - Modify: `python/pydocs_mcp/retrieval/config.py` — add
   `LateInteractionConfig` (twin of `EmbeddingConfig`) + the
@@ -161,12 +165,23 @@ shape).
   on `LateInteractionConfig` lands here; the fold into
   `ingestion_pipeline_hash` is **deferred to PR-4** so this PR doesn't
   touch the cache invalidation path.
+- Modify: `python/pydocs_mcp/retrieval/serialization.py` — add
+  `BuildContext.multi_vector_embedder: "MultiVectorEmbedder | None" = None`
+  alongside the existing `embedder` / `llm_client` fields. Landing this in
+  PR-1 (with the Protocol) means the retrieval-side step (PR-5) and the
+  ingestion-side stage (PR-4) — both of which consume `BuildContext` — can
+  develop independently against the same shared field, and PR-5 no longer
+  blocks on PR-4. The field is `None` on every default-install code path
+  until PR-6 wires the gated factory call at the composition root.
 - Modify: `python/pydocs_mcp/defaults/default_config.yaml` — append a
   commented-out `late_interaction:` block (mirroring the `llm:` block).
 - Modify: `tests/_fakes.py` — add `FakeMultiVectorEmbedder` (deterministic
-  seeded-random `(n_tokens, dim)` matrices, L2-normalized per row).
+  seeded-random `MultiVector = list[np.ndarray]` — `n_tokens` 1-D float32
+  vectors of length `dim`, each L2-normalized).
 - Create: `tests/storage/test_multi_vector_embedder_protocol.py`
+- Create: `tests/storage/test_multi_vector_store_protocol.py`
 - Create: `tests/retrieval/test_config_late_interaction.py`
+- Create: `tests/retrieval/test_build_context_multi_vector_embedder.py`
 - Create: `tests/test_fake_multi_vector_embedder.py`
 
 **Acceptance criteria (mapped to spec ACs):**
@@ -181,19 +196,25 @@ shape).
 - `tests/storage/test_multi_vector_embedder_protocol.py`:
   - `test_multi_vector_embedder_protocol_runtime_checkable` — `FakeMultiVectorEmbedder()` passes `isinstance(obj, MultiVectorEmbedder)`.
   - `test_multi_vector_embedder_has_embed_query_async` — `inspect.iscoroutinefunction(MultiVectorEmbedder.embed_query)`.
-  - `test_multi_vector_embedder_has_embed_documents_async` — same for `embed_documents`.
+  - `test_multi_vector_embedder_has_embed_chunks_async` — same for `embed_chunks`.
   - `test_multi_vector_embedder_declares_dim_and_model_name` — source-scan assertion (mirrors `test_llm_client_protocol_has_model_name`).
+- `tests/storage/test_multi_vector_store_protocol.py`:
+  - `test_multi_vector_store_protocol_runtime_checkable` — a minimal in-memory fake satisfies `isinstance(obj, MultiVectorStore)`.
+  - `test_multi_vector_store_declares_add_remove_clear_load` — surface mirrors the shipped `VectorStore` (`add_vectors`, `remove_vectors`, `clear_all`) plus the new `load_matrices(ids) -> dict[int, np.ndarray]` method consumed by `LateInteractionScorerStep`.
+- `tests/retrieval/test_build_context_multi_vector_embedder.py`:
+  - `test_build_context_has_multi_vector_embedder_field_defaulting_to_none` — `BuildContext().multi_vector_embedder is None`; the field is `MultiVectorEmbedder | None`.
+  - `test_build_context_accepts_multi_vector_embedder` — passing a `FakeMultiVectorEmbedder` round-trips through the dataclass.
 - `tests/retrieval/test_config_late_interaction.py`:
-  - `test_late_interaction_config_defaults` — `provider="pylate"`, `model_name="lightonai/LateOn-Code"`, `dim=128`, `document_length=180`, `query_length=32`, `pool_factor=1`, `candidate_limit=100`.
+  - `test_late_interaction_config_defaults` — `provider="pylate"`, `model_name="lightonai/LateOn-Code"`, `dim=128`, `document_length=180`, `query_length=32`, `pool_factor=1` (no `candidate_limit` field — per Decision F SSOT rationale the re-rank ceiling lives only in the preset YAML's `top_k_filter.k`).
   - `test_app_config_late_interaction_field_present` — `AppConfig().late_interaction` is a `LateInteractionConfig`.
   - `test_app_config_yaml_overlay_for_late_interaction` — overlay edits `model_name` + `pool_factor` and they round-trip via `AppConfig.load(explicit_path=...)`.
   - `test_app_config_env_overlay_for_late_interaction` — `PYDOCS_LATE_INTERACTION__POOL_FACTOR=2` env overlay applies.
   - `test_late_interaction_config_extra_forbid` — unknown key raises at load.
-  - `test_late_interaction_compute_pipeline_hash_changes_on_model_swap` — `model_name="A"` vs `"B"` produce different hashes; `pool_factor=1` vs `2` produce different hashes; `candidate_limit` change does NOT change the hash (retrieval-time knob, not storage identity).
+  - `test_late_interaction_compute_pipeline_hash_changes_on_model_swap` — `model_name="A"` vs `"B"` produce different hashes; `pool_factor=1` vs `2` produce different hashes.
 - `tests/test_fake_multi_vector_embedder.py`:
   - `test_fake_satisfies_multi_vector_protocol` — `isinstance` check.
-  - `test_fake_embed_query_returns_2d_float32_l2_normalized` — shape `(nq, dim)`, dtype `float32`, every row's L2-norm within `1e-5` of `1.0`.
-  - `test_fake_embed_documents_returns_tuple_of_matrices` — input `("a", "b")`, output is a 2-tuple of `(nd, dim)` matrices.
+  - `test_fake_embed_query_returns_list_of_1d_float32_l2_normalized` — output is a Python `list` of length `n_tokens` (so `is_multi_vector(emb)` returns True), each element a 1-D `np.ndarray` of dtype `float32` and length `dim`, L2-norm within `1e-5` of `1.0`.
+  - `test_fake_embed_chunks_returns_tuple_of_multivectors` — input `("a", "b")`, output is a 2-tuple of `MultiVector` (each a `list[np.ndarray]`).
   - `test_fake_seed_determinism` — same seed + same input ⇒ byte-identical output.
 
 **Dependencies:** none (this is the root PR).
@@ -235,18 +256,19 @@ migration), AC-5 (round-trip).
   `SqliteMultiVectorUnitOfWork` (`@dataclass(frozen=True, slots=True)`).
   Surface: `__aenter__` / `__aexit__` / `commit` / `rollback` mirror
   `TurboQuantUnitOfWork`; `add_vectors(ids, embeddings)` validates each
-  emb is a `MultiVector` (2-D ndarray), serializes via
-  `mat.astype(np.float32, copy=False).tobytes()` into the BLOB column;
-  `load_matrices(ids) -> dict[int, np.ndarray]` reads + `np.frombuffer` +
-  reshape; `remove_vectors(ids)` and `clear_all()` are straightforward
-  SQL.
+  emb is a `MultiVector = list[np.ndarray]` (one 1-D vector per token),
+  stacks into a single `(n_tokens, dim)` float32 array, serializes via
+  `mat.tobytes()` into the BLOB column; `load_matrices(ids) ->
+  dict[int, np.ndarray]` reads + `np.frombuffer` + reshape;
+  `remove_vectors(ids)` and `clear_all()` are straightforward SQL. The
+  class satisfies the `MultiVectorStore` Protocol shipped in PR-1.
 - Modify: `python/pydocs_mcp/storage/__init__.py` — re-export the new UoW
   if any other module re-exports `TurboQuantUnitOfWork` (sniff before
   editing).
 - Modify: `tests/_fakes.py` — extend `make_fake_uow_factory(...)` to
-  accept a `vectors=` kwarg pointing at a fake `MultiVectorStore` (a
-  thin in-memory dict-backed double); existing single-vector-store
-  call sites keep working.
+  accept a `vectors=` kwarg pointing at a fake satisfying the
+  `MultiVectorStore` Protocol from PR-1 (a thin in-memory dict-backed
+  double); existing single-vector-store call sites keep working.
 - Create: `tests/storage/test_multi_vector_store.py`
 - Create: `tests/storage/test_schema_v6_chunk_vectors.py`
 
@@ -266,13 +288,14 @@ migration), AC-5 (round-trip).
   - `test_chunk_vectors_in_known_tables` — `"chunk_vectors" in _KNOWN_TABLES`.
   - `test_v5_db_triggers_wipe_and_recreate` — write `PRAGMA user_version=5` to a tmp DB, open via the schema helper, assert tables get recreated at v6.
 - `tests/storage/test_multi_vector_store.py`:
-  - `test_add_vectors_then_load_matrices_round_trip` — write one `(80, 128)` matrix, read it back, `np.array_equal`.
-  - `test_add_vectors_multiple_ids_independent` — two chunks, two distinct matrices, `load_matrices([id1, id2])` returns both.
+  - `test_add_vectors_then_load_matrices_round_trip` — write one `MultiVector` of 80 length-128 vectors, read it back, `np.array_equal` against the stacked `(80, 128)` reference.
+  - `test_add_vectors_multiple_ids_independent` — two chunks, two distinct `MultiVector` inputs, `load_matrices([id1, id2])` returns both.
   - `test_remove_vectors_deletes_row` — add then remove, `load_matrices` returns empty dict for that id.
   - `test_clear_all_empties_table` — add N matrices, `clear_all()`, table count is 0.
-  - `test_add_vectors_rejects_single_vector_input` — passing a 1-D ndarray raises (the inverse of the existing `TurboQuantUnitOfWork` guard).
+  - `test_add_vectors_rejects_single_vector_input` — passing a 1-D ndarray (the single-vector `Embedding` arm) raises (the inverse of the existing `TurboQuantUnitOfWork` guard; multi-vector store accepts only the `MultiVector = list[np.ndarray]` arm).
   - `test_commit_persists_rollback_discards` — within `async with`, add + commit persists; add + raise + reopen-and-read shows the row absent.
   - `test_model_name_column_stamped` — `add_vectors` writes the embedder `model_name` into the row (defense-in-depth per Decision J risk row).
+  - `test_satisfies_multi_vector_store_protocol` — `isinstance(SqliteMultiVectorUnitOfWork(...), MultiVectorStore)` (the Protocol shipped in PR-1).
 
 **Dependencies:** PR-1 (uses `MultiVector` from `models.py`, but that
 union has been there since the hybrid PR — strictly speaking PR-2 could
@@ -321,14 +344,20 @@ extra), AC-14 (actionable ImportError when extra absent).
   Confirm `[tool.maturin] include` already covers `pipelines/*.yaml`
   (it does — no change needed for the YAML presets shipped in PR-7).
 - Create: `python/pydocs_mcp/extraction/strategies/embedders/pylate.py` —
-  `PyLateEmbedder` dataclass. Top-of-module `try / except ImportError`
-  raises the actionable error spelled out in Decision E. `__post_init__`
-  constructs `models.ColBERT(model_name_or_path=..., embedding_size=...,
-  document_length=..., query_length=...)`. `embed_query` calls
+  `PyLateEmbedder` frozen+slots dataclass. Top-of-module `try / except
+  ImportError` raises the actionable error spelled out in Decision E.
+  `__post_init__` uses `object.__setattr__` (required because the dataclass
+  is `frozen=True`) to construct `models.ColBERT(model_name_or_path=...,
+  embedding_size=..., document_length=..., query_length=...,
+  pool_factor=...)` — note `pool_factor` is a `models.ColBERT(...)`
+  constructor kwarg, NOT a `.encode()` kwarg. `embed_query` calls
   `model.encode([text], is_query=True, convert_to_numpy=True,
   normalize_embeddings=True)` wrapped in `asyncio.to_thread`;
-  `embed_documents` does the batch equivalent with `is_query=False` +
-  `pool_factor=...`.
+  `embed_chunks` does the batch equivalent with `is_query=False`. Both
+  unpack the resulting 2-D `(n_tokens, dim)` arrays into
+  `MultiVector = list[np.ndarray]` (one 1-D float32 vector per token)
+  so `is_multi_vector(emb)` (which tests `isinstance(emb, list)`)
+  disambiguates downstream.
 - Modify: `python/pydocs_mcp/extraction/strategies/embedders/__init__.py` —
   add `build_multi_vector_embedder(cfg: LateInteractionConfig) ->
   MultiVectorEmbedder` next to `build_embedder`. Defers the PyLate import
@@ -344,7 +373,7 @@ extra), AC-14 (actionable ImportError when extra absent).
 
 **Acceptance criteria:**
 
-- AC-1 in full (PyLate-specific): `embed_query` / `embed_documents` shape
+- AC-1 in full (PyLate-specific): `embed_query` / `embed_chunks` shape
   + L2-norm verified against a mocked `ColBERT` returning canned arrays.
 - AC-3 in full: factory returns a `PyLateEmbedder` for `provider="pylate"`;
   raises `ValueError` for unknown providers; the `pylate` import is lazy
@@ -359,8 +388,8 @@ extra), AC-14 (actionable ImportError when extra absent).
 - `tests/extraction/strategies/embedders/test_pylate_embedder.py`:
   - `test_pylate_embedder_satisfies_protocol_with_mocked_colbert` — patch `pylate.models.ColBERT` to a `MagicMock` that returns deterministic L2-normalized arrays from `.encode(...)`; `isinstance(obj, MultiVectorEmbedder)`.
   - `test_pylate_embed_query_returns_2d_l2_normalized` — mocked `.encode([text], is_query=True, ...)` returns a `(nq, dim)` array; the embedder unwraps the `[0]`th item.
-  - `test_pylate_embed_documents_passes_pool_factor` — instantiate with `pool_factor=2`; mocked `.encode(..., pool_factor=2)` is asserted via `call_args.kwargs["pool_factor"] == 2`.
-  - `test_pylate_embed_documents_passes_is_query_false` — assert `call_args.kwargs["is_query"] is False`.
+  - `test_pylate_constructor_passes_pool_factor_to_colbert` — instantiate with `pool_factor=2`; mocked `models.ColBERT(...)` is asserted via `call_args.kwargs["pool_factor"] == 2` (per Decision A, `pool_factor` is a `models.ColBERT(...)` constructor kwarg, NOT a `.encode()` kwarg).
+  - `test_pylate_embed_chunks_passes_is_query_false` — assert `call_args.kwargs["is_query"] is False`.
   - `test_pylate_embedder_lazy_import_error_actionable` — block `pylate` from `sys.modules`, importing `pylate.py` raises the actionable `ImportError` naming `pip install 'pydocs-mcp[late-interaction]'`.
 - `tests/extraction/strategies/embedders/test_build_multi_vector_embedder.py`:
   - `test_factory_returns_pylate_embedder_for_pylate_provider` (with mocked ColBERT).
@@ -382,10 +411,11 @@ extra), AC-14 (actionable ImportError when extra absent).
   issue comment`. The mocked test runs without PyLate so can't catch
   this; the OPENAI_API_KEY-style integration test in PR-7 (gated on the
   extra being installed) is the catch.
-- The Decision A code example uses a top-level `from pylate import
-  models`. This MUST move into the `try / except` block per Decision E
-  or the lazy-import promise breaks; AC-3's `sys.modules` assertion will
-  catch a regression.
+- The Decision A code example uses a single lazy-import shape: the
+  `from pylate import models` lives inside the top-of-module `try /
+  except ImportError` block (matching Decision E). PR-3 implements that
+  shape verbatim; AC-3's `sys.modules` assertion catches any regression
+  that re-introduces a top-level eager import.
 
 **Estimated size:** small-medium. ~80 LOC of production code + ~120 LOC
 of tests + a one-line `pyproject.toml` edit.
@@ -413,22 +443,30 @@ AC-10 (stage behavior), AC-11 (hash invalidation), partial AC-12
   Mirror `EmbedChunksStage`'s shape: same `existing_chunk_hashes` skip
   set, same batch loop, same `state.package.embedding_model` stamp, same
   `pipeline_hash` interaction. Replaces `Embedder.embed_chunks` with
-  `MultiVectorEmbedder.embed_documents`; splices each `(n_tokens, dim)`
-  matrix onto `Chunk.embedding`. `from_dict` raises if
-  `context.multi_vector_embedder is None`.
+  `MultiVectorEmbedder.embed_chunks`; splices each `MultiVector =
+  list[np.ndarray]` (length `n_tokens`, each element a 1-D float32 vector
+  of length `dim`) onto `Chunk.embedding`. `from_dict` raises if
+  `context.multi_vector_embedder is None`. (`BuildContext.multi_vector_embedder`
+  itself lands in PR-1 alongside the Protocol, so PR-4 only consumes it.)
 - Create: `python/pydocs_mcp/pipelines/ingestion_late_interaction.yaml` —
   copy of `ingestion.yaml` with the `embed_chunks` entry swapped for
   `embed_chunks_multi_vector`.
-- Modify: `python/pydocs_mcp/retrieval/serialization.py` — extend
-  `BuildContext` with `multi_vector_embedder: "MultiVectorEmbedder | None"
-  = None` (lands here so PR-4 + PR-5 share the same field; PR-5 uses it
-  for the retrieval step).
+- Create: `python/pydocs_mcp/retrieval/_pipeline_introspection.py` —
+  a single shared helper
+  `_pipeline_uses_step_type(yaml_path: Path, type_name: str) -> bool`
+  that parses the YAML with the standard loader and walks every nested
+  step / stage / branch for a `type:` field equal to `type_name`. The
+  result is cached at the AppConfig instance level via the existing
+  `cached_property`. This is the canonical "does this pipeline reference
+  X?" helper — PR-4 calls it with `"embed_chunks_multi_vector"` for the
+  ingestion path; PR-6 calls it with `"late_interaction_scorer"` for the
+  retrieval path. (Replaces the original substring-scan sketch — a
+  parsed walk avoids YAML-comment false positives and gives PR-6 a
+  reusable contract.)
 - Modify: `python/pydocs_mcp/retrieval/config.py` — fold
   `late_interaction.compute_pipeline_hash()` into `ingestion_pipeline_hash`
-  conditionally on `_ingestion_uses_multi_vector(ingestion_path)`. The
-  helper does a cheap one-pass YAML scan for the literal
-  `"embed_chunks_multi_vector"` token; the result is cached at the
-  AppConfig instance level via the existing `cached_property`.
+  conditionally on
+  `_pipeline_uses_step_type(ingestion_path, "embed_chunks_multi_vector")`.
 - Modify: `python/pydocs_mcp/extraction/pipeline/stages/__init__.py` — if
   the existing module re-exports `EmbedChunksStage`, add a sibling re-export.
 - Create:
@@ -449,7 +487,7 @@ AC-10 (stage behavior), AC-11 (hash invalidation), partial AC-12
 **Test plan (TDD — failing tests first):**
 
 - `tests/extraction/pipeline/stages/test_embed_chunks_multi_vector.py`:
-  - `test_embed_chunks_multi_vector_splices_matrix_onto_chunk_embedding` — feed chunks + a `FakeMultiVectorEmbedder`, assert each output `Chunk.embedding.shape == (n_tokens, dim)` (the MultiVector arm).
+  - `test_embed_chunks_multi_vector_splices_multivector_onto_chunk_embedding` — feed chunks + a `FakeMultiVectorEmbedder`, assert each output `is_multi_vector(Chunk.embedding)` is True, `len(Chunk.embedding) == n_tokens`, and each element is a 1-D `np.ndarray` of dtype `float32` and length `dim` (the MultiVector arm of the Embedding union).
   - `test_embed_chunks_multi_vector_honors_skip_set` — chunks with `content_hash in existing_chunk_hashes` are not re-embedded (assert via call-count on the fake).
   - `test_embed_chunks_multi_vector_stamps_package_embedding_model` — output `state.package.embedding_model == fake.model_name`.
   - `test_embed_chunks_multi_vector_from_dict_requires_context` — `from_dict({"type": "embed_chunks_multi_vector"}, BuildContext())` raises `ValueError` pointing at `multi_vector_embedder`.
@@ -459,25 +497,32 @@ AC-10 (stage behavior), AC-11 (hash invalidation), partial AC-12
   - `test_hash_changes_on_late_interaction_model_name_swap` — point `extraction.ingestion.pipeline_path` at `ingestion_late_interaction.yaml`, change `late_interaction.model_name`, assert hash differs.
   - `test_hash_changes_on_pool_factor_change` — same setup, change `pool_factor`.
   - `test_hash_changes_on_document_length_change` — same setup, change `document_length`.
-  - `test_hash_unaffected_by_candidate_limit_change` — `candidate_limit` is a retrieval-time knob, not a storage identity.
+  - `test_late_interaction_config_rejects_candidate_limit_key` — `LateInteractionConfig(candidate_limit=100)` raises (the field was intentionally removed; the re-rank ceiling lives only in the preset YAML's `top_k_filter.k` per Decision F SSOT).
 - `tests/extraction/test_ingestion_late_interaction_yaml_round_trip.py`:
   - `test_ingestion_late_interaction_loads_with_multi_vector_context` — `build_ingestion_pipeline(... , context=BuildContext(multi_vector_embedder=fake))` succeeds.
   - `test_ingestion_late_interaction_swaps_embed_chunks_for_multi_vector` — inspect the loaded pipeline; the embedder stage is the multi-vector variant.
 
-**Dependencies:** PR-1 (`LateInteractionConfig` + Protocol), PR-2
-(`SqliteMultiVectorUnitOfWork` is referenced via the `uow.vectors` surface
-in tests that round-trip a chunk through ingest), PR-3 (`build_multi_vector_embedder`
-is referenced in the YAML round-trip composition).
+**Dependencies:** PR-1 (`LateInteractionConfig` + Protocol +
+`BuildContext.multi_vector_embedder` field), PR-3
+(`build_multi_vector_embedder` is referenced in the YAML round-trip
+composition). PR-2 is NOT a hard prereq for PR-4: the ingestion stage
+splices `MultiVector` onto `Chunk.embedding` and forwards to
+`IndexingService._maybe_write_vectors` via the `uow.vectors` surface; the
+unit tests can use the in-memory `MultiVectorStore` fake from PR-1's
+`make_fake_uow_factory(vectors=...)` extension. PR-2's
+`SqliteMultiVectorUnitOfWork` becomes the real backend only at the PR-6
+composition root.
 
 **Risks / open questions:**
 
-- The cheap YAML scan in `_ingestion_uses_multi_vector` is a substring
-  match for `"embed_chunks_multi_vector"`. A YAML comment containing that
-  literal would trigger a false positive. Acceptable for v1 — surfaces as
-  over-invalidation (re-embed unnecessarily), not under-invalidation
-  (corrupt cache). Test:
-  `test_ingestion_uses_multi_vector_substring_match_with_comments` — if
-  this becomes a real issue, swap to a proper parsed-YAML walk.
+- The shared `_pipeline_uses_step_type(yaml_path, type_name)` helper
+  parses the YAML once with the standard loader and walks every nested
+  step / stage / branch for a `type:` field equal to `type_name`. This
+  avoids the YAML-comment false-positive risk of a naive substring scan
+  AND gives PR-6 a reusable contract (it calls the same helper with
+  `"late_interaction_scorer"` for the retrieval pipeline). Test:
+  `test_pipeline_uses_step_type_ignores_comments_and_strings` to lock
+  the parsed-walk behavior in PR-4.
 - `EmbedChunksMultiVectorStage` must use the **same** `_DEFAULT_BATCH_SIZE`
   constant as `EmbedChunksStage` (single source of truth — import from
   the existing module). If the existing module makes it private, lift it
@@ -521,8 +566,8 @@ H (no new fuser — reuse shipped fusers), AC-6 (`_maxsim` math), AC-7
 - Create: `tests/retrieval/steps/test_late_interaction_scorer_strict_gate.py`
 - Create: `tests/retrieval/steps/test_late_interaction_scorer_parallel_safety.py`
 
-(`BuildContext.multi_vector_embedder` already landed in PR-4 — no edit
-here.)
+(`BuildContext.multi_vector_embedder` already landed in PR-1 alongside
+the Protocol — no edit here. PR-5 only consumes the field.)
 
 **Acceptance criteria:**
 
@@ -554,9 +599,14 @@ here.)
   - `test_does_not_mutate_input_state_scratch_in_place` — run the step with `publish_to="late.ranked"`; assert the input `state.scratch` reference is unchanged (`is` identity); the new state's `scratch` is a different dict.
   - `test_safe_inside_parallel_step_branch` — minimal `ParallelStep` smoke that runs two branches both containing the step, verify scratch isolation.
 
-**Dependencies:** PR-1 (Protocol), PR-2 (real
-`SqliteMultiVectorUnitOfWork` for end-to-end test fixtures), PR-4
-(`BuildContext.multi_vector_embedder` field; preset YAMLs come in PR-7).
+**Dependencies:** PR-1 (Protocol + `BuildContext.multi_vector_embedder`
+field + `MultiVectorStore` Protocol), PR-3 (`MultiVectorEmbedder` concrete
+referenced by integration test fixtures). PR-4 is NOT a hard prereq for
+PR-5 — both consume the same `BuildContext` field landed in PR-1 and
+develop independently. PR-2 is also not a hard prereq because the step
+talks to the `MultiVectorStore` Protocol (PR-1) via `uow.vectors`; a fake
+in-memory store from PR-1's `make_fake_uow_factory(vectors=...)` is
+sufficient for the unit tests.
 
 **Risks / open questions:**
 
@@ -589,24 +639,31 @@ sentence-transformers (AC-13).
 
 **Files touched:**
 
-- Create: `python/pydocs_mcp/storage/factories.py` —
-  `build_sqlite_plus_multi_vector_uow_factory(...)` (sibling of the
-  existing `build_sqlite_plus_turboquant_uow_factory`). Wraps a
-  `CompositeUnitOfWork(SqliteUnitOfWork(...), SqliteMultiVectorUnitOfWork(...))`.
+- Modify: `python/pydocs_mcp/storage/factories.py` — introduce a single
+  `build_vectors_uow_child(config) -> Callable[[], object]` helper that
+  inspects the active ingestion pipeline (via the shared
+  `_pipeline_uses_step_type` helper from PR-4) and returns a closure that
+  constructs either `TurboQuantUnitOfWork` or `SqliteMultiVectorUnitOfWork`.
+  The existing `build_uow_factory(config)` composes the chosen child with
+  `SqliteUnitOfWork` into a `CompositeUnitOfWork` via ONE shared code
+  path. No sibling `build_sqlite_plus_multi_vector_uow_factory` — single
+  dispatch keeps the three composition-root call sites
+  (`storage/factories.py`, `server.py`, `__main__.py`) free of any
+  per-site `if late_interaction:` branching.
 - Modify: `python/pydocs_mcp/retrieval/factories.py` —
   `build_retrieval_context(db_path, config)` becomes config-aware: when
-  the active pipeline references late-interaction (cheap YAML scan
-  mirroring PR-4's `_ingestion_uses_multi_vector` for the retrieval
-  YAML), it calls `build_multi_vector_embedder(config.late_interaction)`
-  and threads the result into `BuildContext.multi_vector_embedder`.
-  Default path: stays at `None`.
-- Modify: `python/pydocs_mcp/server.py` — select between
-  `build_sqlite_plus_turboquant_uow_factory` and
-  `build_sqlite_plus_multi_vector_uow_factory` based on the same
-  ingestion-YAML scan PR-4 added.
-- Modify: `python/pydocs_mcp/__main__.py` — same selection logic on the
-  index path; ensures `pydocs-mcp index . --config
-  ingestion_late_interaction.yaml` routes vectors into the new store.
+  the active retrieval pipeline references `late_interaction_scorer`
+  (via the same `_pipeline_uses_step_type` helper from PR-4, now
+  reused for the retrieval YAML), it calls
+  `build_multi_vector_embedder(config.late_interaction)` and threads the
+  result into `BuildContext.multi_vector_embedder`. Default path: stays
+  at `None`.
+- Modify: `python/pydocs_mcp/server.py` — call the single
+  `build_uow_factory(config)` — no per-site branching.
+- Modify: `python/pydocs_mcp/__main__.py` — call the single
+  `build_uow_factory(config)` on the index path; `pydocs-mcp index . --config
+  ingestion_late_interaction.yaml` routes vectors into the new store via
+  the same dispatch.
 - Create: `tests/test_composition_root_late_interaction.py`
 - Create: `tests/test_default_install_no_torch_import.py` (AC-13 guard).
 - Modify: `tests/_fakes.py` — confirm `make_fake_uow_factory(vectors=...)`
@@ -640,11 +697,15 @@ is the "wire everything together" PR).
 **Risks / open questions:**
 
 - The composition-root choice "is the active pipeline multi-vector?" is
-  done via a YAML substring scan in PR-4. PR-6 reuses the same helper
-  for both the ingestion path (already covered) and the retrieval path
-  (new scan for `"late_interaction_scorer"`). Single source of truth:
-  factor the helper into `retrieval/serialization.py` so both sides
-  call it.
+  done via the shared `_pipeline_uses_step_type(yaml_path, type_name)`
+  helper from PR-4 (parsed-YAML walk, not a substring scan). PR-6 reuses
+  the same helper for both the ingestion path (called with
+  `"embed_chunks_multi_vector"`) and the retrieval path (called with
+  `"late_interaction_scorer"`) — single source of truth for the
+  pipeline-introspection predicate. Single source of truth for the
+  composite UoW choice: ONE `build_vectors_uow_child(config)` returns
+  the right child, ONE `build_uow_factory(config)` composes it with
+  SQLite, every composition root calls only the latter.
 - `tests/test_default_install_no_torch_import.py` is the load-bearing
   AC-13 guard. If pytest somehow loads PyLate via a fixture imported
   earlier in the session, the assertion would false-fail. Mitigate via a
@@ -878,14 +939,19 @@ not mergeable until the audit returns "clean".
 The following constants live in exactly one place across all seven PRs:
 
 - `LateInteractionConfig.dim` default (`128`) — pydantic
-  `Field(default=128, ge=1)`; PR-3's `PyLateEmbedder.dim` field default
-  reads it via the config object passed in (never hardcoded).
+  `Field(default=128, ge=1)`. PR-3's `PyLateEmbedder` has NO field
+  defaults at all; the factory always constructs it via
+  `cfg.dim` / `cfg.model_name` / etc., so the config is the single
+  source of truth.
 - `LateInteractionConfig.document_length` (`180`),
-  `query_length` (`32`), `pool_factor` (`1`), `candidate_limit` (`100`)
-  — same rule.
-- The preset YAMLs (`chunk_search_late_interaction.yaml`, etc.) repeat
-  some numbers (e.g. `k: 100` for `top_k_filter`) for user-visible YAML
-  clarity — the CLAUDE.md exemption for YAML files applies.
+  `query_length` (`32`), `pool_factor` (`1`) — same rule. The
+  re-rank candidate ceiling (`100`) is NOT a config field; it lives
+  only as the preset YAML's `top_k_filter.k` (per Decision F SSOT
+  rationale + finding #8).
+- The preset YAMLs (`chunk_search_late_interaction.yaml`, etc.) own
+  `top_k_filter.k: 100` as the single user-facing re-rank ceiling knob
+  — the CLAUDE.md exemption for YAML files applies and no Python
+  literal mirrors it.
 - A module-level `_DEFAULT_BATCH_SIZE` shared between `EmbedChunksStage`
   and `EmbedChunksMultiVectorStage` (PR-4) — if `EmbedChunksStage`'s
   constant is currently private, lift it to a sibling `_constants.py`

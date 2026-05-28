@@ -26,9 +26,11 @@ preset can ship without touching any shipped default:
    wraps PyLate's `models.ColBERT` to emit **one vector per token** for both
    queries and documents. Distinct from the single-vector `Embedder` Protocol
    (which returns a 1-D `np.ndarray`); a late-interaction embedder returns a
-   `list[np.ndarray]` of length `n_tokens` where each element is a 1-D
-   float32 vector of length `dim` (the `MultiVector` arm of the existing
-   `Embedding` union — `is_multi_vector` checks for `isinstance(emb, list)`).
+   `MultiVector = list[np.ndarray]` of length `n_tokens` where each element
+   is a 1-D float32 vector of length `dim` (the `MultiVector` arm of the
+   existing `Embedding` union — `is_multi_vector` checks for
+   `isinstance(emb, list)`, so the outer container MUST be a Python `list`,
+   not a stacked 2-D array).
 
 2. Multi-vector persistence — a new storage backend that stores one token
    matrix per chunk as a SQLite BLOB, so the full matrix can be reconstructed
@@ -77,10 +79,13 @@ the domain model:
   disambiguation, so adding a sibling `MultiVectorEmbedder` Protocol is
   the planned extension shape, not a surprise.
 - `python/pydocs_mcp/retrieval/steps/dense_fetcher.py:67-74` +
-  `dense_scorer.py:59-64` — both collapse a multi-vector query to `query_vec[0]`
-  as a "degraded single-vector fallback" pending the persistence change;
-  `dense_scorer.py:61-63` explicitly notes that "a future PR adding multi-vector
-  persistence can flip this without changing the contract."
+  `dense_scorer.py:59-64` — both detect a multi-vector query via
+  `is_multi_vector` and collapse it to `query_vec[0]` (the first
+  token-vector) as a transitional fallback until the multi-vector
+  persistence layer lands. `dense_scorer.py:61-63` calls this out as a
+  "degraded single-vector fallback" and notes "A future PR adding
+  multi-vector persistence can flip this without changing the contract"
+  — matching this spec.
 - `python/pydocs_mcp/storage/turboquant_uow.py:104-110` —
   `TurboQuantUnitOfWork.add_vectors` raises `NotImplementedError` for
   multi-vector input, explicitly naming "a future PR that adds a
@@ -104,9 +109,11 @@ score(q, d) = Σ_{i ∈ query tokens}  max_{j ∈ doc tokens}  cos(q_i, d_j)
 `embedding.model_name` at `lightonai/LateOn-Code` cannot work because:
 
 1. **Output shape.** `FastEmbedEmbedder.embed_query` returns a 1-D
-   `np.ndarray`; PyLate returns a 2-D `np.ndarray` of shape `(n_tokens, dim)`.
-   `EmbeddingConfig.dim`'s `dim % 8 == 0` validator and the `_KNOWN_MODEL_DIMS`
-   cross-check assume one vector of `dim` per text.
+   `np.ndarray`; a `MultiVectorEmbedder` returns a `MultiVector =
+   list[np.ndarray]` of length `n_tokens` (each element a 1-D float32
+   vector of length `dim`). `EmbeddingConfig.dim`'s `dim % 8 == 0`
+   validator and the `_KNOWN_MODEL_DIMS` cross-check assume one vector
+   of `dim` per text.
 2. **Storage shape.** `TurboQuantUnitOfWork.add_vectors` stacks one vector per
    id (`np.stack(embeddings)` → `IdMapIndex.add_with_ids`). A chunk with 180
    token-vectors has no single id-to-vector row to write — it needs a
@@ -147,8 +154,10 @@ call sites never grow an `is_multi_vector` branch (the `is_multi_vector`
 guards in `dense_fetcher.py:68` / `dense_scorer.py:60` stay as backwards-
 compat fallbacks for the union type, not as the primary multi-vector
 entry point), and a future multi-vector provider is a one-file addition.
-The Protocol returning the `MultiVector` arm of the existing `Embedding`
-union means no new domain type.
+The Protocol returns the `MultiVector` arm of the existing `Embedding`
+union (`list[np.ndarray]` of length `n_tokens`, each element a 1-D
+float32 vector of length `dim`) so the domain model gains no new type
+and `is_multi_vector(emb)` already disambiguates downstream.
 
 **Method-name rationale:** PyLate distinguishes encoding via an
 `is_query: bool` flag on a single `encode()`, but the codebase's
@@ -190,30 +199,50 @@ class MultiVectorEmbedder(Protocol):
 
 ```python
 # extraction/strategies/embedders/pylate.py — first concrete
-from pylate import models  # optional dependency, imported lazily by the factory
+# Lazy import: PyLate is an OPTIONAL extra (Decision E). Failing fast here
+# with an actionable message is the contract — the factory imports this
+# module only when the late-interaction preset asks for it.
+try:
+    from pylate import models
+except ImportError as e:  # pragma: no cover - exercised via a monkeypatched import test
+    raise ImportError(
+        "Late-interaction retrieval requires the 'late-interaction' extra. "
+        "Install it with:  pip install 'pydocs-mcp[late-interaction]'  "
+        "(pulls pylate + sentence-transformers + torch + transformers; "
+        "expect ~1-5 GB depending on CUDA wheel selection)."
+    ) from e
 
 
-@dataclass
+# Field defaults intentionally omitted — the canonical defaults live on
+# ``LateInteractionConfig`` (Field(default=...)), and the factory always
+# constructs us via ``cfg.model_name`` / ``cfg.dim`` / ``cfg.document_length`` /
+# ``cfg.query_length`` / ``cfg.pool_factor`` (Decision F + CLAUDE.md
+# §"Default values: single source of truth").
+@dataclass(frozen=True, slots=True)
 class PyLateEmbedder:
-    model_name: str = "lightonai/LateOn-Code"
-    dim: int = 128                       # ColBERT projection dim (LateOn-Code)
-    document_length: int = 180           # PyLate's own default (NOT 256 / 512)
-    query_length: int = 32               # PyLate's own default
-    pool_factor: int = 1                 # 1 = no token pooling; >1 trades recall for storage
-    _model: "models.ColBERT" = field(init=False, repr=False)
+    model_name: str
+    dim: int                             # ColBERT projection dim (LateOn-Code: 128)
+    document_length: int                 # PyLate's own default 180 (NOT 256 / 512)
+    query_length: int                    # PyLate's own default 32
+    pool_factor: int                     # 1 = no token pooling; >1 trades recall for storage
 
     def __post_init__(self) -> None:
         # ``embedding_size`` is the PyLate kwarg for the projection dim
         # (NOT ``dim``); ``document_length`` / ``query_length`` are
-        # PyLate's existing kwarg names. ``similarity_fn_name`` defaults
-        # to ``MaxSim`` inside ColBERT — fine for us, we never call
-        # ``model.similarity``.
-        self._model = models.ColBERT(
+        # PyLate's existing kwarg names. ``pool_factor`` is a
+        # ``models.ColBERT(...)`` constructor kwarg (NOT a ``.encode()``
+        # kwarg). ``similarity_fn_name`` defaults to ``MaxSim`` inside
+        # ColBERT — fine for us, we never call ``model.similarity``.
+        # ``frozen=True`` forbids field assignment, so the constructed
+        # model goes in via ``object.__setattr__`` (CLAUDE.md
+        # §"Code Conventions").
+        object.__setattr__(self, "_model", models.ColBERT(
             model_name_or_path=self.model_name,
             embedding_size=self.dim,
             document_length=self.document_length,
             query_length=self.query_length,
-        )
+            pool_factor=self.pool_factor,
+        ))
 
     async def embed_query(self, text: str) -> MultiVector:
         # ``normalize_embeddings=True`` so downstream MaxSim dot-product
@@ -224,19 +253,27 @@ class PyLateEmbedder:
                 convert_to_numpy=True, normalize_embeddings=True,
             )[0],
         )
-        return np.asarray(mat, dtype=np.float32)         # (n_q_tokens, dim)
+        # Return as ``list[np.ndarray]`` (one 1-D float32 vector per token)
+        # so ``is_multi_vector(emb)`` — which tests ``isinstance(emb, list)``
+        # — disambiguates correctly. A 2-D stacked array would silently
+        # fail that check.
+        return [np.asarray(row, dtype=np.float32) for row in mat]
 
-    async def embed_documents(self, texts):
+    async def embed_chunks(self, texts):
         if not texts:
             return ()
         mats = await asyncio.to_thread(
             lambda: self._model.encode(
                 list(texts), is_query=False,
                 convert_to_numpy=True, normalize_embeddings=True,
-                pool_factor=self.pool_factor,
             ),
         )
-        return tuple(np.asarray(m, dtype=np.float32) for m in mats)
+        # Each ``mat`` is shape ``(n_tokens, dim)``; unpack the rows into
+        # the ``MultiVector = list[np.ndarray]`` arm of ``Embedding``.
+        return tuple(
+            [np.asarray(row, dtype=np.float32) for row in mat]
+            for mat in mats
+        )
 ```
 
 ```python
@@ -313,18 +350,48 @@ CREATE TABLE chunk_vectors (
 ```
 
 ```python
+# storage/protocols.py — additive Protocol mirroring the shipped VectorStore
+@runtime_checkable
+class MultiVectorStore(Protocol):
+    """Typed contract for the multi-vector backend (chunk -> token matrix).
+
+    Mirrors the shipped single-vector ``VectorStore`` surface
+    (``add_vectors`` / ``remove_vectors`` / ``clear_all``) plus the new
+    ``load_matrices(ids)`` reader consumed by
+    :class:`LateInteractionScorerStep`. Wiring a typed Protocol here lets
+    :class:`BuildContext` and :class:`UnitOfWork` consumers narrow the
+    ``uow.vectors: object`` slot to a real type when the late-interaction
+    deployment is active, instead of relying on duck typing.
+    """
+
+    async def add_vectors(
+        self, ids: Sequence[int], embeddings: Sequence[Embedding],
+    ) -> None: ...
+
+    async def remove_vectors(self, ids: Sequence[int]) -> None: ...
+
+    async def clear_all(self) -> None: ...
+
+    async def load_matrices(
+        self, ids: Sequence[int],
+    ) -> dict[int, np.ndarray]: ...
+```
+
+```python
 # storage/multi_vector_store.py — the dedicated backend (sketch)
 @dataclass(frozen=True, slots=True)
 class SqliteMultiVectorUnitOfWork:
     """UoW child for chunk_vectors — mirrors TurboQuantUnitOfWork's surface so
     CompositeUnitOfWork dispatches uow.vectors to it the same way. Stores ONE
     token matrix per chunk id. Multi-vector inputs are the expected shape
-    here (the inverse of TurboQuantUnitOfWork)."""
+    here (the inverse of TurboQuantUnitOfWork). Satisfies the
+    :class:`MultiVectorStore` Protocol above."""
 
     async def add_vectors(
         self, ids: Sequence[int], embeddings: Sequence[Embedding],
     ) -> None:
-        # Each emb is a (n_tokens, dim) float32 ndarray -> one BLOB row.
+        # Each emb is a MultiVector = list[np.ndarray] of length n_tokens;
+        # stacked into a single (n_tokens, dim) float32 ndarray -> one BLOB row.
         ...
 
     async def load_matrices(
@@ -349,7 +416,7 @@ upstream candidate set?
 | Option | Pros | Cons |
 |---|---|---|
 | **(C1)** Late-interaction **fetcher** (token-ANN generates candidates from scratch via the B1 token-ANN we rejected) | One-stage retrieval; no recall ceiling | Requires the B1 token-ANN we rejected for fidelity reasons; unbounded MaxSim cost; duplicates BM25 / dense candidate generation; would require a separate token-id space |
-| **(C2)** Late-interaction **re-ranker** over an upstream candidate set | MaxSim cost bounded by `candidate_limit`; reuses the shipped BM25 / dense fetchers as the recall stage; matches PyLate's documented "retrieve then rerank" pattern AND the production ColBERT-v2 / PLAID deployment shape; composes as a plain `RetrieverStep` reading `state.candidates` | Recall ceiling is the first stage's (a relevant doc the first stage misses can't be recovered) — mitigated by (a) widening first-stage `top_k` and (b) fusing BM25+dense+late branches via RRF so any branch finding a doc surfaces it |
+| **(C2)** Late-interaction **re-ranker** over an upstream candidate set | MaxSim cost bounded by the upstream `top_k_filter.k` knob in the preset YAML; reuses the shipped BM25 / dense fetchers as the recall stage; matches PyLate's documented "retrieve then rerank" pattern AND the production ColBERT-v2 / PLAID deployment shape; composes as a plain `RetrieverStep` reading `state.candidates` | Recall ceiling is the first stage's (a relevant doc the first stage misses can't be recovered) — mitigated by (a) widening first-stage `top_k` and (b) fusing BM25+dense+late branches via RRF so any branch finding a doc surfaces it |
 
 **Recommended:** Option **C2** — a re-ranker. `LateInteractionScorerStep` reads
 `state.candidates` (the chunk list produced by an upstream `chunk_fetcher`
@@ -401,7 +468,11 @@ class LateInteractionScorerStep(RetrieverStep):
         ids = [c.id for c in state.candidates.items if c.id is not None]
         if not ids:
             return state
-        query_mat = await self.embedder.embed_query(state.query.terms)
+        # ``embed_query`` returns ``MultiVector = list[np.ndarray]`` per the
+        # Protocol; stack into a single ``(nq, dim)`` matrix once for the
+        # vectorized MaxSim dot-product across every candidate.
+        query_tokens = await self.embedder.embed_query(state.query.terms)
+        query_mat = np.stack(query_tokens, axis=0) if query_tokens else np.empty((0, 0), dtype=np.float32)
         async with self.uow_factory() as uow:
             matrices = await uow.vectors.load_matrices(ids)   # chunk_id -> (nd, dim)
         scored = [
@@ -495,7 +566,7 @@ surface vs YAML configuration", every knob below is YAML-only — never an MCP
 param. Per §"Default values: single source of truth", all defaults live once
 as `Field(default=...)`.
 
-Two notable knobs make it onto the config (not just the embedder kwargs):
+One notable knob makes it onto the config (beyond the standard embedder kwargs):
 
 - **`pool_factor: int = 1`** — PyLate's built-in token-pooling lever
   (described in PyLate docs as "1/pool_factor of the original tokens";
@@ -504,9 +575,15 @@ Two notable knobs make it onto the config (not just the embedder kwargs):
   halves on-disk size at small recall cost, `pool_factor=3` keeps a third,
   etc. Surfacing it in YAML makes the storage / recall trade-off a one-line
   edit instead of a code change.
-- **`candidate_limit: int = 100`** — the re-rank ceiling. Per Decision C,
-  generous first-stage `top_k` mitigates the recall ceiling; the preset's
-  `top_k_filter` reads this value so it stays in one place.
+
+The re-rank candidate ceiling is NOT a config field. The shipped preset
+YAMLs already pin it via `top_k_filter.k: 100` (Decision H) — the
+user-visible knob lives in the preset YAML alongside every other shipped
+pipeline's per-stage settings (consistent with how `chunk_search.yaml` and
+`chunk_search_hybrid.yaml` expose their `k` values). Adding a separate
+`candidate_limit` config field would duplicate the YAML default and
+create a SSOT conflict (CLAUDE.md §"Default values: single source of
+truth").
 
 **Code example (`LateInteractionConfig`):**
 
@@ -533,8 +610,9 @@ class LateInteractionConfig(BaseModel):
     # The principled storage / recall lever — replaces the rejected
     # "BLOB int8-quantize" follow-up.
     pool_factor:     int = Field(default=1, ge=1)
-    # Re-rank candidate ceiling — how many first-stage hits MaxSim scores.
-    candidate_limit: int = Field(default=100, ge=1)
+    # NOTE: no ``candidate_limit`` field. The re-rank ceiling lives in
+    # the preset YAML (``top_k_filter.k: 100``) as the single source of
+    # truth — see Decision F prose above.
 
     def compute_pipeline_hash(self) -> str:
         identity = "|".join([
@@ -626,17 +704,18 @@ fusers consume it with zero new code. No new fuser ships.
 | Option | Pros | Cons |
 |---|---|---|
 | Add a `multi_vector: bool` flag to `EmbedChunksStage` | One stage | The stage takes an `Embedder` (single-vector contract); branching it on a second embedder type violates SRP; its `strict=True` 1:1 zip and `Chunk.embedding` splice assume one vector per chunk |
-| New `EmbedChunksMultiVectorStage` registered via `@stage_registry.register("embed_chunks_multi_vector")` | SRP — one stage per embedder contract; takes a `MultiVectorEmbedder`; splices the `(n_tokens, dim)` matrix onto `Chunk.embedding` (the `MultiVector` arm); a new `ingestion_late_interaction.yaml` swaps `embed_chunks` for it | One more stage (cheap; matches "one stage per file" convention) |
+| New `EmbedChunksMultiVectorStage` registered via `@stage_registry.register("embed_chunks_multi_vector")` | SRP — one stage per embedder contract; takes a `MultiVectorEmbedder`; splices the `MultiVector = list[np.ndarray]` (length `n_tokens`) onto `Chunk.embedding` (the `MultiVector` arm of the `Embedding` union); a new `ingestion_late_interaction.yaml` swaps `embed_chunks` for it | One more stage (cheap; matches "one stage per file" convention) |
 
 **Recommended:** Option 2 — a new `EmbedChunksMultiVectorStage`. It mirrors
 `EmbedChunksStage` (same content-hash skip set, same batch loop, same
-`pipeline_hash` interaction) but calls `MultiVectorEmbedder.embed_documents`
-and stores the matrix into `Chunk.embedding`. A new ingestion preset
+`pipeline_hash` interaction) but calls `MultiVectorEmbedder.embed_chunks`
+and stores the `MultiVector` into `Chunk.embedding`. A new ingestion preset
 (`ingestion_late_interaction.yaml`) wires it in place of `embed_chunks`. The
 existing `IndexingService._maybe_write_vectors` → `uow.vectors.add_vectors`
-path then forwards each `(n_tokens, dim)` matrix to the
-`SqliteMultiVectorUnitOfWork`, which stores it as one BLOB row — no change to
-the service, only to which vector UoW the composite holds.
+path then forwards each `MultiVector` (a `list[np.ndarray]` of length
+`n_tokens`) to the `SqliteMultiVectorUnitOfWork`, which stacks it into a
+single `(n_tokens, dim)` float32 BLOB row — no change to the service,
+only to which vector UoW the composite holds.
 
 **Code example (stage skeleton — only the embedder call + splice differ):**
 
@@ -650,8 +729,10 @@ class EmbedChunksMultiVectorStage:
 
     async def run(self, state: IngestionState) -> IngestionState:
         # ... identical skip-set + batch loop as EmbedChunksStage ...
-        embs = await self.embedder.embed_documents(tuple(c.text for c in batch))
-        # embs[i] is a (n_tokens, dim) float32 ndarray -> Chunk.embedding (MultiVector arm)
+        embs = await self.embedder.embed_chunks(tuple(c.text for c in batch))
+        # embs[i] is a MultiVector = list[np.ndarray] of length n_tokens
+        # (each element a 1-D float32 vector of length dim) -> Chunk.embedding
+        # (the MultiVector arm of the Embedding union).
         ...
 ```
 
@@ -697,9 +778,11 @@ state.candidates  (ChunkList from an upstream chunk_fetcher / dense_fetcher, top
    (empty -> return state unchanged: no-op, mirrors DenseScorerStep)
        │
        ▼
-2. query_mat = await embedder.embed_query(state.query.terms)   # (nq, dim) float32, L2-normalized
+2. query_tokens = await embedder.embed_query(state.query.terms)   # MultiVector = list[np.ndarray]
+   query_mat    = np.stack(query_tokens, axis=0)                  # (nq, dim) float32, L2-normalized
    (PyLate prepends [Q] + pads to query_length with [MASK] for query expansion;
-    asyncio.to_thread wraps the torch call)
+    asyncio.to_thread wraps the torch call; stacking the per-token list into
+    a single 2-D matrix once lets _maxsim use one vectorized matmul per candidate)
        │
        ▼
 3. async with uow_factory() as uow:
@@ -762,15 +845,17 @@ imports torch.
 
 ### Write-path wiring (composition root only)
 
-The single-vector composite is built by
-`build_sqlite_plus_turboquant_uow_factory(...)` in `storage/factories.py`. A
-parallel `build_sqlite_plus_multi_vector_uow_factory(...)` wraps
-`SqliteUnitOfWork` + `SqliteMultiVectorUnitOfWork` (instead of
-`TurboQuantUnitOfWork`). The composition root selects which composite to build
-based on whether the active ingestion pipeline uses the multi-vector stage.
-`IndexingService._maybe_write_vectors` is unchanged — it forwards whatever
-`Chunk.embedding` shape the stage produced to `uow.vectors.add_vectors`, and
-the multi-vector UoW stores it as a BLOB.
+The composite UoW is built by ONE `build_uow_factory(config)` entry point
+in `storage/factories.py`. A single dispatch helper
+`build_vectors_uow_child(config)` picks the vector child —
+`TurboQuantUnitOfWork` by default, `SqliteMultiVectorUnitOfWork` when the
+active ingestion pipeline references `embed_chunks_multi_vector` (detected
+via the shared `_pipeline_uses_step_type` helper). The three composition
+roots (`storage/factories.py`, `server.py`, `__main__.py`) all call the
+same `build_uow_factory(...)` — no per-site `if late_interaction:`
+branching. `IndexingService._maybe_write_vectors` is unchanged — it
+forwards whatever `Chunk.embedding` shape the stage produced to
+`uow.vectors.add_vectors`, and the multi-vector UoW stores it as a BLOB.
 
 ### New preset YAMLs
 
@@ -874,12 +959,15 @@ recall@k / mrr can be measured.
   `LateInteractionScorerStep`.
 - `python/pydocs_mcp/extraction/strategies/embedders/__init__.py` — add
   `build_multi_vector_embedder(cfg)`.
-- `python/pydocs_mcp/storage/factories.py` —
-  `build_sqlite_plus_multi_vector_uow_factory(...)`.
+- `python/pydocs_mcp/storage/factories.py` — introduce single-dispatch
+  `build_vectors_uow_child(config)` + `build_uow_factory(config)`; pick
+  `SqliteMultiVectorUnitOfWork` over `TurboQuantUnitOfWork` when the active
+  ingestion pipeline references `embed_chunks_multi_vector`.
 - `python/pydocs_mcp/retrieval/factories.py` — build the multi-vector embedder
   (gated) and thread it into `BuildContext.multi_vector_embedder`.
-- `python/pydocs_mcp/server.py` + `python/pydocs_mcp/__main__.py` — select the
-  composite UoW factory + thread the multi-vector embedder when configured.
+- `python/pydocs_mcp/server.py` + `python/pydocs_mcp/__main__.py` — call
+  the single `build_uow_factory(config)` entry point; the multi-vector
+  embedder threads through `build_retrieval_context` when configured.
 - `tests/_fakes.py` — `FakeMultiVectorEmbedder` + `make_fake_uow_factory`
   `vectors=` support.
 - `benchmarks/src/benchmarks/eval/systems/pydocs.py` —
@@ -894,14 +982,17 @@ recall@k / mrr can be measured.
 ## 8. Acceptance criteria
 
 1. **AC-1 — `MultiVectorEmbedder` Protocol.** `PyLateEmbedder` passes
-   `isinstance(obj, MultiVectorEmbedder)` at runtime. `embed_query` returns a
-   2-D `np.ndarray` `(nq, dim)`; `embed_documents` returns a tuple of 2-D
-   arrays; both are L2-normalized per row (`np.allclose(np.linalg.norm(row, axis=1), 1.0)`).
+   `isinstance(obj, MultiVectorEmbedder)` at runtime. `embed_query` returns
+   a `MultiVector = list[np.ndarray]` of length `n_q_tokens` (each element a
+   1-D float32 vector of length `dim`); `embed_chunks` returns a tuple of
+   such `MultiVector` lists; every token-vector is L2-normalized
+   (`np.allclose(np.linalg.norm(v), 1.0)` for each `v` in each list).
    Verified with `FakeMultiVectorEmbedder` (no torch needed).
 2. **AC-2 — `LateInteractionConfig`.** `AppConfig.late_interaction` is a
    `LateInteractionConfig` with `provider: Literal["pylate"]`, `model_name`,
-   `dim`, `document_length`, `query_length`, `pool_factor`, `candidate_limit`
-   fields; YAML overlay loading + env overrides
+   `dim`, `document_length`, `query_length`, `pool_factor` fields (no
+   `candidate_limit` — that lives in the preset YAML's `top_k_filter.k`
+   per Decision F's SSOT rationale); YAML overlay loading + env overrides
    (`PYDOCS_LATE_INTERACTION__MODEL_NAME`) work; `extra="forbid"` rejects
    unknown keys.
 3. **AC-3 — `build_multi_vector_embedder`.** Returns a `PyLateEmbedder` when
@@ -938,10 +1029,12 @@ recall@k / mrr can be measured.
    `ValueError` (pointing at the composition root) when
    `context.multi_vector_embedder is None` OR `context.uow_factory is None`.
 10. **AC-10 — `EmbedChunksMultiVectorStage`.** Given chunks and a
-    `FakeMultiVectorEmbedder`, the stage splices a `(nd, dim)` matrix onto each
-    `Chunk.embedding`; honors the `existing_chunk_hashes` skip set; stamps the
-    package `embedding_model`; round-trips `to_dict` / `from_dict`; `from_dict`
-    raises without `context.multi_vector_embedder`.
+    `FakeMultiVectorEmbedder`, the stage splices a `MultiVector =
+    list[np.ndarray]` (length `n_tokens`, each element a 1-D float32 vector
+    of length `dim`) onto each `Chunk.embedding`; honors the
+    `existing_chunk_hashes` skip set; stamps the package `embedding_model`;
+    round-trips `to_dict` / `from_dict`; `from_dict` raises without
+    `context.multi_vector_embedder`.
 11. **AC-11 — `pipeline_hash` invalidation.** With the multi-vector ingestion
     pipeline active, changing `late_interaction.model_name` OR
     `late_interaction.document_length` OR `late_interaction.pool_factor`
@@ -990,7 +1083,7 @@ recall@k / mrr can be measured.
 | Storage blow-up from N vectors per chunk | Decision B2 stores one BLOB row per chunk (no id explosion); `document_length` caps tokens per chunk (PyLate default 180); `pool_factor` (Decision F) reduces stored tokens proportionally. Risk is bounded + measurable: bytes ≈ `n_chunks × (document_length / pool_factor) × dim × 4`. For a typical project (~10k chunks, document_length=180, pool_factor=1, dim=128) that is ~920 MB worst-case if every chunk hits the cap — flagged in docs; real chunks are far shorter, and `pool_factor=2` halves it |
 | PyLate / sentence-transformers / torch / transformers dependency weight (>1 GB CPU-only, 2-5 GB with CUDA wheels) | Optional extra, lazy import, actionable `ImportError`; never in the default dependency closure (AC-13) |
 | Indexing-time cost (encoding every chunk through a transformer) | Reuses the per-package content-hash skip (unchanged packages never re-enter the pipeline) + the chunk-level `pipeline_hash` skip; first index is slow (documented), reindex is incremental |
-| MaxSim float32 BLOB load cost per query | Bounded by `candidate_limit` (default 100) — the re-rank set, not the whole corpus; matrices loaded in one `load_matrices(ids)` batch query; numpy MaxSim over ~100 small matrices is sub-millisecond |
+| MaxSim float32 BLOB load cost per query | Bounded by the preset YAML's `top_k_filter.k` (shipped at 100) — the re-rank set, not the whole corpus; matrices loaded in one `load_matrices(ids)` batch query; numpy MaxSim over ~100 small matrices is sub-millisecond |
 | Recall ceiling: a relevant doc the first stage misses can't be recovered by MaxSim | Inherent ColBERT re-rank trade-off (Decision C); mitigated by a generous first-stage `top_k` (100), parallel BM25 + dense recall branches, and RRF fusion over (BM25, dense, late) so any branch finding a doc surfaces it |
 | `chunk_vectors` matrices outlive a model swap and get MaxSim-scored against a mismatched query encoder | `pipeline_hash` re-embeds on model change (Decision J) AND the `chunk_vectors.model_name` column is a defense-in-depth guard the loader can assert against |
 | `[Q]` / `[D]` marker tokens are model-card metadata: a model card that omits or renames them silently shifts the query/doc encoder behavior | PyLate's `ColBERT.__init__` falls back to `"[Q] "` / `"[D] "` defaults when the model card omits the metadata; loud-fail isn't possible without parsing every model card. Mitigation: pin `model_name` in the recommended preset (`lightonai/LateOn-Code`); add a startup log line stating which prefixes resolved (`query_prefix=...`, `document_prefix=...`); document the constraint in the YAML preset comment |
