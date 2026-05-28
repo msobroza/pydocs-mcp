@@ -349,3 +349,36 @@ def test_null_handler_attached_at_package_root() -> None:
         f"pydocs_mcp.__init__ must attach a logging.NullHandler at the "
         f"package logger; got handlers={package_logger.handlers}"
     )
+
+
+def test_contributing_md_present() -> None:
+    """P2-4: CONTRIBUTING.md guides external contributors."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    cm = root / "CONTRIBUTING.md"
+    assert cm.is_file(), "CONTRIBUTING.md required at repo root (P2-4)"
+    text = cm.read_text(encoding="utf-8")
+    # Must reference the actual Makefile targets contributors will use.
+    assert "make install" in text
+    assert "make test" in text
+    # Cross-link to the security policy.
+    assert "SECURITY.md" in text
+
+
+def test_security_md_present() -> None:
+    """P2-4: SECURITY.md publishes the vulnerability-reporting flow.
+
+    GitHub renders this into a "Report a vulnerability" tab on the
+    repository page when properly named.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sm = root / "SECURITY.md"
+    assert sm.is_file(), "SECURITY.md required at repo root (P2-4)"
+    text = sm.read_text(encoding="utf-8")
+    # Point at GitHub private vulnerability reporting.
+    assert "security/advisories" in text
+    # SLA commitments.
+    assert "72 hours" in text or "72h" in text or "72-hour" in text
