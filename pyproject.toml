@@ -146,6 +146,19 @@ ignore_missing_imports = true
 # `__main__` is here because argparse's add_argument(**dict) has overload
 # resolution that mypy reports as arg-type mismatch on every call site —
 # spurious noise that drowns out real signal.
+#
+# `retrieval.steps.*` retains the override because removing it surfaces
+# ~20 residual errors across 9 step files — the union-narrowing pattern
+# above on `RetrieverState.candidates` (top_k_filter, rrf_fusion,
+# weighted_score_interpolation, limit, metadata_post_filter) and a
+# `VectorSearchable.vector_search` signature mismatch (`Sequence[float]`
+# vs `np.ndarray`) in dense_fetcher. Those tightenings (Protocol-bound
+# generic for the candidates field; relaxed VectorSearchable signature)
+# are out of scope for this PR — the four bugs the audit fixup PR
+# specifically called out (RetrieverStep.to_dict, is_multi_vector
+# TypeGuard, fetcher None-filter / provider contract, CompositeUnitOfWork
+# Protocol conformance) are fixed by the surrounding commits even
+# though their per-module overrides cannot graduate yet.
 [[tool.mypy.overrides]]
 module = [
     "pydocs_mcp.__main__",
