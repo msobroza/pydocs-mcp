@@ -45,6 +45,7 @@ _DISPATCH_ATTRS = (
     "trees",
     "references",
     "vectors",
+    "multi_vectors",
 )
 
 
@@ -83,6 +84,7 @@ class CompositeUnitOfWork:
         # Local import — top-level would create a hard cycle between
         # composite_uow.py and null_vector_store.py (sqlite.py imports
         # this module for the SqliteUnitOfWork.vectors default).
+        from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
         from pydocs_mcp.storage.null_vector_store import NullVectorStore
 
         attr_map: dict[str, Any] = {}
@@ -100,7 +102,11 @@ class CompositeUnitOfWork:
                     # is bound only inside __aenter__. Skip silently —
                     # the post-aenter rescan will pick it up.
                     continue
-                if isinstance(value, NullVectorStore):
+                # Null placeholders (NullVectorStore + NullMultiVectorStore)
+                # must not win over a real backend exposing the same
+                # attribute. Filter them out of the ambiguity scan;
+                # they remain as last-resort fallbacks below.
+                if isinstance(value, (NullVectorStore, NullMultiVectorStore)):
                     null_fallback.setdefault(attr, value)
                     continue
                 if attr in seen:
@@ -228,6 +234,14 @@ class CompositeUnitOfWork:
         # single declared shape. Mirrors the ``vectors: object`` field on
         # the UnitOfWork Protocol itself.
         return self._attr_map["vectors"]
+
+    @property
+    def multi_vectors(self) -> Any:
+        # Same shape as ``vectors`` — the Protocol declares
+        # ``MultiVectorStore`` but the composite returns whatever the
+        # owning child exposes (Null fallback or real fast-plaid
+        # backend), so ``Any`` keeps the runtime polymorphism explicit.
+        return self._attr_map["multi_vectors"]
 
     def __getattr__(self, name: str) -> Any:
         """Delegate attribute access via the cached owner map (spec S26).

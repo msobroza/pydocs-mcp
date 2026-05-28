@@ -13,6 +13,7 @@ properties).
 from __future__ import annotations
 
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
+from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork
 
@@ -31,6 +32,7 @@ class _FakeChild:
     trees = object()
     references = object()
     vectors = NullVectorStore()
+    multi_vectors = NullMultiVectorStore()
 
     async def __aenter__(self) -> _FakeChild:
         return self
@@ -62,7 +64,15 @@ def test_composite_uow_exposes_dispatch_attrs_at_the_class_level() -> None:
     surface the contract at the class level so the subtype check
     passes without ``# type: ignore`` or explicit casts.
     """
-    for attr in ("packages", "chunks", "module_members", "trees", "references", "vectors"):
+    for attr in (
+        "packages",
+        "chunks",
+        "module_members",
+        "trees",
+        "references",
+        "vectors",
+        "multi_vectors",
+    ):
         assert hasattr(CompositeUnitOfWork, attr), (
             f"CompositeUnitOfWork class must expose {attr!r} at the class "
             f"level (via a @property) so mypy's structural-subtype check "

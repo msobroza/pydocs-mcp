@@ -203,6 +203,12 @@ class UnitOfWork(Protocol):
     the composite SQLite + TurboQuant deployment exposes the real
     backend. Callers no longer need ``getattr(uow, "vectors", None)``
     guards.
+
+    Late-interaction: ``multi_vectors`` is ALWAYS present too — the
+    default deployment exposes a
+    :class:`~pydocs_mcp.storage.null_multi_vector_store.NullMultiVectorStore`,
+    deployments that enable ``late_interaction.enabled=true`` in YAML
+    swap in a real fast-plaid backend via the composition root.
     """
 
     packages: PackageStore
@@ -216,6 +222,10 @@ class UnitOfWork(Protocol):
     # contract is "clear_all() / add_vectors() / remove_vectors() —
     # all async no-op or real" and is enforced by the impls below.
     vectors: object
+    # The MultiVectorStore Protocol IS @runtime_checkable so the typed
+    # attribute can name it directly — unlike ``vectors`` which still
+    # uses ``object`` for the NullVectorStore precedent.
+    multi_vectors: MultiVectorStore
 
     async def __aenter__(self) -> UnitOfWork: ...
     async def __aexit__(self, exc_type, exc, tb) -> bool: ...
@@ -403,6 +413,37 @@ class MultiVectorEmbedder(Protocol):
         self,
         texts: Sequence[str],
     ) -> tuple[list[np.ndarray], ...]: ...
+
+
+@runtime_checkable
+class MultiVectorStore(Protocol):
+    """Typed contract for the multi-vector (token-matrix) backend.
+
+    Backend-neutral surface: callers identify chunks by ``chunk_id`` —
+    NOT by the backend-internal ``plaid_doc_id``. The concrete UoW
+    handles the id translation through the
+    ``chunk_multi_vector_ids`` SQLite mapping table inside the same
+    transaction as the ``chunks`` writes, so retrieval steps never see
+    the backend id space.
+    """
+
+    async def add_vectors(
+        self,
+        ids: Sequence[int],
+        embeddings: Sequence[list[np.ndarray]],
+    ) -> None: ...
+
+    async def remove_vectors(self, ids: Sequence[int]) -> None: ...
+
+    async def clear_all(self) -> None: ...
+
+    async def score(
+        self,
+        query_embedding: list[np.ndarray],
+        *,
+        subset_chunk_ids: Sequence[int],
+        top_k: int,
+    ) -> tuple[tuple[int, float], ...]: ...
 
 
 class ChatMessage(TypedDict):
