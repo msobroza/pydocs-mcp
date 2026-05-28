@@ -208,6 +208,7 @@ class FastPlaidUnitOfWork:
         # to the write path that actually needs it (the import is ~1-2 GB
         # of native libs we don't want to pay for at module-load time).
         import torch
+
         doc_tensors = [
             torch.from_numpy(np.stack(emb, axis=0).astype(np.float32, copy=False))
             for emb in embeddings
@@ -240,9 +241,7 @@ class FastPlaidUnitOfWork:
         self._dirty = True
 
     @staticmethod
-    def _packages_for_chunks(
-        conn: sqlite3.Connection, ids: Iterable[int]
-    ) -> dict[int, str]:
+    def _packages_for_chunks(conn: sqlite3.Connection, ids: Iterable[int]) -> dict[int, str]:
         ids_list = list(ids)
         if not ids_list:
             return {}
@@ -303,10 +302,7 @@ class FastPlaidUnitOfWork:
             )
         with sqlite3.connect(str(self.db_path)) as conn:
             plaid_ids = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT plaid_doc_id FROM chunk_multi_vector_ids"
-                )
+                row[0] for row in conn.execute("SELECT plaid_doc_id FROM chunk_multi_vector_ids")
             ]
             if plaid_ids:
                 await asyncio.to_thread(self._handle.delete, subset=plaid_ids)
@@ -339,12 +335,14 @@ class FastPlaidUnitOfWork:
             return ()
         # Lazy import torch — keeps the optional-extra gated to the read path.
         import torch
+
         with sqlite3.connect(str(self.db_path)) as conn:
             placeholders = ",".join("?" for _ in subset_chunk_ids)
             # ``placeholders`` is literal ``?`` chars (one per chunk_id);
             # values bind via the second arg to ``conn.execute``.
             mapping = {
-                row[0]: row[1] for row in conn.execute(
+                row[0]: row[1]
+                for row in conn.execute(
                     f"SELECT plaid_doc_id, chunk_id FROM chunk_multi_vector_ids "  # noqa: S608
                     f"WHERE chunk_id IN ({placeholders})",
                     list(subset_chunk_ids),
@@ -366,9 +364,7 @@ class FastPlaidUnitOfWork:
         if not raw:
             return ()
         return tuple(
-            (mapping[plaid_id], float(score))
-            for (plaid_id, score) in raw[0]
-            if plaid_id in mapping
+            (mapping[plaid_id], float(score)) for (plaid_id, score) in raw[0] if plaid_id in mapping
         )
 
 

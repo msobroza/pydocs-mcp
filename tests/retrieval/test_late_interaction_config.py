@@ -1,4 +1,5 @@
 """Tests for LateInteractionConfig (spec AC-2 + Decision F)."""
+
 from __future__ import annotations
 
 import pytest

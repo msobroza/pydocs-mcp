@@ -1,4 +1,5 @@
 """FilterAdapter accepts FieldIn('id', ids) on chunks (late-interaction subset)."""
+
 from __future__ import annotations
 
 from pydocs_mcp.storage.filters import FieldIn

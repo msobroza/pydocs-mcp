@@ -7,6 +7,7 @@ allocated — pylate/torch are never imported. When enabled, the factory
 constructs the configured embedder and attaches it to the context so
 downstream retrieval steps can consume it via the ambient context.
 """
+
 from __future__ import annotations
 
 import sys
@@ -46,10 +47,7 @@ def test_enabled_yields_embedder(tmp_path, monkeypatch) -> None:
             convert_to_numpy=True,
             normalize_embeddings=True,
         ):
-            return [
-                np.ones((3, self._dim), dtype=np.float32) / np.sqrt(self._dim)
-                for _ in texts
-            ]
+            return [np.ones((3, self._dim), dtype=np.float32) / np.sqrt(self._dim) for _ in texts]
 
     fake_models.ColBERT = _FakeColBERT
     fake_pylate.models = fake_models

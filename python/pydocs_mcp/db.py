@@ -211,13 +211,9 @@ def _apply_v6_additions(conn: sqlite3.Connection) -> None:
         "FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_cmv_plaid_doc_id "
-        "ON chunk_multi_vector_ids(plaid_doc_id)"
+        "CREATE INDEX IF NOT EXISTS idx_cmv_plaid_doc_id ON chunk_multi_vector_ids(plaid_doc_id)"
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_cmv_package "
-        "ON chunk_multi_vector_ids(package)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cmv_package ON chunk_multi_vector_ids(package)")
 
 
 def open_index_database(path: Path) -> sqlite3.Connection:

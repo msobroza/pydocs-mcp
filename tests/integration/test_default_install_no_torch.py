@@ -1,4 +1,5 @@
 """Default install (no extra) must never import torch / pylate / fast_plaid."""
+
 from __future__ import annotations
 
 import sys

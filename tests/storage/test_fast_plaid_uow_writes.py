@@ -1,5 +1,6 @@
 """Write-path tests for FastPlaidUnitOfWork. Uses a stub FastPlaid so
 the tests run without the optional extra."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -12,12 +13,16 @@ from pydocs_mcp.db import open_index_database
 
 class _FakeFastPlaid:
     """In-memory stub matching the FastPlaid public surface for tests."""
+
     def __init__(self, *a, **kw):
         self._matrices: list = []
+
     def create(self, documents_embeddings):
         self._matrices = list(documents_embeddings)
+
     def update(self, documents_embeddings):
         self._matrices.extend(documents_embeddings)
+
     def delete(self, subset):
         # Keep slots so plaid_doc_ids remain stable; mark as None. The
         # stub is in-memory, so a fresh handle (next ``async with``) has
@@ -26,6 +31,7 @@ class _FakeFastPlaid:
         for i in subset:
             if 0 <= i < len(self._matrices):
                 self._matrices[i] = None
+
     def search(self, queries_embeddings, top_k, subset=None):
         if subset is None:
             subset = list(range(len(self._matrices)))
@@ -33,8 +39,16 @@ class _FakeFastPlaid:
         for i in subset:
             if i >= len(self._matrices) or self._matrices[i] is None:
                 continue
-            doc = self._matrices[i].numpy() if hasattr(self._matrices[i], "numpy") else np.asarray(self._matrices[i])
-            q = queries_embeddings.squeeze(0).numpy() if hasattr(queries_embeddings, "numpy") else np.asarray(queries_embeddings).squeeze(0)
+            doc = (
+                self._matrices[i].numpy()
+                if hasattr(self._matrices[i], "numpy")
+                else np.asarray(self._matrices[i])
+            )
+            q = (
+                queries_embeddings.squeeze(0).numpy()
+                if hasattr(queries_embeddings, "numpy")
+                else np.asarray(queries_embeddings).squeeze(0)
+            )
             scored.append((i, float((q @ doc.T).max(axis=1).sum())))
         scored.sort(key=lambda t: -t[1])
         return [scored[:top_k]]
@@ -45,13 +59,18 @@ async def test_add_vectors_writes_mapping_rows(tmp_path, monkeypatch) -> None:
     """add_vectors assigns plaid_doc_ids 0..N-1 and writes chunk_multi_vector_ids."""
     pytest.importorskip("torch")
     import pydocs_mcp.storage.fast_plaid_uow as mod
+
     monkeypatch.setattr(mod, "_FastPlaidCls", _FakeFastPlaid, raising=False)
 
     db_path = tmp_path / "db.db"
     open_index_database(db_path).close()
     with sqlite3.connect(db_path) as conn:
-        conn.execute("INSERT INTO chunks(package, title, text, origin) VALUES('p','t1','b','dep_doc')")
-        conn.execute("INSERT INTO chunks(package, title, text, origin) VALUES('p','t2','b','dep_doc')")
+        conn.execute(
+            "INSERT INTO chunks(package, title, text, origin) VALUES('p','t1','b','dep_doc')"
+        )
+        conn.execute(
+            "INSERT INTO chunks(package, title, text, origin) VALUES('p','t2','b','dep_doc')"
+        )
         conn.commit()
 
     uow = mod.FastPlaidUnitOfWork(
@@ -71,9 +90,11 @@ async def test_add_vectors_writes_mapping_rows(tmp_path, monkeypatch) -> None:
         await uow.commit()
 
     with sqlite3.connect(db_path) as conn:
-        rows = list(conn.execute(
-            "SELECT chunk_id, plaid_doc_id FROM chunk_multi_vector_ids ORDER BY chunk_id"
-        ))
+        rows = list(
+            conn.execute(
+                "SELECT chunk_id, plaid_doc_id FROM chunk_multi_vector_ids ORDER BY chunk_id"
+            )
+        )
     assert rows == [(1, 0), (2, 1)]
 
 
@@ -81,11 +102,14 @@ async def test_add_vectors_writes_mapping_rows(tmp_path, monkeypatch) -> None:
 async def test_remove_vectors_drops_mapping(tmp_path, monkeypatch) -> None:
     pytest.importorskip("torch")
     import pydocs_mcp.storage.fast_plaid_uow as mod
+
     monkeypatch.setattr(mod, "_FastPlaidCls", _FakeFastPlaid, raising=False)
     db_path = tmp_path / "db.db"
     open_index_database(db_path).close()
     with sqlite3.connect(db_path) as conn:
-        conn.execute("INSERT INTO chunks(package, title, text, origin) VALUES('p','t','b','dep_doc')")
+        conn.execute(
+            "INSERT INTO chunks(package, title, text, origin) VALUES('p','t','b','dep_doc')"
+        )
         conn.commit()
 
     uow = mod.FastPlaidUnitOfWork(
@@ -109,11 +133,14 @@ async def test_remove_vectors_drops_mapping(tmp_path, monkeypatch) -> None:
 async def test_clear_all_wipes_mapping(tmp_path, monkeypatch) -> None:
     pytest.importorskip("torch")
     import pydocs_mcp.storage.fast_plaid_uow as mod
+
     monkeypatch.setattr(mod, "_FastPlaidCls", _FakeFastPlaid, raising=False)
     db_path = tmp_path / "db.db"
     open_index_database(db_path).close()
     with sqlite3.connect(db_path) as conn:
-        conn.execute("INSERT INTO chunks(package, title, text, origin) VALUES('p','t','b','dep_doc')")
+        conn.execute(
+            "INSERT INTO chunks(package, title, text, origin) VALUES('p','t','b','dep_doc')"
+        )
         conn.commit()
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",

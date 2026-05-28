@@ -4,6 +4,7 @@ Lazy import: ``pylate`` is the optional ``[late-interaction]`` extra. The
 import happens inside :meth:`from_config` so a default install (no extra)
 never pays the cost.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,24 +61,26 @@ class PyLateEmbedder:
     async def embed_query(self, text: str) -> list[np.ndarray]:
         mat = await asyncio.to_thread(
             lambda: self._model.encode(
-                [text], is_query=True,
-                convert_to_numpy=True, normalize_embeddings=True,
+                [text],
+                is_query=True,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
             )[0],
         )
         return [np.asarray(row, dtype=np.float32) for row in mat]
 
     async def embed_chunks(
-        self, texts: Sequence[str],
+        self,
+        texts: Sequence[str],
     ) -> tuple[list[np.ndarray], ...]:
         if not texts:
             return ()
         mats = await asyncio.to_thread(
             lambda: self._model.encode(
-                list(texts), is_query=False,
-                convert_to_numpy=True, normalize_embeddings=True,
+                list(texts),
+                is_query=False,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
             ),
         )
-        return tuple(
-            [np.asarray(row, dtype=np.float32) for row in mat]
-            for mat in mats
-        )
+        return tuple([np.asarray(row, dtype=np.float32) for row in mat] for mat in mats)

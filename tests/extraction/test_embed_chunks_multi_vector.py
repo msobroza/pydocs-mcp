@@ -28,12 +28,8 @@ class _FakeMVE:
     async def embed_query(self, text: str) -> list[np.ndarray]:
         return [np.ones((4,), dtype=np.float32) / 2]
 
-    async def embed_chunks(
-        self, texts
-    ) -> tuple[list[np.ndarray], ...]:
-        return tuple(
-            [np.ones((4,), dtype=np.float32) / 2 for _ in range(2)] for _ in texts
-        )
+    async def embed_chunks(self, texts) -> tuple[list[np.ndarray], ...]:
+        return tuple([np.ones((4,), dtype=np.float32) / 2 for _ in range(2)] for _ in texts)
 
 
 def _state(

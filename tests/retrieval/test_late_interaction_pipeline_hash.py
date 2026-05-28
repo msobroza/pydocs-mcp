@@ -7,6 +7,7 @@ For a default install (single-vector ingestion), toggling
 LateInteractionConfig MUST NOT change ``ingestion_pipeline_hash`` — the
 "default install hash is stable" invariant.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -68,16 +69,12 @@ def test_multi_vector_ingestion_pipeline_hash_changes_on_model(tmp_path: Path) -
 
     a = AppConfig.load()
     a.extraction.ingestion.pipeline_path = pipe
-    object.__setattr__(
-        a, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1")
-    )
+    object.__setattr__(a, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1"))
     h1 = a.ingestion_pipeline_hash
 
     b = AppConfig.load()
     b.extraction.ingestion.pipeline_path = pipe
-    object.__setattr__(
-        b, "late_interaction", LateInteractionConfig(enabled=True, model_name="m2")
-    )
+    object.__setattr__(b, "late_interaction", LateInteractionConfig(enabled=True, model_name="m2"))
     h2 = b.ingestion_pipeline_hash
 
     assert h1 != h2
@@ -85,24 +82,17 @@ def test_multi_vector_ingestion_pipeline_hash_changes_on_model(tmp_path: Path) -
 
 def test_multi_vector_ingestion_pipeline_hash_stable_when_unchanged(tmp_path: Path) -> None:
     """Idempotency: same YAML + same LateInteractionConfig → same hash."""
-    yaml_text = (
-        "steps:\n"
-        "  - { name: embed, type: embed_chunks_multi_vector, params: {} }\n"
-    )
+    yaml_text = "steps:\n  - { name: embed, type: embed_chunks_multi_vector, params: {} }\n"
     pipe = tmp_path / "ing.yaml"
     pipe.write_text(yaml_text)
 
     a = AppConfig.load()
     a.extraction.ingestion.pipeline_path = pipe
-    object.__setattr__(
-        a, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1")
-    )
+    object.__setattr__(a, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1"))
 
     b = AppConfig.load()
     b.extraction.ingestion.pipeline_path = pipe
-    object.__setattr__(
-        b, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1")
-    )
+    object.__setattr__(b, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1"))
 
     assert a.ingestion_pipeline_hash == b.ingestion_pipeline_hash
 
@@ -117,21 +107,15 @@ def test_multi_vector_ingestion_hash_differs_from_single_vector(tmp_path: Path) 
         "steps:\n  - { name: embed, type: embed_chunks_multi_vector, params: {} }\n"
     )
     single_yaml = tmp_path / "single.yaml"
-    single_yaml.write_text(
-        "steps:\n  - { name: embed, type: embed_chunks, params: {} }\n"
-    )
+    single_yaml.write_text("steps:\n  - { name: embed, type: embed_chunks, params: {} }\n")
 
     a = AppConfig.load()
     a.extraction.ingestion.pipeline_path = multi_yaml
-    object.__setattr__(
-        a, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1")
-    )
+    object.__setattr__(a, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1"))
 
     b = AppConfig.load()
     b.extraction.ingestion.pipeline_path = single_yaml
-    object.__setattr__(
-        b, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1")
-    )
+    object.__setattr__(b, "late_interaction", LateInteractionConfig(enabled=True, model_name="m1"))
 
     # Different YAML bytes → different hash, but additionally the multi-vector
     # branch folds late_interaction identity in.

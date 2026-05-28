@@ -85,9 +85,7 @@ def _pkg(name: str = "demo") -> Package:
 
 def _mv(n_tokens: int, dim: int = 4) -> list[np.ndarray]:
     """Build an ``n_tokens × dim`` multi-vector embedding (unit-norm rows)."""
-    return [
-        np.full((dim,), 1.0 / np.sqrt(dim), dtype=np.float32) for _ in range(n_tokens)
-    ]
+    return [np.full((dim,), 1.0 / np.sqrt(dim), dtype=np.float32) for _ in range(n_tokens)]
 
 
 def _sv(dim: int = 4) -> np.ndarray:

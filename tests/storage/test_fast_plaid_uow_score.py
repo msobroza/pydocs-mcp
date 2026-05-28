@@ -1,4 +1,5 @@
 """score(): subset-filtered MaxSim over fast-plaid (Decision B REVISED)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -43,14 +44,14 @@ class _PersistentFakeFastPlaid(_FakeFastPlaid):
 async def test_score_translates_chunk_ids_to_plaid_ids(tmp_path, monkeypatch) -> None:
     pytest.importorskip("torch")
     import pydocs_mcp.storage.fast_plaid_uow as mod
+
     monkeypatch.setattr(mod, "_FastPlaidCls", _PersistentFakeFastPlaid, raising=False)
     db_path = tmp_path / "db.db"
     open_index_database(db_path).close()
     with sqlite3.connect(db_path) as conn:
         for i in range(3):
             conn.execute(
-                "INSERT INTO chunks(package, title, text, origin) "
-                "VALUES('p',?,?, 'dep_doc')",
+                "INSERT INTO chunks(package, title, text, origin) VALUES('p',?,?, 'dep_doc')",
                 (f"t{i}", f"b{i}"),
             )
         conn.commit()
@@ -61,8 +62,10 @@ async def test_score_translates_chunk_ids_to_plaid_ids(tmp_path, monkeypatch) ->
         device="cpu",
     )
     docs = [
-        [np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-         np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)],
+        [
+            np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32),
+        ],
         [np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)],
         [np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)],
     ]
@@ -89,6 +92,7 @@ async def test_score_translates_chunk_ids_to_plaid_ids(tmp_path, monkeypatch) ->
 async def test_score_empty_subset_returns_empty(tmp_path, monkeypatch) -> None:
     pytest.importorskip("torch")
     import pydocs_mcp.storage.fast_plaid_uow as mod
+
     monkeypatch.setattr(mod, "_FastPlaidCls", _PersistentFakeFastPlaid, raising=False)
     db_path = tmp_path / "db.db"
     open_index_database(db_path).close()

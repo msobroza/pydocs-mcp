@@ -1,4 +1,5 @@
 """Schema v6: chunk_multi_vector_ids — id-mapping table for fast-plaid."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -28,9 +29,12 @@ def test_indices_present(tmp_path) -> None:
     db = tmp_path / "idx.db"
     open_index_database(db).close()
     with sqlite3.connect(db) as conn:
-        idx = {r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='chunk_multi_vector_ids'",
-        )}
+        idx = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='chunk_multi_vector_ids'",
+            )
+        }
     assert "idx_cmv_plaid_doc_id" in idx
     assert "idx_cmv_package" in idx
 

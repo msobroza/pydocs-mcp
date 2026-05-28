@@ -48,7 +48,8 @@ def build_multi_vector_embedder(
 
 
 def _build_multi_vector_embedder_for_provider(
-    provider: str, cfg: LateInteractionConfig,
+    provider: str,
+    cfg: LateInteractionConfig,
 ) -> MultiVectorEmbedder:
     if provider == "pylate":
         from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder

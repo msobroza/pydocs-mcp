@@ -56,8 +56,7 @@ class EmbedChunksMultiVectorStage:
         # :class:`EmbedChunksStage`).
         if self.batch_size <= 0:
             raise ValueError(
-                "EmbedChunksMultiVectorStage.batch_size must be > 0, "
-                f"got {self.batch_size}",
+                f"EmbedChunksMultiVectorStage.batch_size must be > 0, got {self.batch_size}",
             )
 
     async def run(self, state: IngestionState) -> IngestionState:
@@ -67,8 +66,7 @@ class EmbedChunksMultiVectorStage:
 
         skip = state.existing_chunk_hashes or {}
         to_embed_idx = [
-            i for i, c in enumerate(chunks)
-            if c.embedding is None and c.content_hash not in skip
+            i for i, c in enumerate(chunks) if c.embedding is None and c.content_hash not in skip
         ]
 
         # Always stamp the package with embedder identity, even if no
@@ -105,9 +103,7 @@ class EmbedChunksMultiVectorStage:
         return out
 
     @classmethod
-    def from_dict(
-        cls, data: Mapping[str, Any], context: Any
-    ) -> EmbedChunksMultiVectorStage:
+    def from_dict(cls, data: Mapping[str, Any], context: Any) -> EmbedChunksMultiVectorStage:
         embedder = getattr(context, "multi_vector_embedder", None)
         if embedder is None:
             raise ValueError(

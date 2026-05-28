@@ -54,9 +54,7 @@ class _StubMVStore:
         top_k: int,
     ) -> tuple[tuple[int, float], ...]:
         subset = set(subset_chunk_ids)
-        return tuple(
-            (cid, score) for (cid, score) in self._ranking if cid in subset
-        )[:top_k]
+        return tuple((cid, score) for (cid, score) in self._ranking if cid in subset)[:top_k]
 
 
 class _StubUoW:
