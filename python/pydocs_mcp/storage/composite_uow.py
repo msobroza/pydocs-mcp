@@ -14,6 +14,7 @@ Atomicity limitation: NOT strict cross-backend ACID. The startup
 integrity check (compare chunks.count to IdMapIndex.size()) detects
 post-crash mismatches and forces re-embed of affected packages.
 """
+
 from __future__ import annotations
 
 import logging
@@ -140,7 +141,8 @@ class CompositeUnitOfWork:
                 first_exc = exc
                 logger.error(
                     "CompositeUnitOfWork commit failed on %r: %r",
-                    child, exc,
+                    child,
+                    exc,
                 )
                 break
         if first_exc is not None:
@@ -151,7 +153,8 @@ class CompositeUnitOfWork:
                     logger.warning(
                         "Best-effort rollback raised on %r: %r — original "
                         "commit failure NOT masked.",
-                        child, rb_exc,
+                        child,
+                        rb_exc,
                     )
             raise first_exc
 
@@ -162,7 +165,8 @@ class CompositeUnitOfWork:
             except Exception as exc:
                 logger.warning(
                     "CompositeUnitOfWork.rollback raised on %r: %r",
-                    child, exc,
+                    child,
+                    exc,
                 )
 
     async def delete_all(self) -> None:

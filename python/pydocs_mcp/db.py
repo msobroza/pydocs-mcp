@@ -3,6 +3,7 @@
 Schema is versioned via PRAGMA user_version; a mismatch drops all tables and
 recreates from the current DDL. See spec §5.4-5.5.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -64,7 +65,11 @@ _DDL = """
 # Tables we know about — dropped on a version mismatch so earlier schemas
 # (including the pre-v2 `symbols` table) are cleared before recreating.
 _KNOWN_TABLES = (
-    "chunks_fts", "chunks", "module_members", "packages", "symbols",
+    "chunks_fts",
+    "chunks",
+    "module_members",
+    "packages",
+    "symbols",
     "document_trees",
     "node_references",
 )
@@ -78,9 +83,7 @@ def cache_path_for_project(project_dir: Path) -> Path:
     """
     # md5 used as a fast non-cryptographic path-fingerprint to derive a short
     # per-project cache slug; usedforsecurity=False signals intent to ruff/bandit.
-    slug = hashlib.md5(
-        str(project_dir.resolve()).encode(), usedforsecurity=False
-    ).hexdigest()[:10]
+    slug = hashlib.md5(str(project_dir.resolve()).encode(), usedforsecurity=False).hexdigest()[:10]
     return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.db"
 
 
@@ -92,9 +95,7 @@ def turboquant_path_for_project(project_dir: Path) -> Path:
     ``--force`` cache clear deletes both (caller's responsibility).
     """
     # See `cache_path_for_project` — same non-cryptographic slug derivation.
-    slug = hashlib.md5(
-        str(project_dir.resolve()).encode(), usedforsecurity=False
-    ).hexdigest()[:10]
+    slug = hashlib.md5(str(project_dir.resolve()).encode(), usedforsecurity=False).hexdigest()[:10]
     return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.tq"
 
 
@@ -133,9 +134,7 @@ def _apply_v3_additions(conn: sqlite3.Connection) -> None:
         "package TEXT NOT NULL, module TEXT NOT NULL, tree_json TEXT NOT NULL, "
         "content_hash TEXT, updated_at REAL, PRIMARY KEY (package, module))"
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_trees_package ON document_trees(package)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_trees_package ON document_trees(package)")
     _try_add_column(conn, "chunks", "module TEXT DEFAULT ''")
     _try_add_column(conn, "chunks", "content_hash TEXT")
     _try_add_column(conn, "packages", "local_path TEXT")
@@ -143,9 +142,7 @@ def _apply_v3_additions(conn: sqlite3.Connection) -> None:
     # column. v2->v3 in-place migration adds the column via _try_add_column but
     # previously omitted the index — queries that filter chunks by module on a
     # migrated DB hit a full table scan until the next fresh rebuild.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS ix_chunks_module ON chunks(module)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_chunks_module ON chunks(module)")
 
 
 def _apply_v4_additions(conn: sqlite3.Connection) -> None:
@@ -163,15 +160,10 @@ def _apply_v4_additions(conn: sqlite3.Connection) -> None:
         "PRIMARY KEY (from_package, from_node_id, to_name, kind))"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS ix_refs_from "
-        "ON node_references(from_package, from_node_id)"
+        "CREATE INDEX IF NOT EXISTS ix_refs_from ON node_references(from_package, from_node_id)"
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS ix_refs_to_name ON node_references(to_name)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS ix_refs_to_node ON node_references(to_node_id)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_refs_to_name ON node_references(to_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_refs_to_node ON node_references(to_node_id)")
 
 
 def _apply_v5_additions(conn: sqlite3.Connection) -> None:
@@ -268,9 +260,7 @@ def rebuild_fulltext_index(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
-def get_stored_content_hash(
-    connection: sqlite3.Connection, package_name: str
-) -> str | None:
+def get_stored_content_hash(connection: sqlite3.Connection, package_name: str) -> str | None:
     """Return the stored content hash for a package, or ``None`` if not indexed."""
     row = connection.execute(
         "SELECT content_hash FROM packages WHERE name=?", (package_name,)

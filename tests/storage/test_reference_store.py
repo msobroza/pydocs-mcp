@@ -1,4 +1,5 @@
 """End-to-end SqliteReferenceStore tests (spec §6.2)."""
+
 from __future__ import annotations
 
 import pytest
@@ -33,10 +34,14 @@ def provider(tmp_path):
 async def test_save_many_then_find_callers(provider):
     store = SqliteReferenceStore(provider=provider)
     refs = [
-        _ref(from_node_id="pkg.a", to_name="t", to_node_id="t",
-             kind=ReferenceKind.CALLS),
-        _ref(from_package="other", from_node_id="other.x", to_name="t",
-             to_node_id="t", kind=ReferenceKind.CALLS),
+        _ref(from_node_id="pkg.a", to_name="t", to_node_id="t", kind=ReferenceKind.CALLS),
+        _ref(
+            from_package="other",
+            from_node_id="other.x",
+            to_name="t",
+            to_node_id="t",
+            kind=ReferenceKind.CALLS,
+        ),
     ]
     await store.save_many(refs, package="pkg")
     callers = await store.find_callers(target_node_id="t")
@@ -63,15 +68,15 @@ async def test_find_by_name_filter_by_kind(provider):
     await store.save_many(
         [
             _ref(to_name="os.path.join", kind=ReferenceKind.CALLS),
-            _ref(to_name="os.path.join", kind=ReferenceKind.IMPORTS,
-                 from_node_id="pkg.b"),
+            _ref(to_name="os.path.join", kind=ReferenceKind.IMPORTS, from_node_id="pkg.b"),
         ],
         package="pkg",
     )
     all_hits = await store.find_by_name("os.path.join")
     assert len(all_hits) == 2
     calls_only = await store.find_by_name(
-        "os.path.join", ReferenceKind.CALLS,
+        "os.path.join",
+        ReferenceKind.CALLS,
     )
     assert {r.kind for r in calls_only} == {ReferenceKind.CALLS}
 
@@ -85,10 +90,12 @@ async def test_save_many_upsert_on_pk_collision(provider):
     """
     store = SqliteReferenceStore(provider=provider)
     await store.save_many(
-        [_ref(to_name="x", to_node_id=None)], package="pkg",
+        [_ref(to_name="x", to_node_id=None)],
+        package="pkg",
     )
     await store.save_many(
-        [_ref(to_name="x", to_node_id="pkg.real.x")], package="pkg",
+        [_ref(to_name="x", to_node_id="pkg.real.x")],
+        package="pkg",
     )
     rows = await store.find_by_name("x")
     assert len(rows) == 1

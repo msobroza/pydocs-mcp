@@ -11,6 +11,7 @@ their owner modules (``..datasets.base_dataset`` /
 ``from __future__ import annotations`` keeps the references string-only
 so the runtime Protocol check still works under ``runtime_checkable``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,9 +25,7 @@ from ..systems.base_system import RetrievedItem
 class Metric(Protocol):
     name: str
 
-    def compute(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> float: ...
+    def compute(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,9 +36,7 @@ class Scorer:
 
     metrics: tuple[Metric, ...]
 
-    def score(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> dict[str, float]:
+    def score(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> dict[str, float]:
         return {m.name: m.compute(task, retrieved) for m in self.metrics}
 
 

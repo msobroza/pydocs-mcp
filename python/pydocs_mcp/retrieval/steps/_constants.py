@@ -21,6 +21,7 @@ CLAUDE.md §"Default values: single source of truth".
   :mod:`pydocs_mcp.retrieval.steps.pre_filter` so existing fetcher
   imports keep working without modification.
 """
+
 from __future__ import annotations
 
 DEFAULT_BRANCH_KEYS: tuple[str, ...] = ("bm25.ranked", "dense.ranked")

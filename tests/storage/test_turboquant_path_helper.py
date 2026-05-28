@@ -1,4 +1,5 @@
 """turboquant_path_for_project mirrors cache_path_for_project (Task 8)."""
+
 from pathlib import Path
 
 from pydocs_mcp.db import cache_path_for_project, turboquant_path_for_project

@@ -12,6 +12,7 @@ Identity scheme under test (``_item_key``): ``chunk:{id}`` when the
 store/retrieved item carries a chunk id, else ``rank:{rank}`` — namespaced
 so an int chunk-id can never collide with an int rank.
 """
+
 from __future__ import annotations
 
 import sys
@@ -137,9 +138,7 @@ async def test_eager_empty_doc_contents_returns_frozenset_without_db() -> None:
     # WHY: pydocs is HasGoldResolver even for RepoQA (no doc_contents). The
     # early return MUST be zero-cost — the fake UoW is never entered and
     # ``chunks.list`` is never called.
-    factory, chunks_obj, uow = _fake_uow_factory(
-        [_FakeStoreChunk(id=1, text="anything")]
-    )
+    factory, chunks_obj, uow = _fake_uow_factory([_FakeStoreChunk(id=1, text="anything")])
     resolver = PydocsFuzzyGoldResolver(factory)
     task = _task(doc_contents=())
 

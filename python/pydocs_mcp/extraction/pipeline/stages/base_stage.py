@@ -7,6 +7,7 @@ package implements it. The Protocol itself lives in
 two are inextricably tied; this module re-exports the symbol so each
 concrete-stage file imports its contract from one obvious place.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionStage

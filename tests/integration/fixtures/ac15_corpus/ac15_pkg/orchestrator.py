@@ -1,4 +1,5 @@
 """Cross-module composition. Most CALLS edges in the corpus live here."""
+
 from __future__ import annotations
 
 from ac15_pkg.indexer import Indexer

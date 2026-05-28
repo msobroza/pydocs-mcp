@@ -12,6 +12,7 @@ service ``delete``s the package's chunks first and then performs a single
 matching the input chunk order — so input embeddings can be paired
 positionally with the persisted IDs.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -70,12 +71,15 @@ async def test_reindex_package_writes_chunks_AND_vectors(tmp_path: Path) -> None
 
     chunks = (
         _chunk("demo", "alpha", "alpha body", _vec(0.1, 0.2, 0.3, 0.4)),
-        _chunk("demo", "beta",  "beta body",  _vec(0.5, 0.6, 0.7, 0.8)),
+        _chunk("demo", "beta", "beta body", _vec(0.5, 0.6, 0.7, 0.8)),
     )
     package = _pkg("demo")
 
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
 
@@ -89,7 +93,9 @@ async def test_reindex_package_writes_chunks_AND_vectors(tmp_path: Path) -> None
     # TurboQuant sidecar landed both vectors and persisted them to disk.
     assert tq_path.exists()
     async with TurboQuantUnitOfWork(
-        index_path=tq_path, dim=_DIM, bit_width=_BW,
+        index_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     ) as tq_uow:
         assert tq_uow.size() == 2
 
@@ -123,7 +129,10 @@ async def test_reindex_package_skips_chunks_without_embedding(
     )
     package = _pkg("demo")
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
 
@@ -148,7 +157,9 @@ async def test_reindex_package_skips_chunks_without_embedding(
     # pairing-direction regression (mapping the embedding to the wrong
     # row) would flip these two assertions.
     async with TurboQuantUnitOfWork(
-        index_path=tq_path, dim=_DIM, bit_width=_BW,
+        index_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     ) as tq_uow:
         assert tq_uow.size() == 1
         # IdMapIndex.contains is the direct membership probe — proves
@@ -177,7 +188,10 @@ async def test_reindex_package_with_no_embeddings_does_not_touch_tq(
         Chunk(text="bare2", metadata={"package": "demo", "title": "bare2"}),
     )
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
 

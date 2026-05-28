@@ -9,6 +9,7 @@ clears ``packages.content_hash`` on every package so the next indexing
 sweep re-extracts (and re-embeds) them. The fresh-project case
 (both counts == 0) must not false-alarm.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,22 +57,28 @@ def _vec(*values: float) -> np.ndarray:
 
 @pytest.mark.asyncio
 async def test_integrity_check_clears_content_hash_on_size_mismatch(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     db_path = tmp_path / "x.db"
     tq_path = tmp_path / "x.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     # Seed 3 chunks in SQLite but only 1 vector in TurboQuant — mismatch.
     async with factory() as uow:
         await uow.packages.upsert(_pkg("demo"))
-        await uow.chunks.upsert((
-            _chunk("a", "demo"),
-            _chunk("b", "demo"),
-            _chunk("c", "demo"),
-        ))
+        await uow.chunks.upsert(
+            (
+                _chunk("a", "demo"),
+                _chunk("b", "demo"),
+                _chunk("c", "demo"),
+            )
+        )
         # Re-fetch to discover the IDs SQLite auto-assigned.
         persisted = await uow.chunks.list(filter={"package": "demo"})
         first_id = sorted(persisted, key=lambda c: c.id or 0)[0].id
@@ -80,16 +87,17 @@ async def test_integrity_check_clears_content_hash_on_size_mismatch(
 
     caplog.set_level(logging.WARNING)
     repaired_pkg_names = await check_integrity_and_repair(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     assert "demo" in repaired_pkg_names
     # demo's content_hash was cleared so the next index sweep re-extracts.
     async with factory() as uow:
         pkgs = await uow.packages.list(filter={"name": "demo"})
         assert pkgs[0].content_hash in (None, "")
-    assert any(
-        "mismatch" in r.message.lower() for r in caplog.records
-    )
+    assert any("mismatch" in r.message.lower() for r in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -98,7 +106,10 @@ async def test_integrity_check_passes_when_counts_match(tmp_path: Path) -> None:
     tq_path = tmp_path / "y.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     async with factory() as uow:
         await uow.packages.upsert(_pkg("demo"))
@@ -108,7 +119,10 @@ async def test_integrity_check_passes_when_counts_match(tmp_path: Path) -> None:
         await uow.vectors.add_vectors([first_id], [_vec(0.1, 0.2, 0.3, 0.4)])
         await uow.commit()
     repaired = await check_integrity_and_repair(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     assert repaired == []
 
@@ -124,6 +138,9 @@ async def test_integrity_check_no_op_on_fresh_project(tmp_path: Path) -> None:
     tq_path = tmp_path / "z.tq"
     open_index_database(db_path).close()
     repaired = await check_integrity_and_repair(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     assert repaired == []

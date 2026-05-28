@@ -25,6 +25,7 @@ Internal structure:
 - :data:`_MODULE_ID_VARIANTS` — module-level constant (S4) — single
   source of truth for the dotted-prefix probe suffixes.
 """
+
 from __future__ import annotations
 
 import json
@@ -132,7 +133,10 @@ class LookupTarget:
         package = parts[0]
         if len(parts) == 1:
             return cls(
-                package=package, module=None, consumed=1, symbol_path=(),
+                package=package,
+                module=None,
+                consumed=1,
+                symbol_path=(),
             )
         match = await longest_module(package, parts)
         if match is None:
@@ -142,7 +146,10 @@ class LookupTarget:
             # empty so callers don't accidentally treat unresolved parts
             # as a symbol path.
             return cls(
-                package=package, module=None, consumed=1, symbol_path=(),
+                package=package,
+                module=None,
+                consumed=1,
+                symbol_path=(),
             )
         module, consumed = match
         return cls(
@@ -169,10 +176,11 @@ _REF_GETTERS: dict[
         Awaitable[tuple[NodeReference, ...]],
     ],
 ] = {
-    "callers":  lambda svc, p, n: svc.callers(p, n),
-    "callees":  lambda svc, p, n: svc.callees(p, n),
+    "callers": lambda svc, p, n: svc.callers(p, n),
+    "callees": lambda svc, p, n: svc.callees(p, n),
     "inherits": lambda svc, _p, n: svc.find_by_name(
-        n, kind=ReferenceKind.INHERITS,
+        n,
+        kind=ReferenceKind.INHERITS,
     ),
 }
 
@@ -202,12 +210,13 @@ class LookupService:
 
     package_lookup: PackageLookup
     tree_svc: Any  # TreeService | NullTreeService — structural Protocol
-    ref_svc: Any   # ReferenceService | NullReferenceService
+    ref_svc: Any  # ReferenceService | NullReferenceService
 
     async def lookup(self, payload: LookupInput) -> str:
         target_str = payload.target
         parsed = await LookupTarget.parse(
-            target_str, longest_module=self._longest_module,
+            target_str,
+            longest_module=self._longest_module,
         )
 
         # 1. Empty target → list all indexed packages.
@@ -224,17 +233,12 @@ class LookupService:
             if len(original_parts) == 1:
                 doc = await self.package_lookup.get_package_doc(parsed.package)
                 if doc is None:
-                    raise NotFoundError(
-                        f"package '{parsed.package}' not indexed"
-                    )
+                    raise NotFoundError(f"package '{parsed.package}' not indexed")
                 return format_package_doc(doc)
             # Multi-segment target but no module match → NotFoundError
             # using the user's original string (preserves the pre-refactor
             # message shape).
-            raise NotFoundError(
-                f"no module matching '{target_str}' found under "
-                f"'{parsed.package}'"
-            )
+            raise NotFoundError(f"no module matching '{target_str}' found under '{parsed.package}'")
 
         # 3. Module-only target → render module tree.
         if not parsed.symbol_path:
@@ -305,11 +309,16 @@ class LookupService:
         if len(rows) > limit:
             rows = rows[:limit]
         return format_references(
-            rows, target=target, show=show, limit=limit,
+            rows,
+            target=target,
+            show=show,
+            limit=limit,
         )
 
     async def _longest_module(
-        self, package: str, parts: tuple[str, ...],
+        self,
+        package: str,
+        parts: tuple[str, ...],
     ) -> tuple[str, int] | None:
         """Adapter that exposes :meth:`_longest_indexed_module` to
         :meth:`LookupTarget.parse` with the callback shape it expects.
@@ -322,7 +331,9 @@ class LookupService:
         return await self._longest_indexed_module(package, list(parts))
 
     async def _longest_indexed_module(
-        self, package: str, parts: list[str],
+        self,
+        package: str,
+        parts: list[str],
     ) -> tuple[str, int] | None:
         """Walk longest-prefix-first; return ``(module_id, n)`` where n is
         the count of input parts consumed by the match, or ``None``.

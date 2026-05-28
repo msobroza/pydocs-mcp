@@ -1,4 +1,5 @@
 """AC-17: Docs reflect shipped tree-reasoning + weighted-fusion behavior."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,5 @@
 """Tests for pure Python fallback implementations (_fallback.py)."""
+
 from pydocs_mcp._fallback import (
     extract_module_doc,
     hash_files,
@@ -11,6 +12,7 @@ from pydocs_mcp._fallback import (
 
 # ── parse_py_file ────────────────────────────────────────────────────────
 
+
 class TestParsePyFile:
     def test_finds_function(self):
         src = 'def greet(name: str) -> str:\n    """Say hello."""\n    return f"Hi {name}"\n'
@@ -18,7 +20,9 @@ class TestParsePyFile:
         assert any(s.name == "greet" for s in syms)
 
     def test_finds_class(self):
-        src = 'class Foo(Base):\n    """A foo class with enough doc to be useful here."""\n    pass\n'
+        src = (
+            'class Foo(Base):\n    """A foo class with enough doc to be useful here."""\n    pass\n'
+        )
         syms = parse_py_file(src)
         assert any(s.name == "Foo" for s in syms)
 
@@ -37,10 +41,7 @@ class TestParsePyFile:
         assert syms and syms[0].name == "fetch"
 
     def test_no_false_docstring_attribution(self):
-        src = (
-            'def no_doc(x):\n    pass\n\n'
-            'def has_doc(y):\n    """Real doc."""\n    pass\n'
-        )
+        src = 'def no_doc(x):\n    pass\n\ndef has_doc(y):\n    """Real doc."""\n    pass\n'
         syms = parse_py_file(src)
         by_name = {s.name: s for s in syms}
         assert by_name["no_doc"].docstring == ""
@@ -51,6 +52,7 @@ class TestParsePyFile:
 
 
 # ── extract_module_doc ───────────────────────────────────────────────────
+
 
 class TestExtractModuleDoc:
     def test_triple_double_quotes(self):
@@ -89,6 +91,7 @@ class TestExtractModuleDoc:
 
 
 # ── walk_py_files ────────────────────────────────────────────────────────
+
 
 class TestWalkPyFiles:
     def test_finds_py_files(self, tmp_path):
@@ -152,6 +155,7 @@ class TestWalkPyFiles:
 
 # ── hash_files ───────────────────────────────────────────────────────────
 
+
 class TestHashFiles:
     def test_same_files_same_hash(self, tmp_path):
         f = tmp_path / "file.py"
@@ -183,6 +187,7 @@ class TestHashFiles:
 
 # ── read_file ────────────────────────────────────────────────────────────
 
+
 class TestReadFile:
     def test_reads_content(self, tmp_path):
         f = tmp_path / "hello.py"
@@ -204,6 +209,7 @@ class TestReadFile:
 
 
 # ── read_files_parallel ──────────────────────────────────────────────────
+
 
 class TestReadFilesParallel:
     def test_reads_multiple_files(self, tmp_path):

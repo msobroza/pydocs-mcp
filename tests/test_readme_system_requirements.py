@@ -1,4 +1,5 @@
 """AC-15: README documents libopenblas-pthread-dev as a Linux system requirement."""
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

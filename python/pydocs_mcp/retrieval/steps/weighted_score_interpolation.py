@@ -15,6 +15,7 @@ scratch keys. This catches pipeline-configuration bugs (e.g., the
 upstream :class:`TopKFilterStep` forgot to ``publish_to`` the matching
 name) at the boundary instead of silently producing degraded rankings.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -105,10 +106,7 @@ class WeightedScoreInterpolationStep(RetrieverStep):
             items = tuple(branch.items) if hasattr(branch, "items") else tuple(branch)
             if not items:
                 continue
-            scores = [
-                float(c.relevance) if c.relevance is not None else 0.0
-                for c in items
-            ]
+            scores = [float(c.relevance) if c.relevance is not None else 0.0 for c in items]
             lo = min(scores)
             hi = max(scores)
             # WHY: when all scores in a branch are equal (single-item
@@ -123,19 +121,14 @@ class WeightedScoreInterpolationStep(RetrieverStep):
                 if chunk.id is None:
                     continue
                 normed = (raw - lo) / span if span > 0.0 else 1.0
-                accumulated[chunk.id] = (
-                    accumulated.get(chunk.id, 0.0) + weight * normed
-                )
+                accumulated[chunk.id] = accumulated.get(chunk.id, 0.0) + weight * normed
                 first_seen.setdefault(chunk.id, chunk)
 
         if not accumulated:
             return state
 
         fused = sorted(
-            (
-                replace(first_seen[cid], relevance=score)
-                for cid, score in accumulated.items()
-            ),
+            (replace(first_seen[cid], relevance=score) for cid, score in accumulated.items()),
             key=lambda c: c.relevance or 0.0,
             reverse=True,
         )

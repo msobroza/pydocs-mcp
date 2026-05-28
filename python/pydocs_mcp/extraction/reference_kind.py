@@ -8,13 +8,14 @@ capture and therefore opt-in via YAML (sub-PR #5c, §5.3).
 StrEnum so the on-disk ``kind`` column stays plain text — readable in
 SQLite shell, no enum-import-needed for ad-hoc queries.
 """
+
 from __future__ import annotations
 
 from enum import StrEnum
 
 
 class ReferenceKind(StrEnum):
-    CALLS    = "calls"
-    IMPORTS  = "imports"
+    CALLS = "calls"
+    IMPORTS = "imports"
     INHERITS = "inherits"
     MENTIONS = "mentions"

@@ -1,6 +1,7 @@
 """MLflow tracker — lazy-imports ``mlflow`` so the core install stays
 small (spec §4.5). Constructing the tracker triggers the import; users
 hit the install message immediately, not deep inside ``open_run``."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

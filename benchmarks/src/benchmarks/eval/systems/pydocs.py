@@ -7,6 +7,7 @@ benchmark them without subprocessing the MCP server. Reuses
 the SQLite cache lives in a tmp file per ``index()`` call so two
 ``EvalTask`` corpora cannot bleed into one another.
 """
+
 from __future__ import annotations
 
 import os
@@ -53,7 +54,9 @@ class PydocsMcpSystem:
     composite_mode: bool = False
     _db_path: Path | None = field(default=None, init=False, repr=False)
     _pipeline: CodeRetrieverPipeline | None = field(
-        default=None, init=False, repr=False,
+        default=None,
+        init=False,
+        repr=False,
     )
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:
@@ -101,6 +104,7 @@ class PydocsMcpSystem:
         # root. The benchmarks workflow installs ``benchmarks[all]`` +
         # pydocs-mcp[fastembed] so the FastEmbed import path succeeds.
         from pydocs_mcp.extraction.strategies.embedders import build_embedder
+
         embedder = build_embedder(config.embedding)
         # WHY: LoadExistingChunkHashesStage needs uow_factory to read existing
         # content_hashes; AssignChunkContentHashStage needs pipeline_hash to
@@ -142,7 +146,9 @@ class PydocsMcpSystem:
         self._pipeline = build_chunk_pipeline_from_config(config, context)
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         if self._pipeline is None:
             raise RuntimeError(
@@ -192,7 +198,8 @@ class PydocsMcpSystem:
                     text=chunk.text,
                     source_path=str(meta.get("source_path", "")),
                     qualified_name=_first_str(
-                        meta.get("qualified_name"), meta.get("title"),
+                        meta.get("qualified_name"),
+                        meta.get("title"),
                     ),
                     relevance=chunk.relevance,
                     # WHY: stamp the store row id so the eager
@@ -227,7 +234,8 @@ class PydocsMcpSystem:
         from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
         return PydocsFuzzyGoldResolver(
-            build_sqlite_uow_factory(self._db_path), _DEFAULT_FUZZ_THRESHOLD,
+            build_sqlite_uow_factory(self._db_path),
+            _DEFAULT_FUZZ_THRESHOLD,
         )
 
     async def teardown(self) -> None:
@@ -326,8 +334,7 @@ class PydocsTreeParallelSystem(PydocsMcpSystem):
 
     name: str = "pydocs-mcp-tree-parallel"
     _config_path: Path = field(
-        default_factory=lambda: _pipelines_dir()
-        / "chunk_search_with_tree_reasoning_parallel.yaml",
+        default_factory=lambda: _pipelines_dir() / "chunk_search_with_tree_reasoning_parallel.yaml",
     )
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:

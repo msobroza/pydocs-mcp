@@ -18,6 +18,7 @@ entry's ``pipeline_path`` is the load-time source of truth the runner's
 ``AppConfig.load`` exposes verbatim — asserting it is exact and avoids
 coupling the test to pipeline-assembly internals.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

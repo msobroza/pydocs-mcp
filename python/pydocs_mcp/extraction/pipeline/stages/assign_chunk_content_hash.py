@@ -11,6 +11,7 @@ of ingestion.yaml. Any embedder swap or YAML edit invalidates every chunk's
 hash, the diff-merge sees them all as 'added', and the existing add path
 re-embeds them. No separate force-re-embed code path needed.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping

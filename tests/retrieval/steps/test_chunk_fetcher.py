@@ -1,4 +1,5 @@
 """ChunkFetcherStep tests — issues FTS5 MATCH query, returns candidates with raw FTS5 ranks."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,24 +21,26 @@ async def populated_db(tmp_path: Path) -> Path:
     open_index_database(db_path).close()
     provider = build_connection_provider(db_path)
     repo = SqliteChunkRepository(provider=provider)
-    await repo.upsert([
-        Chunk(
-            text="def add(a, b): return a + b",
-            metadata={
-                ChunkFilterField.PACKAGE.value: "demo",
-                ChunkFilterField.TITLE.value: "add",
-                ChunkFilterField.MODULE.value: "demo.m",
-            },
-        ),
-        Chunk(
-            text="def sub(a, b): return a - b",
-            metadata={
-                ChunkFilterField.PACKAGE.value: "demo",
-                ChunkFilterField.TITLE.value: "sub",
-                ChunkFilterField.MODULE.value: "demo.m",
-            },
-        ),
-    ])
+    await repo.upsert(
+        [
+            Chunk(
+                text="def add(a, b): return a + b",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "demo",
+                    ChunkFilterField.TITLE.value: "add",
+                    ChunkFilterField.MODULE.value: "demo.m",
+                },
+            ),
+            Chunk(
+                text="def sub(a, b): return a - b",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "demo",
+                    ChunkFilterField.TITLE.value: "sub",
+                    ChunkFilterField.MODULE.value: "demo.m",
+                },
+            ),
+        ]
+    )
     await repo.rebuild_index()
     return db_path
 
@@ -90,16 +93,17 @@ async def test_chunk_fetcher_reads_pre_filter_from_scratch(populated_db: Path) -
     # calls ``ctx.filter_adapter.adapt`` to materialize SQL — so the
     # tree is what matters here, not a pre-computed SQL fragment.
     from pydocs_mcp.storage.filters import FieldEq
+
     state.scratch["pre_filter.result"] = PreFilterResult(
-        tree=FieldEq(field="package", value="demo"), scope=None,
+        tree=FieldEq(field="package", value="demo"),
+        scope=None,
     )
     out = await step.run(state)
     # The fetcher used the pre-built SQL pushdown, didn't re-parse query.pre_filter.
     assert isinstance(out.candidates, ChunkList)
     # Both seeded chunks are in 'demo' package → both should pass the pushdown.
     assert all(
-        c.metadata.get(ChunkFilterField.PACKAGE.value) == "demo"
-        for c in out.candidates.items
+        c.metadata.get(ChunkFilterField.PACKAGE.value) == "demo" for c in out.candidates.items
     )
 
 

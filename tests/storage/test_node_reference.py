@@ -1,4 +1,5 @@
 """Pin NodeReference value object shape (spec §4.2)."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -39,8 +40,11 @@ def test_node_reference_holds_all_fields() -> None:
 
 def test_node_reference_to_node_id_defaults_to_none() -> None:
     r = NodeReference(
-        from_package="pkg", from_node_id="pkg.mod.fn",
-        to_name="os.path.join", to_node_id=None, kind=ReferenceKind.CALLS,
+        from_package="pkg",
+        from_node_id="pkg.mod.fn",
+        to_name="os.path.join",
+        to_node_id=None,
+        kind=ReferenceKind.CALLS,
     )
     assert r.to_node_id is None
 

@@ -1,4 +1,5 @@
 """Tests for SqliteChunkRepository + SqliteVectorStore (spec §5.3, AC #9)."""
+
 from __future__ import annotations
 
 import pytest
@@ -32,11 +33,13 @@ def _chunk(package: str, title: str, text: str, origin: str = "project_code_sect
 async def test_chunk_repository_upsert_and_list(db_file):
     provider = build_connection_provider(db_file)
     repo = SqliteChunkRepository(provider=provider)
-    await repo.upsert([
-        _chunk("fastapi", "routing", "Path operations and dependencies"),
-        _chunk("fastapi", "security", "OAuth2 with password flow"),
-        _chunk("requests", "get", "Send HTTP GET request"),
-    ])
+    await repo.upsert(
+        [
+            _chunk("fastapi", "routing", "Path operations and dependencies"),
+            _chunk("fastapi", "security", "OAuth2 with password flow"),
+            _chunk("requests", "get", "Send HTTP GET request"),
+        ]
+    )
 
     all_chunks = await repo.list()
     assert len(all_chunks) == 3
@@ -50,11 +53,13 @@ async def test_chunk_repository_upsert_and_list(db_file):
 async def test_chunk_repository_delete(db_file):
     provider = build_connection_provider(db_file)
     repo = SqliteChunkRepository(provider=provider)
-    await repo.upsert([
-        _chunk("fastapi", "routing", "x"),
-        _chunk("fastapi", "security", "y"),
-        _chunk("requests", "get", "z"),
-    ])
+    await repo.upsert(
+        [
+            _chunk("fastapi", "routing", "x"),
+            _chunk("fastapi", "security", "y"),
+            _chunk("requests", "get", "z"),
+        ]
+    )
 
     assert await repo.count() == 3
 
@@ -68,9 +73,11 @@ async def test_chunk_repository_delete(db_file):
 async def test_chunk_repository_rebuild_index(db_file):
     provider = build_connection_provider(db_file)
     repo = SqliteChunkRepository(provider=provider)
-    await repo.upsert([
-        _chunk("fastapi", "routing", "Path operations and dependencies tutorial"),
-    ])
+    await repo.upsert(
+        [
+            _chunk("fastapi", "routing", "Path operations and dependencies tutorial"),
+        ]
+    )
     # Before rebuild, chunks_fts is empty (content=chunks means it's a contentless view).
     # After rebuild, FTS becomes queryable.
     await repo.rebuild_index()
@@ -87,10 +94,12 @@ async def test_chunk_repository_rebuild_index(db_file):
 async def test_vector_store_text_search_basic(db_file):
     provider = build_connection_provider(db_file)
     repo = SqliteChunkRepository(provider=provider)
-    await repo.upsert([
-        _chunk("fastapi", "routing", "Path operations and dependencies"),
-        _chunk("requests", "get", "Send HTTP GET request to a URL"),
-    ])
+    await repo.upsert(
+        [
+            _chunk("fastapi", "routing", "Path operations and dependencies"),
+            _chunk("requests", "get", "Send HTTP GET request to a URL"),
+        ]
+    )
     await repo.rebuild_index()
 
     store = SqliteVectorStore(provider=provider)
@@ -106,16 +115,20 @@ async def test_vector_store_text_search_basic(db_file):
 async def test_vector_store_text_search_with_filter_pushdown(db_file):
     provider = build_connection_provider(db_file)
     repo = SqliteChunkRepository(provider=provider)
-    await repo.upsert([
-        _chunk("fastapi", "routing", "Path operations and dependencies tutorial"),
-        _chunk("requests", "get", "Send HTTP GET request tutorial"),
-    ])
+    await repo.upsert(
+        [
+            _chunk("fastapi", "routing", "Path operations and dependencies tutorial"),
+            _chunk("requests", "get", "Send HTTP GET request tutorial"),
+        ]
+    )
     await repo.rebuild_index()
 
     store = SqliteVectorStore(provider=provider)
     # Both rows match "tutorial" — filter narrows to one.
     results = await store.text_search(
-        "tutorial", limit=5, filter={"package": "requests"},
+        "tutorial",
+        limit=5,
+        filter={"package": "requests"},
     )
     assert len(results) == 1
     assert results[0].metadata["package"] == "requests"
@@ -127,5 +140,7 @@ async def test_vector_store_text_search_invalid_column(db_file):
     # No rebuild needed; validation gates before SQL executes.
     with pytest.raises(ValueError, match="not in safe_columns"):
         await store.text_search(
-            "anything", limit=5, filter={"language": "python"},
+            "anything",
+            limit=5,
+            filter={"language": "python"},
         )

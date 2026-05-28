@@ -1,4 +1,5 @@
 """Tests for CodeRetrieverPipeline + PipelineState."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -12,6 +13,7 @@ from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline, PipelineState
 @dataclass(frozen=True, slots=True)
 class _AppendStage:
     """Test fake — records runs in a shared list."""
+
     name: str
     log: list
 

@@ -10,6 +10,7 @@ The ``n_gt == 0`` guard returns 0.0 BEFORE IDCG so an injected empty
 resolved set (pydocs-on-RepoQA) or a store-less DS-1000 task never divides
 by zero. Hermetic: no ``pydocs_mcp`` import.
 """
+
 from __future__ import annotations
 
 import math
@@ -40,9 +41,7 @@ def _repoqa_task(body: str | None) -> EvalTask:
 
 
 def _item(rank: int, chunk_id: int) -> RetrievedItem:
-    return RetrievedItem(
-        rank=rank, text="x", source_path="p", chunk_id=chunk_id
-    )
+    return RetrievedItem(rank=rank, text="x", source_path="p", chunk_id=chunk_id)
 
 
 def test_hit_at_rank_1_is_perfect() -> None:
@@ -63,18 +62,17 @@ def test_single_hit_at_rank_10() -> None:
 def test_three_of_five_multi_gold_idcg_normalization() -> None:
     # 5 ground-truth chunks (n_gt=5). Hits land at ranks 1, 3, 4 (chunk
     # ids 10, 30, 40 are in the resolved set; 20, 50 are not).
-    resolved = frozenset({"chunk:10", "chunk:30", "chunk:40",
-                          "chunk:60", "chunk:70"})
+    resolved = frozenset({"chunk:10", "chunk:30", "chunk:40", "chunk:60", "chunk:70"})
     task = _ds1000_task(resolved)
     retrieved = (
-        _item(1, 10),   # hit
-        _item(2, 20),   # miss
-        _item(3, 30),   # hit
-        _item(4, 40),   # hit
-        _item(5, 50),   # miss
+        _item(1, 10),  # hit
+        _item(2, 20),  # miss
+        _item(3, 30),  # hit
+        _item(4, 40),  # hit
+        _item(5, 50),  # miss
     )
     dcg = (
-        1.0 / math.log2(2)   # rank 1
+        1.0 / math.log2(2)  # rank 1
         + 1.0 / math.log2(4)  # rank 3
         + 1.0 / math.log2(5)  # rank 4
     )

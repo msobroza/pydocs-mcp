@@ -15,6 +15,7 @@ For new code, prefer the subpackage form
 (``from pydocs_mcp.extraction.model import DocumentNode``) which matches
 the file layout 1:1.
 """
+
 from pydocs_mcp.extraction.factories import (
     build_ingestion_pipeline,
     load_ingestion_pipeline,

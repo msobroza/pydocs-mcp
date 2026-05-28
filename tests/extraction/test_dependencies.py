@@ -11,6 +11,7 @@ Pins:
 Spec §10 picks ``StaticDependencyResolver`` as the only strategy — today's
 ``deps.py`` is already clean; no alternative resolvers ship in sub-PR #5.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,9 +26,7 @@ async def test_resolves_from_pyproject_toml(tmp_path: Path) -> None:
     """A minimal pyproject.toml with [project].dependencies yields its
     normalized names (hyphens → underscores, version specifiers stripped)."""
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\n'
-        'name = "demo"\n'
-        'dependencies = ["requests>=2.0", "scikit-learn", "PyYAML"]\n'
+        '[project]\nname = "demo"\ndependencies = ["requests>=2.0", "scikit-learn", "PyYAML"]\n'
     )
     resolver = StaticDependencyResolver()
     names = await resolver.resolve(tmp_path)
@@ -40,10 +39,7 @@ async def test_resolves_from_pyproject_toml(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_resolves_from_requirements_txt(tmp_path: Path) -> None:
     """``requirements*.txt`` anywhere under project_dir is parsed."""
-    (tmp_path / "requirements.txt").write_text(
-        "numpy==1.26.0\n"
-        "pandas>=2.0\n"
-    )
+    (tmp_path / "requirements.txt").write_text("numpy==1.26.0\npandas>=2.0\n")
     resolver = StaticDependencyResolver()
     names = await resolver.resolve(tmp_path)
 

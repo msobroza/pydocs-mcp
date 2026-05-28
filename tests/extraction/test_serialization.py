@@ -10,6 +10,7 @@ Covers:
 - Duplicate chunker registration raises ``ValueError``.
 - Unknown stage type raises ``KeyError`` with a known-types list (spec AC #24).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -57,6 +58,7 @@ def test_chunker_registry_is_plain_dict():
 
 def test_register_chunker_returns_class_unchanged():
     """The decorator returns the class so it can sit below ``@dataclass``."""
+
     @_register_chunker(".xyz")
     @dataclass(frozen=True, slots=True)
     class XyzChunker:
@@ -75,6 +77,7 @@ def test_register_chunker_returns_class_unchanged():
 def test_register_chunker_duplicate_raises():
     """Registering twice for the same extension is a wiring bug — surface
     at import time, not at first extraction."""
+
     @_register_chunker(".duplicate")
     @dataclass(frozen=True, slots=True)
     class A:
@@ -82,6 +85,7 @@ def test_register_chunker_duplicate_raises():
 
     try:
         with pytest.raises(ValueError, match="already registered"):
+
             @_register_chunker(".duplicate")
             @dataclass(frozen=True, slots=True)
             class B:
@@ -93,6 +97,7 @@ def test_register_chunker_duplicate_raises():
 def test_register_chunker_different_extensions_independent():
     """Each extension gets its own slot; registering ``.a`` does not block
     ``.b`` (regression guard against a buggy global-slot implementation)."""
+
     @_register_chunker(".aaa")
     @dataclass(frozen=True, slots=True)
     class A:
@@ -115,16 +120,19 @@ def test_register_chunker_different_extensions_independent():
 def test_stage_registry_unknown_type_raises_with_known_list(tmp_path):
     """Spec AC #24 — unknown ``type:`` in ingestion YAML must raise
     ``KeyError`` naming the known-stages list. Closed allowlist enforced."""
+
     # Register a single dummy stage so ``known`` list is non-empty.
     @stage_registry.register("_test_dummy_stage")
     @dataclass(frozen=True, slots=True)
     class _Dummy:
         name: str = "_test_dummy_stage"
 
-        def to_dict(self): return {"type": self.name}
+        def to_dict(self):
+            return {"type": self.name}
 
         @classmethod
-        def from_dict(cls, d, ctx): return cls()
+        def from_dict(cls, d, ctx):
+            return cls()
 
     try:
         with pytest.raises(KeyError, match="unknown component"):

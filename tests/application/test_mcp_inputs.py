@@ -1,4 +1,5 @@
 """Tests for SearchInput / LookupInput Pydantic models (sub-PR #6 §4.3)."""
+
 from __future__ import annotations
 
 import pytest
@@ -129,6 +130,7 @@ def test_config_shape_is_runtime_checkable() -> None:
     contract: any object exposing ``reference_graph`` and ``search``
     attributes satisfies the Protocol — no nominal subclassing required.
     """
+
     class _Duck:
         def __init__(self) -> None:
             self.reference_graph = object()

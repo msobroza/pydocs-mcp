@@ -13,6 +13,7 @@ Reference capture: accepts an optional ``ref_collector`` for cross-node
 reference capture (sub-PR #5b). When ``None`` (default) no references
 are emitted, so existing callers see zero behavior change.
 """
+
 from __future__ import annotations
 
 import ast
@@ -44,7 +45,11 @@ log = logging.getLogger("pydocs-mcp")
 @dataclass(frozen=True, slots=True)
 class AstPythonChunker:
     def build_tree(
-        self, path: str, content: str, package: str, root: Path,
+        self,
+        path: str,
+        content: str,
+        package: str,
+        root: Path,
         ref_collector: ReferenceCollector | None = None,
     ) -> DocumentNode:
         module = _module_from_path(path, root)
@@ -57,17 +62,27 @@ class AstPythonChunker:
                 from pydocs_mcp.extraction.strategies.references import (
                     capture_imports,
                 )
+
                 capture_imports(
-                    tree.body, from_package=package,
-                    module_qname=module, collector=ref_collector,
+                    tree.body,
+                    from_package=package,
+                    module_qname=module,
+                    collector=ref_collector,
                 )
             except Exception as exc:
                 log.warning(
-                    "capture_imports failed on %s: %s", path, exc,
+                    "capture_imports failed on %s: %s",
+                    path,
+                    exc,
                 )
         return _module_node_from_ast(
-            tree, module, path, content, root,
-            ref_collector=ref_collector, package=package,
+            tree,
+            module,
+            path,
+            content,
+            root,
+            ref_collector=ref_collector,
+            package=package,
         )
 
     @classmethod
@@ -85,16 +100,25 @@ def _safe_parse(content: str, path: str) -> ast.Module | None:
 
 
 def _module_node_from_ast(
-    tree: ast.Module, module: str, path: str, content: str, root: Path,
-    *, ref_collector: ReferenceCollector | None = None,
+    tree: ast.Module,
+    module: str,
+    path: str,
+    content: str,
+    root: Path,
+    *,
+    ref_collector: ReferenceCollector | None = None,
     package: str = "",
 ) -> DocumentNode:
     """Build the MODULE root + all children from a parsed ``ast.Module``."""
     lines = content.splitlines()
     rel = _relpath(path, root)
     children = _extract_module_children(
-        tree, module, lines, rel,
-        ref_collector=ref_collector, package=package,
+        tree,
+        module,
+        lines,
+        rel,
+        ref_collector=ref_collector,
+        package=package,
     )
     doc = ast.get_docstring(tree) or ""
     doc_examples = _extract_code_examples(doc, module, rel)
@@ -116,8 +140,12 @@ def _module_node_from_ast(
 
 
 def _extract_module_children(
-    tree: ast.Module, module: str, lines: list[str], rel: str,
-    *, ref_collector: ReferenceCollector | None = None,
+    tree: ast.Module,
+    module: str,
+    lines: list[str],
+    rel: str,
+    *,
+    ref_collector: ReferenceCollector | None = None,
     package: str = "",
 ) -> list[DocumentNode]:
     """One IMPORT_BLOCK per contiguous import run + one FUNCTION / CLASS
@@ -129,21 +157,40 @@ def _extract_module_children(
     """
     children: list[DocumentNode] = []
     for suffix_counter, run in enumerate(_consecutive_import_runs(tree.body)):
-        children.append(_import_block_node(
-            run, module, lines, rel, suffix=suffix_counter,
-        ))
+        children.append(
+            _import_block_node(
+                run,
+                module,
+                lines,
+                rel,
+                suffix=suffix_counter,
+            )
+        )
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            children.append(_function_node(
-                stmt, module, lines, rel,
-                parent_id=module, kind=NodeKind.FUNCTION,
-                ref_collector=ref_collector, package=package,
-            ))
+            children.append(
+                _function_node(
+                    stmt,
+                    module,
+                    lines,
+                    rel,
+                    parent_id=module,
+                    kind=NodeKind.FUNCTION,
+                    ref_collector=ref_collector,
+                    package=package,
+                )
+            )
         elif isinstance(stmt, ast.ClassDef):
-            children.append(_class_node(
-                stmt, module, lines, rel,
-                ref_collector=ref_collector, package=package,
-            ))
+            children.append(
+                _class_node(
+                    stmt,
+                    module,
+                    lines,
+                    rel,
+                    ref_collector=ref_collector,
+                    package=package,
+                )
+            )
     # Two-pass collection above produces import blocks first, then
     # defs — out of source order when a second import run lives below
     # a def. Stable sort by ``start_line`` restores intuitive ordering.
@@ -177,8 +224,11 @@ def _consecutive_import_runs(
 
 def _import_block_node(
     imports: list[ast.Import | ast.ImportFrom],
-    module: str, lines: list[str], rel: str,
-    *, suffix: int = 0,
+    module: str,
+    lines: list[str],
+    rel: str,
+    *,
+    suffix: int = 0,
 ) -> DocumentNode:
     """One IMPORT_BLOCK from a single contiguous import run.
 
@@ -191,10 +241,7 @@ def _import_block_node(
     start = imports[0].lineno
     end = imports[-1].end_lineno or start
     txt = _slice_lines(lines, start, end)
-    qname = (
-        f"{module}.__imports__" if suffix == 0
-        else f"{module}.__imports__{suffix}"
-    )
+    qname = f"{module}.__imports__" if suffix == 0 else f"{module}.__imports__{suffix}"
     return DocumentNode(
         node_id=qname,
         qualified_name=qname,
@@ -211,8 +258,12 @@ def _import_block_node(
 
 def _function_node(
     stmt: ast.FunctionDef | ast.AsyncFunctionDef,
-    module: str, lines: list[str], rel: str,
-    *, parent_id: str, kind: NodeKind,
+    module: str,
+    lines: list[str],
+    rel: str,
+    *,
+    parent_id: str,
+    kind: NodeKind,
     ref_collector: ReferenceCollector | None = None,
     package: str = "",
 ) -> DocumentNode:
@@ -225,9 +276,12 @@ def _function_node(
             from pydocs_mcp.extraction.strategies.references import (
                 capture_calls,
             )
+
             capture_calls(
-                stmt.body, from_package=package,
-                from_node_id=qname, collector=ref_collector,
+                stmt.body,
+                from_package=package,
+                from_node_id=qname,
+                collector=ref_collector,
             )
         except Exception as exc:
             log.warning("capture_calls failed on %s: %s", qname, exc)
@@ -257,8 +311,12 @@ def _function_node(
 
 
 def _class_node(
-    stmt: ast.ClassDef, module: str, lines: list[str], rel: str,
-    *, ref_collector: ReferenceCollector | None = None,
+    stmt: ast.ClassDef,
+    module: str,
+    lines: list[str],
+    rel: str,
+    *,
+    ref_collector: ReferenceCollector | None = None,
     package: str = "",
 ) -> DocumentNode:
     """CLASS node with METHOD children. Direct text = class line through
@@ -269,26 +327,31 @@ def _class_node(
             from pydocs_mcp.extraction.strategies.references import (
                 capture_inherits,
             )
+
             capture_inherits(
-                list(stmt.bases), from_package=package,
-                class_qname=qname, collector=ref_collector,
+                list(stmt.bases),
+                from_package=package,
+                class_qname=qname,
+                collector=ref_collector,
             )
         except Exception as exc:
             log.warning("capture_inherits failed on %s: %s", qname, exc)
     doc = ast.get_docstring(stmt) or ""
-    method_stmts = [
-        s for s in stmt.body
-        if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
-    ]
+    method_stmts = [s for s in stmt.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
     start = stmt.lineno
     end = stmt.end_lineno or start
     direct_end = (method_stmts[0].lineno - 1) if method_stmts else end
     direct_txt = _slice_lines(lines, start, direct_end)
     method_nodes = [
         _function_node(
-            m, module, lines, rel,
-            parent_id=qname, kind=NodeKind.METHOD,
-            ref_collector=ref_collector, package=package,
+            m,
+            module,
+            lines,
+            rel,
+            parent_id=qname,
+            kind=NodeKind.METHOD,
+            ref_collector=ref_collector,
+            package=package,
         )
         for m in method_stmts
     ]
@@ -298,6 +361,7 @@ def _class_node(
     # (capture_inherits in references.py). Non-dotted shapes (Subscript, Call,
     # etc.) become "<complex>" rather than the variable ast.unparse output.
     from pydocs_mcp.extraction.strategies.references import canonical_dotted
+
     inherits = tuple(canonical_dotted(b) or "<complex>" for b in stmt.bases)
     return DocumentNode(
         node_id=qname,
@@ -321,7 +385,9 @@ def _class_node(
 
 
 def _extract_code_examples(
-    docstring: str, parent_qname: str, rel: str,
+    docstring: str,
+    parent_qname: str,
+    rel: str,
 ) -> list[DocumentNode]:
     """Pull triple-backtick fenced blocks out of a docstring as
     CODE_EXAMPLE nodes. Fence line-offsets inside the docstring don't map
@@ -336,19 +402,21 @@ def _extract_code_examples(
         lang = (match.group("lang") or "").strip()
         code = match.group("body")
         qname = f"{parent_qname}.__example_{i}__"
-        examples.append(DocumentNode(
-            node_id=qname,
-            qualified_name=qname,
-            title=f"example {i}",
-            kind=NodeKind.CODE_EXAMPLE,
-            source_path=rel,
-            start_line=1,
-            end_line=1,
-            text=code,
-            content_hash=_content_hash(code, NodeKind.CODE_EXAMPLE, f"example {i}"),
-            extra_metadata={"language": lang},
-            parent_id=parent_qname,
-        ))
+        examples.append(
+            DocumentNode(
+                node_id=qname,
+                qualified_name=qname,
+                title=f"example {i}",
+                kind=NodeKind.CODE_EXAMPLE,
+                source_path=rel,
+                start_line=1,
+                end_line=1,
+                text=code,
+                content_hash=_content_hash(code, NodeKind.CODE_EXAMPLE, f"example {i}"),
+                extra_metadata={"language": lang},
+                parent_id=parent_qname,
+            )
+        )
     return examples
 
 

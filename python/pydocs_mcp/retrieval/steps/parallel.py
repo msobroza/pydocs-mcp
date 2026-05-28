@@ -25,6 +25,7 @@ YAML shapes (``from_dict``):
   ``ParallelStep.to_dict`` emits; kept for in-code constructions that
   round-trip through ``to_dict`` / ``from_dict``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -118,9 +119,7 @@ class ParallelStep(RetrieverStep):
         # don't race on the input's shared mutable dict. ``replace`` keeps
         # all other fields (query / candidates / result) pointing at the
         # same immutable objects — those are safe to share.
-        branch_inputs = tuple(
-            replace(state, scratch=dict(state.scratch)) for _ in self.stages
-        )
+        branch_inputs = tuple(replace(state, scratch=dict(state.scratch)) for _ in self.stages)
         # strict=True: ``branch_inputs`` is built from ``self.stages`` above,
         # so lengths are equal by construction; the flag locks that invariant.
         results = await asyncio.gather(
@@ -169,15 +168,12 @@ class ParallelStep(RetrieverStep):
             # IS a RetrieverStep (CodeRetrieverPipeline subclasses RetrieverStep
             # directly), so the resulting stages tuple is homogeneous.
             stages = tuple(
-                CodeRetrieverPipeline.from_dict(branch, context)
-                for branch in data["branches"]
+                CodeRetrieverPipeline.from_dict(branch, context) for branch in data["branches"]
             )
             return cls(stages=stages)
         if has_stages:
             return cls(
-                stages=tuple(
-                    context.step_registry.build(s, context) for s in data["stages"]
-                ),
+                stages=tuple(context.step_registry.build(s, context) for s in data["stages"]),
             )
         # Empty parallel — degenerate but not illegal (the run() loop
         # is a no-op fan-out that returns the input scratch + result).

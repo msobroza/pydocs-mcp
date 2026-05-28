@@ -1,4 +1,5 @@
 """PackageLookup — list + get_package_doc via UoW (spec §5.1, post-#5a-2)."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

@@ -7,6 +7,7 @@ the resolver's Rule 0, which rewrites ``self.X.Y`` to ``<type>.Y`` before
 Rule 5's short-circuit (so calls like ``self.client.fetch`` can resolve
 when ``self.client`` is typed at construction).
 """
+
 from __future__ import annotations
 
 import ast
@@ -28,21 +29,13 @@ def _parse_class(source: str) -> ast.ClassDef:
 
 def test_pattern_b_bare_constructor_call():
     """Pattern B — ``self.client = ApiClient()`` records ``client → ApiClient``."""
-    cls = _parse_class(
-        "class Foo:\n"
-        "    def __init__(self):\n"
-        "        self.client = ApiClient()\n"
-    )
+    cls = _parse_class("class Foo:\n    def __init__(self):\n        self.client = ApiClient()\n")
     assert capture_self_attribute_types(cls) == {"client": "ApiClient"}
 
 
 def test_pattern_c_dotted_constructor_call():
     """Pattern C — ``self.cache = redis.Cache()`` records ``cache → redis.Cache``."""
-    cls = _parse_class(
-        "class Foo:\n"
-        "    def __init__(self):\n"
-        "        self.cache = redis.Cache()\n"
-    )
+    cls = _parse_class("class Foo:\n    def __init__(self):\n        self.cache = redis.Cache()\n")
     assert capture_self_attribute_types(cls) == {"cache": "redis.Cache"}
 
 
@@ -53,9 +46,7 @@ def test_pattern_d_annotated_bare_assignment():
     annotation is the source of truth for inference.
     """
     cls = _parse_class(
-        "class Foo:\n"
-        "    def __init__(self):\n"
-        "        self.runner: Pipeline = build()\n"
+        "class Foo:\n    def __init__(self):\n        self.runner: Pipeline = build()\n"
     )
     assert capture_self_attribute_types(cls) == {"runner": "Pipeline"}
 
@@ -63,9 +54,7 @@ def test_pattern_d_annotated_bare_assignment():
 def test_pattern_e_dotted_annotation():
     """Pattern E — ``self.queue: asyncio.Queue = q`` records ``queue → asyncio.Queue``."""
     cls = _parse_class(
-        "class Foo:\n"
-        "    def __init__(self):\n"
-        "        self.queue: asyncio.Queue = q\n"
+        "class Foo:\n    def __init__(self):\n        self.queue: asyncio.Queue = q\n"
     )
     assert capture_self_attribute_types(cls) == {"queue": "asyncio.Queue"}
 
@@ -87,32 +76,20 @@ def test_skips_pattern_a_passthrough_param_assignment():
 
     Only Pattern B/C (call) and D/E (annotation) carry usable type info.
     """
-    cls = _parse_class(
-        "class Foo:\n"
-        "    def __init__(self, x):\n"
-        "        self.x = x\n"
-    )
+    cls = _parse_class("class Foo:\n    def __init__(self, x):\n        self.x = x\n")
     assert capture_self_attribute_types(cls) == {}
 
 
 def test_skips_non_self_attribute_targets():
     """``other.field = T()`` is not a self-attr — must be ignored."""
-    cls = _parse_class(
-        "class Foo:\n"
-        "    def __init__(self):\n"
-        "        other.field = ApiClient()\n"
-    )
+    cls = _parse_class("class Foo:\n    def __init__(self):\n        other.field = ApiClient()\n")
     assert capture_self_attribute_types(cls) == {}
 
 
 def test_skips_call_with_non_dotted_func():
     """``self.x = make()()`` — the outer Call's func is itself a Call;
     canonical_dotted returns None and we drop the assignment."""
-    cls = _parse_class(
-        "class Foo:\n"
-        "    def __init__(self):\n"
-        "        self.x = make_factory()()\n"
-    )
+    cls = _parse_class("class Foo:\n    def __init__(self):\n        self.x = make_factory()()\n")
     # make_factory() is the inner Call (its func is Name "make_factory") and
     # the outer Call's func is a Call, which canonical_dotted rejects.
     # We capture nothing for `x` because the OUTER func isn't dotted.
@@ -121,11 +98,7 @@ def test_skips_call_with_non_dotted_func():
 
 def test_class_without_init_returns_empty():
     """No ``__init__`` → nothing to infer; return empty dict."""
-    cls = _parse_class(
-        "class Foo:\n"
-        "    def other(self):\n"
-        "        self.x = ApiClient()\n"
-    )
+    cls = _parse_class("class Foo:\n    def other(self):\n        self.x = ApiClient()\n")
     assert capture_self_attribute_types(cls) == {}
 
 
@@ -168,11 +141,7 @@ def test_class_body_annotation_dataclass_field():
     ``cache: redis.Cache`` declared at class scope (no method body)
     records ``cache → redis.Cache`` so calls like ``self.cache.get`` can
     resolve. Most common form in this codebase (frozen dataclasses)."""
-    cls = _parse_class(
-        "class Service:\n"
-        "    cache: redis.Cache\n"
-        "    runner: Pipeline\n"
-    )
+    cls = _parse_class("class Service:\n    cache: redis.Cache\n    runner: Pipeline\n")
     assert capture_self_attribute_types(cls) == {
         "cache": "redis.Cache",
         "runner": "Pipeline",
@@ -181,10 +150,7 @@ def test_class_body_annotation_dataclass_field():
 
 def test_class_body_annotation_with_default_value():
     """Class-body AnnAssign with a default value still records the type."""
-    cls = _parse_class(
-        "class Service:\n"
-        "    timeout: int = 30\n"
-    )
+    cls = _parse_class("class Service:\n    timeout: int = 30\n")
     assert capture_self_attribute_types(cls) == {"timeout": "int"}
 
 

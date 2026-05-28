@@ -11,6 +11,7 @@ C. The shipped YAML pipelines wire the new step types
 D. The YAML loader accepts ``steps:`` with ``name:`` and rejects
    ``stages:``.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -65,10 +66,12 @@ async def test_limit_step_operates_on_candidates() -> None:
 
 async def test_metadata_post_filter_operates_on_candidates() -> None:
     """Item A: MetadataPostFilterStep reads + writes ``state.candidates``."""
-    payload = ChunkList(items=(
-        Chunk(text="a", metadata={ChunkFilterField.PACKAGE.value: "fastapi"}),
-        Chunk(text="b", metadata={ChunkFilterField.PACKAGE.value: "django"}),
-    ))
+    payload = ChunkList(
+        items=(
+            Chunk(text="a", metadata={ChunkFilterField.PACKAGE.value: "fastapi"}),
+            Chunk(text="b", metadata={ChunkFilterField.PACKAGE.value: "django"}),
+        )
+    )
     state = RetrieverState(
         query=SearchQuery(terms="x", post_filter={"package": "fastapi"}),
         candidates=payload,
@@ -86,10 +89,12 @@ async def test_token_budget_renders_candidates_to_result() -> None:
     Reads ``state.candidates``, writes ``state.result`` as a one-item
     composite chunk.
     """
-    payload = ChunkList(items=(
-        Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
-        Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
-    ))
+    payload = ChunkList(
+        items=(
+            Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
+            Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
+        )
+    )
     state = RetrieverState(query=SearchQuery(terms="x"), candidates=payload)
     step = TokenBudgetStep(formatter=ChunkFormatter(), budget=10_000)
     out = await step.run(state)
@@ -111,18 +116,26 @@ async def fts_db(tmp_path: Path) -> Path:
     open_index_database(db_path).close()
     provider = build_connection_provider(db_path)
     repo = SqliteChunkRepository(provider=provider)
-    await repo.upsert([
-        Chunk(text="install fastapi", metadata={
-            ChunkFilterField.PACKAGE.value: "fastapi",
-            ChunkFilterField.TITLE.value: "Install",
-            ChunkFilterField.MODULE.value: "fastapi.docs",
-        }),
-        Chunk(text="install django", metadata={
-            ChunkFilterField.PACKAGE.value: "django",
-            ChunkFilterField.TITLE.value: "Install",
-            ChunkFilterField.MODULE.value: "django.docs",
-        }),
-    ])
+    await repo.upsert(
+        [
+            Chunk(
+                text="install fastapi",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "fastapi",
+                    ChunkFilterField.TITLE.value: "Install",
+                    ChunkFilterField.MODULE.value: "fastapi.docs",
+                },
+            ),
+            Chunk(
+                text="install django",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "django",
+                    ChunkFilterField.TITLE.value: "Install",
+                    ChunkFilterField.MODULE.value: "django.docs",
+                },
+            ),
+        ]
+    )
     await repo.rebuild_index()
     return db_path
 
@@ -189,24 +202,34 @@ async def members_db(tmp_path: Path) -> Path:
     open_index_database(db_path).close()
     provider = build_connection_provider(db_path)
     repo = SqliteModuleMemberRepository(provider=provider)
-    await repo.upsert_many([
-        ModuleMember(metadata={
-            ModuleMemberFilterField.PACKAGE.value: "fastapi",
-            ModuleMemberFilterField.MODULE.value: "fastapi.routing",
-            ModuleMemberFilterField.NAME.value: "APIRouter",
-            ModuleMemberFilterField.KIND.value: MemberKind.CLASS.value,
-            "signature": "()", "return_annotation": "",
-            "parameters": (), "docstring": "Group routes.",
-        }),
-        ModuleMember(metadata={
-            ModuleMemberFilterField.PACKAGE.value: "django",
-            ModuleMemberFilterField.MODULE.value: "django.urls",
-            ModuleMemberFilterField.NAME.value: "URLRouter",
-            ModuleMemberFilterField.KIND.value: MemberKind.CLASS.value,
-            "signature": "()", "return_annotation": "",
-            "parameters": (), "docstring": "Route URLs.",
-        }),
-    ])
+    await repo.upsert_many(
+        [
+            ModuleMember(
+                metadata={
+                    ModuleMemberFilterField.PACKAGE.value: "fastapi",
+                    ModuleMemberFilterField.MODULE.value: "fastapi.routing",
+                    ModuleMemberFilterField.NAME.value: "APIRouter",
+                    ModuleMemberFilterField.KIND.value: MemberKind.CLASS.value,
+                    "signature": "()",
+                    "return_annotation": "",
+                    "parameters": (),
+                    "docstring": "Group routes.",
+                }
+            ),
+            ModuleMember(
+                metadata={
+                    ModuleMemberFilterField.PACKAGE.value: "django",
+                    ModuleMemberFilterField.MODULE.value: "django.urls",
+                    ModuleMemberFilterField.NAME.value: "URLRouter",
+                    ModuleMemberFilterField.KIND.value: MemberKind.CLASS.value,
+                    "signature": "()",
+                    "return_annotation": "",
+                    "parameters": (),
+                    "docstring": "Route URLs.",
+                }
+            ),
+        ]
+    )
     return db_path
 
 

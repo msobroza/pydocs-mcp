@@ -1,4 +1,5 @@
 """AC-7: LlmTreeReasoningStep error handling."""
+
 from __future__ import annotations
 
 import pytest
@@ -17,17 +18,28 @@ from tests._fakes import (
 
 def _project_tree() -> DocumentNode:
     return DocumentNode(
-        node_id="r", qualified_name="proj.entry", title="entry",
-        kind=NodeKind.FUNCTION, source_path="e.py", start_line=1, end_line=5,
-        text="entry body", content_hash="", summary="entry",
-        extra_metadata={}, parent_id=None, children=(),
+        node_id="r",
+        qualified_name="proj.entry",
+        title="entry",
+        kind=NodeKind.FUNCTION,
+        source_path="e.py",
+        start_line=1,
+        end_line=5,
+        text="entry body",
+        content_hash="",
+        summary="entry",
+        extra_metadata={},
+        parent_id=None,
+        children=(),
     )
 
 
 def _state(query: str) -> RetrieverState:
     return RetrieverState(
         query=SearchQuery(terms=query, max_results=10),
-        candidates=None, result=None, scratch={},
+        candidates=None,
+        result=None,
+        scratch={},
     )
 
 
@@ -49,9 +61,11 @@ async def test_invalid_json_raises_with_diagnostic() -> None:
 @pytest.mark.asyncio
 async def test_missing_node_list_key_returns_unchanged() -> None:
     """Missing node_list -> no picks -> state passes through."""
-    llm = FakeLlmClient(responses={
-        "q": '{"thinking": "I forgot the list"}',
-    })
+    llm = FakeLlmClient(
+        responses={
+            "q": '{"thinking": "I forgot the list"}',
+        }
+    )
     uow_factory = make_fake_uow_factory(
         trees=InMemoryDocumentTreeStore(by_package={"__project__": [_project_tree()]}),
     )
@@ -63,9 +77,11 @@ async def test_missing_node_list_key_returns_unchanged() -> None:
 @pytest.mark.asyncio
 async def test_hallucinated_ids_silently_dropped() -> None:
     """LLM returns IDs not in the tree -> dropped without raising."""
-    llm = FakeLlmClient(responses={
-        "q": '{"thinking": "...", "node_list": ["NOT_IN_TREE", "proj.entry"]}',
-    })
+    llm = FakeLlmClient(
+        responses={
+            "q": '{"thinking": "...", "node_list": ["NOT_IN_TREE", "proj.entry"]}',
+        }
+    )
     uow_factory = make_fake_uow_factory(
         trees=InMemoryDocumentTreeStore(by_package={"__project__": [_project_tree()]}),
         chunks=InMemoryChunkStore(),  # no chunks -> tree.ranked empty or absent
@@ -77,9 +93,11 @@ async def test_hallucinated_ids_silently_dropped() -> None:
 
 @pytest.mark.asyncio
 async def test_node_list_not_a_list_raises() -> None:
-    llm = FakeLlmClient(responses={
-        "q": '{"thinking": "", "node_list": "should be a list"}',
-    })
+    llm = FakeLlmClient(
+        responses={
+            "q": '{"thinking": "", "node_list": "should be a list"}',
+        }
+    )
     uow_factory = make_fake_uow_factory(
         trees=InMemoryDocumentTreeStore(by_package={"__project__": [_project_tree()]}),
     )

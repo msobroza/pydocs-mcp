@@ -24,6 +24,7 @@ which runs after chunking and before flatten. The resolver pass lives
 later inside ``IndexingService.reindex_package`` so it has access to the
 cross-package qname universe via ``uow.trees``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
 
 
 class TargetKind(StrEnum):
-    PROJECT    = "project"
+    PROJECT = "project"
     DEPENDENCY = "dependency"
 
 
@@ -45,6 +46,7 @@ class TargetKind(StrEnum):
 # pipeline state. Splitting :class:`IngestionState` into bundles keeps
 # stage signatures honest about the slice they touch and stops the
 # state from growing into a god object.
+
 
 @dataclass(frozen=True, slots=True)
 class FileBundle:
@@ -58,13 +60,13 @@ class FileBundle:
     :class:`IngestionState` from growing into a god object.
     """
 
-    target:        Path | str                  = field(default_factory=lambda: Path())
-    target_kind:   TargetKind                  = TargetKind.PROJECT
-    package_name:  str                         = ""
-    root:          Path                        = field(default_factory=lambda: Path())
-    paths:         tuple[str, ...]             = ()
+    target: Path | str = field(default_factory=lambda: Path())
+    target_kind: TargetKind = TargetKind.PROJECT
+    package_name: str = ""
+    root: Path = field(default_factory=lambda: Path())
+    paths: tuple[str, ...] = ()
     file_contents: tuple[tuple[str, str], ...] = ()
-    content_hash:  str                         = ""
+    content_hash: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,8 +78,8 @@ class ChunkBundle:
     rationale behind the bundle split.
     """
 
-    trees:  tuple[DocumentNode, ...] = ()
-    chunks: tuple[Chunk, ...]        = ()
+    trees: tuple[DocumentNode, ...] = ()
+    chunks: tuple[Chunk, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,9 +99,9 @@ class ReferenceBundle:
       ``<type>.Y`` before Rule 5.
     """
 
-    references:            tuple[Any, ...]              = ()
-    reference_aliases:     dict[str, dict[str, str]]    = field(default_factory=dict)
-    class_attribute_types: dict[str, dict[str, str]]    = field(default_factory=dict)
+    references: tuple[Any, ...] = ()
+    reference_aliases: dict[str, dict[str, str]] = field(default_factory=dict)
+    class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,10 +137,10 @@ class IngestionState:
       from ``{}`` ("ran and found nothing already cached").
     """
 
-    files:         FileBundle
-    chunks:        ChunkBundle                   = field(default_factory=ChunkBundle)
-    refs:          ReferenceBundle               = field(default_factory=ReferenceBundle)
-    package:       Package | None              = None
+    files: FileBundle
+    chunks: ChunkBundle = field(default_factory=ChunkBundle)
+    refs: ReferenceBundle = field(default_factory=ReferenceBundle)
+    package: Package | None = None
     existing_chunk_hashes: dict[str, int] | None = None
 
 

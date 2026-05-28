@@ -13,6 +13,7 @@ indexing + query stack with one import. Rendering helpers in
 :mod:`pydocs_mcp.application.formatting` are the single source of truth for
 byte-level output but are imported directly by their consumers.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.application.api_search import ApiSearch

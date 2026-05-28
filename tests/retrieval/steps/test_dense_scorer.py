@@ -1,4 +1,5 @@
 """DenseScorerStep — cosine sim re-scoring on np.ndarray (AC-18)."""
+
 import numpy as np
 import pytest
 
@@ -23,10 +24,12 @@ async def test_dense_scorer_writes_cosine_similarity_per_candidate() -> None:
     a_vec = await embedder.embed_query("alpha")
     b_vec = await embedder.embed_query("beta")
 
-    candidates = ChunkList(items=(
-        Chunk(text="alpha", id=1, embedding=a_vec),
-        Chunk(text="beta", id=2, embedding=b_vec),
-    ))
+    candidates = ChunkList(
+        items=(
+            Chunk(text="alpha", id=1, embedding=a_vec),
+            Chunk(text="beta", id=2, embedding=b_vec),
+        )
+    )
     state = RetrieverState(
         query=SearchQuery(terms="alpha", max_results=10),
         candidates=candidates,
@@ -45,7 +48,8 @@ async def test_dense_scorer_writes_cosine_similarity_per_candidate() -> None:
 async def test_dense_scorer_no_candidates_returns_state() -> None:
     embedder = MockEmbedder(dim=4)
     state = RetrieverState(
-        query=SearchQuery(terms="x", max_results=10), candidates=None,
+        query=SearchQuery(terms="x", max_results=10),
+        candidates=None,
     )
     step = DenseScorerStep(name="dense_scorer", embedder=embedder)
     out = await step.run(state)

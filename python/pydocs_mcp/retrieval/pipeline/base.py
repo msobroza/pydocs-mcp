@@ -10,6 +10,7 @@ from the extraction-side ``IngestionStage`` Protocol at
 ``pydocs_mcp/extraction/pipeline/ingestion.py``. Different pipelines,
 different state shapes, different contracts.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -31,6 +32,7 @@ class RetrieverStep(ABC):
     accept arbitrary attribute assignment). The frozen contract still
     propagates from the parent but slots does not.
     """
+
     name: str
 
     @abstractmethod
@@ -58,6 +60,7 @@ class RetrieverPipeline(RetrieverStep):
         chunk_pipeline["fetch"]  # -> ChunkFetcherStep
         chunk_pipeline.step_names  # -> ("fetch", "score", "topk", "budget")
     """
+
     steps: tuple[tuple[str, RetrieverStep], ...]
 
     def __post_init__(self) -> None:

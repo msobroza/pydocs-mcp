@@ -4,6 +4,7 @@ The 7 tests below pin the §A.1 markdown shape: empty / single-row / multi-row
 grouped output, resolved-first sort with ⚠ prefix on unresolved rows, resolved
 vs unresolved counts, and H1 wording per ``show`` (callers / callees / inherits).
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.application.formatting import format_references
@@ -40,8 +41,9 @@ def test_format_references_empty_returns_no_references_message():
         show="callers",
         limit=50,
     )
-    assert out.startswith("# Callers of `pkg.helpers.compute`\n"), \
+    assert out.startswith("# Callers of `pkg.helpers.compute`\n"), (
         f"H1 missing or wrong: {out[:60]!r}"
+    )
     assert "No callers found." in out, f"empty body wrong: {out!r}"
     assert out.endswith("\n"), f"trailing newline stripped: {out[-10:]!r}"
 
@@ -56,9 +58,7 @@ def test_format_references_single_resolved_row():
             to_node_id="pkg.helpers.compute",
         ),
     )
-    out = format_references(
-        rows, target="pkg.helpers.compute", show="callers", limit=50
-    )
+    out = format_references(rows, target="pkg.helpers.compute", show="callers", limit=50)
     assert out.startswith("# Callers of `pkg.helpers.compute`\n")
     assert "1 references found (1 resolved, 0 unresolved)." in out, out
     assert "## from `pkg` (1 caller)" in out, out
@@ -88,9 +88,7 @@ def test_format_references_groups_by_from_package_and_shows_count():
             to_node_id="pkg.helpers.compute",
         ),
     )
-    out = format_references(
-        rows, target="pkg.helpers.compute", show="callers", limit=50
-    )
+    out = format_references(rows, target="pkg.helpers.compute", show="callers", limit=50)
     # Both group H2s with plural/singular noun + count
     assert "## from `pkg` (2 callers)" in out, out
     assert "## from `acme-tools` (1 caller)" in out, out
@@ -117,18 +115,11 @@ def test_format_references_resolved_first_within_group_with_warning_prefix():
             to_node_id="pkg.helpers.compute",
         ),
     )
-    out = format_references(
-        rows, target="pkg.helpers.compute", show="callers", limit=50
-    )
-    resolved_idx = out.index(
-        "- `acme_tools.analytics.aggregate.summarize` → `pkg.helpers.compute`"
-    )
+    out = format_references(rows, target="pkg.helpers.compute", show="callers", limit=50)
+    resolved_idx = out.index("- `acme_tools.analytics.aggregate.summarize` → `pkg.helpers.compute`")
     unresolved_idx = out.index("- ⚠ `acme_tools.legacy._old_runner`")
-    assert resolved_idx < unresolved_idx, \
-        f"resolved-first sort broke: {out!r}"
-    assert (
-        "*(unresolved — to_name didn't match any indexed qname)*" in out
-    ), out
+    assert resolved_idx < unresolved_idx, f"resolved-first sort broke: {out!r}"
+    assert "*(unresolved — to_name didn't match any indexed qname)*" in out, out
 
 
 def test_format_references_counts_resolved_vs_unresolved():
@@ -155,9 +146,7 @@ def test_format_references_show_callees_header():
             to_node_id="pkg.utils.add",
         ),
     )
-    out = format_references(
-        rows, target="pkg.helpers.compute", show="callees", limit=50
-    )
+    out = format_references(rows, target="pkg.helpers.compute", show="callees", limit=50)
     assert out.startswith("# Callees of `pkg.helpers.compute`\n"), out
     assert "## from `pkg` (1 callee)" in out, out
 
@@ -181,8 +170,6 @@ def test_format_references_show_inherits_header():
             kind=ReferenceKind.INHERITS,
         ),
     )
-    out = format_references(
-        rows, target="pkg.api.Base", show="inherits", limit=50
-    )
+    out = format_references(rows, target="pkg.api.Base", show="inherits", limit=50)
     assert out.startswith("# Bases of `pkg.api.Base`\n"), out
     assert "## from `pkg` (2 bases)" in out, out

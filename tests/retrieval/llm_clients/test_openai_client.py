@@ -1,4 +1,5 @@
 """AC-1: OpenAiLlmClient implements LlmClient with both async + sync."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -99,9 +100,12 @@ async def test_openai_client_retries_on_rate_limit() -> None:
 
     sdk = client._async_client()
     # Patch asyncio.sleep so the backoff doesn't slow the test down.
-    with patch.object(sdk.chat.completions, "create", new=flaky), patch(
-        "pydocs_mcp.retrieval.llm_clients.openai.asyncio.sleep",
-        new=AsyncMock(return_value=None),
+    with (
+        patch.object(sdk.chat.completions, "create", new=flaky),
+        patch(
+            "pydocs_mcp.retrieval.llm_clients.openai.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ),
     ):
         result = await client.chat(
             [{"role": "user", "content": "x"}],

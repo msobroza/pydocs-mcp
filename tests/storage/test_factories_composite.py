@@ -1,4 +1,5 @@
 """Composite UoW factories (Task 11 + spec §5.7)."""
+
 from pathlib import Path
 
 import pytest
@@ -25,7 +26,10 @@ async def test_build_composite_uow_factory_returns_callable_that_makes_composite
     db_path = _setup_db(tmp_path)
     tq_path = tmp_path / "cache.tq"
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=8, bit_width=4,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=8,
+        bit_width=4,
     )
     uow = factory()
     assert isinstance(uow, CompositeUnitOfWork)
@@ -38,7 +42,10 @@ async def test_composite_factory_exposes_sqlite_repos_AND_vectors_attr(
     db_path = _setup_db(tmp_path)
     tq_path = tmp_path / "cache.tq"
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=8, bit_width=4,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=8,
+        bit_width=4,
     )
     async with factory() as uow:
         # SQLite-owned attributes proxy through.
@@ -54,6 +61,7 @@ async def test_build_composite_uow_factory_with_arbitrary_children(
     tmp_path: Path,
 ) -> None:
     from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
     db_path = _setup_db(tmp_path)
     sqlite_factory = build_sqlite_uow_factory(db_path)
     composite_factory = build_composite_uow_factory([sqlite_factory])

@@ -1,4 +1,5 @@
 """Tests for Context7 client — mocked, no real network calls."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10,9 +11,17 @@ from benchmarks.eval.systems.context7 import Context7Client, Context7Error
 async def test_resolve_library_id_returns_id():
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
-    mock_response.json = MagicMock(return_value={
-        "result": {"content": [{"text": "Available Libraries:\n\n- Title: Requests\n- Context7-compatible library ID: /psf/requests\n- Description: HTTP for Humans"}]}
-    })
+    mock_response.json = MagicMock(
+        return_value={
+            "result": {
+                "content": [
+                    {
+                        "text": "Available Libraries:\n\n- Title: Requests\n- Context7-compatible library ID: /psf/requests\n- Description: HTTP for Humans"
+                    }
+                ]
+            }
+        }
+    )
 
     with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=mock_response)):
         async with Context7Client() as client:
@@ -24,9 +33,9 @@ async def test_resolve_library_id_returns_id():
 async def test_get_library_docs_returns_text():
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
-    mock_response.json = MagicMock(return_value={
-        "result": {"content": [{"text": "requests docs content here"}]}
-    })
+    mock_response.json = MagicMock(
+        return_value={"result": {"content": [{"text": "requests docs content here"}]}}
+    )
 
     with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=mock_response)):
         async with Context7Client() as client:
@@ -37,9 +46,9 @@ async def test_get_library_docs_returns_text():
 @pytest.mark.asyncio
 async def test_raises_context7_error_on_http_error():
     mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock(side_effect=httpx.HTTPStatusError(
-        "404", request=MagicMock(), response=MagicMock()
-    ))
+    mock_response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("404", request=MagicMock(), response=MagicMock())
+    )
     mock_response.json = MagicMock(return_value={})
 
     with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=mock_response)):

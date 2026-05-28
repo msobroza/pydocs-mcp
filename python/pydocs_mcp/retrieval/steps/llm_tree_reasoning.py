@@ -14,6 +14,7 @@ retrieval branches. Composes via ``state.scratch[output_scratch_key]``
 (:class:`RRFFusionStep`, :class:`WeightedScoreInterpolationStep`) can
 fuse this branch with hybrid branches by name.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -61,10 +62,12 @@ class LlmTreeReasoningStep(RetrieverStep):
     prompt_template: str = field(default=_DEFAULT_PROMPT_TEMPLATE, kw_only=True)
     include_references: bool = field(default=False, kw_only=True)
     reference_neighbors_limit: int = field(
-        default=_DEFAULT_REFERENCE_NEIGHBORS_LIMIT, kw_only=True,
+        default=_DEFAULT_REFERENCE_NEIGHBORS_LIMIT,
+        kw_only=True,
     )
     output_scratch_key: str = field(
-        default=_DEFAULT_OUTPUT_SCRATCH_KEY, kw_only=True,
+        default=_DEFAULT_OUTPUT_SCRATCH_KEY,
+        kw_only=True,
     )
     name: str = field(default=_DEFAULT_NAME, kw_only=True)
 
@@ -108,10 +111,7 @@ class LlmTreeReasoningStep(RetrieverStep):
                 filter={ChunkFilterField.PACKAGE.value: PROJECT_PACKAGE_NAME},
             )
             picked_set = set(picked)
-            matched = tuple(
-                c for c in all_chunks
-                if c.metadata.get("qualified_name") in picked_set
-            )
+            matched = tuple(c for c in all_chunks if c.metadata.get("qualified_name") in picked_set)
             if not matched:
                 return state
 
@@ -159,8 +159,10 @@ class LlmTreeReasoningStep(RetrieverStep):
                     # bound is per-target, not global.
                     for ref in callers[: self.reference_neighbors_limit]:
                         key = (
-                            ref.from_package, ref.from_node_id,
-                            ref.to_name, str(ref.kind),
+                            ref.from_package,
+                            ref.from_node_id,
+                            ref.to_name,
+                            str(ref.kind),
                         )
                         if key in seen:
                             continue
@@ -222,7 +224,8 @@ class LlmTreeReasoningStep(RetrieverStep):
                 _DEFAULT_REFERENCE_NEIGHBORS_LIMIT,
             ),
             output_scratch_key=data.get(
-                "output_scratch_key", _DEFAULT_OUTPUT_SCRATCH_KEY,
+                "output_scratch_key",
+                _DEFAULT_OUTPUT_SCRATCH_KEY,
             ),
             name=data.get("name", _DEFAULT_NAME),
         )
@@ -267,7 +270,8 @@ def _collect_qnames(node: DocumentNode, acc: set[str]) -> None:
 
 
 def _parse_node_list(
-    response: str, trees: tuple[DocumentNode, ...],
+    response: str,
+    trees: tuple[DocumentNode, ...],
 ) -> tuple[str, ...]:
     """Parse LLM response; return qualified_names that survive validation.
 
@@ -281,8 +285,7 @@ def _parse_node_list(
     node_list = data.get("node_list", [])
     if not isinstance(node_list, list):
         raise ValueError(
-            f"LLM response 'node_list' must be a list; got "
-            f"{type(node_list).__name__}",
+            f"LLM response 'node_list' must be a list; got {type(node_list).__name__}",
         )
     known: set[str] = set()
     for tree in trees:
@@ -291,7 +294,8 @@ def _parse_node_list(
 
 
 def _score_by_position(
-    chunks: tuple[Chunk, ...], picked_qnames: tuple[str, ...],
+    chunks: tuple[Chunk, ...],
+    picked_qnames: tuple[str, ...],
 ) -> ChunkList:
     """Score each chunk by its position in the LLM's ``node_list``.
 
@@ -302,9 +306,7 @@ def _score_by_position(
     write ``Chunk.relevance``, so downstream fusion sees a homogeneous
     score field across branches.
     """
-    by_qname: dict[str, Chunk] = {
-        c.metadata.get("qualified_name", ""): c for c in chunks
-    }
+    by_qname: dict[str, Chunk] = {c.metadata.get("qualified_name", ""): c for c in chunks}
     n = len(picked_qnames)
     scored: list[Chunk] = []
     for rank, qname in enumerate(picked_qnames):

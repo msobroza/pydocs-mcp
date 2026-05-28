@@ -12,6 +12,7 @@ change and don't churn unrelated step files. This module pins:
   under. Re-exported from ``pre_filter.py`` for backward compatibility
   with existing fetcher imports.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.retrieval.steps import (

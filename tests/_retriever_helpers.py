@@ -13,6 +13,7 @@ production code uses the YAML-loaded pipeline. New tests should compose
 :class:`ChunkFetcherStep` / :class:`BM25ScorerStep` / etc. directly via
 the YAML loader or in-code construction.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -181,13 +182,15 @@ def retrieve_chunks(
             continue
         if topic and topic.lower() not in (chunk_title or "").lower():
             continue
-        out.append({
-            "pkg": chunk_pkg,
-            "heading": chunk_title,
-            "body": chunk.text,
-            "kind": md.get(ChunkFilterField.ORIGIN.value, ""),
-            "rank": chunk.relevance,
-        })
+        out.append(
+            {
+                "pkg": chunk_pkg,
+                "heading": chunk_title,
+                "body": chunk.text,
+                "kind": md.get(ChunkFilterField.ORIGIN.value, ""),
+                "rank": chunk.relevance,
+            }
+        )
     return out[:limit]
 
 
@@ -253,14 +256,16 @@ def retrieve_module_members(
             continue
         if internal is False and member_pkg == PROJECT_PACKAGE_NAME:
             continue
-        out.append({
-            "pkg": member_pkg,
-            "module": md.get(ModuleMemberFilterField.MODULE.value, ""),
-            "name": md.get(ModuleMemberFilterField.NAME.value, ""),
-            "kind": md.get(ModuleMemberFilterField.KIND.value, ""),
-            "signature": md.get("signature", ""),
-            "returns": md.get("return_annotation", ""),
-            "params": md.get("parameters", ()),
-            "doc": md.get("docstring", ""),
-        })
+        out.append(
+            {
+                "pkg": member_pkg,
+                "module": md.get(ModuleMemberFilterField.MODULE.value, ""),
+                "name": md.get(ModuleMemberFilterField.NAME.value, ""),
+                "kind": md.get(ModuleMemberFilterField.KIND.value, ""),
+                "signature": md.get("signature", ""),
+                "returns": md.get("return_annotation", ""),
+                "params": md.get("parameters", ()),
+                "doc": md.get("docstring", ""),
+            }
+        )
     return out[:limit]

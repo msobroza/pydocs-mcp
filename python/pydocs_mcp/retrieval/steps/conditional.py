@@ -1,4 +1,5 @@
 """ConditionalStep — run ``stage`` only when ``predicate_name`` evaluates true."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

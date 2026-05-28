@@ -1,6 +1,7 @@
 """Pin the optional-extra boundary: constructing MlflowExperimentTracker
 without mlflow installed must raise ImportError carrying the exact uv
 install command so users can copy-paste it (spec §4.5)."""
+
 from __future__ import annotations
 
 import sys

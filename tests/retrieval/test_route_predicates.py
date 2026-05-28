@@ -1,4 +1,5 @@
 """Tests for PredicateRegistry + built-in predicates."""
+
 from __future__ import annotations
 
 import pytest
@@ -22,7 +23,8 @@ def test_registration_and_get():
     registry = PredicateRegistry()
 
     @predicate("t", registry=registry)
-    def _t(state): return True
+    def _t(state):
+        return True
 
     assert registry.get("t")(_state()) is True
 
@@ -31,18 +33,22 @@ def test_collision_raises():
     registry = PredicateRegistry()
 
     @predicate("dup", registry=registry)
-    def _a(state): return True
+    def _a(state):
+        return True
 
     with pytest.raises(ValueError, match="already registered"):
+
         @predicate("dup", registry=registry)
-        def _b(state): return False
+        def _b(state):
+            return False
 
 
 def test_unknown_raises_with_known_list():
     registry = PredicateRegistry()
 
     @predicate("one", registry=registry)
-    def _p(state): return True
+    def _p(state):
+        return True
 
     with pytest.raises(KeyError, match="registered"):
         registry.get("missing")

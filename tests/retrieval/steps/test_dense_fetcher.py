@@ -1,4 +1,5 @@
 """DenseFetcherStep reads pre_filter + queries TurboQuantVectorStore (AC-17)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -71,11 +72,13 @@ async def test_dense_fetcher_end_to_end(tmp_path: Path) -> None:
     sqlite_factory = build_sqlite_uow_factory(db_path)
     async with sqlite_factory() as uow:
         await uow.packages.upsert(_pkg("demo"))
-        await uow.chunks.upsert((
-            _chunk("alpha", "demo"),
-            _chunk("beta", "demo"),
-            _chunk("gamma", "demo"),
-        ))
+        await uow.chunks.upsert(
+            (
+                _chunk("alpha", "demo"),
+                _chunk("beta", "demo"),
+                _chunk("gamma", "demo"),
+            )
+        )
         await uow.commit()
 
     # Discover assigned ids dynamically — SqliteChunkRepository.upsert IGNORES
@@ -87,14 +90,18 @@ async def test_dense_fetcher_end_to_end(tmp_path: Path) -> None:
     seeded_ids = [text_to_id[t] for t in seeded_texts]
 
     async with TurboQuantUnitOfWork(
-        index_path=tq_path, dim=_DIM, bit_width=_BIT_WIDTH,
+        index_path=tq_path,
+        dim=_DIM,
+        bit_width=_BIT_WIDTH,
     ) as tq_uow:
         vecs = [await embedder.embed_query(t) for t in seeded_texts]
         await tq_uow.add_vectors(seeded_ids, vecs)
         await tq_uow.commit()
 
     async with TurboQuantUnitOfWork(
-        index_path=tq_path, dim=_DIM, bit_width=_BIT_WIDTH,
+        index_path=tq_path,
+        dim=_DIM,
+        bit_width=_BIT_WIDTH,
     ) as tq_uow:
         store = TurboQuantVectorStore(
             uow=tq_uow,
@@ -130,10 +137,12 @@ async def test_dense_fetcher_with_pre_filter_restricts_results(
     async with sqlite_factory() as uow:
         await uow.packages.upsert(_pkg("demo"))
         await uow.packages.upsert(_pkg("other"))
-        await uow.chunks.upsert((
-            _chunk("alpha", "demo"),
-            _chunk("beta", "other"),
-        ))
+        await uow.chunks.upsert(
+            (
+                _chunk("alpha", "demo"),
+                _chunk("beta", "other"),
+            )
+        )
         await uow.commit()
 
     async with sqlite_factory() as uow:
@@ -141,16 +150,21 @@ async def test_dense_fetcher_with_pre_filter_restricts_results(
     text_to_id = {c.text: c.id for c in all_chunks}
 
     async with TurboQuantUnitOfWork(
-        index_path=tq_path, dim=_DIM, bit_width=_BIT_WIDTH,
+        index_path=tq_path,
+        dim=_DIM,
+        bit_width=_BIT_WIDTH,
     ) as tq_uow:
         vecs = [await embedder.embed_query(t) for t in ("alpha", "beta")]
         await tq_uow.add_vectors(
-            [text_to_id["alpha"], text_to_id["beta"]], vecs,
+            [text_to_id["alpha"], text_to_id["beta"]],
+            vecs,
         )
         await tq_uow.commit()
 
     async with TurboQuantUnitOfWork(
-        index_path=tq_path, dim=_DIM, bit_width=_BIT_WIDTH,
+        index_path=tq_path,
+        dim=_DIM,
+        bit_width=_BIT_WIDTH,
     ) as tq_uow:
         store = TurboQuantVectorStore(
             uow=tq_uow,
@@ -201,6 +215,7 @@ async def test_dense_fetcher_empty_query_short_circuits() -> None:
             nonlocal embedder_called
             embedder_called = True
             import numpy as np
+
             return np.zeros(_DIM, dtype=np.float32)
 
         async def embed_chunks(self, texts):

@@ -1,4 +1,5 @@
 """OpenAIEmbedder — Embedder backed by OpenAI /v1/embeddings."""
+
 from __future__ import annotations
 
 import os
@@ -14,6 +15,7 @@ from pydocs_mcp.models import Embedding
 @dataclass
 class OpenAIEmbedder:
     """Embedder backed by OpenAI /v1/embeddings. Reads OPENAI_API_KEY."""
+
     model_name: str = "text-embedding-3-small"
     dim: int = 1536
     _client: AsyncOpenAI = field(init=False, repr=False)
@@ -30,24 +32,26 @@ class OpenAIEmbedder:
 
     async def embed_query(self, text: str) -> Embedding:
         resp = await self._client.embeddings.create(
-            model=self.model_name, input=text, dimensions=self.dim,
+            model=self.model_name,
+            input=text,
+            dimensions=self.dim,
         )
         # Normalize to np.ndarray float32 — match FastEmbed's output type.
         return np.asarray(resp.data[0].embedding, dtype=np.float32)
 
     async def embed_chunks(
-        self, texts: Sequence[str],
+        self,
+        texts: Sequence[str],
     ) -> tuple[Embedding, ...]:
         if not texts:
             return ()
         resp = await self._client.embeddings.create(
-            model=self.model_name, input=list(texts), dimensions=self.dim,
+            model=self.model_name,
+            input=list(texts),
+            dimensions=self.dim,
         )
         # OpenAI returns embeddings in request order — preserve via tuple comp.
-        return tuple(
-            np.asarray(item.embedding, dtype=np.float32)
-            for item in resp.data
-        )
+        return tuple(np.asarray(item.embedding, dtype=np.float32) for item in resp.data)
 
 
 __all__ = ("OpenAIEmbedder",)

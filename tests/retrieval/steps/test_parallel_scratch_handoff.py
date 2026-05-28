@@ -8,6 +8,7 @@ relied on the (racy) shared-dict behaviour of ``dataclasses.replace``;
 now each branch runs on an isolated scratch copy and the parent
 explicitly merges the keys back into the final state (last-write-wins).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -102,8 +103,7 @@ async def test_parallel_branches_use_isolated_scratch_copies() -> None:
 
         async def run(self, state: RetrieverState) -> RetrieverState:
             assert self.forbidden_key not in state.scratch, (
-                f"branch saw {self.forbidden_key!r} written by a sibling — "
-                "scratch is not isolated"
+                f"branch saw {self.forbidden_key!r} written by a sibling — scratch is not isolated"
             )
             return state
 

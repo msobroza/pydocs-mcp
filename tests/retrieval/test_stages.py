@@ -1,4 +1,5 @@
 """Tests for stage classes — Part 1 (retrieval + post-filter + limit)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,10 +41,12 @@ async def test_metadata_post_filter_stage_noop_when_post_filter_none():
 
 @pytest.mark.asyncio
 async def test_metadata_post_filter_stage_filters_chunks_by_eq():
-    payload = ChunkList(items=(
-        Chunk(text="a", metadata={ChunkFilterField.PACKAGE.value: "fastapi"}),
-        Chunk(text="b", metadata={ChunkFilterField.PACKAGE.value: "django"}),
-    ))
+    payload = ChunkList(
+        items=(
+            Chunk(text="a", metadata={ChunkFilterField.PACKAGE.value: "fastapi"}),
+            Chunk(text="b", metadata={ChunkFilterField.PACKAGE.value: "django"}),
+        )
+    )
     state = PipelineState(
         query=SearchQuery(terms="x", post_filter={"package": "fastapi"}),
         result=payload,
@@ -55,10 +58,12 @@ async def test_metadata_post_filter_stage_filters_chunks_by_eq():
 
 @pytest.mark.asyncio
 async def test_metadata_post_filter_stage_filters_by_like():
-    payload = ChunkList(items=(
-        Chunk(text="a", metadata={ChunkFilterField.TITLE.value: "Routing"}),
-        Chunk(text="b", metadata={ChunkFilterField.TITLE.value: "Middleware"}),
-    ))
+    payload = ChunkList(
+        items=(
+            Chunk(text="a", metadata={ChunkFilterField.TITLE.value: "Routing"}),
+            Chunk(text="b", metadata={ChunkFilterField.TITLE.value: "Middleware"}),
+        )
+    )
     state = PipelineState(
         query=SearchQuery(terms="x", post_filter={"title": {"like": "rout"}}),
         result=payload,
@@ -92,6 +97,7 @@ async def test_parallel_retrieval_stage_runs_branches_concurrently():
     @dataclass(frozen=True, slots=True)
     class _AppendA:
         name: str = "append_a"
+
         async def run(self, state):
             existing = state.result.items if state.result else ()
             return replace(state, result=ChunkList(items=existing + (Chunk(text="A"),)))
@@ -99,11 +105,13 @@ async def test_parallel_retrieval_stage_runs_branches_concurrently():
     @dataclass(frozen=True, slots=True)
     class _AppendB:
         name: str = "append_b"
+
         async def run(self, state):
             existing = state.result.items if state.result else ()
             return replace(state, result=ChunkList(items=existing + (Chunk(text="B"),)))
 
     from dataclasses import replace
+
     stage = ParallelStep(stages=(_AppendA(), _AppendB()))
     state = await stage.run(PipelineState(query=SearchQuery(terms="x")))
     texts = [c.text for c in state.result.items]
@@ -123,15 +131,18 @@ async def test_conditional_stage_runs_when_predicate_true():
     registry = PredicateRegistry()
 
     @predicate("always", registry=registry)
-    def _true(state): return True
+    def _true(state):
+        return True
 
     @dataclass(frozen=True, slots=True)
     class _Sentinel:
         name: str = "sentinel"
+
         async def run(self, state):
             return replace(state, result=ChunkList(items=(Chunk(text="fired"),)))
 
     from dataclasses import replace
+
     stage = ConditionalStep(stage=_Sentinel(), predicate_name="always", registry=registry)
     out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
     assert out.result.items[0].text == "fired"
@@ -145,12 +156,15 @@ async def test_conditional_stage_skipped_when_predicate_false():
     registry = PredicateRegistry()
 
     @predicate("never", registry=registry)
-    def _false(state): return False
+    def _false(state):
+        return False
 
     @dataclass(frozen=True, slots=True)
     class _Sentinel:
         name: str = "sentinel"
-        async def run(self, state): raise AssertionError("should not run")
+
+        async def run(self, state):
+            raise AssertionError("should not run")
 
     stage = ConditionalStep(stage=_Sentinel(), predicate_name="never", registry=registry)
     out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
@@ -165,19 +179,23 @@ async def test_route_stage_first_match_wins():
     registry = PredicateRegistry()
 
     @predicate("always", registry=registry)
-    def _t1(s): return True
+    def _t1(s):
+        return True
 
     @predicate("also_always", registry=registry)
-    def _t2(s): return True
+    def _t2(s):
+        return True
 
     @dataclass(frozen=True, slots=True)
     class _Tag:
         tag: str
         name: str = "tag"
+
         async def run(self, state):
             return replace(state, result=ChunkList(items=(Chunk(text=self.tag),)))
 
     from dataclasses import replace
+
     stage = RouteStep(
         routes=(
             RouteCase(predicate_name="always", stage=_Tag("first")),
@@ -197,16 +215,19 @@ async def test_route_stage_falls_through_to_default():
     registry = PredicateRegistry()
 
     @predicate("never", registry=registry)
-    def _f(s): return False
+    def _f(s):
+        return False
 
     @dataclass(frozen=True, slots=True)
     class _Tag:
         tag: str
         name: str = "tag"
+
         async def run(self, state):
             return replace(state, result=ChunkList(items=(Chunk(text=self.tag),)))
 
     from dataclasses import replace
+
     stage = RouteStep(
         routes=(RouteCase(predicate_name="never", stage=_Tag("route")),),
         default=_Tag("fallback"),
@@ -224,7 +245,8 @@ async def test_route_stage_no_match_no_default_is_noop():
     registry = PredicateRegistry()
 
     @predicate("never", registry=registry)
-    def _f(s): return False
+    def _f(s):
+        return False
 
     stage = RouteStep(routes=(), default=None, registry=registry)
     out = await stage.run(PipelineState(query=SearchQuery(terms="x")))
@@ -243,11 +265,13 @@ async def test_nested_pipeline_threads_state_through_its_stages():
     class _Tag:
         tag: str
         name: str = "tag"
+
         async def run(self, state):
             existing = state.result.items if state.result else ()
             return replace(state, result=ChunkList(items=existing + (Chunk(text=self.tag),)))
 
     from dataclasses import replace
+
     nested = CodeRetrieverPipeline(name="n", stages=(_Tag("inner1"), _Tag("inner2")))
     state = PipelineState(
         query=SearchQuery(terms="x"),
@@ -266,10 +290,12 @@ async def test_token_budget_formatter_stage_composite_output():
         TokenBudgetStep,
     )
 
-    payload = ChunkList(items=(
-        Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
-        Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
-    ))
+    payload = ChunkList(
+        items=(
+            Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
+            Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
+        )
+    )
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
     out = await TokenBudgetStep(
         formatter=ChunkFormatter(),
@@ -295,10 +321,12 @@ async def test_metadata_post_filter_bypasses_composite_sentinel():
         TokenBudgetStep,
     )
 
-    payload = ChunkList(items=(
-        Chunk(text="Section A body", metadata={ChunkFilterField.TITLE.value: "Routing"}),
-        Chunk(text="Section B body", metadata={ChunkFilterField.TITLE.value: "Middleware"}),
-    ))
+    payload = ChunkList(
+        items=(
+            Chunk(text="Section A body", metadata={ChunkFilterField.TITLE.value: "Routing"}),
+            Chunk(text="Section B body", metadata={ChunkFilterField.TITLE.value: "Middleware"}),
+        )
+    )
     # post_filter restricts title to "Routing" — without the sentinel bypass
     # the composite chunk (title="_composite") would be dropped.
     query = SearchQuery(terms="x", post_filter={"title": {"like": "Routing"}})
@@ -325,10 +353,12 @@ async def test_token_budget_formatter_respects_budget():
     from pydocs_mcp.retrieval.steps import TokenBudgetStep
 
     # 100 chunks * ~10-byte render ≈ 1000 bytes. Budget = 50 tokens ≈ 200 bytes (cut early).
-    payload = ChunkList(items=tuple(
-        Chunk(text="x" * 20, metadata={ChunkFilterField.TITLE.value: f"T{i}"})
-        for i in range(100)
-    ))
+    payload = ChunkList(
+        items=tuple(
+            Chunk(text="x" * 20, metadata={ChunkFilterField.TITLE.value: f"T{i}"})
+            for i in range(100)
+        )
+    )
     state = PipelineState(query=SearchQuery(terms="x"), result=payload)
     out = await TokenBudgetStep(
         formatter=ChunkFormatter(),
@@ -361,6 +391,7 @@ async def test_parallel_retrieval_stage_preserves_filtered_branches():
     class _FilterAndTag:
         tag: str
         name: str = "filter_tag"
+
         async def run(self, state):
             # Drops 1 item, adds 1 — positional slice at start=len(initial) fails to capture
             existing = state.result.items if state.result else ()

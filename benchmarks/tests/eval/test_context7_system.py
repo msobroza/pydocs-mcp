@@ -6,6 +6,7 @@ re-raising — otherwise a caller that omits ``teardown()`` in a finally
 block (or one whose finally is preempted by another error) leaks the
 httpx session.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,7 +41,8 @@ class _StubClient:
 
 @pytest.mark.asyncio
 async def test_context7_index_closes_client_when_resolve_raises(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     stub = _StubClient()
     # WHY: ``Context7Client`` is now defined in the same module as

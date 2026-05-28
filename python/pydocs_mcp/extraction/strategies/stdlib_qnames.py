@@ -11,6 +11,7 @@ Module-level state pattern: `_RESOLVER_CONFIG` is read by IndexingService;
 startup. Matches the same pattern used by `_CAPTURE_CONFIG` in
 `pipeline/stages.py` and `_LIMIT_DEFAULT`/`_LIMIT_MAX` in `mcp_inputs.py`.
 """
+
 from __future__ import annotations
 
 import json

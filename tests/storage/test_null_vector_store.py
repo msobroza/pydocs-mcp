@@ -6,6 +6,7 @@ previously scattered across :mod:`pydocs_mcp.application.indexing_service`.
 The mirror surface (``add_vectors`` / ``remove_vectors`` / ``clear_all``)
 matches :class:`TurboQuantUnitOfWork` so callers don't branch on backend.
 """
+
 from __future__ import annotations
 
 import pytest

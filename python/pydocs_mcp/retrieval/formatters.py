@@ -1,4 +1,5 @@
 """Result formatters — render Chunks / ModuleMembers as markdown strings."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

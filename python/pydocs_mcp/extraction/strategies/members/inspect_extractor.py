@@ -13,6 +13,7 @@ can't dump 10K+ symbols into FTS. Defaults to the constant in
 cap kwarg still inherit the production default; CLI wiring passes
 the YAML-configured value.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,13 +40,15 @@ class InspectMemberExtractor:
     docstring_max_chars: int = 1024
 
     async def extract_from_project(
-        self, project_dir: Path,
+        self,
+        project_dir: Path,
     ) -> tuple[ModuleMember, ...]:
         # spec §9.2: project source NEVER goes through live imports.
         return await self.static_fallback.extract_from_project(project_dir)
 
     async def extract_from_dependency(
-        self, dep_name: str,
+        self,
+        dep_name: str,
     ) -> tuple[ModuleMember, ...]:
         return await asyncio.to_thread(self._inspect, dep_name)
 
@@ -57,7 +60,8 @@ class InspectMemberExtractor:
             return ()
         try:
             record = _extract_by_import(
-                dist, self.depth,
+                dist,
+                self.depth,
                 members_per_module_cap=self.members_per_module_cap,
                 signature_max_chars=self.signature_max_chars,
                 docstring_max_chars=self.docstring_max_chars,
@@ -66,7 +70,9 @@ class InspectMemberExtractor:
             return tuple(symbols)
         except Exception as exc:
             log.debug(
-                "inspect import failed for %s: %s — AST fallback", dep_name, exc,
+                "inspect import failed for %s: %s — AST fallback",
+                dep_name,
+                exc,
             )
             # Re-enter the AST path directly (sync — we're already off-loop).
             return self.static_fallback._dep_sync(dep_name)

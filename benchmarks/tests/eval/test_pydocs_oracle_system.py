@@ -13,6 +13,7 @@ Identity coherence under test: each oracle chunk is a real store row, so
 returns ``chunk:{id}`` (NOT the doc_id) — keyed exactly like Task 3's
 ``_item_key`` so the metric's membership check lines up.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping

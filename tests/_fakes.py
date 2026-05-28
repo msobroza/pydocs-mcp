@@ -24,6 +24,7 @@ Tests that need to assert call ordering can either import the fake's
 own ``calls`` list (each entry is a ``(method, payload)`` tuple) or
 inject a shared audit list at construction time.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -81,7 +82,11 @@ class InMemoryDocumentTreeStore:
     by_package: dict[str, list] = field(default_factory=dict)
 
     async def save_many(
-        self, trees, *, package, uow=None,
+        self,
+        trees,
+        *,
+        package,
+        uow=None,
     ) -> None:
         materialised = tuple(trees)
         self.calls.append(_Call("save_many", (package, materialised)))
@@ -136,7 +141,9 @@ class InMemoryPackageStore:
         self.items[package.name] = package
 
     async def list(
-        self, filter: Any | None = None, limit: int | None = None,
+        self,
+        filter: Any | None = None,
+        limit: int | None = None,
     ) -> list[Package]:
         self.calls.append(_Call("list", {"filter": filter, "limit": limit}))
         rows = list(self.items.values())
@@ -184,7 +191,9 @@ class InMemoryChunkStore:
             self.by_package.setdefault(pkg, []).append(c)
 
     async def list(
-        self, filter: Any | None = None, limit: int | None = None,
+        self,
+        filter: Any | None = None,
+        limit: int | None = None,
     ) -> list[Chunk]:
         self.calls.append(_Call("list", {"filter": filter, "limit": limit}))
         if isinstance(filter, dict) and "package" in filter:
@@ -218,7 +227,9 @@ class InMemoryChunkStore:
         return None
 
     async def list_id_hash_pairs(
-        self, *, filter: Any | None = None,
+        self,
+        *,
+        filter: Any | None = None,
     ) -> tuple[tuple[int, str | None], ...]:
         self.calls.append(_Call("list_id_hash_pairs", {"filter": filter}))
         if isinstance(filter, dict) and "package" in filter:
@@ -228,10 +239,7 @@ class InMemoryChunkStore:
         # Mirror the SQLite repo's NULL semantics: a chunk that lacks a
         # content_hash returns None in the hash slot so the diff-merge can
         # treat legacy rows as "removed".
-        return tuple(
-            (c.id if c.id is not None else 0, c.content_hash or None)
-            for c in rows
-        )
+        return tuple((c.id if c.id is not None else 0, c.content_hash or None) for c in rows)
 
     async def delete_by_ids(self, ids) -> None:
         self.calls.append(_Call("delete_by_ids", list(ids)))
@@ -277,7 +285,9 @@ class InMemoryModuleMemberStore:
             self.by_package.setdefault(pkg, []).append(m)
 
     async def list(
-        self, filter: Any | None = None, limit: int | None = None,
+        self,
+        filter: Any | None = None,
+        limit: int | None = None,
     ) -> list[ModuleMember]:
         self.calls.append(_Call("list", {"filter": filter, "limit": limit}))
         if isinstance(filter, dict) and "package" in filter:
@@ -343,22 +353,20 @@ class InMemoryReferenceStore:
             self.by_package.setdefault(r.from_package, []).append(r)
 
     async def find_callers(
-        self, *, target_node_id: str,
+        self,
+        *,
+        target_node_id: str,
     ) -> list[NodeReference]:
         self.calls.append(_Call("find_callers", target_node_id))
-        return [
-            r for rs in self.by_package.values() for r in rs
-            if r.to_node_id == target_node_id
-        ]
+        return [r for rs in self.by_package.values() for r in rs if r.to_node_id == target_node_id]
 
     async def find_callees(
-        self, *, from_node_id: str,
+        self,
+        *,
+        from_node_id: str,
     ) -> list[NodeReference]:
         self.calls.append(_Call("find_callees", from_node_id))
-        return [
-            r for rs in self.by_package.values() for r in rs
-            if r.from_node_id == from_node_id
-        ]
+        return [r for rs in self.by_package.values() for r in rs if r.from_node_id == from_node_id]
 
     async def find_by_name(
         self,
@@ -366,16 +374,16 @@ class InMemoryReferenceStore:
         kind: ReferenceKind | None = None,
     ) -> list[NodeReference]:
         self.calls.append(_Call("find_by_name", (to_name, kind)))
-        rows = [
-            r for rs in self.by_package.values() for r in rs
-            if r.to_name == to_name
-        ]
+        rows = [r for rs in self.by_package.values() for r in rs if r.to_name == to_name]
         if kind is not None:
             rows = [r for r in rows if r.kind == kind]
         return rows
 
     async def delete_for_package(
-        self, package: str, *, uow=None,
+        self,
+        package: str,
+        *,
+        uow=None,
     ) -> None:
         self.calls.append(_Call("delete_for_package", package))
         self.by_package.pop(package, None)
@@ -445,52 +453,54 @@ class FakeUnitOfWork:
     the real stores and ``__aexit__`` swaps back.
     """
 
-    packages_store:       InMemoryPackageStore       = field(default_factory=InMemoryPackageStore)
-    chunks_store:         InMemoryChunkStore         = field(default_factory=InMemoryChunkStore)
-    module_members_store: InMemoryModuleMemberStore  = field(default_factory=InMemoryModuleMemberStore)
-    trees_store:          InMemoryDocumentTreeStore  = field(default_factory=InMemoryDocumentTreeStore)
-    references_store:     InMemoryReferenceStore     = field(default_factory=InMemoryReferenceStore)
+    packages_store: InMemoryPackageStore = field(default_factory=InMemoryPackageStore)
+    chunks_store: InMemoryChunkStore = field(default_factory=InMemoryChunkStore)
+    module_members_store: InMemoryModuleMemberStore = field(
+        default_factory=InMemoryModuleMemberStore
+    )
+    trees_store: InMemoryDocumentTreeStore = field(default_factory=InMemoryDocumentTreeStore)
+    references_store: InMemoryReferenceStore = field(default_factory=InMemoryReferenceStore)
     # Spec S15: ``vectors`` is always present; tests get a
     # :class:`NullVectorStore` by default. Override via
     # :func:`make_fake_uow_factory(vectors=...)` when a test needs to
     # observe vector writes.
-    vectors_store:        Any = field(default_factory=NullVectorStore)
-    committed:   bool = False
+    vectors_store: Any = field(default_factory=NullVectorStore)
+    committed: bool = False
     rolled_back: bool = False
-    _entered:    bool = False
+    _entered: bool = False
 
     # Real instance attributes — swapped by __aenter__/__aexit__. Initialized
     # in __post_init__ so getattr_static() (used by typing on 3.12+) sees them.
-    packages:       Any = field(init=False, repr=False)
-    chunks:         Any = field(init=False, repr=False)
+    packages: Any = field(init=False, repr=False)
+    chunks: Any = field(init=False, repr=False)
     module_members: Any = field(init=False, repr=False)
-    trees:          Any = field(init=False, repr=False)
-    references:     Any = field(init=False, repr=False)
-    vectors:        Any = field(init=False, repr=False)
+    trees: Any = field(init=False, repr=False)
+    references: Any = field(init=False, repr=False)
+    vectors: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.packages       = _NotEnteredProxy("packages")
-        self.chunks         = _NotEnteredProxy("chunks")
+        self.packages = _NotEnteredProxy("packages")
+        self.chunks = _NotEnteredProxy("chunks")
         self.module_members = _NotEnteredProxy("module_members")
-        self.trees          = _NotEnteredProxy("trees")
-        self.references     = _NotEnteredProxy("references")
+        self.trees = _NotEnteredProxy("trees")
+        self.references = _NotEnteredProxy("references")
         # ``vectors`` is always-present per spec S15, even outside the
         # context — application code should never need to branch on
         # backend identity. Tests that want the not-entered guard can
         # call methods on the proxied repos instead.
-        self.vectors        = self.vectors_store
+        self.vectors = self.vectors_store
 
     async def __aenter__(self) -> FakeUnitOfWork:
         if self._entered:
             raise RuntimeError("FakeUnitOfWork is already entered.")
         self._entered = True
         # Swap proxies for real stores.
-        self.packages       = self.packages_store
-        self.chunks         = self.chunks_store
+        self.packages = self.packages_store
+        self.chunks = self.chunks_store
         self.module_members = self.module_members_store
-        self.trees          = self.trees_store
-        self.references     = self.references_store
-        self.vectors        = self.vectors_store
+        self.trees = self.trees_store
+        self.references = self.references_store
+        self.vectors = self.vectors_store
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
@@ -498,12 +508,12 @@ class FakeUnitOfWork:
             self.rolled_back = True
         self._entered = False
         # Swap back to proxies so post-exit access raises.
-        self.packages       = _NotEnteredProxy("packages")
-        self.chunks         = _NotEnteredProxy("chunks")
+        self.packages = _NotEnteredProxy("packages")
+        self.chunks = _NotEnteredProxy("chunks")
         self.module_members = _NotEnteredProxy("module_members")
-        self.trees          = _NotEnteredProxy("trees")
-        self.references     = _NotEnteredProxy("references")
-        self.vectors        = self.vectors_store  # always-present (spec S15)
+        self.trees = _NotEnteredProxy("trees")
+        self.references = _NotEnteredProxy("references")
+        self.vectors = self.vectors_store  # always-present (spec S15)
         return False
 
     async def commit(self) -> None:
@@ -556,11 +566,11 @@ def make_fake_uow_factory(
     test needs to observe vector writes.
     """
     pkgs = packages or InMemoryPackageStore()
-    chs  = chunks   or InMemoryChunkStore()
-    mms  = module_members or InMemoryModuleMemberStore()
-    trs  = trees    or InMemoryDocumentTreeStore()
-    rfs  = references or InMemoryReferenceStore()
-    vec  = vectors if vectors is not None else NullVectorStore()
+    chs = chunks or InMemoryChunkStore()
+    mms = module_members or InMemoryModuleMemberStore()
+    trs = trees or InMemoryDocumentTreeStore()
+    rfs = references or InMemoryReferenceStore()
+    vec = vectors if vectors is not None else NullVectorStore()
 
     def factory() -> FakeUnitOfWork:
         return FakeUnitOfWork(
@@ -571,6 +581,7 @@ def make_fake_uow_factory(
             references_store=rfs,
             vectors_store=vec,
         )
+
     return factory
 
 
@@ -586,6 +597,7 @@ class MockEmbedder:
     dependency. The canonical embedder mock for this PR and future PRs
     that need embedding-shaped data without invoking a real model.
     """
+
     dim: int = 384
     # Mirrors the ``Embedder`` Protocol's ``model_name`` field — written
     # into ``Package.embedding_model`` by ``EmbedChunksStage`` so tests
@@ -596,7 +608,8 @@ class MockEmbedder:
         return self._derive(text)
 
     async def embed_chunks(
-        self, texts: Sequence[str],
+        self,
+        texts: Sequence[str],
     ) -> tuple[Embedding, ...]:
         return tuple(self._derive(t) for t in texts)
 

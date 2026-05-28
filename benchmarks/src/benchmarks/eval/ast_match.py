@@ -10,6 +10,7 @@ the parse-and-dump work is cached at module level. The cache is
 unbounded — at ~150 tasks × ~11 strings/task ≈ 1.6k entries / ~tens of
 MB at worst, well below "worry" territory.
 """
+
 from __future__ import annotations
 
 import ast
@@ -45,7 +46,8 @@ def ast_equivalent(a: str, b: str) -> bool:
 
 
 def find_first_match_rank(
-    retrieved: Sequence[RetrievedItem], gold: str | None,
+    retrieved: Sequence[RetrievedItem],
+    gold: str | None,
 ) -> int | None:
     """Return the 1-indexed rank of the first item AST-equivalent to ``gold``.
 

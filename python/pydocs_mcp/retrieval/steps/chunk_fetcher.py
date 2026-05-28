@@ -24,6 +24,7 @@ score keeps each step single-responsibility and lets a future
 ``DenseScorerStep`` (PR-B3.1) compose alongside :class:`BM25ScorerStep`
 without rewriting fetch logic.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -163,17 +164,20 @@ class ChunkFetcherStep(RetrieverStep):
                 filter_sql, filter_params = self._build_where_clause(result.tree)
 
         rows = await asyncio.to_thread(
-            self._fetch_sync, fulltext, filter_sql, list(filter_params),
+            self._fetch_sync,
+            fulltext,
+            filter_sql,
+            list(filter_params),
         )
-        chunks = tuple(
-            _row_to_candidate(row, self.retriever_name) for row in rows
-        )
+        chunks = tuple(_row_to_candidate(row, self.retriever_name) for row in rows)
         if scope is not None:
             # Lazy import — break the storage→extraction→retrieval.config→
             # retrieval.steps cycle (see module docstring).
             from pydocs_mcp.retrieval.filter_helpers import _matches_scope
+
             chunks = tuple(
-                c for c in chunks
+                c
+                for c in chunks
                 if _matches_scope(c.metadata.get(ChunkFilterField.PACKAGE.value, ""), scope)
             )
         return replace(state, candidates=ChunkList(items=chunks))
@@ -196,11 +200,15 @@ class ChunkFetcherStep(RetrieverStep):
         adapter = self.filter_adapter
         if adapter is None:
             from pydocs_mcp.storage.sqlite import SqliteFilterAdapter as _Fallback
+
             adapter = _Fallback()
         return adapter.adapt(tree, target_field="chunk")
 
     def _fetch_sync(
-        self, fulltext: str, filter_sql: str, filter_params: list,
+        self,
+        fulltext: str,
+        filter_sql: str,
+        filter_params: list,
     ) -> list[sqlite3.Row]:
         # WHY: PerCallConnectionProvider exposes ``cache_path`` directly so a
         # sync-friendly fresh connection avoids tangling with the provider's

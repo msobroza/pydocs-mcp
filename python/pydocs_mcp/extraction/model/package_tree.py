@@ -24,6 +24,7 @@ STRUCTURAL_ONLY_KINDS (PACKAGE, SUBPACKAGE) synthesized here never carry
 text — they are pure path scaffolding, consistent with the rule in
 ``document_node.py``.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -34,7 +35,8 @@ from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 
 
 def build_package_tree(
-    package: str, trees: Mapping[str, DocumentNode],
+    package: str,
+    trees: Mapping[str, DocumentNode],
 ) -> DocumentNode:
     """Build a PACKAGE arborescence root that nests the given modules.
 
@@ -95,7 +97,7 @@ def _build_tree_nodes(
             if module_name == current_prefix:
                 by_next_segment[""][module_name] = node
                 continue
-            rest = module_name[len(current_prefix) + 1:]
+            rest = module_name[len(current_prefix) + 1 :]
         else:
             # Virtual-root mode: admit every module, key by its own first
             # segment — empty module_name would be ill-formed input so we
@@ -121,19 +123,21 @@ def _build_tree_nodes(
         # itself is a MODULE in seg_modules (package __init__), it becomes a
         # leaf under the SUBPACKAGE via the empty-seg branch one level down.
         sub_children = _build_tree_nodes(seg_modules, current_prefix=next_prefix)
-        children.append(DocumentNode(
-            node_id=next_prefix,
-            qualified_name=next_prefix,
-            title=seg,
-            kind=NodeKind.SUBPACKAGE,
-            source_path=next_prefix.replace(".", "/"),
-            start_line=1,
-            end_line=1,
-            text="",
-            content_hash="",
-            children=tuple(sub_children),
-            extra_metadata={"module": next_prefix},
-        ))
+        children.append(
+            DocumentNode(
+                node_id=next_prefix,
+                qualified_name=next_prefix,
+                title=seg,
+                kind=NodeKind.SUBPACKAGE,
+                source_path=next_prefix.replace(".", "/"),
+                start_line=1,
+                end_line=1,
+                text="",
+                content_hash="",
+                children=tuple(sub_children),
+                extra_metadata={"module": next_prefix},
+            )
+        )
     return children
 
 

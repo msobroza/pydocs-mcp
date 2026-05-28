@@ -1,4 +1,5 @@
 """Tests for SqliteUnitOfWork + _maybe_acquire (spec §5.3 + §14.2 / §14.9)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -17,8 +18,13 @@ from pydocs_mcp.storage.sqlite import (
 
 def _pkg(name: str = "x") -> Package:
     return Package(
-        name=name, version="0", summary="", homepage="",
-        dependencies=(), content_hash="", origin=PackageOrigin.DEPENDENCY,
+        name=name,
+        version="0",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="",
+        origin=PackageOrigin.DEPENDENCY,
     )
 
 
@@ -86,7 +92,9 @@ async def test_unit_of_work_rollbacks_on_exception(db_file):
             raise RuntimeError("boom")
 
     fresh = sqlite3.connect(str(db_file))
-    count = fresh.execute("SELECT COUNT(*) FROM packages WHERE name=?", ("rolled_back",)).fetchone()[0]
+    count = fresh.execute(
+        "SELECT COUNT(*) FROM packages WHERE name=?", ("rolled_back",)
+    ).fetchone()[0]
     fresh.close()
     assert count == 0
 
@@ -107,7 +115,8 @@ async def test_maybe_acquire_commits_non_uow_write(db_file):
 
     fresh = sqlite3.connect(str(db_file))
     count = fresh.execute(
-        "SELECT COUNT(*) FROM packages WHERE name=?", ("committed_pkg",),
+        "SELECT COUNT(*) FROM packages WHERE name=?",
+        ("committed_pkg",),
     ).fetchone()[0]
     fresh.close()
     assert count == 1
@@ -128,7 +137,8 @@ async def test_maybe_acquire_rollbacks_non_uow_write_on_exception(db_file):
 
     fresh = sqlite3.connect(str(db_file))
     count = fresh.execute(
-        "SELECT COUNT(*) FROM packages WHERE name=?", ("half_written",),
+        "SELECT COUNT(*) FROM packages WHERE name=?",
+        ("half_written",),
     ).fetchone()[0]
     fresh.close()
     assert count == 0
@@ -171,9 +181,7 @@ async def test_unit_of_work_serializes_concurrent_repo_calls(db_file):
         await uow.commit()
 
     fresh = sqlite3.connect(str(db_file))
-    titles = {
-        r[0] for r in fresh.execute("SELECT title FROM chunks").fetchall()
-    }
+    titles = {r[0] for r in fresh.execute("SELECT title FROM chunks").fetchall()}
     fresh.close()
     assert titles == {"a", "b", "c", "d"}
 
@@ -292,4 +300,3 @@ async def test_uow_references_raises_outside_context(tmp_path):
     uow = SqliteUnitOfWork(provider=provider)
     with pytest.raises(UnitOfWorkNotEnteredError):
         _ = uow.references
-

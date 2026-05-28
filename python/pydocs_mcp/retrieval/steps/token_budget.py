@@ -16,6 +16,7 @@ byte-parity with pre-sub-PR-2 ``format_within_budget``).
 sentinel's producer; consumers like :class:`MetadataPostFilterStep`
 import it from this module.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -63,11 +64,13 @@ class TokenBudgetStep(RetrieverStep):
             return state
         if isinstance(source, ChunkList):
             composite_text = format_chunks_markdown_within_budget(
-                source.items, self.budget,
+                source.items,
+                self.budget,
             )
         else:
             composite_text = format_members_markdown_within_budget(
-                source.items, self.budget,
+                source.items,
+                self.budget,
             )
         composite = Chunk(
             text=composite_text,

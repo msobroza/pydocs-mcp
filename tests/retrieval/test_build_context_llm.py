@@ -1,4 +1,5 @@
 """AC-10: BuildContext gains an llm_client field for steps that need it."""
+
 from __future__ import annotations
 
 from pydocs_mcp.retrieval.serialization import BuildContext

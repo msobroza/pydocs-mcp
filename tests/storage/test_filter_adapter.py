@@ -13,6 +13,7 @@ Two public surfaces:
   the fetchers). Stores BOTH chunk and member configs and dispatches on
   the ``target_field`` kwarg.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -51,10 +52,12 @@ def test_translator_field_like():
 
 def test_translator_all_joins_with_and():
     translator = _SqliteFilterTranslator(safe_columns=frozenset({"package", "origin"}))
-    tree = All(clauses=(
-        FieldEq(field="package", value="x"),
-        FieldEq(field="origin", value="y"),
-    ))
+    tree = All(
+        clauses=(
+            FieldEq(field="package", value="x"),
+            FieldEq(field="origin", value="y"),
+        )
+    )
     where, params = translator.adapt(tree)
     assert "AND" in where
     assert params == ["x", "y"]
@@ -109,7 +112,8 @@ def test_translator_emits_column_prefix():
     for the former ``_walk_with_prefix`` copy-of-_adapt helper.
     """
     translator = _SqliteFilterTranslator(
-        safe_columns=frozenset({"package", "title"}), column_prefix="c.",
+        safe_columns=frozenset({"package", "title"}),
+        column_prefix="c.",
     )
     where, params = translator.adapt(FieldEq(field="package", value="x"))
     assert where == "c.package = ?"
@@ -137,7 +141,8 @@ def test_adapter_dispatch_chunk_uses_chunk_columns_and_prefix():
     """``target_field='chunk'`` emits ``c.<col>`` for the chunks_fts JOIN shape."""
     adapter = SqliteFilterAdapter()
     where, params = adapter.adapt(
-        FieldEq(field="package", value="fastapi"), target_field="chunk",
+        FieldEq(field="package", value="fastapi"),
+        target_field="chunk",
     )
     assert where == "c.package = ?"
     assert params == ("fastapi",)
@@ -147,7 +152,8 @@ def test_adapter_dispatch_member_uses_bare_member_columns():
     """``target_field='member'`` emits bare column names (no JOIN aliasing)."""
     adapter = SqliteFilterAdapter()
     where, params = adapter.adapt(
-        FieldEq(field="kind", value="function"), target_field="member",
+        FieldEq(field="kind", value="function"),
+        target_field="member",
     )
     assert where == "kind = ?"
     assert params == ("function",)
@@ -184,7 +190,8 @@ def test_adapter_returns_tuple_params_not_list():
     """
     adapter = SqliteFilterAdapter()
     _where, params = adapter.adapt(
-        FieldIn(field="package", values=("a", "b")), target_field="chunk",
+        FieldIn(field="package", values=("a", "b")),
+        target_field="chunk",
     )
     assert isinstance(params, tuple)
     assert params == ("a", "b")

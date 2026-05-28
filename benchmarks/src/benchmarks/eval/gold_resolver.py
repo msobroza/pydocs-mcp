@@ -35,6 +35,7 @@ Oracle indexing's exact-match ``PydocsOracleGoldResolver`` also ships here
 matches the gold ``doc_ids`` against each stored chunk's ``title`` metadata
 exactly (no fuzz), returning ``chunk:{store_id}`` for every hit.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -88,9 +89,7 @@ class PydocsFuzzyGoldResolver:
     uow_factory: Callable[[], object]
     threshold: int = _DEFAULT_FUZZ_THRESHOLD
 
-    async def resolve(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> frozenset[str]:
+    async def resolve(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> frozenset[str]:
         # WHY: cheap no-op BEFORE any DB access. ``PydocsMcpSystem`` is
         # ``HasGoldResolver`` even for RepoQA tasks (no ``doc_contents``),
         # so the runner calls ``resolve()`` there too — the early return
@@ -123,9 +122,7 @@ class PydocsFuzzyGoldResolver:
             # id-matched to a store row, so skip them even on a content hit.
             if chunk.id is None:
                 continue
-            score = max(
-                fuzz.partial_ratio(gold, chunk.text) for gold in doc_contents
-            )
+            score = max(fuzz.partial_ratio(gold, chunk.text) for gold in doc_contents)
             if score >= self.threshold:
                 matched.add(f"chunk:{chunk.id}")
         return frozenset(matched)
@@ -155,9 +152,7 @@ class PydocsOracleGoldResolver:
 
     uow_factory: Callable[[], object]
 
-    async def resolve(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> frozenset[str]:
+    async def resolve(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> frozenset[str]:
         # WHY: cheap no-op BEFORE any DB access — same RepoQA-safety rationale
         # as the fuzzy resolver. A task with no gold doc_ids never opens a UoW.
         gold_ids = task.gold.extra.get("doc_ids", ())
@@ -183,8 +178,7 @@ class PydocsOracleGoldResolver:
         return frozenset(
             f"chunk:{c.id}"
             for c in chunks
-            if c.id is not None
-            and c.metadata.get(ChunkFilterField.TITLE.value) in gold_ids
+            if c.id is not None and c.metadata.get(ChunkFilterField.TITLE.value) in gold_ids
         )
 
 
@@ -196,17 +190,13 @@ class LazyFuzzyGoldResolver:
 
     threshold: int = _DEFAULT_FUZZ_THRESHOLD
 
-    async def resolve(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> frozenset[str]:
+    async def resolve(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> frozenset[str]:
         doc_contents = task.gold.extra.get("doc_contents", ())
         if not doc_contents:
             return frozenset()
         matched: set[str] = set()
         for item in retrieved:
-            score = max(
-                fuzz.partial_ratio(gold, item.text) for gold in doc_contents
-            )
+            score = max(fuzz.partial_ratio(gold, item.text) for gold in doc_contents)
             if score >= self.threshold:
                 matched.add(_item_key(item))
         return frozenset(matched)

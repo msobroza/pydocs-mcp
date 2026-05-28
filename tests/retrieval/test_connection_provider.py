@@ -6,6 +6,7 @@ Pins that :class:`PerCallConnectionProvider` exposes a sync-friendly
 an ``async with`` inside the worker thread (deadlock-prone, awkward
 ergonomics).
 """
+
 from __future__ import annotations
 
 import sqlite3

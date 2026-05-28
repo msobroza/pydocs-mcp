@@ -18,6 +18,7 @@ The Pydantic model stays stateless from a test's POV: every fresh
 validation time, so flipping the config and instantiating again is all
 the harness needs to do.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -203,9 +204,13 @@ def test_configure_from_app_config_pushes_resolver_config(monkeypatch):
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.extraction.strategies import stdlib_qnames as stdlib_mod
     from pydocs_mcp.retrieval.config import (
-        AppConfig, ReferenceCaptureConfig, ReferenceGraphConfig,
-        ReferenceOutputConfig, ReferenceResolverConfig,
-        SearchConfig, SearchOutputConfig,
+        AppConfig,
+        ReferenceCaptureConfig,
+        ReferenceGraphConfig,
+        ReferenceOutputConfig,
+        ReferenceResolverConfig,
+        SearchConfig,
+        SearchOutputConfig,
     )
 
     rg = ReferenceGraphConfig(

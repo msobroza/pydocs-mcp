@@ -1,4 +1,5 @@
 """pydocs-mcp — Local Python docs MCP server, accelerated with Rust."""
+
 from importlib.metadata import PackageNotFoundError, version
 
 try:

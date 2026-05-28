@@ -1,4 +1,5 @@
 """Security tests for MCP tool inputs."""
+
 import sqlite3
 from pathlib import Path
 
@@ -6,6 +7,7 @@ from pathlib import Path
 def make_conn_with_package(tmp_path: Path, pkg_name: str) -> sqlite3.Connection:
     """Create a minimal DB with one indexed package for testing."""
     from pydocs_mcp.db import open_index_database
+
     conn = open_index_database(tmp_path / "test.db")
     conn.execute(
         "INSERT INTO packages(name, version, summary, homepage, dependencies, content_hash, origin) VALUES (?,?,?,?,?,?,?)",
@@ -25,19 +27,31 @@ def test_inspect_module_rejects_path_traversal_submodule(tmp_path):
     # We test the validation logic directly by calling the inner function.
     # Since tools are registered inside run(), extract the validation logic to a helper.
     from pydocs_mcp.application.module_inspector import _validate_submodule
-    assert _validate_submodule("") is True          # empty = ok (no submodule)
-    assert _validate_submodule("routing") is True   # simple identifier = ok
-    assert _validate_submodule("a.b.c") is True     # dotted = ok
+
+    assert _validate_submodule("") is True  # empty = ok (no submodule)
+    assert _validate_submodule("routing") is True  # simple identifier = ok
+    assert _validate_submodule("a.b.c") is True  # dotted = ok
     assert _validate_submodule("../evil") is False  # path traversal = rejected
-    assert _validate_submodule("a b") is False      # spaces = rejected
-    assert _validate_submodule("a;drop") is False   # semicolon = rejected
+    assert _validate_submodule("a b") is False  # spaces = rejected
+    assert _validate_submodule("a;drop") is False  # semicolon = rejected
 
 
 def test_validate_submodule_blocks_invalid_in_context(tmp_path):
     """The _validate_submodule helper correctly blocks known-bad inputs."""
     from pydocs_mcp.application.module_inspector import _validate_submodule
+
     # Adversarial inputs that could cause issues via importlib
-    bad_inputs = ["../evil", "a;drop", "a b", "a\x00b", "-evil", "evil-", ".routing", "routing.", "a..b"]
+    bad_inputs = [
+        "../evil",
+        "a;drop",
+        "a b",
+        "a\x00b",
+        "-evil",
+        "evil-",
+        ".routing",
+        "routing.",
+        "a..b",
+    ]
     for bad in bad_inputs:
         assert not _validate_submodule(bad), f"Should reject: {bad!r}"
 
@@ -55,6 +69,7 @@ def test_validate_submodule_rejects_trailing_newline():
     ``^...$`` to ``\\A...\\Z``.
     """
     from pydocs_mcp.application.module_inspector import _validate_submodule
+
     assert _validate_submodule("foo\n") is False
 
 
@@ -63,6 +78,7 @@ def test_validate_submodule_rejects_embedded_newline():
     multi-line identifiers never resolve to real modules.
     """
     from pydocs_mcp.application.module_inspector import _validate_submodule
+
     assert _validate_submodule("foo\nbar") is False
 
 
@@ -71,4 +87,5 @@ def test_validate_submodule_rejects_trailing_spaces():
     newline-rejection fix.
     """
     from pydocs_mcp.application.module_inspector import _validate_submodule
+
     assert _validate_submodule("foo ") is False

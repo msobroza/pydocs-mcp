@@ -24,6 +24,7 @@ Mirrors the LIKE query shape the legacy ``LikeMemberRetriever`` used
 (deleted in Task 9) but pushes the substring match down to SQL instead
 of post-filtering in Python.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -128,7 +129,9 @@ class MemberFetcherStep(RetrieverStep):
                 filter_sql, filter_params = self._build_where_clause(result.tree)
 
         rows = await asyncio.to_thread(
-            self._fetch_sync, filter_sql, list(filter_params),
+            self._fetch_sync,
+            filter_sql,
+            list(filter_params),
         )
         members = tuple(_row_to_candidate(row, self.retriever_name) for row in rows)
         # Apply LIKE-style substring match in-process (matches legacy
@@ -140,8 +143,10 @@ class MemberFetcherStep(RetrieverStep):
             # Lazy import — break the storage→extraction→retrieval.config→
             # retrieval.steps cycle (see module docstring).
             from pydocs_mcp.retrieval.filter_helpers import _matches_scope
+
             members = tuple(
-                m for m in members
+                m
+                for m in members
                 if _matches_scope(
                     str(m.metadata.get(ModuleMemberFilterField.PACKAGE.value, "")),
                     scope,
@@ -160,11 +165,14 @@ class MemberFetcherStep(RetrieverStep):
         adapter = self.filter_adapter
         if adapter is None:
             from pydocs_mcp.storage.sqlite import SqliteFilterAdapter as _Fallback
+
             adapter = _Fallback()
         return adapter.adapt(tree, target_field="member")
 
     def _fetch_sync(
-        self, filter_sql: str, filter_params: list,
+        self,
+        filter_sql: str,
+        filter_params: list,
     ) -> list[sqlite3.Row]:
         # WHY: PerCallConnectionProvider exposes ``cache_path`` directly so a
         # sync-friendly fresh connection avoids tangling with the provider's
@@ -246,13 +254,13 @@ def _row_to_candidate(row: sqlite3.Row, retriever_name: str) -> ModuleMember:
     )
     metadata = {
         ModuleMemberFilterField.PACKAGE.value: row["package"] or "",
-        ModuleMemberFilterField.MODULE.value:  row["module"] or "",
-        ModuleMemberFilterField.NAME.value:    row["name"] or "",
-        ModuleMemberFilterField.KIND.value:    row["kind"] or "",
-        "signature":         row["signature"] or "",
+        ModuleMemberFilterField.MODULE.value: row["module"] or "",
+        ModuleMemberFilterField.NAME.value: row["name"] or "",
+        ModuleMemberFilterField.KIND.value: row["kind"] or "",
+        "signature": row["signature"] or "",
         "return_annotation": row["return_annotation"] or "",
-        "parameters":        params,
-        "docstring":         row["docstring"] or "",
+        "parameters": params,
+        "docstring": row["docstring"] or "",
     }
     return ModuleMember(
         id=row["id"],

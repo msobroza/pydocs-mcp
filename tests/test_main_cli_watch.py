@@ -1,4 +1,5 @@
 """AC-1 / AC-7: `--watch` flag presence + parser shape."""
+
 from __future__ import annotations
 
 import pytest
@@ -48,10 +49,9 @@ def test_cmd_serve_with_watch_spawns_watcher_task(monkeypatch, tmp_path) -> None
     src_serve = inspect.getsource(cli_main._cmd_serve)
     src_module = inspect.getsource(cli_main)
     # Either inline in _cmd_serve OR via a helper — both legal placements.
-    assert (
-        "_run_watch_loop" in src_serve
-        or "_run_watch_loop" in src_module
-    ), "no _run_watch_loop reference in __main__.py"
+    assert "_run_watch_loop" in src_serve or "_run_watch_loop" in src_module, (
+        "no _run_watch_loop reference in __main__.py"
+    )
 
 
 def test_run_watch_loop_helper_exists() -> None:
@@ -110,6 +110,7 @@ async def test_run_watch_loop_cancels_watcher_on_server_exit(tmp_path, monkeypat
         server_calls.append(None)
         # Simulate the server running for ~50ms then "Ctrl+C" via return.
         import time
+
         time.sleep(0.05)
 
     monkeypatch.setattr("pydocs_mcp.server.run", _fake_run)
@@ -118,8 +119,11 @@ async def test_run_watch_loop_cancels_watcher_on_server_exit(tmp_path, monkeypat
     # ONLY the Observer class (FileSystemEventHandler dropped — `_Handler`
     # uses duck typing per watchdog's documented dispatch contract).
     from pydocs_mcp.serve import watcher as watcher_mod
+
     monkeypatch.setattr(
-        watcher_mod, "_load_watchdog", lambda: (lambda: fake_observer),
+        watcher_mod,
+        "_load_watchdog",
+        lambda: lambda: fake_observer,
     )
 
     # The integration: server exits, watcher gets cancelled, observer stopped.
@@ -155,8 +159,11 @@ async def test_run_watch_loop_cancels_watcher_on_server_crash(tmp_path, monkeypa
     monkeypatch.setattr("pydocs_mcp.server.run", _crashing_run)
 
     from pydocs_mcp.serve import watcher as watcher_mod
+
     monkeypatch.setattr(
-        watcher_mod, "_load_watchdog", lambda: (lambda: fake_observer),
+        watcher_mod,
+        "_load_watchdog",
+        lambda: lambda: fake_observer,
     )
 
     with pytest.raises(RuntimeError, match="simulated server crash"):

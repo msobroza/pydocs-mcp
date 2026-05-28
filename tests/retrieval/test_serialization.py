@@ -1,4 +1,5 @@
 """Tests for ComponentRegistry + BuildContext."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -30,10 +31,12 @@ def test_register_and_build(tmp_path):
         msg: str
         name: str = "echo"
 
-        def to_dict(self): return {"type": "echo", "msg": self.msg}
+        def to_dict(self):
+            return {"type": "echo", "msg": self.msg}
 
         @classmethod
-        def from_dict(cls, d, ctx): return cls(msg=d["msg"])
+        def from_dict(cls, d, ctx):
+            return cls(msg=d["msg"])
 
     assert registry.names() == ("echo",)
     instance = registry.build({"type": "echo", "msg": "hi"}, _ctx(tmp_path))
@@ -50,6 +53,7 @@ def test_collision_raises():
         name: str = "a"
 
     with pytest.raises(ValueError, match="already registered"):
+
         @registry.register("dup")
         @dataclass(frozen=True, slots=True)
         class B:
@@ -63,9 +67,13 @@ def test_unknown_type_raises_listing_known(tmp_path):
     @dataclass(frozen=True, slots=True)
     class K:
         name: str = "k"
-        def to_dict(self): return {"type": "known"}
+
+        def to_dict(self):
+            return {"type": "known"}
+
         @classmethod
-        def from_dict(cls, d, ctx): return cls()
+        def from_dict(cls, d, ctx):
+            return cls()
 
     with pytest.raises(KeyError, match="unknown component type"):
         registry.build({"type": "missing"}, _ctx(tmp_path))
@@ -96,7 +104,8 @@ def test_registry_build_forwards_depth_to_var_keyword_from_dict(tmp_path):
     class KwargsStage:
         name: str = "kwargs_stage"
 
-        def to_dict(self): return {"type": "kwargs_stage"}
+        def to_dict(self):
+            return {"type": "kwargs_stage"}
 
         @classmethod
         def from_dict(cls, d, ctx, **kwargs):

@@ -17,6 +17,7 @@ allowlist, never widen the blocklist. Pydantic ``extra="forbid"`` on
 ``exclude_dirs`` field with a :class:`~pydantic.ValidationError` at startup
 (spec AC #6b).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,15 +31,31 @@ allowed via YAML; adding a new extension requires registering a matching
 this allowlist — can't be done via YAML alone."""
 
 
-_EXCLUDED_DIRS: frozenset[str] = frozenset({
-    ".git", ".hg", ".svn",
-    ".venv", "venv",
-    "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    ".tox", ".nox", ".eggs", "egg-info",
-    "node_modules", "build", "dist", "target",
-    "htmlcov", ".coverage", ".cache",
-    "site-packages",
-})
+_EXCLUDED_DIRS: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+        ".eggs",
+        "egg-info",
+        "node_modules",
+        "build",
+        "dist",
+        "target",
+        "htmlcov",
+        ".coverage",
+        ".cache",
+        "site-packages",
+    }
+)
 """Directory names excluded from file discovery — HARDCODED by design (spec
 decision #6b). NOT exposed as a YAML field; trying to set
 ``extraction.discovery.project.exclude_dirs: [...]`` hits Pydantic
@@ -46,7 +63,8 @@ decision #6b). NOT exposed as a YAML field; trying to set
 
 
 def path_under_excluded(
-    filepath: str, excluded: frozenset[str] = _EXCLUDED_DIRS,
+    filepath: str,
+    excluded: frozenset[str] = _EXCLUDED_DIRS,
 ) -> bool:
     """True iff any path component of ``filepath`` is in ``excluded``.
 
@@ -116,9 +134,7 @@ class DiscoveryScopeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    include_extensions: list[str] = Field(
-        default_factory=lambda: [".py", ".md", ".ipynb"]
-    )
+    include_extensions: list[str] = Field(default_factory=lambda: [".py", ".md", ".ipynb"])
     max_file_size_bytes: int = 500_000
 
     @field_validator("include_extensions")

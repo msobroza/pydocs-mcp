@@ -10,6 +10,7 @@ resolver owns no I/O — the caller loads the qname universe and alias
 map from ``uow.trees.load_all_in_package(...)`` and the alias table
 populated by the capture pass, then invokes ``resolve(...)``.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -100,7 +101,7 @@ class ReferenceResolver:
         alias_map = self.aliases.get(module_of_from_node, {})
         leading = to_name.split(".", 1)[0]
         if leading in alias_map:
-            rest = to_name[len(leading):]   # includes leading "." or empty
+            rest = to_name[len(leading) :]  # includes leading "." or empty
             to_name = alias_map[leading] + rest
 
         # Rule B — exact qname match, then F20-disambiguate.

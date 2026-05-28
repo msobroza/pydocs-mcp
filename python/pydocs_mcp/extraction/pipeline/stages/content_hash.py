@@ -4,6 +4,7 @@ The package hash drives whole-package cache invalidation. Per-node
 ``DocumentNode.content_hash`` values are computed inside each chunker
 and ride on the trees instead — they don't flow through state.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,7 @@ class ContentHashStage:
     def _hash(self, paths: list[str]) -> str:
         # Deferred so _fast's native/fallback choice is resolved lazily.
         from pydocs_mcp._fast import hash_files
+
         result = hash_files(paths)
         # hash_files may return str (fallback) or bytes (some native builds).
         # Normalize so downstream consumers see a stable str regardless.

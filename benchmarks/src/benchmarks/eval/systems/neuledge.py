@@ -24,6 +24,7 @@ This client connects via MCP Streamable HTTP at
 format for responses and requires an MCP initialize handshake before
 tool calls.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,7 +60,7 @@ def _parse_sse_json(text: str) -> dict:
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("data:"):
-            payload = line[len("data:"):].strip()
+            payload = line[len("data:") :].strip()
             return json.loads(payload)
     # Fallback: try parsing the whole body as JSON
     return json.loads(text)
@@ -182,10 +183,13 @@ class NeuledgeClient:
         Returns:
             Documentation text from Neuledge Context.
         """
-        return await self._call_tool("get_docs", {
-            "library": library,
-            "topic": topic,
-        })
+        return await self._call_tool(
+            "get_docs",
+            {
+                "library": library,
+                "topic": topic,
+            },
+        )
 
 
 @system_registry.register("neuledge")
@@ -200,7 +204,9 @@ class NeuledgeSystem:
     # default keeps construction cheap (and registry-buildable).
     library: str = ""
     _client: NeuledgeClient | None = field(
-        default=None, init=False, repr=False,
+        default=None,
+        init=False,
+        repr=False,
     )
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:
@@ -209,7 +215,9 @@ class NeuledgeSystem:
             await self._client.__aenter__()
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         if self._client is None or not self.library:
             raise RuntimeError(

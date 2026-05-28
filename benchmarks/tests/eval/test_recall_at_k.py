@@ -2,6 +2,7 @@
 otherwise. Boundary at exactly rank k. Tolerant to whitespace + comments
 (inherited from ast_equivalent). Empty retrieved and missing gold both
 degrade to 0.0 so a partial dataset never aborts a run."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -34,17 +35,13 @@ def test_gold_at_rank_1_with_k1_returns_1_0() -> None:
 
 def test_gold_at_rank_5_with_k5_returns_1_0() -> None:
     metric = RecallAtK(k=5)
-    retrieved = tuple(
-        _item(i, "def other(): pass") for i in range(1, 5)
-    ) + (_item(5, GOLD),)
+    retrieved = tuple(_item(i, "def other(): pass") for i in range(1, 5)) + (_item(5, GOLD),)
     assert metric.compute(_task(GOLD), retrieved) == 1.0
 
 
 def test_gold_at_rank_6_with_k5_returns_0_0() -> None:
     metric = RecallAtK(k=5)
-    retrieved = tuple(
-        _item(i, "def other(): pass") for i in range(1, 6)
-    ) + (_item(6, GOLD),)
+    retrieved = tuple(_item(i, "def other(): pass") for i in range(1, 6)) + (_item(6, GOLD),)
     assert metric.compute(_task(GOLD), retrieved) == 0.0
 
 

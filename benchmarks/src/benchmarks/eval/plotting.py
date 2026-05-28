@@ -36,6 +36,7 @@ Or from the command line::
         --output benchmarks/results/plots/repoqa_real.png \\
         --metrics recall@1,recall@5,recall@10,mrr
 """
+
 from __future__ import annotations
 
 import argparse
@@ -59,22 +60,26 @@ from matplotlib.figure import Figure
 # CLI parser so bumping one updates the other (CLAUDE.md §"Default values").
 _DEFAULT_PALETTE = "colorblind"
 _DEFAULT_METRICS: tuple[str, ...] = (
-    "recall@1", "recall@5", "recall@10", "mrr",
+    "recall@1",
+    "recall@5",
+    "recall@10",
+    "mrr",
 )
 _DEFAULT_TIMING_METRICS: tuple[str, ...] = (
-    "indexing_seconds", "search_seconds",
+    "indexing_seconds",
+    "search_seconds",
 )
 _DEFAULT_FIGSIZE: tuple[float, float] = (10.0, 6.0)
 # One subplot per timing metric — height multiplies per metric so the
 # total figure stays the right size for stacking 1, 2, or 3 panels.
-_TIMING_PANEL_HEIGHT: float = 1.6        # inches per panel
-_TIMING_BAR_PADDING: float = 0.5         # extra vertical padding for labels
+_TIMING_PANEL_HEIGHT: float = 1.6  # inches per panel
+_TIMING_BAR_PADDING: float = 0.5  # extra vertical padding for labels
 
 # Pretty labels for the timing-metric panels — fall back to the raw
 # metric name for unknown keys.
 _TIMING_PRETTY: dict[str, str] = {
     "indexing_seconds": "Indexing time (seconds)",
-    "search_seconds":   "Per-query search latency (seconds)",
+    "search_seconds": "Per-query search latency (seconds)",
 }
 
 
@@ -231,12 +236,13 @@ def plot_baselines(
 
 
 def _load_records(
-    baselines: Iterable[BaselineRecord | Path], *, fn_name: str,
+    baselines: Iterable[BaselineRecord | Path],
+    *,
+    fn_name: str,
 ) -> list[BaselineRecord]:
     """Resolve a mix of ``BaselineRecord`` / ``Path`` items into records."""
     records = [
-        item if isinstance(item, BaselineRecord)
-        else BaselineRecord.from_path(item)
+        item if isinstance(item, BaselineRecord) else BaselineRecord.from_path(item)
         for item in baselines
     ]
     if not records:
@@ -245,7 +251,9 @@ def _load_records(
 
 
 def _validate_same_dataset(
-    records: list[BaselineRecord], *, fn_name: str,
+    records: list[BaselineRecord],
+    *,
+    fn_name: str,
 ) -> None:
     """Apples-to-apples guard — every baseline in a single plot must come
     from the same ``dataset`` slice. Cross-dataset overlays (e.g., the
@@ -256,9 +264,7 @@ def _validate_same_dataset(
     """
     datasets = {r.dataset for r in records}
     if len(datasets) > 1:
-        per_dataset = ", ".join(
-            f"{r.display_label} → {r.dataset}" for r in records
-        )
+        per_dataset = ", ".join(f"{r.display_label} → {r.dataset}" for r in records)
         raise ValueError(
             f"{fn_name} requires every baseline to come from the same "
             "dataset (apples-to-apples comparison). Got multiple "
@@ -323,8 +329,7 @@ def plot_timings(
         # global title + xlabel keeps the figure legible at 1, 2, or 3
         # metrics.
         height = (
-            _TIMING_PANEL_HEIGHT * max(len(records), 1) * len(metrics)
-            + _TIMING_BAR_PADDING * 2
+            _TIMING_PANEL_HEIGHT * max(len(records), 1) * len(metrics) + _TIMING_BAR_PADDING * 2
         )
         figsize = (width, max(height, 3.0))
 
@@ -433,7 +438,8 @@ def plot_metric_vs_latency(
         label = rec.display_label + rec.legend_suffix
 
         ax.errorbar(
-            x_ms, y,
+            x_ms,
+            y,
             yerr=[[max(y - y_lo, 0.0)], [max(y_hi - y, 0.0)]],
             xerr=[[0.0], [max(x_hi_ms - x_ms, 0.0)]],
             fmt="o",
@@ -461,8 +467,7 @@ def plot_metric_vs_latency(
         )
 
     ax.set_xlabel(
-        f"Search latency {latency_percentile} (ms)  "
-        "— horizontal bar extends to p95",
+        f"Search latency {latency_percentile} (ms)  — horizontal bar extends to p95",
     )
     ax.set_ylabel(f"{metric}  (95% CI vertical bars)")
     ax.set_ylim(0.0, 1.0)
@@ -510,8 +515,9 @@ def _plot_timing_axis(
         p99s.append(p99)
 
     ax.barh(
-        y_pos, p50s,
-        color=colors[:len(records)],
+        y_pos,
+        p50s,
+        color=colors[: len(records)],
         edgecolor="black",
         linewidth=0.5,
         height=0.6,
@@ -523,8 +529,10 @@ def _plot_timing_axis(
         if p95 > p50:
             ax.plot([p50, p95], [i, i], color="black", linewidth=1.2)
             ax.plot(
-                [p95, p95], [i - 0.12, i + 0.12],
-                color="black", linewidth=1.2,
+                [p95, p95],
+                [i - 0.12, i + 0.12],
+                color="black",
+                linewidth=1.2,
             )
 
     ax.set_yticks(y_pos)
@@ -573,7 +581,8 @@ def _format_seconds(value: float) -> str:
 
 
 def _long_dataframe(
-    records: list[BaselineRecord], metrics: tuple[str, ...],
+    records: list[BaselineRecord],
+    metrics: tuple[str, ...],
 ) -> pd.DataFrame:
     """Reshape records × metrics into a long-form DataFrame for seaborn."""
     rows: list[dict[str, float | str]] = []
@@ -583,13 +592,15 @@ def _long_dataframe(
                 continue
             stats = rec.metrics[metric]
             mean = float(stats.get("mean", 0.0))
-            rows.append({
-                "system": rec.display_label,
-                "metric": metric,
-                "value": mean,
-                "ci_low": float(stats.get("ci_low", mean)),
-                "ci_high": float(stats.get("ci_high", mean)),
-            })
+            rows.append(
+                {
+                    "system": rec.display_label,
+                    "metric": metric,
+                    "value": mean,
+                    "ci_low": float(stats.get("ci_low", mean)),
+                    "ci_high": float(stats.get("ci_high", mean)),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -614,11 +625,7 @@ def _overlay_ci_error_bars(
         if system_idx >= len(system_order):
             break  # defensive — seaborn shouldn't emit extra bar groups
         system = system_order[system_idx]
-        sys_df = (
-            df[df["system"] == system]
-            .set_index("metric")
-            .reindex(list(metric_order))
-        )
+        sys_df = df[df["system"] == system].set_index("metric").reindex(list(metric_order))
         for bar, (_, row) in zip(container, sys_df.iterrows()):
             if pd.isna(row["value"]):
                 continue  # baseline missing this metric — skip the error bar
@@ -655,7 +662,8 @@ def _cli_parser() -> argparse.ArgumentParser:
         help="One or more baseline JSON paths (e.g. benchmarks/baselines/repoqa_snf.json).",
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         type=Path,
         required=True,
         help="Output path for the figure (.png, .pdf, .svg).",
@@ -663,7 +671,9 @@ def _cli_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--timings",
-        action="store_const", dest="mode", const="timings",
+        action="store_const",
+        dest="mode",
+        const="timings",
         help=(
             "Timing-percentile mode (horizontal bars, p50 + p95 whisker, "
             "one subplot per timing metric). Default metrics become "
@@ -672,7 +682,9 @@ def _cli_parser() -> argparse.ArgumentParser:
     )
     mode.add_argument(
         "--scatter",
-        action="store_const", dest="mode", const="scatter",
+        action="store_const",
+        dest="mode",
+        const="scatter",
         help=(
             "Scatter mode — quality vs latency. One point per baseline; "
             "Y = --scatter-metric (default recall@10), X = "
@@ -744,14 +756,9 @@ def _cli_main(argv: list[str] | None = None) -> int:
             title=args.title,
         )
     else:
-        default_metrics = (
-            _DEFAULT_TIMING_METRICS if args.mode == "timings"
-            else _DEFAULT_METRICS
-        )
+        default_metrics = _DEFAULT_TIMING_METRICS if args.mode == "timings" else _DEFAULT_METRICS
         if args.metrics:
-            metrics = tuple(
-                m.strip() for m in args.metrics.split(",") if m.strip()
-            )
+            metrics = tuple(m.strip() for m in args.metrics.split(",") if m.strip())
         else:
             metrics = default_metrics
         plot_fn = plot_timings if args.mode == "timings" else plot_baselines

@@ -6,6 +6,7 @@ shouldn't, an aggregator is defaulting to non-zero, or the runner is
 injecting fallback retrievals. This test pins the lower bound that the
 oracle test pins the upper bound of.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

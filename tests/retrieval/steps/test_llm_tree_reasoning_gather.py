@@ -7,6 +7,7 @@ gate inside the fake reference store — if the step were serial only one
 call would ever be in flight at a time, the gate would deadlock, and the
 test would time out.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -84,23 +85,38 @@ class _ConcurrentReferenceStore:
 
 def _node(qname: str) -> DocumentNode:
     return DocumentNode(
-        node_id=qname, qualified_name=qname, title=qname,
-        kind=NodeKind.FUNCTION, source_path="f.py", start_line=1, end_line=5,
-        text=f"{qname} body", content_hash="", summary=f"{qname} summary",
-        extra_metadata={}, parent_id=None, children=(),
+        node_id=qname,
+        qualified_name=qname,
+        title=qname,
+        kind=NodeKind.FUNCTION,
+        source_path="f.py",
+        start_line=1,
+        end_line=5,
+        text=f"{qname} body",
+        content_hash="",
+        summary=f"{qname} summary",
+        extra_metadata={},
+        parent_id=None,
+        children=(),
     )
 
 
 def _chunk(qname: str) -> Chunk:
-    return Chunk(text=f"{qname} body", metadata={
-        "qualified_name": qname, "package": "__project__",
-    })
+    return Chunk(
+        text=f"{qname} body",
+        metadata={
+            "qualified_name": qname,
+            "package": "__project__",
+        },
+    )
 
 
 def _state(q: str) -> RetrieverState:
     return RetrieverState(
         query=SearchQuery(terms=q, max_results=10),
-        candidates=None, result=None, scratch={},
+        candidates=None,
+        result=None,
+        scratch={},
     )
 
 
@@ -114,21 +130,26 @@ async def test_find_by_name_uses_gather_not_serial() -> None:
     regresses back to serial, the test fails loudly via TimeoutError.
     """
     picks = ("proj.a", "proj.b", "proj.c")
-    llm = FakeLlmClient(responses={
-        "q": json.dumps({"thinking": "", "node_list": list(picks)}),
-    })
+    llm = FakeLlmClient(
+        responses={
+            "q": json.dumps({"thinking": "", "node_list": list(picks)}),
+        }
+    )
     chunk_store = InMemoryChunkStore()
     await chunk_store.upsert(tuple(_chunk(qn) for qn in picks))
     ref_store = _ConcurrentReferenceStore(expected_concurrency=len(picks))
     uow_factory = make_fake_uow_factory(
-        trees=InMemoryDocumentTreeStore(by_package={
-            "__project__": [_node(qn) for qn in picks],
-        }),
+        trees=InMemoryDocumentTreeStore(
+            by_package={
+                "__project__": [_node(qn) for qn in picks],
+            }
+        ),
         chunks=chunk_store,
         references=ref_store,  # type: ignore[arg-type]
     )
     step = LlmTreeReasoningStep(
-        llm_client=llm, uow_factory=uow_factory,
+        llm_client=llm,
+        uow_factory=uow_factory,
         include_references=True,
     )
 

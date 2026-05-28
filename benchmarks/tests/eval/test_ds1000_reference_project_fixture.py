@@ -9,6 +9,7 @@ manifest here — no install, no network.
 The frozen ``_EXPECTED_PINS`` dict is a regression guard: if anyone edits
 a version pin in the fixture, the equality assertion below fails loudly.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,10 +18,7 @@ import tomllib
 
 # parents[0] = tests/eval, parents[1] = tests, parents[2] = benchmarks
 _PYPROJECT_PATH = (
-    Path(__file__).parents[2]
-    / "fixtures"
-    / "ds1000_reference_project"
-    / "pyproject.toml"
+    Path(__file__).parents[2] / "fixtures" / "ds1000_reference_project" / "pyproject.toml"
 )
 
 # The 11 pins lifted verbatim from the DS-1000 ``ds1000-py310``

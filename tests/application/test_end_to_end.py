@@ -20,6 +20,7 @@ stripped package snapshots. We re-use that DB here rather than re-running
 the indexer so the end-to-end focus stays on the service-composition
 surface, not on extractor side effects.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -13,6 +13,7 @@ circular path.
 historical import path (``from pydocs_mcp.storage.filters import ...``)
 keeps working unchanged.
 """
+
 from __future__ import annotations
 
 import types
@@ -52,12 +53,14 @@ class All:
 @dataclass(frozen=True, slots=True)
 class Any_:
     """Declared for future FilterTreeFormat; unused in MultiFieldFormat."""
+
     clauses: tuple[Filter, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class Not:
     """Declared for future FilterTreeFormat; unused in MultiFieldFormat."""
+
     clause: Filter
 
 

@@ -1,4 +1,5 @@
 """ReferenceResolver tests (spec §7.2 — rules A, B, C, D, E + F20 + self.X.Y)."""
+
 from __future__ import annotations
 
 import pytest
@@ -26,9 +27,11 @@ def test_rule_e_no_match_leaves_to_node_id_none():
         qname_universe={"pkg.mod.fn", "pkg.helpers.compute"},
         aliases={},
     )
-    out = resolver.resolve([
-        _ref(from_node_id="pkg.mod.fn", to_name="totally.unknown"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(from_node_id="pkg.mod.fn", to_name="totally.unknown"),
+        ]
+    )
     assert out[0].to_node_id is None
 
 
@@ -38,9 +41,11 @@ def test_rule_b_exact_match_sets_to_node_id():
         qname_universe={"pkg.helpers.compute"},
         aliases={},
     )
-    out = resolver.resolve([
-        _ref(to_name="pkg.helpers.compute"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(to_name="pkg.helpers.compute"),
+        ]
+    )
     assert out[0].to_node_id == "pkg.helpers.compute"
 
 
@@ -54,9 +59,11 @@ def test_rule_c_suffix_match_within_from_package():
         qname_universe={"pkg.helpers.compute", "other.unrelated.compute"},
         aliases={},
     )
-    out = resolver.resolve([
-        _ref(from_node_id="pkg.mod.fn", to_name="compute"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(from_node_id="pkg.mod.fn", to_name="compute"),
+        ]
+    )
     # Only one qname matches within `pkg.*`; resolved.
     assert out[0].to_node_id == "pkg.helpers.compute"
 
@@ -72,9 +79,11 @@ def test_rule_d_ambiguous_suffix_leaves_none():
         qname_universe={"pkg.a.Foo.bar", "pkg.b.Foo.bar"},
         aliases={},
     )
-    out = resolver.resolve([
-        _ref(from_node_id="pkg.something.x", to_name="bar"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(from_node_id="pkg.something.x", to_name="bar"),
+        ]
+    )
     assert out[0].to_node_id is None
 
 
@@ -88,9 +97,11 @@ def test_rule_a_alias_rewrites_then_resolves_exactly():
         qname_universe={"pkg.helpers.compute"},
         aliases={"pkg.utils": {"do_it": "pkg.helpers.compute"}},
     )
-    out = resolver.resolve([
-        _ref(from_node_id="pkg.utils.runner", to_name="do_it"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(from_node_id="pkg.utils.runner", to_name="do_it"),
+        ]
+    )
     assert out[0].to_node_id == "pkg.helpers.compute"
 
 
@@ -100,9 +111,11 @@ def test_rule_a_alias_with_dotted_remainder():
         qname_universe={"pkg.real.something"},
         aliases={"pkg.utils": {"R": "pkg.real"}},
     )
-    out = resolver.resolve([
-        _ref(from_node_id="pkg.utils.fn", to_name="R.something"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(from_node_id="pkg.utils.fn", to_name="R.something"),
+        ]
+    )
     assert out[0].to_node_id == "pkg.real.something"
 
 
@@ -112,15 +125,17 @@ def test_f20_prefers_bare_module_over_md_or_ipynb():
     candidate. CALLS / IMPORTS / INHERITS don't target docs/notebooks."""
     resolver = ReferenceResolver(
         qname_universe={
-            "pkg.helpers",          # .py module
-            "pkg.helpers.md",       # markdown sibling
-            "pkg.helpers.ipynb",    # notebook sibling
+            "pkg.helpers",  # .py module
+            "pkg.helpers.md",  # markdown sibling
+            "pkg.helpers.ipynb",  # notebook sibling
         },
         aliases={},
     )
-    out = resolver.resolve([
-        _ref(to_name="pkg.helpers"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(to_name="pkg.helpers"),
+        ]
+    )
     assert out[0].to_node_id == "pkg.helpers"
 
 
@@ -130,9 +145,11 @@ def test_self_dot_short_circuit_leaves_none():
         qname_universe={"pkg.cls.client.fetch"},  # plausible target
         aliases={},
     )
-    out = resolver.resolve([
-        _ref(from_node_id="pkg.cls.method", to_name="self.client.fetch"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(from_node_id="pkg.cls.method", to_name="self.client.fetch"),
+        ]
+    )
     assert out[0].to_node_id is None
     # The to_name is preserved verbatim — users see "self.client.fetch" in callees.
     assert out[0].to_name == "self.client.fetch"
@@ -144,9 +161,11 @@ def test_inherits_resolution_works_same_rules():
         qname_universe={"pkg.base.Base"},
         aliases={},
     )
-    out = resolver.resolve([
-        _ref(to_name="pkg.base.Base", kind=ReferenceKind.INHERITS),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(to_name="pkg.base.Base", kind=ReferenceKind.INHERITS),
+        ]
+    )
     assert out[0].to_node_id == "pkg.base.Base"
 
 
@@ -157,9 +176,11 @@ def test_unresolved_external_stays_unresolved():
         qname_universe={"pkg.something"},
         aliases={},
     )
-    out = resolver.resolve([
-        _ref(to_name="os.path.join"),
-    ])
+    out = resolver.resolve(
+        [
+            _ref(to_name="os.path.join"),
+        ]
+    )
     assert out[0].to_node_id is None
     assert out[0].to_name == "os.path.join"
 
@@ -174,16 +195,23 @@ def test_strict_suffix_off_skips_rule_c() -> None:
     """
     qnames = frozenset({"pkg.helpers.compute"})
     resolver_strict = ReferenceResolver(
-        qname_universe=qnames, aliases={}, class_attribute_types={},
+        qname_universe=qnames,
+        aliases={},
+        class_attribute_types={},
         strict_suffix=True,
     )
     resolver_loose = ReferenceResolver(
-        qname_universe=qnames, aliases={}, class_attribute_types={},
+        qname_universe=qnames,
+        aliases={},
+        class_attribute_types={},
         strict_suffix=False,
     )
     ref = NodeReference(
-        from_package="pkg", from_node_id="pkg.module.fn",
-        to_name="compute", to_node_id=None, kind=ReferenceKind.CALLS,
+        from_package="pkg",
+        from_node_id="pkg.module.fn",
+        to_name="compute",
+        to_node_id=None,
+        kind=ReferenceKind.CALLS,
     )
     out_strict = resolver_strict.resolve([ref])
     out_loose = resolver_loose.resolve([ref])

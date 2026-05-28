@@ -17,6 +17,7 @@ traceback stays out of the user's stderr pipeline. The four
 ``# noqa: BLE001`` annotations previously attached to each ``_cmd_*``
 collapse into one inside ``_run_cmd``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -65,7 +66,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # tool surface. Common to every subcommand so the four wirings stay in
     # sync. (Per-deployment knob; no impact on the fixed 2-tool MCP API.)
     _cache_dir = dict(
-        type=Path, default=None,
+        type=Path,
+        default=None,
         help="Override the cache directory (default: ~/.pydocs-mcp).",
     )
     # Re-declaring ``-v/--verbose`` on each subparser so it parses
@@ -75,7 +77,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # keeps whatever value the top-level parser already assigned, so a
     # leading ``-v`` is never silently clobbered.
     _verbose = dict(
-        action="store_true", default=argparse.SUPPRESS,
+        action="store_true",
+        default=argparse.SUPPRESS,
         help="Verbose logging + traceback on failure.",
     )
 
@@ -97,7 +100,9 @@ def _build_parser() -> argparse.ArgumentParser:
         # the F11 dead-config defect /ultrareview just removed for
         # by_extension).
         sp.add_argument(
-            "--depth", type=int, default=None,
+            "--depth",
+            type=int,
+            default=None,
             help="Submodule scan depth (default: YAML extraction.members.inspect_depth)",
         )
         sp.add_argument("--workers", type=int, default=4, help="Parallel workers")
@@ -107,15 +112,17 @@ def _build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--cache-dir", **_cache_dir)
         sp.add_argument("-v", "--verbose", **_verbose)
         sp.add_argument(
-            "--no-inspect", action="store_true",
+            "--no-inspect",
+            action="store_true",
             help="Don't import deps. Read .py files from site-packages instead. "
-                 "Faster, safer, no side-effects. Uses the same parser as project source.",
+            "Faster, safer, no side-effects. Uses the same parser as project source.",
         )
         if cmd == "serve":
             sp.add_argument(
-                "--watch", action="store_true",
+                "--watch",
+                action="store_true",
                 help="Watch the project for changes and reindex on edits. "
-                     "Requires the 'watch' extras: pip install pydocs-mcp[watch]",
+                "Requires the 'watch' extras: pip install pydocs-mcp[watch]",
             )
 
     # sub-PR #6: replace query/api with 2 tools matching the MCP surface.
@@ -137,25 +144,38 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sp_search.add_argument("query", help="Search terms (space-separated; prose AND identifiers work)")
     sp_search.add_argument(
-        "--kind", choices=["docs", "api", "any"], default="any",
+        "query", help="Search terms (space-separated; prose AND identifiers work)"
+    )
+    sp_search.add_argument(
+        "--kind",
+        choices=["docs", "api", "any"],
+        default="any",
         help="Which index to search: 'docs' = prose / README, 'api' = functions / classes, 'any' = both (default).",
     )
     sp_search.add_argument(
-        "-p", "--package", dest="package", default="",
+        "-p",
+        "--package",
+        dest="package",
+        default="",
         help='Restrict to one package (e.g. "fastapi"). Use "__project__" for YOUR code, not a library. Default: all packages.',
     )
     sp_search.add_argument(
-        "--scope", choices=["project", "deps", "all"], default="all",
+        "--scope",
+        choices=["project", "deps", "all"],
+        default="all",
         help='Restrict by scope: "project" = your code only, "deps" = installed deps only, "all" = both (default). Use "project" when the user asks about THEIR code.',
     )
     sp_search.add_argument(
-        "--limit", type=int, default=10,
+        "--limit",
+        type=int,
+        default=10,
         help="Max number of results (1-1000, default: 10).",
     )
     sp_search.add_argument(
-        "--project-dir", dest="project", default=".",
+        "--project-dir",
+        dest="project",
+        default=".",
         help="Path to the project root (default: current directory). Determines which cache database is loaded.",
     )
     sp_search.add_argument("--no-rust", **_no_rust)
@@ -182,11 +202,15 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sp_lookup.add_argument(
-        "target", nargs="?", default="",
+        "target",
+        nargs="?",
+        default="",
         help='Dotted path (e.g. "fastapi.routing.APIRouter"). Use "__project__.<module>.<symbol>" for YOUR code. Empty = list all indexed packages.',
     )
     sp_lookup.add_argument(
-        "--show", choices=["default", "tree", "callers", "callees", "inherits"], default="default",
+        "--show",
+        choices=["default", "tree", "callers", "callees", "inherits"],
+        default="default",
         help=(
             "What to show: 'default' = symbol summary + immediate children (start here); "
             "'tree' = full nested subtree (use when 'default' is too shallow); "
@@ -196,7 +220,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     sp_lookup.add_argument(
-        "--project-dir", dest="project", default=".",
+        "--project-dir",
+        dest="project",
+        default=".",
         help="Path to the project root (default: current directory). Determines which cache database is loaded.",
     )
     sp_lookup.add_argument("--no-rust", **_no_rust)
@@ -311,6 +337,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     # Task 8). Indexing uses the latter via ``ReferenceCaptureStage`` in
     # the ingestion pipeline; reads use the former.
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
+
     configure_from_app_config(config)
 
     # Hybrid-search composition root: SQLite + TurboQuant under a composite
@@ -320,8 +347,10 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     # branching for "is there a vector store?".
     tq_path = _tq_path_for_args(args, project)
     uow_factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path,
-        dim=config.embedding.dim, bit_width=config.embedding.bit_width,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=config.embedding.dim,
+        bit_width=config.embedding.bit_width,
     )
     # Cache integrity sweep — drift between SQLite and the ``.tq`` sidecar
     # (process killed mid-commit, etc.) is detected and repaired by
@@ -333,16 +362,20 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     # and is a clean no-op rather than the false-positive trigger it would
     # have been before clear_all was atomic.
     repaired = await check_integrity_and_repair(
-        db_path=db_path, tq_path=tq_path,
-        dim=config.embedding.dim, bit_width=config.embedding.bit_width,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=config.embedding.dim,
+        bit_width=config.embedding.bit_width,
     )
     if repaired:
         log.warning(
             "Cache integrity: cleared content_hash on %d package(s); "
-            "they will be re-extracted this run", len(repaired),
+            "they will be re-extracted this run",
+            len(repaired),
         )
 
     from pydocs_mcp.application.indexing_service import IndexingService
+
     indexing_service = IndexingService(uow_factory=uow_factory)
 
     # Detect a model rename in YAML — packages tagged with the old
@@ -360,7 +393,8 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         if stale_pkg_names:
             log.warning(
                 "Embedding model changed; re-embedding %d package(s): %s",
-                len(stale_pkg_names), ", ".join(stale_pkg_names),
+                len(stale_pkg_names),
+                ", ".join(stale_pkg_names),
             )
             async with uow_factory() as uow:
                 for name in stale_pkg_names:
@@ -408,18 +442,17 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     # CLI flag wins over YAML; YAML wins over hard-coded fallback. This
     # mirrors the pattern for every other tunable knob — undocumented
     # defaults at the wiring layer become silent traps.
-    inspect_depth = (
-        args.depth if args.depth is not None
-        else members_cfg.inspect_depth
-    )
+    inspect_depth = args.depth if args.depth is not None else members_cfg.inspect_depth
     member_extractor = (
         InspectMemberExtractor(
-            static_fallback=ast_member, depth=inspect_depth,
+            static_fallback=ast_member,
+            depth=inspect_depth,
             members_per_module_cap=members_cfg.members_per_module_cap,
             signature_max_chars=members_cfg.signature_max_chars,
             docstring_max_chars=members_cfg.docstring_max_chars,
         )
-        if use_inspect else ast_member
+        if use_inspect
+        else ast_member
     )
 
     orchestrator = ProjectIndexer(
@@ -448,7 +481,10 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     kb = db_path.stat().st_size / 1024 if db_path.exists() else 0.0
     log.info(
         "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
-        stats.indexed, stats.cached, stats.failed, kb,
+        stats.indexed,
+        stats.cached,
+        stats.failed,
+        kb,
     )
 
 
@@ -464,7 +500,8 @@ async def _run_serve_indexing(args: argparse.Namespace) -> None:
 
 
 def _build_watcher_and_callback(
-    args: argparse.Namespace, watch_cfg: WatchConfig,
+    args: argparse.Namespace,
+    watch_cfg: WatchConfig,
 ) -> tuple[FileWatcher, Callable[[], Awaitable[None]]]:
     """Build the ``FileWatcher`` + ``on_change`` callback shared by
     ``serve --watch`` and the standalone ``watch`` subcommand.
@@ -500,7 +537,9 @@ def _build_watcher_and_callback(
 
 
 async def _run_watch_loop(
-    args: argparse.Namespace, *, db_path: Path | None = None,
+    args: argparse.Namespace,
+    *,
+    db_path: Path | None = None,
 ) -> None:
     """Run the MCP server (Phase 2) AND the file watcher concurrently.
 
@@ -560,7 +599,8 @@ async def _run_watch_only(args: argparse.Namespace) -> None:
     project, _db = _project_and_db(args)
     log.info(
         "watch (CLI-only): started (debounce=%dms, root=%s, MCP server: off)",
-        watch_cfg.debounce_ms, project,
+        watch_cfg.debounce_ms,
+        project,
     )
     await watcher.run_until_cancelled(on_change)
 
@@ -780,9 +820,9 @@ def _cmd_lookup(args: argparse.Namespace) -> int:
 
 
 _CMD_TABLE = {
-    "serve":  _cmd_serve,
-    "index":  _cmd_index,
-    "watch":  _cmd_watch,
+    "serve": _cmd_serve,
+    "index": _cmd_index,
+    "watch": _cmd_watch,
     "search": _cmd_search,
     "lookup": _cmd_lookup,
 }

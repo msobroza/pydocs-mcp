@@ -1,4 +1,5 @@
 """Extended tests for search.py — covers exception paths and edge cases."""
+
 import pytest
 
 from pydocs_mcp.db import open_index_database, rebuild_fulltext_index

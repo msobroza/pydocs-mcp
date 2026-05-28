@@ -1,4 +1,5 @@
 """README jargon rule + audit grep (AC-29)."""
+
 import subprocess
 from pathlib import Path
 
@@ -9,7 +10,8 @@ def test_no_pr_jargon_in_readmes() -> None:
     """The audit regex must match nothing in any tracked README.md."""
     result = subprocess.run(
         [
-            "bash", "-c",
+            "bash",
+            "-c",
             "find . -name 'README.md' "
             "-not -path '*/.venv/*' "
             "-not -path '*/.claude/*' "
@@ -20,11 +22,11 @@ def test_no_pr_jargon_in_readmes() -> None:
             "PR #[0-9]+|sub-PR|#5[a-c]|trilogy|Task [0-9]+ of"
             "|PR-[A-Z][0-9.]+'",
         ],
-        cwd=ROOT, capture_output=True, text=True,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
     )
-    assert result.returncode != 0, (
-        f"README jargon violations:\n{result.stdout}"
-    )
+    assert result.returncode != 0, f"README jargon violations:\n{result.stdout}"
 
 
 def test_claude_md_includes_pr_letter_pattern_in_jargon_rule() -> None:

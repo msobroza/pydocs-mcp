@@ -8,6 +8,7 @@ the stages themselves branch internally. That keeps
 ``ProjectIndexer`` from having to pick between two extractor
 implementations based on project-vs-dependency.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -36,37 +37,46 @@ class PipelineChunkExtractor:
     pipeline: IngestionPipeline
 
     async def extract_from_project(
-        self, project_dir: Path,
+        self,
+        project_dir: Path,
     ) -> ExtractionResult:
-        return self._unwrap(await self.pipeline.run(IngestionState(
-            files=FileBundle(
-                target=project_dir,
-                target_kind=TargetKind.PROJECT,
-                package_name=PROJECT_PACKAGE_NAME,
-            ),
-        )))
+        return self._unwrap(
+            await self.pipeline.run(
+                IngestionState(
+                    files=FileBundle(
+                        target=project_dir,
+                        target_kind=TargetKind.PROJECT,
+                        package_name=PROJECT_PACKAGE_NAME,
+                    ),
+                )
+            )
+        )
 
     async def extract_from_dependency(
-        self, dep_name: str,
+        self,
+        dep_name: str,
     ) -> ExtractionResult:
         # Normalise once here (mirrors PackageBuildStage) so chunks +
         # trees share the canonical module prefix before the package
         # metadata is synthesized.
         pkg_name = normalize_package_name(dep_name)
-        return self._unwrap(await self.pipeline.run(IngestionState(
-            files=FileBundle(
-                target=dep_name,
-                target_kind=TargetKind.DEPENDENCY,
-                package_name=pkg_name,
-            ),
-        )))
+        return self._unwrap(
+            await self.pipeline.run(
+                IngestionState(
+                    files=FileBundle(
+                        target=dep_name,
+                        target_kind=TargetKind.DEPENDENCY,
+                        package_name=pkg_name,
+                    ),
+                )
+            )
+        )
 
     @staticmethod
     def _unwrap(state: IngestionState) -> ExtractionResult:
         if state.package is None:
             raise RuntimeError(
-                "ingestion pipeline did not populate state.package "
-                "(missing package_build stage?)",
+                "ingestion pipeline did not populate state.package (missing package_build stage?)",
             )
         return ExtractionResult(
             chunks=state.chunks.chunks,

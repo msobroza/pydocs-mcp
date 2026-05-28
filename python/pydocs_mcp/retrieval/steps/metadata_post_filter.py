@@ -10,6 +10,7 @@ Composite results from :class:`TokenBudgetStep` carry the
 ``COMPOSITE_TITLE_SENTINEL`` marker and are bypassed so the budgeted
 answer chunk never gets dropped by title-based filters (AC #34).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace

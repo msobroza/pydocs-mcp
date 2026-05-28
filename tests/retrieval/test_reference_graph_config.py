@@ -4,6 +4,7 @@ Pins the YAML-driven defaults shipped in ``defaults/default_config.yaml``,
 the cross-field ``default_limit <= max_limit`` validator, the YAML overlay
 behaviour for ``kinds``, and the ``Literal`` rejection of unknown kinds.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -97,11 +98,7 @@ def test_reference_graph_resolver_defaults_present_after_load():
 def test_reference_graph_resolver_yaml_overlay_can_disable_stdlib(tmp_path):
     """YAML overlay can flip include_stdlib off (e.g., for benchmark A/B)."""
     overlay = tmp_path / "custom.yaml"
-    overlay.write_text(
-        "reference_graph:\n"
-        "  resolver:\n"
-        "    include_stdlib: false\n"
-    )
+    overlay.write_text("reference_graph:\n  resolver:\n    include_stdlib: false\n")
     cfg = AppConfig.load(explicit_path=overlay)
     assert cfg.reference_graph.resolver.include_stdlib is False
     # Other defaults still hold:
@@ -112,6 +109,7 @@ def test_reference_graph_resolver_yaml_overlay_can_disable_stdlib(tmp_path):
 def test_reference_resolver_config_typed():
     """ReferenceResolverConfig is a typed Pydantic model with the expected field."""
     from pydocs_mcp.retrieval.config import ReferenceResolverConfig
+
     cfg = ReferenceResolverConfig()
     assert cfg.include_stdlib is True
     explicit = ReferenceResolverConfig(include_stdlib=False)

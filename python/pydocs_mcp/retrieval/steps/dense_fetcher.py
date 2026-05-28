@@ -20,6 +20,7 @@ to match against today. The check exists so a future PR that adds
 multi-vector persistence can flip the behaviour without changing the
 contract.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping

@@ -9,6 +9,7 @@ Lets ``uow.vectors`` be always-present, removing the
 empty tuple so search-side callers can branch on backend presence by
 result emptiness instead of attribute presence.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -36,7 +37,9 @@ class NullVectorStore:
         return self
 
     async def add_vectors(
-        self, ids: Sequence[int], embeddings: Sequence[object],
+        self,
+        ids: Sequence[int],
+        embeddings: Sequence[object],
     ) -> None:
         # Silent no-op: deployments without dense embeddings drop vectors.
         return None

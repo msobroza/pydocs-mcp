@@ -1,4 +1,5 @@
 """Storage Protocols smoke tests (AC #3)."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -18,9 +19,15 @@ from pydocs_mcp.storage.protocols import (
 
 def test_protocol_imports():
     for cls in (
-        PackageStore, ChunkStore, ModuleMemberStore,
-        TextSearchable, VectorSearchable, HybridSearchable,
-        UnitOfWork, FilterAdapter, DocumentTreeStore,
+        PackageStore,
+        ChunkStore,
+        ModuleMemberStore,
+        TextSearchable,
+        VectorSearchable,
+        HybridSearchable,
+        UnitOfWork,
+        FilterAdapter,
+        DocumentTreeStore,
     ):
         assert hasattr(cls, "__mro__")
 
@@ -91,12 +98,24 @@ def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
         trees = None
         references = None  # sub-PR #5b — 5th repo attribute
         vectors = None  # spec S15 — always-present (may be NullVectorStore)
-        async def __aenter__(self): return self
-        async def __aexit__(self, exc_type, exc, tb): return False
-        async def commit(self): pass
-        async def rollback(self): pass
-        async def delete_all(self): pass  # spec I3
-        async def begin(self): yield
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            pass
+
+        async def delete_all(self):
+            pass  # spec I3
+
+        async def begin(self):
+            yield
 
     assert isinstance(FakeUow(), UnitOfWork)
 
@@ -104,6 +123,7 @@ def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
 def test_unit_of_work_not_entered_error_is_typed():
     """§14.9 AC #7 — outside-context access raises typed error."""
     from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+
     err = UnitOfWorkNotEnteredError("packages")
     assert "packages" in str(err)
     assert err.attr_name == "packages"
@@ -112,6 +132,7 @@ def test_unit_of_work_not_entered_error_is_typed():
 def test_reference_store_protocol_exists_in_storage_protocols():
     """ReferenceStore is the 9th storage Protocol (spec §6.2)."""
     from pydocs_mcp.storage.protocols import ReferenceStore
+
     # @runtime_checkable so duck-typing tests work end-to-end.
     assert hasattr(ReferenceStore, "_is_runtime_protocol")
     # All required methods are declared.
@@ -127,9 +148,11 @@ def test_reference_store_protocol_exists_in_storage_protocols():
 def test_unit_of_work_protocol_now_has_references_attribute():
     """Spec §14.7 — UoW gains a 5th repo attribute (references)."""
     from pydocs_mcp.storage.protocols import UnitOfWork
+
     # __annotations__ exposes the typed attribute. Use get_type_hints to
     # resolve forward refs.
     from typing import get_type_hints
+
     hints = get_type_hints(UnitOfWork)
     assert "references" in hints
     # Type should be ReferenceStore (or its name as a forward ref).

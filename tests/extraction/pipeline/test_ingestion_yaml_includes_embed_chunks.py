@@ -10,6 +10,7 @@ bypass the whole pipeline including embedding.
 The shipped pipeline uses the ``stages:`` key with inline-flow ``{type:...}``
 entries (no ``name:`` field); these assertions match that schema.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,8 +18,7 @@ from pathlib import Path
 import yaml
 
 INGESTION_YAML = (
-    Path(__file__).resolve().parents[3]
-    / "python" / "pydocs_mcp" / "pipelines" / "ingestion.yaml"
+    Path(__file__).resolve().parents[3] / "python" / "pydocs_mcp" / "pipelines" / "ingestion.yaml"
 )
 
 
@@ -33,9 +33,7 @@ def test_embed_chunks_is_between_flatten_and_content_hash() -> None:
 
 def test_embed_chunks_stage_type_is_embed_chunks() -> None:
     cfg = yaml.safe_load(INGESTION_YAML.read_text(encoding="utf-8"))
-    embed_stage = next(
-        s for s in cfg["stages"] if s["type"] == "embed_chunks"
-    )
+    embed_stage = next(s for s in cfg["stages"] if s["type"] == "embed_chunks")
     assert embed_stage["type"] == "embed_chunks"
 
 

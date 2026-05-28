@@ -3,11 +3,13 @@
 Lets embedders catch any library-originated failure with one
 `except PydocsMCPError` clause, without swallowing unrelated bugs.
 """
+
 from __future__ import annotations
 
 
 def test_pydocs_mcp_error_root_exists() -> None:
     from pydocs_mcp.exceptions import PydocsMCPError
+
     assert issubclass(PydocsMCPError, Exception)
 
 

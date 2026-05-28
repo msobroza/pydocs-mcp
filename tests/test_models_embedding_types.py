@@ -6,6 +6,7 @@ validate the alias-free invariants (``MultiVector`` is a list,
 ``is_multi_vector`` discriminates correctly, ``SparseEmbedding`` is a
 forward-compat Protocol).
 """
+
 import numpy as np
 
 from pydocs_mcp.models import (
@@ -22,6 +23,7 @@ def test_embedding_union_includes_np_ndarray() -> None:
     Replaces the legacy ``Vector is np.ndarray`` alias assertion (spec S12).
     """
     import typing
+
     args = typing.get_args(Embedding)
     assert np.ndarray in args
 
@@ -55,6 +57,7 @@ def test_sparse_embedding_protocol_runtime_checkable() -> None:
     """SparseEmbedding is a runtime_checkable Protocol matching FastEmbed's
     shape. Not in the Embedding union this PR — just defined for forward
     compatibility."""
+
     class _Stub:
         indices = np.array([0, 5, 9], dtype=np.uint32)
         values = np.array([0.5, 0.7, 0.2], dtype=np.float32)
@@ -67,5 +70,6 @@ def test_sparse_embedding_NOT_in_embedding_union_yet() -> None:
     Adding SparseEmbedding is a future PR's job."""
     # typing.get_args on a union type alias returns the union members.
     import typing
+
     args = typing.get_args(Embedding)
     assert SparseEmbedding not in args

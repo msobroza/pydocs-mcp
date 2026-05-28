@@ -10,6 +10,7 @@ real extraction imports, no SQLite, no network. The concrete strategy classes
 in ``extraction/strategies/`` and ``extraction/pipeline/`` wire to the
 ``extract_*`` Protocols; the service itself is backend and adapter agnostic.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -44,9 +45,7 @@ def _pkg(name: str) -> Package:
         homepage="",
         dependencies=(),
         content_hash="h",
-        origin=(
-            PackageOrigin.PROJECT if name == "__project__" else PackageOrigin.DEPENDENCY
-        ),
+        origin=(PackageOrigin.PROJECT if name == "__project__" else PackageOrigin.DEPENDENCY),
     )
 
 
@@ -144,7 +143,8 @@ class FakeChunkExtractor:
     dep_calls: list[str] = field(default_factory=list)
 
     async def extract_from_project(
-        self, project_dir: Path,
+        self,
+        project_dir: Path,
     ) -> ExtractionResult:
         self.project_calls.append(project_dir)
         assert self.project_package is not None, "Configure project_package first"
@@ -155,7 +155,8 @@ class FakeChunkExtractor:
         )
 
     async def extract_from_dependency(
-        self, dep_name: str,
+        self,
+        dep_name: str,
     ) -> ExtractionResult:
         self.dep_calls.append(dep_name)
         entry = self.dep_returns.get(dep_name)
@@ -187,13 +188,15 @@ class FakeMemberExtractor:
     dep_calls: list[str] = field(default_factory=list)
 
     async def extract_from_project(
-        self, project_dir: Path,
+        self,
+        project_dir: Path,
     ) -> tuple[ModuleMember, ...]:
         self.project_calls.append(project_dir)
         return self.project_members
 
     async def extract_from_dependency(
-        self, dep_name: str,
+        self,
+        dep_name: str,
     ) -> tuple[ModuleMember, ...]:
         self.dep_calls.append(dep_name)
         entry = self.dep_returns.get(dep_name)
@@ -361,9 +364,7 @@ async def test_index_one_dependency_increments_failed_on_exception(
 
 
 @pytest.mark.asyncio
-async def test_index_one_dependency_failure_logs_warning(
-    tmp_path: Path, caplog
-) -> None:
+async def test_index_one_dependency_failure_logs_warning(tmp_path: Path, caplog) -> None:
     """On failure the service logs a warning that includes the dep name."""
     import logging
 
@@ -537,7 +538,9 @@ async def test_index_project_workers_1_is_serial(tmp_path: Path) -> None:
     )
 
     stats = await service.index_project(
-        tmp_path, include_project_source=False, workers=1,
+        tmp_path,
+        include_project_source=False,
+        workers=1,
     )
 
     # Order preserved because the serial branch iterates the resolver tuple.
@@ -570,7 +573,8 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
             raise AssertionError("project extraction should be skipped in this test")
 
         async def extract_from_dependency(
-            self, dep_name: str,
+            self,
+            dep_name: str,
         ) -> ExtractionResult:
             self.dep_calls.append(dep_name)
             self.in_flight += 1
@@ -607,7 +611,9 @@ async def test_index_project_workers_N_allows_concurrent(tmp_path: Path) -> None
     )
 
     stats = await service.index_project(
-        tmp_path, include_project_source=False, workers=3,
+        tmp_path,
+        include_project_source=False,
+        workers=3,
     )
 
     assert stats.indexed == 3
@@ -627,13 +633,21 @@ async def test_project_indexer_uses_own_uow_factory_for_cache_check(tmp_path: Pa
     not via reach-through to indexing_service.package_store."""
     cached = _pkg("__project__")
     cached_pkg_with_hash = Package(
-        name=cached.name, version=cached.version, summary=cached.summary,
-        homepage=cached.homepage, dependencies=cached.dependencies,
-        content_hash="h", origin=cached.origin,
+        name=cached.name,
+        version=cached.version,
+        summary=cached.summary,
+        homepage=cached.homepage,
+        dependencies=cached.dependencies,
+        content_hash="h",
+        origin=cached.origin,
     )
     project_pkg_same_hash = Package(
-        name="__project__", version="0", summary="", homepage="",
-        dependencies=(), content_hash="h",  # identical hash → cached
+        name="__project__",
+        version="0",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",  # identical hash → cached
         origin=PackageOrigin.PROJECT,
     )
 

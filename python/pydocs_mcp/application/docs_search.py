@@ -1,4 +1,5 @@
 """DocsSearch — thin wrapper around chunk_pipeline.run (spec §5.1)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

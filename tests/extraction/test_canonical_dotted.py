@@ -8,6 +8,7 @@ output would churn every row. canonical_dotted emits one canonical form
 and drops what doesn't fit (returns None), so re-extraction on a new
 Python is byte-stable.
 """
+
 from __future__ import annotations
 
 import ast
@@ -60,7 +61,7 @@ def test_canonical_dotted_truncates_pathological_length() -> None:
     _MAX_TO_NAME_CHARS with a trailing ellipsis to prevent unbounded
     node_references rows.
     """
-    expr = _expr("." .join(["a"] * 200))
+    expr = _expr(".".join(["a"] * 200))
     out = canonical_dotted(_expr(".".join(["a"] * 500)))
     assert out is not None
     assert len(out) <= _MAX_TO_NAME_CHARS

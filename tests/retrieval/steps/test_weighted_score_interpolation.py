@@ -1,4 +1,5 @@
 """AC-4 + AC-5: WeightedScoreInterpolationStep blends per-branch scores."""
+
 from __future__ import annotations
 
 import pytest
@@ -32,8 +33,8 @@ async def test_equal_weights_blend_min_max_normalized_scores() -> None:
         candidates=None,
         result=None,
         scratch={
-            "bm25.ranked":  _ranked([_chunk(1, 10.0), _chunk(2, 5.0)]),
-            "dense.ranked": _ranked([_chunk(1, 1.0),  _chunk(2, 0.5)]),
+            "bm25.ranked": _ranked([_chunk(1, 10.0), _chunk(2, 5.0)]),
+            "dense.ranked": _ranked([_chunk(1, 1.0), _chunk(2, 0.5)]),
         },
     )
     step = WeightedScoreInterpolationStep(
@@ -55,8 +56,8 @@ async def test_asymmetric_weights() -> None:
         candidates=None,
         result=None,
         scratch={
-            "bm25.ranked":  _ranked([_chunk(1, 10.0), _chunk(2, 0.0)]),
-            "dense.ranked": _ranked([_chunk(1, 0.0),  _chunk(2, 1.0)]),
+            "bm25.ranked": _ranked([_chunk(1, 10.0), _chunk(2, 0.0)]),
+            "dense.ranked": _ranked([_chunk(1, 0.0), _chunk(2, 1.0)]),
         },
     )
     step = WeightedScoreInterpolationStep(
@@ -94,7 +95,8 @@ def test_round_trip_yaml() -> None:
         name="custom_name",
     )
     rebuilt = WeightedScoreInterpolationStep.from_dict(
-        original.to_dict(), BuildContext(),
+        original.to_dict(),
+        BuildContext(),
     )
     assert rebuilt.weights == original.weights
     assert rebuilt.branch_keys == original.branch_keys

@@ -18,6 +18,7 @@ value object:
 * ``package`` + ``existing_chunk_hashes`` — orthogonal scalars that
   don't fit any of the three bundles.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

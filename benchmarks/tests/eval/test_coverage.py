@@ -5,6 +5,7 @@ empty/absent -> 0.0.
 
 Hermetic: no ``pydocs_mcp`` import.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -3,6 +3,7 @@
 implementations, and :class:`PipelineChunkExtractor` (the Protocol
 adapter that drives the pipeline for ``ProjectIndexer``).
 """
+
 from pydocs_mcp.extraction.pipeline.chunk_extractor import PipelineChunkExtractor
 from pydocs_mcp.extraction.pipeline.ingestion import (
     IngestionPipeline,

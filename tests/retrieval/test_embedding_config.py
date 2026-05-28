@@ -1,4 +1,5 @@
 """EmbeddingConfig + AppConfig.embedding (spec §5.10)."""
+
 import pytest
 from pydantic import ValidationError
 

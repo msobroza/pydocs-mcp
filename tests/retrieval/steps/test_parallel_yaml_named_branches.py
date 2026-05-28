@@ -19,6 +19,7 @@ without per-branch naming) is still accepted so existing in-memory
 ``ParallelStep(stages=(...))`` constructions and their ``to_dict``/``from_dict``
 round-trips keep working.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

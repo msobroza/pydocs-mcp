@@ -10,6 +10,7 @@ registries; metric computation lives in ``metrics/``; aggregation lives
 in ``metrics/aggregate.py``; per-tracker I/O lives in ``trackers/``;
 markdown rendering lives in ``report.py``. The runner only glues them.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -133,9 +134,7 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
     scorer = Scorer(metrics=metrics)
 
     tk = dict(tracker_kwargs or {})
-    trackers = [
-        tracker_registry.build(name, **dict(tk.get(name, {}))) for name in tracker_names
-    ]
+    trackers = [tracker_registry.build(name, **dict(tk.get(name, {}))) for name in tracker_names]
 
     sweep_results: SweepResults = {}
     # WHY: track the actual per-leg task count so the report title can
@@ -443,7 +442,8 @@ def _flatten_app_config(cfg: AppConfig) -> dict[str, str]:
 
 
 def _flatten(
-    obj: object, prefix: str = "",
+    obj: object,
+    prefix: str = "",
 ) -> list[tuple[str, str]]:
     """Recursive dot-key flattener for nested dicts.
 
@@ -525,10 +525,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--systems",
         default="pydocs-mcp",
-        help=(
-            "comma-separated system names. available: "
-            + ", ".join(system_registry.names())
-        ),
+        help=("comma-separated system names. available: " + ", ".join(system_registry.names())),
     )
     parser.add_argument(
         "--configs",
@@ -543,10 +540,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--trackers",
         default="jsonl",
-        help=(
-            "comma-separated tracker names. available: "
-            + ", ".join(tracker_registry.names())
-        ),
+        help=("comma-separated tracker names. available: " + ", ".join(tracker_registry.names())),
     )
     parser.add_argument(
         "--metrics",
@@ -567,10 +561,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--fixture",
         type=Path,
         default=None,
-        help=(
-            "(repoqa-only) path to repoqa_mini.json — bypasses HuggingFace "
-            "download"
-        ),
+        help=("(repoqa-only) path to repoqa_mini.json — bypasses HuggingFace download"),
     )
     parser.add_argument(
         "--dataset-library-filter",

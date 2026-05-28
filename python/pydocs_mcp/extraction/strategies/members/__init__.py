@@ -12,6 +12,7 @@ Re-exports the underscore helper ``_path_under_excluded`` (used by
 :mod:`tests.extraction.test_members`) so the existing test import path
 keeps working across the split.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.extraction.strategies.members.ast_extractor import (

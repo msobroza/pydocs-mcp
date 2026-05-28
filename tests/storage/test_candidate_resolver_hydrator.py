@@ -1,4 +1,5 @@
 """SQLite-flavored CandidateIdResolver + ChunkHydrator (spec §5.3, §7 risk row 1)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -42,11 +43,13 @@ async def _seed(tmp_path: Path) -> Path:
     async with factory() as uow:
         await uow.packages.upsert(_pkg("demo"))
         await uow.packages.upsert(_pkg("other"))
-        await uow.chunks.upsert((
-            _chunk("alpha", "demo"),
-            _chunk("beta", "demo"),
-            _chunk("gamma", "other"),
-        ))
+        await uow.chunks.upsert(
+            (
+                _chunk("alpha", "demo"),
+                _chunk("beta", "demo"),
+                _chunk("gamma", "other"),
+            )
+        )
         await uow.commit()
     return db_path
 
@@ -116,7 +119,8 @@ async def test_chunk_hydrator_empty_ids_returns_empty_tuple(
 
 @pytest.mark.parametrize("safe_column", sorted({"package", "module", "origin", "title"}))
 async def test_candidate_id_resolver_accepts_every_safe_chunk_column(
-    tmp_path: Path, safe_column: str,
+    tmp_path: Path,
+    safe_column: str,
 ) -> None:
     """The resolver must use the canonical chunk safe-column whitelist —
     rejecting a known-safe column would break TurboQuantVectorStore filters."""

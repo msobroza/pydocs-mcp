@@ -7,6 +7,7 @@ Importing this package eagerly loads ``steps``, ``formatters`` and
 ``route_predicates`` so their ``@registry.register`` decorators fire and
 the shared registries are populated (spec AC #30).
 """
+
 from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401
 from pydocs_mcp.retrieval import route_predicates as _route_predicates  # noqa: F401
 

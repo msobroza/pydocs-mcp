@@ -1,4 +1,5 @@
 """AC #13 — project source qnames must NOT start with `python.`."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,9 +39,12 @@ async def test_project_qnames_use_python_module_path_not_filesystem(tmp_path):
     # shipped ingestion pipeline by default; thread MockEmbedder + the
     # real SQLite UoW factory so the strict from_dict gates are satisfied.
     from tests._fakes import MockEmbedder
+
     config = AppConfig.load()
     pipeline = build_ingestion_pipeline(
-        config, embedder=MockEmbedder(), uow_factory=uow_factory,
+        config,
+        embedder=MockEmbedder(),
+        uow_factory=uow_factory,
     )
 
     class _NoDeps:

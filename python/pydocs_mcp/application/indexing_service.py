@@ -31,6 +31,7 @@ structurally satisfies :class:`~pydocs_mcp.storage.protocols.UnitOfWork`.
 covers the dense-disabled deployment), so this service never branches
 on backend identity.
 """
+
 from __future__ import annotations
 
 import logging
@@ -67,6 +68,7 @@ class IndexingStats:
     (spec §5.3). Deliberately NOT frozen — the service mutates these counters
     while iterating over packages. `slots=True` still guards against typos
     (e.g. ``stats.indexxed += 1``) by rejecting unknown attributes."""
+
     project_indexed: bool = False
     indexed: int = 0
     cached: int = 0
@@ -128,7 +130,9 @@ class IndexingService:
             # because the followup ``packages.delete`` + cascading FK clears the
             # chunk rows en masse.
             _removed_ids, added_chunks = await self._diff_merge_chunks(
-                uow, package_name=package.name, incoming_chunks=chunks,
+                uow,
+                package_name=package.name,
+                incoming_chunks=chunks,
             )
 
             await uow.module_members.delete(
@@ -192,13 +196,8 @@ class IndexingService:
         )
         incoming_hashes = {c.content_hash for c in incoming_chunks}
         existing_by_hash = {h: cid for cid, h in existing_pairs if h}
-        removed_ids = [
-            cid for cid, h in existing_pairs
-            if not h or h not in incoming_hashes
-        ]
-        added_chunks = tuple(
-            c for c in incoming_chunks if c.content_hash not in existing_by_hash
-        )
+        removed_ids = [cid for cid, h in existing_pairs if not h or h not in incoming_hashes]
+        added_chunks = tuple(c for c in incoming_chunks if c.content_hash not in existing_by_hash)
 
         if removed_ids:
             await uow.chunks.delete_by_ids(removed_ids)
@@ -232,7 +231,8 @@ class IndexingService:
                 class_attribute_types,
             )
             await uow.references.save_many(
-                resolved, package=package_name,
+                resolved,
+                package=package_name,
             )
 
         # AC #6.5 — cross-package re-resolution. After writing this
@@ -278,9 +278,7 @@ class IndexingService:
         persisted = await uow.chunks.list(
             filter={ChunkFilterField.PACKAGE.value: package.name},
         )
-        persisted_for_input = [
-            p for p in persisted if p.content_hash in input_hashes
-        ]
+        persisted_for_input = [p for p in persisted if p.content_hash in input_hashes]
         if len(persisted_for_input) != len(input_chunks):
             # Defensive: a hash-set mismatch means INSERT didn't land what
             # we asked for (or two inputs share a hash — should be
@@ -289,7 +287,9 @@ class IndexingService:
             log.warning(
                 "Skipping vector write for %s: persisted matching count %d "
                 "does not match input chunk count %d.",
-                package.name, len(persisted_for_input), len(input_chunks),
+                package.name,
+                len(persisted_for_input),
+                len(input_chunks),
             )
             return
         by_hash = {p.content_hash: p for p in persisted_for_input}
@@ -355,7 +355,9 @@ class IndexingService:
         return resolver.resolve(refs)
 
     async def _reresolve_cross_package(
-        self, uow: UnitOfWork, just_indexed_package: str,
+        self,
+        uow: UnitOfWork,
+        just_indexed_package: str,
     ) -> None:
         """Re-resolve OTHER packages' refs against this package's qnames.
 
@@ -455,9 +457,9 @@ class IndexingService:
         async with self.uow_factory() as uow:
             all_pkgs = await uow.packages.list()
         return [
-            p.name for p in all_pkgs
-            if p.embedding_model is not None
-            and p.embedding_model != current_model
+            p.name
+            for p in all_pkgs
+            if p.embedding_model is not None and p.embedding_model != current_model
         ]
 
 

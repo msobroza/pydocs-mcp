@@ -1,5 +1,6 @@
 """Pin MRR: reciprocal rank of the first AST-match (1-indexed). 0 if no
 match. See https://en.wikipedia.org/wiki/Mean_reciprocal_rank."""
+
 from __future__ import annotations
 
 from pathlib import Path

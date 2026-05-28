@@ -27,6 +27,7 @@ writes under ``tmp_path`` so the run never pollutes the repo.
 ci_high)]]`` — one row per (system, config) leg; each metric (and the
 ``indexing_seconds`` / ``search_seconds`` latency keys) maps to a 3-tuple.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -77,7 +78,9 @@ class _FakeCompositeSystem:
         return None
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return (
             RetrievedItem(
@@ -114,7 +117,9 @@ class _FakeContext7System:
         return None
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return (
             RetrievedItem(
@@ -142,7 +147,9 @@ class _FakeNeuledgeSystem:
         return None
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return (
             RetrievedItem(
@@ -167,7 +174,9 @@ class _FakeRankedSystem:
         return None
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         return tuple(
             RetrievedItem(
@@ -205,7 +214,9 @@ class _FakeOracleSystem:
         return None
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         # These mirror the fixture's gold doc_id shape
         # (``pandas.api.synthetic_<n>.<Class>.<method>``) so a reader sees
@@ -259,9 +270,7 @@ def _override_systems(fakes: Mapping[str, object]) -> Iterator[None]:
 # ── assertion helpers ──────────────────────────────────────────────────────
 
 
-def _assert_quality_metric(
-    aggregates: dict[str, tuple[float, float, float]], key: str
-) -> None:
+def _assert_quality_metric(aggregates: dict[str, tuple[float, float, float]], key: str) -> None:
     """Assert ``key`` is present and its (mean, ci_low, ci_high) are finite
     floats with the mean in [0, 1] and the CI bracketing it."""
     assert key in aggregates, f"missing metric {key!r} in {sorted(aggregates)}"
@@ -274,9 +283,7 @@ def _assert_quality_metric(
     assert ci_low <= mean <= ci_high, f"{key} CI [{ci_low},{ci_high}] !bracket {mean}"
 
 
-def _assert_latency_present(
-    aggregates: dict[str, tuple[float, float, float]]
-) -> None:
+def _assert_latency_present(aggregates: dict[str, tuple[float, float, float]]) -> None:
     """Latency percentile triples are emitted for every leg (spec §5.5)."""
     for key in ("indexing_seconds", "search_seconds"):
         assert key in aggregates, f"missing latency key {key!r}"
@@ -342,9 +349,7 @@ async def test_comparison_config_smoke(tmp_path: Path) -> None:
 
     # library_resolution@1 present + in range for the context7 row (the only
     # system that resolved a library id).
-    _assert_quality_metric(
-        results[("context7", config_name)], "library_resolution@1"
-    )
+    _assert_quality_metric(results[("context7", config_name)], "library_resolution@1")
 
 
 # ── 2. pydocs-only ranked ────────────────────────────────────────────────

@@ -9,6 +9,7 @@ Strategy-based implementations live in ``extraction/strategies/`` and
 ``tuple[..., ..., ...]``) so adding future fields (e.g. extraction
 stats) doesn't break every destructuring call site.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -66,20 +67,24 @@ class DependencyResolver(Protocol):
 @runtime_checkable
 class ChunkExtractor(Protocol):
     async def extract_from_project(
-        self, project_dir: Path,
+        self,
+        project_dir: Path,
     ) -> ExtractionResult: ...
 
     async def extract_from_dependency(
-        self, dep_name: str,
+        self,
+        dep_name: str,
     ) -> ExtractionResult: ...
 
 
 @runtime_checkable
 class MemberExtractor(Protocol):
     async def extract_from_project(
-        self, project_dir: Path,
+        self,
+        project_dir: Path,
     ) -> tuple[ModuleMember, ...]: ...
 
     async def extract_from_dependency(
-        self, dep_name: str,
+        self,
+        dep_name: str,
     ) -> tuple[ModuleMember, ...]: ...

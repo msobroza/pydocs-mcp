@@ -16,6 +16,7 @@ composition over a pre-seeded DB): this file drives the WRITE path
 end-to-end with zero mocks — only the fixture files on disk. A regression
 anywhere on ``extraction → application → storage`` would surface here.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -119,6 +120,7 @@ def _build_service(db_path: Path) -> ProjectIndexer:
     # SQLite UoW factory so the strict from_dict gates in both stages
     # are satisfied (mirrors what ``__main__._run_indexing`` does).
     from tests._fakes import MockEmbedder
+
     pipeline = build_ingestion_pipeline(
         AppConfig.load(),
         embedder=MockEmbedder(),
@@ -156,7 +158,8 @@ async def _run_indexing(fixture_project: Path, db_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_e2e_project_indexing_persists_trees(
-    fixture_project: Path, db_path: Path,
+    fixture_project: Path,
+    db_path: Path,
 ) -> None:
     """Full write path: pipeline → reindex_package → document_trees rows.
 
@@ -178,14 +181,13 @@ async def test_e2e_project_indexing_persists_trees(
         assert root.kind is NodeKind.MODULE, (
             f"tree for {module_name!r} should be a MODULE root, got {root.kind}"
         )
-        assert root.content_hash, (
-            f"tree for {module_name!r} must carry a non-empty content_hash"
-        )
+        assert root.content_hash, f"tree for {module_name!r} must carry a non-empty content_hash"
 
 
 @pytest.mark.asyncio
 async def test_e2e_chunks_and_trees_share_package_name(
-    fixture_project: Path, db_path: Path,
+    fixture_project: Path,
+    db_path: Path,
 ) -> None:
     """Chunks + trees + members all get tagged with the same package id.
 
@@ -201,12 +203,8 @@ async def test_e2e_chunks_and_trees_share_package_name(
     member_store = SqliteModuleMemberRepository(provider=provider)
     tree_store = SqliteDocumentTreeStore(provider=provider)
 
-    chunks = await chunk_store.list(
-        filter={ChunkFilterField.PACKAGE.value: "__project__"}
-    )
-    members = await member_store.list(
-        filter={ModuleMemberFilterField.PACKAGE.value: "__project__"}
-    )
+    chunks = await chunk_store.list(filter={ChunkFilterField.PACKAGE.value: "__project__"})
+    members = await member_store.list(filter={ModuleMemberFilterField.PACKAGE.value: "__project__"})
     trees = await tree_store.load_all_in_package("__project__")
 
     assert chunks, "no chunks were persisted for __project__"
@@ -222,7 +220,8 @@ async def test_e2e_chunks_and_trees_share_package_name(
 
 @pytest.mark.asyncio
 async def test_e2e_python_module_produces_module_tree_with_function_child(
-    fixture_project: Path, db_path: Path,
+    fixture_project: Path,
+    db_path: Path,
 ) -> None:
     """The app.py source lands as a MODULE tree with a FUNCTION child.
 
@@ -247,14 +246,10 @@ async def test_e2e_python_module_produces_module_tree_with_function_child(
     # FUNCTION child for hi() is present with correct qualified_name.
     functions = [c for c in app_tree.children if c.kind is NodeKind.FUNCTION]
     names = {c.qualified_name for c in functions}
-    assert "src.app.hi" in names, (
-        f"expected src.app.hi in FUNCTION children; got {names}"
-    )
+    assert "src.app.hi" in names, f"expected src.app.hi in FUNCTION children; got {names}"
     # Every child should carry its own content_hash — used by incremental reindex.
     for child in app_tree.children:
-        assert child.content_hash, (
-            f"child {child.qualified_name!r} missing content_hash"
-        )
+        assert child.content_hash, f"child {child.qualified_name!r} missing content_hash"
 
     # CLASS child for Foo is present too (sanity — pins the tree shape).
     classes = [c for c in app_tree.children if c.kind is NodeKind.CLASS]
@@ -264,7 +259,8 @@ async def test_e2e_python_module_produces_module_tree_with_function_child(
 
 @pytest.mark.asyncio
 async def test_e2e_markdown_file_produces_module_tree_with_heading_children(
-    fixture_project: Path, db_path: Path,
+    fixture_project: Path,
+    db_path: Path,
 ) -> None:
     """README.md lands as a MODULE tree with MARKDOWN_HEADING children.
 
@@ -299,7 +295,8 @@ async def test_e2e_markdown_file_produces_module_tree_with_heading_children(
 
 @pytest.mark.asyncio
 async def test_e2e_get_tree_service_returns_saved_tree(
-    fixture_project: Path, db_path: Path,
+    fixture_project: Path,
+    db_path: Path,
 ) -> None:
     """TreeService.get_tree — the read path used by get_document_tree MCP.
 
@@ -311,6 +308,7 @@ async def test_e2e_get_tree_service_returns_saved_tree(
     await _run_indexing(fixture_project, db_path)
 
     from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
     service = TreeService(uow_factory=build_sqlite_uow_factory(db_path))
 
     tree = await service.get_tree("__project__", "src.app")

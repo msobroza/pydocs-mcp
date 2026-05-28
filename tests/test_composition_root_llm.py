@@ -7,6 +7,7 @@ Mirrors the embedder + uow_factory threading in ``build_retrieval_context``
 ``LlmTreeReasoningStep.from_dict`` can read ``context.llm_client`` instead
 of having to import ``build_llm_client`` itself.
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch

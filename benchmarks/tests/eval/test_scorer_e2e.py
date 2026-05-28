@@ -6,6 +6,7 @@ runner; if these fail too, the bug is in a metric. Walks the fixture
 directly, hand-crafts ``retrieved`` tuples for each task, and asserts
 the per-metric contribution one metric at a time.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,9 +27,11 @@ def _load_fixture_tasks() -> list[EvalTask]:
     Decouples this test from the on-disk JSON shape so future schema
     changes only touch the loader.
     """
+
     async def _collect() -> list[EvalTask]:
         dataset = RepoQADataset(fixture_path=_FIXTURE)
         return [t async for t in dataset.tasks()]
+
     return asyncio.run(_collect())
 
 
@@ -61,13 +64,15 @@ def test_scorer_oracle_retrieval_scores_one_per_task() -> None:
     # WHY: pin every metric individually to 1.0 on every fixture task with
     # the canonical "gold at rank 1" pattern. If any metric returns < 1.0
     # here, the bug is in that metric — not in the runner or aggregator.
-    scorer = Scorer(metrics=(
-        RecallAtK(k=1),
-        RecallAtK(k=5),
-        RecallAtK(k=10),
-        MRR(),
-        PassAt1Needle(),
-    ))
+    scorer = Scorer(
+        metrics=(
+            RecallAtK(k=1),
+            RecallAtK(k=5),
+            RecallAtK(k=10),
+            MRR(),
+            PassAt1Needle(),
+        )
+    )
     tasks = _load_fixture_tasks()
     assert len(tasks) == 5
 
@@ -84,13 +89,15 @@ def test_scorer_empty_retrieval_scores_zero_per_task() -> None:
     # WHY: empty retrieval = no signal; every metric must read 0.0. The
     # mirror of the oracle test, scoped to the Scorer rather than the
     # runner.
-    scorer = Scorer(metrics=(
-        RecallAtK(k=1),
-        RecallAtK(k=5),
-        RecallAtK(k=10),
-        MRR(),
-        PassAt1Needle(),
-    ))
+    scorer = Scorer(
+        metrics=(
+            RecallAtK(k=1),
+            RecallAtK(k=5),
+            RecallAtK(k=10),
+            MRR(),
+            PassAt1Needle(),
+        )
+    )
     tasks = _load_fixture_tasks()
 
     for task in tasks:
@@ -108,12 +115,14 @@ def test_scorer_gold_at_rank_3_pins_each_metric() -> None:
     # cutoff), recall@5 = 1 (gold inside cutoff), mrr = 1/3, pass@1 = 0
     # (top-1 is a decoy). Catches a metric that ignores its k slice or
     # swaps recall@k for recall@∞.
-    scorer = Scorer(metrics=(
-        RecallAtK(k=1),
-        RecallAtK(k=5),
-        MRR(),
-        PassAt1Needle(),
-    ))
+    scorer = Scorer(
+        metrics=(
+            RecallAtK(k=1),
+            RecallAtK(k=5),
+            MRR(),
+            PassAt1Needle(),
+        )
+    )
     tasks = _load_fixture_tasks()
 
     for task in tasks:

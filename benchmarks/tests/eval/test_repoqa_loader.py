@@ -1,5 +1,6 @@
 """RepoQADataset tests — fixture-only by default, urllib stubbed for the
 release path (no network in tests)."""
+
 from __future__ import annotations
 
 import gzip
@@ -87,12 +88,19 @@ async def test_release_download_path_uses_urllib(monkeypatch, tmp_path) -> None:
     fake_gz = gzip.compress(fake_payload)
 
     class _FakeResp:
-        def __enter__(self): return self
-        def __exit__(self, *exc): return None
-        def read(self): return fake_gz
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def read(self):
+            return fake_gz
 
     monkeypatch.setattr(
-        urllib.request, "urlopen", lambda url, timeout=None: _FakeResp(),
+        urllib.request,
+        "urlopen",
+        lambda url, timeout=None: _FakeResp(),
     )
 
     dataset = RepoQADataset(cache_dir=tmp_path)
@@ -102,7 +110,8 @@ async def test_release_download_path_uses_urllib(monkeypatch, tmp_path) -> None:
 
 
 async def test_release_download_corrupt_payload_does_not_clobber_cache(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     """A gzipped download that decompresses to non-JSON must NOT leave a
     'good-looking' cache file behind. Atomic-write contract:
@@ -110,12 +119,19 @@ async def test_release_download_corrupt_payload_does_not_clobber_cache(
     fake_gz = gzip.compress(b"not valid json{][")
 
     class _FakeResp:
-        def __enter__(self): return self
-        def __exit__(self, *exc): return None
-        def read(self): return fake_gz
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def read(self):
+            return fake_gz
 
     monkeypatch.setattr(
-        urllib.request, "urlopen", lambda url, timeout=None: _FakeResp(),
+        urllib.request,
+        "urlopen",
+        lambda url, timeout=None: _FakeResp(),
     )
 
     dataset = RepoQADataset(cache_dir=tmp_path)

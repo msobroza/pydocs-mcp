@@ -1,4 +1,5 @@
 """Tests for the typed MCP exception hierarchy (sub-PR #6 §5.1)."""
+
 from __future__ import annotations
 
 import pytest
@@ -47,7 +48,15 @@ def test_new_application_exports_are_importable() -> None:
         SearchInput,
         ServiceUnavailableError,
     )
-    assert all([
-        InvalidArgumentError, LookupInput, LookupService, MCPToolError,
-        NotFoundError, SearchInput, ServiceUnavailableError,
-    ])
+
+    assert all(
+        [
+            InvalidArgumentError,
+            LookupInput,
+            LookupService,
+            MCPToolError,
+            NotFoundError,
+            SearchInput,
+            ServiceUnavailableError,
+        ]
+    )

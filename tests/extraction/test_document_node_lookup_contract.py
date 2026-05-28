@@ -27,6 +27,7 @@ If LookupService ever needs a new attribute/method on DocumentNode, add
 it here first; that forces the contract to evolve deliberately rather
 than via silent code drift.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -53,7 +54,8 @@ class DocumentNodeUsedByLookupService(Protocol):
 
     def to_pageindex_json(self) -> dict[str, Any]: ...
     def find_node_by_qualified_name(
-        self, target: str,
+        self,
+        target: str,
     ) -> DocumentNodeUsedByLookupService | None: ...
 
 

@@ -9,6 +9,7 @@ backward-compat — every needle is yielded, exactly as before).
 Hermetic: backed by ``repoqa_mini.json`` (2 repos with multiple needles
 each so stratification is observable), no network calls.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

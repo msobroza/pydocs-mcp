@@ -3,6 +3,7 @@ synthetic project must surface a target symbol via the shipped chunk
 pipeline. Also asserts teardown removes the temp SQLite file (so the
 runner's per-system cleanup contract holds).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,10 +39,7 @@ async def test_index_then_search_returns_matching_chunk(tmp_path: Path) -> None:
     # WHY: the chunker tags the function chunk's title with the function
     # signature ("def widget_helper()") so a hit appears in qualified_name,
     # title metadata, or the chunk body itself — accept any of the three.
-    haystack = " ".join(
-        " ".join(filter(None, [it.qualified_name or "", it.text]))
-        for it in items
-    )
+    haystack = " ".join(" ".join(filter(None, [it.qualified_name or "", it.text])) for it in items)
     assert "widget_helper" in haystack
 
 

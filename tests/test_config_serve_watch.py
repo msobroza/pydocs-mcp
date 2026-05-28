@@ -1,4 +1,5 @@
 """AC-8: ``serve.watch.*`` pydantic sub-model on ``AppConfig``."""
+
 from __future__ import annotations
 
 import pytest

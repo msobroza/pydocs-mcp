@@ -1,4 +1,5 @@
 """Extended tests for deps.py — covers regex fallback and exception paths."""
+
 import os
 from unittest.mock import patch
 
@@ -18,12 +19,12 @@ class TestParseTomlRegexFallback:
     def test_regex_fallback_parses_deps(self, tmp_path):
         toml_file = tmp_path / "pyproject.toml"
         toml_file.write_text(
-            '[project]\n'
+            "[project]\n"
             'name = "myproject"\n'
-            'dependencies = [\n'
+            "dependencies = [\n"
             '    "requests>=2.0",\n'
             '    "click",\n'
-            ']\n'
+            "]\n"
         )
         # Force the regex fallback by making tomllib import fail
         with patch.dict("sys.modules", {"tomllib": None}):
@@ -34,9 +35,7 @@ class TestParseTomlRegexFallback:
 
     def test_regex_fallback_no_dependencies(self, tmp_path):
         toml_file = tmp_path / "pyproject.toml"
-        toml_file.write_text(
-            '[project]\nname = "myproject"\n'
-        )
+        toml_file.write_text('[project]\nname = "myproject"\n')
         with patch.dict("sys.modules", {"tomllib": None}):
             with patch("builtins.__import__", side_effect=_import_without_tomllib):
                 result = parse_pyproject_dependencies(str(toml_file))
@@ -56,12 +55,7 @@ class TestParseRequirementsEdge:
 
     def test_skips_flag_lines(self, tmp_path):
         req_file = tmp_path / "requirements.txt"
-        req_file.write_text(
-            "-r base.txt\n"
-            "-c constraints.txt\n"
-            "-e ./local-pkg\n"
-            "requests\n"
-        )
+        req_file.write_text("-r base.txt\n-c constraints.txt\n-e ./local-pkg\nrequests\n")
         result = parse_requirements_file(str(req_file))
         assert result == ["requests"]
 
@@ -91,4 +85,5 @@ def _import_without_tomllib(name, *args, **kwargs):
 
 
 import builtins
+
 original_import = builtins.__import__

@@ -1,6 +1,7 @@
 def test_license_file_exists() -> None:
     """P0-1: LICENSE file at the repo root carries the MIT text."""
     from pathlib import Path
+
     root = Path(__file__).resolve().parents[1]
     license_path = root / "LICENSE"
     assert license_path.is_file(), "LICENSE file must exist at repo root (P0-1)"
@@ -47,9 +48,7 @@ def test_pyproject_uses_pep639_license_form() -> None:
     # references it. LICENSE-third-party covers vendored attributions.
     assert "license-files" in project, "license-files entry required"
     license_files = project["license-files"]
-    assert "LICENSE" in license_files, (
-        f"LICENSE must be in license-files; got {license_files}"
-    )
+    assert "LICENSE" in license_files, f"LICENSE must be in license-files; got {license_files}"
 
 
 def test_py_typed_marker_exists() -> None:
@@ -159,8 +158,7 @@ def test_dev_deps_not_in_user_facing_extras() -> None:
     if "dev" in extras:
         dev_extras_str = str(extras["dev"])
         assert "pytest" not in dev_extras_str, (
-            "dev deps must live in [dependency-groups], not "
-            "[project.optional-dependencies] (P1-5)"
+            "dev deps must live in [dependency-groups], not [project.optional-dependencies] (P1-5)"
         )
 
 
@@ -205,9 +203,7 @@ def test_mypy_config_present() -> None:
 
     root = Path(__file__).resolve().parents[1]
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert "mypy" in pyproject.get("tool", {}), (
-        "[tool.mypy] required (P1-3)"
-    )
+    assert "mypy" in pyproject.get("tool", {}), "[tool.mypy] required (P1-3)"
     mypy = pyproject["tool"]["mypy"]
     assert mypy["python_version"] == "3.11"
     files = mypy["files"]

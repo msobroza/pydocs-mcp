@@ -16,6 +16,7 @@ step that may run inside a ``ParallelStep`` branch must honour:
    ``TopKFilterStep`` inside a parallel branch observe an isolated
    per-branch copy of scratch instead of a shared one).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -89,10 +90,12 @@ async def test_top_k_filter_publish_to_does_not_mutate_input_scratch() -> None:
     """
     state = RetrieverState(
         query=SearchQuery(terms="x", max_results=10),
-        candidates=ChunkList(items=(
-            Chunk(text="a", id=1, relevance=0.9),
-            Chunk(text="b", id=2, relevance=0.7),
-        )),
+        candidates=ChunkList(
+            items=(
+                Chunk(text="a", id=1, relevance=0.9),
+                Chunk(text="b", id=2, relevance=0.7),
+            )
+        ),
         scratch={"pre.existing": "hi"},
     )
     step = TopKFilterStep(name="topk", k=2, publish_to="bm25.ranked")

@@ -1,4 +1,5 @@
 """TurboQuantUnitOfWork lifecycle + integrity (AC-5..AC-8)."""
+
 from pathlib import Path
 
 import numpy as np
@@ -37,7 +38,8 @@ async def test_rollback_discards_in_memory_adds(tmp_path: Path) -> None:
         await uow.commit()
     async with TurboQuantUnitOfWork(index_path=tq, dim=_DIM, bit_width=4) as uow:
         await uow.add_vectors(
-            [12, 13, 14], [_vec(1, 0, 0, 0) for _ in range(3)],
+            [12, 13, 14],
+            [_vec(1, 0, 0, 0) for _ in range(3)],
         )
         await uow.rollback()
         assert uow.size() == 2
@@ -46,7 +48,8 @@ async def test_rollback_discards_in_memory_adds(tmp_path: Path) -> None:
 async def test_multi_vector_input_raises_notimplementederror(tmp_path: Path) -> None:
     tq = tmp_path / "test.tq"
     multi: list[np.ndarray] = [
-        _vec(0.1, 0.2, 0.3, 0.4), _vec(0.5, 0.6, 0.7, 0.8),
+        _vec(0.1, 0.2, 0.3, 0.4),
+        _vec(0.5, 0.6, 0.7, 0.8),
     ]
     async with TurboQuantUnitOfWork(index_path=tq, dim=_DIM, bit_width=4) as uow:
         with pytest.raises(NotImplementedError, match="chunk_vectors"):

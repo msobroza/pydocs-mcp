@@ -11,6 +11,7 @@ A registered class is its own constructor: ``build(name, **kwargs)`` calls
 registry — eval plug-ins do not need the ``from_dict`` / ``BuildContext``
 recursion machinery, so we don't pay for it.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -54,9 +55,7 @@ class _Registry(Generic[T]):
         try:
             cls = self._items[name]
         except KeyError as exc:
-            raise KeyError(
-                f"unknown entry {name!r}; have {sorted(self._items)}"
-            ) from exc
+            raise KeyError(f"unknown entry {name!r}; have {sorted(self._items)}") from exc
         # WHY: plug-in constructors take plug-in-specific kwargs the generic
         # ``T`` can't capture — type safety is decorative here, runtime
         # registration is the real contract.

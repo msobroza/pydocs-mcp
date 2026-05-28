@@ -1,6 +1,7 @@
 """Always-available tracker: one JSONL file per run, one JSON line per
 event (spec §4.5). Zero deps — the run file is self-describing via an
 ``_event`` discriminator on every record."""
+
 from __future__ import annotations
 
 import json
@@ -53,9 +54,7 @@ class JsonlExperimentTracker:
         tags: Mapping[str, str],
     ) -> RunHandle:
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        path = self.output_dir / (
-            f"{system}_{config_name}_{_slug(dataset)}_{_utc_ts()}.jsonl"
-        )
+        path = self.output_dir / (f"{system}_{config_name}_{_slug(dataset)}_{_utc_ts()}.jsonl")
         fh = path.open("w", encoding="utf-8")
         _write(
             fh,

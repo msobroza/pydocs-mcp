@@ -1,4 +1,5 @@
 """Tests for recursive dependency resolution in deps.py."""
+
 import os
 import pytest
 from pydocs_mcp.deps import discover_declared_dependencies, list_dependency_manifest_files
@@ -9,25 +10,18 @@ def project_tree(tmp_path):
     """Project with deps spread across subdirectories."""
     # Root pyproject.toml
     (tmp_path / "pyproject.toml").write_text(
-        "[project]\n"
-        'dependencies = ["fastapi>=0.100", "uvicorn"]\n'
+        '[project]\ndependencies = ["fastapi>=0.100", "uvicorn"]\n'
     )
     # Nested sub-project
     api_dir = tmp_path / "services" / "api"
     api_dir.mkdir(parents=True)
     (api_dir / "pyproject.toml").write_text(
-        "[project]\n"
-        'dependencies = ["sqlalchemy>=2.0", "alembic"]\n'
+        '[project]\ndependencies = ["sqlalchemy>=2.0", "alembic"]\n'
     )
     # Nested requirements.txt
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
-    (scripts_dir / "requirements.txt").write_text(
-        "boto3>=1.20\n"
-        "click\n"
-        "# a comment\n"
-        "\n"
-    )
+    (scripts_dir / "requirements.txt").write_text("boto3>=1.20\nclick\n# a comment\n\n")
     # Should be ignored — inside .venv
     venv_dir = tmp_path / ".venv" / "lib" / "site-packages" / "fakepkg"
     venv_dir.mkdir(parents=True)
@@ -74,17 +68,12 @@ class TestResolveRecursive:
         assert discover_declared_dependencies(str(tmp_path)) == []
 
     def test_root_only_pyproject_still_works(self, tmp_path):
-        (tmp_path / "pyproject.toml").write_text(
-            "[project]\n"
-            'dependencies = ["httpx"]\n'
-        )
+        (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["httpx"]\n')
         assert discover_declared_dependencies(str(tmp_path)) == ["httpx"]
 
     def test_skips_comment_lines_in_requirements(self, tmp_path):
         (tmp_path / "requirements.txt").write_text(
-            "# This is a comment\n"
-            "requests>=2.0\n"
-            "-r other.txt\n"
+            "# This is a comment\nrequests>=2.0\n-r other.txt\n"
         )
         assert discover_declared_dependencies(str(tmp_path)) == ["requests"]
 
@@ -106,6 +95,4 @@ class TestFindDepFiles:
     def test_skips_node_modules_directory(self, project_tree):
         found = list_dependency_manifest_files(str(project_tree))
         # Check path components, not substring, to avoid matching the tmp dir name
-        assert not any(
-            "node_modules" in p.split(os.sep) for p in found
-        )
+        assert not any("node_modules" in p.split(os.sep) for p in found)

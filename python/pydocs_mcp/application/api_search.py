@@ -1,4 +1,5 @@
 """ApiSearch — thin wrapper around member_pipeline.run (spec §5.1)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

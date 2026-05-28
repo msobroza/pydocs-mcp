@@ -8,6 +8,7 @@ filters as :class:`ProjectFileDiscoverer`, because a wheel can ship
 bundled ``.git/`` / ``__pycache__`` / ``node_modules`` directories and
 they must never leak into the FTS index.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

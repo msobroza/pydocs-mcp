@@ -9,6 +9,7 @@ small alias map for cross-naming gaps (``torch`` vs ``/pytorch/pytorch``).
 Hermetic: no ``pydocs_mcp`` import — drives the metric with in-memory
 ``EvalTask`` fakes.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

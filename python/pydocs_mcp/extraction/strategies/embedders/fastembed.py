@@ -1,4 +1,5 @@
 """FastEmbedEmbedder — Embedder backed by fastembed.TextEmbedding."""
+
 from __future__ import annotations
 
 import asyncio
@@ -18,6 +19,7 @@ class FastEmbedEmbedder:
     Zero-copy from FastEmbed's TextEmbedding.embed() yields straight
     through to our Embedding type — both are np.ndarray (1D, float32).
     """
+
     model_name: str = "BAAI/bge-small-en-v1.5"
     dim: int = 384
     _model: TextEmbedding = field(init=False, repr=False)
@@ -33,7 +35,8 @@ class FastEmbedEmbedder:
         return np.asarray(results[0], dtype=np.float32)
 
     async def embed_chunks(
-        self, texts: Sequence[str],
+        self,
+        texts: Sequence[str],
     ) -> tuple[Embedding, ...]:
         if not texts:
             return ()

@@ -1,4 +1,5 @@
 """Runtime config — pydantic-settings + YAML source layering (spec §5.9)."""
+
 from __future__ import annotations
 
 import hashlib
@@ -43,7 +44,8 @@ from pydocs_mcp.retrieval.serialization import BuildContext
 # instantiates the settings. Scoped to a ContextVar so concurrent async
 # callers (tests in particular) don't clobber each other.
 _USER_CONFIG_PATH_OVERRIDE: ContextVar[Path | None] = ContextVar(
-    "_USER_CONFIG_PATH_OVERRIDE", default=None,
+    "_USER_CONFIG_PATH_OVERRIDE",
+    default=None,
 )
 
 # Cached resolution of the user-config path for the current ``AppConfig.load``
@@ -57,7 +59,8 @@ _USER_CONFIG_PATH_OVERRIDE: ContextVar[Path | None] = ContextVar(
 # couldn't tell "not cached yet" from "resolved to None".
 _UNSET: object = object()
 _RESOLVED_USER_CONFIG_PATH: ContextVar[Path | None | object] = ContextVar(
-    "_RESOLVED_USER_CONFIG_PATH", default=_UNSET,
+    "_RESOLVED_USER_CONFIG_PATH",
+    default=_UNSET,
 )
 
 
@@ -77,9 +80,7 @@ class PipelineRouteEntry(BaseModel):
     def _exactly_one_of_predicate_default(self) -> PipelineRouteEntry:
         has_predicate = self.predicate is not None
         if has_predicate and self.default:
-            raise ValueError(
-                "route entry must set exactly one of predicate or default; both set"
-            )
+            raise ValueError("route entry must set exactly one of predicate or default; both set")
         if not has_predicate and not self.default:
             raise ValueError(
                 "route entry must set exactly one of predicate or default; neither set"
@@ -287,7 +288,7 @@ class ServeConfig(BaseModel):
 _KNOWN_MODEL_DIMS: dict[str, int] = {
     # FastEmbed
     "BAAI/bge-small-en-v1.5": 384,
-    "BAAI/bge-base-en-v1.5":  768,
+    "BAAI/bge-base-en-v1.5": 768,
     "BAAI/bge-large-en-v1.5": 1024,
     "sentence-transformers/all-MiniLM-L6-v2": 384,
     # OpenAI (text-embedding-3-* default dims; can be reduced via .dimensions)
@@ -306,15 +307,15 @@ class EmbeddingConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider:   Literal["fastembed", "openai"] = "fastembed"
+    provider: Literal["fastembed", "openai"] = "fastembed"
     model_name: str = "BAAI/bge-small-en-v1.5"
-    dim:        int = Field(default=384, ge=1)
+    dim: int = Field(default=384, ge=1)
     batch_size: int = Field(default=32, ge=1)
     # TurboQuant scalar-quantization bit width. 4 is the sweet spot per
     # turbovec README — ~16x compression with minimal recall loss on
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
     # 2 for max compression.
-    bit_width:  int = Field(default=4, ge=1, le=8)
+    bit_width: int = Field(default=4, ge=1, le=8)
 
     @field_validator("dim")
     @classmethod
@@ -363,12 +364,14 @@ class EmbeddingConfig(BaseModel):
         is required (``provider`` / ``bit_width`` are bounded enums /
         ints, ``model_name`` cannot legally contain a pipe).
         """
-        identity = "|".join([
-            self.provider,
-            self.model_name,
-            str(self.dim),
-            str(self.bit_width),
-        ])
+        identity = "|".join(
+            [
+                self.provider,
+                self.model_name,
+                str(self.dim),
+                str(self.bit_width),
+            ]
+        )
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
@@ -454,7 +457,9 @@ class AppConfig(BaseSettings):
     # delimiter is configured. The ``__`` (double underscore) separator
     # is the pydantic-settings convention.
     model_config = SettingsConfigDict(
-        env_prefix="PYDOCS_", env_nested_delimiter="__", extra="ignore",
+        env_prefix="PYDOCS_",
+        env_nested_delimiter="__",
+        extra="ignore",
     )
 
     @classmethod
@@ -569,7 +574,9 @@ def _shipped_default_config_path() -> Path:
     runs on every ``AppConfig.load`` call otherwise. The shipped defaults
     directory never changes at runtime, so the lookup is safely memoisable.
     """
-    return Path(str(importlib.resources.files("pydocs_mcp.defaults").joinpath("default_config.yaml")))
+    return Path(
+        str(importlib.resources.files("pydocs_mcp.defaults").joinpath("default_config.yaml"))
+    )
 
 
 @cache
@@ -611,18 +618,26 @@ def _resolved_user_config_path() -> Path | None:
 
 
 def build_chunk_pipeline_from_config(
-    config: AppConfig, context: BuildContext,
+    config: AppConfig,
+    context: BuildContext,
 ) -> CodeRetrieverPipeline:
     return _build_handler_pipeline(
-        "chunk", config.pipelines["chunk"], context, config._user_config_path(),
+        "chunk",
+        config.pipelines["chunk"],
+        context,
+        config._user_config_path(),
     )
 
 
 def build_member_pipeline_from_config(
-    config: AppConfig, context: BuildContext,
+    config: AppConfig,
+    context: BuildContext,
 ) -> CodeRetrieverPipeline:
     return _build_handler_pipeline(
-        "member", config.pipelines["member"], context, config._user_config_path(),
+        "member",
+        config.pipelines["member"],
+        context,
+        config._user_config_path(),
     )
 
 
@@ -655,7 +670,8 @@ def _path_is_inside(candidate: Path, roots: tuple[Path, ...]) -> bool:
 
 
 def _resolve_pipeline_path(
-    pipeline_path: Path, user_config_path: Path | None = None,
+    pipeline_path: Path,
+    user_config_path: Path | None = None,
 ) -> Path:
     """Resolve a YAML ``pipeline_path`` against the user/shipped roots.
 
@@ -694,14 +710,12 @@ def _resolve_pipeline_path(
             if user_local is not None and user_local.exists():
                 candidate = user_local
             else:
-                candidate = Path(str(importlib.resources.files("pydocs_mcp").joinpath(
-                    str(pipeline_path)
-                ))).resolve()
+                candidate = Path(
+                    str(importlib.resources.files("pydocs_mcp").joinpath(str(pipeline_path)))
+                ).resolve()
         else:
             base = (
-                user_config_path.resolve().parent
-                if user_config_path is not None
-                else pipelines_dir
+                user_config_path.resolve().parent if user_config_path is not None else pipelines_dir
             )
             candidate = (base / pipeline_path).resolve()
         resolved = candidate

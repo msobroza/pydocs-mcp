@@ -11,6 +11,7 @@ These tests fake the pipeline directly: a stub ``run()`` returns a
 ``RetrieverState`` with both ``candidates`` and ``result`` slots set, so
 the slot-preference logic is exercised without an index round-trip.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -37,9 +38,7 @@ def _chunk(text: str) -> Chunk:
     return Chunk(text=text, metadata={"source_path": f"{text}.py"})
 
 
-def _make_state(
-    *, candidates: ChunkList | None, result: ChunkList | None
-) -> object:
+def _make_state(*, candidates: ChunkList | None, result: ChunkList | None) -> object:
     from pydocs_mcp.models import SearchQuery
     from pydocs_mcp.retrieval.pipeline import RetrieverState
 
@@ -58,9 +57,7 @@ async def test_default_prefers_candidates_even_when_result_set() -> None:
     candidates = ChunkList(items=(_chunk("a"), _chunk("b"), _chunk("c")))
     result = ChunkList(items=(_chunk("composite"),))
     system = PydocsMcpSystem()
-    system._pipeline = _FakePipeline(
-        _make_state(candidates=candidates, result=result)
-    )
+    system._pipeline = _FakePipeline(_make_state(candidates=candidates, result=result))
 
     items = await system.search("q", limit=10)
 
@@ -75,9 +72,7 @@ async def test_composite_mode_prefers_result_over_candidates() -> None:
     candidates = ChunkList(items=(_chunk("a"), _chunk("b"), _chunk("c")))
     result = ChunkList(items=(_chunk("composite"),))
     system = PydocsMcpSystem(composite_mode=True)
-    system._pipeline = _FakePipeline(
-        _make_state(candidates=candidates, result=result)
-    )
+    system._pipeline = _FakePipeline(_make_state(candidates=candidates, result=result))
 
     items = await system.search("q", limit=10)
 
@@ -92,9 +87,7 @@ async def test_composite_mode_falls_back_to_candidates_when_result_empty() -> No
     # back to the 3-item candidates rather than returning nothing.
     candidates = ChunkList(items=(_chunk("a"), _chunk("b"), _chunk("c")))
     system = PydocsMcpSystem(composite_mode=True)
-    system._pipeline = _FakePipeline(
-        _make_state(candidates=candidates, result=None)
-    )
+    system._pipeline = _FakePipeline(_make_state(candidates=candidates, result=None))
 
     items = await system.search("q", limit=10)
 

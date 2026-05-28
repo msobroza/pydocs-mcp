@@ -9,6 +9,7 @@ These tests exercise the real SQLite + TurboQuant composite UoW so the
 diff covers both backends in one pass, plus a NULL-hash legacy seed that
 proves self-healing on the first reindex per package.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -65,14 +66,15 @@ async def test_reindex_unchanged_chunks_keep_their_ids_and_vectors(
     tq_path = tmp_path / "x.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
     chunks = (
-        Chunk(text="a", metadata={"package": "demo", "title": "a"},
-              embedding=_vec(0.1)),
-        Chunk(text="b", metadata={"package": "demo", "title": "b"},
-              embedding=_vec(0.2)),
+        Chunk(text="a", metadata={"package": "demo", "title": "a"}, embedding=_vec(0.1)),
+        Chunk(text="b", metadata={"package": "demo", "title": "b"}, embedding=_vec(0.2)),
     )
     await svc.reindex_package(_pkg("demo"), chunks, ())
 
@@ -113,16 +115,19 @@ async def test_reindex_partial_diff_inserts_added_deletes_removed(
     tq_path = tmp_path / "x.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
     chunks_first = (
-        Chunk(text="keep-body",
-              metadata={"package": "demo", "title": "keep"},
-              embedding=_vec(0.1)),
-        Chunk(text="goner-body",
-              metadata={"package": "demo", "title": "will-be-removed"},
-              embedding=_vec(0.2)),
+        Chunk(text="keep-body", metadata={"package": "demo", "title": "keep"}, embedding=_vec(0.1)),
+        Chunk(
+            text="goner-body",
+            metadata={"package": "demo", "title": "will-be-removed"},
+            embedding=_vec(0.2),
+        ),
     )
     await svc.reindex_package(_pkg("demo"), chunks_first, ())
 
@@ -136,12 +141,10 @@ async def test_reindex_partial_diff_inserts_added_deletes_removed(
 
     # Second batch: same "keep" chunk + new "added" chunk.
     chunks_second = (
-        Chunk(text="keep-body",
-              metadata={"package": "demo", "title": "keep"},
-              embedding=_vec(0.1)),
-        Chunk(text="added-body",
-              metadata={"package": "demo", "title": "added"},
-              embedding=_vec(0.3)),
+        Chunk(text="keep-body", metadata={"package": "demo", "title": "keep"}, embedding=_vec(0.1)),
+        Chunk(
+            text="added-body", metadata={"package": "demo", "title": "added"}, embedding=_vec(0.3)
+        ),
     )
     await svc.reindex_package(_pkg("demo"), chunks_second, ())
 
@@ -157,9 +160,7 @@ async def test_reindex_partial_diff_inserts_added_deletes_removed(
     titles_after = sorted(r.metadata.get("title", "") for r in rows_after)
     assert titles_after == ["added", "keep"]
     # Keeper's row id is unchanged — proof the diff didn't delete-and-recreate it.
-    keep_chunk_after = next(
-        r for r in rows_after if r.metadata.get("title") == "keep"
-    )
+    keep_chunk_after = next(r for r in rows_after if r.metadata.get("title") == "keep")
     assert keep_chunk_after.id == keep_id_before
     # Vector count tracks the new chunk count exactly: removed wiped, added added.
     assert tq_size == 2
@@ -234,16 +235,23 @@ async def test_remove_package_wipes_vectors_atomically(tmp_path: Path) -> None:
     tq_path = tmp_path / "x.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
-    await svc.reindex_package(_pkg("pkg-a"), (
-        Chunk(text="a1", metadata={"package": "pkg-a"}, embedding=_vec(0.1)),
-        Chunk(text="a2", metadata={"package": "pkg-a"}, embedding=_vec(0.2)),
-    ), ())
-    await svc.reindex_package(_pkg("pkg-b"), (
-        Chunk(text="b1", metadata={"package": "pkg-b"}, embedding=_vec(0.3)),
-    ), ())
+    await svc.reindex_package(
+        _pkg("pkg-a"),
+        (
+            Chunk(text="a1", metadata={"package": "pkg-a"}, embedding=_vec(0.1)),
+            Chunk(text="a2", metadata={"package": "pkg-a"}, embedding=_vec(0.2)),
+        ),
+        (),
+    )
+    await svc.reindex_package(
+        _pkg("pkg-b"), (Chunk(text="b1", metadata={"package": "pkg-b"}, embedding=_vec(0.3)),), ()
+    )
 
     async with factory() as uow:
         assert uow.vectors.size() == 3  # 2 + 1
@@ -267,13 +275,20 @@ async def test_clear_all_wipes_vectors_atomically(tmp_path: Path) -> None:
     tq_path = tmp_path / "x.tq"
     open_index_database(db_path).close()
     factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path, tq_path=tq_path, dim=_DIM, bit_width=_BW,
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
     )
     svc = IndexingService(uow_factory=factory)
-    await svc.reindex_package(_pkg("demo"), (
-        Chunk(text="a", metadata={"package": "demo"}, embedding=_vec(0.1)),
-        Chunk(text="b", metadata={"package": "demo"}, embedding=_vec(0.2)),
-    ), ())
+    await svc.reindex_package(
+        _pkg("demo"),
+        (
+            Chunk(text="a", metadata={"package": "demo"}, embedding=_vec(0.1)),
+            Chunk(text="b", metadata={"package": "demo"}, embedding=_vec(0.2)),
+        ),
+        (),
+    )
 
     async with factory() as uow:
         assert uow.vectors.size() == 2

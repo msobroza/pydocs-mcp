@@ -1,4 +1,5 @@
 """Tests for database operations (db.py)."""
+
 import sqlite3
 from pathlib import Path
 
@@ -24,16 +25,38 @@ def db(tmp_path):
 def db_with_package(db):
     db.execute(
         "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
-        ("testpkg", "2.0", "A test package.", "https://example.com", '["requests"]', "testhash", "dependency"),
+        (
+            "testpkg",
+            "2.0",
+            "A test package.",
+            "https://example.com",
+            '["requests"]',
+            "testhash",
+            "dependency",
+        ),
     )
     db.execute(
         "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
-        ("testpkg", "Overview", "This is the overview of testpkg documentation.", "dependency_doc_file"),
+        (
+            "testpkg",
+            "Overview",
+            "This is the overview of testpkg documentation.",
+            "dependency_doc_file",
+        ),
     )
     db.execute(
         "INSERT INTO module_members(package,module,kind,name,signature,docstring,parameters,return_annotation) "
         "VALUES(?,?,?,?,?,?,?,?)",
-        ("testpkg", "testpkg.core", "function", "compute", "(x: int)", "Compute something.", "[]", "int"),
+        (
+            "testpkg",
+            "testpkg.core",
+            "function",
+            "compute",
+            "(x: int)",
+            "Compute something.",
+            "[]",
+            "int",
+        ),
     )
     db.commit()
     return db
@@ -105,10 +128,7 @@ class TestOpenDb:
 
     def test_indexes_created(self, db):
         indexes = {
-            r[0]
-            for r in db.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            ).fetchall()
+            r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
         }
         assert "ix_chunks_package" in indexes
         assert "ix_module_members_package" in indexes
@@ -136,23 +156,28 @@ class TestClearPkg:
     def test_removes_target_package(self, db_with_package):
         remove_package(db_with_package, "testpkg")
         db_with_package.commit()
-        assert db_with_package.execute(
-            "SELECT * FROM packages WHERE name='testpkg'"
-        ).fetchone() is None
+        assert (
+            db_with_package.execute("SELECT * FROM packages WHERE name='testpkg'").fetchone()
+            is None
+        )
 
     def test_removes_chunks_for_package(self, db_with_package):
         remove_package(db_with_package, "testpkg")
         db_with_package.commit()
-        assert db_with_package.execute(
-            "SELECT * FROM chunks WHERE package='testpkg'"
-        ).fetchone() is None
+        assert (
+            db_with_package.execute("SELECT * FROM chunks WHERE package='testpkg'").fetchone()
+            is None
+        )
 
     def test_removes_symbols_for_package(self, db_with_package):
         remove_package(db_with_package, "testpkg")
         db_with_package.commit()
-        assert db_with_package.execute(
-            "SELECT * FROM module_members WHERE package='testpkg'"
-        ).fetchone() is None
+        assert (
+            db_with_package.execute(
+                "SELECT * FROM module_members WHERE package='testpkg'"
+            ).fetchone()
+            is None
+        )
 
     def test_leaves_other_packages(self, db_with_package):
         db_with_package.execute(
@@ -163,9 +188,10 @@ class TestClearPkg:
         db_with_package.commit()
         remove_package(db_with_package, "testpkg")
         db_with_package.commit()
-        assert db_with_package.execute(
-            "SELECT * FROM packages WHERE name='other'"
-        ).fetchone() is not None
+        assert (
+            db_with_package.execute("SELECT * FROM packages WHERE name='other'").fetchone()
+            is not None
+        )
 
     def test_removes_document_trees_for_package(self, db_with_package):
         """remove_package must clear document_trees rows for that package —
@@ -178,9 +204,12 @@ class TestClearPkg:
         db_with_package.commit()
         remove_package(db_with_package, "testpkg")
         db_with_package.commit()
-        assert db_with_package.execute(
-            "SELECT * FROM document_trees WHERE package='testpkg'"
-        ).fetchone() is None
+        assert (
+            db_with_package.execute(
+                "SELECT * FROM document_trees WHERE package='testpkg'"
+            ).fetchone()
+            is None
+        )
 
     def test_leaves_other_packages_document_trees(self, db_with_package):
         """Cross-package isolation: remove_package('testpkg') leaves other
@@ -196,9 +225,10 @@ class TestClearPkg:
         db_with_package.commit()
         remove_package(db_with_package, "testpkg")
         db_with_package.commit()
-        assert db_with_package.execute(
-            "SELECT * FROM document_trees WHERE package='other'"
-        ).fetchone() is not None
+        assert (
+            db_with_package.execute("SELECT * FROM document_trees WHERE package='other'").fetchone()
+            is not None
+        )
 
 
 class TestClearAll:
@@ -217,9 +247,7 @@ class TestClearAll:
         # document_trees must be cleared too (sub-PR #5 §12.2) — otherwise
         # a fresh re-index reads stale tree payloads for the cleared
         # packages.
-        assert db_with_package.execute(
-            "SELECT count(*) FROM document_trees"
-        ).fetchone()[0] == 0
+        assert db_with_package.execute("SELECT count(*) FROM document_trees").fetchone()[0] == 0
 
 
 class TestRebuildFts:
@@ -236,7 +264,12 @@ class TestRebuildFts:
     def test_fts_reflects_new_data(self, db):
         db.execute(
             "INSERT INTO chunks(package,title,text,origin) VALUES(?,?,?,?)",
-            ("pkg", "Title", "unique searchable content for testing purposes", "dependency_doc_file"),
+            (
+                "pkg",
+                "Title",
+                "unique searchable content for testing purposes",
+                "dependency_doc_file",
+            ),
         )
         db.commit()
         rebuild_fulltext_index(db)
@@ -279,11 +312,10 @@ async def test_build_connection_provider_opens_valid_db(tmp_path):
 
     provider = build_connection_provider(db_file)
     import sqlite3
+
     async with provider.acquire() as c:
         assert c.row_factory is sqlite3.Row
-        tables = {r["name"] for r in c.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
+        tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"packages", "chunks", "module_members"}.issubset(tables)
 
 
@@ -373,25 +405,29 @@ class TestSchemaV3:
 
             # Old rows must survive.
             pkg = migrated.execute(
-                "SELECT name, version FROM packages WHERE name=?", ("legacy_pkg",),
+                "SELECT name, version FROM packages WHERE name=?",
+                ("legacy_pkg",),
             ).fetchone()
             assert pkg is not None
             assert pkg["version"] == "1.0"
 
             chunk = migrated.execute(
-                "SELECT title, text FROM chunks WHERE package=?", ("legacy_pkg",),
+                "SELECT title, text FROM chunks WHERE package=?",
+                ("legacy_pkg",),
             ).fetchone()
             assert chunk is not None
             assert chunk["title"] == "Title"
 
             # New columns must be queryable (NULL for rows written pre-migration).
             pkg_local = migrated.execute(
-                "SELECT local_path FROM packages WHERE name=?", ("legacy_pkg",),
+                "SELECT local_path FROM packages WHERE name=?",
+                ("legacy_pkg",),
             ).fetchone()
             assert pkg_local["local_path"] is None
 
             chunk_hash = migrated.execute(
-                "SELECT content_hash FROM chunks WHERE package=?", ("legacy_pkg",),
+                "SELECT content_hash FROM chunks WHERE package=?",
+                ("legacy_pkg",),
             ).fetchone()
             assert chunk_hash["content_hash"] is None
 
@@ -405,8 +441,7 @@ class TestSchemaV3:
             # migrated DB would scan chunks for every module filter
             # until the next destructive rebuild.
             idx = migrated.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='index' AND name='ix_chunks_module'"
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='ix_chunks_module'"
             ).fetchone()
             assert idx is not None, (
                 "v2->v3 migration must create ix_chunks_module so module "
@@ -416,7 +451,8 @@ class TestSchemaV3:
             migrated.close()
 
     def test_v3_main_shape_db_gets_document_trees_and_columns_on_open(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """A v3-stamped DB written by an earlier code-line that lacked
         document_trees + content_hash + local_path (rebase artefact between
@@ -458,23 +494,19 @@ class TestSchemaV3:
         conn = open_index_database(db)
         try:
             # New table exists.
-            assert conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='document_trees'"
-            ).fetchone() is not None
+            assert (
+                conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='document_trees'"
+                ).fetchone()
+                is not None
+            )
             # New columns exist.
-            chunk_cols = {r[1] for r in conn.execute(
-                "PRAGMA table_info(chunks)"
-            ).fetchall()}
+            chunk_cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
             assert "content_hash" in chunk_cols
-            pkg_cols = {r[1] for r in conn.execute(
-                "PRAGMA table_info(packages)"
-            ).fetchall()}
+            pkg_cols = {r[1] for r in conn.execute("PRAGMA table_info(packages)").fetchall()}
             assert "local_path" in pkg_cols
             # Existing row preserved.
-            row = conn.execute(
-                "SELECT name FROM packages WHERE name='preserved'"
-            ).fetchone()
+            row = conn.execute("SELECT name FROM packages WHERE name='preserved'").fetchone()
             assert row is not None
         finally:
             conn.close()
@@ -490,13 +522,9 @@ class TestSchemaV3:
 
         conn = open_index_database(db)
         try:
-            chunk_cols = [r[1] for r in conn.execute(
-                "PRAGMA table_info(chunks)"
-            ).fetchall()]
+            chunk_cols = [r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()]
             assert chunk_cols.count("content_hash") == 1
-            pkg_cols = [r[1] for r in conn.execute(
-                "PRAGMA table_info(packages)"
-            ).fetchall()]
+            pkg_cols = [r[1] for r in conn.execute("PRAGMA table_info(packages)").fetchall()]
             assert pkg_cols.count("local_path") == 1
         finally:
             conn.close()
@@ -520,16 +548,20 @@ def test_node_references_table_created_on_fresh_db(tmp_path):
     conn = open_index_database(db)
     try:
         # PRAGMA table_info validates column shape.
-        cols = [r["name"] for r in conn.execute(
-            "PRAGMA table_info(node_references)").fetchall()]
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(node_references)").fetchall()]
         assert cols == [
-            "from_package", "from_node_id", "to_name", "to_node_id", "kind",
+            "from_package",
+            "from_node_id",
+            "to_name",
+            "to_node_id",
+            "kind",
         ]
         # 3 secondary indices.
         idx = {
-            r["name"] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' "
-                "AND tbl_name='node_references'").fetchall()
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='node_references'"
+            ).fetchall()
         }
         assert "ix_refs_from" in idx
         assert "ix_refs_to_name" in idx
@@ -543,6 +575,7 @@ def test_v3_to_v4_migration_preserves_existing_rows(tmp_path):
     rows survive the bump. Verifies spec Decision 6.
     """
     import sqlite3
+
     db = tmp_path / "x.db"
     # Hand-craft a v3 DB stamped at user_version=3 with one row in each table.
     conn = sqlite3.connect(str(db))
@@ -589,16 +622,13 @@ def test_v3_to_v4_migration_preserves_existing_rows(tmp_path):
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         # The package row survives.
-        row = conn.execute(
-            "SELECT name FROM packages WHERE name='pkg'").fetchone()
+        row = conn.execute("SELECT name FROM packages WHERE name='pkg'").fetchone()
         assert row is not None
         # The chunk row survives.
-        cnt = conn.execute(
-            "SELECT COUNT(*) AS c FROM chunks WHERE package='pkg'").fetchone()["c"]
+        cnt = conn.execute("SELECT COUNT(*) AS c FROM chunks WHERE package='pkg'").fetchone()["c"]
         assert cnt == 1
         # node_references exists and is empty.
-        cnt = conn.execute(
-            "SELECT COUNT(*) AS c FROM node_references").fetchone()["c"]
+        cnt = conn.execute("SELECT COUNT(*) AS c FROM node_references").fetchone()["c"]
         assert cnt == 0
     finally:
         conn.close()
@@ -620,8 +650,8 @@ def test_v4_open_open_open_is_idempotent(tmp_path):
         # indices (filtering out the implicit ``sqlite_autoindex_*`` index
         # SQLite creates for the composite PRIMARY KEY).
         tbl = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name='node_references'").fetchall()
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='node_references'"
+        ).fetchall()
         assert len(tbl) == 1
         idx = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' "
@@ -636,6 +666,7 @@ def test_drift_recovery_recreates_missing_node_references(tmp_path):
     """AC #3: opening a v4-stamped DB with the node_references table
     manually DROPPED triggers the additive sweep on next open."""
     import sqlite3
+
     db = tmp_path / "x.db"
     open_index_database(db).close()  # creates v4 schema
 
@@ -649,8 +680,8 @@ def test_drift_recovery_recreates_missing_node_references(tmp_path):
     conn = open_index_database(db)
     try:
         tbl = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name='node_references'").fetchall()
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='node_references'"
+        ).fetchall()
         assert len(tbl) == 1
     finally:
         conn.close()
@@ -660,6 +691,7 @@ def test_remove_package_clears_node_references(tmp_path):
     """AC #13: remove_package deletes node_references rows for that package."""
     import sqlite3
     from pydocs_mcp.db import remove_package
+
     db = tmp_path / "x.db"
     conn = open_index_database(db)
     try:
@@ -673,8 +705,7 @@ def test_remove_package_clears_node_references(tmp_path):
         )
         conn.commit()
         remove_package(conn, "pkg")
-        rows = conn.execute(
-            "SELECT from_package FROM node_references").fetchall()
+        rows = conn.execute("SELECT from_package FROM node_references").fetchall()
         assert [r["from_package"] for r in rows] == ["other_pkg"]
     finally:
         conn.close()
@@ -683,6 +714,7 @@ def test_remove_package_clears_node_references(tmp_path):
 def test_clear_all_packages_clears_node_references(tmp_path):
     """AC #14: clear_all_packages wipes node_references entirely."""
     from pydocs_mcp.db import clear_all_packages
+
     db = tmp_path / "x.db"
     conn = open_index_database(db)
     try:
@@ -692,8 +724,7 @@ def test_clear_all_packages_clears_node_references(tmp_path):
         )
         conn.commit()
         clear_all_packages(conn)
-        cnt = conn.execute(
-            "SELECT COUNT(*) AS c FROM node_references").fetchone()["c"]
+        cnt = conn.execute("SELECT COUNT(*) AS c FROM node_references").fetchone()["c"]
         assert cnt == 0
     finally:
         conn.close()

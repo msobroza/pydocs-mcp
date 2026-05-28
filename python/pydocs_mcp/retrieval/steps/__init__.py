@@ -28,6 +28,7 @@ Every step subclasses :class:`~pydocs_mcp.retrieval.pipeline.RetrieverStep`.
 The legacy ``PipelineStage`` Protocol re-export module (``base_stage.py``)
 went away in Task 9 alongside the Protocol itself.
 """
+
 from __future__ import annotations
 
 # Side-effect import: register the "sub_pipeline" YAML decoder so existing

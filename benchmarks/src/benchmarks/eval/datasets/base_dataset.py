@@ -6,6 +6,7 @@ Owns ``CorpusSource``, ``GoldAnswer``, ``EvalTask`` and the ``Dataset``
 through ``dataset_registry`` in ``serialization.py`` — the runner never
 imports the concretes directly.
 """
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping

@@ -10,6 +10,7 @@ value object — no legacy flat fields. These tests pin that each stage:
 The complementary high-level test for the post-commit-3 state shape
 lives in ``test_ingestion_state_bundles.py``.
 """
+
 from __future__ import annotations
 
 import sys
@@ -41,6 +42,7 @@ from pydocs_mcp.extraction.pipeline.stages import (
 # ----------------------------------------------------------------------
 # FileDiscoveryStage
 # ----------------------------------------------------------------------
+
 
 class _FakeProjectDiscoverer:
     def __init__(self, result):
@@ -80,6 +82,7 @@ async def test_file_discovery_writes_to_files_bundle(tmp_path: Path) -> None:
 # FileReadStage
 # ----------------------------------------------------------------------
 
+
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="POSIX-only path handling — Windows path-separator follow-up tracked",
@@ -105,6 +108,7 @@ async def test_file_read_writes_to_files_bundle(tmp_path: Path) -> None:
 # ContentHashStage
 # ----------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_content_hash_writes_to_files_bundle(tmp_path: Path) -> None:
     """ContentHashStage writes state.files.content_hash."""
@@ -125,6 +129,7 @@ async def test_content_hash_writes_to_files_bundle(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------
 # ChunkingStage
 # ----------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_chunking_writes_to_chunks_bundle(tmp_path: Path) -> None:
@@ -148,6 +153,7 @@ async def test_chunking_writes_to_chunks_bundle(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------
 # FlattenStage
 # ----------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_flatten_writes_to_chunks_bundle(tmp_path: Path) -> None:
@@ -180,10 +186,12 @@ async def test_flatten_writes_to_chunks_bundle(tmp_path: Path) -> None:
 # AssignChunkContentHashStage
 # ----------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_assign_chunk_content_hash_writes_to_chunks_bundle() -> None:
     """AssignChunkContentHashStage rewrites state.chunks.chunks[*].content_hash."""
     from pydocs_mcp.models import Chunk
+
     chunk = Chunk(
         text="text",
         metadata={"package": "pkg", "module": "m", "title": "t"},
@@ -201,6 +209,7 @@ async def test_assign_chunk_content_hash_writes_to_chunks_bundle() -> None:
 # ----------------------------------------------------------------------
 # PackageBuildStage — reads from state.files; writes state.package
 # ----------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_package_build_reads_from_files_bundle(tmp_path: Path) -> None:
@@ -221,6 +230,7 @@ async def test_package_build_reads_from_files_bundle(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------
 # ReferenceCaptureStage
 # ----------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_reference_capture_writes_to_refs_bundle(tmp_path: Path) -> None:

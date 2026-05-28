@@ -12,6 +12,7 @@ direction is one-way: ``models → pydocs_mcp.filters``. Because the new
 filters module has no internal imports, ``models`` can reach it at
 module load — no lazy-import workaround needed.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -66,8 +67,9 @@ class SparseEmbedding(Protocol):
     SCOPE for this PR — this Protocol exists only so the typing layer
     is ready for it.
     """
-    indices: np.ndarray   # uint32
-    values:  np.ndarray   # float32
+
+    indices: np.ndarray  # uint32
+    values: np.ndarray  # float32
 
 
 def is_multi_vector(emb: Embedding) -> bool:
@@ -81,39 +83,39 @@ def is_multi_vector(emb: Embedding) -> bool:
 
 
 class ChunkOrigin(StrEnum):
-    PROJECT_MODULE_DOC       = "project_module_doc"
-    PROJECT_CODE_SECTION     = "project_code_section"
-    DEPENDENCY_CODE_SECTION  = "dependency_code_section"
-    DEPENDENCY_DOC_FILE      = "dependency_doc_file"
-    DEPENDENCY_README        = "dependency_readme"
-    DEPENDENCY_MODULE_DOC    = "dependency_module_doc"
-    COMPOSITE_OUTPUT         = "composite_output"
+    PROJECT_MODULE_DOC = "project_module_doc"
+    PROJECT_CODE_SECTION = "project_code_section"
+    DEPENDENCY_CODE_SECTION = "dependency_code_section"
+    DEPENDENCY_DOC_FILE = "dependency_doc_file"
+    DEPENDENCY_README = "dependency_readme"
+    DEPENDENCY_MODULE_DOC = "dependency_module_doc"
+    COMPOSITE_OUTPUT = "composite_output"
     # sub-PR #5 §4.2: origins emitted by DocumentNode extraction strategies.
     # Tagged on Chunk.metadata["origin"] so retrievers / filters can route on
     # "where in the tree did this come from?". CODE_EXAMPLE nodes inherit the
     # origin of their parent (PYTHON_DEF or MARKDOWN_SECTION) — the NodeKind
     # carries the "is this a code example" distinction.
-    PYTHON_DEF               = "python_def"
-    MARKDOWN_SECTION         = "markdown_section"
-    NOTEBOOK_MARKDOWN_CELL   = "notebook_markdown_cell"
-    NOTEBOOK_CODE_CELL       = "notebook_code_cell"
+    PYTHON_DEF = "python_def"
+    MARKDOWN_SECTION = "markdown_section"
+    NOTEBOOK_MARKDOWN_CELL = "notebook_markdown_cell"
+    NOTEBOOK_CODE_CELL = "notebook_code_cell"
 
 
 class MemberKind(StrEnum):
     FUNCTION = "function"
-    CLASS    = "class"
-    METHOD   = "method"
+    CLASS = "class"
+    METHOD = "method"
 
 
 class PackageOrigin(StrEnum):
-    PROJECT    = "project"
+    PROJECT = "project"
     DEPENDENCY = "dependency"
 
 
 class SearchScope(StrEnum):
-    PROJECT_ONLY      = "project_only"
+    PROJECT_ONLY = "project_only"
     DEPENDENCIES_ONLY = "dependencies_only"
-    ALL               = "all"
+    ALL = "all"
 
 
 # ``MetadataFilterFormat`` is re-exported from :mod:`pydocs_mcp.filters` at
@@ -125,24 +127,25 @@ class SearchScope(StrEnum):
 class ChunkFilterField(StrEnum):
     """Canonical metadata keys for Chunk queries (keys in the `metadata` mapping,
     not dataclass fields). Used by MCP handlers to build pre_filter dicts."""
+
     PACKAGE = "package"
-    TITLE   = "title"
-    ORIGIN  = "origin"
-    MODULE  = "module"
-    SCOPE   = "scope"
+    TITLE = "title"
+    ORIGIN = "origin"
+    MODULE = "module"
+    SCOPE = "scope"
     # sub-PR #5 §4.5: filter keys for tree-derived chunks — SOURCE_PATH
     # selects by the originating file (reference-graph lookups), CONTENT_HASH
     # deduplicates identical chunks across re-indexes.
-    SOURCE_PATH  = "source_path"
+    SOURCE_PATH = "source_path"
     CONTENT_HASH = "content_hash"
 
 
 class ModuleMemberFilterField(StrEnum):
     PACKAGE = "package"
-    MODULE  = "module"
-    NAME    = "name"
-    KIND    = "kind"
-    SCOPE   = "scope"   # added by sub-PR #6 — matches ChunkFilterField.SCOPE for unified queries
+    MODULE = "module"
+    NAME = "name"
+    KIND = "kind"
+    SCOPE = "scope"  # added by sub-PR #6 — matches ChunkFilterField.SCOPE for unified queries
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +167,7 @@ class EmbeddingProvenance:
     an optional field alongside the legacy ``embedding_model`` /
     ``content_hash`` fields, which existing callers still set directly.
     """
+
     model_name: str
     content_hash: str
 
@@ -190,7 +194,10 @@ class Package:
 
 
 def compute_chunk_content_hash(
-    package: str, module: str, title: str, text: str,
+    package: str,
+    module: str,
+    title: str,
+    text: str,
     pipeline_hash: str = "",
 ) -> str:
     """SHA-256 hex digest of the null-separated chunk-identity tuple.
@@ -207,8 +214,7 @@ def compute_chunk_content_hash(
     re-embeds via the existing add path.
     """
     return hashlib.sha256(
-        f"{package}\0{module}\0{title}\0{text}\0{pipeline_hash}"
-        .encode(),
+        f"{package}\0{module}\0{title}\0{text}\0{pipeline_hash}".encode(),
     ).hexdigest()
 
 
@@ -223,6 +229,7 @@ class RetrievalEnrichment:
     next to the legacy flat ``relevance`` / ``retriever_name`` fields so
     existing retrieval steps keep working unchanged.
     """
+
     relevance: float
     retriever_name: str
 
@@ -237,6 +244,7 @@ class Chunk:
     Retrieval-time fields (relevance, retriever_name) are None until a
     retriever populates them. The same information is exposed in a
     grouped form via :attr:`enrichment` (see S17)."""
+
     kind: ClassVar[str] = "chunk"
     text: str
     id: int | None = None
@@ -269,7 +277,8 @@ class Chunk:
             # output, ``bm25_scorer`` re-wrapping). New test code should
             # prefer ``Chunk.from_test_inputs(...)``.
             object.__setattr__(
-                self, "content_hash",
+                self,
+                "content_hash",
                 compute_chunk_content_hash(
                     package=str(self.metadata.get("package", "")),
                     module=str(self.metadata.get("module", "")),
@@ -346,6 +355,7 @@ class ModuleMember:
     return_annotation, parameters) live in metadata. The Rust parser produces
     a typed ParsedMember (see _fallback.py / src/lib.rs); the indexer
     converts into this form at the boundary."""
+
     kind: ClassVar[str] = "module_member"
     id: int | None = None
     relevance: float | None = None
@@ -384,6 +394,7 @@ class SearchQuery:
     imports, so the registry is reachable at module load — no
     lazy-import workaround needed).
     """
+
     terms: str
     max_results: int = 8
     pre_filter: Mapping[str, Any] | None = None
@@ -421,6 +432,7 @@ class SearchQuery:
 class SearchResponse:
     """Pipeline-runner output: the typed result plus its originating query and
     the measured duration. Used as the return type of use-case services."""
+
     result: PipelineResultItem
     query: SearchQuery
     duration_ms: float = 0.0
@@ -432,6 +444,7 @@ class PackageDoc:
     (spec §5.1). Consumed by :class:`PackageLookup` in the application
     layer; keeping chunks/members as tuples makes the whole value object
     hashable-ish and safe to pass across async boundaries."""
+
     kind: ClassVar[str] = "package_doc"
     package: Package
     chunks: tuple[Chunk, ...]
@@ -449,5 +462,6 @@ class PackageDoc:
 def __getattr__(name: str):
     if name == "IndexingStats":
         from pydocs_mcp.application.indexing_service import IndexingStats
+
         return IndexingStats
     raise AttributeError(f"module 'pydocs_mcp.models' has no attribute {name!r}")

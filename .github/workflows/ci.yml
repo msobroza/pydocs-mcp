@@ -80,6 +80,9 @@ jobs:
       - name: Lint
         run: ruff check python/ tests/
 
+      - name: Format check
+        run: ruff format --check python/ tests/ benchmarks/
+
       # WHY: 74% of files in python/pydocs_mcp/ carry type hints. With py.typed
       # shipped, mypy must verify the annotations are coherent for downstream
       # consumers. Lenient initial baseline (see [tool.mypy] in pyproject.toml);

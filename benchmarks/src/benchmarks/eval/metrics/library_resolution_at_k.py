@@ -22,6 +22,7 @@ For systems that never populate ``resolved_library_id`` (pydocs /
 neuledge) this scores 0.0 — fine; the metric is only meaningful in the
 Context7 row of the comparison report.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -43,9 +44,7 @@ _LIBRARY_ALIASES: dict[str, tuple[str, ...]] = {"torch": ("torch", "pytorch")}
 class LibraryResolution1:
     name: str = "library_resolution@1"
 
-    def compute(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
-    ) -> float:
+    def compute(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> float:
         rid = task.gold.extra.get("resolved_library_id")
         lib = task.metadata.get("library", "")
         if not (rid and lib):

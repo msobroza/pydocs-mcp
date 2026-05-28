@@ -12,6 +12,7 @@ The discriminator is ``task.gold.ast_body is None``:
 This file pins BOTH branches so a future change to the discriminator can't
 silently break either dataset. Hermetic: no ``pydocs_mcp`` import.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -50,9 +51,7 @@ def _item(rank: int, text: str) -> RetrievedItem:
 
 
 def _chunk_item(rank: int, chunk_id: int) -> RetrievedItem:
-    return RetrievedItem(
-        rank=rank, text="x", source_path="p", chunk_id=chunk_id
-    )
+    return RetrievedItem(rank=rank, text="x", source_path="p", chunk_id=chunk_id)
 
 
 # ── RepoQA fallback: behavior-preserving vs the raw ast match ──────────
@@ -62,17 +61,13 @@ def test_first_relevant_rank_matches_ast_match_on_repoqa() -> None:
     task = _repoqa_task()
     retrieved = (_item(1, "def other(): pass"), _item(2, GOLD))
     # The unified helper must reproduce find_first_match_rank exactly.
-    assert first_relevant_rank(retrieved, task) == find_first_match_rank(
-        retrieved, GOLD
-    )
+    assert first_relevant_rank(retrieved, task) == find_first_match_rank(retrieved, GOLD)
     assert first_relevant_rank(retrieved, task) == 2
 
 
 def test_recall_repoqa_unchanged() -> None:
     task = _repoqa_task()
-    retrieved = tuple(
-        _item(i, "def other(): pass") for i in range(1, 5)
-    ) + (_item(5, GOLD),)
+    retrieved = tuple(_item(i, "def other(): pass") for i in range(1, 5)) + (_item(5, GOLD),)
     # Pre-refactor: 1.0 iff find_first_match_rank <= k. k=5 hits, k=4 misses.
     assert RecallAtK(k=5).compute(task, retrieved) == 1.0
     assert RecallAtK(k=4).compute(task, retrieved) == 0.0

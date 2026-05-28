@@ -12,6 +12,7 @@ Pins the 7-stage behavior (sub-PR #5b added ``reference_capture``):
 - Every stage implements ``from_dict(data, context)`` + ``to_dict()`` so the
   ingestion YAML round-trips.
 """
+
 from __future__ import annotations
 
 import logging
@@ -39,6 +40,7 @@ from pydocs_mcp.models import Package, PackageOrigin
 
 # ── BuildContext stub ──────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class _FakeBuildContext:
     """Minimal stand-in for retrieval.serialization.BuildContext. ``from_dict``
@@ -61,6 +63,7 @@ def _ctx() -> _FakeBuildContext:
 
 
 # ── FileDiscoveryStage ────────────────────────────────────────────────────
+
 
 @dataclass
 class _FakeProjectDiscoverer:
@@ -101,7 +104,8 @@ async def test_file_discovery_branches_on_project_target(tmp_path: Path) -> None
     dep_disc = _FakeDepDiscoverer()
 
     stage = FileDiscoveryStage(
-        project_discoverer=project_disc, dep_discoverer=dep_disc,
+        project_discoverer=project_disc,
+        dep_discoverer=dep_disc,
     )
     state = IngestionState(
         files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
@@ -122,7 +126,8 @@ async def test_file_discovery_branches_on_dependency_target() -> None:
     dep_disc = _FakeDepDiscoverer(result=(["/pkgs/foo/mod.py"], Path("/pkgs")))
 
     stage = FileDiscoveryStage(
-        project_discoverer=project_disc, dep_discoverer=dep_disc,
+        project_discoverer=project_disc,
+        dep_discoverer=dep_disc,
     )
     state = IngestionState(
         files=FileBundle(target="foo", target_kind=TargetKind.DEPENDENCY),
@@ -148,6 +153,7 @@ def test_file_discovery_from_dict_builds_both_discoverers() -> None:
 
 
 # ── FileReadStage ──────────────────────────────────────────────────────────
+
 
 @pytest.mark.skipif(
     sys.platform == "win32",
@@ -184,7 +190,9 @@ async def test_file_read_with_empty_paths_returns_empty(tmp_path: Path) -> None:
     stage = FileReadStage()
     state = IngestionState(
         files=FileBundle(
-            target=tmp_path, target_kind=TargetKind.PROJECT, paths=(),
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            paths=(),
         ),
     )
 
@@ -193,6 +201,7 @@ async def test_file_read_with_empty_paths_returns_empty(tmp_path: Path) -> None:
 
 
 # ── ChunkingStage ──────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_chunking_dispatches_by_extension(tmp_path: Path) -> None:
@@ -204,7 +213,7 @@ async def test_chunking_dispatches_by_extension(tmp_path: Path) -> None:
             target_kind=TargetKind.PROJECT,
             package_name="__project__",
             root=tmp_path,
-            file_contents=((str(tmp_path / "m.py"), 'x = 1\n'),),
+            file_contents=((str(tmp_path / "m.py"), "x = 1\n"),),
         ),
     )
 
@@ -237,11 +246,13 @@ async def test_chunking_skips_unknown_extensions(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_chunking_per_file_failure_isolation(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Spec AC #27 — a chunker that raises on one file MUST NOT abort the
     pipeline; remaining files still chunk. The failing file is logged at
     WARNING level."""
+
     # Register a bomb chunker for a throwaway extension; mirror a real failure.
     @dataclass(frozen=True, slots=True)
     class BombChunker:
@@ -262,9 +273,9 @@ async def test_chunking_per_file_failure_isolation(
                 package_name="__project__",
                 root=tmp_path,
                 file_contents=(
-                    ("/proj/ok.py", "x = 1\n"),       # succeeds
+                    ("/proj/ok.py", "x = 1\n"),  # succeeds
                     ("/proj/bad.bomb", "payload\n"),  # raises; must be caught
-                    ("/proj/also.py", "y = 2\n"),     # succeeds AFTER the failure
+                    ("/proj/also.py", "y = 2\n"),  # succeeds AFTER the failure
                 ),
             ),
         )
@@ -299,6 +310,7 @@ async def test_chunking_skips_empty_source_files(tmp_path: Path) -> None:
 
 
 # ── FlattenStage ───────────────────────────────────────────────────────────
+
 
 def _leaf_node(qname: str, text: str) -> DocumentNode:
     return DocumentNode(
@@ -347,6 +359,7 @@ async def test_flatten_with_empty_trees_yields_empty_chunks(tmp_path: Path) -> N
 
 # ── ContentHashStage ───────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_content_hash_produces_stable_string(tmp_path: Path) -> None:
     """Same paths → same hash. Hash is a non-empty str (normalized whether
@@ -357,7 +370,9 @@ async def test_content_hash_produces_stable_string(tmp_path: Path) -> None:
     stage = ContentHashStage()
     state = IngestionState(
         files=FileBundle(
-            target=tmp_path, target_kind=TargetKind.PROJECT, paths=(str(f),),
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            paths=(str(f),),
         ),
     )
 
@@ -370,6 +385,7 @@ async def test_content_hash_produces_stable_string(tmp_path: Path) -> None:
 
 
 # ── PackageBuildStage ──────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_package_build_project_branch(tmp_path: Path) -> None:
@@ -417,6 +433,7 @@ async def test_package_build_dependency_branch_with_fake_dist(
 ) -> None:
     """DEPENDENCY target with an installed distribution → builds a Package
     from the dist metadata with origin=DEPENDENCY."""
+
     class _FakeMeta:
         def __init__(self, data):
             self._data = data
@@ -426,12 +443,14 @@ async def test_package_build_dependency_branch_with_fake_dist(
 
     class _FakeDist:
         def __init__(self):
-            self.metadata = _FakeMeta({
-                "Name": "Foo-Bar",
-                "Version": "1.2.3",
-                "Summary": "A test package.",
-                "Home-page": "https://example.com",
-            })
+            self.metadata = _FakeMeta(
+                {
+                    "Name": "Foo-Bar",
+                    "Version": "1.2.3",
+                    "Summary": "A test package.",
+                    "Home-page": "https://example.com",
+                }
+            )
             self.requires = ("baz>=1.0",)
 
     monkeypatch.setattr(
@@ -483,14 +502,17 @@ def test_all_seven_stages_are_registered() -> None:
         assert expected in names, f"stage {expected!r} not registered"
 
 
-@pytest.mark.parametrize("stage_cls,type_name", [
-    (ChunkingStage, "chunking"),
-    (ContentHashStage, "content_hash"),
-    (FileDiscoveryStage, "file_discovery"),
-    (FileReadStage, "file_read"),
-    (FlattenStage, "flatten"),
-    (PackageBuildStage, "package_build"),
-])
+@pytest.mark.parametrize(
+    "stage_cls,type_name",
+    [
+        (ChunkingStage, "chunking"),
+        (ContentHashStage, "content_hash"),
+        (FileDiscoveryStage, "file_discovery"),
+        (FileReadStage, "file_read"),
+        (FlattenStage, "flatten"),
+        (PackageBuildStage, "package_build"),
+    ],
+)
 def test_stage_name_field_matches_registered_type(stage_cls, type_name) -> None:
     """Every stage carries ``name == "<registered_type>"`` for introspection —
     lets operators identify a stage without reaching for its class."""
@@ -499,14 +521,17 @@ def test_stage_name_field_matches_registered_type(stage_cls, type_name) -> None:
     assert stage.name == type_name
 
 
-@pytest.mark.parametrize("stage_cls,type_name", [
-    (ChunkingStage, "chunking"),
-    (ContentHashStage, "content_hash"),
-    (FileDiscoveryStage, "file_discovery"),
-    (FileReadStage, "file_read"),
-    (FlattenStage, "flatten"),
-    (PackageBuildStage, "package_build"),
-])
+@pytest.mark.parametrize(
+    "stage_cls,type_name",
+    [
+        (ChunkingStage, "chunking"),
+        (ContentHashStage, "content_hash"),
+        (FileDiscoveryStage, "file_discovery"),
+        (FileReadStage, "file_read"),
+        (FlattenStage, "flatten"),
+        (PackageBuildStage, "package_build"),
+    ],
+)
 def test_stage_to_dict_returns_type_header(stage_cls, type_name) -> None:
     """``to_dict`` always returns at minimum ``{"type": "<registered>"}`` —
     this is the YAML round-trip contract."""
@@ -515,14 +540,17 @@ def test_stage_to_dict_returns_type_header(stage_cls, type_name) -> None:
     assert data["type"] == type_name
 
 
-@pytest.mark.parametrize("stage_cls,type_name", [
-    (ChunkingStage, "chunking"),
-    (ContentHashStage, "content_hash"),
-    (FileDiscoveryStage, "file_discovery"),
-    (FileReadStage, "file_read"),
-    (FlattenStage, "flatten"),
-    (PackageBuildStage, "package_build"),
-])
+@pytest.mark.parametrize(
+    "stage_cls,type_name",
+    [
+        (ChunkingStage, "chunking"),
+        (ContentHashStage, "content_hash"),
+        (FileDiscoveryStage, "file_discovery"),
+        (FileReadStage, "file_read"),
+        (FlattenStage, "flatten"),
+        (PackageBuildStage, "package_build"),
+    ],
+)
 def test_stage_from_dict_accepts_minimal_data(stage_cls, type_name) -> None:
     """Each stage's ``from_dict`` accepts the minimum-viable ``{"type": "..."}``
     payload plus a BuildContext carrying an ExtractionConfig. No stage
@@ -532,6 +560,7 @@ def test_stage_from_dict_accepts_minimal_data(stage_cls, type_name) -> None:
 
 
 # ── Immutability contract ─────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_stages_return_new_state_without_mutating_input(
@@ -546,7 +575,9 @@ async def test_stages_return_new_state_without_mutating_input(
     f.write_text("x = 1\n")
     before = IngestionState(
         files=FileBundle(
-            target=tmp_path, target_kind=TargetKind.PROJECT, paths=(str(f),),
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            paths=(str(f),),
         ),
     )
     after = await stage.run(before)

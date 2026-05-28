@@ -2,6 +2,7 @@
 ``open_run`` / ``log_metric`` / ``log_artifact`` / ``close_run`` call.
 Each line carries an ``_event`` discriminator so the file is a
 self-describing stream — readers tail it without external schema."""
+
 from __future__ import annotations
 
 import json
@@ -16,9 +17,9 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
-def _open(tmp_path: Path, *, dataset: str = "repoqa@v1") -> tuple[
-    JsonlExperimentTracker, object, Path
-]:
+def _open(
+    tmp_path: Path, *, dataset: str = "repoqa@v1"
+) -> tuple[JsonlExperimentTracker, object, Path]:
     tracker = JsonlExperimentTracker(output_dir=tmp_path)
     handle = tracker.open_run(
         system="pydocs",

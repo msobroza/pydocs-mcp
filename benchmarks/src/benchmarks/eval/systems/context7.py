@@ -21,6 +21,7 @@ two tools:
 We communicate via MCP Streamable HTTP transport (JSON-RPC POST with
 ``Accept: application/json, text/event-stream`` header).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -117,10 +118,13 @@ class Context7Client:
         Raises:
             Context7Error: On network failure or unexpected response.
         """
-        text = await self._call_tool("resolve-library-id", {
-            "libraryName": library_name,
-            "query": query or f"How to use {library_name}",
-        })
+        text = await self._call_tool(
+            "resolve-library-id",
+            {
+                "libraryName": library_name,
+                "query": query or f"How to use {library_name}",
+            },
+        )
         # Response format: "- Context7-compatible library ID: /org/project"
         for line in text.splitlines():
             stripped = line.strip()
@@ -150,10 +154,13 @@ class Context7Client:
         Raises:
             Context7Error: On network failure or unexpected response.
         """
-        return await self._call_tool("query-docs", {
-            "libraryId": library_id,
-            "query": query,
-        })
+        return await self._call_tool(
+            "query-docs",
+            {
+                "libraryId": library_id,
+                "query": query,
+            },
+        )
 
     async def get_library_docs(
         self,
@@ -182,7 +189,9 @@ class Context7System:
     # library name (a name→id map is out of scope; configs set it).
     oracle_library_name: str = ""
     _client: Context7Client | None = field(
-        default=None, init=False, repr=False,
+        default=None,
+        init=False,
+        repr=False,
     )
     _library_id: str | None = field(default=None, init=False, repr=False)
 
@@ -214,7 +223,9 @@ class Context7System:
                 raise
 
     async def search(
-        self, query: str, limit: int,
+        self,
+        query: str,
+        limit: int,
     ) -> tuple[RetrievedItem, ...]:
         if self._client is None or self._library_id is None:
             raise RuntimeError(

@@ -12,6 +12,7 @@ resolver turns a ``Filter`` into a ``uint64`` allowlist of candidate
 chunk IDs which is then passed to ``IdMapIndex.search``, so the
 ANN search is restricted to rows the metadata filter already approved.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,6 +43,7 @@ class TurboQuantVectorStore:
       4. Stamp each ``Chunk`` with ``relevance`` (the index score) +
          ``retriever_name`` so the downstream pipeline can fuse / rank.
     """
+
     uow: TurboQuantUnitOfWork
     candidate_id_resolver: CandidateIdResolver
     chunk_hydrator: ChunkHydrator
@@ -63,11 +65,16 @@ class TurboQuantVectorStore:
             if allowlist.size == 0:
                 return ()
             scores_2d, ids_2d = await asyncio.to_thread(
-                self.uow.index.search, query, limit, allowlist=allowlist,
+                self.uow.index.search,
+                query,
+                limit,
+                allowlist=allowlist,
             )
         else:
             scores_2d, ids_2d = await asyncio.to_thread(
-                self.uow.index.search, query, limit,
+                self.uow.index.search,
+                query,
+                limit,
             )
 
         # Unwrap the single-query row from the ``(1, k)`` 2-D results.
@@ -80,10 +87,7 @@ class TurboQuantVectorStore:
         chunks = await self.chunk_hydrator(id_list)
         # strict=True: ids/scores come from the same TurboQuant query
         # response and have identical length by construction.
-        id_to_score = {
-            int(i): float(s)
-            for i, s in zip(ids.tolist(), scores.tolist(), strict=True)
-        }
+        id_to_score = {int(i): float(s) for i, s in zip(ids.tolist(), scores.tolist(), strict=True)}
         # Re-emit each hydrated Chunk with the score + retriever name
         # populated. Frozen dataclass, so we rebuild rather than mutate.
         return tuple(

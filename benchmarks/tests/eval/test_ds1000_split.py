@@ -14,6 +14,7 @@ using Python's banker's rounding. The assertions below recompute the
 expectation with the SAME formula so the test tracks the implementation
 rather than a hand-guessed integer.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -120,17 +121,23 @@ async def test_split_composes_with_library_filter() -> None:
     3 pandas rows."""
     pandas_all = await _task_ids(
         Ds1000Dataset(
-            fixture_path=FIXTURE_PATH, library_filter=("pandas",), split="all",
+            fixture_path=FIXTURE_PATH,
+            library_filter=("pandas",),
+            split="all",
         ),
     )
     pandas_dev = await _task_ids(
         Ds1000Dataset(
-            fixture_path=FIXTURE_PATH, library_filter=("pandas",), split="dev",
+            fixture_path=FIXTURE_PATH,
+            library_filter=("pandas",),
+            split="dev",
         ),
     )
     pandas_test_tasks = await _tasks(
         Ds1000Dataset(
-            fixture_path=FIXTURE_PATH, library_filter=("pandas",), split="test",
+            fixture_path=FIXTURE_PATH,
+            library_filter=("pandas",),
+            split="test",
         ),
     )
     assert len(pandas_all) == 3

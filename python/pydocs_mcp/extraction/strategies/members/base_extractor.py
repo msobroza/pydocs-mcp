@@ -5,6 +5,7 @@ The :class:`MemberExtractor` Protocol lives in
 application-layer contracts). This module re-exports it so each
 concrete-extractor file imports the contract from one obvious place.
 """
+
 from __future__ import annotations
 
 from pydocs_mcp.application.protocols import MemberExtractor

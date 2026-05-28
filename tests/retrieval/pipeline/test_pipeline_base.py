@@ -1,4 +1,5 @@
 """Tests for the new RetrieverStep ABC + RetrieverPipeline + RetrieverState."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace

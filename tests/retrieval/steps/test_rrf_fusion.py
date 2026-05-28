@@ -1,4 +1,5 @@
 """RRFFusionStep multi-list fusion + RRFResultFuser math (AC-19 + spec §5.6)."""
+
 from __future__ import annotations
 
 import pytest

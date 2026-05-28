@@ -1,4 +1,5 @@
 """build_embedder factory (AC-15, AC-16)."""
+
 import pytest
 
 from pydocs_mcp.extraction.strategies.embedders import build_embedder

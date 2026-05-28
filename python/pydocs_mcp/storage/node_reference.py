@@ -5,6 +5,7 @@ external packages not yet indexed, aliased re-exports we can't trace).
 Unresolved edges stay queryable by ``to_name`` so users see the intent
 even when the target isn't in the index.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

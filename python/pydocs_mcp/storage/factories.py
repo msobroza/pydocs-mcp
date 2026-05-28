@@ -7,6 +7,7 @@ composition in one place means a change to the backend dependencies
 (e.g. swapping in a different ``UnitOfWork`` implementation) fans out
 through a single factory instead of N copies.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -63,7 +64,8 @@ def build_sqlite_indexing_service(db_path: Path) -> IndexingService:
 
 
 def build_sqlite_lookup_service(
-    db_path: Path, config: AppConfig | None = None,
+    db_path: Path,
+    config: AppConfig | None = None,
 ) -> LookupService:
     """Compose a wired LookupService from a SQLite DB path.
 
@@ -99,8 +101,10 @@ def build_composite_uow_factory(
     wraps them in a CompositeUnitOfWork. Order-preserving (children[0]
     commits first; rollback walks in reverse).
     """
+
     def _make() -> CompositeUnitOfWork:
         return CompositeUnitOfWork(*(f() for f in children))
+
     return _make
 
 
@@ -118,7 +122,9 @@ def build_sqlite_plus_turboquant_uow_factory(
     """
     sqlite_factory = build_sqlite_uow_factory(db_path)
     tq_factory = lambda: TurboQuantUnitOfWork(  # noqa: E731
-        index_path=tq_path, dim=dim, bit_width=bit_width,
+        index_path=tq_path,
+        dim=dim,
+        bit_width=bit_width,
     )
     return build_composite_uow_factory([sqlite_factory, tq_factory])
 
@@ -142,9 +148,7 @@ def build_sqlite_candidate_id_resolver(
         sql_clause, params = adapter.adapt(filter_tree)
         sql = f"SELECT id FROM chunks WHERE {sql_clause}"
         async with _maybe_acquire(provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(sql, params).fetchall()
-            )
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         # ``np.asarray([], dtype=np.uint64)`` preserves the dtype on the
         # empty-result path; numpy would otherwise infer float64 from [].
         return np.asarray([r[0] for r in rows], dtype=np.uint64)
@@ -184,6 +188,7 @@ async def check_integrity_and_repair(
     becomes the expected steady state and this helper will trigger
     persistent false positives. Skip via custom startup wiring in that case.
     """
+
     def _chunk_count() -> int:
         conn = sqlite3.connect(str(db_path))
         try:
@@ -193,7 +198,9 @@ async def check_integrity_and_repair(
 
     chunk_count = await asyncio.to_thread(_chunk_count)
     async with TurboQuantUnitOfWork(
-        index_path=tq_path, dim=dim, bit_width=bit_width,
+        index_path=tq_path,
+        dim=dim,
+        bit_width=bit_width,
     ) as tq_uow:
         vec_count = tq_uow.size()
     if chunk_count == vec_count:
@@ -203,7 +210,8 @@ async def check_integrity_and_repair(
         "Cache integrity mismatch: chunks=%d but TurboQuant index "
         "size=%d. Clearing content_hash on affected packages so the "
         "next indexing sweep re-extracts them.",
-        chunk_count, vec_count,
+        chunk_count,
+        vec_count,
     )
 
     def _clear_all_hashes() -> list[str]:
@@ -247,9 +255,7 @@ def build_sqlite_chunk_hydrator(
             # whole hydration off the event-loop thread, matching the
             # ``SqliteChunkRepository.list`` pattern.
             return await asyncio.to_thread(
-                lambda: tuple(
-                    row_to_chunk(r) for r in conn.execute(sql, id_list).fetchall()
-                )
+                lambda: tuple(row_to_chunk(r) for r in conn.execute(sql, id_list).fetchall())
             )
 
     return hydrate

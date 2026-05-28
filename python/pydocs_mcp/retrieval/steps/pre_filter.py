@@ -29,6 +29,7 @@ when it needs to materialize the backend-specific query fragment. The
 ``VectorSearchable.vector_search(filter=...)`` so no migration is
 needed there.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -79,6 +80,7 @@ class PreFilterResult:
     - ``scope``: a ``frozenset[SearchScope]`` extracted from the filter,
       or ``None`` if no scope clause was present.
     """
+
     tree: Filter | None
     scope: frozenset[SearchScope] | None
 
@@ -104,7 +106,8 @@ class PreFilterStep(RetrieverStep):
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     schema_name: str = field(default=_DEFAULT_SCHEMA_NAME, kw_only=True)
     target_field: Literal["chunk", "member"] = field(
-        default=_DEFAULT_TARGET_FIELD, kw_only=True,
+        default=_DEFAULT_TARGET_FIELD,
+        kw_only=True,
     )
     name: str = field(default="pre_filter", kw_only=True)
 
@@ -147,7 +150,9 @@ class PreFilterStep(RetrieverStep):
 
     @classmethod
     def from_dict(
-        cls, data: dict, context: BuildContext,
+        cls,
+        data: dict,
+        context: BuildContext,
     ) -> PreFilterStep:
         schema_name = data.get("schema_name", _DEFAULT_SCHEMA_NAME)
         if context.app_config is None:

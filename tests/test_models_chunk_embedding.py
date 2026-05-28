@@ -1,4 +1,5 @@
 """Chunk.embedding field is additive + np.ndarray-typed (spec §5.1 + AC-2)."""
+
 import dataclasses
 
 import numpy as np

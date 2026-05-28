@@ -1,4 +1,5 @@
 """Storage Protocols — 10 @runtime_checkable contracts (spec §5.2, AC #3)."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -18,7 +19,9 @@ class PackageStore(Protocol):
     async def upsert(self, package: Package) -> None: ...
     async def get(self, name: str) -> Package | None: ...
     async def list(
-        self, filter: Filter | Mapping | None = None, limit: int | None = None,
+        self,
+        filter: Filter | Mapping | None = None,
+        limit: int | None = None,
     ) -> list[Package]: ...
     async def delete(self, filter: Filter | Mapping) -> int: ...
     async def count(self, filter: Filter | Mapping | None = None) -> int: ...
@@ -41,7 +44,9 @@ class PackageStore(Protocol):
 class ChunkStore(Protocol):
     async def upsert(self, chunks: Iterable[Chunk]) -> None: ...
     async def list(
-        self, filter: Filter | Mapping | None = None, limit: int | None = None,
+        self,
+        filter: Filter | Mapping | None = None,
+        limit: int | None = None,
     ) -> list[Chunk]: ...
     async def delete(self, filter: Filter | Mapping) -> int: ...
     async def count(self, filter: Filter | Mapping | None = None) -> int: ...
@@ -57,7 +62,9 @@ class ChunkStore(Protocol):
         ...
 
     async def list_id_hash_pairs(
-        self, *, filter: Filter | Mapping | None = None,
+        self,
+        *,
+        filter: Filter | Mapping | None = None,
     ) -> tuple[tuple[int, str | None], ...]:
         """Return (id, content_hash) for chunks matching filter.
 
@@ -95,7 +102,9 @@ class ChunkStore(Protocol):
 class ModuleMemberStore(Protocol):
     async def upsert_many(self, members: Iterable[ModuleMember]) -> None: ...
     async def list(
-        self, filter: Filter | Mapping | None = None, limit: int | None = None,
+        self,
+        filter: Filter | Mapping | None = None,
+        limit: int | None = None,
     ) -> list[ModuleMember]: ...
     async def delete(self, filter: Filter | Mapping) -> int: ...
     async def count(self, filter: Filter | Mapping | None = None) -> int: ...
@@ -256,7 +265,10 @@ class DocumentTreeStore(Protocol):
     async def exists(self, package: str, module: str) -> bool: ...
 
     async def delete_for_package(
-        self, package: str, *, uow: UnitOfWork | None = None,
+        self,
+        package: str,
+        *,
+        uow: UnitOfWork | None = None,
     ) -> None: ...
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
@@ -311,7 +323,10 @@ class ReferenceStore(Protocol):
     ) -> list[NodeReference]: ...
 
     async def delete_for_package(
-        self, package: str, *, uow: UnitOfWork | None = None,
+        self,
+        package: str,
+        *,
+        uow: UnitOfWork | None = None,
     ) -> None: ...
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None: ...
@@ -342,6 +357,7 @@ class Embedder(Protocol):
     (list of 1D ``np.ndarray``\\ s). Use
     `pydocs_mcp.models.is_multi_vector(emb)` to disambiguate.
     """
+
     # Defaults make the attributes discoverable via hasattr(Embedder, ...)
     # for structural / introspection tests. Real implementations override.
     dim: int = 0
@@ -354,7 +370,8 @@ class Embedder(Protocol):
     async def embed_query(self, text: str) -> Embedding: ...
 
     async def embed_chunks(
-        self, texts: Sequence[str],
+        self,
+        texts: Sequence[str],
     ) -> tuple[Embedding, ...]: ...
 
 

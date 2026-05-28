@@ -3,6 +3,7 @@
 Handlers are closures inside ``run()``, so tests substitute a FakeMCP to
 capture the decorated functions and invoke them directly.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,6 +43,7 @@ class FakeMCP:
         def decorator(fn):
             self.tools[fn.__name__] = fn
             return fn
+
         return decorator
 
     def run(self, transport: str | None = None) -> None:
@@ -58,34 +60,46 @@ def _seed_basic_fixture(db_path: Path) -> None:
     conn.execute(
         "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) VALUES(?,?,?,?,?,?,?)",
         (
-            "fastapi", "0.100", "Web framework",
+            "fastapi",
+            "0.100",
+            "Web framework",
             "https://fastapi.example.com",
-            '["starlette", "pydantic"]', "bbb", "dependency",
+            '["starlette", "pydantic"]',
+            "bbb",
+            "dependency",
         ),
     )
     conn.execute(
         "INSERT INTO chunks(package,module,title,text,origin) VALUES(?,?,?,?,?)",
-        ("__project__", "mymod", "Overview", "Project overview with useful code",
-         "project_module_doc"),
+        (
+            "__project__",
+            "mymod",
+            "Overview",
+            "Project overview with useful code",
+            "project_module_doc",
+        ),
     )
     conn.execute(
         "INSERT INTO chunks(package,module,title,text,origin) VALUES(?,?,?,?,?)",
-        ("fastapi", "fastapi", "Getting Started",
-         "FastAPI is a modern web framework for APIs", "dependency_readme"),
+        (
+            "fastapi",
+            "fastapi",
+            "Getting Started",
+            "FastAPI is a modern web framework for APIs",
+            "dependency_readme",
+        ),
     )
     conn.execute(
         "INSERT INTO module_members("
         "package,module,name,kind,signature,return_annotation,parameters,docstring"
         ") VALUES(?,?,?,?,?,?,?,?)",
-        ("__project__", "mymod", "compute", "function", "(x)", "int", "[]",
-         "Compute things"),
+        ("__project__", "mymod", "compute", "function", "(x)", "int", "[]", "Compute things"),
     )
     conn.execute(
         "INSERT INTO module_members("
         "package,module,name,kind,signature,return_annotation,parameters,docstring"
         ") VALUES(?,?,?,?,?,?,?,?)",
-        ("fastapi", "fastapi", "FastAPI", "class", "()", "", "[]",
-         "Main app class"),
+        ("fastapi", "fastapi", "FastAPI", "class", "()", "", "[]", "Main app class"),
     )
     conn.commit()
     rebuild_fulltext_index(conn)
@@ -198,8 +212,11 @@ class TestToolSurface:
     def test_old_tool_names_are_gone(self, server_tools) -> None:
         tools, _ = server_tools
         for dropped in (
-            "list_packages", "get_package_doc",
-            "search_docs", "search_api", "inspect_module",
+            "list_packages",
+            "get_package_doc",
+            "search_docs",
+            "search_api",
+            "inspect_module",
         ):
             assert dropped not in tools
 
@@ -260,7 +277,8 @@ class TestLookupWithTreeService:
         assert "fastapi.routing.APIRouter" in child_ids
 
     def test_lookup_module_target_unknown_falls_through_to_find_module(
-        self, server_tools_with_tree,
+        self,
+        server_tools_with_tree,
     ) -> None:
         """Unknown dotted target with no matching tree raises NotFoundError
         (not ServiceUnavailableError) — proves the tree_svc fallback path
@@ -272,7 +290,8 @@ class TestLookupWithTreeService:
             _arun(tools["lookup"](target="fastapi.does_not_exist"))
 
     def test_lookup_symbol_target_returns_node_json(
-        self, server_tools_with_tree,
+        self,
+        server_tools_with_tree,
     ) -> None:
         """target='fastapi.routing.APIRouter' resolves through the tree to
         the CLASS node and emits its PageIndex JSON, including the child method."""
@@ -303,16 +322,12 @@ class TestSearchDocs:
 
     def test_package_filter(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(
-            tools["search"](query="framework", kind="docs", package="fastapi")
-        )
+        out = _arun(tools["search"](query="framework", kind="docs", package="fastapi"))
         assert "fastapi" in out.lower()
 
     def test_scope_project(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(
-            tools["search"](query="overview", kind="docs", scope="project")
-        )
+        out = _arun(tools["search"](query="overview", kind="docs", scope="project"))
         assert "overview" in out.lower() or "No matches" in out
 
 
@@ -358,9 +373,7 @@ class TestValidation:
 
         tools, _ = server_tools
         with pytest.raises(ValidationError):
-            _arun(
-                tools["search"](query="x", kind="docs", package="has spaces")
-            )
+            _arun(tools["search"](query="x", kind="docs", package="has spaces"))
 
     def test_bad_target_regex_raises_validation_error(self, server_tools) -> None:
         from pydantic import ValidationError
@@ -408,9 +421,7 @@ def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
 
         run(db_path)
 
-    out = _arun(
-        fake_mcp.tools["search"](query="login", kind="docs", package="Flask-Login")
-    )
+    out = _arun(fake_mcp.tools["search"](query="login", kind="docs", package="Flask-Login"))
     # The normalisation happens inside the handler; the search itself may
     # return "No matches" (no chunks seeded) but MUST NOT fail validation.
     assert "validation" not in out.lower()
