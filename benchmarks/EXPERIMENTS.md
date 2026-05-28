@@ -56,8 +56,8 @@ sudo apt-get install -y libopenblas-pthread-dev   # see INSTALL.md for fallbacks
   gitignored `.env` and load it before those runs:
 
   ```bash
-  echo 'OPENAI_API_KEY=sk-...' > .env       # .env is gitignored
-  set -a; source .env; set +a               # export for the tree runs
+  cp .env.example .env          # then edit .env (gitignored) with your key
+  set -a; source .env; set +a   # export OPENAI_API_KEY for the tree runs
   ```
 
 - If `import turbovec` fails with `undefined symbol: cblas_sgemm` even after
