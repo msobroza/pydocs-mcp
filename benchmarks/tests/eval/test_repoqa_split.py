@@ -120,7 +120,9 @@ async def test_small_test_is_capped_subset_of_test() -> None:
     )
     small_ids = await _task_ids(
         RepoQADataset(
-            fixture_path=FIXTURE_PATH, split="small_test", small_test_size=1,
+            fixture_path=FIXTURE_PATH,
+            split="small_test",
+            small_test_size=1,
         ),
     )
     assert small_ids <= test_ids  # subset of held-out test
@@ -131,14 +133,18 @@ async def test_small_test_is_deterministic_under_fixed_seed() -> None:
     """Two ``small_test`` loads with the same seed yield identical ids."""
     first = await _task_ids(
         RepoQADataset(
-            fixture_path=FIXTURE_PATH, split="small_test",
-            small_test_size=2, split_seed=0,
+            fixture_path=FIXTURE_PATH,
+            split="small_test",
+            small_test_size=2,
+            split_seed=0,
         ),
     )
     second = await _task_ids(
         RepoQADataset(
-            fixture_path=FIXTURE_PATH, split="small_test",
-            small_test_size=2, split_seed=0,
+            fixture_path=FIXTURE_PATH,
+            split="small_test",
+            small_test_size=2,
+            split_seed=0,
         ),
     )
     assert first == second

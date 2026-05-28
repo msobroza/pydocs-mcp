@@ -115,15 +115,14 @@ def stratified_split(
     if split == "dev":
         return dev_rows
     if split == "test":
-        return [
-            row for stratum in sorted(test_by_stratum)
-            for row in test_by_stratum[stratum]
-        ]
+        return [row for stratum in sorted(test_by_stratum) for row in test_by_stratum[stratum]]
     return _largest_remainder_subsample(test_by_stratum, target=small_test_size)
 
 
 def _largest_remainder_subsample(
-    test_by_stratum: dict[str, list[T]], *, target: int,
+    test_by_stratum: dict[str, list[T]],
+    *,
+    target: int,
 ) -> list[T]:
     """Proportional fixed-size subsample of the per-stratum ``test`` tails.
 
@@ -148,7 +147,4 @@ def _largest_remainder_subsample(
     by_remainder = sorted(strata, key=lambda s: (-(quotas[s] - counts[s]), s))
     for stratum in by_remainder[:leftover]:
         counts[stratum] += 1
-    return [
-        row for stratum in strata
-        for row in test_by_stratum[stratum][:counts[stratum]]
-    ]
+    return [row for stratum in strata for row in test_by_stratum[stratum][: counts[stratum]]]

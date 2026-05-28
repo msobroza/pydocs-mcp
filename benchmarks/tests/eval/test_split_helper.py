@@ -122,7 +122,10 @@ def test_stratified_split_rejects_invalid_split() -> None:
 
 
 def _small_test(
-    rows: list[dict[str, object]], *, size: int, seed: int = 0,
+    rows: list[dict[str, object]],
+    *,
+    size: int,
+    seed: int = 0,
 ) -> list:
     return stratified_split(
         rows,
