@@ -115,3 +115,50 @@ def test_all_entries_unique() -> None:
     import pydocs_mcp
 
     assert len(pydocs_mcp.__all__) == len(set(pydocs_mcp.__all__))
+
+
+def test_dependency_groups_defined() -> None:
+    """P1-5: PEP 735 [dependency-groups] holds dev/test/lint deps.
+
+    Keeping these out of [project.optional-dependencies] means:
+      (1) they don't ship in wheel METADATA,
+      (2) users can't accidentally `pip install pydocs-mcp[dev]`
+          and pull in pytest,
+      (3) tools (uv, pip 25.1+, PDM) can distinguish "user-installable
+          extra" from "developer-only group".
+    """
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+
+    assert "dependency-groups" in pyproject, "PEP 735 [dependency-groups] section required"
+    groups = pyproject["dependency-groups"]
+    assert "dev" in groups
+    # Dev group should pull in pytest one way or another (either directly
+    # or via include-group: "test").
+    dev_str = str(groups["dev"])
+    assert "pytest" in dev_str or "test" in dev_str
+
+
+def test_dev_deps_not_in_user_facing_extras() -> None:
+    """Embedder safety: `pip install pydocs-mcp[dev]` must NOT work
+    silently (no dev extras group user-installable). PEP 735 groups
+    are explicit-only via uv / pip --group.
+    """
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    extras = pyproject["project"].get("optional-dependencies", {})
+
+    # Either the dev extras group is gone entirely (preferred) OR — if
+    # kept for backward compat — it doesn't list pytest etc.
+    if "dev" in extras:
+        dev_extras_str = str(extras["dev"])
+        assert "pytest" not in dev_extras_str, (
+            "dev deps must live in [dependency-groups], not "
+            "[project.optional-dependencies] (P1-5)"
+        )

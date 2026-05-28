@@ -51,8 +51,16 @@ jobs:
           echo "=== libblas alternatives ==="
           update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>&1 || true
 
-      - name: Install project and dev deps
-        run: pip install -e ".[dev]"
+      # WHY: dev deps moved to PEP 735 [dependency-groups] so they stay
+      # out of wheel METADATA (P1-5). `--group dev` requires uv or
+      # pip >= 25.1 — uv is the established install path in release.yml.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install project + dev group
+        run: |
+          uv pip install --system -e .
+          uv pip install --system --group dev
 
       - name: Lint
         run: ruff check python/ tests/
