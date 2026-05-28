@@ -134,46 +134,111 @@ benchmarks (RepoQA, DS-1000) and head-to-head against Context7 and Neuledge —
 with confidence intervals and plots. See
 [benchmarks/README.md](benchmarks/README.md).
 
-## Late-interaction retrieval (planned, opt-in)
+## Retrieval methods & R&D
 
-A **late-interaction** (multi-vector / ColBERT-style) retrieval backend is
-designed to ship as an opt-in alternative to the default single-vector dense
-embedder. The default embedder produces one vector per chunk; a late-interaction
-model emits **one vector per token** and scores via ColBERT's **MaxSim** (sum
-over query tokens of the max cosine similarity to any document token) — higher
-recall on long, structurally distant queries at the cost of a heavier model and
-larger per-chunk storage.
+Each method below is a named step under
+[`python/pydocs_mcp/retrieval/steps/`](python/pydocs_mcp/retrieval/steps/),
+addressable from YAML. The default `chunk_search.yaml` composes BM25 +
+single-vector dense fused via RRF; everything else is opt-in via a
+preset swap (`--config`), with no behavioral change for default installs.
 
-The default late-interaction model is
-[`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code),
-served via [PyLate](https://github.com/lightonai/pylate)
-([arXiv:2508.03555](https://arxiv.org/abs/2508.03555)). The feature stays
-strictly opt-in via a new `late_interaction:` config block plus a dedicated
-preset; the default install stays lean (no PyTorch, no `sentence-transformers`)
-and existing users see no behavioral change.
+### Keyword — BM25 over SQLite FTS5
 
-Status: **in design.** See
-[`docs/superpowers/specs/2026-05-28-late-interaction-dense-retrieval-design.md`](docs/superpowers/specs/2026-05-28-late-interaction-dense-retrieval-design.md)
-for the design and
-[`docs/superpowers/plans/2026-05-28-late-interaction-dense-retrieval-plan.md`](docs/superpowers/plans/2026-05-28-late-interaction-dense-retrieval-plan.md)
-for the implementation roadmap.
+Full-text search with porter stemming and the unicode61 tokenizer.
+Free, instant, and the baseline that every other method composes with
+through the fusion steps below.
 
-Planned opt-in shape (illustrative — once the feature ships):
+### Single-vector dense — FastEmbed + TurboQuant
 
-```yaml
-# pydocs-mcp.yaml
-late_interaction:
-  provider: pylate
-  model_name: lightonai/LateOn-Code
+- **Embedder.** [FastEmbed](https://github.com/qdrant/fastembed) with
+  [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5)
+  by default — runs on CPU via ONNX, no PyTorch, no torch download.
+  OpenAI `text-embedding-3-small` is the optional alternative for
+  users with an API key.
+- **Vector store.** [TurboQuant](https://arxiv.org/abs/2504.19874)
+  ([turbovec](https://github.com/RyanCodrai/turbovec)) — Online Vector
+  Quantization with near-optimal distortion. **~16× smaller than
+  float32** (a 1536-dim vector drops from 6,144 to 384 bytes; a 10 M-doc
+  corpus fits in 4 GB instead of 31 GB) and faster than FAISS FastScan
+  at the same recall. Persists as a `.tq` sidecar next to the SQLite DB.
 
-pipelines:
-  chunk:
-    - default: true
-      pipeline_path: pipelines/chunk_search_late_interaction.yaml
+### Late-interaction (multi-vector / MaxSim) — opt-in
+
+The flagship R&D backend. One vector per **token** instead of one
+pooled vector per chunk; queries score via ColBERT's **MaxSim** — for
+each query token, take the maximum cosine to any document token, then
+sum. Higher recall on long, structurally distant queries (often the
+hard cases for single-vector retrievers).
+
+- **Method.** ColBERT late interaction
+  ([Khattab & Zaharia, SIGIR 2020](https://arxiv.org/abs/2004.12832)).
+- **Engine.** [PLAID](https://arxiv.org/abs/2205.09707)
+  ([Santhanam et al., CIKM 2022](https://arxiv.org/abs/2205.09707))
+  via [fast-plaid](https://github.com/lightonai/fast-plaid) — a
+  Rust-backed IVF + residual-decompression engine. Persists as a
+  per-project directory sidecar at `~/.pydocs-mcp/{slug}.plaid/`.
+- **Embedder.** [PyLate](https://github.com/lightonai/pylate)
+  ([arXiv:2508.03555](https://arxiv.org/abs/2508.03555)) with the
+  default model
+  [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code)
+  — late-interaction trained on code.
+- **SQLite + fast-plaid coupling.** A `chunk_multi_vector_ids`
+  mapping table bridges SQLite's `chunk_id` to fast-plaid's
+  `plaid_doc_id`. The shipped `FilterAdapter` Protocol pushes
+  metadata filters down to SQLite, then the result chunk-id list is
+  passed as `subset=` to fast-plaid's MaxSim search — so MaxSim is
+  always bounded to the SQLite-eligible candidates and the two
+  engines stay in their own id spaces.
+- **Enable.** `pip install 'pydocs-mcp[late-interaction]'`, set
+  `late_interaction.enabled: true` in your YAML, then point
+  `--config` at the shipped
+  [`chunk_search_late_interaction.yaml`](python/pydocs_mcp/pipelines/chunk_search_late_interaction.yaml)
+  preset.
+
+### Hybrid fusion
+
+- **Reciprocal Rank Fusion (RRF)** —
+  [Cormack, Clarke & Buettcher, SIGIR 2009](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf).
+  Rank-only `1 / (k + rank)` with `k=60` default; the workhorse for
+  combining BM25 + dense, or BM25 + late-interaction.
+- **Weighted Score Interpolation (WSI)** — score-space
+  `α · score_a + (1 − α) · score_b` with min-max normalization, for
+  cases where the score distributions are well-calibrated and rank
+  isn't enough. `α` is tunable from YAML.
+
+### LLM tree reasoning — opt-in
+
+A **vectorless** mode for broad, structural questions ("walk me
+through the request lifecycle"). Instead of embedding text, an LLM
+walks the code map — module / class titles plus short summaries —
+and picks the best spots itself. Inspired by
+[PageIndex (VectifyAI)](https://github.com/VectifyAI/PageIndex)'s
+reasoning-over-tree-of-contents approach.
+
+Three shipped presets under
+[`python/pydocs_mcp/pipelines/`](python/pydocs_mcp/pipelines/):
+`tree_only.yaml`, `chunk_search_with_tree_reasoning_parallel.yaml`
+(run alongside chunk search, fuse via WSI), and
+`chunk_search_with_tree_reasoning_after.yaml` (use chunk search as
+the candidate pool, let the LLM re-rank). Provider / model /
+temperature / max_tokens are tuned under the `llm:` section of YAML;
+any OpenAI-compatible endpoint works.
+
+### Code reference graph
+
+Beyond embeddings, pydocs-mcp captures a **graph of how code
+references code** during indexing: `CALLS`, `IMPORTS`, `INHERITS`,
+and optional `MENTIONS` (backtick-quoted dotted names in markdown).
+The same surface answers an AI's *"what calls this?"* / *"what does
+this extend?"* questions through the `lookup(show=…)` MCP tool:
+
+```bash
+pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
+pydocs-mcp lookup my_module.Parser.parse --show callers
 ```
 
-Enabling it will also require the optional extra:
-`pip install 'pydocs-mcp[late-interaction]'`.
+Capture is on by default and tunable under `reference_graph:` in YAML
+(toggle, kinds-to-emit, output bounds).
 
 ## Learn more
 
@@ -197,7 +262,10 @@ Enabling it will also require the optional extra:
 - TurboQuant — *Online Vector Quantization with Near-optimal Distortion Rate* · [arXiv:2504.19874](https://arxiv.org/abs/2504.19874) (Google Research, 2025); implemented by [`turbovec`](https://github.com/RyanCodrai/turbovec)
 - [FAISS](https://github.com/facebookresearch/faiss) — the similarity-search library used as the speed/storage baseline above
 - [FastEmbed](https://github.com/qdrant/fastembed) with [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) — the default on-device embedder for the **single-vector** dense mode
-- [PyLate](https://github.com/lightonai/pylate) with [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) — the default model for the planned **late-interaction (multi-vector / MaxSim)** mode · *PyLate: Flexible Training and Retrieval for Late Interaction Models* · [arXiv:2508.03555](https://arxiv.org/abs/2508.03555) (LightOn, 2025)
+- [PyLate](https://github.com/lightonai/pylate) with [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) — the default model for the opt-in **late-interaction (multi-vector / MaxSim)** mode · *PyLate: Flexible Training and Retrieval for Late Interaction Models* · [arXiv:2508.03555](https://arxiv.org/abs/2508.03555) (LightOn, 2025)
+- ColBERT — *Efficient and Effective Passage Search via Contextualized Late Interaction over BERT* · [arXiv:2004.12832](https://arxiv.org/abs/2004.12832) (Khattab & Zaharia, SIGIR 2020) — the late-interaction architecture
+- PLAID — *An Efficient Engine for Late Interaction Retrieval* · [arXiv:2205.09707](https://arxiv.org/abs/2205.09707) (Santhanam et al., CIKM 2022) — implemented by [fast-plaid](https://github.com/lightonai/fast-plaid), the engine pydocs-mcp uses for MaxSim scoring
+- Reciprocal Rank Fusion — *Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods* · [Cormack, Clarke & Buettcher, SIGIR 2009](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) — the rank-fusion baseline (k=60)
 - [PageIndex](https://github.com/VectifyAI/PageIndex) — inspiration for the LLM tree-reasoning mode
 
 **Protocol & comparable tools**
