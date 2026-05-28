@@ -382,3 +382,30 @@ def test_security_md_present() -> None:
     assert "security/advisories" in text
     # SLA commitments.
     assert "72 hours" in text or "72h" in text or "72-hour" in text
+
+
+def test_release_yml_syncs_version_from_tag() -> None:
+    """P2-5: release.yml extracts the version from the pushed tag and
+    sed-updates both Cargo.toml and pyproject.toml before each build
+    job. Single-source-of-truth = the git tag at release time.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    release_yml = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    # Sync step must be conditional on a v-prefixed tag push.
+    assert "refs/tags/v" in release_yml, (
+        "release.yml must guard the version-sync step on a v-prefixed tag"
+    )
+    # And update BOTH version files.
+    assert "Cargo.toml" in release_yml and "sed" in release_yml
+    assert "pyproject.toml" in release_yml
+    # Across all 4 build jobs (linux + macos + windows + sdist). The plan's
+    # survey found 4 build jobs; if a future PR adds another, the count
+    # should grow — this assertion catches regressions either way.
+    occurrences = release_yml.count("Sync version from tag")
+    assert occurrences >= 4, (
+        f"expected the sync step in every build job (>= 4 occurrences); "
+        f"got {occurrences}"
+    )
