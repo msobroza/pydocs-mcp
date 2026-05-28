@@ -431,7 +431,7 @@ def _row_to_package(row) -> Package:
 
 # Safe-column whitelists per table (spec §5.3) — declared before the adapter
 # classes so they can reference these as dataclass-field defaults.
-CHUNK_COLUMNS = frozenset({"package", "module", "origin", "title"})
+CHUNK_COLUMNS = frozenset({"id", "package", "module", "origin", "title"})
 _PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
 _MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
 
