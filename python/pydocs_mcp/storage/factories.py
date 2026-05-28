@@ -63,8 +63,8 @@ def build_sqlite_indexing_service(db_path: Path) -> IndexingService:
 
 
 def build_sqlite_lookup_service(
-    db_path: Path, config: "AppConfig | None" = None,  # noqa: ARG001 -- kept for API stability
-) -> "LookupService":
+    db_path: Path, config: AppConfig | None = None,
+) -> LookupService:
     """Compose a wired LookupService from a SQLite DB path.
 
     Post-#5a-2: ``PackageLookup``, ``TreeService``, and ``ReferenceService``

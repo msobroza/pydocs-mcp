@@ -48,7 +48,7 @@ class LimitStep(RetrieverStep):
         return d
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "LimitStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> LimitStep:
         return cls(max_results=data.get("max_results", _DEFAULT_MAX_RESULTS))
 
 

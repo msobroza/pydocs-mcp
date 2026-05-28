@@ -44,7 +44,7 @@ class LibraryResolution1:
     name: str = "library_resolution@1"
 
     def compute(
-        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]  # noqa: ARG002
+        self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]
     ) -> float:
         rid = task.gold.extra.get("resolved_library_id")
         lib = task.metadata.get("library", "")

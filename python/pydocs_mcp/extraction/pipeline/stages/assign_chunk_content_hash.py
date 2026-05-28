@@ -50,7 +50,7 @@ class AssignChunkContentHashStage:
         return replace(state, chunks=new_chunks_bundle)
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any], context: Any) -> "AssignChunkContentHashStage":
+    def from_dict(cls, data: Mapping[str, Any], context: Any) -> AssignChunkContentHashStage:
         return cls(pipeline_hash=getattr(context, "pipeline_hash", ""))
 
     def to_dict(self) -> dict[str, Any]:

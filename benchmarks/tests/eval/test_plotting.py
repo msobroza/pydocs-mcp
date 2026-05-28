@@ -11,21 +11,21 @@ import os
 # Force the non-GUI backend BEFORE matplotlib.pyplot loads anywhere.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from pathlib import Path  # noqa: E402
+from pathlib import Path
 
-import matplotlib  # noqa: E402
+import matplotlib
 
 matplotlib.use("Agg", force=True)
 
-import matplotlib.pyplot as plt  # noqa: E402
-import pytest  # noqa: E402
-from matplotlib.container import BarContainer  # noqa: E402
+import matplotlib.pyplot as plt
+import pytest
+from matplotlib.container import BarContainer
 
 
 def _bar_containers(ax) -> list[BarContainer]:
     return [c for c in ax.containers if isinstance(c, BarContainer)]
 
-from benchmarks.eval.plotting import (  # noqa: E402
+from benchmarks.eval.plotting import (
     BaselineRecord,
     _format_seconds,
     plot_baselines,

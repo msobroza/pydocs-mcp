@@ -78,7 +78,8 @@ class ReferenceResolver:
             result.append(replace(ref, to_node_id=resolved))
         return result
 
-    def _resolve_one(self, ref: NodeReference) -> str | None:
+    def _resolve_one(self, ref: NodeReference) -> str | None:  # noqa: C901 — sequential resolution rules (Rule 0 + A → B/F20 → C → D → E) are inherently sequential decision points; splitting hides the priority order
+
         to_name = ref.to_name
 
         # Rule 0 — self.X.Y inference. When ``self.X`` was typed at

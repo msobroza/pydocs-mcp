@@ -29,6 +29,7 @@ from pydocs_mcp.retrieval.pipeline.state import RetrieverState
 PipelineState = RetrieverState
 
 __all__ = (
+    "_MAX_PIPELINE_DEPTH",
     "CodeRetrieverPipeline",
     "PerCallConnectionProvider",
     "PipelineLoadError",
@@ -36,5 +37,4 @@ __all__ = (
     "RetrieverPipeline",
     "RetrieverState",
     "RetrieverStep",
-    "_MAX_PIPELINE_DEPTH",
 )

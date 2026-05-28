@@ -29,7 +29,7 @@ def _state(
     enough shape to satisfy the dataclass.
     """
     return IngestionState(
-        files=FileBundle(target=Path("."), target_kind=TargetKind.PROJECT),
+        files=FileBundle(target=Path(), target_kind=TargetKind.PROJECT),
         chunks=ChunkBundle(chunks=chunks),
         package=package,
     )
@@ -121,7 +121,7 @@ def test_embed_chunks_registered_in_stage_registry() -> None:
     """``@stage_registry.register("embed_chunks")`` makes the stage
     discoverable for YAML wiring (Task 24)."""
     # Side-effect: importing the module runs the decorator.
-    from pydocs_mcp.extraction.pipeline.stages import embed_chunks as _mod  # noqa: F401
+    from pydocs_mcp.extraction.pipeline.stages import embed_chunks as _mod
     from pydocs_mcp.extraction.serialization import stage_registry
 
     assert "embed_chunks" in stage_registry.names()

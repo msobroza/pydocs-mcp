@@ -58,12 +58,51 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
-ignore = ["E501", "E701"]
+select = [
+    "E", "W",     # pycodestyle
+    "F",          # Pyflakes
+    "I",          # isort
+    "B",          # flake8-bugbear
+    "UP",         # pyupgrade
+    "S",          # flake8-bandit (security)
+    "SIM",        # flake8-simplify
+    "RUF",        # Ruff-specific
+    "C901",       # McCabe complexity
+    "PT",         # flake8-pytest-style
+    "PTH",        # flake8-use-pathlib
+]
+ignore = [
+    "E501",     # line-too-long — opinionated, defer to formatter where it matters
+    "E701",     # compound statements on one line — used for short Protocols
+    "RUF001",   # ambiguous unicode in strings — math symbols (×, ∪) are intentional in benchmark labels
+    "RUF002",   # ambiguous unicode in docstrings — same (× appears in "K × N" capacity comments)
+    "RUF003",   # ambiguous unicode in comments — same
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["F401", "F811", "F841", "E402", "I001"]
-"python/pydocs_mcp/_fast.py" = ["F401", "I001"]
+# Test code is allowed to use bare asserts (S101), short-string secrets in
+# fixtures (S105/S106), broader pytest.raises (PT011/PT012), and the other
+# pytest-style relaxations below — these all reflect intentional test
+# conventions, not bugs.
+"tests/**"                       = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
+"benchmarks/tests/**"            = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
+# Benchmark eval scripts run pre-conditions via assert as a lightweight
+# precondition pattern; they're not security-sensitive code paths.
+# B905 (zip strict) and SIM105 (suppress vs try/except/pass) tolerated in
+# benchmark code where readability of the linear data-flow trumps the lint.
+"benchmarks/src/**"              = ["S101", "S311", "S324", "S603", "S607", "S608", "B905", "SIM105", "SIM102", "PTH207"]
+"python/pydocs_mcp/_fast.py"     = ["F401", "I001"]
+"python/pydocs_mcp/__main__.py"  = ["T201"]
+# The SQLite repositories build `WHERE {clause}` strings where {clause} comes
+# from the FilterAdapter — which only emits SQL fragments built from a
+# whitelisted column set (CHUNK_COLUMNS / MEMBER_COLUMNS / PACKAGE_COLUMNS)
+# and parameterized placeholders. The values flow through DB-API ?-bound
+# parameters; no user data is interpolated into the SQL text.
+"python/pydocs_mcp/storage/sqlite.py"     = ["S608"]
+"python/pydocs_mcp/storage/factories.py"  = ["S608"]

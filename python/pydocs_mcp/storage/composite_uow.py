@@ -108,7 +108,7 @@ class CompositeUnitOfWork:
             attr_map.setdefault(attr, value)
         return attr_map
 
-    async def __aenter__(self) -> "CompositeUnitOfWork":
+    async def __aenter__(self) -> CompositeUnitOfWork:
         for child in self._children:
             await child.__aenter__()
             self._entered.append(child)

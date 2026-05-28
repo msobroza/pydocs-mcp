@@ -27,7 +27,7 @@ log = logging.getLogger("pydocs-mcp")
 @stage_registry.register("chunking")
 @dataclass(frozen=True, slots=True)
 class ChunkingStage:
-    chunking_config: "ChunkingConfig"
+    chunking_config: ChunkingConfig
     name: str = "chunking"
 
     async def run(self, state: IngestionState) -> IngestionState:
@@ -57,12 +57,12 @@ class ChunkingStage:
             return chunker.build_tree(
                 path, source, state.files.package_name, state.files.root,
             )
-        except Exception as exc:  # noqa: BLE001 -- AC #27: per-file failure must not abort pipeline
+        except Exception as exc:
             log.warning("chunker %s failed on %s: %s", ext, path, exc)
             return None
 
     @classmethod
-    def from_dict(cls, data: dict, context: Any) -> "ChunkingStage":
+    def from_dict(cls, data: dict, context: Any) -> ChunkingStage:
         return cls(chunking_config=context.app_config.extraction.chunking)
 
     def to_dict(self) -> dict:

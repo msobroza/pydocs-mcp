@@ -80,7 +80,7 @@ DEFAULT_METRIC_SPECS: tuple[str, ...] = (
 LATENCY_KEYS: tuple[str, ...] = ("indexing_seconds", "search_seconds")
 
 
-async def run_sweep(
+async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a long argument list through dataset/config/system/scorer/tracker setup; the steps are linear and easier to read inline
     *,
     systems: tuple[str, ...],
     config_paths: tuple[Path, ...],
@@ -336,9 +336,9 @@ def _build_metric(spec: str) -> Metric:
 
 async def _resolve_and_inject(
     system: object,
-    task: "EvalTask",
-    retrieved: tuple["RetrievedItem", ...],
-) -> "EvalTask":
+    task: EvalTask,
+    retrieved: tuple[RetrievedItem, ...],
+) -> EvalTask:
     """Run the system's ``GoldResolver`` and inject its result into a fresh
     task (frozen gold -> ``dataclasses.replace``, never mutated).
 
@@ -360,7 +360,7 @@ async def _resolve_and_inject(
     )
 
 
-def _capture_library_resolution(system: object, task: "EvalTask") -> "EvalTask":
+def _capture_library_resolution(system: object, task: EvalTask) -> EvalTask:
     """Record the library id the system resolved during ``index()`` into a
     fresh task's ``gold.extra`` (frozen gold -> ``dataclasses.replace``).
 
@@ -431,7 +431,7 @@ def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:
         system.library = f"{name}@{commit[:7]}" if commit else name
 
 
-def _flatten_app_config(cfg: "AppConfig") -> dict[str, str]:
+def _flatten_app_config(cfg: AppConfig) -> dict[str, str]:
     """Dump ``AppConfig`` to a flat ``{dot.key: str(value)}`` mapping.
 
     Trackers (MLflow especially) want flat ``Mapping[str, str]`` params.
@@ -495,7 +495,7 @@ def _close_all(handles, trackers, *, status) -> None:
     for h, tracker in zip(handles, trackers):
         try:
             tracker.close_run(h, status=status)
-        except Exception:  # noqa: BLE001 -- best-effort cleanup
+        except Exception:
             # WHY: a tracker that fails to flush its close record must not
             # mask the original sweep error — keep the broad ``except`` so
             # one bad tracker doesn't block the others. But dump the

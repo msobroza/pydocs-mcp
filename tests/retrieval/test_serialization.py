@@ -110,7 +110,7 @@ def test_registry_build_forwards_depth_to_var_keyword_from_dict(tmp_path):
 
 def test_bare_retrieval_import_populates_registries():
     """AC #30 — bare ``import pydocs_mcp.retrieval`` fires the decorators."""
-    import pydocs_mcp.retrieval  # noqa: F401
+    import pydocs_mcp.retrieval
     from pydocs_mcp.retrieval import (
         formatter_registry,
         step_registry,

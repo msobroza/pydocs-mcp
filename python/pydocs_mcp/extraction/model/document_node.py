@@ -92,7 +92,7 @@ class DocumentNode:
             "nodes": [child.to_pageindex_json() for child in self.children],
         }
 
-    def find_node_by_qualified_name(self, target: str) -> "DocumentNode | None":
+    def find_node_by_qualified_name(self, target: str) -> DocumentNode | None:
         """BFS search for first node whose qualified_name matches.
 
         Iterative + ``collections.deque`` for O(1) popleft — avoids both

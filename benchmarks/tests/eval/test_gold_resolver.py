@@ -49,7 +49,7 @@ class _FakeChunks:
         self._chunks = chunks
         self.calls: list[object] = []
 
-    async def list(self, filter=None, limit=None):  # noqa: A002 -- mirrors repo API
+    async def list(self, filter=None, limit=None):
         self.calls.append(filter)
         return list(self._chunks)
 
@@ -63,7 +63,7 @@ class _FakeUow:
         self.chunks = chunks_obj
         self.entered = False
 
-    async def __aenter__(self) -> "_FakeUow":
+    async def __aenter__(self) -> _FakeUow:
         self.entered = True
         return self
 
@@ -104,7 +104,7 @@ def _task(doc_contents: tuple[str, ...], *, library: str = "pandas") -> EvalTask
         task_id="t",
         query="q",
         gold=GoldAnswer(extra={"doc_contents": doc_contents}),
-        corpus_source=lambda: Path("."),
+        corpus_source=lambda: Path(),
         metadata={"library": library},
     )
 

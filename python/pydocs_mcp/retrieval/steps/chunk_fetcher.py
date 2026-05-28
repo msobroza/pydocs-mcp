@@ -125,7 +125,7 @@ class ChunkFetcherStep(RetrieverStep):
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     limit: int = field(default=_DEFAULT_LIMIT, kw_only=True)
     retriever_name: str = field(default=_DEFAULT_RETRIEVER_NAME, kw_only=True)
-    filter_adapter: "FilterAdapter | None" = field(default=None, kw_only=True)
+    filter_adapter: FilterAdapter | None = field(default=None, kw_only=True)
     name: str = field(default="chunk_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -227,7 +227,7 @@ class ChunkFetcherStep(RetrieverStep):
             conn.close()
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ChunkFetcherStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> ChunkFetcherStep:
         schema_name = data.get("schema_name", "chunk")
         if context.app_config is None:
             raise ValueError(

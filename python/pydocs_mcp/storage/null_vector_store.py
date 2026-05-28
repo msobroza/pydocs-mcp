@@ -26,7 +26,7 @@ class NullVectorStore:
     """
 
     @property
-    def vectors(self) -> "NullVectorStore":
+    def vectors(self) -> NullVectorStore:
         """Self-reference mirroring :class:`TurboQuantUnitOfWork.vectors`.
 
         ``CompositeUnitOfWork`` delegates by attribute name; were a
@@ -36,12 +36,12 @@ class NullVectorStore:
         return self
 
     async def add_vectors(
-        self, ids: Sequence[int], embeddings: Sequence[object],  # noqa: ARG002
+        self, ids: Sequence[int], embeddings: Sequence[object],
     ) -> None:
         # Silent no-op: deployments without dense embeddings drop vectors.
         return None
 
-    async def remove_vectors(self, ids: Sequence[int]) -> None:  # noqa: ARG002
+    async def remove_vectors(self, ids: Sequence[int]) -> None:
         return None
 
     async def clear_all(self) -> None:
@@ -49,10 +49,10 @@ class NullVectorStore:
 
     async def vector_search(
         self,
-        query_vector: Sequence[float],  # noqa: ARG002
+        query_vector: Sequence[float],
         *,
-        limit: int = 10,  # noqa: ARG002
-        filter: object | None = None,  # noqa: A002, ARG002
+        limit: int = 10,
+        filter: object | None = None,
     ) -> tuple:
         """Empty result — uniform surface for search-side callers."""
         return ()

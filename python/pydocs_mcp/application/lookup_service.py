@@ -165,8 +165,8 @@ class LookupTarget:
 _REF_GETTERS: dict[
     str,
     Callable[
-        ["ReferenceService", str, str],
-        Awaitable["tuple[NodeReference, ...]"],
+        [ReferenceService, str, str],
+        Awaitable[tuple[NodeReference, ...]],
     ],
 ] = {
     "callers":  lambda svc, p, n: svc.callers(p, n),

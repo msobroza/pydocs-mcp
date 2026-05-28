@@ -47,7 +47,7 @@ COMPOSITE_TITLE_SENTINEL = "_composite"
 @step_registry.register("token_budget_formatter")
 @dataclass(frozen=True, slots=True)
 class TokenBudgetStep(RetrieverStep):
-    formatter: "ResultFormatter"
+    formatter: ResultFormatter
     budget: int
     # WHY: inherited ``RetrieverStep.name`` has no default; redeclaring as
     # ``kw_only`` lets non-default subclass fields (formatter, budget)
@@ -86,7 +86,7 @@ class TokenBudgetStep(RetrieverStep):
         }
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "TokenBudgetStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> TokenBudgetStep:
         return cls(
             formatter=context.formatter_registry.build(data["formatter"], context),
             budget=data["budget"],

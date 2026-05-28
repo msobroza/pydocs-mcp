@@ -86,7 +86,7 @@ class ReferenceCaptureStage:
         )
         return replace(state, refs=new_refs_bundle)
 
-    def _capture_all(
+    def _capture_all(  # noqa: C901 — multi-kind reference capture (CALLS/IMPORTS/INHERITS/MENTIONS/ASSIGNS/ATTR-RESOLVE) is inherently branchy; splitting into per-kind helpers would just move the dispatch
         self, state: IngestionState, allowed: set[str],
     ) -> tuple[list[Any], dict[str, dict[str, str]], dict[str, dict[str, str]]]:
         # Deferred imports — strategies pull in ast + reference value objects
@@ -175,7 +175,7 @@ class ReferenceCaptureStage:
                                                 from_node_id=f"{class_qname}.{m.name}",
                                                 collector=collector,
                                             )
-                except Exception as exc:  # noqa: BLE001 -- per-file containment
+                except Exception as exc:
                     log.warning("reference_capture failed on %s: %s", path, exc)
                 continue
             # Markdown branch — regex-fuzzy MENTIONS for backtick-quoted
@@ -191,7 +191,7 @@ class ReferenceCaptureStage:
                         from_node_id=from_node_id,
                         collector=collector,
                     )
-                except Exception as exc:  # noqa: BLE001 -- per-file containment
+                except Exception as exc:
                     log.warning(
                         "reference_capture (markdown) failed on %s: %s", path, exc,
                     )
@@ -206,7 +206,7 @@ class ReferenceCaptureStage:
         return refs, collector.aliases, collector.class_attribute_types
 
     @classmethod
-    def from_dict(cls, data: dict, context: Any) -> "ReferenceCaptureStage":
+    def from_dict(cls, data: dict, context: Any) -> ReferenceCaptureStage:
         return cls()
 
     def to_dict(self) -> dict:

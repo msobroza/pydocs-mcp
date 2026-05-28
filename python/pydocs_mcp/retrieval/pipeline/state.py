@@ -30,9 +30,9 @@ class RetrieverState:
     - Renderer steps (``TokenBudgetStep``):
       read ``candidates``, write ``result``.
     """
-    query: "SearchQuery"
-    candidates: "ChunkList | ModuleMemberList | None" = None
-    result: "PipelineResultItem | None" = None
+    query: SearchQuery
+    candidates: ChunkList | ModuleMemberList | None = None
+    result: PipelineResultItem | None = None
     duration_ms: float = 0.0
     # WHY: free-form per-step scratch. The dict is mutable even inside a
     # frozen dataclass (frozen=True forbids field reassignment, not deep

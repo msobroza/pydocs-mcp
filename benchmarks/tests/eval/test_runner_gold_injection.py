@@ -83,7 +83,7 @@ def _task() -> EvalTask:
         task_id="t",
         query="q",
         gold=GoldAnswer(extra={"doc_contents": ("body",)}),
-        corpus_source=lambda: Path("."),
+        corpus_source=lambda: Path(),
         metadata={"library": "pandas"},
     )
 

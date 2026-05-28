@@ -90,8 +90,8 @@ class IndexingService:
         package: Package,
         chunks: tuple[Chunk, ...],
         module_members: tuple[ModuleMember, ...],
-        trees: Sequence["DocumentNode"] = (),
-        references: Sequence["NodeReference"] = (),
+        trees: Sequence[DocumentNode] = (),
+        references: Sequence[NodeReference] = (),
         reference_aliases: dict[str, dict[str, str]] | None = None,
         class_attribute_types: dict[str, dict[str, str]] | None = None,
     ) -> None:
@@ -123,7 +123,11 @@ class IndexingService:
         # safe-columns whitelist also derives from; the ``packages`` table
         # keys on ``name`` (no matching enum), so that one stays literal.
         async with self.uow_factory() as uow:
-            removed_ids, added_chunks = await self._diff_merge_chunks(
+            # ``removed_ids`` is computed for the parallel vector-removal branch
+            # in ``reindex_package``; the upsert path here doesn't need it
+            # because the followup ``packages.delete`` + cascading FK clears the
+            # chunk rows en masse.
+            _removed_ids, added_chunks = await self._diff_merge_chunks(
                 uow, package_name=package.name, incoming_chunks=chunks,
             )
 
@@ -207,7 +211,7 @@ class IndexingService:
         uow: UnitOfWork,
         *,
         package_name: str,
-        references: Sequence["NodeReference"],
+        references: Sequence[NodeReference],
         reference_aliases: dict[str, dict[str, str]],
         class_attribute_types: dict[str, dict[str, str]],
     ) -> None:
@@ -304,10 +308,10 @@ class IndexingService:
     async def _resolve_references(
         self,
         uow: UnitOfWork,
-        refs: Sequence["NodeReference"],
+        refs: Sequence[NodeReference],
         aliases: dict[str, dict[str, str]],
         class_attribute_types: dict[str, dict[str, str]],
-    ) -> list["NodeReference"]:
+    ) -> list[NodeReference]:
         """Build the cross-package qname universe + run the resolver.
 
         Sub-PR follow-up to #5c (AC #15 stdlib-idx): when
@@ -457,7 +461,7 @@ class IndexingService:
         ]
 
 
-def _add_qnames(node: "DocumentNode", out: set[str]) -> None:
+def _add_qnames(node: DocumentNode, out: set[str]) -> None:
     """Walk a DocumentNode tree, collect every qualified_name into ``out``."""
     out.add(node.qualified_name)
     for child in node.children:

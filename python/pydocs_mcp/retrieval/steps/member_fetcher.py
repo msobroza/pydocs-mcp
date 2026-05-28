@@ -90,7 +90,7 @@ class MemberFetcherStep(RetrieverStep):
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     limit: int = field(default=_DEFAULT_LIMIT, kw_only=True)
     retriever_name: str = field(default=_DEFAULT_RETRIEVER_NAME, kw_only=True)
-    filter_adapter: "FilterAdapter | None" = field(default=None, kw_only=True)
+    filter_adapter: FilterAdapter | None = field(default=None, kw_only=True)
     name: str = field(default="member_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -191,7 +191,7 @@ class MemberFetcherStep(RetrieverStep):
             conn.close()
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "MemberFetcherStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> MemberFetcherStep:
         schema_name = data.get("schema_name", "member")
         if context.app_config is None:
             raise ValueError(

@@ -67,7 +67,7 @@ class MetadataPostFilterStep(RetrieverStep):
         return {"type": "metadata_post_filter"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "MetadataPostFilterStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> MetadataPostFilterStep:
         return cls()
 
 

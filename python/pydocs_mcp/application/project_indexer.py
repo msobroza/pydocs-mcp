@@ -106,6 +106,6 @@ class ProjectIndexer:
             log.info("  ok %s %s (%d chunks, %d syms, %d trees)",
                      pkg.name, pkg.version,
                      len(result.chunks), len(members), len(result.trees))
-        except Exception as e:  # noqa: BLE001 -- spec §7 allowlist
+        except Exception as e:
             log.warning("  fail %s: %s", dep_name, e)
             stats.failed += 1

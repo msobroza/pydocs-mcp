@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import TextIOBase
 from pathlib import Path
 from typing import IO, Literal
@@ -19,7 +19,7 @@ from .base_tracker import RunHandle
 def _utc_ts() -> str:
     # WHY: filename-safe ISO8601 — colons in the time portion are illegal
     # on Windows filesystems and awkward in shells, so we collapse them.
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 # Chars rejected by GitHub Actions artifact upload (and broadly unfriendly
@@ -66,7 +66,7 @@ class JsonlExperimentTracker:
                 "dataset": dataset,
                 "params": dict(params),
                 "tags": dict(tags),
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
             },
         )
         return RunHandle(tracker_name=self.name, raw=fh)

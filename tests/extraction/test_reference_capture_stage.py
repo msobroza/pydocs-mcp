@@ -20,10 +20,10 @@ def _state(file_contents: tuple[tuple[str, str], ...]) -> IngestionState:
     """Helper — build an IngestionState with a populated FileBundle."""
     return IngestionState(
         files=FileBundle(
-            target=Path("."),
+            target=Path(),
             target_kind=TargetKind.PROJECT,
             package_name="pkg",
-            root=Path("."),
+            root=Path(),
             file_contents=file_contents,
         ),
     )

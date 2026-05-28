@@ -51,7 +51,7 @@ class BM25ScorerStep(RetrieverStep):
         return {"type": "bm25_scorer"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "BM25ScorerStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> BM25ScorerStep:
         return cls()
 
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import PydocsMcpSystem  # noqa: F401 -- triggers registration
+from benchmarks.eval.systems import PydocsMcpSystem
 from pydocs_mcp.retrieval.config import AppConfig
 
 

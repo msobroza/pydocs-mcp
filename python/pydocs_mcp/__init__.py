@@ -21,7 +21,7 @@ from pydocs_mcp.application.mcp_errors import (
 )
 from pydocs_mcp.exceptions import PydocsMCPError
 
-__all__ = [
+__all__ = [  # noqa: RUF022 — intentionally ordered as (version → exception base → leaves), not alphabetical
     "__version__",
     # Public exception hierarchy
     "PydocsMCPError",

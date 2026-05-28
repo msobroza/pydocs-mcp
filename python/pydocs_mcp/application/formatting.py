@@ -178,7 +178,7 @@ _SHOW_VOCAB: dict[str, tuple[str, str]] = {
 
 
 def format_references(
-    rows: tuple["NodeReference", ...],
+    rows: tuple[NodeReference, ...],
     *,
     target: str,
     show: Literal["callers", "callees", "inherits"],
@@ -230,7 +230,7 @@ def format_references(
 
     # Group by from_package preserving FIRST-SEEN order — appendix §A.1's
     # example renders packages in the order they appear in ``rows``.
-    groups: dict[str, list["NodeReference"]] = {}
+    groups: dict[str, list[NodeReference]] = {}
     for r in rows:
         groups.setdefault(r.from_package, []).append(r)
 
@@ -263,7 +263,7 @@ _DEFAULT_EMPTY_MSG = "No results."
 
 
 def render_top_composite(
-    response: "SearchResponse",
+    response: SearchResponse,
     empty_msg: str = _DEFAULT_EMPTY_MSG,
 ) -> str:
     """Collapse a :class:`SearchResponse` to a single rendered string.

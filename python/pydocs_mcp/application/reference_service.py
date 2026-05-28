@@ -40,7 +40,7 @@ class ReferenceService:
     uow_factory: Callable[[], UnitOfWork]
 
     async def callers(
-        self, package: str, target_node_qname: str,  # noqa: ARG002 -- `package` is informational; storage is cross-package per spec §6.2
+        self, package: str, target_node_qname: str,
     ) -> tuple[NodeReference, ...]:
         """Return every ref whose ``to_node_id == target_node_qname``.
 
@@ -57,7 +57,7 @@ class ReferenceService:
         return tuple(rows)
 
     async def callees(
-        self, package: str, from_node_qname: str,  # noqa: ARG002 -- `package` informational; see callers()
+        self, package: str, from_node_qname: str,
     ) -> tuple[NodeReference, ...]:
         """Return every ref originating from ``from_node_qname``.
 

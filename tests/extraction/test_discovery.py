@@ -124,7 +124,7 @@ class _FakeFile:
     """Stub for ``importlib.metadata.PackagePath`` — stringifies as posix path,
     locate_file returns absolute path under site-packages."""
     rel: str
-    dist: "_FakeDist"
+    dist: _FakeDist
 
     def __str__(self) -> str:
         return self.rel
@@ -161,7 +161,7 @@ def test_dependency_missing_returns_empty_default_root(tmp_path: Path) -> None:
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())
     paths, root = disc.discover("definitely-not-a-real-pkg-2026-xyz")
     assert paths == []
-    assert root == Path(".")
+    assert root == Path()
 
 
 def test_dependency_lists_dist_files_filters_by_extension(
@@ -279,7 +279,7 @@ def test_dependency_empty_files_returns_default_root(
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())
     paths, root = disc.discover("foo")
     assert paths == []
-    assert root == Path(".")
+    assert root == Path()
 
 
 # ── Protocol conformance ──────────────────────────────────────────────────

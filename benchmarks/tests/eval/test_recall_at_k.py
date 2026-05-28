@@ -16,7 +16,7 @@ def _task(body: str | None) -> EvalTask:
         task_id="t",
         query="q",
         gold=GoldAnswer(ast_body=body),
-        corpus_source=lambda: Path("."),
+        corpus_source=lambda: Path(),
     )
 
 

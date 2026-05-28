@@ -85,8 +85,8 @@ class _ConfigShape(Protocol):
     circular import between ``application`` and ``retrieval``).
     """
 
-    reference_graph: "ReferenceGraphConfig"
-    search: "SearchConfig"
+    reference_graph: ReferenceGraphConfig
+    search: SearchConfig
 
 
 def configure_from_app_config(cfg: _ConfigShape) -> None:

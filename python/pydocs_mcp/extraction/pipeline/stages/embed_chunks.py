@@ -108,7 +108,7 @@ class EmbedChunksStage:
         return replace(state, chunks=new_chunks_bundle, package=new_package)
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any], context: Any) -> "EmbedChunksStage":
+    def from_dict(cls, data: Mapping[str, Any], context: Any) -> EmbedChunksStage:
         if getattr(context, "embedder", None) is None:
             raise ValueError(
                 "EmbedChunksStage requires BuildContext.embedder to be set. "

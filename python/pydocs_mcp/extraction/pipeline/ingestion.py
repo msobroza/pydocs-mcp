@@ -58,10 +58,10 @@ class FileBundle:
     :class:`IngestionState` from growing into a god object.
     """
 
-    target:        Path | str                  = field(default_factory=lambda: Path("."))
+    target:        Path | str                  = field(default_factory=lambda: Path())
     target_kind:   TargetKind                  = TargetKind.PROJECT
     package_name:  str                         = ""
-    root:          Path                        = field(default_factory=lambda: Path("."))
+    root:          Path                        = field(default_factory=lambda: Path())
     paths:         tuple[str, ...]             = ()
     file_contents: tuple[tuple[str, str], ...] = ()
     content_hash:  str                         = ""
@@ -76,8 +76,8 @@ class ChunkBundle:
     rationale behind the bundle split.
     """
 
-    trees:  tuple["DocumentNode", ...] = ()
-    chunks: tuple["Chunk", ...]        = ()
+    trees:  tuple[DocumentNode, ...] = ()
+    chunks: tuple[Chunk, ...]        = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +138,7 @@ class IngestionState:
     files:         FileBundle
     chunks:        ChunkBundle                   = field(default_factory=ChunkBundle)
     refs:          ReferenceBundle               = field(default_factory=ReferenceBundle)
-    package:       "Package | None"              = None
+    package:       Package | None              = None
     existing_chunk_hashes: dict[str, int] | None = None
 
 

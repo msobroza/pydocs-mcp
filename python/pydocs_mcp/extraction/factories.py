@@ -53,12 +53,12 @@ def _default_ingestion_pipeline_path() -> Path:
 
 def load_ingestion_pipeline(
     path: Path,
-    cfg: "AppConfig",
+    cfg: AppConfig,
     *,
-    embedder: "Embedder | None" = None,
-    uow_factory: "Callable[[], UnitOfWork] | None" = None,
+    embedder: Embedder | None = None,
+    uow_factory: Callable[[], UnitOfWork] | None = None,
     pipeline_hash: str = "",
-    llm_client: "LlmClient | None" = None,
+    llm_client: LlmClient | None = None,
 ) -> IngestionPipeline:
     """Load and build an :class:`IngestionPipeline` from a YAML file.
 
@@ -115,12 +115,12 @@ def load_ingestion_pipeline(
 
 
 def build_ingestion_pipeline(
-    cfg: "AppConfig",
+    cfg: AppConfig,
     *,
-    embedder: "Embedder | None" = None,
-    uow_factory: "Callable[[], UnitOfWork] | None" = None,
+    embedder: Embedder | None = None,
+    uow_factory: Callable[[], UnitOfWork] | None = None,
     pipeline_hash: str = "",
-    llm_client: "LlmClient | None" = None,
+    llm_client: LlmClient | None = None,
 ) -> IngestionPipeline:
     """Build the :class:`IngestionPipeline` for this :class:`AppConfig`.
 
@@ -151,7 +151,7 @@ def build_ingestion_pipeline(
 
 
 def _resolve_ingestion_pipeline_path(
-    path: Path, cfg: "AppConfig",
+    path: Path, cfg: AppConfig,
 ) -> Path:
     """Resolve ``path`` through retrieval's shared pipeline_path allowlist.
 

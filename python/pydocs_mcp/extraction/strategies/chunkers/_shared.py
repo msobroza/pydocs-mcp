@@ -92,7 +92,10 @@ def _content_hash(text: str, kind: NodeKind, title: str) -> str:
     """Stable 12-char MD5 prefix over ``(kind, title, text)``. Used for
     incremental re-index — identical inputs produce identical hashes
     across processes (hashlib is deterministic unlike Python ``hash()``)."""
-    h = hashlib.md5(f"{kind.value}:{title}:{text}".encode()).hexdigest()
+    # md5 used as a non-cryptographic content fingerprint, not a security hash.
+    h = hashlib.md5(
+        f"{kind.value}:{title}:{text}".encode(), usedforsecurity=False
+    ).hexdigest()
     return h[:12]
 
 

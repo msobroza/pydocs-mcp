@@ -28,7 +28,7 @@ class RouteCase:
 class RouteStep(RetrieverStep):
     routes: tuple[RouteCase, ...]
     default: RetrieverStep | None = None
-    registry: "PredicateRegistry" = field(default_factory=lambda: default_predicate_registry)
+    registry: PredicateRegistry = field(default_factory=lambda: default_predicate_registry)
     # WHY: inherited ``RetrieverStep.name`` has no default; redeclaring as
     # ``kw_only`` lets non-default subclass field (routes) come before it
     # without violating "non-default after default" rule.
@@ -55,7 +55,7 @@ class RouteStep(RetrieverStep):
         return d
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "RouteStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> RouteStep:
         routes = tuple(
             RouteCase(
                 predicate_name=r["predicate_name"],

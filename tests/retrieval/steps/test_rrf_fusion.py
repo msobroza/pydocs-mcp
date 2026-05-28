@@ -119,7 +119,7 @@ def test_rrf_step_serde_roundtrip() -> None:
 def test_rrf_step_registered_under_rrf_fusion_key() -> None:
     """Old key 'rrf' / 'reciprocal_rank_fusion' is gone; only 'rrf_fusion' remains."""
     # Force-load the step module so its registration runs.
-    from pydocs_mcp.retrieval import steps as _steps  # noqa: F401
+    from pydocs_mcp.retrieval import steps as _steps
     from pydocs_mcp.retrieval.serialization import step_registry
 
     assert "rrf_fusion" in step_registry.names()

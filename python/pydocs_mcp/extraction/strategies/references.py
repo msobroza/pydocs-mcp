@@ -119,7 +119,7 @@ def capture_calls(
             continue
         try:
             to_name = canonical_dotted(node.func)
-        except Exception as exc:  # noqa: BLE001 -- defensive per-call
+        except Exception as exc:
             log.debug("canonical_dotted failed on %r: %s", node.func, exc)
             continue
         if to_name is None:
@@ -188,7 +188,7 @@ def capture_inherits(
     for base in bases:
         try:
             to_name = canonical_dotted(base)
-        except Exception as exc:  # noqa: BLE001 -- defensive per-base
+        except Exception as exc:
             log.debug("canonical_dotted failed on base %r: %s", base, exc)
             continue
         if to_name is None:

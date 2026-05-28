@@ -33,7 +33,7 @@ class FlattenStage:
         return out
 
     @classmethod
-    def from_dict(cls, data: dict, context: Any) -> "FlattenStage":
+    def from_dict(cls, data: dict, context: Any) -> FlattenStage:
         return cls()
 
     def to_dict(self) -> dict:

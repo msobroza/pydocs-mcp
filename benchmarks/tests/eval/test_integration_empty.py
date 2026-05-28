@@ -29,10 +29,10 @@ class _EmptyTestSystem:
 
     name: str = "empty-integration-test"
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         return None
 
-    async def search(self, query: str, limit: int) -> tuple[RetrievedItem, ...]:  # noqa: ARG002
+    async def search(self, query: str, limit: int) -> tuple[RetrievedItem, ...]:
         return ()
 
     async def teardown(self) -> None:

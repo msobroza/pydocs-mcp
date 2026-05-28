@@ -77,7 +77,7 @@ class DenseScorerStep(RetrieverStep):
         return replace(state, candidates=ChunkList(items=tuple(scored)))
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "DenseScorerStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> DenseScorerStep:
         if context.embedder is None:
             raise ValueError(
                 "DenseScorerStep requires BuildContext.embedder to be set.",

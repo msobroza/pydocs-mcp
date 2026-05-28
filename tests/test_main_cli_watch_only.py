@@ -95,7 +95,7 @@ def test_run_watch_only_uses_fakeobserver_without_mcp(
     import pydocs_mcp.server as srv
     server_calls: list[None] = []
 
-    def _trip_wire(*args, **kwargs):  # noqa: ARG001
+    def _trip_wire(*args, **kwargs):
         server_calls.append(None)
 
     monkeypatch.setattr(srv, "run", _trip_wire)

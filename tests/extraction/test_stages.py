@@ -66,7 +66,7 @@ class _FakeProjectDiscoverer:
     """Records which discover() call was invoked; returns a canned (paths, root)."""
 
     calls: list = None
-    result: tuple = ((), Path("."))
+    result: tuple = ((), Path())
 
     def __post_init__(self) -> None:
         if self.calls is None:
@@ -80,7 +80,7 @@ class _FakeProjectDiscoverer:
 @dataclass
 class _FakeDepDiscoverer:
     calls: list = None
-    result: tuple = ((), Path("."))
+    result: tuple = ((), Path())
 
     def __post_init__(self) -> None:
         if self.calls is None:

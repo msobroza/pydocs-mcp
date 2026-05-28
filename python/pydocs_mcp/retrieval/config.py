@@ -74,7 +74,7 @@ class PipelineRouteEntry(BaseModel):
     pipeline_path: Path
 
     @model_validator(mode="after")
-    def _exactly_one_of_predicate_default(self) -> "PipelineRouteEntry":
+    def _exactly_one_of_predicate_default(self) -> PipelineRouteEntry:
         has_predicate = self.predicate is not None
         if has_predicate and self.default:
             raise ValueError(
@@ -137,7 +137,7 @@ class ReferenceOutputConfig(BaseModel):
     max_limit: int = Field(1000, ge=1)
 
     @model_validator(mode="after")
-    def _default_le_max(self) -> "ReferenceOutputConfig":
+    def _default_le_max(self) -> ReferenceOutputConfig:
         if self.default_limit > self.max_limit:
             raise ValueError(
                 f"reference_graph.output.default_limit={self.default_limit} "
@@ -204,7 +204,7 @@ class SearchOutputConfig(BaseModel):
     max_limit: int = Field(1000, ge=1)
 
     @model_validator(mode="after")
-    def _default_le_max(self) -> "SearchOutputConfig":
+    def _default_le_max(self) -> SearchOutputConfig:
         if self.default_limit > self.max_limit:
             raise ValueError(
                 f"search.output.default_limit={self.default_limit} "
@@ -260,7 +260,7 @@ class WatchConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_debounce_bound(self) -> "WatchConfig":
+    def _validate_debounce_bound(self) -> WatchConfig:
         if self.debounce_ms >= _MAX_WATCH_DEBOUNCE_MS:
             raise ValueError(
                 f"serve.watch.debounce_ms={self.debounce_ms} must be "
@@ -333,7 +333,7 @@ class EmbeddingConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _validate_dim_matches_known_model(self) -> "EmbeddingConfig":
+    def _validate_dim_matches_known_model(self) -> EmbeddingConfig:
         # WHY: without this check, setting ``model_name: BAAI/bge-base-en-v1.5``
         # (768-dim) while leaving ``dim=384`` (the shipped default) silently
         # produces a corrupt vector store at query time — every embedded
@@ -479,7 +479,7 @@ class AppConfig(BaseSettings):
         return tuple(sources)
 
     @classmethod
-    def load(cls, explicit_path: Path | None = None) -> "AppConfig":
+    def load(cls, explicit_path: Path | None = None) -> AppConfig:
         """Resolve the user's config path and construct the layered AppConfig.
 
         ``explicit_path`` wins over env / cwd / XDG home for the user layer;

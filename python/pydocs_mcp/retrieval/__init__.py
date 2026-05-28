@@ -7,13 +7,13 @@ Importing this package eagerly loads ``steps``, ``formatters`` and
 ``route_predicates`` so their ``@registry.register`` decorators fire and
 the shared registries are populated (spec AC #30).
 """
-from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401, E402
-from pydocs_mcp.retrieval import route_predicates as _route_predicates  # noqa: F401, E402
+from pydocs_mcp.retrieval import formatters as _formatters  # noqa: F401
+from pydocs_mcp.retrieval import route_predicates as _route_predicates  # noqa: F401
 
 # Side-effect imports — populate the stage/formatter/predicate registries
 # at package import time so bare ``import pydocs_mcp.retrieval`` is a
 # sufficient precondition for config-driven pipeline assembly.
-from pydocs_mcp.retrieval import steps as _steps  # noqa: F401, E402
+from pydocs_mcp.retrieval import steps as _steps  # noqa: F401
 from pydocs_mcp.retrieval.pipeline import (
     CodeRetrieverPipeline,
     PerCallConnectionProvider,

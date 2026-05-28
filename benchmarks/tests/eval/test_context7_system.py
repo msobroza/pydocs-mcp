@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import Context7System  # noqa: F401 -- triggers registration
+from benchmarks.eval.systems import Context7System
 from pydocs_mcp.retrieval.config import AppConfig
 
 
@@ -27,14 +27,14 @@ class _StubClient:
         self.entered = False
         self.exited = False
 
-    async def __aenter__(self) -> "_StubClient":
+    async def __aenter__(self) -> _StubClient:
         self.entered = True
         return self
 
     async def __aexit__(self, *_: object) -> None:
         self.exited = True
 
-    async def resolve_library_id(self, library_name: str) -> str:  # noqa: ARG002
+    async def resolve_library_id(self, library_name: str) -> str:
         raise RuntimeError("resolve boom")
 
 

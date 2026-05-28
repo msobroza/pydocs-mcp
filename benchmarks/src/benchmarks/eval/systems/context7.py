@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -60,9 +60,9 @@ class Context7Client:
     def __init__(self, base_url: str = CONTEXT7_BASE_URL, timeout: float = _DEFAULT_TIMEOUT):
         self._base_url = base_url
         self._timeout = timeout
-        self._http: Optional[httpx.AsyncClient] = None
+        self._http: httpx.AsyncClient | None = None
 
-    async def __aenter__(self) -> "Context7Client":
+    async def __aenter__(self) -> Context7Client:
         self._http = httpx.AsyncClient(
             timeout=self._timeout,
             headers={"Accept": "application/json, text/event-stream"},
@@ -181,12 +181,12 @@ class Context7System:
     # from metadata: the oracle value is a Context7 id, not a DS-1000
     # library name (a name→id map is out of scope; configs set it).
     oracle_library_name: str = ""
-    _client: "Context7Client | None" = field(
+    _client: Context7Client | None = field(
         default=None, init=False, repr=False,
     )
     _library_id: str | None = field(default=None, init=False, repr=False)
 
-    async def index(self, corpus_dir: Path, config: "AppConfig") -> None:  # noqa: ARG002
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         if self._client is None:
             self._client = Context7Client()
             await self._client.__aenter__()
@@ -214,7 +214,7 @@ class Context7System:
                 raise
 
     async def search(
-        self, query: str, limit: int,  # noqa: ARG002 -- Context7 returns one blob
+        self, query: str, limit: int,
     ) -> tuple[RetrievedItem, ...]:
         if self._client is None or self._library_id is None:
             raise RuntimeError(
@@ -233,7 +233,7 @@ class Context7System:
         )
 
     @property
-    def gold_resolver(self) -> "GoldResolver":
+    def gold_resolver(self) -> GoldResolver:
         # WHY: Context7 returns a single concatenated blob from a
         # non-enumerable remote store — there's no chunk-id store to scan,
         # so ground-truth is decided by fuzzy-matching the retrieved blob

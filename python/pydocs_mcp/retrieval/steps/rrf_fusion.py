@@ -148,7 +148,7 @@ class RRFFusionStep(RetrieverStep):
         return d
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "RRFFusionStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> RRFFusionStep:
         return cls(
             k=data.get("k", _DEFAULT_K),
             branch_keys=tuple(data.get("branch_keys", DEFAULT_BRANCH_KEYS)),

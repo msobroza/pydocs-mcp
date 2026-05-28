@@ -46,7 +46,7 @@ async def _with_retry_async(coro_factory: Callable[[], Awaitable[_T]]) -> _T:
             if attempt + 1 == _RETRY_MAX:
                 raise
             await asyncio.sleep(_RETRY_BACKOFF * (2 ** attempt))
-    assert last_exc is not None  # unreachable; loop body raises or returns
+    assert last_exc is not None  # noqa: S101 — control-flow invariant; the loop body either returns or re-raises before this point
     raise last_exc
 
 
@@ -62,7 +62,7 @@ def _with_retry_sync(call_factory: Callable[[], _T]) -> _T:
             # Sync path: blocking sleep — chat_sync() is itself blocking,
             # so this doesn't violate the async-context rule.
             time.sleep(_RETRY_BACKOFF * (2 ** attempt))
-    assert last_exc is not None  # unreachable; loop body raises or returns
+    assert last_exc is not None  # noqa: S101 — control-flow invariant; the loop body either returns or re-raises before this point
     raise last_exc
 
 

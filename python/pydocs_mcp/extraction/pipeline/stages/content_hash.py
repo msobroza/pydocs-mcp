@@ -33,7 +33,7 @@ class ContentHashStage:
         return result if isinstance(result, str) else result.hex()
 
     @classmethod
-    def from_dict(cls, data: dict, context: Any) -> "ContentHashStage":
+    def from_dict(cls, data: dict, context: Any) -> ContentHashStage:
         return cls()
 
     def to_dict(self) -> dict:

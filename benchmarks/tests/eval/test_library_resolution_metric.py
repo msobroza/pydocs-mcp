@@ -26,7 +26,7 @@ def _task(resolved: object, library: str) -> EvalTask:
         task_id="t",
         query="q",
         gold=GoldAnswer(extra=extra),
-        corpus_source=lambda: Path("."),
+        corpus_source=lambda: Path(),
         metadata={"library": library},
     )
 

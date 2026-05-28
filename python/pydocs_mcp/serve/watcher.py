@@ -20,6 +20,7 @@ the consumer side sees the event on the right thread.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
 import logging
 from collections.abc import Awaitable, Callable
@@ -97,10 +98,9 @@ class FileWatcher:
         if path.suffix.lower() not in self.extensions:
             return False
         path_str = str(path)
-        for pattern in self.ignore_globs:
-            if fnmatch.fnmatch(path_str, pattern):
-                return False
-        return True
+        return not any(
+            fnmatch.fnmatch(path_str, pattern) for pattern in self.ignore_globs
+        )
 
     async def run_until_cancelled(
         self, on_change: Callable[[], Awaitable[None]],
@@ -121,7 +121,7 @@ class FileWatcher:
         # test path watchdog-free when callers pass `observer_factory=
         # FakeObserver`, so unit tests don't depend on the `[watch]` extras.
         class _Handler:
-            def on_any_event(self, event) -> None:  # noqa: ANN001
+            def on_any_event(self, event) -> None:
                 # WHY: `watchdog` calls this from its own native thread.
                 # `loop.call_soon_threadsafe(queue.put_nowait, ...)` is the
                 # documented bridge — never `queue.put_nowait` directly,
@@ -129,11 +129,9 @@ class FileWatcher:
                 path = Path(event.src_path)
                 if not watcher_self._matches(path):
                     return
-                try:
+                # Loop closed (observer being torn down): drop the event.
+                with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(queue.put_nowait, path)
-                except RuntimeError:
-                    # Loop closed — observer is being torn down. Drop event.
-                    pass
 
         observer = self.observer_factory()  # type: ignore[misc]
         observer.schedule(_Handler(), str(self.root), recursive=True)
@@ -208,7 +206,7 @@ class FileWatcher:
                 try:
                     nxt = await asyncio.wait_for(queue.get(), timeout=debounce_s)
                     pending_paths.append(nxt)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     break
             # Fire-and-forget so the consumer loop can immediately resume
             # draining queue events into `pending["flag"]` while the

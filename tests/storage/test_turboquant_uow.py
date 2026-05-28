@@ -66,7 +66,7 @@ class _BoomingIndex:
     def __init__(self, real: object) -> None:
         self._real = real
 
-    def write(self, path: str) -> None:  # noqa: ARG002 — mimics IdMapIndex.write
+    def write(self, path: str) -> None:
         raise OSError("disk full")
 
     def __getattr__(self, name: str) -> object:

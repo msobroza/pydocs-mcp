@@ -162,3 +162,33 @@ def test_dev_deps_not_in_user_facing_extras() -> None:
             "dev deps must live in [dependency-groups], not "
             "[project.optional-dependencies] (P1-5)"
         )
+
+
+def test_ruff_target_version_matches_requires_python() -> None:
+    """P2-2: Ruff target-version must match requires-python floor."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    requires_python = pyproject["project"]["requires-python"]
+    ruff_target = pyproject["tool"]["ruff"]["target-version"]
+
+    assert ruff_target == "py311", (
+        f"ruff target {ruff_target!r} must match requires-python {requires_python!r}"
+    )
+
+
+def test_ruff_select_includes_quality_rules() -> None:
+    """P2-3: Ruff select must include B/UP/S/SIM/RUF for bug + upgrade
+    + security + simplification coverage."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    select = pyproject["tool"]["ruff"]["lint"]["select"]
+
+    required = {"E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"}
+    missing = required - set(select)
+    assert not missing, f"ruff select missing: {missing}; current: {select}"

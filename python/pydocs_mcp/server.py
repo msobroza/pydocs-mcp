@@ -120,7 +120,7 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     # list_packages / get_doc handlers that don't exist.
     mcp = FastMCP(
         "pydocs-mcp",
-        instructions="""pydocs-mcp indexes your current project's source code AND every installed dependency into a local hybrid (BM25 + dense embeddings) index. Use this server before web search whenever the user asks about: an installed library's API, a function/class in their own project, who-calls-what / call graph navigation, or `__project__` modules. The surface is two tools only — `search` and `lookup` — pick `search` for keyword/topic queries and `lookup` for known dotted paths or reference-graph traversal. Do NOT use for: refactoring, writing new code from scratch, runtime debugging, or libraries that aren't installed in this project (use Context7 or web search for those).""",  # noqa: E501
+        instructions="""pydocs-mcp indexes your current project's source code AND every installed dependency into a local hybrid (BM25 + dense embeddings) index. Use this server before web search whenever the user asks about: an installed library's API, a function/class in their own project, who-calls-what / call graph navigation, or `__project__` modules. The surface is two tools only — `search` and `lookup` — pick `search` for keyword/topic queries and `lookup` for known dotted paths or reference-graph traversal. Do NOT use for: refactoring, writing new code from scratch, runtime debugging, or libraries that aren't installed in this project (use Context7 or web search for those).""",
     )
 
     @mcp.tool(
@@ -239,8 +239,8 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
 
 async def _do_search(
     payload: SearchInput,
-    search_docs_svc: "DocsSearch",
-    search_api_svc: "ApiSearch",
+    search_docs_svc: DocsSearch,
+    search_api_svc: ApiSearch,
 ) -> str:
     """Dispatch search by kind; returns rendered markdown."""
     query = _build_search_query(payload)

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 class ConditionalStep(RetrieverStep):
     stage: RetrieverStep
     predicate_name: str
-    registry: "PredicateRegistry" = field(default_factory=lambda: default_predicate_registry)
+    registry: PredicateRegistry = field(default_factory=lambda: default_predicate_registry)
     # WHY: inherited ``RetrieverStep.name`` has no default; redeclaring as
     # ``kw_only`` lets non-default subclass fields (stage, predicate_name)
     # come before it without violating "non-default after default" rule.
@@ -36,7 +36,7 @@ class ConditionalStep(RetrieverStep):
         }
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ConditionalStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> ConditionalStep:
         return cls(
             stage=context.step_registry.build(data["stage"], context),
             predicate_name=data["predicate_name"],

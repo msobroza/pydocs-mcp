@@ -197,17 +197,17 @@ async def test_dense_fetcher_empty_query_short_circuits() -> None:
     class _RecordingEmbedder:
         dim = _DIM
 
-        async def embed_query(self, text):  # noqa: ARG002
+        async def embed_query(self, text):
             nonlocal embedder_called
             embedder_called = True
             import numpy as np
             return np.zeros(_DIM, dtype=np.float32)
 
-        async def embed_chunks(self, texts):  # noqa: ARG002
+        async def embed_chunks(self, texts):
             return ()
 
     class _RecordingStore:
-        async def vector_search(self, query_vector, limit, filter=None):  # noqa: ARG002
+        async def vector_search(self, query_vector, limit, filter=None):
             nonlocal store_called
             store_called = True
             return ()
@@ -255,7 +255,7 @@ def test_dense_fetcher_to_dict_round_trip_default_omits_limit() -> None:
 
     # Tiny stub VectorSearchable — only needs the method signature for typing.
     class _StubStore:
-        async def vector_search(self, query_vector, limit, filter=None):  # noqa: ARG002
+        async def vector_search(self, query_vector, limit, filter=None):
             return ()
 
     step = DenseFetcherStep(store=_StubStore(), embedder=embedder)  # type: ignore[arg-type]

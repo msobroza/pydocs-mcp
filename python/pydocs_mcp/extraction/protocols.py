@@ -53,7 +53,7 @@ class Chunker(Protocol):
         content: str,
         package: str,
         root: Path,
-    ) -> "DocumentNode": ...
+    ) -> DocumentNode: ...
 
 
 @runtime_checkable

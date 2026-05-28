@@ -11,7 +11,7 @@ from benchmarks.eval.serialization import (
     system_registry,
     tracker_registry,
 )
-from benchmarks.eval.systems import (  # noqa: F401 -- triggers @register decorators
+from benchmarks.eval.systems import (
     Context7System,
     NeuledgeSystem,
     PydocsMcpSystem,

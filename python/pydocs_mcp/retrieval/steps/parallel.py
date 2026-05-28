@@ -121,8 +121,10 @@ class ParallelStep(RetrieverStep):
         branch_inputs = tuple(
             replace(state, scratch=dict(state.scratch)) for _ in self.stages
         )
+        # strict=True: ``branch_inputs`` is built from ``self.stages`` above,
+        # so lengths are equal by construction; the flag locks that invariant.
         results = await asyncio.gather(
-            *(s.run(bi) for s, bi in zip(self.stages, branch_inputs))
+            *(s.run(bi) for s, bi in zip(self.stages, branch_inputs, strict=True))
         )
 
         accumulated_items, merged_scratch, first_type = _merge_branch_results(
@@ -152,7 +154,7 @@ class ParallelStep(RetrieverStep):
         return {"type": "parallel_retrieval", "stages": [s.to_dict() for s in self.stages]}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ParallelStep":
+    def from_dict(cls, data: dict, context: BuildContext) -> ParallelStep:
         has_branches = "branches" in data
         has_stages = "stages" in data
         if has_branches and has_stages:

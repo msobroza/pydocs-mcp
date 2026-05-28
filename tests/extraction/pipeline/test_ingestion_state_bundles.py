@@ -47,7 +47,7 @@ def test_file_bundle_holds_required_fields():
     # IngestionState before I7.
     assert fb.paths == ()
     assert fb.file_contents == ()
-    assert fb.root == Path(".")
+    assert fb.root == Path()
 
 
 def test_chunk_bundle_defaults():

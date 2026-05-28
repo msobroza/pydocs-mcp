@@ -53,7 +53,7 @@ class HeadingMarkdownChunker:
         )
 
     @classmethod
-    def from_config(cls, cfg: ChunkingConfig) -> "HeadingMarkdownChunker":
+    def from_config(cls, cfg: ChunkingConfig) -> HeadingMarkdownChunker:
         return cls(
             min_heading_level=cfg.markdown.min_heading_level,
             max_heading_level=cfg.markdown.max_heading_level,
@@ -76,10 +76,7 @@ def _parse_md_headings(
     ]
 
     def _in_fence(pos: int) -> bool:
-        for start, end in fenced_ranges:
-            if start <= pos < end:
-                return True
-        return False
+        return any(start <= pos < end for start, end in fenced_ranges)
 
     headings: list[dict] = []
     for m in _HEADING_RE.finditer(content):

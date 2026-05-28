@@ -356,7 +356,7 @@ def test_dep_helpers_collect_symbols_enforces_per_module_cap() -> None:
     # Pump >cap public functions onto the synthetic module so the
     # collected count exceeds the limit if the cap is dropped.
     for i in range(50):
-        def _f(_=i):  # noqa: ARG001 -- closure capture by default arg
+        def _f(_=i):
             pass
         _f.__name__ = f"fn{i}"
         setattr(mod, f"fn{i}", _f)

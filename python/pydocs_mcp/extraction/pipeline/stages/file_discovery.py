@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 @stage_registry.register("file_discovery")
 @dataclass(frozen=True, slots=True)
 class FileDiscoveryStage:
-    project_discoverer: "ProjectFileDiscoverer"
-    dep_discoverer: "DependencyFileDiscoverer"
+    project_discoverer: ProjectFileDiscoverer
+    dep_discoverer: DependencyFileDiscoverer
     name: str = "file_discovery"
 
     async def run(self, state: IngestionState) -> IngestionState:
@@ -41,7 +41,7 @@ class FileDiscoveryStage:
         return self.dep_discoverer.discover(str(state.files.target))
 
     @classmethod
-    def from_dict(cls, data: dict, context: Any) -> "FileDiscoveryStage":
+    def from_dict(cls, data: dict, context: Any) -> FileDiscoveryStage:
         # Deferred import avoids importing concrete discoverers at registry
         # construction time — keeps the registry decode path free of
         # side-effect-heavy filesystem-aware modules.

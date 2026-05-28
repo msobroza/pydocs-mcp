@@ -464,8 +464,8 @@ async def _run_serve_indexing(args: argparse.Namespace) -> None:
 
 
 def _build_watcher_and_callback(
-    args: argparse.Namespace, watch_cfg: "WatchConfig",
-) -> tuple["FileWatcher", Callable[[], Awaitable[None]]]:
+    args: argparse.Namespace, watch_cfg: WatchConfig,
+) -> tuple[FileWatcher, Callable[[], Awaitable[None]]]:
     """Build the ``FileWatcher`` + ``on_change`` callback shared by
     ``serve --watch`` and the standalone ``watch`` subcommand.
 
@@ -489,7 +489,7 @@ def _build_watcher_and_callback(
         # makes the no-change case <100ms (spec §2).
         try:
             await _run_indexing(args)
-        except Exception as exc:  # noqa: BLE001 -- watcher-loop boundary
+        except Exception as exc:
             # WHY: a reindex failure during the watch loop should NOT
             # take down the consumer (MCP server in --watch mode; the
             # whole process in standalone watch mode). Log + keep
@@ -537,7 +537,7 @@ async def _run_watch_loop(
             await watcher_task
         except asyncio.CancelledError:
             pass
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("watch: watcher task exited with %s", exc)
 
 
@@ -647,7 +647,7 @@ def _run_cmd(coro: Awaitable[None], *, verbose: bool) -> int:
     try:
         asyncio.run(coro)
         return 0
-    except Exception as exc:  # noqa: BLE001 -- intentional top-level CLI boundary
+    except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         if verbose:
             traceback.print_exc(file=sys.stderr)
@@ -694,7 +694,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             return 0
         except KeyboardInterrupt:
             return 0
-        except Exception as exc:  # noqa: BLE001 -- intentional top-level CLI boundary
+        except Exception as exc:
             print(f"Error: {exc}", file=sys.stderr)
             if args.verbose:
                 traceback.print_exc(file=sys.stderr)
@@ -721,7 +721,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         # Graceful shutdown via Ctrl+C — not an error.
         return 0
-    except Exception as exc:  # noqa: BLE001 -- intentional top-level CLI boundary
+    except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         if args.verbose:
             traceback.print_exc(file=sys.stderr)
@@ -757,7 +757,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         # Graceful shutdown via Ctrl+C — not an error.
         return 0
-    except Exception as exc:  # noqa: BLE001 -- intentional top-level CLI boundary
+    except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         if args.verbose:
             traceback.print_exc(file=sys.stderr)

@@ -33,7 +33,7 @@ class ChunkFormatter:
         return {"type": "chunk_markdown"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ChunkFormatter":
+    def from_dict(cls, data: dict, context: BuildContext) -> ChunkFormatter:
         return cls()
 
 
@@ -61,5 +61,5 @@ class ModuleMemberFormatter:
         return {"type": "member_markdown"}
 
     @classmethod
-    def from_dict(cls, data: dict, context: BuildContext) -> "ModuleMemberFormatter":
+    def from_dict(cls, data: dict, context: BuildContext) -> ModuleMemberFormatter:
         return cls()

@@ -12,7 +12,7 @@ from typing import Any
 from jinja2 import Environment, StrictUndefined
 
 _env = Environment(
-    autoescape=False,           # prompt text is not HTML; don't escape
+    autoescape=False,           # noqa: S701 — prompt text is not HTML; LLM prompts shouldn't be HTML-escaped
     undefined=StrictUndefined,  # missing vars in templates raise loudly
     trim_blocks=True,
     lstrip_blocks=True,
