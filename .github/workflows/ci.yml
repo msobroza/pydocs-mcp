@@ -160,6 +160,12 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
+          # WHY: maturin >= 1.7 internally calls `pip install --group` when
+          # the project has a [dependency-groups] table (PEP 735). That
+          # requires pip >= 25.1 — older pip in the runner default venv
+          # fails with "no such option: --group". Upgrade before installing
+          # maturin so the build step doesn't trip on a stale resolver.
+          pip install --upgrade pip
           pip install maturin pytest
 
       - name: Rust format check
