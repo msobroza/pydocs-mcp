@@ -45,7 +45,9 @@ from pydocs_mcp.models import (
     Embedding,
     ModuleMember,
     ModuleMemberFilterField,
+    MultiVector,
     Package,
+    is_multi_vector,
 )
 from pydocs_mcp.storage.protocols import UnitOfWork
 
@@ -293,17 +295,29 @@ class IndexingService:
             )
             return
         by_hash = {p.content_hash: p for p in persisted_for_input}
-        ids: list[int] = []
-        embeddings: list[Embedding] = []
+        # Late-interaction split: dispatch each chunk's embedding to the
+        # store that matches its shape. ``np.ndarray`` → ``uow.vectors``
+        # (TurboQuant .tq sidecar), ``list[np.ndarray]`` → ``uow.multi_vectors``
+        # (PLAID-style ColBERT store). The two stores have distinct row
+        # shapes, so mis-routing would corrupt the backing index.
+        sv_ids: list[int] = []
+        sv_embeddings: list[Embedding] = []
+        mv_ids: list[int] = []
+        mv_embeddings: list[MultiVector] = []
         for input_chunk in input_chunks:
             persisted_chunk = by_hash[input_chunk.content_hash]
             if input_chunk.embedding is None or persisted_chunk.id is None:
                 continue
-            ids.append(persisted_chunk.id)
-            embeddings.append(input_chunk.embedding)
-        if not ids:
-            return
-        await uow.vectors.add_vectors(ids, embeddings)
+            if is_multi_vector(input_chunk.embedding):
+                mv_ids.append(persisted_chunk.id)
+                mv_embeddings.append(input_chunk.embedding)
+            else:
+                sv_ids.append(persisted_chunk.id)
+                sv_embeddings.append(input_chunk.embedding)
+        if sv_ids:
+            await uow.vectors.add_vectors(sv_ids, sv_embeddings)
+        if mv_ids:
+            await uow.multi_vectors.add_vectors(mv_ids, mv_embeddings)
 
     async def _resolve_references(
         self,
