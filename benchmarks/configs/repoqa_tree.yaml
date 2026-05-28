@@ -1,8 +1,14 @@
 # RepoQA experiment — vectorless LLM tree-reasoning only.
 # REQUIRES OPENAI_API_KEY (the tree step calls the LLM per query).
 # Uses the default `llm:` config (openai / gpt-4o-mini).
+# Indexing skips the dense `embed_chunks` stage — the tree-reasoning
+# search path walks the code map (titles + summaries) and never reads
+# dense vectors. Drops per-task indexing time by ~80%.
 # See benchmarks/EXPERIMENTS.md.
 pipelines:
+  ingestion:
+    - default: true
+      pipeline_path: pipelines/ingestion_bm25_only.yaml
   chunk:
     - default: true
       pipeline_path: pipelines/exp_tree.yaml

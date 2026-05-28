@@ -1,0 +1,13 @@
+# DS-1000 experiment — vectorless LLM tree-reasoning, ranked output.
+# Mirrors repoqa_tree.yaml. The LLM (default gpt-4o-mini via the `llm:`
+# config) is the only retrieval signal — no BM25, no dense. Requires
+# OPENAI_API_KEY in env at search time.
+# Indexing skips the dense `embed_chunks` stage — the tree-reasoning
+# search path doesn't read dense vectors.
+pipelines:
+  ingestion:
+    - default: true
+      pipeline_path: pipelines/ingestion_bm25_only.yaml
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_tree.yaml

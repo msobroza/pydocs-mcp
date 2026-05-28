@@ -1,0 +1,32 @@
+# BM25-only ingestion pipeline — drops the `embed_chunks` stage so a
+# deployment that only uses BM25 / LLM-tree-reasoning retrieval doesn't
+# pay for dense vector encoding it never reads.
+#
+# When to use this preset:
+#  - Retrieval pipeline is BM25-only (FTS5) — no `dense_fetcher` /
+#    `dense_scorer` / `late_interaction_scorer` step.
+#  - Retrieval pipeline is `llm_tree_reasoning` only — walks the code
+#    map via the LLM, doesn't read embeddings.
+#
+# When NOT to use:
+#  - Any pipeline that includes `dense_fetcher` / `dense_scorer` — those
+#    require `chunks.embedding` populated.
+#  - Late-interaction sweep — use `ingestion_late_interaction.yaml`
+#    which runs `embed_chunks_multi_vector` instead.
+#
+# Override via `pipelines.ingestion.pipeline_path` in your AppConfig
+# YAML (see benchmarks/configs/repoqa_bm25.yaml for an example).
+name: ingestion_bm25_only
+stages:
+  - { type: file_discovery }
+  - { type: file_read }
+  - { type: chunking }
+  - { type: reference_capture }
+  - { type: flatten }
+  - { type: assign_chunk_content_hash }
+  - { type: load_existing_chunk_hashes }
+  # No `embed_chunks` — BM25 / FTS5 doesn't need dense vectors. Skipping
+  # the FastEmbed encode drops per-task indexing wall time by ~80% on
+  # the small repos RepoQA / DS-1000 benchmarks use.
+  - { type: content_hash }
+  - { type: package_build }

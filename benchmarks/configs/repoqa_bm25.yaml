@@ -1,6 +1,12 @@
 # RepoQA experiment — BM25 (FTS5) only. See benchmarks/EXPERIMENTS.md.
-# No embedder or LLM is used at search time (indexing still embeds chunks).
+# No embedder or LLM is used at search time. Indexing also skips the
+# dense `embed_chunks` stage (via `ingestion_bm25_only.yaml`) since BM25
+# never reads the dense vectors — this drops per-task indexing time by
+# ~80% on the small-repo corpora the benchmarks use.
 pipelines:
+  ingestion:
+    - default: true
+      pipeline_path: pipelines/ingestion_bm25_only.yaml
   chunk:
     - default: true
       pipeline_path: pipelines/exp_bm25.yaml
