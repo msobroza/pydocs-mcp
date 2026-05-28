@@ -69,7 +69,7 @@ def _ensure_fast_plaid_imported() -> None:
         # actually monkeypatching ``sys.modules``.
         raise ImportError(_INSTALL_HINT) from _FAST_PLAID_IMPORT_ERROR
     try:
-        from fast_plaid import search as _search
+        from fast_plaid import search as _search  # type: ignore[import-not-found]
 
         _FastPlaidCls = _search.FastPlaid
     except ImportError as e:  # pragma: no cover - exercised when extra is missing
@@ -207,7 +207,7 @@ class FastPlaidUnitOfWork:
         # Lazy import torch — keeps the ``[late-interaction]`` extra gated
         # to the write path that actually needs it (the import is ~1-2 GB
         # of native libs we don't want to pay for at module-load time).
-        import torch
+        import torch  # type: ignore[import-not-found, unused-ignore]
 
         doc_tensors = [
             torch.from_numpy(np.stack(emb, axis=0).astype(np.float32, copy=False))
@@ -334,7 +334,7 @@ class FastPlaidUnitOfWork:
         if not subset_chunk_ids:
             return ()
         # Lazy import torch — keeps the optional-extra gated to the read path.
-        import torch
+        import torch  # type: ignore[import-not-found, unused-ignore]
 
         with sqlite3.connect(str(self.db_path)) as conn:
             placeholders = ",".join("?" for _ in subset_chunk_ids)
