@@ -26,8 +26,9 @@ preset can ship without touching any shipped default:
    wraps PyLate's `models.ColBERT` to emit **one vector per token** for both
    queries and documents. Distinct from the single-vector `Embedder` Protocol
    (which returns a 1-D `np.ndarray`); a late-interaction embedder returns a
-   2-D `np.ndarray` of shape `(n_tokens, dim)` (the `MultiVector` arm of the
-   existing `Embedding` union).
+   `list[np.ndarray]` of length `n_tokens` where each element is a 1-D
+   float32 vector of length `dim` (the `MultiVector` arm of the existing
+   `Embedding` union — `is_multi_vector` checks for `isinstance(emb, list)`).
 
 2. Multi-vector persistence — a new storage backend that stores one token
    matrix per chunk as a SQLite BLOB, so the full matrix can be reconstructed
@@ -71,14 +72,15 @@ the domain model:
 - `python/pydocs_mcp/models.py:56-80` — `MultiVector = list[np.ndarray]`,
   `Embedding = np.ndarray | MultiVector`, and `is_multi_vector(emb)`. The
   `Chunk.embedding` field already accepts the `MultiVector` arm.
-- `python/pydocs_mcp/storage/protocols.py:336-358` — the `Embedder` Protocol
+- `python/pydocs_mcp/storage/protocols.py:350-375` — the `Embedder` Protocol
   docstring already names ColBERT and points at `is_multi_vector` for
   disambiguation, so adding a sibling `MultiVectorEmbedder` Protocol is
   the planned extension shape, not a surprise.
-- `python/pydocs_mcp/retrieval/steps/dense_fetcher.py:67-73` +
-  `dense_scorer.py:59-63` — both collapse a multi-vector query to `query_vec[0]`
-  with a comment: "The check exists so a future PR that adds multi-vector
-  persistence can flip the behaviour without changing the contract."
+- `python/pydocs_mcp/retrieval/steps/dense_fetcher.py:67-74` +
+  `dense_scorer.py:59-64` — both collapse a multi-vector query to `query_vec[0]`
+  as a "degraded single-vector fallback" pending the persistence change;
+  `dense_scorer.py:61-63` explicitly notes that "a future PR adding multi-vector
+  persistence can flip this without changing the contract."
 - `python/pydocs_mcp/storage/turboquant_uow.py:104-110` —
   `TurboQuantUnitOfWork.add_vectors` raises `NotImplementedError` for
   multi-vector input, explicitly naming "a future PR that adds a
@@ -165,15 +167,14 @@ class MultiVectorEmbedder(Protocol):
     """Late-interaction (ColBERT-style) embedder: one vector PER TOKEN.
 
     Distinct from :class:`Embedder` (single pooled vector per text).
-    ``embed_query`` / ``embed_documents`` each return a 2-D float32
-    ``np.ndarray`` of shape ``(n_tokens, dim)`` — the ``MultiVector``
-    arm of the ``Embedding`` union. Query and document encoders may
-    differ (ColBERT prepends a [Q]/[D] marker token + ColBERT-v1 also
-    pads queries with [MASK] tokens for "query expansion"), hence the
-    two method names rather than reusing ``embed_query`` /
-    ``embed_chunks``.
+    ``embed_query`` / ``embed_chunks`` each return a
+    ``MultiVector = list[np.ndarray]`` of length ``n_tokens`` — every
+    element is a 1-D float32 ``np.ndarray`` of length ``dim``. The
+    outer container is a Python ``list`` (NOT a stacked 2-D array)
+    because :func:`pydocs_mcp.models.is_multi_vector` disambiguates the
+    ``Embedding`` union via ``isinstance(emb, list)``.
 
-    Implementations MUST L2-normalize each token-vector row before
+    Implementations MUST L2-normalize each token-vector before
     returning so MaxSim's downstream dot-product IS the cosine — no
     per-query renormalization in :func:`_maxsim` (Decision C).
     """
@@ -182,7 +183,7 @@ class MultiVectorEmbedder(Protocol):
 
     async def embed_query(self, text: str) -> MultiVector: ...
 
-    async def embed_documents(
+    async def embed_chunks(
         self, texts: Sequence[str],
     ) -> tuple[MultiVector, ...]: ...
 ```
