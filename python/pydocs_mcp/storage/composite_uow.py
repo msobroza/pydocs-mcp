@@ -135,7 +135,7 @@ class CompositeUnitOfWork:
         self._attr_map = self._build_attr_map()
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
         for child in reversed(self._entered):
             try:
                 await child.__aexit__(exc_type, exc, tb)
@@ -144,6 +144,10 @@ class CompositeUnitOfWork:
                     "CompositeUnitOfWork child __aexit__ raised: %r",
                     inner_exc,
                 )
+        # Never suppress the in-flight exception — False is falsy,
+        # matching the prior implicit `return None`. The UnitOfWork
+        # Protocol declares `-> bool`, so return an explicit bool.
+        return False
 
     async def commit(self) -> None:
         committed: list = []
@@ -290,3 +294,13 @@ class CompositeUnitOfWork:
 
 
 __all__ = ("CompositeUnitOfWork",)
+
+if TYPE_CHECKING:
+    # Static conformance guard — CI `mypy python/pydocs_mcp` fails here if
+    # CompositeUnitOfWork ever drifts out of UnitOfWork conformance
+    # (a missing repo, a changed method signature). Pairs with the
+    # read-only @property repo declarations on the Protocol + the
+    # __aexit__ -> bool signature below.
+    from pydocs_mcp.storage.protocols import UnitOfWork as _UnitOfWorkConformance
+
+    _COMPOSITE_IS_UOW: type[_UnitOfWorkConformance] = CompositeUnitOfWork

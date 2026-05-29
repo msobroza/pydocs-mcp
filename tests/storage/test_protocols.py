@@ -147,14 +147,14 @@ def test_reference_store_protocol_exists_in_storage_protocols():
 
 
 def test_unit_of_work_protocol_now_has_references_attribute():
-    """Spec §14.7 — UoW gains a 5th repo attribute (references)."""
-    from pydocs_mcp.storage.protocols import UnitOfWork
-
-    # __annotations__ exposes the typed attribute. Use get_type_hints to
-    # resolve forward refs.
+    """Spec §14.7 — UoW exposes a `references` repo, now as a read-only
+    @property (the Protocol declares its repos as read-only properties,
+    matching how SqliteUnitOfWork / CompositeUnitOfWork expose them)."""
     from typing import get_type_hints
 
-    hints = get_type_hints(UnitOfWork)
-    assert "references" in hints
-    # Type should be ReferenceStore (or its name as a forward ref).
-    assert "ReferenceStore" in str(hints["references"])
+    from pydocs_mcp.storage.protocols import UnitOfWork
+
+    prop = UnitOfWork.references
+    assert isinstance(prop, property), "references must be a read-only property"
+    ret = get_type_hints(prop.fget)["return"]
+    assert "ReferenceStore" in str(ret)

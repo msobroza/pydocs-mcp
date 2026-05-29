@@ -211,21 +211,33 @@ class UnitOfWork(Protocol):
     swap in a real fast-plaid backend via the composition root.
     """
 
-    packages: PackageStore
-    chunks: ChunkStore
-    module_members: ModuleMemberStore
-    trees: DocumentTreeStore
-    references: ReferenceStore
+    # Read-only @property (not bare settable annotations): both
+    # SqliteUnitOfWork and CompositeUnitOfWork expose these repos via
+    # read-only properties, so the Protocol must require only a
+    # *readable* attribute. A settable impl still satisfies a read-only
+    # requirement (covariant), so this is the honest minimal contract.
+    @property
+    def packages(self) -> PackageStore: ...
+    @property
+    def chunks(self) -> ChunkStore: ...
+    @property
+    def module_members(self) -> ModuleMemberStore: ...
+    @property
+    def trees(self) -> DocumentTreeStore: ...
+    @property
+    def references(self) -> ReferenceStore: ...
     # Untyped here to avoid a hard import of NullVectorStore at the
     # Protocol level (NullVectorStore is a concrete dataclass with no
     # @runtime_checkable Protocol behind it yet). The structural
     # contract is "clear_all() / add_vectors() / remove_vectors() —
     # all async no-op or real" and is enforced by the impls below.
-    vectors: object
+    @property
+    def vectors(self) -> object: ...
     # The MultiVectorStore Protocol IS @runtime_checkable so the typed
     # attribute can name it directly — unlike ``vectors`` which still
     # uses ``object`` for the NullVectorStore precedent.
-    multi_vectors: MultiVectorStore
+    @property
+    def multi_vectors(self) -> MultiVectorStore: ...
 
     async def __aenter__(self) -> UnitOfWork: ...
     async def __aexit__(self, exc_type, exc, tb) -> bool: ...
