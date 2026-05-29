@@ -91,3 +91,27 @@ def test_ast_equivalent_whitespace_still_tolerant() -> None:
 
 def test_ast_equivalent_syntax_error_still_false() -> None:
     assert ast_equivalent("def f(:", "def f(): return 1") is False
+
+
+# ── The normalization policy is independently testable (the SRP payoff) ─
+
+
+def test_comparable_node_strips_decorators() -> None:
+    import ast
+
+    from benchmarks.eval.ast_match import _comparable_node
+
+    node = _comparable_node("@curry\n@cache\ndef f(): return 1\n")
+    assert isinstance(node, ast.FunctionDef)
+    assert node.name == "f"
+    assert node.decorator_list == []  # both decorators zeroed
+
+
+def test_comparable_node_extracts_first_def_ignoring_siblings() -> None:
+    import ast
+
+    from benchmarks.eval.ast_match import _comparable_node
+
+    node = _comparable_node("def f(): return 1\n\nx = 2\ndef g(): return 3\n")
+    assert isinstance(node, ast.FunctionDef)
+    assert node.name == "f"  # first def, trailing assign + g() ignored

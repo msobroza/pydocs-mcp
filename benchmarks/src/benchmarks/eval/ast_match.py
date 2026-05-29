@@ -1,8 +1,10 @@
 """AST-equivalence matcher for retrieved-vs-gold comparison (spec §4.8).
 
 RepoQA gold bodies and retrieved chunks differ by whitespace, comments,
-and indentation but should still compare equal at the AST level. Using
-``ast.dump(ast.parse(...))`` strips trivia and gives a canonical form.
+and indentation but should still compare equal at the AST level.
+``_comparable_node`` normalizes each snippet to the AST node worth
+comparing (see its docstring); ``ast.dump`` of that node is the
+canonical, trivia-free form.
 
 The same gold body is matched against the same retrieved-item bodies by
 multiple metrics on every task (recall@1/5/10, MRR, pass@1-needle), so
@@ -29,42 +31,51 @@ if TYPE_CHECKING:
 _DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
-@cache
-def _canonical_dump(source: str) -> str | None:
-    """Canonical AST form of a snippet, robust to RepoQA's gold shape.
+def _comparable_node(source: str) -> ast.AST:
+    """The AST node RepoQA gold and a retrieved chunk should compare by.
 
-    Returns ``ast.dump`` of the snippet's first top-level def (function /
-    async function / class) with its decorator list zeroed, or
-    ``ast.dump`` of the whole module when the snippet defines no such
-    node. ``None`` on SyntaxError (a truncated chunk degrades to "no
-    match" rather than aborting the run).
+    Returns the snippet's first top-level def (function / async function
+    / class) with its decorator list zeroed, or the whole module when
+    the snippet defines no such node. Raises ``SyntaxError`` for the
+    caller to handle — this function owns the *normalization policy*,
+    not the caching / error contract (that is ``_canonical_dump``).
 
-    Three normalizations make RepoQA gold <-> retrieved-chunk comparison
-    reliable; each was measured failing on the small_test split:
+    Three normalizations make gold <-> chunk comparison reliable; each
+    was measured failing on the RepoQA small_test split:
 
     1. ``textwrap.dedent`` — RepoQA slices a needle as raw source lines,
        so a class *method* gold arrives indented and ``ast.parse`` would
-       raise ``unexpected indent`` (returning None and auto-zeroing the
-       task before any retrieved item is inspected). Dedenting lets the
-       method parse as a standalone def.
+       raise ``unexpected indent``. Dedenting lets the method parse as a
+       standalone def.
     2. First-def extraction — a retrieved chunk may carry trailing
        sibling lines past the needle's ``end_line``; comparing only the
-       first def node (not the whole-module dump) ignores that trivia.
+       first def node ignores that trivia.
     3. Decorator zeroing — the chunker slices from the ``def`` line,
        dropping ``@decorator`` lines that RepoQA's gold span includes.
-       Zeroing ``decorator_list`` on both sides removes the asymmetry.
-       The node's name + args + body still must match, so a different
+       Zeroing ``decorator_list`` on both sides removes the asymmetry;
+       the node's name + args + body still must match, so a different
        function can never be credited (see the over-credit guard tests).
     """
-    try:
-        module = ast.parse(textwrap.dedent(source))
-    except SyntaxError:
-        return None
+    module = ast.parse(textwrap.dedent(source))
     for node in module.body:
         if isinstance(node, _DEF_TYPES):
             node.decorator_list = []
-            return ast.dump(node)
-    return ast.dump(module)
+            return node
+    return module
+
+
+@cache
+def _canonical_dump(source: str) -> str | None:
+    """Canonical AST string for ``source``, or None on SyntaxError.
+
+    Caches the dumped *string* (not the AST node — a mutable node must
+    not be shared across callers). A truncated chunk degrades to "no
+    match" instead of aborting the run.
+    """
+    try:
+        return ast.dump(_comparable_node(source))
+    except SyntaxError:
+        return None
 
 
 def ast_equivalent(a: str, b: str) -> bool:
