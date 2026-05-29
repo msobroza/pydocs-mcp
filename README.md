@@ -1,5 +1,13 @@
 # pydocs-mcp
 
+[![CI](https://github.com/msobroza/pydocs-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/msobroza/pydocs-mcp/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/pydocs-mcp.svg)](https://pypi.org/project/pydocs-mcp/)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Checked with mypy](https://www.mypy-lang.org/static/mypy_badge.svg)](https://mypy-lang.org/)
+[![MCP](https://img.shields.io/badge/MCP-Model_Context_Protocol-1f6feb)](https://modelcontextprotocol.io)
+
 **Local, version-aware code & docs search for your AI coding agent — over the
 exact library versions installed on your machine.**
 
