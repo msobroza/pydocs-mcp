@@ -14,6 +14,7 @@ MB at worst, well below "worry" territory.
 from __future__ import annotations
 
 import ast
+import textwrap
 from collections.abc import Sequence
 from functools import cache
 from typing import TYPE_CHECKING
@@ -22,13 +23,48 @@ if TYPE_CHECKING:
     from .systems.base_system import RetrievedItem
 
 
+# RepoQA needles are a function, async function, or class. The matcher
+# compares the first such node so a chunk carrying trailing sibling lines
+# (past the needle's end_line) still matches on the needle alone.
+_DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
 @cache
 def _canonical_dump(source: str) -> str | None:
-    """Return ``ast.dump(ast.parse(source))``, or None on SyntaxError."""
+    """Canonical AST form of a snippet, robust to RepoQA's gold shape.
+
+    Returns ``ast.dump`` of the snippet's first top-level def (function /
+    async function / class) with its decorator list zeroed, or
+    ``ast.dump`` of the whole module when the snippet defines no such
+    node. ``None`` on SyntaxError (a truncated chunk degrades to "no
+    match" rather than aborting the run).
+
+    Three normalizations make RepoQA gold <-> retrieved-chunk comparison
+    reliable; each was measured failing on the small_test split:
+
+    1. ``textwrap.dedent`` — RepoQA slices a needle as raw source lines,
+       so a class *method* gold arrives indented and ``ast.parse`` would
+       raise ``unexpected indent`` (returning None and auto-zeroing the
+       task before any retrieved item is inspected). Dedenting lets the
+       method parse as a standalone def.
+    2. First-def extraction — a retrieved chunk may carry trailing
+       sibling lines past the needle's ``end_line``; comparing only the
+       first def node (not the whole-module dump) ignores that trivia.
+    3. Decorator zeroing — the chunker slices from the ``def`` line,
+       dropping ``@decorator`` lines that RepoQA's gold span includes.
+       Zeroing ``decorator_list`` on both sides removes the asymmetry.
+       The node's name + args + body still must match, so a different
+       function can never be credited (see the over-credit guard tests).
+    """
     try:
-        return ast.dump(ast.parse(source))
+        module = ast.parse(textwrap.dedent(source))
     except SyntaxError:
         return None
+    for node in module.body:
+        if isinstance(node, _DEF_TYPES):
+            node.decorator_list = []
+            return ast.dump(node)
+    return ast.dump(module)
 
 
 def ast_equivalent(a: str, b: str) -> bool:
