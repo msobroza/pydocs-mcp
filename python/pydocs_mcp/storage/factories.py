@@ -24,6 +24,7 @@ from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import Chunk
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
+from pydocs_mcp.storage.protocols import UnitOfWork
 from pydocs_mcp.storage.sqlite import (
     CHUNK_COLUMNS,
     SqliteUnitOfWork,
@@ -134,7 +135,7 @@ def build_uow_factory(
     *,
     db_path: Path,
     tq_path: Path | None = None,
-) -> Callable[[], CompositeUnitOfWork]:
+) -> Callable[[], UnitOfWork]:
     """Single-dispatch composition for the per-deployment UoW.
 
     Inspects ``config.late_interaction.enabled`` to decide whether to
