@@ -78,9 +78,11 @@ def _rrf_fuse(
 class RRFResultFuser:
     """Standalone reciprocal-rank fusion fuser.
 
-    The math-only counterpart to RRFFusionStep, used by code paths
-    that aren't structured as pipeline steps (e.g., the future
-    HybridSqliteTurboStore composes this directly).
+    The math-only counterpart to RRFFusionStep, for code paths that
+    aren't structured as pipeline steps. The shipped hybrid path fuses
+    at the pipeline level (parallel retrieval + RRF); a native
+    ``hybrid_search`` exists only when a single backend fuses
+    server-side.
     """
 
     k: int = _DEFAULT_K
