@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 # ``@*_registry.register`` decorator on import, so the four registries
 # are populated *before* ``argparse`` renders ``--help``. AC3 (help text
 # lists registered names) depends on this side effect.
+from . import _bench_cache
 from . import datasets as _datasets  # noqa: F401 -- registry side-effects
 from . import metrics as _metrics_pkg  # noqa: F401 -- registry side-effects
 from . import systems as _systems  # noqa: F401 -- registry side-effects
@@ -525,6 +526,10 @@ def _parse_csv(value: str) -> tuple[str, ...]:
     return tuple(s.strip() for s in value.split(",") if s.strip())
 
 
+def _apply_bench_cache_flag(value: str) -> None:
+    _bench_cache.set_enabled(value == "on")
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         # WHY: ``benchmarks.eval.runner`` (short path) matches how the
@@ -630,6 +635,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="optional path to write the markdown report. omitted = stdout only.",
     )
+    parser.add_argument(
+        "--bench-cache",
+        choices=["on", "off"],
+        default="on",
+        help=(
+            "Reuse a per-(corpus, ingestion-hash) indexed DB across tasks and "
+            "sweeps (default on). 'off' rebuilds a fresh tmp DB per task — use "
+            "to reproduce pre-cache numbers exactly."
+        ),
+    )
     return parser
 
 
@@ -644,6 +659,10 @@ def main() -> None:
     # (--corpus-dir's argparse type already resolved it to an absolute Path.)
     if args.corpus_dir is not None and not args.corpus_dir.is_dir():
         parser.error(f"--corpus-dir not a directory: {args.corpus_dir}")
+
+    # WHY here: toggle the per-(corpus, ingestion-hash) index cache before the
+    # sweep launches so every task in the run observes the same setting.
+    _apply_bench_cache_flag(args.bench_cache)
 
     config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
     dataset_kwargs: dict[str, object] = {}
