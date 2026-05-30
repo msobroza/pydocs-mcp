@@ -1,4 +1,5 @@
 """Backend identity folds into the ingestion pipeline hash (spec §10)."""
+
 from __future__ import annotations
 
 from pathlib import Path

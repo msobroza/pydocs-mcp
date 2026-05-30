@@ -113,7 +113,9 @@ def test_composite_backend_li_enabled_wires_multi(tmp_path: Path) -> None:
 
     assert isinstance(be.multi(), _FastPlaidReadStore)
     assert be.capabilities()["multi"] is True
-    assert len(be.write_uow_children()) == 3  # SQLite + TurboQuant + fast-plaid (lambdas; not called)
+    assert (
+        len(be.write_uow_children()) == 3
+    )  # SQLite + TurboQuant + fast-plaid (lambdas; not called)
 
 
 def test_composite_backend_late_interaction_enabled(tmp_path: Path) -> None:

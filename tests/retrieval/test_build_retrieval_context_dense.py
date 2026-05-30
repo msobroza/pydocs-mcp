@@ -1,4 +1,5 @@
 """build_retrieval_context wires a VectorSearchable dense store from the backend."""
+
 from __future__ import annotations
 
 from pathlib import Path

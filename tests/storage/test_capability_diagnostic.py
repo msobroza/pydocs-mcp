@@ -1,4 +1,5 @@
 """Capability diagnostic renders the active matrix (spec invariant C)."""
+
 from __future__ import annotations
 
 from pathlib import Path

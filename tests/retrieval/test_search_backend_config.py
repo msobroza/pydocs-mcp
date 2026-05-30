@@ -1,4 +1,5 @@
 """search_backend YAML overlay parses; default kind is sqlite_composite."""
+
 from __future__ import annotations
 
 from pathlib import Path

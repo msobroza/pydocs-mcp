@@ -1,4 +1,5 @@
 """Invariant A: a dense step + non-vector store raises at build time."""
+
 from __future__ import annotations
 
 import pytest

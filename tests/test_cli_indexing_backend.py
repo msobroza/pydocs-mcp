@@ -1,4 +1,5 @@
 """Production indexing builds the composite UoW via the SearchBackend."""
+
 from __future__ import annotations
 
 from pathlib import Path

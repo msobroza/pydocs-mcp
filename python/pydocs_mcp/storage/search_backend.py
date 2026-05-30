@@ -28,7 +28,6 @@ from pydocs_mcp.storage.protocols import (
     HybridSearchable,
     MultiVectorSearchable,
     TextSearchable,
-    UnitOfWork,
     VectorSearchable,
 )
 from pydocs_mcp.storage.sqlite import SqliteReferenceStore, SqliteVectorStore
@@ -66,7 +65,7 @@ class SearchBackend(Protocol):
 
     def filter_strategy(self, capability: Literal["dense", "multi"]) -> FilterStrategy: ...
 
-    def write_uow_children(self) -> tuple[Callable[[], UnitOfWork], ...]: ...
+    def write_uow_children(self) -> tuple[Callable[[], object], ...]: ...
 
     def capabilities(self) -> Mapping[str, bool]: ...
 
@@ -199,7 +198,7 @@ class SqliteCompositeBackend:
             "multi": FilterStrategy.RERANK_ONLY,
         }[capability]
 
-    def write_uow_children(self) -> tuple[Callable[[], UnitOfWork], ...]:
+    def write_uow_children(self) -> tuple[Callable[[], object], ...]:
         # Canonical write-child assembler: production indexing sources its
         # ``CompositeUnitOfWork`` children from here. Builds
         # ``[SQLite, TurboQuant, optional FastPlaid]`` — the fast-plaid child
@@ -208,7 +207,7 @@ class SqliteCompositeBackend:
         # test-only SQLite + TurboQuant subset helper (no fast-plaid leg).
         embed = self.config.embedding
         tq_path = self.tq_path
-        children: list[Callable[[], UnitOfWork]] = [
+        children: list[Callable[[], object]] = [
             build_sqlite_uow_factory(self.db_path),
             lambda: TurboQuantUnitOfWork(
                 index_path=tq_path,
@@ -252,7 +251,9 @@ class SqliteCompositeBackend:
 _BACKEND_FACTORIES: dict[str, Callable[..., SearchBackend]] = {}
 
 
-def register_backend(kind: str) -> Callable[[Callable[..., SearchBackend]], Callable[..., SearchBackend]]:
+def register_backend(
+    kind: str,
+) -> Callable[[Callable[..., SearchBackend]], Callable[..., SearchBackend]]:
     """Register a backend factory under ``kind``.
 
     Self-contained decorator registry (intentionally NOT
