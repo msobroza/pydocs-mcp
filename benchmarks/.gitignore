@@ -1,0 +1,14 @@
+# Per the per-sample cached-DB design
+# (docs/superpowers/specs/2026-05-30-bench-per-sample-cache-design.md, D7):
+# the runner's JSONL output dir + any cache breadcrumbs are operator
+# artefacts, not source.
+
+# JsonlExperimentTracker default output_dir
+results/jsonl/
+
+# Distilled baselines under PR-scoped report folders are committed
+# explicitly by operators; the bare per-run dir is operator-local.
+reports/**/baselines/
+
+# Test-cache breadcrumbs
+**/_cache/
