@@ -55,3 +55,49 @@ def test_enabled_flag_roundtrips() -> None:
         assert _bench_cache.is_enabled() is True
     finally:
         _bench_cache.set_enabled(original)
+
+
+def test_lookup_miss_then_hit(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    assert _bench_cache.lookup("deadbeef") is None
+    # Simulate a built entry.
+    d = _bench_cache.entry_dir("deadbeef")
+    d.mkdir(parents=True)
+    db = _bench_cache.db_path_for("deadbeef")
+    db.write_text("not empty")
+    assert _bench_cache.lookup("deadbeef") == db
+
+
+def test_lookup_ignores_empty_db(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    d = _bench_cache.entry_dir("k")
+    d.mkdir(parents=True)
+    _bench_cache.db_path_for("k").touch()  # zero bytes
+    assert _bench_cache.lookup("k") is None
+
+
+def test_reserve_then_commit_promotes_atomically(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    build = _bench_cache.reserve("k")
+    assert build.is_dir()
+    # Write the db + a sidecar into the build dir.
+    (build / "index.sqlite").write_text("db")
+    (build / "index.plaid").write_text("plaid sidecar")
+    db = _bench_cache.commit("k", build)
+    assert db == _bench_cache.db_path_for("k")
+    assert db.read_text() == "db"
+    assert (_bench_cache.entry_dir("k") / "index.plaid").read_text() == "plaid sidecar"
+    assert not build.exists()  # tmp consumed by the rename
+
+
+def test_commit_loses_race_drops_tmp(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    # Pre-create the final entry (another process won).
+    final = _bench_cache.entry_dir("k")
+    final.mkdir(parents=True)
+    _bench_cache.db_path_for("k").write_text("winner")
+    build = _bench_cache.reserve("k")
+    (build / "index.sqlite").write_text("loser")
+    db = _bench_cache.commit("k", build)
+    assert db.read_text() == "winner"  # winner kept
+    assert not build.exists()  # loser dropped

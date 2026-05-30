@@ -15,6 +15,8 @@ set_enabled() (the runner wires --bench-cache on|off).
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,3 +56,37 @@ def entry_dir(key: str) -> Path:
 
 def db_path_for(key: str) -> Path:
     return entry_dir(key) / _DB_FILENAME
+
+
+def lookup(key: str) -> Path | None:
+    db = db_path_for(key)
+    try:
+        if db.is_file() and db.stat().st_size > 0:
+            return db
+    except OSError:
+        return None
+    return None
+
+
+def reserve(key: str) -> Path:
+    """A fresh empty build dir for `key`, sibling to the final entry."""
+    tmp = cache_root() / f"{key}.{os.getpid()}.tmp"
+    if tmp.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+    return tmp
+
+
+def commit(key: str, build_dir: Path) -> Path:
+    """Atomically promote a built dir to the final entry; return the db path.
+
+    If another process already produced the entry (race), drop ours and
+    use theirs — a duplicate build is idempotent for benchmark purposes.
+    """
+    final = entry_dir(key)
+    if final.exists():
+        shutil.rmtree(build_dir, ignore_errors=True)
+        return db_path_for(key)
+    final.parent.mkdir(parents=True, exist_ok=True)
+    build_dir.replace(final)  # atomic dir rename on the same filesystem
+    return db_path_for(key)
