@@ -84,6 +84,15 @@ class _FakeSystem:
         return None
 
 
+@system_registry.register("fake-all-warm-system")
+@dataclass
+class _AllWarm(_FakeSystem):
+    name: str = "fake-all-warm-system"
+
+    async def index(self, corpus_dir: Path, config) -> None:
+        self._hit = True  # every task a hit
+
+
 async def test_cache_hit_tasks_emit_no_indexing_seconds(tmp_path) -> None:
     _LOGGED.clear()
     await run_sweep(
@@ -102,14 +111,6 @@ async def test_cache_hit_tasks_emit_no_indexing_seconds(tmp_path) -> None:
 async def test_all_warm_leg_emits_no_indexing_aggregate(tmp_path) -> None:
     # I2/AC15: when EVERY task is a hit, the empty indexing_seconds series
     # must not emit a 0.0 aggregate row.
-    @system_registry.register("fake-all-warm-system")
-    @dataclass
-    class _AllWarm(_FakeSystem):
-        name: str = "fake-all-warm-system"
-
-        async def index(self, corpus_dir: Path, config) -> None:
-            self._hit = True  # every task a hit
-
     _LOGGED.clear()
     await run_sweep(
         systems=("fake-all-warm-system",),
