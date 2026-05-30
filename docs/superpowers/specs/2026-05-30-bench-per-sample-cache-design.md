@@ -51,7 +51,9 @@ config.compute_ingestion_pipeline_hash())`. **Ingestion hash only** —
 NOT the full config: the indexed DB content depends only on the corpus
 + ingestion pipeline + embedder, never on the retrieval pipeline
 (BM25 vs tree vs LI). So configs that share an ingestion pipeline
-(e.g. `repoqa_bm25` + `repoqa_tree`, both on `ingestion_bm25_only.yaml`)
+(e.g. `repoqa_bm25` + `repoqa_tree` — neither overrides the
+`pipelines.ingestion` route, so both resolve to the same default
+ingestion hash)
 reuse ONE cached DB across configs, not just across tasks. The
 ingestion hash is already canonical (SHA-256 over embedder identity +
 raw YAML bytes), so changing the embedder or ingestion YAML rebuilds
@@ -87,9 +89,23 @@ fixed, with zero cache rework.
   so the `.sqlite` and any `.tq`/`.plaid` sidecars move together. A
   lost race (another process produced the entry) drops the build dir
   and uses the winner — a duplicate build is idempotent.
+- **Leak-safety (review C1):** the build-and-promote MUST be wrapped
+  so a `_do_index` failure removes the half-built `<key>.<pid>.tmp/`
+  dir before re-raising. Otherwise `teardown()` (which skips a *cached*
+  path) would never reach it and the orphan accumulates across PIDs on
+  every failed cold index. Equivalent rule: only mark the path as
+  "cached" (the teardown-skip flag) AFTER a successful `commit()`.
 - The runner's `finally: shutil.rmtree(dir_)` cleanup
   (`runner.py:250`) is unchanged — it only deletes per-task **corpus**
   directories the dataset materialized, never the cache DB.
+- **Subclass coverage (review M1):** the cache branch lives in the
+  base `PydocsMcpSystem.index()`. The tree variants
+  (`PydocsTreeOnlySystem` / `PydocsTreeParallelSystem`) override
+  `index()` only to swap the config, then call `super().index(...)`, so
+  they inherit caching — and their *override* config feeds `make_key`,
+  so a tree leg and a bm25 leg share a cached DB exactly when their
+  ingestion hashes match. The heavy indexing body MUST stay in the base
+  `_do_index`/`index()`, or the tree variants silently lose caching.
 
 ### D4 — Cache is opt-in via `--bench-cache <on|off>` (default: `on`)
 - `on` — the D3 behaviour above.
@@ -173,6 +189,18 @@ is fully sequential (see Non-goals), so the cold leg's
 `indexing_seconds` are clean, uncontended measurements — the cache
 changes neither the ordering nor the timing of a cold task.
 
+**Aggregate-row safety (review I2):** the per-task skip is not enough.
+The runner's latency aggregation (`runner.py:267-276`) iterates
+`LATENCY_KEYS` unconditionally; an all-warm leg leaves
+`latency_values["indexing_seconds"]` EMPTY, and `percentile([])`
+returns `0.0` (it does NOT crash — verified in `metrics/aggregate.py`),
+so the leg would still log `indexing_seconds_p50/p95/p99 = 0.0` — the
+same "0.0 s indexing" corruption, just relocated to the aggregate.
+Rule: the aggregation loop MUST skip emitting a `*_seconds` percentile
+triple when its series is empty (omit the row rather than report 0.0).
+An all-warm leg therefore has NO indexing-time row at all — correct,
+since it performed no indexing.
+
 ## Files to modify
 
 - `benchmarks/src/benchmarks/eval/systems/pydocs.py` — D3, D4, D5
@@ -251,6 +279,16 @@ changes neither the ordering nor the timing of a cold task.
   Tested by driving the runner's per-task body over a fake system
   whose `was_cache_hit` toggles, asserting the `indexing_seconds`
   series length equals the cold-task count (not the total task count).
+- **AC15 — Empty latency series emits NO aggregate row.** An all-warm
+  leg (every task a cache hit → empty `indexing_seconds` series)
+  logs NO `indexing_seconds_p50/p95/p99` metric, rather than `0.0`.
+  Unit-tested on the aggregation loop: empty series → key omitted;
+  non-empty `search_seconds` still emitted.
+- **AC16 — Failed cold index leaves no orphan build dir.** When
+  `_do_index` raises on a cache MISS, no `<key>.<pid>.tmp/` directory
+  survives under `~/.pydocs-mcp/bench/` and no entry is promoted.
+  Tested by monkeypatching `_do_index` to raise and asserting the
+  cache root has no leftover build dir afterwards.
 
 ## TDD sequence (red → green)
 

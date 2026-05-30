@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-05-30-bench-per-sample-cache-design.md`
 
 **Deviations from spec (deliberate, discovered during planning — fold back into spec):**
-- **D1 key refinement:** key on `config.compute_ingestion_pipeline_hash()` (ingestion only), NOT the full config. The indexed DB depends only on ingestion + embedder + corpus; the retrieval pipeline (BM25 vs tree vs LI) never changes DB *content*. So configs that share an ingestion pipeline (e.g. `repoqa_bm25` + `repoqa_tree`, both on `ingestion_bm25_only.yaml`) share one cached DB. Bigger win; AC3 reframed accordingly.
+- **D1 key refinement:** key on `config.compute_ingestion_pipeline_hash()` (ingestion only), NOT the full config. The indexed DB depends only on ingestion + embedder + corpus; the retrieval pipeline (BM25 vs tree vs LI) never changes DB *content*. So configs that share an ingestion pipeline (e.g. `repoqa_bm25` + `repoqa_tree` — neither overrides the `pipelines.ingestion` route, so both resolve to the same default ingestion hash) share one cached DB. Bigger win; AC3 reframed accordingly.
 - **D2/D3 storage refinement:** cache entry is a **directory** `~/.pydocs-mcp/bench/<key>/` holding `index.sqlite` (+ `index.tq` / `index.plaid` sidecars), built in `<key>.<pid>.tmp/` and promoted with an atomic `os.replace` of the *directory*. The spec's flat single-`.db` sketch would orphan the LI `.plaid` and dense `.tq` sidecars (`build_uow_factory` derives them from `db_path.stem`), breaking LI/dense on a cache hit.
 
 **Out of scope (validated BM25/tree only):** the benchmark's `_do_index` uses `build_sqlite_indexing_service` (SQLite-only UoW), so `uow.vectors`/`uow.multi_vectors` are Null no-ops — NO `.tq`/`.plaid` is written today, and dense/LI configs retrieve against absent sidecars (a pre-existing wiring bug, tracked in its own PR). This cache is verified end-to-end on BM25 + tree; the directory shape (Task 2) is forward-compatible so dense/LI gain caching for free once that bug is fixed. Task 2's `test_reserve_then_commit_promotes_atomically` covers spec AC12 with a FAKE `index.plaid` (proves the dir-move preserves arbitrary sidecars without needing real LI).
@@ -375,6 +375,8 @@ git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.
 
 Splitting the heavy indexing body into a helper so Task 5 can call it from both the cache-hit-miss and the no-cache branch without duplication. NO behavior change in this task.
 
+**Subclass coverage (review M1):** `_do_index` and the Task 5 cache branch MUST live in the **base** `PydocsMcpSystem`. The tree variants `PydocsTreeOnlySystem` / `PydocsTreeParallelSystem` (`pydocs.py:292-344`) override only `index()` to swap the config, then call `super().index(...)` — so they inherit `_do_index` + caching automatically, and their override config feeds `make_key`. Do NOT duplicate indexing logic into the subclasses, or they silently lose caching. The existing `test_pydocs_system.py` baseline (Step 1) exercises the base path; no subclass-specific test is needed since they delegate.
+
 - [ ] **Step 1: Run the existing pydocs system tests to capture green baseline**
 
 Run: `cd <worktree> && PYTHONPATH=benchmarks/src .venv/bin/python -m pytest benchmarks/tests/eval/test_pydocs_system.py -q`
@@ -563,6 +565,31 @@ async def test_teardown_keeps_cached_db(tmp_path, monkeypatch, _cache_in_tmp) ->
     assert cached_db.is_file()
     await s.teardown()
     assert cached_db.is_file()  # teardown must NOT delete the cache
+
+
+async def test_failed_cold_index_leaves_no_orphan_build_dir(
+    tmp_path, monkeypatch, _cache_in_tmp
+) -> None:
+    # AC16 / review C1: if _do_index raises on a MISS, the half-built
+    # <key>.<pid>.tmp/ dir must not survive, and no entry is promoted.
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    corpus = _tiny_corpus(tmp_path)
+    config = AppConfig.load()
+
+    async def boom(self, corpus_dir, cfg):
+        raise RuntimeError("indexing blew up")
+
+    monkeypatch.setattr(PydocsMcpSystem, "_do_index", boom)
+
+    s = PydocsMcpSystem()
+    with pytest.raises(RuntimeError, match="blew up"):
+        await s.index(corpus, config)
+    await s.teardown()  # must be safe even after the failed index
+
+    root = _bench_cache.cache_root()
+    leftovers = list(root.iterdir()) if root.exists() else []
+    assert leftovers == []  # no .tmp build dir, no promoted entry
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -594,11 +621,15 @@ And expose the read-only property the runner reads (spec D9):
         return self._was_cache_hit
 ```
 
-Add the cache import at module top (NOT deferred — it's stdlib-light):
+Add the cache import + `shutil` at module top (NOT deferred — stdlib-light;
+`shutil` is needed for the C1 leak-safe cleanup in the MISS branch):
 
 ```python
+import shutil
+
 from .. import _bench_cache
 ```
+(`pydocs.py` already imports `os` and `tempfile` at module top.)
 
 Replace `index()` so the DB is sourced from the cache when enabled:
 
@@ -623,11 +654,21 @@ Replace `index()` so the DB is sourced from the cache when enabled:
                 # .tq/.plaid sidecars travel with the .sqlite.
                 build_dir = _bench_cache.reserve(key)
                 self._db_path = build_dir / "index.sqlite"
-                self._db_is_cached = True
                 self._was_cache_hit = False  # cold task: a real indexing measurement
+                # WHY (spec C1/AC16): mark _db_is_cached only AFTER a
+                # successful commit. If _do_index raises, teardown() would
+                # skip a "cached" path and leak the half-built tmp dir, so
+                # clean the build dir here and re-raise.
+                self._db_is_cached = False
                 open_index_database(self._db_path).close()
-                await self._do_index(corpus_dir, config)
+                try:
+                    await self._do_index(corpus_dir, config)
+                except BaseException:
+                    shutil.rmtree(build_dir, ignore_errors=True)
+                    self._db_path = None
+                    raise
                 self._db_path = _bench_cache.commit(key, build_dir)
+                self._db_is_cached = True
         else:
             fd, name = tempfile.mkstemp(suffix=".sqlite")
             os.close(fd)
@@ -699,55 +740,125 @@ always record `search_seconds`.
 # benchmarks/tests/eval/test_runner_timing_cache_hit.py
 from __future__ import annotations
 
-import asyncio
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
 from benchmarks.eval.runner import run_sweep
+from benchmarks.eval.serialization import (
+    dataset_registry,
+    system_registry,
+    tracker_registry,
+)
+from benchmarks.eval.systems.base_system import RetrievedItem
+from benchmarks.eval.trackers.base_tracker import RunHandle
+
+# Module-level sink the fake tracker appends to (run_sweep builds the
+# tracker via the registry with no handle to our list otherwise).
+_LOGGED: list[tuple[str, float]] = []
 
 
+@tracker_registry.register("fake-timing-tracker")
+@dataclass
 class _FakeTracker:
-    name = "fake"
+    name: str = "fake-timing-tracker"
 
-    def __init__(self) -> None:
-        self.metrics: list[tuple[str, float, object]] = []
-
-    def open_run(self, **_kw):
-        from benchmarks.eval.trackers.base_tracker import RunHandle
-
+    def open_run(self, **_kw) -> RunHandle:
         return RunHandle(tracker_name=self.name, raw=None)
 
-    def log_metric(self, handle, name, value, step=None):
-        self.metrics.append((name, value, step))
+    def log_metric(self, handle, name, value, step=None) -> None:  # noqa: ARG002
+        _LOGGED.append((name, value))
 
-    def close_run(self, handle, status):  # noqa: ARG002
+    def close_run(self, handle, status) -> None:  # noqa: ARG002
         pass
 
 
-def test_cache_hit_tasks_emit_no_indexing_seconds(monkeypatch) -> None:
-    # 3 tasks: cold, warm, warm -> indexing_seconds recorded ONCE.
-    # Drive run_sweep with a fake system whose was_cache_hit cycles.
-    # (Implementer: wire a minimal fake dataset/system/scorer here per the
-    # existing test_pydocs_oracle_system.py harness; the assertion is the
-    # contract below. The point is the count, not the plumbing.)
-    tracker = _FakeTracker()
+@dataset_registry.register("fake-timing-dataset")
+@dataclass
+class _FakeDataset:
+    name: str = "fake-timing-dataset"
+    revision: str = "v0"
 
-    # ... build a 3-task fake sweep where system.was_cache_hit is
-    # [False, True, True] across tasks ...
+    async def tasks(self) -> AsyncIterator[EvalTask]:
+        for i in range(3):  # 3 tasks: cold, warm, warm
+            yield EvalTask(
+                task_id=f"t{i}",
+                query="q",
+                gold=GoldAnswer(ast_body="def f(): return 1"),
+                corpus_source=lambda: Path(),
+                metadata={},
+            )
 
-    asyncio.run(run_sweep(...))  # implementer fills the args
 
-    idx = [m for m in tracker.metrics if m[0] == "indexing_seconds"]
-    srch = [m for m in tracker.metrics if m[0] == "search_seconds"]
-    assert len(idx) == 1   # only the cold task
-    assert len(srch) == 3  # search always recorded
+@system_registry.register("fake-timing-system")
+@dataclass
+class _FakeSystem:
+    name: str = "fake-timing-system"
+    _n: int = field(default=0, init=False)
+    _hit: bool = field(default=False, init=False)
+
+    async def index(self, corpus_dir: Path, config) -> None:  # noqa: ARG002
+        # First task cold (miss), the rest warm (hit) — the cache shape
+        # this whole feature produces on a single corpus.
+        self._hit = self._n > 0
+        self._n += 1
+
+    @property
+    def was_cache_hit(self) -> bool:
+        return self._hit
+
+    async def search(self, query: str, limit: int):  # noqa: ARG002
+        return (RetrievedItem(rank=1, text="def g(): return 2", source_path="p"),)
+
+    async def teardown(self) -> None:
+        return None
+
+
+async def test_cache_hit_tasks_emit_no_indexing_seconds(tmp_path) -> None:
+    _LOGGED.clear()
+    await run_sweep(
+        systems=("fake-timing-system",),
+        config_paths=(tmp_path / "cfg.yaml",),  # stem is the only thing read
+        dataset_name="fake-timing-dataset",
+        tracker_names=("fake-timing-tracker",),
+        metric_specs=("recall@1",),
+    )
+    idx = [v for n, v in _LOGGED if n == "indexing_seconds"]
+    srch = [v for n, v in _LOGGED if n == "search_seconds"]
+    assert len(idx) == 1   # only the cold task recorded indexing time
+    assert len(srch) == 3  # search recorded every task
+
+
+async def test_all_warm_leg_emits_no_indexing_aggregate(tmp_path) -> None:
+    # I2/AC15: when EVERY task is a hit, the empty indexing_seconds series
+    # must not emit a 0.0 aggregate row.
+    @system_registry.register("fake-all-warm-system")
+    @dataclass
+    class _AllWarm(_FakeSystem):
+        name: str = "fake-all-warm-system"
+
+        async def index(self, corpus_dir: Path, config) -> None:  # noqa: ARG002
+            self._hit = True  # every task a hit
+
+    _LOGGED.clear()
+    await run_sweep(
+        systems=("fake-all-warm-system",),
+        config_paths=(tmp_path / "cfg.yaml",),
+        dataset_name="fake-timing-dataset",
+        tracker_names=("fake-timing-tracker",),
+        metric_specs=("recall@1",),
+    )
+    assert not any(n == "indexing_seconds_p50" for n, _ in _LOGGED)  # row omitted
+    assert any(n == "search_seconds_p50" for n, _ in _LOGGED)  # search row present
 ```
 
-(Implementer note: model this fake-sweep harness on the existing
-`benchmarks/tests/eval/test_pydocs_oracle_system.py` /
-`test_runner_gold_injection.py` fixtures — a tiny in-memory dataset +
-a fake system exposing `index` / `search` / `was_cache_hit` / `teardown`
-/ `gold_resolver`. The assertion (`indexing_seconds` count == cold-task
-count) is the AC14 contract.)
+(The fakes register into the real registries — the established pattern in
+`benchmarks/tests/eval/test_runner_gold_injection.py`. The fake system
+exposes `index` / `search` / `was_cache_hit` / `teardown`; it is NOT a
+`HasGoldResolver`, so `_resolve_and_inject` is a no-op and the gold's
+`ast_body` drives `recall@1`. The assertion — `indexing_seconds` count ==
+cold-task count — is the AC14 contract.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -802,17 +913,66 @@ Change it to gate the indexing observation on a non-cache-hit
                         tracker.log_metric(h, "search_seconds", search_secs, step=count)
 ```
 
+- [ ] **Step 3b: Omit the aggregate row for an empty latency series (I2 / AC15)**
+
+The per-task skip is not enough: when EVERY task in a leg is a cache hit,
+`latency_values["indexing_seconds"]` ends up empty, and the aggregation
+loop (`runner.py:267-276`) still calls `percentile([])` → `0.0` and logs
+`indexing_seconds_p50/p95/p99 = 0.0` — the same "0.0 s indexing"
+corruption, relocated to the aggregate. Gate the latency aggregation on a
+non-empty series. The block currently reads:
+
+```python
+            for latency_key in LATENCY_KEYS:
+                values = latency_values[latency_key]
+                p50 = percentile(values, 0.5)
+                p95 = percentile(values, 0.95)
+                p99 = percentile(values, 0.99)
+                aggregates[latency_key] = (p50, p95, p99)
+                for h, tracker in zip(handles, trackers):
+                    tracker.log_metric(h, f"{latency_key}_p50", p50, step=None)
+                    tracker.log_metric(h, f"{latency_key}_p95", p95, step=None)
+                    tracker.log_metric(h, f"{latency_key}_p99", p99, step=None)
+```
+
+Change it to skip an empty series entirely (an all-warm leg performed no
+indexing, so it should have NO indexing-time row rather than a misleading
+0.0):
+
+```python
+            for latency_key in LATENCY_KEYS:
+                values = latency_values[latency_key]
+                # Spec I2/AC15: an all-warm leg leaves indexing_seconds
+                # empty (every task a cache hit skipped its observation).
+                # percentile([]) is 0.0, so emitting here would report
+                # "0.0 s indexing" — omit the row instead.
+                if not values:
+                    continue
+                p50 = percentile(values, 0.5)
+                p95 = percentile(values, 0.95)
+                p99 = percentile(values, 0.99)
+                aggregates[latency_key] = (p50, p95, p99)
+                for h, tracker in zip(handles, trackers):
+                    tracker.log_metric(h, f"{latency_key}_p50", p50, step=None)
+                    tracker.log_metric(h, f"{latency_key}_p95", p95, step=None)
+                    tracker.log_metric(h, f"{latency_key}_p99", p99, step=None)
+```
+
+Add a test to `test_runner_timing_cache_hit.py` asserting that an
+all-hits leg logs NO `indexing_seconds_p50` metric while a leg with at
+least one cold task does.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd <worktree> && PYTHONPATH=benchmarks/src .venv/bin/python -m pytest benchmarks/tests/eval/test_runner_timing_cache_hit.py -q`
-Expected: PASS — `indexing_seconds` count == 1, `search_seconds` count == 3.
+Expected: PASS — `indexing_seconds` count == 1, `search_seconds` count == 3; all-hits leg emits no `indexing_seconds_p50`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add benchmarks/src/benchmarks/eval/runner.py benchmarks/tests/eval/test_runner_timing_cache_hit.py
 git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.com" \
-  commit -m "feat(benchmarks): exclude cache-hit tasks from indexing_seconds (D9)"
+  commit -m "feat(benchmarks): exclude cache-hit tasks from indexing_seconds (D9 + empty-series guard)"
 ```
 
 ---
@@ -1300,10 +1460,10 @@ Record the index-time drop (cold vs warm) in the PR description. Not a CI gate.
 - D7 (.gitignore) → already committed in the spec commit; AC6 verified Task 10 Step 4.
 - D8 (--bench-cache-cleanup, wipe after sweep) → Task 6b.
 - D9 (cache-hit excluded from indexing_seconds) → Task 5 (`was_cache_hit` property) + Task 5b (runner skip).
-- AC1 index-once → Task 5. AC2 quality-fidelity → Task 8. AC3 invalidation-on-ingestion-change → Task 1 `test_make_key_varies_with_corpus_and_ingestion`. AC4 no-content-invalidation → documented Task 9; key is path+ingestion-hash by construction. AC5 teardown keeps cache → Task 5. AC6 gitignore → Task 10 Step 4. AC7 opt-out → Task 5 `test_cache_off_indexes_every_time`. AC8 CLI → Task 7. AC9 no prod code → Task 10 Step 3 + diff scope. AC10 empirical lift → Task 10 Step 5. AC11 green/ruff/mypy → Task 10. AC12 sidecar dir-move → Task 2 `test_reserve_then_commit_promotes_atomically` (fake `index.plaid`). AC13 cleanup-after-sweep → Task 6b. AC14 cache-hit-no-indexing_seconds → Task 5b `test_runner_timing_cache_hit`.
+- AC1 index-once → Task 5. AC2 quality-fidelity → Task 8. AC3 invalidation-on-ingestion-change → Task 1 `test_make_key_varies_with_corpus_and_ingestion`. AC4 no-content-invalidation → documented Task 9; key is path+ingestion-hash by construction. AC5 teardown keeps cache → Task 5. AC6 gitignore → Task 10 Step 4. AC7 opt-out → Task 5 `test_cache_off_indexes_every_time`. AC8 CLI → Task 7. AC9 no prod code → Task 10 Step 3 + diff scope. AC10 empirical lift → Task 10 Step 5. AC11 green/ruff/mypy → Task 10. AC12 sidecar dir-move → Task 2 `test_reserve_then_commit_promotes_atomically` (fake `index.plaid`). AC13 cleanup-after-sweep → Task 6b. AC14 cache-hit-no-indexing_seconds → Task 5b `test_cache_hit_tasks_emit_no_indexing_seconds`. AC15 empty-series-no-aggregate-row → Task 5b Step 3b + `test_all_warm_leg_emits_no_indexing_aggregate`. AC16 failed-cold-index-no-orphan → Task 5 `test_failed_cold_index_leaves_no_orphan_build_dir`.
 
-**2. Placeholder scan:** Task 5b's runner-timing test leaves the fake-sweep plumbing as an implementer note (modelled on the existing `test_pydocs_oracle_system.py` fixtures) because the in-memory dataset/system/scorer harness is large; the *assertion* (indexing_seconds count == cold-task count) is concrete. Every other step has complete code.
+**2. Placeholder scan:** none — Task 5b's runner-timing test is now concrete (registers fakes into the real registries, the `test_runner_gold_injection.py` pattern). Every code step has complete, runnable code.
 
-**3. Type consistency:** `make_key`/`lookup`/`reserve`/`commit`/`entry_dir`/`db_path_for`/`info`/`evict`/`is_enabled`/`set_enabled`/`cache_root` names used identically across tasks 1-8 and the CLI. `_db_is_cached` + `_was_cache_hit` field names + `was_cache_hit` property consistent in Task 5 / Task 5b. `_apply_bench_cache_flag` + `_maybe_cleanup_bench_cache` consistent in Task 6 / 6b.
+**3. Type consistency:** `make_key`/`lookup`/`reserve`/`commit`/`entry_dir`/`db_path_for`/`info`/`evict`/`is_enabled`/`set_enabled`/`cache_root` names used identically across tasks 1-8 and the CLI. `_db_is_cached` + `_was_cache_hit` field names + `was_cache_hit` property consistent in Task 5 / Task 5b. `_apply_bench_cache_flag` + `_maybe_cleanup_bench_cache` consistent in Task 6 / 6b. `_do_index` lives in the base class (Task 4) → tree subclasses inherit it (review M1).
 
 **Note for the implementer:** `<worktree>` = `/Users/msobroza/Projects/pyctx7-mcp/.claude/worktrees/bench-per-sample-cache`; `.venv` = `/Users/msobroza/Projects/pyctx7-mcp/.venv`. The harness resets cwd between shell calls — always `cd <worktree> && ...` and use absolute paths for file writes.
