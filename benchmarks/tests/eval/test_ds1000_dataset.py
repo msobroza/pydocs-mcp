@@ -20,6 +20,10 @@ from benchmarks.eval.datasets.ds1000 import (
 from benchmarks.eval.serialization import dataset_registry
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_mini.json"
+# Mirrors the real ``code-rag-bench/ds1000`` HF row shape: NO top-level
+# ``library`` (it's nested inside a ``metadata`` Python-repr dict STRING),
+# plus one doc-less (empty-gold) pure-codegen row.
+NESTED_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_metadata_nested.json"
 
 
 async def test_dataset_yields_eight_rows_from_mini_fixture() -> None:
@@ -205,6 +209,92 @@ async def test_library_name_normalized_to_lowercase() -> None:
     assert _LIBRARY_NORMALIZATION["Pytorch"] == "torch"
     assert _LIBRARY_NORMALIZATION["Pandas"] == "pandas"
     assert _LIBRARY_NORMALIZATION["Scikit-learn"] == "scikit-learn"
+
+
+# --- Metadata-nested library + empty-gold filtering (real HF row shape) -----
+
+
+async def test_library_extracted_from_metadata_when_no_top_level_field() -> None:
+    """REGRESSION: the real ``code-rag-bench/ds1000`` rows carry NO top-level
+    ``library`` — it's nested inside a ``metadata`` Python-repr dict STRING
+    (e.g. ``"{'library': 'Numpy', 'problem_id': 0, ...}"``). The loader must
+    parse ``metadata`` and resolve the library so ``library_filter`` matches.
+    Pre-fix this matched ZERO rows (``row.get("library", "")`` -> ``""``)."""
+    dataset = Ds1000Dataset(
+        fixture_path=NESTED_FIXTURE_PATH,
+        library_filter=("numpy",),
+    )
+    tasks = [t async for t in dataset.tasks()]
+    # Two Numpy rows in the nested fixture, but one is doc-less (empty gold)
+    # and gets dropped — so the gold-bearing Numpy row is the only match.
+    assert len(tasks) == 1, "metadata-nested 'Numpy' library must be matched"
+    assert all(t.metadata["library"] == "numpy" for t in tasks)
+
+
+async def test_top_level_library_still_matches_back_compat() -> None:
+    """Back-compat: the flat fixtures ship a top-level ``library`` and NO
+    ``metadata``. A present, non-empty top-level ``library`` must be PREFERRED
+    over any metadata parse, so the existing flat fixtures keep working
+    unchanged."""
+    dataset = Ds1000Dataset(fixture_path=FIXTURE_PATH, library_filter=("numpy",))
+    tasks = [t async for t in dataset.tasks()]
+    # The mini fixture has 2 numpy rows, both gold-bearing.
+    assert len(tasks) == 2
+    assert all(t.metadata["library"] == "numpy" for t in tasks)
+
+
+async def test_empty_gold_rows_are_dropped() -> None:
+    """A retrieval recall benchmark must evaluate only gold-bearing rows.
+    DS-1000 has many doc-less pure-codegen problems with no retrieval target;
+    the loader drops rows whose ``docs`` gold is empty. The nested fixture
+    ships 3 rows (1 numpy + 1 pandas with gold, 1 numpy with empty ``docs``);
+    only the 2 gold-bearing rows survive."""
+    dataset = Ds1000Dataset(fixture_path=NESTED_FIXTURE_PATH)
+    tasks = [t async for t in dataset.tasks()]
+    assert len(tasks) == 2, "the doc-less (empty-gold) row must be dropped"
+    # Every surviving task carries >=1 gold doc_id.
+    for t in tasks:
+        doc_ids = t.gold.extra["doc_ids"]  # type: ignore[index]
+        assert doc_ids, f"surviving task {t.task_id} unexpectedly has no gold"
+
+
+def test_has_gold_handles_list_and_json_string_and_empty() -> None:
+    """``_has_gold`` parses the ``docs`` field robustly: a real list, a JSON
+    string (``'[]'`` / ``'["..."]'``), and parse failures all resolve to the
+    right has-gold verdict (>=1 doc => True; empty / unparseable => False)."""
+    from benchmarks.eval.datasets.ds1000 import _has_gold
+
+    # Actual list forms.
+    assert _has_gold({"docs": [{"doc_id": "a", "doc_content": "x"}]}) is True
+    assert _has_gold({"docs": []}) is False
+    # JSON-string forms.
+    assert _has_gold({"docs": '[{"doc_id": "a", "doc_content": "x"}]'}) is True
+    assert _has_gold({"docs": "[]"}) is False
+    # Missing / unparseable => no gold (never raises).
+    assert _has_gold({}) is False
+    assert _has_gold({"docs": "not-json"}) is False
+
+
+def test_resolve_library_prefers_top_level_then_metadata() -> None:
+    """``_resolve_library`` prefers a present, non-empty top-level
+    ``library``; falls back to parsing the ``metadata`` repr-dict STRING;
+    and returns ``""`` on absence / parse failure (never raises)."""
+    from benchmarks.eval.datasets.ds1000 import _resolve_library
+
+    # Top-level wins, even when metadata also carries a (different) library.
+    assert (
+        _resolve_library(
+            {"library": "Pandas", "metadata": "{'library': 'Numpy'}"},
+        )
+        == "Pandas"
+    )
+    # Empty top-level => fall through to metadata.
+    assert _resolve_library({"library": "", "metadata": "{'library': 'Numpy'}"}) == "Numpy"
+    # No top-level at all => parse metadata.
+    assert _resolve_library({"metadata": "{'library': 'Scipy', 'problem_id': 3}"}) == "Scipy"
+    # Unparseable metadata + no top-level => "" (never raises).
+    assert _resolve_library({"metadata": "not-a-dict"}) == ""
+    assert _resolve_library({}) == ""
 
 
 # --- Auxiliary protocol-level / registry-level smoke tests ------------------
