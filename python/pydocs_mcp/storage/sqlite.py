@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import re
 import sqlite3
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
@@ -656,6 +657,20 @@ class SqlitePackageRepository:
 # though the chunk fetcher is more likely to see it than the legacy store.
 _FTS_OPS: frozenset[str] = frozenset({"AND", "OR", "NOT", "NEAR"})
 
+# FTS5 phrase-quote escape: any char outside ``\w`` (word chars) plus dot and
+# hyphen gets replaced with whitespace before the token is wrapped in
+# ``"..."``. Dot keeps dotted identifiers like ``pd.DataFrame`` as one
+# phrase; hyphen keeps ``multi-index``. Everything else FTS5 reserves
+# (``"``, ``,``, ``(``, ``)``, ``*``, ``:``, ``'``, ``[``, ``]``, ``=``,
+# ``/``, …) collapses to whitespace so the subsequent ``.split()`` yields
+# clean word fragments. Pre-fix tokens with those chars either broke out
+# of the phrase wrap (embedded ``"``) or sat unquoted at FTS5 top level
+# (comma after the unbalanced quote), raising ``sqlite3.OperationalError:
+# fts5: syntax error``. Imported by
+# :func:`pydocs_mcp.retrieval.steps.chunk_fetcher._build_fts_match_query`
+# so both copies of the helper share one stripping rule.
+_FTS_PHRASE_SPECIAL = re.compile(r"[^\w.\-]+")
+
 
 @dataclass(frozen=True, slots=True)
 class SqliteChunkRepository:
@@ -793,14 +808,25 @@ def _build_fts_match_query(terms: str) -> str | None:
 
     Mirrors the ChunkFetcherStep MATCH expression so behaviour stays
     byte-identical. Returns ``None`` when no usable token survives filtering.
+
+    Each whitespace-split token is first passed through
+    ``_FTS_PHRASE_SPECIAL.sub(" ", token)`` so FTS5-reserved punctuation
+    inside the token (commas, quotes, parens, etc.) becomes whitespace
+    and the substring re-splits into clean word fragments. Without this,
+    a token like ``temp=u\"\"\"probegenes,sampl`` from a code-paste query
+    crashed SQLite with ``fts5: syntax error near ","``.
     """
     tokens = terms.split()
     if any(t in _FTS_OPS for t in tokens):
         return terms
-    words = [w for w in tokens if len(w) > 1]
-    if not words:
+    cleaned: list[str] = []
+    for t in tokens:
+        for sub in _FTS_PHRASE_SPECIAL.sub(" ", t).split():
+            if len(sub) > 1:
+                cleaned.append(sub)
+    if not cleaned:
         return None
-    return " OR ".join(f'"{w}"' for w in words)
+    return " OR ".join(f'"{w}"' for w in cleaned)
 
 
 @dataclass(frozen=True, slots=True)
