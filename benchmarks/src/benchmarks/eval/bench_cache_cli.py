@@ -1,5 +1,5 @@
-# benchmarks/src/benchmarks/eval/bench_cache.py
-"""CLI for the benchmark index cache: `python -m benchmarks.eval.bench_cache {info,evict}`."""
+# benchmarks/src/benchmarks/eval/bench_cache_cli.py
+"""CLI for the benchmark index cache: `python -m benchmarks.eval.bench_cache_cli {info,evict}`."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from . import _bench_cache
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m benchmarks.eval.bench_cache")
+    parser = argparse.ArgumentParser(prog="python -m benchmarks.eval.bench_cache_cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info", help="list cached indexed DBs (read-only)")
     sub.add_parser("evict", help="remove every cached indexed DB")

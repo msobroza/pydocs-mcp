@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from benchmarks.eval import _bench_cache
-from benchmarks.eval.bench_cache import main
+from benchmarks.eval.bench_cache_cli import main
 
 
 def test_cli_info_empty(tmp_path, monkeypatch, capsys) -> None:

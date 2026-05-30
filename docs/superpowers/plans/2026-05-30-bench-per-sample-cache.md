@@ -1180,7 +1180,7 @@ git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.
 ### Task 7: `bench_cache` CLI (`info` / `evict`)
 
 **Files:**
-- Create: `benchmarks/src/benchmarks/eval/bench_cache.py`
+- Create: `benchmarks/src/benchmarks/eval/bench_cache_cli.py`
 - Test: `benchmarks/tests/eval/test_bench_cache_cli.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -1190,7 +1190,7 @@ git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.
 from __future__ import annotations
 
 from benchmarks.eval import _bench_cache
-from benchmarks.eval.bench_cache import main
+from benchmarks.eval.bench_cache_cli import main
 
 
 def test_cli_info_empty(tmp_path, monkeypatch, capsys) -> None:
@@ -1214,13 +1214,13 @@ def test_cli_evict(tmp_path, monkeypatch, capsys) -> None:
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd <worktree> && PYTHONPATH=benchmarks/src .venv/bin/python -m pytest benchmarks/tests/eval/test_bench_cache_cli.py -q`
-Expected: FAIL — `ModuleNotFoundError: No module named 'benchmarks.eval.bench_cache'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'benchmarks.eval.bench_cache_cli'`
 
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# benchmarks/src/benchmarks/eval/bench_cache.py
-"""CLI for the benchmark index cache: `python -m benchmarks.eval.bench_cache {info,evict}`."""
+# benchmarks/src/benchmarks/eval/bench_cache_cli.py
+"""CLI for the benchmark index cache: `python -m benchmarks.eval.bench_cache_cli {info,evict}`."""
 
 from __future__ import annotations
 
@@ -1231,7 +1231,7 @@ from . import _bench_cache
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m benchmarks.eval.bench_cache")
+    parser = argparse.ArgumentParser(prog="python -m benchmarks.eval.bench_cache_cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info", help="list cached indexed DBs (read-only)")
     sub.add_parser("evict", help="remove every cached indexed DB")
@@ -1266,7 +1266,7 @@ Expected: PASS (2 passed)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add benchmarks/src/benchmarks/eval/bench_cache.py benchmarks/tests/eval/test_bench_cache_cli.py
+git add benchmarks/src/benchmarks/eval/bench_cache_cli.py benchmarks/tests/eval/test_bench_cache_cli.py
 git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.com" \
   commit -m "feat(benchmarks): bench_cache CLI (info / evict)"
 ```
@@ -1365,8 +1365,8 @@ and across sweeps that share an ingestion pipeline. Controlled by
 `~/.pydocs-mcp/bench/` (outside the repo).
 
     # inspect / clear the cache
-    python -m benchmarks.eval.bench_cache info
-    python -m benchmarks.eval.bench_cache evict
+    python -m benchmarks.eval.bench_cache_cli info
+    python -m benchmarks.eval.bench_cache_cli evict
 
     # run all experiments, then free the disk (cache used during the run,
     # wiped when it finishes — even if the run errors)
@@ -1441,7 +1441,7 @@ set -a; source /Users/msobroza/Projects/pyctx7-mcp/python/pydocs_mcp/.env; set +
 PYTHONPATH=benchmarks/src .venv/bin/python -m benchmarks.eval.runner \
   --dataset repoqa --split small_test --systems pydocs-mcp \
   --configs benchmarks/configs/repoqa_bm25.yaml --report /tmp/r1.md --limit 2
-python -m benchmarks.eval.bench_cache info   # 2 entries expected
+python -m benchmarks.eval.bench_cache_cli info   # 2 entries expected
 ```
 
 Record the index-time drop (cold vs warm) in the PR description. Not a CI gate.

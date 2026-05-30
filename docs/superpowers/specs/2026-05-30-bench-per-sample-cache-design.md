@@ -119,7 +119,7 @@ A cached DB persists across tasks and across sweeps; only the
 non-cached tmp DB is unlinked at teardown. This is the inversion of
 the current behaviour and the source of the speedup.
 
-### D6 — `python -m benchmarks.eval.bench_cache {evict,info}` CLI
+### D6 — `python -m benchmarks.eval.bench_cache_cli {evict,info}` CLI
 - `evict` — remove every entry directory under `~/.pydocs-mcp/bench/`.
 - `info` — print one line per cache entry: `key[:12]` (the sha256 of
   corpus+ingestion-hash), total size (MB), and the `index.sqlite`
@@ -210,7 +210,7 @@ since it performed no indexing.
 - `benchmarks/src/benchmarks/eval/runner.py` — `--bench-cache`
   argparse flag (D4) + `--bench-cache-cleanup` flag (D8); apply the
   cache toggle before the sweep and the cleanup in a `finally` after.
-- `benchmarks/src/benchmarks/eval/bench_cache.py` (new) — the CLI
+- `benchmarks/src/benchmarks/eval/bench_cache_cli.py` (new) — the CLI
   entry point for D6 (info / evict).
 - `benchmarks/.gitignore` (new) — D7.
 - `benchmarks/tests/eval/test_bench_cache.py` (new) — see AC list.
@@ -248,7 +248,7 @@ since it performed no indexing.
   anyway).
 - **AC7 — Opt-out exact.** `--bench-cache off` causes one tmp DB per
   task (verified by call-count on the cache lookup).
-- **AC8 — CLI evict.** `python -m benchmarks.eval.bench_cache evict`
+- **AC8 — CLI evict.** `python -m benchmarks.eval.bench_cache_cli evict`
   on a populated cache removes every file under `~/.pydocs-mcp/bench/`
   and prints a 1-line summary; `info` lists them, read-only.
 - **AC9 — No production code touched.** Diff is confined to
@@ -300,7 +300,7 @@ since it performed no indexing.
 3. Wire `--bench-cache` in `runner.py` → AC7 green.
 4. Run a tiny fixture corpus through `--bench-cache off` and `on` and
    compare metric output → AC2 green.
-5. Implement `bench_cache.py` CLI + a test → AC8 green.
+5. Implement `bench_cache_cli.py` CLI + a test → AC8 green.
 6. Add `.gitignore` + a guard test that `git status` is clean after
    a sample test run → AC6 green.
 7. Empirical lift run on real RepoQA → AC10 (number for the PR

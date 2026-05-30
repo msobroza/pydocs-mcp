@@ -589,8 +589,8 @@ and across sweeps that share an ingestion pipeline. Controlled by
 
 ```bash
 # inspect / clear the cache
-python -m benchmarks.eval.bench_cache info
-python -m benchmarks.eval.bench_cache evict
+python -m benchmarks.eval.bench_cache_cli info
+python -m benchmarks.eval.bench_cache_cli evict
 
 # run all experiments, then free the disk (cache used during the run,
 # wiped when it finishes — even if the run errors)
@@ -611,7 +611,7 @@ run's entries) — don't pass it while a concurrent sweep shares the cache.
 **Reading indexing time:** a cache HIT makes `index()` a ~0 s lookup, so
 warm tasks record NO `indexing_seconds` (the metric would otherwise read
 "0.0 s"). Take true indexing-time numbers from a COLD run — the first
-sweep after `bench_cache evict`, or any `--bench-cache off` run. Warm
+sweep after `bench_cache_cli evict`, or any `--bench-cache off` run. Warm
 sweeps still give correct quality + `search_seconds`. The sweep is
 sequential (one task at a time, no concurrency), so a cold run's timing
 is uncontended.
