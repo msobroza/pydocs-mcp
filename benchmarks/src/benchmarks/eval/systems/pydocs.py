@@ -135,6 +135,7 @@ class PydocsMcpSystem:
         lifecycle here — the caller owns ``self._db_path`` and the search
         pipeline."""
         from pydocs_mcp.application import ProjectIndexer
+        from pydocs_mcp.application.indexing_service import IndexingService
         from pydocs_mcp.db import build_connection_provider
         from pydocs_mcp.extraction import (
             AstMemberExtractor,
@@ -142,21 +143,29 @@ class PydocsMcpSystem:
             StaticDependencyResolver,
             build_ingestion_pipeline,
         )
-        from pydocs_mcp.storage.factories import (
-            build_sqlite_indexing_service,
-            build_sqlite_uow_factory,
-        )
+        from pydocs_mcp.storage.factories import build_composite_uow_factory
+        from pydocs_mcp.storage.search_backend import build_search_backend
         from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
-        uow_factory = build_sqlite_uow_factory(self._db_path)
-        indexing_service = build_sqlite_indexing_service(self._db_path)
+        # WHY (#64): route ingestion through the SAME write path production
+        # uses. ``build_search_backend(...).write_uow_children()`` yields the
+        # SQLite + TurboQuant (+ optional fast-plaid) child UoW factories; the
+        # composite uow_factory makes ``uow.vectors`` a real TurboQuant store so
+        # ``EmbedChunksStage`` persists the dense ``.tq`` sidecar. The previous
+        # SQLite-only factory left ``uow.vectors`` a silent ``NullVectorStore``,
+        # dropping every embedding and silently degrading dense/hybrid/LI
+        # benchmark configs to BM25.
+        backend = build_search_backend(config, self._db_path)
+        uow_factory = build_composite_uow_factory(backend.write_uow_children())
+        indexing_service = IndexingService(uow_factory=uow_factory)
 
         # EmbedChunksStage is wired into the shipped ingestion pipeline by
         # default; build the embedder once here so the benchmark sweep
-        # actually computes vectors during ingestion. Production wiring
-        # (see Task 27) will move this construction into __main__.py /
-        # server.py and thread the same instance through the composition
-        # root. The benchmarks workflow installs ``benchmarks[all]`` +
+        # actually computes vectors during ingestion. This mirrors the
+        # production indexing wiring in ``__main__.py`` — both construct the
+        # embedder via ``build_embedder(config.embedding)`` and build the
+        # write UoW from ``build_search_backend(...).write_uow_children()``.
+        # The benchmarks workflow installs ``benchmarks[all]`` +
         # pydocs-mcp[fastembed] so the FastEmbed import path succeeds.
         from pydocs_mcp.extraction.strategies.embedders import build_embedder
 
