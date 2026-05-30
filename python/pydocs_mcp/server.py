@@ -99,6 +99,15 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     # Task 8). One call covers both — see ``configure_from_app_config``.
     configure_from_app_config(config)
     context = build_retrieval_context(db_path, config)
+
+    # Visibility for #64: log which retrieval capabilities the configured
+    # backend actually serves so a misconfigured dense/LI wiring can't stay
+    # silent. Building the backend a second time here is cheap (no I/O until a
+    # query); ``build_retrieval_context`` already built one internally.
+    from pydocs_mcp.storage.search_backend import build_search_backend, format_capabilities
+
+    log.info(format_capabilities(build_search_backend(config, db_path)))
+
     chunk_pipeline = build_chunk_pipeline_from_config(config, context)
     member_pipeline = build_member_pipeline_from_config(config, context)
 

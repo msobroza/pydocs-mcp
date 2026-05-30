@@ -294,3 +294,16 @@ def build_search_backend(config: AppConfig, db_path: Path) -> SearchBackend:
             f"AppConfig YAML.",
         ) from e
     return factory(config, db_path=db_path)
+
+
+def format_capabilities(backend: SearchBackend) -> str:
+    """One-line capability matrix for the startup diagnostic (spec invariant C).
+
+    A log line (not an MCP/CLI param) so an operator can see at a glance which
+    retrieval capabilities the configured backend actually serves — the
+    visibility whose absence let the dense/LI wiring bug stay silent.
+    """
+    caps = backend.capabilities()
+    name = type(backend).__name__
+    cells = " ".join(f"{k}{'✓' if v else '✗'}" for k, v in caps.items())
+    return f"SearchBackend={name}: {cells}"
