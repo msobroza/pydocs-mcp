@@ -200,14 +200,12 @@ class SqliteCompositeBackend:
         }[capability]
 
     def write_uow_children(self) -> tuple[Callable[[], UnitOfWork], ...]:
-        # NOTE: mirrors the child assembly in ``factories.build_uow_factory``.
-        # Both coexist during the SearchBackend migration; once the indexing
-        # composition root sources its write children from this backend,
-        # ``build_uow_factory`` collapses into (or delegates to) this method
-        # and the duplication disappears. Until then, keep the
-        # ``[SQLite, TurboQuant, optional FastPlaid]`` assembly — dim/bit_width,
-        # ``.plaid`` sidecar, pipeline_hash/device, and the
-        # ``late_interaction.enabled`` gate — IN SYNC across both copies.
+        # Canonical write-child assembler: production indexing sources its
+        # ``CompositeUnitOfWork`` children from here. Builds
+        # ``[SQLite, TurboQuant, optional FastPlaid]`` — the fast-plaid child
+        # only when ``late_interaction.enabled``.
+        # ``factories.build_sqlite_plus_turboquant_uow_factory`` remains as a
+        # test-only SQLite + TurboQuant subset helper (no fast-plaid leg).
         embed = self.config.embedding
         tq_path = self.tq_path
         children: list[Callable[[], UnitOfWork]] = [
@@ -247,8 +245,7 @@ class SqliteCompositeBackend:
     @property
     def _plaid_sidecar_path(self) -> Path:
         # Sidecar lives next to the SQLite DB with a ``.plaid`` suffix, mirroring
-        # the ``.tq`` TurboQuant sidecar (same convention as
-        # ``factories.build_uow_factory``).
+        # the ``.tq`` TurboQuant sidecar convention.
         return self.db_path.parent / f"{self.db_path.stem}.plaid"
 
 

@@ -16,13 +16,13 @@ from pydocs_mcp.storage.search_backend import (
 )
 
 
-def test_filter_strategy_values():
+def test_filter_strategy_values() -> None:
     assert FilterStrategy.PREFILTER_IDS == "prefilter_ids"
     assert FilterStrategy.SERVER_SIDE == "server_side"
     assert FilterStrategy.RERANK_ONLY == "rerank_only"
 
 
-def test_search_backend_protocol_surface():
+def test_search_backend_protocol_surface() -> None:
     # A duck-typed object with all accessors satisfies the Protocol.
     class _Stub:
         def lexical(self):
@@ -56,7 +56,7 @@ def _cfg() -> AppConfig:
     return AppConfig.load()
 
 
-def test_composite_backend_capabilities_default(tmp_path: Path):
+def test_composite_backend_capabilities_default(tmp_path: Path) -> None:
     be = SqliteCompositeBackend(config=_cfg(), db_path=tmp_path / "x.db", tq_path=tmp_path / "x.tq")
     assert be.capabilities() == {
         "lexical": True,
@@ -67,7 +67,7 @@ def test_composite_backend_capabilities_default(tmp_path: Path):
     }
 
 
-def test_composite_backend_accessor_types(tmp_path: Path):
+def test_composite_backend_accessor_types(tmp_path: Path) -> None:
     be = SqliteCompositeBackend(config=_cfg(), db_path=tmp_path / "x.db", tq_path=tmp_path / "x.tq")
     assert isinstance(be.lexical(), TextSearchable)
     assert isinstance(be.dense(), VectorSearchable)
@@ -76,23 +76,23 @@ def test_composite_backend_accessor_types(tmp_path: Path):
     assert be.graph() is not None
 
 
-def test_composite_filter_strategy_per_capability(tmp_path: Path):
+def test_composite_filter_strategy_per_capability(tmp_path: Path) -> None:
     be = SqliteCompositeBackend(config=_cfg(), db_path=tmp_path / "x.db", tq_path=tmp_path / "x.tq")
     assert be.filter_strategy("dense") is FilterStrategy.PREFILTER_IDS
     assert be.filter_strategy("multi") is FilterStrategy.RERANK_ONLY
 
 
-def test_write_uow_children_count_default(tmp_path: Path):
+def test_write_uow_children_count_default(tmp_path: Path) -> None:
     be = SqliteCompositeBackend(config=_cfg(), db_path=tmp_path / "x.db", tq_path=tmp_path / "x.tq")
     assert len(be.write_uow_children()) == 2  # SQLite + TurboQuant; no fast-plaid when LI off
 
 
-def test_build_search_backend_resolves_default_kind(tmp_path: Path):
+def test_build_search_backend_resolves_default_kind(tmp_path: Path) -> None:
     be = build_search_backend(_cfg(), db_path=tmp_path / "x.db")
     assert isinstance(be, SqliteCompositeBackend)
 
 
-def test_build_search_backend_unknown_kind_raises(tmp_path: Path):
+def test_build_search_backend_unknown_kind_raises(tmp_path: Path) -> None:
     cfg = _cfg()
     object.__setattr__(cfg.search_backend, "kind", "nope")  # force an unregistered kind
     with pytest.raises(ValueError):

@@ -115,12 +115,14 @@ class BuildContext:
     ``server.py`` / ``__main__.py`` provides all of them at startup
     (spec §5.7, AC #15, AC #17).
 
-    ``vector_store`` is typed as the union of the two retrieval-side
-    Protocols (:class:`TextSearchable` for FTS5-only ``SqliteVectorStore`` /
-    :class:`VectorSearchable` for dense ``TurboQuantVectorStore``) because
-    the field carries either flavour at runtime. ``DenseFetcherStep.from_dict``
-    narrows to :class:`VectorSearchable` at construction time; text-side
-    fetchers narrow to :class:`TextSearchable` the same way.
+    ``vector_store`` carries the dense (:class:`VectorSearchable`) view from
+    the configured ``SearchBackend`` — ``build_retrieval_context`` wires
+    ``backend.dense()`` here, and ``DenseFetcherStep.from_dict`` narrows to
+    :class:`VectorSearchable` at construction time. The text / BM25 leg does
+    NOT travel through this field: text fetchers reach SQLite FTS5 via
+    ``connection_provider`` instead. The annotation stays a union
+    (:class:`TextSearchable` | :class:`VectorSearchable`) so a backend that
+    only exposes the lexical view can still populate the field.
 
     ``embedder`` is typed as :class:`Embedder` and is consumed by
     :class:`DenseFetcherStep` to embed the user's query text into a vector

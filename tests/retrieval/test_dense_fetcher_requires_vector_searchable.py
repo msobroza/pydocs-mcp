@@ -17,7 +17,7 @@ class _Embedder:
         return [0.0]
 
 
-def test_dense_fetcher_rejects_non_vector_searchable_store():
+def test_dense_fetcher_rejects_non_vector_searchable_store() -> None:
     ctx = BuildContext(vector_store=_FtsOnly(), embedder=_Embedder())
     with pytest.raises(ValueError) as exc:
         DenseFetcherStep.from_dict({"type": "dense_fetcher"}, ctx)

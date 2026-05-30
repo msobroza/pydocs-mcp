@@ -805,10 +805,13 @@ def _build_fts_match_query(terms: str) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class SqliteVectorStore:
-    """Retrieval-only service over ``chunks_fts`` (spec §5.3, AC #9).
+    """Retrieval-only service over ``chunks_fts`` (the lexical / FTS5 leg).
 
     CRUD happens via :class:`SqliteChunkRepository`; this type only answers
-    ``text_search`` (and, in future PRs, ``vector_search`` / ``hybrid_search``).
+    ``text_search`` — it is the :class:`TextSearchable` (BM25 / FTS5) view.
+    Dense vector search is served separately via the ``SearchBackend`` seam
+    (``storage/search_backend.py``: ``SqliteCompositeBackend.dense()`` returns
+    a ``_TurboQuantReadStore``), not by this type.
 
     The default ``filter_adapter`` uses ``column_prefix="c."`` so filters
     produce qualified SQL for the ``chunks_fts m JOIN chunks c ON c.id = m.rowid``

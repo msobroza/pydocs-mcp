@@ -6,12 +6,12 @@ from pathlib import Path
 from pydocs_mcp.retrieval.config import AppConfig
 
 
-def test_default_search_backend_kind_is_sqlite_composite():
+def test_default_search_backend_kind_is_sqlite_composite() -> None:
     cfg = AppConfig.load()
     assert cfg.search_backend.kind == "sqlite_composite"
 
 
-def test_search_backend_overlay_parses(tmp_path: Path):
+def test_search_backend_overlay_parses(tmp_path: Path) -> None:
     overlay = tmp_path / "pydocs-mcp.yaml"
     overlay.write_text("search_backend:\n  kind: sqlite_composite\n")
     cfg = AppConfig.load(explicit_path=overlay)

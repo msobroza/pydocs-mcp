@@ -108,6 +108,15 @@ def turboquant_path_for_project(project_dir: Path) -> Path:
     Mirrors :func:`cache_path_for_project`: same dir, same path-hash slug,
     ``.tq`` suffix instead of ``.db``. The two files live side-by-side so a
     ``--force`` cache clear deletes both (caller's responsibility).
+
+    NOTE: production now derives the ``.tq`` path from the resolved ``.db``
+    path via ``db_path.with_suffix(".tq")`` (``storage/search_backend.py``
+    ``_sqlite_composite_factory`` + the ``__main__.py`` integrity sweep), not
+    by calling this helper. The slug derivation here and ``with_suffix(".tq")``
+    must agree on the same stem — if this helper's slug logic changes, keep the
+    two paths in sync so the sidecar a re-index writes matches what retrieval
+    reads. This helper remains for callers that derive the ``.tq`` path
+    directly from a ``project_dir``.
     """
     # See `cache_path_for_project` — same non-cryptographic slug derivation.
     slug = hashlib.md5(str(project_dir.resolve()).encode(), usedforsecurity=False).hexdigest()[:10]

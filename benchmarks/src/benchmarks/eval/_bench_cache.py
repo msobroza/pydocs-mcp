@@ -6,8 +6,8 @@ that re-indexes the same corpora 30 x N times. This cache keys an indexed
 DB by (resolved corpus dir, ingestion_pipeline_hash) so each corpus is
 indexed once per ingestion config and reused across tasks AND across
 sweeps that share that ingestion pipeline. The entry is a directory so
-the dense (.tq) / late-interaction (.plaid) sidecars — which
-build_uow_factory derives from db_path.stem — travel with the .sqlite.
+the dense (.tq) / late-interaction (.plaid) sidecars — which the
+SearchBackend derives from the db path stem — travel with the .sqlite.
 Lives under ~/.pydocs-mcp/bench/ (outside the repo). Toggle with
 set_enabled() (the runner wires --bench-cache on|off).
 """
