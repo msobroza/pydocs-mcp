@@ -97,3 +97,20 @@ def test_build_search_backend_unknown_kind_raises(tmp_path: Path) -> None:
     object.__setattr__(cfg.search_backend, "kind", "nope")  # force an unregistered kind
     with pytest.raises(ValueError):
         build_search_backend(cfg, db_path=tmp_path / "x.db")
+
+
+def test_composite_backend_li_enabled_wires_multi(tmp_path: Path) -> None:
+    # LI-on dispatch must not import fast_plaid: ``multi()`` builds the read view
+    # without importing it (the import is lazy inside ``score()``), and
+    # ``write_uow_children()`` returns lambda factories whose fast_plaid import
+    # lives inside the lambda body — so we assert the count without calling them.
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text("late_interaction:\n  enabled: true\n")
+    cfg = AppConfig.load(explicit_path=overlay)
+    assert cfg.late_interaction.enabled is True
+    be = SqliteCompositeBackend(config=cfg, db_path=tmp_path / "x.db", tq_path=tmp_path / "x.tq")
+    from pydocs_mcp.storage.search_backend import _FastPlaidReadStore
+
+    assert isinstance(be.multi(), _FastPlaidReadStore)
+    assert be.capabilities()["multi"] is True
+    assert len(be.write_uow_children()) == 3  # SQLite + TurboQuant + fast-plaid (lambdas; not called)
