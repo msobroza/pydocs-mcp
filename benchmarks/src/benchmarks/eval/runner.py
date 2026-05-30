@@ -213,10 +213,18 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
                     # below once all observations are in.
                     # Emitted BEFORE the scorer so a scorer failure doesn't
                     # suppress latency that was already measured cleanly.
-                    latency_values["indexing_seconds"].append(index_secs)
+                    # Spec D9: a cache HIT makes index() a ~0 s lookup, not
+                    # an indexing measurement. Record indexing_seconds only
+                    # for cold tasks; search_seconds always (search is
+                    # identical hit or miss). Systems without was_cache_hit
+                    # default to False -> always recorded (unchanged).
+                    cache_hit = getattr(system, "was_cache_hit", False)
+                    if not cache_hit:
+                        latency_values["indexing_seconds"].append(index_secs)
                     latency_values["search_seconds"].append(search_secs)
                     for h, tracker in zip(handles, trackers):
-                        tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
+                        if not cache_hit:
+                            tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
                         tracker.log_metric(h, "search_seconds", search_secs, step=count)
 
                     # WHY: capture the library id the system resolved during
@@ -266,6 +274,12 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
             # suffix (``_seconds``) so the shared triple shape is safe.
             for latency_key in LATENCY_KEYS:
                 values = latency_values[latency_key]
+                # Spec I2/AC15: an all-warm leg leaves indexing_seconds
+                # empty (every task a cache hit skipped its observation).
+                # percentile([]) is 0.0, so emitting here would report
+                # "0.0 s indexing" — omit the row instead.
+                if not values:
+                    continue
                 p50 = percentile(values, 0.5)
                 p95 = percentile(values, 0.95)
                 p99 = percentile(values, 0.99)
