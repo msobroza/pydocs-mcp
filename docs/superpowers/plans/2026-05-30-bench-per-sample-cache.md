@@ -14,6 +14,8 @@
 - **D1 key refinement:** key on `config.compute_ingestion_pipeline_hash()` (ingestion only), NOT the full config. The indexed DB depends only on ingestion + embedder + corpus; the retrieval pipeline (BM25 vs tree vs LI) never changes DB *content*. So configs that share an ingestion pipeline (e.g. `repoqa_bm25` + `repoqa_tree`, both on `ingestion_bm25_only.yaml`) share one cached DB. Bigger win; AC3 reframed accordingly.
 - **D2/D3 storage refinement:** cache entry is a **directory** `~/.pydocs-mcp/bench/<key>/` holding `index.sqlite` (+ `index.tq` / `index.plaid` sidecars), built in `<key>.<pid>.tmp/` and promoted with an atomic `os.replace` of the *directory*. The spec's flat single-`.db` sketch would orphan the LI `.plaid` and dense `.tq` sidecars (`build_uow_factory` derives them from `db_path.stem`), breaking LI/dense on a cache hit.
 
+**Out of scope (validated BM25/tree only):** the benchmark's `_do_index` uses `build_sqlite_indexing_service` (SQLite-only UoW), so `uow.vectors`/`uow.multi_vectors` are Null no-ops — NO `.tq`/`.plaid` is written today, and dense/LI configs retrieve against absent sidecars (a pre-existing wiring bug, tracked in its own PR). This cache is verified end-to-end on BM25 + tree; the directory shape (Task 2) is forward-compatible so dense/LI gain caching for free once that bug is fixed. Task 2's `test_reserve_then_commit_promotes_atomically` covers spec AC12 with a FAKE `index.plaid` (proves the dir-move preserves arbitrary sidecars without needing real LI).
+
 ---
 
 ### Task 1: Cache module — key + paths + enable flag

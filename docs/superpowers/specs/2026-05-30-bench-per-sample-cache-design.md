@@ -40,28 +40,48 @@ isolated per-task DB (i.e. **measurement-fidelity-preserving**).
 
 ## Decisions
 
-### D1 — Cache key: `(corpus_dir, config_hash)`
-The cache is a small dict-like store mapping
-`(canonical_corpus_dir, config_hash) → indexed_db_path`. `config_hash`
-folds the `AppConfig`'s `ingestion_pipeline_hash` (already canonical:
-SHA-256 over embedder identity + raw YAML bytes) so a config change
-correctly invalidates the cache. `canonical_corpus_dir` =
-`Path(...).resolve()`.
+### D1 — Cache key: `(resolved_corpus_dir, ingestion_pipeline_hash)`
+The cache key is `sha256(resolve(corpus_dir) + "\x00" +
+config.compute_ingestion_pipeline_hash())`. **Ingestion hash only** —
+NOT the full config: the indexed DB content depends only on the corpus
++ ingestion pipeline + embedder, never on the retrieval pipeline
+(BM25 vs tree vs LI). So configs that share an ingestion pipeline
+(e.g. `repoqa_bm25` + `repoqa_tree`, both on `ingestion_bm25_only.yaml`)
+reuse ONE cached DB across configs, not just across tasks. The
+ingestion hash is already canonical (SHA-256 over embedder identity +
+raw YAML bytes), so changing the embedder or ingestion YAML rebuilds
+automatically.
 
-### D2 — Persistent cache directory at `~/.pydocs-mcp/bench/`
-DBs land in `~/.pydocs-mcp/bench/<corpus_basename>_<sha256-of-key>.db`
-(mirrors the shipped `~/.pydocs-mcp/{dirname}_{path_hash}.db`
-convention from `python/pydocs_mcp/__main__.py`). Reusable across
-processes and sweeps, not per-PID. Cleaned by explicit
-`--bench-cache evict` (D6) or by hand; never silently auto-evicted
-during a run.
+### D2 — Cache entry is a DIRECTORY at `~/.pydocs-mcp/bench/<key>/`
+**Each entry is a directory, not a flat file** — this is the sidecar
+fix. Both the dense (`.tq`) and late-interaction (`.plaid`) sidecars
+are derived from the SQLite path *by stem* (`db_path.with_suffix(".tq")`
+/ `<dir>/<stem>.plaid` in `build_uow_factory`). A flat
+`<basename>_<hash>.db` cache would CHANGE the stem on promotion and
+orphan the sidecars; a fixed filename inside a per-key directory keeps
+the stem stable so retrieval finds them next to the cached `.sqlite`.
+
+Layout: `~/.pydocs-mcp/bench/<key>/index.sqlite` (+ `index.tq`,
+`index.plaid` when produced). Reusable across processes and sweeps.
+Lives outside the repo. Cleaned by `bench_cache evict` (D6) or by
+hand; never silently auto-evicted during a run.
+
+**Scope note:** the benchmark's current ingestion wiring
+(`build_sqlite_indexing_service` → SQLite-only UoW) writes NO `.tq` /
+`.plaid` today — dense/LI ingestion is a separate pre-existing wiring
+bug (see "Out of scope"). The directory shape is forward-compatible
+insurance: it costs nothing now and "just works" the day that bug is
+fixed, with zero cache rework.
 
 ### D3 — `PydocsMcpSystem.index()` becomes a cache lookup
 - Compute `key = (resolve(corpus_dir), config_hash(config))`.
 - If `cache[key]` exists and the file is non-empty → set `self._db_path`
   and return (no indexing).
-- Else: build a tmp DB as today, then atomically rename it into the
-  cache location (write to `*.tmp`, `os.replace` to final).
+- Else: index into a build directory `<key>.<pid>.tmp/`, then
+  atomically promote the whole DIRECTORY (`os.replace(build, final)`)
+  so the `.sqlite` and any `.tq`/`.plaid` sidecars move together. A
+  lost race (another process produced the entry) drops the build dir
+  and uses the winner — a duplicate build is idempotent.
 - The runner's `finally: shutil.rmtree(dir_)` cleanup
   (`runner.py:250`) is unchanged — it only deletes per-task **corpus**
   directories the dataset materialized, never the cache DB.
@@ -154,6 +174,12 @@ for clarity.
 - **AC11 — Tests green; ruff clean; mypy clean.** Full benchmark
   suite green; `ruff check` + `ruff format --check`; `mypy
   python/pydocs_mcp` unaffected (no production changes).
+- **AC12 — Directory promote preserves sidecars.** A unit test writes a
+  fake `index.sqlite` + `index.tq` + `index.plaid` into a build dir,
+  calls `commit(key, build)`, and asserts all three appear in the final
+  entry dir with the stem `index` intact. (Validated with FAKE sidecars,
+  not an LI end-to-end run — real `.tq`/`.plaid` production is blocked by
+  the dense/LI ingestion wiring bug; see "Out of scope".)
 
 ## TDD sequence (red → green)
 
@@ -230,3 +256,12 @@ contract is comparability.
   is a different optimization).
 - Single-DB + `sample_id` (analysed above; deliberately not chosen
   here, may revisit if the IDF artifact turns out to be small).
+- **Dense / late-interaction ingestion wiring (separate PR).** The
+  benchmark's `_do_index` uses `build_sqlite_indexing_service` (SQLite-
+  only UoW), so `uow.vectors` / `uow.multi_vectors` are Null no-ops and
+  NO `.tq` / `.plaid` is ever written — and `build_retrieval_context`
+  is called without `tq_path`. Dense + LI configs therefore retrieve
+  against absent sidecars today (a pre-existing bug, tracked
+  separately). This cache PR is validated END-TO-END on BM25 + tree
+  only; the directory entry shape (D2) makes it forward-compatible so
+  dense/LI gain caching for free once that wiring is fixed.
