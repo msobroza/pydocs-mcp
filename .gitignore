@@ -44,3 +44,10 @@ benchmarks/results/
 .env
 .env.*
 !.env.example
+
+# Benchmark per-sample eval DB cache (index-once, reuse across sweeps)
+benchmarks/.eval_cache/
+# Vector index sidecars — TurboQuant dense (.tq) + fast-plaid multi-vector (.plaid).
+# Binary generated artifacts; never commit (mirrors the *.db rule above).
+*.tq
+*.plaid
