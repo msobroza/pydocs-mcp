@@ -530,6 +530,11 @@ def _apply_bench_cache_flag(value: str) -> None:
     _bench_cache.set_enabled(value == "on")
 
 
+def _maybe_cleanup_bench_cache(*, enabled: bool) -> None:
+    if enabled:
+        _bench_cache.evict()
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         # WHY: ``benchmarks.eval.runner`` (short path) matches how the
@@ -645,6 +650,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "to reproduce pre-cache numbers exactly."
         ),
     )
+    parser.add_argument(
+        "--bench-cache-cleanup",
+        action="store_true",
+        help=(
+            "After the sweep finishes, evict the ENTIRE index cache at "
+            "~/.pydocs-mcp/bench/ (run experiments, then free the disk). "
+            "Runs even if the sweep raises. Independent of --bench-cache: "
+            "'off --bench-cache-cleanup' caches nothing this run but still "
+            "clears any stale cache. Do NOT use while a concurrent sweep "
+            "shares the cache."
+        ),
+    )
     return parser
 
 
@@ -664,51 +681,56 @@ def main() -> None:
     # sweep launches so every task in the run observes the same setting.
     _apply_bench_cache_flag(args.bench_cache)
 
-    config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
-    dataset_kwargs: dict[str, object] = {}
-    if args.fixture is not None:
-        dataset_kwargs["fixture_path"] = args.fixture
-    # WHY: only add ``library_filter`` when the flag is set so the kwarg is
-    # absent for datasets that don't accept it (RepoQA). An empty/omitted
-    # flag must not pass ``library_filter=()`` — that would still be a kwarg
-    # RepoQA's constructor rejects.
-    if args.dataset_library_filter is not None:
-        dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
-    # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
-    # kwarg is absent for the common case AND for datasets that don't accept
-    # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``
-    # gating above — passing ``split="all"`` would be a no-op for DS-1000 but
-    # would still crash RepoQA's constructor.
-    if args.split != "all":
-        dataset_kwargs["split"] = args.split
+    # WHY try/finally: ``--bench-cache-cleanup`` must free the disk even when
+    # the sweep raises (a crashed run still leaves a populated cache behind).
+    try:
+        config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
+        dataset_kwargs: dict[str, object] = {}
+        if args.fixture is not None:
+            dataset_kwargs["fixture_path"] = args.fixture
+        # WHY: only add ``library_filter`` when the flag is set so the kwarg is
+        # absent for datasets that don't accept it (RepoQA). An empty/omitted
+        # flag must not pass ``library_filter=()`` — that would still be a kwarg
+        # RepoQA's constructor rejects.
+        if args.dataset_library_filter is not None:
+            dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
+        # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
+        # kwarg is absent for the common case AND for datasets that don't accept
+        # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``
+        # gating above — passing ``split="all"`` would be a no-op for DS-1000 but
+        # would still crash RepoQA's constructor.
+        if args.split != "all":
+            dataset_kwargs["split"] = args.split
 
-    results, tasks_ran = asyncio.run(
-        run_sweep(
-            systems=_parse_csv(args.systems),
-            config_paths=config_paths,
+        results, tasks_ran = asyncio.run(
+            run_sweep(
+                systems=_parse_csv(args.systems),
+                config_paths=config_paths,
+                dataset_name=args.dataset,
+                dataset_kwargs=dataset_kwargs or None,
+                tracker_names=_parse_csv(args.trackers),
+                metric_specs=_parse_csv(args.metrics),
+                limit=args.limit,
+                corpus_dir=args.corpus_dir,
+            ),
+        )
+
+        # WHY: render the report after the sweep so the run can crash without
+        # leaking a half-written markdown file. ``tasks_ran`` is the actual
+        # per-leg task count returned by ``run_sweep`` — accurate on both
+        # ``--limit N`` and full-dataset runs.
+        from .report import format_report
+
+        report = format_report(
+            sweep_results=results,
             dataset_name=args.dataset,
-            dataset_kwargs=dataset_kwargs or None,
-            tracker_names=_parse_csv(args.trackers),
-            metric_specs=_parse_csv(args.metrics),
-            limit=args.limit,
-            corpus_dir=args.corpus_dir,
-        ),
-    )
-
-    # WHY: render the report after the sweep so the run can crash without
-    # leaking a half-written markdown file. ``tasks_ran`` is the actual
-    # per-leg task count returned by ``run_sweep`` — accurate on both
-    # ``--limit N`` and full-dataset runs.
-    from .report import format_report
-
-    report = format_report(
-        sweep_results=results,
-        dataset_name=args.dataset,
-        n_tasks=tasks_ran,
-    )
-    if args.report is not None:
-        args.report.write_text(report)
-    print(report)
+            n_tasks=tasks_ran,
+        )
+        if args.report is not None:
+            args.report.write_text(report)
+        print(report)
+    finally:
+        _maybe_cleanup_bench_cache(enabled=args.bench_cache_cleanup)
 
 
 if __name__ == "__main__":  # pragma: no cover -- CLI entry, not unit-tested
