@@ -375,6 +375,23 @@ class EmbeddingConfig(BaseModel):
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
+class SearchBackendConfig(BaseModel):
+    """Which storage backend serves retrieval capabilities (spec §8.1).
+
+    ``dim`` / ``bit_width`` are NOT duplicated here — they stay sourced from
+    :class:`EmbeddingConfig` (single source of truth). Remote-backend blocks
+    (qdrant/elasticsearch) are documented extension points, not parsed yet.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = "sqlite_composite"
+
+    def compute_identity(self) -> str:
+        """Identity string folded into the pipeline hash (spec §10)."""
+        return f"search_backend={self.kind}"
+
+
 class LlmConfig(BaseModel):
     """LLM chat-completion client configuration.
 
@@ -477,6 +494,13 @@ class AppConfig(BaseSettings):
     # configuration": embedding model choice is a pipeline-tuning knob,
     # NOT an MCP tool param — the MCP surface stays fixed.
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    # Unified SearchBackend seam (spec §8.1): which storage backend serves
+    # retrieval capabilities. Defaults to ``sqlite_composite``. ``dim`` /
+    # ``bit_width`` are NOT duplicated here — they stay sourced from
+    # ``embedding`` (single source of truth). Per CLAUDE.md §"MCP API
+    # surface vs YAML configuration": backend selection is a deployment-time
+    # knob, NOT an MCP tool param — the MCP surface stays fixed.
+    search_backend: SearchBackendConfig = Field(default_factory=SearchBackendConfig)
     # LLM chat-completion client config (Task 3 / AC-2). Architectural twin
     # of ``embedding`` — provider/model_name/tuning knobs consumed by
     # ``build_llm_client(cfg)`` to construct the right concrete client. Per
