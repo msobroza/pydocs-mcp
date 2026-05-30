@@ -41,7 +41,8 @@
 │    TextSearchable, VectorSearchable, HybridSearchable            │
 │    UnitOfWork, ConnectionProvider                                │
 │    Filter tree + FilterFormat + FilterAdapter + MetadataSchema   │
-│    Sqlite* + TurboQuantStore + HybridSqliteTurboStore adapters   │
+│    Sqlite* + TurboQuantStore adapters                            │
+│    SearchBackend / SqliteCompositeBackend capability factory     │
 │    SqliteUnitOfWork + TurboQuantUnitOfWork + CompositeUnitOfWork │
 └──────────────────────────┬───────────────────────────────────────┘
                            │
@@ -204,7 +205,7 @@ N. **Add capability-aware ingestion (`REQUIRES` declarations + auto-derivation)*
 
     Pairs well with the `LlmTreeReasoningStep` PR — once that lands, this is the natural follow-up that makes `tree_only.yaml` deployments stop paying for embeddings they never use.
 
-9. **Add `SqliteVecVectorStore`** — alternative dense backend that keeps vectors in SQLite (via `sqlite-vec`) instead of the shipped TurboQuant `.tq` sidecar. The dense plumbing (`Chunk.embedding`, `Embedder` Protocol, `FastEmbedEmbedder`, `OpenAIEmbedder`, `DenseScorerStep`, `DenseFetcherStep`, `HybridSqliteTurboStore`) already exists; this swaps the storage layer to make `.db` self-contained. Useful for deployments that prefer a single-file index.
+9. **Add `SqliteVecVectorStore`** — alternative dense backend that keeps vectors in SQLite (via `sqlite-vec`) instead of the shipped TurboQuant `.tq` sidecar. The dense plumbing (`Chunk.embedding`, `Embedder` Protocol, `FastEmbedEmbedder`, `OpenAIEmbedder`, `DenseScorerStep`, `DenseFetcherStep`, `TurboQuantVectorStore` wired via the `SearchBackend` seam) already exists; this swaps the storage layer to make `.db` self-contained. Useful for deployments that prefer a single-file index.
 
 10. **Add `QdrantVectorStore`** with the full `ChunkStore + TextSearchable + VectorSearchable + HybridSearchable` stack. First full backend swap — validates that nothing above the storage layer changes.
 
