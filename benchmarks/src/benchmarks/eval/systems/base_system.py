@@ -96,6 +96,27 @@ class HasResolvedLibrary(Protocol):
 
 
 @runtime_checkable
+class IndexesDependencies(Protocol):
+    """A system whose indexer can be told whether to index the corpus's
+    declared dependencies. The runner sets ``index_dependencies`` once per
+    sweep before ``index()``:
+
+    - ``True`` — index the corpus's declared deps. Reference-project datasets
+      (DS-1000, supplied via ``--corpus-dir``) whose declared libraries ARE
+      the search target rely on this.
+    - ``False`` — index repo-source-only. Per-task repo datasets (RepoQA)
+      carry their answer in the repo, so resolving + indexing deps is pure
+      noise and the dominant per-task ingestion cost.
+
+    Opt-in via ``isinstance(system, IndexesDependencies)`` — comparative
+    systems that don't expose the attribute are a strict no-op. See
+    ``HasLibraryName`` for the opt-in mechanism.
+    """
+
+    index_dependencies: bool
+
+
+@runtime_checkable
 class HasGoldResolver(Protocol):
     """A system that supplies a per-system ``GoldResolver`` so the runner
     can label ground-truth between ``search()`` and scoring.
@@ -114,6 +135,7 @@ __all__ = [
     "HasLibrary",
     "HasLibraryName",
     "HasResolvedLibrary",
+    "IndexesDependencies",
     "RetrievedItem",
     "System",
 ]

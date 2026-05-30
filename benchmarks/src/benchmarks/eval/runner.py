@@ -50,6 +50,7 @@ from .systems.base_system import (
     HasLibrary,
     HasLibraryName,
     HasResolvedLibrary,
+    IndexesDependencies,
 )
 
 if TYPE_CHECKING:
@@ -154,6 +155,13 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
         config = AppConfig.load(explicit_path=cfg_path)
         system = system_registry.build(system_name)
         config_name = cfg_path.stem
+        # WHY: reference-project datasets (DS-1000, ``--corpus-dir`` set) index
+        # the corpus's declared deps — their libraries ARE the search target.
+        # Per-task repo datasets (RepoQA, ``corpus_dir is None``) index
+        # repo-source-only — deps are noise and the dominant per-task ingestion
+        # cost. ``corpus_dir`` is constant per sweep, so set it once here, not
+        # per-task. This is the slow-RepoQA-ingestion fix.
+        _maybe_set_index_dependencies(system, corpus_dir is not None)
 
         handles = [
             t.open_run(
@@ -408,6 +416,19 @@ def _capture_library_resolution(system: object, task: EvalTask) -> EvalTask:
             },
         ),
     )
+
+
+def _maybe_set_index_dependencies(system: object, include_deps: bool) -> None:
+    """Seed the dependency-indexing toggle on opt-in systems.
+
+    Opt-in via the ``IndexesDependencies`` ``runtime_checkable`` Protocol
+    (``systems/base_system.py``): ``PydocsMcpSystem`` exposes
+    ``index_dependencies``. Comparative systems that don't are a strict no-op
+    — the ``isinstance`` gate documents the contract at the type level and
+    keeps the attribute off unrelated systems.
+    """
+    if isinstance(system, IndexesDependencies):
+        system.index_dependencies = include_deps
 
 
 def _maybe_set_library(system: object, metadata: Mapping[str, str]) -> None:

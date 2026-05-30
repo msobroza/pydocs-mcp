@@ -54,6 +54,13 @@ class PydocsMcpSystem:
     # (``state.result``) over the ranked list (``state.candidates``). Default
     # False keeps the recall@k-friendly N-item behavior for RepoQA et al.
     composite_mode: bool = False
+    # WHY: the runner flips this per sweep via the ``IndexesDependencies``
+    # opt-in (see ``base_system.py``). ``True`` indexes the corpus's declared
+    # deps — reference-project datasets (DS-1000) need it. ``False`` indexes
+    # repo-source-only for per-task repo datasets (RepoQA), where deps are
+    # noise and the dominant ingestion cost. Default ``True`` keeps direct /
+    # test construction production-shaped.
+    index_dependencies: bool = True
     _db_path: Path | None = field(default=None, init=False, repr=False)
     _pipeline: CodeRetrieverPipeline | None = field(
         default=None,
@@ -195,6 +202,7 @@ class PydocsMcpSystem:
             corpus_dir,
             force=True,
             include_project_source=True,
+            include_dependencies=self.index_dependencies,
             workers=1,
         )
         # WHY: bulk-insert path defers the FTS5 content-backed rebuild —
