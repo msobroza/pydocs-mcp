@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.retrieval.config import AppConfig
+from pydocs_mcp.retrieval.config import AppConfig, LateInteractionConfig
 from pydocs_mcp.storage.protocols import TextSearchable, VectorSearchable
 from pydocs_mcp.storage.search_backend import (
     FilterStrategy,
@@ -114,3 +114,21 @@ def test_composite_backend_li_enabled_wires_multi(tmp_path: Path) -> None:
     assert isinstance(be.multi(), _FastPlaidReadStore)
     assert be.capabilities()["multi"] is True
     assert len(be.write_uow_children()) == 3  # SQLite + TurboQuant + fast-plaid (lambdas; not called)
+
+
+def test_composite_backend_late_interaction_enabled(tmp_path: Path) -> None:
+    # Mirrors ``test_composite_backend_li_enabled_wires_multi`` but flips LI on by
+    # overriding the frozen ``AppConfig`` field directly (the ``object.__setattr__``
+    # convention used across the suite) instead of loading an overlay YAML. Same
+    # wiring assertions, and still no ``[late-interaction]`` extra required:
+    # ``multi()`` only builds the read view and ``write_uow_children()`` returns
+    # lambda factories whose fast_plaid import is lazy, so the count is asserted
+    # without invoking them.
+    cfg = _cfg()
+    object.__setattr__(cfg, "late_interaction", LateInteractionConfig(enabled=True))
+    be = SqliteCompositeBackend(config=cfg, db_path=tmp_path / "x.db", tq_path=tmp_path / "x.tq")
+    from pydocs_mcp.storage.search_backend import _FastPlaidReadStore
+
+    assert isinstance(be.multi(), _FastPlaidReadStore)
+    assert be.capabilities()["multi"] is True
+    assert len(be.write_uow_children()) == 3  # SQLite + TurboQuant + fast-plaid
