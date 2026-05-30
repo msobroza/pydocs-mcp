@@ -11,11 +11,13 @@ the SQLite cache lives in a tmp file per ``index()`` call so two
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .. import _bench_cache
 from ..gold_resolver import (
     _DEFAULT_FUZZ_THRESHOLD,
     LazyFuzzyGoldResolver,
@@ -58,6 +60,16 @@ class PydocsMcpSystem:
         init=False,
         repr=False,
     )
+    _db_is_cached: bool = field(default=False, init=False, repr=False)
+    _was_cache_hit: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def was_cache_hit(self) -> bool:
+        """True iff the most recent index() returned a cached DB without
+        indexing. The runner uses this to skip the indexing_seconds
+        observation on warm tasks (a ~0 s cache lookup is not an
+        indexing-time measurement)."""
+        return self._was_cache_hit
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         # WHY: imports deferred so constructing the system (which the
@@ -73,15 +85,45 @@ class PydocsMcpSystem:
         # overwritten. Teardown is idempotent and a no-op on first call.
         await self.teardown()
 
-        # WHY: ``mkstemp`` returns an open fd we close immediately because
-        # ``open_index_database`` will reopen the path. We own the lifecycle
-        # and remove it in ``teardown``.
-        fd, name = tempfile.mkstemp(suffix=".sqlite")
-        os.close(fd)
-        self._db_path = Path(name)
-        open_index_database(self._db_path).close()
-
-        await self._do_index(corpus_dir, config)
+        if _bench_cache.is_enabled():
+            key = _bench_cache.make_key(corpus_dir, config)
+            cached = _bench_cache.lookup(key)
+            if cached is not None:
+                # HIT: reuse the indexed DB (+ its sidecars) as-is.
+                self._db_path = cached
+                self._db_is_cached = True
+                self._was_cache_hit = True
+            else:
+                # MISS: index into a tmp dir, then atomically promote so the
+                # .tq/.plaid sidecars travel with the .sqlite.
+                build_dir = _bench_cache.reserve(key)
+                self._db_path = build_dir / "index.sqlite"
+                self._was_cache_hit = False
+                # WHY (review C1): mark _db_is_cached only AFTER a successful
+                # commit. If _do_index raises, teardown() would skip a
+                # "cached" path and leak the half-built tmp dir, so clean
+                # the build dir here and re-raise.
+                self._db_is_cached = False
+                open_index_database(self._db_path).close()
+                try:
+                    await self._do_index(corpus_dir, config)
+                except BaseException:
+                    shutil.rmtree(build_dir, ignore_errors=True)
+                    self._db_path = None
+                    raise
+                self._db_path = _bench_cache.commit(key, build_dir)
+                self._db_is_cached = True
+        else:
+            # WHY: ``mkstemp`` returns an open fd we close immediately because
+            # ``open_index_database`` will reopen the path. We own the lifecycle
+            # and remove it in ``teardown``.
+            fd, name = tempfile.mkstemp(suffix=".sqlite")
+            os.close(fd)
+            self._db_path = Path(name)
+            self._db_is_cached = False
+            self._was_cache_hit = False
+            open_index_database(self._db_path).close()
+            await self._do_index(corpus_dir, config)
 
         context = build_retrieval_context(self._db_path, config)
         self._pipeline = build_chunk_pipeline_from_config(config, context)
@@ -253,19 +295,24 @@ class PydocsMcpSystem:
         path = self._db_path
         if path is None:
             return
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        # WAL/SHM siblings sometimes survive if WAL mode flushed pre-close.
-        for suffix in ("-wal", "-shm"):
-            sib = path.with_name(path.name + suffix)
+        # WHY: a cached DB is shared across tasks/instances — deleting it on
+        # teardown would defeat the cache (and corrupt a concurrent reader).
+        # Only the unique tmp DB this instance owns gets unlinked here.
+        if not self._db_is_cached:
             try:
-                sib.unlink()
+                path.unlink()
             except FileNotFoundError:
                 pass
+            # WAL/SHM siblings sometimes survive if WAL mode flushed pre-close.
+            for suffix in ("-wal", "-shm"):
+                sib = path.with_name(path.name + suffix)
+                try:
+                    sib.unlink()
+                except FileNotFoundError:
+                    pass
         self._db_path = None
         self._pipeline = None
+        self._db_is_cached = False
 
 
 @system_registry.register("pydocs-mcp-composite")

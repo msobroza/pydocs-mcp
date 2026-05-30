@@ -135,8 +135,8 @@ max-complexity = 12
 # fixtures (S105/S106), broader pytest.raises (PT011/PT012), and the other
 # pytest-style relaxations below — these all reflect intentional test
 # conventions, not bugs.
-"tests/**"                       = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
-"benchmarks/tests/**"            = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
+"tests/**"                       = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT019", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
+"benchmarks/tests/**"            = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT019", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
 # Benchmark eval scripts run pre-conditions via assert as a lightweight
 # precondition pattern; they're not security-sensitive code paths.
 # B905 (zip strict) and SIM105 (suppress vs try/except/pass) tolerated in
