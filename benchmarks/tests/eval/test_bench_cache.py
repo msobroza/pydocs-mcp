@@ -101,3 +101,29 @@ def test_commit_loses_race_drops_tmp(tmp_path, monkeypatch) -> None:
     db = _bench_cache.commit("k", build)
     assert db.read_text() == "winner"  # winner kept
     assert not build.exists()  # loser dropped
+
+
+def test_evict_removes_everything(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    d = _bench_cache.entry_dir("k")
+    d.mkdir(parents=True)
+    _bench_cache.db_path_for("k").write_text("db")
+    removed = _bench_cache.evict()
+    assert removed == 1
+    assert not _bench_cache.cache_root().exists() or not any(_bench_cache.cache_root().iterdir())
+
+
+def test_evict_empty_cache_is_zero(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    assert _bench_cache.evict() == 0
+
+
+def test_info_lists_entries(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    d = _bench_cache.entry_dir("k")
+    d.mkdir(parents=True)
+    _bench_cache.db_path_for("k").write_text("db-bytes")
+    rows = _bench_cache.info()
+    assert len(rows) == 1
+    assert rows[0]["key"] == "k"
+    assert rows[0]["bytes"] >= len("db-bytes")

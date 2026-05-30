@@ -90,3 +90,34 @@ def commit(key: str, build_dir: Path) -> Path:
     final.parent.mkdir(parents=True, exist_ok=True)
     build_dir.replace(final)  # atomic dir rename on the same filesystem
     return db_path_for(key)
+
+
+def evict() -> int:
+    """Remove every cache entry directory. Returns the count removed."""
+    root = cache_root()
+    if not root.exists():
+        return 0
+    count = 0
+    for child in root.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+            count += 1
+        else:
+            child.unlink(missing_ok=True)
+    return count
+
+
+def info() -> list[dict[str, object]]:
+    """One row per cache entry: key, total bytes, db mtime (epoch)."""
+    root = cache_root()
+    rows: list[dict[str, object]] = []
+    if not root.exists():
+        return rows
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or child.name.endswith(".tmp"):
+            continue
+        total = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
+        db = child / _DB_FILENAME
+        mtime = db.stat().st_mtime if db.is_file() else 0.0
+        rows.append({"key": child.name, "bytes": total, "mtime": mtime})
+    return rows
