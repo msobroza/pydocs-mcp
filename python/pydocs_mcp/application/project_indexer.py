@@ -41,6 +41,7 @@ class ProjectIndexer:
         *,
         force: bool = False,
         include_project_source: bool = True,
+        include_dependencies: bool = True,
         workers: int = 1,
     ) -> IndexingStats:
         stats = IndexingStats()
@@ -48,18 +49,25 @@ class ProjectIndexer:
             await self.indexing_service.clear_all()
         if include_project_source:
             await self._index_project_source(project_dir, stats)
-        deps = await self.dependency_resolver.resolve(project_dir)
-        if workers <= 1:
-            for dep_name in deps:
-                await self._index_one_dependency(dep_name, stats)
-        else:
-            sem = asyncio.Semaphore(workers)
-
-            async def _bounded(dep_name: str) -> None:
-                async with sem:
+        # WHY: per-task repository corpora (the benchmark's RepoQA path) carry
+        # their answer in the repo source itself, so resolving + indexing the
+        # repo's declared dependencies is pure noise AND the dominant ingestion
+        # cost. ``include_dependencies=False`` skips the whole block for those.
+        # Default ``True`` preserves production indexing and reference-project
+        # corpora (DS-1000), whose declared libraries ARE the search target.
+        if include_dependencies:
+            deps = await self.dependency_resolver.resolve(project_dir)
+            if workers <= 1:
+                for dep_name in deps:
                     await self._index_one_dependency(dep_name, stats)
+            else:
+                sem = asyncio.Semaphore(workers)
 
-            await asyncio.gather(*[_bounded(d) for d in deps])
+                async def _bounded(dep_name: str) -> None:
+                    async with sem:
+                        await self._index_one_dependency(dep_name, stats)
+
+                await asyncio.gather(*[_bounded(d) for d in deps])
         return stats
 
     async def _index_project_source(
