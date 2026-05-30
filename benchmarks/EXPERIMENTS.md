@@ -24,11 +24,8 @@ BM25/dense weight split of the linear (weighted-score-interpolation) blend.
 Every experiment pipeline emits a ranked top-10 candidate list (`max_results:
 10`) so `recall@10` is measurable — the shipped `*_ranked` presets cap at 8.
 
-> **Dense conditions (2–8) are not measuring dense quality yet** — the
-> harness does not persist the dense vector sidecar at index time, so they
-> currently fall back to the lexical signal. See
-> [§5 Known limitation](#5-known-limitation-dense-conditions). Conditions 1
-> (BM25) and 9 (LLM tree) are fully working.
+The harness persists the dense `.tq` sidecar at index time, so the dense and
+hybrid conditions (2–8) measure real dense retrieval — not a lexical fallback.
 
 The harness caches each index on disk and reuses it across conditions and
 re-runs, so a full sweep indexes the 30 repos once rather than once per
@@ -171,18 +168,7 @@ under the same path is NOT auto-detected — `bench_cache_cli evict` (or
 > sweep after `bench_cache_cli evict`, or any `--bench-cache off` run. Warm
 > sweeps still report correct quality and `search_seconds`.
 
-## 5. Known limitation: dense conditions
-
-Conditions 2–8 (dense and hybrid) need the dense **vector sidecar** populated
-at index time. The harness currently indexes through a SQLite-only path that
-computes the embeddings but does not persist the `.tq` sidecar, so dense
-retrieval finds no vectors and these conditions fall back to the lexical
-(BM25) signal rather than producing distinct dense numbers. **Conditions 1
-(BM25) and 9 (LLM tree) are unaffected.** Until the dense sidecar is wired
-into the benchmark indexer, treat conditions 2–8 as not-yet-measuring dense
-quality.
-
-## 6. Results → plots
+## 5. Results → plots
 
 Each `(system, config)` leg writes one JSONL file under
 `benchmarks/results/jsonl/` (named `pydocs-mcp_<config>_repoqa@<rev>_<ts>.jsonl`)

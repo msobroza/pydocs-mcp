@@ -262,17 +262,10 @@ measure top-K hits.
 The real-100-needle row is the headline figure. A **dense + hybrid retriever
 already ships in `pydocs-mcp`** (the `chunk_search_dense*` / `chunk_search_hybrid*`
 pipeline presets, with embedding-backed `dense_fetcher` / `dense_scorer` and RRF
-fusion) and works end-to-end in the MCP server. No dense baseline has been
-recorded yet; when one is, it should beat `recall@10 = 18%` to be worth adopting
-as the default.
-
-> **Harness limitation (dense not yet measurable here).** The benchmark
-> indexer currently writes through a SQLite-only path that does not persist the
-> dense `.tq` vector sidecar, so a dense/hybrid config run through the harness
-> finds no vectors and falls back to the lexical (BM25) signal. Recording a
-> *real* dense baseline therefore needs the benchmark indexer wired to the
-> dense-capable storage path first — it is not yet just a config-overlay swap.
-> BM25 and LLM-tree conditions are unaffected.
+fusion) and works end-to-end in both the MCP server and the benchmark harness
+(the harness persists the dense `.tq` sidecar at index time). No dense baseline
+has been recorded yet; when one is, it should beat `recall@10 = 18%` to be worth
+adopting as the default.
 
 ### Visualizing baselines
 
