@@ -292,9 +292,8 @@ class FastPlaidUnitOfWork:
     async def clear_all(self) -> None:
         """Wipe every fast-plaid slot and every mapping row.
 
-        Matches ``HybridSqliteTurboStore.clear_all`` semantics for the
-        late-interaction backend: after this returns, the sidecar holds
-        no live vectors and ``chunk_multi_vector_ids`` is empty.
+        After this returns, the late-interaction sidecar holds no live
+        vectors and ``chunk_multi_vector_ids`` is empty.
         """
         if not self._entered or self._handle is None:
             raise UnitOfWorkNotEnteredError(

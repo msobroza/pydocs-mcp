@@ -101,6 +101,20 @@ class DenseFetcherStep(RetrieverStep):
                 "BuildContext.embedder; provide both at server/CLI startup "
                 "via build_retrieval_context(...) (spec AC-17).",
             )
+        # No silent BM25 fallback: a non-None vector_store can still be
+        # FTS-only (a TextSearchable without ``vector_search``). The bare
+        # None-check above passes in that case, so the structural
+        # VectorSearchable check below is what turns the old silent
+        # FTS-only degradation into a loud build-time error.
+        if not isinstance(context.vector_store, VectorSearchable):
+            raise ValueError(
+                "DenseFetcherStep requires a dense-capable vector_store "
+                "(VectorSearchable with vector_search). The configured "
+                "search_backend does not provide dense retrieval — set "
+                "search_backend.kind to a dense-capable backend in your "
+                "AppConfig YAML, or remove the dense step from this pipeline. "
+                "(no silent BM25 fallback).",
+            )
         return cls(
             store=context.vector_store,  # type: ignore[arg-type]
             embedder=context.embedder,

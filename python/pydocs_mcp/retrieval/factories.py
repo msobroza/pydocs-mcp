@@ -2,14 +2,16 @@
 
 Both the MCP server (``server.py``) and the CLI query/api subcommands
 (``__main__.py``) construct the same ``BuildContext``: a SQLite
-``ConnectionProvider``, a ``SqliteVectorStore``, a
-``SqliteModuleMemberRepository``, and an ``AppConfig``. This module
-exposes a single factory they both call so the retrieval-side composition
-lives in one place and cannot drift between the two entry points.
+``ConnectionProvider``, the dense ``VectorSearchable`` view sourced from
+the configured ``SearchBackend``, a ``SqliteModuleMemberRepository``, the
+composite write-UoW factory, and an ``AppConfig``. This module exposes a
+single factory they both call so the retrieval-side composition lives in
+one place and cannot drift between the two entry points.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from pydocs_mcp.db import build_connection_provider
@@ -20,11 +22,12 @@ from pydocs_mcp.extraction.strategies.embedders import (
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.retrieval.llm_clients import build_llm_client
 from pydocs_mcp.retrieval.serialization import BuildContext
-from pydocs_mcp.storage.factories import build_uow_factory
+from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
+from pydocs_mcp.storage.factories import build_composite_uow_factory
+from pydocs_mcp.storage.search_backend import build_search_backend
 from pydocs_mcp.storage.sqlite import (
     SqliteFilterAdapter,
     SqliteModuleMemberRepository,
-    SqliteVectorStore,
 )
 
 
@@ -52,22 +55,22 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
     # Construction is cheap — FastEmbed's ONNX model only loads on first
     # ``encode()`` call, so a BM25-only deployment still pays nothing.
     embedder = build_embedder(config.embedding)
-    # Build the multi-vector (late-interaction) embedder once at startup so the
-    # downstream retrieval steps (and any pipeline-decoder ``from_dict`` hooks)
-    # consume it through the ambient context. Returns ``None`` when
-    # ``late_interaction.enabled=False`` — the shipped default — so a stock
-    # install never pays the pylate/torch import cost.
-    # Wire the UoW factory so retrieval steps that open transactions
-    # (``LateInteractionScorerStep``, future ``ReferenceServiceStep``,
-    # etc.) can call ``async with self.uow_factory() as uow`` and reach
-    # ``uow.multi_vectors`` / ``uow.references`` / ``uow.chunks``. The
-    # factory dispatches on ``config.late_interaction.enabled`` and
-    # returns a composite with ``FastPlaidUnitOfWork`` when enabled,
-    # otherwise a plain ``SqliteUnitOfWork`` + ``NullMultiVectorStore``.
-    uow_factory = build_uow_factory(config, db_path=db_path)
+    # #64 fix: source the dense store + the write-UoW children from the
+    # configured SearchBackend so production + benchmark share one wiring
+    # path. ``backend.dense()`` returns a ``VectorSearchable`` (a per-query
+    # ``_TurboQuantReadStore`` over the ``.tq`` sidecar) instead of the
+    # FTS-only ``SqliteVectorStore`` the lexical leg still reaches via
+    # ``connection_provider`` — so dense/hybrid configs no longer silently
+    # fall back to BM25. Dense is always wired (an empty ``.tq`` yields an
+    # empty index -> ``()``); LI reads flow through ``uow.multi_vectors``
+    # via the composite ``uow_factory``.
+    backend = build_search_backend(config, db_path)
+    uow_factory: Callable[[], CompositeUnitOfWork] = build_composite_uow_factory(
+        backend.write_uow_children()
+    )
     return BuildContext(
         connection_provider=provider,
-        vector_store=SqliteVectorStore(provider=provider),
+        vector_store=backend.dense(),
         module_member_store=SqliteModuleMemberRepository(provider=provider),
         app_config=config,
         embedder=embedder,

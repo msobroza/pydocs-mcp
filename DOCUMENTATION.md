@@ -539,7 +539,8 @@ only on **Protocols** defined in `storage/protocols.py` — `ChunkStore`,
 `Embedder`, `UnitOfWork`, `TextSearchable`, `VectorSearchable`,
 `HybridSearchable`, `ResultFuser`, `FilterAdapter`. Concrete adapters
 (`Sqlite*` repositories, `TurboQuantStore` / `TurboQuantUnitOfWork`,
-`HybridSqliteTurboStore`, `CompositeUnitOfWork`) live behind them.
+the `SearchBackend` / `SqliteCompositeBackend` capability factory,
+`CompositeUnitOfWork`) live behind them.
 
 The composition root (`server.py` + `__main__.py` + `storage/factories.py`)
 builds one `uow_factory` closure and threads it through every service. Rust
@@ -588,7 +589,7 @@ backend / step / service usually reduces to copying one of these.
 
 | Pattern | Where in the code | What it buys |
 |---|---|---|
-| **Hexagonal / Ports & Adapters** | `storage/protocols.py`, `application/protocols.py`, `retrieval/protocols.py` define the ports; `Sqlite*` / `TurboQuant*` / `HybridSqliteTurboStore` / `FastPlaidUnitOfWork` are the adapters. | Application code never imports a concrete `Sqlite*` type — swapping SQLite for Postgres / DuckDB / a hosted vector store is a pure adapter change, not a service rewrite. |
+| **Hexagonal / Ports & Adapters** | `storage/protocols.py`, `application/protocols.py`, `retrieval/protocols.py` define the ports; `Sqlite*` / `TurboQuant*` / `FastPlaidUnitOfWork` are the adapters, fronted by the `SearchBackend` / `SqliteCompositeBackend` capability factory (`storage/search_backend.py`). | Application code never imports a concrete `Sqlite*` type — swapping SQLite for Postgres / DuckDB / a hosted vector store is a pure adapter change, not a service rewrite. |
 | **Repository pattern** | One class per persisted entity: `SqlitePackageRepository`, `SqliteChunkRepository`, `SqliteModuleMemberRepository`, `SqliteDocumentTreeStore`, `SqliteReferenceRepository`. | Each entity's SQL lives in exactly one place. New columns mean editing one file. |
 | **Unit of Work + Composite UoW** | `SqliteUnitOfWork`, `TurboQuantUnitOfWork`, `FastPlaidUnitOfWork`, plus `CompositeUnitOfWork` (`storage/composite_uow.py`) that fans out to children. | Multi-store writes (chunks → vectors → multi-vectors → mapping table) commit or roll back atomically. Application services depend on `uow_factory: Callable[[], UnitOfWork]` and don't know which backends are wired. |
 | **Pipeline pattern (sklearn-shaped)** | `RetrieverPipeline = [(name, RetrieverStep), …]` for reads; `IngestionPipeline` + `IngestionStage` for writes. `Pipeline` IS a `Step`, so sub-pipelines nest without an adapter. | YAML presets compose by name. Parallel branches, fusion, re-rankers all land as new steps without touching existing ones. |

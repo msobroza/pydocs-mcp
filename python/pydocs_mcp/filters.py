@@ -2,8 +2,8 @@
 
 This is the canonical top-level home for the filter-tree vocabulary used
 by both :class:`pydocs_mcp.models.SearchQuery` validation and the storage
-adapters (``storage/sqlite.py``, ``storage/turboquant_store.py``,
-``storage/hybrid_sqlite_turbo_store.py``). Living at the package root —
+adapters (``storage/sqlite.py``, ``storage/turboquant_store.py``). Living
+at the package root —
 with no internal imports — lets ``pydocs_mcp.models`` reference
 ``format_registry`` directly at module load without the historical lazy
 import that worked around the ``models → storage.filters → storage``

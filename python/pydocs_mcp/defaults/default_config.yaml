@@ -90,6 +90,12 @@ embedding:
   batch_size:  32
   bit_width:   4
 
+# Unified SearchBackend seam (spec §8.1): which storage backend serves
+# retrieval capabilities. `dim` / `bit_width` stay sourced from `embedding`
+# above (single source of truth) — do NOT duplicate them here.
+search_backend:
+  kind: sqlite_composite
+
 # LLM client configuration — used by LlmTreeReasoningStep and other
 # LLM-driven retrieval primitives. Defaults to OpenAI's gpt-4o-mini.
 # OPENAI_API_KEY env var is the credential source.

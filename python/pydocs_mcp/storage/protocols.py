@@ -1,4 +1,4 @@
-"""Storage Protocols — 10 @runtime_checkable contracts (spec §5.2, AC #3)."""
+"""Storage Protocols — 12 @runtime_checkable contracts (spec §5.2, AC #3)."""
 
 from __future__ import annotations
 
@@ -307,7 +307,33 @@ class DocumentTreeStore(Protocol):
 
 
 @runtime_checkable
-class ReferenceStore(Protocol):
+class GraphSearchable(Protocol):
+    """Read-only reference-graph view (callers / callees / by-name).
+
+    The read capability a SearchBackend exposes via ``.graph()``. Consumed
+    by the ``lookup`` MCP path (ReferenceService), not the retrieval
+    pipeline. The write surface lives on :class:`ReferenceStore`.
+
+    ``find_callers`` and ``find_callees`` are CROSS-PACKAGE (no package
+    filter) — user intent on ``lookup(target="requests.get",
+    show="callers")`` is "who calls this anywhere", not "who calls this
+    inside requests". Each returned row carries ``from_package`` so the
+    caller can group/render by source package downstream.
+    """
+
+    async def find_callers(self, *, target_node_id: str) -> list[NodeReference]: ...
+
+    async def find_callees(self, *, from_node_id: str) -> list[NodeReference]: ...
+
+    async def find_by_name(
+        self,
+        to_name: str,
+        kind: ReferenceKind | None = None,
+    ) -> list[NodeReference]: ...
+
+
+@runtime_checkable
+class ReferenceStore(GraphSearchable, Protocol):
     """Storage boundary for the cross-node reference graph (spec §6.2).
 
     Persists ``NodeReference`` rows captured during extraction so the
@@ -335,16 +361,6 @@ class ReferenceStore(Protocol):
         package: str,
         uow: UnitOfWork | None = None,
     ) -> None: ...
-
-    async def find_callers(self, *, target_node_id: str) -> list[NodeReference]: ...
-
-    async def find_callees(self, *, from_node_id: str) -> list[NodeReference]: ...
-
-    async def find_by_name(
-        self,
-        to_name: str,
-        kind: ReferenceKind | None = None,
-    ) -> list[NodeReference]: ...
 
     async def delete_for_package(
         self,
@@ -428,7 +444,24 @@ class MultiVectorEmbedder(Protocol):
 
 
 @runtime_checkable
-class MultiVectorStore(Protocol):
+class MultiVectorSearchable(Protocol):
+    """Read-only late-interaction view: MaxSim score over a candidate subset.
+
+    The read capability a SearchBackend exposes via ``.multi()``. The
+    write surface lives on :class:`MultiVectorStore`, which extends this.
+    """
+
+    async def score(
+        self,
+        query_embedding: list[np.ndarray],
+        *,
+        subset_chunk_ids: Sequence[int],
+        top_k: int,
+    ) -> tuple[tuple[int, float], ...]: ...
+
+
+@runtime_checkable
+class MultiVectorStore(MultiVectorSearchable, Protocol):
     """Typed contract for the multi-vector (token-matrix) backend.
 
     Backend-neutral surface: callers identify chunks by ``chunk_id`` —
@@ -448,14 +481,6 @@ class MultiVectorStore(Protocol):
     async def remove_vectors(self, ids: Sequence[int]) -> None: ...
 
     async def clear_all(self) -> None: ...
-
-    async def score(
-        self,
-        query_embedding: list[np.ndarray],
-        *,
-        subset_chunk_ids: Sequence[int],
-        top_k: int,
-    ) -> tuple[tuple[int, float], ...]: ...
 
 
 class ChatMessage(TypedDict):
