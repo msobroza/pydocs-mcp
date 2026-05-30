@@ -572,10 +572,26 @@ Expected: FAIL — `test_index_once_...` asserts `calls["n"] == 1` but gets `2` 
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `pydocs.py`, add the field to `PydocsMcpSystem`:
+In `pydocs.py`, add two fields to `PydocsMcpSystem` — `_db_is_cached`
+controls teardown (don't delete a cached DB); `_was_cache_hit` records
+whether the LAST `index()` was served from cache, so the runner can
+exclude warm tasks from `indexing_seconds` (spec D9 / AC14):
 
 ```python
     _db_is_cached: bool = field(default=False, init=False, repr=False)
+    _was_cache_hit: bool = field(default=False, init=False, repr=False)
+```
+
+And expose the read-only property the runner reads (spec D9):
+
+```python
+    @property
+    def was_cache_hit(self) -> bool:
+        """True iff the most recent index() returned a cached DB without
+        indexing. The runner uses this to skip the indexing_seconds
+        observation on warm tasks (a ~0 s cache lookup is not an
+        indexing-time measurement — spec D9)."""
+        return self._was_cache_hit
 ```
 
 Add the cache import at module top (NOT deferred — it's stdlib-light):
@@ -601,12 +617,14 @@ Replace `index()` so the DB is sourced from the cache when enabled:
                 # HIT: reuse the indexed DB (+ its sidecars) as-is.
                 self._db_path = cached
                 self._db_is_cached = True
+                self._was_cache_hit = True  # spec D9: exclude from indexing_seconds
             else:
                 # MISS: index into a tmp dir, then atomically promote so the
                 # .tq/.plaid sidecars travel with the .sqlite.
                 build_dir = _bench_cache.reserve(key)
                 self._db_path = build_dir / "index.sqlite"
                 self._db_is_cached = True
+                self._was_cache_hit = False  # cold task: a real indexing measurement
                 open_index_database(self._db_path).close()
                 await self._do_index(corpus_dir, config)
                 self._db_path = _bench_cache.commit(key, build_dir)
@@ -615,6 +633,7 @@ Replace `index()` so the DB is sourced from the cache when enabled:
             os.close(fd)
             self._db_path = Path(name)
             self._db_is_cached = False
+            self._was_cache_hit = False  # --bench-cache off: every task is cold
             open_index_database(self._db_path).close()
             await self._do_index(corpus_dir, config)
 
@@ -622,7 +641,10 @@ Replace `index()` so the DB is sourced from the cache when enabled:
         self._pipeline = build_chunk_pipeline_from_config(config, context)
 ```
 
-Guard `teardown()` so cached entries survive:
+Guard `teardown()` so cached entries survive (leave `_was_cache_hit`
+intact — the runner reads it AFTER `index()` and BEFORE the next
+`teardown()`, so resetting it here is unnecessary and would mask the
+just-completed task's hit/miss state):
 
 ```python
     async def teardown(self) -> None:
@@ -656,6 +678,141 @@ Expected: PASS (3 new + the existing pydocs system tests)
 git add benchmarks/src/benchmarks/eval/systems/pydocs.py benchmarks/tests/eval/test_bench_cache_integration.py
 git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.com" \
   commit -m "feat(benchmarks): cache-aware index() + cache-safe teardown()"
+```
+
+---
+
+### Task 5b: Runner excludes cache-hit tasks from `indexing_seconds` (D9 / AC14)
+
+**Files:**
+- Modify: `benchmarks/src/benchmarks/eval/runner.py:202-220` (the timing block in `run_sweep`)
+- Test: `benchmarks/tests/eval/test_runner_timing_cache_hit.py`
+
+A cache hit makes `index()` a ~0 s lookup; recording that as
+`indexing_seconds` would report "indexing takes 0.0 s" (spec D9). Skip
+the `indexing_seconds` observation when the system reports a cache hit;
+always record `search_seconds`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# benchmarks/tests/eval/test_runner_timing_cache_hit.py
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+from benchmarks.eval.runner import run_sweep
+
+
+class _FakeTracker:
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.metrics: list[tuple[str, float, object]] = []
+
+    def open_run(self, **_kw):
+        from benchmarks.eval.trackers.base_tracker import RunHandle
+
+        return RunHandle(tracker_name=self.name, raw=None)
+
+    def log_metric(self, handle, name, value, step=None):
+        self.metrics.append((name, value, step))
+
+    def close_run(self, handle, status):  # noqa: ARG002
+        pass
+
+
+def test_cache_hit_tasks_emit_no_indexing_seconds(monkeypatch) -> None:
+    # 3 tasks: cold, warm, warm -> indexing_seconds recorded ONCE.
+    # Drive run_sweep with a fake system whose was_cache_hit cycles.
+    # (Implementer: wire a minimal fake dataset/system/scorer here per the
+    # existing test_pydocs_oracle_system.py harness; the assertion is the
+    # contract below. The point is the count, not the plumbing.)
+    tracker = _FakeTracker()
+
+    # ... build a 3-task fake sweep where system.was_cache_hit is
+    # [False, True, True] across tasks ...
+
+    asyncio.run(run_sweep(...))  # implementer fills the args
+
+    idx = [m for m in tracker.metrics if m[0] == "indexing_seconds"]
+    srch = [m for m in tracker.metrics if m[0] == "search_seconds"]
+    assert len(idx) == 1   # only the cold task
+    assert len(srch) == 3  # search always recorded
+```
+
+(Implementer note: model this fake-sweep harness on the existing
+`benchmarks/tests/eval/test_pydocs_oracle_system.py` /
+`test_runner_gold_injection.py` fixtures — a tiny in-memory dataset +
+a fake system exposing `index` / `search` / `was_cache_hit` / `teardown`
+/ `gold_resolver`. The assertion (`indexing_seconds` count == cold-task
+count) is the AC14 contract.)
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd <worktree> && PYTHONPATH=benchmarks/src .venv/bin/python -m pytest benchmarks/tests/eval/test_runner_timing_cache_hit.py -q`
+Expected: FAIL — `indexing_seconds` recorded 3 times (the runner doesn't check `was_cache_hit` yet).
+
+- [ ] **Step 3: Write minimal implementation**
+
+In `run_sweep` (`runner.py`), the timing block currently reads:
+
+```python
+                    t0 = time.perf_counter()
+                    await system.index(dir_, config)
+                    index_secs = time.perf_counter() - t0
+
+                    t1 = time.perf_counter()
+                    retrieved = await system.search(task.query, limit=10)
+                    search_secs = time.perf_counter() - t1
+
+                    latency_values["indexing_seconds"].append(index_secs)
+                    latency_values["search_seconds"].append(search_secs)
+                    for h, tracker in zip(handles, trackers):
+                        tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
+                        tracker.log_metric(h, "search_seconds", search_secs, step=count)
+```
+
+Change it to gate the indexing observation on a non-cache-hit
+(`getattr` keeps systems without the property working — they default to
+"not a hit" → always recorded, preserving today's behaviour):
+
+```python
+                    t0 = time.perf_counter()
+                    await system.index(dir_, config)
+                    index_secs = time.perf_counter() - t0
+
+                    t1 = time.perf_counter()
+                    retrieved = await system.search(task.query, limit=10)
+                    search_secs = time.perf_counter() - t1
+
+                    # Spec D9: a cache HIT makes index() a ~0 s lookup, not
+                    # an indexing measurement. Record indexing_seconds only
+                    # for cold tasks; search_seconds always (search is
+                    # identical hit or miss). Systems without was_cache_hit
+                    # default to False -> always recorded (unchanged).
+                    cache_hit = getattr(system, "was_cache_hit", False)
+                    if not cache_hit:
+                        latency_values["indexing_seconds"].append(index_secs)
+                    latency_values["search_seconds"].append(search_secs)
+                    for h, tracker in zip(handles, trackers):
+                        if not cache_hit:
+                            tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
+                        tracker.log_metric(h, "search_seconds", search_secs, step=count)
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd <worktree> && PYTHONPATH=benchmarks/src .venv/bin/python -m pytest benchmarks/tests/eval/test_runner_timing_cache_hit.py -q`
+Expected: PASS — `indexing_seconds` count == 1, `search_seconds` count == 3.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add benchmarks/src/benchmarks/eval/runner.py benchmarks/tests/eval/test_runner_timing_cache_hit.py
+git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.com" \
+  commit -m "feat(benchmarks): exclude cache-hit tasks from indexing_seconds (D9)"
 ```
 
 ---
@@ -1065,6 +1222,14 @@ evict` or `--bench-cache off` after editing a corpus in place.
 
 `--bench-cache-cleanup` evicts the WHOLE cache at the end (not just this
 run's entries) — don't pass it while a concurrent sweep shares the cache.
+
+**Reading indexing time:** a cache HIT makes `index()` a ~0 s lookup, so
+warm tasks record NO `indexing_seconds` (the metric would otherwise read
+"0.0 s"). Take true indexing-time numbers from a COLD run — the first
+sweep after `bench_cache evict`, or any `--bench-cache off` run. Warm
+sweeps still give correct quality + `search_seconds`. The sweep is
+sequential (one task at a time, no concurrency), so a cold run's timing
+is uncontended.
 ```
 
 - [ ] **Step 2: Audit README for jargon (repo rule)**
@@ -1134,10 +1299,11 @@ Record the index-time drop (cold vs warm) in the PR description. Not a CI gate.
 - D6 (CLI info/evict) → Task 7.
 - D7 (.gitignore) → already committed in the spec commit; AC6 verified Task 10 Step 4.
 - D8 (--bench-cache-cleanup, wipe after sweep) → Task 6b.
-- AC1 index-once → Task 5. AC2 fidelity → Task 8. AC3 invalidation-on-ingestion-change → Task 1 `test_make_key_varies_with_corpus_and_ingestion`. AC4 no-content-invalidation → documented Task 9; key is path+ingestion-hash by construction. AC5 teardown keeps cache → Task 5. AC6 gitignore → Task 10 Step 4. AC7 opt-out → Task 5 `test_cache_off_indexes_every_time`. AC8 CLI → Task 7. AC9 no prod code → Task 10 Step 3 + diff scope. AC10 empirical lift → Task 10 Step 5. AC11 green/ruff/mypy → Task 10. AC12 sidecar dir-move → Task 2 `test_reserve_then_commit_promotes_atomically` (fake `index.plaid`). AC13 cleanup-after-sweep → Task 6b.
+- D9 (cache-hit excluded from indexing_seconds) → Task 5 (`was_cache_hit` property) + Task 5b (runner skip).
+- AC1 index-once → Task 5. AC2 quality-fidelity → Task 8. AC3 invalidation-on-ingestion-change → Task 1 `test_make_key_varies_with_corpus_and_ingestion`. AC4 no-content-invalidation → documented Task 9; key is path+ingestion-hash by construction. AC5 teardown keeps cache → Task 5. AC6 gitignore → Task 10 Step 4. AC7 opt-out → Task 5 `test_cache_off_indexes_every_time`. AC8 CLI → Task 7. AC9 no prod code → Task 10 Step 3 + diff scope. AC10 empirical lift → Task 10 Step 5. AC11 green/ruff/mypy → Task 10. AC12 sidecar dir-move → Task 2 `test_reserve_then_commit_promotes_atomically` (fake `index.plaid`). AC13 cleanup-after-sweep → Task 6b. AC14 cache-hit-no-indexing_seconds → Task 5b `test_runner_timing_cache_hit`.
 
-**2. Placeholder scan:** none — every code step has complete code; commands have expected output.
+**2. Placeholder scan:** Task 5b's runner-timing test leaves the fake-sweep plumbing as an implementer note (modelled on the existing `test_pydocs_oracle_system.py` fixtures) because the in-memory dataset/system/scorer harness is large; the *assertion* (indexing_seconds count == cold-task count) is concrete. Every other step has complete code.
 
-**3. Type consistency:** `make_key`/`lookup`/`reserve`/`commit`/`entry_dir`/`db_path_for`/`info`/`evict`/`is_enabled`/`set_enabled`/`cache_root` names are used identically across tasks 1-8 and the CLI. `_db_is_cached` field name consistent in `index()`/`teardown()`. `_apply_bench_cache_flag` consistent in Task 6.
+**3. Type consistency:** `make_key`/`lookup`/`reserve`/`commit`/`entry_dir`/`db_path_for`/`info`/`evict`/`is_enabled`/`set_enabled`/`cache_root` names used identically across tasks 1-8 and the CLI. `_db_is_cached` + `_was_cache_hit` field names + `was_cache_hit` property consistent in Task 5 / Task 5b. `_apply_bench_cache_flag` + `_maybe_cleanup_bench_cache` consistent in Task 6 / 6b.
 
 **Note for the implementer:** `<worktree>` = `/Users/msobroza/Projects/pyctx7-mcp/.claude/worktrees/bench-per-sample-cache`; `.venv` = `/Users/msobroza/Projects/pyctx7-mcp/.venv`. The harness resets cwd between shell calls — always `cd <worktree> && ...` and use absolute paths for file writes.

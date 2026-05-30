@@ -37,6 +37,11 @@ isolated per-task DB (i.e. **measurement-fidelity-preserving**).
   sample's `corpus_dir` genuinely changes during a run.
 - Not adding a `method_hash` metadata field — see "Rejected
   alternatives".
+- No change to the runner's **sequential** execution model. The sweep
+  loop (`run_sweep`, `runner.py`) runs `(system × config × task)` one
+  at a time — no `asyncio.gather` / thread / process pool — so
+  `indexing_seconds` / `search_seconds` are uncontended. The cache
+  MUST NOT introduce any concurrency.
 
 ## Decisions
 
@@ -99,9 +104,12 @@ non-cached tmp DB is unlinked at teardown. This is the inversion of
 the current behaviour and the source of the speedup.
 
 ### D6 — `python -m benchmarks.eval.bench_cache {evict,info}` CLI
-- `evict` — remove every file under `~/.pydocs-mcp/bench/`.
-- `info` — print one line per cached DB: corpus, config_hash[:7],
-  size, mtime. Read-only.
+- `evict` — remove every entry directory under `~/.pydocs-mcp/bench/`.
+- `info` — print one line per cache entry: `key[:12]` (the sha256 of
+  corpus+ingestion-hash), total size (MB), and the `index.sqlite`
+  mtime. Read-only. (The key is opaque by design — corpus path +
+  ingestion hash are folded into it, not stored separately — so `info`
+  lists keys, not corpora.)
 
 ### D7 — `.gitignore` covers cached artifacts
 Append to `benchmarks/.gitignore` (created if absent):
@@ -139,6 +147,32 @@ pass `--bench-cache-cleanup` while a *concurrent* sweep shares the
 cache — it would delete that run's entries too. Documented in the
 README.
 
+### D9 — A cache HIT must NOT pollute the `indexing_seconds` metric
+The runner brackets `await system.index(...)` with `perf_counter`
+(`runner.py`) and records `indexing_seconds`. On a cache HIT, `index()`
+is a ~0 s lookup — recording that as `indexing_seconds` would silently
+report "indexing takes 0.0 s", corrupting the very inference-time
+measurement the sweep exists to produce. The cache is a **throughput**
+optimization (get through N tasks fast), NOT a way to measure indexing.
+
+Rule: a cache HIT contributes NO `indexing_seconds` observation. The
+system exposes whether the last `index()` was served from cache (a
+`was_cache_hit: bool` property reading the hit/miss state set in D3);
+the runner skips the `indexing_seconds` `log_metric` + `latency_values`
+append when it is True. `search_seconds` is ALWAYS recorded — search
+runs identically hit or miss.
+
+**True indexing-time numbers therefore come from the COLD leg** (every
+task a miss — e.g. the first sweep after `bench_cache evict`, or any
+`--bench-cache off` run). Warm legs measure quality + search latency
+only. Documented in the README so the operator reads indexing-time off
+the cold run, not a warm one.
+
+**Sequentiality interaction:** with the cache off (or cold) the runner
+is fully sequential (see Non-goals), so the cold leg's
+`indexing_seconds` are clean, uncontended measurements — the cache
+changes neither the ordering nor the timing of a cold task.
+
 ## Files to modify
 
 - `benchmarks/src/benchmarks/eval/systems/pydocs.py` — D3, D4, D5
@@ -161,10 +195,12 @@ README.
   `repoqa_hybrid_li_rrf.yaml`) over the same 5 tasks calls the real
   indexer **5 times**, not 10. Tested by mocking `ProjectIndexer` and
   asserting the call count.
-- **AC2 — Numbers match the no-cache baseline.** A 5-task RepoQA BM25
-  run with `--bench-cache on` produces metric values byte-identical to
-  the same 5 tasks with `--bench-cache off`. Runs in the CI matrix
-  with a fixture-tiny corpus (no real RepoQA in CI).
+- **AC2 — Quality numbers match the no-cache baseline.** A 5-task
+  RepoQA BM25 run with `--bench-cache on` produces **quality** metric
+  values (`recall@k` / `mrr` / `pass@1-needle`) byte-identical to the
+  same 5 tasks with `--bench-cache off`. (Timing metrics are addressed
+  separately by AC14 — a warm run deliberately differs there.) Runs in
+  the CI matrix with a fixture-tiny corpus (no real RepoQA in CI).
 - **AC3 — Cache invalidation on config change.** Re-running the same
   corpus with a config that changes `ingestion_pipeline_hash` rebuilds
   the DB (the cache key differs) — a second cached DB appears, the
@@ -209,6 +245,12 @@ README.
   helper evicts the whole cache when set and is a no-op when unset
   (unit-tested directly on a populated tmp cache: enabled → empty,
   disabled → entry survives). Cleanup runs even if the sweep raised.
+- **AC14 — Cache hit does NOT record `indexing_seconds`.** A warm task
+  (cache hit) emits NO `indexing_seconds` observation, while a cold
+  task (miss) emits exactly one; `search_seconds` is emitted in both.
+  Tested by driving the runner's per-task body over a fake system
+  whose `was_cache_hit` toggles, asserting the `indexing_seconds`
+  series length equals the cold-task count (not the total task count).
 
 ## TDD sequence (red → green)
 
