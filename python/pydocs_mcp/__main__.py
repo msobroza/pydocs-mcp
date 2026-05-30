@@ -37,7 +37,6 @@ from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.db import (
     cache_path_for_project,
     open_index_database,
-    turboquant_path_for_project,
 )
 
 log = logging.getLogger("pydocs-mcp")
@@ -260,25 +259,13 @@ def _project_and_db(args: argparse.Namespace) -> tuple[Path, Path]:
     if cache_dir is not None:
         # Preserve the per-project ``<dirname>_<hash>.db`` slug computed by
         # ``cache_path_for_project`` so multiple projects keep separate
-        # state under the overridden root. Same convention for the ``.tq``
-        # sidecar that ``turboquant_path_for_project`` derives in the
-        # indexing path.
+        # state under the overridden root. The ``.tq`` (and ``.plaid``)
+        # sidecars the indexing path derives via ``db_path.with_suffix(...)``
+        # share this slug, so the SQLite cache and its sidecars always land
+        # side-by-side under whatever cache root the CLI picked.
         db_path = Path(cache_dir) / db_path.name
     log.debug("DB: %s", db_path)
     return project, db_path
-
-
-def _tq_path_for_args(args: argparse.Namespace, project: Path) -> Path:
-    """Return the ``.tq`` sidecar path, honoring ``--cache-dir`` overrides.
-
-    Mirrors :func:`_project_and_db` so the SQLite + TurboQuant pair always
-    live side-by-side under whatever cache root the CLI picked.
-    """
-    tq_path = turboquant_path_for_project(project)
-    cache_dir = getattr(args, "cache_dir", None)
-    if cache_dir is not None:
-        tq_path = Path(cache_dir) / tq_path.name
-    return tq_path
 
 
 # ── Subcommand handlers ───────────────────────────────────────────────────
@@ -312,8 +299,12 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.llm_clients import build_llm_client
     from pydocs_mcp.storage.factories import (
-        build_sqlite_plus_turboquant_uow_factory,
+        build_composite_uow_factory,
         check_integrity_and_repair,
+    )
+    from pydocs_mcp.storage.search_backend import (
+        build_search_backend,
+        format_capabilities,
     )
     from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
@@ -340,18 +331,27 @@ async def _run_indexing(args: argparse.Namespace) -> None:
 
     configure_from_app_config(config)
 
-    # Hybrid-search composition root: SQLite + TurboQuant under a composite
-    # UoW so ``reindex_package`` writes chunks AND vectors atomically.
-    # ``IndexingService`` and ``ProjectIndexer`` share one composite factory
-    # so the indexing transaction spans both backends without per-service
-    # branching for "is there a vector store?".
-    tq_path = _tq_path_for_args(args, project)
-    uow_factory = build_sqlite_plus_turboquant_uow_factory(
-        db_path=db_path,
-        tq_path=tq_path,
-        dim=config.embedding.dim,
-        bit_width=config.embedding.bit_width,
-    )
+    # Hybrid-search composition root: source the write-side UoW children from
+    # the SAME SearchBackend that retrieval + the benchmark use, so indexing
+    # wires dense (and late-interaction, when enabled) consistently with the
+    # read path — no separate child-assembly that could drift. The composite
+    # UoW makes ``reindex_package`` write chunks AND vectors atomically, and
+    # ``IndexingService`` + ``ProjectIndexer`` share the one factory so the
+    # indexing transaction spans every backend without per-service branching.
+    backend = build_search_backend(config, db_path)
+    # Capability diagnostic (spec invariant C): one log line so an operator
+    # can see at index time which retrieval capabilities the configured
+    # backend actually serves — the visibility whose absence let the
+    # dense/LI wiring bug stay silent.
+    log.info(format_capabilities(backend))
+    uow_factory = build_composite_uow_factory(backend.write_uow_children())
+    # ``.tq`` sidecar path for the integrity sweep below. The backend derives
+    # its TurboQuant sidecar as ``db_path.with_suffix(".tq")``; mirror that
+    # here so the two always point at the same on-disk file. ``db_path``
+    # already carries the per-project ``<dirname>_<hash>`` slug (and any
+    # ``--cache-dir`` override), so the suffix swap lands the sidecar right
+    # beside the SQLite cache under whatever root the CLI picked.
+    tq_path = db_path.with_suffix(".tq")
     # Cache integrity sweep — drift between SQLite and the ``.tq`` sidecar
     # (process killed mid-commit, etc.) is detected and repaired by
     # clearing ``packages.content_hash`` so the next pass re-extracts.
