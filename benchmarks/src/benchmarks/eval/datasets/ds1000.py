@@ -12,7 +12,10 @@ The raw HF row exposes:
   ``BEGIN SOLUTION`` / ``END SOLUTION`` markers).
 - ``library``: title-case library name (``"Pandas"``, ``"Numpy"``,
   ``"Matplotlib"``, ``"Sklearn"``, ``"Scipy"``, ``"Tensorflow"``,
-  ``"Pytorch"``).
+  ``"Pytorch"``). On the real CodeRAG-Bench rows this is nested inside
+  the ``metadata`` repr-dict string rather than exposed top-level, so
+  the loader resolves it via ``_resolve_library`` (top-level wins, else
+  parse ``metadata``).
 - ``perturbation_type``: one of ``"Origin"`` / ``"Surface"`` /
   ``"Semantic"`` / ``"Difficult-Rewrite"`` (DS-1000 paper §3.2).
 - ``docs``: list of ``{"doc_id": str, "doc_content": str}`` — the
@@ -29,6 +32,7 @@ agree on package names), and exposes both ``doc_ids`` and
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import re
@@ -76,6 +80,54 @@ def _normalize_library(raw: str) -> str:
     normalization is total (never raises) and the fallback semantics live
     in exactly one place."""
     return _LIBRARY_NORMALIZATION.get(raw, raw.lower())
+
+
+def _resolve_library(row: dict[str, Any]) -> str:
+    """Resolve a row's raw (title-case) ``library`` value.
+
+    The flat CI fixtures expose a top-level ``library`` directly. The real
+    ``code-rag-bench/ds1000`` HF rows do NOT — the library is nested inside a
+    ``metadata`` field that is a Python-repr dict STRING (e.g.
+    ``"{'problem_id': 0, 'library': 'Numpy', ...}"``). Prefer a present,
+    non-empty top-level ``library`` (keeps the flat fixtures working); else
+    parse ``metadata`` via ``ast.literal_eval`` and read ``["library"]``.
+
+    Total / never raises: a missing field or an unparseable ``metadata``
+    string yields ``""`` so the caller's normalization stays well-defined.
+    """
+    top_level = row.get("library", "")
+    if top_level:
+        return str(top_level)
+    raw_meta = row.get("metadata")
+    if not isinstance(raw_meta, str):
+        return ""
+    try:
+        meta = ast.literal_eval(raw_meta)
+    except (ValueError, SyntaxError):
+        return ""
+    if isinstance(meta, dict):
+        return str(meta.get("library", ""))
+    return ""
+
+
+def _has_gold(row: dict[str, Any]) -> bool:
+    """Whether a row carries at least one gold doc citation.
+
+    The ``docs`` field is a list of ``{doc_id, doc_content}`` in the fixtures,
+    but the HF rows may serialize it as a JSON STRING (``'[]'`` /
+    ``'["..."]'``). Handle both: ``json.loads`` a string, use a list as-is.
+    An empty list, a non-list payload, or a parse failure all count as
+    no gold (never raises).
+    """
+    docs = row.get("docs")
+    if isinstance(docs, str):
+        try:
+            docs = json.loads(docs)
+        except (ValueError, TypeError):
+            return False
+    if not isinstance(docs, list):
+        return False
+    return len(docs) > 0
 
 
 def _split_sort_key(row: dict[str, Any]) -> str:
@@ -184,6 +236,17 @@ class Ds1000Dataset:
         return self._apply_filters(rows)
 
     def _apply_filters(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Normalize each row's library at load (single normalization point):
+        # the real HF rows nest ``library`` inside the ``metadata`` repr-dict
+        # string with NO top-level field, so the library filter + the split
+        # stratification (both keyed off ``row["library"]``) would otherwise
+        # see ``""`` for every HF row — zero filter matches and a degenerate
+        # single-stratum split. ``_resolve_library`` prefers a present
+        # top-level ``library`` (flat CI fixtures) and falls back to parsing
+        # ``metadata`` (HF), so the downstream ``row.get("library")`` reads
+        # work UNCHANGED for both shapes.
+        for row in rows:
+            row["library"] = _resolve_library(row)
         # Filters compare against the NORMALIZED (lowercase canonical)
         # library name, so callers don't have to know the upstream
         # title-case form. Empty filter = keep all.
@@ -209,8 +272,16 @@ class Ds1000Dataset:
             if self.perturbation_filter:
                 if row.get("perturbation_type") not in self.perturbation_filter:
                     continue
+            # Gold-bearing restriction: DS-1000 has many doc-less pure-codegen
+            # problems with no retrieval target. A retrieval-recall benchmark
+            # can only score rows that HAVE a gold citation — a doc-less row
+            # is recall-0 by construction and would silently drag the metric
+            # down. Drop empty-gold rows here so the split (below) stratifies
+            # over scoreable rows only.
+            if not _has_gold(row):
+                continue
             filtered.append(row)
-        # Partition AFTER the library/perturbation filters so the split
+        # Partition AFTER the library/perturbation/gold filters so the split
         # slices the already-narrowed corpus (the split composes with the
         # filters, never the raw HF rows). Stratify by the normalized
         # (PyPI-canonical) library so each slice keeps the corpus's
