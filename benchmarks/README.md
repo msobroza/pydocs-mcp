@@ -262,10 +262,17 @@ measure top-K hits.
 The real-100-needle row is the headline figure. A **dense + hybrid retriever
 already ships in `pydocs-mcp`** (the `chunk_search_dense*` / `chunk_search_hybrid*`
 pipeline presets, with embedding-backed `dense_fetcher` / `dense_scorer` and RRF
-fusion) — so recording a dense baseline is now just a matter of pointing a
-config overlay at one of those presets and re-running the sweep. No dense
-baseline has been recorded yet; when one is, it should beat `recall@10 = 18%` to
-be worth adopting as the default.
+fusion) and works end-to-end in the MCP server. No dense baseline has been
+recorded yet; when one is, it should beat `recall@10 = 18%` to be worth adopting
+as the default.
+
+> **Harness limitation (dense not yet measurable here).** The benchmark
+> indexer currently writes through a SQLite-only path that does not persist the
+> dense `.tq` vector sidecar, so a dense/hybrid config run through the harness
+> finds no vectors and falls back to the lexical (BM25) signal. Recording a
+> *real* dense baseline therefore needs the benchmark indexer wired to the
+> dense-capable storage path first — it is not yet just a config-overlay swap.
+> BM25 and LLM-tree conditions are unaffected.
 
 ### Visualizing baselines
 
@@ -571,14 +578,16 @@ normalized (lower-cased) library name.
 ### Indexing and caching
 
 **Indexing is one-time per RepoQA task.** Each task ships its own repo slice, so
-the harness indexes that slice into a fresh SQLite cache on first touch and
-reuses it for every subsequent query on the same task. The `indexing_seconds`
-row in a baseline JSON measures that first-touch cost; `search_seconds` measures
-per-query latency once the index is warm. Skip detection uses a per-package xxh3
-hash over `(file_path, mtime)` pairs, so subsequent sweeps over unchanged slices
-skip indexing entirely (typical re-run latency &lt;100 ms per task). The DB schema
-is described in the
+the harness indexes that slice into a SQLite cache on first touch and reuses it
+for every subsequent query on the same task. The `indexing_seconds` row in a
+baseline JSON measures that first-touch cost; `search_seconds` measures per-query
+latency once the index is warm. The DB schema is described in the
 [project documentation](../DOCUMENTATION.md#database-schema-simplified).
+
+That index is also **persisted across sweeps and reused** — see
+[Index cache](#index-cache-faster-repeated-sweeps) below for how each
+`(corpus, ingestion-config)` is indexed once and shared across conditions and
+re-runs, and how to inspect or clear it.
 
 ### Index cache (faster repeated sweeps)
 
