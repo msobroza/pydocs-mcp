@@ -64,21 +64,9 @@ class PydocsMcpSystem:
         # registry does on a bare ``build()``) doesn't drag in the whole
         # ``pydocs_mcp.retrieval`` chain when only ``search()`` callers
         # need it.
-        from pydocs_mcp.application import ProjectIndexer
-        from pydocs_mcp.db import build_connection_provider, open_index_database
-        from pydocs_mcp.extraction import (
-            AstMemberExtractor,
-            PipelineChunkExtractor,
-            StaticDependencyResolver,
-            build_ingestion_pipeline,
-        )
+        from pydocs_mcp.db import open_index_database
         from pydocs_mcp.retrieval.config import build_chunk_pipeline_from_config
         from pydocs_mcp.retrieval.factories import build_retrieval_context
-        from pydocs_mcp.storage.factories import (
-            build_sqlite_indexing_service,
-            build_sqlite_uow_factory,
-        )
-        from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
         # WHY: a second ``index()`` call without an intervening ``teardown()``
         # would orphan the prior tmp SQLite (+ WAL/SHM) once ``_db_path`` is
@@ -92,6 +80,31 @@ class PydocsMcpSystem:
         os.close(fd)
         self._db_path = Path(name)
         open_index_database(self._db_path).close()
+
+        await self._do_index(corpus_dir, config)
+
+        context = build_retrieval_context(self._db_path, config)
+        self._pipeline = build_chunk_pipeline_from_config(config, context)
+
+    async def _do_index(self, corpus_dir: Path, config: AppConfig) -> None:
+        """Index ``corpus_dir`` into the SQLite at ``self._db_path`` (already
+        created/empty). Builds the ingestion pipeline + embedder, runs
+        ProjectIndexer, rebuilds the FTS index. No tmp-file or pipeline
+        lifecycle here — the caller owns ``self._db_path`` and the search
+        pipeline."""
+        from pydocs_mcp.application import ProjectIndexer
+        from pydocs_mcp.db import build_connection_provider
+        from pydocs_mcp.extraction import (
+            AstMemberExtractor,
+            PipelineChunkExtractor,
+            StaticDependencyResolver,
+            build_ingestion_pipeline,
+        )
+        from pydocs_mcp.storage.factories import (
+            build_sqlite_indexing_service,
+            build_sqlite_uow_factory,
+        )
+        from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
         uow_factory = build_sqlite_uow_factory(self._db_path)
         indexing_service = build_sqlite_indexing_service(self._db_path)
@@ -141,9 +154,6 @@ class PydocsMcpSystem:
             provider=build_connection_provider(self._db_path),
         )
         await chunk_repo.rebuild_index()
-
-        context = build_retrieval_context(self._db_path, config)
-        self._pipeline = build_chunk_pipeline_from_config(config, context)
 
     async def search(
         self,
