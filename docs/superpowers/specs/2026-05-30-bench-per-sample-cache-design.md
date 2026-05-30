@@ -115,6 +115,30 @@ The `~/.pydocs-mcp/bench/` cache lives outside the repo so no
 `.gitignore` entry is needed for it; documented in the report README
 for clarity.
 
+### D8 — Auto-clean the cache after a sweep via `--bench-cache-cleanup`
+A boolean runner flag (`store_true`, **default off**) that evicts the
+whole cache when the sweep finishes — the "run my experiments, then
+free the disk" path. Wired in `runner.main()` inside a `try/finally`
+so the cache is cleaned even if the sweep raises. Calls
+`_bench_cache.evict()` (the same whole-dir wipe as the D6 CLI).
+
+Orthogonal to `--bench-cache on|off` (ISP: "use a cache" and "clean
+up after" are independent concerns), so the four combinations are all
+meaningful: `on` + no-cleanup (default — cache persists for the next
+run's reuse); `on` + cleanup (use during the run, wipe at the end —
+the experiment-then-free path); `off` + cleanup (don't cache this run,
+but still wipe any stale cache from a prior run); `off` + no-cleanup
+(pre-cache behaviour, untouched).
+
+**Scope of the wipe:** `evict()` removes EVERY entry under
+`~/.pydocs-mcp/bench/`, not just the entries this run produced (the
+cache key isn't run-scoped, and `info`/`evict` operate on the whole
+dir). For the intended single-machine "run all configs in one
+invocation, then clean up" workflow this is exactly right; do NOT
+pass `--bench-cache-cleanup` while a *concurrent* sweep shares the
+cache — it would delete that run's entries too. Documented in the
+README.
+
 ## Files to modify
 
 - `benchmarks/src/benchmarks/eval/systems/pydocs.py` — D3, D4, D5
@@ -122,8 +146,8 @@ for clarity.
 - `benchmarks/src/benchmarks/eval/_bench_cache.py` (new) — the small
   dict-shaped store (~30 lines, stdlib only).
 - `benchmarks/src/benchmarks/eval/runner.py` — `--bench-cache`
-  argparse flag (D4); thread the choice into the `PydocsMcpSystem`
-  constructor.
+  argparse flag (D4) + `--bench-cache-cleanup` flag (D8); apply the
+  cache toggle before the sweep and the cleanup in a `finally` after.
 - `benchmarks/src/benchmarks/eval/bench_cache.py` (new) — the CLI
   entry point for D6 (info / evict).
 - `benchmarks/.gitignore` (new) — D7.
@@ -180,6 +204,11 @@ for clarity.
   entry dir with the stem `index` intact. (Validated with FAKE sidecars,
   not an LI end-to-end run — real `.tq`/`.plaid` production is blocked by
   the dense/LI ingestion wiring bug; see "Out of scope".)
+- **AC13 — `--bench-cache-cleanup` wipes the cache after the sweep.**
+  The flag defaults off (`_build_arg_parser` test). A `finally`-stage
+  helper evicts the whole cache when set and is a no-op when unset
+  (unit-tested directly on a populated tmp cache: enabled → empty,
+  disabled → entry survives). Cleanup runs even if the sweep raised.
 
 ## TDD sequence (red → green)
 

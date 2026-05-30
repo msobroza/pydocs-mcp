@@ -753,6 +753,113 @@ git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.
 
 ---
 
+### Task 6b: `--bench-cache-cleanup` — wipe the cache after the sweep (D8)
+
+**Files:**
+- Modify: `benchmarks/src/benchmarks/eval/runner.py` (`--bench-cache-cleanup` flag; `finally` cleanup in `main()`)
+- Test: `benchmarks/tests/eval/test_runner_bench_cache_flag.py`
+
+The "run my experiments, then free the disk" path. Orthogonal to `--bench-cache on|off` (use-a-cache vs clean-up-after are independent concerns), so the cleanup runs in a `finally` and fires even if the sweep raised.
+
+- [ ] **Step 1: Write the failing test** (append to `test_runner_bench_cache_flag.py`)
+
+```python
+def test_cleanup_flag_defaults_false() -> None:
+    args = _build_arg_parser().parse_args(["--configs", "x.yaml"])
+    assert args.bench_cache_cleanup is False
+
+
+def test_cleanup_flag_sets_true() -> None:
+    args = _build_arg_parser().parse_args(
+        ["--configs", "x.yaml", "--bench-cache-cleanup"]
+    )
+    assert args.bench_cache_cleanup is True
+
+
+def test_maybe_cleanup_evicts_when_enabled(tmp_path, monkeypatch) -> None:
+    from benchmarks.eval.runner import _maybe_cleanup_bench_cache
+
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    d = _bench_cache.entry_dir("k")
+    d.mkdir(parents=True)
+    _bench_cache.db_path_for("k").write_text("db")
+
+    _maybe_cleanup_bench_cache(enabled=True)
+    assert _bench_cache.lookup("k") is None  # wiped
+
+
+def test_maybe_cleanup_noop_when_disabled(tmp_path, monkeypatch) -> None:
+    from benchmarks.eval.runner import _maybe_cleanup_bench_cache
+
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    d = _bench_cache.entry_dir("k")
+    d.mkdir(parents=True)
+    _bench_cache.db_path_for("k").write_text("db")
+
+    _maybe_cleanup_bench_cache(enabled=False)
+    assert _bench_cache.lookup("k") is not None  # untouched
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd <worktree> && PYTHONPATH=benchmarks/src .venv/bin/python -m pytest benchmarks/tests/eval/test_runner_bench_cache_flag.py -q`
+Expected: FAIL — `argument --bench-cache-cleanup: ...` unrecognized / `ImportError: cannot import name '_maybe_cleanup_bench_cache'`
+
+- [ ] **Step 3: Write minimal implementation**
+
+In `runner.py`, add to `_build_arg_parser()` (next to `--bench-cache`):
+
+```python
+    parser.add_argument(
+        "--bench-cache-cleanup",
+        action="store_true",
+        help=(
+            "After the sweep finishes, evict the ENTIRE index cache at "
+            "~/.pydocs-mcp/bench/ (run experiments, then free the disk). "
+            "Runs even if the sweep raises. Independent of --bench-cache: "
+            "'off --bench-cache-cleanup' caches nothing this run but still "
+            "clears any stale cache. Do NOT use while a concurrent sweep "
+            "shares the cache."
+        ),
+    )
+```
+
+Add the helper near `_apply_bench_cache_flag`:
+
+```python
+def _maybe_cleanup_bench_cache(*, enabled: bool) -> None:
+    if enabled:
+        _bench_cache.evict()
+```
+
+Wrap the sweep launch in `main()` so cleanup always runs:
+
+```python
+    _apply_bench_cache_flag(args.bench_cache)
+    try:
+        # ... existing sweep launch (asyncio.run(run_sweep(...)) etc.) ...
+    finally:
+        _maybe_cleanup_bench_cache(enabled=args.bench_cache_cleanup)
+```
+
+(Implementer note: keep the existing `main()` body inside the `try`; the
+only additions are the `try:`/`finally:` lines and the cleanup call.)
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd <worktree> && PYTHONPATH=benchmarks/src .venv/bin/python -m pytest benchmarks/tests/eval/test_runner_bench_cache_flag.py -q`
+Expected: PASS (7 passed — 3 from Task 6 + 4 new)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add benchmarks/src/benchmarks/eval/runner.py benchmarks/tests/eval/test_runner_bench_cache_flag.py
+git -c user.name="Max Raphael Sobroza Marques" -c user.email="max.raphael@gmail.com" \
+  commit -m "feat(benchmarks): --bench-cache-cleanup wipes cache after the sweep"
+```
+
+---
+
 ### Task 7: `bench_cache` CLI (`info` / `evict`)
 
 **Files:**
@@ -944,6 +1051,10 @@ and across sweeps that share an ingestion pipeline. Controlled by
     python -m benchmarks.eval.bench_cache info
     python -m benchmarks.eval.bench_cache evict
 
+    # run all experiments, then free the disk (cache used during the run,
+    # wiped when it finishes — even if the run errors)
+    python -m benchmarks.eval.runner --bench-cache-cleanup ...
+
     # reproduce pre-cache numbers exactly
     python -m benchmarks.eval.runner --bench-cache off ...
 
@@ -951,6 +1062,9 @@ The cache key folds the ingestion pipeline hash, so changing the embedder
 or the ingestion YAML rebuilds automatically. A change to the corpus
 *contents* under the same path is NOT auto-detected — run `bench_cache
 evict` or `--bench-cache off` after editing a corpus in place.
+
+`--bench-cache-cleanup` evicts the WHOLE cache at the end (not just this
+run's entries) — don't pass it while a concurrent sweep shares the cache.
 ```
 
 - [ ] **Step 2: Audit README for jargon (repo rule)**
@@ -1019,7 +1133,8 @@ Record the index-time drop (cold vs warm) in the PR description. Not a CI gate.
 - D5 (teardown only removes tmp) → Task 5.
 - D6 (CLI info/evict) → Task 7.
 - D7 (.gitignore) → already committed in the spec commit; AC6 verified Task 10 Step 4.
-- AC1 index-once → Task 5. AC2 fidelity → Task 8. AC3 invalidation-on-ingestion-change → Task 1 `test_make_key_varies_with_corpus_and_ingestion`. AC4 no-content-invalidation → documented Task 9; key is path+ingestion-hash by construction. AC5 teardown keeps cache → Task 5. AC6 gitignore → Task 10 Step 4. AC7 opt-out → Task 5 `test_cache_off_indexes_every_time`. AC8 CLI → Task 7. AC9 no prod code → Task 10 Step 3 + diff scope. AC10 empirical lift → Task 10 Step 5. AC11 green/ruff/mypy → Task 10.
+- D8 (--bench-cache-cleanup, wipe after sweep) → Task 6b.
+- AC1 index-once → Task 5. AC2 fidelity → Task 8. AC3 invalidation-on-ingestion-change → Task 1 `test_make_key_varies_with_corpus_and_ingestion`. AC4 no-content-invalidation → documented Task 9; key is path+ingestion-hash by construction. AC5 teardown keeps cache → Task 5. AC6 gitignore → Task 10 Step 4. AC7 opt-out → Task 5 `test_cache_off_indexes_every_time`. AC8 CLI → Task 7. AC9 no prod code → Task 10 Step 3 + diff scope. AC10 empirical lift → Task 10 Step 5. AC11 green/ruff/mypy → Task 10. AC12 sidecar dir-move → Task 2 `test_reserve_then_commit_promotes_atomically` (fake `index.plaid`). AC13 cleanup-after-sweep → Task 6b.
 
 **2. Placeholder scan:** none — every code step has complete code; commands have expected output.
 
