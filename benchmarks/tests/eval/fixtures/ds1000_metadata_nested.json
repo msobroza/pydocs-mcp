@@ -3,7 +3,7 @@
     "prompt": "Problem: I have a numpy array and want the cumulative sum along axis 0. What's the call?\nA:\n<code>\nimport numpy as np\nout = np.cumsum(a, axis=0)\n</code>",
     "code_context": "import numpy as np\na = np.arange(6).reshape(2, 3)\n",
     "reference_code": "out = np.cumsum(a, axis=0)",
-    "metadata": "{'problem_id': 0, 'library_problem_id': 0, 'library': 'Numpy', 'test_case_cnt': 1, 'perturbation_type': 'Origin', 'perturbation_origin_id': 0}",
+    "metadata": {"problem_id": 0, "library_problem_id": 0, "library": "Numpy", "test_case_cnt": 1, "perturbation_type": "Origin", "perturbation_origin_id": 0},
     "docs": [
       {"doc_id": "numpy.cumsum", "doc_content": "numpy.cumsum(a, axis=None, dtype=None, out=None) Return the cumulative sum of the elements along a given axis."}
     ]
@@ -12,7 +12,7 @@
     "prompt": "Problem: How do I select rows of a pandas DataFrame where column 'x' is greater than 0?\nA:\n<code>\nimport pandas as pd\nout = df[df['x'] > 0]\n</code>",
     "code_context": "import pandas as pd\n",
     "reference_code": "out = df[df['x'] > 0]",
-    "metadata": "{'problem_id': 1, 'library_problem_id': 1, 'library': 'Pandas', 'test_case_cnt': 1, 'perturbation_type': 'Surface', 'perturbation_origin_id': 1}",
+    "metadata": {"problem_id": 1, "library_problem_id": 1, "library": "Pandas", "test_case_cnt": 1, "perturbation_type": "Surface", "perturbation_origin_id": 1},
     "docs": [
       {"doc_id": "pandas.DataFrame.loc", "doc_content": "DataFrame.loc Access a group of rows and columns by label(s) or a boolean array."}
     ]
@@ -21,7 +21,7 @@
     "prompt": "Problem: Write a numpy expression that returns the element-wise maximum of two arrays. No retrieval gold for this pure-codegen problem.\nA:\n<code>\nimport numpy as np\nout = np.maximum(a, b)\n</code>",
     "code_context": "import numpy as np\n",
     "reference_code": "out = np.maximum(a, b)",
-    "metadata": "{'problem_id': 2, 'library_problem_id': 2, 'library': 'Numpy', 'test_case_cnt': 1, 'perturbation_type': 'Origin', 'perturbation_origin_id': 2}",
+    "metadata": {"problem_id": 2, "library_problem_id": 2, "library": "Numpy", "test_case_cnt": 1, "perturbation_type": "Origin", "perturbation_origin_id": 2},
     "docs": []
   }
 ]

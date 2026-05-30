@@ -82,32 +82,78 @@ def _normalize_library(raw: str) -> str:
     return _LIBRARY_NORMALIZATION.get(raw, raw.lower())
 
 
+# The perturbation fields the loader reads top-level but the real HF rows nest
+# inside the ``metadata`` struct — lifted at load so every downstream
+# ``row.get(<field>)`` works for BOTH shapes (see ``_lift_metadata_fields``).
+# ``library`` is lifted separately via ``_resolve_library`` (which owns the
+# top-level-vs-metadata precedence + the dict/str coercion); these two drive
+# the perturbation filter and the canonical ``ds1000/<lib>/<pert>/<origin>``
+# task id (without them every real row collapses to a colliding
+# ``ds1000/<lib>//``).
+_METADATA_LIFTED_FIELDS: tuple[str, ...] = (
+    "perturbation_type",
+    "perturbation_origin_id",
+)
+
+
+def _coerce_metadata(raw: object) -> dict[str, Any]:
+    """Return a row's ``metadata`` as a dict.
+
+    The live ``datasets`` loader deserializes the ``metadata`` struct column
+    into a real Python dict — that is the production shape. A Python-repr dict
+    STRING (e.g. ``"{'library': 'Numpy', ...}"``) is also accepted defensively
+    for tooling / fixtures that surface ``metadata`` as raw repr text. Any
+    other or unparseable payload yields ``{}`` so callers stay total (never
+    raise)."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _resolve_library(row: dict[str, Any]) -> str:
     """Resolve a row's raw (title-case) ``library`` value.
 
-    The flat CI fixtures expose a top-level ``library`` directly. The real
-    ``code-rag-bench/ds1000`` HF rows do NOT — the library is nested inside a
-    ``metadata`` field that is a Python-repr dict STRING (e.g.
-    ``"{'problem_id': 0, 'library': 'Numpy', ...}"``). Prefer a present,
-    non-empty top-level ``library`` (keeps the flat fixtures working); else
-    parse ``metadata`` via ``ast.literal_eval`` and read ``["library"]``.
-
-    Total / never raises: a missing field or an unparseable ``metadata``
-    string yields ``""`` so the caller's normalization stays well-defined.
-    """
+    The flat CI fixtures expose a top-level ``library`` directly; the real
+    ``code-rag-bench/ds1000`` HF rows nest it inside ``metadata``. Prefer a
+    present, non-empty top-level ``library`` (keeps the flat fixtures working);
+    else read it out of the coerced ``metadata`` dict. Total / never raises:
+    a missing field or unparseable ``metadata`` yields ``""``."""
     top_level = row.get("library", "")
     if top_level:
         return str(top_level)
-    raw_meta = row.get("metadata")
-    if not isinstance(raw_meta, str):
-        return ""
-    try:
-        meta = ast.literal_eval(raw_meta)
-    except (ValueError, SyntaxError):
-        return ""
-    if isinstance(meta, dict):
-        return str(meta.get("library", ""))
-    return ""
+    return str(_coerce_metadata(row.get("metadata")).get("library", ""))
+
+
+def _lift_metadata_fields(row: dict[str, Any]) -> None:
+    """Lift the nested ``metadata`` filter/split/task-id fields up to the top
+    level, IN PLACE.
+
+    Real ``code-rag-bench/ds1000`` rows expose only
+    ``[code_context, docs, metadata, prompt, reference_code]`` — ``library``,
+    ``perturbation_type`` and ``perturbation_origin_id`` all live inside the
+    ``metadata`` struct. The loader reads those three top-level (library
+    filter, stratification key, ``_row_to_task`` task id), so without this lift
+    every real row reads ``""`` for all three: zero filter matches, a
+    degenerate single-stratum split, and colliding ``ds1000/<lib>//`` task ids.
+    A present, non-empty top-level value is PREFERRED (keeps the flat CI
+    fixtures working); otherwise it is copied from ``metadata``."""
+    # ``library``: top-level wins, else read from the coerced ``metadata``.
+    resolved_library = _resolve_library(row)
+    if resolved_library:
+        row["library"] = resolved_library
+    # ``perturbation_*``: copy from ``metadata`` only when the top-level value
+    # is genuinely absent (``None`` / ``""``). The empty test is membership,
+    # not truthiness, so a falsy-but-valid ``0`` origin id is NOT clobbered.
+    meta = _coerce_metadata(row.get("metadata"))
+    for key in _METADATA_LIFTED_FIELDS:
+        if row.get(key) in (None, "") and meta.get(key) not in (None, ""):
+            row[key] = meta[key]
 
 
 def _has_gold(row: dict[str, Any]) -> bool:
@@ -236,17 +282,18 @@ class Ds1000Dataset:
         return self._apply_filters(rows)
 
     def _apply_filters(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # Normalize each row's library at load (single normalization point):
-        # the real HF rows nest ``library`` inside the ``metadata`` repr-dict
-        # string with NO top-level field, so the library filter + the split
-        # stratification (both keyed off ``row["library"]``) would otherwise
-        # see ``""`` for every HF row — zero filter matches and a degenerate
-        # single-stratum split. ``_resolve_library`` prefers a present
-        # top-level ``library`` (flat CI fixtures) and falls back to parsing
-        # ``metadata`` (HF), so the downstream ``row.get("library")`` reads
-        # work UNCHANGED for both shapes.
+        # Lift the nested ``metadata`` fields at load (single normalization
+        # point): the real HF rows nest ``library`` / ``perturbation_type`` /
+        # ``perturbation_origin_id`` inside the ``metadata`` struct with NO
+        # top-level field, so the library + perturbation filters, the split
+        # stratification, and the ``_row_to_task`` task id (all keyed off the
+        # top-level reads) would otherwise see ``""`` for every HF row — zero
+        # filter matches, a degenerate single-stratum split, and colliding
+        # task ids. The lift prefers a present top-level value (flat CI
+        # fixtures) and copies from ``metadata`` otherwise, so the downstream
+        # ``row.get(...)`` reads work UNCHANGED for both shapes.
         for row in rows:
-            row["library"] = _resolve_library(row)
+            _lift_metadata_fields(row)
         # Filters compare against the NORMALIZED (lowercase canonical)
         # library name, so callers don't have to know the upstream
         # title-case form. Empty filter = keep all.

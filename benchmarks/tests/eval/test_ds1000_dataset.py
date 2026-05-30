@@ -21,8 +21,9 @@ from benchmarks.eval.serialization import dataset_registry
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_mini.json"
 # Mirrors the real ``code-rag-bench/ds1000`` HF row shape: NO top-level
-# ``library`` (it's nested inside a ``metadata`` Python-repr dict STRING),
-# plus one doc-less (empty-gold) pure-codegen row.
+# ``library`` / ``perturbation_*`` (they're nested inside a ``metadata``
+# struct — a dict, the shape the live ``datasets`` loader produces), plus one
+# doc-less (empty-gold) pure-codegen row.
 NESTED_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_metadata_nested.json"
 
 
@@ -216,10 +217,11 @@ async def test_library_name_normalized_to_lowercase() -> None:
 
 async def test_library_extracted_from_metadata_when_no_top_level_field() -> None:
     """REGRESSION: the real ``code-rag-bench/ds1000`` rows carry NO top-level
-    ``library`` — it's nested inside a ``metadata`` Python-repr dict STRING
-    (e.g. ``"{'library': 'Numpy', 'problem_id': 0, ...}"``). The loader must
-    parse ``metadata`` and resolve the library so ``library_filter`` matches.
-    Pre-fix this matched ZERO rows (``row.get("library", "")`` -> ``""``)."""
+    ``library`` — it's nested inside a ``metadata`` struct that the live
+    ``datasets`` loader deserializes into a dict (e.g.
+    ``{'library': 'Numpy', 'problem_id': 0, ...}``). The loader must read the
+    library out of ``metadata`` so ``library_filter`` matches. Pre-fix this
+    matched ZERO rows (``row.get("library", "")`` -> ``""``)."""
     dataset = Ds1000Dataset(
         fixture_path=NESTED_FIXTURE_PATH,
         library_filter=("numpy",),
@@ -276,25 +278,66 @@ def test_has_gold_handles_list_and_json_string_and_empty() -> None:
 
 
 def test_resolve_library_prefers_top_level_then_metadata() -> None:
-    """``_resolve_library`` prefers a present, non-empty top-level
-    ``library``; falls back to parsing the ``metadata`` repr-dict STRING;
-    and returns ``""`` on absence / parse failure (never raises)."""
+    """``_resolve_library`` prefers a present, non-empty top-level ``library``;
+    else reads it from ``metadata`` — handling both the live ``datasets`` DICT
+    shape and a defensive repr-dict STRING; and returns ``""`` on absence /
+    parse failure (never raises)."""
     from benchmarks.eval.datasets.ds1000 import _resolve_library
 
     # Top-level wins, even when metadata also carries a (different) library.
-    assert (
-        _resolve_library(
-            {"library": "Pandas", "metadata": "{'library': 'Numpy'}"},
-        )
-        == "Pandas"
-    )
-    # Empty top-level => fall through to metadata.
-    assert _resolve_library({"library": "", "metadata": "{'library': 'Numpy'}"}) == "Numpy"
-    # No top-level at all => parse metadata.
-    assert _resolve_library({"metadata": "{'library': 'Scipy', 'problem_id': 3}"}) == "Scipy"
-    # Unparseable metadata + no top-level => "" (never raises).
+    assert _resolve_library({"library": "Pandas", "metadata": {"library": "Numpy"}}) == "Pandas"
+    # Empty top-level => fall through to metadata (DICT — the real HF shape).
+    assert _resolve_library({"library": "", "metadata": {"library": "Numpy"}}) == "Numpy"
+    assert _resolve_library({"metadata": {"library": "Scipy", "problem_id": 3}}) == "Scipy"
+    # Defensive: metadata as a Python-repr dict STRING still resolves.
+    assert _resolve_library({"metadata": "{'library': 'Numpy'}"}) == "Numpy"
+    # Unparseable / non-dict metadata + no top-level => "" (never raises).
     assert _resolve_library({"metadata": "not-a-dict"}) == ""
+    assert _resolve_library({"metadata": 123}) == ""
     assert _resolve_library({}) == ""
+
+
+def test_lift_metadata_fields_lifts_library_and_perturbation_from_dict() -> None:
+    """``_lift_metadata_fields`` copies ``library`` + the two ``perturbation_*``
+    fields out of the nested ``metadata`` dict (the real HF shape) up to the
+    top level when absent, preferring an existing top-level value. Without the
+    perturbation lift, every real row would collapse to a colliding
+    ``ds1000/<lib>//`` task id."""
+    from benchmarks.eval.datasets.ds1000 import _lift_metadata_fields
+
+    row = {
+        "metadata": {
+            "library": "Numpy",
+            "perturbation_type": "Origin",
+            "perturbation_origin_id": 7,
+        },
+    }
+    _lift_metadata_fields(row)
+    assert row["library"] == "Numpy"
+    assert row["perturbation_type"] == "Origin"
+    assert row["perturbation_origin_id"] == 7
+
+    # Top-level precedence: an existing top-level value is NOT overwritten.
+    kept = {"perturbation_type": "Surface", "metadata": {"perturbation_type": "Origin"}}
+    _lift_metadata_fields(kept)
+    assert kept["perturbation_type"] == "Surface"
+
+    # Unparseable metadata is a no-op (never raises, leaves the row untouched).
+    bare: dict[str, object] = {"metadata": "not-a-dict"}
+    _lift_metadata_fields(bare)
+    assert "library" not in bare
+
+
+async def test_metadata_nested_row_task_id_carries_lifted_perturbation() -> None:
+    """A real-shape row's ``perturbation_type`` / ``perturbation_origin_id``
+    live inside ``metadata``. The lift must surface them into the canonical
+    ``ds1000/<lib>/<pert>/<origin>`` task id — without it every real row
+    collapses to a colliding ``ds1000/numpy//`` (letting the runner dedup
+    distinct problems into one). The gold-bearing Numpy fixture row carries
+    ``perturbation_type='Origin'`` / ``perturbation_origin_id=0``."""
+    dataset = Ds1000Dataset(fixture_path=NESTED_FIXTURE_PATH, library_filter=("numpy",))
+    task_ids = [t.task_id async for t in dataset.tasks()]
+    assert task_ids == ["ds1000/numpy/Origin/0"], task_ids
 
 
 # --- Auxiliary protocol-level / registry-level smoke tests ------------------
