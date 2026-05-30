@@ -24,6 +24,13 @@ BM25/dense weight split of the linear (weighted-score-interpolation) blend.
 Every experiment pipeline emits a ranked top-10 candidate list (`max_results:
 10`) so `recall@10` is measurable — the shipped `*_ranked` presets cap at 8.
 
+The harness persists the dense `.tq` sidecar at index time, so the dense and
+hybrid conditions (2–8) measure real dense retrieval — not a lexical fallback.
+
+The harness caches each index on disk and reuses it across conditions and
+re-runs, so a full sweep indexes the 30 repos once rather than once per
+condition — see [§4 The index cache](#4-the-index-cache-fast-re-runs).
+
 The experiment pipelines live in `configs/pipelines/` and are resolved
 relative to each overlay (the `pipeline_path` search-path prefers a file next
 to the config before the shipped `pydocs_mcp/pipelines/` dir), so they stay
@@ -123,7 +130,45 @@ The default metrics (`recall@1,recall@5,recall@10,mrr,pass@1-needle`) are
 used unless you pass `--metrics`. Add `--limit N` for a quick smoke run over
 the first N needles of the split.
 
-## 4. Results → plots
+## 4. The index cache (fast re-runs)
+
+Indexing dominates wall time — on these small repos a single needle takes
+tens of seconds to several minutes to index, while search is sub-second. By
+default the harness indexes each `(corpus, ingestion-config)` **once** and
+reuses it across needles and across sweeps that share an ingestion pipeline,
+so the first run pays the indexing cost and every later run (tuning a config,
+re-plotting, debugging) is near-instant. The cache lives at
+`~/.pydocs-mcp/bench/`, outside the repo.
+
+Because every condition here uses the same default ingestion pipeline, the
+first condition you run indexes all 30 needles; the other nine reuse those
+cached indexes — so a full ten-condition sweep indexes the 30 repos once, not
+ten times.
+
+```bash
+# inspect / clear the cache
+python -m benchmarks.eval.bench_cache_cli info
+python -m benchmarks.eval.bench_cache_cli evict
+
+# run all conditions, then free the disk when the sweep finishes
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --bench-cache-cleanup ...
+
+# reproduce pre-cache numbers exactly (a fresh index per needle)
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --bench-cache off ...
+```
+
+The cache key folds the ingestion-pipeline hash, so changing the embedder or
+the ingestion YAML rebuilds automatically; a change to a corpus's *contents*
+under the same path is NOT auto-detected — `bench_cache_cli evict` (or
+`--bench-cache off`) after editing a corpus in place.
+
+> **Reading indexing time.** A cache hit makes indexing a ~0 s lookup, so
+> warm needles record NO `indexing_seconds` (the metric would otherwise read
+> "0.0 s"). Take true indexing-time numbers from a **cold** run — the first
+> sweep after `bench_cache_cli evict`, or any `--bench-cache off` run. Warm
+> sweeps still report correct quality and `search_seconds`.
+
+## 5. Results → plots
 
 Each `(system, config)` leg writes one JSONL file under
 `benchmarks/results/jsonl/` (named `pydocs-mcp_<config>_repoqa@<rev>_<ts>.jsonl`)
