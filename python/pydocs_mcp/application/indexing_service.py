@@ -304,10 +304,20 @@ class IndexingService:
         sv_embeddings: list[Embedding] = []
         mv_ids: list[int] = []
         mv_embeddings: list[MultiVector] = []
+        seen_ids: set[int] = set()
         for input_chunk in input_chunks:
             persisted_chunk = by_hash[input_chunk.content_hash]
             if input_chunk.embedding is None or persisted_chunk.id is None:
                 continue
+            # WHY: a package can carry >1 chunk with identical
+            # (package, module, title, text) -> identical content_hash, which
+            # by_hash collapses to one persisted row. Emitting that id more than
+            # once trips IdMapIndex.add_with_ids ("id N already present"). The
+            # colliding chunks are content-identical (same embedding), so writing
+            # the id's vector once is lossless.
+            if persisted_chunk.id in seen_ids:
+                continue
+            seen_ids.add(persisted_chunk.id)
             if is_multi_vector(input_chunk.embedding):
                 mv_ids.append(persisted_chunk.id)
                 mv_embeddings.append(input_chunk.embedding)
