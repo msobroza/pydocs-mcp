@@ -20,9 +20,10 @@ def _tiny_corpus(tmp_path: Path) -> Path:
 @pytest.fixture
 def _cache_in_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    prior = _bench_cache.is_enabled()
     _bench_cache.set_enabled(True)
     yield
-    _bench_cache.set_enabled(True)
+    _bench_cache.set_enabled(prior)
 
 
 async def test_index_once_reused_across_instances(tmp_path, monkeypatch, _cache_in_tmp) -> None:

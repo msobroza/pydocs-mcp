@@ -97,7 +97,7 @@ class PydocsMcpSystem:
                 # MISS: index into a tmp dir, then atomically promote so the
                 # .tq/.plaid sidecars travel with the .sqlite.
                 build_dir = _bench_cache.reserve(key)
-                self._db_path = build_dir / "index.sqlite"
+                self._db_path = build_dir / _bench_cache._DB_FILENAME
                 self._was_cache_hit = False
                 # WHY (review C1): mark _db_is_cached only AFTER a successful
                 # commit. If _do_index raises, teardown() would skip a
