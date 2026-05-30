@@ -9,13 +9,26 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from benchmarks.eval import _bench_cache
 from benchmarks.eval.serialization import system_registry
 from benchmarks.eval.systems import PydocsMcpSystem
 from pydocs_mcp.retrieval.config import AppConfig
 
 
+@pytest.fixture
+def _cache_off():
+    # WHY: these tests pin the per-call *tmp* SQLite lifecycle (a fresh tmp
+    # DB created on index, unlinked on teardown). That contract is the
+    # cache-OFF path; with the bench cache enabled, index() reuses/keeps a
+    # shared cached DB instead, so disable it here to assert tmp semantics.
+    prior = _bench_cache.is_enabled()
+    _bench_cache.set_enabled(False)
+    yield
+    _bench_cache.set_enabled(prior)
+
+
 @pytest.mark.asyncio
-async def test_index_then_search_returns_matching_chunk(tmp_path: Path) -> None:
+async def test_index_then_search_returns_matching_chunk(tmp_path: Path, _cache_off) -> None:
     pkg = tmp_path / "pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
@@ -44,7 +57,7 @@ async def test_index_then_search_returns_matching_chunk(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_teardown_is_idempotent(tmp_path: Path) -> None:
+async def test_teardown_is_idempotent(tmp_path: Path, _cache_off) -> None:
     # WHY: the runner's failure path may call teardown twice (success +
     # finally cleanup). Idempotence keeps the second call from raising
     # and masking the original error.
@@ -65,7 +78,7 @@ async def test_teardown_is_idempotent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_index_called_twice_does_not_leak_prior_db(tmp_path: Path) -> None:
+async def test_index_called_twice_does_not_leak_prior_db(tmp_path: Path, _cache_off) -> None:
     # WHY: a runner that re-uses one system instance across two corpora
     # (or recovers from a partial init failure by retrying ``index``)
     # would orphan the first tmp SQLite if ``index`` didn't clean prior

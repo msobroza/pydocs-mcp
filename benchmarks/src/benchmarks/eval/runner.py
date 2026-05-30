@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 # ``@*_registry.register`` decorator on import, so the four registries
 # are populated *before* ``argparse`` renders ``--help``. AC3 (help text
 # lists registered names) depends on this side effect.
+from . import _bench_cache
 from . import datasets as _datasets  # noqa: F401 -- registry side-effects
 from . import metrics as _metrics_pkg  # noqa: F401 -- registry side-effects
 from . import systems as _systems  # noqa: F401 -- registry side-effects
@@ -213,10 +214,18 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
                     # below once all observations are in.
                     # Emitted BEFORE the scorer so a scorer failure doesn't
                     # suppress latency that was already measured cleanly.
-                    latency_values["indexing_seconds"].append(index_secs)
+                    # Spec D9: a cache HIT makes index() a ~0 s lookup, not
+                    # an indexing measurement. Record indexing_seconds only
+                    # for cold tasks; search_seconds always (search is
+                    # identical hit or miss). Systems without was_cache_hit
+                    # default to False -> always recorded (unchanged).
+                    cache_hit = getattr(system, "was_cache_hit", False)
+                    if not cache_hit:
+                        latency_values["indexing_seconds"].append(index_secs)
                     latency_values["search_seconds"].append(search_secs)
                     for h, tracker in zip(handles, trackers):
-                        tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
+                        if not cache_hit:
+                            tracker.log_metric(h, "indexing_seconds", index_secs, step=count)
                         tracker.log_metric(h, "search_seconds", search_secs, step=count)
 
                     # WHY: capture the library id the system resolved during
@@ -266,6 +275,12 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
             # suffix (``_seconds``) so the shared triple shape is safe.
             for latency_key in LATENCY_KEYS:
                 values = latency_values[latency_key]
+                # Spec I2/AC15: an all-warm leg leaves indexing_seconds
+                # empty (every task a cache hit skipped its observation).
+                # percentile([]) is 0.0, so emitting here would report
+                # "0.0 s indexing" — omit the row instead.
+                if not values:
+                    continue
                 p50 = percentile(values, 0.5)
                 p95 = percentile(values, 0.95)
                 p99 = percentile(values, 0.99)
@@ -511,6 +526,15 @@ def _parse_csv(value: str) -> tuple[str, ...]:
     return tuple(s.strip() for s in value.split(",") if s.strip())
 
 
+def _apply_bench_cache_flag(value: str) -> None:
+    _bench_cache.set_enabled(value == "on")
+
+
+def _maybe_cleanup_bench_cache(*, enabled: bool) -> None:
+    if enabled:
+        _bench_cache.evict()
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         # WHY: ``benchmarks.eval.runner`` (short path) matches how the
@@ -616,6 +640,28 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="optional path to write the markdown report. omitted = stdout only.",
     )
+    parser.add_argument(
+        "--bench-cache",
+        choices=["on", "off"],
+        default="on",
+        help=(
+            "Reuse a per-(corpus, ingestion-hash) indexed DB across tasks and "
+            "sweeps (default on). 'off' rebuilds a fresh tmp DB per task — use "
+            "to reproduce pre-cache numbers exactly."
+        ),
+    )
+    parser.add_argument(
+        "--bench-cache-cleanup",
+        action="store_true",
+        help=(
+            "After the sweep finishes, evict the ENTIRE index cache at "
+            "~/.pydocs-mcp/bench/ (run experiments, then free the disk). "
+            "Runs even if the sweep raises. Independent of --bench-cache: "
+            "'off --bench-cache-cleanup' caches nothing this run but still "
+            "clears any stale cache. Do NOT use while a concurrent sweep "
+            "shares the cache."
+        ),
+    )
     return parser
 
 
@@ -631,51 +677,60 @@ def main() -> None:
     if args.corpus_dir is not None and not args.corpus_dir.is_dir():
         parser.error(f"--corpus-dir not a directory: {args.corpus_dir}")
 
-    config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
-    dataset_kwargs: dict[str, object] = {}
-    if args.fixture is not None:
-        dataset_kwargs["fixture_path"] = args.fixture
-    # WHY: only add ``library_filter`` when the flag is set so the kwarg is
-    # absent for datasets that don't accept it (RepoQA). An empty/omitted
-    # flag must not pass ``library_filter=()`` — that would still be a kwarg
-    # RepoQA's constructor rejects.
-    if args.dataset_library_filter is not None:
-        dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
-    # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
-    # kwarg is absent for the common case AND for datasets that don't accept
-    # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``
-    # gating above — passing ``split="all"`` would be a no-op for DS-1000 but
-    # would still crash RepoQA's constructor.
-    if args.split != "all":
-        dataset_kwargs["split"] = args.split
+    # WHY here: toggle the per-(corpus, ingestion-hash) index cache before the
+    # sweep launches so every task in the run observes the same setting.
+    _apply_bench_cache_flag(args.bench_cache)
 
-    results, tasks_ran = asyncio.run(
-        run_sweep(
-            systems=_parse_csv(args.systems),
-            config_paths=config_paths,
+    # WHY try/finally: ``--bench-cache-cleanup`` must free the disk even when
+    # the sweep raises (a crashed run still leaves a populated cache behind).
+    try:
+        config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
+        dataset_kwargs: dict[str, object] = {}
+        if args.fixture is not None:
+            dataset_kwargs["fixture_path"] = args.fixture
+        # WHY: only add ``library_filter`` when the flag is set so the kwarg is
+        # absent for datasets that don't accept it (RepoQA). An empty/omitted
+        # flag must not pass ``library_filter=()`` — that would still be a kwarg
+        # RepoQA's constructor rejects.
+        if args.dataset_library_filter is not None:
+            dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
+        # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
+        # kwarg is absent for the common case AND for datasets that don't accept
+        # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``
+        # gating above — passing ``split="all"`` would be a no-op for DS-1000 but
+        # would still crash RepoQA's constructor.
+        if args.split != "all":
+            dataset_kwargs["split"] = args.split
+
+        results, tasks_ran = asyncio.run(
+            run_sweep(
+                systems=_parse_csv(args.systems),
+                config_paths=config_paths,
+                dataset_name=args.dataset,
+                dataset_kwargs=dataset_kwargs or None,
+                tracker_names=_parse_csv(args.trackers),
+                metric_specs=_parse_csv(args.metrics),
+                limit=args.limit,
+                corpus_dir=args.corpus_dir,
+            ),
+        )
+
+        # WHY: render the report after the sweep so the run can crash without
+        # leaking a half-written markdown file. ``tasks_ran`` is the actual
+        # per-leg task count returned by ``run_sweep`` — accurate on both
+        # ``--limit N`` and full-dataset runs.
+        from .report import format_report
+
+        report = format_report(
+            sweep_results=results,
             dataset_name=args.dataset,
-            dataset_kwargs=dataset_kwargs or None,
-            tracker_names=_parse_csv(args.trackers),
-            metric_specs=_parse_csv(args.metrics),
-            limit=args.limit,
-            corpus_dir=args.corpus_dir,
-        ),
-    )
-
-    # WHY: render the report after the sweep so the run can crash without
-    # leaking a half-written markdown file. ``tasks_ran`` is the actual
-    # per-leg task count returned by ``run_sweep`` — accurate on both
-    # ``--limit N`` and full-dataset runs.
-    from .report import format_report
-
-    report = format_report(
-        sweep_results=results,
-        dataset_name=args.dataset,
-        n_tasks=tasks_ran,
-    )
-    if args.report is not None:
-        args.report.write_text(report)
-    print(report)
+            n_tasks=tasks_ran,
+        )
+        if args.report is not None:
+            args.report.write_text(report)
+        print(report)
+    finally:
+        _maybe_cleanup_bench_cache(enabled=args.bench_cache_cleanup)
 
 
 if __name__ == "__main__":  # pragma: no cover -- CLI entry, not unit-tested

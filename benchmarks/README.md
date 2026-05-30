@@ -580,6 +580,42 @@ skip indexing entirely (typical re-run latency &lt;100 ms per task). The DB sche
 is described in the
 [project documentation](../DOCUMENTATION.md#database-schema-simplified).
 
+### Index cache (faster repeated sweeps)
+
+Each `(corpus, ingestion-config)` is indexed once and reused across tasks
+and across sweeps that share an ingestion pipeline. Controlled by
+`--bench-cache on|off` (default `on`). The cache lives at
+`~/.pydocs-mcp/bench/` (outside the repo).
+
+```bash
+# inspect / clear the cache
+python -m benchmarks.eval.bench_cache_cli info
+python -m benchmarks.eval.bench_cache_cli evict
+
+# run all experiments, then free the disk (cache used during the run,
+# wiped when it finishes — even if the run errors)
+python -m benchmarks.eval.runner --bench-cache-cleanup ...
+
+# reproduce pre-cache numbers exactly
+python -m benchmarks.eval.runner --bench-cache off ...
+```
+
+The cache key folds the ingestion pipeline hash, so changing the embedder
+or the ingestion YAML rebuilds automatically. A change to the corpus
+*contents* under the same path is NOT auto-detected — run `bench_cache
+evict` or `--bench-cache off` after editing a corpus in place.
+
+`--bench-cache-cleanup` evicts the WHOLE cache at the end (not just this
+run's entries) — don't pass it while a concurrent sweep shares the cache.
+
+**Reading indexing time:** a cache HIT makes `index()` a ~0 s lookup, so
+warm tasks record NO `indexing_seconds` (the metric would otherwise read
+"0.0 s"). Take true indexing-time numbers from a COLD run — the first
+sweep after `bench_cache_cli evict`, or any `--bench-cache off` run. Warm
+sweeps still give correct quality + `search_seconds`. The sweep is
+sequential (one task at a time, no concurrency), so a cold run's timing
+is uncontended.
+
 ### Running the tests
 
 ```bash
