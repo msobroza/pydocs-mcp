@@ -3,8 +3,9 @@
 DS-1000 (Lai et al., ICML 2023; arXiv:2211.11501) packaged inside the
 CodeRAG-Bench benchmark (Wang et al., 2024; arXiv:2406.14497). 1,000
 StackOverflow-derived data-science problems across 7 Python libraries,
-each annotated with the canonical documentation chunks (``docs`` field
-of ``{doc_id, doc_content}``) that answer the problem.
+each annotated with the canonical documentation chunks (``docs`` field of
+``{function, text, title}`` on the real HF rows; the flat CI fixtures use the
+legacy ``{doc_id, doc_content}``) that answer the problem.
 
 The raw HF row exposes:
 - ``prompt``: NL problem statement, then the literal ``A:``, then the
@@ -12,11 +13,18 @@ The raw HF row exposes:
   ``BEGIN SOLUTION`` / ``END SOLUTION`` markers).
 - ``library``: title-case library name (``"Pandas"``, ``"Numpy"``,
   ``"Matplotlib"``, ``"Sklearn"``, ``"Scipy"``, ``"Tensorflow"``,
-  ``"Pytorch"``).
+  ``"Pytorch"``). On the real CodeRAG-Bench rows this is nested inside
+  the ``metadata`` repr-dict string rather than exposed top-level, so
+  the loader resolves it via ``_resolve_library`` (top-level wins, else
+  parse ``metadata``).
 - ``perturbation_type``: one of ``"Origin"`` / ``"Surface"`` /
-  ``"Semantic"`` / ``"Difficult-Rewrite"`` (DS-1000 paper §3.2).
-- ``docs``: list of ``{"doc_id": str, "doc_content": str}`` — the
-  manually-verified gold doc citations.
+  ``"Semantic"`` / ``"Difficult-Rewrite"`` (DS-1000 paper §3.2). Like
+  ``library``, it is nested inside ``metadata`` on the real rows and lifted
+  by ``_lift_metadata_fields``.
+- ``docs``: list of the manually-verified gold doc citations. The real HF
+  entries are dicts keyed ``{function, text, title}`` (``title`` = canonical
+  doc identifier, ``text`` = doc prose); the flat CI fixtures use the legacy
+  ``{doc_id, doc_content}``. ``_gold_doc_fields`` reads either shape.
 
 This loader strips the canonical solution off the prompt (so retrieval
 systems see only the NL question), preserves the raw prompt under
@@ -29,6 +37,7 @@ agree on package names), and exposes both ``doc_ids`` and
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import re
@@ -78,17 +87,116 @@ def _normalize_library(raw: str) -> str:
     return _LIBRARY_NORMALIZATION.get(raw, raw.lower())
 
 
+# The perturbation fields the loader reads top-level but the real HF rows nest
+# inside the ``metadata`` struct — lifted at load so every downstream
+# ``row.get(<field>)`` works for BOTH shapes (see ``_lift_metadata_fields``).
+# ``library`` is lifted separately via ``_resolve_library`` (which owns the
+# top-level-vs-metadata precedence + the dict/str coercion); these two drive
+# the perturbation filter and the canonical ``ds1000/<lib>/<pert>/<origin>``
+# task id (without them every real row collapses to a colliding
+# ``ds1000/<lib>//``).
+_METADATA_LIFTED_FIELDS: tuple[str, ...] = (
+    "perturbation_type",
+    "perturbation_origin_id",
+)
+
+
+def _coerce_metadata(raw: object) -> dict[str, Any]:
+    """Return a row's ``metadata`` as a dict.
+
+    The live ``datasets`` loader deserializes the ``metadata`` struct column
+    into a real Python dict — that is the production shape. A Python-repr dict
+    STRING (e.g. ``"{'library': 'Numpy', ...}"``) is also accepted defensively
+    for tooling / fixtures that surface ``metadata`` as raw repr text. Any
+    other or unparseable payload yields ``{}`` so callers stay total (never
+    raise)."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _resolve_library(row: dict[str, Any]) -> str:
+    """Resolve a row's raw (title-case) ``library`` value.
+
+    The flat CI fixtures expose a top-level ``library`` directly; the real
+    ``code-rag-bench/ds1000`` HF rows nest it inside ``metadata``. Prefer a
+    present, non-empty top-level ``library`` (keeps the flat fixtures working);
+    else read it out of the coerced ``metadata`` dict. Total / never raises:
+    a missing field or unparseable ``metadata`` yields ``""``."""
+    top_level = row.get("library", "")
+    if top_level:
+        return str(top_level)
+    return str(_coerce_metadata(row.get("metadata")).get("library", ""))
+
+
+def _lift_metadata_fields(row: dict[str, Any]) -> None:
+    """Lift the nested ``metadata`` filter/split/task-id fields up to the top
+    level, IN PLACE.
+
+    Real ``code-rag-bench/ds1000`` rows expose only
+    ``[code_context, docs, metadata, prompt, reference_code]`` — ``library``,
+    ``perturbation_type`` and ``perturbation_origin_id`` all live inside the
+    ``metadata`` struct. The loader reads those three top-level (library
+    filter, stratification key, ``_row_to_task`` task id), so without this lift
+    every real row reads ``""`` for all three: zero filter matches, a
+    degenerate single-stratum split, and colliding ``ds1000/<lib>//`` task ids.
+    A present, non-empty top-level value is PREFERRED (keeps the flat CI
+    fixtures working); otherwise it is copied from ``metadata``."""
+    # ``library``: top-level wins, else read from the coerced ``metadata``.
+    resolved_library = _resolve_library(row)
+    if resolved_library:
+        row["library"] = resolved_library
+    # ``perturbation_*``: copy from ``metadata`` only when the top-level value
+    # is genuinely absent (``None`` / ``""``). The empty test is membership,
+    # not truthiness, so a falsy-but-valid ``0`` origin id is NOT clobbered.
+    meta = _coerce_metadata(row.get("metadata"))
+    for key in _METADATA_LIFTED_FIELDS:
+        if row.get(key) in (None, "") and meta.get(key) not in (None, ""):
+            row[key] = meta[key]
+
+
+def _has_gold(row: dict[str, Any]) -> bool:
+    """Whether a row carries at least one gold doc citation.
+
+    The ``docs`` field is a list of gold doc dicts (real HF:
+    ``{function, text, title}``; flat fixtures: ``{doc_id, doc_content}``), but
+    the HF rows may serialize it as a JSON STRING (``'[]'`` / ``'["..."]'``).
+    Handle both: ``json.loads`` a string, use a list as-is. An empty list, a
+    non-list payload, or a parse failure all count as no gold (gold-bearing is
+    purely list-length here, so it stays schema-agnostic; never raises).
+    """
+    docs = row.get("docs")
+    if isinstance(docs, str):
+        try:
+            docs = json.loads(docs)
+        except (ValueError, TypeError):
+            return False
+    if not isinstance(docs, list):
+        return False
+    return len(docs) > 0
+
+
 def _split_sort_key(row: dict[str, Any]) -> str:
     """A deterministic, position-independent sort key for the dev/test
     split's per-library shuffle.
 
-    Uses the gold ``doc_id``\\ s joined with ``"|"`` (stable across runs,
+    Uses the gold doc identifiers joined with ``"|"`` (stable across runs,
     unique per problem), falling back to the raw ``prompt`` when a row has
     no gold docs. Deliberately NOT the row's list index — the key must be
     stable regardless of where the row lands in the loaded list so the
-    seeded shuffle yields the same partition across runs and load paths."""
-    docs = row.get("docs", []) or []
-    doc_ids = [str(d.get("doc_id", "")) for d in docs]
+    seeded shuffle yields the same partition across runs and load paths.
+
+    Routes through ``_gold_doc_fields`` so the identifiers come from the real
+    HF ``title`` key (or the fixtures' ``doc_id``) — reading the legacy
+    ``doc_id`` directly would yield ``""`` for every real row, silently
+    collapsing the key to the ``prompt`` for the entire corpus."""
+    doc_ids, _ = _gold_doc_fields(row.get("docs", []))
     joined = "|".join(doc_ids)
     return joined if joined else str(row.get("prompt", ""))
 
@@ -184,6 +292,18 @@ class Ds1000Dataset:
         return self._apply_filters(rows)
 
     def _apply_filters(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Lift the nested ``metadata`` fields at load (single normalization
+        # point): the real HF rows nest ``library`` / ``perturbation_type`` /
+        # ``perturbation_origin_id`` inside the ``metadata`` struct with NO
+        # top-level field, so the library + perturbation filters, the split
+        # stratification, and the ``_row_to_task`` task id (all keyed off the
+        # top-level reads) would otherwise see ``""`` for every HF row — zero
+        # filter matches, a degenerate single-stratum split, and colliding
+        # task ids. The lift prefers a present top-level value (flat CI
+        # fixtures) and copies from ``metadata`` otherwise, so the downstream
+        # ``row.get(...)`` reads work UNCHANGED for both shapes.
+        for row in rows:
+            _lift_metadata_fields(row)
         # Filters compare against the NORMALIZED (lowercase canonical)
         # library name, so callers don't have to know the upstream
         # title-case form. Empty filter = keep all.
@@ -209,8 +329,16 @@ class Ds1000Dataset:
             if self.perturbation_filter:
                 if row.get("perturbation_type") not in self.perturbation_filter:
                     continue
+            # Gold-bearing restriction: DS-1000 has many doc-less pure-codegen
+            # problems with no retrieval target. A retrieval-recall benchmark
+            # can only score rows that HAVE a gold citation — a doc-less row
+            # is recall-0 by construction and would silently drag the metric
+            # down. Drop empty-gold rows here so the split (below) stratifies
+            # over scoreable rows only.
+            if not _has_gold(row):
+                continue
             filtered.append(row)
-        # Partition AFTER the library/perturbation filters so the split
+        # Partition AFTER the library/perturbation/gold filters so the split
         # slices the already-narrowed corpus (the split composes with the
         # filters, never the raw HF rows). Stratify by the normalized
         # (PyPI-canonical) library so each slice keeps the corpus's
@@ -227,6 +355,33 @@ class Ds1000Dataset:
         )
 
 
+def _gold_doc_fields(docs: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Extract ``(doc_ids, doc_contents)`` from a row's ``docs`` gold list,
+    handling BOTH the real HF schema and the flat CI fixtures.
+
+    Real ``code-rag-bench/ds1000`` gold entries are dicts keyed
+    ``{function, text, title}``: ``title`` is the canonical doc identifier
+    (e.g. ``numpy.reference.generated.numpy.cumsum``) that the exact-title gold
+    resolver matches against a chunk's ``title`` metadata, and ``text`` is the
+    doc prose the fuzzy resolver matches against chunk text. The flat fixtures
+    use ``{doc_id, doc_content}``. Prefer the real keys, fall back to the
+    fixture keys, so BOTH shapes yield non-empty, 1:1-aligned gold (reading the
+    wrong keys silently emptied every gold => recall 0 by construction).
+
+    Total / never raises: non-dict entries and a non-list ``docs`` payload are
+    skipped, yielding aligned empty tuples."""
+    if not isinstance(docs, list):
+        return (), ()
+    ids: list[str] = []
+    contents: list[str] = []
+    for entry in docs:
+        if not isinstance(entry, dict):
+            continue
+        ids.append(str(entry.get("title") or entry.get("doc_id") or ""))
+        contents.append(str(entry.get("text") or entry.get("doc_content") or ""))
+    return tuple(ids), tuple(contents)
+
+
 def _row_to_task(row: dict[str, Any]) -> EvalTask | None:
     raw_prompt = row.get("prompt", "")
     if not raw_prompt:
@@ -236,9 +391,7 @@ def _row_to_task(row: dict[str, Any]) -> EvalTask | None:
     library = _normalize_library(library_raw)
     perturbation = row.get("perturbation_type", "")
     origin_id = row.get("perturbation_origin_id", "")
-    docs = row.get("docs", []) or []
-    doc_ids = tuple(str(d.get("doc_id", "")) for d in docs)
-    doc_contents = tuple(str(d.get("doc_content", "")) for d in docs)
+    doc_ids, doc_contents = _gold_doc_fields(row.get("docs", []))
     # WHY: `<library>:<perturbation>:<origin_id>` is the canonical
     # DS-1000 task identifier — same problem under different
     # perturbations shares an origin_id but differs on perturbation_type.

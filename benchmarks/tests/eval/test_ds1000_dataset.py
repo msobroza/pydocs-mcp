@@ -20,6 +20,11 @@ from benchmarks.eval.datasets.ds1000 import (
 from benchmarks.eval.serialization import dataset_registry
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_mini.json"
+# Mirrors the real ``code-rag-bench/ds1000`` HF row shape: NO top-level
+# ``library`` / ``perturbation_*`` (they're nested inside a ``metadata``
+# struct — a dict, the shape the live ``datasets`` loader produces), plus one
+# doc-less (empty-gold) pure-codegen row.
+NESTED_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_metadata_nested.json"
 
 
 async def test_dataset_yields_eight_rows_from_mini_fixture() -> None:
@@ -161,9 +166,10 @@ async def test_perturbation_filter_slices_rows() -> None:
 
 
 async def test_gold_has_doc_ids_and_doc_contents_aligned() -> None:
-    """The gold ships BOTH ``doc_ids`` (verbatim from DS-1000 ``docs[*].doc_id``,
-    used by oracle-indexing's exact-match resolver) AND ``doc_contents`` (verbatim
-    from ``docs[*].doc_content``, used by fuzzy resolvers). They MUST be aligned
+    """The gold ships BOTH ``doc_ids`` (the doc identifier — ``docs[*].title``
+    on real rows, ``docs[*].doc_id`` on the flat fixtures — used by the
+    exact-title resolver) AND ``doc_contents`` (the doc prose — ``docs[*].text``
+    / ``docs[*].doc_content`` — used by fuzzy resolvers). They MUST be aligned
     1:1 — same length, same order."""
     dataset = Ds1000Dataset(fixture_path=FIXTURE_PATH)
     tasks = [t async for t in dataset.tasks()]
@@ -180,6 +186,41 @@ async def test_gold_has_doc_ids_and_doc_contents_aligned() -> None:
         assert isinstance(doc_ids, tuple)
         assert isinstance(doc_contents, tuple)
         assert len(doc_ids) == len(doc_contents) > 0
+
+
+async def test_gold_extracted_from_real_hf_doc_schema() -> None:
+    """REGRESSION: the real ``code-rag-bench/ds1000`` gold ``docs`` entries are
+    dicts keyed ``{function, text, title}`` — NOT ``{doc_id, doc_content}``. The
+    loader must map ``text`` -> ``doc_contents`` (fuzzy resolver) and ``title``
+    -> ``doc_ids`` (exact-title resolver); otherwise every gold is empty strings
+    and recall is 0 by construction. Pre-fix this yielded ``('',)`` gold."""
+    dataset = Ds1000Dataset(fixture_path=NESTED_FIXTURE_PATH, library_filter=("numpy",))
+    tasks = [t async for t in dataset.tasks()]
+    assert len(tasks) == 1
+    gold = tasks[0].gold.extra
+    # doc_contents comes from the real ``text`` key (non-empty prose).
+    assert gold["doc_contents"] == (  # type: ignore[index]
+        "numpy.cumsum(a, axis=None, dtype=None, out=None) Return the cumulative "
+        "sum of the elements along a given axis.",
+    )
+    # doc_ids comes from the real ``title`` key (the canonical doc identifier).
+    assert gold["doc_ids"] == ("numpy.reference.generated.numpy.cumsum",)  # type: ignore[index]
+
+
+def test_split_sort_key_derives_from_gold_title_on_real_rows() -> None:
+    """``_split_sort_key`` must take the split key from the gold identifiers via
+    ``_gold_doc_fields``. On real HF rows (``docs[*].title``, no ``doc_id``)
+    reading the legacy key directly would yield ``""`` for every row, silently
+    collapsing the stratification key to the prompt for the whole corpus."""
+    from benchmarks.eval.datasets.ds1000 import _split_sort_key
+
+    real = {"prompt": "P", "docs": [{"function": "np.imag", "title": "numpy.imag", "text": "x"}]}
+    assert _split_sort_key(real) == "numpy.imag"
+    # Flat fixture shape still resolves via the doc_id fallback.
+    flat = {"prompt": "P", "docs": [{"doc_id": "numpy.cumsum", "doc_content": "x"}]}
+    assert _split_sort_key(flat) == "numpy.cumsum"
+    # No gold => deterministic fall back to the prompt.
+    assert _split_sort_key({"prompt": "P", "docs": []}) == "P"
 
 
 async def test_library_name_normalized_to_lowercase() -> None:
@@ -205,6 +246,134 @@ async def test_library_name_normalized_to_lowercase() -> None:
     assert _LIBRARY_NORMALIZATION["Pytorch"] == "torch"
     assert _LIBRARY_NORMALIZATION["Pandas"] == "pandas"
     assert _LIBRARY_NORMALIZATION["Scikit-learn"] == "scikit-learn"
+
+
+# --- Metadata-nested library + empty-gold filtering (real HF row shape) -----
+
+
+async def test_library_extracted_from_metadata_when_no_top_level_field() -> None:
+    """REGRESSION: the real ``code-rag-bench/ds1000`` rows carry NO top-level
+    ``library`` — it's nested inside a ``metadata`` struct that the live
+    ``datasets`` loader deserializes into a dict (e.g.
+    ``{'library': 'Numpy', 'problem_id': 0, ...}``). The loader must read the
+    library out of ``metadata`` so ``library_filter`` matches. Pre-fix this
+    matched ZERO rows (``row.get("library", "")`` -> ``""``)."""
+    dataset = Ds1000Dataset(
+        fixture_path=NESTED_FIXTURE_PATH,
+        library_filter=("numpy",),
+    )
+    tasks = [t async for t in dataset.tasks()]
+    # Two Numpy rows in the nested fixture, but one is doc-less (empty gold)
+    # and gets dropped — so the gold-bearing Numpy row is the only match.
+    assert len(tasks) == 1, "metadata-nested 'Numpy' library must be matched"
+    assert all(t.metadata["library"] == "numpy" for t in tasks)
+
+
+async def test_top_level_library_still_matches_back_compat() -> None:
+    """Back-compat: the flat fixtures ship a top-level ``library`` and NO
+    ``metadata``. A present, non-empty top-level ``library`` must be PREFERRED
+    over any metadata parse, so the existing flat fixtures keep working
+    unchanged."""
+    dataset = Ds1000Dataset(fixture_path=FIXTURE_PATH, library_filter=("numpy",))
+    tasks = [t async for t in dataset.tasks()]
+    # The mini fixture has 2 numpy rows, both gold-bearing.
+    assert len(tasks) == 2
+    assert all(t.metadata["library"] == "numpy" for t in tasks)
+
+
+async def test_empty_gold_rows_are_dropped() -> None:
+    """A retrieval recall benchmark must evaluate only gold-bearing rows.
+    DS-1000 has many doc-less pure-codegen problems with no retrieval target;
+    the loader drops rows whose ``docs`` gold is empty. The nested fixture
+    ships 3 rows (1 numpy + 1 pandas with gold, 1 numpy with empty ``docs``);
+    only the 2 gold-bearing rows survive."""
+    dataset = Ds1000Dataset(fixture_path=NESTED_FIXTURE_PATH)
+    tasks = [t async for t in dataset.tasks()]
+    assert len(tasks) == 2, "the doc-less (empty-gold) row must be dropped"
+    # Every surviving task carries >=1 gold doc_id.
+    for t in tasks:
+        doc_ids = t.gold.extra["doc_ids"]  # type: ignore[index]
+        assert doc_ids, f"surviving task {t.task_id} unexpectedly has no gold"
+
+
+def test_has_gold_handles_list_and_json_string_and_empty() -> None:
+    """``_has_gold`` parses the ``docs`` field robustly: a real list, a JSON
+    string (``'[]'`` / ``'["..."]'``), and parse failures all resolve to the
+    right has-gold verdict (>=1 doc => True; empty / unparseable => False)."""
+    from benchmarks.eval.datasets.ds1000 import _has_gold
+
+    # Actual list forms.
+    assert _has_gold({"docs": [{"doc_id": "a", "doc_content": "x"}]}) is True
+    assert _has_gold({"docs": []}) is False
+    # JSON-string forms.
+    assert _has_gold({"docs": '[{"doc_id": "a", "doc_content": "x"}]'}) is True
+    assert _has_gold({"docs": "[]"}) is False
+    # Missing / unparseable => no gold (never raises).
+    assert _has_gold({}) is False
+    assert _has_gold({"docs": "not-json"}) is False
+
+
+def test_resolve_library_prefers_top_level_then_metadata() -> None:
+    """``_resolve_library`` prefers a present, non-empty top-level ``library``;
+    else reads it from ``metadata`` — handling both the live ``datasets`` DICT
+    shape and a defensive repr-dict STRING; and returns ``""`` on absence /
+    parse failure (never raises)."""
+    from benchmarks.eval.datasets.ds1000 import _resolve_library
+
+    # Top-level wins, even when metadata also carries a (different) library.
+    assert _resolve_library({"library": "Pandas", "metadata": {"library": "Numpy"}}) == "Pandas"
+    # Empty top-level => fall through to metadata (DICT — the real HF shape).
+    assert _resolve_library({"library": "", "metadata": {"library": "Numpy"}}) == "Numpy"
+    assert _resolve_library({"metadata": {"library": "Scipy", "problem_id": 3}}) == "Scipy"
+    # Defensive: metadata as a Python-repr dict STRING still resolves.
+    assert _resolve_library({"metadata": "{'library': 'Numpy'}"}) == "Numpy"
+    # Unparseable / non-dict metadata + no top-level => "" (never raises).
+    assert _resolve_library({"metadata": "not-a-dict"}) == ""
+    assert _resolve_library({"metadata": 123}) == ""
+    assert _resolve_library({}) == ""
+
+
+def test_lift_metadata_fields_lifts_library_and_perturbation_from_dict() -> None:
+    """``_lift_metadata_fields`` copies ``library`` + the two ``perturbation_*``
+    fields out of the nested ``metadata`` dict (the real HF shape) up to the
+    top level when absent, preferring an existing top-level value. Without the
+    perturbation lift, every real row would collapse to a colliding
+    ``ds1000/<lib>//`` task id."""
+    from benchmarks.eval.datasets.ds1000 import _lift_metadata_fields
+
+    row = {
+        "metadata": {
+            "library": "Numpy",
+            "perturbation_type": "Origin",
+            "perturbation_origin_id": 7,
+        },
+    }
+    _lift_metadata_fields(row)
+    assert row["library"] == "Numpy"
+    assert row["perturbation_type"] == "Origin"
+    assert row["perturbation_origin_id"] == 7
+
+    # Top-level precedence: an existing top-level value is NOT overwritten.
+    kept = {"perturbation_type": "Surface", "metadata": {"perturbation_type": "Origin"}}
+    _lift_metadata_fields(kept)
+    assert kept["perturbation_type"] == "Surface"
+
+    # Unparseable metadata is a no-op (never raises, leaves the row untouched).
+    bare: dict[str, object] = {"metadata": "not-a-dict"}
+    _lift_metadata_fields(bare)
+    assert "library" not in bare
+
+
+async def test_metadata_nested_row_task_id_carries_lifted_perturbation() -> None:
+    """A real-shape row's ``perturbation_type`` / ``perturbation_origin_id``
+    live inside ``metadata``. The lift must surface them into the canonical
+    ``ds1000/<lib>/<pert>/<origin>`` task id — without it every real row
+    collapses to a colliding ``ds1000/numpy//`` (letting the runner dedup
+    distinct problems into one). The gold-bearing Numpy fixture row carries
+    ``perturbation_type='Origin'`` / ``perturbation_origin_id=0``."""
+    dataset = Ds1000Dataset(fixture_path=NESTED_FIXTURE_PATH, library_filter=("numpy",))
+    task_ids = [t.task_id async for t in dataset.tasks()]
+    assert task_ids == ["ds1000/numpy/Origin/0"], task_ids
 
 
 # --- Auxiliary protocol-level / registry-level smoke tests ------------------
