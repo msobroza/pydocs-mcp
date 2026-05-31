@@ -222,7 +222,9 @@ omits); broad library coverage (only the seven libraries); robustness to query
 perturbation (DS-1000 perturbs the *solution code*, not the retrieval target, so
 scores stay roughly flat across buckets — flatness is not a robustness signal);
 paraphrase-heavy gold (the fuzzy threshold of 85 is conservative and YAML-tunable;
-heavily paraphrased docs may score `0.0` under content matching).
+heavily paraphrased docs may score `0.0` under content matching — this applies
+only to the native source runs; the canonical oracle run matches gold by exact
+doc-title, so it is unaffected).
 
 ### Roadmap: additional benchmarks
 
@@ -533,21 +535,43 @@ calibration, CodeRAG-Bench reports DS-1000 NDCG@10 reference points of roughly
 BM25 ≈ 5.2, GIST-large ≈ 13.6, Voyage-code ≈ 33.1; `pydocs-mcp`'s BM25-based
 ranked preset should land in that range.
 
-**3. Oracle indexing** — isolate retriever quality from chunking:
+**3. Oracle indexing — the canonical, CodeRAG-Bench-comparable run.** This is
+the **standard DS-1000 retrieval eval**: it mirrors CodeRAG-Bench's own setup
+(`retrieval/create/ds1000.py`) one-to-one, so the numbers are comparable to
+their published reference points.
 
 ```bash
 python -m benchmarks.eval.runner --dataset ds1000 \
     --systems pydocs-oracle \
+    --dataset-full-prompt \
     --configs ds1000_ranked.yaml \
     --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
     --trackers jsonl
 ```
 
-`pydocs-oracle` writes chunks **directly** from the
-`code-rag-bench/library-documentation` datastore (one row → one chunk, preserving
-each doc's identity) instead of AST-extracting from source. The gap between run 3
-and run 2 quantifies how much retrieval quality the AST-based chunker costs — run
-3 is the ceiling with chunking removed.
+Three pieces make it canonical, matching the upstream builder:
+
+- **Corpus = the documentation datastore.** `pydocs-oracle` writes one chunk per
+  `code-rag-bench/library-documentation` row (preserving each doc's identity in
+  the chunk `title`) instead of AST-extracting from source. The library is taken
+  from each row's `doc_id` prefix (e.g. `numpy.reference.arrays.scalars` →
+  `numpy`), since the rows carry only `{doc_id, doc_content}`.
+- **Ground truth = exact gold-title match.** Relevance is exact membership of a
+  retrieved chunk's `title` in the task's gold `doc_id`s — the same key the
+  upstream qrels use (`docs[*].title` matched against the corpus `doc_id`). This
+  is `PydocsOracleGoldResolver`; the fuzzy-content threshold of the native runs
+  does NOT apply here.
+- **Query = the full prompt.** `--dataset-full-prompt` sends the unstripped
+  `prompt` (NL problem + code stub) to the retriever, exactly as the upstream
+  builder does (`query = example["prompt"]`). Without the flag the loader keeps
+  only the NL question (a stricter, non-canonical variant).
+
+Add `--dataset-library-filter numpy` for a fast single-library smoke. For
+calibration, CodeRAG-Bench reports DS-1000 NDCG@10 reference points of roughly
+BM25 ≈ 5.2, GIST-large ≈ 13.6, Voyage-code ≈ 33.1; the `ds1000_ranked.yaml`
+(BM25/FTS5) preset lands in the BM25 range. Secondarily, the gap between this run
+and run 2 quantifies how much retrieval quality the AST-based source chunker
+costs — run 3 is the ceiling with chunking removed.
 
 **Splitting and slicing** (both deterministic):
 
@@ -566,7 +590,9 @@ preserving every library's corpus proportion — into a seeded dev head and test
 tail, so you can tune on `dev` without contaminating the held-out `test` numbers.
 The same `--split` applies to RepoQA (partitioned by repo).
 `--dataset-library-filter` takes a comma-separated list matched against the
-normalized (lower-cased) library name.
+normalized (lower-cased) library name. `--dataset-full-prompt` (DS-1000 only)
+queries with the unstripped `prompt` — the canonical CodeRAG-Bench query; omit
+it to query with the NL question alone (the loader's `_strip_query` default).
 
 ### Indexing and caching
 
