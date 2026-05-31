@@ -5,7 +5,7 @@
     "reference_code": "out = np.cumsum(a, axis=0)",
     "metadata": {"problem_id": 0, "library_problem_id": 0, "library": "Numpy", "test_case_cnt": 1, "perturbation_type": "Origin", "perturbation_origin_id": 0},
     "docs": [
-      {"doc_id": "numpy.cumsum", "doc_content": "numpy.cumsum(a, axis=None, dtype=None, out=None) Return the cumulative sum of the elements along a given axis."}
+      {"function": "np.cumsum", "title": "numpy.reference.generated.numpy.cumsum", "text": "numpy.cumsum(a, axis=None, dtype=None, out=None) Return the cumulative sum of the elements along a given axis."}
     ]
   },
   {
@@ -14,7 +14,7 @@
     "reference_code": "out = df[df['x'] > 0]",
     "metadata": {"problem_id": 1, "library_problem_id": 1, "library": "Pandas", "test_case_cnt": 1, "perturbation_type": "Surface", "perturbation_origin_id": 1},
     "docs": [
-      {"doc_id": "pandas.DataFrame.loc", "doc_content": "DataFrame.loc Access a group of rows and columns by label(s) or a boolean array."}
+      {"function": "df.loc", "title": "pandas.reference.api.pandas.dataframe.loc", "text": "DataFrame.loc Access a group of rows and columns by label(s) or a boolean array."}
     ]
   },
   {

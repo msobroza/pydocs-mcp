@@ -166,9 +166,10 @@ async def test_perturbation_filter_slices_rows() -> None:
 
 
 async def test_gold_has_doc_ids_and_doc_contents_aligned() -> None:
-    """The gold ships BOTH ``doc_ids`` (verbatim from DS-1000 ``docs[*].doc_id``,
-    used by oracle-indexing's exact-match resolver) AND ``doc_contents`` (verbatim
-    from ``docs[*].doc_content``, used by fuzzy resolvers). They MUST be aligned
+    """The gold ships BOTH ``doc_ids`` (the doc identifier — ``docs[*].title``
+    on real rows, ``docs[*].doc_id`` on the flat fixtures — used by the
+    exact-title resolver) AND ``doc_contents`` (the doc prose — ``docs[*].text``
+    / ``docs[*].doc_content`` — used by fuzzy resolvers). They MUST be aligned
     1:1 — same length, same order."""
     dataset = Ds1000Dataset(fixture_path=FIXTURE_PATH)
     tasks = [t async for t in dataset.tasks()]
@@ -185,6 +186,41 @@ async def test_gold_has_doc_ids_and_doc_contents_aligned() -> None:
         assert isinstance(doc_ids, tuple)
         assert isinstance(doc_contents, tuple)
         assert len(doc_ids) == len(doc_contents) > 0
+
+
+async def test_gold_extracted_from_real_hf_doc_schema() -> None:
+    """REGRESSION: the real ``code-rag-bench/ds1000`` gold ``docs`` entries are
+    dicts keyed ``{function, text, title}`` — NOT ``{doc_id, doc_content}``. The
+    loader must map ``text`` -> ``doc_contents`` (fuzzy resolver) and ``title``
+    -> ``doc_ids`` (exact-title resolver); otherwise every gold is empty strings
+    and recall is 0 by construction. Pre-fix this yielded ``('',)`` gold."""
+    dataset = Ds1000Dataset(fixture_path=NESTED_FIXTURE_PATH, library_filter=("numpy",))
+    tasks = [t async for t in dataset.tasks()]
+    assert len(tasks) == 1
+    gold = tasks[0].gold.extra
+    # doc_contents comes from the real ``text`` key (non-empty prose).
+    assert gold["doc_contents"] == (  # type: ignore[index]
+        "numpy.cumsum(a, axis=None, dtype=None, out=None) Return the cumulative "
+        "sum of the elements along a given axis.",
+    )
+    # doc_ids comes from the real ``title`` key (the canonical doc identifier).
+    assert gold["doc_ids"] == ("numpy.reference.generated.numpy.cumsum",)  # type: ignore[index]
+
+
+def test_split_sort_key_derives_from_gold_title_on_real_rows() -> None:
+    """``_split_sort_key`` must take the split key from the gold identifiers via
+    ``_gold_doc_fields``. On real HF rows (``docs[*].title``, no ``doc_id``)
+    reading the legacy key directly would yield ``""`` for every row, silently
+    collapsing the stratification key to the prompt for the whole corpus."""
+    from benchmarks.eval.datasets.ds1000 import _split_sort_key
+
+    real = {"prompt": "P", "docs": [{"function": "np.imag", "title": "numpy.imag", "text": "x"}]}
+    assert _split_sort_key(real) == "numpy.imag"
+    # Flat fixture shape still resolves via the doc_id fallback.
+    flat = {"prompt": "P", "docs": [{"doc_id": "numpy.cumsum", "doc_content": "x"}]}
+    assert _split_sort_key(flat) == "numpy.cumsum"
+    # No gold => deterministic fall back to the prompt.
+    assert _split_sort_key({"prompt": "P", "docs": []}) == "P"
 
 
 async def test_library_name_normalized_to_lowercase() -> None:

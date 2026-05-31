@@ -3,8 +3,9 @@
 DS-1000 (Lai et al., ICML 2023; arXiv:2211.11501) packaged inside the
 CodeRAG-Bench benchmark (Wang et al., 2024; arXiv:2406.14497). 1,000
 StackOverflow-derived data-science problems across 7 Python libraries,
-each annotated with the canonical documentation chunks (``docs`` field
-of ``{doc_id, doc_content}``) that answer the problem.
+each annotated with the canonical documentation chunks (``docs`` field of
+``{function, text, title}`` on the real HF rows; the flat CI fixtures use the
+legacy ``{doc_id, doc_content}``) that answer the problem.
 
 The raw HF row exposes:
 - ``prompt``: NL problem statement, then the literal ``A:``, then the
@@ -17,9 +18,13 @@ The raw HF row exposes:
   the loader resolves it via ``_resolve_library`` (top-level wins, else
   parse ``metadata``).
 - ``perturbation_type``: one of ``"Origin"`` / ``"Surface"`` /
-  ``"Semantic"`` / ``"Difficult-Rewrite"`` (DS-1000 paper §3.2).
-- ``docs``: list of ``{"doc_id": str, "doc_content": str}`` — the
-  manually-verified gold doc citations.
+  ``"Semantic"`` / ``"Difficult-Rewrite"`` (DS-1000 paper §3.2). Like
+  ``library``, it is nested inside ``metadata`` on the real rows and lifted
+  by ``_lift_metadata_fields``.
+- ``docs``: list of the manually-verified gold doc citations. The real HF
+  entries are dicts keyed ``{function, text, title}`` (``title`` = canonical
+  doc identifier, ``text`` = doc prose); the flat CI fixtures use the legacy
+  ``{doc_id, doc_content}``. ``_gold_doc_fields`` reads either shape.
 
 This loader strips the canonical solution off the prompt (so retrieval
 systems see only the NL question), preserves the raw prompt under
@@ -159,11 +164,12 @@ def _lift_metadata_fields(row: dict[str, Any]) -> None:
 def _has_gold(row: dict[str, Any]) -> bool:
     """Whether a row carries at least one gold doc citation.
 
-    The ``docs`` field is a list of ``{doc_id, doc_content}`` in the fixtures,
-    but the HF rows may serialize it as a JSON STRING (``'[]'`` /
-    ``'["..."]'``). Handle both: ``json.loads`` a string, use a list as-is.
-    An empty list, a non-list payload, or a parse failure all count as
-    no gold (never raises).
+    The ``docs`` field is a list of gold doc dicts (real HF:
+    ``{function, text, title}``; flat fixtures: ``{doc_id, doc_content}``), but
+    the HF rows may serialize it as a JSON STRING (``'[]'`` / ``'["..."]'``).
+    Handle both: ``json.loads`` a string, use a list as-is. An empty list, a
+    non-list payload, or a parse failure all count as no gold (gold-bearing is
+    purely list-length here, so it stays schema-agnostic; never raises).
     """
     docs = row.get("docs")
     if isinstance(docs, str):
@@ -180,13 +186,17 @@ def _split_sort_key(row: dict[str, Any]) -> str:
     """A deterministic, position-independent sort key for the dev/test
     split's per-library shuffle.
 
-    Uses the gold ``doc_id``\\ s joined with ``"|"`` (stable across runs,
+    Uses the gold doc identifiers joined with ``"|"`` (stable across runs,
     unique per problem), falling back to the raw ``prompt`` when a row has
     no gold docs. Deliberately NOT the row's list index — the key must be
     stable regardless of where the row lands in the loaded list so the
-    seeded shuffle yields the same partition across runs and load paths."""
-    docs = row.get("docs", []) or []
-    doc_ids = [str(d.get("doc_id", "")) for d in docs]
+    seeded shuffle yields the same partition across runs and load paths.
+
+    Routes through ``_gold_doc_fields`` so the identifiers come from the real
+    HF ``title`` key (or the fixtures' ``doc_id``) — reading the legacy
+    ``doc_id`` directly would yield ``""`` for every real row, silently
+    collapsing the key to the ``prompt`` for the entire corpus."""
+    doc_ids, _ = _gold_doc_fields(row.get("docs", []))
     joined = "|".join(doc_ids)
     return joined if joined else str(row.get("prompt", ""))
 
@@ -345,6 +355,33 @@ class Ds1000Dataset:
         )
 
 
+def _gold_doc_fields(docs: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Extract ``(doc_ids, doc_contents)`` from a row's ``docs`` gold list,
+    handling BOTH the real HF schema and the flat CI fixtures.
+
+    Real ``code-rag-bench/ds1000`` gold entries are dicts keyed
+    ``{function, text, title}``: ``title`` is the canonical doc identifier
+    (e.g. ``numpy.reference.generated.numpy.cumsum``) that the exact-title gold
+    resolver matches against a chunk's ``title`` metadata, and ``text`` is the
+    doc prose the fuzzy resolver matches against chunk text. The flat fixtures
+    use ``{doc_id, doc_content}``. Prefer the real keys, fall back to the
+    fixture keys, so BOTH shapes yield non-empty, 1:1-aligned gold (reading the
+    wrong keys silently emptied every gold => recall 0 by construction).
+
+    Total / never raises: non-dict entries and a non-list ``docs`` payload are
+    skipped, yielding aligned empty tuples."""
+    if not isinstance(docs, list):
+        return (), ()
+    ids: list[str] = []
+    contents: list[str] = []
+    for entry in docs:
+        if not isinstance(entry, dict):
+            continue
+        ids.append(str(entry.get("title") or entry.get("doc_id") or ""))
+        contents.append(str(entry.get("text") or entry.get("doc_content") or ""))
+    return tuple(ids), tuple(contents)
+
+
 def _row_to_task(row: dict[str, Any]) -> EvalTask | None:
     raw_prompt = row.get("prompt", "")
     if not raw_prompt:
@@ -354,9 +391,7 @@ def _row_to_task(row: dict[str, Any]) -> EvalTask | None:
     library = _normalize_library(library_raw)
     perturbation = row.get("perturbation_type", "")
     origin_id = row.get("perturbation_origin_id", "")
-    docs = row.get("docs", []) or []
-    doc_ids = tuple(str(d.get("doc_id", "")) for d in docs)
-    doc_contents = tuple(str(d.get("doc_content", "")) for d in docs)
+    doc_ids, doc_contents = _gold_doc_fields(row.get("docs", []))
     # WHY: `<library>:<perturbation>:<origin_id>` is the canonical
     # DS-1000 task identifier — same problem under different
     # perturbations shares an origin_id but differs on perturbation_type.
