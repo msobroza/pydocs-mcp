@@ -63,6 +63,29 @@ def _rows_source() -> Iterable[Mapping[str, str]]:
     return list(_ROWS)
 
 
+# WHY: the REAL ``code-rag-bench/library-documentation`` rows carry ONLY
+# ``{doc_id, doc_content}`` — NO ``library`` / ``source`` field. The
+# ``doc_id`` IS the library source (dot-separated, library first segment),
+# so the oracle must DERIVE the package from that prefix or every chunk
+# lands under package ``""`` and the package-filtered resolver scan never
+# matches (recall 0). These rows mirror that real shape: no library field,
+# dot-separated doc_ids, including the ``sklearn`` -> ``scikit-learn`` remap.
+_REAL_SHAPE_ROWS: tuple[dict[str, str], ...] = (
+    {
+        "doc_id": "numpy.reference.generated.numpy.imag",
+        "doc_content": "numpy imag returns the imaginary part of an array zorptoken",
+    },
+    {
+        "doc_id": "sklearn.generated.sklearn.cluster.kmeans",
+        "doc_content": "sklearn KMeans clusters samples into k groups wibbletoken",
+    },
+)
+
+
+def _real_shape_rows_source() -> Iterable[Mapping[str, str]]:
+    return list(_REAL_SHAPE_ROWS)
+
+
 def _task(doc_ids: tuple[str, ...], *, library: str = "pandas") -> EvalTask:
     return EvalTask(
         task_id="t",
@@ -180,5 +203,43 @@ async def test_oracle_resolver_scopes_to_library_package() -> None:
         by_doc = {c.metadata.get("title"): c.id for c in numpy_chunks}
 
         assert resolved == frozenset({f"chunk:{by_doc['numpy#reshape']}"})
+    finally:
+        await system.teardown()
+
+
+@pytest.mark.asyncio
+async def test_index_derives_library_from_doc_id_prefix() -> None:
+    """REGRESSION: the real ``code-rag-bench/library-documentation`` rows have
+    NO ``library`` / ``source`` field — only ``{doc_id, doc_content}``. The
+    oracle must DERIVE the package from the ``doc_id``'s first dot-segment
+    (``numpy.reference.generated.numpy.imag`` -> ``numpy``;
+    ``sklearn.generated.sklearn.cluster.kmeans`` -> ``sklearn`` -> PyPI
+    ``scikit-learn``), normalized the SAME way the resolver filters. Pre-fix
+    every chunk landed under package ``""`` (resolver scan -> recall 0)."""
+    from pydocs_mcp.deps import normalize_package_name
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
+    config = AppConfig.load()
+    system = PydocsOracleSystem(rows_source=_real_shape_rows_source)
+    try:
+        await system.index(Path("/dev/null"), config)
+
+        uow_factory = build_sqlite_uow_factory(system._db_path)
+        async with uow_factory() as uow:
+            numpy_chunks = await uow.chunks.list(
+                filter={"package": normalize_package_name("numpy")},
+            )
+            sklearn_chunks = await uow.chunks.list(
+                filter={"package": normalize_package_name("scikit-learn")},
+            )
+
+        numpy_titles = {c.metadata.get("title") for c in numpy_chunks}
+        sklearn_titles = {c.metadata.get("title") for c in sklearn_chunks}
+        assert "numpy.reference.generated.numpy.imag" in numpy_titles
+        assert "sklearn.generated.sklearn.cluster.kmeans" in sklearn_titles
+        # The chunks must NOT have collapsed under the empty package name.
+        async with uow_factory() as uow:
+            empty_pkg_chunks = await uow.chunks.list(filter={"package": ""})
+        assert not empty_pkg_chunks, "chunks must not land under empty package"
     finally:
         await system.teardown()
