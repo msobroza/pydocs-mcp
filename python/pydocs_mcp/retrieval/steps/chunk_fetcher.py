@@ -69,18 +69,32 @@ def _build_fts_match_query(terms: str) -> str | None:
     """Shape raw user terms into an FTS5 MATCH expression.
 
     Mirror of :func:`pydocs_mcp.storage.sqlite._build_fts_match_query`.
-    Reuses ``_FTS_OPS`` from the storage module so the operator vocabulary
-    stays unified (AC17 byte-parity).
+    Reuses ``_FTS_OPS`` + ``_FTS_SAFE_TOKEN`` from the storage module so the
+    operator vocabulary and safe-passthrough predicate stay unified (AC17
+    byte-parity).
     """
-    from pydocs_mcp.storage.sqlite import _FTS_OPS
+    from pydocs_mcp.storage.sqlite import _FTS_OPS, _FTS_SAFE_TOKEN
 
     tokens = terms.split()
-    if any(t in _FTS_OPS for t in tokens):
+    # Pass a DELIBERATE FTS expression through untouched, but ONLY when it is
+    # unambiguously one: an operator is present AND every token is a bare word
+    # (no ':' / quotes / parens / punctuation that would make the raw string
+    # invalid FTS5). A stray operator word in natural-language or code text
+    # (e.g. "Problem: ... OR ...") must NOT hijack the raw path — it falls
+    # through to the quote-each-word branch, where every token is a literal
+    # quoted term and the query is always FTS5-safe.
+    if any(t in _FTS_OPS for t in tokens) and all(_FTS_SAFE_TOKEN.match(t) for t in tokens):
         return terms
     words = [w for w in tokens if len(w) > 1]
     if not words:
         return None
-    return " OR ".join(f'"{w}"' for w in words)
+    # Each token becomes an FTS5 string literal: wrap in double quotes and
+    # DOUBLE any embedded double-quote (FTS5 string-literal escaping). Without
+    # the doubling a token like ``"shift"`` emits ``""shift""`` — an empty
+    # phrase + bareword — which unbalances the quoting so later punctuation
+    # (``[``, ``:`` …) becomes a syntax error. Quoting + escaping makes ALL
+    # punctuation literal, so any natural-language / code query is FTS5-safe.
+    return " OR ".join('"' + w.replace('"', '""') + '"' for w in words)
 
 
 # Mirror of ``SqliteVectorStore.text_search`` — but emit RAW negative

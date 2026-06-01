@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import re
 import sqlite3
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
@@ -656,6 +657,12 @@ class SqlitePackageRepository:
 # though the chunk fetcher is more likely to see it than the legacy store.
 _FTS_OPS: frozenset[str] = frozenset({"AND", "OR", "NOT", "NEAR"})
 
+# A bare FTS5 word — no operator/punctuation that would change parsing.
+# Single source of truth (like ``_FTS_OPS``): both ``_build_fts_match_query``
+# implementations import this matcher so the "safe passthrough" predicate
+# cannot drift between the two byte-identical bodies.
+_FTS_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_]+$")
+
 
 @dataclass(frozen=True, slots=True)
 class SqliteChunkRepository:
@@ -795,12 +802,25 @@ def _build_fts_match_query(terms: str) -> str | None:
     byte-identical. Returns ``None`` when no usable token survives filtering.
     """
     tokens = terms.split()
-    if any(t in _FTS_OPS for t in tokens):
+    # Pass a DELIBERATE FTS expression through untouched, but ONLY when it is
+    # unambiguously one: an operator is present AND every token is a bare word
+    # (no ':' / quotes / parens / punctuation that would make the raw string
+    # invalid FTS5). A stray operator word in natural-language or code text
+    # (e.g. "Problem: ... OR ...") must NOT hijack the raw path — it falls
+    # through to the quote-each-word branch, where every token is a literal
+    # quoted term and the query is always FTS5-safe.
+    if any(t in _FTS_OPS for t in tokens) and all(_FTS_SAFE_TOKEN.match(t) for t in tokens):
         return terms
     words = [w for w in tokens if len(w) > 1]
     if not words:
         return None
-    return " OR ".join(f'"{w}"' for w in words)
+    # Each token becomes an FTS5 string literal: wrap in double quotes and
+    # DOUBLE any embedded double-quote (FTS5 string-literal escaping). Without
+    # the doubling a token like ``"shift"`` emits ``""shift""`` — an empty
+    # phrase + bareword — which unbalances the quoting so later punctuation
+    # (``[``, ``:`` …) becomes a syntax error. Quoting + escaping makes ALL
+    # punctuation literal, so any natural-language / code query is FTS5-safe.
+    return " OR ".join('"' + w.replace('"', '""') + '"' for w in words)
 
 
 @dataclass(frozen=True, slots=True)
