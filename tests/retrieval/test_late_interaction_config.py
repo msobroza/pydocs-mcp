@@ -67,6 +67,23 @@ def test_compute_pipeline_hash_changes_on_pool_factor() -> None:
     assert a.compute_pipeline_hash() != b.compute_pipeline_hash()
 
 
+def test_lateon_code_edge_config_values() -> None:
+    from pydocs_mcp.retrieval.config import LateInteractionConfig
+
+    edge = LateInteractionConfig(
+        enabled=True,
+        provider="pylate",
+        model_name="lightonai/LateOn-Code-edge",
+        embedding_dim=48,
+        document_length=2048,
+        query_length=256,
+    )
+    assert edge.embedding_dim == 48 and edge.dim == 48
+    assert edge.document_length == 2048 and edge.query_length == 256
+    default = LateInteractionConfig(enabled=True)  # LateOn-Code / 128 / 180 / 32
+    assert edge.compute_pipeline_hash() != default.compute_pipeline_hash()
+
+
 def test_app_config_exposes_late_interaction_default() -> None:
     """``AppConfig.late_interaction`` is always present (Null Object pattern;
     a future ``NullMultiVectorStore`` covers the disabled case)."""
