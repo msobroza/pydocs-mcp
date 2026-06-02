@@ -16,15 +16,47 @@ returns ``chunk:{id}`` (NOT the doc_id) — keyed exactly like Task 3's
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import hashlib
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
 from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
 from benchmarks.eval.gold_resolver import PydocsOracleGoldResolver, _item_key
 from benchmarks.eval.serialization import system_registry
 from benchmarks.eval.systems import PydocsOracleSystem
 from pydocs_mcp.retrieval.config import AppConfig
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeEmbedder:
+    """Deterministic, offline Embedder double for the oracle dense tests.
+
+    WHY: injected via ``PydocsOracleSystem(embedder=...)`` so the suite
+    never downloads the FastEmbed model nor touches the network. Mirrors
+    the production ``Embedder`` Protocol shape (``model_name`` / ``dim`` /
+    ``embed_query`` / ``embed_chunks``) and the 384-dim default the shipped
+    config's ``BAAI/bge-small-en-v1.5`` produces, so the persisted ``.tq``
+    sidecar's vector dimension matches what the read path expects.
+    """
+
+    dim: int = 384
+    model_name: str = "fake"
+
+    async def embed_query(self, text: str) -> np.ndarray:
+        return self._derive(text)
+
+    async def embed_chunks(self, texts: Sequence[str]) -> tuple[np.ndarray, ...]:
+        return tuple(self._derive(t) for t in texts)
+
+    def _derive(self, text: str) -> np.ndarray:
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        seed = int.from_bytes(digest[:8], "little", signed=False)
+        rng = np.random.default_rng(seed)
+        return rng.uniform(-1.0, 1.0, size=self.dim).astype(np.float32)
+
 
 # WHY: 5 canned rows mimicking the HF ``library-documentation`` schema.
 # Two libraries so the per-library Package upsert + package-filtered
@@ -99,7 +131,7 @@ def _task(doc_ids: tuple[str, ...], *, library: str = "pandas") -> EvalTask:
 @pytest.mark.asyncio
 async def test_index_ignores_corpus_dir_and_search_surfaces_rows() -> None:
     config = AppConfig.load()
-    system = PydocsOracleSystem(rows_source=_rows_source)
+    system = PydocsOracleSystem(rows_source=_rows_source, embedder=_FakeEmbedder())
 
     try:
         # WHY: corpus_dir is IGNORED — DS-1000's corpus_source is /dev/null;
@@ -121,6 +153,39 @@ async def test_index_ignores_corpus_dir_and_search_surfaces_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_index_persists_one_dense_vector_per_row() -> None:
+    """The oracle must embed its chunks and persist the ``.tq`` sidecar.
+
+    Pre-fix the oracle wrote chunks through a SQLite-only ``uow_factory``,
+    so ``uow.vectors`` was a silent ``NullVectorStore`` and NO dense
+    vectors were written — every dense / hybrid config over the canonical
+    DS-1000 eval silently degraded to BM25. Routing the write through the
+    composite backend (so ``uow.vectors`` is a real TurboQuant store) and
+    embedding each chunk persists one vector per indexed row next to the
+    SQLite DB."""
+    from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
+
+    config = AppConfig.load()
+    embedder = _FakeEmbedder()
+    system = PydocsOracleSystem(rows_source=_rows_source, embedder=embedder)
+    try:
+        await system.index(Path("/dev/null"), config)
+
+        tq_path = system._db_path.with_suffix(".tq")
+        assert tq_path.exists(), "dense .tq sidecar was not persisted"
+
+        # One vector per indexed row — re-open the sidecar and count.
+        async with TurboQuantUnitOfWork(
+            index_path=tq_path,
+            dim=embedder.dim,
+            bit_width=4,
+        ) as uow:
+            assert uow.size() == len(_ROWS)
+    finally:
+        await system.teardown()
+
+
+@pytest.mark.asyncio
 async def test_registry_builds_oracle_system() -> None:
     system = system_registry.build("pydocs-oracle")
     assert system.name == "pydocs-oracle"
@@ -131,7 +196,7 @@ async def test_oracle_resolver_exact_match_returns_chunk_ids() -> None:
     from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
     config = AppConfig.load()
-    system = PydocsOracleSystem(rows_source=_rows_source)
+    system = PydocsOracleSystem(rows_source=_rows_source, embedder=_FakeEmbedder())
     try:
         await system.index(Path("/dev/null"), config)
 
@@ -187,7 +252,7 @@ async def test_oracle_resolver_scopes_to_library_package() -> None:
     from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
     config = AppConfig.load()
-    system = PydocsOracleSystem(rows_source=_rows_source)
+    system = PydocsOracleSystem(rows_source=_rows_source, embedder=_FakeEmbedder())
     try:
         await system.index(Path("/dev/null"), config)
         resolver = PydocsOracleGoldResolver(
@@ -220,7 +285,10 @@ async def test_index_derives_library_from_doc_id_prefix() -> None:
     from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
     config = AppConfig.load()
-    system = PydocsOracleSystem(rows_source=_real_shape_rows_source)
+    system = PydocsOracleSystem(
+        rows_source=_real_shape_rows_source,
+        embedder=_FakeEmbedder(),
+    )
     try:
         await system.index(Path("/dev/null"), config)
 
