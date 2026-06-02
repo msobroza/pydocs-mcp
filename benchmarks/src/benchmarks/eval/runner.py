@@ -622,6 +622,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--dataset-full-prompt",
+        action="store_true",
+        help=(
+            "(ds1000-only) query retrieval with the FULL prompt (NL problem + "
+            "code stub), unstripped — the canonical CodeRAG-Bench query. By "
+            "default the loader strips the canonical-solution block so retrieval "
+            "sees only the NL question. Sets Ds1000Dataset.strip_query=False. "
+            "Passed as a kwarg ONLY when set, so datasets that don't accept it "
+            "(RepoQA) are unaffected."
+        ),
+    )
+    parser.add_argument(
         "--split",
         choices=["all", "dev", "test", "small_test"],
         default="all",
@@ -715,6 +727,13 @@ def main() -> None:
         # RepoQA's constructor rejects.
         if args.dataset_library_filter is not None:
             dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
+        # WHY: only add ``strip_query`` when ``--dataset-full-prompt`` is set so
+        # the kwarg is absent for the common case AND for datasets that don't
+        # accept it (RepoQA has no ``strip_query`` field). Mirrors the
+        # ``library_filter`` / ``split`` gating — passing it unconditionally
+        # would crash RepoQA's constructor with an unknown kwarg.
+        if args.dataset_full_prompt:
+            dataset_kwargs["strip_query"] = False
         # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
         # kwarg is absent for the common case AND for datasets that don't accept
         # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``

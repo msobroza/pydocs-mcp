@@ -47,6 +47,32 @@ if TYPE_CHECKING:
     from ..gold_resolver import GoldResolver
 
 
+# WHY: the real ``code-rag-bench/library-documentation`` rows carry ONLY
+# ``{doc_id, doc_content}`` — no ``library`` / ``source`` field. The
+# ``doc_id`` IS the library source: dot-separated with the library as the
+# first segment (``numpy.reference.arrays.scalars`` -> ``numpy``,
+# ``tensorflow.aggregationmethod`` -> ``tensorflow``). The first dot-segment,
+# lowercased, recovers the library when no explicit field is present.
+_DOC_ID_LIBRARY_TO_PYPI: dict[str, str] = {
+    # Only ``sklearn`` differs from its own normalized name — the rest
+    # (numpy / pandas / matplotlib / scipy / tensorflow / torch) ARE their
+    # own PyPI / normalized names, so they need no remap. This map mirrors
+    # what the DS-1000 loader's ``_normalize_library`` produces so the
+    # oracle's package matches the task's PyPI-canonical library that the
+    # resolver filters on.
+    "sklearn": "scikit-learn",
+}
+
+
+def _library_from_doc_id(doc_id: str) -> str:
+    """Recover a library name from a ``library-documentation`` ``doc_id``.
+
+    The ``doc_id`` is dot-separated with the library as the first segment;
+    return that segment lowercased. A missing / empty ``doc_id`` yields
+    ``""`` so the caller stays total (never raises)."""
+    return doc_id.split(".", 1)[0].strip().lower()
+
+
 @system_registry.register("pydocs-oracle")
 @dataclass
 class PydocsOracleSystem(PydocsMcpSystem):
@@ -63,7 +89,8 @@ class PydocsOracleSystem(PydocsMcpSystem):
     # already-materialized rows; when None (real runs), ``index()``
     # deferred-imports ``datasets`` and loads the HF corpus. Typed as a
     # zero-arg callable yielding row Mappings (each with ``doc_id`` /
-    # ``doc_content`` / a library field).
+    # ``doc_content``; the library is derived from the ``doc_id`` prefix
+    # when no explicit ``library`` / ``source`` field is present).
     rows_source: Callable[[], Iterable[Mapping]] | None = field(default=None)
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:
@@ -108,8 +135,20 @@ class PydocsOracleSystem(PydocsMcpSystem):
         chunks: list[Chunk] = []
         libraries: set[str] = set()
         for row in rows:
-            raw_library = row.get("library") or row.get("source") or ""
-            library = normalize_package_name(raw_library)
+            # WHY: prefer an explicit ``library`` / ``source`` field (hermetic
+            # fixtures supply one), else DERIVE the library from the ``doc_id``
+            # prefix — the real HF corpus has neither field. Map the recovered
+            # name to its PyPI-canonical form (only ``sklearn`` differs) BEFORE
+            # normalizing, so the oracle's package matches what the DS-1000
+            # loader's ``_normalize_library`` produces and the package-filtered
+            # resolver scan aligns.
+            raw_library = (
+                row.get("library")
+                or row.get("source")
+                or _library_from_doc_id(row.get("doc_id", ""))
+            )
+            pypi = _DOC_ID_LIBRARY_TO_PYPI.get(raw_library, raw_library)
+            library = normalize_package_name(pypi)
             libraries.add(library)
             chunks.append(
                 Chunk(

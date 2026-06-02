@@ -228,6 +228,12 @@ class Ds1000Dataset:
     fixture_path: Path | None = None
     library_filter: tuple[str, ...] = ()
     perturbation_filter: tuple[str, ...] = ()
+    # WHY: CodeRAG-Bench queries DS-1000 retrieval with the FULL ``prompt`` (NL
+    # problem + code stub), unstripped. Our default strips the canonical
+    # solution so retrieval sees only the NL question. Opt out via
+    # ``strip_query=False`` to feed the verbatim prompt (the canonical
+    # CodeRAG-Bench query). Default ``True`` PRESERVES the existing behavior.
+    strip_query: bool = True
     # WHY: stratified-by-library dev/test split so each slice keeps the
     # 7-library proportions of the full corpus; seeded so the partition is
     # reproducible across runs. Default ``"all"`` is the whole filtered
@@ -265,7 +271,7 @@ class Ds1000Dataset:
                 # doesn't block the event loop.
                 self._rows_cache = await asyncio.to_thread(self._load_from_hf)
         for row in self._rows_cache:
-            task = _row_to_task(row)
+            task = _row_to_task(row, strip_query=self.strip_query)
             if task is None:
                 continue
             yield task
@@ -382,11 +388,14 @@ def _gold_doc_fields(docs: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
     return tuple(ids), tuple(contents)
 
 
-def _row_to_task(row: dict[str, Any]) -> EvalTask | None:
+def _row_to_task(row: dict[str, Any], *, strip_query: bool = True) -> EvalTask | None:
     raw_prompt = row.get("prompt", "")
     if not raw_prompt:
         return None
-    query = _strip_query(raw_prompt)
+    # WHY: ``strip_query=False`` feeds the verbatim prompt (NL problem + code
+    # stub) — the canonical CodeRAG-Bench query. The default strips the
+    # canonical solution so retrieval sees only the NL question.
+    query = _strip_query(raw_prompt) if strip_query else raw_prompt
     library_raw = row.get("library", "")
     library = _normalize_library(library_raw)
     perturbation = row.get("perturbation_type", "")

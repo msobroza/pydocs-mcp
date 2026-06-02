@@ -56,6 +56,28 @@ async def test_query_stripping_removes_solution_blocks() -> None:
     assert "A:" in raw  # The raw is preserved verbatim with the solution block.
 
 
+async def test_full_prompt_query_keeps_solution_block_when_strip_disabled() -> None:
+    """CodeRAG-Bench queries DS-1000 retrieval with the FULL ``prompt`` (NL
+    problem + code stub), unstripped. With ``strip_query=False`` the task
+    ``query`` must equal the raw ``prompt`` verbatim — including the ``A:`` /
+    ``<code>`` canonical-solution stub the default path strips. The default
+    (``strip_query=True``) still strips, preserving the existing behavior."""
+    # Opt-in full-prompt: query == raw prompt (stub included).
+    full = Ds1000Dataset(fixture_path=FIXTURE_PATH, strip_query=False)
+    full_tasks = [t async for t in full.tasks()]
+    full_task = full_tasks[0]
+    assert full_task.query == full_task.metadata["_raw_query"]
+    assert "A:" in full_task.query
+    assert "<code>" in full_task.query
+
+    # Default: still stripped (back-compat with the existing behavior).
+    stripped = Ds1000Dataset(fixture_path=FIXTURE_PATH)
+    stripped_tasks = [t async for t in stripped.tasks()]
+    stripped_task = stripped_tasks[0]
+    assert "A:" not in stripped_task.query
+    assert "<code>" not in stripped_task.query
+
+
 async def test_query_stripping_preserves_in_body_answer_label() -> None:
     """REGRESSION: DS-1000's answer delimiter is a LINE-LEADING ``A:``, not a
     bare ``A:`` substring. Real question bodies reference in-body labels like
