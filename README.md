@@ -163,6 +163,29 @@ through the fusion steps below.
   by default — runs on CPU via ONNX, no PyTorch, no torch download.
   OpenAI `text-embedding-3-small` is the optional alternative for
   users with an API key.
+- **Bigger on-device model — the `onnx` provider.** For stronger dense
+  recall without an API key, switch to
+  [`onnx-community/Qwen3-Embedding-0.6B-ONNX`](https://huggingface.co/onnx-community/Qwen3-Embedding-0.6B-ONNX).
+  It is torch-free — it runs on [onnxruntime](https://onnxruntime.ai/),
+  already a core dependency, so there is nothing extra to install — and
+  the weights download at runtime on first use, exactly like bge-small.
+  Set it in your YAML:
+
+  ```yaml
+  embedding:
+    provider: onnx
+    model_name: onnx-community/Qwen3-Embedding-0.6B-ONNX
+    dim: 1024
+    # Optional. Picks the quantization variant inside the HF repo:
+    #   onnx/model_fp16.onnx  (default · ~1.2 GB download)
+    #   onnx/model_q4f16.onnx (~0.57 GB · smaller download, lower precision)
+    #   onnx/model_int8.onnx
+    onnx_file: onnx/model_fp16.onnx
+    # Optional. Task prompt prepended to queries only (not documents).
+    query_instruction: "Given a web search query, retrieve relevant passages that answer the query"
+  ```
+
+  The default remains bge-small; the `onnx` provider is opt-in.
 - **Vector store.** [TurboQuant](https://arxiv.org/abs/2504.19874)
   ([turbovec](https://github.com/RyanCodrai/turbovec)) — Online Vector
   Quantization with near-optimal distortion. **~16× smaller than
@@ -190,6 +213,22 @@ hard cases for single-vector retrievers).
   default model
   [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code)
   — late-interaction trained on code.
+- **Lighter-weight model — `lightonai/LateOn-Code-edge`.** For a
+  smaller per-token footprint, point the same PyLate path at
+  [`lightonai/LateOn-Code-edge`](https://huggingface.co/lightonai/LateOn-Code-edge)
+  (48-dim token vectors instead of LateOn-Code's 128) in your YAML:
+
+  ```yaml
+  late_interaction:
+    enabled: true
+    provider: pylate
+    model_name: lightonai/LateOn-Code-edge
+    embedding_dim: 48
+    document_length: 2048
+    query_length: 256
+  ```
+
+  The default stays LateOn-Code; LateOn-Code-edge is opt-in.
 - **SQLite + fast-plaid coupling.** A `chunk_multi_vector_ids`
   mapping table bridges SQLite's `chunk_id` to fast-plaid's
   `plaid_doc_id`. The shipped `FilterAdapter` Protocol pushes
