@@ -42,6 +42,7 @@ from ..serialization import system_registry
 from .pydocs import PydocsMcpSystem
 
 if TYPE_CHECKING:
+    from pydocs_mcp.extraction.strategies.embedders import Embedder
     from pydocs_mcp.retrieval.config import AppConfig
 
     from ..gold_resolver import GoldResolver
@@ -92,18 +93,35 @@ class PydocsOracleSystem(PydocsMcpSystem):
     # ``doc_content``; the library is derived from the ``doc_id`` prefix
     # when no explicit ``library`` / ``source`` field is present).
     rows_source: Callable[[], Iterable[Mapping]] | None = field(default=None)
+    # WHY: injectable embedder. When set (tests), it returns deterministic
+    # offline vectors so the suite skips the FastEmbed model download and
+    # never touches the network; when None (real runs), ``index()`` builds
+    # the configured embedder via ``build_embedder(config.embedding)``,
+    # exactly as production indexing does. Typed as the ``Embedder`` Protocol
+    # under TYPE_CHECKING so this module imports without ``pydocs_mcp``.
+    embedder: Embedder | None = field(default=None)
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         # WHY: imports deferred so constructing the system (which the
         # registry does on a bare ``build()``) doesn't drag in the whole
         # ``pydocs_mcp.retrieval`` chain — and so the module imports even
         # without ``pydocs_mcp`` / ``datasets`` present.
+        from dataclasses import replace
+
         from pydocs_mcp.db import build_connection_provider, open_index_database
         from pydocs_mcp.deps import normalize_package_name
-        from pydocs_mcp.models import Chunk, ChunkFilterField, Package, PackageOrigin
+        from pydocs_mcp.extraction.strategies.embedders import build_embedder
+        from pydocs_mcp.models import (
+            Chunk,
+            ChunkFilterField,
+            Embedding,
+            Package,
+            PackageOrigin,
+        )
         from pydocs_mcp.retrieval.config import build_chunk_pipeline_from_config
         from pydocs_mcp.retrieval.factories import build_retrieval_context
-        from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+        from pydocs_mcp.storage.factories import build_composite_uow_factory
+        from pydocs_mcp.storage.search_backend import build_search_backend
         from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
         # WHY: ``corpus_dir`` is deliberately UNUSED — the oracle's chunk
@@ -124,7 +142,19 @@ class PydocsOracleSystem(PydocsMcpSystem):
         self._db_path = Path(name)
         open_index_database(self._db_path).close()
 
-        uow_factory = build_sqlite_uow_factory(self._db_path)
+        # WHY: route through the SAME composite write path production uses
+        # so ``uow.vectors`` is a real TurboQuant store (not a silent
+        # ``NullVectorStore``). ``build_search_backend(...).write_uow_children()``
+        # yields the SQLite + TurboQuant child UoW factories; without this the
+        # dense ``.tq`` sidecar is never written and every dense / hybrid config
+        # over the oracle eval silently degrades to BM25. Mirrors
+        # ``PydocsMcpSystem._do_index``.
+        backend = build_search_backend(config, self._db_path)
+        uow_factory = build_composite_uow_factory(backend.write_uow_children())
+
+        # Resolve the embedder once. The injected fake wins (hermetic tests);
+        # real runs build the configured embedder, matching production wiring.
+        embedder = self.embedder or build_embedder(config.embedding)
 
         rows = self._load_rows()
 
@@ -161,9 +191,21 @@ class PydocsOracleSystem(PydocsMcpSystem):
                 )
             )
 
+        # Embed every chunk in ``batch_size``-sized slices, stamping each
+        # chunk's vector via ``dataclasses.replace`` so the order stays 1:1
+        # with ``chunks``. The bypass-extraction oracle has no ingestion
+        # pipeline, so it does the work ``EmbedChunksStage`` does for
+        # ``PydocsMcpSystem`` (see ``extraction/pipeline/stages/embed_chunks``)
+        # inline here.
+        embeddings: list[Embedding] = []
+        for i in range(0, len(chunks), config.embedding.batch_size):
+            batch = chunks[i : i + config.embedding.batch_size]
+            embeddings.extend(await embedder.embed_chunks(tuple(c.text for c in batch)))
+        chunks = [replace(c, embedding=emb) for c, emb in zip(chunks, embeddings, strict=True)]
+
         # WRITE path (CLAUDE.md §"Creating new application services"): a
         # single UoW, one explicit ``commit()`` — synthetic Package per
-        # distinct library, then all chunks, atomically.
+        # distinct library, then all chunks + their dense vectors, atomically.
         async with uow_factory() as uow:
             for library in sorted(libraries):
                 await uow.packages.upsert(
@@ -178,6 +220,27 @@ class PydocsOracleSystem(PydocsMcpSystem):
                     )
                 )
             await uow.chunks.upsert(chunks)
+
+            # Persist the dense vectors keyed by the PERSISTED chunk id.
+            # Correlate the in-memory embedded chunks to their stored rows by
+            # ``title`` (the ``doc_id`` is globally unique in the corpus, so it
+            # avoids the content-hash collision class ``_maybe_write_vectors``
+            # has to defend against). ``uow.vectors`` is a real TurboQuant store
+            # here (composite backend), so this writes the ``.tq`` sidecar.
+            persisted = await uow.chunks.list(filter=None)
+            title_to_id = {c.metadata.get(ChunkFilterField.TITLE.value): c.id for c in persisted}
+            ids: list[int] = []
+            embs: list[Embedding] = []
+            for chunk in chunks:
+                # Defensive: skip rows that failed to persist or carry no vector.
+                chunk_id = title_to_id.get(chunk.metadata[ChunkFilterField.TITLE.value])
+                if chunk_id is None or chunk.embedding is None:
+                    continue
+                ids.append(chunk_id)
+                embs.append(chunk.embedding)
+            if ids:
+                await uow.vectors.add_vectors(ids, embs)
+
             await uow.commit()
 
         # WHY: bulk-insert path defers the FTS5 content-backed rebuild —
