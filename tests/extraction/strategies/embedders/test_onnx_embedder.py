@@ -3,6 +3,8 @@ run with no model download; the real-model parity test lives in a later task."""
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
@@ -107,3 +109,31 @@ def test_format_query_applies_instruct_prefix() -> None:
     q = e._format_query("the query")
     assert q.startswith("Instruct: Do the thing")
     assert "\nQuery:the query" in q
+
+
+@pytest.mark.skipif(
+    os.environ.get("PYDOCS_RUN_MODEL_TESTS") != "1",
+    reason="downloads the real Qwen3 ONNX; set PYDOCS_RUN_MODEL_TESTS=1 to run",
+)
+async def test_qwen3_onnx_reproduces_reference_matrix() -> None:
+    """Real model: onnxruntime + last-token pool + L2-norm reproduces the model
+    card's reference cosine matrix within the q4f16 quantization tolerance."""
+    emb = OnnxEmbedder(
+        model_name="onnx-community/Qwen3-Embedding-0.6B-ONNX",
+        dim=1024,
+        onnx_file="onnx/model_q4f16.onnx",  # small + fast; fp16 would be tighter
+    )
+    queries = ["What is the capital of China?", "Explain gravity"]
+    docs = [
+        "The capital of China is Beijing.",
+        "Gravity is a force that attracts two bodies towards each other. It gives "
+        "weight to physical objects and is responsible for the movement of planets "
+        "around the sun.",
+    ]
+    qe = np.stack([await emb.embed_query(q) for q in queries])
+    de = np.stack(list(await emb.embed_chunks(docs)))
+    sim = qe @ de.T
+    ref = np.array([[0.7646, 0.1414], [0.1355, 0.6000]])
+    assert qe.shape[1] == 1024
+    assert float(np.max(np.abs(sim - ref))) < 0.15  # q4f16 drift; fp16 < 0.05
+    assert sim[0, 0] > sim[0, 1] and sim[1, 1] > sim[1, 0]
