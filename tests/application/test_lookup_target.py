@@ -59,7 +59,6 @@ async def test_parse_package_only_does_not_invoke_longest_module() -> None:
     async def longest_module(_pkg, _parts):
         nonlocal invoked
         invoked = True
-        return None
 
     t = await LookupTarget.parse("fastapi", longest_module=longest_module)
     assert t.package == "fastapi"

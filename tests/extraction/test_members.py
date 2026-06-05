@@ -364,7 +364,7 @@ def test_dep_helpers_collect_symbols_enforces_per_module_cap() -> None:
     unit-test against _collect_symbols so any future regression
     instantly fails."""
     from types import ModuleType
-    from pydocs_mcp.extraction.strategies._dep_helpers import _collect_symbols
+    from pydocs_mcp.extraction.strategies._dep_helpers import _collect_symbols, _MemberCaps
 
     mod = ModuleType("hugemod")
     # Pump >cap public functions onto the synthetic module so the
@@ -384,7 +384,7 @@ def test_dep_helpers_collect_symbols_enforces_per_module_cap() -> None:
         "hugemod",
         symbols,
         remaining_depth=1,
-        members_per_module_cap=10,  # tighter cap so the assertion is unambiguous
+        caps=_MemberCaps(members_per_module_cap=10),  # tighter cap so the assertion is unambiguous
     )
     assert len(symbols) == 10, (
         f"members_per_module_cap=10 not honoured — got {len(symbols)} symbols"

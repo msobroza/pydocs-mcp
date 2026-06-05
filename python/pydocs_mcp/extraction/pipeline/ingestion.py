@@ -60,10 +60,10 @@ class FileBundle:
     :class:`IngestionState` from growing into a god object.
     """
 
-    target: Path | str = field(default_factory=lambda: Path())
+    target: Path | str = field(default_factory=Path)
     target_kind: TargetKind = TargetKind.PROJECT
     package_name: str = ""
-    root: Path = field(default_factory=lambda: Path())
+    root: Path = field(default_factory=Path)
     paths: tuple[str, ...] = ()
     file_contents: tuple[tuple[str, str], ...] = ()
     content_hash: str = ""

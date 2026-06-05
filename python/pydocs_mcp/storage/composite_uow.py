@@ -158,10 +158,9 @@ class CompositeUnitOfWork:
                 committed.append(child)
             except BaseException as exc:
                 first_exc = exc
-                logger.error(
-                    "CompositeUnitOfWork commit failed on %r: %r",
+                logger.exception(
+                    "CompositeUnitOfWork commit failed on %r",
                     child,
-                    exc,
                 )
                 break
         if first_exc is not None:

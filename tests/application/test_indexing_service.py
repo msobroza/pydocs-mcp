@@ -18,7 +18,7 @@ from dataclasses import fields
 
 import pytest
 
-from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.application.indexing_service import IndexingService, ResolverInputs
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
 from tests._fakes import (
@@ -565,7 +565,7 @@ async def test_reindex_package_runs_resolver_when_aliases_provided():
         module_members=(),
         trees=(),
         references=raw_refs,
-        reference_aliases=aliases,
+        resolver_inputs=ResolverInputs(aliases=aliases),
     )
 
     # save_many got the resolved ref — to_node_id is filled in.

@@ -124,7 +124,7 @@ def format_package_doc(doc: PackageDoc) -> str:
             name = md.get(ModuleMemberFilterField.NAME.value, "")
             signature = md.get("signature", "")
             docstring = str(md.get("docstring", "") or "")
-            first_line = docstring.split("\n")[0][:PACKAGE_DOC_LINE_MAX]
+            first_line = docstring.split("\n", maxsplit=1)[0][:PACKAGE_DOC_LINE_MAX]
             rendered.append(f"- `{kind} {name}{signature}` — {first_line}")
         parts.append("## API\n" + "\n".join(rendered))
     return "\n\n".join(parts)[:PACKAGE_DOC_MAX]

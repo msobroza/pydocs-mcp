@@ -8,12 +8,9 @@
 import logging as _logging
 from importlib.metadata import PackageNotFoundError, version
 
-# Public exception hierarchy. Embedders can:
-#   try:
-#       result = pydocs_mcp_call()
-#   except pydocs_mcp.PydocsMCPError as exc:
-#       ...  # catch any pydocs-mcp originated failure
-# See `python/pydocs_mcp/exceptions.py` for the full design.
+# Public exception hierarchy — embedders catch `pydocs_mcp.PydocsMCPError` to
+# trap any pydocs-mcp originated failure. See `python/pydocs_mcp/exceptions.py`
+# for the full design.
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     MCPToolError,

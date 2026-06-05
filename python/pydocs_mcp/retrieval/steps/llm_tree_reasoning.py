@@ -278,13 +278,13 @@ def _parse_node_list(
     Hallucinated IDs (the LLM returns a string not in the tree) are
     silently dropped — well-known LLM behavior; the step degrades
     gracefully to fewer chunks rather than crashing. A malformed
-    ``node_list`` (non-list) raises ValueError so a broken prompt /
+    ``node_list`` (non-list) raises TypeError so a broken prompt /
     LLM-format regression surfaces immediately.
     """
     data = json.loads(response)
     node_list = data.get("node_list", [])
     if not isinstance(node_list, list):
-        raise ValueError(
+        raise TypeError(
             f"LLM response 'node_list' must be a list; got {type(node_list).__name__}",
         )
     known: set[str] = set()

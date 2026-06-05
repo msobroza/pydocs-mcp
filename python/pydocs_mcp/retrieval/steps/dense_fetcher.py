@@ -107,7 +107,11 @@ class DenseFetcherStep(RetrieverStep):
         # VectorSearchable check below is what turns the old silent
         # FTS-only degradation into a loud build-time error.
         if not isinstance(context.vector_store, VectorSearchable):
-            raise ValueError(
+            # TRY004 noqa: this is a configuration error (wrong backend wired),
+            # not a caller type bug. "Invariant A" is a documented build-time
+            # contract that raises ValueError; the dedicated invariant test and
+            # the sibling missing-context check both depend on ValueError.
+            raise ValueError(  # noqa: TRY004
                 "DenseFetcherStep requires a dense-capable vector_store "
                 "(VectorSearchable with vector_search). The configured "
                 "search_backend does not provide dense retrieval — set "

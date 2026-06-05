@@ -41,6 +41,26 @@ if TYPE_CHECKING:
 log = logging.getLogger("pydocs-mcp")
 
 
+@dataclass(frozen=True, slots=True)
+class _RefCaptureCtx:
+    """The reference-capture context threaded through the node builders.
+
+    ``collector`` (optional sink for CALLS/IMPORTS/MENTIONS edges) and
+    ``package`` (the originating package name stamped on every captured edge)
+    always travel together — every builder that captures references needs both,
+    and ``collector is None`` disables capture wholesale. Bundling them keeps
+    the recursive builder signatures small.
+    """
+
+    collector: ReferenceCollector | None = None
+    package: str = ""
+
+
+# Module-level singleton for the capture-disabled context — used as the
+# parameter default so the immutable value is shared (and B008 doesn't fire).
+_NO_REF_CAPTURE = _RefCaptureCtx()
+
+
 @_register_chunker(".py")
 @dataclass(frozen=True, slots=True)
 class AstPythonChunker:
@@ -81,8 +101,7 @@ class AstPythonChunker:
             path,
             content,
             root,
-            ref_collector=ref_collector,
-            package=package,
+            ctx=_RefCaptureCtx(collector=ref_collector, package=package),
         )
 
     @classmethod
@@ -106,8 +125,7 @@ def _module_node_from_ast(
     content: str,
     root: Path,
     *,
-    ref_collector: ReferenceCollector | None = None,
-    package: str = "",
+    ctx: _RefCaptureCtx = _NO_REF_CAPTURE,
 ) -> DocumentNode:
     """Build the MODULE root + all children from a parsed ``ast.Module``."""
     lines = content.splitlines()
@@ -117,8 +135,7 @@ def _module_node_from_ast(
         module,
         lines,
         rel,
-        ref_collector=ref_collector,
-        package=package,
+        ctx=ctx,
     )
     doc = ast.get_docstring(tree) or ""
     doc_examples = _extract_code_examples(doc, module, rel)
@@ -145,8 +162,7 @@ def _extract_module_children(
     lines: list[str],
     rel: str,
     *,
-    ref_collector: ReferenceCollector | None = None,
-    package: str = "",
+    ctx: _RefCaptureCtx = _NO_REF_CAPTURE,
 ) -> list[DocumentNode]:
     """One IMPORT_BLOCK per contiguous import run + one FUNCTION / CLASS
     per top-level def. Returned in source order: scattered imports
@@ -176,8 +192,7 @@ def _extract_module_children(
                     rel,
                     parent_id=module,
                     kind=NodeKind.FUNCTION,
-                    ref_collector=ref_collector,
-                    package=package,
+                    ctx=ctx,
                 )
             )
         elif isinstance(stmt, ast.ClassDef):
@@ -187,8 +202,7 @@ def _extract_module_children(
                     module,
                     lines,
                     rel,
-                    ref_collector=ref_collector,
-                    package=package,
+                    ctx=ctx,
                 )
             )
     # Two-pass collection above produces import blocks first, then
@@ -256,7 +270,12 @@ def _import_block_node(
     )
 
 
-def _function_node(
+# PLR0913: each of the 7 params is a distinct, non-redundant concept (AST node,
+# module name, source lines, relpath, parent qname, node kind, capture ctx). The
+# two capture params are already grouped into `ctx`; folding the remaining source
+# params into another object would only push threading churn into every other
+# builder in this module for no readability gain.
+def _function_node(  # noqa: PLR0913
     stmt: ast.FunctionDef | ast.AsyncFunctionDef,
     module: str,
     lines: list[str],
@@ -264,14 +283,13 @@ def _function_node(
     *,
     parent_id: str,
     kind: NodeKind,
-    ref_collector: ReferenceCollector | None = None,
-    package: str = "",
+    ctx: _RefCaptureCtx = _NO_REF_CAPTURE,
 ) -> DocumentNode:
     """Shared FUNCTION / METHOD builder. ``kind`` + ``parent_id`` make
     the only difference (methods qualify under the class, functions
     under the module)."""
     qname = f"{parent_id}.{stmt.name}"
-    if ref_collector is not None:
+    if ctx.collector is not None:
         try:
             from pydocs_mcp.extraction.strategies.references import (
                 capture_calls,
@@ -279,9 +297,9 @@ def _function_node(
 
             capture_calls(
                 stmt.body,
-                from_package=package,
+                from_package=ctx.package,
                 from_node_id=qname,
-                collector=ref_collector,
+                collector=ctx.collector,
             )
         except Exception as exc:
             log.warning("capture_calls failed on %s: %s", qname, exc)
@@ -316,13 +334,12 @@ def _class_node(
     lines: list[str],
     rel: str,
     *,
-    ref_collector: ReferenceCollector | None = None,
-    package: str = "",
+    ctx: _RefCaptureCtx = _NO_REF_CAPTURE,
 ) -> DocumentNode:
     """CLASS node with METHOD children. Direct text = class line through
     the line before the first method (spec §4.1.1 direct-text rule)."""
     qname = f"{module}.{stmt.name}"
-    if ref_collector is not None:
+    if ctx.collector is not None:
         try:
             from pydocs_mcp.extraction.strategies.references import (
                 capture_inherits,
@@ -330,9 +347,9 @@ def _class_node(
 
             capture_inherits(
                 list(stmt.bases),
-                from_package=package,
+                from_package=ctx.package,
                 class_qname=qname,
-                collector=ref_collector,
+                collector=ctx.collector,
             )
         except Exception as exc:
             log.warning("capture_inherits failed on %s: %s", qname, exc)
@@ -350,8 +367,7 @@ def _class_node(
             rel,
             parent_id=qname,
             kind=NodeKind.METHOD,
-            ref_collector=ref_collector,
-            package=package,
+            ctx=ctx,
         )
         for m in method_stmts
     ]

@@ -14,6 +14,7 @@ import importlib.metadata
 import inspect
 import logging
 import pkgutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.deps import normalize_package_name
@@ -59,6 +60,28 @@ DEFAULT_MEMBERS_PER_MODULE_CAP: int = 120
 # tooling doesn't break on the rename.
 MAX_SIGNATURE_CHARS = DEFAULT_SIGNATURE_MAX_CHARS
 MAX_DOCSTRING_CHARS = DEFAULT_DOCSTRING_MAX_CHARS
+
+
+@dataclass(frozen=True, slots=True)
+class _MemberCaps:
+    """The three per-member collection limits, grouped so they travel as one.
+
+    ``members_per_module_cap`` bounds members collected per module (DoS guard);
+    ``signature_max_chars`` / ``docstring_max_chars`` truncate each member's
+    text before it lands in an FTS row. They always move together through the
+    inspect-mode collection walk, so bundling them keeps ``_collect_symbols``'s
+    signature small.
+    """
+
+    members_per_module_cap: int = DEFAULT_MEMBERS_PER_MODULE_CAP
+    signature_max_chars: int = DEFAULT_SIGNATURE_MAX_CHARS
+    docstring_max_chars: int = DEFAULT_DOCSTRING_MAX_CHARS
+
+
+# Module-level singleton for the all-defaults caps — used as the parameter
+# default so the immutable value is shared rather than reconstructed per call
+# (and so B008 doesn't fire on a call-in-default).
+_DEFAULT_MEMBER_CAPS = _MemberCaps()
 
 
 def find_installed_distribution(dep_name: str):
@@ -127,9 +150,11 @@ def _extract_by_import(
         import_name,
         symbols,
         depth,
-        members_per_module_cap=members_per_module_cap,
-        signature_max_chars=signature_max_chars,
-        docstring_max_chars=docstring_max_chars,
+        caps=_MemberCaps(
+            members_per_module_cap=members_per_module_cap,
+            signature_max_chars=signature_max_chars,
+            docstring_max_chars=docstring_max_chars,
+        ),
     )
     return {"symbols": tuple(symbols)}
 
@@ -141,9 +166,7 @@ def _collect_symbols(
     symbols: list[ModuleMember],
     remaining_depth: int,
     *,
-    members_per_module_cap: int = DEFAULT_MEMBERS_PER_MODULE_CAP,
-    signature_max_chars: int = DEFAULT_SIGNATURE_MAX_CHARS,
-    docstring_max_chars: int = DEFAULT_DOCSTRING_MAX_CHARS,
+    caps: _MemberCaps = _DEFAULT_MEMBER_CAPS,
 ) -> None:
     """Recurse into submodules; collect function + class signatures.
 
@@ -160,10 +183,10 @@ def _collect_symbols(
 
     collected_in_this_module = 0
     for name, obj in members:
-        if collected_in_this_module >= members_per_module_cap:
+        if collected_in_this_module >= caps.members_per_module_cap:
             log.debug(
                 "members_per_module_cap=%d reached for %s; truncating",
-                members_per_module_cap,
+                caps.members_per_module_cap,
                 module_path,
             )
             break
@@ -182,10 +205,10 @@ def _collect_symbols(
                         ModuleMemberFilterField.MODULE.value: module_path,
                         ModuleMemberFilterField.NAME.value: name,
                         ModuleMemberFilterField.KIND.value: kind,
-                        "signature": _truncate(sig, signature_max_chars),
+                        "signature": _truncate(sig, caps.signature_max_chars),
                         "return_annotation": "",
                         "parameters": (),
-                        "docstring": _truncate(inspect.getdoc(obj) or "", docstring_max_chars),
+                        "docstring": _truncate(inspect.getdoc(obj) or "", caps.docstring_max_chars),
                     }
                 )
             )
@@ -214,9 +237,7 @@ def _collect_symbols(
             full_name,
             symbols,
             remaining_depth - 1,
-            members_per_module_cap=members_per_module_cap,
-            signature_max_chars=signature_max_chars,
-            docstring_max_chars=docstring_max_chars,
+            caps=caps,
         )
 
 

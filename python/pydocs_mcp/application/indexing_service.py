@@ -78,6 +78,28 @@ class IndexingStats:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolverInputs:
+    """The reference-resolver's two side-table inputs, grouped as one.
+
+    ``aliases`` is the per-module import-alias map; ``class_attribute_types`` is
+    the per-class ``self.X`` → ``<type>`` table. Both are produced together by
+    :class:`ReferenceCaptureStage` and consumed together by
+    :class:`ReferenceResolver`, so they travel as a single value through
+    :meth:`IndexingService.reindex_package`. Defaults to empty maps so callers
+    that don't capture references can omit it entirely.
+    """
+
+    aliases: dict[str, dict[str, str]] | None = None
+    class_attribute_types: dict[str, dict[str, str]] | None = None
+
+
+# Module-level singleton for the empty resolver inputs — used as the
+# ``reindex_package`` default so the immutable value is shared rather than
+# reconstructed per call (and so B008 doesn't fire on a call-in-default).
+_EMPTY_RESOLVER_INPUTS = ResolverInputs()
+
+
+@dataclass(frozen=True, slots=True)
 class IndexingService:
     """Coordinates atomic write-side indexing through a UnitOfWork (spec §5.6).
 
@@ -96,8 +118,7 @@ class IndexingService:
         module_members: tuple[ModuleMember, ...],
         trees: Sequence[DocumentNode] = (),
         references: Sequence[NodeReference] = (),
-        reference_aliases: dict[str, dict[str, str]] | None = None,
-        class_attribute_types: dict[str, dict[str, str]] | None = None,
+        resolver_inputs: ResolverInputs = _EMPTY_RESOLVER_INPUTS,
     ) -> None:
         """Replace every row for ``package.name`` atomically (spec §13.3).
 
@@ -110,10 +131,10 @@ class IndexingService:
         unchanged rows survive (and their vectors with them).
 
         ``references`` is emitted by :class:`ReferenceCaptureStage`;
-        ``reference_aliases`` is its sibling alias map. ``class_attribute_types``
-        is the per-class ``self.X`` → ``<type>`` table built by
-        ``capture_self_attribute_types`` — feeds the resolver's Rule 0
-        for cross-method ``self.X.Y`` inference. The resolver runs inside
+        ``resolver_inputs`` bundles its sibling alias map (``aliases``) and the
+        per-class ``self.X`` → ``<type>`` table (``class_attribute_types``) built
+        by ``capture_self_attribute_types`` — the latter feeds the resolver's
+        Rule 0 for cross-method ``self.X.Y`` inference. The resolver runs inside
         this method using the cross-package qname universe loaded from
         ``uow.trees`` (so it sees the just-upserted trees).
 
@@ -161,8 +182,8 @@ class IndexingService:
                 uow,
                 package_name=package.name,
                 references=references,
-                reference_aliases=reference_aliases or {},
-                class_attribute_types=class_attribute_types or {},
+                reference_aliases=resolver_inputs.aliases or {},
+                class_attribute_types=resolver_inputs.class_attribute_types or {},
             )
 
             await uow.commit()

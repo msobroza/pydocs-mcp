@@ -187,12 +187,13 @@ class SqliteUnitOfWork:
             self._references = SqliteReferenceStore(provider=self.provider)
             self._committed = False
             self._entered = True
-            return self
         except BaseException:
             # BEGIN failed (or repo construction failure). Tear down the
             # acquire CM before propagating so we don't leak the connection.
             await cm.__aexit__(None, None, None)
             raise
+        else:
+            return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
         try:

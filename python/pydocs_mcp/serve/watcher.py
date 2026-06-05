@@ -227,8 +227,16 @@ class FileWatcher:
         """
         if not paths:
             return
-        head = ", ".join(str(p) for p in paths[:3])
-        if len(paths) > 3:
-            log.info("watch: reindex triggered (%s, +%d more)", head, len(paths) - 3)
+        # Cap the number of paths echoed into the INFO line; the rest collapse
+        # into a `(+N more)` suffix so editor save-all / git-checkout bursts
+        # don't flood the log.
+        max_logged = 3
+        head = ", ".join(str(p) for p in paths[:max_logged])
+        if len(paths) > max_logged:
+            log.info(
+                "watch: reindex triggered (%s, +%d more)",
+                head,
+                len(paths) - max_logged,
+            )
         else:
             log.info("watch: reindex triggered (%s)", head)

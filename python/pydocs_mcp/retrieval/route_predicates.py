@@ -73,9 +73,14 @@ def _has_matches(state: PipelineState) -> bool:
     return len(target.items) > 0
 
 
+# A query with this many whitespace-separated terms or more is treated as
+# "multi-term" for routing (e.g. dense-vs-lexical branch selection).
+_MULTI_TERM_THRESHOLD = 4
+
+
 @predicate("query_has_multiple_terms")
 def _query_has_multiple_terms(state: PipelineState) -> bool:
-    return len(state.query.terms.split()) >= 4
+    return len(state.query.terms.split()) >= _MULTI_TERM_THRESHOLD
 
 
 @predicate("scope_includes_dependencies")

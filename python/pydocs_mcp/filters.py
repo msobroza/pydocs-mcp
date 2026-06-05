@@ -51,7 +51,7 @@ class All:
 
 
 @dataclass(frozen=True, slots=True)
-class Any_:
+class Any_:  # noqa: N801 — trailing-underscore name reserved for the future FilterTreeFormat ANY-node (avoids shadowing typing.Any)
     """Declared for future FilterTreeFormat; unused in MultiFieldFormat."""
 
     clauses: tuple[Filter, ...]
@@ -94,8 +94,14 @@ class MultiFieldFormat:
     format: MetadataFilterFormat = MetadataFilterFormat.MULTIFIELD
 
     def validate(self, native: Any) -> None:
+        # TRY004 noqa: validate() raises ValueError uniformly for every invalid
+        # input (non-mapping here, bad operators / shapes below). Keeping this
+        # branch ValueError preserves the single-exception-type contract callers
+        # rely on when wrapping validate() in `except ValueError`.
         if not isinstance(native, Mapping):
-            raise ValueError(f"MultiFieldFormat expects a mapping; got {type(native).__name__}")
+            raise ValueError(  # noqa: TRY004
+                f"MultiFieldFormat expects a mapping; got {type(native).__name__}"
+            )
         for key, value in native.items():
             if key in ("$and", "$or", "$not"):
                 raise ValueError(

@@ -95,6 +95,24 @@ jobs:
       - name: Typecheck
         run: uv run mypy python/pydocs_mcp
 
+      # WHY: cognitive-complexity gate. Ceiling 15, enforced against the
+      # committed `complexipy-snapshot.json` baseline so the 15 existing
+      # offenders don't redden CI — only a NEW or WORSENED function (one that
+      # newly exceeds 15, or an already-over function that regresses further)
+      # fails. The plain snapshot-comparison run exits 1 on such regressions and
+      # never overwrites the committed baseline (verified). Burn the baselined
+      # offenders down over time, then lower the ceiling toward 10.
+      - name: Complexity gate (complexipy)
+        run: uv run complexipy python/pydocs_mcp --max-complexity-allowed 15
+
+      # WHY: dead-code gate. The `[tool.vulture]` whitelist (ignore_names /
+      # ignore_decorators) pre-suppresses the 4 known false positives
+      # (_fast.py substitution-boundary re-exports + pydantic-settings hook
+      # params), so a min-confidence-80 run is clean. vulture reads the
+      # pyproject [tool.vulture] section automatically.
+      - name: Dead-code gate (vulture)
+        run: uv run vulture python/pydocs_mcp --min-confidence 80
+
       - name: Smoke-test out-of-tree pydocs_mcp imports
         # benchmarks/ is not under tests/, so a rename to an internal
         # pydocs_mcp module (e.g. storage/wiring.py -> storage/factories.py)

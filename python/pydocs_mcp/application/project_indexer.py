@@ -8,7 +8,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.application.indexing_service import IndexingService, IndexingStats
+from pydocs_mcp.application.indexing_service import (
+    IndexingService,
+    IndexingStats,
+    ResolverInputs,
+)
 from pydocs_mcp.application.protocols import (
     ChunkExtractor,
     DependencyResolver,
@@ -89,8 +93,10 @@ class ProjectIndexer:
             members,
             trees=result.trees,
             references=result.references,
-            reference_aliases=result.reference_aliases,
-            class_attribute_types=result.class_attribute_types,
+            resolver_inputs=ResolverInputs(
+                aliases=result.reference_aliases,
+                class_attribute_types=result.class_attribute_types,
+            ),
         )
         stats.project_indexed = True
         log.info(
@@ -120,8 +126,10 @@ class ProjectIndexer:
                 members,
                 trees=result.trees,
                 references=result.references,
-                reference_aliases=result.reference_aliases,
-                class_attribute_types=result.class_attribute_types,
+                resolver_inputs=ResolverInputs(
+                    aliases=result.reference_aliases,
+                    class_attribute_types=result.class_attribute_types,
+                ),
             )
             stats.indexed += 1
             log.info(

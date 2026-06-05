@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.application.indexing_service import IndexingService, ResolverInputs
 from pydocs_mcp.application.reference_service import ReferenceService
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
@@ -85,7 +85,7 @@ async def test_e2e_index_resolve_store_query(tmp_path):
         module_members=(),
         trees=(helpers_tree, utils_tree),  # both trees in universe
         references=raw_refs,
-        reference_aliases=aliases,
+        resolver_inputs=ResolverInputs(aliases=aliases),
     )
 
     # Query — both find_callers AND find_by_name should see the resolved row.

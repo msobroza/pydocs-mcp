@@ -82,8 +82,7 @@ class FakeIndexingService:
         module_members: tuple[ModuleMember, ...],
         trees: tuple[DocumentNode, ...] = (),
         references: tuple = (),
-        reference_aliases: dict[str, dict[str, str]] | None = None,
-        class_attribute_types: dict[str, dict[str, str]] | None = None,
+        resolver_inputs: object = None,  # ResolverInputs (aliases + attr types)
     ) -> None:
         self.reindex_calls.append(package)
 

@@ -89,7 +89,7 @@ class ReferenceCaptureStage:
         )
         return replace(state, refs=new_refs_bundle)
 
-    def _capture_all(  # noqa: C901 — multi-kind reference capture (CALLS/IMPORTS/INHERITS/MENTIONS/ASSIGNS/ATTR-RESOLVE) is inherently branchy; splitting into per-kind helpers would just move the dispatch
+    def _capture_all(
         self,
         state: IngestionState,
         allowed: set[str],

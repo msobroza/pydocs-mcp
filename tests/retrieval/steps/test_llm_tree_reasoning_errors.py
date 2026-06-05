@@ -102,7 +102,7 @@ async def test_node_list_not_a_list_raises() -> None:
         trees=InMemoryDocumentTreeStore(by_package={"__project__": [_project_tree()]}),
     )
     step = LlmTreeReasoningStep(llm_client=llm, uow_factory=uow_factory)
-    with pytest.raises(ValueError, match="must be a list"):
+    with pytest.raises(TypeError, match="must be a list"):
         await step.run(_state("q"))
 
 

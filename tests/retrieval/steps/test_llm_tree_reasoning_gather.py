@@ -64,8 +64,7 @@ class _ConcurrentReferenceStore:
         async with self._lock:
             self.call_args.append(to_name)
             self.in_flight += 1
-            if self.in_flight > self.peak_concurrency:
-                self.peak_concurrency = self.in_flight
+            self.peak_concurrency = max(self.peak_concurrency, self.in_flight)
             if self.in_flight >= self.expected_concurrency:
                 self.barrier.set()
         # All concurrent callers wait here; with gather they all proceed;

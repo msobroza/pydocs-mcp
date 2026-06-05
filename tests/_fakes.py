@@ -225,7 +225,6 @@ class InMemoryChunkStore:
     async def rebuild_index(self) -> None:
         self.calls.append(_Call("rebuild_index", None))
         # In-memory store has no FTS index to rebuild.
-        return None
 
     async def list_id_hash_pairs(
         self,

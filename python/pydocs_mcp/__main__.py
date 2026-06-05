@@ -56,30 +56,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", type=Path, help="Path to pydocs-mcp.yaml")
     sub = p.add_subparsers(dest="cmd")
 
-    _no_rust = dict(
-        action="store_true",
-        help="Force pure-Python fallback even if Rust extension is available.",
-    )
+    _no_rust = {
+        "action": "store_true",
+        "help": "Force pure-Python fallback even if Rust extension is available.",
+    }
     # ``--cache-dir`` overrides the directory the SQLite cache (and ``.tq``
     # sidecar) live in. CLI-only knob — never plumbed through to the MCP
     # tool surface. Common to every subcommand so the four wirings stay in
     # sync. (Per-deployment knob; no impact on the fixed 2-tool MCP API.)
-    _cache_dir = dict(
-        type=Path,
-        default=None,
-        help="Override the cache directory (default: ~/.pydocs-mcp).",
-    )
+    _cache_dir = {
+        "type": Path,
+        "default": None,
+        "help": "Override the cache directory (default: ~/.pydocs-mcp).",
+    }
     # Re-declaring ``-v/--verbose`` on each subparser so it parses
     # regardless of position (``-m pydocs_mcp -v search …`` and
     # ``-m pydocs_mcp search … -v`` both work). ``default=argparse.SUPPRESS``
     # is the trick: when the subparser's ``-v`` is absent the namespace
     # keeps whatever value the top-level parser already assigned, so a
     # leading ``-v`` is never silently clobbered.
-    _verbose = dict(
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="Verbose logging + traceback on failure.",
-    )
+    _verbose = {
+        "action": "store_true",
+        "default": argparse.SUPPRESS,
+        "help": "Verbose logging + traceback on failure.",
+    }
 
     # ``watch`` is the standalone watcher counterpart to ``serve --watch``:
     # the whole subcommand IS watch mode (it does NOT accept ``--watch``,
@@ -531,7 +531,9 @@ def _build_watcher_and_callback(
             # take down the consumer (MCP server in --watch mode; the
             # whole process in standalone watch mode). Log + keep
             # serving stale data instead.
-            log.error("watch: reindex failed: %s", exc)
+            # TRY400 noqa: a single-line warning (no traceback) keeps the
+            # watch loop quiet on transient reindex failures.
+            log.error("watch: reindex failed: %s", exc)  # noqa: TRY400
 
     return watcher, _on_change
 
@@ -686,7 +688,6 @@ def _run_cmd(coro: Awaitable[None], *, verbose: bool) -> int:
     """
     try:
         asyncio.run(coro)
-        return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         if verbose:
@@ -701,8 +702,14 @@ def _run_cmd(coro: Awaitable[None], *, verbose: bool) -> int:
             log.exception("CLI command failed")
         else:
             print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-            log.error("CLI command failed: %s", exc)
+            # TRY400 noqa: non-verbose path deliberately records WITHOUT a
+            # traceback (log.error, not log.exception) so the default
+            # stderr-attached logger never leaks the traceback to the user's
+            # output pipeline. Documented behavioral contract above.
+            log.error("CLI command failed: %s", exc)  # noqa: TRY400
         return 1
+    else:
+        return 0
 
 
 def _cmd_index(args: argparse.Namespace) -> int:
@@ -731,7 +738,6 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         # exits via thread-pool unwind when the loop is cancelled.
         try:
             asyncio.run(_run_watch_loop(args, db_path=db_path))
-            return 0
         except KeyboardInterrupt:
             return 0
         except Exception as exc:
@@ -741,8 +747,11 @@ def _cmd_serve(args: argparse.Namespace) -> int:
                 log.exception("CLI command failed")
             else:
                 print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-                log.error("CLI command failed: %s", exc)
+                # TRY400 noqa: non-verbose path deliberately omits the traceback.
+                log.error("CLI command failed: %s", exc)  # noqa: TRY400
             return 1
+        else:
+            return 0
 
     # Phase 2 (no-watch path) — unchanged from today.
     # ``server.run`` calls ``anyio.run(self.run_stdio_async)`` internally,
@@ -757,7 +766,6 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     try:
         run(db_path, config_path=getattr(args, "config", None))
-        return 0
     except KeyboardInterrupt:
         # Graceful shutdown via Ctrl+C — not an error.
         return 0
@@ -768,8 +776,11 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             log.exception("CLI command failed")
         else:
             print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-            log.error("CLI command failed: %s", exc)
+            # TRY400 noqa: non-verbose path deliberately omits the traceback.
+            log.error("CLI command failed: %s", exc)  # noqa: TRY400
         return 1
+    else:
+        return 0
 
 
 def _cmd_watch(args: argparse.Namespace) -> int:
@@ -793,7 +804,6 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     # the try/finally inside ``FileWatcher.run_until_cancelled``.
     try:
         asyncio.run(_run_watch_only(args))
-        return 0
     except KeyboardInterrupt:
         # Graceful shutdown via Ctrl+C — not an error.
         return 0
@@ -804,8 +814,11 @@ def _cmd_watch(args: argparse.Namespace) -> int:
             log.exception("CLI command failed")
         else:
             print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-            log.error("CLI command failed: %s", exc)
+            # TRY400 noqa: non-verbose path deliberately omits the traceback.
+            log.error("CLI command failed: %s", exc)  # noqa: TRY400
         return 1
+    else:
+        return 0
 
 
 def _cmd_search(args: argparse.Namespace) -> int:

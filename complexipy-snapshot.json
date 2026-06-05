@@ -1,0 +1,146 @@
+[
+  {
+    "path": "pydocs_mcp/__main__.py",
+    "file_name": "__main__.py",
+    "functions": [
+      {
+        "name": "_run_indexing",
+        "complexity": 18
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/application/module_inspector.py",
+    "file_name": "module_inspector.py",
+    "functions": [
+      {
+        "name": "ModuleInspector::_inspect_target",
+        "complexity": 22
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/extraction/model/package_tree.py",
+    "file_name": "package_tree.py",
+    "functions": [
+      {
+        "name": "_build_tree_nodes",
+        "complexity": 22
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/extraction/pipeline/stages/reference_capture.py",
+    "file_name": "reference_capture.py",
+    "functions": [
+      {
+        "name": "ReferenceCaptureStage::_capture_all",
+        "complexity": 62
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/extraction/strategies/_dep_helpers.py",
+    "file_name": "_dep_helpers.py",
+    "functions": [
+      {
+        "name": "_collect_symbols",
+        "complexity": 20
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/extraction/strategies/reference_resolver.py",
+    "file_name": "reference_resolver.py",
+    "functions": [
+      {
+        "name": "ReferenceResolver::_resolve_one",
+        "complexity": 27
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/extraction/strategies/references.py",
+    "file_name": "references.py",
+    "functions": [
+      {
+        "name": "capture_imports",
+        "complexity": 20
+      },
+      {
+        "name": "_init_body_attribute_types",
+        "complexity": 24
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/filters.py",
+    "file_name": "filters.py",
+    "functions": [
+      {
+        "name": "MultiFieldFormat::validate",
+        "complexity": 24
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/retrieval/config.py",
+    "file_name": "config.py",
+    "functions": [
+      {
+        "name": "_resolve_pipeline_path",
+        "complexity": 21
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/retrieval/filter_helpers.py",
+    "file_name": "filter_helpers.py",
+    "functions": [
+      {
+        "name": "_split_scope",
+        "complexity": 21
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/retrieval/steps/llm_tree_reasoning.py",
+    "file_name": "llm_tree_reasoning.py",
+    "functions": [
+      {
+        "name": "LlmTreeReasoningStep::run",
+        "complexity": 20
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/retrieval/steps/parallel.py",
+    "file_name": "parallel.py",
+    "functions": [
+      {
+        "name": "_merge_branch_results",
+        "complexity": 17
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/retrieval/steps/weighted_score_interpolation.py",
+    "file_name": "weighted_score_interpolation.py",
+    "functions": [
+      {
+        "name": "WeightedScoreInterpolationStep::run",
+        "complexity": 16
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/storage/composite_uow.py",
+    "file_name": "composite_uow.py",
+    "functions": [
+      {
+        "name": "CompositeUnitOfWork::_build_attr_map",
+        "complexity": 17
+      }
+    ]
+  }
+]

@@ -19,7 +19,7 @@ from tests._fakes import FakeLlmClient
 def test_build_retrieval_context_threads_llm_client(tmp_path) -> None:
     """``build_retrieval_context`` calls ``build_llm_client(config.llm)``
     and writes the resulting client into ``context.llm_client``."""
-    import pydocs_mcp.retrieval.factories as factories
+    from pydocs_mcp.retrieval import factories
 
     config = AppConfig.load()
     fake = FakeLlmClient(responses={})

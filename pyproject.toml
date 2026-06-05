@@ -74,6 +74,8 @@ test = [
 lint = [
     "ruff",
     "mypy >= 1.10",
+    "complexipy >= 5.5",     # function-level cognitive-complexity gate (ceiling 15, baselined)
+    "vulture >= 2.16",       # dead-code detection (whitelisted via [tool.vulture])
 ]
 dev = [
     {include-group = "test"},
@@ -118,6 +120,14 @@ select = [
     "C901",       # McCabe complexity
     "PT",         # flake8-pytest-style
     "PTH",        # flake8-use-pathlib
+    # --- newly enabled (measured zero / trivially-fixable in the package) ---
+    "C4",         # flake8-comprehensions  (C408 dict()/list() — auto-fixed)
+    "RET",        # flake8-return          (0 hits in package)
+    "TID",        # flake8-tidy-imports    (0 hits in package)
+    "N",          # pep8-naming            (1 hit, N801 — handled via noqa)
+    "TRY",        # tryceratops            (TRY003 ignored below; the rest fixed inline)
+    "ERA",        # eradicate              (3 hits, all in __init__.py — deleted)
+    "PL",         # Pylint  (PLC/PLR/PLW/PLE) — enabled, with PLC0415 + TRY003 globally ignored below
 ]
 ignore = [
     "E501",     # line-too-long — opinionated, defer to formatter where it matters
@@ -125,25 +135,82 @@ ignore = [
     "RUF001",   # ambiguous unicode in strings — math symbols (×, ∪) are intentional in benchmark labels
     "RUF002",   # ambiguous unicode in docstrings — same (× appears in "K × N" capacity comments)
     "RUF003",   # ambiguous unicode in comments — same
+    # --- new global suppressions, calibrated to measured blast radius ---
+    "PLC0415",  # import-outside-top-level — DELIBERATE architectural pattern: lazy
+                # imports at the _fast.py Rust/Python substitution boundary and for
+                # optional extras ([late-interaction], openai). Fixing it would fight
+                # the documented lazy-import design. Suppress wholesale.
+    "TRY003",   # raise-vanilla-args — the codebase raises domain errors with inline
+                # f-string messages (ServiceUnavailableError pointers, config
+                # validation). Enforcing custom exception classes for every message
+                # is churn, not signal. Suppress wholesale.
+    "PLW0603",  # global-statement — 9 sites, all DELIBERATE module-singleton
+                # patterns: YAML-driven runtime config injection into module-level
+                # MCP-input limits / capture config (mcp_inputs, reference_capture,
+                # stdlib_qnames) and lazy-import caches (fast_plaid_uow). These slots
+                # are the documented mechanism for per-deployment tuning without
+                # threading config through every call site. Suppress wholesale.
 ]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12
 
+[tool.ruff.lint.pylint]
+# Each limit has ≤4 violations, all in scoped-ignored files OR fixed in this change.
+max-branches = 12            # PLR0912 — only remaining sites in __main__.py (scoped)
+max-statements = 50          # PLR0915 — only remaining site in __main__.py (scoped)
+max-returns = 6              # PLR0911
+max-args = 6                 # PLR0913 — the 4 max-args sites are refactored to ≤6 args
+
+[tool.ruff.lint.isort]
+known-first-party = ["pydocs_mcp"]
+
 [tool.ruff.lint.per-file-ignores]
-# Test code is allowed to use bare asserts (S101), short-string secrets in
-# fixtures (S105/S106), broader pytest.raises (PT011/PT012), and the other
-# pytest-style relaxations below — these all reflect intentional test
-# conventions, not bugs.
-"tests/**"                       = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT019", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
-"benchmarks/tests/**"            = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT019", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211"]
+# Test code is allowed bare asserts (S101), fixture secrets (S105/S106), broader
+# pytest.raises (PT011/PT012), and the other pytest-style relaxations below —
+# intentional test conventions, not bugs. The newly-enabled families are pure
+# test-convention noise here too: PLR2004 (magic values), ARG (unused fixture
+# args), PLR0911/0912/0913/0915 + TRY (test-body shape), N (sklearn-API fixture
+# names like `X`/`X_train`, snake_case test names documenting AND/NOT semantics,
+# import aliases in re-export tests), C408 (dict() literals in fixtures), RET504
+# (named-return readability), PLW1510 (subprocess.run helpers).
+"tests/**"                       = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT019", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211", "PLR2004", "PLW2901", "ARG001", "ARG002", "ARG003", "ARG004", "ARG005", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2044", "TRY", "N802", "N803", "N806", "N812", "N813", "C408", "RET504", "PLW1510"]
+"benchmarks/tests/**"            = ["F401", "F811", "F841", "E402", "I001", "S101", "S105", "S106", "PT004", "PT006", "PT011", "PT012", "PT013", "PT017", "PT018", "PT019", "PT022", "B017", "S108", "S311", "S324", "S603", "S607", "S608", "SIM105", "SIM117", "RUF005", "RUF059", "RUF043", "PTH119", "PTH206", "PTH211", "PLR2004", "PLW2901", "ARG001", "ARG002", "ARG003", "ARG004", "ARG005", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2044", "TRY", "N802", "N803", "N806", "N812", "N813", "C408", "RET504", "PLW1510", "PLW0108", "PLR0124", "TID252"]
 # Benchmark eval scripts run pre-conditions via assert as a lightweight
 # precondition pattern; they're not security-sensitive code paths.
 # B905 (zip strict) and SIM105 (suppress vs try/except/pass) tolerated in
 # benchmark code where readability of the linear data-flow trumps the lint.
-"benchmarks/src/**"              = ["S101", "S311", "S324", "S603", "S607", "S608", "B905", "SIM105", "SIM102", "PTH207"]
-"python/pydocs_mcp/_fast.py"     = ["F401", "I001"]
-"python/pydocs_mcp/__main__.py"  = ["T201"]
+# Benchmark eval scripts: relative intra-package imports (TID252), inline
+# lambdas (PLW0108), loop-var rebinding (PLW2901) and the PL complexity / arg
+# / magic-value limits are linear-data-flow conventions in the harness, not the
+# shipped package surface (CI's Lint step only covers python/ + tests/). Kept
+# green so `make lint` — which spans benchmarks/ — stays usable.
+# (C901 is NOT listed here: the one benchmark sweep site already carries an
+# inline `# noqa: C901`, and a file-wide ignore would make that noqa redundant.)
+"benchmarks/src/**"              = ["S101", "S311", "S324", "S603", "S607", "S608", "B905", "SIM105", "SIM102", "PTH207", "TID252", "PLW0108", "PLW2901", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2004", "PLR5501"]
+# _fast.py is the Rust/Python substitution boundary. disable_rust() imports the
+# module by name (PLW0406) so it can rebind its own re-exported attributes to
+# the pure-Python fallback at runtime — a deliberate part of the boundary.
+"python/pydocs_mcp/_fast.py"     = ["F401", "I001", "PLW0406"]
+# __init__.py: the public-exception usage example is commented-out code (ERA001)
+# was deleted; F401/F403 cover the standard re-export relaxations.
+"python/pydocs_mcp/__init__.py"  = ["F401", "F403"]
+# CLI dispatch exceeds the mccabe / branch / statement / return limits by
+# design (argparse fan-out; _cmd_serve returns an exit code from several
+# branches). Scoped ignore keeps the global gates honest elsewhere while the
+# burn-down happens via complexipy's baseline.
+"python/pydocs_mcp/__main__.py"  = ["T201", "C901", "PLR0912", "PLR0915", "PLR0911"]
+# db.py owns the SQLite schema; its PLR2004 hits are literal schema-version
+# numbers in the migration ladder (``current == 4`` → v5 → v6), each already
+# self-documented by an adjacent ``vN → vN+1`` comment. Naming them adds noise.
+"python/pydocs_mcp/db.py"  = ["PLR2004"]
+# The two extraction sites that exceed mccabe=12 / max-branches=12 today:
+# legitimate complexity (reference capture / resolve walks). Scoped C901 +
+# PLR0912 ignore; complexipy baselines them for the burn-down. reference_resolver
+# also keys on dotted-segment counts (``len(parts) >= 3``) that read clearer as
+# literals than named constants — PLR2004 scoped here too. (Phase 2 refactor.)
+"python/pydocs_mcp/extraction/pipeline/stages/reference_capture.py"  = ["C901", "PLR0912"]
+"python/pydocs_mcp/extraction/strategies/reference_resolver.py"      = ["C901", "PLR0912", "PLR2004"]
 # The SQLite repositories build `WHERE {clause}` strings where {clause} comes
 # from the FilterAdapter — which only emits SQL fragments built from a
 # whitelisted column set (CHUNK_COLUMNS / MEMBER_COLUMNS / PACKAGE_COLUMNS)
@@ -227,3 +294,50 @@ module = [
     "pydocs_mcp.filters",
 ]
 ignore_errors = true
+
+[tool.complexipy]
+# Ceiling 15: clean gap in the distribution — nothing scores 15-16; the band
+# jumps from the last passing function to the first failing one (18). 15
+# functions currently exceed 15 (worst: ReferenceCaptureStage._capture_all at
+# 62 — a multi-day rework). A hard clean gate would be red today, so CI enforces
+# this against a committed snapshot baseline (`--diff`): existing offenders are
+# frozen, only NEW or WORSENED functions fail. Burn the baselined 15 down over
+# time, then lower this ceiling toward 10.
+max-complexity-allowed = 15
+
+[tool.vulture]
+# At --min-confidence 80 vulture surfaces 4 findings, ALL false positives:
+#   - _fast.py extract_module_doc (x2): Rust/Python substitution-boundary
+#     re-export, rebound by-name string in disable_rust(); vulture can't trace
+#     either.
+#   - retrieval/config.py dotenv_settings / file_secret_settings: framework-
+#     mandated positional params of pydantic-settings' settings_customise_sources
+#     hook (deliberately unused — the method drops those sources).
+# Whitelisting these names + the registry/pydantic decorators makes a
+# min-confidence-80 run go green (0 findings). The CLI reads this section
+# directly when invoked as `vulture python/pydocs_mcp` (no path arg needed).
+min_confidence = 80
+paths = ["python/pydocs_mcp"]
+ignore_names = [
+    "extract_module_doc",     # _fast.py substitution-boundary re-export
+    "dotenv_settings",        # pydantic-settings settings_customise_sources param
+    "file_secret_settings",   # pydantic-settings settings_customise_sources param
+]
+ignore_decorators = [
+    "@*.register",            # @step_registry.register / @stage_registry.register / @formatter_registry.register
+    "@predicate",            # filter-predicate registry
+    "@field_validator",      # pydantic
+    "@model_validator",      # pydantic
+    "@classmethod",          # classmethod hooks
+]
+
+# Project is at ~94% line coverage. The CLI `--cov-fail-under=90` in ci.yml /
+# Makefile stays the single source of the LINE gate (do NOT lower to 80).
+# branch = true is additive and report-only — no branch threshold is set until a
+# measured run confirms it clears the bar.
+[tool.coverage.run]
+branch = true
+source = ["pydocs_mcp"]
+
+[tool.coverage.report]
+show_missing = true
