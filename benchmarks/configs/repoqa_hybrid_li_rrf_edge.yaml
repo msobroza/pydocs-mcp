@@ -1,0 +1,16 @@
+# RepoQA experiment — BM25 + late-interaction (ColBERT/MaxSim) ranked, fused via
+# RRF, using the lightonai/LateOn-Code-edge model (48-dim/token, vs LateOn-Code's
+# 128). Pairs with repoqa_hybrid_li_rrf.yaml so the delta is attributable to the
+# LI model swap. Requires transformers>=4.57.3 (LateOn-Code-edge architecture).
+late_interaction:
+  enabled: true
+  model_name: lightonai/LateOn-Code-edge
+  embedding_dim: 48
+
+pipelines:
+  ingestion:
+    - default: true
+      pipeline_path: pipelines/ingestion_late_interaction.yaml
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_hybrid_li_rrf.yaml
