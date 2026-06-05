@@ -295,8 +295,6 @@ _KNOWN_MODEL_DIMS: dict[str, int] = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
-    # ONNX (torch-free dense embedder for Qwen3-Embedding)
-    "onnx-community/Qwen3-Embedding-0.6B-ONNX": 1024,
 }
 
 
@@ -309,21 +307,10 @@ class EmbeddingConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["fastembed", "openai", "onnx"] = "fastembed"
+    provider: Literal["fastembed", "openai"] = "fastembed"
     model_name: str = "BAAI/bge-small-en-v1.5"
     dim: int = Field(default=384, ge=1)
     batch_size: int = Field(default=32, ge=1)
-    # WHY: onnx_file / query_instruction only apply to the ``onnx`` provider
-    # (the torch-free ONNX dense embedder for Qwen3-Embedding). They are
-    # inert for fastembed / openai — those providers never read them — but
-    # they live on the shared config so a single embedding block stays the
-    # source of truth. ``onnx_file`` selects the quantization variant within
-    # the HF repo (fp16 / q4f16 / ...); ``query_instruction`` is the prompt
-    # prefix Qwen3-Embedding expects on the query side.
-    onnx_file: str = "onnx/model_fp16.onnx"
-    query_instruction: str = (
-        "Given a web search query, retrieve relevant passages that answer the query"
-    )
     # TurboQuant scalar-quantization bit width. 4 is the sweet spot per
     # turbovec README — ~16x compression with minimal recall loss on
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
@@ -371,17 +358,12 @@ class EmbeddingConfig(BaseModel):
 
         ``batch_size`` is deliberately excluded — it affects throughput,
         not vector contents. The folded fields are ``provider``,
-        ``model_name``, ``dim``, ``bit_width``, and the onnx-only
-        ``onnx_file`` / ``query_instruction`` (the latter two change the
-        produced vectors for the ``onnx`` provider — a different quantized
-        model file or query prompt yields different embeddings — so they
-        must invalidate the chunk-cache when edited). Future preprocessing
+        ``model_name``, ``dim``, and ``bit_width``. Future preprocessing
         flags (``normalize_whitespace``, etc.) get added here as they're
         introduced. Pipe-separated to keep the hash input human-readable
         in a debugger; the field set is small enough that no escaping
         is required (``provider`` / ``bit_width`` are bounded enums /
-        ints, ``model_name`` / ``onnx_file`` cannot legally contain a pipe,
-        and ``query_instruction`` is a fixed-prompt string).
+        ints and ``model_name`` cannot legally contain a pipe).
         """
         identity = "|".join(
             [
@@ -389,8 +371,6 @@ class EmbeddingConfig(BaseModel):
                 self.model_name,
                 str(self.dim),
                 str(self.bit_width),
-                self.onnx_file,
-                self.query_instruction,
             ]
         )
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()

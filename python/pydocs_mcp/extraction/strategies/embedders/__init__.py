@@ -29,18 +29,8 @@ def build_embedder(cfg: EmbeddingConfig) -> Embedder:
         )
 
         return OpenAIEmbedder(model_name=cfg.model_name, dim=cfg.dim)
-    if cfg.provider == "onnx":
-        from pydocs_mcp.extraction.strategies.embedders.onnx import OnnxEmbedder
-
-        return OnnxEmbedder(
-            model_name=cfg.model_name,
-            dim=cfg.dim,
-            onnx_file=cfg.onnx_file,
-            query_instruction=cfg.query_instruction,
-            batch_size=cfg.batch_size,
-        )
     raise ValueError(
-        f"Unknown embedding provider: {cfg.provider!r}. Supported: 'fastembed', 'openai', 'onnx'.",
+        f"Unknown embedding provider: {cfg.provider!r}. Supported: 'fastembed', 'openai'.",
     )
 
 
