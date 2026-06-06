@@ -8,6 +8,16 @@ on:
 jobs:
   python:
     runs-on: ${{ matrix.os }}
+    env:
+      # WHY: the only HuggingFace fetch the default test suite needs is the
+      # bge-small embedding model (downloaded lazily by fastembed). A transient
+      # HF outage/rate-limit was reddening CI with "Could not load model
+      # BAAI/bge-small-en-v1.5 from any source". Pin fastembed's cache to a
+      # stable, cacheable workspace path (fastembed reads FASTEMBED_CACHE_PATH —
+      # see fastembed.common.utils.define_cache_dir) so the model is cached
+      # across runs and a download blip can't fail the job. Cross-OS via
+      # github.workspace.
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.fastembed-cache
     # WHY: fail-fast: false so each OS row reports independently. The whole
     # point of expanding the matrix is to surface platform-specific issues —
     # bailing on the first failure defeats it.
@@ -81,6 +91,32 @@ jobs:
       # without an explicit `source .venv/bin/activate` step.
       - name: Install project + dev group (frozen)
         run: uv sync --frozen --group dev
+
+      # WHY: cache the bge-small model across runs (keyed on the fixed model id)
+      # so steady-state CI does no HuggingFace network at all. The first/cold run
+      # downloads it in the warm-up step below.
+      - name: Cache fastembed model
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.fastembed-cache
+          key: fastembed-${{ runner.os }}-bge-small-en-v1.5-v1
+
+      # WHY: download (or no-op if cache-hit) the embedding model ONCE, with
+      # retries, BEFORE pytest — so a transient HuggingFace blip during the
+      # cold-cache fetch is retried here instead of erroring deep in the suite.
+      # `shell: bash` runs under git-bash on Windows too.
+      - name: Warm fastembed model cache (retry on HF flake)
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if uv run python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5'); print('fastembed model ready')"; then
+              exit 0
+            fi
+            echo "::warning::fastembed warm-up attempt ${attempt} failed (HuggingFace?); retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "::error::could not warm the fastembed model after 5 attempts (HuggingFace unreachable)"
+          exit 1
 
       - name: Lint
         run: uv run ruff check python/ tests/
