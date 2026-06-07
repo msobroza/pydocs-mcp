@@ -567,7 +567,7 @@ class AppConfig(BaseSettings):
         extra="ignore",
     )
 
-    def with_device(self, *, gpu: bool) -> "AppConfig":
+    def with_device(self, *, gpu: bool) -> AppConfig:
         """Return a copy with the embedder execution device set.
 
         ``--gpu`` maps to ``"cuda"``, absent to ``"cpu"``. Device is a
