@@ -24,12 +24,10 @@ async def _seed_chunks(db_path: Path) -> None:
     def _insert() -> None:
         with provider.acquire_sync() as conn:
             conn.execute(
-                "INSERT INTO chunks(package, title, text, origin) "
-                "VALUES('p','t1','b','dep_doc')"
+                "INSERT INTO chunks(package, title, text, origin) VALUES('p','t1','b','dep_doc')"
             )
             conn.execute(
-                "INSERT INTO chunks(package, title, text, origin) "
-                "VALUES('q','t2','b','dep_doc')"
+                "INSERT INTO chunks(package, title, text, origin) VALUES('q','t2','b','dep_doc')"
             )
             conn.commit()
 

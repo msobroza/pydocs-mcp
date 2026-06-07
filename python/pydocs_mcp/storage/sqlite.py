@@ -890,9 +890,7 @@ class SqliteChunkMultiVectorRepository:
             def _select_then_delete() -> tuple[int, ...]:
                 plaid_ids = tuple(
                     row[0]
-                    for row in conn.execute(
-                        "SELECT plaid_doc_id FROM chunk_multi_vector_ids"
-                    )
+                    for row in conn.execute("SELECT plaid_doc_id FROM chunk_multi_vector_ids")
                 )
                 conn.execute("DELETE FROM chunk_multi_vector_ids")
                 return plaid_ids
