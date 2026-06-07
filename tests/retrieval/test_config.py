@@ -331,3 +331,26 @@ def test_compute_ingestion_pipeline_hash_cached(tmp_path: Path) -> None:
     assert h1 == h2 == h3
     # Method form must still exist and produce the same value (backward compat).
     assert cfg.compute_ingestion_pipeline_hash() == h1
+
+
+# ── AppConfig.with_device ───────────────────────────────────────────────
+
+
+def test_with_device_gpu_true_sets_cuda_on_both_embedders() -> None:
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    base = AppConfig()
+    gpu = base.with_device(gpu=True)
+
+    assert gpu.embedding.device == "cuda"
+    assert gpu.late_interaction.device == "cuda"
+    assert base.embedding.device == "cpu"
+    assert base.late_interaction.device == "cpu"
+
+
+def test_with_device_gpu_false_sets_cpu() -> None:
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    cpu = AppConfig().with_device(gpu=False)
+    assert cpu.embedding.device == "cpu"
+    assert cpu.late_interaction.device == "cpu"

@@ -567,6 +567,24 @@ class AppConfig(BaseSettings):
         extra="ignore",
     )
 
+    def with_device(self, *, gpu: bool) -> "AppConfig":
+        """Return a copy with the embedder execution device set.
+
+        ``--gpu`` maps to ``"cuda"``, absent to ``"cpu"``. Device is a
+        runtime latency knob excluded from every pipeline hash (see
+        _DEFAULT_DEVICE), so this never invalidates an index cache. Pure
+        function — the receiver is unmutated (pydantic ``model_copy``).
+        """
+        device = "cuda" if gpu else "cpu"
+        return self.model_copy(
+            update={
+                "embedding": self.embedding.model_copy(update={"device": device}),
+                "late_interaction": self.late_interaction.model_copy(
+                    update={"device": device},
+                ),
+            },
+        )
+
     @classmethod
     def settings_customise_sources(
         cls,
