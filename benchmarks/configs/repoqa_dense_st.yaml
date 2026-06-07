@@ -1,9 +1,9 @@
 # RepoQA experiment — single-stage dense with the bigger on-device Qwen3 model
 # served via sentence-transformers (torch). This is the torch/GPU-reliable
 # Qwen3-Embedding-0.6B path: torch frees CUDA memory between the sweep's
-# sequential index-builds, where the onnxruntime `onnx` provider
-# (repoqa_dense_onnx.yaml) leaks the CUDA arena and eventually OOMs. Same
-# exp_dense pipeline as repoqa_dense.yaml; only the embedder setting differs.
+# sequential index-builds (onnxruntime-based embedders instead leak the CUDA
+# arena and eventually OOM). Same exp_dense pipeline as repoqa_dense.yaml;
+# only the embedder setting differs.
 # See benchmarks/EXPERIMENTS.md.
 embedding:
   provider: sentence_transformers

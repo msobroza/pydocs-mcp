@@ -116,3 +116,22 @@ def test_compute_ingestion_pipeline_hash_stable_when_yaml_unchanged(tmp_path: Pa
     h1 = cfg.compute_ingestion_pipeline_hash()
     h2 = cfg.compute_ingestion_pipeline_hash()
     assert h1 == h2
+
+
+def test_compute_ingestion_pipeline_hash_resolves_relative_pipelines_path() -> None:
+    """A config-relative ``pipelines/<name>.yaml`` override resolves through the
+    shipped pipelines dir (the branch the resolver fix targets), NOT cwd — so
+    the hash is computed without crashing and is stable across reloads. This is
+    the real motivation for routing the override through the shared resolver;
+    the other tests exercise the absolute-path branch.
+    """
+    cfg_a = AppConfig.load()
+    cfg_a.extraction.ingestion.pipeline_path = Path("pipelines/ingestion.yaml")
+    h1 = cfg_a.compute_ingestion_pipeline_hash()
+
+    cfg_b = AppConfig.load()
+    cfg_b.extraction.ingestion.pipeline_path = Path("pipelines/ingestion.yaml")
+    h2 = cfg_b.compute_ingestion_pipeline_hash()
+
+    assert h1 == h2
+    assert len(h1) == 64  # SHA-256 hex — proves it actually read + hashed bytes

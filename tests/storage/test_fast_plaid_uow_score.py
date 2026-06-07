@@ -57,7 +57,6 @@ async def test_score_translates_chunk_ids_to_plaid_ids(tmp_path, monkeypatch) ->
         conn.commit()
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
         provider=build_connection_provider(db_path),
         device="cpu",
@@ -99,7 +98,6 @@ async def test_score_empty_subset_returns_empty(tmp_path, monkeypatch) -> None:
     open_index_database(db_path).close()
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
         provider=build_connection_provider(db_path),
         device="cpu",

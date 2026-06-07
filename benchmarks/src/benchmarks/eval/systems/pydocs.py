@@ -134,12 +134,12 @@ class PydocsMcpSystem:
             await self._do_index(corpus_dir, config)
 
         # WHY: release the PREVIOUS needle's query-time pipeline (which holds
-        # an onnxruntime InferenceSession behind the dense scorer) BEFORE
-        # building the new one. ``teardown()`` above already nulled
-        # ``_pipeline``; force a collection here so the old query session's
-        # CUDA arena is freed before the new ingestion/query sessions
-        # allocate — otherwise arenas accumulate across needles until even a
-        # tiny GPU allocation OOMs. No-op for non-ONNX embedders.
+        # the torch dense embedder behind the dense scorer) BEFORE building the
+        # new one. ``teardown()`` above already nulled ``_pipeline``; force a
+        # collection here so the old embedder's CUDA memory is freed before the
+        # new ingestion/query embedders allocate — otherwise device memory
+        # accumulates across needles until even a tiny GPU allocation OOMs.
+        # No-op for CPU embedders.
         self._pipeline = None
         gc.collect()
         context = build_retrieval_context(self._db_path, config)
@@ -225,12 +225,12 @@ class PydocsMcpSystem:
         await chunk_repo.rebuild_index()
 
         # WHY: release this needle's INGESTION embedder before the next needle
-        # builds its own. The OnnxEmbedder holds an onnxruntime CUDA
-        # InferenceSession whose arena memory only frees when the session is
-        # garbage-collected; without an explicit drop + collect, every needle
-        # leaks a session and the GPU OOMs partway through a sweep. Guard on
+        # builds its own. The torch (sentence_transformers) embedder holds CUDA
+        # memory that only frees when the model is dropped + the cache emptied;
+        # without an explicit close + collect, every needle leaks device memory
+        # and the GPU OOMs partway through a sweep. Guard on
         # ``hasattr(..., "close")`` so this is a strict no-op for FastEmbed /
-        # OpenAI / PyLate embedders (which hold no releasable CUDA arena).
+        # OpenAI / PyLate embedders (which hold no releasable CUDA memory here).
         if hasattr(embedder, "close"):
             embedder.close()
         del embedder
@@ -351,10 +351,9 @@ class PydocsMcpSystem:
                 except FileNotFoundError:
                     pass
         self._db_path = None
-        # WHY: dropping the pipeline releases the query-time onnxruntime
-        # InferenceSession it holds; the collection forces onnxruntime to
-        # free the session's CUDA arena so a torn-down leg leaves no GPU
-        # memory behind. No-op for non-ONNX embedders.
+        # WHY: dropping the pipeline releases the query-time torch embedder it
+        # holds; the collection forces torch to free the model's CUDA memory so
+        # a torn-down leg leaves no GPU memory behind. No-op for CPU embedders.
         self._pipeline = None
         self._db_is_cached = False
         gc.collect()

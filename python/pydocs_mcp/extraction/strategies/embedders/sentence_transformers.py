@@ -1,10 +1,9 @@
 """SentenceTransformersEmbedder — dense Embedder over a SentenceTransformer model.
 
 Serves ``Qwen/Qwen3-Embedding-0.6B`` (and other SentenceTransformer models)
-via torch. This is the GPU-reliable alternative to :class:`OnnxEmbedder`:
-onnxruntime leaks CUDA arena memory across the benchmark's sequential
-index-builds, whereas torch frees device memory when the model is dropped
-(see :meth:`close`).
+via torch. It is GPU-reliable across a benchmark's sequential index-builds:
+torch frees device memory when the model is dropped (see :meth:`close`), so a
+sweep that builds one index per needle does not accumulate CUDA arenas.
 
 Model-agnostic: queries go through ST's ``encode_query`` and documents
 through ``encode_document``, so whatever asymmetric prompting the model
@@ -14,10 +13,9 @@ model is not forced through a prompt it doesn't have. ``normalize`` and the
 optional ``query_prompt_name`` override are config-driven, not baked to any
 one model.
 
-``model`` is injectable so tests run without a model download / torch load,
-mirroring :class:`OnnxEmbedder`'s injectable ``session``. When ``model is
-None`` the real model is loaded lazily inside ``__post_init__`` so a default
-install never imports torch.
+``model`` is injectable so tests run without a model download / torch load.
+When ``model is None`` the real model is loaded lazily inside
+``__post_init__`` so a default install never imports torch.
 """
 
 from __future__ import annotations
@@ -62,9 +60,8 @@ class SentenceTransformersEmbedder:
     # model without one is not forced through a non-existent prompt (which
     # would raise). Set it only to override the model's own default.
     query_prompt_name: str | None = None
-    # Injectable so tests run without loading the real model (mirrors
-    # OnnxEmbedder.session). ``Any`` — the real type is
-    # sentence_transformers.SentenceTransformer, imported lazily.
+    # Injectable so tests run without loading the real model. ``Any`` — the
+    # real type is sentence_transformers.SentenceTransformer, imported lazily.
     model: Any = None
 
     def __post_init__(self) -> None:

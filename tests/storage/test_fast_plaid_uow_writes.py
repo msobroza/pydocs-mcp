@@ -75,7 +75,6 @@ async def test_add_vectors_writes_mapping_rows(tmp_path, monkeypatch) -> None:
 
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
         provider=build_connection_provider(db_path),
         device="cpu",
@@ -115,7 +114,6 @@ async def test_remove_vectors_drops_mapping(tmp_path, monkeypatch) -> None:
 
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
         provider=build_connection_provider(db_path),
         device="cpu",
@@ -146,7 +144,6 @@ async def test_clear_all_wipes_mapping(tmp_path, monkeypatch) -> None:
         conn.commit()
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
         provider=build_connection_provider(db_path),
         device="cpu",
@@ -190,7 +187,6 @@ async def test_add_vectors_rides_shared_sqlite_transaction(tmp_path, monkeypatch
 
     fp = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
         provider=provider,
         device="cpu",

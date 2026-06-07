@@ -40,7 +40,6 @@ async def test_lifecycle_opens_and_closes_without_io(tmp_path, monkeypatch) -> N
 
     uow = FastPlaidUnitOfWork(
         sidecar_path=sidecar,
-        db_path=db_path,
         pipeline_hash="pipeline-x",
         provider=build_connection_provider(db_path),
         device="cpu",
@@ -62,7 +61,6 @@ async def test_rollback_safe_when_no_writes(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(mod, "_FastPlaidCls", lambda *a, **kw: object(), raising=False)
     uow = FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=tmp_path / "x.db",
         pipeline_hash="h",
         provider=build_connection_provider(tmp_path / "x.db"),
         device="cpu",
@@ -81,7 +79,6 @@ async def test_late_interaction_extra_missing_raises_actionable(monkeypatch, tmp
     monkeypatch.setattr(mod, "_FAST_PLAID_IMPORT_ERROR", ImportError("fake"), raising=False)
     uow = FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=tmp_path / "x.db",
         pipeline_hash="h",
         provider=build_connection_provider(tmp_path / "x.db"),
         device="cpu",

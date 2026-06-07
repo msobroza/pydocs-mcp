@@ -122,7 +122,6 @@ class _FastPlaidReadStore:
     """
 
     sidecar_path: Path
-    db_path: Path
     pipeline_hash: str
     device: str
     provider: ConnectionProvider
@@ -138,7 +137,6 @@ class _FastPlaidReadStore:
 
         async with FastPlaidUnitOfWork(
             sidecar_path=self.sidecar_path,
-            db_path=self.db_path,
             pipeline_hash=self.pipeline_hash,
             provider=self.provider,
             device=self.device,
@@ -182,7 +180,6 @@ class SqliteCompositeBackend:
             return None
         return _FastPlaidReadStore(
             sidecar_path=self._plaid_sidecar_path,
-            db_path=self.db_path,
             pipeline_hash=self.config.ingestion_pipeline_hash,
             device=self.config.late_interaction.device,
             provider=build_connection_provider(self.db_path),
@@ -230,13 +227,11 @@ class SqliteCompositeBackend:
             from pydocs_mcp.storage.fast_plaid_uow import FastPlaidUnitOfWork
 
             sidecar = self._plaid_sidecar_path
-            db_path = self.db_path
             pipeline_hash = self.config.ingestion_pipeline_hash
             device = self.config.late_interaction.device
             children.append(
                 lambda: FastPlaidUnitOfWork(
                     sidecar_path=sidecar,
-                    db_path=db_path,
                     pipeline_hash=pipeline_hash,
                     provider=provider,
                     device=device,

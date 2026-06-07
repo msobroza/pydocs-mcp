@@ -139,3 +139,40 @@ async def test_upsert_rolls_back_with_transaction(tmp_path: Path) -> None:
         # no commit -> __aexit__ rolls back
     repo = SqliteChunkMultiVectorRepository(provider=provider)
     assert await repo.next_plaid_offset() == 0
+
+
+@pytest.mark.asyncio
+async def test_mapping_write_shares_held_transaction_no_deadlock(tmp_path: Path) -> None:
+    """Regression for the FastPlaid/SQLite deadlock — torch-free.
+
+    The mapping write must route through the SAME connection a held SQLite
+    write transaction already owns; opening a second connection (the original
+    bug) blocks forever on the write lock. This reproduces the production
+    ``SqliteUnitOfWork`` + mapping-repo shared-provider scenario WITHOUT
+    fast-plaid / torch, so it runs in the default ``.venv`` (the fast-plaid
+    write test is skipped there). The ``asyncio.wait_for`` turns a regression
+    into a fast, deterministic failure instead of a hang.
+    """
+    import asyncio
+
+    db_path = tmp_path / "db.db"
+    open_index_database(db_path).close()
+    await _seed_chunks(db_path)
+    provider = build_connection_provider(db_path)
+
+    async def _run() -> None:
+        uow = SqliteUnitOfWork(provider=provider)
+        async with uow:
+            # Acquire the write lock FIRST (mirrors a composite-UoW SQLite child
+            # that has already written in the open transaction)...
+            await uow.chunks.delete(filter={"package": "p"})
+            # ...then write the mapping through the SAME provider. A second
+            # connection here would deadlock on the held write lock.
+            repo = SqliteChunkMultiVectorRepository(provider=provider)
+            await repo.upsert(((2, 0, "q", "h"),))
+            await uow.commit()
+
+    await asyncio.wait_for(_run(), timeout=10.0)
+
+    repo = SqliteChunkMultiVectorRepository(provider=provider)
+    assert dict(await repo.plaid_ids_for_chunks([2])) == {0: 2}

@@ -104,7 +104,6 @@ class FastPlaidUnitOfWork:
     """
 
     sidecar_path: Path
-    db_path: Path
     pipeline_hash: str
     provider: ConnectionProvider
     device: str = "cpu"
