@@ -128,3 +128,29 @@ def test_embedding_config_hash_folds_onnx_fields() -> None:
     )
     assert base.compute_pipeline_hash() != diff_file.compute_pipeline_hash()
     assert base.compute_pipeline_hash() != diff_instr.compute_pipeline_hash()
+
+
+def test_embedding_device_defaults_to_cpu_and_accepts_cuda() -> None:
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    assert EmbeddingConfig().device == "cpu"
+    assert EmbeddingConfig(device="cuda").device == "cuda"
+
+
+def test_embedding_device_excluded_from_pipeline_hash() -> None:
+    """Device is a runtime latency knob, not part of vector identity."""
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    cpu = EmbeddingConfig(device="cpu")
+    cuda = EmbeddingConfig(device="cuda")
+    assert cpu.compute_pipeline_hash() == cuda.compute_pipeline_hash()
+
+
+def test_embedding_device_rejects_unknown() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    with pytest.raises(ValidationError):
+        EmbeddingConfig(device="tpu")  # type: ignore[arg-type]

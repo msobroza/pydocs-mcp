@@ -223,6 +223,13 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+# Single source of truth for the embedder execution device. Device is a
+# runtime latency knob (where inference runs), NOT part of vector identity —
+# it is deliberately excluded from every compute_pipeline_hash so GPU and CPU
+# share the same index cache. Toggled by the --gpu CLI flag via
+# AppConfig.with_device.
+_DEFAULT_DEVICE = "cpu"
+
 # Single source of truth for the debounce bounds (CLAUDE.md §"Default
 # values: single source of truth"). Used both for the pydantic Field
 # default AND the cross-field validator's ceiling check below.
@@ -310,6 +317,8 @@ class EmbeddingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: Literal["fastembed", "openai", "onnx"] = "fastembed"
+    # Execution device. NOT folded into compute_pipeline_hash — see _DEFAULT_DEVICE.
+    device: Literal["cpu", "cuda"] = _DEFAULT_DEVICE
     model_name: str = "BAAI/bge-small-en-v1.5"
     dim: int = Field(default=384, ge=1)
     batch_size: int = Field(default=32, ge=1)
