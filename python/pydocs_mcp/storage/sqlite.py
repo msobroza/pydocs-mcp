@@ -306,6 +306,10 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
         "text": c.text,
         "origin": md.get(ChunkFilterField.ORIGIN.value, ""),
         "content_hash": c.content_hash,
+        # Plain metadata key (no ChunkFilterField member, like "kind"); persisted
+        # as its own column (schema v7) so it survives the round-trip — the tree
+        # reasoning step joins LLM-picked nodes on it.
+        "qualified_name": md.get("qualified_name", ""),
     }
 
 
@@ -327,6 +331,13 @@ def row_to_chunk(row) -> Chunk:
         value = row[key]
         if value:
             metadata[key] = value
+    # qualified_name is a plain metadata key (not a ChunkFilterField). Persisted
+    # as its own column (schema v7) so it survives the round-trip — the tree
+    # reasoning step joins LLM-picked nodes on it. Direct index: the column is
+    # guaranteed by the migration, matching the row["content_hash"] convention.
+    qname = row["qualified_name"]
+    if qname:
+        metadata["qualified_name"] = qname
     # Defensive against NULL: legacy rows (pre-content_hash wiring) carry
     # NULL in this column. Empty-string preserves the existing __post_init__
     # auto-compute path (which fires when content_hash is falsy).
@@ -432,7 +443,7 @@ def _row_to_package(row) -> Package:
 
 # Safe-column whitelists per table (spec §5.3) — declared before the adapter
 # classes so they can reference these as dataclass-field defaults.
-CHUNK_COLUMNS = frozenset({"id", "package", "module", "origin", "title"})
+CHUNK_COLUMNS = frozenset({"id", "package", "module", "origin", "title", "qualified_name"})
 _PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
 _MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
 
@@ -684,8 +695,10 @@ class SqliteChunkRepository:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
                 conn.executemany,
-                "INSERT INTO chunks (package, module, title, text, origin, content_hash) "
-                "VALUES (:package, :module, :title, :text, :origin, :content_hash)",
+                "INSERT INTO chunks "
+                "(package, module, title, text, origin, content_hash, qualified_name) "
+                "VALUES "
+                "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name)",
                 rows,
             )
 
@@ -781,8 +794,10 @@ class SqliteChunkRepository:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
                 conn.executemany,
-                "INSERT INTO chunks (package, module, title, text, origin, content_hash) "
-                "VALUES (:package, :module, :title, :text, :origin, :content_hash)",
+                "INSERT INTO chunks "
+                "(package, module, title, text, origin, content_hash, qualified_name) "
+                "VALUES "
+                "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name)",
                 rows,
             )
 
@@ -874,7 +889,7 @@ class SqliteVectorStore:
 
         sql = (
             "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
-            "c.content_hash, -m.rank AS rank "
+            "c.content_hash, c.qualified_name, -m.rank AS rank "
             "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
             f"WHERE {' AND '.join(where_parts)} "
             "ORDER BY rank LIMIT ?"
