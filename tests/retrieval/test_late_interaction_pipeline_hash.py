@@ -31,6 +31,15 @@ def _clean_config_env(monkeypatch, tmp_path):
     yield
 
 
+def test_li_device_excluded_from_pipeline_hash() -> None:
+    """Switching cpu<->cuda must NOT invalidate the LI index cache."""
+    from pydocs_mcp.retrieval.config import LateInteractionConfig
+
+    cpu = LateInteractionConfig(enabled=True, device="cpu")
+    cuda = LateInteractionConfig(enabled=True, device="cuda")
+    assert cpu.compute_pipeline_hash() == cuda.compute_pipeline_hash()
+
+
 def test_default_ingestion_hash_unaffected_by_late_interaction_toggle() -> None:
     """Default install: shipped ingestion YAML has no ``embed_chunks_multi_vector``.
 

@@ -459,7 +459,8 @@ class LateInteractionConfig(BaseModel):
     document_length: int = Field(default=180, ge=8)
     query_length: int = Field(default=32, ge=4)
     pool_factor: int = Field(default=1, ge=1)
-    device: Literal["cpu", "cuda"] = "cpu"
+    # Execution device. NOT folded into compute_pipeline_hash — see _DEFAULT_DEVICE.
+    device: Literal["cpu", "cuda"] = _DEFAULT_DEVICE
 
     @property
     def dim(self) -> int:
@@ -477,7 +478,6 @@ class LateInteractionConfig(BaseModel):
                 str(self.document_length),
                 str(self.query_length),
                 str(self.pool_factor),
-                self.device,
             ]
         )
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
