@@ -12,7 +12,7 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 6  # v6 adds ``chunk_multi_vector_ids`` (late-interaction id-mapping)
+SCHEMA_VERSION = 7  # v7 adds ``chunks.qualified_name`` (tree-reasoning join key)
 
 _DDL = """
     CREATE TABLE packages (
@@ -24,7 +24,8 @@ _DDL = """
         id INTEGER PRIMARY KEY, package TEXT,
         module TEXT DEFAULT '',
         title TEXT, text TEXT, origin TEXT,
-        content_hash TEXT
+        content_hash TEXT,
+        qualified_name TEXT
     );
     CREATE VIRTUAL TABLE chunks_fts USING fts5(
         title, text, package,
@@ -225,16 +226,31 @@ def _apply_v6_additions(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cmv_package ON chunk_multi_vector_ids(package)")
 
 
+def _apply_v7_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply every additive change that makes up the v7 shape.
+
+    Adds ``chunks.qualified_name TEXT`` — the dotted symbol path
+    (``pkg.mod.Class.method``) that ``llm_tree_reasoning`` joins LLM-picked
+    tree nodes against. It is produced at extraction (``tree_flatten``) and
+    carried in ``Chunk.metadata`` but was previously dropped at the SQLite
+    boundary, so tree retrieval matched nothing. Nullable: existing rows read
+    back ``None`` until the next re-index repopulates them (it is NOT part of
+    ``compute_chunk_content_hash``, so adding it forces no re-embed). Mirrors
+    the v3/v4 pattern — ``_try_add_column`` swallows duplicate-column errors so
+    the sweep is safe to re-run as a v7-on-open drift-recovery pass.
+    """
+    _try_add_column(conn, "chunks", "qualified_name TEXT")
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
-    - v6 already: re-run v3+v4+v5+v6 sweeps (additive, idempotent; drift recovery).
-    - v5 → v6: wipe-and-recreate. v6 adds the ``chunk_multi_vector_ids`` id-mapping
-      table whose rows are derived from re-indexing; no data to preserve in the
-      mapping itself, and wiping forces a fresh fast-plaid index build.
-    - v4 → v5 → v6: additive (ALTER + new tables); rows in existing tables survive.
-    - v3 → v4 → v5 → v6: walk all forward migrations in order.
-    - v2 → v3 → v4 → v5 → v6: walk all forward migrations in order.
+    - v7 already: re-run v3..v7 sweeps (additive, idempotent; drift recovery).
+    - v6 → v7: additive — adds the nullable ``chunks.qualified_name`` column;
+      existing rows survive and read back NULL until the next re-index.
+    - v4 → … → v7 / v3 → … → v7 / v2 → … → v7: walk all forward migrations in order.
+    - v5: wipe-and-recreate (falls through to the rebuild branch — v5→v6 was a
+      deliberate wipe to force a fresh fast-plaid index build).
     - Any other mismatch: drop every known table and recreate from current DDL.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,21 +261,32 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v6 — re-run additive sweeps for drift recovery.
+        # v7 — re-run additive sweeps for drift recovery.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
+        _apply_v7_additions(conn)
+    elif current == 6:
+        # v6 → v7 — additive (adds the nullable ``chunks.qualified_name``
+        # column). Existing rows survive and read back NULL until re-index.
+        _apply_v3_additions(conn)
+        _apply_v4_additions(conn)
+        _apply_v5_additions(conn)
+        _apply_v6_additions(conn)
+        _apply_v7_additions(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 4:
-        # v4 → v5 → v6 — additive. Rerun the v3/v4 idempotent sweeps first to
+        # v4 → … → v7 — additive. Rerun the v3/v4 idempotent sweeps first to
         # repair any drift in legacy v4-stamped DBs before stamping forward.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
+        _apply_v7_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 3:
-        # v3 → v4 → v5 → v6 — additive. We also re-run the v3 sweep first because
+        # v3 → … → v7 — additive. We also re-run the v3 sweep first because
         # some legacy v3-stamped DBs lack ``document_trees`` / ``content_hash`` /
         # ``local_path`` despite the stamp; rerunning the idempotent v3 sweep
         # repairs that drift before stamping forward.
@@ -267,13 +294,15 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
+        _apply_v7_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 2:
-        # v2 → v3 → v4 → v5 → v6 — walk every forward migration in order.
+        # v2 → … → v7 — walk every forward migration in order.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
+        _apply_v7_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     else:
         _drop_all_known_tables(conn)

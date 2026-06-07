@@ -7,7 +7,7 @@ from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
 
 
 def test_schema_version_is_5() -> None:
-    assert SCHEMA_VERSION == 6
+    assert SCHEMA_VERSION == 7
 
 
 def test_fresh_db_v5_has_packages_embedding_model_column(tmp_path: Path) -> None:
@@ -79,6 +79,6 @@ def test_v4_to_v5_migration_lossless(tmp_path: Path) -> None:
         ("demo-pkg",),
     ).fetchone()[0]
     assert embedding_model is None
-    # Version bumped (v4 → v5 → v6 walks all forward migrations in one open).
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    # Version bumped (v4 → … → v7 walks all forward migrations in one open).
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
     conn.close()
