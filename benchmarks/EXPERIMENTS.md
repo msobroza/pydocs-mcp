@@ -157,6 +157,10 @@ benchmarks/configs/repoqa_hybrid_li_wsi.yaml \
   --report benchmarks/results/repoqa_smalltest_li.md
 ```
 
+Add `--gpu` to any runner command to move embedder inference (FastEmbed / ONNX /
+PyLate) onto CUDA — no YAML change, no re-index. Needs the matching GPU runtime
+(see INSTALL.md §"GPU inference").
+
 To run the same two conditions with the edge model, point the overlays at
 `lightonai/LateOn-Code-edge` (see the model-variants table in §"RepoQA retrieval
 experiments") — switching models triggers a one-time re-index.

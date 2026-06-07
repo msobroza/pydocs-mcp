@@ -73,3 +73,20 @@ maturin develop --release
 
 The pure-Python fallback works without Rust; the native module just
 speeds up the file-walking and parsing hot paths.
+
+## GPU inference (optional)
+
+Pass `--gpu` to `pydocs-mcp serve|index|watch` or to the benchmark runner to run
+embedder inference on CUDA. It requires the GPU runtime for whichever embedder
+you use (the CPU packages are the default):
+
+- ONNX dense provider: `pip install onnxruntime-gpu` (replaces `onnxruntime`).
+- FastEmbed dense: `pip install fastembed-gpu` (replaces `fastembed`; the two
+  conflict — install one).
+- PyLate late-interaction: a CUDA build of torch (already pulled by the
+  `[late-interaction]` extra on a CUDA host).
+
+`--gpu` is a runtime latency knob: it does not change retrieval results and
+does not trigger a re-index (device is excluded from the index-cache key). With
+the CPU runtimes installed, FastEmbed/ONNX fall back to CPU; only the PyLate
+path requires real CUDA.
