@@ -93,8 +93,8 @@ pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 ```
 
 Embeddings run on CPU by default. Add `--gpu` to `serve` / `index` (or the
-benchmark runner) to move all embedder inference — FastEmbed, the `onnx`
-provider, and PyLate — onto CUDA. It's a latency knob only: no YAML change, no
+benchmark runner) to move all embedder inference — FastEmbed, the
+`sentence_transformers` provider, and PyLate — onto CUDA. It's a latency knob only: no YAML change, no
 re-index, identical results. Needs the matching GPU runtime — see
 [INSTALL.md](INSTALL.md#gpu-inference-optional).
 

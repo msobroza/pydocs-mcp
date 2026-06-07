@@ -80,13 +80,14 @@ Pass `--gpu` to `pydocs-mcp serve|index|watch` or to the benchmark runner to run
 embedder inference on CUDA. It requires the GPU runtime for whichever embedder
 you use (the CPU packages are the default):
 
-- ONNX dense provider: `pip install onnxruntime-gpu` (replaces `onnxruntime`).
 - FastEmbed dense: `pip install fastembed-gpu` (replaces `fastembed`; the two
   conflict — install one).
+- `sentence_transformers` dense provider: a CUDA build of torch (pulled by the
+  `[sentence-transformers]` extra on a CUDA host).
 - PyLate late-interaction: a CUDA build of torch (already pulled by the
   `[late-interaction]` extra on a CUDA host).
 
 `--gpu` is a runtime latency knob: it does not change retrieval results and
 does not trigger a re-index (device is excluded from the index-cache key). With
-the CPU runtimes installed, FastEmbed/ONNX fall back to CPU; only the PyLate
-path requires real CUDA.
+the CPU runtimes installed, FastEmbed falls back to CPU; the
+`sentence_transformers` and PyLate paths require real CUDA torch.

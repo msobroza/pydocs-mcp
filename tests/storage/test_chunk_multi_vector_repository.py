@@ -146,12 +146,15 @@ async def test_mapping_write_shares_held_transaction_no_deadlock(tmp_path: Path)
     """Regression for the FastPlaid/SQLite deadlock — torch-free.
 
     The mapping write must route through the SAME connection a held SQLite
-    write transaction already owns; opening a second connection (the original
-    bug) blocks forever on the write lock. This reproduces the production
+    write transaction already owns. The original bug opened a SECOND connection,
+    which cannot take the write lock the open transaction holds — raising
+    ``sqlite3.OperationalError: database is locked`` (or blocking, if a
+    ``busy_timeout`` is ever configured). This reproduces the production
     ``SqliteUnitOfWork`` + mapping-repo shared-provider scenario WITHOUT
     fast-plaid / torch, so it runs in the default ``.venv`` (the fast-plaid
-    write test is skipped there). The ``asyncio.wait_for`` turns a regression
-    into a fast, deterministic failure instead of a hang.
+    write test is skipped there). The ``asyncio.wait_for`` is a defensive bound
+    so a future ``busy_timeout`` increase can't turn the regression into an
+    indefinite hang; with the fix the write completes well under it.
     """
     import asyncio
 
