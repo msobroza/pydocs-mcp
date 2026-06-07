@@ -94,6 +94,7 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
     metric_specs: tuple[str, ...] = DEFAULT_METRIC_SPECS,
     limit: int | None = None,
     corpus_dir: Path | None = None,
+    gpu: bool = False,
 ) -> tuple[SweepResults, int]:
     """Run a (system × config) sweep over a dataset.
 
@@ -120,6 +121,10 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
             never deleted (it's reused across every task and leg). Used to
             point native ``pydocs-mcp`` at a prepared reference project for
             datasets (e.g. DS-1000) whose ``corpus_source`` is a no-op stub.
+        gpu: When ``True``, route embedder inference to CUDA via
+            ``AppConfig.with_device(gpu=True)`` for every leg (device is
+            excluded from the index cache key, so toggling it doesn't force a
+            re-index). ``False`` (default) keeps inference on CPU.
 
     Returns:
         ``(sweep_results, tasks_ran)`` where ``sweep_results`` is
@@ -152,7 +157,7 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
     from pydocs_mcp.retrieval.config import AppConfig
 
     for system_name, cfg_path in itertools.product(systems, config_paths):
-        config = AppConfig.load(explicit_path=cfg_path)
+        config = AppConfig.load(explicit_path=cfg_path).with_device(gpu=gpu)
         system = system_registry.build(system_name)
         config_name = cfg_path.stem
         # WHY: reference-project datasets (DS-1000, ``--corpus-dir`` set) index
@@ -668,6 +673,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help=(
+            "Run embedder inference on CUDA (FastEmbed / ONNX / PyLate). "
+            "Requires the matching GPU runtime (onnxruntime-gpu / "
+            "fastembed-gpu / CUDA torch). Device is excluded from the index "
+            "cache key, so toggling --gpu does NOT trigger a re-index."
+        ),
+    )
+    parser.add_argument(
         "--report",
         type=Path,
         default=None,
@@ -752,6 +767,7 @@ def main() -> None:
                 metric_specs=_parse_csv(args.metrics),
                 limit=args.limit,
                 corpus_dir=args.corpus_dir,
+                gpu=args.gpu,
             ),
         )
 

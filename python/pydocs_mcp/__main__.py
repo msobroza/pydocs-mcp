@@ -116,6 +116,13 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Don't import deps. Read .py files from site-packages instead. "
             "Faster, safer, no side-effects. Uses the same parser as project source.",
         )
+        sp.add_argument(
+            "--gpu",
+            action="store_true",
+            help="Run embedder inference on CUDA. Requires the matching GPU "
+            "runtime (onnxruntime-gpu / fastembed-gpu / CUDA torch). Does not "
+            "trigger a re-index (device is excluded from the cache key).",
+        )
         if cmd == "serve":
             sp.add_argument(
                 "--watch",
@@ -323,6 +330,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     # serve so ingestion pipeline overrides (spec §7.3) stay consistent
     # with the rest of the config.
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
+    config = config.with_device(gpu=getattr(args, "gpu", False))
     # Push YAML-loaded settings into module-level slots read by
     # ``LookupInput`` validators and ``ReferenceCaptureStage`` (sub-PR #5c
     # Task 8). Indexing uses the latter via ``ReferenceCaptureStage`` in
@@ -756,7 +764,11 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from pydocs_mcp.server import run
 
     try:
-        run(db_path, config_path=getattr(args, "config", None))
+        run(
+            db_path,
+            config_path=getattr(args, "config", None),
+            gpu=getattr(args, "gpu", False),
+        )
         return 0
     except KeyboardInterrupt:
         # Graceful shutdown via Ctrl+C — not an error.

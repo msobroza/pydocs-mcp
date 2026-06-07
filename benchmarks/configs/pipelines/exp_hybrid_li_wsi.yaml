@@ -1,0 +1,44 @@
+# Hybrid BM25 + late-interaction (ColBERT/MaxSim), weighted-score
+# interpolation (0.5 BM25 / 0.5 late) — benchmark experiment suite. The
+# weighted twin of exp_hybrid_li_rrf: same two branches, but a linear blend
+# instead of RRF, so a delta against exp_hybrid_li_rrf isolates the fusion
+# method, and a delta against exp_hybrid_wsi_balanced (BM25 + single-vector
+# dense, same 0.5/0.5 weights) isolates the late-interaction branch.
+# max_results=10 so recall@10 sees a full top-10.
+#
+# Requires the [late-interaction] extra and `late_interaction.enabled: true`
+# in the surrounding sweep config (the embedder + FastPlaidUnitOfWork are
+# wired by the composition root when that toggle is on).
+name: exp_hybrid_li_wsi
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: parallel
+    type: parallel_retrieval
+    params:
+      branches:
+        - name: bm25
+          steps:
+            - {name: fetch, type: chunk_fetcher, params: {schema_name: chunk}}
+            - {name: score, type: bm25_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: bm25.ranked}}
+        - name: late
+          steps:
+            - {name: fetch, type: chunk_fetcher, params: {schema_name: chunk}}
+            - {name: score, type: bm25_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {}}
+            - {name: rerank, type: late_interaction_scorer, params: {publish_to: late.ranked}}
+  - name: fuse
+    type: weighted_score_interpolation
+    params:
+      branch_keys: [bm25.ranked, late.ranked]
+      weights: [0.5, 0.5]
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

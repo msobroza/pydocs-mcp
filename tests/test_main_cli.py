@@ -46,6 +46,17 @@ def _run_cli(*argv: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_serve_index_watch_accept_gpu_flag() -> None:
+    from pydocs_mcp.__main__ import _build_parser
+
+    parser = _build_parser()
+    for cmd in ("serve", "index", "watch"):
+        args = parser.parse_args([cmd, ".", "--gpu"])
+        assert args.gpu is True
+        args_default = parser.parse_args([cmd, "."])
+        assert args_default.gpu is False
+
+
 def test_cli_verbose_shows_traceback(tmp_path: Path) -> None:
     # Trigger a controlled failure by pointing at a nonexistent cache dir.
     result = _run_cli(

@@ -89,6 +89,8 @@ embedding:
   dim:         384
   batch_size:  32
   bit_width:   4
+  # Embedder execution device (cpu / cuda); the --gpu CLI flag sets cuda.
+  #   device:    cpu
 
 # Unified SearchBackend seam (spec §8.1): which storage backend serves
 # retrieval capabilities. `dim` / `bit_width` stay sourced from `embedding`

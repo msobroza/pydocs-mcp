@@ -35,3 +35,28 @@ def test_build_embedder_onnx_returns_onnx_embedder() -> None:
         assert e.dim == 1024 and e.model_name == "onnx-community/Qwen3-Embedding-0.6B-ONNX"
     finally:
         onnx_mod.OnnxEmbedder.__post_init__ = orig  # type: ignore[assignment]
+
+
+def test_build_embedder_passes_device_to_fastembed() -> None:
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    captured = {}
+
+    def _fake_text_embedding(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    mock_fastembed = MagicMock()
+    mock_fastembed.TextEmbedding = _fake_text_embedding
+
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    sys.modules.pop("pydocs_mcp.extraction.strategies.embedders.fastembed", None)
+    with patch.dict(sys.modules, {"fastembed": mock_fastembed}):
+        from pydocs_mcp.extraction.strategies.embedders import build_embedder
+
+        build_embedder(EmbeddingConfig(provider="fastembed", device="cuda"))
+
+    assert captured["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    sys.modules.pop("pydocs_mcp.extraction.strategies.embedders.fastembed", None)

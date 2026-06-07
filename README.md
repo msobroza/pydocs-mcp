@@ -87,9 +87,16 @@ Then index your project and start the server:
 
 ```bash
 pydocs-mcp serve .                            # index project + deps, serve over MCP (stdio)
+pydocs-mcp serve . --gpu                      # …same, with CUDA-accelerated embeddings
 pydocs-mcp search "batch inference"           # the same search, from the CLI
 pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 ```
+
+Embeddings run on CPU by default. Add `--gpu` to `serve` / `index` (or the
+benchmark runner) to move all embedder inference — FastEmbed, the `onnx`
+provider, and PyLate — onto CUDA. It's a latency knob only: no YAML change, no
+re-index, identical results. Needs the matching GPU runtime — see
+[INSTALL.md](INSTALL.md#gpu-inference-optional).
 
 ### Live re-indexing (optional)
 
@@ -162,7 +169,8 @@ through the fusion steps below.
   [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5)
   by default — runs on CPU via ONNX, no PyTorch, no torch download.
   OpenAI `text-embedding-3-small` is the optional alternative for
-  users with an API key.
+  users with an API key. Pass `--gpu` to run the on-device embedders
+  (FastEmbed / `onnx`) on CUDA instead — same vectors, lower latency.
 - **Bigger on-device model — the `onnx` provider.** For stronger dense
   recall without an API key, switch to
   [`onnx-community/Qwen3-Embedding-0.6B-ONNX`](https://huggingface.co/onnx-community/Qwen3-Embedding-0.6B-ONNX).

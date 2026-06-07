@@ -175,6 +175,75 @@ async def test_runner_smoke_returns_aggregate_tuple_shape(tmp_path: Path) -> Non
         assert lo <= mean <= hi
 
 
+@dataclass
+class _ConfigCapturingSystem:
+    """Synthetic system that records the ``config`` reaching ``index``.
+
+    Lets the end-to-end ``run_sweep(gpu=True)`` assertion observe that the
+    runner applied ``AppConfig.with_device`` before threading the config to
+    the system. Registered ad-hoc per test; never reaches a real index.
+    """
+
+    name: str = "config-capturing"
+    captured_device: str | None = field(default=None, init=False)
+    captured_li_device: str | None = field(default=None, init=False)
+
+    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
+        self.captured_device = config.embedding.device
+        self.captured_li_device = config.late_interaction.device
+
+    async def search(self, query: str, limit: int) -> tuple[object, ...]:
+        return ()
+
+    async def teardown(self) -> None:
+        return None
+
+
+async def test_runner_run_sweep_gpu_reaches_embedder_with_cuda(tmp_path: Path) -> None:
+    """``run_sweep(gpu=True)`` yields a config whose embedder device is
+    ``"cuda"`` — asserted via a fake system capturing the config.
+
+    This is the spec's end-to-end integration assertion: the argparse-level
+    test only proves the flag parses; this proves the flag actually flows
+    through ``run_sweep`` and lands on the embedder device the system sees.
+    """
+    overlay = _empty_overlay(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+
+    captured = _ConfigCapturingSystem()
+    # WHY: hand-register a *singleton instance* via a factory closure so the
+    # same object the test holds is the one the runner indexes — and clean up
+    # the global registry afterwards so other tests are unaffected.
+    system_registry._items["config-capturing"] = lambda: captured  # type: ignore[assignment]
+    try:
+        await run_sweep(
+            systems=("config-capturing",),
+            config_paths=(overlay,),
+            dataset_name="repoqa",
+            dataset_kwargs={"fixture_path": _FIXTURE},
+            tracker_names=("jsonl",),
+            tracker_kwargs={"jsonl": {"output_dir": jsonl_dir}},
+            limit=1,
+            gpu=True,
+        )
+    finally:
+        system_registry._items.pop("config-capturing", None)
+
+    assert captured.captured_device == "cuda"
+    assert captured.captured_li_device == "cuda"
+
+
+def test_arg_parser_accepts_gpu_flag() -> None:
+    from benchmarks.eval.runner import _build_arg_parser
+
+    parser = _build_arg_parser()
+    args = parser.parse_args(["--configs", "x.yaml", "--gpu"])
+    assert args.gpu is True
+
+    args_default = parser.parse_args(["--configs", "x.yaml"])
+    assert args_default.gpu is False
+
+
 def test_runner_seeds_library_on_systems_before_index() -> None:
     """The runner reads ``task.metadata['repo']`` and seeds
     ``library_name`` / ``library`` on the system instance BEFORE

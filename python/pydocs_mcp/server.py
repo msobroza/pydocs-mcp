@@ -75,7 +75,7 @@ def _build_search_query(payload: SearchInput) -> SearchQuery:
 # ── server ────────────────────────────────────────────────────────────────
 
 
-def run(db_path: Path, config_path: Path | None = None) -> None:
+def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) -> None:
     """Start the MCP server."""
     from mcp.server.fastmcp import FastMCP
     from mcp.types import ToolAnnotations
@@ -94,6 +94,10 @@ def run(db_path: Path, config_path: Path | None = None) -> None:
     from pydocs_mcp.storage.factories import build_sqlite_lookup_service
 
     config = AppConfig.load(explicit_path=config_path)
+    # ``serve --gpu`` stamps the embedder execution device onto the
+    # freshly-loaded config so query-time embedding runs on CUDA. Device is
+    # excluded from every pipeline hash, so this never invalidates a cache.
+    config = config.with_device(gpu=gpu)
     # Push YAML-loaded settings into module-level slots read by
     # ``LookupInput`` validators and ``ReferenceCaptureStage`` (sub-PR #5c
     # Task 8). One call covers both — see ``configure_from_app_config``.

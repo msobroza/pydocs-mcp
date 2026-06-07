@@ -22,10 +22,21 @@ class FastEmbedEmbedder:
 
     model_name: str = "BAAI/bge-small-en-v1.5"
     dim: int = 384
+    # Execution device — drives the onnxruntime provider list so the same
+    # config can run CPU or GPU without code changes.
+    device: str = "cpu"
     _model: TextEmbedding = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._model = TextEmbedding(model_name=self.model_name)
+        if self.device == "cuda":
+            # CPU listed second as graceful fallback when the GPU runtime
+            # is absent (onnxruntime warns and uses CPU rather than crashing).
+            self._model = TextEmbedding(
+                model_name=self.model_name,
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            )
+        else:
+            self._model = TextEmbedding(model_name=self.model_name)
 
     async def embed_query(self, text: str) -> Embedding:
         results = await asyncio.to_thread(

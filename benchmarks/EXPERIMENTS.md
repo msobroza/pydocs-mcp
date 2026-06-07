@@ -3,26 +3,58 @@
 A turnkey suite for comparing pydocs-mcp's retrieval strategies on a small,
 representative slice of **RepoQA-SNF** (Apache-2.0, EvalPlus, arXiv:2406.06025).
 
-Ten conditions are compared on the same `small_test` split so the only thing
+Twelve conditions are compared on the same `small_test` split so the only thing
 that varies between runs is the retrieval pipeline:
 
-| # | Condition | Config overlay | Pipeline | Needs `OPENAI_API_KEY` |
+| # | Condition | Config overlay | Pipeline | Extra dep |
 |---|-----------|----------------|----------|:---:|
-| 1 | BM25 only | `configs/repoqa_bm25.yaml` | `exp_bm25` | no |
-| 2 | Dense only (bge-small) | `configs/repoqa_dense.yaml` | `exp_dense` | no |
-| 3 | Hybrid, RRF `k=30` | `configs/repoqa_hybrid_rrf_k30.yaml` | `exp_hybrid_rrf_k30` | no |
-| 4 | Hybrid, RRF `k=60` (default) | `configs/repoqa_hybrid_rrf_k60.yaml` | `exp_hybrid_rrf_k60` | no |
-| 5 | Hybrid, RRF `k=100` | `configs/repoqa_hybrid_rrf_k100.yaml` | `exp_hybrid_rrf_k100` | no |
-| 6 | Hybrid, weighted 0.7/0.3 (BM25-heavy) | `configs/repoqa_hybrid_wsi_bm25.yaml` | `exp_hybrid_wsi_bm25` | no |
-| 7 | Hybrid, weighted 0.5/0.5 (balanced) | `configs/repoqa_hybrid_wsi_balanced.yaml` | `exp_hybrid_wsi_balanced` | no |
-| 8 | Hybrid, weighted 0.3/0.7 (dense-heavy) | `configs/repoqa_hybrid_wsi_dense.yaml` | `exp_hybrid_wsi_dense` | no |
-| 9 | LLM tree reasoning (vectorless) | `configs/repoqa_tree.yaml` | `exp_tree` | **yes** |
-| 10 | Hybrid + LLM tree rerank (top-10) | `configs/repoqa_hybrid_tree.yaml` | `exp_hybrid_tree` | **yes** |
+| 1 | BM25 only | `configs/repoqa_bm25.yaml` | `exp_bm25` | — |
+| 2 | Dense only (bge-small) | `configs/repoqa_dense.yaml` | `exp_dense` | — |
+| 3 | Hybrid, RRF `k=30` | `configs/repoqa_hybrid_rrf_k30.yaml` | `exp_hybrid_rrf_k30` | — |
+| 4 | Hybrid, RRF `k=60` (default) | `configs/repoqa_hybrid_rrf_k60.yaml` | `exp_hybrid_rrf_k60` | — |
+| 5 | Hybrid, RRF `k=100` | `configs/repoqa_hybrid_rrf_k100.yaml` | `exp_hybrid_rrf_k100` | — |
+| 6 | Hybrid, weighted 0.7/0.3 (BM25-heavy) | `configs/repoqa_hybrid_wsi_bm25.yaml` | `exp_hybrid_wsi_bm25` | — |
+| 7 | Hybrid, weighted 0.5/0.5 (balanced) | `configs/repoqa_hybrid_wsi_balanced.yaml` | `exp_hybrid_wsi_balanced` | — |
+| 8 | Hybrid, weighted 0.3/0.7 (dense-heavy) | `configs/repoqa_hybrid_wsi_dense.yaml` | `exp_hybrid_wsi_dense` | — |
+| 9 | Hybrid + late-interaction (ColBERT/MaxSim), RRF | `configs/repoqa_hybrid_li_rrf.yaml` | `exp_hybrid_li_rrf` | `[late-interaction]` |
+| 10 | Hybrid + late-interaction, weighted 0.5/0.5 | `configs/repoqa_hybrid_li_wsi.yaml` | `exp_hybrid_li_wsi` | `[late-interaction]` |
+| 11 | LLM tree reasoning (vectorless) | `configs/repoqa_tree.yaml` | `exp_tree` | `OPENAI_API_KEY` |
+| 12 | Hybrid + LLM tree rerank (top-10) | `configs/repoqa_hybrid_tree.yaml` | `exp_hybrid_tree` | `OPENAI_API_KEY` |
 
 Conditions 3–5 vary the RRF rank-bias constant `k`; conditions 6–8 vary the
 BM25/dense weight split of the linear (weighted-score-interpolation) blend.
-Every experiment pipeline emits a ranked top-10 candidate list (`max_results:
-10`) so `recall@10` is measurable — the shipped `*_ranked` presets cap at 8.
+Conditions 9–10 swap the single-vector dense branch for token-level
+late-interaction (ColBERT/MaxSim) re-ranking, fused with BM25 by RRF (9) or by
+the same 0.5/0.5 weighted blend (10) — a 9-vs-10 delta isolates the fusion
+method, while 9-vs-4 (RRF, both) and 10-vs-7 (weighted 0.5/0.5, both) each
+isolate the late-interaction branch against its single-vector dense twin. Every
+experiment pipeline emits a ranked top-10 candidate list (`max_results: 10`) so
+`recall@10` is measurable — the shipped `*_ranked` presets cap at 8.
+
+### Late-interaction model variants (conditions 9–10)
+
+Both late-interaction conditions default to `lightonai/LateOn-Code`. The project
+ships a second multi-vector model — swap it by adding a `model_name:` (and its
+matching dims) under `late_interaction:` in the overlay, no pipeline change:
+
+| Model | `embedding_dim` | `document_length` | `query_length` | Trade-off |
+|-------|:---:|:---:|:---:|-----------|
+| `lightonai/LateOn-Code` (default) | 128 | 180 | 32 | Higher per-token fidelity; larger fast-plaid index + slower MaxSim. The quality reference. |
+| `lightonai/LateOn-Code-edge` | 48 | 2048 | 256 | ~2.7× smaller token vectors (48 vs 128) → smaller index + faster MaxSim, and a far longer context window (2048/256 vs 180/32) so large chunks aren't truncated. The speed / long-context proposition. |
+
+```yaml
+# overlay snippet to run conditions 9–10 with the edge model
+late_interaction:
+  enabled: true
+  model_name: lightonai/LateOn-Code-edge
+  embedding_dim: 48
+  document_length: 2048
+  query_length: 256
+```
+
+Because the index-cache key folds the ingestion-pipeline hash (which includes
+`LateInteractionConfig`), switching models triggers a one-time re-index — the
+two models never share cached vectors.
 
 The harness persists the dense `.tq` sidecar at index time, so the dense and
 hybrid conditions (2–8) measure real dense retrieval — not a lexical fallback.
@@ -36,10 +68,12 @@ relative to each overlay (the `pipeline_path` search-path prefers a file next
 to the config before the shipped `pydocs_mcp/pipelines/` dir), so they stay
 out of the installed package.
 
-> **Dense model note.** The dense and hybrid conditions use the current
-> default single-vector embedder (`embedding:` → FastEmbed `bge-small`).
-> Late-interaction / multi-vector models such as `lightonai/LateOn-Code` are a
-> separate feature — see
+> **Embedder note.** The single-vector dense and hybrid conditions (2–8) use the
+> default single-vector embedder (`embedding:` → FastEmbed `bge-small`). The
+> late-interaction conditions (9–10) use a multi-vector ColBERT model
+> (`late_interaction.model_name`, default `lightonai/LateOn-Code`; the edge
+> variant `lightonai/LateOn-Code-edge` is the swap above) via PyLate +
+> fast-plaid — see
 > `docs/superpowers/specs/2026-05-28-late-interaction-dense-retrieval-design.md`.
 
 ## 1. Prerequisites
@@ -107,6 +141,29 @@ benchmarks/configs/repoqa_hybrid_wsi_balanced.yaml,\
 benchmarks/configs/repoqa_hybrid_wsi_dense.yaml \
   --report benchmarks/results/repoqa_smalltest_core.md
 ```
+
+### Late-interaction conditions (need the `[late-interaction]` extra)
+
+```bash
+pip install -e ".[late-interaction]"   # pylate + fast-plaid + torch (~1-5 GB)
+
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+  --systems pydocs-mcp \
+  --dataset repoqa \
+  --split small_test \
+  --configs \
+benchmarks/configs/repoqa_hybrid_li_rrf.yaml,\
+benchmarks/configs/repoqa_hybrid_li_wsi.yaml \
+  --report benchmarks/results/repoqa_smalltest_li.md
+```
+
+Add `--gpu` to any runner command to move embedder inference (FastEmbed / ONNX /
+PyLate) onto CUDA — no YAML change, no re-index. Needs the matching GPU runtime
+(see INSTALL.md §"GPU inference").
+
+To run the same two conditions with the edge model, point the overlays at
+`lightonai/LateOn-Code-edge` (see the model-variants table in §"RepoQA retrieval
+experiments") — switching models triggers a one-time re-index.
 
 ### Tree conditions (need `OPENAI_API_KEY`)
 
