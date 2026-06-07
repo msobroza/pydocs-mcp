@@ -48,6 +48,10 @@ Two more retrieval modes ship as opt-in pipeline presets:
 Select a preset by pointing the chunk pipeline at it in your config overlay (see
 [Configuration](#configuration)); the default remains BM25.
 
+Embedder inference runs on CPU by default. Pass `--gpu` to `serve` / `index` to
+move it onto CUDA — same vectors, same cache, lower latency (see
+[GPU inference](#gpu-inference---gpu)).
+
 ### Routing
 
 `ConditionalStep` and `RouteStep` route per query type — e.g. send long or
@@ -144,11 +148,13 @@ rendering.
 # Serve as an MCP server (the most common entry point)
 pydocs-mcp serve /path/to/project
 pydocs-mcp serve . --no-inspect --depth 2 --workers 8 --config ./my-pydocs.yaml
+pydocs-mcp serve . --gpu            # run embedder inference on CUDA (see "GPU inference" below)
 
 # Index only (no server) — useful for one-shot benchmark setups
 pydocs-mcp index .
 pydocs-mcp index . --force          # clear cache + re-index
 pydocs-mcp index . --skip-project   # only index deps, not the project
+pydocs-mcp index . --gpu            # index with CUDA-accelerated embeddings
 
 # Search (mirrors the MCP `search` tool)
 pydocs-mcp search "batch inference"
@@ -162,6 +168,27 @@ pydocs-mcp lookup fastapi.routing.APIRouter --show tree
 pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
 pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 ```
+
+### GPU inference (`--gpu`)
+
+`serve`, `index`, and `watch` accept `--gpu` to run **embedder inference on
+CUDA** — it covers all embedders: FastEmbed and the `onnx` provider (single-vector
+dense) and PyLate (late-interaction / multi-vector). It needs no YAML change and
+applies to both index-time and query-time embedding.
+
+```bash
+pydocs-mcp index . --gpu     # CUDA-accelerated indexing
+pydocs-mcp serve . --gpu     # CUDA for both the initial index and query-time embedding
+```
+
+`--gpu` is a **runtime latency knob only**: it does not change retrieval results
+and does not trigger a re-index — the execution device is excluded from the
+index-cache key, so the same `.tq` / fast-plaid index is shared across CPU and
+GPU runs. It requires the matching GPU runtime for whichever embedder you use
+(`onnxruntime-gpu`, `fastembed-gpu`, or a CUDA build of torch for PyLate); see
+[INSTALL.md](INSTALL.md#gpu-inference-optional). With the default CPU runtimes
+installed, FastEmbed/ONNX fall back to CPU and only the PyLate path requires real
+CUDA. The benchmark runner takes the same `--gpu` flag.
 
 ### `search` flags
 
