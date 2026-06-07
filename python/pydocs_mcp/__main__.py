@@ -764,7 +764,11 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from pydocs_mcp.server import run
 
     try:
-        run(db_path, config_path=getattr(args, "config", None))
+        run(
+            db_path,
+            config_path=getattr(args, "config", None),
+            gpu=getattr(args, "gpu", False),
+        )
         return 0
     except KeyboardInterrupt:
         # Graceful shutdown via Ctrl+C — not an error.
