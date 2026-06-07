@@ -1,0 +1,26 @@
+# RepoQA experiment — BM25 + late-interaction (ColBERT/MaxSim), fused via
+# weighted-score interpolation (0.5/0.5). Weighted twin of
+# repoqa_hybrid_li_rrf.yaml: pair the two to isolate RRF vs weighted fusion
+# for the late-interaction branch.
+#
+# To swap the late-interaction model, add `model_name:` under
+# `late_interaction:` (the project ships two — see benchmarks/EXPERIMENTS.md):
+#   late_interaction:
+#     enabled: true
+#     model_name: lightonai/LateOn-Code-edge   # 48-dim / 2048-token edge variant
+#     embedding_dim: 48
+#     document_length: 2048
+#     query_length: 256
+#
+# Requires `pip install 'pydocs-mcp[late-interaction]'` (pulls pylate +
+# fast-plaid + sentence-transformers + torch; expect ~1-5 GB).
+late_interaction:
+  enabled: true
+
+pipelines:
+  ingestion:
+    - default: true
+      pipeline_path: pipelines/ingestion_late_interaction.yaml
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_hybrid_li_wsi.yaml
