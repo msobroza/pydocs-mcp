@@ -22,9 +22,7 @@ def build_embedder(cfg: EmbeddingConfig) -> Embedder:
             FastEmbedEmbedder,
         )
 
-        return FastEmbedEmbedder(
-            model_name=cfg.model_name, dim=cfg.dim, device=cfg.device
-        )
+        return FastEmbedEmbedder(model_name=cfg.model_name, dim=cfg.dim, device=cfg.device)
     if cfg.provider == "openai":
         from pydocs_mcp.extraction.strategies.embedders.openai import (
             OpenAIEmbedder,
