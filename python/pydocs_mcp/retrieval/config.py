@@ -575,7 +575,7 @@ class AppConfig(BaseSettings):
         _DEFAULT_DEVICE), so this never invalidates an index cache. Pure
         function — the receiver is unmutated (pydantic ``model_copy``).
         """
-        device = "cuda" if gpu else "cpu"
+        device = "cuda" if gpu else _DEFAULT_DEVICE
         return self.model_copy(
             update={
                 "embedding": self.embedding.model_copy(update={"device": device}),
