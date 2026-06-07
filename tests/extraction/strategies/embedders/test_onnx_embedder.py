@@ -98,6 +98,33 @@ async def test_batched_equals_single(emb) -> None:
     assert np.allclose(one[0], two[0], atol=1e-6)
 
 
+def test_onnx_providers_for_device_cuda() -> None:
+    from pydocs_mcp.extraction.strategies.embedders.onnx import _providers_for_device
+
+    assert _providers_for_device("cuda") == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+
+def test_onnx_providers_for_device_cpu() -> None:
+    from pydocs_mcp.extraction.strategies.embedders.onnx import _providers_for_device
+
+    assert _providers_for_device("cpu") == ["CPUExecutionProvider"]
+
+
+def test_onnx_embedder_accepts_device_field() -> None:
+    """Device is constructor-settable (injected session skips the download)."""
+    from pydocs_mcp.extraction.strategies.embedders.onnx import OnnxEmbedder
+
+    emb = OnnxEmbedder(
+        session=_FakeSession(),
+        tokenizer=_FakeTokenizer(),
+        device="cuda",
+    )
+    assert emb.device == "cuda"
+
+
 def test_format_query_applies_instruct_prefix() -> None:
     e = OnnxEmbedder(
         model_name="x",

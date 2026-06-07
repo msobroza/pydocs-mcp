@@ -27,6 +27,17 @@ from pydocs_mcp.models import Embedding
 _EOS_ID = 151643
 
 
+def _providers_for_device(device: str) -> list[str]:
+    """onnxruntime execution providers for the chosen device.
+
+    CUDA-first with a CPU fallback entry so a missing GPU runtime degrades
+    to CPU (onnxruntime warns) instead of crashing.
+    """
+    if device == "cuda":
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    return ["CPUExecutionProvider"]
+
+
 @dataclass
 class OnnxEmbedder:
     model_name: str = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
@@ -36,6 +47,9 @@ class OnnxEmbedder:
         "Given a web search query, retrieve relevant passages that answer the query"
     )
     batch_size: int = 32
+    # Execution device — selects the onnxruntime provider list so the same
+    # config can run CPU or GPU without code changes.
+    device: str = "cpu"
     session: Any = None
     tokenizer: Any = None
     _kv_names: tuple[str, ...] = field(init=False, default=(), repr=False)
@@ -56,7 +70,8 @@ class OnnxEmbedder:
             )
             if self.session is None:
                 self.session = ort.InferenceSession(
-                    f"{local}/{self.onnx_file}", providers=["CPUExecutionProvider"]
+                    f"{local}/{self.onnx_file}",
+                    providers=_providers_for_device(self.device),
                 )
             if self.tokenizer is None:
                 self.tokenizer = Tokenizer.from_file(f"{local}/tokenizer.json")
