@@ -40,8 +40,20 @@ def build_embedder(cfg: EmbeddingConfig) -> Embedder:
             batch_size=cfg.batch_size,
             device=cfg.device,
         )
+    if cfg.provider == "sentence_transformers":
+        from pydocs_mcp.extraction.strategies.embedders.sentence_transformers import (
+            SentenceTransformersEmbedder,
+        )
+
+        return SentenceTransformersEmbedder(
+            model_name=cfg.model_name,
+            dim=cfg.dim,
+            device=cfg.device,
+            batch_size=cfg.batch_size,
+        )
     raise ValueError(
-        f"Unknown embedding provider: {cfg.provider!r}. Supported: 'fastembed', 'openai', 'onnx'.",
+        f"Unknown embedding provider: {cfg.provider!r}. Supported: "
+        "'fastembed', 'openai', 'onnx', 'sentence_transformers'.",
     )
 
 

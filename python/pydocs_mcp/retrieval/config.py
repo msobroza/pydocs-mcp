@@ -304,6 +304,8 @@ _KNOWN_MODEL_DIMS: dict[str, int] = {
     "text-embedding-ada-002": 1536,
     # ONNX (torch-free dense embedder for Qwen3-Embedding)
     "onnx-community/Qwen3-Embedding-0.6B-ONNX": 1024,
+    # sentence-transformers (torch / GPU-reliable Qwen3-Embedding)
+    "Qwen/Qwen3-Embedding-0.6B": 1024,
 }
 
 
@@ -316,7 +318,7 @@ class EmbeddingConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["fastembed", "openai", "onnx"] = "fastembed"
+    provider: Literal["fastembed", "openai", "onnx", "sentence_transformers"] = "fastembed"
     # Execution device. NOT folded into compute_pipeline_hash — see _DEFAULT_DEVICE.
     device: Literal["cpu", "cuda"] = _DEFAULT_DEVICE
     model_name: str = "BAAI/bge-small-en-v1.5"
@@ -667,10 +669,21 @@ class AppConfig(BaseSettings):
         # back from ``retrieval.config`` (for ``ReferenceCaptureConfig``).
         # Importing inside the method breaks the module-level cycle and
         # keeps the single source of truth for the bundled-YAML lookup.
-        from pydocs_mcp.extraction.factories import _default_ingestion_pipeline_path
+        from pydocs_mcp.extraction.factories import (
+            _default_ingestion_pipeline_path,
+            _resolve_ingestion_pipeline_path,
+        )
 
         override = self.extraction.ingestion.pipeline_path
-        ingestion_path = override if override is not None else _default_ingestion_pipeline_path()
+        # Resolve the override through the SAME allowlist resolver
+        # build_ingestion_pipeline uses, so a config-relative path like
+        # ``pipelines/ingestion_late_interaction.yaml`` is read identically
+        # here and at build time. Reading the raw (CWD-relative) override
+        # made the hash crash on any non-CWD-relative path.
+        if override is not None:
+            ingestion_path = _resolve_ingestion_pipeline_path(override, self)
+        else:
+            ingestion_path = _default_ingestion_pipeline_path()
         yaml_bytes = ingestion_path.read_bytes()
         identity = self.embedding.compute_pipeline_hash().encode("utf-8")
         # Backend identity must invalidate cached sidecars when the storage

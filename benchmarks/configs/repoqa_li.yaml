@@ -1,0 +1,24 @@
+# RepoQA experiment — single-stage late-interaction (ColBERT/MaxSim) with the
+# default lightonai/LateOn-Code model (128-dim, doc 180 / query 32). MaxSim is
+# the only ranking signal (see pipelines/exp_li.yaml). Pairs with
+# repoqa_li_edge.yaml so a delta isolates the late-interaction model.
+#
+# Requires `pip install 'pydocs-mcp[late-interaction]'` (pylate + fast-plaid +
+# torch). Run on a Python 3.11/3.12 env — fast-plaid's voyager dep has no
+# cp313 wheel.
+late_interaction:
+  enabled: true
+
+# The ingestion pipeline is selected by extraction.ingestion.pipeline_path,
+# NOT by a `pipelines.ingestion` key (config.pipelines only handles
+# chunk/member). Point it at the multi-vector ingestion so fast-plaid is
+# actually populated; otherwise the default single-vector ingestion runs and
+# MaxSim finds no vectors (0 recall).
+extraction:
+  ingestion:
+    pipeline_path: pipelines/ingestion_late_interaction.yaml
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_li.yaml

@@ -98,6 +98,32 @@ def test_embedding_config_accepts_onnx_provider() -> None:
     assert "retrieve relevant passages" in cfg.query_instruction
 
 
+def test_embedding_config_accepts_sentence_transformers_provider() -> None:
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    cfg = EmbeddingConfig(
+        provider="sentence_transformers",
+        model_name="Qwen/Qwen3-Embedding-0.6B",
+        dim=1024,
+    )
+    assert cfg.provider == "sentence_transformers"
+    assert cfg.model_name == "Qwen/Qwen3-Embedding-0.6B"
+    assert cfg.dim == 1024
+
+
+def test_embedding_config_sentence_transformers_known_dim_enforced() -> None:
+    import pytest
+
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    with pytest.raises(Exception):
+        EmbeddingConfig(
+            provider="sentence_transformers",
+            model_name="Qwen/Qwen3-Embedding-0.6B",
+            dim=768,
+        )
+
+
 def test_embedding_config_onnx_known_dim_enforced() -> None:
     import pytest
     from pydocs_mcp.retrieval.config import EmbeddingConfig

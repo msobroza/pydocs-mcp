@@ -304,7 +304,9 @@ def test_compute_ingestion_pipeline_hash_cached(tmp_path: Path) -> None:
     """
     yaml_path = tmp_path / "ingestion.yaml"
     yaml_path.write_text("name: test\nstages: []\n")
-    cfg = AppConfig.load()
+    # explicit_path makes tmp_path the user-config dir so yaml_path is inside
+    # the pipeline_path allowlist used by compute_ingestion_pipeline_hash.
+    cfg = AppConfig.load(explicit_path=tmp_path / "pydocs-mcp.yaml")
     cfg.extraction.ingestion.pipeline_path = yaml_path
 
     # Wrap read_bytes so we count calls against ``yaml_path`` specifically —

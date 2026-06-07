@@ -101,8 +101,10 @@ async def test_batched_equals_single(emb) -> None:
 def test_onnx_providers_for_device_cuda() -> None:
     from pydocs_mcp.extraction.strategies.embedders.onnx import _providers_for_device
 
+    # CUDA uses the (provider, options) tuple form to bound the arena so a
+    # single session can't over-grow and starve later allocations.
     assert _providers_for_device("cuda") == [
-        "CUDAExecutionProvider",
+        ("CUDAExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"}),
         "CPUExecutionProvider",
     ]
 

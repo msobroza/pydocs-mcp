@@ -96,14 +96,27 @@ def load_ingestion_pipeline(
     data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or "stages" not in data:
         raise ValueError(f"invalid ingestion pipeline YAML: {resolved!s}")
+    # Deferred imports — retrieval.serialization pulls in pydantic-settings +
+    # the retriever registry; importing inside the function keeps ``extraction``
+    # importable from contexts that don't need retrieval warmed and breaks the
+    # module-level import cycle.
+    from pydocs_mcp.extraction.strategies.embedders import build_multi_vector_embedder
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    # Build the multi-vector (late-interaction) embedder from config so the
+    # EmbedChunksMultiVectorStage in an LI ingestion pipeline has its embedder.
+    # Returns None when late_interaction.enabled is False (no pylate import on
+    # default installs), mirroring build_retrieval_context's wiring — without
+    # this the LI ingestion stage raised "requires multi_vector_embedder" and
+    # silently degraded LI configs to the default single-vector ingestion.
+    multi_vector_embedder = build_multi_vector_embedder(cfg.late_interaction)
+
     # Reuse retrieval's BuildContext — extraction stages read
     # ``context.app_config`` + ``context.embedder`` + ``context.uow_factory``
     # + ``context.pipeline_hash`` inside ``from_dict``; the other BuildContext
     # fields stay unused here but must be constructed to satisfy the
     # dataclass's required ``connection_provider`` field. A ``None``
     # stand-in is acceptable because no extraction stage dereferences it.
-    from pydocs_mcp.retrieval.serialization import BuildContext
-
     context = BuildContext(  # type: ignore[arg-type]
         connection_provider=None,
         app_config=cfg,
@@ -111,6 +124,7 @@ def load_ingestion_pipeline(
         uow_factory=uow_factory,
         pipeline_hash=pipeline_hash,
         llm_client=llm_client,
+        multi_vector_embedder=multi_vector_embedder,
     )
     pipeline_stages = tuple(stage_registry.build(s, context) for s in data["stages"])
     return IngestionPipeline(stages=pipeline_stages)

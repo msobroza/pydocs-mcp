@@ -1,0 +1,17 @@
+# RepoQA experiment — single-stage dense with the bigger on-device ONNX model
+# (Qwen3-Embedding-0.6B, torch-free via onnxruntime). Same exp_dense pipeline
+# as repoqa_dense.yaml, but swaps the embedder from bge-small to Qwen3 so the
+# delta isolates the embedding-model "setting". See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: onnx
+  model_name: onnx-community/Qwen3-Embedding-0.6B-ONNX
+  dim: 1024
+  # Qwen3-0.6B on an 11 GB GPU OOMs the attention arena on long code chunks
+  # even with 2048-token truncation at batch 8 (a contiguous ~2.3 GB MHA
+  # buffer fails). batch 2 keeps the attention buffer small and reliable.
+  batch_size: 2
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

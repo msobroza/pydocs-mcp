@@ -27,7 +27,13 @@ def _clean_config_env(monkeypatch, tmp_path):
     """
     monkeypatch.delenv("PYDOCS_CONFIG_PATH", raising=False)
     monkeypatch.delenv("PYDOCS_LOG_LEVEL", raising=False)
-    monkeypatch.chdir(tmp_path)  # no ./pydocs-mcp.yaml
+    monkeypatch.chdir(tmp_path)
+    # Empty user config in cwd so AppConfig.load() resolves tmp_path as the
+    # user-config dir: the multi-vector tests below point pipeline_path at a
+    # tmp YAML, which must sit inside the pipeline_path allowlist (shipped
+    # pipelines dir OR user-config dir). An empty mapping adds no overrides, so
+    # the shipped-baseline stability tests are unaffected.
+    (tmp_path / "pydocs-mcp.yaml").write_text("{}\n")
     yield
 
 

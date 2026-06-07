@@ -10,6 +10,7 @@ the SQLite cache lives in a tmp file per ``index()`` call so two
 
 from __future__ import annotations
 
+import gc
 import os
 import shutil
 import tempfile
@@ -132,6 +133,15 @@ class PydocsMcpSystem:
             open_index_database(self._db_path).close()
             await self._do_index(corpus_dir, config)
 
+        # WHY: release the PREVIOUS needle's query-time pipeline (which holds
+        # an onnxruntime InferenceSession behind the dense scorer) BEFORE
+        # building the new one. ``teardown()`` above already nulled
+        # ``_pipeline``; force a collection here so the old query session's
+        # CUDA arena is freed before the new ingestion/query sessions
+        # allocate — otherwise arenas accumulate across needles until even a
+        # tiny GPU allocation OOMs. No-op for non-ONNX embedders.
+        self._pipeline = None
+        gc.collect()
         context = build_retrieval_context(self._db_path, config)
         self._pipeline = build_chunk_pipeline_from_config(config, context)
 
@@ -213,6 +223,19 @@ class PydocsMcpSystem:
             provider=build_connection_provider(self._db_path),
         )
         await chunk_repo.rebuild_index()
+
+        # WHY: release this needle's INGESTION embedder before the next needle
+        # builds its own. The OnnxEmbedder holds an onnxruntime CUDA
+        # InferenceSession whose arena memory only frees when the session is
+        # garbage-collected; without an explicit drop + collect, every needle
+        # leaks a session and the GPU OOMs partway through a sweep. Guard on
+        # ``hasattr(..., "close")`` so this is a strict no-op for FastEmbed /
+        # OpenAI / PyLate embedders (which hold no releasable CUDA arena).
+        if hasattr(embedder, "close"):
+            embedder.close()
+        del embedder
+        del ingestion_pipeline
+        gc.collect()
 
     async def search(
         self,
@@ -328,8 +351,13 @@ class PydocsMcpSystem:
                 except FileNotFoundError:
                     pass
         self._db_path = None
+        # WHY: dropping the pipeline releases the query-time onnxruntime
+        # InferenceSession it holds; the collection forces onnxruntime to
+        # free the session's CUDA arena so a torn-down leg leaves no GPU
+        # memory behind. No-op for non-ONNX embedders.
         self._pipeline = None
         self._db_is_cached = False
+        gc.collect()
 
 
 @system_registry.register("pydocs-mcp-composite")

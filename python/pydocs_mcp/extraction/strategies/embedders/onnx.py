@@ -13,6 +13,8 @@ download; real runs build them from the HF repo in ``__post_init__``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import gc
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,14 +29,24 @@ from pydocs_mcp.models import Embedding
 _EOS_ID = 151643
 
 
-def _providers_for_device(device: str) -> list[str]:
+def _providers_for_device(device: str) -> list[Any]:
     """onnxruntime execution providers for the chosen device.
 
     CUDA-first with a CPU fallback entry so a missing GPU runtime degrades
     to CPU (onnxruntime warns) instead of crashing.
+
+    For CUDA we pass the tuple ``(provider, options)`` form so the arena is
+    bounded: ``arena_extend_strategy=kSameAsRequested`` stops a single
+    session's CUDA arena from over-growing on the first big allocation and
+    then never shrinking. Across a sweep that indexes one repo per needle —
+    each rebuilding ingestion + query InferenceSessions — an unbounded arena
+    accumulates until even a tiny allocation OOMs. CPU path is unchanged.
     """
     if device == "cuda":
-        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        return [
+            ("CUDAExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"}),
+            "CPUExecutionProvider",
+        ]
     return ["CPUExecutionProvider"]
 
 
@@ -50,6 +62,10 @@ class OnnxEmbedder:
     # Execution device — selects the onnxruntime provider list so the same
     # config can run CPU or GPU without code changes.
     device: str = "cpu"
+    # Token cap. Qwen3's attention is O(seq^2) in memory, so an un-truncated
+    # long chunk OOMs the GPU. Truncating to this many tokens keeps embedding
+    # within VRAM; 2048 covers retrieval-doc context comfortably.
+    max_seq_length: int = 2048
     session: Any = None
     tokenizer: Any = None
     _kv_names: tuple[str, ...] = field(init=False, default=(), repr=False)
@@ -75,6 +91,8 @@ class OnnxEmbedder:
                 )
             if self.tokenizer is None:
                 self.tokenizer = Tokenizer.from_file(f"{local}/tokenizer.json")
+                # Cap sequence length so a long code chunk can't OOM attention.
+                self.tokenizer.enable_truncation(max_length=self.max_seq_length)
         self._inspect_inputs()
 
     def _inspect_inputs(self) -> None:
@@ -88,6 +106,30 @@ class OnnxEmbedder:
             self._kv_heads = int(shp[1])
             self._kv_head_dim = int(shp[3])
             self._kv_dtype = np.float16 if "float16" in kv[0].type else np.float32
+
+    def close(self) -> None:
+        """Drop the onnxruntime InferenceSession so its device memory frees.
+
+        onnxruntime releases the CUDA arena when the ``InferenceSession``
+        Python object is garbage-collected, so dropping the only reference
+        and forcing a collection is what actually returns the VRAM. Without
+        this, a sweep that builds a fresh session per needle (one for
+        ingestion, one for queries) accumulates arenas until even a tiny
+        allocation OOMs. Idempotent + safe on an already-closed embedder.
+        """
+        if self.session is None:
+            return
+        self.session = None
+        gc.collect()
+
+    def __del__(self) -> None:
+        # Best-effort release if a caller forgot ``close()``. Suppressed
+        # broadly because ``__del__`` can run during interpreter shutdown
+        # (where gc / attributes may already be torn down) or on a
+        # partially-constructed instance whose ``__post_init__`` raised before
+        # ``session`` was set.
+        with contextlib.suppress(Exception):
+            self.close()
 
     def _format_query(self, text: str) -> str:
         return f"Instruct: {self.query_instruction}\nQuery:{text}"
