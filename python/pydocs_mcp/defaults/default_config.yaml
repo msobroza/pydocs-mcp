@@ -89,9 +89,7 @@ embedding:
   dim:         384
   batch_size:  32
   bit_width:   4
-  # Execution device for embedder inference (cpu / cuda). Defaults to cpu;
-  # the --gpu CLI flag flips it to cuda. NOT folded into the pipeline hash,
-  # so cpu and cuda share the same index cache. Uncomment to override:
+  # Embedder execution device (cpu / cuda); the --gpu CLI flag sets cuda.
   #   device:    cpu
 
 # Unified SearchBackend seam (spec §8.1): which storage backend serves
