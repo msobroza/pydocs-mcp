@@ -390,8 +390,12 @@ class PydocsTreeOnlySystem(PydocsMcpSystem):
 
         # WHY: ignore the runner's ``config`` and load our preset instead —
         # see the class docstring. Same ``index()`` body as the parent
-        # otherwise (delegated by super()).
-        override = AppConfig.load(explicit_path=self._config_path)
+        # otherwise (delegated by super()). Carry the runner's --gpu device
+        # through, though: the preset dictates the pipeline, not the embedder
+        # execution device, so a reload would otherwise drop the GPU stamp.
+        override = AppConfig.load(explicit_path=self._config_path).with_device(
+            gpu=(config.embedding.device == "cuda"),
+        )
         await super().index(corpus_dir, override)
 
 
@@ -414,7 +418,11 @@ class PydocsTreeParallelSystem(PydocsMcpSystem):
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:
         from pydocs_mcp.retrieval.config import AppConfig
 
-        override = AppConfig.load(explicit_path=self._config_path)
+        # Carry the runner's --gpu device through the preset reload — see the
+        # ``PydocsTreeOnlySystem.index`` rationale.
+        override = AppConfig.load(explicit_path=self._config_path).with_device(
+            gpu=(config.embedding.device == "cuda"),
+        )
         await super().index(corpus_dir, override)
 
 
