@@ -175,6 +175,17 @@ async def test_runner_smoke_returns_aggregate_tuple_shape(tmp_path: Path) -> Non
         assert lo <= mean <= hi
 
 
+def test_arg_parser_accepts_gpu_flag() -> None:
+    from benchmarks.eval.runner import _build_arg_parser
+
+    parser = _build_arg_parser()
+    args = parser.parse_args(["--configs", "x.yaml", "--gpu"])
+    assert args.gpu is True
+
+    args_default = parser.parse_args(["--configs", "x.yaml"])
+    assert args_default.gpu is False
+
+
 def test_runner_seeds_library_on_systems_before_index() -> None:
     """The runner reads ``task.metadata['repo']`` and seeds
     ``library_name`` / ``library`` on the system instance BEFORE
