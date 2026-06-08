@@ -244,6 +244,36 @@ README subsection mirroring the shape above. No harness changes required.
 
 ## Results
 
+### Method comparison (RepoQA `small_test`)
+
+Single-stage retrieval methods on the RepoQA `small_test` split — each query is a
+function description and the gold is that function (one notebook per method lives
+in [`notebooks/`](../notebooks/)). Higher is better.
+
+![recall@k by retrieval method](assets/method_comparison.png)
+
+| Method | Config | recall@1 | recall@5 | recall@10 | MRR | needles |
+|---|---|---:|---:|---:|---:|---:|
+| BM25 (keyword / FTS5) | `repoqa_bm25.yaml` | 0.167 | 0.333 | 0.400 | 0.238 | 30 |
+| Dense (bge-small, 384-d) | `repoqa_dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
+| Dense (Qwen3-0.6B, 1024-d) | `repoqa_dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
+| Late-interaction (ColBERT / MaxSim) | `repoqa_li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
+| LLM tree reasoning | `repoqa_tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
+
+> \* **Partial runs** (21 of 30 needles) — *indicative, not strictly comparable*
+> to the full-30 rows. These numbers come from ad-hoc runs across one session,
+> not a single locked sweep; regenerate a clean, comparable sweep with the
+> commands in [§Running the benchmarks](#running-the-benchmarks). The `onnx`
+> dense provider was removed; `li_edge` only has a partial run and is omitted.
+> The chart is rendered from this table.
+
+**Takeaways.** Vector methods clearly beat lexical BM25 (semantic vs. exact-term
+matching); the larger **Qwen3** embedder leads; **dense (bge-small)** and
+**late-interaction** are close (LI edges bge at recall@1, bge leads at
+recall@5/10); **LLM tree reasoning** works — once `qualified_name` is persisted
+(schema v7) — but trails the vector methods on this split and is the most
+expensive (one LLM call per query).
+
 ### Current baselines
 
 Two baseline JSON files are tracked in `benchmarks/baselines/`:
