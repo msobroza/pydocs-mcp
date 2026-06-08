@@ -91,14 +91,17 @@ def test_compute_ingestion_pipeline_hash_changes_on_yaml_edit(tmp_path: Path) ->
     """Editing the ingestion YAML (even a comment) invalidates the hash."""
     yaml_path = tmp_path / "ingestion.yaml"
     yaml_path.write_text("name: ingestion\nstages:\n  - {type: flatten}\n")
-    cfg_a = AppConfig.load()
-    # Override the ingestion path so we can hash a controlled file
+    # explicit_path makes tmp_path the user-config dir, so the controlled
+    # ingestion YAML below sits inside the pipeline_path allowlist (shipped
+    # pipelines dir OR user-config dir). The file need not exist — load()'s
+    # explicit override is honored regardless.
+    cfg_a = AppConfig.load(explicit_path=tmp_path / "pydocs-mcp.yaml")
     cfg_a.extraction.ingestion.pipeline_path = yaml_path
     hash_a = cfg_a.compute_ingestion_pipeline_hash()
 
     # Edit YAML: comment-only change is enough (raw-bytes hash is conservative)
     yaml_path.write_text("# new comment\nname: ingestion\nstages:\n  - {type: flatten}\n")
-    cfg_b = AppConfig.load()
+    cfg_b = AppConfig.load(explicit_path=tmp_path / "pydocs-mcp.yaml")
     cfg_b.extraction.ingestion.pipeline_path = yaml_path
     hash_b = cfg_b.compute_ingestion_pipeline_hash()
 
@@ -108,8 +111,27 @@ def test_compute_ingestion_pipeline_hash_changes_on_yaml_edit(tmp_path: Path) ->
 def test_compute_ingestion_pipeline_hash_stable_when_yaml_unchanged(tmp_path: Path) -> None:
     yaml_path = tmp_path / "ingestion.yaml"
     yaml_path.write_text("stages:\n  - {type: flatten}\n")
-    cfg = AppConfig.load()
+    cfg = AppConfig.load(explicit_path=tmp_path / "pydocs-mcp.yaml")
     cfg.extraction.ingestion.pipeline_path = yaml_path
     h1 = cfg.compute_ingestion_pipeline_hash()
     h2 = cfg.compute_ingestion_pipeline_hash()
     assert h1 == h2
+
+
+def test_compute_ingestion_pipeline_hash_resolves_relative_pipelines_path() -> None:
+    """A config-relative ``pipelines/<name>.yaml`` override resolves through the
+    shipped pipelines dir (the branch the resolver fix targets), NOT cwd — so
+    the hash is computed without crashing and is stable across reloads. This is
+    the real motivation for routing the override through the shared resolver;
+    the other tests exercise the absolute-path branch.
+    """
+    cfg_a = AppConfig.load()
+    cfg_a.extraction.ingestion.pipeline_path = Path("pipelines/ingestion.yaml")
+    h1 = cfg_a.compute_ingestion_pipeline_hash()
+
+    cfg_b = AppConfig.load()
+    cfg_b.extraction.ingestion.pipeline_path = Path("pipelines/ingestion.yaml")
+    h2 = cfg_b.compute_ingestion_pipeline_hash()
+
+    assert h1 == h2
+    assert len(h1) == 64  # SHA-256 hex — proves it actually read + hashed bytes

@@ -93,8 +93,8 @@ pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 ```
 
 Embeddings run on CPU by default. Add `--gpu` to `serve` / `index` (or the
-benchmark runner) to move all embedder inference — FastEmbed, the `onnx`
-provider, and PyLate — onto CUDA. It's a latency knob only: no YAML change, no
+benchmark runner) to move all embedder inference — FastEmbed, the
+`sentence_transformers` provider, and PyLate — onto CUDA. It's a latency knob only: no YAML change, no
 re-index, identical results. Needs the matching GPU runtime — see
 [INSTALL.md](INSTALL.md#gpu-inference-optional).
 
@@ -170,30 +170,32 @@ through the fusion steps below.
   by default — runs on CPU via ONNX, no PyTorch, no torch download.
   OpenAI `text-embedding-3-small` is the optional alternative for
   users with an API key. Pass `--gpu` to run the on-device embedders
-  (FastEmbed / `onnx`) on CUDA instead — same vectors, lower latency.
-- **Bigger on-device model — the `onnx` provider.** For stronger dense
-  recall without an API key, switch to
-  [`onnx-community/Qwen3-Embedding-0.6B-ONNX`](https://huggingface.co/onnx-community/Qwen3-Embedding-0.6B-ONNX).
-  It is torch-free — it runs on [onnxruntime](https://onnxruntime.ai/),
-  already a core dependency, so there is nothing extra to install — and
-  the weights download at runtime on first use, exactly like bge-small.
-  Set it in your YAML:
+  (FastEmbed / `sentence_transformers`) on CUDA instead — same vectors,
+  lower latency.
+- **Bigger on-device model — the `sentence_transformers` provider.** For
+  stronger dense recall without an API key, switch to
+  [`Qwen/Qwen3-Embedding-0.6B`](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)
+  served via [sentence-transformers](https://www.sbert.net/) (torch). It is
+  GPU-reliable — torch frees CUDA memory between sequential index-builds — and
+  the weights download at runtime on first use. Install the extra
+  (`pip install 'pydocs-mcp[sentence-transformers]'`, ~1-5 GB with torch),
+  then set it in your YAML:
 
   ```yaml
   embedding:
-    provider: onnx
-    model_name: onnx-community/Qwen3-Embedding-0.6B-ONNX
+    provider: sentence_transformers
+    model_name: Qwen/Qwen3-Embedding-0.6B
     dim: 1024
-    # Optional. Picks the quantization variant inside the HF repo:
-    #   onnx/model_fp16.onnx  (default · ~1.2 GB download)
-    #   onnx/model_q4f16.onnx (~0.57 GB · smaller download, lower precision)
-    #   onnx/model_int8.onnx
-    onnx_file: onnx/model_fp16.onnx
-    # Optional. Task prompt prepended to queries only (not documents).
-    query_instruction: "Given a web search query, retrieve relevant passages that answer the query"
+    # Optional. Token cap (attention is O(seq^2) — the OOM guard). Omit to
+    # use the embedder's own default (2048).
+    max_seq_length: 2048
+    # Optional. L2-normalize output (default true).
+    normalize: true
+    # Optional. Named asymmetric query prompt; omit to use the model's own.
+    query_prompt_name: query
   ```
 
-  The default remains bge-small; the `onnx` provider is opt-in.
+  The default remains bge-small; the `sentence_transformers` provider is opt-in.
 - **Vector store.** [TurboQuant](https://arxiv.org/abs/2504.19874)
   ([turbovec](https://github.com/RyanCodrai/turbovec)) — Online Vector
   Quantization with near-optimal distortion. **~16× smaller than

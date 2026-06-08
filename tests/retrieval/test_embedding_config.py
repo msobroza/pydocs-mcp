@@ -87,47 +87,80 @@ def test_embedding_config_dim_must_be_multiple_of_8() -> None:
         EmbeddingConfig(dim=7)
 
 
-def test_embedding_config_accepts_onnx_provider() -> None:
+def test_embedding_config_rejects_removed_onnx_provider() -> None:
+    # The onnx provider was removed; the Literal must reject it.
+    with pytest.raises(ValidationError):
+        EmbeddingConfig(provider="onnx")  # type: ignore[arg-type]
+
+
+def test_embedding_config_st_knob_defaults() -> None:
+    cfg = EmbeddingConfig()
+    assert cfg.max_seq_length is None  # None = inherit the embedder's own cap
+    assert cfg.normalize is True
+    assert cfg.query_prompt_name is None
+
+
+def test_embedding_config_accepts_sentence_transformers_provider() -> None:
     from pydocs_mcp.retrieval.config import EmbeddingConfig
 
     cfg = EmbeddingConfig(
-        provider="onnx", model_name="onnx-community/Qwen3-Embedding-0.6B-ONNX", dim=1024
+        provider="sentence_transformers",
+        model_name="Qwen/Qwen3-Embedding-0.6B",
+        dim=1024,
     )
-    assert cfg.provider == "onnx"
-    assert cfg.onnx_file == "onnx/model_fp16.onnx"
-    assert "retrieve relevant passages" in cfg.query_instruction
+    assert cfg.provider == "sentence_transformers"
+    assert cfg.model_name == "Qwen/Qwen3-Embedding-0.6B"
+    assert cfg.dim == 1024
 
 
-def test_embedding_config_onnx_known_dim_enforced() -> None:
+def test_embedding_config_sentence_transformers_known_dim_enforced() -> None:
     import pytest
+
     from pydocs_mcp.retrieval.config import EmbeddingConfig
 
     with pytest.raises(Exception):
         EmbeddingConfig(
-            provider="onnx", model_name="onnx-community/Qwen3-Embedding-0.6B-ONNX", dim=768
+            provider="sentence_transformers",
+            model_name="Qwen/Qwen3-Embedding-0.6B",
+            dim=768,
         )
 
 
-def test_embedding_config_hash_folds_onnx_fields() -> None:
-    from pydocs_mcp.retrieval.config import EmbeddingConfig
-
+def test_embedding_config_hash_folds_max_seq_length_and_normalize() -> None:
+    # max_seq_length and normalize change the produced vectors, so editing
+    # either must invalidate the chunk cache (change the hash).
     base = EmbeddingConfig(
-        provider="onnx", model_name="onnx-community/Qwen3-Embedding-0.6B-ONNX", dim=1024
+        provider="sentence_transformers", model_name="Qwen/Qwen3-Embedding-0.6B", dim=1024
     )
-    diff_file = EmbeddingConfig(
-        provider="onnx",
-        model_name="onnx-community/Qwen3-Embedding-0.6B-ONNX",
+    diff_seq = EmbeddingConfig(
+        provider="sentence_transformers",
+        model_name="Qwen/Qwen3-Embedding-0.6B",
         dim=1024,
-        onnx_file="onnx/model_q4f16.onnx",
+        max_seq_length=512,
     )
-    diff_instr = EmbeddingConfig(
-        provider="onnx",
-        model_name="onnx-community/Qwen3-Embedding-0.6B-ONNX",
+    diff_norm = EmbeddingConfig(
+        provider="sentence_transformers",
+        model_name="Qwen/Qwen3-Embedding-0.6B",
         dim=1024,
-        query_instruction="Other task",
+        normalize=False,
     )
-    assert base.compute_pipeline_hash() != diff_file.compute_pipeline_hash()
-    assert base.compute_pipeline_hash() != diff_instr.compute_pipeline_hash()
+    assert base.compute_pipeline_hash() != diff_seq.compute_pipeline_hash()
+    assert base.compute_pipeline_hash() != diff_norm.compute_pipeline_hash()
+
+
+def test_query_prompt_name_excluded_from_pipeline_hash() -> None:
+    # query_prompt_name only shapes the query embedding, never the stored
+    # document vectors — so it must NOT invalidate the chunk cache.
+    base = EmbeddingConfig(
+        provider="sentence_transformers", model_name="Qwen/Qwen3-Embedding-0.6B", dim=1024
+    )
+    with_prompt = EmbeddingConfig(
+        provider="sentence_transformers",
+        model_name="Qwen/Qwen3-Embedding-0.6B",
+        dim=1024,
+        query_prompt_name="query",
+    )
+    assert base.compute_pipeline_hash() == with_prompt.compute_pipeline_hash()
 
 
 def test_embedding_device_defaults_to_cpu_and_accepts_cuda() -> None:

@@ -1,0 +1,33 @@
+# Single-stage late-interaction (ColBERT/MaxSim) ranked chunk search —
+# RepoQA experiment suite. MaxSim is the ONLY ranking signal: chunk_fetcher
+# generates a candidate pool via FTS5 MATCH (no bm25_scorer), then
+# late_interaction_scorer re-ranks the whole pool by MaxSim. This is the most
+# single-stage late-interaction expressible here — the scorer is a re-ranker
+# with no native fast-plaid fetcher, so candidate generation is lexical (FTS),
+# unlike dense's semantic ANN. The fetch limit is widened to 200 so MaxSim
+# sees a generous pool rather than the default top-50. max_results=10 so
+# recall@10 sees a full top-10.
+#
+# Requires the [late-interaction] extra and `late_interaction.enabled: true`
+# in the surrounding sweep config (the embedder + FastPlaidUnitOfWork are
+# wired by the composition root when that toggle is on).
+name: exp_li
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: chunk_fetcher
+    params:
+      schema_name: chunk
+      limit: 200
+  - name: rerank
+    type: late_interaction_scorer
+    params:
+      top_k: 200
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

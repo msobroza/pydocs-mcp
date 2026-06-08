@@ -1,0 +1,21 @@
+# RepoQA experiment — single-stage dense with the bigger on-device Qwen3 model
+# served via sentence-transformers (torch). This is the torch/GPU-reliable
+# Qwen3-Embedding-0.6B path: torch frees CUDA memory between the sweep's
+# sequential index-builds (onnxruntime-based embedders instead leak the CUDA
+# arena and eventually OOM). Same exp_dense pipeline as repoqa_dense.yaml;
+# only the embedder setting differs.
+# See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: sentence_transformers
+  model_name: Qwen/Qwen3-Embedding-0.6B
+  dim: 1024
+  # Small batch keeps the O(seq^2) attention buffer within VRAM on long code
+  # chunks even at the 2048-token cap. Held at 4 for the 11GB RTX 2080 Ti:
+  # batch 8 spiked VRAM during encode of long chunks, so halve the peak
+  # activation buffer for headroom.
+  batch_size: 4
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

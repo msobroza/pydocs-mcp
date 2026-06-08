@@ -172,8 +172,8 @@ pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
 ### GPU inference (`--gpu`)
 
 `serve`, `index`, and `watch` accept `--gpu` to run **embedder inference on
-CUDA** — it covers all embedders: FastEmbed and the `onnx` provider (single-vector
-dense) and PyLate (late-interaction / multi-vector). It needs no YAML change and
+CUDA** — it covers all embedders: FastEmbed and the `sentence_transformers`
+provider (single-vector dense) and PyLate (late-interaction / multi-vector). It needs no YAML change and
 applies to both index-time and query-time embedding.
 
 ```bash

@@ -8,7 +8,7 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from pydocs_mcp.db import open_index_database
+from pydocs_mcp.db import build_connection_provider, open_index_database
 from tests.storage.test_fast_plaid_uow_writes import _FakeFastPlaid
 
 
@@ -57,8 +57,8 @@ async def test_score_translates_chunk_ids_to_plaid_ids(tmp_path, monkeypatch) ->
         conn.commit()
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
+        provider=build_connection_provider(db_path),
         device="cpu",
     )
     docs = [
@@ -98,8 +98,8 @@ async def test_score_empty_subset_returns_empty(tmp_path, monkeypatch) -> None:
     open_index_database(db_path).close()
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
+        provider=build_connection_provider(db_path),
         device="cpu",
     )
     async with uow:

@@ -676,9 +676,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--gpu",
         action="store_true",
         help=(
-            "Run embedder inference on CUDA (FastEmbed / ONNX / PyLate). "
-            "Requires the matching GPU runtime (onnxruntime-gpu / "
-            "fastembed-gpu / CUDA torch). Device is excluded from the index "
+            "Run embedder inference on CUDA (FastEmbed / sentence_transformers "
+            "/ PyLate). Requires the matching GPU runtime (fastembed-gpu / CUDA "
+            "torch). Device is excluded from the index "
             "cache key, so toggling --gpu does NOT trigger a re-index."
         ),
     )

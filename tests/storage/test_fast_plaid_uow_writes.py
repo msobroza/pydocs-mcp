@@ -8,7 +8,7 @@ import sqlite3
 import numpy as np
 import pytest
 
-from pydocs_mcp.db import open_index_database
+from pydocs_mcp.db import build_connection_provider, open_index_database
 
 
 class _FakeFastPlaid:
@@ -75,8 +75,8 @@ async def test_add_vectors_writes_mapping_rows(tmp_path, monkeypatch) -> None:
 
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
+        provider=build_connection_provider(db_path),
         device="cpu",
     )
     async with uow:
@@ -114,8 +114,8 @@ async def test_remove_vectors_drops_mapping(tmp_path, monkeypatch) -> None:
 
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
+        provider=build_connection_provider(db_path),
         device="cpu",
     )
     async with uow:
@@ -144,8 +144,8 @@ async def test_clear_all_wipes_mapping(tmp_path, monkeypatch) -> None:
         conn.commit()
     uow = mod.FastPlaidUnitOfWork(
         sidecar_path=tmp_path / "x.plaid",
-        db_path=db_path,
         pipeline_hash="h",
+        provider=build_connection_provider(db_path),
         device="cpu",
     )
     async with uow:
@@ -155,3 +155,59 @@ async def test_clear_all_wipes_mapping(tmp_path, monkeypatch) -> None:
     with sqlite3.connect(db_path) as conn:
         n = conn.execute("SELECT COUNT(*) FROM chunk_multi_vector_ids").fetchone()[0]
     assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_add_vectors_rides_shared_sqlite_transaction(tmp_path, monkeypatch) -> None:
+    """Regression: the mapping write must ride the ambient SQLite transaction.
+
+    Reproduces the original bug — ``FastPlaidUnitOfWork`` opened its own
+    ``sqlite3.connect`` against the same DB file while the surrounding
+    ``SqliteUnitOfWork`` held an uncommitted write transaction, producing a
+    permanent ``database is locked`` deadlock and breaking atomicity.
+
+    With the fix, the mapping repo shares the ambient ``_sqlite_transaction``
+    connection (same ``provider``), so: (a) NO ``database is locked`` is
+    raised, and (b) a rollback of the outer transaction drops the mapping
+    rows together with the chunks — proving the mapping now commits/rolls
+    back atomically with the ``chunks`` writes.
+    """
+    pytest.importorskip("torch")
+    import pydocs_mcp.storage.fast_plaid_uow as mod
+    from pydocs_mcp.models import Chunk, ChunkFilterField
+    from pydocs_mcp.storage.sqlite import SqliteUnitOfWork
+
+    monkeypatch.setattr(mod, "_FastPlaidCls", _FakeFastPlaid, raising=False)
+    db_path = tmp_path / "db.db"
+    open_index_database(db_path).close()
+
+    # ONE provider shared by the SQLite UoW and the fast-plaid mapping write —
+    # mirrors ``SqliteCompositeBackend.write_uow_children`` production wiring.
+    provider = build_connection_provider(db_path)
+
+    fp = mod.FastPlaidUnitOfWork(
+        sidecar_path=tmp_path / "x.plaid",
+        pipeline_hash="h",
+        provider=provider,
+        device="cpu",
+    )
+
+    sql_uow = SqliteUnitOfWork(provider=provider)
+    async with fp, sql_uow:
+        # Write a chunk through the OPEN (uncommitted) SQLite transaction.
+        await sql_uow.chunks.upsert(
+            (Chunk(text="b", id=1, metadata={ChunkFilterField.PACKAGE.value: "p"}),)
+        )
+        # (a) Mapping write must NOT deadlock — it rides the SAME ambient conn.
+        await fp.add_vectors([1], [[np.ones((4,), dtype=np.float32)]])
+        # Visible inside the still-open transaction (read through the same UoW).
+        in_txn = await sql_uow.chunks.count()
+        assert in_txn == 1
+        # NO commit -> ``__aexit__`` rolls the outer transaction back.
+
+    # (b) After rollback, the mapping rows are GONE — they rode the txn.
+    with sqlite3.connect(db_path) as conn:
+        n = conn.execute("SELECT COUNT(*) FROM chunk_multi_vector_ids").fetchone()[0]
+        chunk_n = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert n == 0  # mapping rolled back with the transaction
+    assert chunk_n == 0  # the chunk rolled back too — same transaction

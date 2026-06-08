@@ -29,19 +29,27 @@ def build_embedder(cfg: EmbeddingConfig) -> Embedder:
         )
 
         return OpenAIEmbedder(model_name=cfg.model_name, dim=cfg.dim)
-    if cfg.provider == "onnx":
-        from pydocs_mcp.extraction.strategies.embedders.onnx import OnnxEmbedder
-
-        return OnnxEmbedder(
-            model_name=cfg.model_name,
-            dim=cfg.dim,
-            onnx_file=cfg.onnx_file,
-            query_instruction=cfg.query_instruction,
-            batch_size=cfg.batch_size,
-            device=cfg.device,
+    if cfg.provider == "sentence_transformers":
+        from pydocs_mcp.extraction.strategies.embedders.sentence_transformers import (
+            SentenceTransformersEmbedder,
         )
+
+        # max_seq_length is passed only when set so None inherits the embedder's
+        # own default — keeps the token cap single-sourced in the embedder class.
+        st_kwargs: dict[str, object] = {
+            "model_name": cfg.model_name,
+            "dim": cfg.dim,
+            "device": cfg.device,
+            "batch_size": cfg.batch_size,
+            "normalize": cfg.normalize,
+            "query_prompt_name": cfg.query_prompt_name,
+        }
+        if cfg.max_seq_length is not None:
+            st_kwargs["max_seq_length"] = cfg.max_seq_length
+        return SentenceTransformersEmbedder(**st_kwargs)  # type: ignore[arg-type]
     raise ValueError(
-        f"Unknown embedding provider: {cfg.provider!r}. Supported: 'fastembed', 'openai', 'onnx'.",
+        f"Unknown embedding provider: {cfg.provider!r}. Supported: "
+        "'fastembed', 'openai', 'sentence_transformers'.",
     )
 
 

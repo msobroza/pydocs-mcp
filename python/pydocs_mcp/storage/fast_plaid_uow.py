@@ -4,9 +4,14 @@ Owns a ``fast_plaid.search.FastPlaid`` index handle persisted to a
 per-project directory sidecar ``~/.pydocs-mcp/{slug}.plaid/``. SQLite is
 the source of truth for ``chunk_id ↔ plaid_doc_id`` mapping via the
 ``chunk_multi_vector_ids`` table — this UoW reads/writes that table
-through the SAME ``sqlite3.Connection`` the surrounding
-:class:`SqliteUnitOfWork` holds, so the mapping commits atomically with
-the ``chunks`` writes.
+through a :class:`SqliteChunkMultiVectorRepository` bound to the SAME
+:class:`ConnectionProvider` the surrounding :class:`SqliteUnitOfWork`
+uses. Because the repository routes through ``_maybe_acquire``, it
+reuses the ambient ``_sqlite_transaction`` connection when a composite
+UoW is open — so the mapping rows ride that one open write transaction
+(no second connection, no ``database is locked`` deadlock) and commit /
+roll back atomically with the ``chunks`` writes. The repository NEVER
+commits; the owning :class:`SqliteUnitOfWork` drives commit / rollback.
 
 Lazy import: ``fast_plaid`` (Rust extension under the
 ``[late-interaction]`` extra) is imported only inside ``__aenter__`` so
@@ -17,15 +22,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+from pydocs_mcp.storage.sqlite import SqliteChunkMultiVectorRepository
 
 logger = logging.getLogger(__name__)
 
@@ -81,25 +87,36 @@ def _ensure_fast_plaid_imported() -> None:
 class FastPlaidUnitOfWork:
     """UoW for the ``fast_plaid`` per-project sidecar directory.
 
-    Lifecycle-only this task — ``add_vectors`` / ``remove_vectors`` /
-    ``score`` / ``clear_all`` land in subsequent tasks. ``commit`` and
-    ``rollback`` here are flag flips: ``fast_plaid`` persists each
-    ``.update`` / ``.delete`` to disk immediately, so there's no
-    in-memory transaction to flush. The surrounding
+    ``commit`` and ``rollback`` here are flag flips: ``fast_plaid``
+    persists each ``.update`` / ``.delete`` to disk immediately, so
+    there's no in-memory transaction to flush. The surrounding
     :class:`SqliteUnitOfWork` owns rollback semantics for the
-    ``chunk_multi_vector_ids`` mapping table, so cross-store consistency
-    falls out of the composite UoW commit order.
+    ``chunk_multi_vector_ids`` mapping table (written via
+    :class:`SqliteChunkMultiVectorRepository` over the shared
+    ``provider``), so cross-store consistency falls out of the composite
+    UoW commit order.
+
+    The ``provider`` MUST be the same :class:`ConnectionProvider` the
+    composite's :class:`SqliteUnitOfWork` child uses. ``_maybe_acquire``
+    then resolves the ambient ``_sqlite_transaction`` connection, so the
+    mapping rows land on the open write transaction instead of opening a
+    second connection (the prior ``sqlite3.connect`` path deadlocked).
     """
 
     sidecar_path: Path
-    db_path: Path
     pipeline_hash: str
+    provider: ConnectionProvider
     device: str = "cpu"
     low_memory: bool = False
 
     _handle: Any | None = field(default=None, init=False)
     _dirty: bool = field(default=False, init=False)
     _entered: bool = field(default=False, init=False)
+
+    @property
+    def _mapping(self) -> SqliteChunkMultiVectorRepository:
+        """The ``chunk_multi_vector_ids`` mapping repository over the shared provider."""
+        return SqliteChunkMultiVectorRepository(provider=self.provider)
 
     async def __aenter__(self) -> FastPlaidUnitOfWork:
         _ensure_fast_plaid_imported()
@@ -213,45 +230,26 @@ class FastPlaidUnitOfWork:
             torch.from_numpy(np.stack(emb, axis=0).astype(np.float32, copy=False))
             for emb in embeddings
         ]
-        with sqlite3.connect(str(self.db_path)) as conn:
-            # Probe current max plaid_doc_id; gives the offset N for the
-            # new batch. ``COALESCE(MAX(...)+1, 0)`` returns 0 on the
-            # empty-index path so the first batch always starts at 0.
-            row = conn.execute(
-                "SELECT COALESCE(MAX(plaid_doc_id) + 1, 0) FROM chunk_multi_vector_ids"
-            ).fetchone()
-            offset = int(row[0])
-            # fast-plaid contract: ``.create`` initializes an empty index
-            # with the first batch, ``.update`` appends to an existing
-            # one. Picking the wrong one raises — branch on offset.
-            await asyncio.to_thread(
-                self._handle.update if offset > 0 else self._handle.create,
-                doc_tensors,
-            )
-            packages = self._packages_for_chunks(conn, ids)
-            conn.executemany(
-                "INSERT OR REPLACE INTO chunk_multi_vector_ids "
-                "(chunk_id, plaid_doc_id, package, pipeline_hash) VALUES (?,?,?,?)",
-                [
-                    (cid, offset + i, packages.get(cid, ""), self.pipeline_hash)
-                    for i, cid in enumerate(ids)
-                ],
-            )
-            conn.commit()
-        self._dirty = True
-
-    @staticmethod
-    def _packages_for_chunks(conn: sqlite3.Connection, ids: Iterable[int]) -> dict[int, str]:
-        ids_list = list(ids)
-        if not ids_list:
-            return {}
-        # The `placeholders` substring is built from literal ``?`` characters only
-        # (one per id, not user input), so the IN-clause SQL is safe; the actual
-        # values bind through parameters. Same pattern as :class:`SqliteFilterAdapter`.
-        q = "SELECT id, package FROM chunks WHERE id IN ({})".format(  # noqa: S608
-            ",".join("?" for _ in ids_list),
+        mapping = self._mapping
+        # Probe current max plaid_doc_id; gives the offset N for the new
+        # batch. ``next_plaid_offset`` returns 0 on the empty-index path
+        # so the first batch always starts at 0.
+        offset = await mapping.next_plaid_offset()
+        # fast-plaid contract: ``.create`` initializes an empty index with
+        # the first batch, ``.update`` appends to an existing one. Picking
+        # the wrong one raises — branch on offset.
+        await asyncio.to_thread(
+            self._handle.update if offset > 0 else self._handle.create,
+            doc_tensors,
         )
-        return {row[0]: row[1] for row in conn.execute(q, ids_list)}
+        packages = await mapping.packages_for_chunks(ids)
+        await mapping.upsert(
+            [
+                (cid, offset + i, packages.get(cid, ""), self.pipeline_hash)
+                for i, cid in enumerate(ids)
+            ]
+        )
+        self._dirty = True
 
     async def remove_vectors(self, ids: Sequence[int]) -> None:
         """Soft-delete the fast-plaid slots and drop the mapping rows.
@@ -267,26 +265,13 @@ class FastPlaidUnitOfWork:
             )
         if not ids:
             return
-        with sqlite3.connect(str(self.db_path)) as conn:
-            placeholders = ",".join("?" for _ in ids)
-            # ``placeholders`` is literal ``?`` chars (one per id); values
-            # are bound via the second arg to ``conn.execute``.
-            plaid_ids = [
-                row[0]
-                for row in conn.execute(
-                    f"SELECT plaid_doc_id FROM chunk_multi_vector_ids "  # noqa: S608
-                    f"WHERE chunk_id IN ({placeholders})",
-                    list(ids),
-                )
-            ]
-            if plaid_ids:
-                await asyncio.to_thread(self._handle.delete, subset=plaid_ids)
-            conn.execute(
-                f"DELETE FROM chunk_multi_vector_ids "  # noqa: S608
-                f"WHERE chunk_id IN ({placeholders})",
-                list(ids),
-            )
-            conn.commit()
+        # The repository SELECTs the plaid_doc_ids and DELETEs the mapping
+        # rows on the ambient connection; we feed those ids to the
+        # fast-plaid soft-delete. fast-plaid keeps the slots in place so
+        # existing plaid_doc_id assignments stay stable.
+        plaid_ids = await self._mapping.delete_by_chunk_ids(ids)
+        if plaid_ids:
+            await asyncio.to_thread(self._handle.delete, subset=list(plaid_ids))
         self._dirty = True
 
     async def clear_all(self) -> None:
@@ -299,14 +284,9 @@ class FastPlaidUnitOfWork:
             raise UnitOfWorkNotEnteredError(
                 "FastPlaidUnitOfWork.clear_all called outside async with",
             )
-        with sqlite3.connect(str(self.db_path)) as conn:
-            plaid_ids = [
-                row[0] for row in conn.execute("SELECT plaid_doc_id FROM chunk_multi_vector_ids")
-            ]
-            if plaid_ids:
-                await asyncio.to_thread(self._handle.delete, subset=plaid_ids)
-            conn.execute("DELETE FROM chunk_multi_vector_ids")
-            conn.commit()
+        plaid_ids = await self._mapping.clear()
+        if plaid_ids:
+            await asyncio.to_thread(self._handle.delete, subset=list(plaid_ids))
         self._dirty = True
 
     async def score(
@@ -335,18 +315,9 @@ class FastPlaidUnitOfWork:
         # Lazy import torch — keeps the optional-extra gated to the read path.
         import torch  # type: ignore[import-not-found, unused-ignore]
 
-        with sqlite3.connect(str(self.db_path)) as conn:
-            placeholders = ",".join("?" for _ in subset_chunk_ids)
-            # ``placeholders`` is literal ``?`` chars (one per chunk_id);
-            # values bind via the second arg to ``conn.execute``.
-            mapping = {
-                row[0]: row[1]
-                for row in conn.execute(
-                    f"SELECT plaid_doc_id, chunk_id FROM chunk_multi_vector_ids "  # noqa: S608
-                    f"WHERE chunk_id IN ({placeholders})",
-                    list(subset_chunk_ids),
-                )
-            }
+        # ``plaid_ids_for_chunks`` returns ``(plaid_doc_id, chunk_id)`` pairs;
+        # build the reverse map so fast-plaid hits map back to chunk_ids.
+        mapping = dict(await self._mapping.plaid_ids_for_chunks(subset_chunk_ids))
         if not mapping:
             return ()
         # Pack the query MultiVector into shape (1, n_q, dim) — fast-plaid expects a batch.

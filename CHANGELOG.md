@@ -7,19 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sentence_transformers` embedding provider** (`provider: sentence_transformers`)
+  serving `Qwen/Qwen3-Embedding-0.6B` and other SentenceTransformer models via
+  torch — a GPU-reliable on-device dense embedder (torch frees CUDA memory
+  between sequential index-builds). Opt-in via the `[sentence-transformers]`
+  extra. New `EmbeddingConfig` knobs `max_seq_length` / `normalize` /
+  `query_prompt_name` (the first two fold into the pipeline hash; the
+  query-only prompt does not).
+
+### Removed
+
+- **The `onnx` embedding provider** (`OnnxEmbedder` and the `onnx_file` /
+  `query_instruction` config fields). The torch-backed `sentence_transformers`
+  provider replaces it for on-device Qwen3-Embedding — onnxruntime leaked the
+  CUDA arena across the benchmark's sequential index-builds.
+
 ### Added (GPU inference)
 
 - **`--gpu` flag** on `serve`, `index`, and `watch` (and the benchmark runner)
-  to run all embedder inference — FastEmbed, the `onnx` provider, and PyLate
-  late-interaction — on CUDA. No YAML change; covers both index-time and
-  query-time embedding. The execution device is excluded from the pipeline /
-  index-cache hash, so toggling `--gpu` shares the same `.tq` / fast-plaid index
-  and never forces a re-index (it is a latency knob, not a quality change).
+  to run all embedder inference — FastEmbed, the `sentence_transformers`
+  provider, and PyLate late-interaction — on CUDA. No YAML change; covers both
+  index-time and query-time embedding. The execution device is excluded from the
+  pipeline / index-cache hash, so toggling `--gpu` shares the same `.tq` /
+  fast-plaid index and never forces a re-index (it is a latency knob, not a
+  quality change).
 - **`EmbeddingConfig.device`** (`cpu` / `cuda`) wiring through `build_embedder`
-  into the FastEmbed and ONNX embedders (CUDA-first onnxruntime providers with a
-  CPU fallback); `AppConfig.with_device(gpu=...)` stamps the device after config
-  load. GPU runtimes (`onnxruntime-gpu`, `fastembed-gpu`, CUDA torch) are
-  documented in `INSTALL.md`, not auto-installed.
+  into the FastEmbed and sentence_transformers embedders;
+  `AppConfig.with_device(gpu=...)` stamps the device after config load. GPU
+  runtimes (`onnxruntime-gpu`, `fastembed-gpu`, CUDA torch) are documented in
+  `INSTALL.md`, not auto-installed.
 
 ## [0.2.0] — 2026-05-28
 

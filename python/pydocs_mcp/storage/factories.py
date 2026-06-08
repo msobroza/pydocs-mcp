@@ -22,6 +22,7 @@ import numpy as np
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import Chunk
+from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
 from pydocs_mcp.storage.sqlite import (
@@ -40,7 +41,11 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
 
-def build_sqlite_uow_factory(db_path: Path) -> Callable[[], SqliteUnitOfWork]:
+def build_sqlite_uow_factory(
+    db_path: Path,
+    *,
+    provider: ConnectionProvider | None = None,
+) -> Callable[[], SqliteUnitOfWork]:
     """Build a fresh-per-call ``SqliteUnitOfWork`` factory bound to a single
     ``ConnectionProvider``.
 
@@ -48,8 +53,14 @@ def build_sqlite_uow_factory(db_path: Path) -> Callable[[], SqliteUnitOfWork]:
     — instances are not reusable (the re-entrance guard fires). The provider
     is captured by closure once at factory-construction time so all UoWs
     share the same connection-pool semantics.
+
+    ``provider`` lets a caller inject a pre-built provider so the SAME
+    instance can be shared with a sibling UoW (e.g. the fast-plaid child in
+    a composite write set must resolve the same ``_sqlite_transaction``
+    ambient connection — see ``SqliteCompositeBackend.write_uow_children``).
+    When omitted, one is built from ``db_path``.
     """
-    provider = build_connection_provider(db_path)
+    provider = provider if provider is not None else build_connection_provider(db_path)
     return lambda: SqliteUnitOfWork(provider=provider)
 
 

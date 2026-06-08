@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import Chunk
+from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.factories import (
     build_sqlite_candidate_id_resolver,
     build_sqlite_chunk_hydrator,
@@ -121,9 +122,9 @@ class _FastPlaidReadStore:
     """
 
     sidecar_path: Path
-    db_path: Path
     pipeline_hash: str
     device: str
+    provider: ConnectionProvider
 
     async def score(
         self,
@@ -136,8 +137,8 @@ class _FastPlaidReadStore:
 
         async with FastPlaidUnitOfWork(
             sidecar_path=self.sidecar_path,
-            db_path=self.db_path,
             pipeline_hash=self.pipeline_hash,
+            provider=self.provider,
             device=self.device,
         ) as uow:
             return await uow.score(
@@ -179,9 +180,9 @@ class SqliteCompositeBackend:
             return None
         return _FastPlaidReadStore(
             sidecar_path=self._plaid_sidecar_path,
-            db_path=self.db_path,
             pipeline_hash=self.config.ingestion_pipeline_hash,
             device=self.config.late_interaction.device,
+            provider=build_connection_provider(self.db_path),
         )
 
     def hybrid(self) -> None:
@@ -207,8 +208,15 @@ class SqliteCompositeBackend:
         # test-only SQLite + TurboQuant subset helper (no fast-plaid leg).
         embed = self.config.embedding
         tq_path = self.tq_path
+        # ONE provider shared by the SQLite child AND the fast-plaid child:
+        # the SQLite UoW's ``__aenter__`` sets the ``_sqlite_transaction``
+        # ambient connection, and the fast-plaid child's mapping repository
+        # routes through ``_maybe_acquire`` — so both resolve the SAME open
+        # write transaction. Without sharing, the fast-plaid child would open
+        # a second connection and deadlock on the held write lock.
+        provider = build_connection_provider(self.db_path)
         children: list[Callable[[], object]] = [
-            build_sqlite_uow_factory(self.db_path),
+            build_sqlite_uow_factory(self.db_path, provider=provider),
             lambda: TurboQuantUnitOfWork(
                 index_path=tq_path,
                 dim=embed.dim,
@@ -219,14 +227,13 @@ class SqliteCompositeBackend:
             from pydocs_mcp.storage.fast_plaid_uow import FastPlaidUnitOfWork
 
             sidecar = self._plaid_sidecar_path
-            db_path = self.db_path
             pipeline_hash = self.config.ingestion_pipeline_hash
             device = self.config.late_interaction.device
             children.append(
                 lambda: FastPlaidUnitOfWork(
                     sidecar_path=sidecar,
-                    db_path=db_path,
                     pipeline_hash=pipeline_hash,
+                    provider=provider,
                     device=device,
                 ),
             )
