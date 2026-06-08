@@ -1,0 +1,16 @@
+# Method: LLM TREE REASONING (vectorless).
+#
+# No embeddings and no keyword search. At query time the LLM is shown the
+# project's document tree (each node's qualified_name / title / kind / summary)
+# and picks the relevant symbols; those are fetched as the result.
+#
+# REQUIRES an OpenAI key:  export OPENAI_API_KEY=...  (or load it from .env).
+# `gpt-4o-mini` is the default; one LLM call per query.
+llm:
+  provider: openai
+  model_name: gpt-4o-mini
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/tree_only.yaml

@@ -1,0 +1,27 @@
+# Method: LATE-INTERACTION (ColBERT / MaxSim) retrieval.
+#
+# Each chunk is stored as MANY token vectors; ranking uses MaxSim (sum of
+# per-query-token best matches) instead of a single pooled vector — finer-
+# grained than dense.
+#
+# NOTE: this is technically two-stage (a candidate set is generated, then
+# re-ranked by MaxSim) — there is no pure single-stage LI pipeline. It is the
+# canonical way to use late interaction.
+#
+# REQUIRES the extra:  pip install 'pydocs-mcp[late-interaction]'  (pylate +
+# fast-plaid + torch; use Python 3.11/3.12). Needs its OWN index: the
+# multi-vector ingestion below builds a fast-plaid `.plaid` sidecar.
+late_interaction:
+  enabled: true
+
+# Selected via extraction.ingestion.pipeline_path (NOT a pipelines.* key):
+# swap the single-vector embed stage for the multi-vector one so fast-plaid is
+# populated at index time. Without this, MaxSim finds no vectors -> 0 results.
+extraction:
+  ingestion:
+    pipeline_path: pipelines/ingestion_late_interaction.yaml
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/chunk_search_late_interaction.yaml
