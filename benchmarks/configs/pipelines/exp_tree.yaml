@@ -11,10 +11,9 @@ steps:
     params:
       prompt_template: tree_reasoning_pydocs_v1
       output_scratch_key: candidates_inline
-      # Fit gpt-4o-mini's 128K-token window: prune very large repo trees so the
-      # sweep degrades gracefully instead of 400-ing on context overflow (e.g.
-      # pytorch_geometric's tree is ~300K tokens). ~50K words ≈ 85K tokens.
-      max_tree_words: 50000
+      # max_tree_words uses the step default (~30K words ≈ 90K tokens) so the
+      # sweep fits gpt-4o-mini's 128K window and prunes very large repo trees
+      # (e.g. pytorch_geometric, ~300K tokens unpruned) instead of 400-ing.
   - name: promote_scratch_to_candidates
     type: rrf_fusion
     params:
