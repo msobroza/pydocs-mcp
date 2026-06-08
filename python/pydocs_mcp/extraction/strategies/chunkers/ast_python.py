@@ -256,6 +256,36 @@ def _import_block_node(
     )
 
 
+# Bound a single decorator label so a pathological non-dotted decorator
+# (a subscript, a call returning a callable) can't bloat the LLM-visible tree.
+_DECORATOR_LABEL_MAX_CHARS = 60
+
+
+def _decorator_labels(decorators: list[ast.expr]) -> tuple[str, ...]:
+    """``@<dotted-name>`` for each decorator, in source order.
+
+    Call decorators drop their arguments (``@app.route('/x')`` →
+    ``@app.route``): the callable name is the high-signal role marker and
+    keeping args would bloat the tree-reasoning prompt. Non-dotted
+    decorators (subscripts, etc.) fall back to a bounded ``ast.unparse``.
+    Reuses ``canonical_dotted`` (also used for class bases) for the
+    version-stable dotted form.
+    """
+    from pydocs_mcp.extraction.strategies.references import canonical_dotted
+
+    labels: list[str] = []
+    for dec in decorators:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        dotted = canonical_dotted(target)
+        if dotted:
+            labels.append(f"@{dotted}"[:_DECORATOR_LABEL_MAX_CHARS])
+            continue
+        # Non-dotted decorator (subscript, complex call target): ast.unparse
+        # is total over valid parsed expressions, so a bounded render is safe.
+        labels.append(("@" + ast.unparse(target))[:_DECORATOR_LABEL_MAX_CHARS])
+    return tuple(labels)
+
+
 def _function_node(
     stmt: ast.FunctionDef | ast.AsyncFunctionDef,
     module: str,
@@ -304,7 +334,12 @@ def _function_node(
         text=txt,
         content_hash=_content_hash(txt, kind, title),
         summary=_docstring_summary(doc),
-        extra_metadata={"module": module, "docstring": doc, "signature": sig_line},
+        extra_metadata={
+            "module": module,
+            "docstring": doc,
+            "signature": sig_line,
+            "decorators": _decorator_labels(stmt.decorator_list),
+        },
         parent_id=parent_id,
         children=tuple(examples),
     )
@@ -378,6 +413,7 @@ def _class_node(
             "module": module,
             "docstring": doc,
             "inherits_from": inherits,
+            "decorators": _decorator_labels(stmt.decorator_list),
         },
         parent_id=module,
         children=tuple(doc_examples) + tuple(method_nodes),

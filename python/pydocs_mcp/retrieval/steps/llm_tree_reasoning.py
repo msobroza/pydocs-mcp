@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from pydocs_mcp.extraction.model import DocumentNode
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
@@ -56,6 +56,46 @@ _DEFAULT_NAME = "llm_tree_reasoning"
 # ~100K tokens, leaving headroom for the prompt template + query + response.
 # Raise it for a larger-context model.
 _DEFAULT_MAX_TREE_WORDS = 60_000
+# Docstring excerpt depth fed to the LLM per node. "sections" = first line +
+# Args/Returns/Raises blocks (best discriminator-per-token); "full" = whole
+# docstring (bounded); "off" = no doc field. YAML-tunable per deployment.
+_DEFAULT_DOC_EXCERPT = "sections"
+_DEFAULT_DOC_EXCERPT_MAX_CHARS = 240
+_DOC_EXCERPT_MODES = ("sections", "full", "off")
+# Cap on the per-node enriched title (decorators + signature) so a giant
+# multi-line signature can't dominate the prompt.
+_TITLE_MAX_CHARS = 200
+# Bound the char scan that reconstructs a def/class header from node text.
+_HEADER_SCAN_LIMIT = 2000
+# Section markers the "sections" doc excerpt recognizes (Google + NumPy
+# headers, matched case-insensitively).
+_DOC_SECTION_HEADERS = frozenset(
+    {
+        "args",
+        "arguments",
+        "parameters",
+        "params",
+        "returns",
+        "return",
+        "yields",
+        "yield",
+        "raises",
+        "raise",
+    }
+)
+# Sphinx / reST field-list prefixes (one field per line) the excerpt keeps.
+_SPHINX_FIELD_PREFIXES = (
+    ":param",
+    ":parameter",
+    ":returns",
+    ":return",
+    ":rtype",
+    ":raises",
+    ":raise",
+    ":yields",
+    ":yield",
+    ":type",
+)
 
 
 @step_registry.register("llm_tree_reasoning")
@@ -86,6 +126,14 @@ class LlmTreeReasoningStep(RetrieverStep):
     # Cap on the serialized tree (words) handed to the LLM; prevents context
     # overflow on large repos. See _DEFAULT_MAX_TREE_WORDS.
     max_tree_words: int = field(default=_DEFAULT_MAX_TREE_WORDS, kw_only=True)
+    # Docstring excerpt depth per node ("sections" | "full" | "off") and its
+    # char cap. Enriches the LLM-visible tree with the author's own words
+    # beyond the 140-char summary first line. See _DEFAULT_DOC_EXCERPT.
+    doc_excerpt: str = field(default=_DEFAULT_DOC_EXCERPT, kw_only=True)
+    doc_excerpt_max_chars: int = field(
+        default=_DEFAULT_DOC_EXCERPT_MAX_CHARS,
+        kw_only=True,
+    )
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         async with self.uow_factory() as uow:
@@ -100,7 +148,25 @@ class LlmTreeReasoningStep(RetrieverStep):
                 return state
             trees = tuple(trees_by_module.values())
 
-            tree_jsons = [_pageindex_with_qname(t) for t in trees]
+            doc_truncations: list[int] = []
+            tree_jsons = [
+                _pageindex_with_qname(
+                    t,
+                    doc_mode=self.doc_excerpt,
+                    doc_max_chars=self.doc_excerpt_max_chars,
+                    _truncations=doc_truncations,
+                )
+                for t in trees
+            ]
+            if doc_truncations:
+                log.warning(
+                    "llm_tree_reasoning: %d docstring excerpt(s) hit the "
+                    "doc_excerpt_max_chars=%d cap and were truncated. Raise "
+                    "doc_excerpt_max_chars (or set doc_excerpt: off) if you want "
+                    "different per-node docstring coverage.",
+                    len(doc_truncations),
+                    self.doc_excerpt_max_chars,
+                )
             tree_jsons, truncated = _fit_trees_to_budget(tree_jsons, self.max_tree_words)
             if truncated:
                 log.warning(
@@ -216,6 +282,10 @@ class LlmTreeReasoningStep(RetrieverStep):
             out["name"] = self.name
         if self.max_tree_words != _DEFAULT_MAX_TREE_WORDS:
             out["max_tree_words"] = self.max_tree_words
+        if self.doc_excerpt != _DEFAULT_DOC_EXCERPT:
+            out["doc_excerpt"] = self.doc_excerpt
+        if self.doc_excerpt_max_chars != _DEFAULT_DOC_EXCERPT_MAX_CHARS:
+            out["doc_excerpt_max_chars"] = self.doc_excerpt_max_chars
         return out
 
     @classmethod
@@ -241,6 +311,21 @@ class LlmTreeReasoningStep(RetrieverStep):
             raise ValueError(
                 "LlmTreeReasoningStep requires BuildContext.uow_factory.",
             )
+        doc_excerpt = data.get("doc_excerpt", _DEFAULT_DOC_EXCERPT)
+        if doc_excerpt not in _DOC_EXCERPT_MODES:
+            raise ValueError(
+                f"doc_excerpt must be one of {_DOC_EXCERPT_MODES}; got {doc_excerpt!r}",
+            )
+        doc_excerpt_max_chars = data.get(
+            "doc_excerpt_max_chars",
+            _DEFAULT_DOC_EXCERPT_MAX_CHARS,
+        )
+        # A non-positive cap would silently under-cap (negative slice drops the
+        # tail instead of bounding) — fail fast at YAML-build time.
+        if not isinstance(doc_excerpt_max_chars, int) or doc_excerpt_max_chars < 1:
+            raise ValueError(
+                f"doc_excerpt_max_chars must be a positive int; got {doc_excerpt_max_chars!r}",
+            )
         return cls(
             llm_client=context.llm_client,
             uow_factory=context.uow_factory,
@@ -256,10 +341,144 @@ class LlmTreeReasoningStep(RetrieverStep):
             ),
             name=data.get("name", _DEFAULT_NAME),
             max_tree_words=data.get("max_tree_words", _DEFAULT_MAX_TREE_WORDS),
+            doc_excerpt=doc_excerpt,
+            doc_excerpt_max_chars=doc_excerpt_max_chars,
         )
 
 
-def _pageindex_with_qname(node: DocumentNode) -> dict[str, Any]:
+def _collapse_ws(text: str) -> str:
+    """Collapse every run of whitespace (incl. newlines) to single spaces."""
+    return " ".join(text.split())
+
+
+def _header_from_text(text: str, *, max_chars: int = _TITLE_MAX_CHARS) -> str:
+    """Reconstruct a ``def`` / ``class`` header from a node's source text.
+
+    Scans to the first paren-depth-0 ``:`` (so annotation / slice colons,
+    which live inside ``()`` / ``[]``, don't terminate the header) and
+    collapses whitespace, so a multi-line signature becomes one tidy line.
+    Best-effort: a ``):`` inside a string default can truncate early, which
+    only degrades the LLM-visible label, never crashes. Decorators are NOT
+    in ``node.text`` (Python 3.11 ``lineno`` points at ``def`` / ``class``),
+    so :func:`_enriched_title` prepends them separately.
+    """
+    if not text:
+        return ""
+    depth = 0
+    chars: list[str] = []
+    for ch in text[:_HEADER_SCAN_LIMIT]:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == ":" and depth == 0:
+            break
+        chars.append(ch)
+    header = _collapse_ws("".join(chars)).replace("( ", "(").replace(" )", ")")
+    return header[:max_chars]
+
+
+def _enriched_title(node: DocumentNode) -> str:
+    """Decorators + real signature for code nodes; the plain title otherwise.
+
+    Falls back to ``node.title`` when the derived header doesn't look like a
+    signature (e.g. synthetic nodes whose ``text`` isn't real source), so
+    only genuine ``def`` / ``class`` headers replace the bare ``def foo()``
+    title. Bounded by ``_TITLE_MAX_CHARS``.
+    """
+    decorators = node.extra_metadata.get("decorators") or ()
+    if node.kind in (NodeKind.FUNCTION, NodeKind.METHOD, NodeKind.CLASS):
+        header = _header_from_text(node.text)
+        if not header.startswith(("def ", "async def ", "class ")):
+            header = node.title
+    else:
+        header = node.title
+    if decorators:
+        header = f"{' '.join(str(d) for d in decorators)} {header}".strip()
+    return header[:_TITLE_MAX_CHARS]
+
+
+def _doc_sections(text: str) -> str:
+    """First line + parameter / return / raise blocks (Google/NumPy/Sphinx)."""
+    lines = text.splitlines()
+    kept: list[str] = []
+    first = lines[0].strip()
+    if first:
+        kept.append(first)
+    in_section = False
+    i = 1
+    while i < len(lines):
+        stripped = lines[i].strip()
+        head_word = stripped.rstrip(":").strip().lower()
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        next_is_underline = set(nxt) == {"-"} and len(nxt) >= 3
+        is_underline = set(stripped) == {"-"} and len(stripped) >= 3
+        is_google_header = head_word in _DOC_SECTION_HEADERS and stripped.endswith(":")
+        is_numpy_header = head_word in _DOC_SECTION_HEADERS and next_is_underline
+        is_sphinx = any(stripped.lower().startswith(p) for p in _SPHINX_FIELD_PREFIXES)
+        if is_underline:
+            # Dashes belong to the header on the preceding line. A RECOGNIZED
+            # NumPy header already toggled capture via is_numpy_header; an
+            # UNRECOGNIZED one (Notes / Examples / See Also / a bare rule) must
+            # NOT turn capture on, or its low-signal body leaks in. So just
+            # skip the underline either way — never toggle, never append.
+            i += 1
+            continue
+        if is_google_header or is_numpy_header:
+            in_section = True
+            kept.append(stripped)
+        elif is_sphinx:
+            kept.append(stripped)
+            in_section = False
+        elif in_section:
+            if not stripped:
+                in_section = False
+            else:
+                kept.append(stripped)
+        i += 1
+    return " ".join(kept)
+
+
+def _doc_excerpt(docstring: str, mode: str, max_chars: int) -> str:
+    """Bounded docstring excerpt for the LLM-visible node.
+
+    ``"off"`` → empty. ``"full"`` → the whole docstring, whitespace-
+    collapsed. ``"sections"`` (and any unknown mode) → the first line plus
+    the Args/Parameters/Returns/Yields/Raises blocks (Google + NumPy headers
+    and Sphinx ``:param:``-style field lists) — the author's own words about
+    inputs/outputs beyond the 140-char summary. Always capped at
+    ``max_chars``.
+    """
+    excerpt, _ = _doc_excerpt_with_flag(docstring, mode, max_chars)
+    return excerpt
+
+
+def _doc_excerpt_with_flag(docstring: str, mode: str, max_chars: int) -> tuple[str, bool]:
+    """Like :func:`_doc_excerpt`, but also report whether the cap truncated it.
+
+    The boolean lets the renderer surface one aggregated warning per query
+    when emitted excerpts were cut — mirroring the ``max_tree_words``
+    over-budget warning — instead of silently dropping docstring content.
+    """
+    if not docstring or mode == "off":
+        return "", False
+    text = docstring.strip()
+    if not text:
+        return "", False
+    # Clamp so a non-positive cap can't become a tail-dropping negative slice;
+    # the "always bounded (0 -> '')" contract holds for any caller.
+    cap = max(0, max_chars)
+    full = _collapse_ws(text) if mode == "full" else _collapse_ws(_doc_sections(text))
+    return full[:cap], len(full) > cap
+
+
+def _pageindex_with_qname(
+    node: DocumentNode,
+    *,
+    doc_mode: str = _DEFAULT_DOC_EXCERPT,
+    doc_max_chars: int = _DEFAULT_DOC_EXCERPT_MAX_CHARS,
+    _truncations: list[int] | None = None,
+) -> dict[str, Any]:
     """Build the LLM-visible tree shape — only fields the prompt asks for.
 
     The shipped :meth:`DocumentNode.to_pageindex_json` emits ``node_id``,
@@ -276,19 +495,49 @@ def _pageindex_with_qname(node: DocumentNode) -> dict[str, Any]:
     ``qualified_name`` set, the only field that joins back to
     ``chunk.metadata["qualified_name"]`` via :func:`flatten_to_chunks`).
 
-    So this helper deliberately bypasses ``to_pageindex_json`` and builds
-    a tight shape: ``qualified_name`` (the join key), ``title``, ``kind``,
-    ``summary``, and recursive ``nodes``. Source-line spans are dropped
-    too — the LLM doesn't pick on byte offsets, and omitting them keeps
-    the prompt token budget tight.
+    So this helper deliberately bypasses ``to_pageindex_json`` and builds a
+    tight shape: ``qualified_name`` (the join key), an enriched ``title``
+    (decorators + real signature via :func:`_enriched_title`), ``kind``,
+    ``summary``, an optional bounded ``doc`` excerpt, and recursive
+    ``nodes``. ``doc`` is omitted when empty or identical to ``summary``
+    (summary is already the docstring's first line — duplicating it would
+    just burn tokens). Source-line spans are dropped — the LLM doesn't pick
+    on byte offsets, and omitting them keeps the prompt budget tight.
     """
-    return {
+    out: dict[str, Any] = {
         "qualified_name": node.qualified_name,
-        "title": node.title,
+        "title": _enriched_title(node),
         "kind": node.kind.value,
         "summary": node.summary,
-        "nodes": [_pageindex_with_qname(child) for child in node.children],
     }
+    docstring = str(node.extra_metadata.get("docstring", "") or "")
+    excerpt, truncated = _doc_excerpt_with_flag(docstring, doc_mode, doc_max_chars)
+    # Omit doc when it adds nothing beyond summary: empty, exactly summary, or
+    # merely a (possibly longer) cut of the docstring's first line — summary
+    # already carries that line, so a duplicate just burns prompt budget. A
+    # richer excerpt (first line + Args/Returns/Raises) is longer than the
+    # first line, so it survives this check and is kept.
+    first_line = _collapse_ws(docstring.strip().split("\n", 1)[0])
+    if (
+        excerpt
+        and excerpt != node.summary
+        and not (first_line and excerpt == first_line[: len(excerpt)])
+    ):
+        out["doc"] = excerpt
+        # Record truncation only for an EMITTED doc, so the aggregated warning
+        # reflects real dropped content (not excerpts that get omitted anyway).
+        if truncated and _truncations is not None:
+            _truncations.append(1)
+    out["nodes"] = [
+        _pageindex_with_qname(
+            child,
+            doc_mode=doc_mode,
+            doc_max_chars=doc_max_chars,
+            _truncations=_truncations,
+        )
+        for child in node.children
+    ]
+    return out
 
 
 def _total_nodes(tree_jsons: list[dict[str, Any]]) -> int:
@@ -319,13 +568,17 @@ def _prune_to_node_budget(tree_jsons: list[dict[str, Any]], max_nodes: int) -> l
         queue.extend(node["nodes"])
 
     def rebuild(node: dict[str, Any]) -> dict[str, Any]:
-        return {
+        rebuilt: dict[str, Any] = {
             "qualified_name": node["qualified_name"],
             "title": node["title"],
             "kind": node["kind"],
             "summary": node["summary"],
-            "nodes": [rebuild(c) for c in node["nodes"] if id(c) in kept],
         }
+        # Preserve the optional enriched doc excerpt through pruning.
+        if "doc" in node:
+            rebuilt["doc"] = node["doc"]
+        rebuilt["nodes"] = [rebuild(c) for c in node["nodes"] if id(c) in kept]
+        return rebuilt
 
     return [rebuild(n) for n in tree_jsons if id(n) in kept]
 

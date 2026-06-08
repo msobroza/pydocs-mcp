@@ -87,6 +87,10 @@ steps:
               type: llm_tree_reasoning
               params:
                 prompt_template: tree_reasoning_pydocs_v1
+                # Docstring excerpt depth per node: "sections" (default) |
+                # "full" | "off". See tree_only.yaml for the full rationale.
+                doc_excerpt: sections
+                doc_excerpt_max_chars: 240
   - name: final_fuse
     type: rrf_fusion
     params:
