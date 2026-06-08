@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -35,6 +36,8 @@ from pydocs_mcp.retrieval.prompts import render_prompt
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 from pydocs_mcp.storage.protocols import LlmClient, UnitOfWork
 
+log = logging.getLogger(__name__)
+
 # WHY: single source of truth for every default — referenced from field
 # defaults, to_dict omit-when-default, and from_dict YAML-fallback. The
 # project-wide convention; see CLAUDE.md "Default values: single source
@@ -43,6 +46,16 @@ _DEFAULT_PROMPT_TEMPLATE = "tree_reasoning_pydocs_v1"
 _DEFAULT_OUTPUT_SCRATCH_KEY = "tree.ranked"
 _DEFAULT_REFERENCE_NEIGHBORS_LIMIT = 5
 _DEFAULT_NAME = "llm_tree_reasoning"
+# WHY: bound the serialized tree sent to the LLM, measured in whitespace-
+# separated WORDS, so a large repo's project tree can't overflow the model
+# context window. When the tree is bigger, _fit_trees_to_budget prunes
+# deepest/excess nodes to fit — graceful degradation instead of a 400
+# context_length_exceeded. Tunable per deployment via the `max_tree_words` param.
+# NOTE: words != tokens — a serialized-JSON word is ~1.5-3 model tokens. The
+# default is sized for the default LLM (gpt-4o-mini, 128K tokens): ~60K words ≈
+# ~100K tokens, leaving headroom for the prompt template + query + response.
+# Raise it for a larger-context model.
+_DEFAULT_MAX_TREE_WORDS = 60_000
 
 
 @step_registry.register("llm_tree_reasoning")
@@ -70,6 +83,9 @@ class LlmTreeReasoningStep(RetrieverStep):
         kw_only=True,
     )
     name: str = field(default=_DEFAULT_NAME, kw_only=True)
+    # Cap on the serialized tree (words) handed to the LLM; prevents context
+    # overflow on large repos. See _DEFAULT_MAX_TREE_WORDS.
+    max_tree_words: int = field(default=_DEFAULT_MAX_TREE_WORDS, kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         async with self.uow_factory() as uow:
@@ -85,6 +101,15 @@ class LlmTreeReasoningStep(RetrieverStep):
             trees = tuple(trees_by_module.values())
 
             tree_jsons = [_pageindex_with_qname(t) for t in trees]
+            tree_jsons, truncated = _fit_trees_to_budget(tree_jsons, self.max_tree_words)
+            if truncated:
+                log.warning(
+                    "llm_tree_reasoning: project tree exceeded max_tree_words=%d; "
+                    "pruned deepest/excess nodes to fit the LLM context window. "
+                    "Large repo — raise max_tree_words or use a larger-context "
+                    "model for full tree coverage.",
+                    self.max_tree_words,
+                )
             prompt = render_prompt(
                 self.prompt_template,
                 query=state.query.terms,
@@ -189,6 +214,8 @@ class LlmTreeReasoningStep(RetrieverStep):
             out["output_scratch_key"] = self.output_scratch_key
         if self.name != _DEFAULT_NAME:
             out["name"] = self.name
+        if self.max_tree_words != _DEFAULT_MAX_TREE_WORDS:
+            out["max_tree_words"] = self.max_tree_words
         return out
 
     @classmethod
@@ -228,6 +255,7 @@ class LlmTreeReasoningStep(RetrieverStep):
                 _DEFAULT_OUTPUT_SCRATCH_KEY,
             ),
             name=data.get("name", _DEFAULT_NAME),
+            max_tree_words=data.get("max_tree_words", _DEFAULT_MAX_TREE_WORDS),
         )
 
 
@@ -261,6 +289,67 @@ def _pageindex_with_qname(node: DocumentNode) -> dict[str, Any]:
         "summary": node.summary,
         "nodes": [_pageindex_with_qname(child) for child in node.children],
     }
+
+
+def _total_nodes(tree_jsons: list[dict[str, Any]]) -> int:
+    """Count every node across the pageindex forest (roots + descendants)."""
+    return sum(1 + _total_nodes(n["nodes"]) for n in tree_jsons)
+
+
+def _word_count(tree_jsons: list[dict[str, Any]]) -> int:
+    """Whitespace-separated word count of the serialized pageindex forest."""
+    return len(json.dumps(tree_jsons).split())
+
+
+def _prune_to_node_budget(tree_jsons: list[dict[str, Any]], max_nodes: int) -> list[dict[str, Any]]:
+    """Keep the first ``max_nodes`` nodes in BREADTH-FIRST order across the forest.
+
+    BFS keeps the shallow structure the LLM picks from (modules, then top-level
+    classes/functions, then methods) and drops the deepest/excess nodes. A kept
+    node's ancestors are always kept (BFS dequeues a parent before enqueueing its
+    children), so no orphans — children are simply filtered to the kept set.
+    """
+    from collections import deque
+
+    kept: set[int] = set()
+    queue: deque[dict[str, Any]] = deque(tree_jsons)
+    while queue and len(kept) < max_nodes:
+        node = queue.popleft()
+        kept.add(id(node))
+        queue.extend(node["nodes"])
+
+    def rebuild(node: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "qualified_name": node["qualified_name"],
+            "title": node["title"],
+            "kind": node["kind"],
+            "summary": node["summary"],
+            "nodes": [rebuild(c) for c in node["nodes"] if id(c) in kept],
+        }
+
+    return [rebuild(n) for n in tree_jsons if id(n) in kept]
+
+
+def _fit_trees_to_budget(
+    tree_jsons: list[dict[str, Any]], max_words: int
+) -> tuple[list[dict[str, Any]], bool]:
+    """Prune the LLM-visible tree so its serialized JSON is <= ``max_words`` words.
+
+    Returns ``(trees, truncated)``. Halving the node budget until it fits
+    guarantees a bounded prompt for an arbitrarily large repo, so the tree step
+    degrades gracefully instead of raising a 400 context_length_exceeded. The
+    common (small-repo) case returns the tree unchanged after one size check.
+    """
+    if _word_count(tree_jsons) <= max_words:
+        return tree_jsons, False
+    budget = _total_nodes(tree_jsons)
+    pruned = tree_jsons
+    while budget > 1:
+        budget //= 2
+        pruned = _prune_to_node_budget(tree_jsons, budget)
+        if _word_count(pruned) <= max_words:
+            return pruned, True
+    return _prune_to_node_budget(tree_jsons, 1), True
 
 
 def _collect_qnames(node: DocumentNode, acc: set[str]) -> None:
