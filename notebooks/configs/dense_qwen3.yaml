@@ -1,0 +1,17 @@
+# Method: single-stage DENSE retrieval with a bigger model — Qwen3-Embedding-0.6B
+# served via sentence-transformers (torch), 1024-dim.
+#
+# Stronger semantic recall than bge-small, at the cost of a heavier model.
+# REQUIRES the extra:  pip install 'pydocs-mcp[sentence-transformers]'
+# Because the embedder differs from bge-small, this method needs its OWN index
+# (its own --cache-dir) — the stored vectors are not interchangeable.
+embedding:
+  provider: sentence_transformers
+  model_name: Qwen/Qwen3-Embedding-0.6B
+  dim: 1024
+  batch_size: 8
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/chunk_search_dense.yaml

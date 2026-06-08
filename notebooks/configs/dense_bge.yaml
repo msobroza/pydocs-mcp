@@ -1,0 +1,15 @@
+# Method: single-stage DENSE retrieval (FastEmbed / bge-small).
+#
+# Ranks chunks by embedding cosine similarity instead of keyword overlap.
+# Uses the default on-device embedder (BAAI/bge-small-en-v1.5, 384-dim) — no
+# API key, no extra install. `chunk_search_dense.yaml` is the shipped pipeline
+# whose final step renders the composite output the CLI prints.
+embedding:
+  provider: fastembed
+  model_name: BAAI/bge-small-en-v1.5
+  dim: 384
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/chunk_search_dense.yaml
