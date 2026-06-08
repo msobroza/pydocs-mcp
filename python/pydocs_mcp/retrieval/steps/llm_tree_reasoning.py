@@ -51,9 +51,11 @@ _DEFAULT_NAME = "llm_tree_reasoning"
 # context window. When the tree is bigger, _fit_trees_to_budget prunes
 # deepest/excess nodes to fit — graceful degradation instead of a 400
 # context_length_exceeded. Tunable per deployment via the `max_tree_words` param.
-# NOTE: words != tokens — a serialized-JSON word is ~1.5-3 model tokens, so size
-# this to the model: a 128K-token model fits comfortably under ~40-80K words.
-_DEFAULT_MAX_TREE_WORDS = 300_000
+# NOTE: words != tokens — a serialized-JSON word is ~1.5-3 model tokens. The
+# default is sized for the default LLM (gpt-4o-mini, 128K tokens): ~60K words ≈
+# ~100K tokens, leaving headroom for the prompt template + query + response.
+# Raise it for a larger-context model.
+_DEFAULT_MAX_TREE_WORDS = 60_000
 
 
 @step_registry.register("llm_tree_reasoning")
