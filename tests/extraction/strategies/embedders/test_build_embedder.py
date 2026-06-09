@@ -5,6 +5,11 @@ import pytest
 from pydocs_mcp.extraction.strategies.embedders import build_embedder
 from pydocs_mcp.retrieval.config import EmbeddingConfig
 
+# These tests assert the REAL factory's provider-selection behavior (they patch
+# the heavy model load themselves), so opt out of the autouse
+# build_embedder->MockEmbedder patch in tests/conftest.py.
+pytestmark = pytest.mark.real_embedder
+
 
 def test_unknown_provider_raises_valueerror() -> None:
     cfg = EmbeddingConfig.model_construct(provider="cohere")  # bypass Literal at runtime

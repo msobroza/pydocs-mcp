@@ -105,6 +105,13 @@ include = [
 testpaths = ["tests"]
 pythonpath = ["python"]
 asyncio_mode = "auto"
+markers = [
+    # Opt out of the autouse build_embedder->MockEmbedder patch in
+    # tests/conftest.py. For tests that assert the REAL build_embedder
+    # factory's provider-selection behavior (they patch the heavy model load
+    # themselves), so the mock must not shadow the genuine factory.
+    "real_embedder: test exercises the real build_embedder factory (skips the autouse mock patch)",
+]
 
 [tool.ruff]
 line-length = 100

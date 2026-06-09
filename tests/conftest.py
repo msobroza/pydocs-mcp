@@ -52,6 +52,53 @@ def _patch_build_llm_client_with_fake(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _patch_build_embedder_with_mock(request, monkeypatch):
+    """Inject MockEmbedder so test runs stay offline.
+
+    ``build_retrieval_context`` calls ``build_embedder(config.embedding)`` at
+    composition time (``retrieval/factories.py``). The shipped default config
+    selects ``provider=fastembed`` and ``FastEmbedEmbedder.__post_init__``
+    eagerly downloads ``BAAI/bge-small-en-v1.5`` (~80MB) from the network — so
+    a transient download failure on a CI runner ERRORs every test whose fixture
+    transitively builds a retrieval context, even though the BM25-only default
+    pipeline asserts result SHAPES, not vectors, and needs no real embeddings.
+
+    This mirrors the autouse ``_patch_build_llm_client_with_fake`` patch above:
+    swap the factory at BOTH bind sites so the suite never touches the network.
+
+    - ``extraction.strategies.embedders.build_embedder`` — the canonical module
+      attribute, hit by any consumer that imports it lazily.
+    - ``retrieval.factories.build_embedder`` — the re-bound name from
+      ``retrieval/factories.py``'s top-level
+      ``from ...embedders import build_embedder``, which is what the production
+      ``build_retrieval_context`` wiring dereferences.
+
+    Tests that assert REAL ``build_embedder`` provider-selection behavior (e.g.
+    ``tests/extraction/strategies/embedders/test_build_embedder.py``) opt out
+    via ``@pytest.mark.real_embedder`` — they patch the heavy model load
+    themselves and must see the genuine factory.
+    """
+    if request.node.get_closest_marker("real_embedder") is not None:
+        return
+
+    from tests._fakes import MockEmbedder
+
+    def _fake_build_embedder(cfg):
+        # Size the mock to the configured dim so any downstream shape check
+        # (vector width) stays faithful to the requested embedding config.
+        return MockEmbedder(dim=cfg.dim)
+
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.embedders.build_embedder",
+        _fake_build_embedder,
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.retrieval.factories.build_embedder",
+        _fake_build_embedder,
+    )
+
+
 from pydocs_mcp.db import (
     open_index_database,
     rebuild_fulltext_index,
