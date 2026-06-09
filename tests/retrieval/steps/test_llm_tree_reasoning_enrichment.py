@@ -90,9 +90,9 @@ def test_enriched_title_prefixes_decorators_before_signature() -> None:
     node = _node(
         text="async def login(req: Request) -> Response:\n    ...",
         title="async def login()",
-        extra={"decorators": ("@app.route",)},
+        extra={"decorators": ("@app.route('/login')",)},
     )
-    assert _enriched_title(node) == "@app.route async def login(req: Request) -> Response"
+    assert _enriched_title(node) == "@app.route('/login') async def login(req: Request) -> Response"
 
 
 def test_enriched_title_without_decorators_is_just_signature() -> None:

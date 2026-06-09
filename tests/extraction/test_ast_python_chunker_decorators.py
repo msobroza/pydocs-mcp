@@ -1,10 +1,11 @@
 """Decorator capture in :class:`AstPythonChunker`.
 
 Functions / methods / classes record their decorators as
-``extra_metadata["decorators"]`` (a tuple of ``@<dotted-name>`` labels) so
+``extra_metadata["decorators"]`` (a tuple of ``@<decorator>`` labels) so
 the PageIndex tree-reasoning step can surface role markers (``@property``,
-``@app.route``, ``@staticmethod``, …) to the LLM. The labels drop call
-arguments (``@app.route('/x')`` → ``@app.route``) to stay bounded.
+``@app.route('/login')``, ``@staticmethod``, …) to the LLM. Call decorators
+INCLUDE their arguments (``@app.route('/login')``) — the route path / call
+args carry signal for query matching — bounded by ``_DECORATOR_LABEL_MAX_CHARS``.
 """
 
 from __future__ import annotations
@@ -47,12 +48,12 @@ def test_labels_bare_names_in_source_order() -> None:
     )
 
 
-def test_labels_call_decorator_drops_arguments() -> None:
-    assert _decs("@app.route('/login')\ndef f():\n    pass\n") == ("@app.route",)
+def test_labels_call_decorator_includes_arguments() -> None:
+    assert _decs("@app.route('/login')\ndef f():\n    pass\n") == ("@app.route('/login')",)
 
 
-def test_labels_dotted_call() -> None:
-    assert _decs("@functools.wraps(g)\ndef f():\n    pass\n") == ("@functools.wraps",)
+def test_labels_dotted_call_includes_arguments() -> None:
+    assert _decs("@functools.wraps(g)\ndef f():\n    pass\n") == ("@functools.wraps(g)",)
 
 
 def test_labels_empty_when_no_decorators() -> None:
@@ -92,18 +93,19 @@ def test_function_without_decorators_records_empty_tuple() -> None:
     assert func.extra_metadata["decorators"] == ()
 
 
-def test_arg_dropping_through_build_tree() -> None:
+def test_args_included_through_build_tree() -> None:
     # End-to-end (not just the _decorator_labels unit): a call decorator's
-    # arguments are dropped at the chunker level too.
+    # arguments are INCLUDED at the chunker level too — the route path is
+    # high-signal for query matching.
     func = _find(_build("@app.route('/login')\ndef login():\n    return 1\n"), NodeKind.FUNCTION)
-    assert func.extra_metadata["decorators"] == ("@app.route",)
+    assert func.extra_metadata["decorators"] == ("@app.route('/login')",)
 
 
 def test_decorator_label_is_length_bounded() -> None:
-    long_name = "a" * 70
+    long_name = "a" * 200
     func = _find(_build(f"@{long_name}\ndef f():\n    pass\n"), NodeKind.FUNCTION)
     (label,) = func.extra_metadata["decorators"]
-    assert len(label) <= 60
+    assert len(label) <= 100
 
 
 def test_decorators_metadata_not_persisted_to_chunk_columns() -> None:
