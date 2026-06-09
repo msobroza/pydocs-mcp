@@ -317,3 +317,107 @@ async def test_e2e_get_tree_service_returns_saved_tree(
     assert tree.qualified_name == "src.app"
     # Children readable + non-empty (we wrote hi() + Foo into the fixture).
     assert tree.children, "expected child nodes (FUNCTION/CLASS) under MODULE"
+
+
+@pytest.mark.asyncio
+async def test_v8_migration_refreshes_decorators_without_reembed(tmp_path: Path) -> None:
+    """End-to-end proof of the schema-v8 auto-refresh.
+
+    A stale, decorator-less cache whose ``packages.content_hash`` still matches
+    is SKIPPED by a normal reindex (``_index_project_source`` early-returns on a
+    hash hit) — until the v7→v8 migration clears content_hash, after which the
+    next reindex re-extracts the tree WITH decorators while the content_hash
+    diff keeps the same chunk rows in place (no re-embed).
+    """
+    import json
+    import sqlite3
+
+    from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text(
+        '"""m."""\n\n\nclass C:\n    """c."""\n\n'
+        "    @staticmethod\n    def util():\n"
+        '        """u."""\n        return 1\n',
+        encoding="utf-8",
+    )
+    db = tmp_path / "e2e.db"
+    open_index_database(db).close()
+
+    async def _index(force: bool) -> None:
+        await _build_service(db).index_project(
+            tmp_path,
+            force=force,
+            include_project_source=True,
+            include_dependencies=False,
+            workers=1,
+        )
+
+    async def _decorators_now() -> set[str]:
+        store = SqliteDocumentTreeStore(provider=build_connection_provider(db))
+        trees = await store.load_all_in_package(PROJECT_PACKAGE_NAME)
+        acc: set[str] = set()
+        stack = list(trees.values())
+        while stack:
+            node = stack.pop()
+            acc.update(node.extra_metadata.get("decorators", ()) or ())
+            stack.extend(node.children)
+        return acc
+
+    def _chunk_ids() -> set[int]:
+        conn = sqlite3.connect(str(db))
+        try:
+            return {r[0] for r in conn.execute("SELECT id FROM chunks")}
+        finally:
+            conn.close()
+
+    def _strip(node: dict) -> None:
+        (node.get("extra_metadata") or {}).pop("decorators", None)
+        for child in node.get("children", ()):
+            _strip(child)
+
+    # 1. Initial index — decorators captured end-to-end.
+    await _index(force=True)
+    assert "@staticmethod" in await _decorators_now()
+    ids_before = _chunk_ids()
+    assert ids_before
+
+    # 2. Simulate a stale decorator-less cache: strip decorators from the
+    #    persisted tree_json, leaving packages.content_hash intact.
+    conn = sqlite3.connect(str(db))
+    try:
+        for rowid, tree_json in conn.execute(
+            "SELECT rowid, tree_json FROM document_trees"
+        ).fetchall():
+            doc = json.loads(tree_json)
+            _strip(doc)
+            conn.execute(
+                "UPDATE document_trees SET tree_json = ? WHERE rowid = ?",
+                (json.dumps(doc), rowid),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    assert "@staticmethod" not in await _decorators_now()
+
+    # 3. Without the migration, a normal reindex SKIPS the project (content_hash
+    #    still matches) — decorators stay missing. This is the staleness v8 fixes.
+    await _index(force=False)
+    assert "@staticmethod" not in await _decorators_now()
+
+    # 4. v7 → v8 migration clears packages.content_hash.
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("PRAGMA user_version = 7")
+        conn.commit()
+    finally:
+        conn.close()
+    open_index_database(db).close()
+
+    # 5. The next non-force reindex re-extracts → decorators restored, and the
+    #    content_hash diff keeps the SAME chunk rows (no re-embed / no churn).
+    await _index(force=False)
+    assert "@staticmethod" in await _decorators_now()
+    assert _chunk_ids() == ids_before

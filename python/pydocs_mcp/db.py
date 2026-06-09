@@ -12,7 +12,9 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 7  # v7 adds ``chunks.qualified_name`` (tree-reasoning join key)
+SCHEMA_VERSION = 8  # v8: no structural change — forces a tree re-extraction so
+# document_trees repopulate with pageindex decorators (``extra_metadata["decorators"]``,
+# which no content_hash covers). v7 added ``chunks.qualified_name`` (tree-reasoning join key).
 
 _DDL = """
     CREATE TABLE packages (
@@ -245,13 +247,18 @@ def _apply_v7_additions(conn: sqlite3.Connection) -> None:
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
-    - v7 already: re-run v3..v7 sweeps (additive, idempotent; drift recovery).
-    - v6 → v7: additive — adds the nullable ``chunks.qualified_name`` column;
-      existing rows survive and read back NULL until the next re-index.
-    - v4 → … → v7 / v3 → … → v7 / v2 → … → v7: walk all forward migrations in order.
-    - v5: wipe-and-recreate (falls through to the rebuild branch — v5→v6 was a
-      deliberate wipe to force a fresh fast-plaid index build).
-    - Any other mismatch: drop every known table and recreate from current DDL.
+    - v8 already: re-run v3..v7 sweeps (additive, idempotent; drift recovery),
+      data preserved.
+    - v2 / v3 / v4 / v6 / v7 → v8: walk all forward (additive, idempotent)
+      structure sweeps, then clear ``packages.content_hash`` so the next index
+      re-extracts every package — repopulating ``document_trees`` with the
+      pageindex decorators (``extra_metadata["decorators"]``, which no
+      content_hash covers). NON-DESTRUCTIVE: every row survives; chunks + the
+      ``.tq`` / multi-vector sidecars stay in place (the chunk content_hash is
+      unchanged, so the re-extract diff skips re-embedding), and the stale
+      trees keep serving until re-extraction replaces them.
+    - v5 / any other mismatch: drop every known table and recreate from current
+      DDL (v5 was a deliberate wipe to force a fresh fast-plaid index build).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -261,48 +268,34 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v7 — re-run additive sweeps for drift recovery.
+        # v8 — re-run additive sweeps for drift recovery; data preserved.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
         _apply_v7_additions(conn)
-    elif current == 6:
-        # v6 → v7 — additive (adds the nullable ``chunks.qualified_name``
-        # column). Existing rows survive and read back NULL until re-index.
+    elif current in (2, 3, 4, 6, 7):
+        # v2/v3/v4/v6/v7 → v8 — walk every forward (additive, idempotent)
+        # structure sweep first. Rerunning them repairs drift in legacy
+        # under-stamped DBs (some v3-stamped DBs lack document_trees /
+        # content_hash / local_path; v6 lacks chunks.qualified_name) before
+        # stamping forward.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
         _apply_v7_additions(conn)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif current == 4:
-        # v4 → … → v7 — additive. Rerun the v3/v4 idempotent sweeps first to
-        # repair any drift in legacy v4-stamped DBs before stamping forward.
-        _apply_v3_additions(conn)
-        _apply_v4_additions(conn)
-        _apply_v5_additions(conn)
-        _apply_v6_additions(conn)
-        _apply_v7_additions(conn)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif current == 3:
-        # v3 → … → v7 — additive. We also re-run the v3 sweep first because
-        # some legacy v3-stamped DBs lack ``document_trees`` / ``content_hash`` /
-        # ``local_path`` despite the stamp; rerunning the idempotent v3 sweep
-        # repairs that drift before stamping forward.
-        _apply_v3_additions(conn)
-        _apply_v4_additions(conn)
-        _apply_v5_additions(conn)
-        _apply_v6_additions(conn)
-        _apply_v7_additions(conn)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif current == 2:
-        # v2 → … → v7 — walk every forward migration in order.
-        _apply_v3_additions(conn)
-        _apply_v4_additions(conn)
-        _apply_v5_additions(conn)
-        _apply_v6_additions(conn)
-        _apply_v7_additions(conn)
+        # v8 carries no structural change. The pageindex enrichment added
+        # extra_metadata["decorators"] to the document_trees JSON blob, which
+        # neither the chunk nor the node content_hash covers — so an
+        # unchanged-files reindex would skip the package and never refresh its
+        # trees. Clearing content_hash routes every package through the
+        # existing hash-skip → re-extract path on the next index (rewriting
+        # trees WITH decorators), while the chunk content_hash stays the same,
+        # so the diff keeps unchanged chunks + their vectors in place (no
+        # re-embed). Non-destructive: rows survive and stale trees keep serving
+        # until re-extraction replaces them. Mirrors check_integrity_and_repair.
+        conn.execute("UPDATE packages SET content_hash = NULL")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     else:
         _drop_all_known_tables(conn)

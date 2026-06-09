@@ -29,6 +29,15 @@ steps:
     params:
       prompt_template: tree_reasoning_pydocs_v1
       output_scratch_key: candidates_inline
+      # Each LLM-visible node carries an enriched title (decorators + real
+      # signature) plus an optional docstring excerpt. doc_excerpt selects
+      # the excerpt depth: "sections" (first line + Args/Returns/Raises;
+      # default), "full" (whole docstring, bounded), or "off" (no doc
+      # field). doc_excerpt_max_chars bounds it. Larger excerpts trade
+      # prompt budget for discriminative context; the tree word-budget
+      # pruner counts them, so big excerpts simply prune sooner.
+      doc_excerpt: sections
+      doc_excerpt_max_chars: 240
   - name: promote_scratch_to_candidates
     type: rrf_fusion
     params:
