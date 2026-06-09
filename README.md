@@ -1,4 +1,4 @@
-# pydocs-mcp
+# <img src="assets/icon.png" width="120"> pydocs-mcp
 
 [![CI](https://github.com/msobroza/pydocs-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/msobroza/pydocs-mcp/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/pydocs-mcp.svg)](https://pypi.org/project/pydocs-mcp/)
