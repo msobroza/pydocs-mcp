@@ -35,6 +35,7 @@ from pydocs_mcp.models import (
     ChunkFilterField,
     ChunkList,
 )
+from pydocs_mcp.retrieval.llm_clients.model_budget import derive_max_tree_words
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.prompts import render_prompt
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
@@ -52,14 +53,11 @@ _DEFAULT_REFERENCE_NEIGHBORS_LIMIT = 5
 _DEFAULT_NAME = "llm_tree_reasoning"
 # WHY: bound the serialized tree sent to the LLM, measured in whitespace-
 # separated WORDS, so a large repo's project tree can't overflow the model
-# context window. When the tree is bigger, _fit_trees_to_budget prunes
-# deepest/excess nodes to fit — graceful degradation instead of a 400
-# context_length_exceeded. Tunable per deployment via the `max_tree_words` param.
-# NOTE: words != tokens — a serialized-JSON word is ~1.5-3 model tokens. The
-# default is sized for the default LLM (gpt-4o-mini, 128K tokens): ~60K words ≈
-# ~100K tokens, leaving headroom for the prompt template + query + response.
-# Raise it for a larger-context model.
-_DEFAULT_MAX_TREE_WORDS = 60_000
+# context window. When over budget, _fit_trees_to_budget drops per-node doc
+# excerpts first, then prunes nodes — graceful degradation instead of a 400
+# context_length_exceeded. The budget DEFAULTS to None = "derive from the
+# configured LLM's context window" (model_budget.derive_max_tree_words), so it
+# auto-scales across models; an explicit int in YAML overrides it.
 # Docstring excerpt depth fed to the LLM per node. "sections" = first line +
 # Args/Returns/Raises blocks (best discriminator-per-token); "full" = whole
 # docstring (bounded); "off" = no doc field. YAML-tunable per deployment.
@@ -128,8 +126,9 @@ class LlmTreeReasoningStep(RetrieverStep):
     )
     name: str = field(default=_DEFAULT_NAME, kw_only=True)
     # Cap on the serialized tree (words) handed to the LLM; prevents context
-    # overflow on large repos. See _DEFAULT_MAX_TREE_WORDS.
-    max_tree_words: int = field(default=_DEFAULT_MAX_TREE_WORDS, kw_only=True)
+    # overflow on large repos. None (default) = auto-derive from the LLM's
+    # context window at run time; an explicit int overrides. See the WHY above.
+    max_tree_words: int | None = field(default=None, kw_only=True)
     # Docstring excerpt depth per node ("sections" | "full" | "off") and its
     # char cap. Enriches the LLM-visible tree with the author's own words
     # beyond the 140-char summary first line. See _DEFAULT_DOC_EXCERPT.
@@ -171,14 +170,32 @@ class LlmTreeReasoningStep(RetrieverStep):
                     len(doc_truncations),
                     self.doc_excerpt_max_chars,
                 )
-            tree_jsons, truncated = _fit_trees_to_budget(tree_jsons, self.max_tree_words)
-            if truncated:
+            # Budget defaults to the model's context window (auto-scales across
+            # LLMs); an explicit max_tree_words overrides. model_name is
+            # guaranteed by the LlmClient Protocol.
+            effective_budget = (
+                self.max_tree_words
+                if self.max_tree_words is not None
+                else derive_max_tree_words(self.llm_client.model_name)
+            )
+            tree_jsons, reduction = _fit_trees_to_budget(tree_jsons, effective_budget)
+            if reduction == "docs":
                 log.warning(
-                    "llm_tree_reasoning: project tree exceeded max_tree_words=%d; "
-                    "pruned deepest/excess nodes to fit the LLM context window. "
-                    "Large repo — raise max_tree_words or use a larger-context "
-                    "model for full tree coverage.",
-                    self.max_tree_words,
+                    "llm_tree_reasoning: project tree exceeded the %d-word budget "
+                    "(model=%s); dropped per-node doc excerpts to fit while keeping "
+                    "all nodes. Raise max_tree_words or use a larger-context model "
+                    "for full docstring coverage.",
+                    effective_budget,
+                    self.llm_client.model_name,
+                )
+            elif reduction == "nodes":
+                log.warning(
+                    "llm_tree_reasoning: project tree exceeded the %d-word budget "
+                    "(model=%s) even without doc excerpts; pruned deepest/excess "
+                    "nodes to fit. Large repo — raise max_tree_words or use a "
+                    "larger-context model for full tree coverage.",
+                    effective_budget,
+                    self.llm_client.model_name,
                 )
             prompt = render_prompt(
                 self.prompt_template,
@@ -284,7 +301,7 @@ class LlmTreeReasoningStep(RetrieverStep):
             out["output_scratch_key"] = self.output_scratch_key
         if self.name != _DEFAULT_NAME:
             out["name"] = self.name
-        if self.max_tree_words != _DEFAULT_MAX_TREE_WORDS:
+        if self.max_tree_words is not None:
             out["max_tree_words"] = self.max_tree_words
         if self.doc_excerpt != _DEFAULT_DOC_EXCERPT:
             out["doc_excerpt"] = self.doc_excerpt
@@ -330,6 +347,15 @@ class LlmTreeReasoningStep(RetrieverStep):
             raise ValueError(
                 f"doc_excerpt_max_chars must be a positive int; got {doc_excerpt_max_chars!r}",
             )
+        # None (or absent) = auto-derive the budget from the LLM context window;
+        # an explicit value must be a positive int.
+        max_tree_words = data.get("max_tree_words")
+        if max_tree_words is not None and (
+            not isinstance(max_tree_words, int) or max_tree_words < 1
+        ):
+            raise ValueError(
+                f"max_tree_words must be a positive int or null (auto); got {max_tree_words!r}",
+            )
         return cls(
             llm_client=context.llm_client,
             uow_factory=context.uow_factory,
@@ -344,7 +370,7 @@ class LlmTreeReasoningStep(RetrieverStep):
                 _DEFAULT_OUTPUT_SCRATCH_KEY,
             ),
             name=data.get("name", _DEFAULT_NAME),
-            max_tree_words=data.get("max_tree_words", _DEFAULT_MAX_TREE_WORDS),
+            max_tree_words=max_tree_words,
             doc_excerpt=doc_excerpt,
             doc_excerpt_max_chars=doc_excerpt_max_chars,
         )
@@ -559,26 +585,50 @@ def _prune_to_node_budget(tree_jsons: list[dict[str, Any]], max_nodes: int) -> l
     return [rebuild(n) for n in tree_jsons if id(n) in kept]
 
 
+def _strip_docs(tree_jsons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deep-copy the forest with every optional ``doc`` excerpt removed.
+
+    Node coverage (qualified_name / title / summary) is preserved — only the
+    most-optional enrichment is dropped. This is the first budget lever, so a
+    too-large tree loses docstring excerpts before it loses whole nodes.
+    """
+
+    def strip(node: dict[str, Any]) -> dict[str, Any]:
+        out = {k: v for k, v in node.items() if k != "doc"}
+        out["nodes"] = [strip(c) for c in node["nodes"]]
+        return out
+
+    return [strip(n) for n in tree_jsons]
+
+
 def _fit_trees_to_budget(
     tree_jsons: list[dict[str, Any]], max_words: int
-) -> tuple[list[dict[str, Any]], bool]:
-    """Prune the LLM-visible tree so its serialized JSON is <= ``max_words`` words.
+) -> tuple[list[dict[str, Any]], str]:
+    """Reduce the LLM-visible tree to <= ``max_words`` words, content-first.
 
-    Returns ``(trees, truncated)``. Halving the node budget until it fits
-    guarantees a bounded prompt for an arbitrarily large repo, so the tree step
-    degrades gracefully instead of raising a 400 context_length_exceeded. The
-    common (small-repo) case returns the tree unchanged after one size check.
+    Returns ``(trees, reduction)`` where ``reduction`` is:
+
+    - ``""`` — fit as-is, no reduction.
+    - ``"docs"`` — dropped the per-node ``doc`` excerpts; **every node is
+      preserved**. Node coverage drives recall, so the optional docstring
+      content is sacrificed first.
+    - ``"nodes"`` — still over budget even without docs, so deepest/excess
+      nodes were pruned (BFS halving) — graceful degradation instead of a 400
+      context_length_exceeded.
     """
     if _word_count(tree_jsons) <= max_words:
-        return tree_jsons, False
-    budget = _total_nodes(tree_jsons)
-    pruned = tree_jsons
+        return tree_jsons, ""
+    stripped = _strip_docs(tree_jsons)
+    if _word_count(stripped) <= max_words:
+        return stripped, "docs"
+    budget = _total_nodes(stripped)
+    pruned = stripped
     while budget > 1:
         budget //= 2
-        pruned = _prune_to_node_budget(tree_jsons, budget)
+        pruned = _prune_to_node_budget(stripped, budget)
         if _word_count(pruned) <= max_words:
-            return pruned, True
-    return _prune_to_node_budget(tree_jsons, 1), True
+            return pruned, "nodes"
+    return _prune_to_node_budget(stripped, 1), "nodes"
 
 
 def _collect_qnames(node: DocumentNode, acc: set[str]) -> None:
