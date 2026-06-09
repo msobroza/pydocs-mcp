@@ -46,16 +46,16 @@ def _big_forest(n_modules: int = 40, per_module: int = 25) -> list[dict]:
 
 def test_small_tree_is_unchanged() -> None:
     forest = [_node("a"), _node("b")]
-    out, truncated = _fit_trees_to_budget(forest, max_words=1_000_000)
-    assert truncated is False
+    out, reduction = _fit_trees_to_budget(forest, max_words=1_000_000)
+    assert reduction == ""
     assert out == forest
 
 
 def test_oversized_tree_is_pruned_to_fit() -> None:
-    forest = _big_forest()
+    forest = _big_forest()  # no `doc` fields -> stripping docs is a no-op
     budget = _word_count(forest) // 4
-    out, truncated = _fit_trees_to_budget(forest, max_words=budget)
-    assert truncated is True
+    out, reduction = _fit_trees_to_budget(forest, max_words=budget)
+    assert reduction == "nodes"
     assert _word_count(out) <= budget
     assert _total_nodes(out) < _total_nodes(forest)
     assert len(out) >= 1  # at least the first root(s) survive (BFS keeps shallow first)
@@ -75,9 +75,51 @@ def test_prune_keeps_a_valid_orphan_free_tree() -> None:
 
 def test_extreme_budget_floors_to_one_node() -> None:
     # Smaller than even a single node — best effort floors to one node, never crashes.
-    out, truncated = _fit_trees_to_budget(_big_forest(), max_words=3)
-    assert truncated is True
+    out, reduction = _fit_trees_to_budget(_big_forest(), max_words=3)
+    assert reduction == "nodes"
     assert _total_nodes(out) == 1
+
+
+# ── content-first reduction: drop doc excerpts before whole nodes ──────────
+
+_BIG_DOC = "alpha beta gamma delta " * 30  # ~120 words of doc per node
+
+
+def _node_with_doc(qn: str) -> dict:
+    return {
+        "qualified_name": qn,
+        "title": f"def {qn}()",
+        "kind": "function",
+        "summary": "short summary",
+        "doc": _BIG_DOC,
+        "nodes": [],
+    }
+
+
+def _docless_word_count(forest: list[dict]) -> int:
+    return _word_count([{k: v for k, v in n.items() if k != "doc"} for n in forest])
+
+
+def test_docs_dropped_before_nodes_when_strip_suffices() -> None:
+    forest = [_node_with_doc(f"f{i}") for i in range(10)]
+    docless = _docless_word_count(forest)
+    full = _word_count(forest)
+    budget = (docless + full) // 2  # fits without docs, not with them
+    assert docless <= budget < full
+    out, reduction = _fit_trees_to_budget(forest, max_words=budget)
+    assert reduction == "docs"
+    assert _total_nodes(out) == _total_nodes(forest)  # EVERY node preserved
+    assert all("doc" not in n for n in out)  # only the optional doc dropped
+    assert _word_count(out) <= budget
+
+
+def test_nodes_dropped_when_docless_still_too_big() -> None:
+    forest = [_node_with_doc(f"f{i}") for i in range(30)]
+    budget = _docless_word_count(forest) // 2  # too big even without docs
+    out, reduction = _fit_trees_to_budget(forest, max_words=budget)
+    assert reduction == "nodes"
+    assert _total_nodes(out) < _total_nodes(forest)
+    assert _word_count(out) <= budget
 
 
 @pytest.mark.asyncio
@@ -160,4 +202,92 @@ async def test_step_bounds_prompt_for_large_tree() -> None:
     assert sent_words < 2000, f"prompt should be pruned, got {sent_words} words"
     # f0 is the first child -> kept by BFS -> still resolves.
     assert "tree.ranked" in out.scratch
+    assert out.scratch["tree.ranked"].items[0].metadata["qualified_name"] == "pkg.mod.f0"
+
+
+@pytest.mark.asyncio
+async def test_step_auto_derives_budget_from_model(caplog) -> None:
+    """With max_tree_words unset (None), the budget is derived from the LLM's
+    context window. The fake model's fallback budget prunes the large tree, and
+    the warning embeds exactly that derived budget + the model name."""
+    import logging
+
+    from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+    from pydocs_mcp.models import Chunk, SearchQuery
+    from pydocs_mcp.retrieval.llm_clients.model_budget import derive_max_tree_words
+    from pydocs_mcp.retrieval.pipeline import RetrieverState
+    from pydocs_mcp.retrieval.steps.llm_tree_reasoning import LlmTreeReasoningStep
+    from tests._fakes import (
+        FakeLlmClient,
+        InMemoryChunkStore,
+        InMemoryDocumentTreeStore,
+        make_fake_uow_factory,
+    )
+
+    children = tuple(
+        DocumentNode(
+            node_id=f"n{j}",
+            qualified_name=f"pkg.mod.f{j}",
+            title=f"def f{j}()",
+            kind=NodeKind.FUNCTION,
+            source_path="m.py",
+            start_line=1,
+            end_line=2,
+            text=f"body{j}",
+            content_hash="",
+            summary=_SUMMARY,
+            extra_metadata={},
+            parent_id="root",
+            children=(),
+        )
+        for j in range(200)
+    )
+    tree = DocumentNode(
+        node_id="root",
+        qualified_name="pkg.mod",
+        title="module",
+        kind=NodeKind.MODULE,
+        source_path="m.py",
+        start_line=1,
+        end_line=999,
+        text="mod",
+        content_hash="",
+        summary="root",
+        extra_metadata={},
+        parent_id=None,
+        children=children,
+    )
+    chunk_store = InMemoryChunkStore()
+    await chunk_store.upsert(
+        (Chunk(text="body0", metadata={"qualified_name": "pkg.mod.f0", "package": "__project__"}),)
+    )
+    uow_factory = make_fake_uow_factory(
+        trees=InMemoryDocumentTreeStore(by_package={"__project__": [tree]}),
+        chunks=chunk_store,
+    )
+    llm = FakeLlmClient(
+        responses={"find f0": json.dumps({"thinking": "", "node_list": ["pkg.mod.f0"]})}
+    )
+    # No max_tree_words -> None -> auto-derive from llm.model_name.
+    step = LlmTreeReasoningStep(
+        llm_client=llm,
+        uow_factory=uow_factory,
+        prompt_template="tree_reasoning_pydocs_v1",
+    )
+    assert step.max_tree_words is None  # default = auto
+    state = RetrieverState(
+        query=SearchQuery(terms="find f0", max_results=5),
+        candidates=None,
+        result=None,
+        scratch={},
+    )
+    with caplog.at_level(logging.WARNING):
+        out = await step.run(state)
+
+    auto_budget = derive_max_tree_words(llm.model_name)  # fake-llm-model -> fallback
+    # The warning embeds the exact model-derived budget — proving auto-derivation.
+    assert f"the {auto_budget}-word budget (model=fake-llm-model)" in caplog.text
+    # Pruned far below the unbounded ~200-node tree (>10k words).
+    sent_words = len(llm._calls[-1][-1]["content"].split())
+    assert sent_words < auto_budget + 2000
     assert out.scratch["tree.ranked"].items[0].metadata["qualified_name"] == "pkg.mod.f0"
