@@ -172,6 +172,40 @@ def test_function_docstring_stored_in_extra_metadata(tmp_path: Path) -> None:
     assert func.summary == "Hello doc."
 
 
+def test_single_line_signature_captured_in_extra_metadata(tmp_path: Path) -> None:
+    src = "def foo(a: int) -> int:\n    return a\n"
+    root = _build(src, root=tmp_path)
+    func = _find_child(root, NodeKind.FUNCTION)
+    assert func is not None
+    assert func.extra_metadata["signature"] == "def foo(a: int) -> int"
+
+
+def test_multiline_signature_captured_as_full_header(tmp_path: Path) -> None:
+    # The def header spans four physical lines; the captured signature must be
+    # the FULL collapsed header, not just ``def foo(`` (the first line).
+    src = "def foo(\n    a: int,\n    b: str = 'x',\n) -> dict[str, int]:\n    return {}\n"
+    root = _build(src, root=tmp_path)
+    func = _find_child(root, NodeKind.FUNCTION)
+    assert func is not None
+    assert func.extra_metadata["signature"] == "def foo(a: int, b: str = 'x',) -> dict[str, int]"
+
+
+def test_multiline_async_method_signature_captured(tmp_path: Path) -> None:
+    src = (
+        "class Svc:\n"
+        "    async def fetch(\n"
+        "        self,\n"
+        "        url: str,\n"
+        "    ) -> bytes:\n"
+        "        return b''\n"
+    )
+    root = _build(src, root=tmp_path)
+    cls = _find_child(root, NodeKind.CLASS)
+    assert cls is not None
+    method = next(c for c in cls.children if c.kind == NodeKind.METHOD)
+    assert method.extra_metadata["signature"] == "async def fetch(self, url: str,) -> bytes"
+
+
 # ── 7. Fenced code block in module docstring → CODE_EXAMPLE child of MODULE
 
 

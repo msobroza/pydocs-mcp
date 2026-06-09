@@ -30,6 +30,7 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _content_hash,
     _docstring_summary,
     _fallback_module_node,
+    _header_from_text,
     _relative_module_parts,
     _relpath,
     _slice_lines,
@@ -256,33 +257,37 @@ def _import_block_node(
     )
 
 
-# Bound a single decorator label so a pathological non-dotted decorator
-# (a subscript, a call returning a callable) can't bloat the LLM-visible tree.
-_DECORATOR_LABEL_MAX_CHARS = 60
+# Bound a single decorator label so a pathological decorator (a long call
+# arg list, a subscript, a call returning a callable) can't bloat the
+# LLM-visible tree.
+_DECORATOR_LABEL_MAX_CHARS = 100
 
 
 def _decorator_labels(decorators: list[ast.expr]) -> tuple[str, ...]:
-    """``@<dotted-name>`` for each decorator, in source order.
+    """``@<decorator>`` for each decorator, in source order.
 
-    Call decorators drop their arguments (``@app.route('/x')`` →
-    ``@app.route``): the callable name is the high-signal role marker and
-    keeping args would bloat the tree-reasoning prompt. Non-dotted
-    decorators (subscripts, etc.) fall back to a bounded ``ast.unparse``.
-    Reuses ``canonical_dotted`` (also used for class bases) for the
-    version-stable dotted form.
+    Call decorators INCLUDE their arguments (``@app.route('/x')`` stays
+    ``@app.route('/x')``): the route path / call args carry signal for query
+    matching, so the full ``ast.unparse`` render is kept (bounded by
+    ``_DECORATOR_LABEL_MAX_CHARS``). Bare dotted names take the
+    ``canonical_dotted`` fast-path (also used for class bases) for a
+    version-stable dotted form; everything else (subscripts, complex call
+    targets, calls with args) falls back to a bounded ``ast.unparse``, which
+    is total over valid parsed expressions.
     """
     from pydocs_mcp.extraction.strategies.references import canonical_dotted
 
     labels: list[str] = []
     for dec in decorators:
-        target = dec.func if isinstance(dec, ast.Call) else dec
-        dotted = canonical_dotted(target)
-        if dotted:
-            labels.append(f"@{dotted}"[:_DECORATOR_LABEL_MAX_CHARS])
-            continue
-        # Non-dotted decorator (subscript, complex call target): ast.unparse
-        # is total over valid parsed expressions, so a bounded render is safe.
-        labels.append(("@" + ast.unparse(target))[:_DECORATOR_LABEL_MAX_CHARS])
+        # Fast-path bare dotted names (``@property``, ``@app.route`` with no
+        # call); Call decorators fall through to ast.unparse so their args
+        # survive.
+        if not isinstance(dec, ast.Call):
+            dotted = canonical_dotted(dec)
+            if dotted:
+                labels.append(f"@{dotted}"[:_DECORATOR_LABEL_MAX_CHARS])
+                continue
+        labels.append(("@" + ast.unparse(dec))[:_DECORATOR_LABEL_MAX_CHARS])
     return tuple(labels)
 
 
@@ -321,7 +326,11 @@ def _function_node(
     txt = _slice_lines(lines, start, end)
     is_async = isinstance(stmt, ast.AsyncFunctionDef)
     title = f"{'async def' if is_async else 'def'} {stmt.name}()"
-    sig_line = lines[start - 1].strip() if 0 <= start - 1 < len(lines) else ""
+    # Capture the FULL def header (multi-line signatures collapse to one line)
+    # via the paren-balancing scanner, not just the first physical line. ``txt``
+    # is the def's source (header + body); _header_from_text stops at the first
+    # paren-depth-0 ``:``, so the body never leaks into the signature.
+    sig_line = _header_from_text(txt)
     examples = _extract_code_examples(doc, qname, rel)
     return DocumentNode(
         node_id=qname,

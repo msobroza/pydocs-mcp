@@ -98,6 +98,44 @@ def _content_hash(text: str, kind: NodeKind, title: str) -> str:
     return h[:12]
 
 
+# Bound the char scan that reconstructs a def/class header from node text, so
+# a pathological body (no paren-depth-0 ``:`` near the top) can't run the
+# scanner over the whole function source.
+_HEADER_SCAN_LIMIT = 2000
+
+
+def _collapse_ws(text: str) -> str:
+    """Collapse every run of whitespace (incl. newlines) to single spaces."""
+    return " ".join(text.split())
+
+
+def _header_from_text(text: str, *, max_chars: int | None = None) -> str:
+    """Reconstruct a ``def`` / ``class`` header from a node's source text.
+
+    Scans to the first paren-depth-0 ``:`` (so annotation / slice colons,
+    which live inside ``()`` / ``[]``, don't terminate the header) and
+    collapses whitespace, so a multi-line signature becomes one tidy line.
+    Best-effort: a ``):`` inside a string default can truncate early, which
+    only degrades the derived label, never crashes. ``max_chars`` (when given)
+    bounds the result; ``None`` means unbounded (the chunker stores the full
+    signature, the tree-reasoning render side passes its own title cap).
+    """
+    if not text:
+        return ""
+    depth = 0
+    chars: list[str] = []
+    for ch in text[:_HEADER_SCAN_LIMIT]:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == ":" and depth == 0:
+            break
+        chars.append(ch)
+    header = _collapse_ws("".join(chars)).replace("( ", "(").replace(" )", ")")
+    return header if max_chars is None else header[:max_chars]
+
+
 def _docstring_summary(doc: str) -> str:
     """First line of the docstring, truncated to 140 chars. Empty
     docstring → empty summary (never raises, never returns ``None``)."""
@@ -132,9 +170,12 @@ def _fallback_module_node(
 
 __all__ = (
     "_FENCED_RE",
+    "_HEADER_SCAN_LIMIT",
+    "_collapse_ws",
     "_content_hash",
     "_docstring_summary",
     "_fallback_module_node",
+    "_header_from_text",
     "_module_from_doc_path",
     "_relative_module_parts",
     "_relpath",

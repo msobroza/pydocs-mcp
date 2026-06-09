@@ -25,6 +25,10 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.strategies.chunkers._shared import (
+    _collapse_ws,
+    _header_from_text,
+)
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
@@ -63,10 +67,10 @@ _DEFAULT_DOC_EXCERPT = "sections"
 _DEFAULT_DOC_EXCERPT_MAX_CHARS = 240
 _DOC_EXCERPT_MODES = ("sections", "full", "off")
 # Cap on the per-node enriched title (decorators + signature) so a giant
-# multi-line signature can't dominate the prompt.
+# multi-line signature can't dominate the prompt. The header scanner + its
+# scan-limit live in the shared chunker utils (``_header_from_text`` in
+# extraction/strategies/chunkers/_shared.py).
 _TITLE_MAX_CHARS = 200
-# Bound the char scan that reconstructs a def/class header from node text.
-_HEADER_SCAN_LIMIT = 2000
 # Section markers the "sections" doc excerpt recognizes (Google + NumPy
 # headers, matched case-insensitively).
 _DOC_SECTION_HEADERS = frozenset(
@@ -346,49 +350,21 @@ class LlmTreeReasoningStep(RetrieverStep):
         )
 
 
-def _collapse_ws(text: str) -> str:
-    """Collapse every run of whitespace (incl. newlines) to single spaces."""
-    return " ".join(text.split())
-
-
-def _header_from_text(text: str, *, max_chars: int = _TITLE_MAX_CHARS) -> str:
-    """Reconstruct a ``def`` / ``class`` header from a node's source text.
-
-    Scans to the first paren-depth-0 ``:`` (so annotation / slice colons,
-    which live inside ``()`` / ``[]``, don't terminate the header) and
-    collapses whitespace, so a multi-line signature becomes one tidy line.
-    Best-effort: a ``):`` inside a string default can truncate early, which
-    only degrades the LLM-visible label, never crashes. Decorators are NOT
-    in ``node.text`` (Python 3.11 ``lineno`` points at ``def`` / ``class``),
-    so :func:`_enriched_title` prepends them separately.
-    """
-    if not text:
-        return ""
-    depth = 0
-    chars: list[str] = []
-    for ch in text[:_HEADER_SCAN_LIMIT]:
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}":
-            depth = max(0, depth - 1)
-        elif ch == ":" and depth == 0:
-            break
-        chars.append(ch)
-    header = _collapse_ws("".join(chars)).replace("( ", "(").replace(" )", ")")
-    return header[:max_chars]
-
-
 def _enriched_title(node: DocumentNode) -> str:
     """Decorators + real signature for code nodes; the plain title otherwise.
 
     Falls back to ``node.title`` when the derived header doesn't look like a
     signature (e.g. synthetic nodes whose ``text`` isn't real source), so
     only genuine ``def`` / ``class`` headers replace the bare ``def foo()``
-    title. Bounded by ``_TITLE_MAX_CHARS``.
+    title. The header scanner (``_header_from_text``) and whitespace collapse
+    (``_collapse_ws``) are shared with the chunker (see
+    ``extraction/strategies/chunkers/_shared.py``). Bounded by
+    ``_TITLE_MAX_CHARS``. Decorators are NOT in ``node.text`` (Python 3.11
+    ``lineno`` points at ``def`` / ``class``), so they're prepended separately.
     """
     decorators = node.extra_metadata.get("decorators") or ()
     if node.kind in (NodeKind.FUNCTION, NodeKind.METHOD, NodeKind.CLASS):
-        header = _header_from_text(node.text)
+        header = _header_from_text(node.text, max_chars=_TITLE_MAX_CHARS)
         if not header.startswith(("def ", "async def ", "class ")):
             header = node.title
     else:
