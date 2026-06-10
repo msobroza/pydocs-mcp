@@ -281,6 +281,28 @@ expensive (one LLM call per query). **BM25 → tree rerank** roughly doubles BM2
 recall@1 (0.17 → 0.33) and lifts recall@5 to 0.57 by re-ranking BM25's top-200
 candidate pool (`k=200`) with gpt-4o-mini — reaching tree-reasoning quality, still behind dense.
 
+#### Quality vs. search latency
+
+![recall@10 vs. p50 search latency by retrieval method](assets/method_quality_vs_latency.png)
+
+Per-needle **p50 search latency** (the query path only — excludes one-time
+indexing), from each run's per-task `search_seconds`:
+
+| Method | recall@10 | search / needle (p50) |
+|---|---:|---:|
+| BM25 | 0.400 | 0.03s |
+| Late-interaction | 0.667 | 0.13s |
+| Dense (bge-small) | 0.733 | 0.15s |
+| Dense (Qwen3-0.6B) | 0.810 | 0.51s |
+| BM25 → tree rerank | 0.567 | 10.6s |
+| LLM tree | 0.524 | 13.7s |
+
+Two tiers: **local index lookups** (BM25 / dense / late-interaction) answer in
+**0.03–0.51 s**, while the **LLM methods** (BM25 → tree rerank, LLM tree) spend
+**~10–14 s** on one `gpt-4o-mini` call per query — a 20–450× gap. **Dense
+(Qwen3)** is the dominant point (highest recall@10 at sub-second latency), so on
+quality-per-second the LLM approaches are the weakest here.
+
 ### Current baselines
 
 Two baseline JSON files are tracked in `benchmarks/baselines/`:
