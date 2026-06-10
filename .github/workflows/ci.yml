@@ -101,7 +101,13 @@ jobs:
       # already-over function that regresses further) fails. The snapshot-
       # comparison run exits 1 on such regressions. Burn the baseline down,
       # then lower the ceiling. See [tool.complexipy].
+      # PYTHONIOENCODING: complexipy prints ✅/🎉 emoji; Windows' default
+      # cp1252 console codec can't encode them, crashing the step with a
+      # UnicodeEncodeError unrelated to any complexity finding. Force UTF-8
+      # stdout so the gate reports findings, not codec errors.
       - name: Complexity gate (complexipy)
+        env:
+          PYTHONIOENCODING: "utf-8"
         run: uv run complexipy python/pydocs_mcp --max-complexity-allowed 15
 
       # WHY: dead-code gate. The [tool.vulture] whitelist (ignore_names /
@@ -110,6 +116,8 @@ jobs:
       # params), so a min-confidence-80 run is clean. vulture reads the
       # pyproject [tool.vulture] section automatically.
       - name: Dead-code gate (vulture)
+        env:
+          PYTHONIOENCODING: "utf-8"
         run: uv run vulture python/pydocs_mcp --min-confidence 80
 
       - name: Smoke-test out-of-tree pydocs_mcp imports
