@@ -1,4 +1,4 @@
-.PHONY: install test test-rust lint lint-rust format typecheck build clean
+.PHONY: install test test-rust lint lint-rust format typecheck gate build clean
 
 install:
 	pip install -e .
@@ -26,6 +26,18 @@ format:
 
 typecheck:
 	mypy python/pydocs_mcp
+
+# Full local quality gate over the calibrated surface (python/pydocs_mcp +
+# tests): lint + format + types + cognitive complexity (snapshot-baselined,
+# ceiling 15) + dead code + the 90%-line-coverage test run. Run before pushing.
+gate:
+	ruff check python/ tests/ benchmarks/
+	ruff format --check python/ tests/ benchmarks/
+	mypy python/pydocs_mcp
+	complexipy python/pydocs_mcp --max-complexity-allowed 15
+	vulture python/pydocs_mcp --min-confidence 80
+	python -m pytest tests/ --ignore=tests/test_parity.py \
+		--cov=pydocs_mcp --cov-report=term-missing --cov-fail-under=90
 
 build:
 	maturin build --release
