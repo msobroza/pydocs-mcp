@@ -38,11 +38,11 @@ steps:
       # pruner counts them, so big excerpts simply prune sooner.
       doc_excerpt: sections
       doc_excerpt_max_chars: 240
-      # max_tree_words bounds the serialized tree handed to the LLM. Omitted
-      # here = auto: derived from the configured llm.model_name's context
-      # window (so it scales across models). When over budget the pruner drops
-      # per-node doc excerpts FIRST, then whole nodes. Set an explicit int to
-      # override the auto budget.
+      # max_tree_tokens bounds the serialized tree handed to the LLM, in REAL
+      # tiktoken tokens. Omitted here = auto: derived from the configured
+      # llm.model_name's context window (so it scales across models) and never
+      # overflows it. When over budget the pruner drops per-node doc excerpts
+      # FIRST, then whole nodes. Set an explicit int to override the auto budget.
   - name: promote_scratch_to_candidates
     type: rrf_fusion
     params:

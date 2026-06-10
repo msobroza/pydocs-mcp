@@ -1,15 +1,17 @@
-"""Model -> tree-reasoning word budget derivation.
+"""Model -> tree-reasoning TOKEN budget + tiktoken token counting.
 
-The LLM tree-reasoning budget (max_tree_words) is derived from the configured
-model's context window so it auto-scales across models instead of a single
-hand-tuned constant.
+The LLM tree-reasoning budget is derived from the configured model's context
+window (in tokens) so it auto-scales across models, and the tree is measured
+in REAL tokens (tiktoken) — not words — so the prompt can never exceed the
+model's context window (which it did under the old word×ratio heuristic).
 """
 
 from __future__ import annotations
 
 from pydocs_mcp.retrieval.llm_clients.model_budget import (
     context_window_tokens,
-    derive_max_tree_words,
+    count_tokens,
+    derive_max_tree_tokens,
 )
 
 
@@ -21,15 +23,12 @@ def test_known_model_window() -> None:
 
 
 def test_prefix_match_ignores_dated_suffix() -> None:
-    # OpenAI appends dated suffixes; match by prefix.
     assert context_window_tokens("gpt-4o-mini-2024-07-18") == 128_000
 
 
 def test_longest_prefix_wins() -> None:
-    # "gpt-4o-mini" must beat both "gpt-4o" and "gpt-4".
     assert context_window_tokens("gpt-4o-mini") == 128_000
     assert context_window_tokens("gpt-4o") == 128_000
-    # bare gpt-4 is the small (8K) window, NOT matched by the gpt-4o entry.
     assert context_window_tokens("gpt-4") == 8_192
     assert context_window_tokens("gpt-4-0613") == 8_192
 
@@ -43,24 +42,51 @@ def test_unknown_model_falls_back_conservatively() -> None:
     assert context_window_tokens("") == 16_000
 
 
-# ── derive_max_tree_words ─────────────────────────────────────────────────
+# ── derive_max_tree_tokens ────────────────────────────────────────────────
 
 
-def test_gpt4o_mini_budget_near_prior_default() -> None:
-    # Calibrated to land near the previous hand-tuned 60K constant.
-    w = derive_max_tree_words("gpt-4o-mini")
-    assert 50_000 <= w <= 65_000
+def test_gpt4o_mini_budget_is_fraction_of_window() -> None:
+    # 128_000 * 0.75 = 96_000 tokens, leaving headroom for prompt + response.
+    assert derive_max_tree_tokens("gpt-4o-mini") == 96_000
+
+
+def test_budget_well_under_context_window() -> None:
+    # The whole point: the tree budget must be strictly below the window so the
+    # prompt (tree + template + query) + the response still fit.
+    for m in ("gpt-4o-mini", "gpt-4.1", "gpt-4", "o1"):
+        assert derive_max_tree_tokens(m) < context_window_tokens(m)
 
 
 def test_budget_scales_with_window() -> None:
     assert (
-        derive_max_tree_words("gpt-4.1")
-        > derive_max_tree_words("gpt-4o-mini")
-        > derive_max_tree_words("gpt-4")
+        derive_max_tree_tokens("gpt-4.1")
+        > derive_max_tree_tokens("gpt-4o-mini")
+        > derive_max_tree_tokens("gpt-4")
     )
 
 
-def test_unknown_budget_is_positive_and_smaller_than_default_model() -> None:
-    w = derive_max_tree_words("some-unknown-model")
-    assert w >= 1
-    assert w < derive_max_tree_words("gpt-4o-mini")
+def test_unknown_budget_positive_and_smaller_than_default_model() -> None:
+    b = derive_max_tree_tokens("some-unknown-model")
+    assert b >= 1
+    assert b < derive_max_tree_tokens("gpt-4o-mini")
+
+
+# ── count_tokens (real tiktoken) ──────────────────────────────────────────
+
+
+def test_count_tokens_known_model() -> None:
+    n = count_tokens("def login(req: Request) -> Response:", "gpt-4o-mini")
+    assert n > 0
+    # Real tokenization is far denser than whitespace words for code: this
+    # 5-word signature is ~9 tokens (the bug the word budget missed).
+    assert n > len(["def", "login(req:", "Request)", "->", "Response:"])
+
+
+def test_count_tokens_unknown_model_uses_fallback_no_crash() -> None:
+    # Unknown model -> fallback encoding, never raises.
+    n = count_tokens("hello world", "fake-llm-model")
+    assert n > 0
+
+
+def test_count_tokens_empty() -> None:
+    assert count_tokens("", "gpt-4o-mini") == 0

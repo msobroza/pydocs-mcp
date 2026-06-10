@@ -45,7 +45,7 @@ classifiers = [
     "Topic :: Text Processing :: Indexing",
     "Typing :: Typed",
 ]
-dependencies = ["mcp>=1.0", "pydantic>=2.0", "pydantic-settings>=2.0", "pyyaml>=6.0", "numpy>=1.26", "turbovec>=0.5,<1.0", "fastembed>=0.4,<1.0", "openai>=1.40,<2.0", "jinja2>=3.0,<4.0"]
+dependencies = ["mcp>=1.0", "pydantic>=2.0", "pydantic-settings>=2.0", "pyyaml>=6.0", "numpy>=1.26", "turbovec>=0.5,<1.0", "fastembed>=0.4,<1.0", "openai>=1.40,<2.0", "jinja2>=3.0,<4.0", "tiktoken>=0.7,<1.0"]
 
 [project.urls]
 Homepage = "https://github.com/msobroza/pydocs-mcp"

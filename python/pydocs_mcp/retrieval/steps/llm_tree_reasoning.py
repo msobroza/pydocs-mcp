@@ -35,7 +35,10 @@ from pydocs_mcp.models import (
     ChunkFilterField,
     ChunkList,
 )
-from pydocs_mcp.retrieval.llm_clients.model_budget import derive_max_tree_words
+from pydocs_mcp.retrieval.llm_clients.model_budget import (
+    count_tokens,
+    derive_max_tree_tokens,
+)
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.prompts import render_prompt
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
@@ -51,13 +54,15 @@ _DEFAULT_PROMPT_TEMPLATE = "tree_reasoning_pydocs_v1"
 _DEFAULT_OUTPUT_SCRATCH_KEY = "tree.ranked"
 _DEFAULT_REFERENCE_NEIGHBORS_LIMIT = 5
 _DEFAULT_NAME = "llm_tree_reasoning"
-# WHY: bound the serialized tree sent to the LLM, measured in whitespace-
-# separated WORDS, so a large repo's project tree can't overflow the model
-# context window. When over budget, _fit_trees_to_budget drops per-node doc
-# excerpts first, then prunes nodes — graceful degradation instead of a 400
-# context_length_exceeded. The budget DEFAULTS to None = "derive from the
-# configured LLM's context window" (model_budget.derive_max_tree_words), so it
-# auto-scales across models; an explicit int in YAML overrides it.
+# WHY: bound the serialized tree sent to the LLM, measured in REAL tiktoken
+# TOKENS, so a large repo's project tree can't overflow the model context
+# window. (Words badly under-count code — a 50K-word tree is ~170K tokens — so
+# a word budget let prompts blow past 128K; tokens make the bound exact.) When
+# over budget, _fit_trees_to_budget drops per-node doc excerpts first, then
+# prunes nodes — graceful degradation instead of a 400 context_length_exceeded.
+# The budget DEFAULTS to None = "derive from the configured LLM's context
+# window" (model_budget.derive_max_tree_tokens); an explicit int in YAML
+# overrides it.
 # Docstring excerpt depth fed to the LLM per node. "sections" = first line +
 # Args/Returns/Raises blocks (best discriminator-per-token); "full" = whole
 # docstring (bounded); "off" = no doc field. YAML-tunable per deployment.
@@ -125,10 +130,10 @@ class LlmTreeReasoningStep(RetrieverStep):
         kw_only=True,
     )
     name: str = field(default=_DEFAULT_NAME, kw_only=True)
-    # Cap on the serialized tree (words) handed to the LLM; prevents context
-    # overflow on large repos. None (default) = auto-derive from the LLM's
-    # context window at run time; an explicit int overrides. See the WHY above.
-    max_tree_words: int | None = field(default=None, kw_only=True)
+    # Cap on the serialized tree (tiktoken tokens) handed to the LLM; prevents
+    # context overflow on large repos. None (default) = auto-derive from the
+    # LLM's context window at run time; an explicit int overrides. See the WHY.
+    max_tree_tokens: int | None = field(default=None, kw_only=True)
     # Docstring excerpt depth per node ("sections" | "full" | "off") and its
     # char cap. Enriches the LLM-visible tree with the author's own words
     # beyond the 140-char summary first line. See _DEFAULT_DOC_EXCERPT.
@@ -175,21 +180,23 @@ class LlmTreeReasoningStep(RetrieverStep):
                 )
                 for t in trees
             ]
-            # Budget defaults to the model's context window (auto-scales across
-            # LLMs); an explicit max_tree_words overrides. model_name is
-            # guaranteed by the LlmClient Protocol.
+            # Budget (tokens) defaults to a fraction of the model's context
+            # window (auto-scales across LLMs); an explicit max_tree_tokens
+            # overrides. model_name is guaranteed by the LlmClient Protocol and
+            # selects the tiktoken encoding the pruner counts with.
+            model_name = self.llm_client.model_name
             effective_budget = (
-                self.max_tree_words
-                if self.max_tree_words is not None
-                else derive_max_tree_words(self.llm_client.model_name)
+                self.max_tree_tokens
+                if self.max_tree_tokens is not None
+                else derive_max_tree_tokens(model_name)
             )
-            tree_jsons, reduction = _fit_trees_to_budget(tree_jsons, effective_budget)
+            tree_jsons, reduction = _fit_trees_to_budget(tree_jsons, effective_budget, model_name)
             _log_reductions(
                 doc_truncations,
                 self.doc_excerpt_max_chars,
                 reduction,
                 effective_budget,
-                self.llm_client.model_name,
+                model_name,
             )
             prompt = render_prompt(
                 self.prompt_template,
@@ -301,8 +308,8 @@ class LlmTreeReasoningStep(RetrieverStep):
             out["output_scratch_key"] = self.output_scratch_key
         if self.name != _DEFAULT_NAME:
             out["name"] = self.name
-        if self.max_tree_words is not None:
-            out["max_tree_words"] = self.max_tree_words
+        if self.max_tree_tokens is not None:
+            out["max_tree_tokens"] = self.max_tree_tokens
         if self.doc_excerpt != _DEFAULT_DOC_EXCERPT:
             out["doc_excerpt"] = self.doc_excerpt
         if self.doc_excerpt_max_chars != _DEFAULT_DOC_EXCERPT_MAX_CHARS:
@@ -349,14 +356,20 @@ class LlmTreeReasoningStep(RetrieverStep):
             raise ValueError(
                 f"doc_excerpt_max_chars must be a positive int; got {doc_excerpt_max_chars!r}",
             )
+        # Migration aid: the budget is now token-based; reject the old word param.
+        if "max_tree_words" in data:
+            raise ValueError(
+                "max_tree_words was renamed to max_tree_tokens (the budget is now "
+                "measured in real tiktoken tokens, not words). Update your YAML.",
+            )
         # None (or absent) = auto-derive the budget from the LLM context window;
         # an explicit value must be a positive int.
-        max_tree_words = data.get("max_tree_words")
-        if max_tree_words is not None and (
-            not isinstance(max_tree_words, int) or max_tree_words < 1
+        max_tree_tokens = data.get("max_tree_tokens")
+        if max_tree_tokens is not None and (
+            not isinstance(max_tree_tokens, int) or max_tree_tokens < 1
         ):
             raise ValueError(
-                f"max_tree_words must be a positive int or null (auto); got {max_tree_words!r}",
+                f"max_tree_tokens must be a positive int or null (auto); got {max_tree_tokens!r}",
             )
         return cls(
             llm_client=context.llm_client,
@@ -372,7 +385,7 @@ class LlmTreeReasoningStep(RetrieverStep):
                 _DEFAULT_OUTPUT_SCRATCH_KEY,
             ),
             name=data.get("name", _DEFAULT_NAME),
-            max_tree_words=max_tree_words,
+            max_tree_tokens=max_tree_tokens,
             doc_excerpt=doc_excerpt,
             doc_excerpt_max_chars=doc_excerpt_max_chars,
             rerank_candidates=data.get("rerank_candidates", False),
@@ -435,18 +448,18 @@ def _log_reductions(
         )
     if reduction == "docs":
         log.warning(
-            "llm_tree_reasoning: project tree exceeded the %d-word budget "
+            "llm_tree_reasoning: project tree exceeded the %d-token budget "
             "(model=%s); dropped per-node doc excerpts to fit while keeping "
-            "all nodes. Raise max_tree_words or use a larger-context model "
+            "all nodes. Raise max_tree_tokens or use a larger-context model "
             "for full docstring coverage.",
             budget,
             model_name,
         )
     elif reduction == "nodes":
         log.warning(
-            "llm_tree_reasoning: project tree exceeded the %d-word budget "
+            "llm_tree_reasoning: project tree exceeded the %d-token budget "
             "(model=%s) even without doc excerpts; pruned deepest/excess "
-            "nodes to fit. Large repo — raise max_tree_words or use a "
+            "nodes to fit. Large repo — raise max_tree_tokens or use a "
             "larger-context model for full tree coverage.",
             budget,
             model_name,
@@ -536,7 +549,7 @@ def _doc_excerpt_with_flag(docstring: str, mode: str, max_chars: int) -> tuple[s
     """Like :func:`_doc_excerpt`, but also report whether the cap truncated it.
 
     The boolean lets the renderer surface one aggregated warning per query
-    when emitted excerpts were cut — mirroring the ``max_tree_words``
+    when emitted excerpts were cut — mirroring the ``max_tree_tokens``
     over-budget warning — instead of silently dropping docstring content.
     """
     if not docstring or mode == "off":
@@ -624,9 +637,11 @@ def _total_nodes(tree_jsons: list[dict[str, Any]]) -> int:
     return sum(1 + _total_nodes(n["nodes"]) for n in tree_jsons)
 
 
-def _word_count(tree_jsons: list[dict[str, Any]]) -> int:
-    """Whitespace-separated word count of the serialized pageindex forest."""
-    return len(json.dumps(tree_jsons).split())
+def _token_count(tree_jsons: list[dict[str, Any]], model_name: str) -> int:
+    """Real tiktoken token count of the serialized pageindex forest under the
+    LLM's encoding — the exact unit the model's context window is measured in
+    (whitespace words under-count code by ~3x)."""
+    return count_tokens(json.dumps(tree_jsons), model_name)
 
 
 def _prune_to_node_budget(tree_jsons: list[dict[str, Any]], max_nodes: int) -> list[dict[str, Any]]:
@@ -679,11 +694,13 @@ def _strip_docs(tree_jsons: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _fit_trees_to_budget(
-    tree_jsons: list[dict[str, Any]], max_words: int
+    tree_jsons: list[dict[str, Any]], max_tokens: int, model_name: str
 ) -> tuple[list[dict[str, Any]], str]:
-    """Reduce the LLM-visible tree to <= ``max_words`` words, content-first.
+    """Reduce the LLM-visible tree to <= ``max_tokens`` tokens, content-first.
 
-    Returns ``(trees, reduction)`` where ``reduction`` is:
+    Tokens are counted with the model's tiktoken encoding (``model_name``), so
+    the bound is exact against the context window. Returns ``(trees, reduction)``
+    where ``reduction`` is:
 
     - ``""`` — fit as-is, no reduction.
     - ``"docs"`` — dropped the per-node ``doc`` excerpts; **every node is
@@ -693,17 +710,17 @@ def _fit_trees_to_budget(
       nodes were pruned (BFS halving) — graceful degradation instead of a 400
       context_length_exceeded.
     """
-    if _word_count(tree_jsons) <= max_words:
+    if _token_count(tree_jsons, model_name) <= max_tokens:
         return tree_jsons, ""
     stripped = _strip_docs(tree_jsons)
-    if _word_count(stripped) <= max_words:
+    if _token_count(stripped, model_name) <= max_tokens:
         return stripped, "docs"
     budget = _total_nodes(stripped)
     pruned = stripped
     while budget > 1:
         budget //= 2
         pruned = _prune_to_node_budget(stripped, budget)
-        if _word_count(pruned) <= max_words:
+        if _token_count(pruned, model_name) <= max_tokens:
             return pruned, "nodes"
     return _prune_to_node_budget(stripped, 1), "nodes"
 
