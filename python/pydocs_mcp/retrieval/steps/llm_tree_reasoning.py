@@ -137,6 +137,12 @@ class LlmTreeReasoningStep(RetrieverStep):
         default=_DEFAULT_DOC_EXCERPT_MAX_CHARS,
         kw_only=True,
     )
+    # Two-stage rerank mode. When True, the step restricts the LLM-visible tree
+    # to the qualified_names of the INCOMING state.candidates (a prior BM25/dense
+    # stage) and writes its ranked picks back to state.candidates — so the tree
+    # reranks that candidate subset instead of walking the whole project tree,
+    # and produces the pipeline's final ranking directly (no fusion step needed).
+    rerank_candidates: bool = field(default=False, kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         async with self.uow_factory() as uow:
@@ -151,6 +157,14 @@ class LlmTreeReasoningStep(RetrieverStep):
                 return state
             trees = tuple(trees_by_module.values())
 
+            # Two-stage rerank: restrict the LLM-visible tree to the incoming
+            # candidates (a prior BM25/dense stage). Empty result = nothing
+            # usable to rerank, so skip the LLM call entirely.
+            if self.rerank_candidates:
+                trees = _scope_trees_to_candidates(trees, state)
+            if not trees:
+                return state
+
             doc_truncations: list[int] = []
             tree_jsons = [
                 _pageindex_with_qname(
@@ -161,15 +175,6 @@ class LlmTreeReasoningStep(RetrieverStep):
                 )
                 for t in trees
             ]
-            if doc_truncations:
-                log.warning(
-                    "llm_tree_reasoning: %d docstring excerpt(s) hit the "
-                    "doc_excerpt_max_chars=%d cap and were truncated. Raise "
-                    "doc_excerpt_max_chars (or set doc_excerpt: off) if you want "
-                    "different per-node docstring coverage.",
-                    len(doc_truncations),
-                    self.doc_excerpt_max_chars,
-                )
             # Budget defaults to the model's context window (auto-scales across
             # LLMs); an explicit max_tree_words overrides. model_name is
             # guaranteed by the LlmClient Protocol.
@@ -179,24 +184,13 @@ class LlmTreeReasoningStep(RetrieverStep):
                 else derive_max_tree_words(self.llm_client.model_name)
             )
             tree_jsons, reduction = _fit_trees_to_budget(tree_jsons, effective_budget)
-            if reduction == "docs":
-                log.warning(
-                    "llm_tree_reasoning: project tree exceeded the %d-word budget "
-                    "(model=%s); dropped per-node doc excerpts to fit while keeping "
-                    "all nodes. Raise max_tree_words or use a larger-context model "
-                    "for full docstring coverage.",
-                    effective_budget,
-                    self.llm_client.model_name,
-                )
-            elif reduction == "nodes":
-                log.warning(
-                    "llm_tree_reasoning: project tree exceeded the %d-word budget "
-                    "(model=%s) even without doc excerpts; pruned deepest/excess "
-                    "nodes to fit. Large repo — raise max_tree_words or use a "
-                    "larger-context model for full tree coverage.",
-                    effective_budget,
-                    self.llm_client.model_name,
-                )
+            _log_reductions(
+                doc_truncations,
+                self.doc_excerpt_max_chars,
+                reduction,
+                effective_budget,
+                self.llm_client.model_name,
+            )
             prompt = render_prompt(
                 self.prompt_template,
                 query=state.query.terms,
@@ -287,7 +281,13 @@ class LlmTreeReasoningStep(RetrieverStep):
                 # one-step extension work per EXTENSIONS.md.
                 new_scratch[f"{self.output_scratch_key}.refs"] = tuple(surfaced)
 
-            return replace(state, scratch=new_scratch)
+            # In rerank mode the tree's picks ARE the pipeline output, so write
+            # them straight to state.candidates (no downstream fusion step).
+            return replace(
+                state,
+                candidates=ranked if self.rerank_candidates else state.candidates,
+                scratch=new_scratch,
+            )
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": "llm_tree_reasoning"}
@@ -307,6 +307,8 @@ class LlmTreeReasoningStep(RetrieverStep):
             out["doc_excerpt"] = self.doc_excerpt
         if self.doc_excerpt_max_chars != _DEFAULT_DOC_EXCERPT_MAX_CHARS:
             out["doc_excerpt_max_chars"] = self.doc_excerpt_max_chars
+        if self.rerank_candidates:
+            out["rerank_candidates"] = True
         return out
 
     @classmethod
@@ -373,6 +375,81 @@ class LlmTreeReasoningStep(RetrieverStep):
             max_tree_words=max_tree_words,
             doc_excerpt=doc_excerpt,
             doc_excerpt_max_chars=doc_excerpt_max_chars,
+            rerank_candidates=data.get("rerank_candidates", False),
+        )
+
+
+def _candidate_qnames(state: RetrieverState) -> set[str]:
+    """Qualified names carried by the incoming candidates (a prior retrieval
+    stage's output). Empty when there are no candidates / none carry a qname."""
+    candidates = state.candidates
+    if candidates is None:
+        return set()
+    return {qn for c in candidates.items if (qn := c.metadata.get("qualified_name"))}
+
+
+def _filter_tree_to_qnames(node: DocumentNode, allowed: set[str]) -> DocumentNode | None:
+    """Prune a tree to nodes whose qualified_name is in ``allowed``, keeping
+    ancestor scaffolding so the LLM still sees structure. Returns None when
+    neither the node nor any descendant survives."""
+    kept = tuple(
+        child for c in node.children if (child := _filter_tree_to_qnames(c, allowed)) is not None
+    )
+    if node.qualified_name in allowed or kept:
+        return replace(node, children=kept)
+    return None
+
+
+def _scope_trees_to_candidates(
+    trees: tuple[DocumentNode, ...],
+    state: RetrieverState,
+) -> tuple[DocumentNode, ...]:
+    """Restrict the project trees to the incoming candidates' qualified_names.
+    Empty result signals 'nothing to rerank' (the caller passes state through)."""
+    allowed = _candidate_qnames(state)
+    if not allowed:
+        return ()
+    return tuple(
+        pruned for t in trees if (pruned := _filter_tree_to_qnames(t, allowed)) is not None
+    )
+
+
+def _log_reductions(
+    doc_truncations: list[int],
+    doc_max_chars: int,
+    reduction: str,
+    budget: int,
+    model_name: str,
+) -> None:
+    """Emit budget warnings: doc-excerpt truncation, then the reduction mode
+    (``"docs"`` = dropped doc excerpts, ``"nodes"`` = pruned nodes) chosen to
+    fit the LLM context window. Pulled out of ``run()`` to keep it simple."""
+    if doc_truncations:
+        log.warning(
+            "llm_tree_reasoning: %d docstring excerpt(s) hit the "
+            "doc_excerpt_max_chars=%d cap and were truncated. Raise "
+            "doc_excerpt_max_chars (or set doc_excerpt: off) if you want "
+            "different per-node docstring coverage.",
+            len(doc_truncations),
+            doc_max_chars,
+        )
+    if reduction == "docs":
+        log.warning(
+            "llm_tree_reasoning: project tree exceeded the %d-word budget "
+            "(model=%s); dropped per-node doc excerpts to fit while keeping "
+            "all nodes. Raise max_tree_words or use a larger-context model "
+            "for full docstring coverage.",
+            budget,
+            model_name,
+        )
+    elif reduction == "nodes":
+        log.warning(
+            "llm_tree_reasoning: project tree exceeded the %d-word budget "
+            "(model=%s) even without doc excerpts; pruned deepest/excess "
+            "nodes to fit. Large repo — raise max_tree_words or use a "
+            "larger-context model for full tree coverage.",
+            budget,
+            model_name,
         )
 
 

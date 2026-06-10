@@ -1,0 +1,9 @@
+# RepoQA experiment — two-stage BM25 top-200 candidate-gen + LLM tree-reasoning
+# rerank scoped to those candidates ("tree picks only", no fusion).
+# REQUIRES OPENAI_API_KEY (the tree step calls the LLM per query).
+# Uses the default `llm:` config (openai / gpt-4o-mini).
+# See benchmarks/EXPERIMENTS.md.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_bm25_tree_rerank.yaml

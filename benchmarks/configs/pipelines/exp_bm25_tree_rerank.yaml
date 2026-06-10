@@ -1,0 +1,42 @@
+# Two-stage retrieval — RepoQA experiment suite.
+# Stage 1: BM25 generates a broad candidate set and top_k trims to 200.
+# Stage 2: LLM tree-reasoning reranks ONLY that subset (rerank_candidates: true)
+#          — it scopes the project tree to the 200 candidates' qualified_names
+#          and writes its ranked picks straight to state.candidates. "Tree picks
+#          only": no rrf_fusion / promotion step. Requires an LLM client (the
+#          `llm:` config + OPENAI_API_KEY) at search time.
+# Referenced by ../repoqa_bm25_tree_rerank.yaml.
+name: exp_bm25_tree_rerank
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: chunk_fetcher
+    params:
+      schema_name: chunk
+      # Fetch well above k so top_k(200) isn't starved (default fetch is 50).
+      limit: 300
+  - name: score
+    type: bm25_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: topk
+    type: top_k_filter
+    params:
+      k: 200
+  - name: tree_rerank
+    type: llm_tree_reasoning
+    params:
+      prompt_template: tree_reasoning_pydocs_v1
+      # Scope the LLM-visible tree to the BM25 top-200 and write the tree's
+      # ranked picks straight to state.candidates (no rrf_fusion promote step).
+      rerank_candidates: true
+  - name: limit
+    type: limit
+    params:
+      max_results: 10
