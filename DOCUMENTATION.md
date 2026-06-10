@@ -154,6 +154,7 @@ pydocs-mcp serve . --gpu            # run embedder inference on CUDA (see "GPU i
 pydocs-mcp index .
 pydocs-mcp index . --force          # clear cache + re-index
 pydocs-mcp index . --skip-project   # only index deps, not the project
+pydocs-mcp index . --skip-deps      # only index the project, not its deps
 pydocs-mcp index . --gpu            # index with CUDA-accelerated embeddings
 
 # Search (mirrors the MCP `search` tool)
