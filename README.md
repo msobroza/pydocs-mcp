@@ -72,8 +72,16 @@ only if you turn it on with your own key.
 ## Quick start
 
 ```bash
-pip install -e .                  # pure Python, works everywhere
-# …or with the Rust core for speed:
+pip install pydocs-mcp            # from PyPI — the usual path
+```
+
+Prebuilt wheels bundle the Rust acceleration core for **Linux** (x86_64 /
+aarch64), **macOS** (Apple Silicon), and **Windows** (x86_64) — no toolchain
+needed. On any other platform `pip` builds from the sdist. To build from source
+instead — for development, or to compile the Rust core on an unlisted platform:
+
+```bash
+git clone https://github.com/msobroza/pydocs-mcp && cd pydocs-mcp
 pip install maturin && maturin develop --release
 ```
 
