@@ -42,6 +42,7 @@ pydocs-mcp serve . --no-inspect --depth 2 --workers 8
 pydocs-mcp index .
 pydocs-mcp index . --force        # Atomic SQLite + .tq wipe via IndexingService.clear_all
 pydocs-mcp index . --skip-project # Dependencies only
+pydocs-mcp index . --skip-deps    # Project only (skip dependencies)
 
 # Search/debug from CLI (mirrors MCP surface: `search` + `lookup`)
 pydocs-mcp search "batch inference"

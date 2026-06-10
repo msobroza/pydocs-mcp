@@ -107,6 +107,11 @@ def _build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--workers", type=int, default=4, help="Parallel workers")
         sp.add_argument("--force", action="store_true", help="Clear cache, re-index all")
         sp.add_argument("--skip-project", action="store_true", help="Skip project source")
+        sp.add_argument(
+            "--skip-deps",
+            action="store_true",
+            help="Skip dependency indexing — index only the project source.",
+        )
         sp.add_argument("--no-rust", **_no_rust)
         sp.add_argument("--cache-dir", **_cache_dir)
         sp.add_argument("-v", "--verbose", **_verbose)
@@ -478,6 +483,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         project,
         force=args.force,
         include_project_source=not args.skip_project,
+        include_dependencies=not args.skip_deps,
         workers=args.workers,
     )
     # FTS rebuild is a maintenance op, not transactional — use a direct

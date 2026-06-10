@@ -159,6 +159,25 @@ class TestIndexCommand:
         conn.close()
         assert pkg is None
 
+    def test_index_skip_deps_only_project_indexed(self, seeded_project):
+        """--skip-deps: declared dependencies are never resolved nor indexed —
+        the packages table holds only ``__project__``."""
+        (seeded_project / "pyproject.toml").write_text('[project]\ndependencies = ["pyyaml"]\n')
+        with patch(
+            "sys.argv",
+            ["pydocs-mcp", "index", str(seeded_project), "--skip-deps", "--no-inspect"],
+        ):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        from pydocs_mcp.db import cache_path_for_project
+
+        db_path = cache_path_for_project(seeded_project)
+        conn = open_index_database(db_path)
+        names = [r[0] for r in conn.execute("SELECT name FROM packages").fetchall()]
+        conn.close()
+        assert names == ["__project__"]
+
     def test_index_verbose(self, seeded_project):
         with patch("sys.argv", ["pydocs-mcp", "-v", "index", str(seeded_project)]):
             from pydocs_mcp.__main__ import main
@@ -179,6 +198,53 @@ class TestIndexCommand:
             from pydocs_mcp.__main__ import main
 
             main()
+
+
+class TestSkipDepsWiring:
+    """``--skip-deps`` must forward ``include_dependencies`` to ``ProjectIndexer``.
+
+    The integration test above proves the end state (no dependency rows); this
+    pair pins the CLI→application wiring in both directions so a regression
+    that hardcodes either value is caught.
+    """
+
+    @pytest.fixture
+    def captured_index_kwargs(self, monkeypatch):
+        import pydocs_mcp.application as _application
+        from pydocs_mcp.application.indexing_service import IndexingStats
+
+        captured: dict[str, object] = {}
+
+        class _CapturingIndexer:
+            def __init__(self, **kwargs):
+                pass
+
+            async def index_project(self, project, **kwargs):
+                captured.update(kwargs)
+                return IndexingStats()
+
+        # ``_run_indexing`` imports ProjectIndexer lazily from the package,
+        # so patching the package attribute intercepts the construction.
+        monkeypatch.setattr(_application, "ProjectIndexer", _CapturingIndexer)
+        return captured
+
+    def test_skip_deps_forwards_include_dependencies_false(
+        self, seeded_project, captured_index_kwargs
+    ):
+        with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project), "--skip-deps"]):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        assert captured_index_kwargs["include_dependencies"] is False
+
+    def test_default_forwards_include_dependencies_true(
+        self, seeded_project, captured_index_kwargs
+    ):
+        with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project)]):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        assert captured_index_kwargs["include_dependencies"] is True
 
 
 class TestSearchCommand:
