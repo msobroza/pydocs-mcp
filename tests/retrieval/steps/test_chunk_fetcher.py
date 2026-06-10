@@ -121,3 +121,32 @@ async def test_chunk_fetcher_raises_if_pre_filter_set_but_scratch_missing(
     # No state.scratch['pre_filter.result'] — PreFilterStep didn't run.
     with pytest.raises(RuntimeError, match="pre_filter"):
         await step.run(state)
+
+
+async def test_fetcher_surfaces_qualified_name(tmp_path: Path) -> None:
+    """BM25 candidates carry qualified_name in metadata — the join key the
+    tree-rerank (rerank_candidates) step uses to map candidates to tree nodes.
+    Without it the rerank silently passes BM25 through (no LLM call)."""
+    db_path = tmp_path / "qn.db"
+    open_index_database(db_path).close()
+    provider = build_connection_provider(db_path)
+    repo = SqliteChunkRepository(provider=provider)
+    await repo.upsert(
+        [
+            Chunk(
+                text="def add(a, b): return a + b",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "demo",
+                    ChunkFilterField.TITLE.value: "add",
+                    "qualified_name": "demo.m.add",
+                },
+            ),
+        ]
+    )
+    await repo.rebuild_index()
+    step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
+    state = RetrieverState(query=SearchQuery(terms="add", max_results=10))
+    out = await step.run(state)
+    assert isinstance(out.candidates, ChunkList)
+    hit = next(c for c in out.candidates.items if "def add" in c.text)
+    assert hit.metadata.get("qualified_name") == "demo.m.add"

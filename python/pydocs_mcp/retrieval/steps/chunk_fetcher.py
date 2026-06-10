@@ -109,7 +109,8 @@ def _build_fts_match_query(terms: str) -> str | None:
 # ranks first — i.e., most relevant first — matching the legacy ORDER
 # BY of ``-m.rank`` (descending) since the data is the same magnitudes.
 _FETCH_SQL_TEMPLATE = (
-    "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, m.rank AS rank "
+    "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
+    "c.qualified_name, m.rank AS rank "
     "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
     "WHERE {where} "
     "ORDER BY m.rank LIMIT ?"
@@ -299,6 +300,13 @@ def _row_to_candidate(row: sqlite3.Row, retriever_name: str) -> Chunk:
         value = row[key]
         if value:
             metadata[key] = value
+    # qualified_name is a plain metadata key (not a ChunkFilterField) — the join
+    # key the tree-rerank step uses to map BM25 candidates back to tree nodes.
+    # Mirrors storage.sqlite.row_to_chunk; without it `rerank_candidates` can't
+    # scope the tree and silently passes BM25 through.
+    qname = row["qualified_name"]
+    if qname:
+        metadata["qualified_name"] = qname
     return Chunk(
         text=row["text"] or "",
         id=row["id"],
