@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-10
+
+### Added
+
+- **`--skip-deps` CLI flag** on `serve` / `index` / `watch` — index only the
+  project source, skipping dependency resolution + indexing entirely. The CLI
+  counterpart of `ProjectIndexer.index_project(include_dependencies=False)`
+  and the inverse of `--skip-project`.
+
 ## [0.3.0] — 2026-06-10
 
 ### Added (LLM tree-reasoning — enrichment, token budget, two-stage rerank)
@@ -155,7 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
-[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.3.1
 [0.3.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.1.0
