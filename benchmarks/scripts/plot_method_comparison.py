@@ -69,13 +69,22 @@ def _render_bars() -> Path:
     for i, (metric, color) in enumerate(zip(METRICS, COLORS)):
         vals = [row[1 + i] for row in DATA]
         bars = ax.bar(
-            x + (i - 1) * width, vals, width, label=metric, color=color,
-            edgecolor="white", linewidth=0.5,
+            x + (i - 1) * width,
+            vals,
+            width,
+            label=metric,
+            color=color,
+            edgecolor="white",
+            linewidth=0.5,
         )
         for bar, v in zip(bars, vals):
             ax.text(
-                bar.get_x() + bar.get_width() / 2, v + 0.012, f"{v:.2f}",
-                ha="center", va="bottom", fontsize=8,
+                bar.get_x() + bar.get_width() / 2,
+                v + 0.012,
+                f"{v:.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
             )
 
     ax.set_xticks(x)
@@ -104,8 +113,12 @@ def _render_scatter() -> Path:
         color = "#C44E52" if lat >= _LLM_LATENCY_S else "#4C72B0"
         ax.scatter(lat, r10, s=120, color=color, edgecolor="white", linewidth=0.6, zorder=3)
         ax.annotate(
-            name, (lat, r10), xytext=(9, 5), textcoords="offset points",
-            fontsize=9, color="0.15",
+            name,
+            (lat, r10),
+            xytext=(9, 5),
+            textcoords="offset points",
+            fontsize=9,
+            color="0.15",
         )
 
     ax.set_xscale("log")
@@ -121,14 +134,29 @@ def _render_scatter() -> Path:
 
     # "better = up and to the left" hint.
     ax.annotate(
-        "↖ better\n(higher recall,\nlower latency)", xy=(0.024, 0.97),
-        fontsize=8, color="0.45", va="top",
+        "↖ better\n(higher recall,\nlower latency)",
+        xy=(0.024, 0.97),
+        fontsize=8,
+        color="0.45",
+        va="top",
     )
     handles = [
-        Line2D([], [], marker="o", linestyle="", color="#4C72B0",
-               label="local index lookup (BM25 / dense / late-interaction)"),
-        Line2D([], [], marker="o", linestyle="", color="#C44E52",
-               label="one gpt-4o-mini call per query"),
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="",
+            color="#4C72B0",
+            label="local index lookup (BM25 / dense / late-interaction)",
+        ),
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="",
+            color="#C44E52",
+            label="one gpt-4o-mini call per query",
+        ),
     ]
     ax.legend(handles=handles, loc="lower right", frameon=True, fontsize=9)
 
