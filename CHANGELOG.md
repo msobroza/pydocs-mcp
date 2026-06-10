@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [0.3.0] — 2026-06-10
+
+### Added (LLM tree-reasoning — enrichment, token budget, two-stage rerank)
+
+- **PageIndex node enrichment** — each LLM-visible tree node now carries its real
+  signature (params + type hints + return annotation), its decorators, and a
+  docstring excerpt, beyond the generated summary. Tunable via `doc_excerpt`
+  (`sections` | `full` | `off`) and `doc_excerpt_max_chars`. A non-destructive
+  schema auto-refresh (v9) re-extracts the metadata on next index without
+  re-embedding unchanged chunks.
+- **Token-counted tree budget** — the serialized tree handed to the LLM is bounded
+  in real `tiktoken` tokens (previously whitespace words, which under-counted code
+  ~3× and could overflow the model's context window with a 400
+  `context_length_exceeded`). `max_tree_words` → **`max_tree_tokens`**
+  (`int | None`; `None` auto-derives from the configured model's context window).
+  Over-budget pruning is content-first — drop per-node doc excerpts before whole
+  nodes. Adds `tiktoken` as a runtime dependency.
+- **BM25 → tree two-stage rerank** — opt-in `rerank_candidates` mode on the
+  `llm_tree_reasoning` step scopes the LLM-visible tree to a prior BM25/dense
+  candidate set and writes its ranked picks back as the pipeline's final ranking
+  (with a `repoqa_bm25_tree_rerank` benchmark config).
+- Persist `chunks.qualified_name` (schema v7) so tree-reasoning picks resolve to
+  the correct chunks.
+
+### Added (on-device dense embeddings)
 
 - **`sentence_transformers` embedding provider** (`provider: sentence_transformers`)
   serving `Qwen/Qwen3-Embedding-0.6B` and other SentenceTransformer models via
@@ -131,6 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
-[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.1.0
