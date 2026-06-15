@@ -222,7 +222,7 @@ Second run with no changes completes in <100ms (hash comparison only).
 
 ## Rust native extension
 
-Optional. The package works without Rust — `_fast.py` tries to import `_native` and falls back to `_fallback.py`.
+Optional for `pip install` users — the prebuilt wheels (Linux x86_64/aarch64, macOS arm64, Windows amd64) already bundle the compiled `_native` module; other platforms use the pure-Python fallback. `_fast.py` tries to import `_native` and falls back to `_fallback.py`.
 
 ### Functions exposed to Python
 
@@ -266,7 +266,7 @@ BM25-ranked full-text search across indexed chunks (project + deps).
 - `scope` ∈ `{"project", "deps", "all"}` — corpus scope
 - `limit` — max results (default `10`, validated 1..1000)
 
-Returns a token-budgeted composite chunk by default. A `chunk_search_ranked.yaml` preset (out-of-scope for this spec; planned follow-up) returns top-K separate items for benchmarking.
+Returns a token-budgeted composite chunk by default. The `chunk_search_ranked.yaml` preset returns top-K separate items for benchmarking.
 
 ### `lookup(target, show)`
 
@@ -453,15 +453,14 @@ Then connect via `http://localhost:8080/sse`.
 ## Installation
 
 ```bash
-# Pure Python (works everywhere)
+# From PyPI — prebuilt wheels bundle the Rust core (Linux x86_64/aarch64,
+# macOS arm64, Windows amd64); pure-Python fallback on other platforms.
+pip install pydocs-mcp
+# Optional extras: 'pydocs-mcp[watch]' / '[sentence-transformers]' / '[late-interaction]'
+
+# …or from source for development (Rust core optional — pure Python works everywhere):
 pip install -e .
-
-# With Rust acceleration (requires Rust toolchain)
-pip install maturin
-maturin develop --release
-
-# Required runtime dependency: mcp >= 1.0 + pydantic-settings >= 2.0 + pyyaml >= 6.0
-# Optional: Rust toolchain (for the _native extension)
+pip install maturin && maturin develop --release
 ```
 
 ## License

@@ -33,17 +33,28 @@ seven-step BM25 chain:
 6. `limit` — cap the final item count.
 7. `token_budget_formatter` — render the composite chunk for MCP output.
 
-### Dense and hybrid retrieval
+### Dense, hybrid, late-interaction, and tree-reasoning retrieval
 
-Two more retrieval modes ship as opt-in pipeline presets:
+Several more retrieval modes ship as opt-in pipeline presets:
 
 - **Dense** (`chunk_search_dense.yaml`, `chunk_search_dense_ranked.yaml`) — a
   `DenseFetcherStep` + `DenseScorerStep` query the TurboQuant vector store using
   embeddings from the configured `Embedder` (FastEmbed `BAAI/bge-small-en-v1.5`
-  by default; OpenAI optional).
+  by default; OpenAI and on-device `sentence_transformers`/Qwen3 optional).
 - **Hybrid** (`chunk_search_hybrid.yaml`, `chunk_search_hybrid_ranked.yaml`) — a
   `ParallelStep` runs the BM25 and dense branches concurrently, then an
   `RRFFusionStep` merges them with reciprocal-rank fusion into one ranking.
+- **Late-interaction** — opt-in multi-vector (ColBERT / PyLate via fast-plaid)
+  MaxSim scoring; enable with the `[late-interaction]` extra and
+  `late_interaction.enabled: true`.
+- **LLM tree-reasoning** (`tree_only.yaml`,
+  `chunk_search_with_tree_reasoning_parallel.yaml`,
+  `chunk_search_with_tree_reasoning_after.yaml`) — vectorless RAG: an
+  `LlmTreeReasoningStep` walks the project's `DocumentNode` tree (each node
+  enriched with its real signature, decorators, and a docstring excerpt) with an
+  LLM and fetches the nodes it selects — no embeddings required. Opt-in via the
+  `llm:` config section; can run standalone, in a branch parallel to hybrid, or
+  as a two-stage reranker over a BM25/dense candidate set (`rerank_candidates`).
 
 Select a preset by pointing the chunk pipeline at it in your config overlay (see
 [Configuration](#configuration)); the default remains BM25.
@@ -440,6 +451,11 @@ what the [benchmark harness](benchmarks/README.md) exploits.)
 - `pipelines/chunk_search_dense.yaml` / `…_dense_ranked.yaml` — dense retrieval.
 - `pipelines/chunk_search_hybrid.yaml` / `…_hybrid_ranked.yaml` — BM25 + dense
   fused via RRF.
+- `pipelines/tree_only.yaml` — LLM tree-reasoning only (vectorless).
+- `pipelines/chunk_search_with_tree_reasoning_parallel.yaml` — hybrid + LLM
+  tree-reasoning in a parallel branch, fused downstream.
+- `pipelines/chunk_search_with_tree_reasoning_after.yaml` — hybrid first, then
+  LLM tree-reasoning as a downstream reranker.
 - `pipelines/member_search.yaml` — default member search.
 - `pipelines/ingestion.yaml` — default ingestion (discovery → read → chunk →
   reference capture → flatten → content-hash → embed → package build).
