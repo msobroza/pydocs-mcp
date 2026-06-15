@@ -3,8 +3,9 @@
 A turnkey suite for comparing pydocs-mcp's retrieval strategies on a small,
 representative slice of **RepoQA-SNF** (Apache-2.0, EvalPlus, arXiv:2406.06025).
 
-Twelve conditions are compared on the same `small_test` split so the only thing
-that varies between runs is the retrieval pipeline:
+Twelve core conditions (plus a 7-condition fusion-ablation extension below) are
+compared on the same `small_test` split so the only thing that varies between
+runs is the retrieval pipeline:
 
 | # | Condition | Config overlay | Pipeline | Extra dep |
 |---|-----------|----------------|----------|:---:|
@@ -30,6 +31,30 @@ method, while 9-vs-4 (RRF, both) and 10-vs-7 (weighted 0.5/0.5, both) each
 isolate the late-interaction branch against its single-vector dense twin. Every
 experiment pipeline emits a ranked top-10 candidate list (`max_results: 10`) so
 `recall@10` is measurable — the shipped `*_ranked` presets cap at 8.
+
+### Fusion ablation — finer sweep + Qwen3 dense (conditions 13–19)
+
+A config-only extension of the hybrid sweep: finer fusion sampling, and the
+stronger Qwen3 dense branch fused with BM25. No new pipeline machinery.
+
+| # | Condition | Config overlay | Pipeline | Extra dep |
+|---|-----------|----------------|----------|:---:|
+| 13 | Hybrid, RRF `k=45` (finer) | `configs/repoqa_hybrid_rrf_k45.yaml` | `exp_hybrid_rrf_k45` | — |
+| 14 | Hybrid, RRF `k=75` (finer) | `configs/repoqa_hybrid_rrf_k75.yaml` | `exp_hybrid_rrf_k75` | — |
+| 15 | Hybrid, weighted 0.6/0.4 (mild BM25) | `configs/repoqa_hybrid_wsi_bm25_mild.yaml` | `exp_hybrid_wsi_bm25_mild` | — |
+| 16 | Hybrid, weighted 0.4/0.6 (mild dense) | `configs/repoqa_hybrid_wsi_dense_mild.yaml` | `exp_hybrid_wsi_dense_mild` | — |
+| 17 | Hybrid + **Qwen3** dense, RRF `k=60` | `configs/repoqa_hybrid_rrf_k60_qwen.yaml` | `exp_hybrid_rrf_k60` | `[sentence-transformers]` |
+| 18 | Hybrid + **Qwen3** dense, weighted 0.5/0.5 | `configs/repoqa_hybrid_wsi_balanced_qwen.yaml` | `exp_hybrid_wsi_balanced` | `[sentence-transformers]` |
+| 19 | Hybrid + **Qwen3** dense, weighted 0.3/0.7 | `configs/repoqa_hybrid_wsi_dense_qwen.yaml` | `exp_hybrid_wsi_dense` | `[sentence-transformers]` |
+
+Conditions 13–14 fill in the RRF `k` curve between the coarse 30/60/100 samples;
+15–16 fill in the weight curve between 0.7/0.3, 0.5/0.5, and 0.3/0.7. Conditions
+17–19 **reuse the existing hybrid pipelines** (4, 7, 8) but swap the dense
+branch's embedder to `Qwen/Qwen3-Embedding-0.6B` via an `embedding:` overlay
+block — so 17-vs-4, 18-vs-7, and 19-vs-8 each isolate the dense-embedder quality
+effect (bge-small vs Qwen3) inside hybrid fusion. The Qwen3 conditions need the
+`[sentence-transformers]` extra (torch) and build their own index (the embedder
+is folded into the index-cache hash).
 
 ### Late-interaction model variants (conditions 9–10)
 

@@ -1,0 +1,15 @@
+# RepoQA experiment — hybrid BM25 + Qwen3 dense, weighted 0.3/0.7 (dense-heavy).
+# Qwen3-Embedding-0.6B (sentence-transformers / torch) dense branch; same
+# hybrid pipeline as repoqa_hybrid_wsi_dense.yaml, only the embedder differs.
+# Dense-heavy blend pairs the strongest single method (Qwen3 dense) with a BM25
+# assist. See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: sentence_transformers
+  model_name: Qwen/Qwen3-Embedding-0.6B
+  dim: 1024
+  batch_size: 4
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_hybrid_wsi_dense.yaml

@@ -1,0 +1,6 @@
+# RepoQA experiment — hybrid BM25+dense, weighted 0.6/0.4 (mild BM25 lean).
+# See benchmarks/EXPERIMENTS.md.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_hybrid_wsi_bm25_mild.yaml
