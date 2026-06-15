@@ -18,6 +18,8 @@ HuggingFace download, fully reproducible.
 | [`03_dense_qwen3.ipynb`](03_dense_qwen3.ipynb) | **Dense** (Qwen3-0.6B, 1024-d) | embedding cosine similarity | `[sentence-transformers]` |
 | [`04_late_interaction.ipynb`](04_late_interaction.ipynb) | **Late interaction** (ColBERT/MaxSim) | per-token MaxSim | `[late-interaction]` |
 | [`05_tree.ipynb`](05_tree.ipynb) | **LLM tree reasoning** (vectorless) | LLM picks tree nodes | `OPENAI_API_KEY` |
+| [`06_dense_modernbert.ipynb`](06_dense_modernbert.ipynb) | **Dense** (gte-modernbert-base, 768-d) | embedding cosine similarity | `[sentence-transformers]` |
+| [`07_dense_f2llm.ipynb`](07_dense_f2llm.ipynb) | **Dense** (F2LLM-v2-0.6B, code) | embedding cosine similarity | `[sentence-transformers]` |
 
 > *Single-stage* = one retrieval method on its own (no hybrid/fusion). Note late
 > interaction is technically a candidate-gen → MaxSim re-rank; it's the canonical
@@ -57,7 +59,7 @@ because they build a heavier index).
 
 ```
 notebooks/
-  00_setup.ipynb … 05_tree.ipynb   # the walkthrough
+  00_setup.ipynb … 07_dense_f2llm.ipynb   # the walkthrough
   nb_helpers.py                    # build-the-pipeline-in-Python search helpers
   configs/                         # one AppConfig overlay per method
   sample_repo/                     # committed marshmallow source (the corpus)

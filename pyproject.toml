@@ -65,7 +65,9 @@ late-interaction = ["pylate>=1.0,<2.0", "fast-plaid>=1.4,<2.0", "transformers>=4
 # sentence-transformers). torch frees CUDA memory across sequential
 # index-builds, so it stays GPU-reliable over a benchmark sweep.
 # Heavy (~1-5 GB with torch). Opt-in; default install stays ~90 MB.
-sentence-transformers = ["sentence-transformers>=5.0,<6.0"]
+# transformers>=4.48 is required for ModernBERT (Alibaba-NLP/gte-modernbert-base);
+# the bare sentence-transformers>=5.0 pin alone can resolve an older transformers.
+sentence-transformers = ["sentence-transformers>=5.0,<6.0", "transformers>=4.48"]
 
 [dependency-groups]
 # PEP 735 developer-only groups — explicit-only via
