@@ -105,6 +105,26 @@ sudo apt-get install -y libopenblas-pthread-dev   # see INSTALL.md for fallbacks
   installing libopenblas, preload it for the run:
   `export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libopenblas.so.0`.
 
+### GPU (strongly recommended for the dense conditions)
+
+Dense-indexing the RepoQA repos on **CPU is the dominant cost** — 60–215 s per
+needle, so a full sweep can take days. On GPU the same embedding is ~50× faster
+(bge-small: 250 → 12 600 chunks/s on an RTX 2080 Ti), turning the sweep into
+minutes. Run any sweep through the wrapper to get it:
+
+```bash
+benchmarks/scripts/run_eval_gpu.sh \
+  --systems pydocs-mcp --dataset repoqa --split small_test --bench-cache on \
+  --configs benchmarks/configs/repoqa_dense_st.yaml \
+  --report benchmarks/results/out.md
+```
+
+It forces `--gpu` and — crucially — prepends torch's bundled NVIDIA libs to
+`LD_LIBRARY_PATH`. Torch embedders (`sentence_transformers`: Qwen3, ModernBERT,
+F2LLM, …) already find CUDA via torch's RPATH, but **FastEmbed (onnxruntime)
+silently falls back to CPU** unless `libcublasLt.so.12` / `libcudnn` are on that
+path. Override the venv with `PYDOCS_VENV=/path/to/venv` (default `.venv-li`).
+
 ## 2. The `small_test` split
 
 `--split small_test` selects a deterministic, stratified subsample of the
