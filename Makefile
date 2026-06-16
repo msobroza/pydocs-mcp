@@ -1,4 +1,4 @@
-.PHONY: install test test-rust lint lint-rust format typecheck gate build clean
+.PHONY: install test test-rust lint lint-rust format typecheck gate build clean docs-serve docs-build
 
 install:
 	pip install -e .
@@ -41,6 +41,16 @@ gate:
 
 build:
 	maturin build --release
+
+# Docs site (Sphinx + Furo + MyST). --no-install-project skips the maturin/Rust
+# build; conf.py reads pydocs_mcp from python/ on sys.path for autodoc.
+docs-serve:
+	uv sync --group docs --no-install-project
+	uv run sphinx-autobuild docs docs/_build/html
+
+docs-build:
+	uv sync --group docs --no-install-project
+	uv run sphinx-build -W --keep-going -b html docs docs/_build/html
 
 clean:
 	rm -rf build/ dist/ target/ *.egg-info

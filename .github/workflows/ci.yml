@@ -236,7 +236,7 @@ jobs:
       # third-party advisories (the project itself isn't published on PyPI
       # during CI — it would be self-referential).
       - name: Export locked deps
-        run: uv export --frozen --no-emit-project --format requirements-txt > requirements-audit.txt
+        run: uv export --frozen --no-emit-project --no-group docs --format requirements-txt > requirements-audit.txt
 
       # WHY: --strict makes the only passing outcome "no advisories found";
       # advisories on transitive deps also fail. If pip-audit reports a CVE,
