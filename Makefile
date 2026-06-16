@@ -46,11 +46,11 @@ build:
 # build; conf.py reads pydocs_mcp from python/ on sys.path for autodoc.
 docs-serve:
 	uv sync --group docs --no-install-project
-	uv run sphinx-autobuild docs docs/_build/html
+	uv run sphinx-autobuild documentation documentation/_build/html
 
 docs-build:
 	uv sync --group docs --no-install-project
-	uv run sphinx-build -W --keep-going -b html docs docs/_build/html
+	uv run sphinx-build -W --keep-going -b html documentation documentation/_build/html
 
 clean:
 	rm -rf build/ dist/ target/ *.egg-info

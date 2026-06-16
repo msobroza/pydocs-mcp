@@ -38,7 +38,7 @@ Thumbs.db
 benchmarks/results/
 
 # Sphinx docs build output
-docs/_build/
+documentation/_build/
 
 # Claude Code — local settings, worktrees, session state
 .claude/
