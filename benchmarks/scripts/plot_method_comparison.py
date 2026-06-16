@@ -37,7 +37,9 @@ DATA: list[tuple[str, float, float, float, bool, float]] = [
     ("BM25", 0.167, 0.333, 0.400, False, 0.029),
     ("BM25 top-200 →\ntree rerank", 0.333, 0.567, 0.567, False, 10.639),
     ("Dense\n(bge-small)", 0.467, 0.733, 0.733, False, 0.145),
+    ("Dense\n(ModernBERT)", 0.533, 0.733, 0.733, False, 0.191),
     ("Dense\n(Qwen3-0.6B)*", 0.667, 0.810, 0.810, True, 0.508),
+    ("Dense\n(F2LLM-0.6B)", 0.900, 0.900, 0.933, False, 0.293),
     ("Late-\ninteraction", 0.500, 0.633, 0.667, False, 0.133),
     ("LLM tree*", 0.333, 0.524, 0.524, True, 13.717),
 ]
@@ -49,7 +51,9 @@ _BAR_FOOTNOTE = (
     "* Qwen3 dense & LLM tree: 21/30 needles (partial run) — not strictly "
     "comparable to the full-30 methods.  BM25 → tree rerank is two-stage: the LLM "
     "(gpt-4o-mini) re-ranks BM25's top-200 candidate pool (k=200), so its recall@10 "
-    "can exceed BM25's own top-10.  LLM tree also uses gpt-4o-mini.  onnx removed."
+    "can exceed BM25's own top-10.  LLM tree also uses gpt-4o-mini.  onnx removed.  "
+    "ModernBERT & F2LLM: full-30, GPU sentence-transformers (2048-token cap); "
+    "F2LLM-v2-0.6B is the code-specialized leader."
 )
 _SCATTER_FOOTNOTE = (
     "Per-needle p50 search latency (excludes one-time indexing).  Local methods are "
@@ -106,6 +110,16 @@ def _render_bars() -> Path:
     return out
 
 
+# Per-label annotation nudges (offset points) to de-collide markers that share a
+# recall@10 / latency neighbourhood — bge-small & ModernBERT both sit at 0.733.
+_LABEL_OFFSETS: dict[str, tuple[int, int]] = {
+    "Dense (bge-small)": (-2, 10),
+    "Dense (ModernBERT)": (12, -4),
+    "Late- interaction": (2, -18),
+}
+_DEFAULT_LABEL_OFFSET = (9, 5)
+
+
 def _render_scatter() -> Path:
     fig, ax = plt.subplots(figsize=(10.5, 6.5))
     for label, _r1, _r5, r10, _partial, lat in DATA:
@@ -115,7 +129,7 @@ def _render_scatter() -> Path:
         ax.annotate(
             name,
             (lat, r10),
-            xytext=(9, 5),
+            xytext=_LABEL_OFFSETS.get(name, _DEFAULT_LABEL_OFFSET),
             textcoords="offset points",
             fontsize=9,
             color="0.15",

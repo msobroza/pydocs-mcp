@@ -1,0 +1,21 @@
+# RepoQA experiment — single-stage dense with codefuse-ai/F2LLM-v2-0.6B
+# (1024-dim, code-specialized LLM embedder, ASYMMETRIC built-in query instruct
+# prompt) served via sentence-transformers (torch). Same exp_dense pipeline as
+# repoqa_dense.yaml; only the embedder differs. See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: sentence_transformers
+  model_name: codefuse-ai/F2LLM-v2-0.6B
+  dim: 1024
+  # 0.6B decoder — keep batch small so the O(seq^2) attention buffer fits VRAM
+  # on long code chunks (held at 4 for the 11GB RTX 2080 Ti, like Qwen3).
+  # At batch 4 this peaks ~7.8/11 GB; batch 8+ risks OOM on long chunks.
+  batch_size: 4
+  # Pin the token cap explicitly (the embedder default is also 2048, but stating
+  # it keeps this config reproducible and apples-to-apples with the other 0.6B
+  # dense configs instead of relying on the implicit default).
+  max_seq_length: 2048
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml
