@@ -14,6 +14,10 @@ embedding:
   # batch 8 spiked VRAM during encode of long chunks, so halve the peak
   # activation buffer for headroom.
   batch_size: 4
+  # Pin the token cap explicitly (the embedder default is also 2048, but stating
+  # it keeps this config reproducible and apples-to-apples with the other 0.6B
+  # dense configs instead of relying on the implicit default).
+  max_seq_length: 2048
 
 pipelines:
   chunk:

@@ -1,0 +1,17 @@
+# Method: single-stage DENSE retrieval with codefuse-ai/F2LLM-v2-0.6B
+# (1024-dim, code-specialized LLM embedder, asymmetric query prompt) via
+# sentence-transformers (torch).
+#
+# REQUIRES the extra:  pip install 'pydocs-mcp[sentence-transformers]'
+# Because the embedder differs from bge-small, this method needs its OWN index
+# (its own --cache-dir) — the stored vectors are not interchangeable.
+embedding:
+  provider: sentence_transformers
+  model_name: codefuse-ai/F2LLM-v2-0.6B
+  dim: 1024
+  batch_size: 8
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/chunk_search_dense.yaml
