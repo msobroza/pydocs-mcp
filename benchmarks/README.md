@@ -257,7 +257,9 @@ in [`notebooks/`](../notebooks/)). Higher is better.
 | BM25 (keyword / FTS5) | `repoqa_bm25.yaml` | 0.167 | 0.333 | 0.400 | 0.238 | 30 |
 | BM25 top-200 → tree rerank (2-stage, gpt-4o-mini) | `repoqa_bm25_tree_rerank.yaml` | 0.333 | 0.567 | 0.567 | 0.424 | 30 |
 | Dense (bge-small, 384-d) | `repoqa_dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
+| Dense (gte-modernbert-base, 768-d) | `repoqa_dense_modernbert.yaml` | 0.533 | 0.733 | 0.733 | 0.601 | 30 |
 | Dense (Qwen3-0.6B, 1024-d) | `repoqa_dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
+| **Dense (F2LLM-v2-0.6B, 1024-d)** | `repoqa_dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
 | Late-interaction (ColBERT / MaxSim) | `repoqa_li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
 | LLM tree reasoning (gpt-4o-mini) | `repoqa_tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
 
@@ -266,6 +268,9 @@ in [`notebooks/`](../notebooks/)). Higher is better.
 > not a single locked sweep; regenerate a clean, comparable sweep with the
 > commands in [§Running the benchmarks](#running-the-benchmarks). The `onnx`
 > dense provider was removed; `li_edge` only has a partial run and is omitted.
+> **gte-modernbert-base** and **F2LLM-v2-0.6B** are full-30 runs served on GPU via
+> sentence-transformers (2048-token cap, `batch_size: 4` for the 0.6B models), each
+> in a dedicated process so CUDA memory is freed between embedders.
 > **BM25 → tree rerank** is the lone two-stage method: the LLM (gpt-4o-mini)
 > re-ranks BM25's **top-200** candidate pool (`k=200`), which is why its recall@10
 > can exceed BM25's own top-10; the rest are single-stage. (LLM tree also uses
@@ -273,7 +278,10 @@ in [`notebooks/`](../notebooks/)). Higher is better.
 > [`scripts/plot_method_comparison.py`](scripts/plot_method_comparison.py).
 
 **Takeaways.** Vector methods clearly beat lexical BM25 (semantic vs. exact-term
-matching); the larger **Qwen3** embedder leads; **dense (bge-small)** and
+matching); the code-specialized **F2LLM-v2-0.6B** embedder leads by a wide margin
+(recall@1 **0.90**, recall@10 **0.93**), well ahead of the general-purpose
+**Qwen3-0.6B**, with **gte-modernbert-base** mid-pack (it ties bge-small at
+recall@10 but edges it at recall@1); **dense (bge-small)** and
 **late-interaction** are close (LI edges bge at recall@1, bge leads at
 recall@5/10); **LLM tree reasoning** works — once `qualified_name` is persisted
 (schema v7) — but trails the vector methods on this split and is the most
@@ -293,6 +301,8 @@ indexing), from each run's per-task `search_seconds`:
 | BM25 | 0.400 | 0.03s |
 | Late-interaction | 0.667 | 0.13s |
 | Dense (bge-small) | 0.733 | 0.15s |
+| Dense (ModernBERT) | 0.733 | 0.19s |
+| Dense (F2LLM-0.6B) | 0.933 | 0.29s |
 | Dense (Qwen3-0.6B) | 0.810 | 0.51s |
 | BM25 → tree rerank | 0.567 | 10.6s |
 | LLM tree | 0.524 | 13.7s |
@@ -300,8 +310,9 @@ indexing), from each run's per-task `search_seconds`:
 Two tiers: **local index lookups** (BM25 / dense / late-interaction) answer in
 **0.03–0.51 s**, while the **LLM methods** (BM25 → tree rerank, LLM tree) spend
 **~10–14 s** on one `gpt-4o-mini` call per query — a 20–450× gap. **Dense
-(Qwen3)** is the dominant point (highest recall@10 at sub-second latency), so on
-quality-per-second the LLM approaches are the weakest here.
+(F2LLM-0.6B)** is now the dominant point (highest recall@10, 0.93, at **0.29 s**),
+beating Qwen3 on both quality *and* latency, so on quality-per-second the LLM
+approaches are the weakest here.
 
 ### Current baselines
 
