@@ -12,6 +12,8 @@
 **Local, version-aware code & docs search for your AI coding agent — over the
 exact library versions installed on your machine.**
 
+📖 **Full documentation: [msobroza.github.io/pydocs-mcp](https://msobroza.github.io/pydocs-mcp/)** — built from [`documentation/`](documentation/).
+
 ![pydocs-mcp architecture overview: your project source and installed Python libraries are indexed into a SQLite database (chunks, metadata, reference graph) plus a TurboQuant .tq vector file; an AI coding assistant's query runs through keyword (BM25) and vector search fused together — with a tree-navigating mode over the code map — then a result ranker returns version-aware answers, all locally with no API keys or network upload.](assets/pydocs-mcp-overview.png)
 
 Your AI assistant thinks you're on `requests` 2.28. You actually have 2.31. It

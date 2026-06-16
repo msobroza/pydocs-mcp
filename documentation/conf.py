@@ -88,5 +88,5 @@ html_static_path = ["_static"]
 html_theme_options = {
     "source_repository": "https://github.com/msobroza/pydocs-mcp",
     "source_branch": "main",
-    "source_directory": "docs/",
+    "source_directory": "documentation/",
 }
