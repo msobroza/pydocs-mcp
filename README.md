@@ -7,6 +7,7 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://www.mypy-lang.org/static/mypy_badge.svg)](https://mypy-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Model_Context_Protocol-1f6feb)](https://modelcontextprotocol.io)
+[![Docs](https://img.shields.io/badge/docs-pydocs--mcp-blue)](https://msobroza.github.io/pydocs-mcp/)
 
 **Local, version-aware code & docs search for your AI coding agent — over the
 exact library versions installed on your machine.**
@@ -72,8 +73,16 @@ only if you turn it on with your own key.
 ## Quick start
 
 ```bash
-pip install -e .                  # pure Python, works everywhere
-# …or with the Rust core for speed:
+pip install pydocs-mcp            # from PyPI — the usual path
+```
+
+Prebuilt wheels bundle the Rust acceleration core for **Linux** (x86_64 /
+aarch64), **macOS** (Apple Silicon), and **Windows** (x86_64) — no toolchain
+needed. On any other platform `pip` builds from the sdist. To build from source
+instead — for development, or to compile the Rust core on an unlisted platform:
+
+```bash
+git clone https://github.com/msobroza/pydocs-mcp && cd pydocs-mcp
 pip install maturin && maturin develop --release
 ```
 
@@ -194,6 +203,19 @@ through the fusion steps below.
     # Optional. Named asymmetric query prompt; omit to use the model's own.
     query_prompt_name: query
   ```
+
+  The provider supports several on-device models — set `model_name` and the
+  matching `dim`:
+
+  - [`Qwen/Qwen3-Embedding-0.6B`](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)
+    (1024-dim) — strong general-purpose retrieval.
+  - [`Alibaba-NLP/gte-modernbert-base`](https://huggingface.co/Alibaba-NLP/gte-modernbert-base)
+    (768-dim) — built on [ModernBERT](https://arxiv.org/abs/2412.13663) with a
+    native 8192-token context; general-purpose and symmetric. Needs a recent
+    `transformers` (≥ 4.48).
+  - [`codefuse-ai/F2LLM-v2-0.6B`](https://huggingface.co/codefuse-ai/F2LLM-v2-0.6B)
+    (1024-dim) — the CodeFuse F2LLM embedder; the **strongest dense model in our
+    [benchmark](benchmarks/README.md)** on RepoQA code retrieval (recall@10 ≈ 0.93).
 
   The default remains bge-small; the `sentence_transformers` provider is opt-in.
 - **Vector store.** [TurboQuant](https://arxiv.org/abs/2504.19874)
@@ -319,6 +341,9 @@ Capture is on by default and tunable under `reference_graph:` in YAML
 - TurboQuant — *Online Vector Quantization with Near-optimal Distortion Rate* · [arXiv:2504.19874](https://arxiv.org/abs/2504.19874) (Google Research, 2025); implemented by [`turbovec`](https://github.com/RyanCodrai/turbovec)
 - [FAISS](https://github.com/facebookresearch/faiss) — the similarity-search library used as the speed/storage baseline above
 - [FastEmbed](https://github.com/qdrant/fastembed) with [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) — the default on-device embedder for the **single-vector** dense mode
+- [Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B), [gte-modernbert-base](https://huggingface.co/Alibaba-NLP/gte-modernbert-base), and [F2LLM-v2-0.6B](https://huggingface.co/codefuse-ai/F2LLM-v2-0.6B) — optional on-device `sentence_transformers` dense embedders (set via the `embedding:` YAML)
+- ModernBERT — *Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast, Memory Efficient, and Long Context Finetuning and Inference* · [arXiv:2412.13663](https://arxiv.org/abs/2412.13663) (2024) — the encoder backbone behind **gte-modernbert-base**
+- F2LLM — *F2LLM-v2: Inclusive, Performant, and Efficient Embeddings for a Multilingual World* · [arXiv:2603.19223](https://arxiv.org/abs/2603.19223) (CodeFuse / Ant Group, 2026); original *F2LLM Technical Report: Matching SOTA Embedding Performance with 6 Million Open-Source Data* · [arXiv:2510.02294](https://arxiv.org/abs/2510.02294) (2025) — the source of the opt-in **F2LLM-v2-0.6B** embedder
 - [PyLate](https://github.com/lightonai/pylate) with [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) — the default model for the opt-in **late-interaction (multi-vector / MaxSim)** mode · *PyLate: Flexible Training and Retrieval for Late Interaction Models* · [arXiv:2508.03555](https://arxiv.org/abs/2508.03555) (LightOn, 2025)
 - ColBERT — *Efficient and Effective Passage Search via Contextualized Late Interaction over BERT* · [arXiv:2004.12832](https://arxiv.org/abs/2004.12832) (Khattab & Zaharia, SIGIR 2020) — the late-interaction architecture
 - PLAID — *An Efficient Engine for Late Interaction Retrieval* · [arXiv:2205.09707](https://arxiv.org/abs/2205.09707) (Santhanam et al., CIKM 2022) — implemented by [fast-plaid](https://github.com/lightonai/fast-plaid), the engine pydocs-mcp uses for MaxSim scoring

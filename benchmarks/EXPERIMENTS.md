@@ -73,16 +73,16 @@ out of the installed package.
 > late-interaction conditions (9–10) use a multi-vector ColBERT model
 > (`late_interaction.model_name`, default `lightonai/LateOn-Code`; the edge
 > variant `lightonai/LateOn-Code-edge` is the swap above) via PyLate +
-> fast-plaid — see
-> `docs/superpowers/specs/2026-05-28-late-interaction-dense-retrieval-design.md`.
+> fast-plaid (configured via the `late_interaction` config section).
 
 ## 1. Prerequisites
 
 ```bash
 # From the repo root, in a Python 3.11+ virtualenv.
 
-# pydocs-mcp + the dense embedder + the benchmark harness extras.
-pip install -e ".[fastembed]"
+# pydocs-mcp (FastEmbed, the default dense embedder, is a core dependency) +
+# the benchmark harness extras.
+pip install -e .
 pip install -e "benchmarks[all]"   # datasets / trackers / report deps
 
 # Linux: libopenblas is a hard requirement for the turbovec native module.

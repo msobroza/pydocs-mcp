@@ -126,6 +126,31 @@ def test_embedding_config_sentence_transformers_known_dim_enforced() -> None:
         )
 
 
+def test_embedding_config_accepts_new_dense_models() -> None:
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    for model, dim in (
+        ("Alibaba-NLP/gte-modernbert-base", 768),
+        ("codefuse-ai/F2LLM-v2-0.6B", 1024),
+    ):
+        cfg = EmbeddingConfig(provider="sentence_transformers", model_name=model, dim=dim)
+        assert cfg.dim == dim
+
+
+def test_embedding_config_new_dense_models_wrong_dim_raises() -> None:
+    import pytest
+
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    # Each registered model's dim is enforced — a mismatch fails at config load.
+    for model, wrong in (
+        ("Alibaba-NLP/gte-modernbert-base", 1024),
+        ("codefuse-ai/F2LLM-v2-0.6B", 768),
+    ):
+        with pytest.raises(Exception):
+            EmbeddingConfig(provider="sentence_transformers", model_name=model, dim=wrong)
+
+
 def test_embedding_config_hash_folds_max_seq_length_and_normalize() -> None:
     # max_seq_length and normalize change the produced vectors, so editing
     # either must invalidate the chunk cache (change the hash).

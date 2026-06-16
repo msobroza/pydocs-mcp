@@ -110,7 +110,7 @@ Every primitive subclasses `RetrieverStep` (ABC) and uses **registry + decorator
 |---|---|
 | Add a field to `Chunk` / `ModuleMember` / `Package` (e.g., `Chunk.embedding`) | Additive — old callers keep working; schema DDL in `db.py` gains a column; `PRAGMA user_version` bump triggers auto-rebuild |
 | New `SearchScope` / `ChunkOrigin` / `MemberKind` enum value | Add to enum; `StrEnum` values are plain strings; zero changes elsewhere |
-| New domain entity (e.g., `Embedding`, `Annotation`, `Conversation`) | New Protocol + concrete repository + new DDL in `db.py`, following the sub-PR #3 pattern |
+| New domain entity (e.g., `Embedding`, `Annotation`, `Conversation`) | New Protocol + concrete repository + new DDL in `db.py`, following the existing one-Protocol-plus-one-`Sqlite*`-repository-per-entity pattern in `storage/` |
 | New operator in `MultiFieldFormat` | Parser branch + `FilterAdapter` case(s) |
 
 ## F. MCP / CLI surface
@@ -156,7 +156,7 @@ These are the walls — the current architecture accepts them as trade-offs rath
 
 ---
 
-## Suggested test extensions — picks for a future sub-PR
+## Suggested test extensions — picks for future follow-up work
 
 Each is small enough to land in one focused PR and exercises the abstractions end-to-end. Ordered by complexity.
 
@@ -176,7 +176,7 @@ Each is small enough to land in one focused PR and exercises the abstractions en
 
 5. **Add `FilterTreeFormat`** — full dict-form filter with `$and` / `$or` / `$not`. Lights up `Any_` and `Not` in the `SqliteFilterAdapter`. First non-multifield format; validates the two-format architecture.
 
-6. **Add `TryStep(inner, on_error=None)`** — the first error-tolerance primitive (originally planned for sub-PR #7). Exercises step-wrapper composition + the "steps propagate exceptions" contract.
+6. **Add `TryStep(inner, on_error=None)`** — the first error-tolerance primitive. Exercises step-wrapper composition + the "steps propagate exceptions" contract.
 
 7. **Add `FieldRange(field, lo, hi)` filter node** — validates that the Filter tree extends cleanly; `SqliteFilterAdapter` gains a `BETWEEN` translation. Would support queries like "chunks indexed in the last 7 days" once a timestamp field lands.
 
