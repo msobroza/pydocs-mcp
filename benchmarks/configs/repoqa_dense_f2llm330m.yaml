@@ -1,0 +1,20 @@
+# RepoQA experiment — dense (embedding) only, F2LLM-330M embedder.
+# The DENSE-ONLY baseline for the structural-recall comparison; its
+# graph counterpart (repoqa_dense_graph_f2llm330m.yaml) uses the SAME
+# embedder block so the only difference measured is the graph_expand step.
+# See benchmarks/EXPERIMENTS.md.
+#
+# TODO(confirm with user): exact HuggingFace id + embedding dim for F2LLM-330M.
+# Best guess below — verify the model id resolves on HF and that `dim` matches
+# its output size before the real sweep (a wrong dim corrupts the .tq sidecar).
+embedding:
+  provider: sentence_transformers
+  model_name: codefuse-ai/F2LLM-v2-0.3B
+  dim: 1024
+  batch_size: 8
+  max_seq_length: 2048
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml
