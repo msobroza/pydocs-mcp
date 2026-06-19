@@ -306,6 +306,8 @@ _KNOWN_MODEL_DIMS: dict[str, int] = {
     "Qwen/Qwen3-Embedding-0.6B": 1024,
     "Alibaba-NLP/gte-modernbert-base": 768,
     "codefuse-ai/F2LLM-v2-0.6B": 1024,
+    # F2LLM-v2-330M: Qwen3-0.6B-Base backbone, hidden_size 896, last-token
+    # pooled + L2-normalized, no projection module → output dim 896.
     "codefuse-ai/F2LLM-v2-330M": 896,
 }
 

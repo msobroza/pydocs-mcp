@@ -40,7 +40,9 @@ Several more retrieval modes ship as opt-in pipeline presets:
 - **Dense** (`chunk_search_dense.yaml`, `chunk_search_dense_ranked.yaml`) — a
   `DenseFetcherStep` + `DenseScorerStep` query the TurboQuant vector store using
   embeddings from the configured `Embedder` (FastEmbed `BAAI/bge-small-en-v1.5`
-  by default; OpenAI and on-device `sentence_transformers`/Qwen3 optional).
+  by default; OpenAI and the on-device `sentence_transformers` provider —
+  `Qwen/Qwen3-Embedding-0.6B`, `Alibaba-NLP/gte-modernbert-base`, or the
+  code-strong `codefuse-ai/F2LLM-v2-0.6B` — optional).
 - **Hybrid** (`chunk_search_hybrid.yaml`, `chunk_search_hybrid_ranked.yaml`) — a
   `ParallelStep` runs the BM25 and dense branches concurrently, then an
   `RRFFusionStep` merges them with reciprocal-rank fusion into one ranking.

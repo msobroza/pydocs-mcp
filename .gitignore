@@ -41,6 +41,9 @@ benchmarks/logs/
 # Sphinx build artifacts (generated; rebuild with the docs toolchain)
 docs/_build/
 
+# Sphinx docs build output
+documentation/_build/
+
 # Claude Code — local settings, worktrees, session state
 .claude/
 

@@ -105,6 +105,26 @@ sudo apt-get install -y libopenblas-pthread-dev   # see INSTALL.md for fallbacks
   installing libopenblas, preload it for the run:
   `export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libopenblas.so.0`.
 
+### GPU (strongly recommended for the dense conditions)
+
+Dense-indexing the RepoQA repos on **CPU is the dominant cost** — 60–215 s per
+needle, so a full sweep can take days. On GPU the same embedding is ~50× faster
+(bge-small: 250 → 12 600 chunks/s on an RTX 2080 Ti), turning the sweep into
+minutes. Run any sweep through the wrapper to get it:
+
+```bash
+benchmarks/scripts/run_eval_gpu.sh \
+  --systems pydocs-mcp --dataset repoqa --split small_test --bench-cache on \
+  --configs benchmarks/configs/repoqa_dense_st.yaml \
+  --report benchmarks/results/out.md
+```
+
+It forces `--gpu` and — crucially — prepends torch's bundled NVIDIA libs to
+`LD_LIBRARY_PATH`. Torch embedders (`sentence_transformers`: Qwen3, ModernBERT,
+F2LLM, …) already find CUDA via torch's RPATH, but **FastEmbed (onnxruntime)
+silently falls back to CPU** unless `libcublasLt.so.12` / `libcudnn` are on that
+path. Override the venv with `PYDOCS_VENV=/path/to/venv` (default `.venv-li`).
+
 ## 2. The `small_test` split
 
 `--split small_test` selects a deterministic, stratified subsample of the
@@ -236,3 +256,37 @@ with per-task metric/latency events and final `*_mean` / `*_ci_low` /
 To get the comparison plots committed: run the sweeps above, then attach the
 contents of `benchmarks/results/jsonl/` (and the markdown reports) back here —
 the plotting + committing of the figures is handled from those result files.
+
+## 6. Structural-recall eval (dense + reference-graph expansion)
+
+RepoQA `small_test` is saturated (dense already scores ~1.0), so it cannot show
+whether reference-graph expansion helps. The `repoqa-structural` dataset is hard
+*by construction*: the query stays a needle's description, but the gold is a
+graph NEIGHBOUR of that needle (a caller, or an overriding subclass method) that
+is embedding-dissimilar to the query — the answer dense retrieval misses but a
+1-hop graph expansion from the dense hit recovers.
+
+Generate the fixture once (offline; indexes each repo + walks the graph):
+
+```bash
+PYTHONPATH=benchmarks/src python benchmarks/scripts/build_structural_recall.py \
+    --config benchmarks/configs/repoqa_dense_f2llm330m.yaml \
+    --out benchmarks/fixtures/structural_recall.json --gpu
+```
+
+Then compare DENSE-ONLY vs DENSE+GRAPH (embedding-centric — no BM25, no RRF):
+
+```bash
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+    --systems pydocs-mcp --dataset repoqa-structural \
+    --configs repoqa_dense_f2llm330m,repoqa_dense_graph_f2llm330m \
+    --metrics recall@1,recall@5,recall@10,mrr --gpu \
+    --report benchmarks/results/structural_recall.md
+```
+
+The lift is the recall delta between the two columns. The graph signal is the
+`graph_expand` retrieval step (`pipelines/exp_dense_graph.yaml`): it seeds from
+the top dense hits, expands 1 hop over `node_references` (callers + callees),
+and merges neighbours into the dense list by `max(dense_sim, seed_sim·decay)`.
+Regression check: the same two configs on `--dataset repoqa --split small_test`
+must both stay ~1.0 (the merge is additive and cannot drop a dense hit).

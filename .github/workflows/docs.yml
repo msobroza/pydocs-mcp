@@ -1,0 +1,68 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "documentation/**"
+      - "python/**"
+      - "*.md"
+      - "benchmarks/**.md"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "documentation/**"
+      - "python/**"
+      - "*.md"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialize Pages deployments; never cancel an in-flight publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # turbovec links CBLAS, so autodoc needs libopenblas to import the package.
+      - name: Install system OpenBLAS
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-pthread-dev
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      # Install the docs group + runtime deps, but DON'T build the Rust
+      # extension (--no-install-project) or pull dev tooling (--no-group dev).
+      # conf.py reads pydocs_mcp from python/ on sys.path for autodoc.
+      - name: Install deps (no project build)
+        run: uv sync --frozen --group docs --no-group dev --no-install-project
+
+      - name: Build (warnings = errors)
+        run: uv run sphinx-build -W --keep-going -b html documentation documentation/_build/html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: documentation/_build/html
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

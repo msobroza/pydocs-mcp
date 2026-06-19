@@ -1,0 +1,39 @@
+# Dense (embedding) + reference-graph expansion ranked chunk search.
+# Embedding-centric: NO BM25, NO RRF. The dense fetch+score produces the
+# candidates; `graph_expand` seeds from the top dense hits and pulls in their
+# 1-hop caller/callee neighbours (the structurally-adjacent answers an
+# embedding misses), merged by max(dense_sim, graph_score). Referenced by
+# ../repoqa_dense_graph.yaml. See benchmarks/EXPERIMENTS.md.
+name: exp_dense_graph
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: score
+    type: dense_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  # Graph expansion runs after filtering (so neighbours aren't constrained by
+  # the pre/post metadata filter) and before top-k, so the recovered neighbours
+  # compete for the final ranked slots. Reaches the reference graph via the
+  # pipeline's uow_factory; degrades to dense-only when the graph is empty.
+  - name: graph
+    type: graph_expand
+    params:
+      top_s: 10
+      max_depth: 1
+      decay: 0.5
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 10
