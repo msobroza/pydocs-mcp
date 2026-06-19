@@ -256,3 +256,37 @@ with per-task metric/latency events and final `*_mean` / `*_ci_low` /
 To get the comparison plots committed: run the sweeps above, then attach the
 contents of `benchmarks/results/jsonl/` (and the markdown reports) back here —
 the plotting + committing of the figures is handled from those result files.
+
+## 6. Structural-recall eval (dense + reference-graph expansion)
+
+RepoQA `small_test` is saturated (dense already scores ~1.0), so it cannot show
+whether reference-graph expansion helps. The `repoqa-structural` dataset is hard
+*by construction*: the query stays a needle's description, but the gold is a
+graph NEIGHBOUR of that needle (a caller, or an overriding subclass method) that
+is embedding-dissimilar to the query — the answer dense retrieval misses but a
+1-hop graph expansion from the dense hit recovers.
+
+Generate the fixture once (offline; indexes each repo + walks the graph):
+
+```bash
+PYTHONPATH=benchmarks/src python benchmarks/scripts/build_structural_recall.py \
+    --config benchmarks/configs/repoqa_dense_f2llm330m.yaml \
+    --out benchmarks/fixtures/structural_recall.json --gpu
+```
+
+Then compare DENSE-ONLY vs DENSE+GRAPH (embedding-centric — no BM25, no RRF):
+
+```bash
+PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+    --systems pydocs-mcp --dataset repoqa-structural \
+    --configs repoqa_dense_f2llm330m,repoqa_dense_graph_f2llm330m \
+    --metrics recall@1,recall@5,recall@10,mrr --gpu \
+    --report benchmarks/results/structural_recall.md
+```
+
+The lift is the recall delta between the two columns. The graph signal is the
+`graph_expand` retrieval step (`pipelines/exp_dense_graph.yaml`): it seeds from
+the top dense hits, expands 1 hop over `node_references` (callers + callees),
+and merges neighbours into the dense list by `max(dense_sim, seed_sim·decay)`.
+Regression check: the same two configs on `--dataset repoqa --split small_test`
+must both stay ~1.0 (the merge is additive and cannot drop a dense hit).

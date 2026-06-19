@@ -1,0 +1,17 @@
+# RepoQA experiment — dense (embedding) only, codefuse-ai/F2LLM-v2-330M
+# (896-dim, Qwen3-0.6B-Base backbone, last-token pooled + L2-normalized,
+# code-specialized). The DENSE-ONLY baseline for the structural-recall
+# comparison; its graph counterpart (repoqa_dense_graph_f2llm330m.yaml) uses the
+# SAME embedder block so the only difference measured is the graph_expand step.
+# See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: sentence_transformers
+  model_name: codefuse-ai/F2LLM-v2-330M
+  dim: 896
+  batch_size: 8
+  max_seq_length: 2048
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

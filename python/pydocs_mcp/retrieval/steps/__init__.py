@@ -10,6 +10,7 @@ Module layout:
 - :mod:`.chunk_fetcher` — :class:`ChunkFetcherStep`
 - :mod:`.dense_fetcher` — :class:`DenseFetcherStep`
 - :mod:`.dense_scorer` — :class:`DenseScorerStep`
+- :mod:`.graph_expand` — :class:`GraphExpandStep`
 - :mod:`.late_interaction_scorer` — :class:`LateInteractionScorerStep`
 - :mod:`.member_fetcher` — :class:`MemberFetcherStep`
 - :mod:`.metadata_post_filter` — :class:`MetadataPostFilterStep`
@@ -40,6 +41,7 @@ from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
 from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
 from pydocs_mcp.retrieval.steps.dense_fetcher import DenseFetcherStep
 from pydocs_mcp.retrieval.steps.dense_scorer import DenseScorerStep
+from pydocs_mcp.retrieval.steps.graph_expand import GraphExpandStep
 from pydocs_mcp.retrieval.steps.late_interaction_scorer import LateInteractionScorerStep
 from pydocs_mcp.retrieval.steps.limit import LimitStep
 from pydocs_mcp.retrieval.steps.llm_tree_reasoning import LlmTreeReasoningStep
@@ -65,6 +67,7 @@ __all__ = (
     "ConditionalStep",
     "DenseFetcherStep",
     "DenseScorerStep",
+    "GraphExpandStep",
     "LateInteractionScorerStep",
     "LimitStep",
     "LlmTreeReasoningStep",
