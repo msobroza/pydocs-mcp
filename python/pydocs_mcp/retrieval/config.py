@@ -306,6 +306,7 @@ _KNOWN_MODEL_DIMS: dict[str, int] = {
     "Qwen/Qwen3-Embedding-0.6B": 1024,
     "Alibaba-NLP/gte-modernbert-base": 768,
     "codefuse-ai/F2LLM-v2-0.6B": 1024,
+    "codefuse-ai/F2LLM-v2-330M": 896,
 }
 
 

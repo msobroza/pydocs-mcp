@@ -36,6 +36,10 @@ Thumbs.db
 
 # Benchmark outputs
 benchmarks/results/
+benchmarks/logs/
+
+# Sphinx build artifacts (generated; rebuild with the docs toolchain)
+docs/_build/
 
 # Claude Code — local settings, worktrees, session state
 .claude/

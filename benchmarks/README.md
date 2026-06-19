@@ -259,6 +259,7 @@ in [`notebooks/`](../notebooks/)). Higher is better.
 | Dense (bge-small, 384-d) | `repoqa_dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
 | Dense (gte-modernbert-base, 768-d) | `repoqa_dense_modernbert.yaml` | 0.533 | 0.733 | 0.733 | 0.601 | 30 |
 | Dense (Qwen3-0.6B, 1024-d) | `repoqa_dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
+| Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm_330m.yaml` | 0.700 | 0.767 | 0.767 | 0.725 | 30 |
 | **Dense (F2LLM-v2-0.6B, 1024-d)** | `repoqa_dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
 | Late-interaction (ColBERT / MaxSim) | `repoqa_li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
 | LLM tree reasoning (gpt-4o-mini) | `repoqa_tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
@@ -268,9 +269,9 @@ in [`notebooks/`](../notebooks/)). Higher is better.
 > not a single locked sweep; regenerate a clean, comparable sweep with the
 > commands in [§Running the benchmarks](#running-the-benchmarks). The `onnx`
 > dense provider was removed; `li_edge` only has a partial run and is omitted.
-> **gte-modernbert-base** and **F2LLM-v2-0.6B** are full-30 runs served on GPU via
-> sentence-transformers (2048-token cap, `batch_size: 4` for the 0.6B models), each
-> in a dedicated process so CUDA memory is freed between embedders.
+> **gte-modernbert-base**, **F2LLM-v2-330M**, and **F2LLM-v2-0.6B** are full-30 runs
+> served on GPU via sentence-transformers (2048-token cap, `batch_size: 4` for the
+> F2LLM models), each in a dedicated process so CUDA memory is freed between embedders.
 > **BM25 → tree rerank** is the lone two-stage method: the LLM (gpt-4o-mini)
 > re-ranks BM25's **top-200** candidate pool (`k=200`), which is why its recall@10
 > can exceed BM25's own top-10; the rest are single-stage. (LLM tree also uses
@@ -289,6 +290,13 @@ expensive (one LLM call per query). **BM25 → tree rerank** roughly doubles BM2
 recall@1 (0.17 → 0.33) and lifts recall@5 to 0.57 by re-ranking BM25's top-200
 candidate pool (`k=200`) with gpt-4o-mini — reaching tree-reasoning quality, still behind dense.
 
+**Model size matters for F2LLM.** The smaller **F2LLM-v2-330M** (896-d) lands at
+recall@1 **0.70** / recall@10 **0.77** (MRR 0.73) — clearly below its 0.6B sibling
+(0.90 / 0.93) but still topping the general-purpose **Qwen3-0.6B** and
+**gte-modernbert-base** at recall@1, at a slightly lower search latency (0.23s p50).
+So the code-specialized family wins at both sizes, but ~half the parameters costs
+~0.16 recall@10 here.
+
 #### Quality vs. search latency
 
 ![recall@10 vs. p50 search latency by retrieval method](assets/method_quality_vs_latency.png)
@@ -302,6 +310,7 @@ indexing), from each run's per-task `search_seconds`:
 | Late-interaction | 0.667 | 0.13s |
 | Dense (bge-small) | 0.733 | 0.15s |
 | Dense (ModernBERT) | 0.733 | 0.19s |
+| Dense (F2LLM-330M) | 0.767 | 0.23s |
 | Dense (F2LLM-0.6B) | 0.933 | 0.29s |
 | Dense (Qwen3-0.6B) | 0.810 | 0.51s |
 | BM25 → tree rerank | 0.567 | 10.6s |

@@ -39,6 +39,7 @@ DATA: list[tuple[str, float, float, float, bool, float]] = [
     ("Dense\n(bge-small)", 0.467, 0.733, 0.733, False, 0.145),
     ("Dense\n(ModernBERT)", 0.533, 0.733, 0.733, False, 0.191),
     ("Dense\n(Qwen3-0.6B)*", 0.667, 0.810, 0.810, True, 0.508),
+    ("Dense\n(F2LLM-330M)", 0.700, 0.767, 0.767, False, 0.227),
     ("Dense\n(F2LLM-0.6B)", 0.900, 0.900, 0.933, False, 0.293),
     ("Late-\ninteraction", 0.500, 0.633, 0.667, False, 0.133),
     ("LLM tree*", 0.333, 0.524, 0.524, True, 13.717),
@@ -52,8 +53,8 @@ _BAR_FOOTNOTE = (
     "comparable to the full-30 methods.  BM25 → tree rerank is two-stage: the LLM "
     "(gpt-4o-mini) re-ranks BM25's top-200 candidate pool (k=200), so its recall@10 "
     "can exceed BM25's own top-10.  LLM tree also uses gpt-4o-mini.  onnx removed.  "
-    "ModernBERT & F2LLM: full-30, GPU sentence-transformers (2048-token cap); "
-    "F2LLM-v2-0.6B is the code-specialized leader."
+    "ModernBERT & both F2LLM sizes: full-30, GPU sentence-transformers (2048-token "
+    "cap); F2LLM-v2-0.6B is the code-specialized leader, F2LLM-v2-330M its lighter sibling."
 )
 _SCATTER_FOOTNOTE = (
     "Per-needle p50 search latency (excludes one-time indexing).  Local methods are "
@@ -115,6 +116,7 @@ def _render_bars() -> Path:
 _LABEL_OFFSETS: dict[str, tuple[int, int]] = {
     "Dense (bge-small)": (-2, 10),
     "Dense (ModernBERT)": (12, -4),
+    "Dense (F2LLM-330M)": (6, 12),  # lift above the bge-small / ModernBERT cluster
     "Late- interaction": (2, -18),
 }
 _DEFAULT_LABEL_OFFSET = (9, 5)
