@@ -226,6 +226,29 @@ heavily paraphrased docs may score `0.0` under content matching — this applies
 only to the native source runs; the canonical oracle run matches gold by exact
 doc-title, so it is unaffected).
 
+### RepoQA-structural (reference-graph split)
+
+A derived split that stress-tests **structural** retrieval — the code you reach by
+following the call / inheritance graph, not by matching text. Built from RepoQA by
+[`scripts/build_structural_recall.py`](scripts/build_structural_recall.py): for
+each needle it keeps the original natural-language description as the query but
+swaps the gold to a **1-hop reference-graph neighbour** (a caller, a callee, or an
+overriding subclass method) that is *not* the dense top-1, while requiring the
+needle itself to be in the dense top-K — so the neighbour is reachable by seeding
+graph expansion from a dense hit.
+
+- **What it measures.** Whether the `graph_expand` retrieval step recovers
+  structurally-adjacent answers a dense embedder misses (its text doesn't match
+  the query, but it calls / is called by / overrides a function that does).
+- **Gold.** The neighbour's function body, AST-matched (same scorer as RepoQA).
+- **Registered as** `repoqa-structural`
+  ([`datasets/structural_recall.py`](src/benchmarks/eval/datasets/structural_recall.py)).
+  The fixture (`fixtures/structural_recall.json`) is a **thin overlay** — repo
+  source is reconstructed from the cached RepoQA release at eval time, so it stays
+  tiny (no duplicated repo trees).
+- **Run it.** See [EXPERIMENTS.md §6](EXPERIMENTS.md) for the generate + compare
+  commands.
+
 ### Roadmap: additional benchmarks
 
 Each future benchmark gets its own subsection following the same four-question
@@ -313,6 +336,39 @@ Two tiers: **local index lookups** (BM25 / dense / late-interaction) answer in
 (F2LLM-0.6B)** is now the dominant point (highest recall@10, 0.93, at **0.29 s**),
 beating Qwen3 on both quality *and* latency, so on quality-per-second the LLM
 approaches are the weakest here.
+
+### Structural recall (graph expansion)
+
+The [`repoqa-structural`](#repoqa-structural-reference-graph-split) split isolates
+what the `graph_expand` step adds: each query is a RepoQA needle's description, but
+the gold is a 1-hop reference-graph neighbour (caller / callee / override) that
+dense retrieval does **not** rank first. Embedder is **F2LLM-v2-330M** (896-d) for
+both columns — the only difference is the graph step. Higher is better.
+
+![recall@k — dense vs. dense+graph on repoqa-structural](assets/structural_recall.png)
+
+| Method | Config | recall@1 | recall@5 | recall@10 | MRR | tasks |
+|---|---|---:|---:|---:|---:|---:|
+| Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm330m.yaml` | 0.00 | 0.20 | 0.30 | 0.113 | 20 |
+| Dense + graph (decay 0.5, old default) | `graph_expand`, decay 0.5 | 0.00 | 0.25 | 0.40 | 0.128 | 20 |
+| **Dense + graph (decay 0.9)** | `repoqa_dense_graph_f2llm330m.yaml` | 0.00 | **0.80** | **1.00** | **0.386** | 20 |
+
+> **recall@1 is 0 by construction** — the gold is a *neighbour* of the needle, and
+> the needle itself holds dense rank 1, so the neighbour lands at rank ≥ 2; the
+> meaningful metrics are recall@5/10 and MRR. The graph branch is
+> **embedding-centric**: it seeds from the dense top-S and merges each discovered
+> neighbour by `max(dense_sim, seed_sim·decay)` — **no RRF, no BM25**. Chart
+> rendered from this table by
+> [`scripts/plot_structural_recall.py`](scripts/plot_structural_recall.py).
+
+**Takeaways.** On the queries dense ranks poorly, a 1-hop graph expansion from the
+dense hit **recovers every miss into the top-10 (recall@10 0.30 → 1.00)** and more
+than triples MRR (0.11 → 0.39) at decay 0.9. The `graph_expand` **decay knob is
+decisive**: the old default 0.5 is near-inert on F2LLM's compressed cosine scale
+(recall@10 0.30 → 0.40 only), so the shipped default is now **0.9**. This is the
+graph's home turf — on the standard RepoQA split (where the gold *is* the
+described function) pure dense already wins, and graph expansion only adds
+neighbours *below* the answer, leaving recall@1 unchanged.
 
 ### Current baselines
 

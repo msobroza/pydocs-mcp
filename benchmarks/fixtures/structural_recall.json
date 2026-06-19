@@ -1,0 +1,224 @@
+{
+  "python": [
+    {
+      "query": "\n1. **Purpose**: To combine adjacent strings into a single string within a line of code, ensuring that the merged result is syntactically correct.\n2. **Input**: A line of code and a list of indices indicating the starting points of groups of strings to be merged.\n3. **Output**: A modified line of code with the specified groups of strings merged, or an error if the merge cannot be performed.\n4. **Procedure**: \n   - The function iterates over the provided indices, each representing the start of a group of adjacent strings.\n   - For each index, it checks if the group of strings can be merged without violating syntax rules.\n   - If valid, it merges the strings and updates a dictionary with the new string and its position.\n   - If no strings can be merged, it returns an error.\n   - Otherwise, it constructs a new line of code with the merged strings and any remaining elements from the original line, including comments.\n",
+      "gold_ast_body": "def append_leaves(\n    new_line: Line, old_line: Line, leaves: List[Leaf], preformatted: bool = False\n) -> None:\n    \"\"\"\n    Append leaves (taken from @old_line) to @new_line, making sure to fix the\n    underlying Node structure where appropriate.\n\n    All of the leaves in @leaves are duplicated. The duplicates are then\n    appended to @new_line and used to replace their originals in the underlying\n    Node structure. Any comments attached to the old leaves are reattached to\n    the new leaves.\n\n    Pre-conditions:\n        set(@leaves) is a subset of set(@old_line.leaves).\n    \"\"\"\n    for old_leaf in leaves:\n        new_leaf = Leaf(old_leaf.type, old_leaf.value)\n        replace_child(old_leaf, new_leaf)\n        new_line.append(new_leaf, preformatted=preformatted)\n\n        for comment_leaf in old_line.comments_after(old_leaf):\n            new_line.append(comment_leaf, preformatted=True)",
+      "repo": "psf/black",
+      "commit": "f03ee113c9f3dfeb477f2d4247bfb7de2e5f465c",
+      "needle_path": "src/black/trans.py",
+      "seed_qname": "black.trans.StringMerger._merge_string_group",
+      "gold_qname": "black.lines.append_leaves",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function is designed to transform specific lines of code that have not been modified into a special comment format that preserves their original formatting during further processing. This is particularly useful in scenarios where selective formatting is required, ensuring that unchanged parts of the code remain visually consistent and untouched.\n2. **Input**: The function takes two parameters: a node representing the parsed source code and a collection of line ranges that specify which lines have not been altered.\n3. **Output**: There is no direct output from this function as it modifies the input node in place. The changes involve converting specified lines into a format that will not be altered in subsequent formatting steps.\n4. **Procedure**: The function operates in two main phases:\n   - First, it identifies top-level statements within the unchanged lines and converts these blocks into a special comment type that preserves their formatting.\n   - Second, it processes individual unchanged lines within the node, converting them into the same special comment type. This includes normalizing comment prefixes and indentations to ensure consistency, even though the content itself remains unchanged.\n",
+      "gold_ast_body": "def _format_str_once(\n    src_contents: str, *, mode: Mode, lines: Collection[Tuple[int, int]] = ()\n) -> str:\n    src_node = lib2to3_parse(src_contents.lstrip(), mode.target_versions)\n    dst_blocks: List[LinesBlock] = []\n    if mode.target_versions:\n        versions = mode.target_versions\n    else:\n        future_imports = get_future_imports(src_node)\n        versions = detect_target_versions(src_node, future_imports=future_imports)\n\n    context_manager_features = {\n        feature\n        for feature in {Feature.PARENTHESIZED_CONTEXT_MANAGERS}\n        if supports_feature(versions, feature)\n    }\n    normalize_fmt_off(src_node, mode, lines)\n    if lines:\n        # This should be called after normalize_fmt_off.\n        convert_unchanged_lines(src_node, lines)\n\n    line_generator = LineGenerator(mode=mode, features=context_manager_features)\n    elt = EmptyLineTracker(mode=mode)\n    split_line_features = {\n        feature\n        for feature in {Feature.TRAILING_COMMA_IN_CALL, Feature.TRAILING_COMMA_IN_DEF}\n        if supports_feature(versions, feature)\n    }\n    block: Optional[LinesBlock] = None\n    for current_line in line_generator.visit(src_node):\n        block = elt.maybe_empty_lines(current_line)\n        dst_blocks.append(block)\n        for line in transform_line(\n            current_line, mode=mode, features=split_line_features\n        ):\n            block.content_lines.append(str(line))\n    if dst_blocks:\n        dst_blocks[-1].after = 0\n    dst_contents = []\n    for block in dst_blocks:\n        dst_contents.extend(block.all_lines())\n    if not dst_contents:\n        # Use decode_bytes to retrieve the correct source newline (CRLF or LF),\n        # and check if normalized_content has more than one line\n        normalized_content, _, newline = decode_bytes(src_contents.encode(\"utf-8\"))\n        if \"\\n\" in normalized_content:\n            return newline\n        return \"\"\n    return \"\".join(dst_contents)",
+      "repo": "psf/black",
+      "commit": "f03ee113c9f3dfeb477f2d4247bfb7de2e5f465c",
+      "needle_path": "src/black/ranges.py",
+      "seed_qname": "black.ranges.convert_unchanged_lines",
+      "gold_qname": "black._format_str_once",
+      "gold_kind": "caller",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function generates a string used to format text with new lines and optionally a form feed character, typically used to control spacing in formatted output.\n2. **Input**: The function takes three parameters: an integer representing the number of new lines, a boolean indicating whether a form feed character should be included, and an optional string representing the line break character (defaulting to a newline).\n3. **Output**: It returns a string composed of the specified number of newline characters, and if requested, includes a form feed character followed by an additional newline.\n4. **Procedure**: The function first checks if the form feed should be included. If true, it concatenates the specified number of newline characters minus one with a form feed character and another newline. If false, it simply returns a string of newline characters multiplied by the specified integer.\n",
+      "gold_ast_body": "def generate_comments(leaf: LN) -> Iterator[Leaf]:\n    \"\"\"Clean the prefix of the `leaf` and generate comments from it, if any.\n\n    Comments in lib2to3 are shoved into the whitespace prefix.  This happens\n    in `pgen2/driver.py:Driver.parse_tokens()`.  This was a brilliant implementation\n    move because it does away with modifying the grammar to include all the\n    possible places in which comments can be placed.\n\n    The sad consequence for us though is that comments don't \"belong\" anywhere.\n    This is why this function generates simple parentless Leaf objects for\n    comments.  We simply don't know what the correct parent should be.\n\n    No matter though, we can live without this.  We really only need to\n    differentiate between inline and standalone comments.  The latter don't\n    share the line with any code.\n\n    Inline comments are emitted as regular token.COMMENT leaves.  Standalone\n    are emitted with a fake STANDALONE_COMMENT token identifier.\n    \"\"\"\n    total_consumed = 0\n    for pc in list_comments(leaf.prefix, is_endmarker=leaf.type == token.ENDMARKER):\n        total_consumed = pc.consumed\n        prefix = make_simple_prefix(pc.newlines, pc.form_feed)\n        yield Leaf(pc.type, pc.value, prefix=prefix)\n    normalize_trailing_prefix(leaf, total_consumed)",
+      "repo": "psf/black",
+      "commit": "f03ee113c9f3dfeb477f2d4247bfb7de2e5f465c",
+      "needle_path": "src/black/nodes.py",
+      "seed_qname": "black.nodes.make_simple_prefix",
+      "gold_qname": "black.comments.generate_comments",
+      "gold_kind": "caller",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function is designed to apply a transformation to a line of code based on specified rules and conditions, and then evaluate the transformed line to ensure it meets certain criteria. If the initial transformation does not meet the criteria, a secondary transformation is attempted with additional constraints.\n2. **Input**: The function accepts a line of code, a transformation function, a mode specifying formatting rules, a collection of features that may influence the transformation, and optionally a string representation of the line.\n3. **Output**: It returns a list of transformed lines of code. If the transformation is unsuccessful or unnecessary, the original line or its direct transformation is returned.\n4. **Procedure**: \n   - Convert the input line to a string if not provided.\n   - Apply the transformation function to the line.\n   - Check if the transformed line is unchanged; if so, raise an exception.\n   - Validate the transformed line against a set of criteria including line length and structural integrity.\n   - If the initial transformation does not meet all criteria, clone the original line and attempt a secondary transformation with an additional feature.\n   - Return the result of the transformation that best meets the criteria.\n",
+      "gold_ast_body": "def append_leaves(\n    new_line: Line, old_line: Line, leaves: List[Leaf], preformatted: bool = False\n) -> None:\n    \"\"\"\n    Append leaves (taken from @old_line) to @new_line, making sure to fix the\n    underlying Node structure where appropriate.\n\n    All of the leaves in @leaves are duplicated. The duplicates are then\n    appended to @new_line and used to replace their originals in the underlying\n    Node structure. Any comments attached to the old leaves are reattached to\n    the new leaves.\n\n    Pre-conditions:\n        set(@leaves) is a subset of set(@old_line.leaves).\n    \"\"\"\n    for old_leaf in leaves:\n        new_leaf = Leaf(old_leaf.type, old_leaf.value)\n        replace_child(old_leaf, new_leaf)\n        new_line.append(new_leaf, preformatted=preformatted)\n\n        for comment_leaf in old_line.comments_after(old_leaf):\n            new_line.append(comment_leaf, preformatted=True)",
+      "repo": "psf/black",
+      "commit": "f03ee113c9f3dfeb477f2d4247bfb7de2e5f465c",
+      "needle_path": "src/black/linegen.py",
+      "seed_qname": "black.linegen.run_transformer",
+      "gold_qname": "black.lines.append_leaves",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: Determines if a specified syntax element is part of a type annotation in the source code.\n2. **Input**: A syntax element from the parsed source code.\n3. **Output**: A boolean value indicating whether the given syntax element is involved in a type annotation.\n4. **Procedure**: The function checks the type of annotation associated with the syntax element by tracing its position in the syntax tree and examining its relationship with surrounding elements. If the element is identified as part of either a return type or parameter type annotation, the function returns true; otherwise, it returns false.\n",
+      "gold_ast_body": "def bracket_split_build_line(\n    leaves: List[Leaf],\n    original: Line,\n    opening_bracket: Leaf,\n    *,\n    component: _BracketSplitComponent,\n) -> Line:\n    \"\"\"Return a new line with given `leaves` and respective comments from `original`.\n\n    If it's the head component, brackets will be tracked so trailing commas are\n    respected.\n\n    If it's the body component, the result line is one-indented inside brackets and as\n    such has its first leaf's prefix normalized and a trailing comma added when\n    expected.\n    \"\"\"\n    result = Line(mode=original.mode, depth=original.depth)\n    if component is _BracketSplitComponent.body:\n        result.inside_brackets = True\n        result.depth += 1\n        if leaves:\n            no_commas = (\n                # Ensure a trailing comma for imports and standalone function arguments\n                original.is_def\n                # Don't add one after any comments or within type annotations\n                and opening_bracket.value == \"(\"\n                # Don't add one if there's already one there\n                and not any(\n                    leaf.type == token.COMMA\n                    and (\n                        Preview.typed_params_trailing_comma not in original.mode\n                        or not is_part_of_annotation(leaf)\n                    )\n                    for leaf in leaves\n                )\n                # Don't add one inside parenthesized return annotations\n                and get_annotation_type(leaves[0]) != \"return\"\n                # Don't add one inside PEP 604 unions\n                and not (\n                    leaves[0].parent\n                    and leaves[0].parent.next_sibling\n                    and leaves[0].parent.next_sibling.type == token.VBAR\n                )\n            )\n\n            if original.is_import or no_commas:\n                for i in range(len(leaves) - 1, -1, -1):\n                    if leaves[i].type == STANDALONE_COMMENT:\n                        continue\n\n                    if leaves[i].type != token.COMMA:\n                        new_comma = Leaf(token.COMMA, \",\")\n                        leaves.insert(i + 1, new_comma)\n                    break\n\n    leaves_to_track: Set[LeafID] = set()\n    if component is _BracketSplitComponent.head:\n        leaves_to_track = get_leaves_inside_matching_brackets(leaves)\n    # Populate the line\n    for leaf in leaves:\n        result.append(\n            leaf,\n            preformatted=True,\n            track_bracket=id(leaf) in leaves_to_track,\n        )\n        for comment_after in original.comments_after(leaf):\n            result.append(comment_after, preformatted=True)\n    if component is _BracketSplitComponent.body and should_split_line(\n        result, opening_bracket\n    ):\n        result.should_split_rhs = True\n    return result",
+      "repo": "psf/black",
+      "commit": "f03ee113c9f3dfeb477f2d4247bfb7de2e5f465c",
+      "needle_path": "src/black/nodes.py",
+      "seed_qname": "black.nodes.is_part_of_annotation",
+      "gold_qname": "black.linegen.bracket_split_build_line",
+      "gold_kind": "caller",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: To enhance the event loop performance by optionally integrating a faster alternative if available in the environment.\n2. **Input**: None.\n3. **Output**: None, but the system's default event loop may be replaced.\n4. **Procedure**: The function attempts to import a specific high-performance event loop implementation. If the import is successful, it sets this implementation as the default for the entire application. If the import fails, the function does nothing, leaving the default event loop unchanged.\n",
+      "gold_ast_body": "def patched_main() -> None:\n    maybe_install_uvloop()\n    freeze_support()\n    main()",
+      "repo": "psf/black",
+      "commit": "f03ee113c9f3dfeb477f2d4247bfb7de2e5f465c",
+      "needle_path": "src/black/concurrency.py",
+      "seed_qname": "black.concurrency.maybe_install_uvloop",
+      "gold_qname": "blackd.patched_main",
+      "gold_kind": "caller",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: Initializes the state and configuration of an object after its creation, setting up necessary properties and methods for handling different types of statements in code formatting.\n2. **Input**: None explicitly, but operates on the instance itself.\n3. **Output**: None, as it modifies the instance state directly.\n4. **Procedure**: Sets an initial line configuration based on the mode, assigns specialized partial functions to handle various statement types like assertions, loops, and conditional statements, and configures handling for different syntactic elements based on the formatting mode.\n",
+      "gold_ast_body": "class Line:\n    \"\"\"Holds leaves and comments. Can be printed with `str(line)`.\"\"\"\n\n    mode: Mode = field(repr=False)\n    depth: int = 0\n    leaves: List[Leaf] = field(default_factory=list)\n    # keys ordered like `leaves`\n    comments: Dict[LeafID, List[Leaf]] = field(default_factory=dict)\n    bracket_tracker: BracketTracker = field(default_factory=BracketTracker)\n    inside_brackets: bool = False\n    should_split_rhs: bool = False\n    magic_trailing_comma: Optional[Leaf] = None\n",
+      "repo": "psf/black",
+      "commit": "f03ee113c9f3dfeb477f2d4247bfb7de2e5f465c",
+      "needle_path": "src/black/linegen.py",
+      "seed_qname": "black.linegen.LineGenerator.__post_init__",
+      "gold_qname": "black.lines.Line",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: To determine if a function definition line should be split based on the presence of a specific punctuation mark in the return type.\n2. **Input**: A line of code and a formatting mode.\n3. **Output**: A boolean value indicating whether the line should be split.\n4. **Procedure**: The function scans through the tokens of the line to identify the section that specifies the return type. It then checks if this section contains a specific punctuation mark that necessitates splitting the line. If found, the function returns true, indicating that the line should be split to properly format the return type according to the style rules.\n",
+      "gold_ast_body": "def get_leaves_inside_matching_brackets(leaves: Sequence[Leaf]) -> Set[LeafID]:\n    \"\"\"Return leaves that are inside matching brackets.\n\n    The input `leaves` can have non-matching brackets at the head or tail parts.\n    Matching brackets are included.\n    \"\"\"\n    try:\n        # Start with the first opening bracket and ignore closing brackets before.\n        start_index = next(\n            i for i, l in enumerate(leaves) if l.type in OPENING_BRACKETS\n        )\n    except StopIteration:\n        return set()\n    bracket_stack = []\n    ids = set()\n    for i in range(start_index, len(leaves)):\n        leaf = leaves[i]\n        if leaf.type in OPENING_BRACKETS:\n            bracket_stack.append((BRACKET[leaf.type], i))\n        if leaf.type in CLOSING_BRACKETS:\n            if bracket_stack and leaf.type == bracket_stack[-1][0]:\n                _, start = bracket_stack.pop()\n                for j in range(start, i + 1):\n                    ids.add(id(leaves[j]))\n            else:\n                break\n    return ids",
+      "repo": "psf/black",
+      "commit": "f03ee113c9f3dfeb477f2d4247bfb7de2e5f465c",
+      "needle_path": "src/black/linegen.py",
+      "seed_qname": "black.linegen.should_split_funcdef_with_rhs",
+      "gold_qname": "black.brackets.get_leaves_inside_matching_brackets",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: To verify that a system correctly reduces the number of active users across three worker nodes to zero using a specific rate of user deactivation.\n2. **Input**: A setup with three worker nodes and three types of users, initially having a total of nine active users distributed across the nodes.\n3. **Output**: Assertions check that all users are deactivated in one step and that no further users remain to be deactivated, confirming the rapid deactivation process.\n4. **Procedure**: \n   - Initialize the system with three worker nodes and an equal distribution of nine users.\n   - Command the system to deactivate all users at a rate of nine users per step.\n   - Verify through assertions that all users are deactivated in one step and that attempting to get the next state results in no further users, confirming the end of the deactivation process.\n",
+      "gold_ast_body": "class UsersDispatcher(Iterator):\n    \"\"\"\n    Iterator that dispatches the users to the workers.\n\n    The dispatcher waits an appropriate amount of time between each iteration\n    in order for the spawn rate to be respected whether running in\n    local or distributed mode.\n\n    The terminology used in the users dispatcher is:\n      - Dispatch cycle\n            A dispatch cycle corresponds to a ramp-up from start to finish. So,\n            going from 10 to 100 users with a spawn rate of 1/s corresponds to one\n            dispatch cycle. An instance of the `UsersDispatcher` class \"lives\" for\n            one dispatch cycle only.\n      - Dispatch iteration\n            A dispatch cycle contains one or more dispatch iterations. In the previous example\n            of going from 10 to 100 users with a spawn rate of 1/s, there are 100 dispatch iterations.\n            That is, from 10 to 11 users is a dispatch iteration, from 12 to 13 is another, and so on.\n            If the spawn rate were to be 2/s, then there would be 50 dispatch iterations for this dispatch cycle.\n            For a more extreme case with a spawn rate of 120/s, there would be only a single dispatch iteration\n            from 10 to 100.\n    \"\"\"\n",
+      "repo": "locustio/locust",
+      "commit": "6241e9cf0a5c296da98abfaeb9d66d0ad1db2390",
+      "needle_path": "locust/test/test_dispatch.py",
+      "seed_qname": "locust.test.test_dispatch.TestRampDownUsersToZero.test_ramp_down_users_to_3_workers_with_spawn_rate_of_9",
+      "gold_qname": "locust.dispatch.UsersDispatcher",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: To verify that the system correctly handles an error when attempting to use an SSL context with incompatible settings (hostname checks enabled but certificate verification disabled).\n2. **Input**: A custom SSL context configuration where hostname verification is enabled but the SSL certificate verification mode is set to none.\n3. **Output**: An exception is expected to be raised, specifically a `ValueError` indicating the conflict in SSL context settings.\n4. **Procedure**: \n   - A custom SSL context is created with conflicting settings: hostname checks are enabled, but certificate verification is disabled.\n   - An HTTP session is initiated using this custom SSL context to make a request to a predefined server address.\n   - The test checks that making a request with this configuration raises the expected `ValueError`, confirming that the system properly identifies and rejects the invalid SSL context settings.\n",
+      "gold_ast_body": "class FastHttpSession:\n    auth_header = None\n",
+      "repo": "locustio/locust",
+      "commit": "6241e9cf0a5c296da98abfaeb9d66d0ad1db2390",
+      "needle_path": "locust/test/test_fasthttp.py",
+      "seed_qname": "locust.test.test_fasthttp.TestFastHttpSession.test_custom_ssl_context_fail_with_bad_context",
+      "gold_qname": "locust.contrib.fasthttp.FastHttpSession",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function is designed to validate the distribution mechanism of users across multiple worker nodes, ensuring that the total number of users distributed matches a predefined target while measuring the efficiency and performance of the distribution process.\n2. **Input**: The function takes different sets of user classes (with varying distribution weights and fixed counts) and a large number of worker nodes as input parameters.\n3. **Output**: The primary output is a validation of whether the total number of users distributed across all worker nodes matches the expected target. Additionally, it outputs performance metrics indicating the time taken for the distribution process.\n4. **Procedure**: The function initiates by creating a list of worker nodes. It then iterates over different configurations of user classes, setting up a user distribution system for each configuration. For each setup, it measures the time taken to distribute a target number of users across the worker nodes, checks the total count of distributed users, and asserts that the distribution time is within acceptable limits.\n",
+      "gold_ast_body": "class UsersDispatcher(Iterator):\n    \"\"\"\n    Iterator that dispatches the users to the workers.\n\n    The dispatcher waits an appropriate amount of time between each iteration\n    in order for the spawn rate to be respected whether running in\n    local or distributed mode.\n\n    The terminology used in the users dispatcher is:\n      - Dispatch cycle\n            A dispatch cycle corresponds to a ramp-up from start to finish. So,\n            going from 10 to 100 users with a spawn rate of 1/s corresponds to one\n            dispatch cycle. An instance of the `UsersDispatcher` class \"lives\" for\n            one dispatch cycle only.\n      - Dispatch iteration\n            A dispatch cycle contains one or more dispatch iterations. In the previous example\n            of going from 10 to 100 users with a spawn rate of 1/s, there are 100 dispatch iterations.\n            That is, from 10 to 11 users is a dispatch iteration, from 12 to 13 is another, and so on.\n            If the spawn rate were to be 2/s, then there would be 50 dispatch iterations for this dispatch cycle.\n            For a more extreme case with a spawn rate of 120/s, there would be only a single dispatch iteration\n            from 10 to 100.\n    \"\"\"\n",
+      "repo": "locustio/locust",
+      "commit": "6241e9cf0a5c296da98abfaeb9d66d0ad1db2390",
+      "needle_path": "locust/test/test_dispatch.py",
+      "seed_qname": "locust.test.test_dispatch.TestLargeScale.test_distribute_users",
+      "gold_qname": "locust.dispatch.UsersDispatcher",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: To extract and convert specific memory usage statistics from profiling data into a more readable format, specifically in megabytes.\n2. **Input**: A profiler object that contains raw memory profiling records.\n3. **Output**: A list of floats, each representing a memory statistic (peak allocated, reserved, and active bytes) converted from bytes to megabytes.\n4. **Procedure**: The function retrieves raw line records from the profiler, specifies the memory statistics to track, and then processes these records to extract the maximum values of the specified statistics. These byte values are then converted to megabytes and returned as a list.\n",
+      "gold_ast_body": "def byte_to_megabyte(value: int, digits: int = 2) -> float:\n    return round(value / (1024 * 1024), digits)",
+      "repo": "pyg-team/pytorch_geometric",
+      "commit": "af0f5f44d4dfa8accd898df3e8523d06b67940b0",
+      "needle_path": "torch_geometric/profile/profile.py",
+      "seed_qname": "torch_geometric.profile.profile.read_from_memlab",
+      "gold_qname": "torch_geometric.profile.utils.byte_to_megabyte",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function is designed to convert a graph representation from edge indices and optional edge attributes into a sparse matrix format, which is commonly used for efficient mathematical and scientific computations.\n2. **Input**: The function takes three parameters: a tensor of edge indices indicating the connections between nodes, an optional tensor of edge attributes that can represent weights or multi-dimensional features of the edges, and an optional integer specifying the total number of nodes in the graph.\n3. **Output**: It produces a sparse matrix in COOrdinate format from the scipy library, representing the graph where rows and columns correspond to nodes and non-zero entries represent edges, optionally weighted by the edge attributes.\n4. **Procedure**: The function first extracts the rows and columns from the edge indices tensor. If no edge attributes are provided, it assigns a weight of one to all edges. It then determines the number of nodes, either from the input or by calculating the maximum index in the edge indices. Finally, it constructs and returns the sparse matrix using the node indices and edge attributes (or default weights).\n",
+      "gold_ast_body": "def maybe_num_nodes(\n    edge_index: Union[Tensor, Tuple[Tensor, Tensor], SparseTensor],\n    num_nodes: Optional[int] = None,\n) -> int:\n    if num_nodes is not None:\n        return num_nodes\n    elif not torch.jit.is_scripting() and isinstance(edge_index, EdgeIndex):\n        return max(edge_index.get_sparse_size())\n    elif isinstance(edge_index, Tensor):\n        if torch_geometric.utils.is_torch_sparse_tensor(edge_index):\n            return max(edge_index.size(0), edge_index.size(1))\n\n        if torch.jit.is_tracing():\n            # Avoid non-traceable if-check for empty `edge_index` tensor:\n            tmp = torch.concat([\n                edge_index.view(-1),\n                edge_index.new_full((1, ), fill_value=-1)\n            ])\n            return tmp.max() + 1  # type: ignore\n\n        return int(edge_index.max()) + 1 if edge_index.numel() > 0 else 0\n    elif isinstance(edge_index, tuple):\n        return max(\n            int(edge_index[0].max()) + 1 if edge_index[0].numel() > 0 else 0,\n            int(edge_index[1].max()) + 1 if edge_index[1].numel() > 0 else 0,\n        )\n    elif isinstance(edge_index, SparseTensor):\n        return max(edge_index.size(0), edge_index.size(1))\n    raise NotImplementedError",
+      "repo": "pyg-team/pytorch_geometric",
+      "commit": "af0f5f44d4dfa8accd898df3e8523d06b67940b0",
+      "needle_path": "torch_geometric/utils/convert.py",
+      "seed_qname": "torch_geometric.utils.convert.to_scipy_sparse_matrix",
+      "gold_qname": "torch_geometric.utils.num_nodes.maybe_num_nodes",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function retrieves the attributes or weights of self-loops (edges that connect a node to itself) for each node in a graph. If a self-loop is absent for a node, the attribute is set to zero. If no attributes are provided, a default attribute of one is used for each self-loop.\n2. **Input**: \n   - A tensor representing the indices of edges in the graph.\n   - An optional tensor for the attributes or weights of these edges.\n   - An optional integer specifying the total number of nodes in the graph.\n3. **Output**: A tensor containing the attributes or weights of self-loops for each node. If a node does not have a self-loop, the corresponding value is zero.\n4. **Procedure**: \n   - First, identify which edges are self-loops by checking where the start and end nodes of each edge are the same.\n   - Extract the indices and attributes of these self-loops.\n   - Create a tensor initialized with zeros (or ones if no attributes are provided) to represent the attributes of self-loops for all nodes.\n   - Place the extracted attributes into this tensor at the positions corresponding to nodes with self-loops.\n",
+      "gold_ast_body": "def maybe_num_nodes(\n    edge_index: Union[Tensor, Tuple[Tensor, Tensor], SparseTensor],\n    num_nodes: Optional[int] = None,\n) -> int:\n    if num_nodes is not None:\n        return num_nodes\n    elif not torch.jit.is_scripting() and isinstance(edge_index, EdgeIndex):\n        return max(edge_index.get_sparse_size())\n    elif isinstance(edge_index, Tensor):\n        if torch_geometric.utils.is_torch_sparse_tensor(edge_index):\n            return max(edge_index.size(0), edge_index.size(1))\n\n        if torch.jit.is_tracing():\n            # Avoid non-traceable if-check for empty `edge_index` tensor:\n            tmp = torch.concat([\n                edge_index.view(-1),\n                edge_index.new_full((1, ), fill_value=-1)\n            ])\n            return tmp.max() + 1  # type: ignore\n\n        return int(edge_index.max()) + 1 if edge_index.numel() > 0 else 0\n    elif isinstance(edge_index, tuple):\n        return max(\n            int(edge_index[0].max()) + 1 if edge_index[0].numel() > 0 else 0,\n            int(edge_index[1].max()) + 1 if edge_index[1].numel() > 0 else 0,\n        )\n    elif isinstance(edge_index, SparseTensor):\n        return max(edge_index.size(0), edge_index.size(1))\n    raise NotImplementedError",
+      "repo": "pyg-team/pytorch_geometric",
+      "commit": "af0f5f44d4dfa8accd898df3e8523d06b67940b0",
+      "needle_path": "torch_geometric/utils/loop.py",
+      "seed_qname": "torch_geometric.utils.loop.get_self_loop_attr",
+      "gold_qname": "torch_geometric.utils.num_nodes.maybe_num_nodes",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: To create an event handler that is associated with a unique identifier, which can be configured to stop propagation or prevent default actions during event handling.\n2. **Input**: A function that defines the behavior of the event handler, and optional boolean flags to control event propagation and default actions.\n3. **Output**: An event handler object that encapsulates the user-defined function, event control behaviors, and a unique identifier.\n4. **Procedure**: The method generates a unique identifier for the event handler upon object instantiation. When called, it wraps the provided function with additional functionalities based on the specified flags for stopping propagation and preventing default actions, and associates it with the unique identifier.\n",
+      "gold_ast_body": "class EventHandler:\n    \"\"\"Turn a function or coroutine into an event handler\n\n    Parameters:\n        function:\n            The function or coroutine which handles the event.\n        stop_propagation:\n            Block the event from propagating further up the DOM.\n        prevent_default:\n            Stops the default action associate with the event from taking place.\n        target:\n            A unique identifier for this event handler (auto-generated by default)\n    \"\"\"\n\n    __slots__ = (\n        \"__weakref__\",\n        \"function\",\n        \"prevent_default\",\n        \"stop_propagation\",\n        \"target\",\n    )\n",
+      "repo": "reactive-python/reactpy",
+      "commit": "4307a09dfa75e6c1b10a285e5ae4bdf0323cd018",
+      "needle_path": "src/py/reactpy/reactpy/testing/common.py",
+      "seed_qname": "reactpy.testing.common.StaticEventHandler.use",
+      "gold_qname": "reactpy.core.events.EventHandler",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function is designed to iterate through and provide all available server backend implementations supported by a Python library.\n2. **Input**: There are no inputs required for this function.\n3. **Output**: The function yields each successfully imported server backend implementation module.\n4. **Procedure**: The function iterates over a predefined list of backend names. For each name, it attempts to import the corresponding module. If the import is successful, the function then constructs the full module name for the backend specific to the library and yields the imported module. If the import fails, it logs the failure and continues to the next backend.\n",
+      "gold_ast_body": "def _default_implementation() -> BackendType[Any]:\n    \"\"\"Get the first available server implementation\"\"\"\n    global _DEFAULT_IMPLEMENTATION  # noqa: PLW0603\n\n    if _DEFAULT_IMPLEMENTATION is not None:\n        return _DEFAULT_IMPLEMENTATION\n\n    try:\n        implementation = next(all_implementations())\n    except StopIteration:  # nocov\n        logger.debug(\"Backend implementation import failed\", exc_info=exc_info())\n        supported_backends = \", \".join(SUPPORTED_BACKENDS)\n        msg = (\n            \"It seems you haven't installed a backend. To resolve this issue, \"\n            \"you can install a backend by running:\\n\\n\"\n            '\\033[1mpip install \"reactpy[starlette]\"\\033[0m\\n\\n'\n            f\"Other supported backends include: {supported_backends}.\"\n        )\n        raise RuntimeError(msg) from None\n    else:\n        _DEFAULT_IMPLEMENTATION = implementation\n        return implementation",
+      "repo": "reactive-python/reactpy",
+      "commit": "4307a09dfa75e6c1b10a285e5ae4bdf0323cd018",
+      "needle_path": "src/py/reactpy/reactpy/backend/utils.py",
+      "seed_qname": "reactpy.backend.utils.all_implementations",
+      "gold_qname": "reactpy.backend.default._default_implementation",
+      "gold_kind": "caller",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: To retrieve the response associated with a specific request identifier from a cache, with a mechanism to handle timeouts if the response is not available within a specified duration.\n2. **Input**: A unique identifier for the request and an optional timeout duration.\n3. **Output**: The response corresponding to the request identifier if available; otherwise, an exception is raised if the response is not found within the timeout period.\n4. **Procedure**: The function checks a cache for the response corresponding to the given request identifier. It continuously yields control back to the event loop to allow other operations to proceed while waiting. If the response is found within the allotted time, it is returned. If not, an exception indicating a timeout is raised.\n",
+      "gold_ast_body": "def generate_cache_key(value: Any) -> str:\n    \"\"\"\n    Generates a cache key for the *args and **kwargs\n    \"\"\"\n    if is_bytes(value):\n        return hashlib.md5(value).hexdigest()\n    elif is_text(value):\n        return generate_cache_key(to_bytes(text=value))\n    elif is_boolean(value) or is_null(value) or is_number(value):\n        return generate_cache_key(repr(value))\n    elif is_dict(value):\n        return generate_cache_key(((key, value[key]) for key in sorted(value.keys())))\n    elif is_list_like(value) or isinstance(value, collections.abc.Generator):\n        return generate_cache_key(\"\".join((generate_cache_key(item) for item in value)))\n    else:\n        raise TypeError(\n            f\"Cannot generate cache key for value {value} of type {type(value)}\"\n        )",
+      "repo": "ethereum/web3.py",
+      "commit": "257f464801d11431bf09132fb30bbeeb5937542e",
+      "needle_path": "web3/providers/persistent/persistent.py",
+      "seed_qname": "web3.providers.persistent.persistent.PersistentConnectionProvider._get_response_for_request_id",
+      "gold_qname": "web3._utils.caching.generate_cache_key",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function is designed to apply a given transformation function to each element within a structured data tree, where each element is associated with a specific data type.\n2. **Input**: The function takes two parameters: a transformation function that operates on a data type and its associated data, and a data tree where each element is a tuple of a data type and its corresponding data.\n3. **Output**: The output is a modified data tree where each element has been transformed by the provided function, maintaining the structure of the original data tree.\n4. **Procedure**: The function iterates over the data tree, applying the transformation function to each element. If an element is a tuple containing a data type and data (recognized as a specific data type structure), the transformation function is applied to it. The function is applied recursively to ensure all nested elements are processed.\n",
+      "gold_ast_body": "def recursive_map(func: Callable[..., TReturn], data: Any) -> TReturn:\n    \"\"\"\n    Apply func to data, and any collection items inside data (using map_collection).\n    Define func so that it only applies to the type of value that you\n    want it to apply to.\n    \"\"\"\n\n    def recurse(item: Any) -> TReturn:\n        return recursive_map(func, item)\n\n    items_mapped = map_collection(recurse, data)\n    return func(items_mapped)",
+      "repo": "ethereum/web3.py",
+      "commit": "257f464801d11431bf09132fb30bbeeb5937542e",
+      "needle_path": "web3/_utils/abi.py",
+      "seed_qname": "web3._utils.abi.data_tree_map",
+      "gold_qname": "web3._utils.formatters.recursive_map",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function is designed to fetch data from a specified server endpoint and return the response in a structured format.\n2. **Input**: It takes a string representing the specific endpoint of a server from which data needs to be retrieved.\n3. **Output**: It returns a dictionary containing the data fetched from the server endpoint.\n4. **Procedure**: The function constructs the full URL by appending the endpoint to the base server URL. It then sends an HTTP GET request to this URL and waits for the response. The response is processed and returned as a JSON-formatted dictionary.\n",
+      "gold_ast_body": "def json_make_get_request(\n    endpoint_uri: URI, *args: Any, **kwargs: Any\n) -> Dict[str, Any]:\n    response = get_response_from_get_request(endpoint_uri, *args, **kwargs)\n    response.raise_for_status()\n    return response.json()",
+      "repo": "ethereum/web3.py",
+      "commit": "257f464801d11431bf09132fb30bbeeb5937542e",
+      "needle_path": "web3/beacon/beacon.py",
+      "seed_qname": "web3.beacon.beacon.Beacon._make_get_request",
+      "gold_qname": "web3._utils.request.json_make_get_request",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    },
+    {
+      "query": "\n1. **Purpose**: The function is designed to decrypt a cipher text that has been encrypted using a specific polyalphabetic substitution cipher method. It identifies potential decryption keys based on statistical analysis and returns a list of possible plaintexts.\n2. **Input**: The function takes three parameters: the cipher text as a string, a statistical analysis result of the cipher text, and the original cipher text for case correction purposes.\n3. **Output**: Outputs a list of decryption results, each containing the decrypted text, information about the decryption key used, and additional statistical information related to the decryption process.\n4. **Procedure**: The function performs the following steps:\n   - It calls a decryption analysis function to get potential decryption keys based on the provided analysis.\n   - Limits the number of potential keys to a predefined maximum.\n   - Decrypts the cipher text using each of the potential keys.\n   - Corrects the case of the decrypted text to match the original cipher text.\n   - Compiles the decryption results, including the decrypted text, key information, and statistical data, into a list.\n",
+      "gold_ast_body": "def fix_case(target: str, base: str) -> str:\n    \"\"\"Returns the lower-case string target with the case of base\"\"\"\n    ret = \"\".join(\n        [\n            target[i].upper() if base[i].isupper() else target[i]\n            for i in range(len(target))\n        ]\n    )\n    return \"\".join(\n        [\n            target[i].upper() if base[i].isupper() else target[i]\n            for i in range(len(target))\n        ]\n    )",
+      "repo": "Ciphey/Ciphey",
+      "commit": "5dfbe9330070d4aefc997e5d2648155a136a3757",
+      "needle_path": "ciphey/basemods/Crackers/vigenere.py",
+      "seed_qname": "ciphey.basemods.Crackers.vigenere.Vigenere.crackOne",
+      "gold_qname": "ciphey.common.fix_case",
+      "gold_kind": "callee",
+      "hop_distance": 1
+    }
+  ]
+}
