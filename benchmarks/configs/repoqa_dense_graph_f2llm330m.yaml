@@ -1,15 +1,13 @@
-# RepoQA experiment — dense (embedding) + reference-graph expansion, F2LLM-330M.
-# Apples-to-apples counterpart of repoqa_dense_f2llm330m.yaml: SAME embedder,
-# the only difference is the graph_expand step in the pipeline. Embedding-centric
-# — no BM25, no RRF, no LLM at search time. See benchmarks/EXPERIMENTS.md.
-#
-# TODO(confirm with user): exact HuggingFace id + embedding dim for F2LLM-330M.
-# Best guess below — verify the model id resolves on HF and that `dim` matches
-# its output size before the real sweep (a wrong dim corrupts the .tq sidecar).
+# RepoQA experiment — dense (embedding) + reference-graph expansion, with
+# codefuse-ai/F2LLM-v2-330M (896-dim, Qwen3-0.6B-Base backbone, last-token
+# pooled + L2-normalized). Apples-to-apples counterpart of
+# repoqa_dense_f2llm330m.yaml: SAME embedder, the only difference is the
+# graph_expand step in the pipeline. Embedding-centric — no BM25, no RRF, no LLM
+# at search time. See benchmarks/EXPERIMENTS.md.
 embedding:
   provider: sentence_transformers
-  model_name: codefuse-ai/F2LLM-v2-0.3B
-  dim: 1024
+  model_name: codefuse-ai/F2LLM-v2-330M
+  dim: 896
   batch_size: 8
   max_seq_length: 2048
 
