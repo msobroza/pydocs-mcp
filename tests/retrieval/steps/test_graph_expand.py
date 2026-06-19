@@ -234,7 +234,8 @@ async def test_run_cycle_guard_terminates_no_dup() -> None:
     out = await step.run(_state([_chunk("pkg.A", 1.0)]))
     qnames = [c.metadata["qualified_name"] for c in out.candidates.items]
     assert qnames.count("pkg.B") == 1
-    assert _by_qname(out)["pkg.B"].relevance == pytest.approx(0.5)  # hop-1 score
+    # hop-1 score = seed_sim (1.0) * default decay.
+    assert _by_qname(out)["pkg.B"].relevance == pytest.approx(_DEFAULT_DECAY)
 
 
 @pytest.mark.asyncio

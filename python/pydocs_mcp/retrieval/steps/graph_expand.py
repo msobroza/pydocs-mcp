@@ -45,7 +45,14 @@ from pydocs_mcp.storage.protocols import UnitOfWork
 # defaults, to_dict omit-when-default, and from_dict YAML-fallback.
 _DEFAULT_TOP_S = 10
 _DEFAULT_MAX_DEPTH = 1
-_DEFAULT_DECAY = 0.5
+# WHY 0.9 (not a steeper decay): a discovered neighbour scores seed_sim*decay^hop
+# and competes on the dense cosine scale, which is COMPRESSED (top hits sit in a
+# narrow band). A steep decay (e.g. 0.5) drops a rank-1 seed's neighbour below
+# the dense tail so it never enters the top-k — measured near-inert on the
+# repoqa-structural benchmark (recall@10 30%->40% at decay 0.5 vs 30%->100% at
+# 0.9). 0.9 ranks the neighbour just below its seed; safe for precision because
+# the real answer (the seed) always outranks its own decayed neighbours.
+_DEFAULT_DECAY = 0.9
 _DEFAULT_DIRECTIONS: tuple[str, ...] = ("callers", "callees")
 _DEFAULT_KINDS: tuple[str, ...] = ("calls", "inherits")
 _DEFAULT_NEIGHBORS_PER_SEED = 25

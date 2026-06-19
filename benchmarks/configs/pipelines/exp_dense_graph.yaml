@@ -29,7 +29,7 @@ steps:
     params:
       top_s: 10
       max_depth: 1
-      decay: 0.5
+      decay: 0.9
   - name: topk
     type: top_k_filter
     params: {}
