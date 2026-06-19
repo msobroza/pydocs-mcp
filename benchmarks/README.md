@@ -323,6 +323,41 @@ Two tiers: **local index lookups** (BM25 / dense / late-interaction) answer in
 beating Qwen3 on both quality *and* latency, so on quality-per-second the LLM
 approaches are the weakest here.
 
+### Hybrid fusion sweep (F2LLM-v2-330M)
+
+Does pairing the dense branch with BM25 help? We ran the **same F2LLM-v2-330M**
+embedder through six fusion strategies on RepoQA `small_test` (30 needles) — only
+the fusion step varies, so this isolates *fusion* from the embedder. **None beat
+pure dense.**
+
+![F2LLM-v2-330M fusion strategies — recall@k](assets/hybrid_fusion_f2llm_330m.png)
+
+| Fusion | Config | recall@1 | recall@5 | recall@10 | MRR |
+|---|---|---:|---:|---:|---:|
+| **Pure dense (no fusion)** | `repoqa_dense_f2llm_330m.yaml` | **0.700** | **0.767** | **0.767** | **0.725** |
+| WSI dense-heavy (0.3 BM25 / 0.7 dense) | `repoqa_hybrid_wsi_dense_f2llm.yaml` | 0.633 | 0.767 | 0.767 | 0.674 |
+| WSI balanced (0.5 / 0.5) | `repoqa_hybrid_wsi_balanced_f2llm.yaml` | 0.433 | 0.733 | 0.767 | 0.573 |
+| WSI BM25-heavy (0.7 BM25 / 0.3 dense) | `repoqa_hybrid_wsi_bm25_f2llm.yaml` | 0.333 | 0.500 | 0.600 | 0.401 |
+| RRF k=30 | `repoqa_hybrid_rrf_k30_f2llm.yaml` | 0.367 | 0.600 | 0.733 | 0.481 |
+| RRF k=60 | `repoqa_hybrid_rrf_k60_f2llm.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
+| RRF k=100 | `repoqa_hybrid_rrf_k100_f2llm.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
+
+All seven are full-30-needle GPU runs; p50 search latency is ~0.23 s across the
+board (fusion is cheap — the cost is the dense embed, shared by all). The chart is
+rendered from this table by
+[`scripts/plot_hybrid_fusion_330m.py`](scripts/plot_hybrid_fusion_330m.py).
+
+**Takeaways.** **Pure dense wins.** BM25 is far weaker than the code-specialized
+dense branch (BM25 alone is recall@1 0.17), so blending it in mostly injects noise.
+Within **WSI** (weighted score interpolation) recall tracks the dense weight
+monotonically — dense-heavy (0.63) → balanced (0.43) → BM25-heavy (0.33) at
+recall@1 — so the more you trust BM25 the worse it gets, and dense-heavy WSI only
+*approaches* pure dense without passing it. **RRF** flattens to recall@1 0.37
+regardless of `k`, because it keeps only ranks and discards score magnitude —
+throwing away exactly the dense branch's calibrated confidence. So for a strong
+code embedder, **skip fusion**; if you must fuse, weight dense heavily and prefer
+WSI over RRF.
+
 ### Current baselines
 
 Two baseline JSON files are tracked in `benchmarks/baselines/`:
