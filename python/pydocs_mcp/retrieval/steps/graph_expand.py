@@ -146,20 +146,35 @@ class GraphExpandStep(RetrieverStep):
         visited: set[str] = {qname for qname, _ in seeds}
         frontier = list(seeds)
         for hop in range(1, max(1, self.max_depth) + 1):
-            score_factor = self.decay**hop
-            next_frontier: list[tuple[str, float]] = []
-            for qname, base_sim in frontier:
-                score = base_sim * score_factor
-                for neighbour in await self._neighbours(uow, qname):
-                    if score > best_score.get(neighbour, float("-inf")):
-                        best_score[neighbour] = score
-                    if neighbour not in visited:
-                        visited.add(neighbour)
-                        next_frontier.append((neighbour, base_sim))
-            if not next_frontier:
+            frontier = await self._expand_one_hop(
+                uow, frontier, self.decay**hop, best_score, visited
+            )
+            if not frontier:
                 break
-            frontier = next_frontier
         return best_score
+
+    async def _expand_one_hop(
+        self,
+        uow: UnitOfWork,
+        frontier: list[tuple[str, float]],
+        score_factor: float,
+        best_score: dict[str, float],
+        visited: set[str],
+    ) -> list[tuple[str, float]]:
+        """One BFS hop: score each frontier node's neighbours, return the next
+        frontier. Mutates ``best_score`` (max per qname) and ``visited`` (cycle
+        guard) in place; ``base_sim`` (the originating seed similarity) is
+        carried forward so the next hop decays from the seed, not the parent."""
+        next_frontier: list[tuple[str, float]] = []
+        for qname, base_sim in frontier:
+            score = base_sim * score_factor
+            for neighbour in await self._neighbours(uow, qname):
+                if score > best_score.get(neighbour, float("-inf")):
+                    best_score[neighbour] = score
+                if neighbour not in visited:
+                    visited.add(neighbour)
+                    next_frontier.append((neighbour, base_sim))
+        return next_frontier
 
     async def _neighbours(self, uow: UnitOfWork, qname: str) -> list[str]:
         """Neighbour qnames of ``qname`` across the configured directions/kinds.
