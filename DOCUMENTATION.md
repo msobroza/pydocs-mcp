@@ -46,6 +46,14 @@ Several more retrieval modes ship as opt-in pipeline presets:
 - **Hybrid** (`chunk_search_hybrid.yaml`, `chunk_search_hybrid_ranked.yaml`) — a
   `ParallelStep` runs the BM25 and dense branches concurrently, then an
   `RRFFusionStep` merges them with reciprocal-rank fusion into one ranking.
+- **Graph (dense + reference-graph expansion)** (`chunk_search_graph.yaml`,
+  `chunk_search_graph_ranked.yaml`) — a `GraphExpandStep` seeds from the top
+  dense hits and pulls in their 1-hop reference-graph neighbours (callers /
+  callees / overriding subclass methods), merging them into the dense ranking by
+  `max(dense_sim, seed_sim · decay)` — embedding-centric (no RRF/BM25). Recovers
+  the structurally-adjacent answer a dense embedder misses; degrades to
+  dense-only when the index has no reference graph. See the
+  [structural-recall benchmark](benchmarks/README.md#structural-recall-graph-expansion).
 - **Late-interaction** — opt-in multi-vector (ColBERT / PyLate via fast-plaid)
   MaxSim scoring; enable with the `[late-interaction]` extra and
   `late_interaction.enabled: true`.
@@ -60,6 +68,25 @@ Several more retrieval modes ship as opt-in pipeline presets:
 
 Select a preset by pointing the chunk pipeline at it in your config overlay (see
 [Configuration](#configuration)); the default remains BM25.
+
+#### Graph analytics (opt-in)
+
+Two further reference-graph signals are computed at index time when enabled
+(both off by default; PageRank/community detection needs the `[graph]` extra —
+`pip install 'pydocs-mcp[graph]'`):
+
+- **Node scores** (`reference_graph.node_scores.enabled: true`) — a single
+  post-index pass computes in-degree, PageRank, and Louvain community per symbol
+  into a `node_scores` table. Two rerank steps consume it: `centrality_prior`
+  (boost structurally central "god-node" APIs by a normalised PageRank/in-degree
+  prior — rerank-only, can't hurt recall) and `community_diversity` (greedy
+  MMR-by-community so the top-k spans subsystems instead of near-duplicates from
+  one module). Add either step to a chunk pipeline YAML.
+- **Similar edges** (`reference_graph.similar_edges.enabled: true`, `top_m: N`) —
+  the `synthesize_similar_edges` ingestion stage adds `kind='similar'`
+  embedding-kNN edges between each symbol and its nearest neighbours, densifying
+  the AST graph so `graph_expand` (with `kinds: [calls, inherits, similar]`) can
+  reach semantically-related code that has no call/inherit edge.
 
 Embedder inference runs on CPU by default. Pass `--gpu` to `serve` / `index` to
 move it onto CUDA — same vectors, same cache, lower latency (see

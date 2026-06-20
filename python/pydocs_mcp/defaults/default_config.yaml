@@ -57,6 +57,11 @@ reference_graph:
   resolver:                                 # sub-PR follow-up to #5c
     include_stdlib: true                    # merges bundled stdlib_qnames.json into universe
     strict_suffix: true                     # ablation knob — see ReferenceResolverConfig
+  node_scores:
+    enabled: false                          # index-time PageRank/community/in-degree; needs pip install 'pydocs-mcp[graph]'
+  similar_edges:
+    enabled: false                          # synthetic embedding-kNN 'similar' edges (densify the graph)
+    top_m: 5                                # neighbours per node when enabled (1-25)
 
 search:
   output:
