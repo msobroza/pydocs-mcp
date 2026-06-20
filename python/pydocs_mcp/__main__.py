@@ -389,7 +389,10 @@ async def _run_indexing(args: argparse.Namespace) -> None:
 
     from pydocs_mcp.application.indexing_service import IndexingService
 
-    indexing_service = IndexingService(uow_factory=uow_factory)
+    indexing_service = IndexingService(
+        uow_factory=uow_factory,
+        node_scores_enabled=config.reference_graph.node_scores.enabled,
+    )
 
     # Detect a model rename in YAML — packages tagged with the old
     # ``embedding_model`` carry vectors that the new model cannot match

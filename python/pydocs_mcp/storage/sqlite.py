@@ -1485,9 +1485,7 @@ class SqliteNodeScoreRepository:
         *,
         uow: UnitOfWork | None = None,
     ) -> None:
-        rows = [
-            (s.package, s.qualified_name, s.in_degree, s.pagerank, s.community) for s in scores
-        ]
+        rows = [(s.package, s.qualified_name, s.in_degree, s.pagerank, s.community) for s in scores]
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:

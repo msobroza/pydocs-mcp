@@ -170,6 +170,37 @@ class ReferenceResolverConfig(BaseModel):
     strict_suffix: bool = True
 
 
+class NodeScoresConfig(BaseModel):
+    """Index-time node-score precompute toggle (PageRank / community / in-degree).
+
+    Off by default: computing PageRank + Louvain at index time needs the
+    ``[graph]`` extra (networkx) and adds a one-shot post-index pass, so it's
+    opt-in. When enabled, ``IndexingService.recompute_node_scores`` populates the
+    ``node_scores`` table the centrality-prior / community-diversity rerank steps
+    read. When disabled the table stays empty and those steps no-op.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+
+
+class SimilarEdgesConfig(BaseModel):
+    """Synthetic embedding-kNN ``similar`` edge generation (index-time).
+
+    Off by default. When enabled, the ``synthesize_similar_edges`` ingestion
+    stage adds, per indexed node, ``top_m`` ``kind='similar'`` reference-graph
+    edges to its nearest-neighbour symbols by embedding cosine — densifying the
+    sparse AST graph so ``graph_expand`` (with ``similar`` in its ``kinds``) can
+    reach semantically-related code with no call/inherit edge.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    top_m: int = Field(5, ge=1, le=25)
+
+
 class ReferenceGraphConfig(BaseModel):
     """Composite — capture toggles + output bounds (sub-PR #5c, §5.3).
 
@@ -185,6 +216,8 @@ class ReferenceGraphConfig(BaseModel):
     capture: ReferenceCaptureConfig = Field(default_factory=ReferenceCaptureConfig)
     output: ReferenceOutputConfig = Field(default_factory=ReferenceOutputConfig)
     resolver: ReferenceResolverConfig = Field(default_factory=ReferenceResolverConfig)
+    node_scores: NodeScoresConfig = Field(default_factory=NodeScoresConfig)
+    similar_edges: SimilarEdgesConfig = Field(default_factory=SimilarEdgesConfig)
 
 
 class SearchOutputConfig(BaseModel):

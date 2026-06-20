@@ -68,6 +68,10 @@ class ProjectIndexer:
                         await self._index_one_dependency(dep_name, stats)
 
                 await asyncio.gather(*[_bounded(d) for d in deps])
+        # Single post-index pass: recompute global node scores (PageRank /
+        # community / in-degree) over the now fully-resolved cross-package
+        # reference graph. No-op unless enabled on the IndexingService.
+        await self.indexing_service.recompute_node_scores()
         return stats
 
     async def _index_project_source(

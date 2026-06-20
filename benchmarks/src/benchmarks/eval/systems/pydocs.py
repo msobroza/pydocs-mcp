@@ -174,7 +174,10 @@ class PydocsMcpSystem:
         # benchmark configs to BM25.
         backend = build_search_backend(config, self._db_path)
         uow_factory = build_composite_uow_factory(backend.write_uow_children())
-        indexing_service = IndexingService(uow_factory=uow_factory)
+        indexing_service = IndexingService(
+            uow_factory=uow_factory,
+            node_scores_enabled=config.reference_graph.node_scores.enabled,
+        )
 
         # EmbedChunksStage is wired into the shipped ingestion pipeline by
         # default; build the embedder once here so the benchmark sweep

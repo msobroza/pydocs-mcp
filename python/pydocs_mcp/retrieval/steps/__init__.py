@@ -37,7 +37,9 @@ from __future__ import annotations
 # YAML keeps loading. The module exports no public symbols.
 from pydocs_mcp.retrieval.steps import sub_pipeline as _sub_pipeline  # noqa: F401
 from pydocs_mcp.retrieval.steps.bm25_scorer import BM25ScorerStep
+from pydocs_mcp.retrieval.steps.centrality_prior import CentralityPriorStep
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
+from pydocs_mcp.retrieval.steps.community_diversity import CommunityDiversityStep
 from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
 from pydocs_mcp.retrieval.steps.dense_fetcher import DenseFetcherStep
 from pydocs_mcp.retrieval.steps.dense_scorer import DenseScorerStep
@@ -63,7 +65,9 @@ from pydocs_mcp.retrieval.steps.weighted_score_interpolation import (
 __all__ = (
     "COMPOSITE_TITLE_SENTINEL",
     "BM25ScorerStep",
+    "CentralityPriorStep",
     "ChunkFetcherStep",
+    "CommunityDiversityStep",
     "ConditionalStep",
     "DenseFetcherStep",
     "DenseScorerStep",

@@ -88,6 +88,10 @@ class IndexingService:
     """
 
     uow_factory: Callable[[], UnitOfWork]
+    # Opt-in (reference_graph.node_scores.enabled). When True,
+    # recompute_node_scores() runs a single post-index pass computing PageRank /
+    # community / in-degree into the node_scores table. Needs the [graph] extra.
+    node_scores_enabled: bool = False
 
     async def reindex_package(
         self,
@@ -439,6 +443,7 @@ class IndexingService:
             # serves the pre-reindex payload.
             await uow.trees.delete_for_package(name)
             await uow.references.delete_for_package(name)
+            await uow.node_scores.delete_for_package(name)
             await uow.packages.delete(filter={"name": name})
             await uow.commit()
 
@@ -454,6 +459,39 @@ class IndexingService:
         async with self.uow_factory() as uow:
             await uow.delete_all()
             await uow.commit()
+
+    async def recompute_node_scores(self) -> None:
+        """Recompute the ``node_scores`` table over the FULL reference graph.
+
+        A single post-index pass — global PageRank / Louvain communities must
+        see the fully-resolved cross-package graph, so this runs ONCE after
+        :meth:`ProjectIndexer.index_project` finishes (and its cross-package
+        re-resolution), NOT per package. No-op unless ``node_scores_enabled``;
+        degrades gracefully (logs a warning) when the ``[graph]`` extra is
+        absent, leaving the table empty so the rerank steps simply no-op.
+        """
+        if not self.node_scores_enabled:
+            return
+        # Deferred import: the helper guards the optional networkx dependency.
+        from pydocs_mcp.application.node_score_compute import compute_scores
+
+        async with self.uow_factory() as uow:
+            edges = await uow.references.resolved_edges()
+            chunks = await uow.chunks.list()
+            qname_packages = {
+                qn: pkg
+                for c in chunks
+                if (qn := c.metadata.get("qualified_name")) and (pkg := c.metadata.get("package"))
+            }
+            try:
+                scores = compute_scores(edges, qname_packages)
+            except ImportError as exc:
+                log.warning("node_scores recompute skipped — %s", exc)
+                return
+            await uow.node_scores.delete_all()
+            await uow.node_scores.upsert(scores)
+            await uow.commit()
+        log.info("node_scores: recomputed %d nodes", len(scores))
 
     async def find_stale_packages(self, *, current_model: str) -> list[str]:
         """Return packages whose stored ``embedding_model`` differs from

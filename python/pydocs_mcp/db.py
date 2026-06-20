@@ -279,12 +279,8 @@ def _apply_v10_additions(conn: sqlite3.Connection) -> None:
         "community INTEGER NOT NULL DEFAULT -1, "
         "PRIMARY KEY (package, qualified_name))"
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS ix_node_scores_qname ON node_scores(qualified_name)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS ix_node_scores_package ON node_scores(package)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_node_scores_qname ON node_scores(qualified_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_node_scores_package ON node_scores(package)")
 
 
 def open_index_database(path: Path) -> sqlite3.Connection:
