@@ -68,6 +68,11 @@ late-interaction = ["pylate>=1.0,<2.0", "fast-plaid>=1.4,<2.0", "transformers>=4
 # transformers>=4.48 is required for ModernBERT (Alibaba-NLP/gte-modernbert-base);
 # the bare sentence-transformers>=5.0 pin alone can resolve an older transformers.
 sentence-transformers = ["sentence-transformers>=5.0,<6.0", "transformers>=4.48"]
+# Reference-graph analytics: PageRank + Louvain community detection over the
+# node_references graph, computed at index time for the centrality-prior and
+# community-diversity rerank steps. networkx is pure-Python + light; imported
+# lazily (a guard), so the default install never pays for it. Opt-in.
+graph = ["networkx>=3.0,<4.0"]
 
 [dependency-groups]
 # PEP 735 developer-only groups — explicit-only via

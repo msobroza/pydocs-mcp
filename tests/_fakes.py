@@ -38,6 +38,7 @@ from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import ChatMessage
@@ -426,6 +427,46 @@ class InMemoryReferenceStore:
             self.by_package[pkg] = new_rows
         return rows_updated
 
+    async def resolved_edges(self) -> list[tuple[str, str]]:
+        self.calls.append(_Call("resolved_edges", None))
+        return [
+            (r.from_node_id, r.to_node_id)
+            for rs in self.by_package.values()
+            for r in rs
+            if r.to_node_id
+        ]
+
+
+@dataclass
+class InMemoryNodeScoreStore:
+    """Structurally satisfies NodeScoreStore — async methods only."""
+
+    by_key: dict[tuple[str, str], NodeScore] = field(default_factory=dict)
+    calls: list[_Call] = field(default_factory=list)
+
+    async def upsert(self, scores, *, uow=None) -> None:
+        materialised = tuple(scores)
+        self.calls.append(_Call("upsert", materialised))
+        for s in materialised:
+            self.by_key[(s.package, s.qualified_name)] = s
+
+    async def scores_for(self, qnames) -> dict[str, NodeScore]:
+        wanted = {q for q in qnames if q}
+        self.calls.append(_Call("scores_for", wanted))
+        out: dict[str, NodeScore] = {}
+        for (_pkg, qn), score in self.by_key.items():
+            if qn in wanted:
+                out.setdefault(qn, score)
+        return out
+
+    async def delete_for_package(self, package, *, uow=None) -> None:
+        self.calls.append(_Call("delete_for_package", package))
+        self.by_key = {k: v for k, v in self.by_key.items() if k[0] != package}
+
+    async def delete_all(self, *, uow=None) -> None:
+        self.calls.append(_Call("delete_all", None))
+        self.by_key.clear()
+
 
 # ── FakeUnitOfWork ───────────────────────────────────────────────────────
 
@@ -461,6 +502,7 @@ class FakeUnitOfWork:
     )
     trees_store: InMemoryDocumentTreeStore = field(default_factory=InMemoryDocumentTreeStore)
     references_store: InMemoryReferenceStore = field(default_factory=InMemoryReferenceStore)
+    node_scores_store: InMemoryNodeScoreStore = field(default_factory=InMemoryNodeScoreStore)
     # Spec S15: ``vectors`` is always present; tests get a
     # :class:`NullVectorStore` by default. Override via
     # :func:`make_fake_uow_factory(vectors=...)` when a test needs to
@@ -481,6 +523,7 @@ class FakeUnitOfWork:
     module_members: Any = field(init=False, repr=False)
     trees: Any = field(init=False, repr=False)
     references: Any = field(init=False, repr=False)
+    node_scores: Any = field(init=False, repr=False)
     vectors: Any = field(init=False, repr=False)
     multi_vectors: Any = field(init=False, repr=False)
 
@@ -490,6 +533,7 @@ class FakeUnitOfWork:
         self.module_members = _NotEnteredProxy("module_members")
         self.trees = _NotEnteredProxy("trees")
         self.references = _NotEnteredProxy("references")
+        self.node_scores = _NotEnteredProxy("node_scores")
         # ``vectors`` is always-present per spec S15, even outside the
         # context — application code should never need to branch on
         # backend identity. Tests that want the not-entered guard can
@@ -509,6 +553,7 @@ class FakeUnitOfWork:
         self.module_members = self.module_members_store
         self.trees = self.trees_store
         self.references = self.references_store
+        self.node_scores = self.node_scores_store
         self.vectors = self.vectors_store
         self.multi_vectors = self.multi_vectors_store
         return self
@@ -523,6 +568,7 @@ class FakeUnitOfWork:
         self.module_members = _NotEnteredProxy("module_members")
         self.trees = _NotEnteredProxy("trees")
         self.references = _NotEnteredProxy("references")
+        self.node_scores = _NotEnteredProxy("node_scores")
         self.vectors = self.vectors_store  # always-present (spec S15)
         self.multi_vectors = self.multi_vectors_store  # always-present
         return False
@@ -546,6 +592,7 @@ class FakeUnitOfWork:
         await self.module_members_store.delete(None)
         await self.trees_store.delete_all()
         await self.references_store.delete_all()
+        await self.node_scores_store.delete_all()
         await self.packages_store.delete(None)
         await self.vectors_store.clear_all()
         await self.multi_vectors_store.clear_all()
@@ -561,6 +608,7 @@ def make_fake_uow_factory(
     module_members: InMemoryModuleMemberStore | None = None,
     trees: InMemoryDocumentTreeStore | None = None,
     references: InMemoryReferenceStore | None = None,
+    node_scores: InMemoryNodeScoreStore | None = None,
     vectors: Any = None,
     multi_vectors: Any = None,
 ) -> Callable[[], FakeUnitOfWork]:
@@ -585,6 +633,7 @@ def make_fake_uow_factory(
     mms = module_members or InMemoryModuleMemberStore()
     trs = trees or InMemoryDocumentTreeStore()
     rfs = references or InMemoryReferenceStore()
+    nss = node_scores or InMemoryNodeScoreStore()
     vec = vectors if vectors is not None else NullVectorStore()
     mv = multi_vectors if multi_vectors is not None else NullMultiVectorStore()
 
@@ -595,6 +644,7 @@ def make_fake_uow_factory(
             module_members_store=mms,
             trees_store=trs,
             references_store=rfs,
+            node_scores_store=nss,
             vectors_store=vec,
             multi_vectors_store=mv,
         )

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         ChunkStore,
         DocumentTreeStore,
         ModuleMemberStore,
+        NodeScoreStore,
         PackageStore,
         ReferenceStore,
     )
@@ -44,6 +45,7 @@ _DISPATCH_ATTRS = (
     "module_members",
     "trees",
     "references",
+    "node_scores",
     "vectors",
     "multi_vectors",
 )
@@ -230,6 +232,10 @@ class CompositeUnitOfWork:
     @property
     def references(self) -> ReferenceStore:
         return cast("ReferenceStore", self._attr_map["references"])
+
+    @property
+    def node_scores(self) -> NodeScoreStore:
+        return cast("NodeScoreStore", self._attr_map["node_scores"])
 
     @property
     def vectors(self) -> Any:

@@ -29,6 +29,8 @@ NEW_PRESETS = (
     "chunk_search_dense_ranked.yaml",
     "chunk_search_hybrid.yaml",
     "chunk_search_hybrid_ranked.yaml",
+    "chunk_search_graph.yaml",
+    "chunk_search_graph_ranked.yaml",
 )
 
 
@@ -62,7 +64,25 @@ def test_dense_preset_uses_dense_fetcher_and_dense_scorer() -> None:
 
 
 def test_ranked_variants_drop_token_budget_formatter() -> None:
-    for ranked in ("chunk_search_dense_ranked.yaml", "chunk_search_hybrid_ranked.yaml"):
+    for ranked in (
+        "chunk_search_dense_ranked.yaml",
+        "chunk_search_hybrid_ranked.yaml",
+        "chunk_search_graph_ranked.yaml",
+    ):
         cfg = yaml.safe_load((PIPELINES_DIR / ranked).read_text(encoding="utf-8"))
         step_types = [s["type"] for s in cfg["steps"]]
         assert "token_budget_formatter" not in step_types
+
+
+def test_graph_preset_runs_graph_expand_after_filter() -> None:
+    cfg = yaml.safe_load(
+        (PIPELINES_DIR / "chunk_search_graph.yaml").read_text(encoding="utf-8"),
+    )
+    step_types = [s["type"] for s in cfg["steps"]]
+    assert {"dense_fetcher", "dense_scorer", "graph_expand"} <= set(step_types)
+    # graph_expand sits after the metadata filter, before the top-k cutoff.
+    assert (
+        step_types.index("metadata_post_filter")
+        < step_types.index("graph_expand")
+        < step_types.index("top_k_filter")
+    )

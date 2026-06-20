@@ -40,6 +40,7 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
+from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -141,6 +142,7 @@ class SqliteUnitOfWork:
     )
     _trees: SqliteDocumentTreeStore | None = field(default=None, init=False, repr=False)
     _references: SqliteReferenceStore | None = field(default=None, init=False, repr=False)
+    _node_scores: SqliteNodeScoreRepository | None = field(default=None, init=False, repr=False)
     # Spec S15: ``uow.vectors`` is always present; the SQLite-only UoW
     # exposes a :class:`NullVectorStore` so application code does not
     # need to ``getattr(uow, "vectors", None)`` guards. The composite
@@ -185,6 +187,7 @@ class SqliteUnitOfWork:
             self._module_members = SqliteModuleMemberRepository(provider=self.provider)
             self._trees = SqliteDocumentTreeStore(provider=self.provider)
             self._references = SqliteReferenceStore(provider=self.provider)
+            self._node_scores = SqliteNodeScoreRepository(provider=self.provider)
             self._committed = False
             self._entered = True
             return self
@@ -229,6 +232,7 @@ class SqliteUnitOfWork:
             self._module_members = None
             self._trees = None
             self._references = None
+            self._node_scores = None
             self._committed = False
             self._entered = False
         return False
@@ -261,6 +265,7 @@ class SqliteUnitOfWork:
         await self.module_members.delete_all()
         await self.trees.delete_all()
         await self.references.delete_all()
+        await self.node_scores.delete_all()
         await self.packages.delete_all()
         await self.vectors.clear_all()
 
@@ -293,6 +298,12 @@ class SqliteUnitOfWork:
         if self._references is None:
             raise UnitOfWorkNotEnteredError("references")
         return self._references
+
+    @property
+    def node_scores(self) -> SqliteNodeScoreRepository:
+        if self._node_scores is None:
+            raise UnitOfWorkNotEnteredError("node_scores")
+        return self._node_scores
 
 
 # ── Chunk ↔ row ──────────────────────────────────────────────────────────
@@ -1431,6 +1442,16 @@ class SqliteReferenceStore:
                 rows_updated += cur.rowcount or 0
         return rows_updated
 
+    async def resolved_edges(self) -> list[tuple[str, str]]:
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(
+                    "SELECT from_node_id, to_node_id FROM node_references "
+                    "WHERE to_node_id IS NOT NULL"
+                ).fetchall()
+            )
+        return [(r["from_node_id"], r["to_node_id"]) for r in rows]
+
 
 def _row_to_node_reference(row) -> NodeReference:
     return NodeReference(
@@ -1439,4 +1460,91 @@ def _row_to_node_reference(row) -> NodeReference:
         to_name=row["to_name"] or "",
         to_node_id=row["to_node_id"],  # NULL → None
         kind=ReferenceKind(row["kind"]),
+    )
+
+
+# ── Node-score store ────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class SqliteNodeScoreRepository:
+    """NodeScoreStore backed by the ``node_scores`` SQLite table (v10).
+
+    Holds per-node graph signals (in-degree / PageRank / community) recomputed
+    at index time. UPSERT-on-PK ``(package, qualified_name)``; ``scores_for``
+    is the read path the rerank steps call, keyed on ``qualified_name``.
+    Mirrors :class:`SqliteReferenceStore`: every method rides the ambient
+    transaction via ``_maybe_acquire`` and never calls ``conn.commit()``.
+    """
+
+    provider: ConnectionProvider
+
+    async def upsert(
+        self,
+        scores: Iterable[NodeScore],
+        *,
+        uow: UnitOfWork | None = None,
+    ) -> None:
+        rows = [
+            (s.package, s.qualified_name, s.in_degree, s.pagerank, s.community) for s in scores
+        ]
+        if not rows:
+            return
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.executemany,
+                "INSERT INTO node_scores "
+                "(package, qualified_name, in_degree, pagerank, community) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(package, qualified_name) DO UPDATE SET "
+                "in_degree = excluded.in_degree, pagerank = excluded.pagerank, "
+                "community = excluded.community",
+                rows,
+            )
+
+    async def scores_for(self, qnames: Iterable[str]) -> dict[str, NodeScore]:
+        wanted = tuple({q for q in qnames if q})
+        if not wanted:
+            return {}
+        placeholders = ",".join("?" * len(wanted))
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(
+                    "SELECT package, qualified_name, in_degree, pagerank, community "
+                    f"FROM node_scores WHERE qualified_name IN ({placeholders})",
+                    wanted,
+                ).fetchall()
+            )
+        # First row wins per qname (a qname is unique within a package; across
+        # packages a duplicate qname is vanishingly rare and either is fine).
+        out: dict[str, NodeScore] = {}
+        for r in rows:
+            out.setdefault(r["qualified_name"], _row_to_node_score(r))
+        return out
+
+    async def delete_for_package(
+        self,
+        package: str,
+        *,
+        uow: UnitOfWork | None = None,
+    ) -> None:
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.execute,
+                "DELETE FROM node_scores WHERE package = ?",
+                (package,),
+            )
+
+    async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(conn.execute, "DELETE FROM node_scores")
+
+
+def _row_to_node_score(row) -> NodeScore:
+    return NodeScore(
+        package=row["package"] or "",
+        qualified_name=row["qualified_name"] or "",
+        in_degree=row["in_degree"] or 0,
+        pagerank=row["pagerank"] or 0.0,
+        community=row["community"] if row["community"] is not None else -1,
     )
