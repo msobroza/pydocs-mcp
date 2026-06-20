@@ -38,6 +38,7 @@ def _wiring():
 
 @pytest.mark.asyncio
 async def test_recompute_populates_when_enabled() -> None:
+    pytest.importorskip("networkx")  # PageRank/Louvain need the [graph] extra
     _chunks, _refs, nss, uowf = _wiring()
     svc = IndexingService(uow_factory=uowf, node_scores_enabled=True)
     await svc.recompute_node_scores()

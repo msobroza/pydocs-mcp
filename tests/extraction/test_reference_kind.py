@@ -14,15 +14,15 @@ def test_reference_kind_is_str_enum() -> None:
     assert issubclass(ReferenceKind, StrEnum)
 
 
-def test_reference_kind_values_are_the_four_kinds() -> None:
-    """Sub-PR #5c lands MENTIONS — regex-fuzzy backtick-quoted dotted
-    names captured from markdown. Joins the three AST-precise kinds
-    (calls / imports / inherits) as the fourth wire value."""
+def test_reference_kind_values_are_the_known_kinds() -> None:
+    """Three AST-precise kinds (calls / imports / inherits), the regex-fuzzy
+    MENTIONS, and the index-time synthetic SIMILAR (embedding-kNN edges)."""
     assert {k.value for k in ReferenceKind} == {
         "calls",
         "imports",
         "inherits",
         "mentions",
+        "similar",
     }
 
 

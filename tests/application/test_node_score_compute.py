@@ -9,6 +9,7 @@ from pydocs_mcp.application.node_score_compute import compute_scores
 
 
 def test_in_degree_and_pagerank_and_community() -> None:
+    pytest.importorskip("networkx")  # PageRank/Louvain need the [graph] extra
     # b is referenced by a and c; c by a; a by nobody; d is isolated (a chunk
     # with no edges) -> neutral score.
     edges = [("a", "b"), ("c", "b"), ("a", "c")]
@@ -36,6 +37,7 @@ def test_no_edges_needs_no_networkx() -> None:
 
 
 def test_scores_only_for_indexed_qnames() -> None:
+    pytest.importorskip("networkx")
     # Graph node "ghost" has no chunk -> not in qname_packages -> no row emitted.
     edges = [("a", "ghost")]
     scores = compute_scores(edges, {"a": "pkg"})

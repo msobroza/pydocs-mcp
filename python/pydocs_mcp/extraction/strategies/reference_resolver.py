@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.storage.node_reference import NodeReference
 
 if TYPE_CHECKING:
@@ -75,6 +76,12 @@ class ReferenceResolver:
 
         result: list[NodeReference] = []
         for ref in refs:
+            # Synthetic kNN 'similar' edges already carry a real qname target
+            # (set by SynthesizeSimilarEdgesStage); the name-matching resolver
+            # would only re-derive (or clobber) it, so pass them through verbatim.
+            if ref.kind is ReferenceKind.SIMILAR:
+                result.append(ref)
+                continue
             resolved = self._resolve_one(ref)
             result.append(replace(ref, to_node_id=resolved))
         return result
