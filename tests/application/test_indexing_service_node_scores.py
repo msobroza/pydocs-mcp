@@ -48,6 +48,26 @@ async def test_recompute_populates_when_enabled() -> None:
 
 
 @pytest.mark.asyncio
+async def test_similar_edges_excluded_from_centrality() -> None:
+    pytest.importorskip("networkx")
+    chunks = InMemoryChunkStore(by_package={"pkg": [_chunk("pkg.a"), _chunk("pkg.b")]})
+    # One real CALLS edge a->b plus a synthetic 'similar' a->b: in_degree(b)
+    # must count ONLY the structural edge (1), not the similar one.
+    refs = InMemoryReferenceStore(
+        by_package={
+            "pkg": [
+                _ref("pkg.a", "pkg.b"),
+                NodeReference("pkg", "pkg.a", "pkg.b", "pkg.b", ReferenceKind.SIMILAR),
+            ]
+        }
+    )
+    nss = InMemoryNodeScoreStore()
+    uowf = make_fake_uow_factory(chunks=chunks, references=refs, node_scores=nss)
+    await IndexingService(uow_factory=uowf, node_scores_enabled=True).recompute_node_scores()
+    assert nss.by_key[("pkg", "pkg.b")].in_degree == 1
+
+
+@pytest.mark.asyncio
 async def test_recompute_noop_when_disabled() -> None:
     _chunks, _refs, nss, uowf = _wiring()
     svc = IndexingService(uow_factory=uowf, node_scores_enabled=False)

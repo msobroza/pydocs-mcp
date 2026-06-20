@@ -86,7 +86,11 @@ Two further reference-graph signals are computed at index time when enabled
   the `synthesize_similar_edges` ingestion stage adds `kind='similar'`
   embedding-kNN edges between each symbol and its nearest neighbours, densifying
   the AST graph so `graph_expand` (with `kinds: [calls, inherits, similar]`) can
-  reach semantically-related code that has no call/inherit edge.
+  reach semantically-related code that has no call/inherit edge. `similar` edges
+  are excluded from node-score centrality (which stays structural). Note: the
+  kNN runs over chunks embedded in the current index pass, so a *complete*
+  similar-edge graph requires a full `index --force`; an incremental reindex of
+  a touched package recomputes them from its re-embedded chunks only.
 
 Embedder inference runs on CPU by default. Pass `--gpu` to `serve` / `index` to
 move it onto CUDA — same vectors, same cache, lower latency (see

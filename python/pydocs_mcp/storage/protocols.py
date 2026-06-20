@@ -390,13 +390,14 @@ class ReferenceStore(GraphSearchable, Protocol):
         ...
 
     async def resolved_edges(self) -> list[tuple[str, str]]:
-        """All RESOLVED directed edges as ``(from_node_id, to_node_id)`` pairs.
+        """RESOLVED STRUCTURAL directed edges as ``(from_node_id, to_node_id)``.
 
         Cross-package, resolved-only (``to_node_id IS NOT NULL``) — an
         unresolved edge points outside the indexed universe and would inject a
-        phantom node keyed by a bare ``to_name``. The index-time node-score
-        recompute builds its graph from these pairs (PageRank / Louvain /
-        in-degree); keeping it a Protocol method keeps :class:`IndexingService`
+        phantom node. Excludes synthetic ``kind='similar'`` kNN edges so the
+        node-score recompute measures *structural* centrality (PageRank /
+        Louvain / in-degree over real call/import/inherit edges), not embedding
+        similarity. Keeping it a Protocol method keeps :class:`IndexingService`
         backend-agnostic (no raw SQL in the service).
         """
         ...

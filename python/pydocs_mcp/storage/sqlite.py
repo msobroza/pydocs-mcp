@@ -1447,7 +1447,7 @@ class SqliteReferenceStore:
             rows = await asyncio.to_thread(
                 lambda: conn.execute(
                     "SELECT from_node_id, to_node_id FROM node_references "
-                    "WHERE to_node_id IS NOT NULL"
+                    "WHERE to_node_id IS NOT NULL AND kind != 'similar'"
                 ).fetchall()
             )
         return [(r["from_node_id"], r["to_node_id"]) for r in rows]

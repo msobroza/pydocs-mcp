@@ -36,6 +36,11 @@ _INSTALL_HINT = (
 _LOUVAIN_SEED = 42
 # PageRank damping — networkx default.
 _PAGERANK_ALPHA = 0.85
+# Generous iteration cap — power iteration occasionally needs more than the
+# networkx default of 100 (likelier once synthetic 'similar' edges densify the
+# graph). On the rare non-convergence we fall back to neutral pagerank rather
+# than failing the index.
+_PAGERANK_MAX_ITER = 200
 
 
 def _ensure_networkx() -> Any:
@@ -80,7 +85,11 @@ def compute_scores(
         nx = _ensure_networkx()
         digraph = nx.DiGraph()
         digraph.add_edges_from(edge_list)
-        pagerank = nx.pagerank(digraph, alpha=_PAGERANK_ALPHA)
+        try:
+            pagerank = nx.pagerank(digraph, alpha=_PAGERANK_ALPHA, max_iter=_PAGERANK_MAX_ITER)
+        except nx.PowerIterationFailedConvergence:
+            log.warning("PageRank did not converge; using neutral (0.0) pagerank scores")
+            pagerank = {}
         communities = nx.community.louvain_communities(digraph.to_undirected(), seed=_LOUVAIN_SEED)
         community_of = {qn: idx for idx, comm in enumerate(communities) for qn in comm}
 

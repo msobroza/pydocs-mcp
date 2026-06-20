@@ -433,7 +433,7 @@ class InMemoryReferenceStore:
             (r.from_node_id, r.to_node_id)
             for rs in self.by_package.values()
             for r in rs
-            if r.to_node_id
+            if r.to_node_id and str(r.kind) != "similar"
         ]
 
 

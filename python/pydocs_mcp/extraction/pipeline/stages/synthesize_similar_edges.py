@@ -13,6 +13,16 @@ the module-level singleton by ``configure_from_app_config``). Skips chunks with
 no embedding (cached on an incremental reindex) and multi-vector embeddings
 (late-interaction). The kNN matmul runs off the event loop via
 ``asyncio.to_thread``.
+
+LIMITATION (incremental reindex): the kNN is computed only over chunks embedded
+in THIS run. On a partial reindex of a changed package, unchanged chunks come
+out of EmbedChunksStage with ``embedding=None`` (their vector lives only in the
+TurboQuant ``.tq`` sidecar, which has no read-back API), so they are excluded —
+while the package's prior ``similar`` edges were already swept by the reference
+delete. Net: similar edges are complete only after a full / ``--force`` index;
+an incremental reindex of a touched package yields edges among its re-embedded
+chunks only. The feature is opt-in/experimental; regenerate with ``index
+--force`` for a complete similar-edge graph.
 """
 
 from __future__ import annotations

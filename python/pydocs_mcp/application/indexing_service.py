@@ -488,6 +488,12 @@ class IndexingService:
             except ImportError as exc:
                 log.warning("node_scores recompute skipped — %s", exc)
                 return
+            except Exception as exc:
+                # The node-score pass is an optional, advisory post-index step;
+                # a graph-algorithm failure (e.g. a networkx convergence error)
+                # must never fail the whole index after chunks are committed.
+                log.warning("node_scores recompute failed — %s", exc)
+                return
             await uow.node_scores.delete_all()
             await uow.node_scores.upsert(scores)
             await uow.commit()
