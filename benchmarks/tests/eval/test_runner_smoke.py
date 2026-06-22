@@ -35,6 +35,25 @@ def _empty_overlay(tmp_path: Path) -> Path:
     return overlay
 
 
+async def test_run_sweep_missing_config_path_fails_loud(tmp_path: Path) -> None:
+    """A non-existent config path must raise, not silently run shipped defaults.
+
+    Regression guard: ``AppConfig.load(explicit_path=...)`` treats a missing
+    path as "no overlay" and layers only the defaults, so without this check a
+    mistyped / wrong-directory ``--configs`` value would run the DEFAULT
+    pipeline and silently produce results for a config nobody asked for.
+    """
+    missing = tmp_path / "does_not_exist.yaml"  # never created
+    with pytest.raises(FileNotFoundError, match="does_not_exist.yaml"):
+        await run_sweep(
+            systems=("pydocs-mcp",),
+            config_paths=(missing,),
+            dataset_name="repoqa",
+            dataset_kwargs={"fixture_path": _FIXTURE},
+            limit=1,
+        )
+
+
 async def test_runner_smoke_pydocs_jsonl_fixture(tmp_path: Path) -> None:
     overlay = _empty_overlay(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
