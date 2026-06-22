@@ -3,26 +3,50 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]          # full cross-platform matrix runs on a release tag
   pull_request:
+  workflow_dispatch:       # manual trigger to run the full matrix on demand
 
 jobs:
+  # WHY: the per-platform × per-Python matrix is expensive (9 jobs) and the
+  # platform-specific risk it guards — broken non-Linux wheels — only matters
+  # when PUBLISHING. So PR / push-to-main run a single fast cell
+  # (ubuntu-latest, 3.13); the full matrix runs only on a release tag (`v*`)
+  # or a manual `workflow_dispatch`, i.e. before re-publishing the package.
+  # This job emits the matrix the `python` job consumes via fromJSON.
+  matrix-config:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.pick.outputs.include }}
+    steps:
+      - id: pick
+        shell: bash
+        # WHY env (not inline ${{ }}): github.ref is a ref NAME — quoting it
+        # through an env var avoids any shell-injection via a crafted branch/
+        # tag name (GitHub Actions hardening guidance).
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$REF" == refs/tags/* ]]; then
+            echo 'include=[{"os":"ubuntu-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.12"},{"os":"ubuntu-latest","python-version":"3.13"},{"os":"macos-14","python-version":"3.11"},{"os":"macos-14","python-version":"3.12"},{"os":"macos-14","python-version":"3.13"},{"os":"windows-latest","python-version":"3.11"},{"os":"windows-latest","python-version":"3.12"},{"os":"windows-latest","python-version":"3.13"}]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'include=[{"os":"ubuntu-latest","python-version":"3.13"}]' >> "$GITHUB_OUTPUT"
+          fi
+
   python:
+    needs: matrix-config
     runs-on: ${{ matrix.os }}
-    # WHY: fail-fast: false so each OS row reports independently. The whole
-    # point of expanding the matrix is to surface platform-specific issues —
-    # bailing on the first failure defeats it.
+    # WHY: fail-fast: false so each OS row reports independently. The matrix is
+    # chosen by the `matrix-config` job above — a single cell for PR/merge, the
+    # full OS × Python grid (mirroring release.yml's wheel targets) on a release
+    # tag or workflow_dispatch. Some tests may need @pytest.mark.skipif when
+    # macOS / Windows surface POSIX-only behavior — prefer per-test skips over
+    # dropping OS rows.
     strategy:
       fail-fast: false
       matrix:
-        # WHY: release.yml builds wheels for Linux x86_64+aarch64, macOS
-        # arm64 (macos-14), and Windows x64. ci.yml mirrors that surface so
-        # broken non-Linux wheels can't ship.
-        # TODO: some tests may need @pytest.mark.skipif decorators when
-        # macOS / Windows surface POSIX-only behavior (e.g., os.fork,
-        # hard-coded /tmp paths, BLAS-thread fork semantics). Prefer
-        # per-test skips over dropping OS rows.
-        os: [ubuntu-latest, macos-14, windows-latest]
-        python-version: ["3.11", "3.12", "3.13"]
+        include: ${{ fromJSON(needs.matrix-config.outputs.include) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -157,9 +181,10 @@ jobs:
           uv run python -m pytest tests/ -v --ignore=tests/test_parity.py --cov=pydocs_mcp --cov-report=term-missing --cov-fail-under=90
 
       - name: Upload coverage artifact
-        # WHY: only one upload per run — pin to the Linux + 3.12 cell so
-        # the matrix expansion doesn't produce 12 artifacts named the same.
-        if: runner.os == 'Linux' && matrix.python-version == '3.12'
+        # WHY: only one upload per run — pin to the Linux + 3.13 cell, which
+        # is the single cell that ALWAYS runs (PR/merge light matrix + every
+        # full-matrix expansion), so the artifact is produced exactly once.
+        if: runner.os == 'Linux' && matrix.python-version == '3.13'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
