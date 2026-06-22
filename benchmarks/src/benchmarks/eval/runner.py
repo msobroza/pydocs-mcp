@@ -133,6 +133,21 @@ async def run_sweep(  # noqa: C901 — benchmark sweep orchestrator threads a lo
         dataset (the same across legs — each leg sees the same dataset).
         Same metric data is streamed to every tracker via ``log_metric``.
     """
+    # Fail loud on a missing config path. ``AppConfig.load(explicit_path=...)``
+    # treats a non-existent path as "no overlay" and silently layers only the
+    # shipped defaults — so a mistyped or wrong-directory entry (e.g. a bare
+    # ``foo.yaml`` passed from the repo root instead of
+    # ``benchmarks/configs/foo.yaml``) would run the DEFAULT pipeline with no
+    # error, silently producing results for a config the operator never asked
+    # for. Validate up front so the mistake surfaces immediately.
+    missing = [str(p) for p in config_paths if not p.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "config_paths not found (resolved relative to the current working "
+            f"directory): {', '.join(missing)}. Pass paths that exist, e.g. "
+            "benchmarks/configs/<name>.yaml from the repo root.",
+        )
+
     # WHY: build the dataset once — the iterator is consumed by every
     # (system, config) leg. ``async for`` triggers a fresh iteration each
     # leg so ``corpus_source`` closures still fire per-task.

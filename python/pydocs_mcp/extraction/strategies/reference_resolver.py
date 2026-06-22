@@ -74,6 +74,17 @@ class ReferenceResolver:
         """
         from dataclasses import replace
 
+        # Performance: Rule C (strict dotted-suffix match) needs the subset of
+        # the qname universe whose LAST dotted segment equals the target's last
+        # segment. Precompute that bucketing ONCE per resolve() call instead of
+        # rescanning the whole universe per reference — the previous per-ref
+        # full scan was O(refs × universe), which hangs on large libraries
+        # (numpy/torch/tf have tens of thousands of qnames). Both Rule C match
+        # cases (`q == to_name` and `q.endswith("." + to_name)`) imply q's last
+        # segment == to_name's last segment, so the bucket is a sound filter
+        # with identical results.
+        tail_index = self._build_tail_index() if self.strict_suffix else {}
+
         result: list[NodeReference] = []
         for ref in refs:
             # Synthetic kNN 'similar' edges already carry a real qname target
@@ -82,11 +93,25 @@ class ReferenceResolver:
             if ref.kind is ReferenceKind.SIMILAR:
                 result.append(ref)
                 continue
-            resolved = self._resolve_one(ref)
+            resolved = self._resolve_one(ref, tail_index)
             result.append(replace(ref, to_node_id=resolved))
         return result
 
-    def _resolve_one(self, ref: NodeReference) -> str | None:  # noqa: C901 — sequential resolution rules (Rule 0 + A → B/F20 → C → D → E) are inherently sequential decision points; splitting hides the priority order
+    def _build_tail_index(self) -> dict[str, list[str]]:
+        """Bucket the qname universe by each qname's last dotted segment.
+
+        Rule C only ever matches a qname whose last segment equals the
+        target's last segment, so this index lets Rule C scan a small
+        bucket instead of the whole universe (single source of truth for
+        the suffix-candidate search). Built once per resolve() call.
+        """
+        index: dict[str, list[str]] = {}
+        for qname in self.qname_universe:
+            tail = qname.rsplit(".", 1)[-1]
+            index.setdefault(tail, []).append(qname)
+        return index
+
+    def _resolve_one(self, ref: NodeReference, tail_index: dict[str, list[str]]) -> str | None:
 
         to_name = ref.to_name
 
@@ -124,28 +149,39 @@ class ReferenceResolver:
                 if bare in self.qname_universe:
                     return bare
 
-        # Rule C — strict dotted suffix within from_package. Gated by the
-        # ``strict_suffix`` ablation knob: when False, the resolver skips
-        # straight to Rule E (no match) so the benchmark harness can
-        # measure Rule C's contribution to AC #15 resolution rate.
-        # Build candidates = {qname in universe whose package prefix == from_package
-        #                     AND qname endswith ".<to_name>" OR qname == to_name}.
+        # Rule C/D — strict dotted-suffix match within from_package, gated by
+        # the ``strict_suffix`` ablation knob (when False, skip straight to
+        # Rule E so the benchmark harness can measure Rule C's contribution).
+        # The helper returns the sole match (C), or None for zero (E) or many
+        # (D — ambiguous) candidates.
         if self.strict_suffix:
-            candidates: list[str] = []
-            suffix_dot = "." + to_name
-            for qname in self.qname_universe:
-                if not qname.startswith(ref.from_package + ".") and qname != ref.from_package:
-                    continue
-                if qname == to_name or qname.endswith(suffix_dot):
-                    candidates.append(qname)
-            if len(candidates) == 1:
-                return candidates[0]
-            # Rule D — ambiguous suffix (>1 candidate) leaves None deterministically.
-            if len(candidates) > 1:
-                return None
+            return self._rule_c_suffix_match(ref, to_name, tail_index)
 
         # Rule E — no match.
         return None
+
+    def _rule_c_suffix_match(
+        self, ref: NodeReference, to_name: str, tail_index: dict[str, list[str]]
+    ) -> str | None:
+        """Rule C/D: unique dotted-suffix match within ``ref.from_package``.
+
+        Candidates are qnames in the package whose dotted suffix is ``to_name``
+        (``q == to_name`` OR ``q.endswith("." + to_name)``) — both imply ``q``'s
+        last segment equals ``to_name``'s, so only that bucket of ``tail_index``
+        is scanned instead of the whole universe (the O(refs × universe) → O(1)
+        bucket fix). Returns the sole match (Rule C), or None for zero
+        candidates (Rule E) or more than one (Rule D — ambiguous, deterministic
+        None).
+        """
+        suffix_dot = "." + to_name
+        tail = to_name.rsplit(".", 1)[-1]
+        candidates = [
+            q
+            for q in tail_index.get(tail, ())
+            if (q == ref.from_package or q.startswith(ref.from_package + "."))
+            and (q == to_name or q.endswith(suffix_dot))
+        ]
+        return candidates[0] if len(candidates) == 1 else None
 
     def _infer_self_type(self, from_node_id: str, to_name: str) -> str | None:
         """Rewrite ``self.X[.Y]`` to a dotted target when self's type is known.
