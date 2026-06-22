@@ -1,0 +1,37 @@
+# Ranked dense + reference-graph expansion pipeline — benchmark / eval use.
+#
+# Identical to chunk_search_graph.yaml but drops the final
+# token_budget_formatter step, so the pipeline returns top-K SEPARATE ranked
+# chunks in state.candidates (what recall@k / mrr metrics measure) instead of
+# one composite chunk in state.result. Use for benchmark sweeps; the MCP
+# server keeps chunk_search.yaml (BM25 composite) as its default.
+name: chunk_search_graph_ranked
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: score
+    type: dense_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: graph
+    type: graph_expand
+    params:
+      top_s: 10
+      max_depth: 1
+      decay: 0.9
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  # NO token_budget_formatter — output is state.candidates (ranked list).

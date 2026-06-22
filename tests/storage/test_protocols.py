@@ -97,6 +97,7 @@ def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
         module_members = None
         trees = None
         references = None  # sub-PR #5b — 5th repo attribute
+        node_scores = None  # v10 — per-node graph scores (in-degree / PageRank / community)
         vectors = None  # spec S15 — always-present (may be NullVectorStore)
         multi_vectors = None  # late-interaction — always-present (may be NullMultiVectorStore)
 

@@ -12,7 +12,10 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 9  # v9: no structural change — forces a tree re-extraction so
+SCHEMA_VERSION = 10  # v10: additive — node_scores table (in-degree / PageRank /
+# community per node, computed at index time for the graph rerank steps). Purely
+# additive: empty until the next index populates it; no re-extraction forced.
+# v9: no structural change — forces a tree re-extraction so
 # document_trees repopulate with the FULL multi-line ``extra_metadata["signature"]``
 # header + decorator call args (``@app.route('/x')``), neither of which any
 # content_hash covers. v8 forced the same re-extraction for pageindex decorators;
@@ -69,6 +72,14 @@ _DDL = """
         pipeline_hash TEXT    NOT NULL,
         FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
     );
+    CREATE TABLE node_scores (
+        package        TEXT    NOT NULL,
+        qualified_name TEXT    NOT NULL,
+        in_degree      INTEGER NOT NULL DEFAULT 0,
+        pagerank       REAL    NOT NULL DEFAULT 0.0,
+        community      INTEGER NOT NULL DEFAULT -1,
+        PRIMARY KEY (package, qualified_name)
+    );
     CREATE INDEX ix_chunks_package         ON chunks(package);
     CREATE INDEX ix_chunks_module          ON chunks(module);
     CREATE INDEX ix_module_members_package ON module_members(package);
@@ -79,6 +90,8 @@ _DDL = """
     CREATE INDEX ix_refs_to_node           ON node_references(to_node_id);
     CREATE INDEX idx_cmv_plaid_doc_id      ON chunk_multi_vector_ids(plaid_doc_id);
     CREATE INDEX idx_cmv_package           ON chunk_multi_vector_ids(package);
+    CREATE INDEX ix_node_scores_qname      ON node_scores(qualified_name);
+    CREATE INDEX ix_node_scores_package    ON node_scores(package);
 """
 
 # Tables we know about — dropped on a version mismatch so earlier schemas
@@ -92,6 +105,7 @@ _KNOWN_TABLES = (
     "document_trees",
     "node_references",
     "chunk_multi_vector_ids",  # new in v6
+    "node_scores",  # new in v10
 )
 
 
@@ -246,6 +260,29 @@ def _apply_v7_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "chunks", "qualified_name TEXT")
 
 
+def _apply_v10_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v10 shape — the ``node_scores`` table + indices.
+
+    Holds per-node graph signals (in-degree / PageRank / community) computed at
+    index time for the centrality-prior and community-diversity rerank steps.
+    Purely additive: the table starts empty and is repopulated by the next
+    index's node-score recompute, so the migration forces NO re-extraction or
+    re-embed (unlike v9). ``CREATE ... IF NOT EXISTS`` keeps the sweep safe to
+    re-run as a v10-on-open drift-recovery pass.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS node_scores ("
+        "package TEXT NOT NULL, "
+        "qualified_name TEXT NOT NULL, "
+        "in_degree INTEGER NOT NULL DEFAULT 0, "
+        "pagerank REAL NOT NULL DEFAULT 0.0, "
+        "community INTEGER NOT NULL DEFAULT -1, "
+        "PRIMARY KEY (package, qualified_name))"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_node_scores_qname ON node_scores(qualified_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_node_scores_package ON node_scores(package)")
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
@@ -272,12 +309,18 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v9 — re-run additive sweeps for drift recovery; data preserved.
+        # v10 — re-run additive sweeps for drift recovery; data preserved.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
         _apply_v7_additions(conn)
+        _apply_v10_additions(conn)
+    elif current == 9:
+        # v9 → v10 — purely additive: create node_scores (empty until the next
+        # index populates it). NO content_hash clear / re-extraction needed.
+        _apply_v10_additions(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (2, 3, 4, 6, 7, 8):
         # v2/v3/v4/v6/v7/v8 → v9 — walk every forward (additive, idempotent)
         # structure sweep first. Rerunning them repairs drift in legacy
@@ -289,6 +332,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
         _apply_v7_additions(conn)
+        _apply_v10_additions(conn)
         # v9 carries no structural change. The extraction enrichment added the
         # FULL multi-line extra_metadata["signature"] header + decorator call
         # args (@app.route('/x')) to the document_trees JSON blob, which neither
@@ -321,6 +365,7 @@ def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
     connection.execute("DELETE FROM module_members WHERE package=?", (package_name,))
     connection.execute("DELETE FROM document_trees WHERE package=?", (package_name,))
     connection.execute("DELETE FROM node_references WHERE from_package=?", (package_name,))
+    connection.execute("DELETE FROM node_scores WHERE package=?", (package_name,))
     connection.execute("DELETE FROM packages WHERE name=?", (package_name,))
 
 
@@ -331,6 +376,7 @@ def clear_all_packages(connection: sqlite3.Connection) -> None:
     connection.execute("DELETE FROM module_members")
     connection.execute("DELETE FROM document_trees")
     connection.execute("DELETE FROM node_references")
+    connection.execute("DELETE FROM node_scores")
     connection.commit()
 
 

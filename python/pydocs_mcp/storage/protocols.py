@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.node_reference import NodeReference
+    from pydocs_mcp.storage.node_score import NodeScore
 
 
 @runtime_checkable
@@ -226,6 +227,8 @@ class UnitOfWork(Protocol):
     def trees(self) -> DocumentTreeStore: ...
     @property
     def references(self) -> ReferenceStore: ...
+    @property
+    def node_scores(self) -> NodeScoreStore: ...
     # Untyped here to avoid a hard import of NullVectorStore at the
     # Protocol level (NullVectorStore is a concrete dataclass with no
     # @runtime_checkable Protocol behind it yet). The structural
@@ -385,6 +388,52 @@ class ReferenceStore(GraphSearchable, Protocol):
         this method and the cross-package re-resolution pass keeps working.
         """
         ...
+
+    async def resolved_edges(self) -> list[tuple[str, str]]:
+        """RESOLVED STRUCTURAL directed edges as ``(from_node_id, to_node_id)``.
+
+        Cross-package, resolved-only (``to_node_id IS NOT NULL``) — an
+        unresolved edge points outside the indexed universe and would inject a
+        phantom node. Excludes synthetic ``kind='similar'`` kNN edges so the
+        node-score recompute measures *structural* centrality (PageRank /
+        Louvain / in-degree over real call/import/inherit edges), not embedding
+        similarity. Keeping it a Protocol method keeps :class:`IndexingService`
+        backend-agnostic (no raw SQL in the service).
+        """
+        ...
+
+
+@runtime_checkable
+class NodeScoreStore(Protocol):
+    """Storage boundary for per-node graph scores (the ``node_scores`` table).
+
+    Holds ``NodeScore`` rows (in-degree / PageRank / community) recomputed at
+    index time over the reference graph. Read side (``scores_for``) is consumed
+    by the centrality-prior and community-diversity rerank steps, keyed on
+    ``qualified_name``. All methods async; SQLite I/O wraps ``asyncio.to_thread``.
+    """
+
+    async def upsert(
+        self,
+        scores: Iterable[NodeScore],
+        *,
+        uow: UnitOfWork | None = None,
+    ) -> None: ...
+
+    async def scores_for(self, qnames: Iterable[str]) -> dict[str, NodeScore]:
+        """Return ``{qualified_name: NodeScore}`` for the given qnames (the
+        subset present in the table); missing qnames are simply absent so
+        callers treat them as a neutral prior."""
+        ...
+
+    async def delete_for_package(
+        self,
+        package: str,
+        *,
+        uow: UnitOfWork | None = None,
+    ) -> None: ...
+
+    async def delete_all(self, *, uow: UnitOfWork | None = None) -> None: ...
 
 
 @runtime_checkable

@@ -1,9 +1,12 @@
 """ReferenceKind enum for the cross-node reference graph (spec §4.1).
 
-Four kinds total. Three are AST-precise — CALLS, IMPORTS, INHERITS —
-captured during Python file ingestion. MENTIONS is regex-fuzzy:
-backtick-quoted dotted names in markdown, lower-precision than AST
-capture and therefore opt-in via YAML (sub-PR #5c, §5.3).
+Five kinds. Three are AST-precise — CALLS, IMPORTS, INHERITS — captured during
+Python file ingestion. MENTIONS is regex-fuzzy: backtick-quoted dotted names in
+markdown, lower-precision than AST capture and therefore opt-in via YAML.
+SIMILAR is index-time *synthetic*: embedding-kNN edges between a node and its
+top-m nearest neighbours, densifying the otherwise-sparse AST graph so graph
+expansion can reach semantically-related code that has no call/inherit edge.
+Opt-in (off by default).
 
 StrEnum so the on-disk ``kind`` column stays plain text — readable in
 SQLite shell, no enum-import-needed for ad-hoc queries.
@@ -19,3 +22,4 @@ class ReferenceKind(StrEnum):
     IMPORTS = "imports"
     INHERITS = "inherits"
     MENTIONS = "mentions"
+    SIMILAR = "similar"

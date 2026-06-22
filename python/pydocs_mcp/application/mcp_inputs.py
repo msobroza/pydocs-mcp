@@ -128,9 +128,15 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     # Local import — keeps the application -> extraction edge lazy so
     # importing ``mcp_inputs`` at app startup doesn't drag in the whole
     # extraction pipeline (or fight with the existing import order).
-    from pydocs_mcp.extraction.pipeline.stages import _set_capture_config
+    from pydocs_mcp.extraction.pipeline.stages import (
+        _set_capture_config,
+        _set_similar_config,
+    )
 
     _set_capture_config(cfg.reference_graph.capture)
+    # Synthetic kNN 'similar' edge generation (off by default) — same
+    # module-level-slot push as the capture config above.
+    _set_similar_config(cfg.reference_graph.similar_edges)
 
     # AC #15 stdlib-idx: push resolver config so IndexingService picks up
     # the include_stdlib toggle on next reindex. Parity with the capture

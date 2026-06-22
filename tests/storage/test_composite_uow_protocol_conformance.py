@@ -19,7 +19,7 @@ from pydocs_mcp.storage.protocols import UnitOfWork
 
 
 class _FakeChild:
-    """A child UoW exposing all six dispatch attrs eagerly (no
+    """A child UoW exposing all seven dispatch attrs eagerly (no
     ``__aenter__``-deferred binding) so ``CompositeUnitOfWork`` can
     build its dispatch map at construction time. Only used by the
     Protocol-conformance test below — production children are
@@ -31,6 +31,7 @@ class _FakeChild:
     module_members = object()
     trees = object()
     references = object()
+    node_scores = object()
     vectors = NullVectorStore()
     multi_vectors = NullMultiVectorStore()
 
@@ -51,7 +52,7 @@ class _FakeChild:
 
 
 def test_composite_uow_exposes_dispatch_attrs_at_the_class_level() -> None:
-    """The six dispatch attrs (``packages``, ``chunks``, ``module_members``,
+    """The seven dispatch attrs (``packages``, ``chunks``, ``module_members``,
     ``trees``, ``references``, ``vectors``) must be visible on the
     ``CompositeUnitOfWork`` *class* — not only on instances after a
     runtime ``__getattr__`` resolution.
@@ -70,6 +71,7 @@ def test_composite_uow_exposes_dispatch_attrs_at_the_class_level() -> None:
         "module_members",
         "trees",
         "references",
+        "node_scores",
         "vectors",
         "multi_vectors",
     ):

@@ -84,14 +84,15 @@ def _tree(qname: str, *, kind: NodeKind = NodeKind.MODULE) -> DocumentNode:
 # ── Shape pin ────────────────────────────────────────────────────────────
 
 
-def test_indexing_service_only_has_one_field():
-    """Sub-PR #5a-2: IndexingService is reduced to a single dependency —
-    ``uow_factory``. The 4 stores + ``unit_of_work`` are gone; the service
+def test_indexing_service_only_has_one_store_dependency():
+    """Sub-PR #5a-2: IndexingService's only *store* dependency is
+    ``uow_factory`` — the 4 stores + ``unit_of_work`` are gone; the service
     opens a UoW per call and writes through it. A drift here means a
-    re-introduction of the legacy reach-through wiring.
+    re-introduction of the legacy reach-through wiring. ``node_scores_enabled``
+    is a plain behaviour toggle (a bool), not a store reach-through.
     """
     names = {f.name for f in fields(IndexingService)}
-    assert names == {"uow_factory"}
+    assert names == {"uow_factory", "node_scores_enabled"}
 
 
 # ── Core writes go through UoW ───────────────────────────────────────────

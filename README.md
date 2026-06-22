@@ -321,6 +321,17 @@ pydocs-mcp lookup my_module.Parser.parse --show callers
 Capture is on by default and tunable under `reference_graph:` in YAML
 (toggle, kinds-to-emit, output bounds).
 
+The graph is also a **search** signal, not just a `lookup` surface:
+the [`chunk_search_graph.yaml`](python/pydocs_mcp/pipelines/chunk_search_graph.yaml)
+preset seeds graph expansion from the top dense hits to recover
+structurally-adjacent answers a dense embedder misses (callers / callees /
+overrides) — on a structural-recall split this lifts recall@10 from 0.30 to
+1.00 (see [benchmarks](benchmarks/README.md#structural-recall-graph-expansion)).
+Two opt-in index-time analytics (`reference_graph.node_scores` /
+`reference_graph.similar_edges`, `[graph]` extra) add PageRank/community
+rerankers and synthetic embedding-kNN edges — see
+[DOCUMENTATION.md](DOCUMENTATION.md#graph-analytics-opt-in).
+
 ## Learn more
 
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval

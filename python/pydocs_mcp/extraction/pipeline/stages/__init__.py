@@ -47,6 +47,11 @@ from pydocs_mcp.extraction.pipeline.stages.reference_capture import (
     _get_capture_config,
     _set_capture_config,
 )
+from pydocs_mcp.extraction.pipeline.stages.synthesize_similar_edges import (
+    SynthesizeSimilarEdgesStage,
+    _get_similar_config,
+    _set_similar_config,
+)
 
 __all__ = (
     "AssignChunkContentHashStage",
@@ -61,6 +66,9 @@ __all__ = (
     "LoadExistingChunkHashesStage",
     "PackageBuildStage",
     "ReferenceCaptureStage",
+    "SynthesizeSimilarEdgesStage",
     "_get_capture_config",
+    "_get_similar_config",
     "_set_capture_config",
+    "_set_similar_config",
 )

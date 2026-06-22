@@ -1,0 +1,63 @@
+# Dense + reference-graph expansion chunk-search pipeline.
+#
+# The dense chain of chunk_search_dense.yaml with a `graph_expand` step
+# inserted after the metadata post-filter: it seeds from the top dense hits
+# and pulls in their 1-hop reference-graph neighbours (callers / callees /
+# overriding subclass methods), merging them into the dense ranking by
+# max(dense_sim, seed_sim * decay) — embedding-centric, no RRF, no BM25.
+#
+# This recovers the structurally-adjacent answer a dense embedder misses (its
+# text doesn't match the query, but it calls / is called by a function that
+# does). Safety contract: when the index has no reference graph, or no
+# neighbour is found, graph_expand returns the candidates unchanged — so
+# adding it can only help (it degrades to dense-only).
+#
+# Steps:
+#   1. pre_filter           — parse + validate + scope-split
+#   2. dense_fetcher        — embed query, ANN search; writes state.candidates
+#   3. dense_scorer         — overwrite relevance with exact cosine sim
+#   4. metadata_post_filter — apply SearchQuery.post_filter in-memory
+#   5. graph_expand         — seed from top dense hits, add 1-hop neighbours
+#   6. top_k_filter         — sort by relevance desc, keep top K
+#   7. limit                — cap final item count
+#   8. token_budget_formatter — render the composite chunk for MCP output
+#
+# Requires BuildContext.embedder + .vector_store (dense steps) and
+# .uow_factory (graph_expand) at load time — all provided by
+# build_retrieval_context(...) on the server / CLI boot path.
+name: chunk_search_graph
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: score
+    type: dense_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  # Runs after the metadata filter (neighbours aren't constrained by it) and
+  # before top-k (recovered neighbours compete for the final ranked slots).
+  - name: graph
+    type: graph_expand
+    params:
+      top_s: 10
+      max_depth: 1
+      decay: 0.9
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  - name: budget
+    type: token_budget_formatter
+    params:
+      formatter: {type: chunk_markdown}
+      budget: 2000

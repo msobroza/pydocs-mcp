@@ -94,6 +94,9 @@ class FakeIndexingService:
         self.cleared = True
         self.clear_call_order = self._call_counter
 
+    async def recompute_node_scores(self) -> None:
+        self.node_scores_recomputed = True
+
     async def reindex_package(
         self,
         package: Package,
