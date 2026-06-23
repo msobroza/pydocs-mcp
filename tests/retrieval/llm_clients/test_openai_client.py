@@ -80,6 +80,111 @@ def test_chat_sync_calls_openai_with_expected_args() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_async_omits_temperature_for_reasoning_model() -> None:
+    """Reasoning models (gpt-5+, o-series) only accept the default temperature;
+    sending an explicit value 400s. chat() must OMIT the temperature kwarg for
+    them, letting the model default stand, while still passing model + messages
+    + response_format."""
+    client = OpenAiLlmClient(model_name="gpt-5.5", api_key="test-key")
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="hi"))]
+    sdk = client._async_client()
+    with patch.object(
+        sdk.chat.completions,
+        "create",
+        new=AsyncMock(return_value=fake_completion),
+    ) as mock_create:
+        result = await client.chat(
+            [{"role": "user", "content": "hello"}],
+            response_format="json_object",
+            temperature=0.0,
+        )
+    assert result == "hi"
+    call_kwargs = mock_create.call_args.kwargs
+    assert "temperature" not in call_kwargs
+    # None cap must be omitted, not sent as max_tokens: null (reasoning 400s).
+    assert "max_tokens" not in call_kwargs
+    assert "max_completion_tokens" not in call_kwargs
+    assert call_kwargs["model"] == "gpt-5.5"
+    assert call_kwargs["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_chat_async_maps_max_tokens_to_completion_for_reasoning_model() -> None:
+    """A set token cap must go to max_completion_tokens (not the legacy
+    max_tokens, which reasoning models reject) for reasoning models."""
+    client = OpenAiLlmClient(model_name="gpt-5.5", api_key="test-key")
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="x"))]
+    sdk = client._async_client()
+    with patch.object(
+        sdk.chat.completions,
+        "create",
+        new=AsyncMock(return_value=fake_completion),
+    ) as mock_create:
+        await client.chat([{"role": "user", "content": "hi"}], max_tokens=256)
+    call_kwargs = mock_create.call_args.kwargs
+    assert call_kwargs["max_completion_tokens"] == 256
+    assert "max_tokens" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_chat_async_standard_model_uses_legacy_max_tokens() -> None:
+    """Standard models keep the legacy max_tokens param when a cap is set."""
+    client = OpenAiLlmClient(model_name="gpt-4o-mini", api_key="test-key")
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="x"))]
+    sdk = client._async_client()
+    with patch.object(
+        sdk.chat.completions,
+        "create",
+        new=AsyncMock(return_value=fake_completion),
+    ) as mock_create:
+        await client.chat([{"role": "user", "content": "hi"}], max_tokens=256)
+    call_kwargs = mock_create.call_args.kwargs
+    assert call_kwargs["max_tokens"] == 256
+    assert "max_completion_tokens" not in call_kwargs
+
+
+def test_chat_sync_omits_temperature_for_reasoning_model() -> None:
+    """Sync path mirrors the async reasoning-model temperature omission."""
+    client = OpenAiLlmClient(model_name="o3-mini", api_key="test-key")
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="x"))]
+    sdk = client._sync_client()
+    with patch.object(
+        sdk.chat.completions,
+        "create",
+        return_value=fake_completion,
+    ) as mock_create:
+        client.chat_sync(
+            [{"role": "user", "content": "ping"}],
+            temperature=0.0,
+        )
+    assert "temperature" not in mock_create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_chat_async_keeps_temperature_for_standard_model() -> None:
+    """Non-reasoning models (gpt-4o-mini) must STILL receive the caller's
+    temperature — the omission applies only to reasoning models."""
+    client = OpenAiLlmClient(model_name="gpt-4o-mini", api_key="test-key")
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="hi"))]
+    sdk = client._async_client()
+    with patch.object(
+        sdk.chat.completions,
+        "create",
+        new=AsyncMock(return_value=fake_completion),
+    ) as mock_create:
+        await client.chat(
+            [{"role": "user", "content": "hello"}],
+            temperature=0.0,
+        )
+    assert mock_create.call_args.kwargs["temperature"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_openai_client_retries_on_rate_limit() -> None:
     """Transient RateLimitError must be retried with backoff; a 3rd success
     yields the response. Persistent failures would still surface on attempt 3."""

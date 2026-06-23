@@ -22,7 +22,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 from openai import AsyncOpenAI, OpenAI, RateLimitError
 
@@ -35,6 +35,23 @@ _RETRY_MAX = 3
 _RETRY_BACKOFF = 2.0
 
 _T = TypeVar("_T")
+
+# Reasoning models (gpt-5+, the o-series) differ from gpt-4o-class chat models
+# in two request-shape ways that 400 otherwise:
+#   1. temperature — they accept ONLY the default (1); any explicit value (even
+#      the 0.0 we send for determinism) returns 400 "'temperature' does not
+#      support X". So we omit the kwarg and let the model default stand.
+#   2. token cap — they reject the legacy ``max_tokens`` param (it must be
+#      ``max_completion_tokens``); even ``max_tokens: null`` 400s. So we map the
+#      cap to ``max_completion_tokens`` for them.
+# Standard models keep the legacy shape (explicit temperature, ``max_tokens``).
+_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _is_reasoning_model(model_name: str) -> bool:
+    """True for models that reject a custom ``temperature`` and the legacy
+    ``max_tokens`` param (gpt-5+, the o-series)."""
+    return (model_name or "").lower().startswith(_REASONING_MODEL_PREFIXES)
 
 
 async def _with_retry_async(coro_factory: Callable[[], Awaitable[_T]]) -> _T:
@@ -97,15 +114,10 @@ class OpenAiLlmClient:
         max_tokens: int | None = None,
     ) -> str:
         rf = {"type": "json_object"} if response_format == "json_object" else None
+        kwargs = self._completion_kwargs(messages, rf, temperature, max_tokens)
 
         async def _go() -> str:
-            rsp = await self._async_client().chat.completions.create(
-                model=self.model_name,
-                messages=list(messages),
-                response_format=rf,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            rsp = await self._async_client().chat.completions.create(**kwargs)
             return rsp.choices[0].message.content or ""
 
         return await _with_retry_async(_go)
@@ -119,18 +131,40 @@ class OpenAiLlmClient:
         max_tokens: int | None = None,
     ) -> str:
         rf = {"type": "json_object"} if response_format == "json_object" else None
+        kwargs = self._completion_kwargs(messages, rf, temperature, max_tokens)
 
         def _go() -> str:
-            rsp = self._sync_client().chat.completions.create(
-                model=self.model_name,
-                messages=list(messages),
-                response_format=rf,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            rsp = self._sync_client().chat.completions.create(**kwargs)
             return rsp.choices[0].message.content or ""
 
         return _with_retry_sync(_go)
+
+    def _completion_kwargs(
+        self,
+        messages: Sequence[ChatMessage],
+        response_format: dict[str, str] | None,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> dict[str, Any]:
+        """Shared chat.completions kwargs for the async + sync paths.
+
+        Reasoning models (see :func:`_is_reasoning_model`) need a different
+        request shape: ``temperature`` is omitted (they reject a custom value)
+        and a token cap goes to ``max_completion_tokens`` rather than the legacy
+        ``max_tokens``. ``None`` caps are omitted entirely — the legacy
+        ``max_tokens: null`` 400s on reasoning models and is a no-op elsewhere.
+        """
+        reasoning = _is_reasoning_model(self.model_name)
+        kwargs: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": list(messages),
+            "response_format": response_format,
+        }
+        if not reasoning:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            kwargs["max_completion_tokens" if reasoning else "max_tokens"] = max_tokens
+        return kwargs
 
 
 __all__ = ("OpenAiLlmClient",)

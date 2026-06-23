@@ -279,6 +279,7 @@ in [`notebooks/`](../notebooks/)). Higher is better.
 |---|---|---:|---:|---:|---:|---:|
 | BM25 (keyword / FTS5) | `repoqa_bm25.yaml` | 0.167 | 0.333 | 0.400 | 0.238 | 30 |
 | BM25 top-200 → tree rerank (2-stage, gpt-4o-mini) | `repoqa_bm25_tree_rerank.yaml` | 0.333 | 0.567 | 0.567 | 0.424 | 30 |
+| BM25 top-200 → tree rerank (2-stage, gpt-5.5) | `repoqa_bm25_tree_rerank_gpt55.yaml` | 0.667 | 0.667 | 0.667 | 0.667 | 30 |
 | Dense (bge-small, 384-d) | `repoqa_dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
 | Dense (gte-modernbert-base, 768-d) | `repoqa_dense_modernbert.yaml` | 0.533 | 0.733 | 0.733 | 0.601 | 30 |
 | Dense (Qwen3-0.6B, 1024-d) | `repoqa_dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
@@ -295,10 +296,12 @@ in [`notebooks/`](../notebooks/)). Higher is better.
 > **gte-modernbert-base**, **F2LLM-v2-330M**, and **F2LLM-v2-0.6B** are full-30 runs
 > served on GPU via sentence-transformers (2048-token cap, `batch_size: 4` for the
 > F2LLM models), each in a dedicated process so CUDA memory is freed between embedders.
-> **BM25 → tree rerank** is the lone two-stage method: the LLM (gpt-4o-mini)
-> re-ranks BM25's **top-200** candidate pool (`k=200`), which is why its recall@10
-> can exceed BM25's own top-10; the rest are single-stage. (LLM tree also uses
-> gpt-4o-mini.) The chart is rendered from this table by
+> **BM25 → tree rerank** is the lone two-stage method: the LLM (gpt-4o-mini or
+> gpt-5.5) re-ranks BM25's **top-200** candidate pool (`k=200`), which is why its
+> recall@10 can exceed BM25's own top-10; the rest are single-stage. Swapping the
+> reranker LLM to **gpt-5.5** doubles recall@1 (0.33 → 0.67) — see
+> [§Reranker model: gpt-4o-mini vs gpt-5.5](#reranker-model-gpt-4o-mini-vs-gpt-55).
+> (LLM tree also uses gpt-4o-mini.) The chart is rendered from this table by
 > [`scripts/plot_method_comparison.py`](scripts/plot_method_comparison.py).
 
 **Takeaways.** Vector methods clearly beat lexical BM25 (semantic vs. exact-term
@@ -312,6 +315,8 @@ recall@5/10); **LLM tree reasoning** works — once `qualified_name` is persiste
 expensive (one LLM call per query). **BM25 → tree rerank** roughly doubles BM25's
 recall@1 (0.17 → 0.33) and lifts recall@5 to 0.57 by re-ranking BM25's top-200
 candidate pool (`k=200`) with gpt-4o-mini — reaching tree-reasoning quality, still behind dense.
+Upgrading that reranker to **gpt-5.5** doubles recall@1 again (0.33 → 0.67) and lifts
+recall@10 to 0.67, closing much of the gap to the mid-pack dense methods (see below).
 
 **Model size matters for F2LLM.** The smaller **F2LLM-v2-330M** (896-d) lands at
 recall@1 **0.70** / recall@10 **0.77** (MRR 0.73) — clearly below its 0.6B sibling
@@ -319,6 +324,31 @@ recall@1 **0.70** / recall@10 **0.77** (MRR 0.73) — clearly below its 0.6B sib
 **gte-modernbert-base** at recall@1, at a slightly lower search latency (0.23s p50).
 So the code-specialized family wins at both sizes, but ~half the parameters costs
 ~0.16 recall@10 here.
+
+#### Reranker model: gpt-4o-mini vs gpt-5.5
+
+Holding the two-stage pipeline fixed (BM25 top-200 → LLM tree-reasoning rerank,
+tree picks only) and varying **only** the reranker LLM, on the same 30-needle
+`small_test` split:
+
+![reranker model comparison — recall@k](assets/reranker_model_comparison.png)
+
+| Reranker | recall@1 | recall@5 | recall@10 | MRR | search / needle (p50) |
+|---|---:|---:|---:|---:|---:|
+| gpt-4o-mini | 0.333 | 0.567 | 0.567 | 0.424 | 10.6s |
+| **gpt-5.5** | **0.667** | **0.667** | **0.667** | **0.667** | 8.8s |
+
+**gpt-5.5 doubles recall@1** (0.33 → 0.67) and lifts MRR by +0.24. For gpt-5.5,
+recall@1 = recall@5 = recall@10 = MRR: when it surfaces the gold it ranks it
+**first** — no "buried at rank 2–10" cases — whereas gpt-4o-mini's recall@1
+(0.33) sits well below its recall@10 (0.57). Median latency is comparable
+(gpt-5.5 slightly faster), but gpt-5.5 has a heavier tail (p99 ~43s vs ~17s) from
+occasional long reasoning bursts. gpt-5.5 is a reasoning model, so its temperature
+is forced to the model default (the client omits the unsupported `temperature=0`),
+making its rerank mildly non-deterministic. Rendered by
+[`scripts/plot_reranker_model_comparison.py`](scripts/plot_reranker_model_comparison.py).
+n=30 with a wide CI (`[0.50, 0.83]`) — the recall@1 / MRR gaps are large; the
+recall@10 gap (+0.10) is smaller relative to that noise.
 
 #### Quality vs. search latency
 
@@ -336,7 +366,8 @@ indexing), from each run's per-task `search_seconds`:
 | Dense (F2LLM-330M) | 0.767 | 0.23s |
 | Dense (F2LLM-0.6B) | 0.933 | 0.29s |
 | Dense (Qwen3-0.6B) | 0.810 | 0.51s |
-| BM25 → tree rerank | 0.567 | 10.6s |
+| BM25 → tree rerank (gpt-4o-mini) | 0.567 | 10.6s |
+| BM25 → tree rerank (gpt-5.5) | 0.667 | 8.8s |
 | LLM tree | 0.524 | 13.7s |
 
 Two tiers: **local index lookups** (BM25 / dense / late-interaction) answer in

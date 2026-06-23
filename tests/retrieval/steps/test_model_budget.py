@@ -37,6 +37,16 @@ def test_large_context_model() -> None:
     assert context_window_tokens("gpt-4.1") == 1_000_000
 
 
+def test_gpt5_reasoning_model_window_is_1m() -> None:
+    # gpt-5.5 has a 1M-token context window (gpt-4.1 class) and resolves via the
+    # "gpt-5" prefix — NOT the 16K unknown-model fallback — so the tree budget
+    # auto-scales to the model.
+    assert context_window_tokens("gpt-5.5") == 1_000_000
+    assert context_window_tokens("gpt-5") == 1_000_000
+    # And the derived tree budget tracks the 1M window (0.75 safety fraction).
+    assert derive_max_tree_tokens("gpt-5.5") == 750_000
+
+
 def test_unknown_model_falls_back_conservatively() -> None:
     assert context_window_tokens("some-unknown-model") == 16_000
     assert context_window_tokens("") == 16_000
