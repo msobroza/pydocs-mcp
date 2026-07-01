@@ -1436,6 +1436,44 @@ class SqliteReferenceStore:
             rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return [(r["qname"], r["hop"], r["in_degree"]) for r in rows]
 
+    async def find_transitive_callees(
+        self,
+        from_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Bounded FORWARD transitive closure — the target's dependency closure.
+
+        Walks FORWARD from ``from_node_id`` (what it calls, what those call, …)
+        up to ``max_depth`` hops, returning ``(qname, min_hop, in_degree)`` per
+        transitive callee. The forward mirror of :meth:`find_transitive_callers`
+        (join on ``from_node_id`` / select ``to_node_id``, with an explicit
+        ``to_node_id IS NOT NULL`` since a forward hop needs a resolved target).
+        Same cycle-safety, min-hop dedup, ``'similar'`` exclusion, and
+        seed-self exclusion. ``in_degree`` is the callee's structural fan-in.
+        Powers ``lookup(show="context")``.
+        """
+        sql = (
+            "WITH RECURSIVE reach(node_id, depth) AS ("
+            "  SELECT to_node_id, 1 FROM node_references"
+            "    WHERE from_node_id = ? AND kind != 'similar' AND to_node_id IS NOT NULL"
+            "  UNION"
+            "  SELECT r.to_node_id, reach.depth + 1"
+            "    FROM node_references r JOIN reach ON r.from_node_id = reach.node_id"
+            "    WHERE reach.depth < ? AND r.kind != 'similar' AND r.to_node_id IS NOT NULL"
+            ") "
+            "SELECT reach.node_id AS qname, MIN(reach.depth) AS hop, "
+            "  (SELECT COUNT(*) FROM node_references nr "
+            "     WHERE nr.to_node_id = reach.node_id AND nr.kind != 'similar') AS in_degree "
+            "FROM reach WHERE reach.node_id != ? "
+            "GROUP BY reach.node_id "
+            "ORDER BY hop ASC, in_degree DESC, qname ASC"
+        )
+        params = (from_node_id, max_depth, from_node_id)
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+        return [(r["qname"], r["hop"], r["in_degree"]) for r in rows]
+
     async def delete_for_package(
         self,
         package: str,

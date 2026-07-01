@@ -6,15 +6,25 @@ import dataclasses
 
 import pytest
 
-from pydocs_mcp.application.reference_service import ImpactNode, ReferenceService
+from pydocs_mcp.application.reference_service import (
+    ContextNode,
+    ImpactNode,
+    ReferenceService,
+)
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.models import Chunk
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.node_score import NodeScore
 from tests._fakes import (
+    InMemoryChunkStore,
     InMemoryNodeScoreStore,
     InMemoryReferenceStore,
     make_fake_uow_factory,
 )
+
+
+def _chunk(qname: str, *, text: str = "") -> Chunk:
+    return Chunk(text=text, metadata={"package": "pkg", "qualified_name": qname})
 
 
 def _ref(**kw) -> NodeReference:
@@ -205,3 +215,107 @@ async def test_impact_empty_when_no_callers():
     svc = ReferenceService(uow_factory=make_fake_uow_factory(references=store))
     out = await svc.impact("pkg", "T", max_depth=3, limit=10)
     assert out == ()
+
+
+# ── context() — smart-context dependency closure (lookup(show="context")) ──
+
+
+def _ctx_svc(refs, *, chunks=None, node_scores=None):
+    return ReferenceService(
+        uow_factory=make_fake_uow_factory(references=refs, chunks=chunks, node_scores=node_scores)
+    )
+
+
+@pytest.mark.asyncio
+async def test_context_seed_is_focus_hop0_first():
+    refs = InMemoryReferenceStore()
+    await refs.save_many([_edge("S", "A")], package="pkg")
+    chunks = InMemoryChunkStore()
+    await chunks.upsert([_chunk("S", text="def s(): a()"), _chunk("A", text="def a(): pass")])
+    out = await _ctx_svc(refs, chunks=chunks).context("pkg", "S", max_depth=2, limit=10)
+    assert isinstance(out[0], ContextNode)
+    assert (out[0].qualified_name, out[0].hop) == ("S", 0)  # seed = focus, first
+    assert out[0].source_text == "def s(): a()"
+    assert [n.qualified_name for n in out] == ["S", "A"]
+    assert any(c.method == "find_transitive_callees" for c in refs.calls)
+
+
+@pytest.mark.asyncio
+async def test_context_ranks_callees_by_pagerank():
+    refs = InMemoryReferenceStore()
+    await refs.save_many([_edge("S", "A"), _edge("S", "B")], package="pkg")  # both hop 1
+    chunks = InMemoryChunkStore()
+    await chunks.upsert([_chunk("S"), _chunk("A"), _chunk("B")])
+    nss = InMemoryNodeScoreStore()
+    await nss.upsert(
+        [_score("A", pagerank=0.1, in_degree=1), _score("B", pagerank=0.9, in_degree=1)]
+    )
+    out = await _ctx_svc(refs, chunks=chunks, node_scores=nss).context(
+        "pkg", "S", max_depth=1, limit=10
+    )
+    assert [n.qualified_name for n in out] == ["S", "B", "A"]  # seed, then B (higher pagerank)
+
+
+@pytest.mark.asyncio
+async def test_context_limit_caps_total_nodes():
+    refs = InMemoryReferenceStore()
+    await refs.save_many([_edge("S", "A"), _edge("S", "B"), _edge("S", "C")], package="pkg")
+    chunks = InMemoryChunkStore()
+    await chunks.upsert([_chunk(q) for q in ("S", "A", "B", "C")])
+    nss = InMemoryNodeScoreStore()
+    await nss.upsert(
+        [
+            _score("A", pagerank=0.3, in_degree=0),
+            _score("B", pagerank=0.9, in_degree=0),
+            _score("C", pagerank=0.6, in_degree=0),
+        ]
+    )
+    out = await _ctx_svc(refs, chunks=chunks, node_scores=nss).context(
+        "pkg", "S", max_depth=1, limit=2
+    )
+    assert [n.qualified_name for n in out] == ["S", "B"]  # seed + top-1 callee
+
+
+@pytest.mark.asyncio
+async def test_context_populates_source_text_from_chunk():
+    refs = InMemoryReferenceStore()
+    await refs.save_many([_edge("S", "A")], package="pkg")
+    chunks = InMemoryChunkStore()
+    await chunks.upsert([_chunk("S"), _chunk("A", text="def a(x):\n    return x")])
+    out = await _ctx_svc(refs, chunks=chunks).context("pkg", "S", max_depth=1, limit=10)
+    a = next(n for n in out if n.qualified_name == "A")
+    assert a.source_text == "def a(x):\n    return x"
+
+
+@pytest.mark.asyncio
+async def test_context_fanin_fallback_without_scores():
+    # No node_scores; A has higher fan-in than B → A ranks first among callees.
+    refs = InMemoryReferenceStore()
+    await refs.save_many([_edge("S", "A"), _edge("S", "B"), _edge("X", "A")], package="pkg")
+    chunks = InMemoryChunkStore()
+    await chunks.upsert([_chunk(q) for q in ("S", "A", "B")])
+    out = await _ctx_svc(refs, chunks=chunks).context("pkg", "S", max_depth=1, limit=10)
+    assert [n.qualified_name for n in out] == ["S", "A", "B"]
+    a = next(n for n in out if n.qualified_name == "A")
+    assert a.in_degree == 2  # S + X
+
+
+@pytest.mark.asyncio
+async def test_context_empty_closure_returns_just_seed():
+    refs = InMemoryReferenceStore()
+    await refs.save_many([_edge("X", "Y")], package="pkg")  # unrelated to S
+    chunks = InMemoryChunkStore()
+    await chunks.upsert([_chunk("S", text="def s(): pass")])
+    out = await _ctx_svc(refs, chunks=chunks).context("pkg", "S", max_depth=2, limit=10)
+    assert [n.qualified_name for n in out] == ["S"]
+
+
+@pytest.mark.asyncio
+async def test_context_missing_chunk_yields_empty_source():
+    refs = InMemoryReferenceStore()
+    await refs.save_many([_edge("S", "A")], package="pkg")
+    chunks = InMemoryChunkStore()
+    await chunks.upsert([_chunk("S", text="def s(): a()")])  # no chunk for A
+    out = await _ctx_svc(refs, chunks=chunks).context("pkg", "S", max_depth=1, limit=10)
+    a = next(n for n in out if n.qualified_name == "A")
+    assert a.source_text == ""

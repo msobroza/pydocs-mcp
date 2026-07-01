@@ -350,6 +350,22 @@ class GraphSearchable(Protocol):
         """
         ...
 
+    async def find_transitive_callees(
+        self,
+        from_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Bounded forward transitive closure: the target's dependency closure.
+
+        Forward mirror of :meth:`find_transitive_callers` — returns
+        ``(qualified_name, min_hop, in_degree)`` per transitive callee (what
+        the target calls, what those call, …) within ``max_depth`` hops.
+        Cross-package, cycle-safe, excludes ``'similar'`` / unresolved edges,
+        never lists the target itself. Powers ``lookup(show="context")``.
+        """
+        ...
+
 
 @runtime_checkable
 class ReferenceStore(GraphSearchable, Protocol):

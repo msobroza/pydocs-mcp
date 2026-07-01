@@ -64,6 +64,9 @@ reference_graph:
     top_m: 5                                # neighbours per node when enabled (1-25)
   impact:
     max_depth: 3                            # reverse-traversal depth for lookup(show="impact"), 1-6
+  context:
+    max_depth: 2                            # forward dependency-closure depth for lookup(show="context"), 1-6
+    token_budget: 2048                      # token cap for the packed context (graded fidelity)
 
 search:
   output:

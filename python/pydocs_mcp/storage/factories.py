@@ -96,21 +96,25 @@ def build_sqlite_lookup_service(
     from pydocs_mcp.application.package_lookup import PackageLookup
     from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.tree_service import TreeService
-    from pydocs_mcp.retrieval.config import ImpactConfig
+    from pydocs_mcp.retrieval.config import ContextConfig, ImpactConfig
 
     uow_factory = build_sqlite_uow_factory(db_path)
     package_lookup = PackageLookup(uow_factory=uow_factory)
     tree_svc = TreeService(uow_factory=uow_factory)
     ref_svc = ReferenceService(uow_factory=uow_factory)
-    # ``show="impact"`` reverse-walk depth is a YAML tunable, not an MCP param;
-    # thread it from config (falling back to the shipped ImpactConfig default
-    # for direct/test construction with no config).
-    impact_cfg = config.reference_graph.impact if config is not None else ImpactConfig()
+    # ``show="impact"`` / ``show="context"`` tunables are YAML settings, not MCP
+    # params; thread them from config (falling back to the shipped sub-config
+    # defaults for direct/test construction with no config).
+    rg = config.reference_graph if config is not None else None
+    impact_cfg = rg.impact if rg is not None else ImpactConfig()
+    context_cfg = rg.context if rg is not None else ContextConfig()
     return LookupService(
         package_lookup=package_lookup,
         tree_svc=tree_svc,
         ref_svc=ref_svc,
         impact_max_depth=impact_cfg.max_depth,
+        context_max_depth=context_cfg.max_depth,
+        context_token_budget=context_cfg.token_budget,
     )
 
 

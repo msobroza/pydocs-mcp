@@ -223,6 +223,29 @@ class ImpactConfig(BaseModel):
     max_depth: int = Field(_DEFAULT_IMPACT_MAX_DEPTH, ge=1, le=6)
 
 
+# Single source of truth for the smart-context defaults — referenced by both
+# ``ContextConfig`` (the YAML canonical source) and the ``LookupService``
+# fallback fields, so the literals live in exactly one place.
+_DEFAULT_CONTEXT_MAX_DEPTH = 2
+_DEFAULT_CONTEXT_TOKEN_BUDGET = 2048
+
+
+class ContextConfig(BaseModel):
+    """Bounds for ``lookup(show="context")`` (smart-context packing).
+
+    ``context`` walks the reference graph FORWARD from the target (its
+    dependency closure — what it calls) and packs the closure under one token
+    budget at graded fidelity (focus = full source, ring = signatures, rest =
+    outline). ``max_depth`` bounds the walk; ``token_budget`` caps the packed
+    output. Both are server-side tunables, NOT MCP parameters.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_depth: int = Field(_DEFAULT_CONTEXT_MAX_DEPTH, ge=1, le=6)
+    token_budget: int = Field(_DEFAULT_CONTEXT_TOKEN_BUDGET, ge=128, le=100_000)
+
+
 class ReferenceGraphConfig(BaseModel):
     """Composite — capture toggles + output bounds (sub-PR #5c, §5.3).
 
@@ -241,6 +264,7 @@ class ReferenceGraphConfig(BaseModel):
     node_scores: NodeScoresConfig = Field(default_factory=NodeScoresConfig)
     similar_edges: SimilarEdgesConfig = Field(default_factory=SimilarEdgesConfig)
     impact: ImpactConfig = Field(default_factory=ImpactConfig)
+    context: ContextConfig = Field(default_factory=ContextConfig)
 
 
 class SearchOutputConfig(BaseModel):

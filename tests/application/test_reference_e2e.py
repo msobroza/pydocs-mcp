@@ -14,7 +14,7 @@ from pydocs_mcp.application.reference_service import ReferenceService
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.models import Package, PackageOrigin
+from pydocs_mcp.models import Chunk, Package, PackageOrigin
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -142,3 +142,36 @@ async def test_e2e_impact_ranks_transitive_callers(tmp_path):
         ("pkg.indirect", 2),
     ]
     assert all(not n.has_scores for n in out)  # node_scores disabled by default
+
+
+def _src_chunk(qname: str, *, text: str) -> Chunk:
+    return Chunk(text=text, metadata={"package": "pkg", "qualified_name": qname})
+
+
+@pytest.mark.asyncio
+async def test_e2e_context_packs_dependency_closure(tmp_path):
+    """Full pipeline: resolve + store chunks, then ReferenceService.context
+    forward-walks the closure and hydrates focus/ring source from real chunks."""
+    db = tmp_path / "x.db"
+    open_index_database(db).close()
+    uow_factory = build_sqlite_uow_factory(db)
+    indexing = IndexingService(uow_factory=uow_factory)
+    ref_svc = ReferenceService(uow_factory=uow_factory)
+
+    pkg = _pkg("pkg")
+    trees = (_module_tree("pkg.seed"), _module_tree("pkg.dep"))
+    refs = (_ref(from_node_id="pkg.seed", to_name="pkg.dep", to_node_id=None),)  # seed calls dep
+    chunks = (
+        _src_chunk("pkg.seed", text="def seed():\n    dep()"),
+        _src_chunk("pkg.dep", text="def dep():\n    pass"),
+    )
+    await indexing.reindex_package(
+        pkg, chunks=chunks, module_members=(), trees=trees, references=refs
+    )
+
+    out = await ref_svc.context("pkg", "pkg.seed", max_depth=2, limit=10)
+    assert [(n.qualified_name, n.hop) for n in out] == [("pkg.seed", 0), ("pkg.dep", 1)]
+    assert (
+        out[0].source_text == "def seed():\n    dep()"
+    )  # focus = full source (survives round-trip)
+    assert out[1].source_text == "def dep():\n    pass"  # ring renderer derives signature from this

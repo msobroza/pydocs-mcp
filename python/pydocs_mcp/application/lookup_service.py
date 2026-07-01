@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.application.formatting import (
+    format_context,
     format_impact,
     format_package_doc,
     format_packages_list,
@@ -46,7 +47,11 @@ from pydocs_mcp.application.mcp_errors import (
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.retrieval.config import _DEFAULT_IMPACT_MAX_DEPTH
+from pydocs_mcp.retrieval.config import (
+    _DEFAULT_CONTEXT_MAX_DEPTH,
+    _DEFAULT_CONTEXT_TOKEN_BUDGET,
+    _DEFAULT_IMPACT_MAX_DEPTH,
+)
 
 if TYPE_CHECKING:
     # ReferenceService is the typing target for _REF_GETTERS; concrete
@@ -218,6 +223,10 @@ class LookupService:
     # default keeps direct/test construction working (single source of truth:
     # ``retrieval.config._DEFAULT_IMPACT_MAX_DEPTH``).
     impact_max_depth: int = _DEFAULT_IMPACT_MAX_DEPTH
+    # Forward-closure depth + token budget for ``show="context"`` — same
+    # posture (YAML tunables via the composition root, not MCP params).
+    context_max_depth: int = _DEFAULT_CONTEXT_MAX_DEPTH
+    context_token_budget: int = _DEFAULT_CONTEXT_TOKEN_BUDGET
 
     async def lookup(self, payload: LookupInput) -> str:
         target_str = payload.target
@@ -306,6 +315,18 @@ class LookupService:
                 limit=limit,
             )
             return format_impact(impacted, target=target, limit=limit)
+
+        # Smart-context — forward dependency-closure packed at graded fidelity
+        # under a token budget. Own return shape (ContextNodes) + formatter.
+        # ``limit`` caps the candidate node count; the token budget caps output.
+        if show == "context":
+            ctx = await self.ref_svc.context(
+                package,
+                node.node_id,
+                max_depth=self.context_max_depth,
+                limit=limit,
+            )
+            return format_context(ctx, target=target, token_budget=self.context_token_budget)
 
         # Reference-graph dispatch (callers / callees / inherits).
         getter = _REF_GETTERS.get(show)

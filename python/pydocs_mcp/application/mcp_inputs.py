@@ -189,7 +189,9 @@ class LookupInput(BaseModel):
     """Input for the ``lookup`` MCP tool (spec §4.1)."""
 
     target: str = ""
-    show: Literal["default", "tree", "callers", "callees", "inherits", "impact"] = "default"
+    show: Literal["default", "tree", "callers", "callees", "inherits", "impact", "context"] = (
+        "default"
+    )
     # ``limit`` bounds reference-graph output (callers/callees/inherits).
     # The default and the upper ceiling are BOTH driven by YAML
     # (``reference_graph.output.default_limit`` / ``max_limit``), pushed

@@ -301,3 +301,100 @@ async def test_transitive_callers_empty_when_no_callers(provider):
     await store.save_many([_call("A", "B")], package="pkg")
     rows = await store.find_transitive_callers("T", max_depth=3)
     assert rows == []
+
+
+# ── find_transitive_callees (forward dependency-closure, lookup(show="context")) ──
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_single_hop(provider):
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many([_call("S", "A")], package="pkg")  # S calls A
+    rows = await store.find_transitive_callees("S", max_depth=1)
+    assert [(q, hop) for q, hop, _ in rows] == [("A", 1)]
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_multi_hop_within_depth(provider):
+    # S -> A -> B -> C (each calls the next)
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many([_call("S", "A"), _call("A", "B"), _call("B", "C")], package="pkg")
+    rows = await store.find_transitive_callees("S", max_depth=2)
+    assert {q: hop for q, hop, _ in rows} == {"A": 1, "B": 2}  # C at hop 3 > depth 2
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_min_hop_dedup(provider):
+    # S -> A (direct), S -> B, B -> A : A reachable at hop 1 and hop 2.
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many([_call("S", "A"), _call("S", "B"), _call("B", "A")], package="pkg")
+    rows = await store.find_transitive_callees("S", max_depth=3)
+    assert {q: hop for q, hop, _ in rows} == {"A": 1, "B": 1}
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_cycle_terminates_and_excludes_seed(provider):
+    # S -> A and A -> S (cycle back through the seed).
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many([_call("S", "A"), _call("A", "S")], package="pkg")
+    rows = await store.find_transitive_callees("S", max_depth=5)
+    assert [q for q, _, _ in rows] == ["A"]  # terminates; seed not its own callee
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_depth_bound(provider):
+    # S -> A -> B -> C -> D ; depth 2 keeps only A (1) and B (2).
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many(
+        [_call("S", "A"), _call("A", "B"), _call("B", "C"), _call("C", "D")], package="pkg"
+    )
+    rows = await store.find_transitive_callees("S", max_depth=2)
+    assert {q for q, _, _ in rows} == {"A", "B"}
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_skips_unresolved_edges(provider):
+    # S "calls" A by NAME but the edge is unresolved (to_node_id=None) → not a callee.
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many(
+        [_ref(from_node_id="S", to_name="A", to_node_id=None), _call("S", "B")], package="pkg"
+    )
+    rows = await store.find_transitive_callees("S", max_depth=2)
+    assert {q for q, _, _ in rows} == {"B"}
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_excludes_similar_edges(provider):
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many(
+        [_call("S", "A"), _call("S", "Z", kind=ReferenceKind.SIMILAR)], package="pkg"
+    )
+    rows = await store.find_transitive_callees("S", max_depth=2)
+    assert {q for q, _, _ in rows} == {"A"}
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_in_degree_counts_real_callers(provider):
+    # A is called by S (the seed edge), B, C → global fan-in 3; a 'similar' edge
+    # into A does not count.
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many(
+        [
+            _call("S", "A"),
+            _call("B", "A"),
+            _call("C", "A"),
+            _call("Z", "A", kind=ReferenceKind.SIMILAR),
+        ],
+        package="pkg",
+    )
+    rows = await store.find_transitive_callees("S", max_depth=1)
+    in_deg = {q: deg for q, _, deg in rows}
+    assert in_deg["A"] == 3  # S + B + C ; 'similar' excluded
+
+
+@pytest.mark.asyncio
+async def test_transitive_callees_empty_when_no_callees(provider):
+    store = SqliteReferenceStore(provider=provider)
+    await store.save_many([_call("X", "Y")], package="pkg")
+    rows = await store.find_transitive_callees("S", max_depth=3)
+    assert rows == []
