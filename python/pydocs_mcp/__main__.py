@@ -208,6 +208,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  pydocs-mcp lookup fastapi.routing.APIRouter                                 # class + members\n"
             "  pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers   # who calls this method\n"
             "  pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits               # base classes\n"
+            "  pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show impact    # what breaks if I change it\n"
             "  pydocs-mcp lookup __project__.my_module.MyClass                             # YOUR class, not a library\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -220,14 +221,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_lookup.add_argument(
         "--show",
-        choices=["default", "tree", "callers", "callees", "inherits"],
+        choices=["default", "tree", "callers", "callees", "inherits", "impact"],
         default="default",
         help=(
             "What to show: 'default' = symbol summary + immediate children (start here); "
             "'tree' = full nested subtree (use when 'default' is too shallow); "
             "'callers' = who references this — use to answer 'who uses X?'; "
             "'callees' = what this calls — use to answer 'what does X depend on?'; "
-            "'inherits' = base classes / interface chain — use to answer 'what does X extend?'."
+            "'inherits' = base classes / interface chain — use to answer 'what does X extend?'; "
+            "'impact' = everything that transitively calls this, ranked — 'what breaks if I change X?'."
         ),
     )
     sp_lookup.add_argument(

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from pydocs_mcp.retrieval.config import (
     AppConfig,
+    ImpactConfig,
     ReferenceCaptureConfig,
     ReferenceGraphConfig,
     ReferenceOutputConfig,
@@ -114,3 +115,37 @@ def test_reference_resolver_config_typed():
     assert cfg.include_stdlib is True
     explicit = ReferenceResolverConfig(include_stdlib=False)
     assert explicit.include_stdlib is False
+
+
+def test_reference_graph_impact_default_max_depth_after_load():
+    """Shipped baseline yields reference_graph.impact.max_depth == 3."""
+    cfg = AppConfig.load()
+    assert cfg.reference_graph.impact.max_depth == 3
+
+
+def test_reference_graph_impact_yaml_overlay_overrides_max_depth(tmp_path):
+    """YAML overlay can retune the blast-radius traversal depth."""
+    overlay = tmp_path / "custom.yaml"
+    overlay.write_text("reference_graph:\n  impact:\n    max_depth: 5\n")
+    cfg = AppConfig.load(explicit_path=overlay)
+    assert cfg.reference_graph.impact.max_depth == 5
+    # Untouched sibling keys keep their shipped defaults.
+    assert cfg.reference_graph.output.default_limit == 50
+
+
+@pytest.mark.parametrize("bad", [0, 7])
+def test_impact_config_rejects_out_of_bounds_depth(bad):
+    """max_depth is bounded 1..6 (0 is a degenerate walk; >6 caps blast-radius cost)."""
+    with pytest.raises(ValidationError):
+        ImpactConfig(max_depth=bad)
+
+
+@pytest.mark.parametrize("ok", [1, 6])
+def test_impact_config_accepts_boundary_depth(ok):
+    assert ImpactConfig(max_depth=ok).max_depth == ok
+
+
+def test_impact_config_rejects_unknown_key():
+    """extra='forbid' catches a mistyped key under impact:."""
+    with pytest.raises(ValidationError):
+        ImpactConfig(max_dept=3)  # typo

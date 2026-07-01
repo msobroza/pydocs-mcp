@@ -381,6 +381,48 @@ class InMemoryReferenceStore:
             rows = [r for r in rows if r.kind == kind]
         return rows
 
+    async def find_transitive_callers(
+        self,
+        target_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Python reverse-BFS mirror of SqliteReferenceStore.find_transitive_callers.
+
+        Output-equivalent to the recursive CTE: min-hop per transitive caller
+        within ``max_depth``, cross-package, excluding ``'similar'`` /
+        unresolved edges and the target itself; ``in_degree`` = non-``similar``
+        resolved fan-in.
+        """
+        self.calls.append(_Call("find_transitive_callers", (target_node_id, max_depth)))
+        edges = [
+            r
+            for rs in self.by_package.values()
+            for r in rs
+            if r.to_node_id is not None and str(r.kind) != "similar"
+        ]
+        callers_of: dict[str, list[str]] = {}
+        in_degree: dict[str, int] = {}
+        for r in edges:
+            callers_of.setdefault(r.to_node_id, []).append(r.from_node_id)
+            in_degree[r.to_node_id] = in_degree.get(r.to_node_id, 0) + 1
+        min_hop: dict[str, int] = {}
+        frontier = [target_node_id]
+        for depth in range(1, max_depth + 1):
+            nxt: list[str] = []
+            for node in frontier:
+                for caller in callers_of.get(node, []):
+                    if caller == target_node_id or caller in min_hop:
+                        continue
+                    min_hop[caller] = depth
+                    nxt.append(caller)
+            frontier = nxt
+            if not frontier:
+                break
+        result = [(q, hop, in_degree.get(q, 0)) for q, hop in min_hop.items()]
+        result.sort(key=lambda t: (t[1], -t[2], t[0]))
+        return result
+
     async def delete_for_package(
         self,
         package: str,

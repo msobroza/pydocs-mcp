@@ -21,6 +21,23 @@ from pydocs_mcp.storage.protocols import UnitOfWork
 
 
 @dataclass(frozen=True, slots=True)
+class ImpactNode:
+    """One transitive caller in a ``lookup(show="impact")`` blast-radius.
+
+    ``hop`` is the shortest reverse distance from the target; ``in_degree`` is
+    the node's structural fan-in; ``pagerank`` is its graph centrality (``0.0``
+    when ``node_scores`` is disabled); ``has_scores`` records whether PageRank
+    was available (drives the render label + the fan-in-vs-PageRank ranking).
+    """
+
+    qualified_name: str
+    hop: int
+    pagerank: float
+    in_degree: int
+    has_scores: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReferenceService:
     """Reads the cross-node reference graph through a per-call UnitOfWork.
 
@@ -87,3 +104,42 @@ class ReferenceService:
         async with self.uow_factory() as uow:
             rows = await uow.references.find_by_name(name, kind)
         return tuple(rows)
+
+    async def impact(
+        self,
+        package: str,
+        qname: str,
+        *,
+        max_depth: int,
+        limit: int,
+    ) -> tuple[ImpactNode, ...]:
+        """Ranked blast-radius: who transitively calls ``qname`` (what breaks).
+
+        Walks the reference graph BACKWARD up to ``max_depth`` hops, then ranks
+        by ``(hop asc, pagerank desc, in_degree desc, qname asc)`` and slices to
+        ``limit``. PageRank comes from the index-time ``node_scores`` table when
+        enabled; otherwise every ``pagerank`` is ``0.0`` and the sort collapses
+        to fan-in (in-degree) ranking — no ``[graph]`` extra required. ``package``
+        is informational (the walk is cross-package, like ``callers``).
+        Read-only: no ``commit``.
+        """
+        async with self.uow_factory() as uow:
+            discovered = await uow.references.find_transitive_callers(
+                qname,
+                max_depth=max_depth,
+            )
+            if not discovered:
+                return ()
+            scores = await uow.node_scores.scores_for([q for q, _hop, _deg in discovered])
+        nodes = [
+            ImpactNode(
+                qualified_name=q,
+                hop=hop,
+                pagerank=scores[q].pagerank if q in scores else 0.0,
+                in_degree=scores[q].in_degree if q in scores else fan_in,
+                has_scores=q in scores,
+            )
+            for q, hop, fan_in in discovered
+        ]
+        nodes.sort(key=lambda n: (n.hop, -n.pagerank, -n.in_degree, n.qualified_name))
+        return tuple(nodes[:limit])

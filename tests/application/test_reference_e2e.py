@@ -106,3 +106,39 @@ async def test_e2e_index_resolve_store_query(tmp_path):
     )
     assert len(by_name) == 1
     assert by_name[0].to_node_id == "pkg.helpers.compute"
+
+
+@pytest.mark.asyncio
+async def test_e2e_impact_ranks_transitive_callers(tmp_path):
+    """Full pipeline: resolve + store, then ReferenceService.impact runs the
+    real recursive-CTE over SQLite and ranks the blast-radius.
+
+    Graph: pkg.indirect -> pkg.direct -> pkg.target. Blast-radius of
+    pkg.target is pkg.direct (hop 1), pkg.indirect (hop 2). node_scores is
+    disabled by default → fan-in fallback ranking (no PageRank).
+    """
+    db = tmp_path / "x.db"
+    open_index_database(db).close()
+    uow_factory = build_sqlite_uow_factory(db)
+    indexing = IndexingService(uow_factory=uow_factory)
+    ref_svc = ReferenceService(uow_factory=uow_factory)
+
+    pkg = _pkg("pkg")
+    trees = (
+        _module_tree("pkg.target"),
+        _module_tree("pkg.direct"),
+        _module_tree("pkg.indirect"),
+    )
+    # Raw (unresolved) edges — the resolver fills to_node_id by exact qname match.
+    refs = (
+        _ref(from_node_id="pkg.direct", to_name="pkg.target", to_node_id=None),
+        _ref(from_node_id="pkg.indirect", to_name="pkg.direct", to_node_id=None),
+    )
+    await indexing.reindex_package(pkg, chunks=(), module_members=(), trees=trees, references=refs)
+
+    out = await ref_svc.impact("pkg", "pkg.target", max_depth=2, limit=10)
+    assert [(n.qualified_name, n.hop) for n in out] == [
+        ("pkg.direct", 1),
+        ("pkg.indirect", 2),
+    ]
+    assert all(not n.has_scores for n in out)  # node_scores disabled by default

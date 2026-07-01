@@ -6,10 +6,15 @@ import dataclasses
 
 import pytest
 
-from pydocs_mcp.application.reference_service import ReferenceService
+from pydocs_mcp.application.reference_service import ImpactNode, ReferenceService
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.storage.node_reference import NodeReference
-from tests._fakes import InMemoryReferenceStore, make_fake_uow_factory
+from pydocs_mcp.storage.node_score import NodeScore
+from tests._fakes import (
+    InMemoryNodeScoreStore,
+    InMemoryReferenceStore,
+    make_fake_uow_factory,
+)
 
 
 def _ref(**kw) -> NodeReference:
@@ -22,6 +27,17 @@ def _ref(**kw) -> NodeReference:
     )
     base.update(kw)
     return NodeReference(**base)
+
+
+def _edge(frm: str, to: str, kind: ReferenceKind = ReferenceKind.CALLS) -> NodeReference:
+    """A resolved caller edge ``frm`` → ``to``."""
+    return _ref(from_node_id=frm, to_name=to, to_node_id=to, kind=kind)
+
+
+def _score(qname: str, *, pagerank: float, in_degree: int) -> NodeScore:
+    return NodeScore(
+        package="pkg", qualified_name=qname, in_degree=in_degree, pagerank=pagerank, community=0
+    )
 
 
 def test_reference_service_only_has_uow_factory_field() -> None:
@@ -104,3 +120,88 @@ async def test_callers_does_not_call_commit():
     assert all(not f.committed for f in fakes)
     # And `rolled_back` is True because __aexit__ treats no-commit as rollback.
     assert all(f.rolled_back for f in fakes)
+
+
+# ── impact() — ranked blast-radius (lookup(show="impact")) ──
+
+
+@pytest.mark.asyncio
+async def test_impact_reads_via_find_transitive_callers():
+    store = InMemoryReferenceStore()
+    await store.save_many([_edge("A", "T")], package="pkg")
+    svc = ReferenceService(uow_factory=make_fake_uow_factory(references=store))
+    out = await svc.impact("pkg", "T", max_depth=2, limit=10)
+    assert isinstance(out, tuple)
+    assert [n.qualified_name for n in out] == ["A"]
+    assert isinstance(out[0], ImpactNode)
+    assert any(c.method == "find_transitive_callers" for c in store.calls)
+
+
+@pytest.mark.asyncio
+async def test_impact_ranks_by_pagerank_when_scores_present():
+    store = InMemoryReferenceStore()
+    await store.save_many([_edge("A", "T"), _edge("B", "T")], package="pkg")  # both hop 1
+    nss = InMemoryNodeScoreStore()
+    await nss.upsert(
+        [_score("A", pagerank=0.1, in_degree=1), _score("B", pagerank=0.9, in_degree=1)]
+    )
+    svc = ReferenceService(uow_factory=make_fake_uow_factory(references=store, node_scores=nss))
+    out = await svc.impact("pkg", "T", max_depth=1, limit=10)
+    assert [n.qualified_name for n in out] == ["B", "A"]  # pagerank desc within same hop
+    assert all(n.has_scores for n in out)
+    assert out[0].pagerank == 0.9
+
+
+@pytest.mark.asyncio
+async def test_impact_falls_back_to_fanin_without_scores():
+    # A has 2 real callers, B has 1 → fan-in ranks A before B (same hop, no node_scores).
+    store = InMemoryReferenceStore()
+    await store.save_many(
+        [_edge("A", "T"), _edge("B", "T"), _edge("X", "A"), _edge("Y", "A"), _edge("Z", "B")],
+        package="pkg",
+    )
+    svc = ReferenceService(uow_factory=make_fake_uow_factory(references=store))  # empty node_scores
+    out = await svc.impact("pkg", "T", max_depth=1, limit=10)
+    assert [n.qualified_name for n in out] == ["A", "B"]  # fan-in desc
+    assert all(not n.has_scores for n in out)
+    assert out[0].in_degree == 2
+
+
+@pytest.mark.asyncio
+async def test_impact_hop_dominates_centrality():
+    # A hop 1 (pagerank 0.01), B hop 2 (pagerank 0.99) → A still ranks first.
+    store = InMemoryReferenceStore()
+    await store.save_many([_edge("A", "T"), _edge("B", "A")], package="pkg")
+    nss = InMemoryNodeScoreStore()
+    await nss.upsert(
+        [_score("A", pagerank=0.01, in_degree=1), _score("B", pagerank=0.99, in_degree=1)]
+    )
+    svc = ReferenceService(uow_factory=make_fake_uow_factory(references=store, node_scores=nss))
+    out = await svc.impact("pkg", "T", max_depth=2, limit=10)
+    assert [n.qualified_name for n in out] == ["A", "B"]
+
+
+@pytest.mark.asyncio
+async def test_impact_limit_slices_after_ranking():
+    store = InMemoryReferenceStore()
+    await store.save_many([_edge("A", "T"), _edge("B", "T"), _edge("C", "T")], package="pkg")
+    nss = InMemoryNodeScoreStore()
+    await nss.upsert(
+        [
+            _score("A", pagerank=0.3, in_degree=0),
+            _score("B", pagerank=0.9, in_degree=0),
+            _score("C", pagerank=0.6, in_degree=0),
+        ]
+    )
+    svc = ReferenceService(uow_factory=make_fake_uow_factory(references=store, node_scores=nss))
+    out = await svc.impact("pkg", "T", max_depth=1, limit=2)
+    assert [n.qualified_name for n in out] == ["B", "C"]  # top-2 by pagerank, AFTER ranking
+
+
+@pytest.mark.asyncio
+async def test_impact_empty_when_no_callers():
+    store = InMemoryReferenceStore()
+    await store.save_many([_edge("A", "B")], package="pkg")
+    svc = ReferenceService(uow_factory=make_fake_uow_factory(references=store))
+    out = await svc.impact("pkg", "T", max_depth=3, limit=10)
+    assert out == ()

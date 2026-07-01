@@ -62,6 +62,8 @@ reference_graph:
   similar_edges:
     enabled: false                          # synthetic embedding-kNN 'similar' edges (densify the graph)
     top_m: 5                                # neighbours per node when enabled (1-25)
+  impact:
+    max_depth: 3                            # reverse-traversal depth for lookup(show="impact"), 1-6
 
 search:
   output:

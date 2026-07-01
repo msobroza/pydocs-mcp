@@ -42,6 +42,7 @@ from pydocs_mcp.models import (
 )
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.reference_service import ImpactNode
     from pydocs_mcp.models import SearchResponse
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -252,6 +253,64 @@ def format_references(
                     f"- ⚠ `{r.from_node_id}` → `{r.to_name}` "
                     f"*(unresolved — to_name didn't match any indexed qname)*\n"
                 )
+    return "".join(blocks)
+
+
+def format_impact(
+    rows: tuple[ImpactNode, ...],
+    *,
+    target: str,
+    limit: int,
+) -> str:
+    """Render a ranked blast-radius (``lookup(show="impact")``) as markdown.
+
+    ``rows`` are the ``ImpactNode``s the service already ranked and sliced;
+    this only renders them (grouped into concentric hop rings so "what breaks
+    first" reads top-down). The ranking-mode line tells the user whether the
+    order came from PageRank (``node_scores`` enabled) or the fan-in fallback.
+
+    Shape:
+      - H1 = ``# Impact of `target` — what transitively calls it``
+      - Empty rows → H1 + ``Nothing transitively calls `target`.``
+      - Lead: ``N transitive caller(s) found (max depth D).`` + ranking-mode note
+      - ``## hop N`` ring per distance (``hop 1`` labelled "direct callers")
+      - Row: ``- `qname` — PageRank P, in-degree D`` (or just in-degree when
+        ``node_scores`` is disabled)
+
+    ``limit`` is accepted for API symmetry with the service (which already
+    sliced); it is NOT re-applied here. Always ends with a single ``\\n``.
+    """
+    h1 = f"# Impact of `{target}` — what transitively calls it\n"
+    if not rows:
+        return f"{h1}\nNothing transitively calls `{target}`.\n"
+
+    max_hop = max(n.hop for n in rows)
+    has_scores = any(n.has_scores for n in rows)
+    mode = (
+        "Ranked by PageRank centrality.\n"
+        if has_scores
+        else "Ranked by fan-in (in-degree); enable reference_graph.node_scores "
+        "for PageRank ranking.\n"
+    )
+    plural = "" if len(rows) == 1 else "s"
+    lead = f"{len(rows)} transitive caller{plural} found (max depth {max_hop}). {mode}"
+
+    # Group into hop rings preserving the service's rank order within each ring.
+    rings: dict[int, list[ImpactNode]] = {}
+    for n in rows:
+        rings.setdefault(n.hop, []).append(n)
+
+    blocks: list[str] = [h1, lead]
+    for hop in sorted(rings):
+        label = " (direct callers)" if hop == 1 else ""
+        blocks.append(f"\n## hop {hop}{label}\n\n")
+        for n in rings[hop]:
+            if n.has_scores:
+                blocks.append(
+                    f"- `{n.qualified_name}` — PageRank {n.pagerank:.4f}, in-degree {n.in_degree}\n"
+                )
+            else:
+                blocks.append(f"- `{n.qualified_name}` — in-degree {n.in_degree}\n")
     return "".join(blocks)
 
 
