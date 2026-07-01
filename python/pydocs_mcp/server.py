@@ -223,12 +223,14 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
             "callers"  → every site that calls/references this symbol — use to answer "who uses X?"
             "callees"  → every symbol this calls — use to answer "what does X depend on?"
             "inherits" → base classes and interface chain — use to answer "what does X extend?"
+            "impact"   → everything that transitively calls this symbol, ranked — use to answer "what breaks if I change X?"
 
         Examples:
           lookup(target="")
           lookup(target="fastapi.routing.APIRouter")
           lookup(target="fastapi.routing.APIRouter.include_router", show="callers")
           lookup(target="requests.auth.HTTPBasicAuth", show="inherits")
+          lookup(target="fastapi.routing.APIRouter.include_router", show="impact")
 
         Returns markdown — exact shape varies by `show` mode (a summary block
         for "default", a tree for "tree", a list of caller / callee entries

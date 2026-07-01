@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.application.formatting import (
+    format_impact,
     format_package_doc,
     format_packages_list,
     format_references,
@@ -45,6 +46,7 @@ from pydocs_mcp.application.mcp_errors import (
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.retrieval.config import _DEFAULT_IMPACT_MAX_DEPTH
 
 if TYPE_CHECKING:
     # ReferenceService is the typing target for _REF_GETTERS; concrete
@@ -211,6 +213,11 @@ class LookupService:
     package_lookup: PackageLookup
     tree_svc: Any  # TreeService | NullTreeService — structural Protocol
     ref_svc: Any  # ReferenceService | NullReferenceService
+    # Reverse-traversal depth for ``show="impact"``. NOT an MCP param — the
+    # composition root threads ``reference_graph.impact.max_depth`` here; the
+    # default keeps direct/test construction working (single source of truth:
+    # ``retrieval.config._DEFAULT_IMPACT_MAX_DEPTH``).
+    impact_max_depth: int = _DEFAULT_IMPACT_MAX_DEPTH
 
     async def lookup(self, payload: LookupInput) -> str:
         target_str = payload.target
@@ -286,6 +293,19 @@ class LookupService:
         # Tree / default → render node's page-index JSON.
         if show in _TREE_SHOWS:
             return json.dumps(node.to_pageindex_json(), indent=2)
+
+        # Ranked blast-radius — multi-hop REVERSE traversal, its own return
+        # shape (ranked ImpactNodes) + formatter, so it can't ride _REF_GETTERS.
+        # Applies to any node kind (unlike ``inherits``). ``limit`` slices the
+        # rendered rows AFTER the service ranks the full discovered set.
+        if show == "impact":
+            impacted = await self.ref_svc.impact(
+                package,
+                node.node_id,
+                max_depth=self.impact_max_depth,
+                limit=limit,
+            )
+            return format_impact(impacted, target=target, limit=limit)
 
         # Reference-graph dispatch (callers / callees / inherits).
         getter = _REF_GETTERS.get(show)

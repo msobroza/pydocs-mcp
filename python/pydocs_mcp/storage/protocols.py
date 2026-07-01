@@ -334,6 +334,22 @@ class GraphSearchable(Protocol):
         kind: ReferenceKind | None = None,
     ) -> list[NodeReference]: ...
 
+    async def find_transitive_callers(
+        self,
+        target_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Bounded reverse transitive closure: who transitively calls the target.
+
+        Returns ``(qualified_name, min_hop, in_degree)`` per transitive caller
+        within ``max_depth`` hops. ``in_degree`` is the node's structural
+        fan-in (non-``similar`` resolved edges pointing at it). Cross-package,
+        cycle-safe, excludes ``'similar'`` edges / unresolved targets, and
+        never lists the target itself. Powers ``lookup(show="impact")``.
+        """
+        ...
+
 
 @runtime_checkable
 class ReferenceStore(GraphSearchable, Protocol):

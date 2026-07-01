@@ -1394,6 +1394,48 @@ class SqliteReferenceStore:
             rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return [_row_to_node_reference(r) for r in rows]
 
+    async def find_transitive_callers(
+        self,
+        target_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Bounded REVERSE transitive closure over the call/reference graph.
+
+        Walks BACKWARD from ``target_node_id`` (who calls it, who calls them,
+        …) up to ``max_depth`` hops, returning ``(qname, min_hop, in_degree)``
+        for every transitive caller. ``in_degree`` is the node's global
+        structural fan-in (non-``similar`` resolved edges pointing at it) —
+        the centrality proxy used when ``node_scores`` PageRank is absent.
+
+        Cycle-safe: ``depth`` strictly increases and is capped by
+        ``max_depth`` (so ``max_depth`` MUST be a finite ``>= 1`` int).
+        ``UNION`` dedups intermediate rows; the outer ``GROUP BY`` collapses a
+        node reachable at several depths to its MIN hop. ``'similar'`` edges
+        and unresolved (NULL) targets never participate, and the target is
+        never listed as its own caller.
+        """
+        sql = (
+            "WITH RECURSIVE reach(node_id, depth) AS ("
+            "  SELECT from_node_id, 1 FROM node_references"
+            "    WHERE to_node_id = ? AND kind != 'similar'"
+            "  UNION"
+            "  SELECT r.from_node_id, reach.depth + 1"
+            "    FROM node_references r JOIN reach ON r.to_node_id = reach.node_id"
+            "    WHERE reach.depth < ? AND r.kind != 'similar'"
+            ") "
+            "SELECT reach.node_id AS qname, MIN(reach.depth) AS hop, "
+            "  (SELECT COUNT(*) FROM node_references nr "
+            "     WHERE nr.to_node_id = reach.node_id AND nr.kind != 'similar') AS in_degree "
+            "FROM reach WHERE reach.node_id != ? "
+            "GROUP BY reach.node_id "
+            "ORDER BY hop ASC, in_degree DESC, qname ASC"
+        )
+        params = (target_node_id, max_depth, target_node_id)
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+        return [(r["qname"], r["hop"], r["in_degree"]) for r in rows]
+
     async def delete_for_package(
         self,
         package: str,

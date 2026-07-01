@@ -201,6 +201,28 @@ class SimilarEdgesConfig(BaseModel):
     top_m: int = Field(5, ge=1, le=25)
 
 
+# Single source of truth for the blast-radius traversal depth default —
+# referenced by both ``ImpactConfig.max_depth`` (the YAML-tunable canonical
+# source) and ``LookupService.impact_max_depth`` (the direct-construction
+# fallback), so the literal lives in exactly one place.
+_DEFAULT_IMPACT_MAX_DEPTH = 3
+
+
+class ImpactConfig(BaseModel):
+    """Bounded reverse-traversal depth for ``lookup(show="impact")``.
+
+    ``impact`` answers "what transitively calls X / what breaks if I change X"
+    by walking the reference graph BACKWARD from the target. ``max_depth``
+    bounds that walk (and is termination-critical for cyclic graphs). It is a
+    server-side tunable, NOT an MCP parameter — the client only sends the fixed
+    ``lookup(target, show)`` surface.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_depth: int = Field(_DEFAULT_IMPACT_MAX_DEPTH, ge=1, le=6)
+
+
 class ReferenceGraphConfig(BaseModel):
     """Composite — capture toggles + output bounds (sub-PR #5c, §5.3).
 
@@ -218,6 +240,7 @@ class ReferenceGraphConfig(BaseModel):
     resolver: ReferenceResolverConfig = Field(default_factory=ReferenceResolverConfig)
     node_scores: NodeScoresConfig = Field(default_factory=NodeScoresConfig)
     similar_edges: SimilarEdgesConfig = Field(default_factory=SimilarEdgesConfig)
+    impact: ImpactConfig = Field(default_factory=ImpactConfig)
 
 
 class SearchOutputConfig(BaseModel):
