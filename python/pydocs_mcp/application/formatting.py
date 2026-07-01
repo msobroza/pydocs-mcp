@@ -42,7 +42,7 @@ from pydocs_mcp.models import (
 )
 
 if TYPE_CHECKING:
-    from pydocs_mcp.application.reference_service import ImpactNode
+    from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.models import SearchResponse
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -312,6 +312,63 @@ def format_impact(
             else:
                 blocks.append(f"- `{n.qualified_name}` — in-degree {n.in_degree}\n")
     return "".join(blocks)
+
+
+def _render_context_node(node: ContextNode) -> str:
+    """Render one node at the fidelity its hop distance earns.
+
+    Derives each tier from the persisted source text: full source (focus),
+    signature = first source line (ring), name only (outline).
+    """
+    if node.hop == 0:  # focus tier — full source
+        body = node.source_text or "# (source unavailable)"
+        return f"\n## Focus — `{node.qualified_name}`\n\n```python\n{body}\n```\n"
+    if node.hop == 1:  # ring tier — signature (the source's first line)
+        sig = node.source_text.split("\n", 1)[0].strip() or f"# `{node.qualified_name}`"
+        return f"\n## `{node.qualified_name}` — signature\n\n```python\n{sig}\n```\n"
+    # outline tier — one line
+    return f"- `{node.qualified_name}` (hop {node.hop})\n"
+
+
+def format_context(
+    nodes: tuple[ContextNode, ...],
+    *,
+    target: str,
+    token_budget: int,
+) -> str:
+    """Render a smart-context pack (``lookup(show="context")``) under a budget.
+
+    ``nodes`` are already ranked by the service (seed first, then callees by
+    proximity × centrality). Each is rendered at graded fidelity by hop —
+    focus (hop 0) = full source, ring (hop 1) = signature, rest (hop ≥2) =
+    one-line outline — and appended in rank order until the token budget
+    (``token_budget * _CHARS_PER_TOKEN`` chars) is hit; the piece that would
+    overflow is truncated when ≥ ``_TRUNCATION_MIN_REMAINDER`` chars remain,
+    else dropped. Always ends with a single ``\\n``.
+    """
+    h1 = f"# Context for `{target}` — its dependency closure\n"
+    if not nodes:
+        return f"{h1}\nNo dependency context available for `{target}`.\n"
+
+    max_hop = max(n.hop for n in nodes)
+    lead = (
+        f"{len(nodes)} symbols in the closure (max depth {max_hop}). Graded fidelity: "
+        "focus = full source, ring = signature, rest = outline.\n"
+    )
+    max_chars = token_budget * _CHARS_PER_TOKEN
+    blocks = [h1, lead]
+    total = len(h1) + len(lead)
+    for node in nodes:
+        piece = _render_context_node(node)
+        if total + len(piece) > max_chars:
+            remaining = max_chars - total
+            if remaining >= _TRUNCATION_MIN_REMAINDER:
+                blocks.append(piece[:remaining])
+            break
+        blocks.append(piece)
+        total += len(piece)
+    out = "".join(blocks)
+    return out if out.endswith("\n") else out + "\n"
 
 
 # Default empty-state message for ``render_top_composite``. Single source of

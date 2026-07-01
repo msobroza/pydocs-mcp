@@ -224,6 +224,7 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
             "callees"  → every symbol this calls — use to answer "what does X depend on?"
             "inherits" → base classes and interface chain — use to answer "what does X extend?"
             "impact"   → everything that transitively calls this symbol, ranked — use to answer "what breaks if I change X?"
+            "context"  → the symbol's dependency closure packed under a token budget (full source + signatures + outline) — use to answer "everything I need to understand X"
 
         Examples:
           lookup(target="")
@@ -231,6 +232,7 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
           lookup(target="fastapi.routing.APIRouter.include_router", show="callers")
           lookup(target="requests.auth.HTTPBasicAuth", show="inherits")
           lookup(target="fastapi.routing.APIRouter.include_router", show="impact")
+          lookup(target="fastapi.routing.APIRouter.include_router", show="context")
 
         Returns markdown — exact shape varies by `show` mode (a summary block
         for "default", a tree for "tree", a list of caller / callee entries

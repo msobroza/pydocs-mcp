@@ -108,6 +108,9 @@ class NullReferenceService:
     async def impact(self, *_args, **_kwargs):
         raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
 
+    async def context(self, *_args, **_kwargs):
+        raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
+
 
 __all__ = (
     "NullReferenceService",

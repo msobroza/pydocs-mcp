@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from pydocs_mcp.retrieval.config import (
     AppConfig,
+    ContextConfig,
     ImpactConfig,
     ReferenceCaptureConfig,
     ReferenceGraphConfig,
@@ -149,3 +150,35 @@ def test_impact_config_rejects_unknown_key():
     """extra='forbid' catches a mistyped key under impact:."""
     with pytest.raises(ValidationError):
         ImpactConfig(max_dept=3)  # typo
+
+
+def test_reference_graph_context_defaults_after_load():
+    """Shipped baseline yields reference_graph.context.{max_depth=2, token_budget=2048}."""
+    cfg = AppConfig.load()
+    assert cfg.reference_graph.context.max_depth == 2
+    assert cfg.reference_graph.context.token_budget == 2048
+
+
+def test_reference_graph_context_yaml_overlay(tmp_path):
+    overlay = tmp_path / "custom.yaml"
+    overlay.write_text("reference_graph:\n  context:\n    max_depth: 3\n    token_budget: 4096\n")
+    cfg = AppConfig.load(explicit_path=overlay)
+    assert cfg.reference_graph.context.max_depth == 3
+    assert cfg.reference_graph.context.token_budget == 4096
+    assert cfg.reference_graph.impact.max_depth == 3  # untouched sibling default
+
+
+@pytest.mark.parametrize("bad", [0, 7])
+def test_context_config_rejects_out_of_bounds_depth(bad):
+    with pytest.raises(ValidationError):
+        ContextConfig(max_depth=bad)
+
+
+def test_context_config_rejects_tiny_budget():
+    with pytest.raises(ValidationError):
+        ContextConfig(token_budget=1)  # below the 128 floor
+
+
+def test_context_config_rejects_unknown_key():
+    with pytest.raises(ValidationError):
+        ContextConfig(max_dept=2)  # typo
