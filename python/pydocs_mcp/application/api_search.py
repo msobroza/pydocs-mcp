@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from pydocs_mcp.models import ModuleMemberList, SearchQuery, SearchResponse
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
@@ -41,6 +42,11 @@ class ApiSearch:
         and dedup across databases.
         """
         state = await self.member_pipeline.run(query)
-        if state.candidates is not None:
-            return state.candidates
-        return state.result if state.result is not None else ModuleMemberList(items=())
+        # A member pipeline's candidates / result are always ModuleMemberList; the
+        # state field is a union across pipeline kinds, so narrow explicitly.
+        candidates = state.candidates if state.candidates is not None else state.result
+        return (
+            cast("ModuleMemberList", candidates)
+            if candidates is not None
+            else ModuleMemberList(items=())
+        )
