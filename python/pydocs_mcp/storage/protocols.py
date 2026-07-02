@@ -91,6 +91,17 @@ class ChunkStore(Protocol):
         """
         ...
 
+    async def mark_embedded(self, ids: Sequence[int]) -> None:
+        """Flag chunks whose single-vector was just written to the ``.tq``.
+
+        Stamped by the vector-write path in the same UoW transaction as
+        ``vectors.add_vectors`` so ``chunks.embedded`` mirrors the sidecar
+        exactly. The integrity check compares vectors against this flag —
+        chunks a selective embed policy deliberately skips stay 0 and are
+        never mistaken for SQLite/.tq drift. Empty ids → no-op.
+        """
+        ...
+
     async def insert(self, chunks: tuple[Chunk, ...]) -> None:
         """Insert chunks; assigns rowids.
 

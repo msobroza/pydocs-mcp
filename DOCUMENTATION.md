@@ -436,6 +436,40 @@ Capture is on by default and tuned via YAML
 
 ---
 
+## Selective dependency embedding
+
+Everything discovered is chunked and FTS/BM25-indexed, but **dense vectors are
+written per package tier** (`EmbedPolicy` — `extraction/embed_policy.py`):
+
+- **`full`** — every chunk embedded. Applies to the project itself, to any
+  dependency matching `embedding.full_index_dependencies` (exact names or
+  fnmatch globs; the CLI `--full-dep NAME` flag merges into the list), and
+  globally when `embedding.dependency_policy: full`.
+- **`doc_pages`** (default for dependencies) — only documentation chunks are
+  embedded: the per-module docstring pages emitted by the
+  `dependency_doc_pages` ingestion stage (module docstring + public top-level
+  signatures/docstrings, code bodies excluded), plus markdown sections and
+  READMEs. One embedding per module instead of one per def.
+- **`none`** — dependencies get no vectors at all (BM25-only).
+
+Mechanics worth knowing:
+
+- The package's tier is folded into every chunk's `content_hash`
+  (`AssignChunkContentHashStage` appends `|tier:<tier>`), so promoting or
+  demoting one dependency re-embeds (or drops vectors for) **exactly that
+  package** on the next index — no global re-embed.
+- `chunks.embedded` (schema v12) records which chunks actually carry a `.tq`
+  vector; the startup integrity check compares vectors against this flag, so
+  deliberately-unembedded chunks are a steady state, never treated as drift.
+- Dense search over a partially-embedded corpus returns the embedded subset
+  (the allowlist is intersected with the index's ids first).
+- `scope=deps` queries route to `pipelines/chunk_search_deps.yaml`
+  (BM25 over all dep chunks ∥ dense over their doc pages, RRF-fused) via the
+  `scope_is_dependencies_only` route predicate; other scopes stay on the
+  dense+graph default, which also reaches the embedded dep doc pages.
+- A package whose tier yields no embeddable chunks keeps
+  `packages.embedding_model` NULL and is never re-embedded on model changes.
+
 ## Two-level cache
 
 Each project gets a `.db` (SQLite — chunks + metadata + reference graph) plus a

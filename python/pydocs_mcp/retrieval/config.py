@@ -424,6 +424,20 @@ class EmbeddingConfig(BaseModel):
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
     # 2 for max compression.
     bit_width: int = Field(default=4, ge=1, le=8)
+    # Selective embedding for dependencies (indexing-latency control; big deps
+    # like torch carry ~50k code chunks and embedding them all takes ~an hour
+    # on CPU). Everything stays FTS/BM25-indexed regardless; this only decides
+    # which chunks get dense vectors:
+    #   doc_pages (default) — dependency docstring pages + markdown/README only
+    #   full               — every dependency chunk (pre-v12 behavior)
+    #   none               — dependencies are BM25-only
+    # NOT folded into compute_pipeline_hash: the per-package tier is folded
+    # into chunk content hashes instead (AssignChunkContentHashStage), so a
+    # policy change re-embeds only the packages whose tier actually changed.
+    dependency_policy: Literal["doc_pages", "full", "none"] = "doc_pages"
+    # Dependencies promoted to the project-grade `full` tier — exact PyPI names
+    # or fnmatch globs ("internal-*"). CLI `--full-dep NAME` merges into this.
+    full_index_dependencies: list[str] = Field(default_factory=list)
 
     @field_validator("dim")
     @classmethod
@@ -651,6 +665,24 @@ class AppConfig(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
     )
+
+    def with_full_index_dependencies(self, names: tuple[str, ...]) -> AppConfig:
+        """Return a copy with ``names`` merged into ``embedding.full_index_dependencies``.
+
+        CLI ``--full-dep`` convenience — flags ADD to (never replace) the
+        YAML-declared list, deduplicated order-preserving. Pure function
+        (pydantic ``model_copy``); no-op when ``names`` is empty.
+        """
+        if not names:
+            return self
+        merged = list(dict.fromkeys([*self.embedding.full_index_dependencies, *names]))
+        return self.model_copy(
+            update={
+                "embedding": self.embedding.model_copy(
+                    update={"full_index_dependencies": merged},
+                ),
+            },
+        )
 
     def with_device(self, *, gpu: bool) -> AppConfig:
         """Return a copy with the embedder execution device set.

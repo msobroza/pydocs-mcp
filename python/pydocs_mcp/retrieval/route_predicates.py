@@ -90,6 +90,23 @@ def _scope_includes_project(state: PipelineState) -> bool:
     return v != SearchScope.DEPENDENCIES_ONLY.value
 
 
+@predicate("scope_is_project_only")
+def _scope_is_project_only(state: PipelineState) -> bool:
+    """Exact-match variant of scope_includes_*: fires ONLY for scope=project.
+
+    Route entries have no negation, so exclusive routing (deps queries -> the
+    BM25+dense deps preset, everything else -> the graph default) needs exact
+    predicates alongside the inclusive ``scope_includes_*`` pair.
+    """
+    return _scope_value(state) == SearchScope.PROJECT_ONLY.value
+
+
+@predicate("scope_is_dependencies_only")
+def _scope_is_dependencies_only(state: PipelineState) -> bool:
+    """Fires ONLY for scope=deps — see scope_is_project_only for the rationale."""
+    return _scope_value(state) == SearchScope.DEPENDENCIES_ONLY.value
+
+
 _IS_LONG_QUERY_THRESHOLD = 8
 
 

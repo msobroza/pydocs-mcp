@@ -64,6 +64,23 @@ class TurboQuantVectorStore:
             allowlist = await self.candidate_id_resolver(filter)
             if allowlist.size == 0:
                 return ()
+
+            # Selective embed policies leave some chunks deliberately
+            # vectorless (dependency code under ``dependency_policy:
+            # doc_pages``), and the SQL-derived allowlist can't know which —
+            # but ``IdMapIndex.search`` raises ``KeyError`` for allowlist ids
+            # absent from the index. Intersect with the present ids first so
+            # a mixed candidate set degrades to the embedded subset.
+            def _present_only() -> np.ndarray:
+                index = self.uow.index
+                return np.asarray(
+                    [i for i in allowlist.tolist() if index.contains(int(i))],
+                    dtype=allowlist.dtype,
+                )
+
+            allowlist = await asyncio.to_thread(_present_only)
+            if allowlist.size == 0:
+                return ()
             scores_2d, ids_2d = await asyncio.to_thread(
                 self.uow.index.search,
                 query,

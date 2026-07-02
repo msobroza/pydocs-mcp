@@ -9,6 +9,13 @@ metadata_schemas:
 
 pipelines:
   chunk:
+    # scope=deps queries route to the BM25 ∥ dense-doc-pages preset (dependency
+    # code is FTS-indexed but vectorless under embedding.dependency_policy:
+    # doc_pages, so pure dense would miss it). Everything else stays on the
+    # benchmarked dense + graph default — which also covers dependency doc
+    # pages semantically, since those ARE embedded.
+    - predicate: scope_is_dependencies_only
+      pipeline_path: pipelines/chunk_search_deps.yaml
     - default: true
       pipeline_path: pipelines/chunk_search_graph.yaml
   member:
@@ -101,6 +108,14 @@ embedding:
   bit_width:   4
   # Embedder execution device (cpu / cuda); the --gpu CLI flag sets cuda.
   #   device:    cpu
+  # Which DEPENDENCY chunks get dense vectors (everything stays BM25-indexed):
+  #   doc_pages (default) — per-module docstring pages + markdown/README only
+  #   full                — every dependency chunk (slow on torch-sized deps)
+  #   none                — dependencies are BM25-only
+  dependency_policy: doc_pages
+  # Dependencies promoted to the project-grade full tier (names or fnmatch
+  # globs); the CLI --full-dep flag merges into this list.
+  full_index_dependencies: []
 
 # Unified SearchBackend seam (spec §8.1): which storage backend serves
 # retrieval capabilities. `dim` / `bit_width` stay sourced from `embedding`

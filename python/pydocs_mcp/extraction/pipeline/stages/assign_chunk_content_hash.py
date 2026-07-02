@@ -15,9 +15,10 @@ re-embeds them. No separate force-re-embed code path needed.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.models import compute_chunk_content_hash
@@ -26,14 +27,26 @@ from pydocs_mcp.models import compute_chunk_content_hash
 @stage_registry.register("assign_chunk_content_hash")
 @dataclass(frozen=True, slots=True)
 class AssignChunkContentHashStage:
-    """Rewrite each chunk's content_hash with the pipeline-aware version."""
+    """Rewrite each chunk's content_hash with the pipeline-aware version.
+
+    The package's embed TIER (``EmbedPolicy.tier`` — full / doc_pages / none)
+    is folded into the hash slot alongside ``pipeline_hash``. Promoting a
+    dependency (``--full-dep`` / ``embedding.full_index_dependencies``) or
+    changing ``embedding.dependency_policy`` therefore invalidates exactly the
+    affected packages' chunk hashes: the diff-merge re-inserts them, the embed
+    stage re-embeds them under the new tier, and demoted packages' old rows
+    (+ vectors) are dropped — no global re-embed, no separate force path.
+    """
 
     pipeline_hash: str = ""
+    embed_policy: EmbedPolicy = field(default_factory=EmbedPolicy)
     name: str = "assign_chunk_content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
         if not state.chunks.chunks or not self.pipeline_hash:
             return state
+        tier = self.embed_policy.tier(state.files.target_kind, state.files.package_name)
+        effective_hash = f"{self.pipeline_hash}|tier:{tier}"
         new_chunks = tuple(
             replace(
                 c,
@@ -42,7 +55,7 @@ class AssignChunkContentHashStage:
                     module=str(c.metadata.get("module", "")),
                     title=str(c.metadata.get("title", "")),
                     text=c.text,
-                    pipeline_hash=self.pipeline_hash,
+                    pipeline_hash=effective_hash,
                 ),
             )
             for c in state.chunks.chunks
@@ -52,7 +65,11 @@ class AssignChunkContentHashStage:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], context: Any) -> AssignChunkContentHashStage:
-        return cls(pipeline_hash=getattr(context, "pipeline_hash", ""))
+        app_config = getattr(context, "app_config", None)
+        return cls(
+            pipeline_hash=getattr(context, "pipeline_hash", ""),
+            embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": "assign_chunk_content_hash"}
