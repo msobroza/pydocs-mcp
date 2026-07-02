@@ -155,6 +155,10 @@ class SearchInput(BaseModel):
     kind: Literal["docs", "api", "any"] = "any"
     package: str = ""
     scope: Literal["project", "deps", "all"] = "all"
+    # Multi-repo corpus selector (sibling of ``package`` / ``scope``): restrict
+    # the query to one loaded project by name. "" = union across all loaded
+    # projects. No effect on a single-project server.
+    project: str = ""
     # ``limit`` bounds the chunk-result count. Both the default and the
     # upper ceiling are driven by YAML (``search.output.default_limit`` /
     # ``max_limit``), pushed into module-level slots by
@@ -184,6 +188,13 @@ class SearchInput(BaseModel):
             raise ValueError("package must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ or be '__project__'")
         return v
 
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
 
 class LookupInput(BaseModel):
     """Input for the ``lookup`` MCP tool (spec §4.1)."""
@@ -192,6 +203,10 @@ class LookupInput(BaseModel):
     show: Literal["default", "tree", "callers", "callees", "inherits", "impact", "context"] = (
         "default"
     )
+    # Multi-repo corpus selector: resolve the target inside one loaded project by
+    # name. "" = resolve across all loaded projects (most-recent first). No effect
+    # on a single-project server.
+    project: str = ""
     # ``limit`` bounds reference-graph output (callers/callees/inherits).
     # The default and the upper ceiling are BOTH driven by YAML
     # (``reference_graph.output.default_limit`` / ``max_limit``), pushed
@@ -208,6 +223,13 @@ class LookupInput(BaseModel):
             raise ValueError(
                 "target must be a dotted identifier like 'pkg.mod.Class.method' or empty"
             )
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
         return v
 
     @field_validator("limit")

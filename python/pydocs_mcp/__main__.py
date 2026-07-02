@@ -69,6 +69,30 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the cache directory (default: ~/.pydocs-mcp).",
     )
+    # Multi-repo loading (CLI-only knob). ``--workspace`` loads every pre-built
+    # ``.db`` bundle in a directory; ``--db`` loads specific bundles (repeatable).
+    # Both are READ-ONLY (the real source may be absent, so no reindex/watch). The
+    # per-query ``--project`` scope selects among what was loaded.
+    _workspace = dict(
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Load every pre-built .db bundle in DIR (read-only multi-repo).",
+    )
+    _db = dict(
+        type=Path,
+        action="append",
+        default=None,
+        dest="db_paths",
+        metavar="FILE",
+        help="Load a specific pre-built .db bundle (repeatable; read-only).",
+    )
+    _project_scope = dict(
+        default="",
+        dest="project_scope",
+        metavar="NAME",
+        help="Restrict the query to one loaded project by name (default: all loaded).",
+    )
     # Re-declaring ``-v/--verbose`` on each subparser so it parses
     # regardless of position (``-m pydocs_mcp -v search …`` and
     # ``-m pydocs_mcp search … -v`` both work). ``default=argparse.SUPPRESS``
@@ -135,6 +159,10 @@ def _build_parser() -> argparse.ArgumentParser:
                 help="Watch the project for changes and reindex on edits. "
                 "Requires the 'watch' extras: pip install pydocs-mcp[watch]",
             )
+            # Multi-repo serve: load pre-built db bundles read-only (skips
+            # indexing + watch) so one MCP server hosts several indexed repos.
+            sp.add_argument("--workspace", **_workspace)
+            sp.add_argument("--db", **_db)
 
     # sub-PR #6: replace query/api with 2 tools matching the MCP surface.
     sp_search = sub.add_parser(
@@ -190,6 +218,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Path to the project root (default: current directory). Determines which cache database is loaded.",
     )
+    sp_search.add_argument("--workspace", **_workspace)
+    sp_search.add_argument("--db", **_db)
+    sp_search.add_argument("--project", **_project_scope)
     sp_search.add_argument("--no-rust", **_no_rust)
     sp_search.add_argument("--cache-dir", **_cache_dir)
     sp_search.add_argument("-v", "--verbose", **_verbose)
@@ -241,6 +272,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Path to the project root (default: current directory). Determines which cache database is loaded.",
     )
+    sp_lookup.add_argument("--workspace", **_workspace)
+    sp_lookup.add_argument("--db", **_db)
+    sp_lookup.add_argument("--project", **_project_scope)
     sp_lookup.add_argument("--no-rust", **_no_rust)
     sp_lookup.add_argument("--cache-dir", **_cache_dir)
     sp_lookup.add_argument("-v", "--verbose", **_verbose)
@@ -500,6 +534,29 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     chunk_repo = SqliteChunkRepository(provider=build_connection_provider(db_path))
     await chunk_repo.rebuild_index()
 
+    # Stamp the database identity (project name/root + embedder identity + recency)
+    # so a portable load can reject a mismatched-embedder .tq and multi-repo search
+    # can route/dedup by project. Written last — only a fully-indexed db is stamped.
+    import time
+
+    from pydocs_mcp.db import write_index_metadata
+    from pydocs_mcp.storage.index_metadata import IndexMetadata
+
+    stamp_conn = open_index_database(db_path)
+    write_index_metadata(
+        stamp_conn,
+        IndexMetadata(
+            project_name=project.name,
+            project_root=str(project),
+            embedding_provider=config.embedding.provider,
+            embedding_model=config.embedding.model_name,
+            embedding_dim=config.embedding.dim,
+            pipeline_hash=pipeline_hash,
+            indexed_at=time.time(),
+        ),
+    )
+    stamp_conn.close()
+
     kb = db_path.stat().st_size / 1024 if db_path.exists() else 0.0
     log.info(
         "Done: %d indexed, %d cached, %d failed (db: %.0f KB)",
@@ -627,69 +684,60 @@ async def _run_watch_only(args: argparse.Namespace) -> None:
     await watcher.run_until_cancelled(on_change)
 
 
+def _query_db_path(args: argparse.Namespace) -> Path | None:
+    """Single-db path for a query, or ``None`` when a workspace/--db load is used."""
+    if getattr(args, "workspace", None) or getattr(args, "db_paths", None):
+        return None
+    return _project_and_db(args)[1]
+
+
 async def _run_search(args: argparse.Namespace) -> None:
-    """Mirror the MCP ``search`` tool: Pydantic input + same pipelines +
-    same rendering. kind='any' runs chunks and members in parallel (§8)."""
-    from pydocs_mcp.application import (
-        ApiSearch,
-        DocsSearch,
-        SearchInput,
-    )
+    """Mirror the MCP ``search`` tool: same router + same rendering.
+
+    Routes to one loaded project (``--project`` / a single ``--project-dir`` db)
+    or unions across a ``--workspace`` / ``--db`` multi-repo load.
+    """
+    from pydocs_mcp.application import SearchInput
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
-    from pydocs_mcp.retrieval.config import (
-        AppConfig,
-        build_chunk_pipeline_from_config,
-        build_member_pipeline_from_config,
-    )
-    from pydocs_mcp.retrieval.factories import build_retrieval_context
-    from pydocs_mcp.server import _do_search
+    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.server import build_routers
 
-    _project, db_path = _project_and_db(args)
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
-    # Push YAML-loaded settings into module-level slots (sub-PR #5c
-    # Task 8). ``search`` itself doesn't consume the reference-graph
-    # config, but the call is uniform across every CLI command so a
-    # follow-up search subcommand can rely on it.
     configure_from_app_config(config)
-    context = build_retrieval_context(db_path, config)
-    docs_svc = DocsSearch(
-        chunk_pipeline=build_chunk_pipeline_from_config(config, context),
+    search_router, _lookup, _svcs = build_routers(
+        config,
+        db_path=_query_db_path(args),
+        workspace=args.workspace,
+        db_paths=args.db_paths,
     )
-    api_svc = ApiSearch(
-        member_pipeline=build_member_pipeline_from_config(config, context),
-    )
-
     payload = SearchInput(
         query=args.query,
         kind=args.kind,
         package=args.package,
         scope=args.scope,
         limit=args.limit,
+        project=args.project_scope,
     )
-    print(await _do_search(payload, docs_svc, api_svc))
+    print(await search_router.search(payload))
 
 
 async def _run_lookup(args: argparse.Namespace) -> None:
-    """Mirror the MCP ``lookup`` tool — same LookupService dispatch.
-
-    Delegates wiring to :func:`build_sqlite_lookup_service` so the CLI and
-    the MCP server can never drift on which stores back ``lookup``.
-    """
+    """Mirror the MCP ``lookup`` tool — same router; routes/resolves by project."""
     from pydocs_mcp.application import LookupInput
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.storage.factories import build_sqlite_lookup_service
+    from pydocs_mcp.server import build_routers
 
-    _project, db_path = _project_and_db(args)
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
-    # Push YAML-loaded settings into module-level slots (sub-PR #5c
-    # Task 8). ``LookupInput`` validators read ``_LIMIT_DEFAULT`` /
-    # ``_LIMIT_MAX`` from this for show='callers'|'callees' bounds.
     configure_from_app_config(config)
-    svc = build_sqlite_lookup_service(db_path, config=config)
-
-    payload = LookupInput(target=args.target, show=args.show)
-    print(await svc.lookup(payload))
+    _search, lookup_router, _svcs = build_routers(
+        config,
+        db_path=_query_db_path(args),
+        workspace=args.workspace,
+        db_paths=args.db_paths,
+    )
+    payload = LookupInput(target=args.target, show=args.show, project=args.project_scope)
+    print(await lookup_router.lookup(payload))
 
 
 def _run_cmd(coro: Awaitable[None], *, verbose: bool) -> int:
@@ -731,7 +779,54 @@ def _cmd_index(args: argparse.Namespace) -> int:
     return _run_cmd(_run_indexing(args), verbose=args.verbose)
 
 
+def _serve_run(
+    args: argparse.Namespace,
+    *,
+    db_path: Path | None,
+    workspace: Path | None,
+    db_paths: list[Path] | None,
+) -> int:
+    """Run the MCP server (single-db or multi-repo) under the shared error policy.
+
+    Kept on the main thread so the default SIGINT handler reaches the blocking
+    ``mcp.run`` loop (see the no-watch rationale in ``_cmd_serve``).
+    """
+    from pydocs_mcp.server import run
+
+    try:
+        run(
+            db_path,
+            config_path=getattr(args, "config", None),
+            gpu=getattr(args, "gpu", False),
+            workspace=workspace,
+            db_paths=db_paths,
+        )
+        return 0
+    except KeyboardInterrupt:
+        # Graceful shutdown via Ctrl+C — not an error.
+        return 0
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        if getattr(args, "verbose", False):
+            traceback.print_exc(file=sys.stderr)
+            log.exception("CLI command failed")
+        else:
+            print("(re-run with --verbose to see the traceback)", file=sys.stderr)
+            log.error("CLI command failed: %s", exc)
+        return 1
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
+    # Multi-repo serve (``--workspace`` / ``--db``): the dbs are pre-built and
+    # read-only, so there is NO indexing phase and no watch — jump straight to the
+    # server over the loaded bundles.
+    workspace = getattr(args, "workspace", None)
+    db_paths = getattr(args, "db_paths", None)
+    multi = workspace is not None or bool(db_paths)
+
+    if multi:
+        return _serve_run(args, db_path=None, workspace=workspace, db_paths=db_paths)
+
     # Phase 1 — async indexing through ``_run_cmd`` so the verbose /
     # traceback policy applies to indexing failures uniformly.
     code = _run_cmd(_run_serve_indexing(args), verbose=args.verbose)
@@ -775,27 +870,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # against ``pydocs-mcp serve`` would not interrupt cleanly. Run on
     # the main thread so the default SIGINT handler reaches the blocking
     # loop. The try / except mirrors ``_run_cmd``'s policy.
-    from pydocs_mcp.server import run
-
-    try:
-        run(
-            db_path,
-            config_path=getattr(args, "config", None),
-            gpu=getattr(args, "gpu", False),
-        )
-        return 0
-    except KeyboardInterrupt:
-        # Graceful shutdown via Ctrl+C — not an error.
-        return 0
-    except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        if args.verbose:
-            traceback.print_exc(file=sys.stderr)
-            log.exception("CLI command failed")
-        else:
-            print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-            log.error("CLI command failed: %s", exc)
-        return 1
+    return _serve_run(args, db_path=db_path, workspace=None, db_paths=None)
 
 
 def _cmd_watch(args: argparse.Namespace) -> int:

@@ -42,26 +42,38 @@ def _capture_config(monkeypatch: pytest.MonkeyPatch) -> dict[str, AppConfig]:
     return captured
 
 
-def test_run_gpu_true_moves_query_embedding_to_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+def _empty_db(tmp_path: Path) -> Path:
+    """A real (schema-only) db so ``run`` -> ``load_project`` passes before the
+    patched ``build_retrieval_context`` aborts (load_project requires an existing db)."""
+    from pydocs_mcp.db import open_index_database
+
+    db = tmp_path / "x.db"
+    open_index_database(db).close()
+    return db
+
+
+def test_run_gpu_true_moves_query_embedding_to_cuda(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from pydocs_mcp.server import run
 
     captured = _capture_config(monkeypatch)
 
     with pytest.raises(_Sentinel):
-        run(db_path=Path("x.db"), gpu=True)
+        run(db_path=_empty_db(tmp_path), gpu=True)
 
     config = captured["config"]
     assert config.embedding.device == "cuda"
     assert config.late_interaction.device == "cuda"
 
 
-def test_run_gpu_false_keeps_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_gpu_false_keeps_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from pydocs_mcp.server import run
 
     captured = _capture_config(monkeypatch)
 
     with pytest.raises(_Sentinel):
-        run(db_path=Path("x.db"), gpu=False)
+        run(db_path=_empty_db(tmp_path), gpu=False)
 
     config = captured["config"]
     assert config.embedding.device == "cpu"

@@ -125,6 +125,35 @@ Both modes share the same YAML tunables: debounce, file extensions, and
 ignored paths live under `serve.watch.*` in your `pydocs-mcp.yaml` (see
 [DOCUMENTATION.md](DOCUMENTATION.md#live-re-indexing)).
 
+### Multi-repo search (optional)
+
+One MCP server can host several already-indexed repos. Index each once (every
+project writes a portable `{name}_{hash}.db` + `.tq` bundle under `--cache-dir`),
+then serve them all — each query searches across every loaded repo, or one via
+the `project` scope:
+
+```bash
+# index a few repos into a shared directory of db bundles
+pydocs-mcp index ~/code/frontend --cache-dir ~/pydocs-index
+pydocs-mcp index ~/code/backend  --cache-dir ~/pydocs-index
+
+# serve them all from ONE MCP server (read-only — no reindex/watch)
+pydocs-mcp serve --workspace ~/pydocs-index
+pydocs-mcp serve --db ~/pydocs-index/backend_1a2b3c4d5e.db   # or specific bundles
+
+# query across all loaded repos, or scope to one by name
+pydocs-mcp search "db pool" --workspace ~/pydocs-index
+pydocs-mcp search "db pool" --workspace ~/pydocs-index --project backend
+```
+
+On the MCP surface the selector is the `project` filter, a sibling of
+`package`/`scope`: `search(query="db pool", project="backend")` /
+`lookup(target="app.db.Pool", project="backend")`; omit it to search every loaded
+repo. When the same package appears in several repos, a root-project copy wins
+over a dependency copy, and among duplicate dependencies the most-recently-indexed
+one is kept. Every loaded db must share the configured embedder — a mismatch
+fails fast (a read-only load can't re-embed an absent project).
+
 Point Claude Code, Cursor, or Continue.dev at it over stdio — copy-paste client
 configs are in [DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration), and
 install troubleshooting (including the `libopenblas` fallback) is in

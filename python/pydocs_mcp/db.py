@@ -10,9 +10,15 @@ import hashlib
 import sqlite3
 from pathlib import Path
 
+from pydocs_mcp.storage.index_metadata import IndexMetadata
+
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 10  # v10: additive — node_scores table (in-degree / PageRank /
+SCHEMA_VERSION = 11  # v11: additive — index_metadata table (single row: project
+# identity + embedder identity + pipeline_hash + indexed_at) so a loader can
+# reject a mismatched-embedder .tq and multi-repo search can route/dedup by
+# project name and recency. Empty until the next index stamps it; no re-extract.
+# v10: additive — node_scores table (in-degree / PageRank /
 # community per node, computed at index time for the graph rerank steps). Purely
 # additive: empty until the next index populates it; no re-extraction forced.
 # v9: no structural change — forces a tree re-extraction so
@@ -92,6 +98,12 @@ _DDL = """
     CREATE INDEX idx_cmv_package           ON chunk_multi_vector_ids(package);
     CREATE INDEX ix_node_scores_qname      ON node_scores(qualified_name);
     CREATE INDEX ix_node_scores_package    ON node_scores(package);
+    CREATE TABLE index_metadata (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        project_name TEXT, project_root TEXT,
+        embedding_provider TEXT, embedding_model TEXT, embedding_dim INTEGER,
+        pipeline_hash TEXT, indexed_at REAL
+    );
 """
 
 # Tables we know about — dropped on a version mismatch so earlier schemas
@@ -106,6 +118,7 @@ _KNOWN_TABLES = (
     "node_references",
     "chunk_multi_vector_ids",  # new in v6
     "node_scores",  # new in v10
+    "index_metadata",  # new in v11
 )
 
 
@@ -283,6 +296,25 @@ def _apply_v10_additions(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS ix_node_scores_package ON node_scores(package)")
 
 
+def _apply_v11_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v11 shape — the single-row ``index_metadata`` table.
+
+    Records the database's project identity + embedder identity + ``indexed_at``
+    (see :mod:`pydocs_mcp.storage.index_metadata`). Purely additive: the table
+    starts empty (legacy dbs read back no row and fall back to
+    ``packages.embedding_model``) and is stamped by the next index, so the
+    migration forces NO re-extraction or re-embed. ``CREATE ... IF NOT EXISTS``
+    keeps the sweep safe to re-run as a v11-on-open drift-recovery pass.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS index_metadata ("
+        "id INTEGER PRIMARY KEY CHECK (id = 1), "
+        "project_name TEXT, project_root TEXT, "
+        "embedding_provider TEXT, embedding_model TEXT, embedding_dim INTEGER, "
+        "pipeline_hash TEXT, indexed_at REAL)"
+    )
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
@@ -309,17 +341,20 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v10 — re-run additive sweeps for drift recovery; data preserved.
+        # v11 — re-run additive sweeps for drift recovery; data preserved.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
         _apply_v6_additions(conn)
         _apply_v7_additions(conn)
         _apply_v10_additions(conn)
-    elif current == 9:
-        # v9 → v10 — purely additive: create node_scores (empty until the next
-        # index populates it). NO content_hash clear / re-extraction needed.
+        _apply_v11_additions(conn)
+    elif current in (9, 10):
+        # v9/v10 → v11 — purely additive: create node_scores (v10) + index_metadata
+        # (v11), both empty until the next index populates them. NO content_hash
+        # clear / re-extraction needed.
         _apply_v10_additions(conn)
+        _apply_v11_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (2, 3, 4, 6, 7, 8):
         # v2/v3/v4/v6/v7/v8 → v9 — walk every forward (additive, idempotent)
@@ -333,6 +368,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v6_additions(conn)
         _apply_v7_additions(conn)
         _apply_v10_additions(conn)
+        _apply_v11_additions(conn)
         # v9 carries no structural change. The extraction enrichment added the
         # FULL multi-line extra_metadata["signature"] header + decorator call
         # args (@app.route('/x')) to the document_trees JSON blob, which neither
@@ -392,6 +428,49 @@ def get_stored_content_hash(connection: sqlite3.Connection, package_name: str) -
         "SELECT content_hash FROM packages WHERE name=?", (package_name,)
     ).fetchone()
     return row["content_hash"] if row else None
+
+
+def write_index_metadata(connection: sqlite3.Connection, meta: IndexMetadata) -> None:
+    """Upsert the single ``index_metadata`` row (id=1) that stamps this database."""
+    connection.execute(
+        "INSERT INTO index_metadata "
+        "(id, project_name, project_root, embedding_provider, embedding_model, "
+        "embedding_dim, pipeline_hash, indexed_at) VALUES (1,?,?,?,?,?,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "project_name=excluded.project_name, project_root=excluded.project_root, "
+        "embedding_provider=excluded.embedding_provider, "
+        "embedding_model=excluded.embedding_model, embedding_dim=excluded.embedding_dim, "
+        "pipeline_hash=excluded.pipeline_hash, indexed_at=excluded.indexed_at",
+        (
+            meta.project_name,
+            meta.project_root,
+            meta.embedding_provider,
+            meta.embedding_model,
+            meta.embedding_dim,
+            meta.pipeline_hash,
+            meta.indexed_at,
+        ),
+    )
+    connection.commit()
+
+
+def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
+    """Return the stored :class:`IndexMetadata`, or ``None`` for a pre-v11 database."""
+    row = connection.execute(
+        "SELECT project_name, project_root, embedding_provider, embedding_model, "
+        "embedding_dim, pipeline_hash, indexed_at FROM index_metadata WHERE id=1"
+    ).fetchone()
+    if row is None:
+        return None
+    return IndexMetadata(
+        project_name=row["project_name"] or "",
+        project_root=row["project_root"] or "",
+        embedding_provider=row["embedding_provider"] or "",
+        embedding_model=row["embedding_model"] or "",
+        embedding_dim=row["embedding_dim"] if row["embedding_dim"] is not None else -1,
+        pipeline_hash=row["pipeline_hash"] or "",
+        indexed_at=row["indexed_at"] or 0.0,
+    )
 
 
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider  # noqa: E402
