@@ -1,0 +1,52 @@
+# Graph-ranked hybrid — BM25 + dense (RRF) then reference-graph expansion +
+# centrality rerank. The A3 candidate: takes the reference hybrid
+# (exp_hybrid_rrf_k60) and adds the shipped graph signals on top —
+# `graph_expand` pulls in 1-hop structural neighbours of the fused top hits,
+# then `centrality_prior` reranks toward the graph's central API. Referenced by
+# ../repoqa_graph_hybrid_f2llm330m.yaml. See benchmarks/EXPERIMENTS.md.
+name: exp_hybrid_graph
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: parallel
+    type: parallel_retrieval
+    params:
+      branches:
+        - name: bm25
+          steps:
+            - {name: fetch, type: chunk_fetcher, params: {schema_name: chunk}}
+            - {name: score, type: bm25_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: bm25.ranked}}
+        - name: dense
+          steps:
+            - {name: fetch, type: dense_fetcher, params: {}}
+            - {name: score, type: dense_scorer, params: {}}
+            - {name: filter, type: metadata_post_filter, params: {}}
+            - {name: topk, type: top_k_filter, params: {publish_to: dense.ranked}}
+  - name: fuse
+    type: rrf_fusion
+    params:
+      k: 60
+  # Graph expansion after fusion (recovers structural neighbours the fused set
+  # missed), then centrality rerank toward the graph-central API. graph_expand
+  # is pure SQL (no extra); centrality_prior reads node_scores (needs the
+  # [graph] extra + reference_graph.node_scores.enabled in the config).
+  - name: graph
+    type: graph_expand
+    params:
+      top_s: 10
+      max_depth: 1
+      decay: 0.9
+  - name: centrality
+    type: centrality_prior
+    params:
+      metric: pagerank
+      alpha: 0.5
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

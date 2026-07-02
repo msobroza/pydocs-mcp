@@ -1,0 +1,39 @@
+# Dense + graph_expand + centrality_prior — the DENSE-base counterpart of
+# exp_hybrid_graph.yaml (same two graph steps, but seeded from pure dense
+# instead of RRF(BM25,dense)). Isolates the base: does dropping the RRF-BM25
+# leg keep dense's standard-query recall while retaining the graph structural
+# lift? Referenced by ../repoqa_dense_graph_centrality_f2llm330m.yaml.
+name: exp_dense_graph_centrality
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: score
+    type: dense_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: graph
+    type: graph_expand
+    params:
+      top_s: 10
+      max_depth: 1
+      decay: 0.9
+  - name: centrality
+    type: centrality_prior
+    params:
+      metric: pagerank
+      alpha: 0.5
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

@@ -414,6 +414,42 @@ graph's home turf — on the standard RepoQA split (where the gold *is* the
 described function) pure dense already wins, and graph expansion only adds
 neighbours *below* the answer, leaving recall@1 unchanged.
 
+### Graph-ranked default
+
+The two sweeps above settle the out-of-box default (previously BM25-only):
+**fusion doesn't help** a strong code embedder, and **graph expansion transforms**
+structurally-reachable retrieval. This A/B runs six chunk-search methods across
+**both** splits with the same **F2LLM-v2-330M** embedder (`--bench-cache off`).
+Each cell is recall@1 / recall@10 / MRR:
+
+![recall@10 by method on both splits](assets/graph_default_ab.png)
+
+| Method | Config | small_test (standard, n=30) | structural (graph, n=20) |
+|---|---|---|---|
+| BM25 (old default) | `repoqa_bm25.yaml` | 0.17 / 0.40 / 0.24 | 0.05 / 0.30 / 0.11 |
+| Dense | `repoqa_dense_f2llm330m.yaml` | 0.70 / 0.77 / 0.73 | 0.00 / 0.30 / 0.11 |
+| Hybrid (RRF k=60) | `repoqa_hybrid_rrf_k60_f2llm.yaml` | 0.37 / 0.63 / 0.46 | 0.05 / 0.25 / 0.10 |
+| Graph-hybrid (RRF + graph) | `repoqa_graph_hybrid_f2llm330m.yaml` | 0.27 / 0.63 / 0.37 | 0.25 / 0.90 / 0.47 |
+| **Dense + graph (new default)** | `repoqa_dense_graph_f2llm330m.yaml` | **0.70 / 0.77 / 0.73** | **0.00 / 1.00 / 0.39** |
+| Dense + graph + centrality | `repoqa_dense_graph_centrality_f2llm330m.yaml` | 0.57 / 0.77 / 0.65 | 0.35 / 0.95 / 0.62 |
+
+> Chart rendered from this table by
+> [`scripts/plot_graph_default_ab.py`](scripts/plot_graph_default_ab.py).
+
+**Takeaways.** **`dense + graph_expand` is the new shipped default**
+(`chunk_search_graph.yaml`). It matches pure dense on standard queries (recall@10
+0.77 — zero regression) *and* tops the structural slice (1.00), strictly
+dominating the old BM25 default on both (0.40 → 0.77 standard, 0.30 → 1.00
+structural). Two negative results pin down *why* it's dense+graph and nothing
+fancier: **RRF-hybrid dilutes** the strong dense branch (graph-hybrid drops to
+0.63 on standard — the ~13-pt cost of mixing in weak BM25), and **centrality
+reranking hurts standard recall@1** (0.70 → 0.57, pushing the exact match below
+the graph-central API). `graph_expand` is pure SQL (no `[graph]` extra), and the
+default index already builds the dense `.tq` sidecar, so the flip adds no indexing
+cost. The ordering also holds with the general-purpose **bge-small** default
+embedder (dense recall@10 0.73 vs BM25 0.40 — see Method comparison), so the flip
+helps out-of-box, not just with F2LLM.
+
 ### Current baselines
 
 Two baseline JSON files are tracked in `benchmarks/baselines/`:
@@ -425,8 +461,8 @@ Two baseline JSON files are tracked in `benchmarks/baselines/`:
 
 CIs are 95% intervals from bootstrap resampling (1000 iter, seed=0). Both were
 captured against the `chunk_search_ranked.yaml` preset, which returns top-K
-ranked separate chunks. The MCP server's default `chunk_search.yaml` instead
-collapses to one composite chunk via `token_budget_formatter` (correct for LLM
+ranked separate chunks. The MCP server's default (`chunk_search_graph.yaml`)
+instead collapses to one composite chunk via `token_budget_formatter` (correct for LLM
 consumers, but it structurally caps `recall@k > 1` at 0 — there is only ever one
 item to retrieve). The ranked preset drops the formatter so `recall@k` can
 measure top-K hits.

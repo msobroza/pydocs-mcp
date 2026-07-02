@@ -107,7 +107,20 @@ def _seed_basic_fixture(db_path: Path) -> None:
 
 
 def _run_server_capture_tools(db_path: Path):
-    """Boot ``server.run`` with FakeMCP injected so we can call handlers."""
+    """Boot ``server.run`` with FakeMCP injected so we can call handlers.
+
+    Pins the vector-free BM25 chunk pipeline via ``config_path``: these tests
+    assert search WIRING (matching chunks, package filter) on the deterministic
+    FTS path, not dense ranking. The shipped default is dense+graph (needs a
+    seeded ``.tq`` sidecar); pinning BM25 keeps the wiring tests deterministic
+    without seeding vectors. The dense+graph default is covered by the benchmark
+    A/B + the dense-pipeline unit tests.
+    """
+    config_path = db_path.parent / "bm25_overlay.yaml"
+    config_path.write_text(
+        "pipelines:\n  chunk:\n    - default: true\n"
+        "      pipeline_path: pipelines/chunk_search.yaml\n"
+    )
     fake_mcp = FakeMCP("test")
     fake_mcp_module = MagicMock()
     fake_mcp_module.FastMCP = lambda name, **kwargs: fake_mcp
@@ -127,7 +140,7 @@ def _run_server_capture_tools(db_path: Path):
     ):
         from pydocs_mcp.server import run
 
-        run(db_path)
+        run(db_path, config_path)
 
     return fake_mcp.tools
 

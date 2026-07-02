@@ -139,10 +139,11 @@ def _build_parser() -> argparse.ArgumentParser:
     # sub-PR #6: replace query/api with 2 tools matching the MCP surface.
     sp_search = sub.add_parser(
         "search",
-        help="Hybrid keyword + semantic search over project + deps",
+        help="Semantic + keyword search over project + deps",
         description=(
-            "Hybrid keyword + semantic search across your project's source AND every "
-            "installed dependency (docs + code), ranked by BM25 plus dense embeddings. "
+            "Semantic + keyword search across your project's source AND every "
+            "installed dependency (docs + code); the default ranks by dense embeddings "
+            "with reference-graph expansion (BM25 and hybrid presets are opt-in). "
             "Use --package __project__ or --scope project to restrict to YOUR code, "
             "not a library."
         ),

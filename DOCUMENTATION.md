@@ -17,21 +17,27 @@ Every query runs through a **`RetrieverPipeline`** — an sklearn-shaped chain o
 inside another for sub-routing, and address any step by name
 (`pipeline["fetch"]`) for introspection or testing.
 
-### The default chunk-search pipeline (BM25)
+### The default chunk-search pipeline (dense + graph expansion)
 
-The shipped default (`python/pydocs_mcp/pipelines/chunk_search.yaml`) is a
-seven-step BM25 chain:
+The shipped default (`python/pydocs_mcp/pipelines/chunk_search_graph.yaml`) is an
+eight-step dense + reference-graph chain:
 
 1. `pre_filter` — parse + validate + scope-split; writes a typed result to
    `state.scratch` for the fetcher.
-2. `chunk_fetcher` — FTS5 `MATCH` with pre-filter pushdown (metadata filters run
-   *inside* SQLite).
-3. `bm25_scorer` — flip the sign so higher = better.
+2. `dense_fetcher` — embed the query, ANN-search the `.tq` sidecar; writes the
+   candidate set.
+3. `dense_scorer` — cosine similarity → relevance.
 4. `metadata_post_filter` — apply any remaining `SearchQuery.post_filter`
    in-memory.
-5. `top_k_filter` — sort by relevance, keep top K.
-6. `limit` — cap the final item count.
-7. `token_budget_formatter` — render the composite chunk for MCP output.
+5. `graph_expand` — seed from the top dense hits, add their 1-hop caller/callee
+   neighbours (the structurally-adjacent code an embedding alone misses).
+6. `top_k_filter` — sort by relevance, keep top K.
+7. `limit` — cap the final item count.
+8. `token_budget_formatter` — render the composite chunk for MCP output.
+
+The former BM25-only chain (`chunk_search.yaml`) remains a shipped preset. On the
+RepoQA benchmark, this dense + graph default lifts recall@10 from 0.40 (BM25) to
+0.77 on standard queries and to 1.00 on structurally-reachable answers.
 
 ### Dense, hybrid, late-interaction, and tree-reasoning retrieval
 
@@ -67,7 +73,8 @@ Several more retrieval modes ship as opt-in pipeline presets:
   as a two-stage reranker over a BM25/dense candidate set (`rerank_candidates`).
 
 Select a preset by pointing the chunk pipeline at it in your config overlay (see
-[Configuration](#configuration)); the default remains BM25.
+[Configuration](#configuration)); the default is dense + graph expansion
+(`chunk_search_graph.yaml`).
 
 #### Graph analytics (opt-in)
 
@@ -478,7 +485,9 @@ what the [benchmark harness](benchmarks/README.md) exploits.)
 
 ### Shipped blueprints
 
-- `pipelines/chunk_search.yaml` — default chunk search (BM25).
+- `pipelines/chunk_search_graph.yaml` / `…_graph_ranked.yaml` — **default** chunk
+  search: dense retrieval + `graph_expand` reference-graph expansion.
+- `pipelines/chunk_search.yaml` — BM25 chunk search (the former default).
 - `pipelines/chunk_search_ranked.yaml` — BM25, ranked top-K (no composite
   collapse).
 - `pipelines/chunk_search_dense.yaml` / `…_dense_ranked.yaml` — dense retrieval.
