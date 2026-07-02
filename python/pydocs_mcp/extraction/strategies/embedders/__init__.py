@@ -43,6 +43,8 @@ def build_embedder(cfg: EmbeddingConfig) -> Embedder:
             "batch_size": cfg.batch_size,
             "normalize": cfg.normalize,
             "query_prompt_name": cfg.query_prompt_name,
+            "backend": cfg.backend,
+            "model_file_name": cfg.model_file_name,
         }
         if cfg.max_seq_length is not None:
             st_kwargs["max_seq_length"] = cfg.max_seq_length

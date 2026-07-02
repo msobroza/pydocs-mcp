@@ -419,6 +419,19 @@ class EmbeddingConfig(BaseModel):
     max_seq_length: int | None = Field(default=None, ge=1)
     normalize: bool = True
     query_prompt_name: str | None = None
+    # ``backend`` / ``model_file_name`` are likewise sentence_transformers-only
+    # (inert for fastembed / openai). ``backend`` selects the ST inference
+    # runtime: ``torch`` (default), ``onnx``, or ``openvino`` — the latter two
+    # enable fast CPU inference, typically ~2-4x with a qint8-quantized file.
+    # ``model_file_name`` picks a specific exported weight file inside the HF
+    # repo (e.g. ``openvino/openvino_model_qint8_quantized.xml`` or
+    # ``onnx/model_qint8_avx512.onnx``); ``None`` uses the backend's default
+    # export. Non-torch backends need the matching ST extra installed
+    # (``sentence-transformers[openvino]`` / ``[onnx]``). Both fields fold into
+    # compute_pipeline_hash ONLY when non-default — quantization changes the
+    # produced vectors, but defaults must keep existing index hashes stable.
+    backend: Literal["torch", "onnx", "openvino"] = "torch"
+    model_file_name: str | None = None
     # TurboQuant scalar-quantization bit width. 4 is the sweet spot per
     # turbovec README — ~16x compression with minimal recall loss on
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
@@ -475,6 +488,20 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_backend_device(self) -> EmbeddingConfig:
+        # WHY: sentence-transformers' OpenVINO backend runs on CPU/iGPU and
+        # does not understand torch's "cuda" device string — failing at
+        # config-load time beats a cryptic backend error at first embed.
+        # (onnx + cuda stays permissive: onnxruntime-gpu is a real setup.)
+        if self.backend == "openvino" and self.device == "cuda":
+            raise ValueError(
+                "The OpenVINO backend (embedding.backend: openvino) runs on "
+                "CPU/iGPU and is incompatible with device: cuda. Keep device: "
+                "cpu (drop --gpu), or use backend: torch/onnx for CUDA."
+            )
+        return self
+
     def compute_pipeline_hash(self) -> str:
         """SHA-256 of embedder fields that affect vector identity.
 
@@ -490,17 +517,28 @@ class EmbeddingConfig(BaseModel):
         field set is small enough that no escaping is required (``provider`` /
         ``bit_width`` / ``max_seq_length`` / ``normalize`` are bounded enums /
         ints / bools, and ``model_name`` cannot legally contain a pipe).
+
+        ``backend`` / ``model_file_name`` fold in ONLY when non-default: a
+        non-torch backend or a quantized weight file changes the produced
+        document vectors (qint8 outputs differ from full precision), so
+        setting them must invalidate the chunk cache — but the conditional
+        append keeps the hash byte-identical for every pre-existing config
+        (the "default install hash is stable" invariant, same pattern as the
+        late-interaction fold in ``ingestion_pipeline_hash``).
         """
-        identity = "|".join(
-            [
-                self.provider,
-                self.model_name,
-                str(self.dim),
-                str(self.bit_width),
-                str(self.max_seq_length),
-                str(self.normalize),
-            ]
-        )
+        parts = [
+            self.provider,
+            self.model_name,
+            str(self.dim),
+            str(self.bit_width),
+            str(self.max_seq_length),
+            str(self.normalize),
+        ]
+        if self.backend != "torch":
+            parts.append(f"backend:{self.backend}")
+        if self.model_file_name is not None:
+            parts.append(f"file:{self.model_file_name}")
+        identity = "|".join(parts)
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 

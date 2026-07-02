@@ -310,6 +310,9 @@ logical identifiers only — no absolute paths), stamped at index time with an
 - **Embedder guard** — every loaded db must match the configured embedder
   (`model` + `dim`, from `index_metadata`); a read-only load that can't re-embed
   fails fast with a clear error rather than a dim-mismatch panic at query time.
+  Note: the guard compares model + dim only — a `backend`/quantization
+  difference between bundles (same model, qint8 vs full precision) is not
+  caught here; single-db deployments catch it via the pipeline hash.
 
 `lookup(target)` without `project` resolves across loaded repos most-recent-first
 and returns the first repo that has the target (its reference-graph traversal stays
@@ -435,6 +438,25 @@ Capture is on by default and tuned via YAML
 (`reference_graph.capture.{enabled,kinds}`); `MENTIONS` is opt-in.
 
 ---
+
+## Embedding backends (sentence_transformers)
+
+The `sentence_transformers` provider can run its model through three runtimes,
+selected by `embedding.backend`: `torch` (default), `onnx`, or `openvino`.
+`embedding.model_file_name` optionally picks a specific exported weight file in
+the HF repo — e.g. `openvino/openvino_model_qint8_quantized.xml` or
+`onnx/model_qint8_avx512.onnx` — for quantized CPU inference (typically 2–4×
+faster than torch-CPU at a small recall cost).
+
+- Non-torch backends need the matching sentence-transformers extra:
+  `pip install 'pydocs-mcp[openvino]'` (or `pip install
+  'sentence-transformers[onnx]'` for the ONNX backend).
+- `backend: openvino` is CPU/iGPU-only — combining it with `device: cuda`
+  (`--gpu`) fails at config load with an actionable error.
+- Both keys fold into the pipeline hash **only when set**, so enabling them
+  re-embeds on the next index (quantized vectors differ from full precision),
+  while default configs keep their existing index hashes byte-identical.
+- Both keys are inert for the `fastembed` / `openai` providers.
 
 ## Selective dependency embedding
 

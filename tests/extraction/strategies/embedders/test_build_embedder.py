@@ -97,3 +97,23 @@ def test_build_embedder_passes_device_to_fastembed() -> None:
 
     assert captured["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
     sys.modules.pop("pydocs_mcp.extraction.strategies.embedders.fastembed", None)
+
+
+def test_st_backend_and_file_threaded() -> None:
+    emb = _build_st(
+        EmbeddingConfig(
+            provider="sentence_transformers",
+            model_name="m",
+            dim=8,
+            backend="openvino",
+            model_file_name="openvino/openvino_model_qint8_quantized.xml",
+        )
+    )
+    assert emb.backend == "openvino"
+    assert emb.model_file_name == "openvino/openvino_model_qint8_quantized.xml"
+
+
+def test_st_backend_defaults_thread_as_torch_none() -> None:
+    emb = _build_st(EmbeddingConfig(provider="sentence_transformers", model_name="m", dim=8))
+    assert emb.backend == "torch"
+    assert emb.model_file_name is None

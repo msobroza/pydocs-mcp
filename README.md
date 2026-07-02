@@ -260,6 +260,22 @@ through the fusion steps below.
     query_prompt_name: query
   ```
 
+  The provider also runs ONNX / OpenVINO exports for **fast CPU inference** —
+  typically 2–4× with a qint8-quantized file — via two optional keys
+  (`pip install 'pydocs-mcp[openvino]'` for the OpenVINO runtime):
+
+  ```yaml
+  embedding:
+    provider: sentence_transformers
+    model_name: BAAI/bge-small-en-v1.5
+    dim: 384
+    backend: openvino          # torch (default) | onnx | openvino
+    model_file_name: openvino/openvino_model_qint8_quantized.xml
+  ```
+
+  Setting either key re-embeds on the next index (quantized vectors differ
+  from full-precision ones); defaults leave existing indexes untouched.
+
   The provider supports several on-device models — set `model_name` and the
   matching `dim`:
 
