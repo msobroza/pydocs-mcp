@@ -13,8 +13,9 @@ as [gortex](https://github.com/zzet/gortex)).
    surface stays fixed at `search` / `lookup`.
 2. **SQLite stays the source of truth.** Any derived artifact (e.g. `node_scores`)
    is a rebuildable projection of `node_references`, never a second master.
-3. **Read-only, single-project, Python-only.** Write/refactor, multi-repo, and a
-   shared daemon are explicitly out of scope (see bottom).
+3. **Read-only, local, Python-only.** Write/refactor + a shared daemon / HTTP
+   transport stay out of scope (see bottom). Multi-repo read-only serving — one
+   stdio server over several pre-built db bundles — is now **shipped** (below).
 4. **Embedding-centric fusion.** The graph recovers what embeddings structurally
    miss; combine with the **dense** set (rerank / dense⊕graph), not RRF-with-BM25.
 
@@ -55,6 +56,16 @@ The graph is now a ranked retrieval signal, not just single-hop lookup:
   (no `[graph]` extra required); depth/budget are `reference_graph.{impact,context}`
   YAML tunables. (Unblocked by the O(N²) → O(1)-bucket fix in
   `reference_resolver.py` Rule C, which made large-library indexing finite.)
+- **Multi-repo search** — one MCP server (or CLI query) hosts several
+  already-indexed repos. `serve --workspace <dir>` / `--db <file>` load pre-built
+  `{name}_{hash}.db` bundles **read-only** (no reindex/watch); the per-query
+  `project` filter (a sibling of `package`/`scope`) scopes to one repo, else the
+  query **unions** across all with dedup (a repo's own code beats the same symbol
+  seen as a dependency; among duplicate dependencies the most-recently-indexed
+  wins). A schema-v11 `index_metadata` row stamps each db's embedder identity, so
+  a load whose embedder ≠ the configured pipeline **fails fast** with a clear
+  error (a read-only load can't re-embed). See `multirepo.py` +
+  `application/multi_project_search.py`.
 
 > **Opt-in posture (intentional):** `node_scores` precompute and `similar`-edge
 > generation are **off by default** (`reference_graph.{node_scores,similar_edges}.enabled=False`,
@@ -105,8 +116,9 @@ every shipped graph feature (edges are only as good as the name/suffix heuristic
 today).
 
 ### Out of scope (mission / invariant)
-Write/refactor + speculative edits + overlays (breaks read-only); multi-repo +
-shared daemon + HTTP transport (breaks single-project/stdio); durable agent memory /
+Write/refactor + speculative edits + overlays (breaks read-only); a shared daemon
++ HTTP transport (breaks the local/stdio invariant — note multi-repo read-only
+serving over stdio IS now shipped, see above); durable agent memory /
 notes (needs new MCP tools → breaks the 2-tool surface); dataflow/taint, clone
 MinHash, SAST (a code-quality/security engine, off a doc-retrieval mission);
 257-language breadth + multi-language resolvers (Python-only by design).
