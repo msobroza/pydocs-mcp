@@ -32,3 +32,15 @@ class ApiSearch:
             query=state.query,
             duration_ms=state.duration_ms,
         )
+
+    async def ranked(self, query: SearchQuery) -> ModuleMemberList:
+        """Return the RANKED candidate members (pre composite collapse).
+
+        Mirrors :meth:`DocsSearch.ranked` — multi-repo union needs per-item
+        members (score + ``package`` / ``module`` / ``name`` metadata) to merge
+        and dedup across databases.
+        """
+        state = await self.member_pipeline.run(query)
+        if state.candidates is not None:
+            return state.candidates
+        return state.result if state.result is not None else ModuleMemberList(items=())

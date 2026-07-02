@@ -258,6 +258,8 @@ Other rules:
 
 **The one allowed exception** is *input-shape* validators on the MCP tool models (e.g., `LookupInput.limit: int = Field(50, ge=1, le=1000)`) — these constrain a single client request's bounds and are client-driven, not feature toggles. If you find yourself adding a parameter like `lookup(kinds=[...])` or `search(min_score=0.5)`, **stop**: that's a pipeline setting, it belongs in YAML, and the MCP input should expose nothing.
 
+**Corpus-scope filters are the second sanctioned category** (not tuning knobs). `search(package=…, scope=…)` and `search/lookup(project=…)` all answer *"which slice of the indexed corpus does this ONE request cover"* — they are client-driven per-request selectors, not server behavior toggles. `project` was added (multi-repo search: one MCP server hosting several indexed repos, selected per query) as a deliberate sibling of `package`/`scope`. The test: a new param is allowed only if it narrows *what corpus is searched* for a single request and is meaningless to bake into YAML (the client, not the deployment, decides it per call). Anything about *how* retrieval ranks/scores/expands still goes in YAML. When in doubt, it's a tuning knob — keep it out.
+
 **Where YAML config lives:**
 
 - `python/pydocs_mcp/defaults/default_config.yaml` — shipped lowest-priority defaults, the canonical reference of every tunable.

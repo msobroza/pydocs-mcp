@@ -283,8 +283,37 @@ and pinning them keeps MCP clients stable across server retunes (see
 
 | Tool | Signature | Purpose |
 |---|---|---|
-| `search` | `search(query, kind, package, scope, limit)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any}`. |
-| `lookup` | `lookup(target, show)` | Navigate to a specific named target. `show` ∈ `{default, tree, callers, callees, inherits}`. Empty target lists indexed packages. |
+| `search` | `search(query, kind, package, scope, limit, project)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any}`. `package` / `scope` / `project` are corpus-scope filters (`project` selects one loaded repo in a multi-repo server). |
+| `lookup` | `lookup(target, show, project)` | Navigate to a specific named target. `show` ∈ `{default, tree, callers, callees, inherits, impact, context}`. `project` resolves the target inside one loaded repo. Empty target lists indexed packages. |
+
+---
+
+## Multi-repo serving
+
+One MCP server (or CLI query) can host several already-indexed repos. Each indexed
+project is a portable `{name}_{hash}.db` + `.tq` bundle (relative source paths and
+logical identifiers only — no absolute paths), stamped at index time with an
+`index_metadata` row: project name/root, the embedder identity, and `indexed_at`.
+
+- **Load** — `serve --workspace <dir>` loads every `.db` bundle in a directory;
+  `serve --db <file>` loads specific bundles (repeatable). Both are **read-only**:
+  the real source may be absent, so there is no reindex/watch. `--cache-dir` still
+  controls where `index` writes bundles (default `~/.pydocs-mcp`); the
+  `{name}_{hash}` filename is unchanged.
+- **Scope** — the per-query `project` filter (MCP tool param / CLI `--project`)
+  restricts to one loaded repo by name; omitted, a query **unions** across all
+  loaded repos.
+- **Dedup** (union only) — when the same symbol appears in several repos, a
+  root-project copy (`__project__`) beats a dependency copy; among duplicate
+  dependencies the most-recently-indexed (`indexed_at`) wins. Cross-repo scores are
+  comparable because…
+- **Embedder guard** — every loaded db must match the configured embedder
+  (`model` + `dim`, from `index_metadata`); a read-only load that can't re-embed
+  fails fast with a clear error rather than a dim-mismatch panic at query time.
+
+`lookup(target)` without `project` resolves across loaded repos most-recent-first
+and returns the first repo that has the target (its reference-graph traversal stays
+within that repo).
 
 ---
 

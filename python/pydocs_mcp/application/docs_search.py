@@ -46,3 +46,17 @@ class DocsSearch:
             query=state.query,
             duration_ms=state.duration_ms,
         )
+
+    async def ranked(self, query: SearchQuery) -> ChunkList:
+        """Return the RANKED candidate chunks (pre composite collapse).
+
+        Multi-repo union needs item-level candidates — each chunk's per-item
+        ``relevance`` score and ``package`` / ``qualified_name`` metadata — to
+        merge and dedup across databases, which the single composite ``search``
+        output cannot provide. Reads ``state.candidates``; falls back to
+        ``state.result`` for a ranked preset that skips the formatter.
+        """
+        state = await self.chunk_pipeline.run(query)
+        if state.candidates is not None:
+            return state.candidates
+        return state.result if state.result is not None else ChunkList(items=())

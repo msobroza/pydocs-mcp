@@ -14,10 +14,8 @@ Error policy (§5.2):
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from pydocs_mcp.application import (
     LookupInput,
@@ -25,107 +23,112 @@ from pydocs_mcp.application import (
     SearchInput,
     ServiceUnavailableError,
 )
-from pydocs_mcp.application.formatting import render_top_composite
-from pydocs_mcp.deps import normalize_package_name
-from pydocs_mcp.models import (
-    PROJECT_PACKAGE_NAME,
-    ChunkFilterField,
-    SearchQuery,
-    SearchScope,
-)
-
-if TYPE_CHECKING:
-    # `_do_search` is a module-level function but the services it takes are
-    # constructed inside ``run()``. Import here for the type annotations
-    # without paying the cost at server start.
-    from pydocs_mcp.application import ApiSearch, DocsSearch
 
 log = logging.getLogger("pydocs-mcp")
-
-
-# ── helpers ───────────────────────────────────────────────────────────────
-
-
-def _scope_from_string(scope: str) -> SearchScope:
-    """Map SearchInput.scope literal to the SearchScope enum."""
-    return {
-        "project": SearchScope.PROJECT_ONLY,
-        "deps": SearchScope.DEPENDENCIES_ONLY,
-        "all": SearchScope.ALL,
-    }[scope]
-
-
-def _normalize_pkg_filter_value(package: str) -> str:
-    """PyPI names like 'Flask-Login' are stored as 'flask_login' in the DB.
-    ``__project__`` is a sentinel — leave intact."""
-    pkg = package.strip()
-    return pkg if pkg == PROJECT_PACKAGE_NAME else normalize_package_name(pkg)
-
-
-def _build_search_query(payload: SearchInput) -> SearchQuery:
-    """One SearchQuery shape works for chunks, members, or both — the
-    filter-key strings overlap across ChunkFilterField and
-    ModuleMemberFilterField (invariant checked by AC #25)."""
-    pre_filter: dict = {ChunkFilterField.SCOPE.value: _scope_from_string(payload.scope).value}
-    if payload.package:
-        pre_filter[ChunkFilterField.PACKAGE.value] = _normalize_pkg_filter_value(payload.package)
-    return SearchQuery(terms=payload.query, pre_filter=pre_filter)
 
 
 # ── server ────────────────────────────────────────────────────────────────
 
 
-def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) -> None:
-    """Start the MCP server."""
-    from mcp.server.fastmcp import FastMCP
-    from mcp.types import ToolAnnotations
+def _build_project_services(loaded, config):
+    """Build one project's read-side service set (docs + api + lookup) from its db.
 
-    from pydocs_mcp.application import (
-        ApiSearch,
-        DocsSearch,
-    )
-    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
+    Extracted so a single-db server and a multi-repo server share ONE per-project
+    wiring — the services are constructor-injected (no globals), so building N of
+    them is just calling this N times.
+    """
+    from pydocs_mcp.application import ApiSearch, DocsSearch
+    from pydocs_mcp.application.multi_project_search import ProjectServices
     from pydocs_mcp.retrieval.config import (
-        AppConfig,
         build_chunk_pipeline_from_config,
         build_member_pipeline_from_config,
     )
     from pydocs_mcp.retrieval.factories import build_retrieval_context
     from pydocs_mcp.storage.factories import build_sqlite_lookup_service
 
-    config = AppConfig.load(explicit_path=config_path)
-    # ``serve --gpu`` stamps the embedder execution device onto the
-    # freshly-loaded config so query-time embedding runs on CUDA. Device is
-    # excluded from every pipeline hash, so this never invalidates a cache.
-    config = config.with_device(gpu=gpu)
-    # Push YAML-loaded settings into module-level slots read by
-    # ``LookupInput`` validators and ``ReferenceCaptureStage`` (sub-PR #5c
-    # Task 8). One call covers both — see ``configure_from_app_config``.
-    configure_from_app_config(config)
-    context = build_retrieval_context(db_path, config)
+    context = build_retrieval_context(loaded.db_path, config)
+    return ProjectServices(
+        project=loaded,
+        docs=DocsSearch(chunk_pipeline=build_chunk_pipeline_from_config(config, context)),
+        api=ApiSearch(member_pipeline=build_member_pipeline_from_config(config, context)),
+        # ``build_sqlite_lookup_service`` owns LookupService composition so the CLI
+        # and MCP server never drift on which stores back ``lookup``.
+        lookup=build_sqlite_lookup_service(loaded.db_path, config=config),
+    )
 
-    # Visibility for #64: log which retrieval capabilities the configured
-    # backend actually serves so a misconfigured dense/LI wiring can't stay
-    # silent. Building the backend a second time here is cheap (no I/O until a
-    # query); ``build_retrieval_context`` already built one internally.
+
+def _resolve_projects(db_path, workspace, db_paths):
+    """Resolve which projects to load + whether the load is READ-ONLY.
+
+    A ``workspace`` dir loads every ``.db`` bundle in it; explicit ``db_paths``
+    load each named bundle; both are read-only (the real source may be absent, so
+    the embedder is validated and no reindex/watch happens). A single ``db_path``
+    is the index-and-serve target (read-write; its embedder was just written).
+    """
+    from pydocs_mcp.multirepo import discover_workspace, load_project
+
+    if workspace is not None:
+        return discover_workspace(workspace), True
+    if db_paths:
+        return [load_project(p) for p in db_paths], True
+    return [load_project(db_path)], False
+
+
+def build_routers(config, *, db_path=None, workspace=None, db_paths=None):
+    """Resolve + validate + build the per-project services and the two routers.
+
+    Shared by ``run`` (MCP server) and the CLI ``search`` / ``lookup`` commands so
+    both select, validate, and load databases identically. Returns
+    ``(search_router, lookup_router, services)``.
+    """
+    from pydocs_mcp.application.multi_project_search import (
+        MultiProjectLookup,
+        MultiProjectSearch,
+    )
+    from pydocs_mcp.multirepo import validate_project_embedders
+
+    projects, read_only = _resolve_projects(db_path, workspace, db_paths)
+    if read_only:
+        validate_project_embedders(
+            projects, model=config.embedding.model_name, dim=config.embedding.dim
+        )
+    services = tuple(_build_project_services(p, config) for p in projects)
+    return MultiProjectSearch(services=services), MultiProjectLookup(services=services), services
+
+
+def run(
+    db_path: Path | None = None,
+    config_path: Path | None = None,
+    *,
+    gpu: bool = False,
+    workspace: Path | None = None,
+    db_paths: list[Path] | None = None,
+) -> None:
+    """Start the MCP server over one project (``db_path``) or several — a
+    ``workspace`` dir or explicit ``db_paths`` (read-only multi-repo)."""
+    from mcp.server.fastmcp import FastMCP
+    from mcp.types import ToolAnnotations
+
+    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
+    from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.storage.search_backend import build_search_backend, format_capabilities
 
-    log.info(format_capabilities(build_search_backend(config, db_path)))
+    config = AppConfig.load(explicit_path=config_path)
+    # ``serve --gpu`` stamps the embedder execution device onto the freshly-loaded
+    # config so query-time embedding runs on CUDA. Device is excluded from every
+    # pipeline hash, so this never invalidates a cache.
+    config = config.with_device(gpu=gpu)
+    # Push YAML-loaded settings into module-level slots read by ``LookupInput`` /
+    # ``SearchInput`` validators and ``ReferenceCaptureStage``.
+    configure_from_app_config(config)
 
-    chunk_pipeline = build_chunk_pipeline_from_config(config, context)
-    member_pipeline = build_member_pipeline_from_config(config, context)
-
-    search_docs_svc = DocsSearch(chunk_pipeline=chunk_pipeline)
-    search_api_svc = ApiSearch(member_pipeline=member_pipeline)
-
-    # LookupService composition is owned by ``build_sqlite_lookup_service``
-    # so the CLI (``__main__._cmd_lookup``) and MCP server can never drift
-    # on which stores back ``lookup``. Post-#5c (Task 8): the factory wires
-    # a real ``ReferenceService`` into ``ref_svc`` — previously this site
-    # constructed ``LookupService(ref_svc=None)`` inline, leaving the MCP
-    # ``lookup(show="callers"|"callees"|"inherits")`` modes raising
-    # ``ServiceUnavailableError`` in production.
-    lookup_svc = build_sqlite_lookup_service(db_path, config=config)
+    search_router, lookup_router, services = build_routers(
+        config, db_path=db_path, workspace=workspace, db_paths=db_paths
+    )
+    # One capability line per project so a misconfigured dense/LI wiring stays visible.
+    for svc in services:
+        caps = format_capabilities(build_search_backend(config, svc.project.db_path))
+        log.info("%s: %s", svc.project.name, caps)
 
     # Session-level scope frame surfaced to MCP clients. Tells the AI when
     # to reach for pydocs-mcp (installed libraries, user's project code
@@ -150,6 +153,7 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
         package: str = "",
         scope: str = "all",
         limit: int = 10,
+        project: str = "",
     ) -> str:
         """Hybrid keyword + semantic search across your project's source AND every installed dependency (docs + code).
 
@@ -166,6 +170,9 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
           scope:   "project" (user's code only) | "deps" (installed deps only) | "all" (default).
                    Use scope="project" or package="__project__" when the user asks about THEIR
                    code, not a library — this is the most common routing mistake to avoid.
+          project: when this server hosts several indexed repos, restrict to one by name
+                   (e.g. "backend"). "" = search all loaded repos (results deduped). No effect
+                   on a single-repo server.
           limit:   max results 1-1000, default 10.
 
         Examples:
@@ -174,6 +181,7 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
           search(query="retry logic", package="requests")
           search(query="our parser", scope="project")
           search(query="ValidationError", package="__project__")
+          search(query="db pool", project="backend")
 
         Returns markdown with up to `limit` ranked hits, each block carrying
         package, module path, and a code/docs excerpt.
@@ -184,9 +192,10 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
             package=package,
             scope=scope,
             limit=limit,
+            project=project,
         )
         try:
-            return await _do_search(payload, search_docs_svc, search_api_svc)
+            return await search_router.search(payload)
         except MCPToolError:
             raise
         except Exception as e:
@@ -200,7 +209,7 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
             openWorldHint=True,
         )
     )
-    async def lookup(target: str = "", show: str = "default") -> str:
+    async def lookup(target: str = "", show: str = "default", project: str = "") -> str:
         """Navigate to a known symbol (dotted path) and optionally traverse its reference graph — callers, callees, base classes.
 
         When to use this tool:
@@ -233,14 +242,19 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
           lookup(target="requests.auth.HTTPBasicAuth", show="inherits")
           lookup(target="fastapi.routing.APIRouter.include_router", show="impact")
           lookup(target="fastapi.routing.APIRouter.include_router", show="context")
+          lookup(target="app.db.Pool", project="backend")
+
+        When this server hosts several indexed repos, pass `project` (e.g.
+        "backend") to resolve the target inside one repo; "" resolves across all
+        loaded repos. No effect on a single-repo server.
 
         Returns markdown — exact shape varies by `show` mode (a summary block
         for "default", a tree for "tree", a list of caller / callee entries
         for the graph modes).
         """
-        payload = LookupInput(target=target, show=show)
+        payload = LookupInput(target=target, show=show, project=project)
         try:
-            return await lookup_svc.lookup(payload)
+            return await lookup_router.lookup(payload)
         except MCPToolError:
             raise
         except Exception as e:
@@ -255,31 +269,7 @@ def run(db_path: Path, config_path: Path | None = None, *, gpu: bool = False) ->
     # (``TreeService``, ``build_package_tree``, ``flatten_to_chunks``)
     # remain available for the integration.
 
-    log.info("MCP ready (db: %s)", db_path)
-    mcp.run(transport="stdio")
-
-
-async def _do_search(
-    payload: SearchInput,
-    search_docs_svc: DocsSearch,
-    search_api_svc: ApiSearch,
-) -> str:
-    """Dispatch search by kind; returns rendered markdown."""
-    query = _build_search_query(payload)
-    if payload.kind == "docs":
-        response = await search_docs_svc.search(query)
-        return render_top_composite(response, empty_msg="No matches found.")
-    if payload.kind == "api":
-        response = await search_api_svc.search(query)
-        return render_top_composite(response, empty_msg="No symbols found.")
-    # kind == "any" — run both pipelines concurrently, concatenate rendered outputs (§8).
-    # Pass empty_msg="" so an empty half does NOT inject a "No matches" line
-    # into the joined output — the final fallback below handles the all-empty case.
-    chunk_resp, member_resp = await asyncio.gather(
-        search_docs_svc.search(query),
-        search_api_svc.search(query),
+    log.info(
+        "MCP ready (%d project(s): %s)", len(services), ", ".join(s.project.name for s in services)
     )
-    chunk_text = render_top_composite(chunk_resp, empty_msg="")
-    member_text = render_top_composite(member_resp, empty_msg="")
-    parts = [p for p in (chunk_text, member_text) if p]
-    return "\n\n".join(parts) if parts else "No matches found."
+    mcp.run(transport="stdio")
