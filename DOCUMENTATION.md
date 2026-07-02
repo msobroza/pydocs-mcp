@@ -354,11 +354,14 @@ Without the `[watch]` extras, both `pydocs-mcp serve --watch` and
 
 ### How it works
 
-1. The watcher monitors the project root (NOT `site-packages/` —
-   dependency changes are rare and user-initiated; re-run
-   `pydocs-mcp index .` after `pip install`).
-2. File-system events for paths matching `extensions` AND not matching
-   any `ignore_globs` pattern are queued.
+1. The watcher monitors the project root (NOT `site-packages/`, which is under
+   the ignored `.venv`). It fires on edits to source files (`extensions`) **and**
+   to dependency manifests (`pyproject.toml` / `requirements*.txt`) — so adding a
+   package (e.g. `uv add X`, which edits `pyproject.toml`) reindexes and picks up
+   the new dependency once it's installed.
+2. File-system events for paths matching `extensions` — or a dependency manifest
+   (`pyproject.toml` / `requirements*.txt`, always watched regardless of
+   `extensions`) — AND not matching any `ignore_globs` pattern are queued.
 3. Events are **debounced** by `debounce_ms` — N edits within the
    window collapse into a single reindex. Editor atomic-save sequences
    (temp create → delete → rename) naturally fall under the same
