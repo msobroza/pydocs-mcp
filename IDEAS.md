@@ -41,6 +41,20 @@ The graph is now a ranked retrieval signal, not just single-hop lookup:
   graph-neighbor slice); decay default 0.9.
 - **Identity prereq resolved** — chunk↔graph join is `qualified_name` end-to-end;
   the `node_id` vs `qualified_name` concern was verified a non-bug for code nodes.
+- **Graph-native `lookup` readers (was backlog A1/A2)** — two multi-hop
+  reference-graph reads behind the fixed surface:
+  - `lookup(show="impact")` — ranked reverse blast-radius ("what transitively
+    calls X / what breaks if I change X"): `SqliteReferenceStore.find_transitive_callers`
+    (bounded reverse recursive-CTE) → `ReferenceService.impact` → `format_impact`.
+  - `lookup(show="context")` — forward dependency-closure packed under one token
+    budget at graded fidelity (focus = full source, ring = signature, rest =
+    outline): `find_transitive_callees` → `ReferenceService.context` →
+    `format_context`.
+
+  Both rank by PageRank when `node_scores` is enabled, else degrade to fan-in
+  (no `[graph]` extra required); depth/budget are `reference_graph.{impact,context}`
+  YAML tunables. (Unblocked by the O(N²) → O(1)-bucket fix in
+  `reference_resolver.py` Rule C, which made large-library indexing finite.)
 
 > **Opt-in posture (intentional):** `node_scores` precompute and `similar`-edge
 > generation are **off by default** (`reference_graph.{node_scores,similar_edges}.enabled=False`,
@@ -65,10 +79,12 @@ The graph is now a ranked retrieval signal, not just single-hop lookup:
 All land **behind the fixed surface** (`search(kind=…)` / `lookup(show=…)` / YAML
 steps). Difficulty: **S** = hours–1 day · **M** = days · **L** = 1–2 weeks.
 
+> **A1 (`smart_context`) and A2 (ranked blast-radius) have SHIPPED** as
+> `lookup(show="context")` / `lookup(show="impact")` — see the Shipped section
+> above. The remaining open features keep their original A-labels (stable IDs).
+
 | # | Feature | What it does | Difficulty | Impact | Where (code → benefit) |
 |---|---------|--------------|-----------|--------|------------------------|
-| A1 | **`smart_context` — graph-ranked context packing** ★ | Seed symbol → dependency-closure walk → rank by graph-distance × `node_scores` centrality → pack under one token budget at graded fidelity (focus = full source, ring = signatures, rest = outline) | **M–L** | **High** | new `retrieval/steps/context_pack.py` + `lookup(show="context")`. **Reuses the shipped graph infra** (`graph_expand` + `node_scores` + `similar` + `token_budget`). Benefit: agents get "everything to understand X in N tokens" instead of reading whole files |
-| A2 | **Ranked blast-radius — `lookup(show="impact")`** (was graph idea #7) | Multi-hop *reverse* traversal "what transitively calls X / what breaks if I change X", ranked by PageRank | **M** | **High** | recursive CTE / precomputed reach in `storage/sqlite.py` (`SqliteReferenceStore`) + new `show=` value. `lookup` is single-hop today; `node_scores` makes the radius usable instead of noisy |
 | A3 | **Default-on graph-ranked hybrid** | Ship a `*_ranked` hybrid preset as the **default** instead of BM25-only | **S** | **High** | `defaults/default_config.yaml`, `pipelines/chunk_search.yaml`. Flips the shipped graph/dense investment on out-of-box. **Caveat:** default index then builds the `.tq` sidecar (+ `[graph]` extra for ranking) — A/B on the RepoQA harness first |
 | A4 | **LSP / compiler-grade resolution (pyright/jedi)** | Resolve CALLS/IMPORTS edges through a type engine; stamp an edge-confidence `tier` | **L** | **High** | `extraction/strategies/reference_resolver.py` (opt-in pass) + edge `tier` column in `db.py`. **Quality multiplier on all shipped graph features** — PageRank/community/`similar` anchoring are only as good as the edges (today: name/suffix heuristic) |
 | A5 | **Structural + literal code search — `search(kind="ast"\|"text")`** | Trigram literal/regex search + tree-sitter AST-pattern queries alongside BM25 | **M** | **Med–High** | trigram index table + AST query in `retrieval/steps/`; new `kind=` value. Benefit: exact/regex/structural nav semantic search can't do (e.g. every `except: pass`) |
@@ -78,10 +94,15 @@ steps). Difficulty: **S** = hours–1 day · **M** = days · **L** = 1–2 weeks
 | A9 | **No-LLM query expansion** | Equivalence-class vocabulary (`auth ≈ authentication`) without an LLM call | **M** | **Med** | new `retrieval/steps/` expansion step. Recall lift at zero LLM cost |
 
 ### Recommended next
-**A1 (smart_context)** or **A2 (ranked blast-radius)** — highest-leverage, pure-read,
-behind the existing surface, and both *consume* the now-shipped `node_scores`/graph
-infra that is currently underused. **A3 (default flip)** is the cheapest high-impact
-change (settle the default indexing-cost tradeoff first).
+With A1/A2 shipped, the graph reads exist but the graph/dense infra still isn't
+on out-of-box. **A3 (default-on graph-ranked hybrid)** is the cheapest
+high-impact move — settle the default indexing-cost tradeoff via a RepoQA A/B
+first. **A6 (`lookup("__project__", show="outline")`)** is the next-cheapest: a
+cold-start repo map that's nearly free now that `node_scores` exists and reuses
+the same `lookup(show=…)` seam A1/A2 just extended. **A4 (LSP-grade edge
+resolution)** is the highest-ceiling but heaviest — it's a quality multiplier on
+every shipped graph feature (edges are only as good as the name/suffix heuristic
+today).
 
 ### Out of scope (mission / invariant)
 Write/refactor + speculative edits + overlays (breaks read-only); multi-repo +
