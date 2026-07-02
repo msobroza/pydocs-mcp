@@ -108,6 +108,10 @@ embedding:
   bit_width:   4
   # Embedder execution device (cpu / cuda); the --gpu CLI flag sets cuda.
   #   device:    cpu
+  # sentence_transformers-only: inference runtime + quantized weight file.
+  # Setting either re-embeds on the next index (they change the vectors).
+  #   backend:         openvino   # torch (default) | onnx | openvino
+  #   model_file_name: openvino/openvino_model_qint8_quantized.xml
   # Which DEPENDENCY chunks get dense vectors (everything stays BM25-indexed):
   #   doc_pages (default) — per-module docstring pages + markdown/README only
   #   full                — every dependency chunk (slow on torch-sized deps)

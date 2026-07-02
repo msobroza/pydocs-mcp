@@ -135,3 +135,65 @@ def test_compute_ingestion_pipeline_hash_resolves_relative_pipelines_path() -> N
 
     assert h1 == h2
     assert len(h1) == 64  # SHA-256 hex — proves it actually read + hashed bytes
+
+
+# ── backend + model_file_name folding (ST openvino/onnx quantization) ──
+
+
+def test_default_hash_unchanged_by_backend_fields() -> None:
+    """Golden stability: the new fields at their defaults must NOT alter the
+    hash — mirrors the late-interaction 'default install hash is stable'
+    invariant, so shipping this feature re-embeds nobody."""
+    import hashlib
+
+    cfg = EmbeddingConfig(provider="fastembed", model_name="m", dim=8, bit_width=4)
+    legacy_identity = "|".join(
+        [
+            cfg.provider,
+            cfg.model_name,
+            str(cfg.dim),
+            str(cfg.bit_width),
+            str(cfg.max_seq_length),
+            str(cfg.normalize),
+        ]
+    )
+    assert cfg.compute_pipeline_hash() == hashlib.sha256(legacy_identity.encode()).hexdigest()
+
+
+def test_backend_changes_hash() -> None:
+    base = EmbeddingConfig(provider="sentence_transformers", model_name="m", dim=8)
+    ov = EmbeddingConfig(
+        provider="sentence_transformers", model_name="m", dim=8, backend="openvino"
+    )
+    assert base.compute_pipeline_hash() != ov.compute_pipeline_hash()
+
+
+def test_model_file_name_changes_hash() -> None:
+    base = EmbeddingConfig(provider="sentence_transformers", model_name="m", dim=8)
+    q = EmbeddingConfig(
+        provider="sentence_transformers",
+        model_name="m",
+        dim=8,
+        model_file_name="openvino/openvino_model_qint8_quantized.xml",
+    )
+    assert base.compute_pipeline_hash() != q.compute_pipeline_hash()
+    q2 = EmbeddingConfig(
+        provider="sentence_transformers",
+        model_name="m",
+        dim=8,
+        model_file_name="onnx/model_qint8_avx512.onnx",
+    )
+    assert q.compute_pipeline_hash() != q2.compute_pipeline_hash()
+
+
+def test_openvino_plus_cuda_rejected() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="OpenVINO"):
+        EmbeddingConfig(
+            provider="sentence_transformers",
+            model_name="m",
+            dim=8,
+            backend="openvino",
+            device="cuda",
+        )
