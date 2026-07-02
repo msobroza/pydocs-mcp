@@ -37,6 +37,19 @@ _INSTALL_HINT = (
 )
 
 
+def _is_dependency_manifest(name: str) -> bool:
+    """A ``pyproject.toml`` / ``requirements*.txt`` — files whose edits add or
+    remove indexable dependencies.
+
+    Mirrors :func:`pydocs_mcp.deps.list_dependency_manifest_files` so the watcher
+    retriggers on exactly the files dependency discovery reads. Manifests match
+    regardless of the configured ``extensions`` (adding a package must reindex),
+    but still respect ``ignore_globs`` — a vendored ``pyproject.toml`` under an
+    ignored ``.venv`` never fires.
+    """
+    return name == "pyproject.toml" or (name.startswith("requirements") and name.endswith(".txt"))
+
+
 def _load_watchdog():
     """Resolve `watchdog.observers.Observer`.
 
@@ -92,10 +105,14 @@ class FileWatcher:
         (macOS APFS / Windows NTFS by default) still trigger reindex.
         Defaults in WatchConfig are lowercase by convention.
 
-        Returns False for: non-watched extensions, paths matching any
-        `ignore_globs` pattern.
+        Dependency manifests (`pyproject.toml` / `requirements*.txt`) always
+        match regardless of `extensions`, so adding a package to them retriggers
+        indexing and the new dependency gets picked up.
+
+        Returns False for: non-watched extensions that aren't a manifest, paths
+        matching any `ignore_globs` pattern.
         """
-        if path.suffix.lower() not in self.extensions:
+        if path.suffix.lower() not in self.extensions and not _is_dependency_manifest(path.name):
             return False
         path_str = str(path)
         return not any(fnmatch.fnmatch(path_str, pattern) for pattern in self.ignore_globs)
