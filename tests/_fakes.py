@@ -181,6 +181,8 @@ class InMemoryPackageStore:
 class InMemoryChunkStore:
     by_package: dict[str, list[Chunk]] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
+    # Ids stamped by mark_embedded — mirrors chunks.embedded=1 rows.
+    embedded_ids: set[int] = field(default_factory=set)
 
     async def upsert(self, chunks) -> None:
         # Materialize first — the input may be an iterator, and we want
@@ -250,6 +252,12 @@ class InMemoryChunkStore:
         ids_set = set(ids)
         for pkg, items in self.by_package.items():
             self.by_package[pkg] = [c for c in items if c.id not in ids_set]
+
+    async def mark_embedded(self, ids) -> None:
+        # Mirrors SqliteChunkRepository.mark_embedded — records which chunk
+        # ids the vector-write path flagged so tests can assert the policy.
+        self.calls.append(_Call("mark_embedded", list(ids)))
+        self.embedded_ids.update(ids)
 
     async def insert(self, chunks) -> None:
         # Mimic SQLite autoincrement so list_id_hash_pairs returns real ints.

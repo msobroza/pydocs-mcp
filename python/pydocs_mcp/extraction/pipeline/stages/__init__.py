@@ -31,6 +31,9 @@ from pydocs_mcp.extraction.pipeline.stages.assign_chunk_content_hash import (
 from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
 from pydocs_mcp.extraction.pipeline.stages.chunking import ChunkingStage
 from pydocs_mcp.extraction.pipeline.stages.content_hash import ContentHashStage
+from pydocs_mcp.extraction.pipeline.stages.dependency_doc_pages import (
+    DependencyDocPagesStage,
+)
 from pydocs_mcp.extraction.pipeline.stages.embed_chunks import EmbedChunksStage
 from pydocs_mcp.extraction.pipeline.stages.embed_chunks_multi_vector import (
     EmbedChunksMultiVectorStage,
@@ -57,6 +60,7 @@ __all__ = (
     "AssignChunkContentHashStage",
     "ChunkingStage",
     "ContentHashStage",
+    "DependencyDocPagesStage",
     "EmbedChunksMultiVectorStage",
     "EmbedChunksStage",
     "FileDiscoveryStage",

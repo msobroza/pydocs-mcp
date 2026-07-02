@@ -14,7 +14,13 @@ from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 11  # v11: additive — index_metadata table (single row: project
+SCHEMA_VERSION = 12  # v12: additive — chunks.embedded flag (1 = a single-vector
+# was written to the .tq for this chunk). Lets the integrity check compare
+# INTENDED embeddings vs vectors, so selective embed policies (dependency doc
+# pages only) don't read as drift and trigger the clear-all-content_hash loop.
+# The upgrade backfills embedded=1 on existing rows (they were written under
+# the embed-everything policy); no re-extraction forced.
+# v11: additive — index_metadata table (single row: project
 # identity + embedder identity + pipeline_hash + indexed_at) so a loader can
 # reject a mismatched-embedder .tq and multi-repo search can route/dedup by
 # project name and recency. Empty until the next index stamps it; no re-extract.
@@ -38,7 +44,8 @@ _DDL = """
         module TEXT DEFAULT '',
         title TEXT, text TEXT, origin TEXT,
         content_hash TEXT,
-        qualified_name TEXT
+        qualified_name TEXT,
+        embedded INTEGER NOT NULL DEFAULT 0
     );
     CREATE VIRTUAL TABLE chunks_fts USING fts5(
         title, text, package,
@@ -315,6 +322,21 @@ def _apply_v11_additions(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v12_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v12 shape — the ``chunks.embedded`` flag column.
+
+    ``embedded = 1`` records that a single-vector was written to the ``.tq``
+    sidecar for this chunk (stamped by the vector-write path). The integrity
+    check compares vectors against INTENDED embeddings (``WHERE embedded = 1``)
+    instead of every chunk, so selective embed policies (dependency doc pages
+    only, ``dependency_policy: none`` ...) are steady states, not drift.
+    Backfill for pre-v12 rows happens in the UPGRADE branch only — re-running
+    this sweep on-open must not overwrite flags written under a selective
+    policy.
+    """
+    _try_add_column(conn, "chunks", "embedded INTEGER NOT NULL DEFAULT 0")
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
@@ -341,7 +363,9 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v11 — re-run additive sweeps for drift recovery; data preserved.
+        # v12 — re-run additive sweeps for drift recovery; data preserved.
+        # (No embedded-flag backfill here: flags written under a selective
+        # embed policy must survive reopen.)
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
@@ -349,12 +373,18 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v7_additions(conn)
         _apply_v10_additions(conn)
         _apply_v11_additions(conn)
-    elif current in (9, 10):
-        # v9/v10 → v11 — purely additive: create node_scores (v10) + index_metadata
-        # (v11), both empty until the next index populates them. NO content_hash
-        # clear / re-extraction needed.
+        _apply_v12_additions(conn)
+    elif current in (9, 10, 11):
+        # v9/v10/v11 → v12 — purely additive: create node_scores (v10) +
+        # index_metadata (v11) + chunks.embedded (v12). Pre-v12 rows were
+        # written under the embed-everything policy, so backfill embedded=1 —
+        # their vectors ARE in the .tq (SQLite-only deployments with no
+        # vectors converge after one repair pass instead of looping forever).
+        # NO content_hash clear / re-extraction needed.
         _apply_v10_additions(conn)
         _apply_v11_additions(conn)
+        _apply_v12_additions(conn)
+        conn.execute("UPDATE chunks SET embedded = 1")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (2, 3, 4, 6, 7, 8):
         # v2/v3/v4/v6/v7/v8 → v9 — walk every forward (additive, idempotent)
@@ -369,6 +399,8 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v7_additions(conn)
         _apply_v10_additions(conn)
         _apply_v11_additions(conn)
+        _apply_v12_additions(conn)
+        conn.execute("UPDATE chunks SET embedded = 1")
         # v9 carries no structural change. The extraction enrichment added the
         # FULL multi-line extra_metadata["signature"] header + decorator call
         # args (@app.route('/x')) to the document_trees JSON blob, which neither

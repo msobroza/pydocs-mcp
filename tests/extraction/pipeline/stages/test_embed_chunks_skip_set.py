@@ -48,7 +48,7 @@ class _CountingEmbedder:
 
 def _state(chunks: tuple[Chunk, ...], skip: dict | None) -> IngestionState:
     return IngestionState(
-        files=FileBundle(target=Path("demo"), target_kind=TargetKind.DEPENDENCY),
+        files=FileBundle(target=Path("demo"), target_kind=TargetKind.PROJECT),
         chunks=ChunkBundle(chunks=chunks),
         package=_pkg("demo"),
         existing_chunk_hashes=skip,

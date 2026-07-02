@@ -192,7 +192,8 @@ async def check_integrity_and_repair(
     dim: int,
     bit_width: int,
 ) -> list[str]:
-    """Compare ``chunks`` row count vs TurboQuant ``size()``; repair drift.
+    """Compare INTENDED embeddings (``chunks.embedded = 1``) vs TurboQuant
+    ``size()``; repair drift.
 
     Composite SQLite + TurboQuant deployments are not strictly cross-backend
     ACID (see :class:`CompositeUnitOfWork` docstring). A crash between the
@@ -205,41 +206,41 @@ async def check_integrity_and_repair(
     surface them in logs / metrics.
 
     The fresh-project case is intentional: when neither backend has any
-    rows yet (``chunk_count == 0 == vec_count``) the function is a no-op
+    rows yet (``embedded_count == 0 == vec_count``) the function is a no-op
     and returns ``[]``. ``TurboQuantUnitOfWork.__aenter__`` synthesises an
     empty in-memory index for a missing ``.tq`` file, so ``size() == 0``
-    matches an empty ``chunks`` table — no false alarm. Per spec §5.7
+    matches an empty flag count — no false alarm. Per spec §5.7
     (cache is regenerable; silent recovery preserves user flow).
 
-    Assumes the configured ingestion pipeline writes one embedding per chunk
-    (the shipped default does — ``embed_chunks`` stage with strict=True 1:1
-    zip). If a custom ingestion.yaml omits embed_chunks, chunks > vectors
-    becomes the expected steady state and this helper will trigger
-    persistent false positives. Skip via custom startup wiring in that case.
+    Only chunks stamped ``embedded = 1`` count on the SQLite side (the
+    vector-write path flags them in the same transaction as ``add_vectors``),
+    so selective embed policies — dependency doc pages only, ingestion
+    pipelines without ``embed_chunks`` at all — are steady states, NOT
+    drift: deliberately-unembedded chunks can never trigger the repair.
     """
 
-    def _chunk_count() -> int:
+    def _embedded_count() -> int:
         conn = sqlite3.connect(str(db_path))
         try:
-            return conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            return conn.execute("SELECT COUNT(*) FROM chunks WHERE embedded = 1").fetchone()[0]
         finally:
             conn.close()
 
-    chunk_count = await asyncio.to_thread(_chunk_count)
+    embedded_count = await asyncio.to_thread(_embedded_count)
     async with TurboQuantUnitOfWork(
         index_path=tq_path,
         dim=dim,
         bit_width=bit_width,
     ) as tq_uow:
         vec_count = tq_uow.size()
-    if chunk_count == vec_count:
+    if embedded_count == vec_count:
         return []
 
     logger.warning(
-        "Cache integrity mismatch: chunks=%d but TurboQuant index "
-        "size=%d. Clearing content_hash on affected packages so the "
+        "Cache integrity mismatch: embedded-flagged chunks=%d but TurboQuant "
+        "index size=%d. Clearing content_hash on affected packages so the "
         "next indexing sweep re-extracts them.",
-        chunk_count,
+        embedded_count,
         vec_count,
     )
 

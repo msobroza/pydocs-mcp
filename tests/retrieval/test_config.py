@@ -35,9 +35,13 @@ def test_appconfig_loads_shipped_defaults_absent_user_file():
     # revert to chunk_search.yaml is caught.
     assert "chunk" in config.pipelines
     assert "member" in config.pipelines
-    assert config.pipelines["chunk"].routes[0].pipeline_path == Path(
-        "pipelines/chunk_search_graph.yaml"
-    )
+    # Routed default: scope=deps -> the BM25+dense-doc-pages preset; the
+    # DEFAULT route stays the benchmarked dense+graph pipeline.
+    chunk_routes = config.pipelines["chunk"].routes
+    assert chunk_routes[0].predicate == "scope_is_dependencies_only"
+    assert chunk_routes[0].pipeline_path == Path("pipelines/chunk_search_deps.yaml")
+    assert chunk_routes[-1].default
+    assert chunk_routes[-1].pipeline_path == Path("pipelines/chunk_search_graph.yaml")
 
 
 def test_appconfig_user_yaml_overlays_shipped_baseline(tmp_path):

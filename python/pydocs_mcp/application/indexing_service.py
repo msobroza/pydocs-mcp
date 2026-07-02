@@ -330,6 +330,11 @@ class IndexingService:
                 sv_embeddings.append(input_chunk.embedding)
         if sv_ids:
             await uow.vectors.add_vectors(sv_ids, sv_embeddings)
+            # Stamp chunks.embedded in the SAME transaction as the vector
+            # write so the flag mirrors the .tq exactly. The integrity check
+            # compares vectors against this flag — chunks a selective embed
+            # policy skips stay 0 and never read as drift.
+            await uow.chunks.mark_embedded(sv_ids)
         if mv_ids:
             await uow.multi_vectors.add_vectors(mv_ids, mv_embeddings)
 

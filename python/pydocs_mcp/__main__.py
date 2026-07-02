@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pydocs_mcp.retrieval.config import WatchConfig
+    from pydocs_mcp.retrieval.config import AppConfig, WatchConfig
     from pydocs_mcp.serve.watcher import FileWatcher
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
@@ -144,6 +144,16 @@ def _build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="Don't import deps. Read .py files from site-packages instead. "
             "Faster, safer, no side-effects. Uses the same parser as project source.",
+        )
+        sp.add_argument(
+            "--full-dep",
+            action="append",
+            dest="full_deps",
+            default=None,
+            metavar="NAME",
+            help="Promote a dependency to the full project-grade pipeline (all its "
+            "chunks dense-embedded, not just doc pages). Repeatable; accepts fnmatch "
+            "globs. Merges into embedding.full_index_dependencies from YAML.",
         )
         sp.add_argument(
             "--gpu",
@@ -322,6 +332,18 @@ def _project_and_db(args: argparse.Namespace) -> tuple[Path, Path]:
 # ── Subcommand handlers ───────────────────────────────────────────────────
 
 
+def _load_indexing_config(args: argparse.Namespace, app_config_cls: type[AppConfig]) -> AppConfig:
+    """AppConfig for an indexing run: YAML + --gpu device + --full-dep merges.
+
+    CLI --full-dep promotions merge into the YAML-declared list. Affects the
+    per-package embed tier folded into chunk hashes, so a newly promoted
+    dependency re-embeds fully on this run (and only that dependency).
+    """
+    config = app_config_cls.load(explicit_path=getattr(args, "config", None))
+    config = config.with_device(gpu=getattr(args, "gpu", False))
+    return config.with_full_index_dependencies(tuple(getattr(args, "full_deps", None) or ()))
+
+
 async def _run_indexing(args: argparse.Namespace) -> None:
     """Run :class:`ProjectIndexer` end-to-end for ``index`` / ``serve``.
 
@@ -373,8 +395,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     # optional ``--config`` override the CLI already passes to search /
     # serve so ingestion pipeline overrides (spec §7.3) stay consistent
     # with the rest of the config.
-    config = AppConfig.load(explicit_path=getattr(args, "config", None))
-    config = config.with_device(gpu=getattr(args, "gpu", False))
+    config = _load_indexing_config(args, AppConfig)
     # Push YAML-loaded settings into module-level slots read by
     # ``LookupInput`` validators and ``ReferenceCaptureStage`` (sub-PR #5c
     # Task 8). Indexing uses the latter via ``ReferenceCaptureStage`` in

@@ -794,6 +794,20 @@ class SqliteChunkRepository:
                     list(batch),
                 )
 
+    async def mark_embedded(self, ids: Sequence[int]) -> None:
+        if not ids:
+            return
+        # Same 500-row batching rationale as delete_by_ids above.
+        async with _maybe_acquire(self.provider) as conn:
+            for i in range(0, len(ids), 500):
+                batch = ids[i : i + 500]
+                placeholders = ",".join("?" * len(batch))
+                await asyncio.to_thread(
+                    conn.execute,
+                    f"UPDATE chunks SET embedded = 1 WHERE id IN ({placeholders})",
+                    list(batch),
+                )
+
     async def insert(self, chunks: tuple[Chunk, ...]) -> None:
         # SQL is identical to upsert (SQLite INSERT with no conflict clause
         # IS the insert-only semantic). The two methods are kept distinct

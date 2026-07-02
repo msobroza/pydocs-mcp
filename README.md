@@ -154,6 +154,29 @@ over a dependency copy, and among duplicate dependencies the most-recently-index
 one is kept. Every loaded db must share the configured embedder — a mismatch
 fails fast (a read-only load can't re-embed an absent project).
 
+### Fast dependency indexing (selective embedding)
+
+Everything is BM25/FTS-indexed, but **dense embedding is selective by package
+tier** — embedding is the dominant indexing cost, and big dependencies (torch,
+sklearn) carry tens of thousands of code chunks:
+
+| Tier | What gets dense vectors | Selected by |
+|---|---|---|
+| Project / subprojects | every chunk (dense + graph, unchanged) | automatic |
+| Promoted dependencies | every chunk — project-grade | `--full-dep NAME` (repeatable, globs OK) or `embedding.full_index_dependencies` |
+| Regular dependencies | documentation only: one docstring **page per module** (module + public signatures + docstrings) plus `.md`/README chunks | default (`embedding.dependency_policy: doc_pages`) |
+
+So torch indexes in seconds (≈one embedding per module) instead of an hour,
+while its docs stay *semantically* searchable and all of its code stays
+keyword-searchable + navigable (`lookup`, `kind="api"`). `scope=deps` queries
+automatically route to a BM25 ∥ dense fusion pipeline that covers both. Set
+`dependency_policy: full` to restore embed-everything, or `none` for BM25-only
+dependencies:
+
+```bash
+pydocs-mcp index . --full-dep my-internal-lib --full-dep "acme-*"
+```
+
 Point Claude Code, Cursor, or Continue.dev at it over stdio — copy-paste client
 configs are in [DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration), and
 install troubleshooting (including the `libopenblas` fallback) is in
