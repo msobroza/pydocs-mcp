@@ -37,6 +37,23 @@ def _build_context(provider, config: AppConfig) -> BuildContext:
     )
 
 
+def _bm25_config(tmp_dir: Path) -> AppConfig:
+    """Pin the vector-free BM25 chunk pipeline.
+
+    These tests assert the composite output SHAPE (the ``token_budget_formatter``
+    parity contract), which is identical for BM25 and the shipped dense+graph
+    default. BM25 keeps them deterministic on the raw-SQL fixture without seeding
+    a ``.tq`` sidecar — the dense+graph default is exercised by the benchmark
+    suite and the dense-pipeline unit tests instead.
+    """
+    overlay = tmp_dir / "bm25_overlay.yaml"
+    overlay.write_text(
+        "pipelines:\n  chunk:\n    - default: true\n"
+        "      pipeline_path: pipelines/chunk_search.yaml\n"
+    )
+    return AppConfig.load(explicit_path=overlay)
+
+
 @pytest.fixture
 def seeded_db(tmp_path: Path):
     db_file = tmp_path / "golden.db"
@@ -80,7 +97,7 @@ async def test_chunk_composite_output_shape(seeded_db: Path):
     """Composite chunk text starts with `## {title}\\n{body}` (single newline)
     per the byte-parity contract with pre-PR format_within_budget output."""
     provider = build_connection_provider(seeded_db)
-    config = AppConfig.load()
+    config = _bm25_config(seeded_db.parent)
     ctx = _build_context(provider, config)
     pipeline = build_chunk_pipeline_from_config(config, ctx)
 
@@ -110,7 +127,7 @@ async def test_chunk_composite_preserves_trailing_newline(seeded_db: Path):
     """TokenBudgetStep must not rstrip() the trailing newline —
     old format_within_budget preserved it."""
     provider = build_connection_provider(seeded_db)
-    config = AppConfig.load()
+    config = _bm25_config(seeded_db.parent)
     ctx = _build_context(provider, config)
     pipeline = build_chunk_pipeline_from_config(config, ctx)
 
@@ -126,7 +143,7 @@ async def test_chunk_composite_preserves_trailing_newline(seeded_db: Path):
 async def test_member_composite_output_shape(seeded_db: Path):
     """Composite module-member text follows **[pkg] mod.name(sig)** (kind)\\ndocstring shape."""
     provider = build_connection_provider(seeded_db)
-    config = AppConfig.load()
+    config = _bm25_config(seeded_db.parent)
     ctx = _build_context(provider, config)
     pipeline = build_member_pipeline_from_config(config, ctx)
 

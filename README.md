@@ -164,9 +164,11 @@ with confidence intervals and plots. See
 
 Each method below is a named step under
 [`python/pydocs_mcp/retrieval/steps/`](python/pydocs_mcp/retrieval/steps/),
-addressable from YAML. The default `chunk_search.yaml` composes BM25 +
-single-vector dense fused via RRF; everything else is opt-in via a
-preset swap (`--config`), with no behavioral change for default installs.
+addressable from YAML. The default `chunk_search_graph.yaml` composes
+single-vector dense retrieval with reference-graph expansion (`graph_expand`) —
+on the RepoQA benchmark this lifts recall@10 from 0.40 (keyword-only) to 0.77 on
+standard queries and to 1.00 on structurally-reachable answers. Everything else
+is opt-in via a preset swap (`--config`).
 
 ### Keyword — BM25 over SQLite FTS5
 

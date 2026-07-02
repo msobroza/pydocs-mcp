@@ -29,9 +29,15 @@ def test_appconfig_loads_shipped_defaults_absent_user_file():
     assert config.metadata_schemas["chunk"] == ("package", "scope", "origin", "title", "module")
     assert config.metadata_schemas["member"] == ("package", "scope", "module", "name", "kind")
     assert config.log_level == "info"
-    # Pipelines default to the shipped routes
+    # Pipelines default to the shipped routes. The default chunk pipeline is
+    # the dense + graph_expand composite (RepoQA A/B: recall@10 40->77 standard,
+    # 30->100 structural vs the former BM25-only default); locked here so a
+    # revert to chunk_search.yaml is caught.
     assert "chunk" in config.pipelines
     assert "member" in config.pipelines
+    assert config.pipelines["chunk"].routes[0].pipeline_path == Path(
+        "pipelines/chunk_search_graph.yaml"
+    )
 
 
 def test_appconfig_user_yaml_overlays_shipped_baseline(tmp_path):

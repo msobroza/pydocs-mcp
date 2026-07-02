@@ -10,7 +10,7 @@ metadata_schemas:
 pipelines:
   chunk:
     - default: true
-      pipeline_path: pipelines/chunk_search.yaml
+      pipeline_path: pipelines/chunk_search_graph.yaml
   member:
     - default: true
       pipeline_path: pipelines/member_search.yaml
