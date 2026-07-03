@@ -59,6 +59,7 @@ See [`notebook.ipynb`](notebook.ipynb) — the same two calls:
 from agent import build_agent, ask
 
 agent, llm = await build_agent("~/pydocs-index", model="gpt-4o-mini",
+                               base_url=None,  # e.g. "http://localhost:8000/v1" for vLLM / Ollama / LiteLLM
                                pydocs_config="configs/serve_cpu_openvino.yaml")
 history = []
 print(await ask(agent, history, "how do I open a database pool?"))
