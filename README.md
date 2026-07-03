@@ -290,6 +290,17 @@ through the fusion steps below.
     [benchmark](benchmarks/README.md)** on RepoQA code retrieval (recall@10 ≈ 0.93).
 
   The default remains bge-small; the `sentence_transformers` provider is opt-in.
+- **Air-gapped / offline deployments.** Point `embedding.model_name` at a
+  local directory of side-loaded weights (e.g. a `git clone` of the HF repo
+  made on a connected machine) and nothing is downloaded — HF offline mode
+  is forced, so a missing file fails locally instead of reaching for the
+  network. Works for every provider: `fastembed` additionally needs the
+  model's recipe in YAML (`pooling`, `normalize`, `model_file_name`) since
+  an arbitrary ONNX folder doesn't carry it — and note fastembed pools only
+  `mean`/`cls`, so last-token models like Qwen3-Embedding must use
+  `provider: sentence_transformers` (which reads the recipe from the model
+  directory itself). `openai` rejects a local path. See
+  `python/pydocs_mcp/defaults/default_config.yaml` for full examples.
 - **Vector store.** [TurboQuant](https://arxiv.org/abs/2504.19874)
   ([turbovec](https://github.com/RyanCodrai/turbovec)) — Online Vector
   Quantization with near-optimal distortion. **~16× smaller than
