@@ -35,7 +35,8 @@ from matplotlib.lines import Line2D  # noqa: E402
 #   (from each run's per-task `search_seconds` in the JSONL tracker).
 DATA: list[tuple[str, float, float, float, bool, float]] = [
     ("BM25", 0.167, 0.333, 0.400, False, 0.029),
-    ("BM25 top-200 →\ntree rerank", 0.333, 0.567, 0.567, False, 10.639),
+    ("BM25→tree rerank\n(gpt-4o-mini)", 0.333, 0.567, 0.567, False, 10.639),
+    ("BM25→tree rerank\n(gpt-5.5)", 0.667, 0.667, 0.667, False, 8.76),
     ("Dense\n(bge-small)", 0.467, 0.733, 0.733, False, 0.145),
     ("Dense\n(ModernBERT)", 0.533, 0.733, 0.733, False, 0.191),
     ("Dense\n(Qwen3-0.6B)*", 0.667, 0.810, 0.810, True, 0.508),
@@ -51,8 +52,9 @@ _LLM_LATENCY_S = 1.0  # split: methods slower than this spend an LLM call/query
 _BAR_FOOTNOTE = (
     "* Qwen3 dense & LLM tree: 21/30 needles (partial run) — not strictly "
     "comparable to the full-30 methods.  BM25 → tree rerank is two-stage: the LLM "
-    "(gpt-4o-mini) re-ranks BM25's top-200 candidate pool (k=200), so its recall@10 "
-    "can exceed BM25's own top-10.  LLM tree also uses gpt-4o-mini.  onnx removed.  "
+    "(gpt-4o-mini or gpt-5.5) re-ranks BM25's top-200 candidate pool (k=200), so its "
+    "recall@10 can exceed BM25's own top-10; gpt-5.5 lifts recall@1 0.33->0.67.  LLM "
+    "tree also uses gpt-4o-mini.  onnx removed.  "
     "ModernBERT & both F2LLM sizes: full-30, GPU sentence-transformers (2048-token "
     "cap); F2LLM-v2-0.6B is the code-specialized leader, F2LLM-v2-330M its lighter sibling."
 )

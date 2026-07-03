@@ -1,0 +1,16 @@
+# RepoQA experiment — two-stage BM25 top-200 candidate-gen + LLM tree-reasoning
+# rerank scoped to those candidates ("tree picks only", no fusion).
+# Identical to repoqa_bm25_tree_rerank.yaml EXCEPT the reranker LLM is gpt-5.5
+# (a reasoning model) instead of the default gpt-4o-mini, so the only thing that
+# varies between the two runs is the reranker model.
+# REQUIRES OPENAI_API_KEY (the tree step calls the LLM per query).
+# NOTE: gpt-5.5 only accepts the default temperature; the client omits the
+# temperature kwarg for reasoning models (see llm_clients/openai.py), so the
+# rerank is mildly non-deterministic vs the temperature=0 gpt-4o-mini baseline.
+# See benchmarks/EXPERIMENTS.md.
+llm:
+  model_name: gpt-5.5
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_bm25_tree_rerank.yaml

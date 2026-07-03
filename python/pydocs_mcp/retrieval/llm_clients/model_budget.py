@@ -28,6 +28,11 @@ import tiktoken
 # matching rather than exact.
 _MODEL_CONTEXT_TOKENS: dict[str, int] = {
     "gpt-4.1": 1_000_000,
+    # gpt-5.5 ships a 1M-token context window (gpt-4.1 class), so the tree
+    # budget auto-scales to it — the reranker can see a far larger candidate
+    # tree before pruning than on a 128K model. Prefix-matched, so dated /
+    # point-release suffixes (gpt-5.5, gpt-5-...) all resolve here.
+    "gpt-5": 1_000_000,
     "gpt-4o-mini": 128_000,
     "gpt-4o": 128_000,
     "gpt-4-turbo": 128_000,
