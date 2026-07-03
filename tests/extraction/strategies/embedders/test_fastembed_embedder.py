@@ -153,7 +153,9 @@ def test_local_dir_registration_is_idempotent(tmp_path) -> None:
     model_dir = tmp_path / "bge-small-local"
     model_dir.mkdir()
 
-    with patch.dict(sys.modules, modules):
+    # Local-dir construction fires enable_hf_offline(); snapshot/restore the
+    # environ so HF_HUB_OFFLINE=1 can't leak into the rest of the suite.
+    with mock.patch.dict(os.environ), patch.dict(sys.modules, modules):
         cls = _fresh_fastembed_embedder(modules)
         cls(model_name=str(model_dir), dim=384)
         # Must NOT re-register (real fastembed raises on a duplicate label).
@@ -171,7 +173,8 @@ def test_same_label_conflicting_recipe_raises(tmp_path) -> None:
     a.mkdir(parents=True)
     b.mkdir(parents=True)
 
-    with patch.dict(sys.modules, modules):
+    # Env snapshot: local-dir construction mutates HF offline vars (D5).
+    with mock.patch.dict(os.environ), patch.dict(sys.modules, modules):
         cls = _fresh_fastembed_embedder(modules)
         cls(model_name=str(a), dim=384)
         with pytest.raises(ValueError, match="same-name"):
@@ -203,11 +206,42 @@ def test_local_dir_cuda_keeps_gpu_providers(tmp_path) -> None:
     model_dir = tmp_path / "bge-small-local"
     model_dir.mkdir()
 
-    with patch.dict(sys.modules, modules):
+    # Env snapshot: local-dir construction mutates HF offline vars (D5).
+    with mock.patch.dict(os.environ), patch.dict(sys.modules, modules):
         cls = _fresh_fastembed_embedder(modules)
         cls(model_name=str(model_dir), dim=384, device="cuda")
 
     (ctor,) = calls["ctor"]
     assert ctor["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
     assert ctor["specific_model_path"] == str(model_dir)
+    sys.modules.pop("pydocs_mcp.extraction.strategies.embedders.fastembed", None)
+
+
+def test_dot_model_name_raises_on_empty_label() -> None:
+    # model_name="." IS an existing directory but its basename is "" —
+    # an empty label must fail loudly, not register with ModelSource(hf="").
+    calls, modules = _patched_fastembed_modules()
+
+    with mock.patch.dict(os.environ), patch.dict(sys.modules, modules):
+        cls = _fresh_fastembed_embedder(modules)
+        with pytest.raises(ValueError, match="label"):
+            cls(model_name=".", dim=384)
+
+    assert calls["add_custom_model"] == []
+    sys.modules.pop("pydocs_mcp.extraction.strategies.embedders.fastembed", None)
+
+
+def test_unknown_pooling_error_names_sentence_transformers(tmp_path) -> None:
+    # Direct construction bypasses the YAML Literal guard — the error must
+    # steer the operator toward the provider that supports exotic pooling.
+    calls, modules = _patched_fastembed_modules()
+    model_dir = tmp_path / "bge-small-local"
+    model_dir.mkdir()
+
+    with mock.patch.dict(os.environ), patch.dict(sys.modules, modules):
+        cls = _fresh_fastembed_embedder(modules)
+        with pytest.raises(ValueError, match="sentence_transformers"):
+            cls(model_name=str(model_dir), dim=384, pooling="last")
+
+    assert calls["add_custom_model"] == []
     sys.modules.pop("pydocs_mcp.extraction.strategies.embedders.fastembed", None)

@@ -42,7 +42,18 @@ def _register_local_model(
     )
 
     label = model_dir.name
-    recipe = (str(model_dir), dim, pooling, normalize, model_file)
+    if not label:
+        # Path(".").name and Path("/").name are "" — an empty label would
+        # register with ModelSource(hf="") (0.8.0 accepts it) and fail
+        # confusingly downstream instead of here.
+        raise ValueError(
+            f"Cannot derive a model label from {model_dir!r} — point "
+            "model_name at the model directory itself, not '.' or '/'."
+        )
+    # resolve() in the memo key only: two spellings/symlinks of the same
+    # physical dir must not trip the "different recipe" guard. The label and
+    # specific_model_path keep the user-given form.
+    recipe = (str(model_dir.resolve()), dim, pooling, normalize, model_file)
     previous = _REGISTERED_LOCAL_MODELS.get(label)
     if previous == recipe:
         return label
@@ -57,12 +68,20 @@ def _register_local_model(
         "cls": PoolingType.CLS,
         "disabled": PoolingType.DISABLED,
     }
+    # The YAML path is Literal-guarded; this protects direct construction.
+    pooling_type = pooling_types.get(pooling)
+    if pooling_type is None:
+        raise ValueError(
+            f"Unknown pooling {pooling!r} for local model {label!r}; "
+            f"valid: mean, cls, disabled (fastembed has no last-token "
+            "pooling — use provider: sentence_transformers for those models)."
+        )
     # ModelSource requires at least one source (0.8.0 raises on empty), but a
     # local load never consults it: TextEmbedding's download_model()
     # short-circuits on specific_model_path. The label is a harmless dummy.
     TextEmbedding.add_custom_model(
         model=label,
-        pooling=pooling_types[pooling],
+        pooling=pooling_type,
         normalization=normalize,
         sources=ModelSource(hf=label),
         dim=dim,
