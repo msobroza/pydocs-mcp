@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-07-03
+
+### Added
+
+- **Air-gapped / offline model loading** — point `embedding.model_name` at a
+  local directory of side-loaded weights and nothing is ever downloaded, for
+  every provider. fastembed states the model recipe in YAML (new `pooling`
+  knob + `normalize` / `model_file_name`) and loads via a pinned local path;
+  sentence-transformers and PyLate take the directory natively (the right
+  choice for last-token models like Qwen3-Embedding) with HF offline mode
+  forced so a missing file fails locally; `openai` rejects a local path with
+  an actionable error. Existing configs keep their exact pipeline hashes —
+  nothing re-embeds. (#121)
+- **Ask-your-docs Streamlit webapp** — `examples/ask_your_docs_agent` now
+  ships a themed chat UI (`streamlit run streamlit_app.py`) over the same
+  LangGraph agent: sidebar config, conversation memory with follow-up
+  reformulation, code snippets rendered in fenced blocks. The example is now
+  Streamlit + notebook only (the terminal REPL is gone). (#122)
+
+### Fixed
+
+- **Full-suite test failures in the fast-plaid storage tests** — the
+  default-install no-torch test evicted torch from `sys.modules` without
+  restoring it, so any later torch import in the same run crashed
+  (`function '_has_torch_function' already has a docstring`). The evicted
+  modules are now restored, and the suite is fully green. (#123)
+
+### Changed
+
+- The ask-your-docs example defines its dependencies in a single
+  `requirements.txt` (the short-lived `requirements.py` variant is gone).
+
 ## [0.4.0] — 2026-07-03
 
 ### Added

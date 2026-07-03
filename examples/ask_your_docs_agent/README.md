@@ -26,7 +26,7 @@ What it demonstrates:
 ```bash
 cd examples/ask_your_docs_agent
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.py           # pydocs-mcp from this repo + agent + streamlit
+pip install -r requirements.txt          # pydocs-mcp from this repo + agent + streamlit
 export OPENAI_API_KEY=sk-...             # any placeholder works for local servers
 ```
 

@@ -1,6 +1,6 @@
 """Streamlit chat UI for the ask-your-docs agent.
 
-    pip install -r requirements.py
+    pip install -r requirements.txt
     streamlit run streamlit_app.py
 
 Configure via the sidebar or env: PYDOCS_WORKSPACE, PYDOCS_MODEL,
