@@ -1,6 +1,4 @@
-"""Streamlit chat UI for the ask-your-docs agent (northern-lights theme).
-
-Run from this folder (the agent's own setup applies — see README):
+"""Streamlit chat UI for the ask-your-docs agent.
 
     pip install -r requirements.py
     streamlit run streamlit_app.py
@@ -40,9 +38,7 @@ st.title('"ask your docs"')
 
 @st.cache_resource
 def event_loop() -> asyncio.AbstractEventLoop:
-    # The MCP stdio session must live on ONE loop for the whole app lifetime;
-    # asyncio.run() per rerun would bind it to a dead loop. So: a single
-    # background loop in a daemon thread, shared across Streamlit reruns.
+    # The MCP stdio session must live on ONE loop across Streamlit reruns.
     loop = asyncio.new_event_loop()
     threading.Thread(target=loop.run_forever, daemon=True).start()
     return loop
@@ -72,7 +68,7 @@ if "messages" not in st.session_state:
 
 for role, text in st.session_state.messages:
     with st.chat_message(role):
-        st.markdown(text)  # fenced ``` blocks render as code snippets
+        st.markdown(text)
 
 if question := st.chat_input("Ask about your indexed projects…"):
     st.session_state.messages.append(("user", question))

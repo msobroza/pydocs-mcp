@@ -1,17 +1,14 @@
 """Ask-your-docs agent — a LangGraph ReAct agent over pydocs-mcp.
 
-Points a conversational agent at a directory of pre-built pydocs-mcp indexes
-(multi-repo bundles) and answers questions about their documentation and code,
-grounded in the `search` / `lookup` MCP tools.
+Used by the Streamlit app (`streamlit run streamlit_app.py`) and the
+notebook (`notebook.ipynb`):
 
-Terminal:   python agent.py --workspace ~/pydocs-index --model gpt-4o-mini
-Notebook:   agent, history = await build_agent(...);  await ask(agent, history, "...")
+    agent, llm = await build_agent("~/pydocs-index", model="gpt-4o-mini")
+    history = []
+    answer = await ask(agent, history, "how do I open a database pool?")
 """
 
 from __future__ import annotations
-
-import argparse
-import asyncio
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -61,12 +58,8 @@ async def build_agent(
     pydocs_config: str | None = None,
     pydocs_cmd: str = "pydocs-mcp",
 ):
-    """Start pydocs-mcp over the workspace and return a ready ReAct agent.
-
-    Returns (agent, llm). The MCP server runs as a stdio subprocess for the
-    lifetime of the process.
-    """
-    # NOTE: --config is a root flag and must come BEFORE the serve subcommand.
+    """Start pydocs-mcp over the workspace; return (agent, llm)."""
+    # --config is a root flag: it must come BEFORE the serve subcommand.
     args = ["serve", "--workspace", workspace]
     if pydocs_config:
         args = ["--config", pydocs_config, *args]
@@ -75,8 +68,8 @@ async def build_agent(
     )
     tools = await client.get_tools()
 
-    # Tell the model what is actually indexed (projects + packages) so it can
-    # infer which project a task refers to when the user doesn't name one.
+    # Fold the indexed projects/packages listing into the prompt so the model
+    # can infer which project a task refers to.
     lookup = next(t for t in tools if t.name == "lookup")
     listing = await lookup.ainvoke({"target": ""})
     prompt = f"{SYSTEM_PROMPT}\nIndexed projects and packages:\n{listing}"
@@ -99,49 +92,5 @@ async def ask(agent, history: list, question: str, max_history: int = 8) -> str:
     result = await agent.ainvoke({"messages": [*history, HumanMessage(question)]})
     answer = result["messages"][-1].content
     history += [HumanMessage(question), AIMessage(answer)]
-    del history[:-max_history]  # keep only the last N messages
+    del history[:-max_history]
     return answer
-
-
-async def chat(args: argparse.Namespace) -> None:
-    """Terminal REPL. Type a question; 'exit' to quit."""
-    agent, llm = await build_agent(
-        args.workspace, args.model, args.base_url, args.pydocs_config, args.pydocs_cmd
-    )
-    history: list = []
-    print("Ready. Ask about your indexed projects ('exit' to quit).")
-    while True:
-        try:
-            question = input("\nyou> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            break
-        if not question or question.lower() in ("exit", "quit"):
-            break
-        question = await reformulate(llm, history, question)
-        answer = await ask(agent, history, question, args.history)
-        print(f"\nagent> {answer}")
-
-
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--workspace", required=True, help="Directory of pre-built .db bundles")
-    p.add_argument("--model", required=True, help="LLM name (any OpenAI-API-compatible model)")
-    p.add_argument(
-        "--base-url", default=None, help="OpenAI-compatible endpoint (vLLM, Ollama, ...)"
-    )
-    p.add_argument(
-        "--pydocs-config",
-        default=None,
-        help="pydocs-mcp YAML (e.g. configs/serve_cpu_openvino.yaml)",
-    )
-    p.add_argument(
-        "--history", type=int, default=8, help="How many past messages to keep (default 8)"
-    )
-    p.add_argument(
-        "--pydocs-cmd", default="pydocs-mcp", help="pydocs-mcp executable (default: pydocs-mcp)"
-    )
-    asyncio.run(chat(p.parse_args()))
-
-
-if __name__ == "__main__":
-    main()
