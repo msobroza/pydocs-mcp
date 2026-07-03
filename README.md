@@ -404,6 +404,9 @@ rerankers and synthetic embedding-kNN edges — see
 
 ## Learn more
 
+- **[examples/ask_your_docs_agent/](examples/ask_your_docs_agent/)** — a
+  minimal LangGraph ReAct chat agent (terminal or notebook) that answers
+  questions about your indexed repos through the `search` / `lookup` tools.
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval
   pipeline, reference graph, cache, configuration, database schema, and the full
   CLI reference.
