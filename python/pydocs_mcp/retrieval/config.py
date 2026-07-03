@@ -432,6 +432,15 @@ class EmbeddingConfig(BaseModel):
     # produced vectors, but defaults must keep existing index hashes stable.
     backend: Literal["torch", "onnx", "openvino"] = "torch"
     model_file_name: str | None = None
+    # ``pooling`` is read ONLY by the fastembed provider in LOCAL-directory
+    # mode (airgap spec D2): fastembed's custom-model registration needs the
+    # pooling recipe stated explicitly because an arbitrary ONNX folder does
+    # not carry it. Inert for every other provider / online fastembed (same
+    # inert-field pattern as the sentence_transformers-only knobs above).
+    # fastembed 0.8.0 offers exactly CLS | MEAN | DISABLED — notably NO
+    # last-token pooling, so Qwen3-class models must use
+    # provider: sentence_transformers instead (spec D3).
+    pooling: Literal["mean", "cls", "disabled"] = "mean"
     # TurboQuant scalar-quantization bit width. 4 is the sweet spot per
     # turbovec README — ~16x compression with minimal recall loss on
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
@@ -518,13 +527,15 @@ class EmbeddingConfig(BaseModel):
         ``bit_width`` / ``max_seq_length`` / ``normalize`` are bounded enums /
         ints / bools, and ``model_name`` cannot legally contain a pipe).
 
-        ``backend`` / ``model_file_name`` fold in ONLY when non-default: a
-        non-torch backend or a quantized weight file changes the produced
-        document vectors (qint8 outputs differ from full precision), so
-        setting them must invalidate the chunk cache — but the conditional
-        append keeps the hash byte-identical for every pre-existing config
-        (the "default install hash is stable" invariant, same pattern as the
-        late-interaction fold in ``ingestion_pipeline_hash``).
+        ``backend`` / ``model_file_name`` / ``pooling`` fold in ONLY when
+        non-default: a non-torch backend or a quantized weight file changes
+        the produced document vectors (qint8 outputs differ from full
+        precision), and a wrong pooling recipe produces entirely different
+        vectors from the same ONNX graph — so setting any of them must
+        invalidate the chunk cache. The conditional append keeps the hash
+        byte-identical for every pre-existing config (the "default install
+        hash is stable" invariant, same pattern as the late-interaction fold
+        in ``ingestion_pipeline_hash``).
         """
         parts = [
             self.provider,
@@ -538,6 +549,8 @@ class EmbeddingConfig(BaseModel):
             parts.append(f"backend:{self.backend}")
         if self.model_file_name is not None:
             parts.append(f"file:{self.model_file_name}")
+        if self.pooling != "mean":
+            parts.append(f"pooling:{self.pooling}")
         identity = "|".join(parts)
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
