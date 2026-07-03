@@ -1,0 +1,17 @@
+# INDEX-time config — embed the corpus ONCE on GPU (torch backend).
+#
+# Usage (once per repo you want in the workspace):
+#   pydocs-mcp --config configs/index_gpu.yaml index ~/code/myrepo \
+#       --cache-dir ~/pydocs-index --gpu
+#
+# Keep model_name / dim / max_seq_length identical to serve_cpu_openvino.yaml
+# (they define the vector space); batch_size and --gpu are free to differ.
+embedding:
+  provider: sentence_transformers
+  # Low on GPU memory? Swap both files to the 0.6B sibling:
+  #   model_name: Qwen/Qwen3-Embedding-0.6B
+  #   dim: 1024
+  model_name: Qwen/Qwen3-Embedding-4B
+  dim: 2560
+  batch_size: 2          # 4B model — small batches keep VRAM bounded
+  max_seq_length: 2048
