@@ -42,14 +42,20 @@ class PyLateEmbedder:
     def from_config(cls, cfg: LateInteractionConfig) -> PyLateEmbedder:
         # Airgap (spec D5): see local_source — force HF offline before pylate
         # (sentence-transformers underneath) can attempt a Hub fallback.
-        if local_model_dir(cfg.model_name) is not None:
+        # ``model_path`` carries the expanded form: ColBERT does not
+        # expanduser, so a `~/models/x` spelling would otherwise be rejected
+        # as a malformed HF repo id.
+        model_path = cfg.model_name
+        local_dir = local_model_dir(cfg.model_name)
+        if local_dir is not None:
             enable_hf_offline()
+            model_path = str(local_dir)
         try:
             from pylate import models  # type: ignore[import-not-found]
         except ImportError as e:
             raise ImportError(_INSTALL_HINT) from e
         self = cls(
-            model_name=cfg.model_name,
+            model_name=model_path,
             dim=cfg.embedding_dim,
             document_length=cfg.document_length,
             query_length=cfg.query_length,
@@ -64,7 +70,7 @@ class PyLateEmbedder:
         # ``cfg.pool_factor`` on the dataclass for future fast-plaid
         # index wiring; just don't pass it here.
         self._model = models.ColBERT(
-            model_name_or_path=cfg.model_name,
+            model_name_or_path=model_path,
             embedding_size=cfg.embedding_dim,
             document_length=cfg.document_length,
             query_length=cfg.query_length,

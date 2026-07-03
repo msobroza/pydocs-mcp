@@ -161,3 +161,18 @@ def test_from_config_repo_id_does_not_touch_offline_env(monkeypatch) -> None:
         cfg = LateInteractionConfig(enabled=True)  # default repo-id model_name
         PyLateEmbedder.from_config(cfg)
         assert "HF_HUB_OFFLINE" not in os.environ
+
+
+def test_from_config_tilde_is_expanded_for_the_loader(tmp_path, monkeypatch) -> None:
+    # ColBERT does not expanduser, so a `~/models/x` spelling must reach the
+    # loader in expanded form or it would be rejected as a malformed HF repo
+    # id. POSIX-only: expanduser reads HOME.
+    _install_fake_pylate(monkeypatch)
+    from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "models" / "x").mkdir(parents=True)
+    with mock.patch.dict(os.environ):
+        cfg = LateInteractionConfig(enabled=True, model_name="~/models/x")
+        emb = PyLateEmbedder.from_config(cfg)
+    assert emb.model_name == str(tmp_path / "models" / "x")

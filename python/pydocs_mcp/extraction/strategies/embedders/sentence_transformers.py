@@ -80,8 +80,13 @@ class SentenceTransformersEmbedder:
     def __post_init__(self) -> None:
         # Airgap (spec D5): a side-loaded model dir must never fall back to
         # the Hub for a missing file — force HF offline before any load.
-        if local_model_dir(self.model_name) is not None:
+        local_dir = local_model_dir(self.model_name)
+        if local_dir is not None:
             enable_hf_offline()
+            # Hand the loader the expanded path — SentenceTransformer does
+            # not expanduser, so a `~/models/x` spelling would otherwise be
+            # rejected as a malformed HF repo id.
+            self.model_name = str(local_dir)
         if self.model is None:
             try:
                 from sentence_transformers import SentenceTransformer
