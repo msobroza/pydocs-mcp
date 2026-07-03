@@ -18,7 +18,15 @@ def local_model_dir(model_name: str) -> Path | None:
     existing directory is treated as side-loaded weights (spec D1 overloads
     ``model_name`` instead of adding a second YAML field).
     """
-    path = Path(model_name).expanduser()
+    # A blank YAML value must fall through to "not a local dir": Path("") is
+    # Path("."), which is_dir() — it would silently point at the server cwd.
+    if not model_name.strip():
+        return None
+    # Fail closed to repo-id mode when ~ can't be resolved (e.g. no HOME).
+    try:
+        path = Path(model_name).expanduser()
+    except RuntimeError:
+        return None
     if path.is_dir():
         return path
     return None
