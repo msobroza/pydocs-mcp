@@ -29,9 +29,19 @@ def test_appconfig_loads_shipped_defaults_absent_user_file():
     assert config.metadata_schemas["chunk"] == ("package", "scope", "origin", "title", "module")
     assert config.metadata_schemas["member"] == ("package", "scope", "module", "name", "kind")
     assert config.log_level == "info"
-    # Pipelines default to the shipped routes
+    # Pipelines default to the shipped routes. The default chunk pipeline is
+    # the dense + graph_expand composite (RepoQA A/B: recall@10 40->77 standard,
+    # 30->100 structural vs the former BM25-only default); locked here so a
+    # revert to chunk_search.yaml is caught.
     assert "chunk" in config.pipelines
     assert "member" in config.pipelines
+    # Routed default: scope=deps -> the BM25+dense-doc-pages preset; the
+    # DEFAULT route stays the benchmarked dense+graph pipeline.
+    chunk_routes = config.pipelines["chunk"].routes
+    assert chunk_routes[0].predicate == "scope_is_dependencies_only"
+    assert chunk_routes[0].pipeline_path == Path("pipelines/chunk_search_deps.yaml")
+    assert chunk_routes[-1].default
+    assert chunk_routes[-1].pipeline_path == Path("pipelines/chunk_search_graph.yaml")
 
 
 def test_appconfig_user_yaml_overlays_shipped_baseline(tmp_path):
@@ -356,3 +366,32 @@ def test_with_device_gpu_false_sets_cpu() -> None:
     cpu = AppConfig().with_device(gpu=False)
     assert cpu.embedding.device == "cpu"
     assert cpu.late_interaction.device == "cpu"
+
+
+def test_pooling_default_mean_and_validated() -> None:
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    assert EmbeddingConfig().pooling == "mean"
+    assert EmbeddingConfig(pooling="cls").pooling == "cls"
+    with pytest.raises(ValidationError):
+        EmbeddingConfig(pooling="last_token")
+
+
+def test_pooling_default_keeps_hash_stable() -> None:
+    # The "default install hash is stable" invariant: adding the field must
+    # not invalidate any existing chunk cache.
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    assert (
+        EmbeddingConfig().compute_pipeline_hash()
+        == EmbeddingConfig(pooling="mean").compute_pipeline_hash()
+    )
+
+
+def test_pooling_non_default_changes_hash() -> None:
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    assert (
+        EmbeddingConfig(pooling="cls").compute_pipeline_hash()
+        != EmbeddingConfig().compute_pipeline_hash()
+    )

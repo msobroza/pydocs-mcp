@@ -1,0 +1,148 @@
+"""Multi-repo db resolution — discover + name + select pre-built ``.db`` bundles.
+
+A single MCP server can serve several already-indexed projects. Each project is a
+portable ``{name}_{hash}.db`` (+ its ``.tq`` sidecar) that may live anywhere —
+not necessarily beside the real source. This module answers "which dbs, under
+what project names" so the composition root can build one backend per project and
+route a query by ``project=`` scope.
+
+Loading is startup-config only (CLI ``--db`` / ``--workspace``); the per-query
+``project`` filter selects among what was loaded. A workspace/explicit-db load is
+READ-ONLY — the real source may be absent, so reindex/watch is disabled (an
+absent project would otherwise re-index itself to empty).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from pydocs_mcp.db import open_index_database, read_index_metadata
+from pydocs_mcp.storage.index_metadata import IndexMetadata
+
+# ``cache_path_for_project`` names files ``{project_name}_{md5[:10]}.db``; the
+# 10-hex-char suffix is the path slug. Strip it to recover the project name when
+# a db predates the stamped ``index_metadata.project_name``.
+_SLUG_RE = re.compile(r"^(.*)_[0-9a-f]{10}$")
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedProject:
+    """One indexed database selected for serving, with its routing identity.
+
+    ``metadata`` is always present — a pre-v11 db gets a
+    :meth:`IndexMetadata.legacy_fallback` synthesized from its
+    ``packages.embedding_model`` (dim unknown, ``indexed_at=0.0``).
+    """
+
+    name: str
+    db_path: Path
+    metadata: IndexMetadata
+
+    @property
+    def indexed_at(self) -> float:
+        """Recency for the most-recent-wins dedup tiebreak (0.0 if unstamped)."""
+        return self.metadata.indexed_at
+
+
+def _name_from_stem(stem: str) -> str:
+    """Recover the project name from a ``{name}_{slug}`` db filename stem."""
+    m = _SLUG_RE.match(stem)
+    return m.group(1) if m else stem
+
+
+def _legacy_embedding_model(conn) -> str | None:
+    """The pre-v11 embedder identity: any non-empty ``packages.embedding_model``."""
+    row = conn.execute(
+        "SELECT embedding_model FROM packages "
+        "WHERE embedding_model IS NOT NULL AND embedding_model != '' LIMIT 1"
+    ).fetchone()
+    return row[0] if row else None
+
+
+def load_project(db_path: Path) -> LoadedProject:
+    """Open ``db_path``, read its stamped identity, and derive its project name.
+
+    The routing name prefers the stamped ``index_metadata.project_name``; a legacy
+    (unstamped) db falls back to a synthesized metadata (embedder from
+    ``packages.embedding_model``) and the ``{name}_{slug}`` filename prefix.
+
+    Raises ``FileNotFoundError`` if the db file is absent — loading a pre-built
+    bundle that does not exist (or querying a never-indexed project) is an error,
+    not an empty index (``open_index_database`` would otherwise create it).
+    """
+    if not db_path.exists():
+        raise FileNotFoundError(f"index database not found: {db_path}")
+    conn = open_index_database(db_path)
+    try:
+        meta = read_index_metadata(conn)
+        if meta is None:
+            meta = IndexMetadata.legacy_fallback(
+                project_name=_name_from_stem(db_path.stem),
+                embedding_model=_legacy_embedding_model(conn),
+            )
+    finally:
+        conn.close()
+    name = meta.project_name or _name_from_stem(db_path.stem)
+    return LoadedProject(name=name, db_path=db_path, metadata=meta)
+
+
+def discover_workspace(workspace: Path) -> list[LoadedProject]:
+    """Load every ``*.db`` bundle directly under ``workspace`` (non-recursive).
+
+    Raises ``FileNotFoundError`` if the directory is missing and ``ValueError`` if
+    it holds no ``.db`` files — a silent empty load would look like "no results".
+    """
+    if not workspace.is_dir():
+        raise FileNotFoundError(f"workspace directory not found: {workspace}")
+    dbs = sorted(workspace.glob("*.db"))
+    if not dbs:
+        raise ValueError(f"no .db bundles found in workspace: {workspace}")
+    return [load_project(db) for db in dbs]
+
+
+class EmbedderMismatchError(RuntimeError):
+    """A loaded db's vectors were built with an embedder the pipeline can't use."""
+
+
+def validate_project_embedder(project: LoadedProject, *, model: str, dim: int) -> None:
+    """Raise :class:`EmbedderMismatchError` if ``project`` is incompatible with the embedder.
+
+    Multi-repo serving is READ-ONLY — an absent source can't be re-embedded — so a
+    mismatch must fail fast here with a clear message rather than panic deep inside
+    turbovec at query time on a dim mismatch. Legacy dbs that never recorded their
+    embedder identity are permitted (they cannot be checked).
+    """
+    got = project.metadata
+    if not got.embedder_matches(model=model, dim=dim):
+        raise EmbedderMismatchError(
+            f"project {project.name!r} ({project.db_path}) was indexed with embedder "
+            f"{got.embedding_model!r} (dim {got.embedding_dim}), but the configured "
+            f"pipeline uses {model!r} (dim {dim}). Re-index the project with the "
+            f"matching embedder, or point the pipeline at {got.embedding_model!r}."
+        )
+
+
+def validate_project_embedders(projects: list[LoadedProject], *, model: str, dim: int) -> None:
+    """Validate every loaded project against the configured embedder (fail-fast)."""
+    for project in projects:
+        validate_project_embedder(project, model=model, dim=dim)
+
+
+def select_project(projects: list[LoadedProject], name: str) -> LoadedProject:
+    """Pick the loaded project matching ``name``.
+
+    A ``name`` may match more than one loaded db (two projects share a directory
+    name at different paths). Per the multi-repo priority rule, the
+    most-recently-indexed wins; pass a fuller ``{name}_{slug}`` filename stem to
+    disambiguate precisely. Raises ``KeyError`` when nothing matches.
+    """
+    matches = [p for p in projects if p.name == name]
+    if not matches:
+        # Allow selecting by the full filename stem (disambiguation escape hatch).
+        matches = [p for p in projects if p.db_path.stem == name]
+    if not matches:
+        available = ", ".join(sorted({p.name for p in projects}))
+        raise KeyError(f"no loaded project named {name!r}; available: {available}")
+    return max(matches, key=lambda p: p.indexed_at)

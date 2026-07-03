@@ -61,8 +61,9 @@ def _patch_build_embedder_with_mock(request, monkeypatch):
     selects ``provider=fastembed`` and ``FastEmbedEmbedder.__post_init__``
     eagerly downloads ``BAAI/bge-small-en-v1.5`` (~80MB) from the network — so
     a transient download failure on a CI runner ERRORs every test whose fixture
-    transitively builds a retrieval context, even though the BM25-only default
-    pipeline asserts result SHAPES, not vectors, and needs no real embeddings.
+    transitively builds a retrieval context. The MockEmbedder keeps every such
+    build offline; shape/wiring tests on the raw-SQL fixtures pin the vector-free
+    BM25 preset, so they need no seeded vectors either.
 
     This mirrors the autouse ``_patch_build_llm_client_with_fake`` patch above:
     swap the factory at BOTH bind sites so the suite never touches the network.

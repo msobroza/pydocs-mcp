@@ -17,21 +17,27 @@ Every query runs through a **`RetrieverPipeline`** — an sklearn-shaped chain o
 inside another for sub-routing, and address any step by name
 (`pipeline["fetch"]`) for introspection or testing.
 
-### The default chunk-search pipeline (BM25)
+### The default chunk-search pipeline (dense + graph expansion)
 
-The shipped default (`python/pydocs_mcp/pipelines/chunk_search.yaml`) is a
-seven-step BM25 chain:
+The shipped default (`python/pydocs_mcp/pipelines/chunk_search_graph.yaml`) is an
+eight-step dense + reference-graph chain:
 
 1. `pre_filter` — parse + validate + scope-split; writes a typed result to
    `state.scratch` for the fetcher.
-2. `chunk_fetcher` — FTS5 `MATCH` with pre-filter pushdown (metadata filters run
-   *inside* SQLite).
-3. `bm25_scorer` — flip the sign so higher = better.
+2. `dense_fetcher` — embed the query, ANN-search the `.tq` sidecar; writes the
+   candidate set.
+3. `dense_scorer` — cosine similarity → relevance.
 4. `metadata_post_filter` — apply any remaining `SearchQuery.post_filter`
    in-memory.
-5. `top_k_filter` — sort by relevance, keep top K.
-6. `limit` — cap the final item count.
-7. `token_budget_formatter` — render the composite chunk for MCP output.
+5. `graph_expand` — seed from the top dense hits, add their 1-hop caller/callee
+   neighbours (the structurally-adjacent code an embedding alone misses).
+6. `top_k_filter` — sort by relevance, keep top K.
+7. `limit` — cap the final item count.
+8. `token_budget_formatter` — render the composite chunk for MCP output.
+
+The former BM25-only chain (`chunk_search.yaml`) remains a shipped preset. On the
+RepoQA benchmark, this dense + graph default lifts recall@10 from 0.40 (BM25) to
+0.77 on standard queries and to 1.00 on structurally-reachable answers.
 
 ### Dense, hybrid, late-interaction, and tree-reasoning retrieval
 
@@ -67,7 +73,8 @@ Several more retrieval modes ship as opt-in pipeline presets:
   as a two-stage reranker over a BM25/dense candidate set (`rerank_candidates`).
 
 Select a preset by pointing the chunk pipeline at it in your config overlay (see
-[Configuration](#configuration)); the default remains BM25.
+[Configuration](#configuration)); the default is dense + graph expansion
+(`chunk_search_graph.yaml`).
 
 #### Graph analytics (opt-in)
 
@@ -276,8 +283,40 @@ and pinning them keeps MCP clients stable across server retunes (see
 
 | Tool | Signature | Purpose |
 |---|---|---|
-| `search` | `search(query, kind, package, scope, limit)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any}`. |
-| `lookup` | `lookup(target, show)` | Navigate to a specific named target. `show` ∈ `{default, tree, callers, callees, inherits}`. Empty target lists indexed packages. |
+| `search` | `search(query, kind, package, scope, limit, project)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any}`. `package` / `scope` / `project` are corpus-scope filters (`project` selects one loaded repo in a multi-repo server). |
+| `lookup` | `lookup(target, show, project)` | Navigate to a specific named target. `show` ∈ `{default, tree, callers, callees, inherits, impact, context}`. `project` resolves the target inside one loaded repo. Empty target lists indexed packages. |
+
+---
+
+## Multi-repo serving
+
+One MCP server (or CLI query) can host several already-indexed repos. Each indexed
+project is a portable `{name}_{hash}.db` + `.tq` bundle (relative source paths and
+logical identifiers only — no absolute paths), stamped at index time with an
+`index_metadata` row: project name/root, the embedder identity, and `indexed_at`.
+
+- **Load** — `serve --workspace <dir>` loads every `.db` bundle in a directory;
+  `serve --db <file>` loads specific bundles (repeatable). Both are **read-only**:
+  the real source may be absent, so there is no reindex/watch. `--cache-dir` still
+  controls where `index` writes bundles (default `~/.pydocs-mcp`); the
+  `{name}_{hash}` filename is unchanged.
+- **Scope** — the per-query `project` filter (MCP tool param / CLI `--project`)
+  restricts to one loaded repo by name; omitted, a query **unions** across all
+  loaded repos.
+- **Dedup** (union only) — when the same symbol appears in several repos, a
+  root-project copy (`__project__`) beats a dependency copy; among duplicate
+  dependencies the most-recently-indexed (`indexed_at`) wins. Cross-repo scores are
+  comparable because…
+- **Embedder guard** — every loaded db must match the configured embedder
+  (`model` + `dim`, from `index_metadata`); a read-only load that can't re-embed
+  fails fast with a clear error rather than a dim-mismatch panic at query time.
+  Note: the guard compares model + dim only — a `backend`/quantization
+  difference between bundles (same model, qint8 vs full precision) is not
+  caught here; single-db deployments catch it via the pipeline hash.
+
+`lookup(target)` without `project` resolves across loaded repos most-recent-first
+and returns the first repo that has the target (its reference-graph traversal stays
+within that repo).
 
 ---
 
@@ -318,11 +357,14 @@ Without the `[watch]` extras, both `pydocs-mcp serve --watch` and
 
 ### How it works
 
-1. The watcher monitors the project root (NOT `site-packages/` —
-   dependency changes are rare and user-initiated; re-run
-   `pydocs-mcp index .` after `pip install`).
-2. File-system events for paths matching `extensions` AND not matching
-   any `ignore_globs` pattern are queued.
+1. The watcher monitors the project root (NOT `site-packages/`, which is under
+   the ignored `.venv`). It fires on edits to source files (`extensions`) **and**
+   to dependency manifests (`pyproject.toml` / `requirements*.txt`) — so adding a
+   package (e.g. `uv add X`, which edits `pyproject.toml`) reindexes and picks up
+   the new dependency once it's installed.
+2. File-system events for paths matching `extensions` — or a dependency manifest
+   (`pyproject.toml` / `requirements*.txt`, always watched regardless of
+   `extensions`) — AND not matching any `ignore_globs` pattern are queued.
 3. Events are **debounced** by `debounce_ms` — N edits within the
    window collapse into a single reindex. Editor atomic-save sequences
    (temp create → delete → rename) naturally fall under the same
@@ -396,6 +438,59 @@ Capture is on by default and tuned via YAML
 (`reference_graph.capture.{enabled,kinds}`); `MENTIONS` is opt-in.
 
 ---
+
+## Embedding backends (sentence_transformers)
+
+The `sentence_transformers` provider can run its model through three runtimes,
+selected by `embedding.backend`: `torch` (default), `onnx`, or `openvino`.
+`embedding.model_file_name` optionally picks a specific exported weight file in
+the HF repo — e.g. `openvino/openvino_model_qint8_quantized.xml` or
+`onnx/model_qint8_avx512.onnx` — for quantized CPU inference (typically 2–4×
+faster than torch-CPU at a small recall cost).
+
+- Non-torch backends need the matching sentence-transformers extra:
+  `pip install 'pydocs-mcp[openvino]'` (or `pip install
+  'sentence-transformers[onnx]'` for the ONNX backend).
+- `backend: openvino` is CPU/iGPU-only — combining it with `device: cuda`
+  (`--gpu`) fails at config load with an actionable error.
+- Both keys fold into the pipeline hash **only when set**, so enabling them
+  re-embeds on the next index (quantized vectors differ from full precision),
+  while default configs keep their existing index hashes byte-identical.
+- Both keys are inert for the `fastembed` / `openai` providers.
+
+## Selective dependency embedding
+
+Everything discovered is chunked and FTS/BM25-indexed, but **dense vectors are
+written per package tier** (`EmbedPolicy` — `extraction/embed_policy.py`):
+
+- **`full`** — every chunk embedded. Applies to the project itself, to any
+  dependency matching `embedding.full_index_dependencies` (exact names or
+  fnmatch globs; the CLI `--full-dep NAME` flag merges into the list), and
+  globally when `embedding.dependency_policy: full`.
+- **`doc_pages`** (default for dependencies) — only documentation chunks are
+  embedded: the per-module docstring pages emitted by the
+  `dependency_doc_pages` ingestion stage (module docstring + public top-level
+  signatures/docstrings, code bodies excluded), plus markdown sections and
+  READMEs. One embedding per module instead of one per def.
+- **`none`** — dependencies get no vectors at all (BM25-only).
+
+Mechanics worth knowing:
+
+- The package's tier is folded into every chunk's `content_hash`
+  (`AssignChunkContentHashStage` appends `|tier:<tier>`), so promoting or
+  demoting one dependency re-embeds (or drops vectors for) **exactly that
+  package** on the next index — no global re-embed.
+- `chunks.embedded` (schema v12) records which chunks actually carry a `.tq`
+  vector; the startup integrity check compares vectors against this flag, so
+  deliberately-unembedded chunks are a steady state, never treated as drift.
+- Dense search over a partially-embedded corpus returns the embedded subset
+  (the allowlist is intersected with the index's ids first).
+- `scope=deps` queries route to `pipelines/chunk_search_deps.yaml`
+  (BM25 over all dep chunks ∥ dense over their doc pages, RRF-fused) via the
+  `scope_is_dependencies_only` route predicate; other scopes stay on the
+  dense+graph default, which also reaches the embedded dep doc pages.
+- A package whose tier yields no embeddable chunks keeps
+  `packages.embedding_model` NULL and is never re-embedded on model changes.
 
 ## Two-level cache
 
@@ -478,7 +573,9 @@ what the [benchmark harness](benchmarks/README.md) exploits.)
 
 ### Shipped blueprints
 
-- `pipelines/chunk_search.yaml` — default chunk search (BM25).
+- `pipelines/chunk_search_graph.yaml` / `…_graph_ranked.yaml` — **default** chunk
+  search: dense retrieval + `graph_expand` reference-graph expansion.
+- `pipelines/chunk_search.yaml` — BM25 chunk search (the former default).
 - `pipelines/chunk_search_ranked.yaml` — BM25, ranked top-K (no composite
   collapse).
 - `pipelines/chunk_search_dense.yaml` / `…_dense_ranked.yaml` — dense retrieval.

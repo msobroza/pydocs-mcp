@@ -89,7 +89,7 @@ class NullTreeService:
 class NullReferenceService:
     """Reference-service stand-in for deployments without the reference graph.
 
-    All three methods raise ``ServiceUnavailableError`` so the
+    Every method raises ``ServiceUnavailableError`` so the
     user-visible failure mode (``lookup(show="callers")`` against an
     un-indexed deployment) points squarely at the YAML knob.  Returning
     empty rows would silently mislead the user into thinking no
@@ -103,6 +103,12 @@ class NullReferenceService:
         raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
 
     async def find_by_name(self, *_args, **_kwargs):
+        raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
+
+    async def impact(self, *_args, **_kwargs):
+        raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
+
+    async def context(self, *_args, **_kwargs):
         raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
 
 

@@ -29,6 +29,10 @@ from typing import Any
 
 import numpy as np
 
+from pydocs_mcp.extraction.strategies.embedders.local_source import (
+    enable_hf_offline,
+    local_model_dir,
+)
 from pydocs_mcp.models import Embedding
 
 _INSTALL_HINT = (
@@ -60,17 +64,56 @@ class SentenceTransformersEmbedder:
     # model without one is not forced through a non-existent prompt (which
     # would raise). Set it only to override the model's own default.
     query_prompt_name: str | None = None
+    # ST inference runtime: "torch" (default) | "onnx" | "openvino". The
+    # non-torch backends enable fast CPU inference — typically ~2-4x with a
+    # qint8-quantized ``model_file_name`` — and need the matching ST extra
+    # (``sentence-transformers[openvino]`` / ``[onnx]``) installed.
+    backend: str = "torch"
+    # Specific exported weight file inside the HF repo (e.g.
+    # ``openvino/openvino_model_qint8_quantized.xml``); ``None`` uses the
+    # backend's default export. Threaded as ST's model_kwargs["file_name"].
+    model_file_name: str | None = None
     # Injectable so tests run without loading the real model. ``Any`` — the
     # real type is sentence_transformers.SentenceTransformer, imported lazily.
     model: Any = None
 
     def __post_init__(self) -> None:
+        # Airgap (spec D5): a side-loaded model dir must never fall back to
+        # the Hub for a missing file — force HF offline before any load.
+        local_dir = local_model_dir(self.model_name)
+        if local_dir is not None:
+            enable_hf_offline()
+            # Hand the loader the expanded path — SentenceTransformer does
+            # not expanduser, so a `~/models/x` spelling would otherwise be
+            # rejected as a malformed HF repo id.
+            self.model_name = str(local_dir)
         if self.model is None:
             try:
                 from sentence_transformers import SentenceTransformer
             except ImportError as e:
                 raise ImportError(_INSTALL_HINT) from e
-            self.model = SentenceTransformer(self.model_name, device=self.device)
+            # Pass backend/model_kwargs ONLY when non-default so the torch
+            # path constructs byte-identically to before this feature.
+            ctor_kwargs: dict[str, Any] = {"device": self.device}
+            if self.backend != "torch":
+                ctor_kwargs["backend"] = self.backend
+            if self.model_file_name is not None:
+                ctor_kwargs["model_kwargs"] = {"file_name": self.model_file_name}
+            try:
+                self.model = SentenceTransformer(self.model_name, **ctor_kwargs)
+            except ImportError as e:
+                # ModuleNotFoundError (e.g. missing optimum) is an ImportError
+                # subclass, so this one clause covers it.
+                if self.backend == "torch":
+                    raise
+                # A non-torch backend fails construction when optimum /
+                # openvino aren't installed — surface the extras hint instead
+                # of the deep import error.
+                raise ImportError(
+                    f"embedding.backend: {self.backend} requires the matching "
+                    "sentence-transformers extra. Install with: pip install "
+                    f"'sentence-transformers[{self.backend}]'"
+                ) from e
         # Cap sequence length so a long code chunk can't OOM attention. Applied
         # to injected models too so test + real paths stay symmetric.
         self.model.max_seq_length = self.max_seq_length

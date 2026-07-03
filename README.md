@@ -125,6 +125,58 @@ Both modes share the same YAML tunables: debounce, file extensions, and
 ignored paths live under `serve.watch.*` in your `pydocs-mcp.yaml` (see
 [DOCUMENTATION.md](DOCUMENTATION.md#live-re-indexing)).
 
+### Multi-repo search (optional)
+
+One MCP server can host several already-indexed repos. Index each once (every
+project writes a portable `{name}_{hash}.db` + `.tq` bundle under `--cache-dir`),
+then serve them all — each query searches across every loaded repo, or one via
+the `project` scope:
+
+```bash
+# index a few repos into a shared directory of db bundles
+pydocs-mcp index ~/code/frontend --cache-dir ~/pydocs-index
+pydocs-mcp index ~/code/backend  --cache-dir ~/pydocs-index
+
+# serve them all from ONE MCP server (read-only — no reindex/watch)
+pydocs-mcp serve --workspace ~/pydocs-index
+pydocs-mcp serve --db ~/pydocs-index/backend_1a2b3c4d5e.db   # or specific bundles
+
+# query across all loaded repos, or scope to one by name
+pydocs-mcp search "db pool" --workspace ~/pydocs-index
+pydocs-mcp search "db pool" --workspace ~/pydocs-index --project backend
+```
+
+On the MCP surface the selector is the `project` filter, a sibling of
+`package`/`scope`: `search(query="db pool", project="backend")` /
+`lookup(target="app.db.Pool", project="backend")`; omit it to search every loaded
+repo. When the same package appears in several repos, a root-project copy wins
+over a dependency copy, and among duplicate dependencies the most-recently-indexed
+one is kept. Every loaded db must share the configured embedder — a mismatch
+fails fast (a read-only load can't re-embed an absent project).
+
+### Fast dependency indexing (selective embedding)
+
+Everything is BM25/FTS-indexed, but **dense embedding is selective by package
+tier** — embedding is the dominant indexing cost, and big dependencies (torch,
+sklearn) carry tens of thousands of code chunks:
+
+| Tier | What gets dense vectors | Selected by |
+|---|---|---|
+| Project / subprojects | every chunk (dense + graph, unchanged) | automatic |
+| Promoted dependencies | every chunk — project-grade | `--full-dep NAME` (repeatable, globs OK) or `embedding.full_index_dependencies` |
+| Regular dependencies | documentation only: one docstring **page per module** (module + public signatures + docstrings) plus `.md`/README chunks | default (`embedding.dependency_policy: doc_pages`) |
+
+So torch indexes in seconds (≈one embedding per module) instead of an hour,
+while its docs stay *semantically* searchable and all of its code stays
+keyword-searchable + navigable (`lookup`, `kind="api"`). `scope=deps` queries
+automatically route to a BM25 ∥ dense fusion pipeline that covers both. Set
+`dependency_policy: full` to restore embed-everything, or `none` for BM25-only
+dependencies:
+
+```bash
+pydocs-mcp index . --full-dep my-internal-lib --full-dep "acme-*"
+```
+
 Point Claude Code, Cursor, or Continue.dev at it over stdio — copy-paste client
 configs are in [DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration), and
 install troubleshooting (including the `libopenblas` fallback) is in
@@ -164,9 +216,11 @@ with confidence intervals and plots. See
 
 Each method below is a named step under
 [`python/pydocs_mcp/retrieval/steps/`](python/pydocs_mcp/retrieval/steps/),
-addressable from YAML. The default `chunk_search.yaml` composes BM25 +
-single-vector dense fused via RRF; everything else is opt-in via a
-preset swap (`--config`), with no behavioral change for default installs.
+addressable from YAML. The default `chunk_search_graph.yaml` composes
+single-vector dense retrieval with reference-graph expansion (`graph_expand`) —
+on the RepoQA benchmark this lifts recall@10 from 0.40 (keyword-only) to 0.77 on
+standard queries and to 1.00 on structurally-reachable answers. Everything else
+is opt-in via a preset swap (`--config`).
 
 ### Keyword — BM25 over SQLite FTS5
 
@@ -206,6 +260,22 @@ through the fusion steps below.
     query_prompt_name: query
   ```
 
+  The provider also runs ONNX / OpenVINO exports for **fast CPU inference** —
+  typically 2–4× with a qint8-quantized file — via two optional keys
+  (`pip install 'pydocs-mcp[openvino]'` for the OpenVINO runtime):
+
+  ```yaml
+  embedding:
+    provider: sentence_transformers
+    model_name: BAAI/bge-small-en-v1.5
+    dim: 384
+    backend: openvino          # torch (default) | onnx | openvino
+    model_file_name: openvino/openvino_model_qint8_quantized.xml
+  ```
+
+  Setting either key re-embeds on the next index (quantized vectors differ
+  from full-precision ones); defaults leave existing indexes untouched.
+
   The provider supports several on-device models — set `model_name` and the
   matching `dim`:
 
@@ -220,6 +290,17 @@ through the fusion steps below.
     [benchmark](benchmarks/README.md)** on RepoQA code retrieval (recall@10 ≈ 0.93).
 
   The default remains bge-small; the `sentence_transformers` provider is opt-in.
+- **Air-gapped / offline deployments.** Point `embedding.model_name` at a
+  local directory of side-loaded weights (e.g. a `git clone` of the HF repo
+  made on a connected machine) and nothing is downloaded — HF offline mode
+  is forced, so a missing file fails locally instead of reaching for the
+  network. Works for every provider: `fastembed` additionally needs the
+  model's recipe in YAML (`pooling`, `normalize`, `model_file_name`) since
+  an arbitrary ONNX folder doesn't carry it — and note fastembed pools only
+  `mean`/`cls`, so last-token models like Qwen3-Embedding must use
+  `provider: sentence_transformers` (which reads the recipe from the model
+  directory itself). `openai` rejects a local path. See
+  `python/pydocs_mcp/defaults/default_config.yaml` for full examples.
 - **Vector store.** [TurboQuant](https://arxiv.org/abs/2504.19874)
   ([turbovec](https://github.com/RyanCodrai/turbovec)) — Online Vector
   Quantization with near-optimal distortion. **~16× smaller than
@@ -334,6 +415,9 @@ rerankers and synthetic embedding-kNN edges — see
 
 ## Learn more
 
+- **[examples/ask_your_docs_agent/](examples/ask_your_docs_agent/)** — a
+  minimal LangGraph ReAct chat agent (terminal or notebook) that answers
+  questions about your indexed repos through the `search` / `lookup` tools.
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval
   pipeline, reference graph, cache, configuration, database schema, and the full
   CLI reference.

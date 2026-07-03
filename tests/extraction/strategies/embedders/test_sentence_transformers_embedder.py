@@ -7,6 +7,9 @@ transformers load is needed — they run in the default ``.venv``.
 
 from __future__ import annotations
 
+import os
+from unittest import mock
+
 import numpy as np
 import pytest
 
@@ -140,3 +143,115 @@ def test_injected_model_skips_real_load() -> None:
     # __post_init__ should still apply the seq-length cap to the injected model.
     assert e.model is fake
     assert fake.max_seq_length == e.max_seq_length
+
+
+# ── backend (torch | onnx | openvino) + quantized model_file_name ──
+
+
+def _install_fake_st_module(monkeypatch, records: list[dict], fail: Exception | None = None):
+    """Inject a fake ``sentence_transformers`` module whose constructor records
+    kwargs — lets tests assert exactly what ``__post_init__`` passes without
+    torch or a model download."""
+    import sys
+    import types
+
+    mod = types.ModuleType("sentence_transformers")
+
+    class _RecordingCtor:
+        def __init__(self, model_name, **kwargs):
+            records.append({"model_name": model_name, **kwargs})
+            if fail is not None:
+                raise fail
+            self.max_seq_length = 0
+
+    mod.SentenceTransformer = _RecordingCtor
+    monkeypatch.setitem(sys.modules, "sentence_transformers", mod)
+
+
+def test_default_torch_backend_constructor_kwargs_unchanged(monkeypatch) -> None:
+    """Defaults must construct EXACTLY as before this feature: model_name +
+    device only — no backend=, no model_kwargs= keys leak into the call."""
+    records: list[dict] = []
+    _install_fake_st_module(monkeypatch, records)
+    SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+    assert records == [{"model_name": "m", "device": "cpu"}]
+
+
+def test_openvino_backend_and_quantized_file_passed(monkeypatch) -> None:
+    records: list[dict] = []
+    _install_fake_st_module(monkeypatch, records)
+    SentenceTransformersEmbedder(
+        model_name="m",
+        dim=_DIM,
+        backend="openvino",
+        model_file_name="openvino/openvino_model_qint8_quantized.xml",
+    )
+    assert records == [
+        {
+            "model_name": "m",
+            "device": "cpu",
+            "backend": "openvino",
+            "model_kwargs": {"file_name": "openvino/openvino_model_qint8_quantized.xml"},
+        }
+    ]
+
+
+def test_onnx_backend_without_file(monkeypatch) -> None:
+    records: list[dict] = []
+    _install_fake_st_module(monkeypatch, records)
+    SentenceTransformersEmbedder(model_name="m", dim=_DIM, backend="onnx")
+    assert records == [{"model_name": "m", "device": "cpu", "backend": "onnx"}]
+
+
+def test_nontorch_backend_construction_failure_gets_install_hint(monkeypatch) -> None:
+    """A missing optimum/openvino dep surfaces as ImportError deep inside the
+    ST constructor — with a non-torch backend configured, re-raise with the
+    actionable extras hint."""
+    records: list[dict] = []
+    _install_fake_st_module(
+        monkeypatch, records, fail=ModuleNotFoundError("No module named 'optimum'")
+    )
+    with pytest.raises(ImportError, match=r"sentence-transformers\[openvino\]"):
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM, backend="openvino")
+
+
+def test_torch_backend_construction_failure_propagates_raw(monkeypatch) -> None:
+    """Default-backend constructor errors keep today's behavior — no rewrap."""
+    records: list[dict] = []
+    _install_fake_st_module(monkeypatch, records, fail=RuntimeError("boom"))
+    with pytest.raises(RuntimeError, match="boom"):
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+
+
+# ── airgap (spec D5): local model dir forces HF offline ──
+
+
+def test_local_dir_sets_offline_env(tmp_path) -> None:
+    # Env snapshot/restore: enable_hf_offline() writes os.environ directly,
+    # and patch.dict restores even vars that were absent before the test.
+    with mock.patch.dict(os.environ):
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        SentenceTransformersEmbedder(model_name=str(tmp_path), dim=_DIM, model=_FakeModel())
+        assert os.environ["HF_HUB_OFFLINE"] == "1"
+        assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_repo_id_does_not_touch_offline_env() -> None:
+    with mock.patch.dict(os.environ):
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        SentenceTransformersEmbedder(
+            model_name="Qwen/Qwen3-Embedding-0.6B", dim=_DIM, model=_FakeModel()
+        )
+        assert "HF_HUB_OFFLINE" not in os.environ
+
+
+def test_local_dir_tilde_is_expanded_for_the_loader(tmp_path, monkeypatch) -> None:
+    # SentenceTransformer does not expanduser, so a `~/models/x` spelling
+    # must reach the loader in expanded form or it would be rejected as a
+    # malformed HF repo id. POSIX-only: expanduser reads HOME.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "models" / "x").mkdir(parents=True)
+    with mock.patch.dict(os.environ):
+        emb = SentenceTransformersEmbedder(model_name="~/models/x", dim=_DIM, model=_FakeModel())
+    assert emb.model_name == str(tmp_path / "models" / "x")

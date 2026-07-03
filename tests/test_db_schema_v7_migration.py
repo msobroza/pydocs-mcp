@@ -7,7 +7,7 @@ from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
 
 
 def test_schema_version_is_7() -> None:
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION == 12
 
 
 def test_fresh_db_v7_has_chunks_qualified_name_column(tmp_path: Path) -> None:
@@ -72,7 +72,7 @@ def test_v6_to_v7_migration_adds_column_lossless(tmp_path: Path) -> None:
         cols = [row[1] for row in conn.execute("PRAGMA table_info(chunks)")]
         assert "qualified_name" in cols
         # Version bumped.
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
         # Pre-existing row survived; new column reads NULL on it (not wiped).
         row = conn.execute(
             "SELECT title, qualified_name FROM chunks WHERE package = '__project__'"

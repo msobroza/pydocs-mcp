@@ -3,11 +3,14 @@
 Composite SQLite + TurboQuant deployments can drift if a write lands in
 one backend but not the other (process killed between commits, disk
 full mid-flush, etc.). :func:`check_integrity_and_repair` compares
-``SELECT COUNT(*) FROM chunks`` against
+``SELECT COUNT(*) FROM chunks WHERE embedded = 1`` (INTENDED embeddings —
+the vector-write path stamps the flag in the same transaction) against
 :meth:`TurboQuantUnitOfWork.size`. On mismatch it logs a warning and
 clears ``packages.content_hash`` on every package so the next indexing
 sweep re-extracts (and re-embeds) them. The fresh-project case
-(both counts == 0) must not false-alarm.
+(both counts == 0) must not false-alarm, and deliberately-unembedded
+chunks (selective embed policies) never count as drift — see
+tests/storage/test_embedded_flag.py.
 """
 
 from __future__ import annotations
@@ -69,7 +72,9 @@ async def test_integrity_check_clears_content_hash_on_size_mismatch(
         dim=_DIM,
         bit_width=_BW,
     )
-    # Seed 3 chunks in SQLite but only 1 vector in TurboQuant — mismatch.
+    # Seed 3 chunks that all CLAIM embeddings but only 1 vector actually
+    # landed in TurboQuant (crash between the flag commit and the .tq
+    # flush) — genuine drift.
     async with factory() as uow:
         await uow.packages.upsert(_pkg("demo"))
         await uow.chunks.upsert(
@@ -81,8 +86,9 @@ async def test_integrity_check_clears_content_hash_on_size_mismatch(
         )
         # Re-fetch to discover the IDs SQLite auto-assigned.
         persisted = await uow.chunks.list(filter={"package": "demo"})
-        first_id = sorted(persisted, key=lambda c: c.id or 0)[0].id
-        await uow.vectors.add_vectors([first_id], [_vec(0.1, 0.2, 0.3, 0.4)])
+        all_ids = sorted(c.id for c in persisted if c.id is not None)
+        await uow.vectors.add_vectors([all_ids[0]], [_vec(0.1, 0.2, 0.3, 0.4)])
+        await uow.chunks.mark_embedded(all_ids)  # all 3 claim a vector
         await uow.commit()
 
     caplog.set_level(logging.WARNING)
@@ -117,6 +123,9 @@ async def test_integrity_check_passes_when_counts_match(tmp_path: Path) -> None:
         persisted = await uow.chunks.list(filter={"package": "demo"})
         first_id = persisted[0].id
         await uow.vectors.add_vectors([first_id], [_vec(0.1, 0.2, 0.3, 0.4)])
+        # Mirror the production vector-write path (post-v12): the same UoW
+        # stamps chunks.embedded so the integrity count matches the .tq.
+        await uow.chunks.mark_embedded([first_id])
         await uow.commit()
     repaired = await check_integrity_and_repair(
         db_path=db_path,

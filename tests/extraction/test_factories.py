@@ -37,6 +37,7 @@ from pydocs_mcp.extraction.pipeline.ingestion import (
     FileBundle,
 )
 from pydocs_mcp.extraction.pipeline.stages import (
+    DependencyDocPagesStage,
     AssignChunkContentHashStage,
     ChunkingStage,
     ContentHashStage,
@@ -99,13 +100,14 @@ def test_load_ingestion_pipeline_success() -> None:
         uow_factory=make_fake_uow_factory(),
     )
     assert isinstance(pipeline, IngestionPipeline)
-    assert len(pipeline.stages) == 11
+    assert len(pipeline.stages) == 12
     expected_types = [
         FileDiscoveryStage,
         FileReadStage,
         ChunkingStage,
         ReferenceCaptureStage,
         FlattenStage,
+        DependencyDocPagesStage,
         AssignChunkContentHashStage,
         LoadExistingChunkHashesStage,
         EmbedChunksStage,
@@ -159,7 +161,7 @@ def test_build_ingestion_pipeline_uses_bundled_preset_when_config_none() -> None
         uow_factory=make_fake_uow_factory(),
     )
     assert isinstance(pipeline, IngestionPipeline)
-    assert len(pipeline.stages) == 11
+    assert len(pipeline.stages) == 12
 
 
 def test_build_ingestion_pipeline_uses_custom_path_when_provided(tmp_path: Path) -> None:

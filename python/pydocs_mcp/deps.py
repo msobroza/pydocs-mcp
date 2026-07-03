@@ -61,8 +61,13 @@ def list_dependency_manifest_files(root: str) -> list[str]:
 def parse_pyproject_dependencies(path: str) -> list[str]:
     """Extract dependency names from a pyproject.toml file path.
 
-    Returns normalised package names from [project] dependencies.
-    Falls back to regex when tomllib is unavailable (Python < 3.11).
+    Returns normalised package names from ``[project].dependencies``, the PEP 621
+    ``[project.optional-dependencies]`` extras, and the PEP 735
+    ``[dependency-groups]`` groups (what ``uv add --group`` / PDM write) — so a
+    dev/test/docs dependency declared in any of those is indexable too.
+
+    Falls back to a ``[project].dependencies``-only regex when tomllib can't parse
+    the file (malformed TOML, or Python < 3.11).
     """
     pyproject_path = Path(path)
     try:
@@ -70,8 +75,17 @@ def parse_pyproject_dependencies(path: str) -> list[str]:
 
         with pyproject_path.open("rb") as f:
             data = tomllib.load(f)
-        deps = data.get("project", {}).get("dependencies", [])
-        return [normalize_package_name(d) for d in deps if d.strip()]
+        project = data.get("project", {})
+        specs: list[str] = list(project.get("dependencies", []))
+        # PEP 621 extras: {extra_name: [specs]} under [project.optional-dependencies].
+        for extra in project.get("optional-dependencies", {}).values():
+            specs.extend(extra)
+        # PEP 735 groups: {group_name: [spec | {include-group=name}]} at the top
+        # level. Skip the include-group dict refs — the referenced group's specs
+        # are collected on its own iteration.
+        for group in data.get("dependency-groups", {}).values():
+            specs.extend(item for item in group if isinstance(item, str))
+        return [normalize_package_name(d) for d in specs if isinstance(d, str) and d.strip()]
     except Exception:
         # Best-effort parsing: malformed pyproject.toml shouldn't crash discovery;
         # log at debug level so the failure isn't entirely silent for an operator.

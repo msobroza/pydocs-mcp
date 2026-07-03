@@ -32,6 +32,7 @@ from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.null_services import NullReferenceService
+from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -232,3 +233,131 @@ async def test_lookup_callers_zero_rows_renders_empty_message() -> None:
     assert out.startswith("# Callers of `pkg.helpers.compute`\n"), out
     assert "No callers found." in out, out
     assert "(no references)" not in out, out
+
+
+# ── Test 6: impact — ranked blast-radius dispatch + format_impact ──────────
+
+
+@pytest.mark.asyncio
+async def test_lookup_impact_renders_via_ref_svc() -> None:
+    """``show='impact'`` on any node kind → ``ref_svc.impact(package, node_id,
+    max_depth=<field>, limit=<payload>)`` and renders via ``format_impact``."""
+    tree = _real_node_tree("pkg.helpers.compute")  # a function node (not a class)
+    tree_svc = _tree_svc_for_module("pkg.helpers", tree)
+
+    node = ImpactNode(
+        qualified_name="pkg.cli.main", hop=1, pagerank=0.0, in_degree=2, has_scores=False
+    )
+    ref_svc = MagicMock()
+    ref_svc.impact = AsyncMock(return_value=(node,))
+
+    svc = LookupService(
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
+    )
+    out = await svc.lookup(LookupInput(target="pkg.helpers.compute", show="impact", limit=10))
+
+    # max_depth comes from the LookupService field (shipped default 3), limit from payload.
+    ref_svc.impact.assert_awaited_once_with("pkg", "pkg.helpers.compute", max_depth=3, limit=10)
+    assert out.startswith("# Impact of `pkg.helpers.compute` — what transitively calls it\n"), out
+    assert "- `pkg.cli.main` — in-degree 2" in out, out
+
+
+@pytest.mark.asyncio
+async def test_lookup_impact_threads_configured_max_depth() -> None:
+    """``impact_max_depth`` (wired from ``reference_graph.impact.max_depth``)
+    flows into the ``ref_svc.impact`` call — proves the YAML tunable reaches
+    the service without an MCP param."""
+    tree = _real_node_tree("pkg.helpers.compute")
+    tree_svc = _tree_svc_for_module("pkg.helpers", tree)
+    ref_svc = MagicMock()
+    ref_svc.impact = AsyncMock(return_value=())
+
+    svc = LookupService(
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
+        impact_max_depth=5,
+    )
+    await svc.lookup(LookupInput(target="pkg.helpers.compute", show="impact", limit=7))
+
+    ref_svc.impact.assert_awaited_once_with("pkg", "pkg.helpers.compute", max_depth=5, limit=7)
+
+
+@pytest.mark.asyncio
+async def test_lookup_impact_with_null_ref_svc_raises_with_yaml_message() -> None:
+    """``NullReferenceService.impact`` raises the YAML-anchored error."""
+    tree = _real_node_tree("pkg.helpers.compute")
+    tree_svc = _tree_svc_for_module("pkg.helpers", tree)
+
+    svc = LookupService(
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=NullReferenceService(),
+    )
+    with pytest.raises(ServiceUnavailableError) as excinfo:
+        await svc.lookup(LookupInput(target="pkg.helpers.compute", show="impact"))
+    assert "reference_graph.capture.enabled" in str(excinfo.value)
+
+
+# ── Test 7: context — smart-context dispatch + format_context ──────────────
+
+
+def _ctx_node(qname, hop, *, source=""):
+    return ContextNode(qualified_name=qname, hop=hop, pagerank=0.0, in_degree=0, source_text=source)
+
+
+@pytest.mark.asyncio
+async def test_lookup_context_renders_via_ref_svc() -> None:
+    """``show='context'`` → ``ref_svc.context(package, node_id, max_depth=<field>,
+    limit=<payload>)`` and renders via ``format_context``."""
+    tree = _real_node_tree("pkg.helpers.compute")
+    tree_svc = _tree_svc_for_module("pkg.helpers", tree)
+    ref_svc = MagicMock()
+    ref_svc.context = AsyncMock(
+        return_value=(_ctx_node("pkg.helpers.compute", 0, source="def compute(): ..."),)
+    )
+    svc = LookupService(package_lookup=_pkg_lookup_mock(), tree_svc=tree_svc, ref_svc=ref_svc)
+    out = await svc.lookup(LookupInput(target="pkg.helpers.compute", show="context", limit=10))
+
+    ref_svc.context.assert_awaited_once_with("pkg", "pkg.helpers.compute", max_depth=2, limit=10)
+    assert out.startswith("# Context for `pkg.helpers.compute` — its dependency closure\n"), out
+    assert "def compute(): ..." in out
+
+
+@pytest.mark.asyncio
+async def test_lookup_context_threads_configured_depth_and_budget() -> None:
+    """``context_max_depth`` flows into the service call, and
+    ``context_token_budget`` flows into ``format_context`` (a tiny budget
+    truncates the rendered output)."""
+    tree = _real_node_tree("pkg.helpers.compute")
+    tree_svc = _tree_svc_for_module("pkg.helpers", tree)
+    ref_svc = MagicMock()
+    ref_svc.context = AsyncMock(
+        return_value=(_ctx_node("pkg.helpers.compute", 0, source="Z" * 5000),)
+    )
+    svc = LookupService(
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
+        context_max_depth=4,
+        context_token_budget=200,  # 800 chars
+    )
+    out = await svc.lookup(LookupInput(target="pkg.helpers.compute", show="context", limit=7))
+    ref_svc.context.assert_awaited_once_with("pkg", "pkg.helpers.compute", max_depth=4, limit=7)
+    assert len(out) <= 850  # token budget honored
+
+
+@pytest.mark.asyncio
+async def test_lookup_context_with_null_ref_svc_raises() -> None:
+    tree = _real_node_tree("pkg.helpers.compute")
+    tree_svc = _tree_svc_for_module("pkg.helpers", tree)
+    svc = LookupService(
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=NullReferenceService(),
+    )
+    with pytest.raises(ServiceUnavailableError) as excinfo:
+        await svc.lookup(LookupInput(target="pkg.helpers.compute", show="context"))
+    assert "reference_graph.capture.enabled" in str(excinfo.value)

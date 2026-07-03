@@ -201,6 +201,51 @@ class SimilarEdgesConfig(BaseModel):
     top_m: int = Field(5, ge=1, le=25)
 
 
+# Single source of truth for the blast-radius traversal depth default —
+# referenced by both ``ImpactConfig.max_depth`` (the YAML-tunable canonical
+# source) and ``LookupService.impact_max_depth`` (the direct-construction
+# fallback), so the literal lives in exactly one place.
+_DEFAULT_IMPACT_MAX_DEPTH = 3
+
+
+class ImpactConfig(BaseModel):
+    """Bounded reverse-traversal depth for ``lookup(show="impact")``.
+
+    ``impact`` answers "what transitively calls X / what breaks if I change X"
+    by walking the reference graph BACKWARD from the target. ``max_depth``
+    bounds that walk (and is termination-critical for cyclic graphs). It is a
+    server-side tunable, NOT an MCP parameter — the client only sends the fixed
+    ``lookup(target, show)`` surface.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_depth: int = Field(_DEFAULT_IMPACT_MAX_DEPTH, ge=1, le=6)
+
+
+# Single source of truth for the smart-context defaults — referenced by both
+# ``ContextConfig`` (the YAML canonical source) and the ``LookupService``
+# fallback fields, so the literals live in exactly one place.
+_DEFAULT_CONTEXT_MAX_DEPTH = 2
+_DEFAULT_CONTEXT_TOKEN_BUDGET = 2048
+
+
+class ContextConfig(BaseModel):
+    """Bounds for ``lookup(show="context")`` (smart-context packing).
+
+    ``context`` walks the reference graph FORWARD from the target (its
+    dependency closure — what it calls) and packs the closure under one token
+    budget at graded fidelity (focus = full source, ring = signatures, rest =
+    outline). ``max_depth`` bounds the walk; ``token_budget`` caps the packed
+    output. Both are server-side tunables, NOT MCP parameters.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_depth: int = Field(_DEFAULT_CONTEXT_MAX_DEPTH, ge=1, le=6)
+    token_budget: int = Field(_DEFAULT_CONTEXT_TOKEN_BUDGET, ge=128, le=100_000)
+
+
 class ReferenceGraphConfig(BaseModel):
     """Composite — capture toggles + output bounds (sub-PR #5c, §5.3).
 
@@ -218,6 +263,8 @@ class ReferenceGraphConfig(BaseModel):
     resolver: ReferenceResolverConfig = Field(default_factory=ReferenceResolverConfig)
     node_scores: NodeScoresConfig = Field(default_factory=NodeScoresConfig)
     similar_edges: SimilarEdgesConfig = Field(default_factory=SimilarEdgesConfig)
+    impact: ImpactConfig = Field(default_factory=ImpactConfig)
+    context: ContextConfig = Field(default_factory=ContextConfig)
 
 
 class SearchOutputConfig(BaseModel):
@@ -372,11 +419,47 @@ class EmbeddingConfig(BaseModel):
     max_seq_length: int | None = Field(default=None, ge=1)
     normalize: bool = True
     query_prompt_name: str | None = None
+    # ``backend`` / ``model_file_name`` are likewise sentence_transformers-only
+    # (inert for fastembed / openai). ``backend`` selects the ST inference
+    # runtime: ``torch`` (default), ``onnx``, or ``openvino`` — the latter two
+    # enable fast CPU inference, typically ~2-4x with a qint8-quantized file.
+    # ``model_file_name`` picks a specific exported weight file inside the HF
+    # repo (e.g. ``openvino/openvino_model_qint8_quantized.xml`` or
+    # ``onnx/model_qint8_avx512.onnx``); ``None`` uses the backend's default
+    # export. Non-torch backends need the matching ST extra installed
+    # (``sentence-transformers[openvino]`` / ``[onnx]``). Both fields fold into
+    # compute_pipeline_hash ONLY when non-default — quantization changes the
+    # produced vectors, but defaults must keep existing index hashes stable.
+    backend: Literal["torch", "onnx", "openvino"] = "torch"
+    model_file_name: str | None = None
+    # ``pooling`` is read ONLY by the fastembed provider in LOCAL-directory
+    # mode (airgap spec D2): fastembed's custom-model registration needs the
+    # pooling recipe stated explicitly because an arbitrary ONNX folder does
+    # not carry it. Inert for every other provider / online fastembed (same
+    # inert-field pattern as the sentence_transformers-only knobs above).
+    # fastembed 0.8.0 offers exactly CLS | MEAN | DISABLED — notably NO
+    # last-token pooling, so Qwen3-class models must use
+    # provider: sentence_transformers instead (spec D3).
+    pooling: Literal["mean", "cls", "disabled"] = "mean"
     # TurboQuant scalar-quantization bit width. 4 is the sweet spot per
     # turbovec README — ~16x compression with minimal recall loss on
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
     # 2 for max compression.
     bit_width: int = Field(default=4, ge=1, le=8)
+    # Selective embedding for dependencies (indexing-latency control; big deps
+    # like torch carry ~50k code chunks and embedding them all takes ~an hour
+    # on CPU). Everything stays FTS/BM25-indexed regardless; this only decides
+    # which chunks get dense vectors:
+    #   doc_pages (default) — dependency docstring pages + markdown/README only
+    #   full               — every dependency chunk (pre-v12 behavior)
+    #   none               — dependencies are BM25-only
+    # NOT folded into compute_pipeline_hash: the per-package tier is folded
+    # into chunk content hashes instead (AssignChunkContentHashStage), so a
+    # policy change re-embeds only the packages whose tier actually changed.
+    dependency_policy: Literal["doc_pages", "full", "none"] = "doc_pages"
+    # Dependencies promoted to the project-grade `full` tier — exact PyPI names
+    # or fnmatch globs ("internal-*"). CLI `--full-dep NAME` merges into this.
+    full_index_dependencies: list[str] = Field(default_factory=list)
 
     @field_validator("dim")
     @classmethod
@@ -414,6 +497,20 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_backend_device(self) -> EmbeddingConfig:
+        # WHY: sentence-transformers' OpenVINO backend runs on CPU/iGPU and
+        # does not understand torch's "cuda" device string — failing at
+        # config-load time beats a cryptic backend error at first embed.
+        # (onnx + cuda stays permissive: onnxruntime-gpu is a real setup.)
+        if self.backend == "openvino" and self.device == "cuda":
+            raise ValueError(
+                "The OpenVINO backend (embedding.backend: openvino) runs on "
+                "CPU/iGPU and is incompatible with device: cuda. Keep device: "
+                "cpu (drop --gpu), or use backend: torch/onnx for CUDA."
+            )
+        return self
+
     def compute_pipeline_hash(self) -> str:
         """SHA-256 of embedder fields that affect vector identity.
 
@@ -429,17 +526,32 @@ class EmbeddingConfig(BaseModel):
         field set is small enough that no escaping is required (``provider`` /
         ``bit_width`` / ``max_seq_length`` / ``normalize`` are bounded enums /
         ints / bools, and ``model_name`` cannot legally contain a pipe).
+
+        ``backend`` / ``model_file_name`` / ``pooling`` fold in ONLY when
+        non-default: a non-torch backend or a quantized weight file changes
+        the produced document vectors (qint8 outputs differ from full
+        precision), and a wrong pooling recipe produces entirely different
+        vectors from the same ONNX graph — so setting any of them must
+        invalidate the chunk cache. The conditional append keeps the hash
+        byte-identical for every pre-existing config (the "default install
+        hash is stable" invariant, same pattern as the late-interaction fold
+        in ``ingestion_pipeline_hash``).
         """
-        identity = "|".join(
-            [
-                self.provider,
-                self.model_name,
-                str(self.dim),
-                str(self.bit_width),
-                str(self.max_seq_length),
-                str(self.normalize),
-            ]
-        )
+        parts = [
+            self.provider,
+            self.model_name,
+            str(self.dim),
+            str(self.bit_width),
+            str(self.max_seq_length),
+            str(self.normalize),
+        ]
+        if self.backend != "torch":
+            parts.append(f"backend:{self.backend}")
+        if self.model_file_name is not None:
+            parts.append(f"file:{self.model_file_name}")
+        if self.pooling != "mean":
+            parts.append(f"pooling:{self.pooling}")
+        identity = "|".join(parts)
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
@@ -604,6 +716,24 @@ class AppConfig(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
     )
+
+    def with_full_index_dependencies(self, names: tuple[str, ...]) -> AppConfig:
+        """Return a copy with ``names`` merged into ``embedding.full_index_dependencies``.
+
+        CLI ``--full-dep`` convenience — flags ADD to (never replace) the
+        YAML-declared list, deduplicated order-preserving. Pure function
+        (pydantic ``model_copy``); no-op when ``names`` is empty.
+        """
+        if not names:
+            return self
+        merged = list(dict.fromkeys([*self.embedding.full_index_dependencies, *names]))
+        return self.model_copy(
+            update={
+                "embedding": self.embedding.model_copy(
+                    update={"full_index_dependencies": merged},
+                ),
+            },
+        )
 
     def with_device(self, *, gpu: bool) -> AppConfig:
         """Return a copy with the embedder execution device set.

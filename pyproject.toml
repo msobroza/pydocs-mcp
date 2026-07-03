@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pydocs-mcp"
-version = "0.3.1"
+version = "0.4.1"
 description = "Local Python docs MCP server, accelerated with Rust"
 readme = "README.md"
 license = "MIT"
@@ -68,6 +68,10 @@ late-interaction = ["pylate>=1.0,<2.0", "fast-plaid>=1.4,<2.0", "transformers>=4
 # transformers>=4.48 is required for ModernBERT (Alibaba-NLP/gte-modernbert-base);
 # the bare sentence-transformers>=5.0 pin alone can resolve an older transformers.
 sentence-transformers = ["sentence-transformers>=5.0,<6.0", "transformers>=4.48"]
+# OpenVINO CPU inference for the sentence_transformers provider
+# (embedding.backend: openvino, optionally + a qint8 model_file_name).
+# Pulls optimum-intel + openvino on top of the torch stack.
+openvino = ["sentence-transformers[openvino]>=5.0,<6.0", "transformers>=4.48"]
 # Reference-graph analytics: PageRank + Louvain community detection over the
 # node_references graph, computed at index time for the centrality-prior and
 # community-diversity rerank steps. networkx is pure-Python + light; imported

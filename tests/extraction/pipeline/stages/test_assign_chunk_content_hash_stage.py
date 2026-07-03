@@ -49,14 +49,14 @@ async def test_assign_rewrites_chunk_hashes_with_pipeline_slot() -> None:
         module="m",
         title="t1",
         text="alpha",
-        pipeline_hash=pipeline_hash,
+        pipeline_hash=f"{pipeline_hash}|tier:full",
     )
     expected_h1 = compute_chunk_content_hash(
         package="demo",
         module="m",
         title="t2",
         text="beta",
-        pipeline_hash=pipeline_hash,
+        pipeline_hash=f"{pipeline_hash}|tier:full",
     )
     assert out.chunks.chunks[0].content_hash == expected_h0
     assert out.chunks.chunks[1].content_hash == expected_h1
@@ -89,7 +89,9 @@ async def test_assign_no_op_on_empty_chunks() -> None:
 
 
 def test_assign_from_dict_reads_pipeline_hash_from_context() -> None:
-    context = MagicMock(pipeline_hash="ctx-hash-xyz")
+    # app_config=None -> EmbedPolicy defaults (a bare MagicMock leaks mock
+    # attrs into EmbedPolicy.from_config and trips its validation).
+    context = MagicMock(pipeline_hash="ctx-hash-xyz", app_config=None)
     stage = AssignChunkContentHashStage.from_dict({}, context)
     assert stage.pipeline_hash == "ctx-hash-xyz"
 

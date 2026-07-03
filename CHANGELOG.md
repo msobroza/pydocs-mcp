@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-07-03
+
+### Added
+
+- **Air-gapped / offline model loading** — point `embedding.model_name` at a
+  local directory of side-loaded weights and nothing is ever downloaded, for
+  every provider. fastembed states the model recipe in YAML (new `pooling`
+  knob + `normalize` / `model_file_name`) and loads via a pinned local path;
+  sentence-transformers and PyLate take the directory natively (the right
+  choice for last-token models like Qwen3-Embedding) with HF offline mode
+  forced so a missing file fails locally; `openai` rejects a local path with
+  an actionable error. Existing configs keep their exact pipeline hashes —
+  nothing re-embeds. (#121)
+- **Ask-your-docs Streamlit webapp** — `examples/ask_your_docs_agent` now
+  ships a themed chat UI (`streamlit run streamlit_app.py`) over the same
+  LangGraph agent: sidebar config, conversation memory with follow-up
+  reformulation, code snippets rendered in fenced blocks. The example is now
+  Streamlit + notebook only (the terminal REPL is gone). (#122)
+
+### Fixed
+
+- **Full-suite test failures in the fast-plaid storage tests** — the
+  default-install no-torch test evicted torch from `sys.modules` without
+  restoring it, so any later torch import in the same run crashed
+  (`function '_has_torch_function' already has a docstring`). The evicted
+  modules are now restored, and the suite is fully green. (#123)
+
+### Changed
+
+- The ask-your-docs example defines its dependencies in a single
+  `requirements.txt` (the short-lived `requirements.py` variant is gone).
+
+## [0.4.0] — 2026-07-03
+
+### Added
+
+- **Multi-repo search** — one MCP server (or CLI query) over several already-
+  indexed repos: `serve --workspace <dir>` / `--db <file>` load pre-built
+  `{name}_{hash}.db` bundles read-only; a new `project` filter on `search` /
+  `lookup` scopes one repo, omitted it unions across all with dedup (a repo's
+  own code beats the same symbol seen as a dependency; most-recently-indexed
+  wins among duplicates). A per-database identity stamp (`index_metadata`)
+  rejects bundles built with a mismatching embedder up front.
+- **Reference-graph readers on `lookup`** — `show="impact"` (everything that
+  transitively calls a symbol, ranked — "what breaks if I change X?") and
+  `show="context"` (the symbol's dependency closure packed under a token
+  budget at graded fidelity — "everything to understand X").
+- **Graph-boosted retrieval** — `graph_expand` step (dense-seeded 1-hop
+  reference-graph expansion), index-time `node_scores` (PageRank / community,
+  optional `[graph]` extra) with centrality / diversity rerankers, synthetic
+  embedding-kNN `similar` edges, graph pipeline presets, and a
+  structural-recall benchmark split.
+- **Selective dependency embedding** — everything stays BM25/FTS-indexed, but
+  dense vectors are written per package tier: the project embeds fully;
+  dependencies embed one docstring **page per module** (module + public
+  signatures + docstrings) plus markdown/READMEs by default. Promote chosen
+  dependencies to full embedding with `--full-dep NAME` /
+  `embedding.full_index_dependencies` (globs supported);
+  `embedding.dependency_policy: full | doc_pages | none`. Indexing
+  torch-sized dependencies drops from ~an hour to seconds on CPU.
+- **ONNX / OpenVINO backends for `sentence_transformers`** —
+  `embedding.backend: torch | onnx | openvino` + `embedding.model_file_name`
+  (e.g. a qint8-quantized export) for ~2–4× faster CPU inference; new
+  `[openvino]` extra. Index on GPU, serve on CPU with the same model.
+- **New embedders** — `gte-modernbert-base` and the code-specialized
+  `F2LLM-v2` family via the `sentence_transformers` provider (RepoQA
+  leaderboard + figures in the benchmark docs).
+- **Dependency manifests** — `[project.optional-dependencies]` and PEP 735
+  `[dependency-groups]` (what `uv add --group` writes) are now parsed; the
+  `--watch` watcher re-indexes when `pyproject.toml` / `requirements*.txt`
+  change, so adding a package updates the index automatically.
+- **Example agent** — `examples/ask_your_docs_agent/`: a minimal LangGraph
+  ReAct chat agent (terminal or notebook) answering questions about your
+  indexed repos through the MCP tools, with conversation memory, follow-up
+  reformulation, and project inference.
+- **Documentation site** — Sphinx + Furo under `documentation/`.
+
+### Changed
+
+- **Default chunk search is now dense + graph expansion**
+  (`chunk_search_graph.yaml`), replacing BM25-only — RepoQA recall@10 0.40 →
+  0.77 on standard queries and 0.30 → 1.00 on structurally-reachable answers,
+  at no extra indexing cost. BM25 and hybrid remain as presets.
+- Dependencies embed documentation pages only by default (see Added);
+  `scope="deps"` searches route to a BM25 ∥ dense fusion preset so dependency
+  code stays reachable by keyword.
+- `graph_expand` decay default raised to 0.9.
+- Schema v10 → v12 (`node_scores`, `index_metadata`, `chunks.embedded`) —
+  additive, migrated automatically on open. Note: the ingestion pipeline
+  identity changed, so the first re-index after upgrading re-extracts and
+  re-embeds packages; serving existing indexes keeps working without it.
+
+### Fixed
+
+- Reference resolver no longer rescans the whole symbol universe per
+  reference (O(N²) → bucketed) — indexing large dependencies such as numpy /
+  torch previously appeared to hang.
+- The startup SQLite ↔ vector-store integrity check compares intended
+  embeddings instead of raw chunk counts, ending the repeated
+  re-extract-everything loop for deployments that don't embed every chunk.
+- Dense search over a partially-embedded corpus no longer raises when the
+  candidate set contains vectorless chunks.
+- BM25 candidates carry `qualified_name`, unblocking LLM tree reranking.
+- GPU benchmark runs no longer silently fall back to CPU
+  (onnxruntime CUDA library path).
+
 ## [0.3.1] — 2026-06-10
 
 ### Added
@@ -164,7 +270,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
-[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.4.0
 [0.3.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.3.1
 [0.3.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.2.0

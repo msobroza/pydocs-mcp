@@ -794,6 +794,20 @@ class SqliteChunkRepository:
                     list(batch),
                 )
 
+    async def mark_embedded(self, ids: Sequence[int]) -> None:
+        if not ids:
+            return
+        # Same 500-row batching rationale as delete_by_ids above.
+        async with _maybe_acquire(self.provider) as conn:
+            for i in range(0, len(ids), 500):
+                batch = ids[i : i + 500]
+                placeholders = ",".join("?" * len(batch))
+                await asyncio.to_thread(
+                    conn.execute,
+                    f"UPDATE chunks SET embedded = 1 WHERE id IN ({placeholders})",
+                    list(batch),
+                )
+
     async def insert(self, chunks: tuple[Chunk, ...]) -> None:
         # SQL is identical to upsert (SQLite INSERT with no conflict clause
         # IS the insert-only semantic). The two methods are kept distinct
@@ -1393,6 +1407,86 @@ class SqliteReferenceStore:
         async with _maybe_acquire(self.provider) as conn:
             rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return [_row_to_node_reference(r) for r in rows]
+
+    async def find_transitive_callers(
+        self,
+        target_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Bounded REVERSE transitive closure over the call/reference graph.
+
+        Walks BACKWARD from ``target_node_id`` (who calls it, who calls them,
+        …) up to ``max_depth`` hops, returning ``(qname, min_hop, in_degree)``
+        for every transitive caller. ``in_degree`` is the node's global
+        structural fan-in (non-``similar`` resolved edges pointing at it) —
+        the centrality proxy used when ``node_scores`` PageRank is absent.
+
+        Cycle-safe: ``depth`` strictly increases and is capped by
+        ``max_depth`` (so ``max_depth`` MUST be a finite ``>= 1`` int).
+        ``UNION`` dedups intermediate rows; the outer ``GROUP BY`` collapses a
+        node reachable at several depths to its MIN hop. ``'similar'`` edges
+        and unresolved (NULL) targets never participate, and the target is
+        never listed as its own caller.
+        """
+        sql = (
+            "WITH RECURSIVE reach(node_id, depth) AS ("
+            "  SELECT from_node_id, 1 FROM node_references"
+            "    WHERE to_node_id = ? AND kind != 'similar'"
+            "  UNION"
+            "  SELECT r.from_node_id, reach.depth + 1"
+            "    FROM node_references r JOIN reach ON r.to_node_id = reach.node_id"
+            "    WHERE reach.depth < ? AND r.kind != 'similar'"
+            ") "
+            "SELECT reach.node_id AS qname, MIN(reach.depth) AS hop, "
+            "  (SELECT COUNT(*) FROM node_references nr "
+            "     WHERE nr.to_node_id = reach.node_id AND nr.kind != 'similar') AS in_degree "
+            "FROM reach WHERE reach.node_id != ? "
+            "GROUP BY reach.node_id "
+            "ORDER BY hop ASC, in_degree DESC, qname ASC"
+        )
+        params = (target_node_id, max_depth, target_node_id)
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+        return [(r["qname"], r["hop"], r["in_degree"]) for r in rows]
+
+    async def find_transitive_callees(
+        self,
+        from_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Bounded FORWARD transitive closure — the target's dependency closure.
+
+        Walks FORWARD from ``from_node_id`` (what it calls, what those call, …)
+        up to ``max_depth`` hops, returning ``(qname, min_hop, in_degree)`` per
+        transitive callee. The forward mirror of :meth:`find_transitive_callers`
+        (join on ``from_node_id`` / select ``to_node_id``, with an explicit
+        ``to_node_id IS NOT NULL`` since a forward hop needs a resolved target).
+        Same cycle-safety, min-hop dedup, ``'similar'`` exclusion, and
+        seed-self exclusion. ``in_degree`` is the callee's structural fan-in.
+        Powers ``lookup(show="context")``.
+        """
+        sql = (
+            "WITH RECURSIVE reach(node_id, depth) AS ("
+            "  SELECT to_node_id, 1 FROM node_references"
+            "    WHERE from_node_id = ? AND kind != 'similar' AND to_node_id IS NOT NULL"
+            "  UNION"
+            "  SELECT r.to_node_id, reach.depth + 1"
+            "    FROM node_references r JOIN reach ON r.from_node_id = reach.node_id"
+            "    WHERE reach.depth < ? AND r.kind != 'similar' AND r.to_node_id IS NOT NULL"
+            ") "
+            "SELECT reach.node_id AS qname, MIN(reach.depth) AS hop, "
+            "  (SELECT COUNT(*) FROM node_references nr "
+            "     WHERE nr.to_node_id = reach.node_id AND nr.kind != 'similar') AS in_degree "
+            "FROM reach WHERE reach.node_id != ? "
+            "GROUP BY reach.node_id "
+            "ORDER BY hop ASC, in_degree DESC, qname ASC"
+        )
+        params = (from_node_id, max_depth, from_node_id)
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+        return [(r["qname"], r["hop"], r["in_degree"]) for r in rows]
 
     async def delete_for_package(
         self,

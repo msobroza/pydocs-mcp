@@ -290,3 +290,41 @@ the top dense hits, expands 1 hop over `node_references` (callers + callees),
 and merges neighbours into the dense list by `max(dense_sim, seed_sim·decay)`.
 Regression check: the same two configs on `--dataset repoqa --split small_test`
 must both stay ~1.0 (the merge is additive and cannot drop a dense hit).
+
+## Graph-ranked default A/B (F2LLM-v2-330M, both splits)
+
+Separate from the twelve bge-small conditions above: the sweep that motivated the
+shipped default flip (BM25 → dense + `graph_expand`, `chunk_search_graph.yaml`).
+Six chunk-search methods on the **same F2LLM-v2-330M** GPU embedder, each run on
+**both** the standard `small_test` split and the `repoqa-structural` graph split.
+Results + takeaways live in the README "Graph-ranked default" section.
+
+| Method | Config | Pipeline | Extra dep |
+|---|---|---|:---:|
+| BM25 | `configs/repoqa_bm25.yaml` | `exp_bm25` | — |
+| Dense | `configs/repoqa_dense_f2llm330m.yaml` | `exp_dense` | — |
+| Hybrid (RRF k=60) | `configs/repoqa_hybrid_rrf_k60_f2llm.yaml` | `exp_hybrid_rrf_k60` | — |
+| Graph-hybrid (RRF + graph_expand + centrality) | `configs/repoqa_graph_hybrid_f2llm330m.yaml` | `exp_hybrid_graph` | `[graph]` |
+| Dense + graph_expand (**new default**) | `configs/repoqa_dense_graph_f2llm330m.yaml` | `exp_dense_graph` | — |
+| Dense + graph_expand + centrality | `configs/repoqa_dense_graph_centrality_f2llm330m.yaml` | `exp_dense_graph_centrality` | `[graph]` |
+
+The two graph-hybrid / centrality conditions enable `reference_graph.node_scores`
+(PageRank), so they need the `[graph]` extra; `graph_expand` alone is pure SQL.
+Run both splits (GPU wrapper; `--bench-cache off` avoids the cache-reindex bug):
+
+```bash
+CFGS=benchmarks/configs/repoqa_bm25.yaml,\
+benchmarks/configs/repoqa_dense_f2llm330m.yaml,\
+benchmarks/configs/repoqa_hybrid_rrf_k60_f2llm.yaml,\
+benchmarks/configs/repoqa_graph_hybrid_f2llm330m.yaml,\
+benchmarks/configs/repoqa_dense_graph_f2llm330m.yaml,\
+benchmarks/configs/repoqa_dense_graph_centrality_f2llm330m.yaml
+for SPLIT in "repoqa --split small_test" "repoqa-structural"; do
+  benchmarks/scripts/run_eval_gpu.sh --systems pydocs-mcp --dataset $SPLIT \
+    --configs "$CFGS" --metrics recall@1,recall@5,recall@10,mrr \
+    --bench-cache off --report benchmarks/results/a3_${SPLIT// /_}.md
+done
+```
+
+Regenerate the chart after editing the README table:
+`.venv/bin/python benchmarks/scripts/plot_graph_default_ab.py`.

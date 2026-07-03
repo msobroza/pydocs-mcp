@@ -91,6 +91,17 @@ class ChunkStore(Protocol):
         """
         ...
 
+    async def mark_embedded(self, ids: Sequence[int]) -> None:
+        """Flag chunks whose single-vector was just written to the ``.tq``.
+
+        Stamped by the vector-write path in the same UoW transaction as
+        ``vectors.add_vectors`` so ``chunks.embedded`` mirrors the sidecar
+        exactly. The integrity check compares vectors against this flag —
+        chunks a selective embed policy deliberately skips stay 0 and are
+        never mistaken for SQLite/.tq drift. Empty ids → no-op.
+        """
+        ...
+
     async def insert(self, chunks: tuple[Chunk, ...]) -> None:
         """Insert chunks; assigns rowids.
 
@@ -333,6 +344,38 @@ class GraphSearchable(Protocol):
         to_name: str,
         kind: ReferenceKind | None = None,
     ) -> list[NodeReference]: ...
+
+    async def find_transitive_callers(
+        self,
+        target_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Bounded reverse transitive closure: who transitively calls the target.
+
+        Returns ``(qualified_name, min_hop, in_degree)`` per transitive caller
+        within ``max_depth`` hops. ``in_degree`` is the node's structural
+        fan-in (non-``similar`` resolved edges pointing at it). Cross-package,
+        cycle-safe, excludes ``'similar'`` edges / unresolved targets, and
+        never lists the target itself. Powers ``lookup(show="impact")``.
+        """
+        ...
+
+    async def find_transitive_callees(
+        self,
+        from_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Bounded forward transitive closure: the target's dependency closure.
+
+        Forward mirror of :meth:`find_transitive_callers` — returns
+        ``(qualified_name, min_hop, in_degree)`` per transitive callee (what
+        the target calls, what those call, …) within ``max_depth`` hops.
+        Cross-package, cycle-safe, excludes ``'similar'`` / unresolved edges,
+        never lists the target itself. Powers ``lookup(show="context")``.
+        """
+        ...
 
 
 @runtime_checkable

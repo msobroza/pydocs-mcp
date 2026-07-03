@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from pydocs_mcp.models import ChunkList, SearchQuery, SearchResponse
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
@@ -46,3 +47,18 @@ class DocsSearch:
             query=state.query,
             duration_ms=state.duration_ms,
         )
+
+    async def ranked(self, query: SearchQuery) -> ChunkList:
+        """Return the RANKED candidate chunks (pre composite collapse).
+
+        Multi-repo union needs item-level candidates — each chunk's per-item
+        ``relevance`` score and ``package`` / ``qualified_name`` metadata — to
+        merge and dedup across databases, which the single composite ``search``
+        output cannot provide. Reads ``state.candidates``; falls back to
+        ``state.result`` for a ranked preset that skips the formatter.
+        """
+        state = await self.chunk_pipeline.run(query)
+        # A chunk pipeline's candidates / result are always ChunkList; the state
+        # field is a union across pipeline kinds, so narrow explicitly.
+        candidates = state.candidates if state.candidates is not None else state.result
+        return cast("ChunkList", candidates) if candidates is not None else ChunkList(items=())

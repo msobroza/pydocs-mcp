@@ -181,6 +181,8 @@ class InMemoryPackageStore:
 class InMemoryChunkStore:
     by_package: dict[str, list[Chunk]] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
+    # Ids stamped by mark_embedded — mirrors chunks.embedded=1 rows.
+    embedded_ids: set[int] = field(default_factory=set)
 
     async def upsert(self, chunks) -> None:
         # Materialize first — the input may be an iterator, and we want
@@ -250,6 +252,12 @@ class InMemoryChunkStore:
         ids_set = set(ids)
         for pkg, items in self.by_package.items():
             self.by_package[pkg] = [c for c in items if c.id not in ids_set]
+
+    async def mark_embedded(self, ids) -> None:
+        # Mirrors SqliteChunkRepository.mark_embedded — records which chunk
+        # ids the vector-write path flagged so tests can assert the policy.
+        self.calls.append(_Call("mark_embedded", list(ids)))
+        self.embedded_ids.update(ids)
 
     async def insert(self, chunks) -> None:
         # Mimic SQLite autoincrement so list_id_hash_pairs returns real ints.
@@ -380,6 +388,84 @@ class InMemoryReferenceStore:
         if kind is not None:
             rows = [r for r in rows if r.kind == kind]
         return rows
+
+    async def find_transitive_callers(
+        self,
+        target_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Python reverse-BFS mirror of SqliteReferenceStore.find_transitive_callers.
+
+        Output-equivalent to the recursive CTE: min-hop per transitive caller
+        within ``max_depth``, cross-package, excluding ``'similar'`` /
+        unresolved edges and the target itself; ``in_degree`` = non-``similar``
+        resolved fan-in.
+        """
+        self.calls.append(_Call("find_transitive_callers", (target_node_id, max_depth)))
+        edges = [
+            r
+            for rs in self.by_package.values()
+            for r in rs
+            if r.to_node_id is not None and str(r.kind) != "similar"
+        ]
+        callers_of: dict[str, list[str]] = {}
+        in_degree: dict[str, int] = {}
+        for r in edges:
+            callers_of.setdefault(r.to_node_id, []).append(r.from_node_id)
+            in_degree[r.to_node_id] = in_degree.get(r.to_node_id, 0) + 1
+        min_hop: dict[str, int] = {}
+        frontier = [target_node_id]
+        for depth in range(1, max_depth + 1):
+            nxt: list[str] = []
+            for node in frontier:
+                for caller in callers_of.get(node, []):
+                    if caller == target_node_id or caller in min_hop:
+                        continue
+                    min_hop[caller] = depth
+                    nxt.append(caller)
+            frontier = nxt
+            if not frontier:
+                break
+        result = [(q, hop, in_degree.get(q, 0)) for q, hop in min_hop.items()]
+        result.sort(key=lambda t: (t[1], -t[2], t[0]))
+        return result
+
+    async def find_transitive_callees(
+        self,
+        from_node_id: str,
+        *,
+        max_depth: int,
+    ) -> list[tuple[str, int, int]]:
+        """Python forward-BFS mirror of SqliteReferenceStore.find_transitive_callees."""
+        self.calls.append(_Call("find_transitive_callees", (from_node_id, max_depth)))
+        edges = [
+            r
+            for rs in self.by_package.values()
+            for r in rs
+            if r.to_node_id is not None and str(r.kind) != "similar"
+        ]
+        callees_of: dict[str, list[str]] = {}
+        in_degree: dict[str, int] = {}
+        for r in edges:
+            callees_of.setdefault(r.from_node_id, []).append(r.to_node_id)
+            in_degree[r.to_node_id] = in_degree.get(r.to_node_id, 0) + 1
+        min_hop: dict[str, int] = {}
+        frontier = [from_node_id]
+        for depth in range(1, max_depth + 1):
+            nxt: list[str] = []
+            for node in frontier:
+                for callee in callees_of.get(node, []):
+                    if callee == from_node_id or callee in min_hop:
+                        continue
+                    min_hop[callee] = depth
+                    nxt.append(callee)
+            frontier = nxt
+            if not frontier:
+                break
+        result = [(q, hop, in_degree.get(q, 0)) for q, hop in min_hop.items()]
+        result.sort(key=lambda t: (t[1], -t[2], t[0]))
+        return result
 
     async def delete_for_package(
         self,

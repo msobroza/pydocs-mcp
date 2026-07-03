@@ -16,8 +16,46 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.storage.filters import FieldIn
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import UnitOfWork
+
+
+@dataclass(frozen=True, slots=True)
+class ContextNode:
+    """One symbol in a ``lookup(show="context")`` graded-fidelity pack.
+
+    ``hop`` is the forward distance from the seed (``0`` = the seed itself =
+    focus tier; ``1`` = ring tier; ``>= 2`` = outline tier). ``source_text`` is
+    the symbol's full source (the only content the chunk store persists), from
+    which the renderer derives each tier's fidelity: full source (focus), first
+    line / signature (ring), or just the name (outline). ``pagerank`` /
+    ``in_degree`` drive the within-budget inclusion order (closer + more
+    central first).
+    """
+
+    qualified_name: str
+    hop: int
+    pagerank: float
+    in_degree: int
+    source_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ImpactNode:
+    """One transitive caller in a ``lookup(show="impact")`` blast-radius.
+
+    ``hop`` is the shortest reverse distance from the target; ``in_degree`` is
+    the node's structural fan-in; ``pagerank`` is its graph centrality (``0.0``
+    when ``node_scores`` is disabled); ``has_scores`` records whether PageRank
+    was available (drives the render label + the fan-in-vs-PageRank ranking).
+    """
+
+    qualified_name: str
+    hop: int
+    pagerank: float
+    in_degree: int
+    has_scores: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,3 +125,97 @@ class ReferenceService:
         async with self.uow_factory() as uow:
             rows = await uow.references.find_by_name(name, kind)
         return tuple(rows)
+
+    async def impact(
+        self,
+        package: str,
+        qname: str,
+        *,
+        max_depth: int,
+        limit: int,
+    ) -> tuple[ImpactNode, ...]:
+        """Ranked blast-radius: who transitively calls ``qname`` (what breaks).
+
+        Walks the reference graph BACKWARD up to ``max_depth`` hops, then ranks
+        by ``(hop asc, pagerank desc, in_degree desc, qname asc)`` and slices to
+        ``limit``. PageRank comes from the index-time ``node_scores`` table when
+        enabled; otherwise every ``pagerank`` is ``0.0`` and the sort collapses
+        to fan-in (in-degree) ranking — no ``[graph]`` extra required. ``package``
+        is informational (the walk is cross-package, like ``callers``).
+        Read-only: no ``commit``.
+        """
+        async with self.uow_factory() as uow:
+            discovered = await uow.references.find_transitive_callers(
+                qname,
+                max_depth=max_depth,
+            )
+            if not discovered:
+                return ()
+            scores = await uow.node_scores.scores_for([q for q, _hop, _deg in discovered])
+        nodes = [
+            ImpactNode(
+                qualified_name=q,
+                hop=hop,
+                pagerank=scores[q].pagerank if q in scores else 0.0,
+                in_degree=scores[q].in_degree if q in scores else fan_in,
+                has_scores=q in scores,
+            )
+            for q, hop, fan_in in discovered
+        ]
+        nodes.sort(key=lambda n: (n.hop, -n.pagerank, -n.in_degree, n.qualified_name))
+        return tuple(nodes[:limit])
+
+    async def context(
+        self,
+        package: str,
+        qname: str,
+        *,
+        max_depth: int,
+        limit: int,
+    ) -> tuple[ContextNode, ...]:
+        """Smart-context: the seed's dependency closure, ready for graded packing.
+
+        Walks FORWARD up to ``max_depth`` hops (what ``qname`` transitively
+        calls), ranks the callees by ``(hop asc, pagerank desc, in_degree desc,
+        qname)``, keeps the seed (hop 0) plus the top ``limit - 1`` callees, and
+        hydrates each with its source text from the chunk store (the only
+        content persisted; the renderer derives the signature/outline tiers
+        from it). The seed is ALWAYS first (the focus). PageRank comes from
+        ``node_scores``
+        when enabled; otherwise ranking collapses to fan-in. Rendering
+        (``format_context``) packs these under the token budget at graded
+        fidelity. Read-only; ``package`` informational (cross-package walk).
+        """
+        async with self.uow_factory() as uow:
+            callees = await uow.references.find_transitive_callees(qname, max_depth=max_depth)
+            scores = await uow.node_scores.scores_for([qname, *(q for q, _, _ in callees)])
+            callees.sort(
+                key=lambda t: (
+                    t[1],
+                    -(scores[t[0]].pagerank if t[0] in scores else 0.0),
+                    -t[2],
+                    t[0],
+                )
+            )
+            seed_deg = scores[qname].in_degree if qname in scores else 0
+            selected = [(qname, 0, seed_deg), *callees[: max(0, limit - 1)]]
+            by_qname = {
+                c.metadata.get("qualified_name"): c
+                for c in await uow.chunks.list(
+                    filter=FieldIn(field="qualified_name", values=tuple(q for q, _, _ in selected)),
+                )
+            }
+        return tuple(
+            self._to_context_node(q, hop, fan_in, scores.get(q), by_qname.get(q))
+            for q, hop, fan_in in selected
+        )
+
+    @staticmethod
+    def _to_context_node(qname, hop, fan_in, score, chunk) -> ContextNode:
+        return ContextNode(
+            qualified_name=qname,
+            hop=hop,
+            pagerank=score.pagerank if score is not None else 0.0,
+            in_degree=score.in_degree if score is not None else fan_in,
+            source_text=chunk.text if chunk is not None else "",
+        )

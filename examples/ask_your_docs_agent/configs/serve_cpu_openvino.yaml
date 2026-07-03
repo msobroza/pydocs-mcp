@@ -1,0 +1,20 @@
+# SERVE-time config — CPU inference via OpenVINO. Only the QUERY is embedded
+# at serve time (one short text per search), so CPU is plenty.
+#
+# Usage: passed to the agent, which forwards it to the pydocs-mcp subprocess:
+#   python agent.py --workspace ~/pydocs-index --model gpt-4o-mini \
+#       --pydocs-config configs/serve_cpu_openvino.yaml
+#
+# DO NOT INDEX with this file: `backend` folds into the chunk cache identity,
+# so re-indexing under it would re-embed everything on CPU. Index with
+# index_gpu.yaml; serve with this one.
+embedding:
+  provider: sentence_transformers
+  # Low on GPU memory? Swap both files to the 0.6B sibling:
+  #   model_name: Qwen/Qwen3-Embedding-0.6B
+  #   dim: 1024
+  model_name: Qwen/Qwen3-Embedding-4B   # must match index_gpu.yaml
+  dim: 2560                             # must match index_gpu.yaml
+  max_seq_length: 2048                  # must match index_gpu.yaml
+  backend: openvino          # sentence-transformers auto-exports on first load
+  query_prompt_name: query   # Qwen3 embeddings are asymmetric — use its query prompt

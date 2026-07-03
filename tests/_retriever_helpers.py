@@ -120,7 +120,7 @@ def retrieve_chunks(
 
     Composes :class:`ChunkFetcherStep` (FTS pushdown + raw rank) then
     :class:`BM25ScorerStep` (sign flip → positive relevance) — the same
-    front-half of the shipped ``chunk_search.yaml`` pipeline. Returns a
+    front-half of the shipped BM25 ``chunk_search.yaml`` preset. Returns a
     list of dicts using the historical keys (``pkg``, ``heading``,
     ``body``, ``kind``) so existing assertions continue to work. Scope /
     title post-filters are applied here so the shim preserves the

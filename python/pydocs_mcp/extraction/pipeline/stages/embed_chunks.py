@@ -21,9 +21,10 @@ the :class:`BuildContext`. Tests pass a :class:`MockEmbedder`.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.models import Embedding
@@ -45,6 +46,7 @@ class EmbedChunksStage:
 
     embedder: Embedder
     batch_size: int = _DEFAULT_BATCH_SIZE
+    embed_policy: EmbedPolicy = field(default_factory=EmbedPolicy)
     name: str = "embed_chunks"
 
     def __post_init__(self) -> None:
@@ -61,14 +63,27 @@ class EmbedChunksStage:
         if not state.chunks.chunks:
             return state
 
-        skip = state.existing_chunk_hashes or {}
-        chunks_to_embed = tuple(c for c in state.chunks.chunks if c.content_hash not in skip)
+        # Selective embed policy: only tier-eligible chunks get vectors
+        # (project + promoted deps = all; regular deps = doc pages only;
+        # dependency_policy "none" = nothing). Ineligible chunks still
+        # persist to SQLite — they are FTS/BM25-searchable, just vectorless.
+        tier = self.embed_policy.tier(state.files.target_kind, state.files.package_name)
+        eligible = tuple(
+            c
+            for c in state.chunks.chunks
+            if self.embed_policy.should_embed(c.metadata.get("origin"), tier)
+        )
 
-        # Always stamp the package with embedder identity, even if no chunks
-        # need re-embedding — so ``find_packages_with_stale_embeddings``
-        # still sees the current model_name for fully-cached packages.
+        skip = state.existing_chunk_hashes or {}
+        chunks_to_embed = tuple(c for c in eligible if c.content_hash not in skip)
+
+        # Stamp the package with embedder identity iff this package HAS
+        # embeddings under the policy (any eligible chunk, cached or fresh) —
+        # so ``find_packages_with_stale_embeddings`` re-embeds it on a model
+        # change. Packages with no eligible chunks keep embedding_model NULL
+        # and are intentionally never flagged stale.
         new_package = state.package
-        if state.package is not None:
+        if state.package is not None and eligible:
             new_package = replace(
                 state.package,
                 embedding_model=self.embedder.model_name,
@@ -118,9 +133,11 @@ class EmbedChunksStage:
                 "Enable embeddings by configuring 'embedding.model_name' "
                 "in YAML so build_embedder(cfg) returns a real instance.",
             )
+        app_config = getattr(context, "app_config", None)
         return cls(
             embedder=context.embedder,
             batch_size=data.get("batch_size", _DEFAULT_BATCH_SIZE),
+            embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
         )
 
     def to_dict(self) -> dict[str, Any]:

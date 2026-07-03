@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from pydocs_mcp.models import ModuleMemberList, SearchQuery, SearchResponse
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
@@ -31,4 +32,21 @@ class ApiSearch:
             result=state.result or ModuleMemberList(items=()),
             query=state.query,
             duration_ms=state.duration_ms,
+        )
+
+    async def ranked(self, query: SearchQuery) -> ModuleMemberList:
+        """Return the RANKED candidate members (pre composite collapse).
+
+        Mirrors :meth:`DocsSearch.ranked` — multi-repo union needs per-item
+        members (score + ``package`` / ``module`` / ``name`` metadata) to merge
+        and dedup across databases.
+        """
+        state = await self.member_pipeline.run(query)
+        # A member pipeline's candidates / result are always ModuleMemberList; the
+        # state field is a union across pipeline kinds, so narrow explicitly.
+        candidates = state.candidates if state.candidates is not None else state.result
+        return (
+            cast("ModuleMemberList", candidates)
+            if candidates is not None
+            else ModuleMemberList(items=())
         )
