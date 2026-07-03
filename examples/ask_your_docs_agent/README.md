@@ -2,7 +2,7 @@
 
 A minimal **LangGraph ReAct** conversational agent that uses **pydocs-mcp** as
 its tool server to answer questions about the documentation and code of your
-indexed projects — in the terminal or a notebook.
+indexed projects — as a Streamlit webapp or in a notebook.
 
 What it demonstrates:
 
@@ -12,12 +12,12 @@ What it demonstrates:
   `search` / `lookup` tools, cites `project` + `package.module`, infers the
   right project when the user doesn't name one, and asks a clarifying
   question when things stay ambiguous.
-- **Conversation memory**: the last N messages (`--history N`) are kept, and
-  follow-up questions are **reformulated** into standalone queries before
-  hitting the tools ("what does *it* return?" → "what does
-  `backend.db.Pool.acquire` return?").
+- **Conversation memory**: the last N messages are kept, and follow-up
+  questions are **reformulated** into standalone queries before hitting the
+  tools ("what does *it* return?" → "what does `backend.db.Pool.acquire`
+  return?").
 - **Your LLM**: any model served over the OpenAI API protocol — OpenAI itself
-  or a local vLLM / Ollama / LiteLLM endpoint via `--base-url`.
+  or a local vLLM / Ollama / LiteLLM endpoint via the base URL.
 - **GPU indexing, CPU serving**: embed the corpus once on GPU
   (Qwen3-Embedding-4B, torch), then serve queries on CPU via OpenVINO.
 
@@ -26,7 +26,7 @@ What it demonstrates:
 ```bash
 cd examples/ask_your_docs_agent
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # includes pydocs-mcp from this repo
+pip install -r requirements.py           # pydocs-mcp from this repo + agent + streamlit
 export OPENAI_API_KEY=sk-...             # any placeholder works for local servers
 ```
 
@@ -40,27 +40,16 @@ pydocs-mcp --config configs/index_gpu.yaml index ~/code/backend  --cache-dir ~/p
 Each run writes a portable `{name}_{hash}.db` + `.tq` bundle into the
 workspace directory.
 
-## 2. Chat (terminal)
+## 2. Chat (Streamlit)
 
 ```bash
-python agent.py --workspace ~/pydocs-index --model gpt-4o-mini \
-    --pydocs-config configs/serve_cpu_openvino.yaml
+streamlit run streamlit_app.py
 ```
 
-```text
-you> how do I open a database pool?
-agent> In backend (`backend.db`), use `open_pool(size)` ... 
-
-you> and what does it return?          # follow-up — reformulated automatically
-agent> `backend.db.open_pool(size)` returns ...
-```
-
-Local LLM instead of OpenAI:
-
-```bash
-python agent.py --workspace ~/pydocs-index \
-    --model qwen2.5-coder-32b --base-url http://localhost:8000/v1
-```
+Set the workspace, model, base URL (for a local vLLM / Ollama endpoint) and
+optional pydocs config in the sidebar — or pre-fill them via
+`PYDOCS_WORKSPACE`, `PYDOCS_MODEL`, `OPENAI_BASE_URL`, `PYDOCS_CONFIG`.
+Answers cite `project` + `package.module` and render code in fenced blocks.
 
 ## 3. Or in a notebook
 
