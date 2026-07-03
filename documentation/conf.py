@@ -24,7 +24,7 @@ project_copyright = "2026, Max Sobroza"
 try:
     release = _pkg_version("pydocs-mcp")
 except PackageNotFoundError:  # running from a checkout, package not installed
-    release = "0.3.1"
+    release = "0.4.0"
 version = release
 
 # -- General configuration ---------------------------------------------------
