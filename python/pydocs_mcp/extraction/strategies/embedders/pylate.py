@@ -14,6 +14,10 @@ from typing import Any
 
 import numpy as np
 
+from pydocs_mcp.extraction.strategies.embedders.local_source import (
+    enable_hf_offline,
+    local_model_dir,
+)
 from pydocs_mcp.retrieval.config import LateInteractionConfig
 
 _INSTALL_HINT = (
@@ -36,6 +40,10 @@ class PyLateEmbedder:
 
     @classmethod
     def from_config(cls, cfg: LateInteractionConfig) -> PyLateEmbedder:
+        # Airgap (spec D5): see local_source — force HF offline before pylate
+        # (sentence-transformers underneath) can attempt a Hub fallback.
+        if local_model_dir(cfg.model_name) is not None:
+            enable_hf_offline()
         try:
             from pylate import models  # type: ignore[import-not-found]
         except ImportError as e:

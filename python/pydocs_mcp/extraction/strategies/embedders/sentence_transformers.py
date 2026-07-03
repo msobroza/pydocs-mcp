@@ -29,6 +29,10 @@ from typing import Any
 
 import numpy as np
 
+from pydocs_mcp.extraction.strategies.embedders.local_source import (
+    enable_hf_offline,
+    local_model_dir,
+)
 from pydocs_mcp.models import Embedding
 
 _INSTALL_HINT = (
@@ -74,6 +78,10 @@ class SentenceTransformersEmbedder:
     model: Any = None
 
     def __post_init__(self) -> None:
+        # Airgap (spec D5): a side-loaded model dir must never fall back to
+        # the Hub for a missing file — force HF offline before any load.
+        if local_model_dir(self.model_name) is not None:
+            enable_hf_offline()
         if self.model is None:
             try:
                 from sentence_transformers import SentenceTransformer

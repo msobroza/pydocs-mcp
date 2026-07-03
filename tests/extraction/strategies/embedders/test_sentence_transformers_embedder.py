@@ -7,6 +7,9 @@ transformers load is needed — they run in the default ``.venv``.
 
 from __future__ import annotations
 
+import os
+from unittest import mock
+
 import numpy as np
 import pytest
 
@@ -218,3 +221,26 @@ def test_torch_backend_construction_failure_propagates_raw(monkeypatch) -> None:
     _install_fake_st_module(monkeypatch, records, fail=RuntimeError("boom"))
     with pytest.raises(RuntimeError, match="boom"):
         SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+
+
+# ── airgap (spec D5): local model dir forces HF offline ──
+
+
+def test_local_dir_sets_offline_env(tmp_path) -> None:
+    # Env snapshot/restore: enable_hf_offline() writes os.environ directly,
+    # and patch.dict restores even vars that were absent before the test.
+    with mock.patch.dict(os.environ):
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        SentenceTransformersEmbedder(model_name=str(tmp_path), dim=_DIM, model=_FakeModel())
+        assert os.environ["HF_HUB_OFFLINE"] == "1"
+        assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_repo_id_does_not_touch_offline_env() -> None:
+    with mock.patch.dict(os.environ):
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        SentenceTransformersEmbedder(
+            model_name="Qwen/Qwen3-Embedding-0.6B", dim=_DIM, model=_FakeModel()
+        )
+        assert "HF_HUB_OFFLINE" not in os.environ
