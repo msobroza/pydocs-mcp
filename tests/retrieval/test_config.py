@@ -366,3 +366,32 @@ def test_with_device_gpu_false_sets_cpu() -> None:
     cpu = AppConfig().with_device(gpu=False)
     assert cpu.embedding.device == "cpu"
     assert cpu.late_interaction.device == "cpu"
+
+
+def test_pooling_default_mean_and_validated() -> None:
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    assert EmbeddingConfig().pooling == "mean"
+    assert EmbeddingConfig(pooling="cls").pooling == "cls"
+    with pytest.raises(ValidationError):
+        EmbeddingConfig(pooling="last_token")
+
+
+def test_pooling_default_keeps_hash_stable() -> None:
+    # The "default install hash is stable" invariant: adding the field must
+    # not invalidate any existing chunk cache.
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    assert (
+        EmbeddingConfig().compute_pipeline_hash()
+        == EmbeddingConfig(pooling="mean").compute_pipeline_hash()
+    )
+
+
+def test_pooling_non_default_changes_hash() -> None:
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+
+    assert (
+        EmbeddingConfig(pooling="cls").compute_pipeline_hash()
+        != EmbeddingConfig().compute_pipeline_hash()
+    )

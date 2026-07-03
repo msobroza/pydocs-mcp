@@ -117,3 +117,47 @@ def test_st_backend_defaults_thread_as_torch_none() -> None:
     emb = _build_st(EmbeddingConfig(provider="sentence_transformers", model_name="m", dim=8))
     assert emb.backend == "torch"
     assert emb.model_file_name is None
+
+
+def test_build_fastembed_threads_local_recipe(tmp_path) -> None:
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    captured = {}
+
+    class _Fake:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    fake_mod = MagicMock()
+    fake_mod.FastEmbedEmbedder = _Fake
+    with patch.dict(
+        sys.modules,
+        {"pydocs_mcp.extraction.strategies.embedders.fastembed": fake_mod},
+    ):
+        build_embedder(
+            EmbeddingConfig(
+                model_name=str(tmp_path),
+                pooling="cls",
+                normalize=False,
+                model_file_name="onnx/model_q.onnx",
+            )
+        )
+
+    assert captured["model_name"] == str(tmp_path)
+    assert captured["pooling"] == "cls"
+    assert captured["normalize"] is False
+    assert captured["model_file_name"] == "onnx/model_q.onnx"
+
+
+def test_build_openai_rejects_local_directory(tmp_path) -> None:
+    import os
+    import re
+
+    env_before = (os.environ.get("HF_HUB_OFFLINE"), os.environ.get("TRANSFORMERS_OFFLINE"))
+    cfg = EmbeddingConfig(provider="openai", model_name=str(tmp_path), dim=1536)
+    with pytest.raises(ValueError, match=re.escape(str(tmp_path))):
+        build_embedder(cfg)
+    # The rejection must happen before any embedder work — no offline env
+    # mutation (enable_hf_offline) may leak from this path.
+    assert (os.environ.get("HF_HUB_OFFLINE"), os.environ.get("TRANSFORMERS_OFFLINE")) == env_before
