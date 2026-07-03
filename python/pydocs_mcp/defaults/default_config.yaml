@@ -121,6 +121,30 @@ embedding:
   # globs); the CLI --full-dep flag merges into this list.
   full_index_dependencies: []
 
+# Airgap / offline: set model_name to a LOCAL DIRECTORY of side-loaded
+# weights and nothing is ever downloaded (HF offline is forced). For
+# provider: fastembed also state the model's recipe — fastembed cannot
+# read it from an arbitrary ONNX folder:
+#
+#   embedding:
+#     provider: fastembed
+#     model_name: /opt/models/bge-small-en-v1.5
+#     dim: 384
+#     pooling: mean            # mean | cls | disabled — MUST match the model
+#     normalize: true
+#     model_file_name: onnx/model.onnx
+#
+# provider: sentence_transformers reads pooling/prompts from the model dir
+# itself — the right choice for last-token models like Qwen3-Embedding
+# (fastembed has no last-token pooling):
+#
+#   embedding:
+#     provider: sentence_transformers
+#     model_name: /opt/models/Qwen3-Embedding-0.6B
+#     dim: 1024
+#
+# provider: openai rejects a local path (remote API).
+
 # Unified SearchBackend seam (spec §8.1): which storage backend serves
 # retrieval capabilities. `dim` / `bit_width` stay sourced from `embedding`
 # above (single source of truth) — do NOT duplicate them here.

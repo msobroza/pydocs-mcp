@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import types
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -130,3 +132,47 @@ def test_lazy_import_raises_actionable(monkeypatch) -> None:
     with pytest.raises(ImportError) as exc:
         build_multi_vector_embedder(LateInteractionConfig(enabled=True))
     assert "pydocs-mcp[late-interaction]" in str(exc.value)
+
+
+# ── airgap (spec D5): local model dir forces HF offline ──
+
+
+def test_from_config_local_dir_sets_offline_env(monkeypatch, tmp_path) -> None:
+    _install_fake_pylate(monkeypatch)
+    from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder
+
+    # Env snapshot/restore: enable_hf_offline() writes os.environ directly,
+    # and patch.dict restores even vars that were absent before the test.
+    with mock.patch.dict(os.environ):
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        cfg = LateInteractionConfig(enabled=True, model_name=str(tmp_path))
+        PyLateEmbedder.from_config(cfg)
+        assert os.environ["HF_HUB_OFFLINE"] == "1"
+        assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_from_config_repo_id_does_not_touch_offline_env(monkeypatch) -> None:
+    _install_fake_pylate(monkeypatch)
+    from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder
+
+    with mock.patch.dict(os.environ):
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        cfg = LateInteractionConfig(enabled=True)  # default repo-id model_name
+        PyLateEmbedder.from_config(cfg)
+        assert "HF_HUB_OFFLINE" not in os.environ
+
+
+def test_from_config_tilde_is_expanded_for_the_loader(tmp_path, monkeypatch) -> None:
+    # ColBERT does not expanduser, so a `~/models/x` spelling must reach the
+    # loader in expanded form or it would be rejected as a malformed HF repo
+    # id. POSIX-only: expanduser reads HOME.
+    _install_fake_pylate(monkeypatch)
+    from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "models" / "x").mkdir(parents=True)
+    with mock.patch.dict(os.environ):
+        cfg = LateInteractionConfig(enabled=True, model_name="~/models/x")
+        emb = PyLateEmbedder.from_config(cfg)
+    assert emb.model_name == str(tmp_path / "models" / "x")
