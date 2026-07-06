@@ -15,15 +15,20 @@ from dataclasses import dataclass, field
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.filters import Filter
-from pydocs_mcp.models import Chunk, ModuleMember
+from pydocs_mcp.models import ModuleMember
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
-from pydocs_mcp.storage.fts_query import build_fts_match_query as _build_fts_match_query
+from pydocs_mcp.storage.fts_query import (
+    build_fts_match_query as _build_fts_match_query,  # noqa: F401
+)
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork
+from pydocs_mcp.storage.sqlite.chunk_multi_vector_repository import (  # noqa: F401
+    SqliteChunkMultiVectorRepository,
+)
 from pydocs_mcp.storage.sqlite.chunk_repository import SqliteChunkRepository
 from pydocs_mcp.storage.sqlite.filter_adapter import (  # noqa: F401
     _MEMBER_COLUMNS,
@@ -32,6 +37,10 @@ from pydocs_mcp.storage.sqlite.filter_adapter import (  # noqa: F401
     SqliteFilterAdapter,
     _resolve_filter,
     _SqliteFilterTranslator,
+)
+from pydocs_mcp.storage.sqlite.fts_store import (  # noqa: F401
+    SqliteLexicalStore,
+    SqliteVectorStore,
 )
 from pydocs_mcp.storage.sqlite.package_repository import SqlitePackageRepository
 from pydocs_mcp.storage.sqlite.row_mappers import (  # noqa: F401
@@ -265,236 +274,6 @@ class SqliteUnitOfWork:
         if self._node_scores is None:
             raise UnitOfWorkNotEnteredError("node_scores")
         return self._node_scores
-
-
-
-
-# ── chunk_id ↔ plaid_doc_id mapping repository ───────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class SqliteChunkMultiVectorRepository:
-    """Repository over the ``chunk_multi_vector_ids`` SQLite table.
-
-    Bridges ``chunks.id`` ↔ fast-plaid ``plaid_doc_id`` for the
-    late-interaction backend. Structurally a sibling of
-    :class:`SqliteChunkRepository`: a frozen/slots dataclass holding a
-    :class:`ConnectionProvider`, every method routing through
-    :func:`_maybe_acquire` so it reuses the ambient
-    :class:`SqliteUnitOfWork` transaction when one is open — and NEVER
-    calling ``conn.commit()`` itself. The owning UoW drives commit.
-
-    Extracted from :class:`FastPlaidUnitOfWork`, which previously opened
-    its own ``sqlite3.connect`` + eager ``conn.commit()`` against this
-    table — that deadlocked against the composite UoW's already-open
-    write transaction on the same DB file and broke cross-store
-    atomicity. Routing the mapping SQL through this repo (and the shared
-    provider) keeps the mapping rows on the same ambient transaction as
-    the ``chunks`` writes.
-    """
-
-    provider: ConnectionProvider
-
-    async def next_plaid_offset(self) -> int:
-        """Next free ``plaid_doc_id`` = ``MAX(plaid_doc_id)+1`` (0 on empty).
-
-        ``COALESCE(MAX(...)+1, 0)`` returns 0 for the empty-table path so
-        the first append always starts at offset 0 — matching fast-plaid's
-        ``.create`` (offset 0) vs ``.update`` (offset > 0) branch.
-        """
-        async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT COALESCE(MAX(plaid_doc_id) + 1, 0) FROM chunk_multi_vector_ids"
-                ).fetchone()
-            )
-        return int(row[0])
-
-    async def upsert(self, rows: Sequence[tuple[int, int, str, str]]) -> None:
-        """Insert/replace ``(chunk_id, plaid_doc_id, package, pipeline_hash)`` rows.
-
-        ``INSERT OR REPLACE`` keyed on the ``chunk_id`` PRIMARY KEY — a
-        reindex of the same chunk overwrites its mapping row in place.
-        """
-        if not rows:
-            return
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.executemany,
-                "INSERT OR REPLACE INTO chunk_multi_vector_ids "
-                "(chunk_id, plaid_doc_id, package, pipeline_hash) VALUES (?,?,?,?)",
-                list(rows),
-            )
-
-    async def delete_by_chunk_ids(self, ids: Sequence[int]) -> tuple[int, ...]:
-        """Delete mapping rows for ``ids``; return the freed ``plaid_doc_id``s.
-
-        The caller (fast-plaid soft-delete) needs the ``plaid_doc_id``s to
-        ``delete(subset=...)`` the index slots, so we SELECT them before
-        the DELETE. Both statements run on the ambient connection so the
-        SELECT-then-DELETE is consistent within the surrounding
-        transaction.
-        """
-        ids_list = list(ids)
-        if not ids_list:
-            return ()
-        # ``placeholders`` is literal ``?`` chars (one per id, not user input),
-        # so the IN-clause SQL is safe; the values bind via parameters.
-        placeholders = ",".join("?" for _ in ids_list)
-        async with _maybe_acquire(self.provider) as conn:
-
-            def _select_then_delete() -> tuple[int, ...]:
-                plaid_ids = tuple(
-                    row[0]
-                    for row in conn.execute(
-                        "SELECT plaid_doc_id FROM chunk_multi_vector_ids "
-                        f"WHERE chunk_id IN ({placeholders})",
-                        ids_list,
-                    )
-                )
-                conn.execute(
-                    f"DELETE FROM chunk_multi_vector_ids WHERE chunk_id IN ({placeholders})",
-                    ids_list,
-                )
-                return plaid_ids
-
-            return await asyncio.to_thread(_select_then_delete)
-
-    async def clear(self) -> tuple[int, ...]:
-        """Delete every mapping row; return all freed ``plaid_doc_id``s."""
-        async with _maybe_acquire(self.provider) as conn:
-
-            def _select_then_delete() -> tuple[int, ...]:
-                plaid_ids = tuple(
-                    row[0]
-                    for row in conn.execute("SELECT plaid_doc_id FROM chunk_multi_vector_ids")
-                )
-                conn.execute("DELETE FROM chunk_multi_vector_ids")
-                return plaid_ids
-
-            return await asyncio.to_thread(_select_then_delete)
-
-    async def packages_for_chunks(self, ids: Sequence[int]) -> dict[int, str]:
-        """Map ``chunk_id -> package`` from the ``chunks`` table for ``ids``."""
-        ids_list = list(ids)
-        if not ids_list:
-            return {}
-        # ``placeholders`` is literal ``?`` chars (one per id); values bind via parameters.
-        placeholders = ",".join("?" for _ in ids_list)
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(
-                    f"SELECT id, package FROM chunks WHERE id IN ({placeholders})",
-                    ids_list,
-                ).fetchall()
-            )
-        return {row[0]: row[1] for row in rows}
-
-    async def plaid_ids_for_chunks(self, ids: Sequence[int]) -> tuple[tuple[int, int], ...]:
-        """Return ``(plaid_doc_id, chunk_id)`` pairs for the given ``chunk_id``s.
-
-        The score path reverse-maps fast-plaid hits back to ``chunk_id``s,
-        so it wants the mapping keyed by ``plaid_doc_id``. Returning pairs
-        (not a dict) keeps the repository free of caller-specific shaping.
-        """
-        ids_list = list(ids)
-        if not ids_list:
-            return ()
-        # ``placeholders`` is literal ``?`` chars (one per id); values bind via parameters.
-        placeholders = ",".join("?" for _ in ids_list)
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT plaid_doc_id, chunk_id FROM chunk_multi_vector_ids "
-                    f"WHERE chunk_id IN ({placeholders})",
-                    ids_list,
-                ).fetchall()
-            )
-        return tuple((row[0], row[1]) for row in rows)
-
-
-# ── Vector store (FTS5 text search) ──────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class SqliteLexicalStore:
-    """Retrieval-only lexical service over ``chunks_fts`` (BM25 / FTS5).
-
-    CRUD happens via :class:`SqliteChunkRepository`; this type only answers
-    ``text_search`` — it is the :class:`TextSearchable` view. Dense vector
-    search lives behind ``SqliteCompositeBackend.dense()``
-    (``storage/search_backend.py``).
-
-    The default ``filter_adapter`` uses ``column_prefix="c."`` so filters
-    produce qualified SQL for the ``chunks_fts m JOIN chunks c ON c.id = m.rowid``
-    shape — ``chunks_fts`` shares column names with ``chunks`` and unqualified
-    references would be ambiguous.
-    """
-
-    provider: ConnectionProvider
-    filter_adapter: _SqliteFilterTranslator = field(
-        default_factory=lambda: _SqliteFilterTranslator(
-            safe_columns=CHUNK_COLUMNS,
-            column_prefix="c.",
-        )
-    )
-    retriever_name: str = "bm25_chunk"
-
-    async def text_search(
-        self,
-        query_terms: str,
-        limit: int,
-        filter: Filter | Mapping | None = None,
-    ) -> tuple[Chunk, ...]:
-        tree = _resolve_filter(filter)
-        # Validate/adapt filter before touching FTS — a bad column must raise
-        # ValueError even when the query is empty.
-        filter_sql, filter_params = "", []
-        if tree is not None:
-            filter_sql, filter_params = self.filter_adapter.adapt(tree)
-
-        fulltext = _build_fts_match_query(query_terms)
-        if fulltext is None:
-            return ()
-
-        where_parts = ["chunks_fts MATCH ?"]
-        params: list = [fulltext]
-        if filter_sql:
-            where_parts.append(filter_sql)
-            params.extend(filter_params)
-        params.append(limit)
-
-        sql = (
-            "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
-            "c.content_hash, c.qualified_name, -m.rank AS rank "
-            "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
-            f"WHERE {' AND '.join(where_parts)} "
-            "ORDER BY rank LIMIT ?"
-        )
-
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
-
-        items: list[Chunk] = []
-        for row in rows:
-            base = row_to_chunk(row)
-            items.append(
-                Chunk(
-                    text=base.text,
-                    id=base.id,
-                    relevance=float(row["rank"]),
-                    retriever_name=self.retriever_name,
-                    metadata=dict(base.metadata),
-                    content_hash=base.content_hash,  # defense-in-depth: don't trigger auto-compute
-                )
-            )
-        return tuple(items)
-
-
-# Deprecated alias — the class was renamed because it is the FTS5/BM25
-# LEXICAL store (TextSearchable), not a vector store (the dense store is
-# TurboQuantVectorStore). Kept one release so external imports keep working.
-SqliteVectorStore = SqliteLexicalStore
 
 
 # ── ModuleMember repository ──────────────────────────────────────────────

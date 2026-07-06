@@ -94,3 +94,13 @@ def test_package_and_chunk_repositories_have_own_modules() -> None:
 
     assert sqlite_pkg.SqlitePackageRepository is package_repository.SqlitePackageRepository
     assert sqlite_pkg.SqliteChunkRepository is chunk_repository.SqliteChunkRepository
+
+
+def test_multi_vector_mapping_and_fts_store_have_own_modules() -> None:
+    from pydocs_mcp.storage.sqlite import chunk_multi_vector_repository, fts_store
+
+    assert (
+        sqlite_pkg.SqliteChunkMultiVectorRepository
+        is chunk_multi_vector_repository.SqliteChunkMultiVectorRepository
+    )
+    assert sqlite_pkg.SqliteLexicalStore is fts_store.SqliteLexicalStore
