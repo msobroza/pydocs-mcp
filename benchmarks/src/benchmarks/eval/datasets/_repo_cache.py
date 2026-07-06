@@ -20,6 +20,23 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class RepoCacheLike(Protocol):
+    """The two operations the dataset adapters need from a repo cache.
+
+    WHY a Protocol (not the concrete ``RepoCache``): the SWE-QA / SWE-QA-Pro
+    adapters take this as a constructor field so tests can inject a
+    no-git/no-network fake (``_FakeRepoCache``) that returns a fixed file
+    tree and a fixture corpus dir. The real ``RepoCache`` below satisfies it.
+    """
+
+    def checkout(self, url: str, sha: str) -> Path: ...
+
+    def file_tree(self, url: str, sha: str) -> tuple[str, ...]: ...
+
 
 # Longest git op here is the initial full clone of a large repo; 10 min is
 # generous headroom over the observed worst case and matches the plan's bound.
@@ -144,3 +161,22 @@ def _stderr_tail(exc: subprocess.CalledProcessError, limit: int = 500) -> str:
     stderr = exc.stderr or ""
     text = stderr.decode() if isinstance(stderr, bytes) else stderr
     return text.strip()[-limit:]
+
+
+def read_checkout_files(root: Path) -> dict[str, str]:
+    """Read every ``.py`` file under ``root`` into a ``{rel_posix: source}`` map.
+
+    WHY: the SWE-QA adapters materialize a fresh, runner-owned corpus copy from
+    this mapping via ``materialize_corpus`` — never handing the runner the shared
+    cache worktree directly (the runner ``rmtree``s the corpus between tasks, so
+    it must own the dir). Python-only corpora (both datasets are Python), so the
+    ``.py`` filter keeps the materialized project small and index-relevant.
+    ``errors="replace"`` tolerates the odd non-UTF-8 byte in a real repo file.
+    """
+    files: dict[str, str] = {}
+    for path in sorted(root.rglob("*.py")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        files[rel] = path.read_text(encoding="utf-8", errors="replace")
+    return files

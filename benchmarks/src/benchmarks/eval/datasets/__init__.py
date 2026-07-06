@@ -8,10 +8,14 @@ from .base_dataset import Dataset
 from .ds1000 import Ds1000Dataset
 from .repoqa import RepoQADataset
 from .structural_recall import StructuralRecallDataset
+from .swe_qa import SweQaDataset
+from .swe_qa_pro import SweQaProDataset
 
 __all__ = [
     "Dataset",
     "Ds1000Dataset",
     "RepoQADataset",
     "StructuralRecallDataset",
+    "SweQaDataset",
+    "SweQaProDataset",
 ]
