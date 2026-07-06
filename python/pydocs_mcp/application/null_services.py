@@ -56,6 +56,16 @@ _TREE_INDEX_DISABLED_MSG = (
     "Re-index with the default ingestion pipeline (which builds trees) "
     "to enable tree-based lookups."
 )
+# Parallel YAML-anchored hint for the decision-capture failure mode.
+# ``get_why`` is served by the real ``DecisionService`` only when the
+# decision layer is enabled; until then this Null impl points the user
+# at the exact YAML knob (``decision_capture.enabled``) rather than
+# returning an empty answer that reads as "there are no decisions".
+_DECISIONS_DISABLED_MSG = (
+    "Architectural-decision capture is not enabled in this build. "
+    "It ships with the decision layer (decision_capture.enabled in "
+    "pydocs-mcp.yaml); until then get_why has nothing to answer from."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +122,27 @@ class NullReferenceService:
         raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
 
 
+@dataclass(frozen=True, slots=True)
+class NullDecisionService:
+    """get_why's backing service when decision capture is absent (spec §D9).
+
+    Raises rather than returning empty: decisions are user-requested via the
+    MCP surface — a silent empty result would mislead the caller (same
+    rationale as NullTreeService vs NullVectorStore).
+    """
+
+    async def search(self, query: str) -> str:
+        raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
+
+    async def for_targets(self, targets: list[str]) -> str:
+        raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
+
+    async def dashboard(self) -> str:
+        raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
+
+
 __all__ = (
+    "NullDecisionService",
     "NullReferenceService",
     "NullTreeService",
 )
