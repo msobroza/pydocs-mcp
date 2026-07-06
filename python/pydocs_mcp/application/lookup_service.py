@@ -49,8 +49,10 @@ from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
+    _DEFAULT_CONTEXT_RENDER,
     _DEFAULT_CONTEXT_TOKEN_BUDGET,
     _DEFAULT_IMPACT_MAX_DEPTH,
+    _DEFAULT_SKELETON_BODY_RATIO,
 )
 
 if TYPE_CHECKING:
@@ -227,6 +229,10 @@ class LookupService:
     # posture (YAML tunables via the composition root, not MCP params).
     context_max_depth: int = _DEFAULT_CONTEXT_MAX_DEPTH
     context_token_budget: int = _DEFAULT_CONTEXT_TOKEN_BUDGET
+    # Render strategy + skeleton body budget for ``show="context"`` (spec §D6).
+    # Skeleton is the shipped default; ``format_context`` reads both.
+    context_render: str = _DEFAULT_CONTEXT_RENDER
+    context_body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO
 
     async def lookup(self, payload: LookupInput) -> str:
         target_str = payload.target
@@ -326,7 +332,13 @@ class LookupService:
                 max_depth=self.context_max_depth,
                 limit=limit,
             )
-            return format_context(ctx, target=target, token_budget=self.context_token_budget)
+            return format_context(
+                ctx,
+                target=target,
+                token_budget=self.context_token_budget,
+                render=self.context_render,
+                body_ratio=self.context_body_ratio,
+            )
 
         # Reference-graph dispatch (callers / callees / inherits).
         getter = _REF_GETTERS.get(show)

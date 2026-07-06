@@ -138,6 +138,8 @@ def build_sqlite_lookup_service(
         impact_max_depth=impact_cfg.max_depth,
         context_max_depth=context_cfg.max_depth,
         context_token_budget=context_cfg.token_budget,
+        context_render=context_cfg.render,
+        context_body_ratio=context_cfg.skeleton_body_ratio,
     )
 
 

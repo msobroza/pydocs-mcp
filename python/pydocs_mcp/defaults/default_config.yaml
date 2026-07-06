@@ -74,6 +74,8 @@ reference_graph:
   context:
     max_depth: 2                            # forward dependency-closure depth for lookup(show="context"), 1-6
     token_budget: 2048                      # token cap for the packed context (graded fidelity)
+    render: skeleton                        # "skeleton" (signatures + bodies for the most-central nodes) | "full" (hop-graded fidelity)
+    skeleton_body_ratio: 0.35               # fraction of token_budget spent on FULL bodies in skeleton mode, 0<r<=1
 
 search:
   output:

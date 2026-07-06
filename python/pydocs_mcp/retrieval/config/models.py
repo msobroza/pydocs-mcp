@@ -178,6 +178,11 @@ class ImpactConfig(BaseModel):
 # fallback fields, so the literals live in exactly one place.
 _DEFAULT_CONTEXT_MAX_DEPTH = 2
 _DEFAULT_CONTEXT_TOKEN_BUDGET = 2048
+# Skeleton body-budget default (spec §D6). Canonical for ``ContextConfig`` +
+# the ``LookupService`` fallback field; ``application.formatting`` imports THIS
+# constant so the ``format_context(body_ratio=...)`` default never drifts.
+_DEFAULT_CONTEXT_RENDER: Literal["skeleton", "full"] = "skeleton"
+_DEFAULT_SKELETON_BODY_RATIO = 0.35
 
 
 class ContextConfig(BaseModel):
@@ -185,15 +190,20 @@ class ContextConfig(BaseModel):
 
     ``context`` walks the reference graph FORWARD from the target (its
     dependency closure — what it calls) and packs the closure under one token
-    budget at graded fidelity (focus = full source, ring = signatures, rest =
-    outline). ``max_depth`` bounds the walk; ``token_budget`` caps the packed
-    output. Both are server-side tunables, NOT MCP parameters.
+    budget. ``max_depth`` bounds the walk; ``token_budget`` caps the packed
+    output. ``render`` selects the packing strategy: ``"skeleton"`` (the
+    default per §D6) renders every node's signature and spends only
+    ``skeleton_body_ratio`` of the budget on FULL bodies of the most-central
+    nodes; ``"full"`` uses the legacy hop-graded fidelity (focus = full source,
+    ring = signature, rest = outline). All server-side tunables, NOT MCP params.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     max_depth: int = Field(_DEFAULT_CONTEXT_MAX_DEPTH, ge=1, le=6)
     token_budget: int = Field(_DEFAULT_CONTEXT_TOKEN_BUDGET, ge=128, le=100_000)
+    render: Literal["skeleton", "full"] = _DEFAULT_CONTEXT_RENDER
+    skeleton_body_ratio: float = Field(_DEFAULT_SKELETON_BODY_RATIO, gt=0.0, le=1.0)
 
 
 class ReferenceGraphConfig(BaseModel):
