@@ -269,7 +269,7 @@ def test_runner_seeds_library_on_systems_before_index() -> None:
     ``index()`` is called. Helper is sync; only the system-facing
     boundary is async.
     """
-    from benchmarks.eval.runner import _maybe_set_library
+    from benchmarks.eval.sweep_support import _maybe_set_library
 
     class _Recorder:
         name = "recorder"
@@ -289,7 +289,7 @@ def test_maybe_set_library_noop_on_system_without_fields() -> None:
     runner helper must be a strict no-op (no ``setattr`` fallback that
     would invent attributes on unrelated systems). Finding I5.
     """
-    from benchmarks.eval.runner import _maybe_set_library
+    from benchmarks.eval.sweep_support import _maybe_set_library
 
     class _Bare:
         name = "bare"
@@ -304,7 +304,7 @@ def test_maybe_set_library_noop_when_metadata_missing_repo() -> None:
     """If ``task.metadata`` lacks ``'repo'``, the helper must not touch
     the system. Defensive against datasets that don't carry the field.
     """
-    from benchmarks.eval.runner import _maybe_set_library
+    from benchmarks.eval.sweep_support import _maybe_set_library
 
     class _Recorder:
         library_name: str = "initial"

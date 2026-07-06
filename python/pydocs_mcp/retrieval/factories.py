@@ -59,7 +59,7 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
     # configured SearchBackend so production + benchmark share one wiring
     # path. ``backend.dense()`` returns a ``VectorSearchable`` (a per-query
     # ``_TurboQuantReadStore`` over the ``.tq`` sidecar) instead of the
-    # FTS-only ``SqliteVectorStore`` the lexical leg still reaches via
+    # FTS-only ``SqliteLexicalStore`` the lexical leg still reaches via
     # ``connection_provider`` — so dense/hybrid configs no longer silently
     # fall back to BM25. Dense is always wired (an empty ``.tq`` yields an
     # empty index -> ``()``); LI reads flow through ``uow.multi_vectors``

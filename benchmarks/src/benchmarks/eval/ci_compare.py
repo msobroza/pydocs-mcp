@@ -19,6 +19,8 @@ import json
 import sys
 from pathlib import Path
 
+from .baseline_record import BaselineRecord
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -49,9 +51,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    baseline = json.loads(args.baseline.read_text())
+    # WHY BaselineRecord: the single read model for baseline JSONs
+    # (stdlib-only module) instead of re-encoding the JSON shape here. A
+    # malformed baseline — missing top-level field OR missing metric — is
+    # an input error → exit 2.
     try:
-        baseline_mean = baseline["metrics"][args.metric]["mean"]
+        baseline = BaselineRecord.from_path(args.baseline)
+        baseline_mean = baseline.metrics[args.metric]["mean"]
     except KeyError:
         print(
             f"::error::Baseline {args.baseline} is missing metric {args.metric!r}",

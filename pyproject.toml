@@ -287,21 +287,26 @@ ignore_errors = true
 max-complexity-allowed = 15
 
 [tool.vulture]
-# Dead-code gate. At --min-confidence 80 vulture surfaces exactly 4 findings on
-# this package, ALL false positives:
+# Dead-code gate. At --min-confidence 80 vulture surfaces false positives
+# from substitution boundaries, framework hooks, and Protocol method
+# parameters. Whitelisting these names + the registry/pydantic decorators
+# makes a min-confidence-80 run go green. vulture reads this section
+# automatically.
 #   - _fast.py extract_module_doc (x2): Rust/Python substitution-boundary
 #     re-export that vulture can't trace.
 #   - retrieval/config/app_config.py dotenv_settings / file_secret_settings: framework-
 #     mandated positional params of pydantic-settings'
 #     settings_customise_sources hook (deliberately unused).
-# Whitelisting these names + the registry/pydantic decorators makes a
-# min-confidence-80 run go green. vulture reads this section automatically.
+#   - application/protocols.py node_qname: Protocol method parameter — the
+#     methods are bodyless (`...`) so vulture sees the arg as unused, but
+#     it is part of the contract and is used by every conformer.
 min_confidence = 80
 paths = ["python/pydocs_mcp"]
 ignore_names = [
     "extract_module_doc",     # _fast.py substitution-boundary re-export
     "dotenv_settings",        # pydantic-settings settings_customise_sources param
     "file_secret_settings",   # pydantic-settings settings_customise_sources param
+    "node_qname",             # application/protocols.py Protocol method params
 ]
 ignore_decorators = [
     "@*.register",            # @step_registry.register / @stage_registry.register / @formatter_registry.register

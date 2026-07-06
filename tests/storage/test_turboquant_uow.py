@@ -97,3 +97,19 @@ async def test_write_is_atomic_via_tmp_rename(tmp_path: Path) -> None:
     # Original file is byte-identical — the failed write went to <path>.tmp,
     # never replaced the target.
     assert tq.read_bytes() == pre_bytes
+
+
+async def test_guards_raise_uow_not_entered_error(tmp_path: Path) -> None:
+    """All four not-entered guards raise the shared typed error with a bare
+    ``Class.method`` op label — the contract unified across sidecar UoWs."""
+    from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+
+    uow = TurboQuantUnitOfWork(index_path=tmp_path / "t.tq", dim=_DIM, bit_width=4)
+    with pytest.raises(UnitOfWorkNotEnteredError, match="TurboQuantUnitOfWork.add_vectors"):
+        await uow.add_vectors([1], [_vec(0.0)])
+    with pytest.raises(UnitOfWorkNotEnteredError, match="TurboQuantUnitOfWork.remove_vectors"):
+        await uow.remove_vectors([1])
+    with pytest.raises(UnitOfWorkNotEnteredError, match="TurboQuantUnitOfWork.clear_all"):
+        await uow.clear_all()
+    with pytest.raises(UnitOfWorkNotEnteredError, match="TurboQuantUnitOfWork.index"):
+        _ = uow.index

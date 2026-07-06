@@ -24,6 +24,7 @@ import numpy as np
 from turbovec import IdMapIndex
 
 from pydocs_mcp.models import Embedding, is_multi_vector
+from pydocs_mcp.storage.sidecar_uow import require_entered, rollback_safely
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +70,11 @@ class TurboQuantUnitOfWork:
         # happens without an explicit commit OR with an exception. For
         # TurboQuant this is harmless when no commit was attempted — the
         # ``.tq`` file on disk hasn't been touched — but it keeps the
-        # UoW contract uniform across backends.
+        # UoW contract uniform across backends. Trigger condition
+        # deliberately differs from FastPlaid's (dirty AND exception):
+        # see storage/sidecar_uow.py.
         if self._dirty:
-            try:
-                await self.rollback()
-            except Exception as rollback_exc:
-                # Best-effort cleanup; don't mask the original exception
-                # that triggered ``__aexit__``. Mirrors SqliteUnitOfWork's
-                # __aexit__ rollback-failure path — log the inner exception
-                # rather than swallowing silently so an operator running
-                # at WARNING+ still sees the failure.
-                logger.warning(
-                    "TurboQuant rollback in __aexit__ failed: %r",
-                    rollback_exc,
-                )
+            await rollback_safely(self, logger, "TurboQuant")
 
     async def add_vectors(
         self,
@@ -96,10 +88,7 @@ class TurboQuantUnitOfWork:
         multi-vector embeddings will land alongside the
         ``chunk_vectors`` side-table in a future PR.
         """
-        if self._index is None:
-            raise RuntimeError(
-                "TurboQuantUnitOfWork.add_vectors called outside async with",
-            )
+        index = require_entered(self._index, "TurboQuantUnitOfWork.add_vectors")
         for emb in embeddings:
             if is_multi_vector(emb):
                 raise NotImplementedError(
@@ -117,14 +106,11 @@ class TurboQuantUnitOfWork:
         # ``add_with_ids`` is a sync PyO3 call doing per-vector
         # quantization — offload to a worker thread per CLAUDE.md
         # §"Async Patterns".
-        await asyncio.to_thread(self._index.add_with_ids, vectors, ids_arr)
+        await asyncio.to_thread(index.add_with_ids, vectors, ids_arr)
         self._dirty = True
 
     async def remove_vectors(self, ids: Sequence[int]) -> None:
-        if self._index is None:
-            raise RuntimeError(
-                "TurboQuantUnitOfWork.remove_vectors called outside async with",
-            )
+        require_entered(self._index, "TurboQuantUnitOfWork.remove_vectors")
         # Batch the per-id PyO3 ``remove`` calls inside a single worker
         # thread: N sync calls hopped across N ``asyncio.to_thread`` boundaries
         # would amplify context-switch overhead linearly in ``len(ids)``. The
@@ -147,10 +133,7 @@ class TurboQuantUnitOfWork:
         file write happens in commit() via the existing tmp + os.replace
         path. No separate unlink() needed.
         """
-        if self._index is None:
-            raise RuntimeError(
-                "TurboQuantUnitOfWork.clear_all called outside async with",
-            )
+        require_entered(self._index, "TurboQuantUnitOfWork.clear_all")
         self._index = await asyncio.to_thread(
             IdMapIndex,
             dim=self._dim,
@@ -208,11 +191,7 @@ class TurboQuantUnitOfWork:
     @property
     def index(self) -> IdMapIndex:
         """Read access to the underlying index — for ``TurboQuantVectorStore``."""
-        if self._index is None:
-            raise RuntimeError(
-                "TurboQuantUnitOfWork.index accessed outside async with",
-            )
-        return self._index
+        return require_entered(self._index, "TurboQuantUnitOfWork.index")
 
     @property
     def vectors(self) -> TurboQuantUnitOfWork:

@@ -1,4 +1,4 @@
-"""Tests for SqliteChunkRepository + SqliteVectorStore (spec §5.3, AC #9)."""
+"""Tests for SqliteChunkRepository + SqliteLexicalStore (the FTS5/BM25 lexical leg)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pytest
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import Chunk, ChunkFilterField
-from pydocs_mcp.storage.sqlite import SqliteChunkRepository, SqliteVectorStore
+from pydocs_mcp.storage.sqlite import SqliteChunkRepository, SqliteLexicalStore
 
 
 @pytest.fixture
@@ -83,7 +83,7 @@ async def test_chunk_repository_rebuild_index(db_file):
     # After rebuild, FTS becomes queryable.
     await repo.rebuild_index()
 
-    store = SqliteVectorStore(provider=provider)
+    store = SqliteLexicalStore(provider=provider)
     results = await store.text_search("routing", limit=5)
     assert len(results) >= 1
     assert results[0].metadata["package"] == "fastapi"
@@ -103,7 +103,7 @@ async def test_vector_store_text_search_basic(db_file):
     )
     await repo.rebuild_index()
 
-    store = SqliteVectorStore(provider=provider)
+    store = SqliteLexicalStore(provider=provider)
     results = await store.text_search("routing", limit=5)
     assert len(results) == 1
     got = results[0]
@@ -124,7 +124,7 @@ async def test_vector_store_text_search_with_filter_pushdown(db_file):
     )
     await repo.rebuild_index()
 
-    store = SqliteVectorStore(provider=provider)
+    store = SqliteLexicalStore(provider=provider)
     # Both rows match "tutorial" — filter narrows to one.
     results = await store.text_search(
         "tutorial",
@@ -137,7 +137,7 @@ async def test_vector_store_text_search_with_filter_pushdown(db_file):
 
 async def test_vector_store_text_search_invalid_column(db_file):
     provider = build_connection_provider(db_file)
-    store = SqliteVectorStore(provider=provider)
+    store = SqliteLexicalStore(provider=provider)
     # No rebuild needed; validation gates before SQL executes.
     with pytest.raises(ValueError, match="not in safe_columns"):
         await store.text_search(
@@ -145,3 +145,14 @@ async def test_vector_store_text_search_invalid_column(db_file):
             limit=5,
             filter={"language": "python"},
         )
+
+
+def test_lexical_store_rename_keeps_deprecated_alias() -> None:
+    """SqliteLexicalStore is the real name (FTS5/BM25 TextSearchable leg);
+    SqliteVectorStore survives one release as a deprecated alias so
+    external imports keep working."""
+    from pydocs_mcp.storage import SqliteLexicalStore as pkg_export
+    from pydocs_mcp.storage.sqlite import SqliteLexicalStore, SqliteVectorStore
+
+    assert SqliteVectorStore is SqliteLexicalStore
+    assert pkg_export is SqliteLexicalStore

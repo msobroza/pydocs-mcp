@@ -14,7 +14,7 @@ test needs no ``pydocs_mcp`` install.
 
 from __future__ import annotations
 
-from benchmarks.eval.runner import _maybe_set_index_dependencies
+from benchmarks.eval.sweep_support import _maybe_set_index_dependencies
 from benchmarks.eval.systems.base_system import IndexesDependencies
 from benchmarks.eval.systems.pydocs import PydocsMcpSystem
 

@@ -17,7 +17,7 @@ clause into the FTS5 JOIN. If the scratch key is missing while the
 query carries a filter, the fetcher raises a clear ``RuntimeError``
 pointing at the canonical YAML shape.
 
-Mirrors the FTS5 SQL in :mod:`pydocs_mcp.storage.sqlite.SqliteVectorStore`
+Mirrors the FTS5 SQL in :mod:`pydocs_mcp.storage.sqlite.SqliteLexicalStore`
 but deliberately does NOT flip the sign of FTS5's negative rank — that's
 :class:`BM25ScorerStep`'s job in the next step. Splitting fetch from
 score keeps each step single-responsibility and lets a future
@@ -65,7 +65,7 @@ if TYPE_CHECKING:
 # all retrieval/extraction modules have finished initializing.
 
 
-# Mirror of ``SqliteVectorStore.text_search`` — but emit RAW negative
+# Mirror of ``SqliteLexicalStore.text_search`` — but emit RAW negative
 # ``m.rank`` (no sign flip). The legacy storage layer flipped the sign
 # in SQL (``-m.rank AS rank``), but the Task-4 refactor splits "fetch
 # raw FTS5 ranks" from "normalize them to positive scores". The latter
