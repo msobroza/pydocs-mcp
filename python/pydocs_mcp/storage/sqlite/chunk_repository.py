@@ -14,8 +14,18 @@ from pydocs_mcp.storage.sqlite.filter_adapter import (
     _SqliteFilterTranslator,
 )
 from pydocs_mcp.storage.sqlite.row_mappers import _chunk_to_row, row_to_chunk
-from pydocs_mcp.storage.sqlite.table_crud import _resolve_filter
+from pydocs_mcp.storage.sqlite.table_crud import (
+    _resolve_filter,
+    count_rows,
+    delete_all_rows,
+    delete_rows,
+    list_rows,
+)
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
+
+# Injection boundary: the table name the CRUD helpers interpolate comes
+# only from this constant — never caller input.
+_TABLE = "chunks"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,41 +60,20 @@ class SqliteChunkRepository:
         filter: Filter | Mapping | None = None,
         limit: int | None = None,
     ) -> list[Chunk]:
-        tree = _resolve_filter(filter)
-        where, params = "", []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-        sql = "SELECT * FROM chunks"
-        if where:
-            sql += f" WHERE {where}"
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
-        return [row_to_chunk(r) for r in rows]
+        return await list_rows(
+            self.provider,
+            self.filter_adapter,
+            table=_TABLE,
+            mapper=row_to_chunk,
+            filter=filter,
+            limit=limit,
+        )
 
     async def delete(self, filter: Filter | Mapping) -> int:
-        tree = _resolve_filter(filter)
-        if tree is None:
-            raise ValueError("delete requires an explicit filter")
-        where, params = self.filter_adapter.adapt(tree)
-        async with _maybe_acquire(self.provider) as conn:
-            cursor = await asyncio.to_thread(
-                conn.execute, f"DELETE FROM chunks WHERE {where}", params
-            )
-            return cursor.rowcount
+        return await delete_rows(self.provider, self.filter_adapter, table=_TABLE, filter=filter)
 
     async def count(self, filter: Filter | Mapping | None = None) -> int:
-        tree = _resolve_filter(filter)
-        sql = "SELECT COUNT(*) FROM chunks"
-        params: list = []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-            sql += f" WHERE {where}"
-        async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchone())
-        return row[0]
+        return await count_rows(self.provider, self.filter_adapter, table=_TABLE, filter=filter)
 
     async def rebuild_index(self) -> None:
         """Rebuild the chunks_fts virtual table so newly-inserted rows are searchable."""
@@ -160,5 +149,4 @@ class SqliteChunkRepository:
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM chunks")
+        await delete_all_rows(self.provider, table=_TABLE)
