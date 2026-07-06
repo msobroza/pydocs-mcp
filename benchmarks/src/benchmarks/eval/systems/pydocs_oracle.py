@@ -108,7 +108,8 @@ class PydocsOracleSystem(PydocsMcpSystem):
         # without ``pydocs_mcp`` / ``datasets`` present.
         from dataclasses import replace
 
-        from pydocs_mcp.db import build_connection_provider, open_index_database
+        from pydocs_mcp.db import open_index_database
+        from pydocs_mcp.storage.factories import build_connection_provider
         from pydocs_mcp.deps import normalize_package_name
         from pydocs_mcp.extraction.strategies.embedders import build_embedder
         from pydocs_mcp.models import (

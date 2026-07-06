@@ -198,7 +198,8 @@ async def test_find_module_returns_false_on_empty_args() -> None:
 @pytest.mark.asyncio
 async def test_find_module_end_to_end_against_real_sqlite(tmp_path) -> None:
     """Drive find_module through the real SqliteUnitOfWork stack."""
-    from pydocs_mcp.db import build_connection_provider, open_index_database
+    from pydocs_mcp.db import open_index_database
+    from pydocs_mcp.storage.factories import build_connection_provider
     from pydocs_mcp.storage.sqlite import SqliteUnitOfWork
 
     db_path = tmp_path / "e2e.db"

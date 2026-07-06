@@ -6,7 +6,6 @@ import asyncio
 import contextvars
 import json
 import logging
-import re
 import sqlite3
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
@@ -39,6 +38,7 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+from pydocs_mcp.storage.fts_query import build_fts_match_query as _build_fts_match_query
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
@@ -667,25 +667,6 @@ class SqlitePackageRepository:
 # ── Chunk repository ─────────────────────────────────────────────────────
 
 
-# FTS5 reserves these tokens as boolean operators — unquoted query terms may
-# use them directly. Any other word is OR-joined and double-quoted so that
-# punctuation / hyphenation in user terms does not crash the parser.
-#
-# Single source of truth (spec S6): :mod:`pydocs_mcp.retrieval.steps.chunk_fetcher`
-# imports this set so the two ``_build_fts_match_query`` implementations
-# share one operator vocabulary instead of two near-duplicate literals
-# that drift over time (AC17 byte-parity hinges on this staying unified).
-# ``NEAR`` is included since FTS5 accepts it as a top-level operator even
-# though the chunk fetcher is more likely to see it than the legacy store.
-_FTS_OPS: frozenset[str] = frozenset({"AND", "OR", "NOT", "NEAR"})
-
-# A bare FTS5 word — no operator/punctuation that would change parsing.
-# Single source of truth (like ``_FTS_OPS``): both ``_build_fts_match_query``
-# implementations import this matcher so the "safe passthrough" predicate
-# cannot drift between the two byte-identical bodies.
-_FTS_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_]+$")
-
-
 @dataclass(frozen=True, slots=True)
 class SqliteChunkRepository:
     """ChunkStore backed by the 'chunks' SQLite table (spec §5.3, AC #9).
@@ -977,34 +958,6 @@ class SqliteChunkMultiVectorRepository:
 
 
 # ── Vector store (FTS5 text search) ──────────────────────────────────────
-
-
-def _build_fts_match_query(terms: str) -> str | None:
-    """Shape raw user terms into an FTS5 MATCH expression.
-
-    Mirrors the ChunkFetcherStep MATCH expression so behaviour stays
-    byte-identical. Returns ``None`` when no usable token survives filtering.
-    """
-    tokens = terms.split()
-    # Pass a DELIBERATE FTS expression through untouched, but ONLY when it is
-    # unambiguously one: an operator is present AND every token is a bare word
-    # (no ':' / quotes / parens / punctuation that would make the raw string
-    # invalid FTS5). A stray operator word in natural-language or code text
-    # (e.g. "Problem: ... OR ...") must NOT hijack the raw path — it falls
-    # through to the quote-each-word branch, where every token is a literal
-    # quoted term and the query is always FTS5-safe.
-    if any(t in _FTS_OPS for t in tokens) and all(_FTS_SAFE_TOKEN.match(t) for t in tokens):
-        return terms
-    words = [w for w in tokens if len(w) > 1]
-    if not words:
-        return None
-    # Each token becomes an FTS5 string literal: wrap in double quotes and
-    # DOUBLE any embedded double-quote (FTS5 string-literal escaping). Without
-    # the doubling a token like ``"shift"`` emits ``""shift""`` — an empty
-    # phrase + bareword — which unbalances the quoting so later punctuation
-    # (``[``, ``:`` …) becomes a syntax error. Quoting + escaping makes ALL
-    # punctuation literal, so any natural-language / code query is FTS5-safe.
-    return " OR ".join('"' + w.replace('"', '""') + '"' for w in words)
 
 
 @dataclass(frozen=True, slots=True)

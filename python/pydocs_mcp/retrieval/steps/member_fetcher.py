@@ -91,7 +91,7 @@ class MemberFetcherStep(RetrieverStep):
     allowed_fields: frozenset[str] = field(default=frozenset(), kw_only=True)
     limit: int = field(default=_DEFAULT_LIMIT, kw_only=True)
     retriever_name: str = field(default=_DEFAULT_RETRIEVER_NAME, kw_only=True)
-    filter_adapter: FilterAdapter | None = field(default=None, kw_only=True)
+    filter_adapter: FilterAdapter = field(kw_only=True)
     name: str = field(default="member_fetcher", kw_only=True)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
@@ -157,19 +157,15 @@ class MemberFetcherStep(RetrieverStep):
         return replace(state, candidates=ModuleMemberList(items=members))
 
     def _build_where_clause(self, tree) -> tuple[str, tuple]:
-        """Materialize a parsed filter tree to (WHERE-fragment, params).
+        """Materialize a parsed filter tree via the wired FilterAdapter.
 
-        Mirrors :meth:`ChunkFetcherStep._build_where_clause` but uses
-        ``target_field='member'`` so the adapter picks the
-        ``module_members`` whitelist (and the bare-column prefix, since
-        member queries are not joined).
+        ``target_field='member'`` selects the ``module_members`` whitelist
+        (and the bare-column prefix, since member queries are not joined).
+        WHY: retrieval steps must never import the SQLite adapter at
+        runtime — the composition root wires the concrete adapter into
+        ``BuildContext.filter_adapter`` (see retrieval/factories.py).
         """
-        adapter = self.filter_adapter
-        if adapter is None:
-            from pydocs_mcp.storage.sqlite import SqliteFilterAdapter as _Fallback
-
-            adapter = _Fallback()
-        return adapter.adapt(tree, target_field="member")
+        return self.filter_adapter.adapt(tree, target_field="member")
 
     def _fetch_sync(
         self,
@@ -213,6 +209,12 @@ class MemberFetcherStep(RetrieverStep):
                 "MemberFetcherStep requires BuildContext.connection_provider; "
                 "the composition root must wire a PerCallConnectionProvider "
                 "(see storage/factories.py)."
+            )
+        if context.filter_adapter is None:
+            raise ValueError(
+                "MemberFetcherStep requires BuildContext.filter_adapter; "
+                "the composition root wires SqliteFilterAdapter() "
+                "(see retrieval/factories.py)."
             )
         allowed = frozenset(context.app_config.metadata_schemas[schema_name])
         return cls(

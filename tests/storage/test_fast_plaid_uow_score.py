@@ -8,7 +8,8 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.storage.factories import build_connection_provider
 from tests.storage.test_fast_plaid_uow_writes import _FakeFastPlaid
 
 

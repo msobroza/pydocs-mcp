@@ -154,14 +154,13 @@ class BuildContext:
     uow_factory: Callable[[], UnitOfWork] | None = None
     llm_client: LlmClient | None = None
     pipeline_hash: str = ""
-    # Spec C5: tightened ``FilterAdapter`` Protocol — composition root wires
-    # a SQLite-specific adapter here so ``PreFilterStep`` (and downstream
-    # fetchers, post-C5 commit 2) call the typed Protocol instead of
-    # importing :class:`pydocs_mcp.storage.sqlite.SqliteFilterAdapter` at
-    # ``step.run`` time. Optional at the type level so isolated unit tests
-    # can instantiate a minimal context; ``from_dict`` decoders raise when
-    # the dep is missing (transitional shape — commit 1 falls back to a
-    # default-constructed adapter; commit 2 will require explicit wiring).
+    # Spec C5: tightened ``FilterAdapter`` Protocol — the composition root
+    # wires a SQLite-specific adapter here so ``PreFilterStep`` and the
+    # fetchers call the typed Protocol instead of importing
+    # :class:`pydocs_mcp.storage.sqlite.SqliteFilterAdapter` at ``step.run``
+    # time. Optional at the type level so isolated unit tests can
+    # instantiate a minimal context; the fetcher ``from_dict`` decoders
+    # raise a wiring-anchored ValueError when it is missing.
     filter_adapter: FilterAdapter | None = None
     # Late-interaction (ColBERT-style) embedder consumed by
     # :class:`EmbedChunksMultiVectorStage`. Optional at the type level so

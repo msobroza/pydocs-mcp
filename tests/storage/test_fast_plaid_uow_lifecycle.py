@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.db import build_connection_provider
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.storage.fast_plaid_uow import FastPlaidUnitOfWork
 
 

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.application.indexing_service import IndexingService
-from pydocs_mcp.db import build_connection_provider
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
@@ -41,6 +41,7 @@ from pydocs_mcp.retrieval.steps import (
     PreFilterStep,
 )
 from pydocs_mcp.storage.factories import build_sqlite_indexing_service
+from pydocs_mcp.storage.sqlite import SqliteFilterAdapter
 
 # Allowlist mirrors the shipped default_config.yaml metadata_schemas so the
 # step pre-filter validation accepts the same fields production does,
@@ -151,6 +152,7 @@ def retrieve_chunks(
     fetcher = ChunkFetcherStep(
         name="fetch",
         provider=provider,
+        filter_adapter=SqliteFilterAdapter(),
         allowed_fields=_CHUNK_ALLOWED_FIELDS,
         limit=limit,
     )
@@ -230,6 +232,7 @@ def retrieve_module_members(
     fetcher = MemberFetcherStep(
         name="fetch",
         provider=provider,
+        filter_adapter=SqliteFilterAdapter(),
         allowed_fields=_MEMBER_ALLOWED_FIELDS,
         limit=limit,
     )

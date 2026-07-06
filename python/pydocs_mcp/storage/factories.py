@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from pydocs_mcp.application.indexing_service import IndexingService
-from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import Chunk
+from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
@@ -39,6 +39,16 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.retrieval.config import AppConfig
+
+
+def build_connection_provider(cache_path: Path) -> PerCallConnectionProvider:
+    """Factory — the default ``ConnectionProvider`` for a given DB path.
+
+    WHY here: this is composition-root wiring. It used to live at the
+    bottom of ``db.py`` behind a ``# noqa: E402`` retrieval import, which
+    inverted the layering (low-level db importing retrieval).
+    """
+    return PerCallConnectionProvider(cache_path=cache_path)
 
 
 def build_sqlite_uow_factory(

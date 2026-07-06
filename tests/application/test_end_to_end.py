@@ -33,7 +33,7 @@ from pydocs_mcp.application import (
     ModuleInspector,
     PackageLookup,
 )
-from pydocs_mcp.db import build_connection_provider
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import (
     ChunkList,
     ModuleMemberList,

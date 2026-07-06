@@ -6,12 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import Chunk, ChunkFilterField, ChunkList, SearchQuery
 from pydocs_mcp.retrieval.pipeline import RetrieverState
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
 from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
-from pydocs_mcp.storage.sqlite import SqliteChunkRepository
+from pydocs_mcp.storage.sqlite import SqliteChunkRepository, SqliteFilterAdapter
 
 
 @pytest.fixture
@@ -48,7 +49,9 @@ async def populated_db(tmp_path: Path) -> Path:
 async def test_fetcher_returns_candidates_for_matching_query(populated_db: Path) -> None:
     """FTS5 MATCH 'add' returns the chunk whose text contains 'add'."""
     provider = build_connection_provider(populated_db)
-    step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
+    step = ChunkFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     state = RetrieverState(query=SearchQuery(terms="add", max_results=10))
     out = await step.run(state)
     assert isinstance(out.candidates, ChunkList)
@@ -59,7 +62,9 @@ async def test_fetcher_returns_candidates_for_matching_query(populated_db: Path)
 async def test_fetcher_respects_limit(populated_db: Path) -> None:
     """limit caps the returned candidate count."""
     provider = build_connection_provider(populated_db)
-    step = ChunkFetcherStep(name="fetch", provider=provider, limit=1)
+    step = ChunkFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=1
+    )
     state = RetrieverState(query=SearchQuery(terms="def", max_results=10))
     out = await step.run(state)
     assert isinstance(out.candidates, ChunkList)
@@ -70,7 +75,9 @@ async def test_fetcher_captures_fts5_rank_as_negative_relevance(populated_db: Pa
     """Candidates carry FTS5's raw BM25 rank as ``relevance`` (negative,
     per FTS5 convention — sign is flipped downstream by BM25ScorerStep)."""
     provider = build_connection_provider(populated_db)
-    step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
+    step = ChunkFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     state = RetrieverState(query=SearchQuery(terms="add", max_results=10))
     out = await step.run(state)
     assert isinstance(out.candidates, ChunkList)
@@ -84,7 +91,9 @@ async def test_chunk_fetcher_reads_pre_filter_from_scratch(populated_db: Path) -
     state.scratch['pre_filter.result'], the fetcher consumes it directly without
     re-parsing state.query.pre_filter."""
     provider = build_connection_provider(populated_db)
-    step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
+    step = ChunkFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     state = RetrieverState(
         query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
     )
@@ -114,7 +123,9 @@ async def test_chunk_fetcher_raises_if_pre_filter_set_but_scratch_missing(
     upstream (scratch lacks 'pre_filter'), the fetcher raises a clear
     error pointing at the missing pipeline step."""
     provider = build_connection_provider(populated_db)
-    step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
+    step = ChunkFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     state = RetrieverState(
         query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
     )
@@ -144,7 +155,9 @@ async def test_fetcher_surfaces_qualified_name(tmp_path: Path) -> None:
         ]
     )
     await repo.rebuild_index()
-    step = ChunkFetcherStep(name="fetch", provider=provider, limit=10)
+    step = ChunkFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     state = RetrieverState(query=SearchQuery(terms="add", max_results=10))
     out = await step.run(state)
     assert isinstance(out.candidates, ChunkList)

@@ -15,10 +15,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
-from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.models import Chunk
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.factories import (
+    build_connection_provider,
     build_sqlite_candidate_id_resolver,
     build_sqlite_chunk_hydrator,
     build_sqlite_uow_factory,

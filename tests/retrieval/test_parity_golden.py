@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import SearchQuery
 from pydocs_mcp.retrieval.config import (
     AppConfig,
@@ -22,6 +23,7 @@ from pydocs_mcp.retrieval.config import (
 )
 from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.storage.sqlite import (
+    SqliteFilterAdapter,
     SqliteModuleMemberRepository,
     SqliteVectorStore,
 )
@@ -34,6 +36,7 @@ def _build_context(provider, config: AppConfig) -> BuildContext:
         vector_store=SqliteVectorStore(provider=provider),
         module_member_store=SqliteModuleMemberRepository(provider=provider),
         app_config=config,
+        filter_adapter=SqliteFilterAdapter(),
     )
 
 

@@ -159,7 +159,7 @@ def _seed_tree_for_fastapi(db_path: Path) -> DocumentNode:
     Uses ``SqliteDocumentTreeStore.save_many`` directly — same write path as
     the production indexer — so we exercise the full read/write contract.
     """
-    from pydocs_mcp.db import build_connection_provider
+    from pydocs_mcp.storage.factories import build_connection_provider
     from pydocs_mcp.storage.sqlite import SqliteDocumentTreeStore
 
     method = DocumentNode(
