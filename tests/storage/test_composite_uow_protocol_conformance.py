@@ -19,7 +19,7 @@ from pydocs_mcp.storage.protocols import UnitOfWork
 
 
 class _FakeChild:
-    """A child UoW exposing all seven dispatch attrs eagerly (no
+    """A child UoW exposing all dispatch attrs eagerly (no
     ``__aenter__``-deferred binding) so ``CompositeUnitOfWork`` can
     build its dispatch map at construction time. Only used by the
     Protocol-conformance test below — production children are
@@ -32,6 +32,7 @@ class _FakeChild:
     trees = object()
     references = object()
     node_scores = object()
+    decisions = object()
     vectors = NullVectorStore()
     multi_vectors = NullMultiVectorStore()
 
@@ -72,6 +73,7 @@ def test_composite_uow_exposes_dispatch_attrs_at_the_class_level() -> None:
         "trees",
         "references",
         "node_scores",
+        "decisions",
         "vectors",
         "multi_vectors",
     ):

@@ -25,6 +25,7 @@ from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 if TYPE_CHECKING:
     from pydocs_mcp.storage.protocols import (
         ChunkStore,
+        DecisionStore,
         DocumentTreeStore,
         ModuleMemberStore,
         NodeScoreStore,
@@ -46,6 +47,7 @@ _DISPATCH_ATTRS = (
     "trees",
     "references",
     "node_scores",
+    "decisions",
     "vectors",
     "multi_vectors",
 )
@@ -236,6 +238,10 @@ class CompositeUnitOfWork:
     @property
     def node_scores(self) -> NodeScoreStore:
         return cast("NodeScoreStore", self._attr_map["node_scores"])
+
+    @property
+    def decisions(self) -> DecisionStore:
+        return cast("DecisionStore", self._attr_map["decisions"])
 
     @property
     def vectors(self) -> Any:

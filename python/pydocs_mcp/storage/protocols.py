@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.decision_record import DecisionRecord
     from pydocs_mcp.storage.node_reference import NodeReference
     from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 
@@ -203,12 +204,14 @@ class FilterAdapter(Protocol):
 class UnitOfWork(Protocol):
     """Atomic transaction scope + per-transaction repository accessor (spec §14.2).
 
-    Inside ``async with uow:`` the FIVE repository attributes are valid
-    and share one SQLite connection. Outside the context they raise
+    Inside ``async with uow:`` the repository attributes (``packages`` /
+    ``chunks`` / ``module_members`` / ``trees`` / ``references`` /
+    ``node_scores`` / ``decisions``) are valid and share one SQLite
+    connection. Outside the context they raise
     :class:`~pydocs_mcp.storage.errors.UnitOfWorkNotEnteredError`.
     Explicit ``commit()`` persists; safety-net ``rollback`` on exception
-    or no-commit. ``references`` is the 5th attribute (the cross-node
-    reference-graph store).
+    or no-commit. ``references`` is the cross-node reference-graph store;
+    ``decisions`` is the mined-decision store (spec §D8-§D10).
 
     Spec S15: ``vectors`` is ALWAYS present — the SQLite-only deployment
     exposes a :class:`~pydocs_mcp.storage.null_vector_store.NullVectorStore`,
@@ -240,6 +243,8 @@ class UnitOfWork(Protocol):
     def references(self) -> ReferenceStore: ...
     @property
     def node_scores(self) -> NodeScoreStore: ...
+    @property
+    def decisions(self) -> DecisionStore: ...
     # Untyped here to avoid a hard import of NullVectorStore at the
     # Protocol level (NullVectorStore is a concrete dataclass with no
     # @runtime_checkable Protocol behind it yet). The structural
@@ -485,6 +490,37 @@ class NodeScoreStore(Protocol):
     async def community_cohesion(self, package: str) -> dict[int, CommunityCohesion]:
         """Per-community size + intra/cross edge counts (one bounded SQL, §D17 block 5)."""
         ...
+
+    async def delete_for_package(
+        self,
+        package: str,
+        *,
+        uow: UnitOfWork | None = None,
+    ) -> None: ...
+
+    async def delete_all(self, *, uow: UnitOfWork | None = None) -> None: ...
+
+
+@runtime_checkable
+class DecisionStore(Protocol):
+    """Storage boundary for mined decisions (the ``decision_records`` table).
+
+    Holds :class:`~pydocs_mcp.storage.decision_record.DecisionRecord` rows
+    (spec §D8-§D10). ``upsert`` is insert-or-update-by-id: records with
+    ``id is None`` INSERT and their assigned rowids are returned; records with a
+    concrete ``id`` UPDATE that row (preserving ``created_at``) and the same id
+    is returned. ``list_for_package`` is the read path. All methods async;
+    SQLite I/O wraps ``asyncio.to_thread``.
+    """
+
+    async def upsert(
+        self,
+        records: Sequence[DecisionRecord],
+        *,
+        uow: UnitOfWork | None = None,
+    ) -> tuple[int, ...]: ...
+
+    async def list_for_package(self, package: str) -> tuple[DecisionRecord, ...]: ...
 
     async def delete_for_package(
         self,

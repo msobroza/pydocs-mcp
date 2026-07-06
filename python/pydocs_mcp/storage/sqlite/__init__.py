@@ -19,6 +19,10 @@ from pydocs_mcp.storage.sqlite.chunk_multi_vector_repository import (
     SqliteChunkMultiVectorRepository,
 )
 from pydocs_mcp.storage.sqlite.chunk_repository import SqliteChunkRepository
+from pydocs_mcp.storage.sqlite.decision_repository import (
+    SqliteDecisionRepository,
+    _row_to_decision_record,
+)
 from pydocs_mcp.storage.sqlite.document_tree_store import (
     SqliteDocumentTreeStore,
     _deserialize_tree_from_json,
@@ -67,6 +71,7 @@ __all__ = [
     "_PACKAGE_COLUMNS",
     "SqliteChunkMultiVectorRepository",
     "SqliteChunkRepository",
+    "SqliteDecisionRepository",
     "SqliteDocumentTreeStore",
     "SqliteFilterAdapter",
     "SqliteLexicalStore",
@@ -86,6 +91,7 @@ __all__ = [
     "_node_to_dict",
     "_package_to_row",
     "_resolve_filter",
+    "_row_to_decision_record",
     "_row_to_module_member",
     "_row_to_node_reference",
     "_row_to_node_score",
