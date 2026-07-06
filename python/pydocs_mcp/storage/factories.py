@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
+    from pydocs_mcp.application.symbol_source import SymbolSourceService
     from pydocs_mcp.retrieval.config import AppConfig
 
 
@@ -136,6 +137,35 @@ def build_sqlite_lookup_service(
         impact_max_depth=impact_cfg.max_depth,
         context_max_depth=context_cfg.max_depth,
         context_token_budget=context_cfg.token_budget,
+    )
+
+
+def build_sqlite_symbol_source_service(
+    db_path: Path,
+    config: AppConfig | None = None,
+) -> SymbolSourceService:
+    """Compose a wired ``SymbolSourceService`` from a SQLite DB path.
+
+    Sibling of ``build_sqlite_lookup_service``: the CLI and the MCP server
+    both build get_symbol(depth="source")'s backing service here so they
+    never drift on the ``max_lines`` line cap. The cap is a YAML setting
+    (``symbol_source.max_lines``), NOT an MCP param — thread it from
+    ``config`` when given, else fall back to the module-level
+    ``mcp_inputs._SYMBOL_SOURCE_MAX_LINES`` slot (populated by
+    ``configure_from_app_config`` at startup, or its shipped-default literal
+    for direct/test construction with no config).
+    """
+    from pydocs_mcp.application import mcp_inputs
+    from pydocs_mcp.application.symbol_source import SymbolSourceService
+
+    max_lines = (
+        config.symbol_source.max_lines
+        if config is not None
+        else mcp_inputs._SYMBOL_SOURCE_MAX_LINES
+    )
+    return SymbolSourceService(
+        uow_factory=build_sqlite_uow_factory(db_path),
+        max_lines=max_lines,
     )
 
 
