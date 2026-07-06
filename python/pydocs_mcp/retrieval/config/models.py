@@ -317,6 +317,90 @@ class OverviewConfig(BaseModel):
     max_communities: int = Field(10, ge=1, le=50)
 
 
+# Single source of truth for the default decision-mining source order (spec
+# §D8). Referenced by ``DecisionCaptureConfig.sources`` default_factory so the
+# literal tuple lives in exactly one place; YAML restates it for user clarity.
+_DEFAULT_DECISION_SOURCES = (
+    "adr_files",
+    "inline_markers",
+    "commit_messages",
+    "changelog",
+    "docs_prose",
+)
+
+
+class LlmStructuringConfig(BaseModel):
+    """Default-OFF LLM structuring gate for mined decisions (spec §D12).
+
+    When enabled, the ``LlmClient`` structures decision fields; the grounding
+    gate drops any field not traceable to verbatim evidence at or above
+    ``grounding_threshold``. Off by default — deterministic mining ships the
+    verbatim record with no LLM in the index path.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    grounding_threshold: float = Field(0.60, gt=0.0, le=1.0)
+    batch_size: int = Field(5, ge=1, le=20)
+
+
+class CommitMessagesConfig(BaseModel):
+    """Bounds for the ``commit_messages`` mining source (spec §D8).
+
+    ``max_commits`` caps the git-log window; ``timeout_seconds`` bounds the
+    subprocess so a slow/hung git never stalls indexing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_commits: int = Field(2000, ge=1)
+    timeout_seconds: float = Field(30.0, gt=0.0)
+
+
+class DocsProseConfig(BaseModel):
+    """Bounds for the ``docs_prose`` mining source (spec §D8)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_files: int = Field(10, ge=1, le=100)
+    max_kb_per_file: int = Field(50, ge=1)
+
+
+class InlineMarkersConfig(BaseModel):
+    """Context window for the ``inline_markers`` mining source (spec §D8).
+
+    ``context_lines`` bounds how many lines around a ``# WHY:`` / ``# DECISION:``
+    marker are captured as verbatim evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    context_lines: int = Field(20, ge=0, le=200)
+
+
+class DecisionCaptureConfig(BaseModel):
+    """Index-time decision-mining toggles (spec §D8).
+
+    Drives the ``capture_decisions`` ingestion stage: which deterministic
+    sources run, the merge/dedupe Jaccard threshold, per-source bounds, and the
+    default-off LLM structuring gate. Per CLAUDE.md §"MCP API surface vs YAML
+    configuration": all deployment-time knobs, NOT MCP tool params — the
+    six task-shaped tools stay fixed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    sources: list[str] = Field(default_factory=lambda: list(_DEFAULT_DECISION_SOURCES))
+    merge_jaccard: float = Field(0.85, gt=0.0, le=1.0)
+    inline_markers: InlineMarkersConfig = Field(default_factory=InlineMarkersConfig)
+    commit_messages: CommitMessagesConfig = Field(default_factory=CommitMessagesConfig)
+    docs_prose: DocsProseConfig = Field(default_factory=DocsProseConfig)
+    include_deps: bool = False
+    llm_structuring: LlmStructuringConfig = Field(default_factory=LlmStructuringConfig)
+
+
 # Single source of truth for the debounce bounds (CLAUDE.md §"Default
 # values: single source of truth"). Used both for the pydantic Field
 # default AND the cross-field validator's ceiling check below.

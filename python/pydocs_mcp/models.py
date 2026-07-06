@@ -105,6 +105,12 @@ class ChunkOrigin(StrEnum):
     MARKDOWN_SECTION = "markdown_section"
     NOTEBOOK_MARKDOWN_CELL = "notebook_markdown_cell"
     NOTEBOOK_CODE_CELL = "notebook_code_cell"
+    # Searchable projection of a mined `decision_records` row (spec §D9). The
+    # capture_decisions ingestion stage emits one chunk per merged decision so
+    # architectural rationale flows through the same hashing → embedding →
+    # retrieval machinery as code/doc chunks; chunks.decision_id backlinks the
+    # chunk to its source record.
+    DECISION_RECORD = "decision_record"
 
 
 class MemberKind(StrEnum):
