@@ -253,6 +253,31 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+class EnvelopeConfig(BaseModel):
+    """Freshness envelope on every MCP/CLI response (spec §D4).
+
+    ``head_check_ttl_seconds`` bounds how often the probe re-reads
+    ``.git/HEAD`` + ``index_metadata`` — 5s keeps a chatty agent session at
+    ~1 stat-burst per turn without ever serving minutes-stale warnings.
+    """
+
+    enabled: bool = True
+    head_check_ttl_seconds: float = Field(5.0, ge=0.0)
+
+
+class NextPointersConfig(BaseModel):
+    """Per-hit next-step pointer rendering toggle (spec §D5)."""
+
+    enabled: bool = True
+
+
+class OutputConfig(BaseModel):
+    """Response-convention toggles shared by every tool output."""
+
+    envelope: EnvelopeConfig = EnvelopeConfig()
+    next_pointers: NextPointersConfig = NextPointersConfig()
+
+
 # Single source of truth for the debounce bounds (CLAUDE.md §"Default
 # values: single source of truth"). Used both for the pydantic Field
 # default AND the cross-field validator's ceiling check below.
