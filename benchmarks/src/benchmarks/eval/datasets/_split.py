@@ -20,13 +20,16 @@ T = TypeVar("T")
 # ``__post_init__`` validation and the runner's argparse ``choices`` mirror
 # this set (``"all"`` is the backward-compat default — the whole filtered
 # corpus, no partition).
-VALID_SPLITS: tuple[str, ...] = ("all", "dev", "test", "small_test")
+VALID_SPLITS: tuple[str, ...] = ("all", "dev", "test", "small_test", "small_dev")
 
-# Default target size for the ``small_test`` split — a fixed-size, stratified
-# subsample of the held-out ``test`` tail for fast experiment iteration over
-# the expensive (dense / hybrid / LLM-tree) sweeps. Single source of truth:
-# the datasets' ``small_test_size`` field default and ``stratified_split``'s
-# parameter default both read this constant.
+# Default target size for BOTH small splits: ``small_test`` (fixed-size,
+# stratified subsample of the held-out ``test`` tail) and ``small_dev`` (its
+# mirror drawn from the ``dev`` head — the burn-free iteration slice; see
+# benchmarks/README.md §"Sweep protocol"). One constant on purpose: the
+# mirror only earns its keep if it is the SAME size as the slice it stands
+# in for. Single source of truth: the datasets' ``small_test_size`` field
+# default and ``stratified_split``'s parameter default both read this
+# constant.
 _DEFAULT_SMALL_TEST_SIZE = 30
 
 
@@ -85,6 +88,14 @@ def stratified_split(
     yields 50, not 30). Rows are taken from the HEAD of each stratum's
     already-shuffled ``test`` tail, so ``small_test`` is a deterministic
     subset of ``test``.
+
+    ``"small_dev"`` is the exact mirror of ``"small_test"`` drawn from the
+    ``dev`` partition instead of ``test``: the same Hamilton
+    largest-remainder apportionment, the same ``small_test_size`` target and
+    the same seed, taken from the head of each stratum's already-shuffled
+    ``dev`` head (``small_dev`` ⊂ ``dev``). It exists so tuning sweeps can
+    iterate without consuming test-derived data — see
+    ``benchmarks/README.md`` §"Sweep protocol".
     """
     validate_split(split)
     if split == "all":
@@ -103,17 +114,23 @@ def stratified_split(
     # future change in row arrival order). dev head + test tail are computed
     # the same way for every split so the shuffle draw sequence — and hence
     # dev/test membership — stays byte-identical to the original.
-    dev_rows: list[T] = []
+    dev_by_stratum: dict[str, list[T]] = {}
     test_by_stratum: dict[str, list[T]] = {}
     for stratum in sorted(groups):
         group = sorted(groups[stratum], key=sort_key)
         rng.shuffle(group)
         n_dev = round(dev_fraction * len(group))
-        dev_rows.extend(group[:n_dev])
+        dev_by_stratum[stratum] = group[:n_dev]
         test_by_stratum[stratum] = group[n_dev:]
 
+    # Flattening in sorted-stratum order reproduces the exact row order the
+    # previous flat ``dev_rows`` accumulator produced — dev/test membership
+    # AND order stay byte-identical after the small_dev addition, so every
+    # recorded baseline number keeps meaning the same slice.
     if split == "dev":
-        return dev_rows
+        return [row for stratum in sorted(dev_by_stratum) for row in dev_by_stratum[stratum]]
+    if split == "small_dev":
+        return _largest_remainder_subsample(dev_by_stratum, target=small_test_size)
     if split == "test":
         return [row for stratum in sorted(test_by_stratum) for row in test_by_stratum[stratum]]
     return _largest_remainder_subsample(test_by_stratum, target=small_test_size)
@@ -124,13 +141,13 @@ def _largest_remainder_subsample(
     *,
     target: int,
 ) -> list[T]:
-    """Proportional fixed-size subsample of the per-stratum ``test`` tails.
+    """Proportional fixed-size subsample of per-stratum row groups.
 
-    Implements the ``small_test`` apportionment described in
-    :func:`stratified_split`: ``min(target, |test|)`` rows split across
-    strata in proportion to each stratum's ``test`` size via Hamilton's
+    Implements the ``small_test`` / ``small_dev`` apportionment described in
+    :func:`stratified_split`: ``min(target, |rows|)`` rows split across
+    strata in proportion to each stratum's group size via Hamilton's
     largest-remainder method, taken from the head of each (already-shuffled)
-    tail. Deterministic — ties on the fractional remainder break by sorted
+    group. Deterministic — ties on the fractional remainder break by sorted
     stratum key.
     """
     total = sum(len(rows) for rows in test_by_stratum.values())

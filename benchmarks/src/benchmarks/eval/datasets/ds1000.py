@@ -242,9 +242,11 @@ class Ds1000Dataset:
     split: str = "all"
     dev_fraction: float = 0.2
     split_seed: int = 0
-    # ``small_test`` target size — a fixed-size stratified subsample of the
-    # held-out ``test`` tail for fast experiment iteration. Default from the
-    # shared split helper (single source of truth).
+    # Target size for BOTH small splits: ``small_test`` (fixed-size
+    # stratified subsample of the held-out ``test`` tail) and ``small_dev``
+    # (its mirror on the ``dev`` head — the burn-free iteration slice; see
+    # benchmarks/README.md §"Sweep protocol"). Default from the shared
+    # split helper (single source of truth).
     small_test_size: int = _DEFAULT_SMALL_TEST_SIZE
     cache_dir: Path = field(
         default_factory=lambda: Path("~/.cache/pydocs-mcp/ds1000").expanduser(),
