@@ -34,6 +34,7 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.llm_clients.model_budget import derive_max_tree_tokens
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.prompts import render_prompt
+from pydocs_mcp.retrieval.protocols import LlmClient
 from pydocs_mcp.retrieval.serialization import (
     BuildContext,
     step_registry,
@@ -47,7 +48,7 @@ from pydocs_mcp.retrieval.tree_prompt.doc_excerpt import (
 )
 from pydocs_mcp.retrieval.tree_prompt.pageindex_serializer import pageindex_with_qname
 from pydocs_mcp.retrieval.tree_prompt.tree_budget_fitter import fit_trees_to_budget
-from pydocs_mcp.storage.protocols import LlmClient, UnitOfWork
+from pydocs_mcp.storage.protocols import UnitOfWork
 
 log = logging.getLogger(__name__)
 

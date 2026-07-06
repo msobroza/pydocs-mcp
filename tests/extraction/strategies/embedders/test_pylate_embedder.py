@@ -12,7 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from pydocs_mcp.retrieval.config import LateInteractionConfig
-from pydocs_mcp.storage.protocols import MultiVectorEmbedder
+from pydocs_mcp.retrieval.protocols import MultiVectorEmbedder
 
 
 def _install_fake_pylate(monkeypatch):

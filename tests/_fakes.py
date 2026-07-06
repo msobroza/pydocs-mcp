@@ -41,7 +41,7 @@ from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
-from pydocs_mcp.storage.protocols import ChatMessage
+from pydocs_mcp.retrieval.protocols import ChatMessage
 
 
 class _NotEnteredProxy:

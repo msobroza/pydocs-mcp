@@ -4,7 +4,7 @@ Slots between :class:`FlattenStage` and :class:`ContentHashStage` in the
 shipped ``pipelines/ingestion.yaml`` (wired by Task 24): once flatten has
 materialized every per-tree :class:`~pydocs_mcp.models.Chunk`, this stage
 computes a vector for each in fixed-size batches via the configured
-:class:`~pydocs_mcp.storage.protocols.Embedder` and threads the result
+:class:`~pydocs_mcp.retrieval.protocols.Embedder` and threads the result
 back onto the chunk via ``dataclasses.replace(chunk, embedding=...)``.
 
 Idempotent — re-running the stage on a state whose chunks already carry
@@ -28,7 +28,7 @@ from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.models import Embedding
-from pydocs_mcp.storage.protocols import Embedder
+from pydocs_mcp.retrieval.protocols import Embedder
 
 _DEFAULT_BATCH_SIZE = 32
 

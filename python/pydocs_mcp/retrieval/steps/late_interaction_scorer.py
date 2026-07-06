@@ -23,8 +23,9 @@ from typing import Any
 
 from pydocs_mcp.models import ChunkList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
+from pydocs_mcp.retrieval.protocols import MultiVectorEmbedder
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
-from pydocs_mcp.storage.protocols import MultiVectorEmbedder, UnitOfWork
+from pydocs_mcp.storage.protocols import UnitOfWork
 
 # WHY: single source of truth for the late-interaction cutoff.
 # Referenced from the dataclass field default + to_dict (omit-when-default)

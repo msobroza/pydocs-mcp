@@ -8,7 +8,7 @@ import pytest
 from openai import RateLimitError
 
 from pydocs_mcp.retrieval.llm_clients.openai import OpenAiLlmClient
-from pydocs_mcp.storage.protocols import LlmClient
+from pydocs_mcp.retrieval.protocols import LlmClient
 
 
 def test_openai_client_satisfies_protocol() -> None:

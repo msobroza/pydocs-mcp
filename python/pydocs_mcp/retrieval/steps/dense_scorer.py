@@ -16,8 +16,8 @@ import numpy as np
 
 from pydocs_mcp.models import ChunkList, is_multi_vector
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
+from pydocs_mcp.retrieval.protocols import Embedder
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
-from pydocs_mcp.storage.protocols import Embedder
 
 
 def _cosine_sim(u: np.ndarray, v: np.ndarray) -> float:

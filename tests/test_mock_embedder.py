@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pydocs_mcp.storage.protocols import Embedder
+from pydocs_mcp.retrieval.protocols import Embedder
 from tests._fakes import MockEmbedder
 
 

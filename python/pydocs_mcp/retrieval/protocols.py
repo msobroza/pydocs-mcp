@@ -1,27 +1,34 @@
 """Retrieval-pipeline protocols — cross-cutting structural types.
 
-After the retrieval-pipeline refactor (Tasks 1-9), only two structural
-types remain here:
+Persistence contracts live in :mod:`pydocs_mcp.storage.protocols`; this
+module owns the contracts whose implementations and consumers are
+retrieval- / extraction-side:
 
 - :class:`ConnectionProvider` — the SQLite-connection acquisition contract
   threaded through ``BuildContext`` into the fetcher steps.
 - :class:`ResultFormatter` — the per-item render contract used by
   ``application/formatting`` and the token-budget step.
+- :class:`Embedder` / :class:`MultiVectorEmbedder` — embedding contracts
+  consumed by the dense retrieval steps and the ingestion embed stages.
+- :class:`ChatMessage` / :class:`LlmClient` — LLM chat contracts; concretes
+  live in :mod:`pydocs_mcp.retrieval.llm_clients`.
+- :class:`ResultFuser` — rank-fusion contract (``RRFResultFuser``).
 
 ``RetrieverStep`` (the nominal ABC every step subclasses) lives in
-:mod:`pydocs_mcp.retrieval.pipeline.base`. The legacy
-``PipelineStage`` / ``Retriever`` / ``ChunkRetriever`` /
-``ModuleMemberRetriever`` Protocols were deleted in Task 9 once the
-``retrievers/`` directory and ``pipeline_legacy.py`` went away.
+:mod:`pydocs_mcp.retrieval.pipeline.base`.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, runtime_checkable
 
-from pydocs_mcp.models import Chunk, ModuleMember
+from pydocs_mcp.models import Chunk, Embedding, ModuleMember
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 @runtime_checkable
@@ -68,3 +75,130 @@ class ResultFormatter(Protocol):
     """Renders one result (Chunk or ModuleMember) as a string payload."""
 
     def format(self, result: Chunk | ModuleMember) -> str: ...
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """One embedder serves both query-time and ingestion-time work.
+
+    Spec §5.2 — concrete classes return their natural shape:
+    single-vector embedders (FastEmbed, OpenAI, BGE) return ``np.ndarray``
+    (1D, float32); future ColBERT-style embedders return ``MultiVector``
+    (list of 1D ``np.ndarray``\\ s). Use
+    `pydocs_mcp.models.is_multi_vector(emb)` to disambiguate.
+    """
+
+    # Defaults make the attributes discoverable via hasattr(Embedder, ...)
+    # for structural / introspection tests. Real implementations override.
+    dim: int = 0
+    # Identifier string the embedder embedded with — written to
+    # ``Package.embedding_model`` by ``EmbedChunksStage`` so a YAML
+    # ``embedding.model_name`` swap triggers the re-embed sweep in
+    # :meth:`IndexingService.invalidate_stale_embeddings`.
+    model_name: str = ""
+
+    async def embed_query(self, text: str) -> Embedding: ...
+
+    async def embed_chunks(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[Embedding, ...]: ...
+
+
+@runtime_checkable
+class MultiVectorEmbedder(Protocol):
+    """Late-interaction (ColBERT-style) embedder: one vector PER TOKEN.
+
+    Distinct from :class:`Embedder` (single pooled vector per text).
+    ``embed_query`` / ``embed_chunks`` each return a
+    ``MultiVector = list[np.ndarray]`` of length ``n_tokens`` — every
+    element is a 1-D float32 ``np.ndarray`` of length ``dim``. The outer
+    container is a Python ``list`` (NOT a stacked 2-D array) because
+    :func:`pydocs_mcp.models.is_multi_vector` disambiguates the
+    ``Embedding`` union via ``isinstance(emb, list)``.
+
+    Implementations MUST L2-normalize each token-vector before returning
+    so MaxSim's downstream dot-product IS the cosine — no per-query
+    renormalization in ``_maxsim`` (spec Decision C).
+    """
+
+    dim: int
+    model_name: str
+
+    async def embed_query(self, text: str) -> list[np.ndarray]: ...
+
+    async def embed_chunks(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[list[np.ndarray], ...]: ...
+
+
+class ChatMessage(TypedDict):
+    """One message in an LLM chat-completion conversation.
+
+    Mirrors the OpenAI / Anthropic / common LLM API shape: role +
+    content. Used by LlmClient.chat() / chat_sync() as input.
+    """
+
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
+@runtime_checkable
+class LlmClient(Protocol):
+    """LLM chat-completion client.
+
+    Exposes BOTH async ``chat()`` and sync ``chat_sync()`` — LLM calls
+    surface in more contexts than embedding calls (the MCP server is
+    async, but the CLI debug path, test helpers, and notebooks need a
+    sync surface).
+
+    Implementations live under
+    ``python/pydocs_mcp/retrieval/llm_clients/``. The factory
+    ``build_llm_client(cfg)`` dispatches on ``cfg.provider`` to the
+    right concrete (OpenAiLlmClient for v1; SOLID open/closed for
+    future providers). Protocol and concretes are both retrieval-owned
+    because the only consumer today is LlmTreeReasoningStep; if
+    extraction-time LLM use lands, both can be lifted to a neutral
+    location together.
+    """
+
+    model_name: str
+
+    async def chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        response_format: Literal["text", "json_object"] = "text",
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Async chat completion. Returns the assistant's response text."""
+        ...
+
+    def chat_sync(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        response_format: Literal["text", "json_object"] = "text",
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Sync chat completion. Same contract as ``chat()``."""
+        ...
+
+
+@runtime_checkable
+class ResultFuser(Protocol):
+    """Combines N ranked Chunk lists into one fused ranking.
+
+    Spec §5.2. Implementations: RRFResultFuser (reciprocal-rank fusion).
+    Future: WeightedSumResultFuser, DistributionBasedResultFuser.
+    """
+
+    async def fuse(
+        self,
+        ranked_lists: Sequence[tuple[Chunk, ...]],
+        *,
+        limit: int,
+    ) -> tuple[Chunk, ...]: ...

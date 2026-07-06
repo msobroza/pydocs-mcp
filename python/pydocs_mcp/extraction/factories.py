@@ -36,7 +36,8 @@ from pydocs_mcp.extraction.serialization import stage_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.storage.protocols import Embedder, LlmClient, UnitOfWork
+    from pydocs_mcp.retrieval.protocols import Embedder, LlmClient
+    from pydocs_mcp.storage.protocols import UnitOfWork
 
 
 @cache

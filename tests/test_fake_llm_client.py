@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.storage.protocols import LlmClient
+from pydocs_mcp.retrieval.protocols import LlmClient
 from tests._fakes import FakeLlmClient
 
 

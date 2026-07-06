@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pydocs_mcp.storage.protocols import Embedder, ResultFuser
+from pydocs_mcp.retrieval.protocols import Embedder, ResultFuser
 
 
 def test_embedder_protocol_exposes_required_attrs() -> None:

@@ -72,9 +72,7 @@ async def delete_rows(
         raise ValueError("delete requires an explicit filter")
     where, params = translator.adapt(tree)
     async with _maybe_acquire(provider) as conn:
-        cursor = await asyncio.to_thread(
-            conn.execute, f"DELETE FROM {table} WHERE {where}", params
-        )
+        cursor = await asyncio.to_thread(conn.execute, f"DELETE FROM {table} WHERE {where}", params)
         return cursor.rowcount
 
 

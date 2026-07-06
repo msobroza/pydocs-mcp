@@ -121,10 +121,7 @@ def test_reference_and_node_score_stores_have_own_modules() -> None:
     from pydocs_mcp.storage.sqlite import node_score_repository, reference_store
 
     assert sqlite_pkg.SqliteReferenceStore is reference_store.SqliteReferenceStore
-    assert (
-        sqlite_pkg.SqliteNodeScoreRepository
-        is node_score_repository.SqliteNodeScoreRepository
-    )
+    assert sqlite_pkg.SqliteNodeScoreRepository is node_score_repository.SqliteNodeScoreRepository
 
 
 def test_uow_module_owns_the_unit_of_work() -> None:
