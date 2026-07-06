@@ -43,6 +43,34 @@ class RetrievedItem:
     chunk_id: int | None = None
 
 
+def single_blob_items(
+    text: str,
+    *,
+    source_path: str,
+    qualified_name: str | None,
+) -> tuple[RetrievedItem, ...]:
+    """One rank-1 ``RetrievedItem`` from a single concatenated doc blob.
+
+    Context7 / Neuledge return one text body per query rather than ranked
+    chunks; both adapters (and any future hosted-docs comparator) share
+    this emission, including the empty-response → ``()`` case.
+
+    Example::
+
+        return single_blob_items(text, source_path=lib_id, qualified_name=name)
+    """
+    if not text:
+        return ()
+    return (
+        RetrievedItem(
+            rank=1,
+            text=text,
+            source_path=source_path,
+            qualified_name=qualified_name,
+        ),
+    )
+
+
 @runtime_checkable
 class System(Protocol):
     name: str
@@ -138,4 +166,5 @@ __all__ = [
     "IndexesDependencies",
     "RetrievedItem",
     "System",
+    "single_blob_items",
 ]

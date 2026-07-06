@@ -19,6 +19,7 @@ from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import _register_chunker
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _FENCED_RE,
+    _code_example_node,
     _content_hash,
     _docstring_summary,
     _module_from_doc_path,
@@ -183,26 +184,15 @@ def _extract_md_fenced_examples(
     last = 0
     for i, m in enumerate(_FENCED_RE.finditer(raw_text), start=1):
         cleaned_parts.append(raw_text[last : m.start()])
-        lang = (m.group("lang") or "").strip()
-        code = m.group("body")
-        qname = f"{parent_qname}.__example_{i}__"
         examples.append(
-            DocumentNode(
-                node_id=qname,
-                qualified_name=qname,
-                title=f"example {i}",
-                kind=NodeKind.CODE_EXAMPLE,
-                source_path=rel,
+            _code_example_node(
+                m.group("body"),
+                (m.group("lang") or "").strip(),
+                i,
+                parent_qname,
+                rel,
                 start_line=start_line,
                 end_line=end_line,
-                text=code,
-                content_hash=_content_hash(
-                    code,
-                    NodeKind.CODE_EXAMPLE,
-                    f"example {i}",
-                ),
-                extra_metadata={"language": lang},
-                parent_id=parent_qname,
             )
         )
         last = m.end()

@@ -28,8 +28,11 @@ from ..serialization import system_registry
 from .base_system import RetrievedItem
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+    from pydocs_mcp.storage.protocols import UnitOfWork
 
     from ..gold_resolver import GoldResolver
 
@@ -62,6 +65,12 @@ class PydocsMcpSystem:
     # noise and the dominant ingestion cost. Default ``True`` keeps direct /
     # test construction production-shaped.
     index_dependencies: bool = True
+    # WHY: preset-pinned variants set this; ``index()`` reloads AppConfig
+    # from it (via ``_preset_override``) regardless of the YAML the runner
+    # pinned for the sweep leg — a variant is defined BY its preset, so
+    # running it against any other YAML would defeat the comparison.
+    # ``None`` = use the runner's config unchanged (the base system).
+    _config_path: Path | None = None
     _db_path: Path | None = field(default=None, init=False, repr=False)
     _pipeline: CodeRetrieverPipeline | None = field(
         default=None,
@@ -85,8 +94,13 @@ class PydocsMcpSystem:
         # ``pydocs_mcp.retrieval`` chain when only ``search()`` callers
         # need it.
         from pydocs_mcp.db import open_index_database
-        from pydocs_mcp.retrieval.config import build_chunk_pipeline_from_config
-        from pydocs_mcp.retrieval.factories import build_retrieval_context
+
+        # CRITICAL ordering: apply the preset override BEFORE
+        # ``_bench_cache.make_key(corpus_dir, config)`` below. The tree
+        # variants are defined BY the preset they load; keying the cache on
+        # the runner's config instead would let the variants silently reuse
+        # each other's indexed DBs (wrong-results bug).
+        config = self._preset_override(config)
 
         # WHY: a second ``index()`` call without an intervening ``teardown()``
         # would orphan the prior tmp SQLite (+ WAL/SHM) once ``_db_path`` is
@@ -122,15 +136,9 @@ class PydocsMcpSystem:
                 self._db_path = _bench_cache.commit(key, build_dir)
                 self._db_is_cached = True
         else:
-            # WHY: ``mkstemp`` returns an open fd we close immediately because
-            # ``open_index_database`` will reopen the path. We own the lifecycle
-            # and remove it in ``teardown``.
-            fd, name = tempfile.mkstemp(suffix=".sqlite")
-            os.close(fd)
-            self._db_path = Path(name)
+            self._db_path = self._create_tmp_db()
             self._db_is_cached = False
             self._was_cache_hit = False
-            open_index_database(self._db_path).close()
             await self._do_index(corpus_dir, config)
 
         # WHY: release the PREVIOUS needle's query-time pipeline (which holds
@@ -142,15 +150,95 @@ class PydocsMcpSystem:
         # No-op for CPU embedders.
         self._pipeline = None
         gc.collect()
+        self._pipeline = self._build_search_pipeline(config)
+
+    def _preset_override(self, config: AppConfig) -> AppConfig:
+        """Swap in this variant's pinned preset YAML, carrying the runner's
+        ``--gpu`` device stamp through the reload (the preset dictates the
+        pipeline, not the embedder execution device). Identity when no
+        preset is pinned (the base system)."""
+        if self._config_path is None:
+            return config
+        from pydocs_mcp.retrieval.config import AppConfig
+
+        return AppConfig.load(explicit_path=self._config_path).with_device(
+            gpu=(config.embedding.device == "cuda"),
+        )
+
+    def _create_tmp_db(self) -> Path:
+        """A fresh empty SQLite for one uncached ``index()`` call.
+
+        WHY: ``mkstemp`` returns an open fd we close immediately because
+        ``open_index_database`` will reopen the path. We own the lifecycle
+        and remove it in ``teardown``.
+        """
+        from pydocs_mcp.db import open_index_database
+
+        fd, name = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        path = Path(name)
+        open_index_database(path).close()
+        return path
+
+    def _build_write_factory(self, config: AppConfig) -> Callable[[], UnitOfWork]:
+        """Composite write-path factory for the store at ``self._db_path``.
+
+        WHY (#64): route ingestion through the SAME write path production
+        uses. ``build_search_backend(...).write_uow_children()`` yields the
+        SQLite + TurboQuant (+ optional fast-plaid) child UoW factories; the
+        composite uow_factory makes ``uow.vectors`` a real TurboQuant store
+        so dense embeddings persist to the ``.tq`` sidecar. A SQLite-only
+        factory would leave ``uow.vectors`` a silent ``NullVectorStore``,
+        dropping every embedding and silently degrading dense/hybrid/LI
+        benchmark configs to BM25. Single canonical home for this rationale
+        — the oracle subclass reuses the hook instead of restating it.
+        """
+        from pydocs_mcp.storage.factories import build_composite_uow_factory
+        from pydocs_mcp.storage.search_backend import build_search_backend
+
+        backend = build_search_backend(config, self._db_path)
+        return build_composite_uow_factory(backend.write_uow_children())
+
+    async def _rebuild_fts(self) -> None:
+        """WHY: the bulk-insert path defers the FTS5 content-backed rebuild
+        — without this call ``chunks_fts MATCH ?`` returns zero rows even
+        though ``chunks`` is populated (same as ``__main__.py`` does at the
+        end of every index run)."""
+        from pydocs_mcp.storage.factories import build_connection_provider
+        from pydocs_mcp.storage.sqlite import SqliteChunkRepository
+
+        chunk_repo = SqliteChunkRepository(
+            provider=build_connection_provider(self._db_path),
+        )
+        await chunk_repo.rebuild_index()
+
+    def _build_search_pipeline(self, config: AppConfig) -> CodeRetrieverPipeline:
+        from pydocs_mcp.retrieval.config import build_chunk_pipeline_from_config
+        from pydocs_mcp.retrieval.factories import build_retrieval_context
+
         context = build_retrieval_context(self._db_path, config)
-        self._pipeline = build_chunk_pipeline_from_config(config, context)
+        return build_chunk_pipeline_from_config(config, context)
 
     async def _do_index(self, corpus_dir: Path, config: AppConfig) -> None:
         """Index ``corpus_dir`` into the SQLite at ``self._db_path`` (already
-        created/empty). Builds the ingestion pipeline + embedder, runs
-        ProjectIndexer, rebuilds the FTS index. No tmp-file or pipeline
-        lifecycle here — the caller owns ``self._db_path`` and the search
-        pipeline."""
+        created/empty): composite write factory → populate → FTS rebuild.
+        No tmp-file or search-pipeline lifecycle here — the caller owns
+        ``self._db_path`` and the pipeline."""
+        uow_factory = self._build_write_factory(config)
+        await self._populate(corpus_dir, config, uow_factory)
+        await self._rebuild_fts()
+
+    async def _populate(
+        self,
+        corpus_dir: Path,
+        config: AppConfig,
+        uow_factory: Callable[[], UnitOfWork],
+    ) -> None:
+        """Extract + embed ``corpus_dir`` into the store behind
+        ``uow_factory``. Subclasses override ONLY this to swap the
+        population strategy (the oracle writes HF rows directly); the
+        tmp-DB / FTS-rebuild / search-pipeline lifecycle stays with the
+        caller."""
         from pydocs_mcp.application import ProjectIndexer
         from pydocs_mcp.application.indexing_service import IndexingService
         from pydocs_mcp.storage.factories import build_connection_provider
@@ -160,20 +248,8 @@ class PydocsMcpSystem:
             StaticDependencyResolver,
             build_ingestion_pipeline,
         )
-        from pydocs_mcp.storage.factories import build_composite_uow_factory
-        from pydocs_mcp.storage.search_backend import build_search_backend
-        from pydocs_mcp.storage.sqlite import SqliteChunkRepository
+        from pydocs_mcp.extraction.strategies.embedders import build_embedder
 
-        # WHY (#64): route ingestion through the SAME write path production
-        # uses. ``build_search_backend(...).write_uow_children()`` yields the
-        # SQLite + TurboQuant (+ optional fast-plaid) child UoW factories; the
-        # composite uow_factory makes ``uow.vectors`` a real TurboQuant store so
-        # ``EmbedChunksStage`` persists the dense ``.tq`` sidecar. The previous
-        # SQLite-only factory left ``uow.vectors`` a silent ``NullVectorStore``,
-        # dropping every embedding and silently degrading dense/hybrid/LI
-        # benchmark configs to BM25.
-        backend = build_search_backend(config, self._db_path)
-        uow_factory = build_composite_uow_factory(backend.write_uow_children())
         indexing_service = IndexingService(
             uow_factory=uow_factory,
             node_scores_enabled=config.reference_graph.node_scores.enabled,
@@ -181,19 +257,16 @@ class PydocsMcpSystem:
 
         # EmbedChunksStage is wired into the shipped ingestion pipeline by
         # default; build the embedder once here so the benchmark sweep
-        # actually computes vectors during ingestion. This mirrors the
-        # production indexing wiring in ``__main__.py`` — both construct the
-        # embedder via ``build_embedder(config.embedding)`` and build the
-        # write UoW from ``build_search_backend(...).write_uow_children()``.
-        # The benchmarks workflow installs ``benchmarks[all]`` +
-        # pydocs-mcp[fastembed] so the FastEmbed import path succeeds.
-        from pydocs_mcp.extraction.strategies.embedders import build_embedder
-
+        # actually computes vectors during ingestion. Mirrors the production
+        # indexing wiring in ``__main__.py`` — both construct the embedder
+        # via ``build_embedder(config.embedding)`` and build the write UoW
+        # from ``build_search_backend(...).write_uow_children()``.
         embedder = build_embedder(config.embedding)
-        # WHY: LoadExistingChunkHashesStage needs uow_factory to read existing
-        # content_hashes; AssignChunkContentHashStage needs pipeline_hash to
-        # invalidate every chunk's hash when the embedder or pipeline changes.
-        # Both are passed through BuildContext to the stage from_dict methods.
+        # WHY: LoadExistingChunkHashesStage needs uow_factory to read
+        # existing content_hashes; AssignChunkContentHashStage needs
+        # pipeline_hash to invalidate every chunk's hash when the embedder
+        # or pipeline changes. Both are passed through BuildContext to the
+        # stage from_dict methods.
         ingestion_pipeline = build_ingestion_pipeline(
             config,
             embedder=embedder,
@@ -218,22 +291,14 @@ class PydocsMcpSystem:
             include_dependencies=self.index_dependencies,
             workers=1,
         )
-        # WHY: bulk-insert path defers the FTS5 content-backed rebuild —
-        # without this call ``chunks_fts MATCH ?`` returns zero rows even
-        # though ``chunks`` is populated (same as ``__main__.py`` does at
-        # the end of every index run).
-        chunk_repo = SqliteChunkRepository(
-            provider=build_connection_provider(self._db_path),
-        )
-        await chunk_repo.rebuild_index()
 
-        # WHY: release this needle's INGESTION embedder before the next needle
-        # builds its own. The torch (sentence_transformers) embedder holds CUDA
-        # memory that only frees when the model is dropped + the cache emptied;
-        # without an explicit close + collect, every needle leaks device memory
-        # and the GPU OOMs partway through a sweep. Guard on
-        # ``hasattr(..., "close")`` so this is a strict no-op for FastEmbed /
-        # OpenAI / PyLate embedders (which hold no releasable CUDA memory here).
+        # WHY: release this needle's INGESTION embedder before the next
+        # needle builds its own. The torch (sentence_transformers) embedder
+        # holds CUDA memory that only frees when the model is dropped + the
+        # cache emptied; without an explicit close + collect, every needle
+        # leaks device memory and the GPU OOMs partway through a sweep.
+        # Guard on ``hasattr(..., "close")`` so this is a strict no-op for
+        # FastEmbed / OpenAI / PyLate embedders.
         if hasattr(embedder, "close"):
             embedder.close()
         del embedder
@@ -400,33 +465,20 @@ class PydocsTreeOnlySystem(PydocsMcpSystem):
 
     Loads the shipped ``tree_only.yaml`` preset (no BM25, no dense, no RRF
     fusion — purely the LLM-driven DocumentNode-tree walk) regardless of the
-    YAML the runner pinned for the sweep leg. Everything else (search /
-    teardown / gold_resolver) is inherited from ``PydocsMcpSystem``.
+    YAML the runner pinned for the sweep leg. Everything else (index /
+    search / teardown / gold_resolver) is inherited from ``PydocsMcpSystem``
+    — the pinned ``_config_path`` routes through the parent's
+    ``_preset_override`` hook.
 
     WHY override the runner's config: the runner pairs ``(system × cfg_path)``
     cartesianly, but this variant is defined BY the preset it loads; running
-    it against any other YAML would defeat the comparison. ``index()`` below
-    reloads ``AppConfig`` from ``_config_path`` and drops the runner's
-    ``config`` arg.
+    it against any other YAML would defeat the comparison.
     """
 
     name: str = "pydocs-mcp-tree-only"
     _config_path: Path = field(
         default_factory=lambda: _pipelines_dir() / "tree_only.yaml",
     )
-
-    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
-        from pydocs_mcp.retrieval.config import AppConfig
-
-        # WHY: ignore the runner's ``config`` and load our preset instead —
-        # see the class docstring. Same ``index()`` body as the parent
-        # otherwise (delegated by super()). Carry the runner's --gpu device
-        # through, though: the preset dictates the pipeline, not the embedder
-        # execution device, so a reload would otherwise drop the GPU stamp.
-        override = AppConfig.load(explicit_path=self._config_path).with_device(
-            gpu=(config.embedding.device == "cuda"),
-        )
-        await super().index(corpus_dir, override)
 
 
 @system_registry.register("pydocs-mcp-tree-parallel")
@@ -444,16 +496,6 @@ class PydocsTreeParallelSystem(PydocsMcpSystem):
     _config_path: Path = field(
         default_factory=lambda: _pipelines_dir() / "chunk_search_with_tree_reasoning_parallel.yaml",
     )
-
-    async def index(self, corpus_dir: Path, config: AppConfig) -> None:
-        from pydocs_mcp.retrieval.config import AppConfig
-
-        # Carry the runner's --gpu device through the preset reload — see the
-        # ``PydocsTreeOnlySystem.index`` rationale.
-        override = AppConfig.load(explicit_path=self._config_path).with_device(
-            gpu=(config.embedding.device == "cuda"),
-        )
-        await super().index(corpus_dir, override)
 
 
 def _first_str(*candidates: object) -> str | None:

@@ -87,3 +87,31 @@ async def test_late_interaction_extra_missing_raises_actionable(monkeypatch, tmp
         async with uow:
             pass
     assert "pydocs-mcp[late-interaction]" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_guards_raise_with_bare_op_label(tmp_path) -> None:
+    """Not-entered guards carry a bare ``Class.method`` attr_name — the
+    error type templates it into its own message, so a sentence here
+    would render redundantly ('... called outside async with' accessed
+    outside `async with uow:` ...)."""
+    from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+
+    uow = FastPlaidUnitOfWork(
+        sidecar_path=tmp_path / "x.plaid",
+        pipeline_hash="h",
+        provider=build_connection_provider(tmp_path / "x.db"),
+        device="cpu",
+    )
+    with pytest.raises(UnitOfWorkNotEnteredError) as exc_info:
+        await uow.add_vectors([1], [])
+    assert exc_info.value.attr_name == "FastPlaidUnitOfWork.add_vectors"
+    with pytest.raises(UnitOfWorkNotEnteredError) as exc_info:
+        await uow.remove_vectors([1])
+    assert exc_info.value.attr_name == "FastPlaidUnitOfWork.remove_vectors"
+    with pytest.raises(UnitOfWorkNotEnteredError) as exc_info:
+        await uow.clear_all()
+    assert exc_info.value.attr_name == "FastPlaidUnitOfWork.clear_all"
+    with pytest.raises(UnitOfWorkNotEnteredError) as exc_info:
+        await uow.score([], subset_chunk_ids=[1], top_k=5)
+    assert exc_info.value.attr_name == "FastPlaidUnitOfWork.score"

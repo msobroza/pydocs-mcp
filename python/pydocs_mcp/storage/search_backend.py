@@ -31,7 +31,7 @@ from pydocs_mcp.storage.protocols import (
     TextSearchable,
     VectorSearchable,
 )
-from pydocs_mcp.storage.sqlite import SqliteReferenceStore, SqliteVectorStore
+from pydocs_mcp.storage.sqlite import SqliteLexicalStore, SqliteReferenceStore
 from pydocs_mcp.storage.turboquant_store import (
     CandidateIdResolver,
     ChunkHydrator,
@@ -163,7 +163,7 @@ class SqliteCompositeBackend:
     tq_path: Path
 
     def lexical(self) -> TextSearchable:
-        return SqliteVectorStore(provider=build_connection_provider(self.db_path))
+        return SqliteLexicalStore(provider=build_connection_provider(self.db_path))
 
     def dense(self) -> VectorSearchable:
         embed = self.config.embedding
