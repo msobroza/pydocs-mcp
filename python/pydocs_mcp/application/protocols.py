@@ -1,4 +1,4 @@
-"""Application-layer Protocols — extraction + dependency resolution.
+"""Application-layer Protocols — extraction, dependency resolution + navigation.
 
 ChunkExtractor returns an :class:`ExtractionResult` so the extraction
 pipeline can surface chunks, the ``DocumentNode`` forest, and the
@@ -8,6 +8,14 @@ Strategy-based implementations live in ``extraction/strategies/`` and
 ``ProjectIndexer`` backend-agnostic. A dataclass is used (instead of a
 ``tuple[..., ..., ...]``) so adding future fields (e.g. extraction
 stats) doesn't break every destructuring call site.
+
+:class:`TreeNavigator` / :class:`ReferenceNavigator` capture exactly the
+surface :class:`~pydocs_mcp.application.lookup_service.LookupService`
+consumes from its two collaborators. Positional-only markers (PEP 570
+``/``) keep parameter-NAME differences between the real impls
+(``TreeService`` / ``ReferenceService``) and the Null impls out of the
+structural-conformance check; keyword-only names (``kind`` /
+``max_depth`` / ``limit``) match the concrete impls exactly.
 """
 
 from __future__ import annotations
@@ -21,9 +29,11 @@ from pydocs_mcp.models import Chunk, ModuleMember, Package
 
 if TYPE_CHECKING:
     # Imported only for typing — keeps the application layer from taking
-    # a runtime dependency on storage value objects. ``NodeReference``
-    # is emitted by a future ``ReferenceExtractionStage`` and persisted
-    # by ``ReferenceStore`` (spec §4.2).
+    # a runtime dependency on storage value objects (``NodeReference``)
+    # and avoids a runtime import cycle with the sibling service modules
+    # that themselves import these Protocols' consumers.
+    from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.node_reference import NodeReference
 
 
@@ -88,3 +98,44 @@ class MemberExtractor(Protocol):
         self,
         dep_name: str,
     ) -> tuple[ModuleMember, ...]: ...
+
+
+@runtime_checkable
+class TreeNavigator(Protocol):
+    """Read-side tree navigation consumed by ``LookupService``.
+
+    Conformers: ``TreeService`` (real) and ``NullTreeService`` (raises /
+    returns-False stand-in for deployments without a tree index).
+    """
+
+    async def get_tree(self, package: str, module: str, /) -> DocumentNode | None: ...
+
+    async def exists(self, package: str, module: str, /) -> bool: ...
+
+
+@runtime_checkable
+class ReferenceNavigator(Protocol):
+    """Read-side reference-graph navigation consumed by ``LookupService``.
+
+    Conformers: ``ReferenceService`` (real) and ``NullReferenceService``
+    (raises ``ServiceUnavailableError`` when the reference graph is not
+    captured). ``package`` is informational on every method — storage is
+    cross-package by design; it stays in the signature for rendering
+    context and call-site symmetry.
+    """
+
+    async def callers(self, package: str, node_qname: str, /) -> tuple[NodeReference, ...]: ...
+
+    async def callees(self, package: str, node_qname: str, /) -> tuple[NodeReference, ...]: ...
+
+    async def find_by_name(
+        self, name: str, /, *, kind: ReferenceKind | None = None
+    ) -> tuple[NodeReference, ...]: ...
+
+    async def impact(
+        self, package: str, qname: str, /, *, max_depth: int, limit: int
+    ) -> tuple[ImpactNode, ...]: ...
+
+    async def context(
+        self, package: str, qname: str, /, *, max_depth: int, limit: int
+    ) -> tuple[ContextNode, ...]: ...

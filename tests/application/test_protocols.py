@@ -108,3 +108,30 @@ def test_extraction_result_accepts_node_references() -> None:
         references=(ref,),
     )
     assert result.references == (ref,)
+
+
+# ---------- navigation Protocols (LookupService collaborators) ----------
+#
+# runtime_checkable isinstance verifies method PRESENCE; mypy (a CI gate)
+# verifies the signatures. Both real impls and Null impls must conform to
+# one contract so a drift is caught at CI, not at MCP runtime.
+
+
+def test_tree_navigator_satisfied_by_real_and_null_impls() -> None:
+    from pydocs_mcp.application.null_services import NullTreeService
+    from pydocs_mcp.application.protocols import TreeNavigator
+    from pydocs_mcp.application.tree_service import TreeService
+    from tests._fakes import make_fake_uow_factory
+
+    assert isinstance(TreeService(uow_factory=make_fake_uow_factory()), TreeNavigator)
+    assert isinstance(NullTreeService(), TreeNavigator)
+
+
+def test_reference_navigator_satisfied_by_real_and_null_impls() -> None:
+    from pydocs_mcp.application.null_services import NullReferenceService
+    from pydocs_mcp.application.protocols import ReferenceNavigator
+    from pydocs_mcp.application.reference_service import ReferenceService
+    from tests._fakes import make_fake_uow_factory
+
+    assert isinstance(ReferenceService(uow_factory=make_fake_uow_factory()), ReferenceNavigator)
+    assert isinstance(NullReferenceService(), ReferenceNavigator)

@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.formatting import (
     format_context,
@@ -54,11 +54,11 @@ from pydocs_mcp.retrieval.config import (
 )
 
 if TYPE_CHECKING:
-    # ReferenceService is the typing target for _REF_GETTERS; concrete
-    # tree services (TreeService / NullTreeService) and ref services
-    # (ReferenceService / NullReferenceService) flow in via ``Any`` on
-    # the LookupService fields — duck-typed Protocol substitution.
-    from pydocs_mcp.application.reference_service import ReferenceService
+    # Structural typing targets for the two collaborator fields and the
+    # ``_REF_GETTERS`` dispatch table: TreeService / NullTreeService and
+    # ReferenceService / NullReferenceService all conform to the
+    # navigation Protocols in ``application.protocols``.
+    from pydocs_mcp.application.protocols import ReferenceNavigator, TreeNavigator
     from pydocs_mcp.storage.node_reference import NodeReference
 
 
@@ -179,7 +179,7 @@ class LookupTarget:
 _REF_GETTERS: dict[
     str,
     Callable[
-        [ReferenceService, str, str],
+        [ReferenceNavigator, str, str],
         Awaitable[tuple[NodeReference, ...]],
     ],
 ] = {
@@ -216,8 +216,8 @@ class LookupService:
     """
 
     package_lookup: PackageLookup
-    tree_svc: Any  # TreeService | NullTreeService — structural Protocol
-    ref_svc: Any  # ReferenceService | NullReferenceService
+    tree_svc: TreeNavigator
+    ref_svc: ReferenceNavigator
     # Reverse-traversal depth for ``show="impact"``. NOT an MCP param — the
     # composition root threads ``reference_graph.impact.max_depth`` here; the
     # default keeps direct/test construction working (single source of truth:
