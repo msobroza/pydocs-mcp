@@ -67,7 +67,31 @@ _TRUNCATION_MIN_REMAINDER = 100
 # via MCP or the CLI, so the ResponseEnvelope resolves tokens at the router
 # layer. Token payloads are dotted names / show-mode words (no ':' or ']]'),
 # which keeps the grammar regex-parsable.
-_POINTER_RE = re.compile(r"\[\[next:(lookup|lookup-show):([^:\]]+)(?::([^:\]]+))?\]\]")
+_POINTER_RE = re.compile(r"\[\[next:(lookup|lookup-show|search):([^:\]]+)(?::([^:\]]+))?\]\]")
+
+# show-mode → (mcp renderer, cli renderer). context maps to a one-element
+# get_context batch; tree/default stay on get_symbol via depth.
+_SHOW_TO_TOOL: dict[str, tuple[str, str]] = {
+    "callers": (
+        'get_references(target="{t}", direction="callers")',
+        "pydocs-mcp refs {t} --direction callers",
+    ),
+    "callees": (
+        'get_references(target="{t}", direction="callees")',
+        "pydocs-mcp refs {t} --direction callees",
+    ),
+    "inherits": (
+        'get_references(target="{t}", direction="inherits")',
+        "pydocs-mcp refs {t} --direction inherits",
+    ),
+    "impact": (
+        'get_references(target="{t}", direction="impact")',
+        "pydocs-mcp refs {t} --direction impact",
+    ),
+    "context": ('get_context(targets=["{t}"])', "pydocs-mcp context {t}"),
+    "tree": ('get_symbol(target="{t}", depth="tree")', "pydocs-mcp symbol {t} --depth tree"),
+    "source": ('get_symbol(target="{t}", depth="source")', "pydocs-mcp symbol {t} --depth source"),
+}
 
 
 def pointer_token(action: str, target: str, show: str = "") -> str:
@@ -79,13 +103,17 @@ def pointer_token(action: str, target: str, show: str = "") -> str:
 
 def _render_pointer(match: re.Match[str], surface: str) -> str:
     action, target, show = match.group(1), match.group(2), match.group(3)
-    if action == "lookup-show":
+    if action == "search":
         if surface == "cli":
-            return f"→ pydocs-mcp lookup {target} --show {show}"
-        return f'→ lookup(target="{target}", show="{show}")'
+            return f'→ pydocs-mcp search "{target}"'
+        return f'→ search_codebase(query="{target}")'
+    if action == "lookup-show":
+        mcp_fmt, cli_fmt = _SHOW_TO_TOOL[show]
+        fmt = cli_fmt if surface == "cli" else mcp_fmt
+        return "→ " + fmt.format(t=target)
     if surface == "cli":
-        return f"→ pydocs-mcp lookup {target}"
-    return f'→ lookup(target="{target}")'
+        return f"→ pydocs-mcp symbol {target}"
+    return f'→ get_symbol(target="{target}")'
 
 
 def resolve_pointers(text: str, surface: str) -> str:

@@ -58,7 +58,7 @@ async def _body() -> str:
 def test_header_and_resolved_pointer_mcp() -> None:
     out = asyncio.run(_envelope(_fresh_info()).wrap(_body))
     assert out.startswith("[index: 8e2110e · 0d old · 42 packages]\n\n")
-    assert '→ lookup(target="pkg.mod.X")' in out
+    assert '→ get_symbol(target="pkg.mod.X")' in out
     assert "[[next:" not in out
 
 
@@ -70,7 +70,7 @@ def test_stale_warning_line() -> None:
 
 def test_cli_surface_pointer_syntax() -> None:
     out = asyncio.run(_envelope(_fresh_info(), surface="cli").wrap(_body))
-    assert "→ pydocs-mcp lookup pkg.mod.X" in out
+    assert "→ pydocs-mcp symbol pkg.mod.X" in out
 
 
 def test_pointers_disabled_are_stripped() -> None:
@@ -92,4 +92,4 @@ def test_footer_renders_ledger_entries() -> None:
 
     out = asyncio.run(_envelope(_fresh_info()).wrap(truncating_body))
     assert "[truncated: 1 section" in out
-    assert out.rstrip().endswith('2 result(s) elided → lookup(target="pkg.mod.X")')
+    assert out.rstrip().endswith('2 result(s) elided → get_symbol(target="pkg.mod.X")')

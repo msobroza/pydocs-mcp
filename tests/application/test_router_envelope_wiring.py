@@ -106,8 +106,8 @@ def test_cli_and_mcp_differ_only_in_pointer_syntax() -> None:
     cli_out = asyncio.run(_search_router("cli").search(SearchInput(query="x", kind="docs")))
 
     def normalize(s: str) -> str:
-        return s.replace('→ lookup(target="pkg.mod.X")', "<PTR>").replace(
-            "→ pydocs-mcp lookup pkg.mod.X", "<PTR>"
+        return s.replace('→ get_symbol(target="pkg.mod.X")', "<PTR>").replace(
+            "→ pydocs-mcp symbol pkg.mod.X", "<PTR>"
         )
 
     assert normalize(mcp_out) == normalize(cli_out)
