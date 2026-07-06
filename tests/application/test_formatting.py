@@ -135,9 +135,10 @@ def test_format_members_markdown_basic_shape():
         }
     )
     out = format_members_markdown_within_budget((m,), budget_tokens=1000)
-    assert (
-        out
-        == "**[fastapi] fastapi.routing.APIRouter(prefix: str = '')** (class)\nGroups endpoints.\n"
+    assert out == (
+        "**[fastapi] fastapi.routing.APIRouter(prefix: str = '')** (class)\n"
+        "Groups endpoints.\n"
+        "[[next:lookup:fastapi.routing.APIRouter]]\n"
     )
 
 
@@ -163,9 +164,11 @@ def test_format_members_markdown_double_newline_between_blocks():
         }
     )
     out = format_members_markdown_within_budget((m1, m2), budget_tokens=1000)
-    assert out == ("**[p] m.A()** (class)\none\n\n**[p] m.B()** (class)\ntwo\n"), (
-        f"members between-block separator broke: {out!r}"
-    )
+    assert out == (
+        "**[p] m.A()** (class)\none\n[[next:lookup:m.A]]\n"
+        "\n"
+        "**[p] m.B()** (class)\ntwo\n[[next:lookup:m.B]]\n"
+    ), f"members between-block separator broke: {out!r}"
 
 
 def test_format_members_markdown_preserves_trailing_newline():
@@ -306,11 +309,16 @@ def test_format_chunks_strict_gate_appends_partial_at_101_remaining():
 
 
 def test_format_members_strict_gate_drops_partial_at_exactly_100_remaining():
+    # piece = header + "\n" + doc + "\n" + token + "\n" — the §D5 pointer
+    # token joined the member block, so the doc padding subtracts its length
+    # too to keep the piece exactly 300 chars, leaving remaining == 100 of the
+    # 400-char budget.  The strict `>` gate then drops the second piece.
+    def token(name: str) -> str:
+        return f"[[next:lookup:m.{name}]]"
+
     def member(name: str) -> ModuleMember:
         header = f"**[p] m.{name}** (c)"
-        # piece = header + "\n" + doc + "\n" — pad doc so the piece is
-        # exactly 300 chars, leaving remaining == 100 of the 400-char budget.
-        doc = "d" * (300 - len(header) - 2)
+        doc = "d" * (300 - len(header) - 3 - len(token(name)))
         return ModuleMember(
             metadata={
                 ModuleMemberFilterField.PACKAGE.value: "p",
@@ -325,7 +333,8 @@ def test_format_members_strict_gate_drops_partial_at_exactly_100_remaining():
     m1, m2 = member("A"), member("B")
     out = format_members_markdown_within_budget((m1, m2), budget_tokens=100)
     header1 = "**[p] m.A** (c)"
-    expected = header1 + "\n" + "d" * (300 - len(header1) - 2) + "\n"
+    doc1 = "d" * (300 - len(header1) - 3 - len(token("A")))
+    expected = header1 + "\n" + doc1 + "\n" + token("A") + "\n"
     assert out == expected
 
 

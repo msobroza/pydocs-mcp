@@ -28,6 +28,7 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Literal
 
@@ -59,6 +60,41 @@ _CHARS_PER_TOKEN = 4
 # Truncation gate: if fewer chars than this remain in the budget, we do NOT
 # emit a partial piece at all (the old ``format_within_budget`` behaviour).
 _TRUNCATION_MIN_REMAINDER = 100
+
+# Next-step pointers (spec §D5). Renderers emit surface-NEUTRAL tokens —
+# the pipeline that renders hits cannot know whether the response will leave
+# via MCP or the CLI, so the ResponseEnvelope resolves tokens at the router
+# layer. Token payloads are dotted names / show-mode words (no ':' or ']]'),
+# which keeps the grammar regex-parsable.
+_POINTER_RE = re.compile(r"\[\[next:(lookup|lookup-show):([^:\]]+)(?::([^:\]]+))?\]\]")
+
+
+def pointer_token(action: str, target: str, show: str = "") -> str:
+    """Build a surface-neutral next-step token. ``show`` only for lookup-show."""
+    if action == "lookup-show":
+        return f"[[next:lookup-show:{target}:{show}]]"
+    return f"[[next:{action}:{target}]]"
+
+
+def _render_pointer(match: re.Match[str], surface: str) -> str:
+    action, target, show = match.group(1), match.group(2), match.group(3)
+    if action == "lookup-show":
+        if surface == "cli":
+            return f"→ pydocs-mcp lookup {target} --show {show}"
+        return f'→ lookup(target="{target}", show="{show}")'
+    if surface == "cli":
+        return f"→ pydocs-mcp lookup {target}"
+    return f'→ lookup(target="{target}")'
+
+
+def resolve_pointers(text: str, surface: str) -> str:
+    """Rewrite every pointer token to ``surface`` syntax ("mcp" | "cli")."""
+    return _POINTER_RE.sub(lambda m: _render_pointer(m, surface), text)
+
+
+def strip_pointers(text: str) -> str:
+    """Remove pointer tokens AND their line ending — restores pre-§D5 bytes."""
+    return re.sub(r"\[\[next:[^\]]*\]\]\n?", "", text)
 
 
 def _take_within_budget(
@@ -104,6 +140,12 @@ def _take_within_budget(
 def _chunk_piece(chunk: Chunk) -> str:
     title = chunk.metadata.get(ChunkFilterField.TITLE.value, "") or ""
     text = chunk.text or ""
+    # Code-backed hits carry the v7 ``qualified_name`` column back through
+    # metadata (storage/sqlite/row_mappers.row_to_chunk); those point at
+    # ``lookup``. Prose hits (no qname) get no pointer in slice 1.
+    qname = str(chunk.metadata.get("qualified_name") or "")
+    if qname:
+        return f"## {title}\n{text}\n{pointer_token('lookup', qname)}\n"
     return f"## {title}\n{text}\n"
 
 
@@ -116,7 +158,11 @@ def _member_piece(member: ModuleMember) -> str:
     signature = md.get("signature", "") or ""
     docstring = md.get("docstring", "") or ""
     header = f"**[{pkg}] {module}.{name}{signature}** ({kind})"
-    return f"{header}\n{docstring}\n"
+    body = f"{header}\n{docstring}\n"
+    # Members are always code-backed: ``module.name`` IS their lookup target.
+    if module and name:
+        body += f"{pointer_token('lookup', f'{module}.{name}')}\n"
+    return body
 
 
 def format_chunks_markdown_within_budget(
