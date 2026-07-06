@@ -22,7 +22,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, ClassVar
 
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import (
@@ -34,7 +34,12 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.llm_clients.model_budget import derive_max_tree_tokens
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.prompts import render_prompt
-from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+from pydocs_mcp.retrieval.serialization import (
+    BuildContext,
+    step_registry,
+    step_to_yaml_dict,
+    yaml_kwargs,
+)
 from pydocs_mcp.retrieval.tree_prompt.doc_excerpt import (
     DEFAULT_DOC_EXCERPT,
     DEFAULT_DOC_EXCERPT_MAX_CHARS,
@@ -108,6 +113,17 @@ class LlmTreeReasoningStep(RetrieverStep):
     # reranks that candidate subset instead of walking the whole project tree,
     # and produces the pipeline's final ranking directly (no fusion step needed).
     rerank_candidates: bool = field(default=False, kw_only=True)
+    _YAML_KEYS: ClassVar[tuple[str, ...]] = (
+        "prompt_template",
+        "include_references",
+        "reference_neighbors_limit",
+        "output_scratch_key",
+        "name",
+        "max_tree_tokens",
+        "doc_excerpt",
+        "doc_excerpt_max_chars",
+        "rerank_candidates",
+    )
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         async with self.uow_factory() as uow:
@@ -280,26 +296,7 @@ class LlmTreeReasoningStep(RetrieverStep):
             )
 
     def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"type": "llm_tree_reasoning"}
-        if self.prompt_template != _DEFAULT_PROMPT_TEMPLATE:
-            out["prompt_template"] = self.prompt_template
-        if self.include_references:
-            out["include_references"] = True
-        if self.reference_neighbors_limit != _DEFAULT_REFERENCE_NEIGHBORS_LIMIT:
-            out["reference_neighbors_limit"] = self.reference_neighbors_limit
-        if self.output_scratch_key != _DEFAULT_OUTPUT_SCRATCH_KEY:
-            out["output_scratch_key"] = self.output_scratch_key
-        if self.name != _DEFAULT_NAME:
-            out["name"] = self.name
-        if self.max_tree_tokens is not None:
-            out["max_tree_tokens"] = self.max_tree_tokens
-        if self.doc_excerpt != DEFAULT_DOC_EXCERPT:
-            out["doc_excerpt"] = self.doc_excerpt
-        if self.doc_excerpt_max_chars != DEFAULT_DOC_EXCERPT_MAX_CHARS:
-            out["doc_excerpt_max_chars"] = self.doc_excerpt_max_chars
-        if self.rerank_candidates:
-            out["rerank_candidates"] = True
-        return out
+        return step_to_yaml_dict(self, type_name="llm_tree_reasoning", keys=self._YAML_KEYS)
 
     @classmethod
     def from_dict(
@@ -324,20 +321,19 @@ class LlmTreeReasoningStep(RetrieverStep):
             raise ValueError(
                 "LlmTreeReasoningStep requires BuildContext.uow_factory.",
             )
-        doc_excerpt = data.get("doc_excerpt", DEFAULT_DOC_EXCERPT)
-        if doc_excerpt not in DOC_EXCERPT_MODES:
+        kwargs = yaml_kwargs(data, cls, cls._YAML_KEYS)
+        if kwargs["doc_excerpt"] not in DOC_EXCERPT_MODES:
             raise ValueError(
-                f"doc_excerpt must be one of {DOC_EXCERPT_MODES}; got {doc_excerpt!r}",
+                f"doc_excerpt must be one of {DOC_EXCERPT_MODES}; "
+                f"got {kwargs['doc_excerpt']!r}",
             )
-        doc_excerpt_max_chars = data.get(
-            "doc_excerpt_max_chars",
-            DEFAULT_DOC_EXCERPT_MAX_CHARS,
-        )
+        doc_excerpt_max_chars = kwargs["doc_excerpt_max_chars"]
         # A non-positive cap would silently under-cap (negative slice drops the
         # tail instead of bounding) — fail fast at YAML-build time.
         if not isinstance(doc_excerpt_max_chars, int) or doc_excerpt_max_chars < 1:
             raise ValueError(
-                f"doc_excerpt_max_chars must be a positive int; got {doc_excerpt_max_chars!r}",
+                f"doc_excerpt_max_chars must be a positive int; "
+                f"got {doc_excerpt_max_chars!r}",
             )
         # Migration aid: the budget is now token-based; reject the old word param.
         if "max_tree_words" in data:
@@ -347,31 +343,18 @@ class LlmTreeReasoningStep(RetrieverStep):
             )
         # None (or absent) = auto-derive the budget from the LLM context window;
         # an explicit value must be a positive int.
-        max_tree_tokens = data.get("max_tree_tokens")
+        max_tree_tokens = kwargs["max_tree_tokens"]
         if max_tree_tokens is not None and (
             not isinstance(max_tree_tokens, int) or max_tree_tokens < 1
         ):
             raise ValueError(
-                f"max_tree_tokens must be a positive int or null (auto); got {max_tree_tokens!r}",
+                f"max_tree_tokens must be a positive int or null (auto); "
+                f"got {max_tree_tokens!r}",
             )
         return cls(
             llm_client=context.llm_client,
             uow_factory=context.uow_factory,
-            prompt_template=data.get("prompt_template", _DEFAULT_PROMPT_TEMPLATE),
-            include_references=data.get("include_references", False),
-            reference_neighbors_limit=data.get(
-                "reference_neighbors_limit",
-                _DEFAULT_REFERENCE_NEIGHBORS_LIMIT,
-            ),
-            output_scratch_key=data.get(
-                "output_scratch_key",
-                _DEFAULT_OUTPUT_SCRATCH_KEY,
-            ),
-            name=data.get("name", _DEFAULT_NAME),
-            max_tree_tokens=max_tree_tokens,
-            doc_excerpt=doc_excerpt,
-            doc_excerpt_max_chars=doc_excerpt_max_chars,
-            rerank_candidates=data.get("rerank_candidates", False),
+            **kwargs,
         )
 
 

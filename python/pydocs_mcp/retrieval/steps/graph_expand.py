@@ -34,11 +34,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from typing import ClassVar
 
 from pydocs_mcp.filters import FieldIn
 from pydocs_mcp.models import Chunk, ChunkList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+from pydocs_mcp.retrieval.serialization import (
+    BuildContext,
+    step_registry,
+    step_to_yaml_dict,
+    yaml_kwargs,
+)
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 # WHY: single source of truth for every default — referenced from field
@@ -94,6 +100,15 @@ class GraphExpandStep(RetrieverStep):
     kinds: tuple[str, ...] = field(default=_DEFAULT_KINDS, kw_only=True)
     neighbors_per_seed: int = field(default=_DEFAULT_NEIGHBORS_PER_SEED, kw_only=True)
     name: str = field(default=_DEFAULT_NAME, kw_only=True)
+    _YAML_KEYS: ClassVar[tuple[str, ...]] = (
+        "top_s",
+        "max_depth",
+        "decay",
+        "directions",
+        "kinds",
+        "neighbors_per_seed",
+        "name",
+    )
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         candidates = state.candidates
@@ -229,22 +244,7 @@ class GraphExpandStep(RetrieverStep):
         return [replace(c, relevance=discovered[q]) for q, c in best_chunk.items()]
 
     def to_dict(self) -> dict:
-        d: dict = {"type": "graph_expand"}
-        if self.top_s != _DEFAULT_TOP_S:
-            d["top_s"] = self.top_s
-        if self.max_depth != _DEFAULT_MAX_DEPTH:
-            d["max_depth"] = self.max_depth
-        if self.decay != _DEFAULT_DECAY:
-            d["decay"] = self.decay
-        if self.directions != _DEFAULT_DIRECTIONS:
-            d["directions"] = list(self.directions)
-        if self.kinds != _DEFAULT_KINDS:
-            d["kinds"] = list(self.kinds)
-        if self.neighbors_per_seed != _DEFAULT_NEIGHBORS_PER_SEED:
-            d["neighbors_per_seed"] = self.neighbors_per_seed
-        if self.name != _DEFAULT_NAME:
-            d["name"] = self.name
-        return d
+        return step_to_yaml_dict(self, type_name="graph_expand", keys=self._YAML_KEYS)
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> GraphExpandStep:
@@ -254,27 +254,17 @@ class GraphExpandStep(RetrieverStep):
                 "Production wiring in __main__.py / server.py sets this; "
                 "tests must pass it explicitly.",
             )
-        max_depth = data.get("max_depth", _DEFAULT_MAX_DEPTH)
+        kwargs = yaml_kwargs(data, cls, cls._YAML_KEYS)
         # Clamp rather than reject — out-of-range depth is a tuning typo, not a
         # wiring bug; silently bounding keeps the safety contract intact.
-        max_depth = max(1, min(_MAX_DEPTH_CAP, max_depth))
-        directions = tuple(data.get("directions", _DEFAULT_DIRECTIONS))
-        invalid = [d for d in directions if d not in _VALID_DIRECTIONS]
+        kwargs["max_depth"] = max(1, min(_MAX_DEPTH_CAP, kwargs["max_depth"]))
+        invalid = [d for d in kwargs["directions"] if d not in _VALID_DIRECTIONS]
         if invalid:
             raise ValueError(
                 f"GraphExpandStep.directions must be a subset of "
                 f"{sorted(_VALID_DIRECTIONS)}; got unexpected {invalid}.",
             )
-        return cls(
-            uow_factory=context.uow_factory,
-            top_s=data.get("top_s", _DEFAULT_TOP_S),
-            max_depth=max_depth,
-            decay=data.get("decay", _DEFAULT_DECAY),
-            directions=directions,
-            kinds=tuple(data.get("kinds", _DEFAULT_KINDS)),
-            neighbors_per_seed=data.get("neighbors_per_seed", _DEFAULT_NEIGHBORS_PER_SEED),
-            name=data.get("name", _DEFAULT_NAME),
-        )
+        return cls(uow_factory=context.uow_factory, **kwargs)
 
 
 def _merge(dense_items: tuple[Chunk, ...], neighbour_chunks: list[Chunk]) -> tuple[Chunk, ...]:

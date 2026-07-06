@@ -13,8 +13,10 @@ from pathlib import Path
 from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.retrieval.steps.centrality_prior import CentralityPriorStep
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
+from pydocs_mcp.retrieval.steps.graph_expand import GraphExpandStep
+from pydocs_mcp.retrieval.steps.llm_tree_reasoning import LlmTreeReasoningStep
 from pydocs_mcp.retrieval.steps.rrf_fusion import RRFFusionStep
-from tests._fakes import make_fake_uow_factory
+from tests._fakes import FakeLlmClient, make_fake_uow_factory
 
 
 class _FakeProvider:
@@ -88,3 +90,103 @@ def test_chunk_fetcher_emits_limit_and_retriever_name_never_name() -> None:
         "limit": 7,
         "retriever_name": "alt",
     }
+
+
+def test_graph_and_tree_steps_declare_yaml_keys() -> None:
+    assert GraphExpandStep._YAML_KEYS == (
+        "top_s",
+        "max_depth",
+        "decay",
+        "directions",
+        "kinds",
+        "neighbors_per_seed",
+        "name",
+    )
+    assert LlmTreeReasoningStep._YAML_KEYS == (
+        "prompt_template",
+        "include_references",
+        "reference_neighbors_limit",
+        "output_scratch_key",
+        "name",
+        "max_tree_tokens",
+        "doc_excerpt",
+        "doc_excerpt_max_chars",
+        "rerank_candidates",
+    )
+
+
+def test_graph_expand_default_emits_bare_type() -> None:
+    step = GraphExpandStep(uow_factory=make_fake_uow_factory())
+    assert step.to_dict() == {"type": "graph_expand"}
+
+
+def test_graph_expand_emits_non_defaults_tuples_as_lists() -> None:
+    step = GraphExpandStep(
+        uow_factory=make_fake_uow_factory(),
+        top_s=5,
+        max_depth=2,
+        decay=0.5,
+        directions=("callers",),
+        kinds=("calls",),
+        neighbors_per_seed=10,
+        name="ge",
+    )
+    assert step.to_dict() == {
+        "type": "graph_expand",
+        "top_s": 5,
+        "max_depth": 2,
+        "decay": 0.5,
+        "directions": ["callers"],
+        "kinds": ["calls"],
+        "neighbors_per_seed": 10,
+        "name": "ge",
+    }
+
+
+def test_llm_tree_reasoning_default_emits_bare_type() -> None:
+    step = LlmTreeReasoningStep(
+        llm_client=FakeLlmClient(), uow_factory=make_fake_uow_factory()
+    )
+    assert step.to_dict() == {"type": "llm_tree_reasoning"}
+
+
+def test_llm_tree_reasoning_emits_non_defaults_in_legacy_order() -> None:
+    step = LlmTreeReasoningStep(
+        llm_client=FakeLlmClient(),
+        uow_factory=make_fake_uow_factory(),
+        prompt_template="alt_prompt",
+        include_references=True,
+        reference_neighbors_limit=3,
+        output_scratch_key="alt.ranked",
+        name="tree",
+        max_tree_tokens=1000,
+        doc_excerpt="full",
+        doc_excerpt_max_chars=120,
+        rerank_candidates=True,
+    )
+    out = step.to_dict()
+    assert out == {
+        "type": "llm_tree_reasoning",
+        "prompt_template": "alt_prompt",
+        "include_references": True,
+        "reference_neighbors_limit": 3,
+        "output_scratch_key": "alt.ranked",
+        "name": "tree",
+        "max_tree_tokens": 1000,
+        "doc_excerpt": "full",
+        "doc_excerpt_max_chars": 120,
+        "rerank_candidates": True,
+    }
+    # Emission order pins the legacy if-chain order (YAML byte-parity).
+    assert list(out) == [
+        "type",
+        "prompt_template",
+        "include_references",
+        "reference_neighbors_limit",
+        "output_scratch_key",
+        "name",
+        "max_tree_tokens",
+        "doc_excerpt",
+        "doc_excerpt_max_chars",
+        "rerank_candidates",
+    ]
