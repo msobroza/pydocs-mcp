@@ -469,7 +469,7 @@ class _SqliteFilterTranslator:
 
     ``column_prefix`` is prepended verbatim to every column reference in the
     emitted SQL (e.g. ``"c."`` for the ``chunks_fts JOIN chunks`` query used
-    by :class:`SqliteVectorStore`). The safe-column check always runs on the
+    by :class:`SqliteLexicalStore`). The safe-column check always runs on the
     raw/unprefixed name.
 
     INTERNAL — repositories instantiate this directly for per-table queries
@@ -671,7 +671,7 @@ class SqlitePackageRepository:
 class SqliteChunkRepository:
     """ChunkStore backed by the 'chunks' SQLite table (spec §5.3, AC #9).
 
-    CRUD only — text retrieval lives in ``SqliteVectorStore``. ``rebuild_index``
+    CRUD only — text retrieval lives in ``SqliteLexicalStore``. ``rebuild_index``
     refreshes the ``chunks_fts`` content-backed virtual table after bulk writes.
     """
 
@@ -961,14 +961,13 @@ class SqliteChunkMultiVectorRepository:
 
 
 @dataclass(frozen=True, slots=True)
-class SqliteVectorStore:
-    """Retrieval-only service over ``chunks_fts`` (the lexical / FTS5 leg).
+class SqliteLexicalStore:
+    """Retrieval-only lexical service over ``chunks_fts`` (BM25 / FTS5).
 
     CRUD happens via :class:`SqliteChunkRepository`; this type only answers
-    ``text_search`` — it is the :class:`TextSearchable` (BM25 / FTS5) view.
-    Dense vector search is served separately via the ``SearchBackend`` seam
-    (``storage/search_backend.py``: ``SqliteCompositeBackend.dense()`` returns
-    a ``_TurboQuantReadStore``), not by this type.
+    ``text_search`` — it is the :class:`TextSearchable` view. Dense vector
+    search lives behind ``SqliteCompositeBackend.dense()``
+    (``storage/search_backend.py``).
 
     The default ``filter_adapter`` uses ``column_prefix="c."`` so filters
     produce qualified SQL for the ``chunks_fts m JOIN chunks c ON c.id = m.rowid``
@@ -1034,6 +1033,12 @@ class SqliteVectorStore:
                 )
             )
         return tuple(items)
+
+
+# Deprecated alias — the class was renamed because it is the FTS5/BM25
+# LEXICAL store (TextSearchable), not a vector store (the dense store is
+# TurboQuantVectorStore). Kept one release so external imports keep working.
+SqliteVectorStore = SqliteLexicalStore
 
 
 # ── ModuleMember repository ──────────────────────────────────────────────

@@ -238,7 +238,7 @@ Other rules:
 - One UoW per public method call. Short transactions = low contention.
 - Inside `async with self.uow_factory() as uow:` you reach every repository via `uow.packages` / `uow.chunks` / `uow.module_members` / `uow.trees` / `uow.references`. The `UnitOfWork` Protocol guarantees they're present — no `if uow.X is not None:` guards.
 - Reads are wrapped too — even if a method touches only `uow.packages`, going through the UoW keeps the connection-acquisition path uniform and lets a single transaction span multiple reads with consistent isolation. Reads do **not** need `await uow.commit()`; the `__aexit__` safety-net rollback is a no-op for read-only paths.
-- **The only exception:** retrieval/search pipelines that consume `SqliteVectorStore` directly via `ConnectionProvider` (`DocsSearch`, `ApiSearch`). They are query-only against a single FTS table and don't need cross-store consistency. Anything that touches more than one store, or any write path, uses `uow_factory`.
+- **The only exception:** retrieval/search pipelines that consume `SqliteLexicalStore` directly via `ConnectionProvider` (`DocsSearch`, `ApiSearch`). They are query-only against a single FTS table and don't need cross-store consistency. Anything that touches more than one store, or any write path, uses `uow_factory`.
 
 **Tests** use `make_fake_uow_factory(packages=..., chunks=..., module_members=..., trees=..., references=...)` from `tests/_fakes.py`. Never construct services with direct `package_store=` / `chunk_store=` / `module_member_store=` / `tree_store=` / `unit_of_work=` kwargs in tests — those constructor shapes are obsolete and the helper enforces the new contract.
 
