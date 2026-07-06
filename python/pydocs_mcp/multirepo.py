@@ -18,8 +18,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.db import open_index_database, read_index_metadata
-from pydocs_mcp.storage.index_metadata import IndexMetadata
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.storage.index_metadata import IndexMetadata, read_index_metadata
 
 # ``cache_path_for_project`` names files ``{project_name}_{md5[:10]}.db``; the
 # 10-hex-char suffix is the path slug. Strip it to recover the project name when

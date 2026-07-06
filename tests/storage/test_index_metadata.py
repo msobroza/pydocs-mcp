@@ -5,13 +5,12 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from pydocs_mcp.db import (
-    SCHEMA_VERSION,
-    open_index_database,
+from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
+from pydocs_mcp.storage.index_metadata import (
+    IndexMetadata,
     read_index_metadata,
     write_index_metadata,
 )
-from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 
 def _meta(**kw) -> IndexMetadata:

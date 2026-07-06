@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import open_index_database, write_index_metadata
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.storage.index_metadata import write_index_metadata
 from pydocs_mcp.multirepo import (
     EmbedderMismatchError,
     LoadedProject,

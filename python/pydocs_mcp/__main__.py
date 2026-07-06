@@ -560,8 +560,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     # can route/dedup by project. Written last — only a fully-indexed db is stamped.
     import time
 
-    from pydocs_mcp.db import write_index_metadata
-    from pydocs_mcp.storage.index_metadata import IndexMetadata
+    from pydocs_mcp.storage.index_metadata import IndexMetadata, write_index_metadata
 
     stamp_conn = open_index_database(db_path)
     write_index_metadata(
