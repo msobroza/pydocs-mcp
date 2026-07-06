@@ -15,11 +15,7 @@ from dataclasses import dataclass, field
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.filters import Filter
-from pydocs_mcp.models import (
-    Chunk,
-    ModuleMember,
-    Package,
-)
+from pydocs_mcp.models import Chunk, ModuleMember
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.fts_query import build_fts_match_query as _build_fts_match_query
@@ -28,17 +24,17 @@ from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork
-from pydocs_mcp.storage.sqlite.filter_adapter import (
+from pydocs_mcp.storage.sqlite.chunk_repository import SqliteChunkRepository
+from pydocs_mcp.storage.sqlite.filter_adapter import (  # noqa: F401
     _MEMBER_COLUMNS,
     _PACKAGE_COLUMNS,
     CHUNK_COLUMNS,
+    SqliteFilterAdapter,
     _resolve_filter,
     _SqliteFilterTranslator,
 )
-from pydocs_mcp.storage.sqlite.filter_adapter import (
-    SqliteFilterAdapter as SqliteFilterAdapter,
-)
-from pydocs_mcp.storage.sqlite.row_mappers import (
+from pydocs_mcp.storage.sqlite.package_repository import SqlitePackageRepository
+from pydocs_mcp.storage.sqlite.row_mappers import (  # noqa: F401
     _chunk_to_row,
     _module_member_to_row,
     _package_to_row,
@@ -46,7 +42,10 @@ from pydocs_mcp.storage.sqlite.row_mappers import (
     _row_to_package,
     row_to_chunk,
 )
-from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire, _sqlite_transaction
+from pydocs_mcp.storage.sqlite.transaction import (
+    _maybe_acquire,
+    _sqlite_transaction,
+)
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -268,237 +267,6 @@ class SqliteUnitOfWork:
         return self._node_scores
 
 
-
-# ── Package repository ───────────────────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class SqlitePackageRepository:
-    """PackageStore backed by the 'packages' SQLite table (spec §5.3)."""
-
-    provider: ConnectionProvider
-    filter_adapter: _SqliteFilterTranslator = field(
-        default_factory=lambda: _SqliteFilterTranslator(safe_columns=_PACKAGE_COLUMNS)
-    )
-
-    async def upsert(self, package: Package) -> None:
-        row = _package_to_row(package)
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.execute,
-                "INSERT INTO packages (name, version, summary, homepage, "
-                "dependencies, content_hash, origin, embedding_model) "
-                "VALUES (:name,:version,:summary,:homepage,:dependencies,"
-                ":content_hash,:origin,:embedding_model) "
-                "ON CONFLICT(name) DO UPDATE SET "
-                "version=excluded.version, summary=excluded.summary, "
-                "homepage=excluded.homepage, dependencies=excluded.dependencies, "
-                "content_hash=excluded.content_hash, origin=excluded.origin, "
-                "embedding_model=excluded.embedding_model",
-                row,
-            )
-
-    async def get(self, name: str) -> Package | None:
-        async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
-                lambda: conn.execute("SELECT * FROM packages WHERE name=?", (name,)).fetchone()
-            )
-        return _row_to_package(row) if row else None
-
-    async def list(
-        self,
-        filter: Filter | Mapping | None = None,
-        limit: int | None = None,
-    ) -> list[Package]:
-        tree = _resolve_filter(filter)
-        where, params = "", []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-        sql = "SELECT * FROM packages"
-        if where:
-            sql += f" WHERE {where}"
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
-        return [_row_to_package(r) for r in rows]
-
-    async def delete(self, filter: Filter | Mapping) -> int:
-        tree = _resolve_filter(filter)
-        if tree is None:
-            raise ValueError("delete requires an explicit filter")
-        where, params = self.filter_adapter.adapt(tree)
-        async with _maybe_acquire(self.provider) as conn:
-            cursor = await asyncio.to_thread(
-                conn.execute, f"DELETE FROM packages WHERE {where}", params
-            )
-            return cursor.rowcount
-
-    async def count(self, filter: Filter | Mapping | None = None) -> int:
-        tree = _resolve_filter(filter)
-        sql = "SELECT COUNT(*) FROM packages"
-        params: list = []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-            sql += f" WHERE {where}"
-        async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchone())
-        return row[0]
-
-    async def delete_all(self) -> None:
-        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM packages")
-
-
-# ── Chunk repository ─────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class SqliteChunkRepository:
-    """ChunkStore backed by the 'chunks' SQLite table (spec §5.3, AC #9).
-
-    CRUD only — text retrieval lives in ``SqliteLexicalStore``. ``rebuild_index``
-    refreshes the ``chunks_fts`` content-backed virtual table after bulk writes.
-    """
-
-    provider: ConnectionProvider
-    filter_adapter: _SqliteFilterTranslator = field(
-        default_factory=lambda: _SqliteFilterTranslator(safe_columns=CHUNK_COLUMNS)
-    )
-
-    async def upsert(self, chunks: Iterable[Chunk]) -> None:
-        rows = [_chunk_to_row(c) for c in chunks]
-        if not rows:
-            return
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.executemany,
-                "INSERT INTO chunks "
-                "(package, module, title, text, origin, content_hash, qualified_name) "
-                "VALUES "
-                "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name)",
-                rows,
-            )
-
-    async def list(
-        self,
-        filter: Filter | Mapping | None = None,
-        limit: int | None = None,
-    ) -> list[Chunk]:
-        tree = _resolve_filter(filter)
-        where, params = "", []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-        sql = "SELECT * FROM chunks"
-        if where:
-            sql += f" WHERE {where}"
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
-        return [row_to_chunk(r) for r in rows]
-
-    async def delete(self, filter: Filter | Mapping) -> int:
-        tree = _resolve_filter(filter)
-        if tree is None:
-            raise ValueError("delete requires an explicit filter")
-        where, params = self.filter_adapter.adapt(tree)
-        async with _maybe_acquire(self.provider) as conn:
-            cursor = await asyncio.to_thread(
-                conn.execute, f"DELETE FROM chunks WHERE {where}", params
-            )
-            return cursor.rowcount
-
-    async def count(self, filter: Filter | Mapping | None = None) -> int:
-        tree = _resolve_filter(filter)
-        sql = "SELECT COUNT(*) FROM chunks"
-        params: list = []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-            sql += f" WHERE {where}"
-        async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchone())
-        return row[0]
-
-    async def rebuild_index(self) -> None:
-        """Rebuild the chunks_fts virtual table so newly-inserted rows are searchable."""
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.execute,
-                "INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')",
-            )
-
-    async def list_id_hash_pairs(
-        self,
-        *,
-        filter: Filter | Mapping | None = None,
-    ) -> tuple[tuple[int, str | None], ...]:
-        tree = _resolve_filter(filter)
-        where, params = "", []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-        sql = "SELECT id, content_hash FROM chunks"
-        if where:
-            sql += f" WHERE {where}"
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
-        return tuple((row["id"], row["content_hash"]) for row in rows)
-
-    async def delete_by_ids(self, ids: Sequence[int]) -> None:
-        if not ids:
-            return
-        # Performance: batch at 500 to stay safely under SQLITE_MAX_VARIABLE_NUMBER
-        # (default 999 in older SQLite builds; 32766 in newer ones — 500 is
-        # well under both and limits per-statement parsing cost).
-        async with _maybe_acquire(self.provider) as conn:
-            for i in range(0, len(ids), 500):
-                batch = ids[i : i + 500]
-                placeholders = ",".join("?" * len(batch))
-                await asyncio.to_thread(
-                    conn.execute,
-                    f"DELETE FROM chunks WHERE id IN ({placeholders})",
-                    list(batch),
-                )
-
-    async def mark_embedded(self, ids: Sequence[int]) -> None:
-        if not ids:
-            return
-        # Same 500-row batching rationale as delete_by_ids above.
-        async with _maybe_acquire(self.provider) as conn:
-            for i in range(0, len(ids), 500):
-                batch = ids[i : i + 500]
-                placeholders = ",".join("?" * len(batch))
-                await asyncio.to_thread(
-                    conn.execute,
-                    f"UPDATE chunks SET embedded = 1 WHERE id IN ({placeholders})",
-                    list(batch),
-                )
-
-    async def insert(self, chunks: tuple[Chunk, ...]) -> None:
-        # SQL is identical to upsert (SQLite INSERT with no conflict clause
-        # IS the insert-only semantic). The two methods are kept distinct
-        # to make caller intent explicit — the diff-merge wants insert-only,
-        # while the legacy "wipe and rewrite" path uses upsert.
-        rows = [_chunk_to_row(c) for c in chunks]
-        if not rows:
-            return
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.executemany,
-                "INSERT INTO chunks "
-                "(package, module, title, text, origin, content_hash, qualified_name) "
-                "VALUES "
-                "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name)",
-                rows,
-            )
-
-    async def delete_all(self) -> None:
-        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM chunks")
 
 
 # ── chunk_id ↔ plaid_doc_id mapping repository ───────────────────────────

@@ -87,3 +87,10 @@ def test_filter_adapter_module_owns_the_translator() -> None:
     assert sqlite_pkg._SqliteFilterTranslator is filter_adapter._SqliteFilterTranslator
     assert sqlite_pkg.SqliteFilterAdapter is filter_adapter.SqliteFilterAdapter
     assert sqlite_pkg.CHUNK_COLUMNS is filter_adapter.CHUNK_COLUMNS
+
+
+def test_package_and_chunk_repositories_have_own_modules() -> None:
+    from pydocs_mcp.storage.sqlite import chunk_repository, package_repository
+
+    assert sqlite_pkg.SqlitePackageRepository is package_repository.SqlitePackageRepository
+    assert sqlite_pkg.SqliteChunkRepository is chunk_repository.SqliteChunkRepository
