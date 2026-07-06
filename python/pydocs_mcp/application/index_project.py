@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.application.freshness import resolve_git_head
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 if TYPE_CHECKING:
@@ -118,6 +119,7 @@ async def run_index_pass(
             embedding_dim=embedding_dim,
             pipeline_hash=pipeline_hash,
             indexed_at=time.time(),
+            git_head=resolve_git_head(project) or "",
         ),
     )
     return stats
