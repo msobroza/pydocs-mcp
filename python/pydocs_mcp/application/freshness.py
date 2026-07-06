@@ -30,6 +30,44 @@ def _read_packed_refs(packed: Path, ref: str) -> str | None:
     return None
 
 
+def _locate_gitdir(project_root: Path) -> Path | None:
+    """Resolve ``.git`` to a gitdir — a directory, or a worktree gitfile pointer."""
+    git = project_root / ".git"
+    if git.is_dir():
+        return git
+    if not git.is_file():
+        return None
+    content = git.read_text(encoding="utf-8").strip()
+    if not content.startswith("gitdir:"):
+        return None
+    gitdir = Path(content.split(":", 1)[1].strip())
+    return gitdir if gitdir.is_absolute() else (project_root / gitdir).resolve()
+
+
+def _refs_home(gitdir: Path) -> Path:
+    """Where refs/packed-refs live.
+
+    Worktree gitdirs keep only HEAD locally; refs + packed-refs live in the
+    main repo's gitdir, reachable via the ``commondir`` pointer.
+    """
+    commondir_file = gitdir / "commondir"
+    if not commondir_file.is_file():
+        return gitdir
+    common = Path(commondir_file.read_text(encoding="utf-8").strip())
+    return common if common.is_absolute() else (gitdir / common).resolve()
+
+
+def _resolve_ref(gitdir: Path, ref: str) -> str | None:
+    """Resolve a symbolic ref: loose file first, then the refs home, then packed-refs."""
+    for candidate in (gitdir / ref, _refs_home(gitdir) / ref):
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8").strip() or None
+    packed = _refs_home(gitdir) / "packed-refs"
+    if packed.is_file():
+        return _read_packed_refs(packed, ref)
+    return None
+
+
 def resolve_git_head(project_root: Path) -> str | None:
     """Return the commit sha ``HEAD`` points at, or ``None`` when unresolvable.
 
@@ -37,46 +75,14 @@ def resolve_git_head(project_root: Path) -> str | None:
     refs, worktree gitfiles (``gitdir:`` pointer + ``commondir`` delegation),
     and ``packed-refs``. Any I/O error or unrecognized layout → ``None``.
     """
-    git = project_root / ".git"
     try:
-        if git.is_file():
-            content = git.read_text(encoding="utf-8").strip()
-            if not content.startswith("gitdir:"):
-                return None
-            gitdir = Path(content.split(":", 1)[1].strip())
-            if not gitdir.is_absolute():
-                gitdir = (project_root / gitdir).resolve()
-        elif git.is_dir():
-            gitdir = git
-        else:
+        gitdir = _locate_gitdir(project_root)
+        if gitdir is None:
             return None
-
         head = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
         if not head.startswith("ref:"):
             return head or None  # detached HEAD stores the raw sha
-        ref = head.split(":", 1)[1].strip()
-
-        loose = gitdir / ref
-        if loose.is_file():
-            return loose.read_text(encoding="utf-8").strip() or None
-
-        # Worktree gitdirs keep only HEAD locally; refs + packed-refs live in
-        # the main repo's gitdir, reachable via the ``commondir`` pointer.
-        commondir_file = gitdir / "commondir"
-        if commondir_file.is_file():
-            common = Path(commondir_file.read_text(encoding="utf-8").strip())
-            if not common.is_absolute():
-                common = (gitdir / common).resolve()
-            loose = common / ref
-            if loose.is_file():
-                return loose.read_text(encoding="utf-8").strip() or None
-            packed = common / "packed-refs"
-        else:
-            packed = gitdir / "packed-refs"
-
-        if packed.is_file():
-            return _read_packed_refs(packed, ref)
-        return None
+        return _resolve_ref(gitdir, head.split(":", 1)[1].strip())
     except OSError:
         return None
 
