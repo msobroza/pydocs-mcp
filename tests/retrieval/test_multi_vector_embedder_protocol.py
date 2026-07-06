@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from pydocs_mcp.storage.protocols import MultiVectorEmbedder
+from pydocs_mcp.retrieval.protocols import MultiVectorEmbedder
 
 
 def test_protocol_is_runtime_checkable() -> None:

@@ -26,7 +26,7 @@ from typing import Any, Literal, TypeVar
 
 from openai import AsyncOpenAI, OpenAI, RateLimitError
 
-from pydocs_mcp.storage.protocols import ChatMessage
+from pydocs_mcp.retrieval.protocols import ChatMessage
 
 # Retry policy for transient RateLimitError. Three attempts with
 # exponential backoff (2s, 4s) gives ~6s headroom — enough to ride

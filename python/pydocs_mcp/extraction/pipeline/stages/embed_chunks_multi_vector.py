@@ -3,7 +3,7 @@
 Sibling of :class:`EmbedChunksStage` for the late-interaction path. Splits
 single-vector vs multi-vector ingestion by Protocol contract rather than
 by a runtime branch inside one stage: this stage takes a
-:class:`~pydocs_mcp.storage.protocols.MultiVectorEmbedder` (ColBERT-style,
+:class:`~pydocs_mcp.retrieval.protocols.MultiVectorEmbedder` (ColBERT-style,
 one normalized vector per token) and splices the resulting
 ``MultiVector = list[np.ndarray]`` onto each :class:`Chunk.embedding`.
 
@@ -28,7 +28,7 @@ from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
 from pydocs_mcp.extraction.serialization import stage_registry
-from pydocs_mcp.storage.protocols import MultiVectorEmbedder
+from pydocs_mcp.retrieval.protocols import MultiVectorEmbedder
 
 _DEFAULT_BATCH_SIZE = 32
 

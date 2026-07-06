@@ -28,9 +28,10 @@ from dataclasses import dataclass, field, replace
 
 from pydocs_mcp.models import ChunkList, is_multi_vector
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
+from pydocs_mcp.retrieval.protocols import Embedder
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 from pydocs_mcp.retrieval.steps.pre_filter import PRE_FILTER_SCRATCH_KEY, PreFilterResult
-from pydocs_mcp.storage.protocols import Embedder, VectorSearchable
+from pydocs_mcp.storage.protocols import VectorSearchable
 
 # WHY: single source of truth for the fetch-side default — referenced by
 # the dataclass field, ``to_dict`` (omit-when-default), and ``from_dict``

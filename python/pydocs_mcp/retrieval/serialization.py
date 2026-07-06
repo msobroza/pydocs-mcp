@@ -11,14 +11,16 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.retrieval.protocols import ConnectionProvider
+    from pydocs_mcp.retrieval.protocols import (
+        ConnectionProvider,
+        Embedder,
+        LlmClient,
+        MultiVectorEmbedder,
+    )
     from pydocs_mcp.retrieval.route_predicates import PredicateRegistry
     from pydocs_mcp.storage.protocols import (
-        Embedder,
         FilterAdapter,
-        LlmClient,
         ModuleMemberStore,
-        MultiVectorEmbedder,
         TextSearchable,
         UnitOfWork,
         VectorSearchable,

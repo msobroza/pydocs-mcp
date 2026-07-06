@@ -1,9 +1,9 @@
 """LLM client concretes + factory.
 
-The ``LlmClient`` Protocol lives in ``storage/protocols.py`` alongside
-the other infrastructure Protocols (``Embedder``, ``UnitOfWork``,
-``ChunkStore``, …); concretes implementing it live here under
-``retrieval/`` because the only consumer today is the retrieval pipeline
+The ``LlmClient`` Protocol lives in ``retrieval/protocols.py`` next to
+the other retrieval-side contracts (``Embedder``, ``ResultFuser``, …);
+concretes implementing it live here because the only consumer today is
+the retrieval pipeline
 (:class:`pydocs_mcp.retrieval.steps.llm_tree_reasoning.LlmTreeReasoningStep`).
 
 If a future extraction-time consumer lands (e.g., LLM-driven chunk
@@ -19,7 +19,7 @@ Adding a new provider = one new module + one new branch in
 from __future__ import annotations
 
 from pydocs_mcp.retrieval.config import LlmConfig
-from pydocs_mcp.storage.protocols import LlmClient
+from pydocs_mcp.retrieval.protocols import LlmClient
 
 
 def build_llm_client(cfg: LlmConfig) -> LlmClient:

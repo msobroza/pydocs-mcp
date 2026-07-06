@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 
-from pydocs_mcp.storage.protocols import ChatMessage, LlmClient
+from pydocs_mcp.retrieval.protocols import ChatMessage, LlmClient
 
 
 def test_chat_message_typed_dict_shape() -> None:
@@ -29,7 +29,7 @@ def test_llm_client_protocol_has_chat_sync() -> None:
 def test_llm_client_protocol_has_model_name() -> None:
     """LlmClient declares model_name so callers can identify the provider
     without peeking into the concrete class."""
-    import pydocs_mcp.storage.protocols as proto_module
+    import pydocs_mcp.retrieval.protocols as proto_module
 
     src = inspect.getsource(proto_module)
     assert "model_name: str" in src

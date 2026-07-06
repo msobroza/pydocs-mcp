@@ -8,7 +8,7 @@ add a new module + one new branch + one new entry in dependencies.
 from __future__ import annotations
 
 from pydocs_mcp.retrieval.config import EmbeddingConfig, LateInteractionConfig
-from pydocs_mcp.storage.protocols import Embedder, MultiVectorEmbedder
+from pydocs_mcp.retrieval.protocols import Embedder, MultiVectorEmbedder
 
 
 def build_embedder(cfg: EmbeddingConfig) -> Embedder:
