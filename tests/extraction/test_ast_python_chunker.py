@@ -418,3 +418,75 @@ def test_imports_only_file_one_block(tmp_path: Path) -> None:
     # No def or class children to compete with.
     non_imports = [c for c in root.children if c.kind != NodeKind.IMPORT_BLOCK]
     assert non_imports == []
+
+
+# ── Nested defs get their own FUNCTION nodes ────────────────────────────────
+
+
+def test_nested_def_gets_own_function_child(tmp_path: Path) -> None:
+    """A def inside a function body is emitted as a FUNCTION child of the
+    enclosing def — previously invisible to retrieval (PAGEINDEX_DIVS.md F3:
+    a benchmark gold was a nested def and no retriever could match it)."""
+    src = (
+        "def outer():\n"
+        "    x = 1\n"
+        "    def inner(v):\n"
+        '        """Inner doc."""\n'
+        "        return v + 1\n"
+        "    return inner(x)\n"
+    )
+    root = _build(src, path="pkg/mod.py", root=tmp_path)
+    outer = _find_child(root, NodeKind.FUNCTION, "def outer()")
+    assert outer is not None
+    inner = next((c for c in outer.children if c.kind == NodeKind.FUNCTION), None)
+    assert inner is not None
+    assert inner.qualified_name == "pkg.mod.outer.inner"
+    assert inner.title == "def inner()"
+    assert inner.parent_id == "pkg.mod.outer"
+    assert "return v + 1" in inner.text
+    assert inner.extra_metadata["docstring"] == "Inner doc."
+
+
+def test_doubly_nested_def_recurses(tmp_path: Path) -> None:
+    src = (
+        "def a():\n"
+        "    def b():\n"
+        "        def c():\n"
+        "            return 3\n"
+        "        return c()\n"
+        "    return b()\n"
+    )
+    root = _build(src, path="pkg/mod.py", root=tmp_path)
+    a = _find_child(root, NodeKind.FUNCTION, "def a()")
+    assert a is not None
+    b = next(c for c in a.children if c.kind == NodeKind.FUNCTION)
+    assert b.qualified_name == "pkg.mod.a.b"
+    c = next(ch for ch in b.children if ch.kind == NodeKind.FUNCTION)
+    assert c.qualified_name == "pkg.mod.a.b.c"
+
+
+def test_async_nested_def_inside_method(tmp_path: Path) -> None:
+    """Nested capture works through the METHOD path too (shared builder)."""
+    src = (
+        "class K:\n"
+        "    def m(self):\n"
+        "        async def helper():\n"
+        "            return 1\n"
+        "        return helper\n"
+    )
+    root = _build(src, path="pkg/mod.py", root=tmp_path)
+    klass = _find_child(root, NodeKind.CLASS, "class K")
+    assert klass is not None
+    method = next(c for c in klass.children if c.kind == NodeKind.METHOD)
+    helper = next(c for c in method.children if c.kind == NodeKind.FUNCTION)
+    assert helper.qualified_name == "pkg.mod.K.m.helper"
+    assert helper.title == "async def helper()"
+
+
+def test_function_without_nested_defs_unchanged(tmp_path: Path) -> None:
+    """Non-regression: a flat def still has only CODE_EXAMPLE children."""
+    src = "def flat():\n    return 1\n"
+    root = _build(src, path="pkg/mod.py", root=tmp_path)
+    flat = _find_child(root, NodeKind.FUNCTION, "def flat()")
+    assert flat is not None
+    assert flat.children == ()

@@ -1,7 +1,9 @@
 """AstPythonChunker — parses ``.py`` into a MODULE → CLASS / FUNCTION tree.
 
 Structure: MODULE → (IMPORT_BLOCK? | FUNCTION* | CLASS*) with METHOD
-children under each CLASS. Docstrings on MODULE / FUNCTION / METHOD /
+children under each CLASS, and nested ``def``s recursively emitted as
+FUNCTION children under their enclosing FUNCTION / METHOD.
+Docstrings on MODULE / FUNCTION / METHOD /
 CLASS may contribute CODE_EXAMPLE grandchildren via fenced-block
 extraction (spec §8.1).
 
@@ -331,6 +333,27 @@ def _function_node(
     # is the def's source (header + body); _header_from_text stops at the first
     # paren-depth-0 ``:``, so the body never leaks into the signature.
     sig_line = _header_from_text(txt)
+    # Nested defs become their own FUNCTION children so inner helpers are
+    # indexed and retrievable — a benchmark gold that was a def inside
+    # main() was unmatchable at any file-size cap without this
+    # (PAGEINDEX_DIVS.md F3). ref_collector is deliberately NOT threaded
+    # down: capture_calls above already walked the whole body (nested
+    # bodies included) attributing CALLS edges to the enclosing def, so
+    # re-capturing at nested depth would emit duplicate edges.
+    nested_defs = tuple(
+        _function_node(
+            s,
+            module,
+            lines,
+            rel,
+            parent_id=qname,
+            kind=NodeKind.FUNCTION,
+            ref_collector=None,
+            package=package,
+        )
+        for s in stmt.body
+        if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
     examples = _extract_code_examples(doc, qname, rel)
     return DocumentNode(
         node_id=qname,
@@ -350,7 +373,7 @@ def _function_node(
             "decorators": _decorator_labels(stmt.decorator_list),
         },
         parent_id=parent_id,
-        children=tuple(examples),
+        children=tuple(examples) + nested_defs,
     )
 
 
