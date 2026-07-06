@@ -84,8 +84,8 @@
     ]
   },
   {
-    "path": "pydocs_mcp/retrieval/config.py",
-    "file_name": "config.py",
+    "path": "pydocs_mcp/retrieval/config/pipeline_assembly.py",
+    "file_name": "pipeline_assembly.py",
     "functions": [
       {
         "name": "_resolve_pipeline_path",
