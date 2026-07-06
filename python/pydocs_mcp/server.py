@@ -261,14 +261,6 @@ def run(
             log.exception("lookup failed unexpectedly")
             raise ServiceUnavailableError(f"lookup failed: {e}") from e
 
-    # TODO(follow-up): wire TreeService + build_package_tree
-    # into ``lookup(kind="tree")`` dispatch so the tree arborescence is reachable
-    # via the unified 2-tool MCP surface. Standalone ``get_document_tree`` /
-    # ``get_package_tree`` handlers were removed during the rebase onto #6's
-    # consolidated MCP surface; the underlying services
-    # (``TreeService``, ``build_package_tree``, ``flatten_to_chunks``)
-    # remain available for the integration.
-
     log.info(
         "MCP ready (%d project(s): %s)", len(services), ", ".join(s.project.name for s in services)
     )

@@ -20,45 +20,8 @@ MODULE_DOCSTRING_MAX: int = 5000
 """Max chars stored for a module-level docstring."""
 
 # ---------------------------------------------------------------------------
-# Indexing limits — Python-only (no Rust equivalent)
-# ---------------------------------------------------------------------------
-
-SIGNATURE_MAX: int = 400
-"""Max chars stored for a function signature string."""
-
-RETURN_TYPE_MAX: int = 200
-"""Max chars stored for a return-type annotation."""
-
-PARAMS_JSON_MAX: int = 2000
-"""Max chars stored for the JSON-serialised parameter list."""
-
-PARAM_DEFAULT_MAX: int = 80
-"""Max chars stored for a single parameter default repr."""
-
-CLASS_DOCSTRING_MAX: int = 3000
-"""Max chars stored for a class-level docstring (same as function)."""
-
-CLASS_FULL_DOC_MAX: int = 5000
-"""Max chars for a class doc after appending method summaries."""
-
-METHOD_SUMMARY_MAX: int = 120
-"""Max chars for a method's one-line docstring in class listings."""
-
-# ---------------------------------------------------------------------------
 # Display limits — MCP tool output formatting
 # ---------------------------------------------------------------------------
-
-SEARCH_BODY_DISPLAY: int = 1500
-"""Max chars of chunk body shown in search_docs results."""
-
-SEARCH_DOC_DISPLAY: int = 500
-"""Max chars of symbol docstring shown in search_api results."""
-
-SEARCH_BODY_CLI: int = 500
-"""Max chars of chunk body printed in CLI 'query' output."""
-
-SEARCH_DOC_CLI: int = 300
-"""Max chars of symbol docstring printed in CLI 'api' output."""
 
 PACKAGE_DOC_MAX: int = 30_000
 """Max chars for the concatenated package doc response."""
@@ -84,16 +47,3 @@ LIST_PACKAGES_MAX: int = 200
 
 Defensive cap so a badly-populated cache (or a future all-deps mode)
 cannot blow up the client's context window or stream size."""
-
-SEARCH_RESULTS_MAX: int = 50
-"""Max symbol results returned in search_api."""
-
-CONTEXT_TOKEN_BUDGET: int = 2000
-"""Max tokens returned by search_docs. Chunks are concatenated until this
-budget is reached. 1 token ~ 4 characters. Not exposed to MCP clients."""
-
-REQUIREMENTS_PARSE_MAX: int = 40
-"""Max requirements parsed from package metadata."""
-
-CLASS_METHODS_MAX: int = 12
-"""Max methods listed per class during inspection indexing."""

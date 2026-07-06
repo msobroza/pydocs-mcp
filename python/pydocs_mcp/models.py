@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar, Protocol, TypeGuard, runtime_checkable
@@ -162,23 +162,6 @@ class Parameter:
 
 
 @dataclass(frozen=True, slots=True)
-class EmbeddingProvenance:
-    """Pairs the embedding model identity with the package content hash
-    that produced its vectors (S28).
-
-    These two facts always move together: re-embed is needed iff *either*
-    the model identity changed *or* the source files changed. Grouping
-    them into one value object keeps that invariant visible in the type
-    system. Construction is additive — Package accepts ``provenance`` as
-    an optional field alongside the legacy ``embedding_model`` /
-    ``content_hash`` fields, which existing callers still set directly.
-    """
-
-    model_name: str
-    content_hash: str
-
-
-@dataclass(frozen=True, slots=True)
 class Package:
     kind: ClassVar[str] = "package"
     name: str
@@ -192,11 +175,6 @@ class Package:
     # indexing service can force re-embed when YAML's embedding.model_name
     # changes. ``None`` = pre-hybrid cache (no vectors yet).
     embedding_model: str | None = None
-    # S28: optional grouped form of (embedding_model, content_hash). Kept
-    # additive so existing Package(...) callers don't need to be migrated
-    # in lock-step; future readers may prefer the grouped accessor when
-    # both fields are required together.
-    provenance: EmbeddingProvenance | None = None
 
 
 def compute_chunk_content_hash(
@@ -225,22 +203,6 @@ def compute_chunk_content_hash(
 
 
 @dataclass(frozen=True, slots=True)
-class RetrievalEnrichment:
-    """Retrieval-time metadata attached to a Chunk by a scoring step (S17).
-
-    ``relevance`` is the score the named ``retriever_name`` assigned;
-    grouping the two as one value object makes "which scorer produced
-    this score" inseparable in the type system. Attach via
-    :meth:`Chunk.with_enrichment` — Chunk treats the field as additive
-    next to the legacy flat ``relevance`` / ``retriever_name`` fields so
-    existing retrieval steps keep working unchanged.
-    """
-
-    relevance: float
-    retriever_name: str
-
-
-@dataclass(frozen=True, slots=True)
 class Chunk:
     """Unit of retrieval. `text` is the primary payload; everything else
     (package, title, origin, module) lives in metadata keyed by
@@ -248,8 +210,7 @@ class Chunk:
     metadata['origin'] == ChunkOrigin.COMPOSITE_OUTPUT.value.
 
     Retrieval-time fields (relevance, retriever_name) are None until a
-    retriever populates them. The same information is exposed in a
-    grouped form via :attr:`enrichment` (see S17)."""
+    retriever populates them."""
 
     kind: ClassVar[str] = "chunk"
     text: str
@@ -270,10 +231,6 @@ class Chunk:
     # auto-hash entry point for tests is ``Chunk.from_test_inputs(...)``
     # (S2/S25).
     content_hash: str = ""
-    # S17: optional grouped form of (relevance, retriever_name). Default
-    # is ``None`` because most paths still populate the flat fields
-    # directly; the grouped form is opt-in via with_enrichment().
-    enrichment: RetrievalEnrichment | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
@@ -345,13 +302,6 @@ class Chunk:
             ),
             **kwargs,
         )
-
-    def with_enrichment(self, enrichment: RetrievalEnrichment) -> Chunk:
-        """Return a copy of this Chunk with the supplied retrieval-time
-        enrichment attached. Non-mutating — the original Chunk is left
-        untouched (S17).
-        """
-        return replace(self, enrichment=enrichment)
 
 
 @dataclass(frozen=True, slots=True)
