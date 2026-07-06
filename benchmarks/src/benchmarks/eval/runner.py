@@ -36,6 +36,7 @@ from . import datasets as _datasets  # noqa: F401 -- registry side-effects
 from . import metrics as _metrics_pkg  # noqa: F401 -- registry side-effects
 from . import systems as _systems  # noqa: F401 -- registry side-effects
 from . import trackers as _trackers  # noqa: F401 -- registry side-effects
+from .datasets._split import VALID_SPLITS
 from .metrics import MRR, NDCGAtK, PassAt1Needle, RecallAtK
 from .metrics.aggregate import mean_with_bootstrap_ci, percentile
 from .metrics.base_metric import Metric, Scorer
@@ -655,19 +656,24 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--split",
-        choices=["all", "dev", "test", "small_test"],
+        # Single source of truth: mirrors the shared helper's VALID_SPLITS so
+        # a split added there is automatically accepted here — the previous
+        # literal list silently rejected new splits until hand-synced.
+        choices=list(VALID_SPLITS),
         default="all",
         help=(
             "stratified dataset split (both DS-1000 and RepoQA). `all` "
             "(default) yields every task; `dev` / `test` partition each "
             "stratum independently (preserving its corpus proportion) into a "
-            "seeded dev head + test tail — tune on `dev`, evaluate on held-out "
-            "`test`; `small_test` is a fixed-size (~30) stratified subsample "
-            "of `test` for fast iteration over the expensive (dense / hybrid "
-            "/ LLM-tree) sweeps. Stratified by library (DS-1000) or repo "
-            "(RepoQA) via the shared split helper. Passed as a kwarg ONLY when "
-            "!= `all`. Tune fraction/seed/size via the dataset dataclass "
-            "defaults (dev_fraction=0.2, split_seed=0, small_test_size=30)."
+            "seeded dev head + test tail; `small_test` is a fixed-size (~30) "
+            "stratified subsample of `test`; `small_dev` is its same-size, "
+            "same-seed mirror drawn from `dev` — iterate on `small_dev`, "
+            "reserve test-derived splits for confirmation (see "
+            "benchmarks/README.md, Sweep protocol). Stratified by library "
+            "(DS-1000) or repo (RepoQA) via the shared split helper. Passed "
+            "as a kwarg ONLY when != `all`. Tune fraction/seed/size via the "
+            "dataset dataclass defaults (dev_fraction=0.2, split_seed=0, "
+            "small_test_size=30)."
         ),
     )
     parser.add_argument(
