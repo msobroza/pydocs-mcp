@@ -105,8 +105,8 @@ async def test_split_is_deterministic_under_fixed_seed() -> None:
 
 
 def test_invalid_split_raises_value_error() -> None:
-    """A ``split`` outside {all,dev,test,small_test} is a caller bug —
-    rejected at construction with a ``ValueError``."""
+    """A ``split`` outside {all,dev,test,small_test,small_dev} is a caller
+    bug — rejected at construction with a ``ValueError``."""
     with pytest.raises(ValueError):
         RepoQADataset(fixture_path=FIXTURE_PATH, split="train")
 
@@ -144,6 +144,65 @@ async def test_small_test_is_deterministic_under_fixed_seed() -> None:
             fixture_path=FIXTURE_PATH,
             split="small_test",
             small_test_size=2,
+            split_seed=0,
+        ),
+    )
+    assert first == second
+
+
+async def test_small_dev_is_capped_subset_of_dev() -> None:
+    """``split="small_dev"`` yields a fixed-size stratified subsample of the
+    ``dev`` head: a subset of ``dev``, capped at
+    ``min(small_test_size, |dev|)``. dev_fraction=0.5 so the fixture's dev
+    head (2 + 1 needles) is big enough to observe the cap."""
+    dev_ids = await _task_ids(
+        RepoQADataset(fixture_path=FIXTURE_PATH, split="dev", dev_fraction=0.5),
+    )
+    small_ids = await _task_ids(
+        RepoQADataset(
+            fixture_path=FIXTURE_PATH,
+            split="small_dev",
+            dev_fraction=0.5,
+            small_test_size=2,
+        ),
+    )
+    assert small_ids <= dev_ids  # subset of the dev head
+    assert len(small_ids) == min(2, len(dev_ids))
+
+
+async def test_small_dev_never_touches_the_test_tail() -> None:
+    """``small_dev`` is the burn-free iteration slice — it must be disjoint
+    from the held-out ``test`` tail by construction."""
+    test_ids = await _task_ids(
+        RepoQADataset(fixture_path=FIXTURE_PATH, split="test", dev_fraction=0.5),
+    )
+    small_ids = await _task_ids(
+        RepoQADataset(
+            fixture_path=FIXTURE_PATH,
+            split="small_dev",
+            dev_fraction=0.5,
+            small_test_size=2,
+        ),
+    )
+    assert small_ids & test_ids == set()
+
+
+async def test_small_dev_is_deterministic_under_fixed_seed() -> None:
+    """Two ``small_dev`` loads with the same seed yield identical ids —
+    the split-seed determinism contract extends to the new split."""
+    first = await _task_ids(
+        RepoQADataset(
+            fixture_path=FIXTURE_PATH,
+            split="small_dev",
+            small_test_size=1,
+            split_seed=0,
+        ),
+    )
+    second = await _task_ids(
+        RepoQADataset(
+            fixture_path=FIXTURE_PATH,
+            split="small_dev",
+            small_test_size=1,
             split_seed=0,
         ),
     )
