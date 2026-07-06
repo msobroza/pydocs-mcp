@@ -100,6 +100,27 @@ class SqliteDecisionRepository:
             )
         return tuple(_row_to_decision_record(r) for r in rows)
 
+    async def delete_by_ids(
+        self,
+        ids: Sequence[int],
+        *,
+        uow: UnitOfWork | None = None,
+    ) -> None:
+        materialised = tuple(ids)
+        if not materialised:
+            return
+        # Same 500-row batching rationale as SqliteChunkRepository.delete_by_ids:
+        # stay under SQLITE_MAX_VARIABLE_NUMBER and bound per-statement parsing.
+        async with _maybe_acquire(self.provider) as conn:
+            for i in range(0, len(materialised), 500):
+                batch = materialised[i : i + 500]
+                placeholders = ",".join("?" * len(batch))
+                await asyncio.to_thread(
+                    conn.execute,
+                    f"DELETE FROM decision_records WHERE id IN ({placeholders})",
+                    list(batch),
+                )
+
     async def delete_for_package(
         self,
         package: str,

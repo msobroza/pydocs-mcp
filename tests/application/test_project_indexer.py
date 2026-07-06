@@ -106,6 +106,8 @@ class FakeIndexingService:
         references: tuple = (),  # spec §3.1 — accept the #5b seam
         reference_aliases: dict[str, dict[str, str]] | None = None,  # sub-PR #5b
         class_attribute_types: dict[str, dict[str, str]] | None = None,  # sub-PR #5d
+        decisions: tuple = (),  # spec §D8 — decision capture seam
+        project_root=None,  # staleness scorer root (project path)
     ) -> None:
         self._call_counter += 1
         self.reindex_calls.append((package, chunks, module_members, tuple(trees)))

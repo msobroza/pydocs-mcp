@@ -95,6 +95,11 @@ class ProjectIndexer:
             references=result.references,
             reference_aliases=result.reference_aliases,
             class_attribute_types=result.class_attribute_types,
+            # Decisions are project-scoped: only the project source path threads
+            # them + the project root for staleness scoring. Dependency packages
+            # keep the default ``decisions=()`` (spec §D8).
+            decisions=result.decisions,
+            project_root=project_dir,
         )
         stats.project_indexed = True
         log.info(

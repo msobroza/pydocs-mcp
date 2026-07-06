@@ -80,6 +80,21 @@ async def test_delete_for_package(store) -> None:
     assert len(await store.list_for_package("requests")) == 1
 
 
+async def test_delete_by_ids(store) -> None:
+    ids = await store.upsert(
+        (
+            _record(title="keep"),
+            _record(title="drop"),
+        )
+    )
+    await store.delete_by_ids((ids[1],))
+    rows = await store.list_for_package("__project__")
+    assert [r.title for r in rows] == ["keep"]
+    # Empty ids is a no-op (no statement executed).
+    await store.delete_by_ids(())
+    assert len(await store.list_for_package("__project__")) == 1
+
+
 async def test_delete_all(store) -> None:
     await store.upsert((_record(package="__project__"), _record(package="requests")))
     await store.delete_all()

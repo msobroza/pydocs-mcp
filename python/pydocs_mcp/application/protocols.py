@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     # and avoids a runtime import cycle with the sibling service modules
     # that themselves import these Protocols' consumers.
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
+    from pydocs_mcp.extraction.decisions._types import RawDecision
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -67,6 +68,10 @@ class ExtractionResult:
     # (self.X.Y inference); carried alongside ``reference_aliases``
     # because both feed the same resolver pass.
     class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Merged mined decisions (spec §D8) — populated by CaptureDecisionsStage on
+    # project targets only; dependency extractions leave it empty. Threaded into
+    # ``IndexingService.reindex_package`` for reconcile + persistence.
+    decisions: tuple[RawDecision, ...] = field(default=())
 
 
 @runtime_checkable

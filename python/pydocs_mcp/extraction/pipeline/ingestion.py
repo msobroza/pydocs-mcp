@@ -142,6 +142,11 @@ class IngestionState:
     refs: ReferenceBundle = field(default_factory=ReferenceBundle)
     package: Package | None = None
     existing_chunk_hashes: dict[str, int] | None = None
+    # Merged mined decisions (spec §D8) — populated by CaptureDecisionsStage on
+    # project targets, consumed by IndexingService.reindex_package (reconcile +
+    # persist). Additive, default (), mirroring how ``refs`` travels the state:
+    # dependency targets and any pipeline without the stage leave it empty.
+    decisions: tuple[Any, ...] = ()
 
 
 @runtime_checkable

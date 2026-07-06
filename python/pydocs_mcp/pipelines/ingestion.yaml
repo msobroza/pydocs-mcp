@@ -12,6 +12,7 @@ stages:
   - { type: chunking }
   - { type: reference_capture }
   - { type: flatten }
+  - { type: capture_decisions }            # project only: mine + merge decisions → decision-as-chunks (spec §D8)
   - { type: dependency_doc_pages }         # deps only: 1 docstring page per module (the embedded doc unit)
   - { type: assign_chunk_content_hash }    # rewrites chunk hashes with pipeline_hash slot
   - { type: load_existing_chunk_hashes }   # reads SQLite for the embed-skip set

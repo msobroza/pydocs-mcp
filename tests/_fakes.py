@@ -682,6 +682,12 @@ class InMemoryDecisionStore:
         rows = [r for r in self.by_id.values() if r.package == package]
         return tuple(sorted(rows, key=lambda r: r.id or 0))
 
+    async def delete_by_ids(self, ids, *, uow=None) -> None:
+        materialised = tuple(ids)
+        self.calls.append(_Call("delete_by_ids", materialised))
+        for rid in materialised:
+            self.by_id.pop(rid, None)
+
     async def delete_for_package(self, package, *, uow=None) -> None:
         self.calls.append(_Call("delete_for_package", package))
         self.by_id = {rid: r for rid, r in self.by_id.items() if r.package != package}

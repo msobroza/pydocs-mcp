@@ -522,6 +522,13 @@ class DecisionStore(Protocol):
 
     async def list_for_package(self, package: str) -> tuple[DecisionRecord, ...]: ...
 
+    async def delete_by_ids(
+        self,
+        ids: Sequence[int],
+        *,
+        uow: UnitOfWork | None = None,
+    ) -> None: ...
+
     async def delete_for_package(
         self,
         package: str,
