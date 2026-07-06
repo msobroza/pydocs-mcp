@@ -249,6 +249,96 @@ graph expansion from a dense hit.
 - **Run it.** See [EXPERIMENTS.md §6](EXPERIMENTS.md) for the generate + compare
   commands.
 
+### SWE-QA-Pro (primary code-QA track)
+
+**What it measures.** Repository-level code-comprehension questions →
+file-level retrieval. Each task hands the system a real Python repo pinned to a
+commit and a natural-language question about it ("How does the variational QAOA
+model override the minimize method?"); the system returns ranked chunks, and the
+harness checks whether the file(s) the gold answer cites appear in the retrieved
+set. This is the dominant query shape for `get_context` / `search_codebase` on
+whole real-world codebases (not single needles).
+
+- **Dataset size + source.** 260 QA pairs over 26 Python-only repos (10 each),
+  MIT, from `TIGER-Lab/SWE-QA-Pro-Bench` (arXiv:2603.16124). Each row carries a
+  full 40-hex `commit_id`, a `qa_type` (What / Where / How / Why + 12
+  sub-classes), a `cluster` id, and near-regular `(path.py: line N-M)` answer
+  citations (96% of rows). Pinned at dataset revision `596892da…`.
+- **Gold.** File-level pseudo-qrels: the answer's path citations, resolved
+  against the pinned repo's file tree, become `GoldAnswer.file_set`. Rows whose
+  answer cites no resolvable file are dropped **with a logged count** (no silent
+  caps). Registered as `swe-qa-pro`
+  ([`datasets/swe_qa_pro.py`](src/benchmarks/eval/datasets/swe_qa_pro.py)); the
+  committed mini fixture (`fixtures/swe_qa_pro_mini.jsonl`) drives hermetic CI
+  without network access.
+- **Per-category reporting.** Because every row is tagged with a `qa_type`, the
+  report grows a `## By qa_type` breakout (What / Where / How / Why) whenever ≥2
+  categories are present — this is why SWE-QA-Pro is the **primary** track for
+  per-category analysis. Once decision capture lands, the 65 **Why** rows also
+  feed `get_why`'s acceptance probe.
+- **Run it.**
+
+  ```bash
+  # Config zoo: benchmarks/configs/swe_qa_pro_{bm25,dense,hybrid_rrf_k60,graph}.yaml
+  python -m benchmarks.eval.runner \
+      --dataset swe-qa-pro \
+      --configs benchmarks/configs/swe_qa_pro_bm25.yaml,benchmarks/configs/swe_qa_pro_hybrid_rrf_k60.yaml
+  ```
+
+  The loader fetches the pinned `data/test.jsonl` and clones each repo pin into
+  `~/.cache/pydocs-mcp/swe-qa-pro/` on first run, then reuses the cache. Corpora
+  are redistributed-by-download — cloned into the cache, never committed (they
+  belong to their authors).
+
+**Pseudo-qrel caveat** — the same caveat governs both SWE-QA corpora, so read it
+once here:
+
+> The datasets ship QA pairs, not qrels, so retrieval evaluation derives
+> **pseudo-qrels**: a file/symbol is relevant to a question iff it is cited in
+> the gold answer (path and dotted-name extraction with normalization). This is
+> a documented approximation — good for *comparing our own configs* on nDCG@10,
+> recall@{5,10,20}, MRR; not publishable as absolute IR quality.
+
+### SWE-QA (secondary code-QA track)
+
+**What it measures.** The same repository-level code-QA → file retrieval shape as
+SWE-QA-Pro, on a larger but noisier corpus. Complements SWE-QA-Pro with more
+repos and more questions, at the cost of coarser labels and no per-question
+taxonomy.
+
+- **Dataset size + source.** 720 QA pairs over 15 Python repos, Apache-2.0, from
+  `swe-qa/SWE-QA-Benchmark`. The HF release columns are
+  `question` + `answer` **only** — the repo is inferred from the split name, and
+  there are **no commit pins in the data**. Pins (short SHAs) live in the
+  companion GitHub repo (`peng-weihan/SWE-QA-Bench`, `repo_commit.txt`) and are
+  transcribed into the adapter's `_REPO_PINS`. It is **unverified** that the
+  720-row release was built against exactly those commits, so labels stay
+  **file-level** for this corpus (safe under line drift). Pinned at dataset
+  revision `07e206aa…`.
+- **Gold.** File-level pseudo-qrels, same extraction as SWE-QA-Pro; citations are
+  noisier (~8% bare filenames resolved by unique basename), citation-free rows
+  drop with a logged count. Registered as `swe-qa`
+  ([`datasets/swe_qa.py`](src/benchmarks/eval/datasets/swe_qa.py)); the committed
+  mini fixture (`fixtures/swe_qa_mini.jsonl`) drives hermetic CI. There is **no
+  per-question taxonomy** in the release, so per-category breakouts come from
+  SWE-QA-Pro; SWE-QA gets per-repo breakouts only.
+- **Run it.**
+
+  ```bash
+  # --split selects one repo (e.g. matplotlib) or "default" for all 15.
+  python -m benchmarks.eval.runner \
+      --dataset swe-qa \
+      --configs benchmarks/configs/swe_qa_pro_bm25.yaml \
+      --split matplotlib
+  ```
+
+  The loader fetches the per-repo `data/<repo>.jsonl` files and clones each pin
+  into `~/.cache/pydocs-mcp/swe-qa/` on first run. Corpora are
+  redistributed-by-download — never committed.
+
+The **pseudo-qrel caveat** above applies identically to this corpus —
+comparative, not absolute, IR quality.
+
 ### Roadmap: additional benchmarks
 
 Each future benchmark gets its own subsection following the same four-question
