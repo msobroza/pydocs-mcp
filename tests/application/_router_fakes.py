@@ -65,19 +65,36 @@ class FakeLookup:
     """A lookup body that echoes the requested ``show`` mode so ToolRouter's
     depth/direction → ``show`` mapping is observable.
 
-    Empty target = "list packages"; ``show="context"`` renders a per-target
-    context card; ``show="impact"`` renders an impact heading — enough for the
-    router tests to assert routing without pulling in the real LookupService.
+    Empty target = "list packages"; ``show="impact"`` renders an impact
+    heading — enough for the router tests to assert routing without pulling in
+    the real LookupService.
+
+    ``get_context`` no longer routes through ``lookup(show="context")``: it uses
+    the two-phase ``context_nodes`` (resolve) + ``render_context_card`` (render)
+    split. This fake mirrors that seam — ``context_nodes`` returns a one-node
+    closure per target and ``render_context_card`` emits the ``# Context for``
+    heading — so the router's "one card per target" routing stays observable
+    without the real LookupService + reference graph.
     """
 
+    # Read by ``get_context`` phase 2 as the shared budget to split; the fake
+    # closures are one node each so the split is even and the value is inert.
+    context_token_budget = 2048
+
     async def lookup(self, payload: LookupInput) -> str:
-        if payload.show == "context":
-            return f"# Context for {payload.target}\n\nctx body"
         if payload.show == "impact":
             return f"Impact of {payload.target}\n\nimpact body"
         if not payload.target:
             return "## Packages\n- pkg"
         return f"## {payload.target}\n\nsummary body"
+
+    async def context_nodes(self, target: str) -> tuple[str, tuple[str, ...]]:
+        # Trivial one-node closure keyed by target — enough for the router's
+        # proportional split (all sizes equal → even shares).
+        return target, (f"{target}.dep0",)
+
+    def render_context_card(self, target: str, nodes: tuple[str, ...], *, token_budget: int) -> str:
+        return f"# Context for {target}\n\nctx body ({len(nodes)} nodes)"
 
 
 class FakeSymbolSource:

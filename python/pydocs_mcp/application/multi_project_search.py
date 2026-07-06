@@ -14,9 +14,9 @@ comparable across dbs because the embedder-match guard forces one embedder.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.docs_search import DocsSearch
@@ -38,6 +38,9 @@ from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ModuleMember
 from pydocs_mcp.multirepo import LoadedProject, select_project
 
+if TYPE_CHECKING:
+    from pydocs_mcp.application.reference_service import ContextNode
+
 # Composite token budget for the unioned output — matches the shipped
 # chunk_search_graph.yaml / member_search.yaml ``budget: 2000``.
 _DEFAULT_BUDGET_TOKENS = 2000
@@ -54,6 +57,10 @@ EMPTY_SEARCH_MESSAGES = frozenset((_EMPTY_DOCS_MSG, _EMPTY_API_MSG))
 # ``metadata``). Value-constrained so the merge preserves the concrete type and
 # the chunk / member formatters (each wanting its own tuple) type-check.
 _R = TypeVar("_R", Chunk, ModuleMember)
+
+# Result of a per-project resolver run through ``_resolve_by_recency`` — a
+# rendered lookup body (``str``) or a ``(target, closure)`` context tuple.
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,25 +214,54 @@ class MultiProjectLookup:
                 f"## Project: {s.project.name}\n\n{text}"
                 for s, text in zip(self.services, listings, strict=True)
             )
-        # A specific target lives in exactly one project — try by recency and
-        # return the first that resolves it (a project without it raises
-        # NotFoundError; reference-graph traversal stays within that project).
+        # A specific target lives in exactly one project — resolve by recency.
+        return await self._resolve_by_recency(
+            lambda svc: svc.lookup.lookup(payload),
+            target=payload.target,
+        )
+
+    async def resolve_context(
+        self, target: str, project: str
+    ) -> tuple[str, tuple[ContextNode, ...]]:
+        """Resolve ``target`` → ``(display_target, closure_nodes)`` via the right
+        project's ``LookupService.context_nodes`` — the same project-routing /
+        recency resolution ``_lookup_body`` uses, so a batched ``get_context``
+        target lands in exactly the project a single lookup would.
+
+        ``ToolRouter.get_context`` calls this once per target (phase 1) before
+        splitting the shared budget across the gathered closures (phase 2).
+        """
+        if project:
+            return await _select_service(self.services, project).lookup.context_nodes(target)
+        if len(self.services) == 1:
+            return await self.services[0].lookup.context_nodes(target)
+        return await self._resolve_by_recency(
+            lambda svc: svc.lookup.context_nodes(target),
+            target=target,
+        )
+
+    async def _resolve_by_recency(
+        self, run: Callable[[ProjectServices], Awaitable[_T]], *, target: str
+    ) -> _T:
+        """Try ``run(svc)`` per project most-recently-indexed first; return the
+        first result that resolves, skipping projects that raise
+        ``NotFoundError``. When every project misses, raise ``NotFoundError``
+        carrying a search recovery pointer (spec §D1 error contract).
+
+        The token stays RAW in the surfaced message: a raised error unwinds past
+        ``ResponseEnvelope.wrap`` before its resolve_pointers step runs
+        (envelope.py resolves only the value returned by produce(), never an
+        exception), so the literal ``[[next:search:...]]`` is what ``str(exc)``
+        yields on both surfaces — MCP (server.py re-raises; FastMCP serializes
+        str(exc)) and CLI (__main__ prints ``Error: {exc}``).
+        """
         ordered = sorted(self.services, key=lambda s: s.project.indexed_at, reverse=True)
         for svc in ordered:
             try:
-                return await svc.lookup.lookup(payload)
+                return await run(svc)
             except NotFoundError:
                 continue
-        # Every project missed the target. The error text is what surfaces to
-        # the agent, so it carries a search pointer (spec §D1 error contract) to
-        # steer it to the recovery step. The token stays RAW in the surfaced
-        # message: a raised error unwinds past ResponseEnvelope.wrap before its
-        # resolve_pointers step runs (envelope.py resolves only the value
-        # returned by produce(), never an exception), so the literal
-        # "[[next:search:...]]" is what str(exc) yields on both surfaces — MCP
-        # (server.py re-raises; FastMCP serializes str(exc)) and CLI (__main__
-        # prints "Error: {exc}").
         raise NotFoundError(
-            f"'{payload.target}' not found in any loaded project. "
-            f"{pointer_token('search', payload.target.rsplit('.', 1)[-1])}"
+            f"'{target}' not found in any loaded project. "
+            f"{pointer_token('search', target.rsplit('.', 1)[-1])}"
         )

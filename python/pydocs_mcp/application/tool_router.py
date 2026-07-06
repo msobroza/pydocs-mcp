@@ -39,6 +39,11 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
     "tree": "tree",
 }
 
+# Floor share every context card is guaranteed regardless of closure-size skew,
+# so a tiny closure batched beside a huge one still renders its focus block
+# (spec §D1 batched-context contract). Single source of truth for the split.
+_MIN_SHARE_RATIO = 0.10
+
 
 @dataclass(frozen=True, slots=True)
 class ToolRouter:
@@ -86,10 +91,21 @@ class ToolRouter:
 
     async def get_context(self, payload: ContextInput) -> str:
         async def _cards() -> str:
-            cards = []
-            for target in payload.targets:
-                body = LookupInput(target=target, show="context", project=payload.project)
-                cards.append(await self.lookup_router._lookup_body(body))
+            # Phase 1 — resolve every target's forward closure through the same
+            # project-routing / recency resolution a single lookup uses.
+            resolved = [
+                await self.lookup_router.resolve_context(target, payload.project)
+                for target in payload.targets
+            ]
+            # Phase 2 — split the ONE shared budget proportionally to closure
+            # size, then render each card at its own share.
+            svc = self._svc(payload.project)
+            budget = svc.lookup.context_token_budget
+            shares = _split_budget(budget, [len(nodes) for _, nodes in resolved])
+            cards = [
+                svc.lookup.render_context_card(target, nodes, token_budget=share)
+                for (target, nodes), share in zip(resolved, shares, strict=True)
+            ]
             return "\n\n".join(cards)
 
         return await self.envelope.wrap(_cards)
@@ -119,3 +135,24 @@ async def _render_overview(service: OverviewService, package: str) -> str:
     """Build + render the §D17 structural card. Module-level so ``get_overview``
     stays a one-liner and the service/render seam is directly testable."""
     return format_overview_card(await service.build(package))
+
+
+def _split_budget(total: int, sizes: list[int]) -> list[int]:
+    """Split ``total`` tokens across cards proportionally to closure ``sizes``.
+
+    ``share_i = max(floor, total * size_i / Σsizes)`` with
+    ``floor = int(total * _MIN_SHARE_RATIO)`` — every card is guaranteed the
+    floor so a tiny closure batched beside a huge one still renders (a bigger
+    closure just gets proportionally more of the remaining budget). When every
+    closure is empty (``Σsizes == 0``) the budget splits evenly, so each card
+    still gets a usable share instead of collapsing to the floor.
+
+    Module-level + pure so the proportional-split math is unit-testable apart
+    from the async two-phase orchestration in ``ToolRouter.get_context``.
+    """
+    floor = int(total * _MIN_SHARE_RATIO)
+    denom = sum(sizes)
+    if denom == 0:
+        even = total // len(sizes)
+        return [max(floor, even) for _ in sizes]
+    return [max(floor, total * size // denom) for size in sizes]
