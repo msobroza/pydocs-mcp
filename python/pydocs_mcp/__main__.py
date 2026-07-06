@@ -106,6 +106,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Verbose logging + traceback on failure.",
     )
 
+    # The shared corpus-selector + engine knobs every query subcommand carries.
+    # Single source of truth so the six task-shaped subcommands (plus the
+    # deprecated ``lookup`` alias) never drift on which flags they accept:
+    # ``--project-dir`` picks the cache DB; ``--workspace`` / ``--db`` load
+    # read-only multi-repo bundles; ``--project`` scopes the query to one loaded
+    # project; ``--no-rust`` / ``--cache-dir`` / ``-v`` are engine/verbosity knobs.
+    def _add_query_flags(sp_query: argparse.ArgumentParser) -> None:
+        sp_query.add_argument(
+            "--project-dir",
+            dest="project",
+            default=".",
+            help="Path to the project root (default: current directory). "
+            "Determines which cache database is loaded.",
+        )
+        sp_query.add_argument("--workspace", **_workspace)
+        sp_query.add_argument("--db", **_db)
+        sp_query.add_argument("--project", **_project_scope)
+        sp_query.add_argument("--no-rust", **_no_rust)
+        sp_query.add_argument("--cache-dir", **_cache_dir)
+        sp_query.add_argument("-v", "--verbose", **_verbose)
+
     # ``watch`` is the standalone watcher counterpart to ``serve --watch``:
     # the whole subcommand IS watch mode (it does NOT accept ``--watch``,
     # which would be redundant noise). Shares every other knob with the
@@ -223,22 +244,47 @@ def _build_parser() -> argparse.ArgumentParser:
         default=10,
         help="Max number of results (1-1000, default: 10).",
     )
-    sp_search.add_argument(
-        "--project-dir",
-        dest="project",
-        default=".",
-        help="Path to the project root (default: current directory). Determines which cache database is loaded.",
+    _add_query_flags(sp_search)
+
+    # ── Six task-shaped subcommands mirror the six MCP tools 1:1 (spec §D1) ──
+    # Each carries the shared query flags via ``_add_query_flags``; only their
+    # positional/tool-specific args differ. ``search`` above is the sixth tool
+    # (``search_codebase``) — its flag set already IS the task-shaped interface.
+    # Help text comes from the ``TOOL_DOCS`` single source so the CLI and MCP
+    # descriptions never drift (spec §D13).
+    from pydocs_mcp.application.tool_docs import TOOL_DOCS
+
+    p_overview = sub.add_parser("overview", help=TOOL_DOCS["get_overview"].splitlines()[0])
+    p_overview.add_argument("package", nargs="?", default="")
+    _add_query_flags(p_overview)
+
+    p_symbol = sub.add_parser("symbol", help=TOOL_DOCS["get_symbol"].splitlines()[0])
+    p_symbol.add_argument("target")
+    p_symbol.add_argument("--depth", choices=["summary", "tree", "source"], default="summary")
+    _add_query_flags(p_symbol)
+
+    p_context = sub.add_parser("context", help=TOOL_DOCS["get_context"].splitlines()[0])
+    p_context.add_argument("targets", nargs="+")
+    _add_query_flags(p_context)
+
+    p_refs = sub.add_parser("refs", help=TOOL_DOCS["get_references"].splitlines()[0])
+    p_refs.add_argument("target")
+    p_refs.add_argument(
+        "--direction",
+        choices=["callers", "callees", "inherits", "impact"],
+        default="callers",
     )
-    sp_search.add_argument("--workspace", **_workspace)
-    sp_search.add_argument("--db", **_db)
-    sp_search.add_argument("--project", **_project_scope)
-    sp_search.add_argument("--no-rust", **_no_rust)
-    sp_search.add_argument("--cache-dir", **_cache_dir)
-    sp_search.add_argument("-v", "--verbose", **_verbose)
+    p_refs.add_argument("--limit", type=int, default=None)
+    _add_query_flags(p_refs)
+
+    p_why = sub.add_parser("why", help=TOOL_DOCS["get_why"].splitlines()[0])
+    p_why.add_argument("query", nargs="?", default="")
+    p_why.add_argument("--target", action="append", dest="targets", default=None)
+    _add_query_flags(p_why)
 
     sp_lookup = sub.add_parser(
         "lookup",
-        help="Navigate to a known symbol + walk its reference graph",
+        help="[deprecated] Alias for symbol/refs/context — use those directly",
         description=(
             "Navigate to a known symbol (dotted path) and optionally traverse its "
             "reference graph — callers, callees, base classes. Use this when you "
@@ -277,18 +323,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "'context' = dependency closure packed under a token budget — 'everything to understand X'."
         ),
     )
-    sp_lookup.add_argument(
-        "--project-dir",
-        dest="project",
-        default=".",
-        help="Path to the project root (default: current directory). Determines which cache database is loaded.",
-    )
-    sp_lookup.add_argument("--workspace", **_workspace)
-    sp_lookup.add_argument("--db", **_db)
-    sp_lookup.add_argument("--project", **_project_scope)
-    sp_lookup.add_argument("--no-rust", **_no_rust)
-    sp_lookup.add_argument("--cache-dir", **_cache_dir)
-    sp_lookup.add_argument("-v", "--verbose", **_verbose)
+    _add_query_flags(sp_lookup)
 
     return p
 
@@ -539,13 +574,16 @@ def _query_db_path(args: argparse.Namespace) -> Path | None:
     return _project_and_db(args)[1]
 
 
-async def _run_search(args: argparse.Namespace) -> None:
-    """Mirror the MCP ``search`` tool: same router + same rendering.
+def _build_cli_tools(args: argparse.Namespace):
+    """Build the ``ToolRouter`` for a query subcommand (the CLI composition root).
 
-    Routes to one loaded project (``--project`` / a single ``--project-dir`` db)
-    or unions across a ``--workspace`` / ``--db`` multi-repo load.
+    Every task-shaped subcommand loads config + configures the input-model slots
+    + builds routers identically — ``surface="cli"`` picks the CLI pointer syntax
+    the shared envelope resolves to. Collapsed into one helper so each ``_run_*``
+    runner stays a small adapter (build tools → construct its input model → print)
+    and they can't drift on how they select / load databases (``--project-dir``
+    single db vs ``--workspace`` / ``--db`` read-only multi-repo).
     """
-    from pydocs_mcp.application import SearchInput
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.server import build_routers
@@ -559,6 +597,18 @@ async def _run_search(args: argparse.Namespace) -> None:
         db_paths=args.db_paths,
         surface="cli",
     )
+    return tools
+
+
+async def _run_search(args: argparse.Namespace) -> None:
+    """Mirror the MCP ``search_codebase`` tool: same router + same rendering.
+
+    Routes to one loaded project (``--project`` / a single ``--project-dir`` db)
+    or unions across a ``--workspace`` / ``--db`` multi-repo load.
+    """
+    from pydocs_mcp.application import SearchInput
+
+    tools = _build_cli_tools(args)
     payload = SearchInput(
         query=args.query,
         kind=args.kind,
@@ -570,27 +620,107 @@ async def _run_search(args: argparse.Namespace) -> None:
     print(await tools.search_codebase(payload))
 
 
-async def _run_lookup(args: argparse.Namespace) -> None:
-    """Mirror the MCP ``lookup`` tool — same router; routes/resolves by project."""
-    from pydocs_mcp.application import LookupInput
-    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
-    from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.server import build_routers
+async def _run_overview(args: argparse.Namespace) -> None:
+    """Mirror the MCP ``get_overview`` tool."""
+    from pydocs_mcp.application.mcp_inputs import OverviewInput
 
-    config = AppConfig.load(explicit_path=getattr(args, "config", None))
-    configure_from_app_config(config)
-    tools, _svcs = build_routers(
-        config,
-        db_path=_query_db_path(args),
-        workspace=args.workspace,
-        db_paths=args.db_paths,
-        surface="cli",
+    tools = _build_cli_tools(args)
+    payload = OverviewInput(package=args.package, project=args.project_scope)
+    print(await tools.get_overview(payload))
+
+
+async def _run_symbol(args: argparse.Namespace) -> None:
+    """Mirror the MCP ``get_symbol`` tool (``--depth`` summary/tree/source)."""
+    from pydocs_mcp.application.mcp_inputs import SymbolInput
+
+    tools = _build_cli_tools(args)
+    payload = SymbolInput(target=args.target, depth=args.depth, project=args.project_scope)
+    print(await tools.get_symbol(payload))
+
+
+async def _run_context(args: argparse.Namespace) -> None:
+    """Mirror the MCP ``get_context`` tool — batched targets under one budget."""
+    from pydocs_mcp.application.mcp_inputs import ContextInput
+
+    tools = _build_cli_tools(args)
+    payload = ContextInput(targets=args.targets, project=args.project_scope)
+    print(await tools.get_context(payload))
+
+
+async def _run_refs(args: argparse.Namespace) -> None:
+    """Mirror the MCP ``get_references`` tool (``--direction`` + graph traversal)."""
+    from pydocs_mcp.application.mcp_inputs import ReferencesInput
+
+    tools = _build_cli_tools(args)
+    # ``limit`` is omitted when the client didn't pass ``--limit`` so the input
+    # model's YAML-wired default_factory supplies the reference-graph default —
+    # no literal duplicated here (single-source-of-truth defaults).
+    fields = {"target": args.target, "direction": args.direction, "project": args.project_scope}
+    if args.limit is not None:
+        fields["limit"] = args.limit
+    print(await tools.get_references(ReferencesInput(**fields)))
+
+
+async def _run_why(args: argparse.Namespace) -> None:
+    """Mirror the MCP ``get_why`` tool — decision search / per-target / dashboard.
+
+    Until the decision layer lands, this routes to ``NullDecisionService`` which
+    raises ``ServiceUnavailableError`` (a typed :class:`MCPToolError`); the
+    ``_run_cmd`` boundary maps it to ``Error: …`` on stderr + exit 1, exactly
+    like the MCP handler's error path.
+    """
+    from pydocs_mcp.application.mcp_inputs import WhyInput
+
+    tools = _build_cli_tools(args)
+    payload = WhyInput(query=args.query, targets=args.targets, project=args.project_scope)
+    print(await tools.get_why(payload))
+
+
+# ``lookup --show`` → new-router routing. ``default``/``tree`` are get_symbol
+# depths; the graph shows map 1:1 to get_references directions. ``context`` and
+# empty-target ("list packages") are handled separately in ``_run_lookup``.
+_ALIAS_DEPTH = {"default": "summary", "tree": "tree"}
+_ALIAS_DIRECTION = frozenset({"callers", "callees", "inherits", "impact"})
+
+
+async def _run_lookup(args: argparse.Namespace) -> None:
+    """Deprecated ``lookup`` alias — warn on stderr, then delegate to the new router.
+
+    Kept for one release so existing scripts keep working. ``--show`` maps onto
+    the task-shaped tools: ``default``/``tree`` → ``get_symbol``; graph shows
+    (``callers``/``callees``/``inherits``/``impact``) → ``get_references``;
+    ``context`` → ``get_context``; an empty target preserves the old "list
+    packages" behavior via ``get_overview``.
+    """
+    from pydocs_mcp.application.mcp_inputs import (
+        ContextInput,
+        OverviewInput,
+        ReferencesInput,
+        SymbolInput,
     )
-    payload = LookupInput(target=args.target, show=args.show, project=args.project_scope)
-    # Task 9 rewrites this into the six task-shaped subcommands; until then the
-    # deprecated ``lookup`` command routes through the same enveloped lookup body
-    # the old two-tool surface used, so every ``--show`` mode behaves as before.
-    print(await tools.envelope.wrap(lambda: tools.lookup_router._lookup_body(payload)))
+
+    print(
+        "'pydocs-mcp lookup' is deprecated — use 'pydocs-mcp symbol' "
+        "(or refs/context per --show); routing there now.",
+        file=sys.stderr,
+    )
+    tools = _build_cli_tools(args)
+    project = args.project_scope
+
+    # Empty target = "list packages" — the old lookup behavior for every --show;
+    # get_overview(package="") renders that listing.
+    if not args.target:
+        print(await tools.get_overview(OverviewInput(package="", project=project)))
+        return
+    if args.show == "context":
+        print(await tools.get_context(ContextInput(targets=[args.target], project=project)))
+        return
+    if args.show in _ALIAS_DIRECTION:
+        payload = ReferencesInput(target=args.target, direction=args.show, project=project)
+        print(await tools.get_references(payload))
+        return
+    depth = _ALIAS_DEPTH[args.show]
+    print(await tools.get_symbol(SymbolInput(target=args.target, depth=depth, project=project)))
 
 
 def _report_cli_failure(exc: Exception, *, verbose: bool) -> int:
@@ -759,6 +889,26 @@ def _cmd_search(args: argparse.Namespace) -> int:
     return _run_cmd(_run_search(args), verbose=args.verbose)
 
 
+def _cmd_overview(args: argparse.Namespace) -> int:
+    return _run_cmd(_run_overview(args), verbose=args.verbose)
+
+
+def _cmd_symbol(args: argparse.Namespace) -> int:
+    return _run_cmd(_run_symbol(args), verbose=args.verbose)
+
+
+def _cmd_context(args: argparse.Namespace) -> int:
+    return _run_cmd(_run_context(args), verbose=args.verbose)
+
+
+def _cmd_refs(args: argparse.Namespace) -> int:
+    return _run_cmd(_run_refs(args), verbose=args.verbose)
+
+
+def _cmd_why(args: argparse.Namespace) -> int:
+    return _run_cmd(_run_why(args), verbose=args.verbose)
+
+
 def _cmd_lookup(args: argparse.Namespace) -> int:
     return _run_cmd(_run_lookup(args), verbose=args.verbose)
 
@@ -771,6 +921,11 @@ _CMD_TABLE = {
     "index": _cmd_index,
     "watch": _cmd_watch,
     "search": _cmd_search,
+    "overview": _cmd_overview,
+    "symbol": _cmd_symbol,
+    "context": _cmd_context,
+    "refs": _cmd_refs,
+    "why": _cmd_why,
     "lookup": _cmd_lookup,
 }
 
