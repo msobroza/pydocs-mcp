@@ -25,7 +25,7 @@ import itertools
 import shutil
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -90,6 +90,11 @@ class TaskObservation:
     ``index_seconds`` is ALWAYS measured; ``cache_hit`` records whether the
     system served a cached index (spec D9: a ~0 s cache lookup is not an
     indexing measurement — aggregation and trackers skip hit rows).
+
+    ``metadata`` carries the task's ``EvalTask.metadata`` verbatim so the
+    report's ``## By qa_type`` breakout (spec §D14) can group per-task scores
+    by ``metadata["qa_type"]`` without re-parsing tracker JSONL. Empty for
+    datasets that carry no per-task metadata (RepoQA, DS-1000).
     """
 
     task_id: str
@@ -97,6 +102,7 @@ class TaskObservation:
     index_seconds: float
     search_seconds: float
     cache_hit: bool
+    metadata: Mapping[str, str] = field(default_factory=dict)
 
 
 class ScorerFailure(Exception):
@@ -189,6 +195,7 @@ async def _run_task(
                 index_seconds=index_seconds,
                 search_seconds=search_seconds,
                 cache_hit=cache_hit,
+                metadata=dict(task.metadata),
             )
             raise ScorerFailure(partial, exc) from exc
 
@@ -198,6 +205,7 @@ async def _run_task(
             index_seconds=index_seconds,
             search_seconds=search_seconds,
             cache_hit=cache_hit,
+            metadata=dict(task.metadata),
         )
     finally:
         # WHY: only rmtree a per-task corpus the dataset materialized —

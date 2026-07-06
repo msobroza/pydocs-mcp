@@ -65,7 +65,7 @@ class _FixedScorer:
         return dict(self._scores)
 
 
-def _task(tmp_dirs: list[Path]) -> EvalTask:
+def _task(tmp_dirs: list[Path], metadata: dict[str, str] | None = None) -> EvalTask:
     def _source() -> Path:
         d = Path(tempfile.mkdtemp(prefix="sweep_unit_corpus_"))
         tmp_dirs.append(d)
@@ -76,7 +76,7 @@ def _task(tmp_dirs: list[Path]) -> EvalTask:
         query="q",
         gold=GoldAnswer(ast_body="def f(): ..."),
         corpus_source=_source,
-        metadata={},
+        metadata=metadata or {},
     )
 
 
@@ -96,6 +96,37 @@ async def test_run_task_cold_observation_shape() -> None:
     assert obs.search_seconds >= 0.0
     # The per-task materialized corpus is rmtree'd when corpus_dir is None.
     assert dirs and not dirs[0].exists()
+
+
+async def test_run_task_propagates_task_metadata() -> None:
+    # WHY: the report's ``## By qa_type`` breakout needs per-task metadata to
+    # survive into the observation — the aggregated SweepResults pools it away.
+    # ``_run_task`` reassigns ``task`` via the gold-resolution helpers, so this
+    # pins that the original ``metadata`` is preserved verbatim.
+    dirs: list[Path] = []
+    obs = await _run_task(
+        _FakeSystem(),
+        _task(dirs, metadata={"qa_type": "What", "sub_class": "impl"}),
+        _CONFIG,
+        _FixedScorer({"recall@1": 1.0}),
+        corpus_dir=None,
+    )
+    assert obs.metadata == {"qa_type": "What", "sub_class": "impl"}
+
+
+async def test_run_task_scorer_failure_preserves_metadata() -> None:
+    # The ScorerFailure partial also carries metadata so a per-category
+    # breakout survives a leg that scored the metrics but failed resolution.
+    dirs: list[Path] = []
+    with pytest.raises(ScorerFailure) as excinfo:
+        await _run_task(
+            _FakeSystem(),
+            _task(dirs, metadata={"qa_type": "Where"}),
+            _CONFIG,
+            _FixedScorer(exc=RuntimeError("boom")),
+            corpus_dir=None,
+        )
+    assert excinfo.value.partial.metadata == {"qa_type": "Where"}
 
 
 async def test_run_task_cache_hit_flag_set() -> None:

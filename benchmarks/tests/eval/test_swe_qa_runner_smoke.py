@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval.runner import run_sweep
+from benchmarks.eval.report import format_report
+from benchmarks.eval.runner import _task_rows_from_legs, run_sweep, run_sweep_detailed
 
 _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -89,3 +90,39 @@ async def test_swe_qa_pro_runner_smoke(config_stem: str, tmp_path: Path) -> None
         assert len(triple) == 3, f"{spec} aggregate shape changed"
         for v in triple:
             assert 0.0 <= v <= 1.0, f"{spec} value out of bounds: {v}"
+
+
+async def test_swe_qa_pro_runner_emits_qa_type_breakout(tmp_path: Path) -> None:
+    # WHY: this is the PRODUCTION path ``runner.main`` now takes — run the
+    # detailed sweep, project the legs into ``task_rows``, and render. The
+    # fixture's four scorable rows span three distinct ``qa_type`` first-words
+    # (How / Where / What / Why), so the ``## By qa_type`` breakout the README
+    # documents must actually appear in the CLI's report (previously the
+    # feature was exercised only by report.py unit tests — dead in the runner).
+    overlay = _CONFIGS_DIR / "swe_qa_pro_bm25.yaml"
+    jsonl_dir = tmp_path / "jsonl"
+
+    outcome = await run_sweep_detailed(
+        systems=("pydocs-mcp",),
+        config_paths=(overlay,),
+        dataset_name="swe-qa-pro",
+        dataset_kwargs={"fixture_path": _PRO_FIXTURE, "repo_cache": _FakeRepoCache()},
+        metric_specs=_METRIC_SPECS,
+        tracker_names=("jsonl",),
+        tracker_kwargs={"jsonl": {"output_dir": jsonl_dir}},
+        limit=None,
+    )
+
+    task_rows = _task_rows_from_legs(outcome.legs)
+    report = format_report(
+        sweep_results=outcome.results,
+        dataset_name="swe-qa-pro",
+        n_tasks=outcome.tasks_ran,
+        task_rows=task_rows,
+    )
+
+    assert "## By qa_type" in report
+    # Every scorable row's qa_type first-word must label a breakout row.
+    section = report.split("## By qa_type", 1)[1]
+    for category in ("How", "Where", "What", "Why"):
+        assert f"| {category} |" in section
