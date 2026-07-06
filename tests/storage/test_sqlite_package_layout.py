@@ -115,3 +115,13 @@ def test_member_repo_and_tree_store_have_own_modules() -> None:
     )
     assert sqlite_pkg.SqliteDocumentTreeStore is document_tree_store.SqliteDocumentTreeStore
     assert sqlite_pkg._serialize_tree_to_json is document_tree_store._serialize_tree_to_json
+
+
+def test_reference_and_node_score_stores_have_own_modules() -> None:
+    from pydocs_mcp.storage.sqlite import node_score_repository, reference_store
+
+    assert sqlite_pkg.SqliteReferenceStore is reference_store.SqliteReferenceStore
+    assert (
+        sqlite_pkg.SqliteNodeScoreRepository
+        is node_score_repository.SqliteNodeScoreRepository
+    )
