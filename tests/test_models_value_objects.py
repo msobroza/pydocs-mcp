@@ -1,4 +1,4 @@
-"""Task 21 — Chunk + Package value-object polish.
+"""Chunk + Package value-object behavior after the dead-code sweep.
 
 Covers:
 
@@ -7,34 +7,22 @@ Covers:
   explicitly; the factory is a test-only convenience.
 * S13: ``Chunk.embedding`` is documented as ``None`` on read paths
   (vectors live in the ``.tq`` sidecar).
-* S17: ``RetrievalEnrichment(relevance, retriever_name)`` is exposed as
-  an optional sub-object on Chunk via ``chunk.with_enrichment(...)``.
-  Added **additively** — the legacy ``relevance`` / ``retriever_name``
-  fields on Chunk continue to work for backward compatibility.
-* S28: ``EmbeddingProvenance(model_name, content_hash)`` is exposed as
-  an optional sub-object on Package. Added **additively** — the legacy
-  ``embedding_model`` / ``content_hash`` fields on Package continue to
-  work for backward compatibility.
-
-The test file is intentionally adapted to the actual Chunk / Package
-schema (text + metadata payload, not a flat record), which is the
-shape production callers in ``storage/sqlite.py``,
-``retrieval/steps/*.py``, and ``extraction/pipeline/stages/*.py``
-already use.
+* Dead-code sweep: the transitional grouped value objects
+  (``RetrievalEnrichment`` + ``Chunk.enrichment`` +
+  ``Chunk.with_enrichment``; ``EmbeddingProvenance`` +
+  ``Package.provenance``) never gained a producer or consumer outside
+  their own tests and were removed. The flat fields (``relevance`` /
+  ``retriever_name`` on Chunk, ``embedding_model`` on Package) are the
+  single surviving form; the absence tests below make re-introducing
+  the grouped form a deliberate act instead of drift.
 """
 
 from __future__ import annotations
 
-import pytest
+import dataclasses
 
-from pydocs_mcp.models import (
-    Chunk,
-    EmbeddingProvenance,
-    Package,
-    PackageOrigin,
-    RetrievalEnrichment,
-)
-
+import pydocs_mcp.models as models
+from pydocs_mcp.models import Chunk, Package, PackageOrigin
 
 # ── S2 / S25: Chunk.from_test_inputs auto-computes content_hash ────────
 
@@ -103,115 +91,24 @@ def test_chunk_embedding_documented_as_none_on_read_paths() -> None:
     """The ``Chunk.embedding`` field carries the inline embedding only
     during ingestion. On read paths it is always ``None`` because dense
     vectors live in the ``.tq`` sidecar, not on the SQLite row."""
-    # The docstring is attached to the field via the dataclass field
-    # default; we assert here that the documented default (None) holds
-    # and is reachable via the standard attribute path.
     chunk = Chunk(text="x")
     assert chunk.embedding is None
 
 
-# ── S17: RetrievalEnrichment value object on Chunk ─────────────────────
+# ── Flat retrieval / provenance fields are the single surviving form ───
 
 
-def test_retrieval_enrichment_value_object() -> None:
-    enr = RetrievalEnrichment(relevance=0.95, retriever_name="bm25")
-    assert enr.relevance == 0.95
-    assert enr.retriever_name == "bm25"
-
-
-def test_retrieval_enrichment_is_frozen() -> None:
-    enr = RetrievalEnrichment(relevance=0.5, retriever_name="bm25")
-    with pytest.raises(Exception):
-        enr.relevance = 0.9  # type: ignore[misc]
-
-
-def test_chunk_enrichment_default_is_none() -> None:
-    chunk = Chunk(text="x")
-    assert chunk.enrichment is None
-
-
-def test_chunk_with_enrichment_returns_new_instance() -> None:
-    """``chunk.with_enrichment(e)`` is non-mutating; the original chunk
-    is unchanged and a new Chunk carries the enrichment."""
-    original = Chunk(text="x", content_hash="h")
-    enr = RetrievalEnrichment(relevance=0.95, retriever_name="bm25")
-    enriched = original.with_enrichment(enr)
-
-    assert original.enrichment is None  # original is untouched
-    assert enriched is not original
-    assert enriched.enrichment == enr
-    assert enriched.enrichment is not None
-    assert enriched.enrichment.relevance == 0.95
-    assert enriched.enrichment.retriever_name == "bm25"
-    # Identity fields preserved.
-    assert enriched.text == "x"
-    assert enriched.content_hash == "h"
-
-
-def test_chunk_legacy_relevance_fields_still_work() -> None:
-    """S17 is ADDITIVE — the legacy flat ``relevance`` / ``retriever_name``
-    fields remain on Chunk for backward compatibility with existing
-    production retrieval steps (bm25_scorer, dense_scorer, etc.)."""
+def test_chunk_flat_relevance_fields() -> None:
+    """``relevance`` / ``retriever_name`` are the fields every production
+    retrieval step (bm25_scorer, dense_scorer, rrf_fusion, ...) writes."""
     chunk = Chunk(text="x", relevance=0.9, retriever_name="bm25")
     assert chunk.relevance == 0.9
     assert chunk.retriever_name == "bm25"
-    assert chunk.enrichment is None  # the two paths are independent
 
 
-# ── S28: EmbeddingProvenance value object on Package ───────────────────
-
-
-def test_embedding_provenance_value_object() -> None:
-    prov = EmbeddingProvenance(model_name="BAAI/bge-small-en-v1.5", content_hash="h")
-    assert prov.model_name == "BAAI/bge-small-en-v1.5"
-    assert prov.content_hash == "h"
-
-
-def test_embedding_provenance_is_frozen() -> None:
-    prov = EmbeddingProvenance(model_name="m", content_hash="h")
-    with pytest.raises(Exception):
-        prov.model_name = "other"  # type: ignore[misc]
-
-
-def test_package_provenance_default_is_none() -> None:
-    """S28 is ADDITIVE — ``provenance`` is optional and defaults to
-    None so every existing Package(...) call site keeps compiling."""
-    pkg = Package(
-        name="demo",
-        version="1.0",
-        summary="",
-        homepage="",
-        dependencies=(),
-        content_hash="h",
-        origin=PackageOrigin.DEPENDENCY,
-    )
-    assert pkg.provenance is None
-
-
-def test_package_with_explicit_provenance() -> None:
-    prov = EmbeddingProvenance(
-        model_name="BAAI/bge-small-en-v1.5",
-        content_hash="pkg-h",
-    )
-    pkg = Package(
-        name="demo",
-        version="1.0",
-        summary="",
-        homepage="",
-        dependencies=(),
-        content_hash="pkg-h",
-        origin=PackageOrigin.DEPENDENCY,
-        provenance=prov,
-    )
-    assert pkg.provenance == prov
-    assert pkg.provenance is not None
-    assert pkg.provenance.model_name == "BAAI/bge-small-en-v1.5"
-
-
-def test_package_legacy_embedding_model_field_still_works() -> None:
-    """S28 is ADDITIVE — the legacy flat ``embedding_model`` field
-    remains on Package for backward compatibility with the
-    indexing-service re-embed-on-model-change path."""
+def test_package_flat_embedding_model_field() -> None:
+    """``embedding_model`` drives the indexing-service
+    re-embed-on-model-change path."""
     pkg = Package(
         name="demo",
         version="1.0",
@@ -223,4 +120,16 @@ def test_package_legacy_embedding_model_field_still_works() -> None:
         embedding_model="BAAI/bge-small-en-v1.5",
     )
     assert pkg.embedding_model == "BAAI/bge-small-en-v1.5"
-    assert pkg.provenance is None
+
+
+# ── Dead grouped value objects stay dead ────────────────────────────────
+
+
+def test_grouped_value_objects_removed() -> None:
+    """models.py has a PEP 562 ``__getattr__`` that raises AttributeError
+    for unknown names, so hasattr() is a faithful absence probe."""
+    assert not hasattr(models, "RetrievalEnrichment")
+    assert not hasattr(models, "EmbeddingProvenance")
+    assert not hasattr(Chunk, "with_enrichment")
+    assert "enrichment" not in {f.name for f in dataclasses.fields(Chunk)}
+    assert "provenance" not in {f.name for f in dataclasses.fields(Package)}
