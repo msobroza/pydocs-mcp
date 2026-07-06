@@ -125,3 +125,21 @@ def test_reference_and_node_score_stores_have_own_modules() -> None:
         sqlite_pkg.SqliteNodeScoreRepository
         is node_score_repository.SqliteNodeScoreRepository
     )
+
+
+def test_uow_module_owns_the_unit_of_work() -> None:
+    from pydocs_mcp.storage.sqlite import uow
+
+    assert sqlite_pkg.SqliteUnitOfWork is uow.SqliteUnitOfWork
+
+
+def test_every_submodule_fits_the_file_cap() -> None:
+    from pathlib import Path
+
+    pkg_dir = Path(sqlite_pkg.__file__).parent
+    oversized = {
+        p.name: sum(1 for _ in p.open())
+        for p in pkg_dir.glob("*.py")
+        if sum(1 for _ in p.open()) > 500
+    }
+    assert oversized == {}
