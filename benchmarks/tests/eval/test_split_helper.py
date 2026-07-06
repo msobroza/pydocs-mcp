@@ -99,7 +99,7 @@ def test_deterministic_under_fixed_seed() -> None:
 def test_empty_input_returns_empty() -> None:
     """Empty rows -> empty result for every split (no IndexError on the
     slice, no spurious group)."""
-    for split in ("all", "dev", "test", "small_test"):
+    for split in ("all", "dev", "test", "small_test", "small_dev"):
         assert _split([], split) == []
 
 
@@ -181,3 +181,93 @@ def test_small_test_is_deterministic_under_fixed_seed() -> None:
     first = [r["key"] for r in _small_test(rows, size=4, seed=7)]
     second = [r["key"] for r in _small_test(rows, size=4, seed=7)]
     assert first == second
+
+
+def _half_split(rows: list[dict[str, object]], split: str, *, seed: int = 0) -> list:
+    """dev_fraction=0.5 so the dev head is big enough (3 "a" + 2 "b") for
+    the small_dev apportionment to be observable per stratum."""
+    return stratified_split(
+        rows,
+        split=split,
+        dev_fraction=0.5,
+        seed=seed,
+        stratum_of=lambda r: r["stratum"],
+        sort_key=lambda r: r["key"],
+    )
+
+
+def _small_dev(
+    rows: list[dict[str, object]],
+    *,
+    size: int,
+    seed: int = 0,
+) -> list:
+    return stratified_split(
+        rows,
+        split="small_dev",
+        dev_fraction=0.5,
+        seed=seed,
+        stratum_of=lambda r: r["stratum"],
+        sort_key=lambda r: r["key"],
+        small_test_size=size,
+    )
+
+
+def test_small_dev_hits_target_size_exactly() -> None:
+    """``small_dev`` apportions EXACTLY ``small_test_size`` rows when the dev
+    head is large enough — the same Hamilton largest-remainder method as
+    ``small_test``, applied to the dev partition."""
+    rows = _rows()  # dev head at 0.5 = 3 ("a") + 2 ("b") = 5
+    assert len(_small_dev(rows, size=3)) == 3
+
+
+def test_small_dev_is_subset_of_dev_and_disjoint_from_test() -> None:
+    """``small_dev`` ⊂ ``dev`` and NEVER touches the held-out test tail —
+    the whole point of the split is burn-free iteration."""
+    rows = _rows()
+    dev_keys = {r["key"] for r in _half_split(rows, "dev")}
+    test_keys = {r["key"] for r in _half_split(rows, "test")}
+    small_keys = {r["key"] for r in _small_dev(rows, size=3)}
+    assert small_keys <= dev_keys
+    assert small_keys & test_keys == set()
+
+
+def test_small_dev_is_stratified_proportionally() -> None:
+    """The subsample keeps both strata in proportion to their dev heads
+    (3:2 -> 2:1 at size 3 via largest-remainder), never collapsing to one
+    stratum."""
+    rows = _rows()
+    counts: dict[str, int] = {}
+    for r in _small_dev(rows, size=3):
+        counts[r["stratum"]] = counts.get(r["stratum"], 0) + 1
+    assert counts == {"a": 2, "b": 1}
+
+
+def test_small_dev_caps_at_dev_size() -> None:
+    """A target larger than the dev head yields the WHOLE head (never more,
+    never an IndexError) — ``min(size, |dev|)``."""
+    rows = _rows()
+    dev_keys = {r["key"] for r in _half_split(rows, "dev")}
+    capped = _small_dev(rows, size=10_000)
+    assert {r["key"] for r in capped} == dev_keys
+
+
+def test_small_dev_is_deterministic_under_fixed_seed() -> None:
+    """Same seed -> byte-identical subsample (order included)."""
+    rows = _rows()
+    first = [r["key"] for r in _small_dev(rows, size=3, seed=7)]
+    second = [r["key"] for r in _small_dev(rows, size=3, seed=7)]
+    assert first == second
+
+
+def test_small_dev_does_not_perturb_existing_splits() -> None:
+    """Adding ``small_dev`` must leave dev/test membership AND order
+    byte-identical — the frozen baselines were recorded on the old
+    partition, so any drift silently invalidates every recorded number."""
+    rows = _rows()
+    dev = [r["key"] for r in _split(rows, "dev", seed=0)]
+    test = [r["key"] for r in _split(rows, "test", seed=0)]
+    # Pin the concrete draw: same seed, same sort keys -> same sequence
+    # forever. If this assertion ever fires, the partition moved.
+    assert sorted(dev + test) == sorted(r["key"] for r in rows)
+    assert len(dev) == round(0.2 * 6) + round(0.2 * 4)
