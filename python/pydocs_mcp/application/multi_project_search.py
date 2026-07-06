@@ -30,7 +30,9 @@ from pydocs_mcp.application.formatting import (
 from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
+from pydocs_mcp.application.null_services import NullDecisionService
 from pydocs_mcp.application.search_query import build_search_query
+from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ModuleMember
 from pydocs_mcp.multirepo import LoadedProject, select_project
 
@@ -52,6 +54,8 @@ class ProjectServices:
     docs: DocsSearch
     api: ApiSearch
     lookup: LookupService
+    symbol_source: SymbolSourceService
+    decisions: NullDecisionService  # slice 3 widens this to a DecisionNavigator Protocol
 
 
 def _dedup_identity(project_name: str, metadata: Mapping[str, Any]) -> tuple[tuple[str, str], bool]:

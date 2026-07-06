@@ -39,12 +39,14 @@ def _build_project_services(loaded, config):
     """
     from pydocs_mcp.application import ApiSearch, DocsSearch
     from pydocs_mcp.application.multi_project_search import ProjectServices
+    from pydocs_mcp.application.null_services import NullDecisionService
+    from pydocs_mcp.application.symbol_source import SymbolSourceService
     from pydocs_mcp.retrieval.config import (
         build_chunk_pipeline_from_config,
         build_member_pipeline_from_config,
     )
     from pydocs_mcp.retrieval.factories import build_retrieval_context
-    from pydocs_mcp.storage.factories import build_sqlite_lookup_service
+    from pydocs_mcp.storage.factories import build_sqlite_lookup_service, build_sqlite_uow_factory
 
     context = build_retrieval_context(loaded.db_path, config)
     return ProjectServices(
@@ -54,6 +56,10 @@ def _build_project_services(loaded, config):
         # ``build_sqlite_lookup_service`` owns LookupService composition so the CLI
         # and MCP server never drift on which stores back ``lookup``.
         lookup=build_sqlite_lookup_service(loaded.db_path, config=config),
+        # get_symbol(depth="source") reads verbatim chunk text via its own uow;
+        # decisions is the Null impl until the slice-3 decision layer lands.
+        symbol_source=SymbolSourceService(uow_factory=build_sqlite_uow_factory(loaded.db_path)),
+        decisions=NullDecisionService(),
     )
 
 
