@@ -206,3 +206,66 @@ def test_caps_respected() -> None:
     service = _build_service(max_modules=1, max_communities=1)
     card = asyncio.run(service.build(package=_PKG))
     assert len(card.modules) == 1 and len(card.communities) == 1
+
+
+def test_dependency_profile_excludes_project_self_imports() -> None:
+    """Self-imports leak past the storage-layer ``top == package`` guard because
+    the primary target is the ``__project__`` sentinel while the project's own
+    import targets use the REAL top-level name (``proj``). OverviewService must
+    derive ``proj`` from the tree module qnames and filter it out."""
+    seed = _seed_stores()
+    asyncio.run(seed["node_scores"].upsert(seed["scores"]))
+    asyncio.run(_seed_references(seed["references"]))
+    # A project-internal import: proj.core imports proj.util (top segment proj).
+    asyncio.run(
+        seed["references"].save_many(
+            [_edge("proj.core", "proj.util", ReferenceKind.IMPORTS)],
+            package=_PKG,
+        )
+    )
+    factory = make_fake_uow_factory(
+        packages=seed["packages"],
+        trees=seed["trees"],
+        module_members=seed["members"],
+        node_scores=seed["node_scores"],
+        references=seed["references"],
+    )
+    service = OverviewService(uow_factory=factory, scripts={})
+    card = asyncio.run(service.build(package=_PKG))
+    names = {name for name, _ in card.dependency_profile}
+    assert "numpy" in names
+    assert "proj" not in names
+
+
+def test_entry_points_dedup_dunder_main_that_is_also_a_root() -> None:
+    """A ``*.__main__`` module that also qualifies as a zero-in-degree /
+    high-out-degree CALLS root must appear exactly once, as ``module`` (the
+    more specific/declared kind wins over the inferred ``root``)."""
+    seed = _seed_stores()
+    asyncio.run(seed["node_scores"].upsert(seed["scores"]))
+    asyncio.run(_seed_references(seed["references"]))
+    # proj.__main__ calls three nodes → zero in-degree, out-degree above the
+    # candidate median, so it ALSO qualifies as a graph root alongside being a
+    # dunder-main module.
+    asyncio.run(
+        seed["references"].save_many(
+            [
+                _edge("proj.__main__", "proj.core"),
+                _edge("proj.__main__", "proj.api"),
+                _edge("proj.__main__", "proj.cli.main"),
+            ],
+            package=_PKG,
+        )
+    )
+    factory = make_fake_uow_factory(
+        packages=seed["packages"],
+        trees=seed["trees"],
+        module_members=seed["members"],
+        node_scores=seed["node_scores"],
+        references=seed["references"],
+    )
+    service = OverviewService(uow_factory=factory, scripts={})
+    card = asyncio.run(service.build(package=_PKG))
+    dunder = [e for e in card.entry_points if e.name == "proj.__main__"]
+    assert len(dunder) == 1
+    assert dunder[0].kind == "module"

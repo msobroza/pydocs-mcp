@@ -94,6 +94,7 @@ class OverviewService:
         pagerank = {s.qualified_name: s.pagerank for s in scores}
         modules = _rank_modules(trees, pagerank, degrees, bool(scores), self.max_modules)
         communities = _build_communities(scores, cohesion, self.max_communities) if scores else ()
+        own_tops = _own_top_levels(trees)
         return OverviewCard(
             package=target,
             package_count=len(packages),
@@ -103,7 +104,7 @@ class OverviewService:
             modules=modules,
             entry_points=_entry_points(self.scripts, trees, degrees),
             communities=communities,
-            dependency_profile=_dependency_profile(imports),
+            dependency_profile=_dependency_profile(imports, own_tops),
             node_scores_available=bool(scores),
         )
 
@@ -160,6 +161,13 @@ def _root_entry_points(
     return roots
 
 
+# Kind precedence for entry-point dedup: a more specific/declared kind beats an
+# inferred one. A [project.scripts] name is declared; a *.__main__ module is a
+# structural convention; a zero-in/high-out graph root is purely inferred — so
+# the same name surfacing under several kinds collapses to the most specific.
+_ENTRY_KIND_PRECEDENCE = {"script": 0, "module": 1, "root": 2}
+
+
 def _entry_points(
     scripts: Mapping[str, str],
     trees: Mapping[str, DocumentNode],
@@ -168,7 +176,9 @@ def _entry_points(
     """Union of ``[project.scripts]``, ``*.__main__`` modules, and graph roots.
 
     Any qname carrying a test-path marker segment is dropped — a test harness
-    entry point is noise on the orientation card.
+    entry point is noise on the orientation card. A name emitted under several
+    kinds (e.g. a ``*.__main__`` module that is also a graph root) collapses to
+    its most specific kind via ``_ENTRY_KIND_PRECEDENCE``.
     """
     entries: list[EntryPoint] = [EntryPoint(name, "script") for name in scripts]
     entries.extend(
@@ -178,7 +188,22 @@ def _entry_points(
         EntryPoint(qname, "root")
         for qname in _root_entry_points(trees, degrees)[:_DEFAULT_MAX_ROOTS]
     )
-    return tuple(e for e in entries if not _has_test_marker(e.name))
+    kept = [e for e in entries if not _has_test_marker(e.name)]
+    return _dedup_by_kind_precedence(kept)
+
+
+def _dedup_by_kind_precedence(entries: Sequence[EntryPoint]) -> tuple[EntryPoint, ...]:
+    """Keep one EntryPoint per name — the one whose kind ranks most specific."""
+    best: dict[str, EntryPoint] = {}
+    for entry in entries:
+        current = best.get(entry.name)
+        if current is None or _entry_rank(entry) < _entry_rank(current):
+            best[entry.name] = entry
+    return tuple(best.values())
+
+
+def _entry_rank(entry: EntryPoint) -> int:
+    return _ENTRY_KIND_PRECEDENCE[entry.kind]
 
 
 def _community_label(members: Sequence[str], top_member: str) -> str:
@@ -236,7 +261,27 @@ def _cohesion_ratio(cohesion: CommunityCohesion | None) -> float:
     return cohesion.intra_edges / max(1, cohesion.intra_edges + cohesion.cross_edges)
 
 
-def _dependency_profile(imports: Mapping[str, int]) -> tuple[tuple[str, int], ...]:
-    """External import counts sorted by count desc (name tie-break), top 10."""
-    ordered = sorted(imports.items(), key=lambda kv: (-kv[1], kv[0]))
+def _own_top_levels(trees: Mapping[str, DocumentNode]) -> frozenset[str]:
+    """Distinct first dotted segments of the project's module qnames.
+
+    The storage-layer ``top == package`` self-import guard is dead for the
+    primary target: ``package`` is the ``__project__`` sentinel while the
+    project's own import targets carry the REAL top-level name (``proj``), so
+    self-imports slip through. Deriving the real top-levels here lets the
+    consumer strip them from the dependency profile.
+    """
+    return frozenset(q.split(".", 1)[0] for q in trees if q)
+
+
+def _dependency_profile(
+    imports: Mapping[str, int],
+    own_tops: frozenset[str],
+) -> tuple[tuple[str, int], ...]:
+    """External import counts sorted by count desc (name tie-break), top 10.
+
+    Drops any target whose top-level segment is one of the project's own
+    module top-levels — those are self-imports the storage guard missed.
+    """
+    external = {name: count for name, count in imports.items() if name not in own_tops}
+    ordered = sorted(external.items(), key=lambda kv: (-kv[1], kv[0]))
     return tuple(ordered[:_DEFAULT_MAX_DEPENDENCIES])
