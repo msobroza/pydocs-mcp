@@ -1,9 +1,12 @@
-"""MCP server exposing 2 consolidated tools: ``search`` and ``lookup`` (sub-PR #6).
+"""MCP server exposing the six task-shaped tools (spec §D1/§D2).
 
-Handlers are thin adapters over application-layer services. Per the design
-spec (§4.1) each tool's description is LLM-visible prose — the copy here is
-the production tool-selection prompt. Rendering lives in
-:mod:`pydocs_mcp.application.formatting` and the services.
+The surface is ``get_overview`` / ``search_codebase`` / ``get_symbol`` /
+``get_context`` / ``get_references`` / ``get_why``. Handlers are thin adapters
+that validate their pydantic input model and delegate to :class:`ToolRouter`
+(which wraps every response in the shared :class:`ResponseEnvelope`). All
+LLM-visible prose — per-tool descriptions and the server-level orientation —
+comes from :mod:`pydocs_mcp.application.tool_docs` (``TOOL_DOCS`` /
+``SERVER_INSTRUCTIONS``) so the MCP and CLI surfaces never drift.
 
 Error policy (§5.2):
 - Typed :class:`MCPToolError` subclasses raise through to the MCP protocol
@@ -18,9 +21,7 @@ import logging
 from pathlib import Path
 
 from pydocs_mcp.application import (
-    LookupInput,
     MCPToolError,
-    SearchInput,
     ServiceUnavailableError,
 )
 
@@ -85,18 +86,20 @@ def _resolve_projects(db_path, workspace, db_paths):
 
 
 def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surface="mcp"):
-    """Resolve + validate + build the per-project services and the two routers.
+    """Resolve + validate + build the per-project services and the ``ToolRouter``.
 
-    Shared by ``run`` (MCP server) and the CLI ``search`` / ``lookup`` commands so
-    both select, validate, and load databases identically. ``surface`` ("mcp" |
-    "cli") picks the pointer syntax the shared envelope resolves to. Returns
-    ``(search_router, lookup_router, services)``.
+    Shared by ``run`` (MCP server) and the CLI subcommands so both select,
+    validate, and load databases identically. ``surface`` ("mcp" | "cli") picks
+    the pointer syntax the shared envelope resolves to. Returns
+    ``(ToolRouter, services)`` — the router fronts the six task-shaped tools over
+    the multi-project ``MultiProjectSearch`` / ``MultiProjectLookup`` bodies.
     """
     from pydocs_mcp.application.envelope import ResponseEnvelope
     from pydocs_mcp.application.multi_project_search import (
         MultiProjectLookup,
         MultiProjectSearch,
     )
+    from pydocs_mcp.application.tool_router import ToolRouter
     from pydocs_mcp.multirepo import validate_project_embedders
     from pydocs_mcp.storage.factories import build_freshness_probe
 
@@ -108,8 +111,8 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surfac
     services = tuple(_build_project_services(p, config) for p in projects)
 
     # Probe facts come from the FIRST loaded project. Multi-repo per-project
-    # staleness is slice-2 ``get_overview`` territory — one envelope for both
-    # routers keeps the two surfaces from drifting.
+    # staleness is ``get_overview`` territory — one envelope for the whole
+    # router keeps every tool's freshness header from drifting.
     first = services[0].project
     probe = build_freshness_probe(
         db_path=first.db_path,
@@ -122,11 +125,16 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surfac
         surface=surface,
         pointers_enabled=config.output.next_pointers.enabled,
     )
-    return (
-        MultiProjectSearch(services=services, envelope=envelope),
-        MultiProjectLookup(services=services, envelope=envelope),
-        services,
+    # Body-only routers (``envelope=None``): the ``ToolRouter`` owns the single
+    # envelope so every one of the six tools shares one freshness header /
+    # pointer-resolution / truncation footer path.
+    tools = ToolRouter(
+        services=services,
+        envelope=envelope,
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
     )
+    return tools, services
 
 
 def run(
@@ -140,9 +148,9 @@ def run(
     """Start the MCP server over one project (``db_path``) or several — a
     ``workspace`` dir or explicit ``db_paths`` (read-only multi-repo)."""
     from mcp.server.fastmcp import FastMCP
-    from mcp.types import ToolAnnotations
 
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
+    from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.storage.search_backend import build_search_backend, format_capabilities
 
@@ -151,150 +159,148 @@ def run(
     # config so query-time embedding runs on CUDA. Device is excluded from every
     # pipeline hash, so this never invalidates a cache.
     config = config.with_device(gpu=gpu)
-    # Push YAML-loaded settings into module-level slots read by ``LookupInput`` /
-    # ``SearchInput`` validators and ``ReferenceCaptureStage``.
+    # Push YAML-loaded settings into module-level slots read by the input-model
+    # validators and ``ReferenceCaptureStage``.
     configure_from_app_config(config)
 
-    search_router, lookup_router, services = build_routers(
-        config, db_path=db_path, workspace=workspace, db_paths=db_paths
-    )
+    tools, services = build_routers(config, db_path=db_path, workspace=workspace, db_paths=db_paths)
     # One capability line per project so a misconfigured dense/LI wiring stays visible.
     for svc in services:
         caps = format_capabilities(build_search_backend(config, svc.project.db_path))
         log.info("%s: %s", svc.project.name, caps)
 
-    # Session-level scope frame surfaced to MCP clients. Tells the AI when
-    # to reach for pydocs-mcp (installed libraries, user's project code
-    # under the ``__project__`` sentinel, call graph) versus other tools,
-    # and pins the fixed 2-tool surface so the AI doesn't try to synthesize
-    # list_packages / get_doc handlers that don't exist.
-    mcp = FastMCP(
-        "pydocs-mcp",
-        instructions="""pydocs-mcp indexes your current project's source code AND every installed dependency into a local hybrid index (dense embeddings + BM25 + a reference graph). Use this server before web search whenever the user asks about: an installed library's API, a function/class in their own project, who-calls-what / call graph navigation, or `__project__` modules. The surface is two tools only — `search` and `lookup` — pick `search` for semantic/keyword/topic queries (default retrieval is dense embeddings with reference-graph expansion) and `lookup` for known dotted paths or reference-graph traversal. Do NOT use for: refactoring, writing new code from scratch, runtime debugging, or libraries that aren't installed in this project (use Context7 or web search for those).""",
-    )
-
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            idempotentHint=True,
-            openWorldHint=True,
-        )
-    )
-    async def search(
-        query: str,
-        kind: str = "any",
-        package: str = "",
-        scope: str = "all",
-        limit: int = 10,
-        project: str = "",
-    ) -> str:
-        """Hybrid keyword + semantic search across your project's source AND every installed dependency (docs + code).
-
-        When to use this tool:
-          - Topic, keyword, concept, or partial name (you don't know the exact dotted path)
-          - "How do I do X" / "Where is the code for X" style questions
-          - Use `lookup` instead if you know the exact dotted path OR want to walk the code graph
-
-        Params:
-          query:   search terms (space-separated; both prose and identifiers work)
-          kind:    "docs" (prose / README chunks) | "api" (functions / classes) | "any" (default)
-          package: restrict to one package (e.g. "fastapi"). Use "__project__" for the USER's
-                   code, not a library. "" = all packages.
-          scope:   "project" (user's code only) | "deps" (installed deps only) | "all" (default).
-                   Use scope="project" or package="__project__" when the user asks about THEIR
-                   code, not a library — this is the most common routing mistake to avoid.
-          project: when this server hosts several indexed repos, restrict to one by name
-                   (e.g. "backend"). "" = search all loaded repos (results deduped). No effect
-                   on a single-repo server.
-          limit:   max results 1-1000, default 10.
-
-        Examples:
-          search(query="batch inference", kind="docs")
-          search(query="HTTPBasicAuth", kind="api")
-          search(query="retry logic", package="requests")
-          search(query="our parser", scope="project")
-          search(query="ValidationError", package="__project__")
-          search(query="db pool", project="backend")
-
-        Returns markdown with up to `limit` ranked hits, each block carrying
-        package, module path, and a code/docs excerpt.
-        """
-        payload = SearchInput(
-            query=query,
-            kind=kind,
-            package=package,
-            scope=scope,
-            limit=limit,
-            project=project,
-        )
-        try:
-            return await search_router.search(payload)
-        except MCPToolError:
-            raise
-        except Exception as e:
-            log.exception("search failed unexpectedly")
-            raise ServiceUnavailableError(f"search failed: {e}") from e
-
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            idempotentHint=True,
-            openWorldHint=True,
-        )
-    )
-    async def lookup(target: str = "", show: str = "default", project: str = "") -> str:
-        """Navigate to a known symbol (dotted path) and optionally traverse its reference graph — callers, callees, base classes.
-
-        When to use this tool:
-          - You know the exact dotted path of a package / module / class / method
-          - You want to walk the code graph from a known symbol (who calls X, what X calls)
-          - Use `search` instead if you only have a keyword, topic, or partial name
-
-        Params:
-          target: dotted path
-            ""                                          → list all indexed packages
-            "fastapi"                                   → package overview + deps
-            "fastapi.routing"                           → module tree
-            "fastapi.routing.APIRouter"                 → class + children
-            "fastapi.routing.APIRouter.include_router"  → method details
-            "__project__.my_module.MyClass"             → YOUR class (not a library)
-
-          show:
-            "default"  → symbol summary + immediate children (start here)
-            "tree"     → full nested subtree (use when "default" is too shallow)
-            "callers"  → every site that calls/references this symbol — use to answer "who uses X?"
-            "callees"  → every symbol this calls — use to answer "what does X depend on?"
-            "inherits" → base classes and interface chain — use to answer "what does X extend?"
-            "impact"   → everything that transitively calls this symbol, ranked — use to answer "what breaks if I change X?"
-            "context"  → the symbol's dependency closure packed under a token budget (full source + signatures + outline) — use to answer "everything I need to understand X"
-
-        Examples:
-          lookup(target="")
-          lookup(target="fastapi.routing.APIRouter")
-          lookup(target="fastapi.routing.APIRouter.include_router", show="callers")
-          lookup(target="requests.auth.HTTPBasicAuth", show="inherits")
-          lookup(target="fastapi.routing.APIRouter.include_router", show="impact")
-          lookup(target="fastapi.routing.APIRouter.include_router", show="context")
-          lookup(target="app.db.Pool", project="backend")
-
-        When this server hosts several indexed repos, pass `project` (e.g.
-        "backend") to resolve the target inside one repo; "" resolves across all
-        loaded repos. No effect on a single-repo server.
-
-        Returns markdown — exact shape varies by `show` mode (a summary block
-        for "default", a tree for "tree", a list of caller / callee entries
-        for the graph modes).
-        """
-        payload = LookupInput(target=target, show=show, project=project)
-        try:
-            return await lookup_router.lookup(payload)
-        except MCPToolError:
-            raise
-        except Exception as e:
-            log.exception("lookup failed unexpectedly")
-            raise ServiceUnavailableError(f"lookup failed: {e}") from e
+    # Session-level scope frame surfaced to MCP clients — the single source is
+    # ``SERVER_INSTRUCTIONS`` in ``application.tool_docs`` so the MCP orientation
+    # and the CLI top-level help never drift.
+    mcp = FastMCP("pydocs-mcp", instructions=SERVER_INSTRUCTIONS)
+    _register_tools(mcp, tools)
 
     log.info(
         "MCP ready (%d project(s): %s)", len(services), ", ".join(s.project.name for s in services)
     )
     mcp.run(transport="stdio")
+
+
+async def _run_tool(name: str, produce):
+    """Shared handler error boundary (§5.2).
+
+    Awaits ``produce()`` (the ``ToolRouter`` call), re-raising typed
+    :class:`MCPToolError`s unchanged and wrapping anything else in
+    :class:`ServiceUnavailableError` after logging. Factored out so every one of
+    the six handlers is a one-line delegation — no per-tool try/except copy.
+    """
+    try:
+        return await produce()
+    except MCPToolError:
+        raise
+    except Exception as e:
+        log.exception("%s failed unexpectedly", name)
+        raise ServiceUnavailableError(f"{name} failed: {e}") from e
+
+
+def _register_tools(mcp, tools) -> None:
+    """Register the six task-shaped MCP tools on ``mcp``, delegating to ``tools``.
+
+    Each handler is a thin adapter: validate its pydantic input model and hand
+    the matching :class:`ToolRouter` call to :func:`_run_tool` (the shared error
+    boundary). Split out of :func:`run` so the composition root stays flat and
+    each handler reads as one unit.
+    """
+    from mcp.types import ToolAnnotations
+
+    from pydocs_mcp.application.mcp_inputs import (
+        ContextInput,
+        OverviewInput,
+        ReferencesInput,
+        SearchInput,
+        SymbolInput,
+        WhyInput,
+    )
+    from pydocs_mcp.application.tool_docs import TOOL_DOCS
+
+    def _register(fn, name: str):
+        """Register a thin handler under ``name`` with ``TOOL_DOCS[name]`` as its
+        LLM-visible description.
+
+        ``description=`` is passed explicitly rather than relying on ``fn.__doc__``
+        so the tool text is the ``TOOL_DOCS`` single source regardless of how
+        FastMCP resolves docstrings across versions (§D13).
+        """
+        return mcp.tool(
+            name=name,
+            description=TOOL_DOCS[name],
+            annotations=ToolAnnotations(
+                readOnlyHint=True,
+                idempotentHint=True,
+                openWorldHint=True,
+            ),
+        )(fn)
+
+    async def get_overview(package: str = "", project: str = "") -> str:
+        payload = OverviewInput(package=package, project=project)
+        return await _run_tool("get_overview", lambda: tools.get_overview(payload))
+
+    _register(get_overview, "get_overview")
+
+    async def search_codebase(
+        query: str,
+        kind: str = "any",
+        package: str = "",
+        scope: str = "all",
+        limit: int | None = None,
+        project: str = "",
+    ) -> str:
+        # ``limit`` is omitted from ``SearchInput`` when the client didn't send
+        # one so the model's YAML-wired ``default_factory`` supplies the default —
+        # no literal duplicated here (single-source-of-truth defaults).
+        fields = {
+            "query": query,
+            "kind": kind,
+            "package": package,
+            "scope": scope,
+            "project": project,
+        }
+        if limit is not None:
+            fields["limit"] = limit
+        payload = SearchInput(**fields)
+        return await _run_tool("search_codebase", lambda: tools.search_codebase(payload))
+
+    _register(search_codebase, "search_codebase")
+
+    async def get_symbol(target: str, depth: str = "summary", project: str = "") -> str:
+        payload = SymbolInput(target=target, depth=depth, project=project)
+        return await _run_tool("get_symbol", lambda: tools.get_symbol(payload))
+
+    _register(get_symbol, "get_symbol")
+
+    async def get_context(targets: list[str], project: str = "") -> str:
+        payload = ContextInput(targets=targets, project=project)
+        return await _run_tool("get_context", lambda: tools.get_context(payload))
+
+    _register(get_context, "get_context")
+
+    async def get_references(
+        target: str,
+        direction: str = "callers",
+        limit: int | None = None,
+        project: str = "",
+    ) -> str:
+        # Same limit-omission rule as search_codebase: absent arg lets the input
+        # model apply the YAML-wired reference-graph default.
+        fields = {"target": target, "direction": direction, "project": project}
+        if limit is not None:
+            fields["limit"] = limit
+        payload = ReferencesInput(**fields)
+        return await _run_tool("get_references", lambda: tools.get_references(payload))
+
+    _register(get_references, "get_references")
+
+    async def get_why(
+        query: str = "",
+        targets: list[str] | None = None,
+        project: str = "",
+    ) -> str:
+        payload = WhyInput(query=query, targets=targets, project=project)
+        return await _run_tool("get_why", lambda: tools.get_why(payload))
+
+    _register(get_why, "get_why")

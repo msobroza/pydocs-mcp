@@ -552,7 +552,7 @@ async def _run_search(args: argparse.Namespace) -> None:
 
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     configure_from_app_config(config)
-    search_router, _lookup, _svcs = build_routers(
+    tools, _svcs = build_routers(
         config,
         db_path=_query_db_path(args),
         workspace=args.workspace,
@@ -567,7 +567,7 @@ async def _run_search(args: argparse.Namespace) -> None:
         limit=args.limit,
         project=args.project_scope,
     )
-    print(await search_router.search(payload))
+    print(await tools.search_codebase(payload))
 
 
 async def _run_lookup(args: argparse.Namespace) -> None:
@@ -579,7 +579,7 @@ async def _run_lookup(args: argparse.Namespace) -> None:
 
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     configure_from_app_config(config)
-    _search, lookup_router, _svcs = build_routers(
+    tools, _svcs = build_routers(
         config,
         db_path=_query_db_path(args),
         workspace=args.workspace,
@@ -587,7 +587,10 @@ async def _run_lookup(args: argparse.Namespace) -> None:
         surface="cli",
     )
     payload = LookupInput(target=args.target, show=args.show, project=args.project_scope)
-    print(await lookup_router.lookup(payload))
+    # Task 9 rewrites this into the six task-shaped subcommands; until then the
+    # deprecated ``lookup`` command routes through the same enveloped lookup body
+    # the old two-tool surface used, so every ``--show`` mode behaves as before.
+    print(await tools.envelope.wrap(lambda: tools.lookup_router._lookup_body(payload)))
 
 
 def _report_cli_failure(exc: Exception, *, verbose: bool) -> int:

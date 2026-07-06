@@ -1,7 +1,9 @@
-"""Tests for MCP server 2-tool surface (sub-PR #6).
+"""Tests for the MCP server's six task-shaped tool surface (spec §D1/§D2).
 
 Handlers are closures inside ``run()``, so tests substitute a FakeMCP to
-capture the decorated functions and invoke them directly.
+capture the decorated functions and invoke them directly. Every response is
+enveloped (freshness header + pointer resolution), so behavioral assertions
+target substrings of the body, not exact equality.
 """
 
 from __future__ import annotations
@@ -147,7 +149,7 @@ def _run_server_capture_tools(db_path: Path):
 
 @pytest.fixture
 def server_tools(tmp_path: Path):
-    """Run server.run() with FakeMCP to capture the 2 tool closures."""
+    """Run server.run() with FakeMCP to capture the six tool closures."""
     db_path = tmp_path / "test.db"
     _seed_basic_fixture(db_path)
     return _run_server_capture_tools(db_path), db_path
@@ -218,13 +220,22 @@ def server_tools_with_tree(tmp_path: Path):
 
 
 class TestToolSurface:
-    def test_exactly_two_tools_registered(self, server_tools) -> None:
+    def test_exactly_six_tools_registered(self, server_tools) -> None:
         tools, _ = server_tools
-        assert set(tools) == {"search", "lookup"}
+        assert set(tools) == {
+            "get_overview",
+            "search_codebase",
+            "get_symbol",
+            "get_context",
+            "get_references",
+            "get_why",
+        }
 
     def test_old_tool_names_are_gone(self, server_tools) -> None:
         tools, _ = server_tools
         for dropped in (
+            "search",
+            "lookup",
             "list_packages",
             "get_package_doc",
             "search_docs",
@@ -234,33 +245,33 @@ class TestToolSurface:
             assert dropped not in tools
 
 
-# ── lookup ────────────────────────────────────────────────────────────────
+# ── get_overview ───────────────────────────────────────────────────────────
 
 
-class TestLookupPackagesList:
-    def test_empty_target_lists_packages(self, server_tools) -> None:
+class TestOverviewPackagesList:
+    def test_empty_package_lists_packages(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["lookup"](target=""))
+        out = _arun(tools["get_overview"](package=""))
         assert "__project__" in out
         assert "fastapi" in out
         assert "0.100" in out
 
 
-class TestLookupPackageDoc:
+class TestOverviewPackageDoc:
     def test_returns_package_doc(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["lookup"](target="fastapi"))
+        out = _arun(tools["get_overview"](package="fastapi"))
         assert "fastapi" in out
         assert "0.100" in out
 
     def test_includes_homepage(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["lookup"](target="fastapi"))
+        out = _arun(tools["get_overview"](package="fastapi"))
         assert "https://fastapi.example.com" in out
 
     def test_includes_deps(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["lookup"](target="fastapi"))
+        out = _arun(tools["get_overview"](package="fastapi"))
         assert "starlette" in out
 
     def test_unknown_package_raises_not_found(self, server_tools) -> None:
@@ -268,20 +279,20 @@ class TestLookupPackageDoc:
 
         tools, _ = server_tools
         with pytest.raises(NotFoundError):
-            _arun(tools["lookup"](target="nonexistent_pkg"))
+            _arun(tools["get_overview"](package="nonexistent_pkg"))
 
 
-class TestLookupWithTreeService:
-    """FIX 6: TreeService now wired into the composition root — multi-segment
-    lookup targets resolve against persisted DocumentNode trees instead of
+class TestSymbolWithTreeService:
+    """TreeService is wired into the composition root — multi-segment
+    get_symbol targets resolve against persisted DocumentNode trees instead of
     raising ``ServiceUnavailableError``."""
 
-    def test_lookup_module_target_returns_tree_json(self, server_tools_with_tree) -> None:
+    def test_symbol_module_target_returns_tree_json(self, server_tools_with_tree) -> None:
         """target='fastapi.routing' returns PageIndex-style JSON for the tree."""
         import json
 
         tools, _ = server_tools_with_tree
-        out = _arun(tools["lookup"](target="fastapi.routing"))
+        out = _arun(tools["get_symbol"](target="fastapi.routing"))
         payload = json.loads(out)
         assert payload["node_id"] == "fastapi.routing"
         assert payload["kind"] == "module"
@@ -289,7 +300,7 @@ class TestLookupWithTreeService:
         child_ids = [n["node_id"] for n in payload["nodes"]]
         assert "fastapi.routing.APIRouter" in child_ids
 
-    def test_lookup_module_target_unknown_falls_through_to_find_module(
+    def test_symbol_module_target_unknown_falls_through_to_find_module(
         self,
         server_tools_with_tree,
     ) -> None:
@@ -300,9 +311,9 @@ class TestLookupWithTreeService:
 
         tools, _ = server_tools_with_tree
         with pytest.raises(NotFoundError):
-            _arun(tools["lookup"](target="fastapi.does_not_exist"))
+            _arun(tools["get_symbol"](target="fastapi.does_not_exist"))
 
-    def test_lookup_symbol_target_returns_node_json(
+    def test_symbol_symbol_target_returns_node_json(
         self,
         server_tools_with_tree,
     ) -> None:
@@ -311,7 +322,7 @@ class TestLookupWithTreeService:
         import json
 
         tools, _ = server_tools_with_tree
-        out = _arun(tools["lookup"](target="fastapi.routing.APIRouter"))
+        out = _arun(tools["get_symbol"](target="fastapi.routing.APIRouter"))
         payload = json.loads(out)
         assert payload["node_id"] == "fastapi.routing.APIRouter"
         assert payload["kind"] == "class"
@@ -325,34 +336,34 @@ class TestLookupWithTreeService:
 class TestSearchDocs:
     def test_returns_matching_chunks(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search"](query="framework", kind="docs"))
+        out = _arun(tools["search_codebase"](query="framework", kind="docs"))
         assert "fastapi" in out.lower()
 
     def test_no_matches_returns_message(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search"](query="zzznonexistenttermzzz", kind="docs"))
+        out = _arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="docs"))
         assert "No matches" in out
 
     def test_package_filter(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search"](query="framework", kind="docs", package="fastapi"))
+        out = _arun(tools["search_codebase"](query="framework", kind="docs", package="fastapi"))
         assert "fastapi" in out.lower()
 
     def test_scope_project(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search"](query="overview", kind="docs", scope="project"))
+        out = _arun(tools["search_codebase"](query="overview", kind="docs", scope="project"))
         assert "overview" in out.lower() or "No matches" in out
 
 
 class TestSearchApi:
     def test_returns_matching_symbols(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search"](query="compute", kind="api"))
+        out = _arun(tools["search_codebase"](query="compute", kind="api"))
         assert "compute" in out
 
     def test_no_matches_returns_symbol_msg(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search"](query="zzznonexistenttermzzz", kind="api"))
+        out = _arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="api"))
         assert "No symbols" in out
 
 
@@ -360,13 +371,13 @@ class TestSearchAny:
     def test_merges_docs_and_api(self, server_tools) -> None:
         """kind='any' runs both pipelines in parallel and concatenates."""
         tools, _ = server_tools
-        out = _arun(tools["search"](query="compute", kind="any"))
+        out = _arun(tools["search_codebase"](query="compute", kind="any"))
         # compute appears as a member; members pipeline should surface it
         assert "compute" in out
 
     def test_no_matches_returns_message(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search"](query="zzznonexistenttermzzz", kind="any"))
+        out = _arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="any"))
         assert "No matches" in out
 
 
@@ -379,28 +390,28 @@ class TestValidation:
 
         tools, _ = server_tools
         with pytest.raises(ValidationError):
-            _arun(tools["search"](query=""))
+            _arun(tools["search_codebase"](query=""))
 
     def test_bad_package_regex_raises_validation_error(self, server_tools) -> None:
         from pydantic import ValidationError
 
         tools, _ = server_tools
         with pytest.raises(ValidationError):
-            _arun(tools["search"](query="x", kind="docs", package="has spaces"))
+            _arun(tools["search_codebase"](query="x", kind="docs", package="has spaces"))
 
     def test_bad_target_regex_raises_validation_error(self, server_tools) -> None:
         from pydantic import ValidationError
 
         tools, _ = server_tools
         with pytest.raises(ValidationError):
-            _arun(tools["lookup"](target="foo..bar"))
+            _arun(tools["get_symbol"](target="foo..bar"))
 
     def test_limit_out_of_range_raises(self, server_tools) -> None:
         from pydantic import ValidationError
 
         tools, _ = server_tools
         with pytest.raises(ValidationError):
-            _arun(tools["search"](query="x", limit=0))
+            _arun(tools["search_codebase"](query="x", limit=0))
 
 
 # ── name normalization (regression) ──────────────────────────────────────
@@ -434,7 +445,9 @@ def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
 
         run(db_path)
 
-    out = _arun(fake_mcp.tools["search"](query="login", kind="docs", package="Flask-Login"))
+    out = _arun(
+        fake_mcp.tools["search_codebase"](query="login", kind="docs", package="Flask-Login")
+    )
     # The normalisation happens inside the handler; the search itself may
     # return "No matches" (no chunks seeded) but MUST NOT fail validation.
     assert "validation" not in out.lower()
