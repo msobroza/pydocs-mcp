@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..datasets.ds1000_schema import PINNED_LIBDOCS_REVISION, to_pypi_canonical
 from ..serialization import system_registry
 from .pydocs import PydocsMcpSystem
 
@@ -55,17 +56,6 @@ if TYPE_CHECKING:
 # first segment (``numpy.reference.arrays.scalars`` -> ``numpy``,
 # ``tensorflow.aggregationmethod`` -> ``tensorflow``). The first dot-segment,
 # lowercased, recovers the library when no explicit field is present.
-_DOC_ID_LIBRARY_TO_PYPI: dict[str, str] = {
-    # Only ``sklearn`` differs from its own normalized name — the rest
-    # (numpy / pandas / matplotlib / scipy / tensorflow / torch) ARE their
-    # own PyPI / normalized names, so they need no remap. This map mirrors
-    # what the DS-1000 loader's ``_normalize_library`` produces so the
-    # oracle's package matches the task's PyPI-canonical library that the
-    # resolver filters on.
-    "sklearn": "scikit-learn",
-}
-
-
 def _library_from_doc_id(doc_id: str) -> str:
     """Recover a library name from a ``library-documentation`` ``doc_id``.
 
@@ -158,17 +148,16 @@ class PydocsOracleSystem(PydocsMcpSystem):
         for row in rows:
             # WHY: prefer an explicit ``library`` / ``source`` field (hermetic
             # fixtures supply one), else DERIVE the library from the ``doc_id``
-            # prefix — the real HF corpus has neither field. Map the recovered
-            # name to its PyPI-canonical form (only ``sklearn`` differs) BEFORE
-            # normalizing, so the oracle's package matches what the DS-1000
-            # loader's ``_normalize_library`` produces and the package-filtered
-            # resolver scan aligns.
+            # prefix — the real HF corpus has neither field. Canonicalize the
+            # recovered name via the SAME to_pypi_canonical the DS-1000 loader
+            # uses, so the oracle's package matches the task's PyPI-canonical
+            # library that the resolver filters on.
             raw_library = (
                 row.get("library")
                 or row.get("source")
                 or _library_from_doc_id(row.get("doc_id", ""))
             )
-            pypi = _DOC_ID_LIBRARY_TO_PYPI.get(raw_library, raw_library)
+            pypi = to_pypi_canonical(raw_library)
             library = normalize_package_name(pypi)
             libraries.add(library)
             chunks.append(
@@ -245,15 +234,14 @@ class PydocsOracleSystem(PydocsMcpSystem):
         if self.rows_source is not None:
             return list(self.rows_source())
         # WHY (deferred): the network-touching path. ``datasets`` is only an
-        # optional dep and tests never reach here. Import the pinned revision
-        # from the dataset module to avoid drift between loader + indexer.
+        # optional dep and tests never reach here. The pinned revision is
+        # shared via ``ds1000_schema`` (single source, no loader/indexer
+        # drift).
         from datasets import load_dataset
-
-        from ..datasets.ds1000 import _PINNED_LIBDOCS_REVISION
 
         dataset = load_dataset(
             "code-rag-bench/library-documentation",
-            revision=_PINNED_LIBDOCS_REVISION,
+            revision=PINNED_LIBDOCS_REVISION,
             split="train",
         )
         return list(dataset)
