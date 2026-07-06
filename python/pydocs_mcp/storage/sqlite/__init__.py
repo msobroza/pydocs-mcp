@@ -4,18 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import json
 import logging
 import sqlite3
-import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 
-from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.filters import Filter
-from pydocs_mcp.models import ModuleMember
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.fts_query import (
@@ -30,6 +25,13 @@ from pydocs_mcp.storage.sqlite.chunk_multi_vector_repository import (  # noqa: F
     SqliteChunkMultiVectorRepository,
 )
 from pydocs_mcp.storage.sqlite.chunk_repository import SqliteChunkRepository
+from pydocs_mcp.storage.sqlite.document_tree_store import (  # noqa: F401
+    SqliteDocumentTreeStore,
+    _deserialize_tree_from_json,
+    _dict_to_node,
+    _node_to_dict,
+    _serialize_tree_to_json,
+)
 from pydocs_mcp.storage.sqlite.filter_adapter import (  # noqa: F401
     _MEMBER_COLUMNS,
     _PACKAGE_COLUMNS,
@@ -42,6 +44,7 @@ from pydocs_mcp.storage.sqlite.fts_store import (  # noqa: F401
     SqliteLexicalStore,
     SqliteVectorStore,
 )
+from pydocs_mcp.storage.sqlite.module_member_repository import SqliteModuleMemberRepository
 from pydocs_mcp.storage.sqlite.package_repository import SqlitePackageRepository
 from pydocs_mcp.storage.sqlite.row_mappers import (  # noqa: F401
     _chunk_to_row,
@@ -275,238 +278,6 @@ class SqliteUnitOfWork:
             raise UnitOfWorkNotEnteredError("node_scores")
         return self._node_scores
 
-
-# ── ModuleMember repository ──────────────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class SqliteModuleMemberRepository:
-    """ModuleMemberStore backed by the 'module_members' SQLite table (spec §5.3).
-
-    Mirrors :class:`SqliteChunkRepository` but without FTS5 — ``module_members``
-    is queried via exact-match / LIKE on structured columns.
-    """
-
-    provider: ConnectionProvider
-    filter_adapter: _SqliteFilterTranslator = field(
-        default_factory=lambda: _SqliteFilterTranslator(safe_columns=_MEMBER_COLUMNS)
-    )
-
-    async def upsert_many(self, members: Iterable[ModuleMember]) -> None:
-        rows = [_module_member_to_row(m) for m in members]
-        if not rows:
-            return
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.executemany,
-                "INSERT INTO module_members "
-                "(package, module, name, kind, signature, return_annotation, "
-                "parameters, docstring) "
-                "VALUES (:package, :module, :name, :kind, :signature, "
-                ":return_annotation, :parameters, :docstring)",
-                rows,
-            )
-
-    async def list(
-        self,
-        filter: Filter | Mapping | None = None,
-        limit: int | None = None,
-    ) -> list[ModuleMember]:
-        tree = _resolve_filter(filter)
-        where, params = "", []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-        sql = "SELECT * FROM module_members"
-        if where:
-            sql += f" WHERE {where}"
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
-        return [_row_to_module_member(r) for r in rows]
-
-    async def delete(self, filter: Filter | Mapping) -> int:
-        tree = _resolve_filter(filter)
-        if tree is None:
-            raise ValueError("delete requires an explicit filter")
-        where, params = self.filter_adapter.adapt(tree)
-        async with _maybe_acquire(self.provider) as conn:
-            cursor = await asyncio.to_thread(
-                conn.execute, f"DELETE FROM module_members WHERE {where}", params
-            )
-            return cursor.rowcount
-
-    async def count(self, filter: Filter | Mapping | None = None) -> int:
-        tree = _resolve_filter(filter)
-        sql = "SELECT COUNT(*) FROM module_members"
-        params: list = []
-        if tree is not None:
-            where, params = self.filter_adapter.adapt(tree)
-            sql += f" WHERE {where}"
-        async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchone())
-        return row[0]
-
-    async def delete_all(self) -> None:
-        """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM module_members")
-
-
-# ── Document tree store ──────────────────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class SqliteDocumentTreeStore:
-    """DocumentTreeStore backed by the ``document_trees`` SQLite table (spec §12.2).
-
-    Each row stores one module's tree as a JSON blob keyed by
-    ``(package, module)``. The ``module`` column equals the root
-    ``DocumentNode.qualified_name`` — callers (``IndexingService``) own
-    that identity mapping and pass ``package`` explicitly so the store
-    never introspects each tree to infer which package it belongs to.
-    """
-
-    provider: ConnectionProvider
-
-    async def save_many(
-        self,
-        trees: Sequence[DocumentNode],
-        *,
-        package: str,
-        uow: UnitOfWork | None = None,
-    ) -> None:
-        if not trees:
-            return
-        # Capture the write timestamp once per call so every tree in a
-        # batch shares a consistent ``updated_at`` (cheaper + clearer than
-        # asking time.time() per row).
-        now = time.time()
-        rows = [
-            (
-                package,
-                t.qualified_name,
-                _serialize_tree_to_json(t),
-                t.content_hash,
-                now,
-            )
-            for t in trees
-        ]
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.executemany,
-                "INSERT INTO document_trees "
-                "(package, module, tree_json, content_hash, updated_at) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(package, module) DO UPDATE SET "
-                "tree_json=excluded.tree_json, "
-                "content_hash=excluded.content_hash, "
-                "updated_at=excluded.updated_at",
-                rows,
-            )
-
-    async def load(self, package: str, module: str) -> DocumentNode | None:
-        async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT tree_json FROM document_trees WHERE package=? AND module=?",
-                    (package, module),
-                ).fetchone()
-            )
-        return _deserialize_tree_from_json(row[0]) if row else None
-
-    async def load_all_in_package(self, package: str) -> dict[str, DocumentNode]:
-        async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT module, tree_json FROM document_trees WHERE package=?",
-                    (package,),
-                ).fetchall()
-            )
-        return {r["module"]: _deserialize_tree_from_json(r["tree_json"]) for r in rows}
-
-    async def exists(self, package: str, module: str) -> bool:
-        """Cheap existence check — no JSON parse, no DocumentNode allocation.
-
-        Used by ``LookupService._longest_indexed_module`` to probe dotted-
-        prefix candidates without paying the full deserialization cost; the
-        downstream ``_module_lookup`` / ``_symbol_lookup`` paths still call
-        ``load`` once on the winning candidate.
-        """
-        async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT 1 FROM document_trees WHERE package=? AND module=? LIMIT 1",
-                    (package, module),
-                ).fetchone()
-            )
-        return row is not None
-
-    async def delete_for_package(
-        self,
-        package: str,
-        *,
-        uow: UnitOfWork | None = None,
-    ) -> None:
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.execute,
-                "DELETE FROM document_trees WHERE package=?",
-                (package,),
-            )
-
-    async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.execute,
-                "DELETE FROM document_trees",
-            )
-
-
-def _serialize_tree_to_json(node: DocumentNode) -> str:
-    """Serialise a ``DocumentNode`` tree to compact JSON for storage."""
-    return json.dumps(_node_to_dict(node), separators=(",", ":"))
-
-
-def _node_to_dict(node: DocumentNode) -> dict:
-    return {
-        "node_id": node.node_id,
-        "qualified_name": node.qualified_name,
-        "title": node.title,
-        "kind": node.kind.value,
-        "source_path": node.source_path,
-        "start_line": node.start_line,
-        "end_line": node.end_line,
-        "text": node.text,
-        "content_hash": node.content_hash,
-        "summary": node.summary,
-        "extra_metadata": dict(node.extra_metadata),
-        "parent_id": node.parent_id,
-        "children": [_node_to_dict(c) for c in node.children],
-    }
-
-
-def _deserialize_tree_from_json(s: str) -> DocumentNode:
-    return _dict_to_node(json.loads(s))
-
-
-def _dict_to_node(d: dict) -> DocumentNode:
-    return DocumentNode(
-        node_id=d["node_id"],
-        qualified_name=d["qualified_name"],
-        title=d["title"],
-        kind=NodeKind(d["kind"]),
-        source_path=d["source_path"],
-        start_line=d["start_line"],
-        end_line=d["end_line"],
-        text=d["text"],
-        content_hash=d["content_hash"],
-        summary=d.get("summary", ""),
-        extra_metadata=d.get("extra_metadata", {}),
-        parent_id=d.get("parent_id"),
-        children=tuple(_dict_to_node(c) for c in d.get("children", ())),
-    )
 
 
 # ── Reference store ─────────────────────────────────────────────────────

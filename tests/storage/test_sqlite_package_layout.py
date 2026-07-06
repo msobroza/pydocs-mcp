@@ -104,3 +104,14 @@ def test_multi_vector_mapping_and_fts_store_have_own_modules() -> None:
         is chunk_multi_vector_repository.SqliteChunkMultiVectorRepository
     )
     assert sqlite_pkg.SqliteLexicalStore is fts_store.SqliteLexicalStore
+
+
+def test_member_repo_and_tree_store_have_own_modules() -> None:
+    from pydocs_mcp.storage.sqlite import document_tree_store, module_member_repository
+
+    assert (
+        sqlite_pkg.SqliteModuleMemberRepository
+        is module_member_repository.SqliteModuleMemberRepository
+    )
+    assert sqlite_pkg.SqliteDocumentTreeStore is document_tree_store.SqliteDocumentTreeStore
+    assert sqlite_pkg._serialize_tree_to_json is document_tree_store._serialize_tree_to_json
