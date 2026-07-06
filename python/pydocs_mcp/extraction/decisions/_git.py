@@ -94,21 +94,23 @@ def _frame_block(block: list[str]) -> str:
 def _partition(block: list[str]) -> tuple[list[str], list[str]]:
     """Split a block into its header lines and its trailing file paths.
 
-    Header runs until the blank line that ``git`` inserts before the file list;
-    everything non-blank after that blank line is a touched path. A body with a
-    trailing blank of its own is handled by taking the LAST blank run before the
-    files as the separator (files never contain blanks).
+    ``git`` separates the ``%b`` body from the ``--name-only`` file list with a
+    blank run, but a multi-paragraph body carries its OWN blank lines. Splitting
+    on the FIRST blank drops later body paragraphs and leaks their words into the
+    file list. Since file paths never contain blanks, the separator is the LAST
+    maximal blank run in the block: the files are the trailing run of non-blank
+    lines, and everything before that final blank run is the header (whose own
+    inter-paragraph blanks are preserved for the body parser).
     """
-    header: list[str] = []
-    files: list[str] = []
-    in_files = False
-    for line in block:
-        if in_files:
-            if line.strip():
-                files.append(line.strip())
-            continue
-        if not line.strip():
-            in_files = True  # blank separates header from the --name-only list
-            continue
-        header.append(line)
-    return header, files
+    trailing_files: list[str] = []
+    idx = len(block) - 1
+    # Walk back over the trailing non-blank run — the --name-only file list.
+    while idx >= 0 and block[idx].strip():
+        trailing_files.append(block[idx].strip())
+        idx -= 1
+    # Walk back over the blank run that separates that file list from the body.
+    while idx >= 0 and not block[idx].strip():
+        idx -= 1
+    header = block[: idx + 1]
+    trailing_files.reverse()
+    return header, trailing_files

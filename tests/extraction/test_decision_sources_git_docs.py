@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.extraction.decisions import CaptureContext
-from pydocs_mcp.extraction.decisions._git import read_git_log
+from pydocs_mcp.extraction.decisions._git import _normalize_log, read_git_log
 from pydocs_mcp.extraction.decisions.sources import (
     ChangelogSource,
     CommitMessagesSource,
@@ -192,6 +192,49 @@ def test_read_git_log_round_trips_real_repo(tmp_path) -> None:
 
 def test_read_git_log_no_repo_returns_empty(tmp_path) -> None:
     assert read_git_log(tmp_path, max_commits=10, timeout_seconds=5.0) == ""
+
+
+# Exactly what ``git log --name-only`` emits for a commit built with three ``-m``
+# flags (subject + two body paragraphs). git separates the paragraphs with a
+# blank line AND separates the body from the file list with a blank run — so a
+# naive "split on the first blank" drops the second paragraph into the files.
+_MULTI_PARAGRAPH_STDOUT = (
+    "commit aaaa1111\n"
+    "author-date 1700000000\n"
+    "subject migrate the vector store\n"
+    "body First we replace the blobs.\n"
+    "\n"
+    "Then we remove the legacy path.\n"
+    "\n"
+    "\n"
+    "a.py\n"
+)
+
+
+def test_normalize_log_keeps_multiparagraph_body_out_of_files() -> None:
+    # Regression: the LAST blank run — not the first — is the body/files
+    # separator. Both body paragraphs must survive; no body word may leak into
+    # the `files` line (which must carry only the real path).
+    framed = _normalize_log(_MULTI_PARAGRAPH_STDOUT)
+    assert "body First we replace the blobs." in framed
+    assert "Then we remove the legacy path." in framed
+    assert "files a.py\n" in framed
+    files_line = next(ln for ln in framed.splitlines() if ln.startswith("files "))
+    assert files_line == "files a.py"  # no body words leaked in
+
+
+async def test_multiparagraph_commit_body_survives_in_evidence(tmp_path) -> None:
+    # End-to-end through the parser: the framed multi-paragraph record must mine
+    # with its FULL body in the evidence text and only the real path in
+    # affected_files — no body word masquerading as a touched file.
+    (tmp_path / "a.py").write_text("a = 1\n")
+    log = _normalize_log(_MULTI_PARAGRAPH_STDOUT)
+    raws = await CommitMessagesSource().mine(_ctx(project_root=tmp_path, git_log_text=log))
+    assert len(raws) == 1
+    text = raws[0].evidence[0].text
+    assert "First we replace the blobs." in text
+    assert "Then we remove the legacy path." in text  # second paragraph survived
+    assert raws[0].affected_files == ("a.py",)  # no body words became files
 
 
 def _path_env() -> str:
