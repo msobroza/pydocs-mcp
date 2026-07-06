@@ -38,7 +38,7 @@ from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
-from pydocs_mcp.storage.node_score import NodeScore
+from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.retrieval.protocols import ChatMessage
@@ -522,13 +522,60 @@ class InMemoryReferenceStore:
             if r.to_node_id and str(r.kind) != "similar"
         ]
 
+    async def degree_by_package(self, package: str) -> dict[str, tuple[int, int]]:
+        """In-memory mirror of SqliteReferenceStore.degree_by_package.
+
+        Out-degree counts every row of ``package`` keyed on ``from_node_id``;
+        in-degree counts only resolved rows keyed on ``to_node_id`` (unresolved
+        targets name nothing). Same ``{qname: (in, out)}`` shape.
+        """
+        self.calls.append(_Call("degree_by_package", package))
+        rows = self.by_package.get(package, [])
+        in_deg: dict[str, int] = {}
+        out_deg: dict[str, int] = {}
+        for r in rows:
+            out_deg[r.from_node_id] = out_deg.get(r.from_node_id, 0) + 1
+            if r.to_node_id is not None:
+                in_deg[r.to_node_id] = in_deg.get(r.to_node_id, 0) + 1
+        degrees: dict[str, tuple[int, int]] = {}
+        for q in set(in_deg) | set(out_deg):
+            degrees[q] = (in_deg.get(q, 0), out_deg.get(q, 0))
+        return degrees
+
+    async def imports_grouped_by_target(self, package: str) -> dict[str, int]:
+        """In-memory mirror of SqliteReferenceStore.imports_grouped_by_target.
+
+        Counts ``imports``-kind rows of ``package`` grouped by the target's
+        top-level segment; self-imports (top segment == ``package``) are
+        excluded to match the SQL path.
+        """
+        self.calls.append(_Call("imports_grouped_by_target", package))
+        profile: dict[str, int] = {}
+        for r in self.by_package.get(package, []):
+            if str(r.kind) != "imports":
+                continue
+            top = (r.to_name or "").split(".")[0]
+            if not top or top == package:
+                continue
+            profile[top] = profile.get(top, 0) + 1
+        return profile
+
 
 @dataclass
 class InMemoryNodeScoreStore:
-    """Structurally satisfies NodeScoreStore — async methods only."""
+    """Structurally satisfies NodeScoreStore — async methods only.
+
+    ``references`` is an optional back-link to the sibling
+    :class:`InMemoryReferenceStore` so ``community_cohesion`` can partition
+    edges by community exactly as the SQLite join does. It stays ``None`` for
+    standalone tests that only exercise score reads; ``make_fake_uow_factory``
+    wires it to the shared reference store so cross-store aggregates match the
+    real UoW's behaviour.
+    """
 
     by_key: dict[tuple[str, str], NodeScore] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
+    references: InMemoryReferenceStore | None = None
 
     async def upsert(self, scores, *, uow=None) -> None:
         materialised = tuple(scores)
@@ -544,6 +591,49 @@ class InMemoryNodeScoreStore:
             if qn in wanted:
                 out.setdefault(qn, score)
         return out
+
+    async def for_package(self, package: str) -> list[NodeScore]:
+        """In-memory mirror of SqliteNodeScoreRepository.for_package."""
+        self.calls.append(_Call("for_package", package))
+        return [s for (pkg, _qn), s in self.by_key.items() if pkg == package]
+
+    async def community_cohesion(self, package: str) -> dict[int, CommunityCohesion]:
+        """In-memory mirror of SqliteNodeScoreRepository.community_cohesion.
+
+        Sizes come from the score rows of ``package``; intra/cross edges are
+        partitioned over the sibling reference store's resolved intra-package
+        edges by whether both endpoints share a community. Matches the SQL join.
+        """
+        self.calls.append(_Call("community_cohesion", package))
+        community_of: dict[str, int] = {
+            qn: s.community for (pkg, qn), s in self.by_key.items() if pkg == package
+        }
+        sizes: dict[int, int] = {}
+        for community in community_of.values():
+            sizes[community] = sizes.get(community, 0) + 1
+        intra: dict[int, int] = {}
+        cross: dict[int, int] = {}
+        rows = self.references.by_package.get(package, []) if self.references else []
+        for r in rows:
+            if r.to_node_id is None:
+                continue
+            src = community_of.get(r.from_node_id)
+            dst = community_of.get(r.to_node_id)
+            if src is None or dst is None:
+                continue
+            if src == dst:
+                intra[src] = intra.get(src, 0) + 1
+            else:
+                cross[src] = cross.get(src, 0) + 1
+        return {
+            community: CommunityCohesion(
+                community=community,
+                size=size,
+                intra_edges=intra.get(community, 0),
+                cross_edges=cross.get(community, 0),
+            )
+            for community, size in sizes.items()
+        }
 
     async def delete_for_package(self, package, *, uow=None) -> None:
         self.calls.append(_Call("delete_for_package", package))
@@ -720,6 +810,11 @@ def make_fake_uow_factory(
     trs = trees or InMemoryDocumentTreeStore()
     rfs = references or InMemoryReferenceStore()
     nss = node_scores or InMemoryNodeScoreStore()
+    # Cross-store aggregate: community_cohesion partitions the reference
+    # store's edges by community, mirroring the SQLite node_references⋈
+    # node_scores join. Link the shared reference store so the fake matches.
+    if nss.references is None:
+        nss.references = rfs
     vec = vectors if vectors is not None else NullVectorStore()
     mv = multi_vectors if multi_vectors is not None else NullMultiVectorStore()
 
