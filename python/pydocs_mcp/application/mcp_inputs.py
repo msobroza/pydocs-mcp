@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     # passes, validated structurally via ``_ConfigShape``). Avoids the
     # circular-import risk called out in the pre-refactor docstring.
     from pydocs_mcp.retrieval.config import ReferenceGraphConfig, SearchConfig
+    from pydocs_mcp.retrieval.config.models import SymbolSourceConfig
 
 # Format validators — reject malformed input at the boundary.
 _PACKAGE_RE = re.compile(
@@ -60,6 +61,16 @@ _LIMIT_MAX: int = 1000
 # adjust one without the other.
 _SEARCH_LIMIT_DEFAULT: int = 10
 _SEARCH_LIMIT_MAX: int = 1000
+# get_symbol(depth="source") verbatim line cap — installed from
+# ``cfg.symbol_source.max_lines`` by ``configure_from_app_config`` at
+# startup. Initial literal matches the shipped ``default_config.yaml``
+# (``symbol_source.max_lines: 400``) so direct construction of
+# ``SymbolSourceService`` behaves correctly if ``configure_from_app_config``
+# is never called (same rationale as the limit slots above — importing the
+# canonical config constant here would invert the application -> retrieval
+# layering). The per-project ``build_sqlite_symbol_source_service`` factory
+# reads this slot for its fallback when no ``config`` is passed.
+_SYMBOL_SOURCE_MAX_LINES: int = 400
 
 
 @runtime_checkable
@@ -70,7 +81,8 @@ class _ConfigShape(Protocol):
     Replaces the previous ``cfg: Any`` parameter with a typed Protocol
     that documents exactly which cfg sub-trees the function consumes —
     ``reference_graph`` (for ``capture`` / ``resolver`` / ``output``
-    sub-models) and ``search`` (for the ``search.output`` bounds).
+    sub-models), ``search`` (for the ``search.output`` bounds), and
+    ``symbol_source`` (for the get_symbol(depth="source") line cap).
 
     The Protocol is ``@runtime_checkable`` so unit tests can structurally
     verify any duck-typed config carrier satisfies the shape via
@@ -88,6 +100,7 @@ class _ConfigShape(Protocol):
 
     reference_graph: ReferenceGraphConfig
     search: SearchConfig
+    symbol_source: SymbolSourceConfig
 
 
 def configure_from_app_config(cfg: _ConfigShape) -> None:
@@ -101,7 +114,7 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     Stamp coupling is gone: callers no longer pass an untyped ``Any``;
     static type-checkers can verify the contract.
 
-    Three slots are updated:
+    Four slots are updated:
 
     1. ``_LIMIT_DEFAULT`` / ``_LIMIT_MAX`` here in ``mcp_inputs`` — read
        by ``LookupInput.limit`` (default + ceiling).
@@ -109,13 +122,18 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
        ``mcp_inputs`` — read by ``SearchInput.limit`` (default + ceiling).
        Separate slot pair so deployments can tune search and lookup
        limits independently.
-    3. ``_CAPTURE_CONFIG`` in ``extraction.pipeline.stages`` — read by
+    3. ``_SYMBOL_SOURCE_MAX_LINES`` here in ``mcp_inputs`` — the
+       get_symbol(depth="source") verbatim line cap, read by the
+       per-project ``build_sqlite_symbol_source_service`` factory as its
+       no-config fallback.
+    4. ``_CAPTURE_CONFIG`` in ``extraction.pipeline.stages`` — read by
        ``ReferenceCaptureStage`` to gate capture on/off and pick which
        reference kinds to emit. Pushed via ``_set_capture_config`` so the
        stage module owns its own slot (no cross-package mutation).
     """
     global _LIMIT_DEFAULT, _LIMIT_MAX
     global _SEARCH_LIMIT_DEFAULT, _SEARCH_LIMIT_MAX
+    global _SYMBOL_SOURCE_MAX_LINES
 
     output = cfg.reference_graph.output
     _LIMIT_DEFAULT = output.default_limit
@@ -124,6 +142,8 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     search_output = cfg.search.output
     _SEARCH_LIMIT_DEFAULT = search_output.default_limit
     _SEARCH_LIMIT_MAX = search_output.max_limit
+
+    _SYMBOL_SOURCE_MAX_LINES = cfg.symbol_source.max_lines
 
     # Local import — keeps the application -> extraction edge lazy so
     # importing ``mcp_inputs`` at app startup doesn't drag in the whole
@@ -242,4 +262,119 @@ class LookupInput(BaseModel):
             raise ValueError(
                 f"limit must be <= {_LIMIT_MAX} (configured via reference_graph.output.max_limit)"
             )
+        return v
+
+
+# ── Task-shaped tool inputs (spec §D1) ──────────────────────────────────
+#
+# The six task-shaped tools reuse the same YAML-wired limit slots and the
+# same ``_PACKAGE_RE`` / ``_TARGET_RE`` boundary validators as the two-tool
+# ``SearchInput`` / ``LookupInput`` surface above. ``project`` carries the
+# identical multi-repo corpus-selector semantics on every model that has it.
+
+
+class OverviewInput(BaseModel):
+    """get_overview — orientation card scope (spec §D1/§D17)."""
+
+    package: str = ""
+    project: str = ""
+
+    @field_validator("package")
+    @classmethod
+    def _check_package(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("package must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ or be '__project__'")
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+class SymbolInput(BaseModel):
+    """get_symbol — known dotted path (spec §D1). depth='source' is the §D7 recovery contract."""
+
+    target: str = Field(min_length=1)
+    depth: Literal["summary", "tree", "source"] = "summary"
+    project: str = ""
+
+    @field_validator("target")
+    @classmethod
+    def _check_target(cls, v: str) -> str:
+        if not _TARGET_RE.match(v):
+            raise ValueError("target must be a dotted identifier like 'pkg.mod.Class.method'")
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+class ContextInput(BaseModel):
+    """get_context — batched targets under one shared budget (spec §D1)."""
+
+    targets: list[str] = Field(min_length=1, max_length=20)
+    project: str = ""
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+class ReferencesInput(BaseModel):
+    """get_references — graph traversal incl. ranked transitive impact (spec §D1)."""
+
+    target: str = Field(min_length=1)
+    direction: Literal["callers", "callees", "inherits", "impact"] = "callers"
+    project: str = ""
+    limit: int = Field(default_factory=lambda: _LIMIT_DEFAULT, ge=1)
+
+    @field_validator("target")
+    @classmethod
+    def _check_target(cls, v: str) -> str:
+        if not _TARGET_RE.match(v):
+            raise ValueError("target must be a dotted identifier like 'pkg.mod.Class.method'")
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+    @field_validator("limit")
+    @classmethod
+    def _check_limit_max(cls, v: int) -> int:
+        # Read ``_LIMIT_MAX`` at call time so YAML reloads (or test
+        # overrides) take effect on every ``ReferencesInput(...)`` rather
+        # than being frozen at class-definition time — mirrors LookupInput.
+        if v > _LIMIT_MAX:
+            raise ValueError(
+                f"limit must be <= {_LIMIT_MAX} (configured via reference_graph.output.max_limit)"
+            )
+        return v
+
+
+class WhyInput(BaseModel):
+    """get_why — decision search / per-target governing decisions / dashboard (spec §D11)."""
+
+    query: str = ""
+    targets: list[str] | None = Field(None, min_length=1, max_length=20)
+    project: str = ""
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
         return v

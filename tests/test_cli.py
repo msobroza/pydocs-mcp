@@ -416,6 +416,193 @@ class TestLookupCommand:
             )
 
 
+def _seed_resolvable_symbol_db(db_path: Path) -> None:
+    """Seed a cache DB with a symbol the CLI target parser can resolve.
+
+    WHY a hand-seeded package (``mypkg``) instead of the ``seeded_project``
+    fixture: project source is indexed under ``__project__`` with module ids
+    that DON'T carry the package prefix (module ``app`` lives under package
+    ``__project__``). ``LookupTarget.parse`` uses ``target.split('.')[0]`` as
+    the package and re-joins the full dotted prefix as the module-id probe, so
+    a ``__project__`` symbol is unreachable through the target string. A
+    dependency-style package whose NAME equals its module prefix
+    (``mypkg`` / ``mypkg.core``) is the addressable shape — the same shape the
+    service-level ref tests use (``pkg.helpers.compute``). Seeding the tree +
+    a resolved CALLS edge gives ``refs``/``context`` a symbol that resolves
+    end-to-end through the real router.
+    """
+    import asyncio
+    import sqlite3
+
+    from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+    from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+    from pydocs_mcp.storage.sqlite.document_tree_store import SqliteDocumentTreeStore
+
+    def _node(node_id, kind, title, start, end, text="", children=()):
+        return DocumentNode(
+            node_id=node_id,
+            qualified_name=node_id,
+            title=title,
+            kind=kind,
+            source_path="mypkg/core.py",
+            start_line=start,
+            end_line=end,
+            text=text,
+            content_hash="h_" + node_id,
+            summary=title,
+            children=children,
+        )
+
+    open_index_database(db_path).close()
+    greet = _node(
+        "mypkg.core.greet",
+        NodeKind.FUNCTION,
+        "def greet()",
+        1,
+        3,
+        "def greet():\n    return farewell()\n",
+    )
+    farewell = _node(
+        "mypkg.core.farewell",
+        NodeKind.FUNCTION,
+        "def farewell()",
+        5,
+        7,
+        "def farewell():\n    return 'bye'\n",
+    )
+    module = _node("mypkg.core", NodeKind.MODULE, "core", 1, 7, children=(greet, farewell))
+    asyncio.run(
+        SqliteDocumentTreeStore(provider=PerCallConnectionProvider(db_path)).save_many(
+            [module], package="mypkg"
+        )
+    )
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO packages (name, version, summary, homepage, dependencies, "
+        "content_hash, origin) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("mypkg", "1.0", "My package", "", "[]", "pkg_hash", "dependency"),
+    )
+    conn.executemany(
+        "INSERT INTO node_references (from_package, from_node_id, to_name, to_node_id, kind) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [
+            # greet -> farewell : a resolved forward edge, powers `context`.
+            ("mypkg", "mypkg.core.greet", "farewell", "mypkg.core.farewell", "calls"),
+            # cli.main -> greet : a resolved reverse edge, powers `callers`.
+            ("mypkg", "mypkg.cli.main", "greet", "mypkg.core.greet", "calls"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
+class TestTaskShapedSubcommands:
+    """Task 9: six task-shaped subcommands mirror the six MCP tools 1:1.
+
+    ``overview`` / ``symbol`` / ``context`` / ``refs`` / ``why`` join the
+    existing ``search`` (each routing through the ToolRouter + shared
+    ResponseEnvelope), and the old ``lookup`` stays for one release as a
+    deprecated alias that warns + delegates to the new router calls.
+    """
+
+    @pytest.fixture
+    def symbol_project(self, tmp_path):
+        """A project dir whose cache DB holds a resolvable ``mypkg.core.*`` symbol."""
+        from pydocs_mcp.db import cache_path_for_project
+
+        project = tmp_path / "symproject"
+        project.mkdir()
+        db_path = cache_path_for_project(project)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        _seed_resolvable_symbol_db(db_path)
+        return project
+
+    def test_symbol_subcommand_prints_enveloped_output(self, seeded_project, capsys, monkeypatch):
+        monkeypatch.chdir(seeded_project)
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        # ``__project__`` is a single-segment package target → get_symbol renders
+        # the package overview (no deep module-id probe needed) inside the envelope.
+        with patch("sys.argv", ["pydocs-mcp", "symbol", "__project__", "--project-dir", "."]):
+            main()
+        out = capsys.readouterr().out
+        assert out.startswith("[index:")
+
+    def test_refs_subcommand_direction_flag(self, symbol_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch(
+            "sys.argv",
+            [
+                "pydocs-mcp",
+                "refs",
+                "mypkg.core.greet",
+                "--direction",
+                "callers",
+                "--project-dir",
+                str(symbol_project),
+            ],
+        ):
+            main()
+        assert "Callers of" in capsys.readouterr().out
+
+    def test_context_accepts_multiple_targets(self, symbol_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch(
+            "sys.argv",
+            [
+                "pydocs-mcp",
+                "context",
+                "mypkg.core.greet",
+                "mypkg.core.farewell",
+                "--project-dir",
+                str(symbol_project),
+            ],
+        ):
+            main()
+        assert capsys.readouterr().out.count("# Context for") == 2
+
+    def test_overview_subcommand(self, seeded_project, capsys, monkeypatch):
+        monkeypatch.chdir(seeded_project)
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        with patch("sys.argv", ["pydocs-mcp", "overview", "--project-dir", "."]):
+            main()
+        assert "# Overview" in capsys.readouterr().out
+
+    def test_why_reports_unavailable(self, seeded_project, capsys, monkeypatch):
+        monkeypatch.chdir(seeded_project)
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        with patch("sys.argv", ["pydocs-mcp", "why", "anything", "--project-dir", "."]):
+            rc = main()
+        assert rc != 0
+        # NullDecisionService points the user at the YAML knob `decision_capture`.
+        assert "decision_capture" in capsys.readouterr().err
+
+    def test_lookup_alias_warns_and_delegates(self, seeded_project, capsys, monkeypatch):
+        monkeypatch.chdir(seeded_project)
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        # Empty target on the deprecated alias preserves the old "list packages"
+        # behavior (routes to get_overview), so the enveloped listing prints while
+        # the deprecation notice + the new-tool pointer land on stderr.
+        with patch("sys.argv", ["pydocs-mcp", "lookup", "", "--project-dir", "."]):
+            main()
+        captured = capsys.readouterr()
+        assert "deprecated" in captured.err and "pydocs-mcp symbol" in captured.err
+        assert captured.out.startswith("[index:")
+
+
 class TestServeCommand:
     def test_serve_indexes_then_starts_server(self, seeded_project):
         """Test that serve indexes and calls run() — we mock run() to avoid blocking.

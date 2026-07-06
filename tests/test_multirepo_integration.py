@@ -1,7 +1,7 @@
 """Integration: build_routers over real workspace dbs (mock embedder via conftest).
 
 Exercises the composition root end-to-end — resolve + validate + build N service
-sets + routers — with real stamped databases, without full indexing.
+sets + the ToolRouter — with real stamped databases, without full indexing.
 """
 
 from __future__ import annotations
@@ -57,9 +57,10 @@ def test_build_routers_workspace_loads_all_projects(tmp_path: Path) -> None:
         dim=cfg.embedding.dim,
     )
 
-    search_router, lookup_router, services = build_routers(cfg, workspace=tmp_path)
+    tools, services = build_routers(cfg, workspace=tmp_path)
     assert {s.project.name for s in services} == {"frontend", "backend"}
-    assert len(search_router.services) == 2 and len(lookup_router.services) == 2
+    assert len(tools.services) == 2
+    assert len(tools.search_router.services) == 2 and len(tools.lookup_router.services) == 2
 
 
 def test_build_routers_read_only_rejects_embedder_mismatch(tmp_path: Path) -> None:
@@ -90,7 +91,7 @@ def test_build_routers_explicit_db_paths_read_only(tmp_path: Path) -> None:
         model=cfg.embedding.model_name,
         dim=cfg.embedding.dim,
     )
-    _s, _l, services = build_routers(cfg, db_paths=[a, b])
+    _tools, services = build_routers(cfg, db_paths=[a, b])
     assert {s.project.name for s in services} == {"a", "b"}
 
 
@@ -101,7 +102,7 @@ def test_build_routers_single_db_is_read_write_skips_validation(tmp_path: Path) 
 
     cfg = _default_config()
     db = _stamp_db(tmp_path / "solo_5555555555.db", name="solo", model="stale-model", dim=1)
-    _s, _l, services = build_routers(cfg, db_path=db)  # no raise despite mismatch
+    _tools, services = build_routers(cfg, db_path=db)  # no raise despite mismatch
     assert len(services) == 1 and services[0].project.name == "solo"
 
 
@@ -123,10 +124,10 @@ async def test_routers_search_over_empty_workspace_returns_no_matches(tmp_path: 
         model=cfg.embedding.model_name,
         dim=cfg.embedding.dim,
     )
-    search_router, _l, _s = build_routers(cfg, workspace=tmp_path)
+    tools, _services = build_routers(cfg, workspace=tmp_path)
     # Empty (schema-only) dbs -> union across both -> nothing to return. The
     # envelope wraps the body with a freshness header (probe reads the FIRST
     # project); the body itself is still the empty-state message.
-    out = await search_router.search(SearchInput(query="anything"))
+    out = await tools.search_codebase(SearchInput(query="anything"))
     assert out.startswith("[index: ")
     assert "No matches found." in out

@@ -74,11 +74,16 @@ reference_graph:
   context:
     max_depth: 2                            # forward dependency-closure depth for lookup(show="context"), 1-6
     token_budget: 2048                      # token cap for the packed context (graded fidelity)
+    render: skeleton                        # "skeleton" (signatures + bodies for the most-central nodes) | "full" (hop-graded fidelity)
+    skeleton_body_ratio: 0.35               # fraction of token_budget spent on FULL bodies in skeleton mode, 0<r<=1
 
 search:
   output:
     default_limit: 10
     max_limit: 1000
+
+symbol_source:
+  max_lines: 400            # get_symbol(depth="source") bound (spec §D7)
 
 # Response conventions (spec §D4/§D5): the freshness envelope line and
 # per-hit next-step pointers on every search/lookup response. Disable
@@ -90,6 +95,10 @@ output:
     head_check_ttl_seconds: 5
   next_pointers:
     enabled: true
+
+overview:                     # get_overview card caps (spec §D17)
+  max_modules: 20
+  max_communities: 10
 
 # File-watcher tunables for `pydocs-mcp serve --watch` (CLI flag overrides
 # `enabled` — leave it false here so plain `pydocs-mcp serve` is identical

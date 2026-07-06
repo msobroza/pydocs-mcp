@@ -48,7 +48,9 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
+    from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
+    from pydocs_mcp.application.symbol_source import SymbolSourceService
     from pydocs_mcp.retrieval.config import AppConfig
 
 
@@ -136,6 +138,67 @@ def build_sqlite_lookup_service(
         impact_max_depth=impact_cfg.max_depth,
         context_max_depth=context_cfg.max_depth,
         context_token_budget=context_cfg.token_budget,
+        context_render=context_cfg.render,
+        context_body_ratio=context_cfg.skeleton_body_ratio,
+    )
+
+
+def build_sqlite_symbol_source_service(
+    db_path: Path,
+    config: AppConfig | None = None,
+) -> SymbolSourceService:
+    """Compose a wired ``SymbolSourceService`` from a SQLite DB path.
+
+    Sibling of ``build_sqlite_lookup_service``: the CLI and the MCP server
+    both build get_symbol(depth="source")'s backing service here so they
+    never drift on the ``max_lines`` line cap. The cap is a YAML setting
+    (``symbol_source.max_lines``), NOT an MCP param — thread it from
+    ``config`` when given, else fall back to the module-level
+    ``mcp_inputs._SYMBOL_SOURCE_MAX_LINES`` slot (populated by
+    ``configure_from_app_config`` at startup, or its shipped-default literal
+    for direct/test construction with no config).
+    """
+    from pydocs_mcp.application import mcp_inputs
+    from pydocs_mcp.application.symbol_source import SymbolSourceService
+
+    max_lines = (
+        config.symbol_source.max_lines
+        if config is not None
+        else mcp_inputs._SYMBOL_SOURCE_MAX_LINES
+    )
+    return SymbolSourceService(
+        uow_factory=build_sqlite_uow_factory(db_path),
+        max_lines=max_lines,
+    )
+
+
+def build_sqlite_overview_service(
+    db_path: Path,
+    *,
+    project_root: Path,
+    config: AppConfig | None = None,
+) -> OverviewService:
+    """Compose a wired ``OverviewService`` from a SQLite DB path.
+
+    Sibling of ``build_sqlite_lookup_service`` / ``build_sqlite_symbol_source_service``:
+    the CLI and the MCP server both build ``get_overview``'s backing service
+    here so they never drift on the card caps or on where the entry-point
+    ``[project.scripts]`` come from. Caps are YAML settings (``overview.*``),
+    NOT MCP params — threaded from ``config`` when given, else the sub-config
+    defaults. ``scripts`` is parsed ONCE at composition from
+    ``project_root/pyproject.toml`` (missing / malformed → ``{}``: entry points
+    are advisory card content, never a reason to fail an overview).
+    """
+    from pydocs_mcp.application.overview_service import OverviewService
+    from pydocs_mcp.deps import parse_project_scripts
+    from pydocs_mcp.retrieval.config import OverviewConfig
+
+    overview_cfg = config.overview if config is not None else OverviewConfig()
+    return OverviewService(
+        uow_factory=build_sqlite_uow_factory(db_path),
+        scripts=parse_project_scripts(str(project_root / "pyproject.toml")),
+        max_modules=overview_cfg.max_modules,
+        max_communities=overview_cfg.max_communities,
     )
 
 

@@ -21,3 +21,19 @@ class NodeScore:
     in_degree: int = 0
     pagerank: float = 0.0
     community: int = -1
+
+
+@dataclass(frozen=True, slots=True)
+class CommunityCohesion:
+    """Per-community edge partition — one row of the overview community map.
+
+    ``size`` is the node count assigned to the community; ``intra_edges`` /
+    ``cross_edges`` split the resolved out-edges of that community's nodes by
+    whether the target sits in the same community (§D17 block 5). High
+    intra/(intra+cross) ratio marks a cohesive module cluster.
+    """
+
+    community: int
+    size: int
+    intra_edges: int = 0
+    cross_edges: int = 0

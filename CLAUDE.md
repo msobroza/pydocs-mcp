@@ -12,13 +12,13 @@ Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this reposit
 
 **Current state:**
 
-- **Reference graph** (CALLS / IMPORTS / INHERITS / MENTIONS edges) lives in the indexer and is queried via the existing MCP surface as `lookup(target=X, show="callers" | "callees" | "inherits")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`.
+- **Reference graph** (CALLS / IMPORTS / INHERITS / MENTIONS edges) lives in the indexer and is queried via the existing MCP surface as `get_references(target=X, direction="callers" | "callees" | "inherits" | "impact")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`.
 - **Hybrid retrieval** — BM25 (FTS5) + dense embeddings (FastEmbed by default, OpenAI optional) fused via RRF. Retrieval sources its stores from a capability-based `SearchBackend` (`SqliteCompositeBackend` by default, in `storage/search_backend.py`): lexical via SQLite FTS5, dense via the TurboQuant `.tq` sidecar, multi-vector via fast-plaid (opt-in); hybrid is fused at the pipeline level (parallel retrieval + RRF), not by a single combined engine. Writes flow through `CompositeUnitOfWork`.
 - **Chunk-level cache + atomic vector cleanup** — `chunks.content_hash` (SHA-256 of `package+module+title+text+pipeline_hash`) skips re-embedding unchanged chunks on reindex; `pipeline_hash` invalidates every chunk hash when the embedder or `ingestion.yaml` changes; `IndexingService.reindex_package` / `remove_package` / `clear_all` keep SQLite + TurboQuant coherent atomically through the UoW.
 - **LLM tree reasoning + weighted fusion** — opt-in retrieval steps (`weighted_score_interpolation`, `llm_tree_reasoning`) compose with the existing pipeline. Tuned via the `llm:` section in `AppConfig` (provider / model / temperature / max_tokens), mirroring `embedding:`. Three preset YAMLs ship under `python/pydocs_mcp/pipelines/` (`tree_only.yaml`, `chunk_search_with_tree_reasoning_parallel.yaml`, `chunk_search_with_tree_reasoning_after.yaml`).
 - **Late-interaction (ColBERT / PyLate) multi-vector retrieval** — opt-in via the `[late-interaction]` extra + `late_interaction.enabled: true` in YAML. fast-plaid is the multi-vector index backend; SQLite's `chunk_multi_vector_ids` table bridges `chunk_id` to fast-plaid's `plaid_doc_id`. Retrieval-side, the `late_interaction_scorer` step uses the existing `FilterAdapter` Protocol to scope MaxSim to a candidate subset.
 
-The MCP surface remains the fixed 2-tool `search` + `lookup` (see §"MCP API surface vs YAML configuration").
+The MCP surface remains a fixed set of six task-shaped tools — `get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why` (see §"MCP API surface vs YAML configuration").
 
 ## Build & Run Commands
 
@@ -44,11 +44,15 @@ pydocs-mcp index . --force        # Atomic SQLite + .tq wipe via IndexingService
 pydocs-mcp index . --skip-project # Dependencies only
 pydocs-mcp index . --skip-deps    # Project only (skip dependencies)
 
-# Search/debug from CLI (mirrors MCP surface: `search` + `lookup`)
-pydocs-mcp search "batch inference"
+# Search/debug from CLI (mirrors the six task-shaped MCP tools)
+pydocs-mcp search "batch inference"                                    # search_codebase
 pydocs-mcp search "predict" --kind api -p vllm
-pydocs-mcp lookup fastapi.routing.APIRouter
-pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
+pydocs-mcp overview fastapi                                            # get_overview
+pydocs-mcp symbol fastapi.routing.APIRouter --depth source            # get_symbol
+pydocs-mcp context fastapi.routing.APIRouter fastapi.applications.FastAPI  # get_context
+pydocs-mcp refs fastapi.routing.APIRouter.include_router --direction callers  # get_references
+pydocs-mcp why "how does routing work"                                # get_why
+pydocs-mcp lookup fastapi.routing.APIRouter --show callers            # [deprecated] alias for symbol/refs/context
 
 # Verbose logging
 pydocs-mcp -v serve .
@@ -179,7 +183,7 @@ Quick map of the patterns this codebase uses; deeper rules live in the sections 
 
 - **Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion** — applied throughout; see §"SOLID Principles" for which module owns which concern and how to extend without modifying existing code.
 - **DRY** — defaults rule above; shared rendering lives in `application/formatting.py`; no inline duplication of repository wiring (composition root only).
-- **YAGNI** — pipeline / feature settings go to YAML, never new MCP params (§"MCP API surface vs YAML configuration"). The MCP surface is fixed at two tools by design.
+- **YAGNI** — pipeline / feature settings go to YAML, never new MCP params (§"MCP API surface vs YAML configuration"). The MCP surface is fixed at six task-shaped tools by design.
 - **TDD** — failing test first, smallest change to green, then refactor; every PR ships with new tests mapped to discrete acceptance criteria.
 
 ## SOLID Principles
@@ -248,7 +252,7 @@ Other rules:
 
 **Rule:** Pipeline / feature / behavior settings — capture toggles, resolver thresholds, retrieval limits-on-defaults, ranking weights, embedding model choices, indexing depth, kinds-to-emit, reference-graph capture on/off, etc. — MUST be configured via YAML (loaded through `AppConfig.load(...)` at server / CLI startup), NEVER exposed as new MCP tool parameters.
 
-**The MCP tool surface is FIXED at two tools:** `search(query, kind, ...)` and `lookup(target, show, ...)`. Their signatures are pinned in `server.py`. New features land **behind** the existing surface — via YAML config + internal service composition — never as a new MCP param.
+**The MCP tool surface is FIXED at six task-shaped tools:** `get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, and `get_why`. Their signatures are pinned in `server.py`. Adding a seventh tool is a design-doc-level versioning event for every external client — not something to reach for; new features land **behind** the existing surface — via YAML config + internal service composition — never as a new MCP tool or a new MCP param. The two sanctioned parameter categories below and the YAML litmus test apply per-tool.
 
 **Why:**
 
@@ -256,9 +260,9 @@ Other rules:
 2. **Experiment tracking + benchmark evaluation.** A/B testing different resolver thresholds, capture strategies, or ranking weights happens server-side via swappable YAML. The benchmark harness can iterate over `configs/*.yaml` and produce comparable measurements **without rebuilding clients or churning the API**. Conflating "what the API offers" with "how the server is currently tuned" makes evaluation impossible.
 3. **Per-deployment tuning.** Different MCP server deployments (per-project, per-developer, per-environment) carry different configs. The API stays the same; the behavior varies.
 
-**The one allowed exception** is *input-shape* validators on the MCP tool models (e.g., `LookupInput.limit: int = Field(50, ge=1, le=1000)`) — these constrain a single client request's bounds and are client-driven, not feature toggles. If you find yourself adding a parameter like `lookup(kinds=[...])` or `search(min_score=0.5)`, **stop**: that's a pipeline setting, it belongs in YAML, and the MCP input should expose nothing.
+**The one allowed exception** is *input-shape* validators on the MCP tool models (e.g., `ReferencesInput.limit: int = Field(ge=1)` bounded above against `reference_graph.output.max_limit`) — these constrain a single client request's bounds and are client-driven, not feature toggles. If you find yourself adding a parameter like `get_references(kinds=[...])` or `search_codebase(min_score=0.5)`, **stop**: that's a pipeline setting, it belongs in YAML, and the MCP input should expose nothing.
 
-**Corpus-scope filters are the second sanctioned category** (not tuning knobs). `search(package=…, scope=…)` and `search/lookup(project=…)` all answer *"which slice of the indexed corpus does this ONE request cover"* — they are client-driven per-request selectors, not server behavior toggles. `project` was added (multi-repo search: one MCP server hosting several indexed repos, selected per query) as a deliberate sibling of `package`/`scope`. The test: a new param is allowed only if it narrows *what corpus is searched* for a single request and is meaningless to bake into YAML (the client, not the deployment, decides it per call). Anything about *how* retrieval ranks/scores/expands still goes in YAML. When in doubt, it's a tuning knob — keep it out.
+**Corpus-scope filters are the second sanctioned category** (not tuning knobs). `search_codebase(package=…, scope=…)` and the `project=…` selector shared across the task-shaped tools all answer *"which slice of the indexed corpus does this ONE request cover"* — they are client-driven per-request selectors, not server behavior toggles. `project` was added (multi-repo search: one MCP server hosting several indexed repos, selected per query) as a deliberate sibling of `package`/`scope`. The test: a new param is allowed only if it narrows *what corpus is searched* for a single request and is meaningless to bake into YAML (the client, not the deployment, decides it per call). Anything about *how* retrieval ranks/scores/expands still goes in YAML. When in doubt, it's a tuning knob — keep it out.
 
 **Where YAML config lives:**
 
@@ -344,7 +348,7 @@ Examples in this repo:
 
 **Why:** `X | None` forces every consumer to add `if x is not None:` guards. Null Object pattern keeps the call sites uniform and the type signatures simple. The `getattr(uow, "vectors", None)` guards previously scattered across `application/indexing_service.py` were removed under this rule.
 
-The failure-semantics asymmetry between the two Null impls is deliberate: `NullVectorStore` is silent because vectors are advisory; `NullTreeService` / `NullReferenceService` raise because trees / references are user-requested via the MCP `lookup` tool — a silent empty result would mislead the caller.
+The failure-semantics asymmetry between the two Null impls is deliberate: `NullVectorStore` is silent because vectors are advisory; `NullTreeService` / `NullReferenceService` raise because trees / references are user-requested via the task-shaped tools (`get_symbol` / `get_context` / `get_references`) — a silent empty result would mislead the caller.
 
 ## `RetrieverState.scratch` mutation discipline
 

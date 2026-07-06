@@ -38,6 +38,7 @@ from pydocs_mcp.retrieval.config import (
     SearchConfig,
     SearchOutputConfig,
 )
+from pydocs_mcp.retrieval.config.models import SymbolSourceConfig
 
 
 class _StubCfg:
@@ -47,12 +48,17 @@ class _StubCfg:
         self,
         reference_graph: ReferenceGraphConfig,
         search: SearchConfig | None = None,
+        symbol_source: SymbolSourceConfig | None = None,
     ) -> None:
         self.reference_graph = reference_graph
         # Default SearchConfig matches the shipped YAML so tests that
         # only exercise the LookupInput slots don't need to spell out
         # search explicitly.
         self.search = search if search is not None else SearchConfig()
+        # ``configure_from_app_config`` also reads ``cfg.symbol_source`` (the
+        # get_symbol line cap) — default to the shipped config so limit-slot
+        # tests don't need to spell it out.
+        self.symbol_source = symbol_source if symbol_source is not None else SymbolSourceConfig()
 
 
 @pytest.fixture(autouse=True)
@@ -62,6 +68,7 @@ def _restore_module_state() -> None:
     saved_max = mcp_inputs._LIMIT_MAX
     saved_search_default = mcp_inputs._SEARCH_LIMIT_DEFAULT
     saved_search_max = mcp_inputs._SEARCH_LIMIT_MAX
+    saved_symbol_source_max = mcp_inputs._SYMBOL_SOURCE_MAX_LINES
     saved_capture = pipeline_stages._CAPTURE_CONFIG
     try:
         yield
@@ -70,6 +77,7 @@ def _restore_module_state() -> None:
         mcp_inputs._LIMIT_MAX = saved_max
         mcp_inputs._SEARCH_LIMIT_DEFAULT = saved_search_default
         mcp_inputs._SEARCH_LIMIT_MAX = saved_search_max
+        mcp_inputs._SYMBOL_SOURCE_MAX_LINES = saved_symbol_source_max
         pipeline_stages._CAPTURE_CONFIG = saved_capture
 
 

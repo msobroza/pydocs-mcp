@@ -240,6 +240,57 @@ class SqliteReferenceStore:
             )
         return [(r["from_node_id"], r["to_node_id"]) for r in rows]
 
+    async def degree_by_package(self, package: str) -> dict[str, tuple[int, int]]:
+        """(in_degree, out_degree) per resolved qname within one package (§D17 blocks 3-4).
+
+        Two grouped index scans (in-degree keyed on ``to_node_id``, out-degree
+        on ``from_node_id``) unioned in Python into ``{qname: (in, out)}``. Both
+        rides ``ix_refs_from`` / ``ix_refs_to_node`` for the ``from_package``
+        filter; nodes appearing on only one side get a 0 on the missing axis.
+        The in-degree scan drops unresolved edges (``to_node_id IS NULL``) since
+        an unresolved target names nothing in the indexed universe.
+        """
+        in_sql = (
+            "SELECT to_node_id AS q, COUNT(*) AS c FROM node_references "
+            "WHERE from_package = ? AND to_node_id IS NOT NULL GROUP BY to_node_id"
+        )
+        out_sql = (
+            "SELECT from_node_id AS q, COUNT(*) AS c FROM node_references "
+            "WHERE from_package = ? GROUP BY from_node_id"
+        )
+        async with _maybe_acquire(self.provider) as conn:
+            in_rows = await asyncio.to_thread(lambda: conn.execute(in_sql, (package,)).fetchall())
+            out_rows = await asyncio.to_thread(lambda: conn.execute(out_sql, (package,)).fetchall())
+        degrees: dict[str, tuple[int, int]] = {}
+        for r in in_rows:
+            degrees[r["q"]] = (r["c"], 0)
+        for r in out_rows:
+            in_deg = degrees.get(r["q"], (0, 0))[0]
+            degrees[r["q"]] = (in_deg, r["c"])
+        return degrees
+
+    async def imports_grouped_by_target(self, package: str) -> dict[str, int]:
+        """IMPORTS edge counts grouped by the target's top-level package (§D17 block 6).
+
+        One grouped scan over ``kind = 'imports'`` rows of ``package``; the
+        top-level segment split (``to_name.split(".")[0]``) is folded in Python.
+        Self-imports (top segment == ``package``) are excluded — the import
+        profile is about *external* dependency surface, not intra-package refs.
+        """
+        sql = (
+            "SELECT to_name, COUNT(*) AS c FROM node_references "
+            "WHERE from_package = ? AND kind = 'imports' GROUP BY to_name"
+        )
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, (package,)).fetchall())
+        profile: dict[str, int] = {}
+        for r in rows:
+            top = (r["to_name"] or "").split(".")[0]
+            if not top or top == package:
+                continue
+            profile[top] = profile.get(top, 0) + r["c"]
+        return profile
+
 
 def _row_to_node_reference(row) -> NodeReference:
     return NodeReference(

@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
-from pydocs_mcp.storage.node_score import NodeScore
+from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 from pydocs_mcp.storage.protocols import UnitOfWork
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
@@ -64,6 +64,68 @@ class SqliteNodeScoreRepository:
         out: dict[str, NodeScore] = {}
         for r in rows:
             out.setdefault(r["qualified_name"], _row_to_node_score(r))
+        return out
+
+    async def for_package(self, package: str) -> list[NodeScore]:
+        """All ``node_scores`` rows of one package — overview module map + communities.
+
+        Rides ``ix_node_scores_package``; reuses :func:`_row_to_node_score` so
+        the value-object shape matches ``scores_for``.
+        """
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(
+                    "SELECT package, qualified_name, in_degree, pagerank, community "
+                    "FROM node_scores WHERE package = ?",
+                    (package,),
+                ).fetchall()
+            )
+        return [_row_to_node_score(r) for r in rows]
+
+    async def community_cohesion(self, package: str) -> dict[int, CommunityCohesion]:
+        """Per-community size + intra/cross resolved-edge counts (§D17 block 5).
+
+        Sizes come from a grouped scan over ``node_scores`` (authoritative node
+        membership, so a community with no out-edges still appears). Edge
+        partition is one join of ``node_references`` against ``node_scores``
+        on both endpoints: each resolved out-edge of a community's node is
+        counted intra when the target shares the community, cross otherwise.
+        Both bounded to ``package`` — cohesion is a per-package structural view.
+        """
+        size_sql = (
+            "SELECT community, COUNT(*) AS size FROM node_scores "
+            "WHERE package = ? GROUP BY community"
+        )
+        edge_sql = (
+            "SELECT s1.community AS community, "
+            "SUM(CASE WHEN s2.community = s1.community THEN 1 ELSE 0 END) AS intra, "
+            "SUM(CASE WHEN s2.community != s1.community THEN 1 ELSE 0 END) AS cross "
+            "FROM node_references r "
+            "JOIN node_scores s1 ON s1.package = r.from_package "
+            "AND s1.qualified_name = r.from_node_id "
+            "JOIN node_scores s2 ON s2.package = r.from_package "
+            "AND s2.qualified_name = r.to_node_id "
+            "WHERE r.from_package = ? AND r.to_node_id IS NOT NULL "
+            "GROUP BY s1.community"
+        )
+        async with _maybe_acquire(self.provider) as conn:
+            size_rows = await asyncio.to_thread(
+                lambda: conn.execute(size_sql, (package,)).fetchall()
+            )
+            edge_rows = await asyncio.to_thread(
+                lambda: conn.execute(edge_sql, (package,)).fetchall()
+            )
+        edges = {r["community"]: (r["intra"] or 0, r["cross"] or 0) for r in edge_rows}
+        out: dict[int, CommunityCohesion] = {}
+        for r in size_rows:
+            community = r["community"]
+            intra, cross = edges.get(community, (0, 0))
+            out[community] = CommunityCohesion(
+                community=community,
+                size=r["size"],
+                intra_edges=intra,
+                cross_edges=cross,
+            )
         return out
 
     async def delete_for_package(

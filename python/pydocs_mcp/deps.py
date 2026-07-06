@@ -103,6 +103,23 @@ def parse_pyproject_dependencies(path: str) -> list[str]:
         return []
 
 
+def parse_project_scripts(path: str) -> dict[str, str]:
+    """Console entry points from ``[project.scripts]`` — overview entry-point detector.
+
+    Missing file / missing table / malformed TOML all return ``{}``: entry
+    points are advisory card content, never a reason to fail an overview.
+    """
+    import tomllib
+
+    try:
+        with Path(path).open("rb") as fh:
+            data = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    scripts = data.get("project", {}).get("scripts", {})
+    return {str(k): str(v) for k, v in scripts.items()} if isinstance(scripts, dict) else {}
+
+
 def parse_requirements_file(path: str) -> list[str]:
     """Extract dependency names from a requirements*.txt file.
 

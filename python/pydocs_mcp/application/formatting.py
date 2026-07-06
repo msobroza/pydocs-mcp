@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable
+from math import ceil
 from typing import TYPE_CHECKING, Literal
 
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
@@ -47,8 +48,10 @@ from pydocs_mcp.models import (
     Package,
     PackageDoc,
 )
+from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.overview_service import OverviewCard
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.models import SearchResponse
     from pydocs_mcp.storage.node_reference import NodeReference
@@ -67,7 +70,38 @@ _TRUNCATION_MIN_REMAINDER = 100
 # via MCP or the CLI, so the ResponseEnvelope resolves tokens at the router
 # layer. Token payloads are dotted names / show-mode words (no ':' or ']]'),
 # which keeps the grammar regex-parsable.
-_POINTER_RE = re.compile(r"\[\[next:(lookup|lookup-show):([^:\]]+)(?::([^:\]]+))?\]\]")
+#
+# The ``overview`` action is the zero-hit-search recovery step (spec §D1 empty
+# contract): it takes an EMPTY target (``[[next:overview:]]``) because
+# get_overview scopes to a package, not a symbol — the target group is ``*``
+# (not ``+``) so the empty payload parses.
+_POINTER_RE = re.compile(
+    r"\[\[next:(lookup|lookup-show|search|overview):([^:\]]*)(?::([^:\]]+))?\]\]"
+)
+
+# show-mode → (mcp renderer, cli renderer). context maps to a one-element
+# get_context batch; tree/default stay on get_symbol via depth.
+_SHOW_TO_TOOL: dict[str, tuple[str, str]] = {
+    "callers": (
+        'get_references(target="{t}", direction="callers")',
+        "pydocs-mcp refs {t} --direction callers",
+    ),
+    "callees": (
+        'get_references(target="{t}", direction="callees")',
+        "pydocs-mcp refs {t} --direction callees",
+    ),
+    "inherits": (
+        'get_references(target="{t}", direction="inherits")',
+        "pydocs-mcp refs {t} --direction inherits",
+    ),
+    "impact": (
+        'get_references(target="{t}", direction="impact")',
+        "pydocs-mcp refs {t} --direction impact",
+    ),
+    "context": ('get_context(targets=["{t}"])', "pydocs-mcp context {t}"),
+    "tree": ('get_symbol(target="{t}", depth="tree")', "pydocs-mcp symbol {t} --depth tree"),
+    "source": ('get_symbol(target="{t}", depth="source")', "pydocs-mcp symbol {t} --depth source"),
+}
 
 
 def pointer_token(action: str, target: str, show: str = "") -> str:
@@ -79,13 +113,21 @@ def pointer_token(action: str, target: str, show: str = "") -> str:
 
 def _render_pointer(match: re.Match[str], surface: str) -> str:
     action, target, show = match.group(1), match.group(2), match.group(3)
-    if action == "lookup-show":
+    if action == "overview":
+        # Empty-target action: get_overview scopes to a package, so the
+        # zero-hit-search recovery pointer takes no argument.
+        return "→ pydocs-mcp overview" if surface == "cli" else "→ get_overview()"
+    if action == "search":
         if surface == "cli":
-            return f"→ pydocs-mcp lookup {target} --show {show}"
-        return f'→ lookup(target="{target}", show="{show}")'
+            return f'→ pydocs-mcp search "{target}"'
+        return f'→ search_codebase(query="{target}")'
+    if action == "lookup-show":
+        mcp_fmt, cli_fmt = _SHOW_TO_TOOL[show]
+        fmt = cli_fmt if surface == "cli" else mcp_fmt
+        return "→ " + fmt.format(t=target)
     if surface == "cli":
-        return f"→ pydocs-mcp lookup {target}"
-    return f'→ lookup(target="{target}")'
+        return f"→ pydocs-mcp symbol {target}"
+    return f'→ get_symbol(target="{target}")'
 
 
 def resolve_pointers(text: str, surface: str) -> str:
@@ -467,31 +509,136 @@ def _render_context_node(node: ContextNode) -> str:
     return f"- `{node.qualified_name}` (hop {node.hop})\n"
 
 
+def _context_signature_lines(node: ContextNode) -> str:
+    """Signature line, plus the first docstring line when one follows it.
+
+    The persisted ``source_text`` starts with the ``def``/``class`` header; a
+    module/class-level docstring — when present — is the SECOND source line.
+    We surface it because a one-line summary is the highest-value byte per
+    token in a skeleton (spec §D6). No docstring → signature only.
+    """
+    lines = node.source_text.split("\n")
+    sig = lines[0].strip() or f"# `{node.qualified_name}`"
+    second = lines[1].strip() if len(lines) > 1 else ""
+    if second.startswith(('"""', "'''")):
+        return f"{sig}\n{second}"
+    return sig
+
+
+def _rank_context_nodes(nodes: tuple[ContextNode, ...]) -> tuple[ContextNode, ...]:
+    """Order nodes most-central first for skeleton body allocation.
+
+    Key is ``(pagerank if any node carries pagerank else in_degree, -hop)``
+    descending: PageRank when the graph was scored, structural fan-in as the
+    tie-breaking fallback, closer hops winning ties. Pure — does not mutate.
+    """
+    use_pagerank = any(n.pagerank for n in nodes)
+    return tuple(
+        sorted(
+            nodes,
+            key=lambda n: (n.pagerank if use_pagerank else n.in_degree, -n.hop),
+            reverse=True,
+        )
+    )
+
+
+def _select_body_qnames(
+    nodes: tuple[ContextNode, ...],
+    *,
+    body_budget_chars: int,
+    max_bodies: int,
+) -> frozenset[str]:
+    """Qnames that earn a FULL body — the most-central nodes, doubly bounded.
+
+    Walks the centrality-ranked order (:func:`_rank_context_nodes`) admitting a
+    node while BOTH bounds hold: its source keeps cumulative body length within
+    ``body_budget_chars`` (the char cap the spec fraction sets) AND the admitted
+    count stays within ``max_bodies`` (a fraction of node count, so a tiny
+    corpus of tiny bodies still reserves most nodes for signature-only). Pure —
+    returns the admitted qname set so the renderer decides per node in input
+    order.
+    """
+    admitted: set[str] = set()
+    spent = 0
+    for node in _rank_context_nodes(nodes):
+        if len(admitted) >= max_bodies:
+            break
+        cost = len(node.source_text)
+        if spent + cost > body_budget_chars:
+            continue
+        admitted.add(node.qualified_name)
+        spent += cost
+    return frozenset(admitted)
+
+
+def _skeleton_block(node: ContextNode, *, with_body: bool) -> str:
+    """One skeleton card block — full body for central nodes, signature else.
+
+    Non-body nodes keep a ``lookup-show:<qname>:source`` recovery pointer so
+    the elided body is one hop away (resolves to ``get_symbol(..., "source")``).
+    """
+    header = f"\n## `{node.qualified_name}`\n\n"
+    if with_body:
+        body = node.source_text or "# (source unavailable)"
+        return f"{header}```python\n{body}\n```\n"
+    sig = _context_signature_lines(node)
+    pointer = pointer_token("lookup-show", node.qualified_name, "source")
+    return f"{header}```python\n{sig}\n```\n{pointer}\n"
+
+
+def _render_context_skeleton(
+    nodes: tuple[ContextNode, ...],
+    *,
+    token_budget: int,
+    body_ratio: float,
+) -> list[str]:
+    """Skeleton blocks in input order — bodies to the most-central nodes.
+
+    ``body_ratio`` governs both bounds :func:`_select_body_qnames` applies: the
+    char budget (``body_ratio`` of the total char budget) and the body count
+    (``ceil(body_ratio * n)``, so the same fraction of nodes stays signature-
+    only even when every body is small). Blocks stay in the service's input
+    order so callee proximity reads top-down.
+    """
+    body_budget = int(body_ratio * token_budget * _CHARS_PER_TOKEN)
+    max_bodies = max(1, ceil(body_ratio * len(nodes)))
+    with_body = _select_body_qnames(nodes, body_budget_chars=body_budget, max_bodies=max_bodies)
+    return [_skeleton_block(node, with_body=node.qualified_name in with_body) for node in nodes]
+
+
 def format_context(
     nodes: tuple[ContextNode, ...],
     *,
     target: str,
     token_budget: int,
+    render: str = "full",
+    body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO,
 ) -> str:
     """Render a smart-context pack (``lookup(show="context")``) under a budget.
 
     ``nodes`` are already ranked by the service (seed first, then callees by
-    proximity × centrality). Each is rendered at graded fidelity by hop —
-    focus (hop 0) = full source, ring (hop 1) = signature, rest (hop ≥2) =
-    one-line outline — and appended in rank order until the token budget
-    (``token_budget * _CHARS_PER_TOKEN`` chars) is hit; the piece that would
-    overflow is truncated when ≥ ``_TRUNCATION_MIN_REMAINDER`` chars remain,
-    else dropped. Always ends with a single ``\\n``.
+    proximity × centrality). Two render modes:
+
+    - ``render="full"`` (default for direct/test construction): graded fidelity
+      by hop — focus (hop 0) = full source, ring (hop 1) = signature, rest
+      (hop ≥2) = one-line outline.
+    - ``render="skeleton"`` (spec §D6, the shipped YAML default): every node
+      renders its signature line (+ first docstring line); full bodies are
+      appended only to the most-central nodes — ranked by ``(pagerank else
+      in_degree, -hop)`` — while their cumulative length stays within
+      ``body_ratio * token_budget * _CHARS_PER_TOKEN`` chars. Each elided body
+      keeps a ``lookup-show:<qname>:source`` recovery pointer.
+
+    In both modes blocks are appended until the token budget
+    (``token_budget * _CHARS_PER_TOKEN`` chars) is hit; the overflow piece is
+    truncated when ≥ ``_TRUNCATION_MIN_REMAINDER`` chars remain, else dropped.
+    Always ends with a single ``\\n``.
     """
     h1 = f"# Context for `{target}` — its dependency closure\n"
     if not nodes:
         return f"{h1}\nNo dependency context available for `{target}`.\n"
 
     max_hop = max(n.hop for n in nodes)
-    lead = (
-        f"{len(nodes)} symbols in the closure (max depth {max_hop}). Graded fidelity: "
-        "focus = full source, ring = signature, rest = outline.\n"
-    )
 
     def _context_entry(count: int) -> TruncationEntry:
         # ``"context"`` is not in ``_SHOW_VOCAB`` — it doesn't need to be; the
@@ -501,10 +648,23 @@ def format_context(
             recovery=pointer_token("lookup-show", target, "context"),
         )
 
+    if render == "skeleton":
+        lead = (
+            f"{len(nodes)} nodes in the closure (max depth {max_hop}). Skeleton "
+            "fidelity: signatures for all, full source for the most-central.\n"
+        )
+        pieces = _render_context_skeleton(nodes, token_budget=token_budget, body_ratio=body_ratio)
+    else:
+        lead = (
+            f"{len(nodes)} symbols in the closure (max depth {max_hop}). Graded fidelity: "
+            "focus = full source, ring = signature, rest = outline.\n"
+        )
+        pieces = [_render_context_node(node) for node in nodes]
+
     blocks = [h1, lead]
     blocks.extend(
         _take_within_budget(
-            (_render_context_node(node) for node in nodes),
+            pieces,
             token_budget * _CHARS_PER_TOKEN,
             start_total=len(h1) + len(lead),
             inclusive_gate=True,
@@ -512,6 +672,89 @@ def format_context(
         )
     )
     out = "".join(blocks)
+    return out if out.endswith("\n") else out + "\n"
+
+
+# The communities block degrades to this hint when node_scores is off — the
+# community partition is derived from PageRank/Leiden, so with scores disabled
+# there is nothing to show. Anchored on the YAML knob so the agent's fix is
+# one config edit away (spec §D17 block 5).
+_COMMUNITIES_DISABLED_HINT = (
+    "Community structure is unavailable — enable reference_graph.node_scores to see it.\n"
+)
+
+
+def _overview_stats_line(card: OverviewCard) -> str:
+    """One-line corpus census — ``doc_coverage`` rendered as an integer percent."""
+    pct = round(card.doc_coverage * 100)
+    return (
+        f"[{card.package_count} packages · {card.module_count} modules · "
+        f"{card.symbol_count} symbols · {pct}% documented]\n"
+    )
+
+
+def _overview_module_block(card: OverviewCard) -> str:
+    """Centrality-ranked module map — each line points at ``get_context`` via
+    the ``lookup-show:<module>:context`` token (resolved per surface)."""
+    lines = [
+        f"- `{m.qualified_name}` — {m.first_doc_line} "
+        f"{pointer_token('lookup-show', m.qualified_name, 'context')}\n"
+        for m in card.modules
+    ]
+    return "## Module map\n" + "".join(lines)
+
+
+def _overview_entry_points_block(card: OverviewCard) -> str:
+    """Entry-point union (scripts / __main__ / graph roots), each pointing at
+    ``get_symbol`` via a plain ``lookup`` token."""
+    lines = [
+        f"- `{e.name}` ({e.kind}) {pointer_token('lookup', e.name)}\n" for e in card.entry_points
+    ]
+    return "## Entry points\n" + "".join(lines)
+
+
+def _overview_communities_block(card: OverviewCard) -> str:
+    """Structure communities with cohesion, OR the enablement hint when
+    ``node_scores`` is off (nothing to partition without centrality)."""
+    if not card.node_scores_available:
+        return "## Structure communities\n" + _COMMUNITIES_DISABLED_HINT
+    lines = [
+        f"- {c.label} — {c.size} members, cohesion {c.cohesion:.2f}, top `{c.top_member}`\n"
+        for c in card.communities
+    ]
+    return "## Structure communities\n" + "".join(lines)
+
+
+def _overview_dependency_block(card: OverviewCard) -> str:
+    """External dependency profile by import count — each points at
+    ``get_symbol`` for the package via a ``lookup`` token."""
+    lines = [
+        f"- {pkg} ({count} imports) {pointer_token('lookup', pkg)}\n"
+        for pkg, count in card.dependency_profile
+    ]
+    return "## Dependency profile\n" + "".join(lines)
+
+
+def format_overview_card(card: OverviewCard) -> str:
+    """Render an :class:`OverviewCard` as the §D17 structural orientation card.
+
+    Pure rendering (no I/O): H1 + one stats line, then the four §D17 H2 blocks
+    in order — Module map, Entry points, Structure communities, Dependency
+    profile. Each block obeys the module byte-parity contract (``## {title}\\n``
+    then body lines, blocks joined with ``"\\n"`` so a blank line separates
+    them). The communities block degrades to an enablement hint when
+    ``node_scores`` is disabled. Always ends with a single trailing ``\\n``.
+    """
+    h1 = f"# Overview — {card.package}\n"
+    header = h1 + _overview_stats_line(card)
+    blocks = [
+        header,
+        _overview_module_block(card),
+        _overview_entry_points_block(card),
+        _overview_communities_block(card),
+        _overview_dependency_block(card),
+    ]
+    out = "\n".join(blocks)
     return out if out.endswith("\n") else out + "\n"
 
 

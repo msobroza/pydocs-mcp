@@ -135,6 +135,7 @@ def test_config_shape_is_runtime_checkable() -> None:
         def __init__(self) -> None:
             self.reference_graph = object()
             self.search = object()
+            self.symbol_source = object()
 
     assert isinstance(_Duck(), _ConfigShape)
 

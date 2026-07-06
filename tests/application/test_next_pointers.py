@@ -65,20 +65,52 @@ def test_member_gets_lookup_token_from_module_dot_name() -> None:
 
 def test_resolve_mcp_syntax() -> None:
     text = "hit\n[[next:lookup:pkg.mod.X]]\n"
-    assert resolve_pointers(text, "mcp") == 'hit\n→ lookup(target="pkg.mod.X")\n'
+    assert resolve_pointers(text, "mcp") == 'hit\n→ get_symbol(target="pkg.mod.X")\n'
 
 
 def test_resolve_cli_syntax() -> None:
     text = "hit\n[[next:lookup:pkg.mod.X]]\n"
-    assert resolve_pointers(text, "cli") == "hit\n→ pydocs-mcp lookup pkg.mod.X\n"
+    assert resolve_pointers(text, "cli") == "hit\n→ pydocs-mcp symbol pkg.mod.X\n"
 
 
-def test_resolve_show_variant() -> None:
-    text = "[[next:lookup-show:pkg.mod.X:callers]]"
-    assert resolve_pointers(text, "mcp") == '→ lookup(target="pkg.mod.X", show="callers")'
-    assert resolve_pointers(text, "cli") == "→ pydocs-mcp lookup pkg.mod.X --show callers"
+def test_resolve_show_variants_map_to_new_tools() -> None:
+    assert resolve_pointers("[[next:lookup-show:pkg.mod.X:callers]]", "mcp") == (
+        '→ get_references(target="pkg.mod.X", direction="callers")'
+    )
+    assert resolve_pointers("[[next:lookup-show:pkg.mod.X:impact]]", "cli") == (
+        "→ pydocs-mcp refs pkg.mod.X --direction impact"
+    )
+    assert resolve_pointers("[[next:lookup-show:pkg.mod.X:context]]", "mcp") == (
+        '→ get_context(targets=["pkg.mod.X"])'
+    )
+    assert resolve_pointers("[[next:lookup-show:pkg.mod.X:tree]]", "mcp") == (
+        '→ get_symbol(target="pkg.mod.X", depth="tree")'
+    )
+
+
+def test_search_action_token() -> None:
+    assert pointer_token("search", "retry logic") == "[[next:search:retry logic]]"
+    assert resolve_pointers("[[next:search:retry logic]]", "mcp") == (
+        '→ search_codebase(query="retry logic")'
+    )
+    assert resolve_pointers("[[next:search:retry logic]]", "cli") == (
+        '→ pydocs-mcp search "retry logic"'
+    )
+
+
+def test_overview_action_token() -> None:
+    # get_overview scopes to a package, so the zero-hit-search recovery pointer
+    # carries an empty target (spec §D1 empty contract).
+    assert pointer_token("overview", "") == "[[next:overview:]]"
+    assert resolve_pointers("[[next:overview:]]", "mcp") == "→ get_overview()"
+    assert resolve_pointers("[[next:overview:]]", "cli") == "→ pydocs-mcp overview"
 
 
 def test_strip_restores_pre_pointer_bytes() -> None:
     with_token = "## T\nbody\n[[next:lookup:pkg.mod.X]]\n"
     assert strip_pointers(with_token) == "## T\nbody\n"
+
+
+def test_strip_removes_overview_token() -> None:
+    with_token = "No matches found.\n[[next:overview:]]\n"
+    assert strip_pointers(with_token) == "No matches found.\n"

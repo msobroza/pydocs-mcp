@@ -14,6 +14,9 @@ from pydocs_mcp.application.multi_project_search import (
     ProjectServices,
     _merge_ranked,
 )
+from pydocs_mcp.application.null_services import NullDecisionService
+from pydocs_mcp.application.overview_service import OverviewService
+from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
@@ -23,6 +26,8 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.storage.index_metadata import IndexMetadata
+
+from .._fakes import make_fake_uow_factory
 
 
 def _project(name: str, indexed_at: float) -> LoadedProject:
@@ -81,11 +86,17 @@ class _FakeLookup:
 
 
 def _svc(project: LoadedProject, ranked=(), composite="SINGLE", lookup="") -> ProjectServices:
+    # symbol_source / decisions are unused by these routing/dedup tests, but the
+    # ProjectServices contract now requires them (spec §D1) — wire the real
+    # stateless SymbolSourceService (empty in-memory uow) + NullDecisionService.
     return ProjectServices(
         project=project,
         docs=_FakeDocs(ranked, composite),
         api=_FakeApi(),
         lookup=_FakeLookup(lookup),
+        symbol_source=SymbolSourceService(uow_factory=make_fake_uow_factory()),
+        overview=OverviewService(uow_factory=make_fake_uow_factory(), scripts={}),
+        decisions=NullDecisionService(),
     )
 
 

@@ -49,8 +49,10 @@ from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
+    _DEFAULT_CONTEXT_RENDER,
     _DEFAULT_CONTEXT_TOKEN_BUDGET,
     _DEFAULT_IMPACT_MAX_DEPTH,
+    _DEFAULT_SKELETON_BODY_RATIO,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +61,7 @@ if TYPE_CHECKING:
     # ReferenceService / NullReferenceService all conform to the
     # navigation Protocols in ``application.protocols``.
     from pydocs_mcp.application.protocols import ReferenceNavigator, TreeNavigator
+    from pydocs_mcp.application.reference_service import ContextNode
     from pydocs_mcp.storage.node_reference import NodeReference
 
 
@@ -227,6 +230,10 @@ class LookupService:
     # posture (YAML tunables via the composition root, not MCP params).
     context_max_depth: int = _DEFAULT_CONTEXT_MAX_DEPTH
     context_token_budget: int = _DEFAULT_CONTEXT_TOKEN_BUDGET
+    # Render strategy + skeleton body budget for ``show="context"`` (spec §D6).
+    # Skeleton is the shipped default; ``format_context`` reads both.
+    context_render: str = _DEFAULT_CONTEXT_RENDER
+    context_body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO
 
     async def lookup(self, payload: LookupInput) -> str:
         target_str = payload.target
@@ -319,14 +326,12 @@ class LookupService:
         # Smart-context — forward dependency-closure packed at graded fidelity
         # under a token budget. Own return shape (ContextNodes) + formatter.
         # ``limit`` caps the candidate node count; the token budget caps output.
+        # Composed from the two reusable helpers ``get_context`` calls directly
+        # for its proportional multi-target budget split — behavior here is
+        # unchanged (full ``context_token_budget`` for the single-target path).
         if show == "context":
-            ctx = await self.ref_svc.context(
-                package,
-                node.node_id,
-                max_depth=self.context_max_depth,
-                limit=limit,
-            )
-            return format_context(ctx, target=target, token_budget=self.context_token_budget)
+            ctx = await self._context_closure(package, node.node_id, limit=limit)
+            return self.render_context_card(target, ctx, token_budget=self.context_token_budget)
 
         # Reference-graph dispatch (callers / callees / inherits).
         getter = _REF_GETTERS.get(show)
@@ -355,6 +360,75 @@ class LookupService:
             show=show,
             limit=limit,
         )
+
+    async def context_nodes(self, target: str) -> tuple[str, tuple[ContextNode, ...]]:
+        """Resolve ``target`` to its forward dependency closure.
+
+        Runs the same parse + node-resolution path as ``lookup(show="context")``
+        but stops BEFORE rendering, returning ``(display_target, nodes)`` so the
+        caller can render one card per target under a per-card token budget
+        (``ToolRouter.get_context``'s proportional multi-target split). ``target``
+        is echoed back verbatim as the card heading target — matching the
+        single-target ``show="context"`` path.
+
+        ``NotFoundError`` propagates unchanged (bad package / module / symbol),
+        as does ``ServiceUnavailableError`` from a ``NullReferenceService``.
+        """
+        package, node_id = await self._resolve_context_target(target)
+        # ``limit`` mirrors the single-target ``lookup(show="context")`` path,
+        # which flows the ``LookupInput.limit`` default (single source of truth:
+        # ``reference_graph.output.default_limit`` via the YAML-backed slot).
+        limit = LookupInput(target=target).limit
+        nodes = await self._context_closure(package, node_id, limit=limit)
+        return target, nodes
+
+    def render_context_card(
+        self,
+        target: str,
+        nodes: tuple[ContextNode, ...],
+        *,
+        token_budget: int,
+    ) -> str:
+        """Render one context card via ``format_context`` at ``token_budget``.
+
+        Threads the service's render strategy + skeleton body ratio so a card
+        rendered here is byte-identical to the single-target path at the same
+        budget. Pure (no I/O) — the ``get_context`` split renders every card
+        with the same helper at each target's proportional share.
+        """
+        return format_context(
+            nodes,
+            target=target,
+            token_budget=token_budget,
+            render=self.context_render,
+            body_ratio=self.context_body_ratio,
+        )
+
+    async def _context_closure(
+        self, package: str, node_id: str, *, limit: int
+    ) -> tuple[ContextNode, ...]:
+        """The ``ref_svc.context`` call, shared by the sync and split paths."""
+        return await self.ref_svc.context(
+            package,
+            node_id,
+            max_depth=self.context_max_depth,
+            limit=limit,
+        )
+
+    async def _resolve_context_target(self, target: str) -> tuple[str, str]:
+        """Parse ``target`` → ``(package, node_id)`` for a symbol-level context
+        request. Raises ``NotFoundError`` with the same messages the ``lookup``
+        dispatcher surfaces (unresolved package / module / symbol)."""
+        parsed = await LookupTarget.parse(target, longest_module=self._longest_module)
+        if parsed.module is None or not parsed.symbol_path:
+            raise NotFoundError(f"no symbol matching '{target}' found for context closure")
+        tree = await self.tree_svc.get_tree(parsed.package, parsed.module)
+        if tree is None:
+            raise NotFoundError(f"no tree for '{parsed.package}.{parsed.module}'")
+        node = tree.find_node_by_qualified_name(target)
+        if node is None:
+            raise NotFoundError(f"'{target}' not found in {parsed.module}")
+        return parsed.package, node.node_id
 
     async def _longest_module(
         self,

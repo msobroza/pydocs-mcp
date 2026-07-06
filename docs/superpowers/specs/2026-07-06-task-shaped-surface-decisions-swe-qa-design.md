@@ -1,6 +1,6 @@
 # Task-shaped MCP surface, decision capture, and SWE-QA evaluation — Design
 
-**Date:** 2026-07-06 (rev 3 — post four-lens design review + overview enrichment)
+**Date:** 2026-07-06 (rev 4 — §D14 corrected from dataset verification, 2026-07-07)
 **Status:** Draft (pending user review)
 **Goal:** Replace the two-tool MCP surface with a six-tool task-shaped surface
 (mirrored 1:1 by the CLI), add an architectural-decision capture pipeline and
@@ -553,14 +553,21 @@ CLI parser builders).
 
 New dataset adapters in `benchmarks/src/`:
 
-- `swe_qa` — HuggingFace `swe-qa/SWE-QA-Benchmark` (720 QA pairs across 15
-  Python repos — 576 in the v1 release — with a What/How/Why/Where taxonomy;
-  arXiv:2509.14635).
-- `swe_qa_pro` — HuggingFace `TIGER-Lab/SWE-QA-Pro-Bench`
-  (memorization-filtered, topically balanced task subclasses;
-  arXiv:2603.16124). Exact subclass counts and answer-verification claims
-  are confirmed against the dataset card at plan time, and the config pins
-  the **dataset revision hash** alongside repo commit SHAs.
+- `swe_qa_pro` — HuggingFace `TIGER-Lab/SWE-QA-Pro-Bench` (**primary
+  corpus**; verified 2026-07-07): 260 QA pairs over 26 Python-only repos
+  (10 each), MIT, per-row **full commit SHA**, structured `qa_type`
+  (What/Where/How/Why + 12 sub-classes) and 48 cluster ids, and near-regular
+  `(path.py: line N-M)` answer citations (96% of rows); arXiv:2603.16124.
+  Pinned at dataset revision `596892da…`.
+- `swe_qa` — HuggingFace `swe-qa/SWE-QA-Benchmark` (secondary; verified
+  2026-07-07): 720 QA pairs over 15 Python repos, Apache-2.0, columns
+  `question`+`answer` **only** — the paper's taxonomy labels are NOT in the
+  release (and the release is 720/15 vs the paper's 576/11, unexplained), so
+  per-category breakouts come from SWE-QA-Pro. Repo identity comes from the
+  split name; commit pins exist only in the companion GitHub repo
+  (`repo_commit.txt`, short SHAs) and their pairing with the HF release is
+  unverified — labels stay **file-level** for this corpus. Pinned at dataset
+  revision `07e206aa…`.
 
 A `download_swe_qa.py` script fetches datasets + clones the pinned upstream
 repos into the benchmark cache (corpora are redistributed-by-download, never
@@ -574,10 +581,10 @@ relevant to a question iff it is cited in the gold answer (path and
 dotted-name extraction with normalization). This is a documented
 approximation — good for *comparing our own configs* on nDCG@10,
 recall@{5,10,20}, MRR; not publishable as absolute IR quality. Reports break
-out per taxonomy category; once slice 3 lands, Why-category questions
-additionally run through the `decision_search` preset as `get_why`'s
-acceptance probe (slice 4 is landable before slice 3 — the Why breakout
-simply becomes meaningful later).
+out per category using SWE-QA-Pro's `qa_type` (SWE-QA gets per-repo breakouts
+only); once slice 3 lands, the Pro **Why** rows (65) additionally run through
+the `decision_search` preset as `get_why`'s acceptance probe (slice 4 is
+landable before slice 3 — the Why breakout simply becomes meaningful later).
 
 CI-safe: offline after the download step, per the existing conftest offline
 fixtures; adapter tests run on committed 5-question mini fixtures.

@@ -178,6 +178,11 @@ class ImpactConfig(BaseModel):
 # fallback fields, so the literals live in exactly one place.
 _DEFAULT_CONTEXT_MAX_DEPTH = 2
 _DEFAULT_CONTEXT_TOKEN_BUDGET = 2048
+# Skeleton body-budget default (spec §D6). Canonical for ``ContextConfig`` +
+# the ``LookupService`` fallback field; ``application.formatting`` imports THIS
+# constant so the ``format_context(body_ratio=...)`` default never drifts.
+_DEFAULT_CONTEXT_RENDER: Literal["skeleton", "full"] = "skeleton"
+_DEFAULT_SKELETON_BODY_RATIO = 0.35
 
 
 class ContextConfig(BaseModel):
@@ -185,15 +190,20 @@ class ContextConfig(BaseModel):
 
     ``context`` walks the reference graph FORWARD from the target (its
     dependency closure — what it calls) and packs the closure under one token
-    budget at graded fidelity (focus = full source, ring = signatures, rest =
-    outline). ``max_depth`` bounds the walk; ``token_budget`` caps the packed
-    output. Both are server-side tunables, NOT MCP parameters.
+    budget. ``max_depth`` bounds the walk; ``token_budget`` caps the packed
+    output. ``render`` selects the packing strategy: ``"skeleton"`` (the
+    default per §D6) renders every node's signature and spends only
+    ``skeleton_body_ratio`` of the budget on FULL bodies of the most-central
+    nodes; ``"full"`` uses the legacy hop-graded fidelity (focus = full source,
+    ring = signature, rest = outline). All server-side tunables, NOT MCP params.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     max_depth: int = Field(_DEFAULT_CONTEXT_MAX_DEPTH, ge=1, le=6)
     token_budget: int = Field(_DEFAULT_CONTEXT_TOKEN_BUDGET, ge=128, le=100_000)
+    render: Literal["skeleton", "full"] = _DEFAULT_CONTEXT_RENDER
+    skeleton_body_ratio: float = Field(_DEFAULT_SKELETON_BODY_RATIO, gt=0.0, le=1.0)
 
 
 class ReferenceGraphConfig(BaseModel):
@@ -253,6 +263,26 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+# Single source of truth for the get_symbol(depth="source") line cap — the
+# YAML-canonical default lives here; ``SymbolSourceService`` carries its own
+# construction-time fallback constant (wired config→service in a later task).
+_DEFAULT_MAX_LINES_SYMBOL_SOURCE = 400
+
+
+class SymbolSourceConfig(BaseModel):
+    """Line cap for ``get_symbol(depth="source")`` verbatim output (spec §D7).
+
+    Bounds how many source lines the per-symbol source view renders before it
+    truncates with a recovery note pointing at the on-disk file (the terminal
+    §D7 recovery step). Server-side tunable, NOT an MCP parameter — the fixed
+    surface stays at ``search`` + ``lookup``/``get_symbol``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_lines: int = Field(_DEFAULT_MAX_LINES_SYMBOL_SOURCE, ge=20, le=5000)
+
+
 class EnvelopeConfig(BaseModel):
     """Freshness envelope on every MCP/CLI response (spec §D4).
 
@@ -276,6 +306,15 @@ class OutputConfig(BaseModel):
 
     envelope: EnvelopeConfig = EnvelopeConfig()
     next_pointers: NextPointersConfig = NextPointersConfig()
+
+
+class OverviewConfig(BaseModel):
+    """get_overview card caps (spec §D17) — list caps keep the card inside token budgets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_modules: int = Field(20, ge=1, le=200)
+    max_communities: int = Field(10, ge=1, le=50)
 
 
 # Single source of truth for the debounce bounds (CLAUDE.md §"Default

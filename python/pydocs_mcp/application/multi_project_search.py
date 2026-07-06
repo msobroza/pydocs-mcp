@@ -14,9 +14,9 @@ comparable across dbs because the embedder-match guard forces one embedder.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.docs_search import DocsSearch
@@ -24,24 +24,43 @@ from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
+    pointer_token,
     render_top_composite,
     strip_pointers,
 )
 from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
+from pydocs_mcp.application.null_services import NullDecisionService
+from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.search_query import build_search_query
+from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ModuleMember
 from pydocs_mcp.multirepo import LoadedProject, select_project
+
+if TYPE_CHECKING:
+    from pydocs_mcp.application.reference_service import ContextNode
 
 # Composite token budget for the unioned output — matches the shipped
 # chunk_search_graph.yaml / member_search.yaml ``budget: 2000``.
 _DEFAULT_BUDGET_TOKENS = 2000
 
+# Empty-result bodies (single source of truth). ``search`` returns success with
+# one of these strings — it never raises (unlike ``lookup``; see mcp_errors.py).
+# ``ToolRouter`` reads ``EMPTY_SEARCH_MESSAGES`` to append the zero-hit overview
+# pointer (spec §D1 empty contract) without re-encoding the literals.
+_EMPTY_DOCS_MSG = "No matches found."
+_EMPTY_API_MSG = "No symbols found."
+EMPTY_SEARCH_MESSAGES = frozenset((_EMPTY_DOCS_MSG, _EMPTY_API_MSG))
+
 # A ranked candidate is a Chunk or a ModuleMember (both carry ``relevance`` +
 # ``metadata``). Value-constrained so the merge preserves the concrete type and
 # the chunk / member formatters (each wanting its own tuple) type-check.
 _R = TypeVar("_R", Chunk, ModuleMember)
+
+# Result of a per-project resolver run through ``_resolve_by_recency`` — a
+# rendered lookup body (``str``) or a ``(target, closure)`` context tuple.
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +71,9 @@ class ProjectServices:
     docs: DocsSearch
     api: ApiSearch
     lookup: LookupService
+    symbol_source: SymbolSourceService
+    overview: OverviewService
+    decisions: NullDecisionService  # slice 3 widens this to a DecisionNavigator Protocol
 
 
 def _dedup_identity(project_name: str, metadata: Mapping[str, Any]) -> tuple[tuple[str, str], bool]:
@@ -101,16 +123,16 @@ async def render_single_search(payload: SearchInput, docs: DocsSearch, api: ApiS
     behavior, shared so a 1-project router is byte-identical to a single-db server)."""
     query = build_search_query(payload)
     if payload.kind == "docs":
-        return render_top_composite(await docs.search(query), empty_msg="No matches found.")
+        return render_top_composite(await docs.search(query), empty_msg=_EMPTY_DOCS_MSG)
     if payload.kind == "api":
-        return render_top_composite(await api.search(query), empty_msg="No symbols found.")
+        return render_top_composite(await api.search(query), empty_msg=_EMPTY_API_MSG)
     chunk_resp, member_resp = await asyncio.gather(docs.search(query), api.search(query))
     parts = [
         render_top_composite(chunk_resp, empty_msg=""),
         render_top_composite(member_resp, empty_msg=""),
     ]
     parts = [p for p in parts if p]
-    return "\n\n".join(parts) if parts else "No matches found."
+    return "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
 
 
 def _select_service(services: tuple[ProjectServices, ...], project_name: str) -> ProjectServices:
@@ -148,7 +170,7 @@ class MultiProjectSearch:
         if payload.kind in ("api", "any"):
             parts.append(await self._union_api(query, payload.limit))
         parts = [p for p in parts if p]
-        return "\n\n".join(parts) if parts else "No matches found."
+        return "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
 
     async def _union_docs(self, query, limit: int) -> str:
         lists = await asyncio.gather(*[s.docs.ranked(query) for s in self.services])
@@ -192,18 +214,54 @@ class MultiProjectLookup:
                 f"## Project: {s.project.name}\n\n{text}"
                 for s, text in zip(self.services, listings, strict=True)
             )
-        # A specific target lives in exactly one project — try by recency and
-        # return the first that resolves it (a project without it raises
-        # NotFoundError; reference-graph traversal stays within that project).
+        # A specific target lives in exactly one project — resolve by recency.
+        return await self._resolve_by_recency(
+            lambda svc: svc.lookup.lookup(payload),
+            target=payload.target,
+        )
+
+    async def resolve_context(
+        self, target: str, project: str
+    ) -> tuple[str, tuple[ContextNode, ...]]:
+        """Resolve ``target`` → ``(display_target, closure_nodes)`` via the right
+        project's ``LookupService.context_nodes`` — the same project-routing /
+        recency resolution ``_lookup_body`` uses, so a batched ``get_context``
+        target lands in exactly the project a single lookup would.
+
+        ``ToolRouter.get_context`` calls this once per target (phase 1) before
+        splitting the shared budget across the gathered closures (phase 2).
+        """
+        if project:
+            return await _select_service(self.services, project).lookup.context_nodes(target)
+        if len(self.services) == 1:
+            return await self.services[0].lookup.context_nodes(target)
+        return await self._resolve_by_recency(
+            lambda svc: svc.lookup.context_nodes(target),
+            target=target,
+        )
+
+    async def _resolve_by_recency(
+        self, run: Callable[[ProjectServices], Awaitable[_T]], *, target: str
+    ) -> _T:
+        """Try ``run(svc)`` per project most-recently-indexed first; return the
+        first result that resolves, skipping projects that raise
+        ``NotFoundError``. When every project misses, raise ``NotFoundError``
+        carrying a search recovery pointer (spec §D1 error contract).
+
+        The token stays RAW in the surfaced message: a raised error unwinds past
+        ``ResponseEnvelope.wrap`` before its resolve_pointers step runs
+        (envelope.py resolves only the value returned by produce(), never an
+        exception), so the literal ``[[next:search:...]]`` is what ``str(exc)``
+        yields on both surfaces — MCP (server.py re-raises; FastMCP serializes
+        str(exc)) and CLI (__main__ prints ``Error: {exc}``).
+        """
         ordered = sorted(self.services, key=lambda s: s.project.indexed_at, reverse=True)
-        last_error: NotFoundError | None = None
         for svc in ordered:
             try:
-                return await svc.lookup.lookup(payload)
-            except NotFoundError as exc:
-                last_error = exc
-        raise (
-            last_error
-            if last_error is not None
-            else NotFoundError(f"'{payload.target}' not found in any loaded project")
+                return await run(svc)
+            except NotFoundError:
+                continue
+        raise NotFoundError(
+            f"'{target}' not found in any loaded project. "
+            f"{pointer_token('search', target.rsplit('.', 1)[-1])}"
         )

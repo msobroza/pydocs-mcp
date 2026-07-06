@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.node_reference import NodeReference
-    from pydocs_mcp.storage.node_score import NodeScore
+    from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 
 
 @runtime_checkable
@@ -445,6 +445,15 @@ class ReferenceStore(GraphSearchable, Protocol):
         """
         ...
 
+    async def degree_by_package(self, package: str) -> dict[str, tuple[int, int]]:
+        """(in_degree, out_degree) per resolved qname — overview ranking fallback
+        and entry-point root detection (spec §D17 blocks 3-4)."""
+        ...
+
+    async def imports_grouped_by_target(self, package: str) -> dict[str, int]:
+        """IMPORTS edge counts grouped by the target's top-level package (§D17 block 6)."""
+        ...
+
 
 @runtime_checkable
 class NodeScoreStore(Protocol):
@@ -467,6 +476,14 @@ class NodeScoreStore(Protocol):
         """Return ``{qualified_name: NodeScore}`` for the given qnames (the
         subset present in the table); missing qnames are simply absent so
         callers treat them as a neutral prior."""
+        ...
+
+    async def for_package(self, package: str) -> list[NodeScore]:
+        """All score rows of one package — overview module map + communities."""
+        ...
+
+    async def community_cohesion(self, package: str) -> dict[int, CommunityCohesion]:
+        """Per-community size + intra/cross edge counts (one bounded SQL, §D17 block 5)."""
         ...
 
     async def delete_for_package(

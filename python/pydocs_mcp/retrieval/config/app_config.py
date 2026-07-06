@@ -32,10 +32,12 @@ from pydocs_mcp.retrieval.config.embedder_models import (
 from pydocs_mcp.retrieval.config.models import (
     HandlerConfig,
     OutputConfig,
+    OverviewConfig,
     ReferenceGraphConfig,
     SearchBackendConfig,
     SearchConfig,
     ServeConfig,
+    SymbolSourceConfig,
 )
 
 # ── Tunable user-config path override ───────────────────────────────────
@@ -94,12 +96,22 @@ class AppConfig(BaseSettings):
     # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
     # surface stays fixed; only deployment-time bounds are configurable.
     search: SearchConfig = Field(default_factory=SearchConfig)
+    # get_symbol(depth="source") line cap (spec §D7). Bounds the verbatim
+    # per-symbol source view; wired config→service in a later task. Per
+    # CLAUDE.md §"MCP API surface vs YAML configuration": a deployment-time
+    # rendering bound, NOT an MCP tool param — the surface stays fixed.
+    symbol_source: SymbolSourceConfig = Field(default_factory=SymbolSourceConfig)
     # Response conventions (spec §D4/§D5): freshness-envelope + per-hit
     # next-step pointer toggles shared by every search/lookup response.
     # Per CLAUDE.md §"MCP API surface vs YAML configuration": these are
     # deployment-time rendering knobs, NOT MCP tool params. The MCP surface
     # (search, lookup) stays fixed.
     output: OutputConfig = Field(default_factory=OutputConfig)
+    # get_overview card caps (spec §D17): list caps keep the orientation
+    # card inside token budgets. Per CLAUDE.md §"MCP API surface vs YAML
+    # configuration": these are deployment-time rendering bounds, NOT MCP
+    # tool params — the MCP surface (search, lookup) stays fixed.
+    overview: OverviewConfig = Field(default_factory=OverviewConfig)
     # Serve-command tunables (file watcher today; future HTTP transport
     # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
     # configuration": CLI ``--watch`` overrides ``serve.watch.enabled``;
