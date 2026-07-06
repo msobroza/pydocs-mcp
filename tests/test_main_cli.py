@@ -114,3 +114,53 @@ def test_cmd_serve_does_not_wrap_run_in_to_thread() -> None:
         "_cmd_serve must call run(...) on the main thread to preserve "
         "SIGINT delivery; got source:\n" + src
     )
+
+
+# ---------- shared error-policy helpers (_report_cli_failure / _run_blocking) ----------
+
+
+def test_run_blocking_keyboard_interrupt_is_success() -> None:
+    """Ctrl+C against serve/watch is a graceful shutdown — exit code 0."""
+    from pydocs_mcp.__main__ import _run_blocking
+
+    def boom() -> None:
+        raise KeyboardInterrupt
+
+    assert _run_blocking(boom, verbose=False) == 0
+
+
+def test_run_blocking_exception_routes_through_shared_policy(capsys) -> None:
+    from pydocs_mcp.__main__ import _run_blocking
+
+    def boom() -> None:
+        raise RuntimeError("kaput")
+
+    assert _run_blocking(boom, verbose=False) == 1
+    err = capsys.readouterr().err
+    assert "Error: kaput" in err
+    assert "re-run with --verbose" in err
+
+
+def test_report_cli_failure_verbose_prints_traceback(capsys) -> None:
+    from pydocs_mcp.__main__ import _report_cli_failure
+
+    try:
+        raise RuntimeError("kaput")
+    except RuntimeError as exc:
+        code = _report_cli_failure(exc, verbose=True)
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "Error: kaput" in err
+    assert "Traceback" in err
+
+
+def test_error_policy_lives_in_exactly_one_function() -> None:
+    """Anti-drift pin: the user-facing hint string must appear exactly once
+    in the module source — inside _report_cli_failure. A second occurrence
+    means a copy-pasted except-body grew back."""
+    import pathlib
+
+    import pydocs_mcp.__main__ as main_mod
+
+    src = pathlib.Path(main_mod.__file__).read_text()
+    assert src.count("re-run with --verbose to see the traceback") == 1
