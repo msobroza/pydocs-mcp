@@ -85,13 +85,24 @@ def test_project_prunes_excluded_dirs(tmp_path: Path) -> None:
 def test_project_respects_max_file_size_bytes(tmp_path: Path) -> None:
     """Files exceeding max_file_size_bytes are skipped (oversized binary/doc)."""
     (tmp_path / "small.py").write_text("x = 1\n")
-    (tmp_path / "huge.py").write_text("x" * 600_000)  # > default 500_000
+    (tmp_path / "huge.py").write_text("x" * 1_100_000)  # > default 1_000_000
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
     paths, _ = disc.discover(tmp_path)
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["small.py"]
+
+
+def test_project_indexes_files_between_old_and_new_cap(tmp_path: Path) -> None:
+    """561,026 bytes is the exact size of the real-world gold file the old
+    500KB cap silently dropped (PAGEINDEX_DIVS.md F3) — it must index now."""
+    (tmp_path / "gold.py").write_text("x" * 561_026)
+
+    disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
+    paths, _ = disc.discover(tmp_path)
+
+    assert [Path(p).name for p in paths] == ["gold.py"]
 
 
 def test_project_root_equals_project_dir(tmp_path: Path) -> None:
@@ -249,7 +260,7 @@ def test_dependency_respects_max_file_size_bytes(
     """Oversized shipped doc / source file is filtered just like project code."""
     dist = _make_fake_dist(tmp_path, ("foo/huge.py", "foo/small.py"))
     huge = tmp_path / "site-packages" / "foo" / "huge.py"
-    huge.write_text("x" * 600_000)
+    huge.write_text("x" * 1_100_000)  # > default 1_000_000
     monkeypatch.setattr(
         "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
         lambda name: dist,

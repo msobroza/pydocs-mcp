@@ -265,8 +265,8 @@ def test_appconfig_includes_extraction_defaults():
         ".md",
         ".ipynb",
     ]
-    assert config.extraction.discovery.project.max_file_size_bytes == 500_000
-    assert config.extraction.discovery.dependency.max_file_size_bytes == 500_000
+    assert config.extraction.discovery.project.max_file_size_bytes == 1_000_000
+    assert config.extraction.discovery.dependency.max_file_size_bytes == 1_000_000
     assert config.extraction.members.inspect_depth == 1
     assert config.extraction.members.members_per_module_cap == 120
     assert config.extraction.ingestion.pipeline_path is None

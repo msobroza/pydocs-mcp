@@ -39,10 +39,10 @@ extraction:
   discovery:
     project:
       include_extensions: [".py", ".md", ".ipynb"]
-      max_file_size_bytes: 500000
+      max_file_size_bytes: 1000000
     dependency:
       include_extensions: [".py", ".md", ".ipynb"]
-      max_file_size_bytes: 500000
+      max_file_size_bytes: 1000000
   members:
     # Per-module symbol cap + per-field truncation. Increase if you
     # index huge dependencies (large ML libs); decrease to bound FTS
