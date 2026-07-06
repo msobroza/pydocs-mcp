@@ -95,9 +95,15 @@ class _AllWarm(_FakeSystem):
 
 async def test_cache_hit_tasks_emit_no_indexing_seconds(tmp_path) -> None:
     _LOGGED.clear()
+    # WHY: run_sweep now fail-loud rejects missing config paths (runner.py:143)
+    # to catch mistyped/wrong-directory YAML entries. Touch the overlay so the
+    # validator passes — an empty file layers no overrides, exactly the "stem
+    # is the only thing read" contract the fake system relies on.
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text("")
     await run_sweep(
         systems=("fake-timing-system",),
-        config_paths=(tmp_path / "cfg.yaml",),  # stem is the only thing read
+        config_paths=(cfg_path,),  # stem is the only thing read
         dataset_name="fake-timing-dataset",
         tracker_names=("fake-timing-tracker",),
         metric_specs=("recall@1",),
@@ -112,9 +118,13 @@ async def test_all_warm_leg_emits_no_indexing_aggregate(tmp_path) -> None:
     # I2/AC15: when EVERY task is a hit, the empty indexing_seconds series
     # must not emit a 0.0 aggregate row.
     _LOGGED.clear()
+    # WHY: run_sweep now fail-loud rejects missing config paths (runner.py:143);
+    # touch an empty overlay so the validator passes without layering overrides.
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text("")
     await run_sweep(
         systems=("fake-all-warm-system",),
-        config_paths=(tmp_path / "cfg.yaml",),
+        config_paths=(cfg_path,),
         dataset_name="fake-timing-dataset",
         tracker_names=("fake-timing-tracker",),
         metric_specs=("recall@1",),
