@@ -67,7 +67,14 @@ _TRUNCATION_MIN_REMAINDER = 100
 # via MCP or the CLI, so the ResponseEnvelope resolves tokens at the router
 # layer. Token payloads are dotted names / show-mode words (no ':' or ']]'),
 # which keeps the grammar regex-parsable.
-_POINTER_RE = re.compile(r"\[\[next:(lookup|lookup-show|search):([^:\]]+)(?::([^:\]]+))?\]\]")
+#
+# The ``overview`` action is the zero-hit-search recovery step (spec §D1 empty
+# contract): it takes an EMPTY target (``[[next:overview:]]``) because
+# get_overview scopes to a package, not a symbol — the target group is ``*``
+# (not ``+``) so the empty payload parses.
+_POINTER_RE = re.compile(
+    r"\[\[next:(lookup|lookup-show|search|overview):([^:\]]*)(?::([^:\]]+))?\]\]"
+)
 
 # show-mode → (mcp renderer, cli renderer). context maps to a one-element
 # get_context batch; tree/default stay on get_symbol via depth.
@@ -103,6 +110,10 @@ def pointer_token(action: str, target: str, show: str = "") -> str:
 
 def _render_pointer(match: re.Match[str], surface: str) -> str:
     action, target, show = match.group(1), match.group(2), match.group(3)
+    if action == "overview":
+        # Empty-target action: get_overview scopes to a package, so the
+        # zero-hit-search recovery pointer takes no argument.
+        return "→ pydocs-mcp overview" if surface == "cli" else "→ get_overview()"
     if action == "search":
         if surface == "cli":
             return f'→ pydocs-mcp search "{target}"'

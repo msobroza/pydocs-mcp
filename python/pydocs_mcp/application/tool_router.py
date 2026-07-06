@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
+from pydocs_mcp.application.formatting import pointer_token
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
     LookupInput,
@@ -21,6 +22,7 @@ from pydocs_mcp.application.mcp_inputs import (
     WhyInput,
 )
 from pydocs_mcp.application.multi_project_search import (
+    EMPTY_SEARCH_MESSAGES,
     MultiProjectLookup,
     MultiProjectSearch,
     ProjectServices,
@@ -43,7 +45,16 @@ class ToolRouter:
         return self.services[0]
 
     async def search_codebase(self, payload: SearchInput) -> str:
-        return await self.envelope.wrap(lambda: self.search_router._search_body(payload))
+        async def _body() -> str:
+            body = await self.search_router._search_body(payload)
+            # Zero hits still return success (search never raises); steer the
+            # agent to an orientation card via the overview pointer (spec §D1
+            # empty contract). The envelope resolves the token per surface.
+            if body in EMPTY_SEARCH_MESSAGES:
+                return f"{body}\n{pointer_token('overview', '')}"
+            return body
+
+        return await self.envelope.wrap(_body)
 
     async def get_symbol(self, payload: SymbolInput) -> str:
         if payload.depth == "source":

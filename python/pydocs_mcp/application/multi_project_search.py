@@ -24,6 +24,7 @@ from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
+    pointer_token,
     render_top_composite,
     strip_pointers,
 )
@@ -39,6 +40,14 @@ from pydocs_mcp.multirepo import LoadedProject, select_project
 # Composite token budget for the unioned output — matches the shipped
 # chunk_search_graph.yaml / member_search.yaml ``budget: 2000``.
 _DEFAULT_BUDGET_TOKENS = 2000
+
+# Empty-result bodies (single source of truth). ``search`` returns success with
+# one of these strings — it never raises (unlike ``lookup``; see mcp_errors.py).
+# ``ToolRouter`` reads ``EMPTY_SEARCH_MESSAGES`` to append the zero-hit overview
+# pointer (spec §D1 empty contract) without re-encoding the literals.
+_EMPTY_DOCS_MSG = "No matches found."
+_EMPTY_API_MSG = "No symbols found."
+EMPTY_SEARCH_MESSAGES = frozenset((_EMPTY_DOCS_MSG, _EMPTY_API_MSG))
 
 # A ranked candidate is a Chunk or a ModuleMember (both carry ``relevance`` +
 # ``metadata``). Value-constrained so the merge preserves the concrete type and
@@ -105,16 +114,16 @@ async def render_single_search(payload: SearchInput, docs: DocsSearch, api: ApiS
     behavior, shared so a 1-project router is byte-identical to a single-db server)."""
     query = build_search_query(payload)
     if payload.kind == "docs":
-        return render_top_composite(await docs.search(query), empty_msg="No matches found.")
+        return render_top_composite(await docs.search(query), empty_msg=_EMPTY_DOCS_MSG)
     if payload.kind == "api":
-        return render_top_composite(await api.search(query), empty_msg="No symbols found.")
+        return render_top_composite(await api.search(query), empty_msg=_EMPTY_API_MSG)
     chunk_resp, member_resp = await asyncio.gather(docs.search(query), api.search(query))
     parts = [
         render_top_composite(chunk_resp, empty_msg=""),
         render_top_composite(member_resp, empty_msg=""),
     ]
     parts = [p for p in parts if p]
-    return "\n\n".join(parts) if parts else "No matches found."
+    return "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
 
 
 def _select_service(services: tuple[ProjectServices, ...], project_name: str) -> ProjectServices:
@@ -152,7 +161,7 @@ class MultiProjectSearch:
         if payload.kind in ("api", "any"):
             parts.append(await self._union_api(query, payload.limit))
         parts = [p for p in parts if p]
-        return "\n\n".join(parts) if parts else "No matches found."
+        return "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
 
     async def _union_docs(self, query, limit: int) -> str:
         lists = await asyncio.gather(*[s.docs.ranked(query) for s in self.services])
@@ -200,14 +209,17 @@ class MultiProjectLookup:
         # return the first that resolves it (a project without it raises
         # NotFoundError; reference-graph traversal stays within that project).
         ordered = sorted(self.services, key=lambda s: s.project.indexed_at, reverse=True)
-        last_error: NotFoundError | None = None
         for svc in ordered:
             try:
                 return await svc.lookup.lookup(payload)
-            except NotFoundError as exc:
-                last_error = exc
-        raise (
-            last_error
-            if last_error is not None
-            else NotFoundError(f"'{payload.target}' not found in any loaded project")
+            except NotFoundError:
+                continue
+        # Every project missed the target. The error text is what the MCP error
+        # path surfaces, so it carries a search pointer (spec §D1 error
+        # contract) to steer the agent to the recovery step — resolved by the
+        # ResponseEnvelope on the CLI/MCP surfaces, kept raw here for the
+        # server-side JSON-RPC error rendering.
+        raise NotFoundError(
+            f"'{payload.target}' not found in any loaded project. "
+            f"{pointer_token('search', payload.target.rsplit('.', 1)[-1])}"
         )

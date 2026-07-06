@@ -98,6 +98,19 @@ def test_search_action_token() -> None:
     )
 
 
+def test_overview_action_token() -> None:
+    # get_overview scopes to a package, so the zero-hit-search recovery pointer
+    # carries an empty target (spec §D1 empty contract).
+    assert pointer_token("overview", "") == "[[next:overview:]]"
+    assert resolve_pointers("[[next:overview:]]", "mcp") == "→ get_overview()"
+    assert resolve_pointers("[[next:overview:]]", "cli") == "→ pydocs-mcp overview"
+
+
 def test_strip_restores_pre_pointer_bytes() -> None:
     with_token = "## T\nbody\n[[next:lookup:pkg.mod.X]]\n"
     assert strip_pointers(with_token) == "## T\nbody\n"
+
+
+def test_strip_removes_overview_token() -> None:
+    with_token = "No matches found.\n[[next:overview:]]\n"
+    assert strip_pointers(with_token) == "No matches found.\n"
