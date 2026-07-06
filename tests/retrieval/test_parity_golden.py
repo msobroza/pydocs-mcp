@@ -22,6 +22,7 @@ from pydocs_mcp.retrieval.config import (
 )
 from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.storage.sqlite import (
+    SqliteFilterAdapter,
     SqliteModuleMemberRepository,
     SqliteVectorStore,
 )
@@ -34,6 +35,7 @@ def _build_context(provider, config: AppConfig) -> BuildContext:
         vector_store=SqliteVectorStore(provider=provider),
         module_member_store=SqliteModuleMemberRepository(provider=provider),
         app_config=config,
+        filter_adapter=SqliteFilterAdapter(),
     )
 
 

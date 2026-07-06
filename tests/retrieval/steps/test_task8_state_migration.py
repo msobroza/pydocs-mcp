@@ -43,6 +43,7 @@ from pydocs_mcp.retrieval.steps.token_budget import (
 )
 from pydocs_mcp.storage.sqlite import (
     SqliteChunkRepository,
+    SqliteFilterAdapter,
     SqliteModuleMemberRepository,
 )
 
@@ -155,6 +156,7 @@ async def test_chunk_fetcher_pushes_pre_filter_into_sql(fts_db: Path) -> None:
     fetch = ChunkFetcherStep(
         name="fetch",
         provider=provider,
+        filter_adapter=SqliteFilterAdapter(),
         allowed_fields=frozenset({"package", "scope", "module", "title"}),
         limit=10,
     )
@@ -182,6 +184,7 @@ async def test_chunk_fetcher_strips_scope_for_sql_pushdown(fts_db: Path) -> None
     fetch = ChunkFetcherStep(
         name="fetch",
         provider=provider,
+        filter_adapter=SqliteFilterAdapter(),
         allowed_fields=frozenset({"package", "scope", "module", "title"}),
         limit=10,
     )
