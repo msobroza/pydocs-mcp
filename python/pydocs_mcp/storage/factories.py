@@ -33,10 +33,10 @@ from pydocs_mcp.storage.sqlite import (
     CHUNK_COLUMNS,
     SqliteChunkRepository,
     SqliteUnitOfWork,
-    _maybe_acquire,
-    _SqliteFilterTranslator,
     row_to_chunk,
 )
+from pydocs_mcp.storage.sqlite.filter_adapter import _SqliteFilterTranslator
+from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 
 logger = logging.getLogger(__name__)

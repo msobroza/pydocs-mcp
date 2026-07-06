@@ -79,3 +79,11 @@ def test_row_mappers_module_owns_the_mappers() -> None:
     assert sqlite_pkg.row_to_chunk is row_mappers.row_to_chunk
     assert sqlite_pkg._chunk_to_row is row_mappers._chunk_to_row
     assert sqlite_pkg._row_to_package is row_mappers._row_to_package
+
+
+def test_filter_adapter_module_owns_the_translator() -> None:
+    from pydocs_mcp.storage.sqlite import filter_adapter
+
+    assert sqlite_pkg._SqliteFilterTranslator is filter_adapter._SqliteFilterTranslator
+    assert sqlite_pkg.SqliteFilterAdapter is filter_adapter.SqliteFilterAdapter
+    assert sqlite_pkg.CHUNK_COLUMNS is filter_adapter.CHUNK_COLUMNS
