@@ -194,12 +194,10 @@ max-complexity = 12
 "benchmarks/src/**"              = ["S101", "S311", "S324", "S603", "S607", "S608", "B905", "SIM105", "SIM102", "PTH207"]
 "python/pydocs_mcp/_fast.py"     = ["F401", "I001"]
 "python/pydocs_mcp/__main__.py"  = ["T201"]
-# The SQLite repositories build `WHERE {clause}` strings where {clause} comes
-# from the FilterAdapter — which only emits SQL fragments built from a
-# whitelisted column set (CHUNK_COLUMNS / MEMBER_COLUMNS / PACKAGE_COLUMNS)
-# and parameterized placeholders. The values flow through DB-API ?-bound
-# parameters; no user data is interpolated into the SQL text.
-"python/pydocs_mcp/storage/sqlite.py"     = ["S608"]
+# The whole sqlite/ package builds `WHERE {clause}` strings; clauses come
+# only from the whitelisted-column FilterAdapter and table names from
+# per-repository module constants — values bind via ?-parameters.
+"python/pydocs_mcp/storage/sqlite/**"     = ["S608"]
 "python/pydocs_mcp/storage/factories.py"  = ["S608"]
 
 [tool.mypy]
@@ -257,6 +255,7 @@ ignore_missing_imports = true
 module = [
     "pydocs_mcp.__main__",
     "pydocs_mcp.storage.sqlite",
+    "pydocs_mcp.storage.sqlite.*",
     "pydocs_mcp.storage.factories",
     "pydocs_mcp.retrieval.config.*",
     "pydocs_mcp.retrieval.serialization",
