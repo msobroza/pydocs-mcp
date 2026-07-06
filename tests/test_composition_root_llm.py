@@ -2,7 +2,7 @@
 
 Mirrors the embedder + uow_factory threading in ``build_retrieval_context``
 / ``build_ingestion_pipeline``: the entry points (``server.run`` and
-``__main__._run_indexing``) construct one LLM client at startup via
+``storage.factories.build_project_indexer``) construct one LLM client at startup via
 ``build_llm_client(config.llm)`` and thread it into the BuildContext so
 ``LlmTreeReasoningStep.from_dict`` can read ``context.llm_client`` instead
 of having to import ``build_llm_client`` itself.

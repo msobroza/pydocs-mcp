@@ -1,4 +1,5 @@
-"""Canonical SQLite factories for the indexing + lookup services (post-#5a-2).
+"""Canonical factories for the indexing + lookup services — including the
+write-side composition root (``build_project_indexer`` → ``IndexerBundle``).
 
 The MCP CLI (``__main__.py``), the MCP server (``server.py``), the
 benchmark suite, and the test suite all construct services around a
@@ -14,19 +15,23 @@ import asyncio
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.models import Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
+from pydocs_mcp.storage.index_metadata import IndexMetadata, write_index_metadata
 from pydocs_mcp.storage.sqlite import (
     CHUNK_COLUMNS,
+    SqliteChunkRepository,
     SqliteUnitOfWork,
     _maybe_acquire,
     _SqliteFilterTranslator,
@@ -38,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
+    from pydocs_mcp.application.project_indexer import ProjectIndexer
     from pydocs_mcp.retrieval.config import AppConfig
 
 
@@ -299,3 +305,176 @@ def build_sqlite_chunk_hydrator(
             )
 
     return hydrate
+
+
+@dataclass(frozen=True, slots=True)
+class IndexerBundle:
+    """Write-side wiring for one project's indexing runs.
+
+    ``build_project_indexer`` is the single write-side composition root
+    (the counterpart of ``server.py``'s read-side ``build_routers``): the
+    CLI, the watch loop's reindex callback, tests, and any future
+    programmatic consumer all get the same orchestrator + service +
+    maintenance ops without re-deriving ~240 lines of wiring. The three
+    callables close over the concrete SQLite / TurboQuant handles so the
+    application-layer ``run_index_pass`` stays Protocol-only — Decision C
+    (``IndexingService`` deliberately exposes no chunk-store handle) is
+    preserved by shipping the FTS rebuild as a closure instead.
+    """
+
+    orchestrator: ProjectIndexer
+    indexing_service: IndexingService
+    uow_factory: Callable[[], CompositeUnitOfWork]
+    pipeline_hash: str
+    check_integrity: Callable[[], Awaitable[list[str]]]
+    rebuild_fts: Callable[[], Awaitable[None]]
+    stamp_metadata: Callable[[IndexMetadata], None]
+
+
+def build_project_indexer(
+    config: AppConfig,
+    db_path: Path,
+    *,
+    use_inspect: bool,
+    inspect_depth: int | None,
+) -> IndexerBundle:
+    """Assemble the write-side composition root for one project.
+
+    Absorbs the wiring that previously lived inline in
+    ``__main__._run_indexing``. ``inspect_depth=None`` falls back to the
+    YAML ``extraction.members.inspect_depth``; the CLI resolves its
+    ``--depth`` flag BEFORE calling (CLI flag wins over YAML — resolution
+    stays client-side so this factory carries no argparse knowledge).
+    The caller is responsible for having created the schema
+    (``open_index_database(db_path).close()``) before repositories issue
+    queries.
+
+    Example::
+
+        bundle = build_project_indexer(config, db_path, use_inspect=True, inspect_depth=None)
+        stats = await run_index_pass(orchestrator=bundle.orchestrator, ...)
+    """
+    # Deferred imports are deliberate: they are the monkeypatch seams the
+    # test suite relies on (tests/test_cli.py patches the module/package
+    # attributes at call time), and they keep heavy optional deps
+    # (fastembed/onnxruntime, the openai client) off the import path of
+    # ``storage.factories`` consumers that never index.
+    from pydocs_mcp.application import ProjectIndexer
+    from pydocs_mcp.extraction import (
+        AstMemberExtractor,
+        InspectMemberExtractor,
+        PipelineChunkExtractor,
+        StaticDependencyResolver,
+        build_ingestion_pipeline,
+    )
+    from pydocs_mcp.extraction.strategies.embedders import build_embedder
+    from pydocs_mcp.retrieval.llm_clients import build_llm_client
+    from pydocs_mcp.storage.search_backend import build_search_backend, format_capabilities
+
+    # Hybrid-search composition root: source the write-side UoW children from
+    # the SAME SearchBackend that retrieval + the benchmark use, so indexing
+    # wires dense (and late-interaction, when enabled) consistently with the
+    # read path — no separate child-assembly that could drift. The composite
+    # UoW makes ``reindex_package`` write chunks AND vectors atomically, and
+    # ``IndexingService`` + ``ProjectIndexer`` share the one factory so the
+    # indexing transaction spans every backend without per-service branching.
+    backend = build_search_backend(config, db_path)
+    # Capability diagnostic (spec invariant C): one log line so an operator
+    # can see at index time which retrieval capabilities the configured
+    # backend actually serves — the visibility whose absence let the
+    # dense/LI wiring bug stay silent.
+    logger.info(format_capabilities(backend))
+    uow_factory = build_composite_uow_factory(backend.write_uow_children())
+    # ``.tq`` sidecar path for the integrity sweep. The backend derives its
+    # TurboQuant sidecar as ``db_path.with_suffix(".tq")``; mirror that here
+    # so the two always point at the same on-disk file. ``db_path`` already
+    # carries the per-project ``<dirname>_<hash>`` slug (and any --cache-dir
+    # override), so the suffix swap lands the sidecar beside the SQLite cache.
+    tq_path = db_path.with_suffix(".tq")
+
+    indexing_service = IndexingService(
+        uow_factory=uow_factory,
+        node_scores_enabled=config.reference_graph.node_scores.enabled,
+    )
+
+    # Construct the embedder once at startup so the rest of the pipeline
+    # can share it. Failing here (e.g., OPENAI_API_KEY missing) surfaces
+    # the issue immediately rather than at first query.
+    embedder = build_embedder(config.embedding)
+    # Compute the ingestion pipeline_hash ONCE at startup. This identity
+    # slot (embedder + raw ingestion-YAML bytes) is threaded through the
+    # BuildContext so ``AssignChunkContentHashStage`` can stamp every
+    # chunk's content_hash with it. Any embedder swap or YAML edit
+    # invalidates every chunk hash, the diff-merge sees them as 'added',
+    # and the existing add path re-embeds them — no separate force-re-embed
+    # code path needed.
+    pipeline_hash = config.compute_ingestion_pipeline_hash()
+    # Construct the LLM client once at startup so any future ingestion-time
+    # LLM stage can be wired without another composition change. Symmetric
+    # with ``embedder``: build once, thread through.
+    llm_client = build_llm_client(config.llm)
+    ingestion_pipeline = build_ingestion_pipeline(
+        config,
+        embedder=embedder,
+        uow_factory=uow_factory,
+        pipeline_hash=pipeline_hash,
+        llm_client=llm_client,
+    )
+    chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
+
+    ast_member = AstMemberExtractor()
+    members_cfg = config.extraction.members
+    depth = inspect_depth if inspect_depth is not None else members_cfg.inspect_depth
+    member_extractor = (
+        InspectMemberExtractor(
+            static_fallback=ast_member,
+            depth=depth,
+            members_per_module_cap=members_cfg.members_per_module_cap,
+            signature_max_chars=members_cfg.signature_max_chars,
+            docstring_max_chars=members_cfg.docstring_max_chars,
+        )
+        if use_inspect
+        else ast_member
+    )
+
+    orchestrator = ProjectIndexer(
+        indexing_service=indexing_service,
+        dependency_resolver=StaticDependencyResolver(),
+        chunk_extractor=chunk_extractor,
+        member_extractor=member_extractor,
+        uow_factory=uow_factory,
+    )
+
+    async def _check_integrity() -> list[str]:
+        # Drift between SQLite and the ``.tq`` sidecar (process killed
+        # mid-commit, etc.) is detected and repaired by clearing
+        # ``packages.content_hash`` so the next pass re-extracts. No-op on a
+        # fresh project (both counts == 0) and after an atomic clear_all.
+        return await check_integrity_and_repair(
+            db_path=db_path,
+            tq_path=tq_path,
+            dim=config.embedding.dim,
+            bit_width=config.embedding.bit_width,
+        )
+
+    async def _rebuild_fts() -> None:
+        # FTS rebuild is a maintenance op, not transactional — use a direct
+        # SqliteChunkRepository handle here in the composition root
+        # (Decision C: IndexingService no longer exposes a chunk_store).
+        chunk_repo = SqliteChunkRepository(provider=build_connection_provider(db_path))
+        await chunk_repo.rebuild_index()
+
+    def _stamp_metadata(meta: IndexMetadata) -> None:
+        stamp_conn = open_index_database(db_path)
+        write_index_metadata(stamp_conn, meta)
+        stamp_conn.close()
+
+    return IndexerBundle(
+        orchestrator=orchestrator,
+        indexing_service=indexing_service,
+        uow_factory=uow_factory,
+        pipeline_hash=pipeline_hash,
+        check_integrity=_check_integrity,
+        rebuild_fts=_rebuild_fts,
+        stamp_metadata=_stamp_metadata,
+    )

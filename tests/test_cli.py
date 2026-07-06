@@ -44,9 +44,9 @@ def _patch_embedder_with_mock(monkeypatch):
     # Patch ``build_llm_client`` at every site where a consumer imports
     # it at module top (so the local binding inside that module is what
     # production code dereferences). The retrieval factory imports it
-    # directly, ``__main__.py`` resolves it lazily inside ``_run_indexing``
-    # via ``from pydocs_mcp.retrieval.llm_clients import build_llm_client``
-    # — patching the canonical module attribute covers both.
+    # directly; ``storage.factories.build_project_indexer`` resolves it
+    # lazily via ``from pydocs_mcp.retrieval.llm_clients import
+    # build_llm_client`` — patching the canonical module attribute covers both.
     def _llm_with_mock(cfg):
         return FakeLlmClient(responses={})
 
@@ -77,7 +77,7 @@ def _patch_embedder_with_mock(monkeypatch):
             llm_client=llm_client or FakeLlmClient(responses={}),
         )
 
-    # ``_run_indexing`` does ``from pydocs_mcp.extraction import build_ingestion_pipeline``
+    # ``build_project_indexer`` does ``from pydocs_mcp.extraction import build_ingestion_pipeline``
     # at call time (deferred import) — patch both the re-exported attribute
     # on the package and the source attribute on factories, since the
     # deferred import resolves the former and direct callers use the latter.
@@ -223,7 +223,7 @@ class TestSkipDepsWiring:
                 captured.update(kwargs)
                 return IndexingStats()
 
-        # ``_run_indexing`` imports ProjectIndexer lazily from the package,
+        # ``build_project_indexer`` imports ProjectIndexer lazily from the package,
         # so patching the package attribute intercepts the construction.
         monkeypatch.setattr(_application, "ProjectIndexer", _CapturingIndexer)
         return captured
@@ -433,3 +433,94 @@ class TestServeCommand:
 
                 main()
             mock_run.assert_called_once()
+
+
+class TestRunIndexingDelegation:
+    """``_run_indexing`` is a thin wrapper: composition lives in
+    ``storage.factories.build_project_indexer`` and the pass sequence in
+    ``application.run_index_pass``; the CLI only resolves paths + flags."""
+
+    @pytest.fixture
+    def delegation_capture(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import pydocs_mcp.application as _application
+        import pydocs_mcp.storage.factories as _storage_factories
+        from pydocs_mcp.application.indexing_service import IndexingStats
+
+        captured: dict[str, object] = {}
+        sentinel_bundle = SimpleNamespace(
+            orchestrator=object(),
+            indexing_service=object(),
+            uow_factory=lambda: None,
+            pipeline_hash="hash-sentinel",
+            check_integrity=object(),
+            rebuild_fts=object(),
+            stamp_metadata=object(),
+        )
+
+        def _fake_build(config, db_path, *, use_inspect, inspect_depth):
+            captured["config"] = config
+            captured["factory"] = (db_path, use_inspect, inspect_depth)
+            return sentinel_bundle
+
+        async def _fake_pass(**kwargs):
+            captured["pass"] = kwargs
+            return IndexingStats()
+
+        # ``_run_indexing`` resolves both lazily at call time, so patching
+        # the module / package attributes intercepts the delegation.
+        monkeypatch.setattr(_storage_factories, "build_project_indexer", _fake_build)
+        monkeypatch.setattr(_application, "run_index_pass", _fake_pass)
+        return captured, sentinel_bundle
+
+    def test_delegates_flags_and_bundle_members(self, seeded_project, delegation_capture):
+        captured, sentinel_bundle = delegation_capture
+        with patch(
+            "sys.argv",
+            ["pydocs-mcp", "index", str(seeded_project), "--depth", "3", "--skip-deps"],
+        ):
+            from pydocs_mcp.__main__ import main
+
+            assert main() == 0
+
+        from pydocs_mcp.retrieval.config import AppConfig
+
+        assert isinstance(captured["config"], AppConfig)
+        _db_path, use_inspect, inspect_depth = captured["factory"]
+        assert use_inspect is True
+        assert inspect_depth == 3  # CLI --depth wins over YAML
+        kwargs = captured["pass"]
+        assert kwargs["orchestrator"] is sentinel_bundle.orchestrator
+        assert kwargs["indexing_service"] is sentinel_bundle.indexing_service
+        assert kwargs["pipeline_hash"] == "hash-sentinel"
+        assert kwargs["check_integrity"] is sentinel_bundle.check_integrity
+        assert kwargs["rebuild_fts"] is sentinel_bundle.rebuild_fts
+        assert kwargs["stamp_metadata"] is sentinel_bundle.stamp_metadata
+        assert kwargs["project"] == seeded_project.resolve()
+        assert kwargs["force"] is False
+        assert kwargs["include_project_source"] is True
+        assert kwargs["include_dependencies"] is False
+        assert kwargs["workers"] == 4
+
+    def test_depth_absent_falls_back_to_yaml(self, seeded_project, delegation_capture):
+        captured, _bundle = delegation_capture
+        with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project)]):
+            from pydocs_mcp.__main__ import main
+
+            assert main() == 0
+
+        from pydocs_mcp.retrieval.config import AppConfig
+
+        _db_path, _use_inspect, inspect_depth = captured["factory"]
+        assert inspect_depth == AppConfig.load().extraction.members.inspect_depth
+
+    def test_no_inspect_flag_forwarded(self, seeded_project, delegation_capture):
+        captured, _bundle = delegation_capture
+        with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project), "--no-inspect"]):
+            from pydocs_mcp.__main__ import main
+
+            assert main() == 0
+
+        _db_path, use_inspect, _depth = captured["factory"]
+        assert use_inspect is False

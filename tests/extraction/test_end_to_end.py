@@ -119,7 +119,7 @@ def _build_service(db_path: Path) -> ProjectIndexer:
     # EmbedChunksStage + LoadExistingChunkHashesStage are wired into the
     # shipped pipeline by default. Thread a MockEmbedder + the real
     # SQLite UoW factory so the strict from_dict gates in both stages
-    # are satisfied (mirrors what ``__main__._run_indexing`` does).
+    # are satisfied (mirrors what ``build_project_indexer`` + ``run_index_pass`` do).
     from tests._fakes import MockEmbedder
 
     pipeline = build_ingestion_pipeline(
