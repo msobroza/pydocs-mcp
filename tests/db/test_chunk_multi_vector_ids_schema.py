@@ -8,7 +8,7 @@ from pydocs_mcp.db import SCHEMA_VERSION, _KNOWN_TABLES, open_index_database
 
 
 def test_schema_version_is_6() -> None:
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
 
 
 def test_known_tables_includes_chunk_multi_vector_ids() -> None:
@@ -52,5 +52,5 @@ def test_v5_db_is_migrated(tmp_path) -> None:
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE name='chunk_multi_vector_ids'",
         ).fetchall()
-    assert ver == 12
+    assert ver == 13
     assert rows == [("chunk_multi_vector_ids",)]

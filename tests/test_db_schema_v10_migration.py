@@ -14,7 +14,7 @@ from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
 
 
 def test_schema_version_is_10() -> None:
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -48,7 +48,7 @@ def test_v9_to_v10_adds_node_scores_additively(tmp_path: Path) -> None:
 
     conn = sqlite3.connect(db_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert _table_exists(conn, "node_scores")
         # Additive: content_hash is NOT cleared (no re-extraction forced).
         pkg = conn.execute(
@@ -78,7 +78,7 @@ def test_node_scores_survives_drift_recovery_reopen(tmp_path: Path) -> None:
 
     conn = sqlite3.connect(db_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         row = conn.execute(
             "SELECT in_degree, pagerank, community FROM node_scores WHERE qualified_name='demo.mod.foo'"
         ).fetchone()

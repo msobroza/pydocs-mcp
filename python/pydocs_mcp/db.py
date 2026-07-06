@@ -12,7 +12,11 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 12  # v12: additive — chunks.embedded flag (1 = a single-vector
+SCHEMA_VERSION = 13  # v13: additive — index_metadata.git_head (the project's
+# git HEAD sha stamped at index time; the freshness envelope compares it to
+# the live .git/HEAD to emit a stale warning). Nullable: legacy rows read
+# back None until the next index stamps it. NO re-extraction or re-embed.
+# v12: additive — chunks.embedded flag (1 = a single-vector
 # was written to the .tq for this chunk). Lets the integrity check compare
 # INTENDED embeddings vs vectors, so selective embed policies (dependency doc
 # pages only) don't read as drift and trigger the clear-all-content_hash loop.
@@ -107,7 +111,7 @@ _DDL = """
         id INTEGER PRIMARY KEY CHECK (id = 1),
         project_name TEXT, project_root TEXT,
         embedding_provider TEXT, embedding_model TEXT, embedding_dim INTEGER,
-        pipeline_hash TEXT, indexed_at REAL
+        pipeline_hash TEXT, indexed_at REAL, git_head TEXT
     );
 """
 
@@ -335,6 +339,16 @@ def _apply_v12_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "chunks", "embedded INTEGER NOT NULL DEFAULT 0")
 
 
+def _apply_v13_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v13 shape — ``index_metadata.git_head``.
+
+    Stamped by the next index pass; NULL until then (the envelope renders
+    age-only for a NULL head). ``_try_add_column`` swallows duplicate-column
+    errors so the sweep is safe to re-run as a v13-on-open drift-recovery pass.
+    """
+    _try_add_column(conn, "index_metadata", "git_head TEXT")
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
@@ -361,7 +375,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v12 — re-run additive sweeps for drift recovery; data preserved.
+        # v13 — re-run additive sweeps for drift recovery; data preserved.
         # (No embedded-flag backfill here: flags written under a selective
         # embed policy must survive reopen.)
         _apply_v3_additions(conn)
@@ -372,6 +386,12 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v10_additions(conn)
         _apply_v11_additions(conn)
         _apply_v12_additions(conn)
+        _apply_v13_additions(conn)
+    elif current == 12:
+        # v12 → v13 — one additive column. NO embedded backfill here:
+        # v12 flags may have been written under a selective embed policy.
+        _apply_v13_additions(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (9, 10, 11):
         # v9/v10/v11 → v12 — purely additive: create node_scores (v10) +
         # index_metadata (v11) + chunks.embedded (v12). Pre-v12 rows were
@@ -382,6 +402,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v10_additions(conn)
         _apply_v11_additions(conn)
         _apply_v12_additions(conn)
+        _apply_v13_additions(conn)
         conn.execute("UPDATE chunks SET embedded = 1")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (2, 3, 4, 6, 7, 8):
@@ -398,6 +419,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v10_additions(conn)
         _apply_v11_additions(conn)
         _apply_v12_additions(conn)
+        _apply_v13_additions(conn)
         conn.execute("UPDATE chunks SET embedded = 1")
         # v9 carries no structural change. The extraction enrichment added the
         # FULL multi-line extra_metadata["signature"] header + decorator call
