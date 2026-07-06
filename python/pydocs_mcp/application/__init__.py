@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.docs_search import DocsSearch
+from pydocs_mcp.application.index_project import run_index_pass
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import (
@@ -57,4 +58,5 @@ __all__ = [
     "SearchInput",
     "ServiceUnavailableError",
     "TreeService",
+    "run_index_pass",
 ]
