@@ -392,7 +392,20 @@ class DecisionCaptureConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    sources: list[str] = Field(default_factory=lambda: list(_DEFAULT_DECISION_SOURCES))
+    # WHY: closed source set, typed Literal so a misspelled overlay value (e.g.
+    # ``adr_file`` missing the trailing ``s``) fails at YAML load rather than
+    # silently mining nothing from that source — same silent-failure guard as
+    # ``ReferenceCaptureConfig.kinds``. ``extra="forbid"`` only validates keys,
+    # not list values, so the Literal is what closes the hazard here.
+    sources: list[
+        Literal[
+            "adr_files",
+            "inline_markers",
+            "commit_messages",
+            "changelog",
+            "docs_prose",
+        ]
+    ] = Field(default_factory=lambda: list(_DEFAULT_DECISION_SOURCES))
     merge_jaccard: float = Field(0.85, gt=0.0, le=1.0)
     inline_markers: InlineMarkersConfig = Field(default_factory=InlineMarkersConfig)
     commit_messages: CommitMessagesConfig = Field(default_factory=CommitMessagesConfig)

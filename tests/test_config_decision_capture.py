@@ -59,3 +59,13 @@ def test_decision_capture_unknown_key_rejected(tmp_path) -> None:
     overlay.write_text("decision_capture:\n  bogus_key: 1\n")
     with pytest.raises(ValidationError):
         AppConfig.load(explicit_path=overlay)
+
+
+def test_decision_capture_unknown_source_rejected(tmp_path) -> None:
+    # A misspelled source (``adr_file`` missing the trailing ``s``) must fail at
+    # YAML load — the Literal type closes the silent-mine-nothing hazard that
+    # ``extra="forbid"`` (keys only) does not cover.
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text("decision_capture:\n  sources:\n    - adr_file\n")
+    with pytest.raises(ValidationError):
+        AppConfig.load(explicit_path=overlay)
