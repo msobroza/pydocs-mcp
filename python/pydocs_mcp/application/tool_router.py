@@ -9,6 +9,7 @@ so ranking/dedup/project-routing stay in exactly one place.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.formatting import pointer_token
@@ -29,7 +30,13 @@ from pydocs_mcp.application.multi_project_search import (
     _select_service,
 )
 
-_DEPTH_TO_SHOW = {"summary": "default", "tree": "tree"}
+# get_symbol depth → lookup `show`. The "source" depth is handled before this
+# map (verbatim source path), so only "summary"/"tree" reach it. The Literal
+# value type lets mypy narrow into LookupInput.show without an ignore.
+_DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
+    "summary": "default",
+    "tree": "tree",
+}
 
 
 @dataclass(frozen=True, slots=True)
