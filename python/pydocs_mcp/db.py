@@ -12,7 +12,12 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 13  # v13: additive — index_metadata.git_head (the project's
+SCHEMA_VERSION = 14  # v14: additive — decision_records table (mined
+# architectural decisions, spec §D8-§D10) + chunks.decision_id
+# (searchable-projection backlink) + index_metadata.{activity_summary,
+# overview_summary} (JSON aggregates for the overview card, §D17). NULL/empty
+# until the next index; NO re-extraction or re-embed.
+# v13: additive — index_metadata.git_head (the project's
 # git HEAD sha stamped at index time; the freshness envelope compares it to
 # the live .git/HEAD to emit a stale warning). Nullable: legacy rows read
 # back None until the next index stamps it. NO re-extraction or re-embed.
@@ -47,7 +52,8 @@ _DDL = """
         title TEXT, text TEXT, origin TEXT,
         content_hash TEXT,
         qualified_name TEXT,
-        embedded INTEGER NOT NULL DEFAULT 0
+        embedded INTEGER NOT NULL DEFAULT 0,
+        decision_id INTEGER
     );
     CREATE VIRTUAL TABLE chunks_fts USING fts5(
         title, text, package,
@@ -95,6 +101,23 @@ _DDL = """
         community      INTEGER NOT NULL DEFAULT -1,
         PRIMARY KEY (package, qualified_name)
     );
+    CREATE TABLE decision_records (
+        id              INTEGER PRIMARY KEY,
+        package         TEXT NOT NULL,
+        title           TEXT NOT NULL,
+        status          TEXT NOT NULL,
+        source          TEXT NOT NULL,
+        confidence      REAL NOT NULL,
+        evidence        TEXT NOT NULL,
+        affected_files  TEXT NOT NULL,
+        affected_qnames TEXT NOT NULL,
+        staleness_score REAL NOT NULL DEFAULT 0.0,
+        superseded_by   INTEGER,
+        verification    TEXT NOT NULL DEFAULT 'verbatim',
+        structured      TEXT,
+        created_at      REAL NOT NULL,
+        updated_at      REAL NOT NULL
+    );
     CREATE INDEX ix_chunks_package         ON chunks(package);
     CREATE INDEX ix_chunks_module          ON chunks(module);
     CREATE INDEX ix_module_members_package ON module_members(package);
@@ -107,11 +130,13 @@ _DDL = """
     CREATE INDEX idx_cmv_package           ON chunk_multi_vector_ids(package);
     CREATE INDEX ix_node_scores_qname      ON node_scores(qualified_name);
     CREATE INDEX ix_node_scores_package    ON node_scores(package);
+    CREATE INDEX ix_decisions_package      ON decision_records(package);
     CREATE TABLE index_metadata (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         project_name TEXT, project_root TEXT,
         embedding_provider TEXT, embedding_model TEXT, embedding_dim INTEGER,
-        pipeline_hash TEXT, indexed_at REAL, git_head TEXT
+        pipeline_hash TEXT, indexed_at REAL, git_head TEXT,
+        activity_summary TEXT, overview_summary TEXT
     );
 """
 
@@ -128,6 +153,7 @@ _KNOWN_TABLES = (
     "chunk_multi_vector_ids",  # new in v6
     "node_scores",  # new in v10
     "index_metadata",  # new in v11
+    "decision_records",  # new in v14
 )
 
 
@@ -349,6 +375,42 @@ def _apply_v13_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "index_metadata", "git_head TEXT")
 
 
+def _apply_v14_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v14 shape — the decision layer (spec §D8-§D10, §D17).
+
+    Adds ``decision_records`` (mined architectural decisions) + its package
+    index, ``chunks.decision_id`` (the searchable-projection backlink from a
+    decision chunk to its record), and the two ``index_metadata`` JSON aggregate
+    columns (``activity_summary`` / ``overview_summary``) that feed the overview
+    card. Purely additive: the table starts empty, the columns read back NULL
+    until the next index stamps them, so the migration forces NO re-extraction
+    or re-embed. ``CREATE ... IF NOT EXISTS`` + ``_try_add_column`` keep the
+    sweep safe to re-run as a v14-on-open drift-recovery pass.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS decision_records ("
+        "id INTEGER PRIMARY KEY, "
+        "package TEXT NOT NULL, "
+        "title TEXT NOT NULL, "
+        "status TEXT NOT NULL, "
+        "source TEXT NOT NULL, "
+        "confidence REAL NOT NULL, "
+        "evidence TEXT NOT NULL, "
+        "affected_files TEXT NOT NULL, "
+        "affected_qnames TEXT NOT NULL, "
+        "staleness_score REAL NOT NULL DEFAULT 0.0, "
+        "superseded_by INTEGER, "
+        "verification TEXT NOT NULL DEFAULT 'verbatim', "
+        "structured TEXT, "
+        "created_at REAL NOT NULL, "
+        "updated_at REAL NOT NULL)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_decisions_package ON decision_records(package)")
+    _try_add_column(conn, "chunks", "decision_id INTEGER")
+    _try_add_column(conn, "index_metadata", "activity_summary TEXT")
+    _try_add_column(conn, "index_metadata", "overview_summary TEXT")
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
@@ -375,7 +437,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
-        # v13 — re-run additive sweeps for drift recovery; data preserved.
+        # v14 — re-run additive sweeps for drift recovery; data preserved.
         # (No embedded-flag backfill here: flags written under a selective
         # embed policy must survive reopen.)
         _apply_v3_additions(conn)
@@ -387,10 +449,19 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v11_additions(conn)
         _apply_v12_additions(conn)
         _apply_v13_additions(conn)
+        _apply_v14_additions(conn)
+    elif current == 13:
+        # v13 → v14 — purely additive decision layer (decision_records +
+        # chunks.decision_id + index_metadata JSON aggregates). NO embedded
+        # backfill: v13 flags may have been written under a selective policy.
+        _apply_v14_additions(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current == 12:
-        # v12 → v13 — one additive column. NO embedded backfill here:
-        # v12 flags may have been written under a selective embed policy.
+        # v12 → v14 — one additive column (v13 git_head) + the decision layer
+        # (v14). NO embedded backfill here: v12 flags may have been written
+        # under a selective embed policy.
         _apply_v13_additions(conn)
+        _apply_v14_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (9, 10, 11):
         # v9/v10/v11 → v12 — purely additive: create node_scores (v10) +
@@ -403,6 +474,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v11_additions(conn)
         _apply_v12_additions(conn)
         _apply_v13_additions(conn)
+        _apply_v14_additions(conn)
         conn.execute("UPDATE chunks SET embedded = 1")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (2, 3, 4, 6, 7, 8):
@@ -420,6 +492,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v11_additions(conn)
         _apply_v12_additions(conn)
         _apply_v13_additions(conn)
+        _apply_v14_additions(conn)
         conn.execute("UPDATE chunks SET embedded = 1")
         # v9 carries no structural change. The extraction enrichment added the
         # FULL multi-line extra_metadata["signature"] header + decorator call

@@ -14,15 +14,16 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def test_schema_version_is_13() -> None:
-    assert SCHEMA_VERSION == 13
+def test_git_head_column_survives_forward_migration() -> None:
+    # v13 introduced git_head; every later version keeps it additively.
+    assert SCHEMA_VERSION >= 13
 
 
 def test_fresh_db_has_git_head_column(tmp_path) -> None:
     conn = open_index_database(tmp_path / "fresh.db")
     try:
         assert "git_head" in _columns(conn, "index_metadata")
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     finally:
         conn.close()
 
@@ -62,7 +63,7 @@ def test_v12_db_upgrades_in_place_preserving_rows(tmp_path) -> None:
 
     conn = open_index_database(db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert "git_head" in _columns(conn, "index_metadata")
         # Row data preserved; new column reads back NULL until next stamp.
         row = conn.execute(
@@ -102,7 +103,7 @@ def test_v11_db_still_walks_forward_with_embedded_backfill(tmp_path) -> None:
 
     conn = open_index_database(db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert "git_head" in _columns(conn, "index_metadata")
         # Pre-v12 rows were embed-everything: backfill embedded=1 still runs.
         assert conn.execute("SELECT embedded FROM chunks").fetchone()[0] == 1
