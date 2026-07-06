@@ -8,9 +8,8 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from contextvars import ContextVar
+from collections.abc import Iterable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -44,49 +43,9 @@ from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.protocols import UnitOfWork
+from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire, _sqlite_transaction
 
 log = logging.getLogger("pydocs-mcp")
-
-# Ambient transaction state — set by SqliteUnitOfWork.__aenter__, read by _maybe_acquire.
-# The lock serialises concurrent repo calls that share the ambient connection —
-# ``asyncio.gather(repo.a.upsert(...), repo.b.upsert(...))`` inside a UoW
-# would otherwise race two worker threads on the same sqlite3.Connection
-# (undefined behaviour: interleaved SQL / corrupted transaction state).
-_sqlite_transaction: ContextVar[tuple[sqlite3.Connection, asyncio.Lock] | None] = ContextVar(
-    "_sqlite_transaction",
-    default=None,
-)
-
-
-@asynccontextmanager
-async def _maybe_acquire(
-    provider: ConnectionProvider,
-) -> AsyncIterator[sqlite3.Connection]:
-    """Reuse the ambient transaction's conn if set; otherwise acquire fresh via provider.
-
-    When there is no ambient :class:`SqliteUnitOfWork` the context manager
-    owns the commit/rollback lifecycle — successful exit commits, an
-    exception triggers a rollback before re-raising. Inside a UoW scope
-    the transaction is driven by :meth:`SqliteUnitOfWork.begin` and this
-    helper only yields the shared connection; commit/rollback there is
-    the UoW's responsibility. This folds the former
-    ``if _sqlite_transaction.get() is None: conn.commit()`` gate that was
-    duplicated across every repository write method.
-    """
-    ambient = _sqlite_transaction.get()
-    if ambient is not None:
-        conn, lock = ambient
-        async with lock:
-            yield conn
-    else:
-        async with provider.acquire() as conn:
-            try:
-                yield conn
-            except BaseException:
-                await asyncio.to_thread(conn.rollback)
-                raise
-            else:
-                await asyncio.to_thread(conn.commit)
 
 
 @dataclass(slots=True)

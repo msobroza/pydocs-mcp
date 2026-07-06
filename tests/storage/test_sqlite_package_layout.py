@@ -61,3 +61,13 @@ def test_sqlite_is_a_package() -> None:
 def test_package_mirrors_the_old_module_namespace() -> None:
     missing = [name for name in _EXPECTED_SURFACE if not hasattr(sqlite_pkg, name)]
     assert missing == []
+
+
+def test_transaction_module_owns_the_ambient_contextvar() -> None:
+    from pydocs_mcp.storage.sqlite import transaction
+
+    # Identity, not equality: SqliteUnitOfWork sets this ContextVar and
+    # _maybe_acquire reads it — two ContextVar objects would silently
+    # break ambient-transaction reuse.
+    assert sqlite_pkg._sqlite_transaction is transaction._sqlite_transaction
+    assert sqlite_pkg._maybe_acquire is transaction._maybe_acquire
