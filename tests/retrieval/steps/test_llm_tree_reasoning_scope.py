@@ -161,9 +161,13 @@ async def test_rerank_scopes_tree_and_writes_candidates() -> None:
     prompt = llm._calls[-1][-1]["content"]
     assert "pkg.mod.a" in prompt and "pkg.mod.b" in prompt  # the candidate subset
     assert "pkg.mod.c" not in prompt and "pkg.mod.d" not in prompt  # scoped out
-    # Tree picks written straight to state.candidates — no fusion step needed.
+    # Picks lead; the unpicked stage-1 remainder is backfilled after them so
+    # an LLM omission can't drop a candidate stage 1 already surfaced.
     assert isinstance(out.candidates, ChunkList)
-    assert [c.metadata["qualified_name"] for c in out.candidates.items] == ["pkg.mod.a"]
+    assert [c.metadata["qualified_name"] for c in out.candidates.items] == [
+        "pkg.mod.a",
+        "pkg.mod.b",
+    ]
 
 
 @pytest.mark.asyncio

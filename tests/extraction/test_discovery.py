@@ -17,6 +17,7 @@ blocklist entries in output filtering.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -85,13 +86,24 @@ def test_project_prunes_excluded_dirs(tmp_path: Path) -> None:
 def test_project_respects_max_file_size_bytes(tmp_path: Path) -> None:
     """Files exceeding max_file_size_bytes are skipped (oversized binary/doc)."""
     (tmp_path / "small.py").write_text("x = 1\n")
-    (tmp_path / "huge.py").write_text("x" * 600_000)  # > default 500_000
+    (tmp_path / "huge.py").write_text("x" * 1_100_000)  # > default 1_000_000
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
     paths, _ = disc.discover(tmp_path)
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["small.py"]
+
+
+def test_project_indexes_files_between_old_and_new_cap(tmp_path: Path) -> None:
+    """561,026 bytes is the exact size of the real-world gold file the old
+    500KB cap silently dropped (PAGEINDEX_DIVS.md F3) — it must index now."""
+    (tmp_path / "gold.py").write_text("x" * 561_026)
+
+    disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
+    paths, _ = disc.discover(tmp_path)
+
+    assert [Path(p).name for p in paths] == ["gold.py"]
 
 
 def test_project_root_equals_project_dir(tmp_path: Path) -> None:
@@ -249,7 +261,7 @@ def test_dependency_respects_max_file_size_bytes(
     """Oversized shipped doc / source file is filtered just like project code."""
     dist = _make_fake_dist(tmp_path, ("foo/huge.py", "foo/small.py"))
     huge = tmp_path / "site-packages" / "foo" / "huge.py"
-    huge.write_text("x" * 600_000)
+    huge.write_text("x" * 1_100_000)  # > default 1_000_000
     monkeypatch.setattr(
         "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
         lambda name: dist,
@@ -344,3 +356,40 @@ def test_discoverers_satisfy_protocol_surface() -> None:
         DependencyFileDiscoverer(scope=DiscoveryScopeConfig()),
         DependencyProto,
     )
+
+
+# ── Size-skip WARNING (oversized files must be named, not silently dropped) ─
+
+
+def test_oversize_file_logs_warning_naming_it(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A file over the cap is skipped AND a WARNING names it — silent skips
+    hid an indexing-coverage hole for weeks (PAGEINDEX_DIVS.md F3)."""
+    (tmp_path / "small.py").write_text("x = 1\n")
+    (tmp_path / "huge.py").write_text("x" * 1_100_000)
+
+    disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
+    with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
+        paths, _ = disc.discover(tmp_path)
+
+    assert sorted(Path(p).name for p in paths) == ["small.py"]
+    skip_msgs = [r.getMessage() for r in caplog.records if "huge.py" in r.getMessage()]
+    assert len(skip_msgs) == 1
+    assert "max_file_size_bytes" in skip_msgs[0]
+    assert "1000000" in skip_msgs[0]  # the effective cap is actionable info
+
+
+def test_within_cap_file_indexes_without_warning(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    (tmp_path / "ok.py").write_text("x = 1\n")
+
+    disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
+    with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
+        paths, _ = disc.discover(tmp_path)
+
+    assert [Path(p).name for p in paths] == ["ok.py"]
+    assert not [r for r in caplog.records if "max_file_size_bytes" in r.getMessage()]

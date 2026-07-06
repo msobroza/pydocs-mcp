@@ -135,7 +135,10 @@ class DiscoveryScopeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include_extensions: list[str] = Field(default_factory=lambda: [".py", ".md", ".ipynb"])
-    max_file_size_bytes: int = 500_000
+    # 1MB, not 500KB: a real 561KB module (mlc_llm dispatch table) was
+    # silently skipped under the old cap, imposing an unwinnable recall
+    # ceiling on every retrieval method (PAGEINDEX_DIVS.md F3).
+    max_file_size_bytes: int = 1_000_000
 
     @field_validator("include_extensions")
     @classmethod

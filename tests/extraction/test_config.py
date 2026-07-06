@@ -43,7 +43,9 @@ def test_extraction_config_defaults_load():
     assert cfg.chunking.markdown.max_heading_level == 3
     assert cfg.chunking.notebook.include_outputs is False
     assert cfg.discovery.project.include_extensions == [".py", ".md", ".ipynb"]
-    assert cfg.discovery.project.max_file_size_bytes == 500_000
+    # 1MB: a 561KB real-world module was silently skipped under 500KB and
+    # capped retrieval recall for every method (PAGEINDEX_DIVS.md F3).
+    assert cfg.discovery.project.max_file_size_bytes == 1_000_000
     assert cfg.discovery.dependency.include_extensions == [".py", ".md", ".ipynb"]
     assert cfg.members.inspect_depth == 1
     assert cfg.members.members_per_module_cap == 120
