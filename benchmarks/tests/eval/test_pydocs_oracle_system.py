@@ -129,8 +129,22 @@ def _task(doc_ids: tuple[str, ...], *, library: str = "pandas") -> EvalTask:
 
 
 @pytest.mark.asyncio
-async def test_index_ignores_corpus_dir_and_search_surfaces_rows() -> None:
-    config = AppConfig.load()
+async def test_index_ignores_corpus_dir_and_search_surfaces_rows(tmp_path) -> None:
+    # WHY: pin the vector-free BM25 chunk pipeline. This test asserts pipeline
+    # plumbing (chunks stored, FTS rebuilt, exact-token query surfaces the row
+    # by qualified_name) — a deterministic BM25-shaped assertion. The shipped
+    # default flipped to dense+graph_expand, but _FakeEmbedder produces
+    # sha-derived pseudorandom vectors, so under the dense default the "top hit"
+    # ordering is meaningless (top result is arbitrary noise, not the doc whose
+    # text matches the query). Pin BM25 the same way tests/retrieval/
+    # test_parity_golden.py and tests/test_server.py do — the dense default is
+    # covered by the benchmark A/B and the dense-pipeline unit tests instead.
+    overlay = tmp_path / "bm25_overlay.yaml"
+    overlay.write_text(
+        "pipelines:\n  chunk:\n    - default: true\n"
+        "      pipeline_path: pipelines/chunk_search.yaml\n"
+    )
+    config = AppConfig.load(explicit_path=overlay)
     system = PydocsOracleSystem(rows_source=_rows_source, embedder=_FakeEmbedder())
 
     try:
