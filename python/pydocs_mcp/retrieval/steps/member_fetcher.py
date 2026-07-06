@@ -43,6 +43,11 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+from pydocs_mcp.retrieval.steps._sql_fetch import (
+    execute_fetch,
+    read_pre_filter_result,
+    require_fetch_context,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.storage.protocols import FilterAdapter
@@ -74,6 +79,10 @@ _FETCH_SQL_TEMPLATE = (
 _DEFAULT_LIMIT = 50
 _DEFAULT_RETRIEVER_NAME = "like_member"
 
+# Parameterizes the shared _sql_fetch error messages (byte-identical to the
+# pre-extraction inline copies).
+_STEP_LABEL = "MemberFetcherStep"
+
 
 @step_registry.register("member_fetcher")
 @dataclass(frozen=True, slots=True)
@@ -99,39 +108,29 @@ class MemberFetcherStep(RetrieverStep):
         if not needle:
             return replace(state, candidates=ModuleMemberList(items=()))
 
-        # Read PreFilterStep's typed result from scratch. Same contract as
-        # ChunkFetcherStep — PreFilterStep MUST run upstream when
-        # query.pre_filter is set; the fetcher does not re-parse the raw
-        # mapping. Post-C5 commit 2 the typed result carries only
-        # ``tree`` + ``scope``; the fetcher itself calls
-        # ``ctx.filter_adapter.adapt`` to materialize the WHERE fragment.
-        from pydocs_mcp.retrieval.steps.pre_filter import (
-            PRE_FILTER_SCRATCH_KEY,
-            PreFilterResult,
+        result = read_pre_filter_result(
+            state,
+            step_label=_STEP_LABEL,
+            step_name="member_fetcher",
+            pipeline_yaml="pipelines/member_search.yaml",
         )
-
         filter_sql = ""
         filter_params: tuple = ()
         scope: frozenset[SearchScope] | None = None
-
-        if state.query.pre_filter is not None:
-            result = state.scratch.get(PRE_FILTER_SCRATCH_KEY)
-            if not isinstance(result, PreFilterResult):
-                raise RuntimeError(
-                    "MemberFetcherStep: state.query.pre_filter is set but "
-                    f"state.scratch[{PRE_FILTER_SCRATCH_KEY!r}] is missing. "
-                    "The pipeline must include the 'pre_filter' step before "
-                    "'member_fetcher'. See pipelines/member_search.yaml "
-                    "for the canonical shape.",
-                )
+        if result is not None:
             scope = result.scope
             if result.tree is not None:
                 filter_sql, filter_params = self._build_where_clause(result.tree)
 
+        where_clause = ""
+        params: list = []
+        if filter_sql:
+            where_clause = f"WHERE {filter_sql} "
+            params.extend(filter_params)
+        params.append(self.limit)
+        sql = _FETCH_SQL_TEMPLATE.format(where_clause=where_clause)
         rows = await asyncio.to_thread(
-            self._fetch_sync,
-            filter_sql,
-            list(filter_params),
+            execute_fetch, self.provider, sql, params, step_label=_STEP_LABEL
         )
         members = tuple(_row_to_candidate(row, self.retriever_name) for row in rows)
         # Apply LIKE-style substring match in-process (matches legacy
@@ -167,58 +166,19 @@ class MemberFetcherStep(RetrieverStep):
         """
         return self.filter_adapter.adapt(tree, target_field="member")
 
-    def _fetch_sync(
-        self,
-        filter_sql: str,
-        filter_params: list,
-    ) -> list[sqlite3.Row]:
-        # WHY: PerCallConnectionProvider exposes ``cache_path`` directly so a
-        # sync-friendly fresh connection avoids tangling with the provider's
-        # async ``acquire()`` context manager from inside ``to_thread``.
-        # Mirrors :class:`ChunkFetcherStep._fetch_sync`.
-        cache_path = getattr(self.provider, "cache_path", None)
-        if cache_path is None:
-            raise TypeError(
-                "MemberFetcherStep requires a provider exposing 'cache_path'; "
-                f"got {type(self.provider).__name__}"
-            )
-        where_clause = ""
-        params: list = []
-        if filter_sql:
-            where_clause = f"WHERE {filter_sql} "
-            params.extend(filter_params)
-        params.append(self.limit)
-        sql = _FETCH_SQL_TEMPLATE.format(where_clause=where_clause)
-        conn = sqlite3.connect(str(cache_path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        try:
-            return list(conn.execute(sql, params).fetchall())
-        finally:
-            conn.close()
-
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> MemberFetcherStep:
         schema_name = data.get("schema_name", "member")
-        if context.app_config is None:
-            raise ValueError(
-                "MemberFetcherStep requires BuildContext.app_config; "
-                "provide AppConfig at server/CLI startup."
-            )
-        if context.connection_provider is None:
-            raise ValueError(
-                "MemberFetcherStep requires BuildContext.connection_provider; "
-                "the composition root must wire a PerCallConnectionProvider "
-                "(see storage/factories.py)."
-            )
+        app_config, provider = require_fetch_context(context, _STEP_LABEL)
         if context.filter_adapter is None:
             raise ValueError(
                 "MemberFetcherStep requires BuildContext.filter_adapter; "
                 "the composition root wires SqliteFilterAdapter() "
                 "(see retrieval/factories.py)."
             )
-        allowed = frozenset(context.app_config.metadata_schemas[schema_name])
+        allowed = frozenset(app_config.metadata_schemas[schema_name])
         return cls(
-            provider=context.connection_provider,
+            provider=provider,
             allowed_fields=allowed,
             limit=data.get("limit", _DEFAULT_LIMIT),
             retriever_name=data.get("retriever_name", _DEFAULT_RETRIEVER_NAME),

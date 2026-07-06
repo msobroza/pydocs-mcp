@@ -258,7 +258,7 @@ module = [
     "pydocs_mcp.__main__",
     "pydocs_mcp.storage.sqlite",
     "pydocs_mcp.storage.factories",
-    "pydocs_mcp.retrieval.config",
+    "pydocs_mcp.retrieval.config.*",
     "pydocs_mcp.retrieval.serialization",
     "pydocs_mcp.retrieval.llm_clients.openai",
     "pydocs_mcp.retrieval.steps.*",
@@ -294,7 +294,7 @@ max-complexity-allowed = 15
 # automatically.
 #   - _fast.py extract_module_doc (x2): Rust/Python substitution-boundary
 #     re-export that vulture can't trace.
-#   - retrieval/config.py dotenv_settings / file_secret_settings: framework-
+#   - retrieval/config/app_config.py dotenv_settings / file_secret_settings: framework-
 #     mandated positional params of pydantic-settings'
 #     settings_customise_sources hook (deliberately unused).
 #   - application/protocols.py node_qname: Protocol method parameter — the

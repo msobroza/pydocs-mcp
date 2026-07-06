@@ -17,10 +17,16 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from typing import ClassVar
 
 from pydocs_mcp.models import Chunk, ChunkList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+from pydocs_mcp.retrieval.serialization import (
+    BuildContext,
+    step_registry,
+    step_to_yaml_dict,
+    yaml_kwargs,
+)
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 _DEFAULT_METRIC = "pagerank"
@@ -40,6 +46,7 @@ class CentralityPriorStep(RetrieverStep):
     metric: str = field(default=_DEFAULT_METRIC, kw_only=True)
     alpha: float = field(default=_DEFAULT_ALPHA, kw_only=True)
     name: str = field(default=_DEFAULT_NAME, kw_only=True)
+    _YAML_KEYS: ClassVar[tuple[str, ...]] = ("metric", "alpha", "name")
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         candidates = state.candidates
@@ -75,14 +82,7 @@ class CentralityPriorStep(RetrieverStep):
         return replace(chunk, relevance=base * (1.0 + self.alpha * prior))
 
     def to_dict(self) -> dict:
-        d: dict = {"type": "centrality_prior"}
-        if self.metric != _DEFAULT_METRIC:
-            d["metric"] = self.metric
-        if self.alpha != _DEFAULT_ALPHA:
-            d["alpha"] = self.alpha
-        if self.name != _DEFAULT_NAME:
-            d["name"] = self.name
-        return d
+        return step_to_yaml_dict(self, type_name="centrality_prior", keys=self._YAML_KEYS)
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> CentralityPriorStep:
@@ -91,17 +91,13 @@ class CentralityPriorStep(RetrieverStep):
                 "CentralityPriorStep requires BuildContext.uow_factory. "
                 "Production wiring in __main__.py / server.py sets this.",
             )
-        metric = data.get("metric", _DEFAULT_METRIC)
-        if metric not in _VALID_METRICS:
+        kwargs = yaml_kwargs(data, cls, cls._YAML_KEYS)
+        if kwargs["metric"] not in _VALID_METRICS:
             raise ValueError(
-                f"CentralityPriorStep.metric must be one of {sorted(_VALID_METRICS)}; got {metric!r}.",
+                f"CentralityPriorStep.metric must be one of "
+                f"{sorted(_VALID_METRICS)}; got {kwargs['metric']!r}.",
             )
-        return cls(
-            uow_factory=context.uow_factory,
-            metric=metric,
-            alpha=data.get("alpha", _DEFAULT_ALPHA),
-            name=data.get("name", _DEFAULT_NAME),
-        )
+        return cls(uow_factory=context.uow_factory, **kwargs)
 
 
 __all__ = ("CentralityPriorStep",)

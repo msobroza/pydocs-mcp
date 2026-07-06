@@ -271,9 +271,9 @@ async def test_pageindex_json_helper_does_not_emit_node_id_field() -> None:
         children=(),
     )
     # Render via the same helper the step uses internally
-    from pydocs_mcp.retrieval.steps.llm_tree_reasoning import _pageindex_with_qname
+    from pydocs_mcp.retrieval.tree_prompt.pageindex_serializer import pageindex_with_qname
 
-    out = _pageindex_with_qname(tree)
+    out = pageindex_with_qname(tree)
     # node_id should be absent; qualified_name should be present
     assert "qualified_name" in out
     assert "node_id" not in out, (
