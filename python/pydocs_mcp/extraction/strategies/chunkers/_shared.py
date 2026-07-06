@@ -168,9 +168,47 @@ def _fallback_module_node(
     )
 
 
+def _code_example_node(
+    code: str,
+    lang: str,
+    index: int,
+    parent_qname: str,
+    rel: str,
+    *,
+    start_line: int = 1,
+    end_line: int = 1,
+) -> DocumentNode:
+    """Shared CODE_EXAMPLE constructor for the .py and .md chunkers.
+
+    The qname scheme (``{parent}.__example_{i}__``) and the
+    ``_content_hash`` recipe are IDENTITY-BEARING — ``chunks.content_hash``
+    (incremental re-index) and tree lookups key off them, so the two
+    chunkers must never drift; this helper is the single owner.
+    ``start_line``/``end_line`` default to the docstring-stub policy
+    (fence offsets inside a docstring don't map back to source lines);
+    the markdown chunker passes its real heading span.
+    """
+    title = f"example {index}"
+    qname = f"{parent_qname}.__example_{index}__"
+    return DocumentNode(
+        node_id=qname,
+        qualified_name=qname,
+        title=title,
+        kind=NodeKind.CODE_EXAMPLE,
+        source_path=rel,
+        start_line=start_line,
+        end_line=end_line,
+        text=code,
+        content_hash=_content_hash(code, NodeKind.CODE_EXAMPLE, title),
+        extra_metadata={"language": lang},
+        parent_id=parent_qname,
+    )
+
+
 __all__ = (
     "_FENCED_RE",
     "_HEADER_SCAN_LIMIT",
+    "_code_example_node",
     "_collapse_ws",
     "_content_hash",
     "_docstring_summary",

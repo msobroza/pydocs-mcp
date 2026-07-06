@@ -30,6 +30,7 @@ from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import _register_chunker
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _FENCED_RE,
+    _code_example_node,
     _content_hash,
     _docstring_summary,
     _fallback_module_node,
@@ -464,27 +465,16 @@ def _extract_code_examples(
     ``qualified_name`` / ``node_id``."""
     if not docstring:
         return []
-    examples: list[DocumentNode] = []
-    for i, match in enumerate(_FENCED_RE.finditer(docstring), start=1):
-        lang = (match.group("lang") or "").strip()
-        code = match.group("body")
-        qname = f"{parent_qname}.__example_{i}__"
-        examples.append(
-            DocumentNode(
-                node_id=qname,
-                qualified_name=qname,
-                title=f"example {i}",
-                kind=NodeKind.CODE_EXAMPLE,
-                source_path=rel,
-                start_line=1,
-                end_line=1,
-                text=code,
-                content_hash=_content_hash(code, NodeKind.CODE_EXAMPLE, f"example {i}"),
-                extra_metadata={"language": lang},
-                parent_id=parent_qname,
-            )
+    return [
+        _code_example_node(
+            match.group("body"),
+            (match.group("lang") or "").strip(),
+            i,
+            parent_qname,
+            rel,
         )
-    return examples
+        for i, match in enumerate(_FENCED_RE.finditer(docstring), start=1)
+    ]
 
 
 def _python_package_root(source_file: Path) -> Path:
