@@ -11,10 +11,10 @@ from pydocs_mcp.models import Package
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     _PACKAGE_COLUMNS,
-    _resolve_filter,
     _SqliteFilterTranslator,
 )
 from pydocs_mcp.storage.sqlite.row_mappers import _package_to_row, _row_to_package
+from pydocs_mcp.storage.sqlite.table_crud import _resolve_filter
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
 

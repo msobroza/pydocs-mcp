@@ -16,10 +16,10 @@ from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.fts_query import build_fts_match_query
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     CHUNK_COLUMNS,
-    _resolve_filter,
     _SqliteFilterTranslator,
 )
 from pydocs_mcp.storage.sqlite.row_mappers import row_to_chunk
+from pydocs_mcp.storage.sqlite.table_crud import _resolve_filter
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
 

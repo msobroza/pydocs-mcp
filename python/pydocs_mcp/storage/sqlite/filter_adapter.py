@@ -10,7 +10,6 @@ whitelist BEFORE interpolation, which is what makes the repositories'
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -21,9 +20,7 @@ from pydocs_mcp.filters import (
     FieldIn,
     FieldLike,
     Filter,
-    MetadataFilterFormat,
     Not,
-    format_registry,
 )
 
 # Safe-column whitelists per table (spec §5.3) — declared before the adapter
@@ -144,12 +141,3 @@ class SqliteFilterAdapter:
             )
         where, params = translator.adapt(tree)
         return where, tuple(params)
-
-
-def _resolve_filter(filter: Filter | Mapping | None):
-    """Accept a Mapping (parse via MultiFieldFormat) or a pre-parsed Filter tree."""
-    if filter is None:
-        return None
-    if isinstance(filter, Mapping):
-        return format_registry[MetadataFilterFormat.MULTIFIELD].parse(filter)
-    return filter

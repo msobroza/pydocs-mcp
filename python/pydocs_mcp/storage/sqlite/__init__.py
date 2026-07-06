@@ -31,7 +31,6 @@ from pydocs_mcp.storage.sqlite.filter_adapter import (
     _PACKAGE_COLUMNS,
     CHUNK_COLUMNS,
     SqliteFilterAdapter,
-    _resolve_filter,
     _SqliteFilterTranslator,
 )
 from pydocs_mcp.storage.sqlite.fts_store import (
@@ -56,6 +55,7 @@ from pydocs_mcp.storage.sqlite.row_mappers import (
     _row_to_package,
     row_to_chunk,
 )
+from pydocs_mcp.storage.sqlite.table_crud import _resolve_filter
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire, _sqlite_transaction
 from pydocs_mcp.storage.sqlite.uow import SqliteUnitOfWork
 
