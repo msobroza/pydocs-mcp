@@ -3,7 +3,7 @@ produce real dense hits, not a silent BM25 fallback.
 
 This is the keystone end-to-end guard for the unified SearchBackend seam.
 On a pre-fix tree (``build_retrieval_context`` sourcing the dense leg from
-the FTS-only ``SqliteVectorStore`` instead of ``backend.dense()``) the read
+the FTS-only ``SqliteLexicalStore`` instead of ``backend.dense()``) the read
 half returns zero hits / the wrong ``retriever_name`` and this test fails.
 
 Both halves of the contract run through the SAME ``SearchBackend`` so the

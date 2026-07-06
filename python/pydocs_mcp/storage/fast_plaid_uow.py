@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
-from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
+from pydocs_mcp.storage.sidecar_uow import require_entered, rollback_safely
 from pydocs_mcp.storage.sqlite import SqliteChunkMultiVectorRepository
 
 logger = logging.getLogger(__name__)
@@ -149,14 +149,11 @@ class FastPlaidUnitOfWork:
         # :class:`SqliteUnitOfWork` — and a hook the future
         # ``add_vectors`` / ``remove_vectors`` tasks can extend to undo
         # writes if needed.
+        # Trigger condition deliberately differs from TurboQuant's (dirty
+        # alone): fast_plaid persists eagerly, so a clean exit needs no
+        # undo — see storage/sidecar_uow.py.
         if self._dirty and exc is not None:
-            try:
-                await self.rollback()
-            except Exception as rb:  # pragma: no cover - best-effort path
-                # Mirror ``TurboQuantUnitOfWork.__aexit__``: log rollback
-                # failures at WARNING+ rather than masking the original
-                # exception that triggered ``__aexit__``.
-                logger.warning("FastPlaid rollback in __aexit__ failed: %r", rb)
+            await rollback_safely(self, logger, "FastPlaid")
         self._entered = False
         self._handle = None
 
@@ -215,10 +212,10 @@ class FastPlaidUnitOfWork:
         the mapping stable across reindexes — never reused, never
         renumbered — which is what makes ``remove_vectors`` safe.
         """
-        if not self._entered or self._handle is None:
-            raise UnitOfWorkNotEnteredError(
-                "FastPlaidUnitOfWork.add_vectors called outside async with",
-            )
+        handle = require_entered(
+            self._handle if self._entered else None,
+            "FastPlaidUnitOfWork.add_vectors",
+        )
         if not ids:
             return
         # Lazy import torch — keeps the ``[late-interaction]`` extra gated
@@ -239,7 +236,7 @@ class FastPlaidUnitOfWork:
         # the first batch, ``.update`` appends to an existing one. Picking
         # the wrong one raises — branch on offset.
         await asyncio.to_thread(
-            self._handle.update if offset > 0 else self._handle.create,
+            handle.update if offset > 0 else handle.create,
             doc_tensors,
         )
         packages = await mapping.packages_for_chunks(ids)
@@ -259,10 +256,10 @@ class FastPlaidUnitOfWork:
         just stop matching at query time. Mapping-row removal is what
         makes the chunks invisible from the SQL side.
         """
-        if not self._entered or self._handle is None:
-            raise UnitOfWorkNotEnteredError(
-                "FastPlaidUnitOfWork.remove_vectors called outside async with",
-            )
+        handle = require_entered(
+            self._handle if self._entered else None,
+            "FastPlaidUnitOfWork.remove_vectors",
+        )
         if not ids:
             return
         # The repository SELECTs the plaid_doc_ids and DELETEs the mapping
@@ -271,7 +268,7 @@ class FastPlaidUnitOfWork:
         # existing plaid_doc_id assignments stay stable.
         plaid_ids = await self._mapping.delete_by_chunk_ids(ids)
         if plaid_ids:
-            await asyncio.to_thread(self._handle.delete, subset=list(plaid_ids))
+            await asyncio.to_thread(handle.delete, subset=list(plaid_ids))
         self._dirty = True
 
     async def clear_all(self) -> None:
@@ -280,13 +277,13 @@ class FastPlaidUnitOfWork:
         After this returns, the late-interaction sidecar holds no live
         vectors and ``chunk_multi_vector_ids`` is empty.
         """
-        if not self._entered or self._handle is None:
-            raise UnitOfWorkNotEnteredError(
-                "FastPlaidUnitOfWork.clear_all called outside async with",
-            )
+        handle = require_entered(
+            self._handle if self._entered else None,
+            "FastPlaidUnitOfWork.clear_all",
+        )
         plaid_ids = await self._mapping.clear()
         if plaid_ids:
-            await asyncio.to_thread(self._handle.delete, subset=list(plaid_ids))
+            await asyncio.to_thread(handle.delete, subset=list(plaid_ids))
         self._dirty = True
 
     async def score(
@@ -306,10 +303,10 @@ class FastPlaidUnitOfWork:
         search, then reverse-maps results to ``(chunk_id, score)`` pairs
         so callers stay on the SQLite id space.
         """
-        if not self._entered or self._handle is None:
-            raise UnitOfWorkNotEnteredError(
-                "FastPlaidUnitOfWork.score called outside async with",
-            )
+        handle = require_entered(
+            self._handle if self._entered else None,
+            "FastPlaidUnitOfWork.score",
+        )
         if not subset_chunk_ids:
             return ()
         # Lazy import torch — keeps the optional-extra gated to the read path.
@@ -325,7 +322,7 @@ class FastPlaidUnitOfWork:
         q_tensor = torch.from_numpy(q_stack).unsqueeze(0)
         plaid_ids = list(mapping.keys())
         raw = await asyncio.to_thread(
-            self._handle.search,
+            handle.search,
             queries_embeddings=q_tensor,
             top_k=top_k,
             subset=plaid_ids,

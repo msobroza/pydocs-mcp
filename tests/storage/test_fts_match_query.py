@@ -22,7 +22,7 @@ from pydocs_mcp.db import open_index_database
 from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import Chunk, ChunkFilterField
 from pydocs_mcp.storage.fts_query import build_fts_match_query
-from pydocs_mcp.storage.sqlite import SqliteChunkRepository, SqliteVectorStore
+from pydocs_mcp.storage.sqlite import SqliteChunkRepository, SqliteLexicalStore
 
 
 def test_single_source_of_truth() -> None:
@@ -108,7 +108,7 @@ async def test_text_search_does_not_crash_on_stray_operator(populated_db: Path) 
     a stray operator word must run against FTS5 ``MATCH`` WITHOUT raising
     ``sqlite3.OperationalError`` (the reported crash)."""
     provider = build_connection_provider(populated_db)
-    store = SqliteVectorStore(provider=provider)
+    store = SqliteLexicalStore(provider=provider)
     # Must not raise sqlite3.OperationalError: no such column: Problem
     results = await store.text_search("Problem: foo OR bar", limit=10)
     assert isinstance(results, tuple)
@@ -120,7 +120,7 @@ async def test_text_search_does_not_crash_on_quotes_and_brackets(populated_db: P
     must run against FTS5 ``MATCH`` WITHOUT raising. The embedded-quote
     escaping keeps the quoting balanced so ``[`` stays a literal term."""
     provider = build_connection_provider(populated_db)
-    store = SqliteVectorStore(provider=provider)
+    store = SqliteLexicalStore(provider=provider)
     # Previously raised sqlite3.OperationalError: fts5: syntax error near "["
     results = await store.text_search('how to "shift" an array x = [1, 2, 3]', limit=10)
     assert isinstance(results, tuple)
