@@ -214,11 +214,15 @@ class MultiProjectLookup:
                 return await svc.lookup.lookup(payload)
             except NotFoundError:
                 continue
-        # Every project missed the target. The error text is what the MCP error
-        # path surfaces, so it carries a search pointer (spec §D1 error
-        # contract) to steer the agent to the recovery step — resolved by the
-        # ResponseEnvelope on the CLI/MCP surfaces, kept raw here for the
-        # server-side JSON-RPC error rendering.
+        # Every project missed the target. The error text is what surfaces to
+        # the agent, so it carries a search pointer (spec §D1 error contract) to
+        # steer it to the recovery step. The token stays RAW in the surfaced
+        # message: a raised error unwinds past ResponseEnvelope.wrap before its
+        # resolve_pointers step runs (envelope.py resolves only the value
+        # returned by produce(), never an exception), so the literal
+        # "[[next:search:...]]" is what str(exc) yields on both surfaces — MCP
+        # (server.py re-raises; FastMCP serializes str(exc)) and CLI (__main__
+        # prints "Error: {exc}").
         raise NotFoundError(
             f"'{payload.target}' not found in any loaded project. "
             f"{pointer_token('search', payload.target.rsplit('.', 1)[-1])}"
