@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -37,11 +38,35 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _relpath,
     _slice_lines,
 )
+from pydocs_mcp.extraction.strategies.references import (
+    canonical_dotted,
+    capture_calls,
+    capture_imports,
+    capture_inherits,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 
 log = logging.getLogger("pydocs-mcp")
+
+
+def _capture_safely(
+    capture_fn: Callable[..., None],
+    label: str,
+    **kwargs: object,
+) -> None:
+    """Run a reference-capture function, swallowing any failure at WARNING.
+
+    Single owner of the swallow-and-warn policy: a broken file must
+    degrade to 'no references captured', never abort indexing.
+    ``capture_fn.__name__`` keeps the per-capture log messages identical
+    to the pre-hoist per-site copies.
+    """
+    try:
+        capture_fn(**kwargs)
+    except Exception as exc:
+        log.warning("%s failed on %s: %s", capture_fn.__name__, label, exc)
 
 
 @_register_chunker(".py")
@@ -61,23 +86,14 @@ class AstPythonChunker:
             return _fallback_module_node(module, path, content, root)
         # Module-level capture: imports + alias table for downstream resolver.
         if ref_collector is not None:
-            try:
-                from pydocs_mcp.extraction.strategies.references import (
-                    capture_imports,
-                )
-
-                capture_imports(
-                    tree.body,
-                    from_package=package,
-                    module_qname=module,
-                    collector=ref_collector,
-                )
-            except Exception as exc:
-                log.warning(
-                    "capture_imports failed on %s: %s",
-                    path,
-                    exc,
-                )
+            _capture_safely(
+                capture_imports,
+                path,
+                body=tree.body,
+                from_package=package,
+                module_qname=module,
+                collector=ref_collector,
+            )
         return _module_node_from_ast(
             tree,
             module,
@@ -277,8 +293,6 @@ def _decorator_labels(decorators: list[ast.expr]) -> tuple[str, ...]:
     targets, calls with args) falls back to a bounded ``ast.unparse``, which
     is total over valid parsed expressions.
     """
-    from pydocs_mcp.extraction.strategies.references import canonical_dotted
-
     labels: list[str] = []
     for dec in decorators:
         # Fast-path bare dotted names (``@property``, ``@app.route`` with no
@@ -309,19 +323,14 @@ def _function_node(
     under the module)."""
     qname = f"{parent_id}.{stmt.name}"
     if ref_collector is not None:
-        try:
-            from pydocs_mcp.extraction.strategies.references import (
-                capture_calls,
-            )
-
-            capture_calls(
-                stmt.body,
-                from_package=package,
-                from_node_id=qname,
-                collector=ref_collector,
-            )
-        except Exception as exc:
-            log.warning("capture_calls failed on %s: %s", qname, exc)
+        _capture_safely(
+            capture_calls,
+            qname,
+            body=stmt.body,
+            from_package=package,
+            from_node_id=qname,
+            collector=ref_collector,
+        )
     doc = ast.get_docstring(stmt) or ""
     start = stmt.lineno
     end = stmt.end_lineno or start
@@ -390,19 +399,14 @@ def _class_node(
     the line before the first method (spec §4.1.1 direct-text rule)."""
     qname = f"{module}.{stmt.name}"
     if ref_collector is not None:
-        try:
-            from pydocs_mcp.extraction.strategies.references import (
-                capture_inherits,
-            )
-
-            capture_inherits(
-                list(stmt.bases),
-                from_package=package,
-                class_qname=qname,
-                collector=ref_collector,
-            )
-        except Exception as exc:
-            log.warning("capture_inherits failed on %s: %s", qname, exc)
+        _capture_safely(
+            capture_inherits,
+            qname,
+            bases=list(stmt.bases),
+            from_package=package,
+            class_qname=qname,
+            collector=ref_collector,
+        )
     doc = ast.get_docstring(stmt) or ""
     method_stmts = [s for s in stmt.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
     start = stmt.lineno
@@ -423,12 +427,7 @@ def _class_node(
         for m in method_stmts
     ]
     doc_examples = _extract_code_examples(doc, qname, rel)
-    # Use canonical_dotted (version-stable across CPython releases) instead of
-    # ast.unparse — consistent with the rest of the reference-graph machinery
-    # (capture_inherits in references.py). Non-dotted shapes (Subscript, Call,
-    # etc.) become "<complex>" rather than the variable ast.unparse output.
-    from pydocs_mcp.extraction.strategies.references import canonical_dotted
-
+    # Non-dotted shapes (Subscript, Call, etc.) become "<complex>".
     inherits = tuple(canonical_dotted(b) or "<complex>" for b in stmt.bases)
     return DocumentNode(
         node_id=qname,
