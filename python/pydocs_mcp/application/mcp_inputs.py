@@ -243,3 +243,118 @@ class LookupInput(BaseModel):
                 f"limit must be <= {_LIMIT_MAX} (configured via reference_graph.output.max_limit)"
             )
         return v
+
+
+# ── Task-shaped tool inputs (spec §D1) ──────────────────────────────────
+#
+# The six task-shaped tools reuse the same YAML-wired limit slots and the
+# same ``_PACKAGE_RE`` / ``_TARGET_RE`` boundary validators as the two-tool
+# ``SearchInput`` / ``LookupInput`` surface above. ``project`` carries the
+# identical multi-repo corpus-selector semantics on every model that has it.
+
+
+class OverviewInput(BaseModel):
+    """get_overview — orientation card scope (spec §D1/§D17)."""
+
+    package: str = ""
+    project: str = ""
+
+    @field_validator("package")
+    @classmethod
+    def _check_package(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("package must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ or be '__project__'")
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+class SymbolInput(BaseModel):
+    """get_symbol — known dotted path (spec §D1). depth='source' is the §D7 recovery contract."""
+
+    target: str = Field(min_length=1)
+    depth: Literal["summary", "tree", "source"] = "summary"
+    project: str = ""
+
+    @field_validator("target")
+    @classmethod
+    def _check_target(cls, v: str) -> str:
+        if not _TARGET_RE.match(v):
+            raise ValueError("target must be a dotted identifier like 'pkg.mod.Class.method'")
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+class ContextInput(BaseModel):
+    """get_context — batched targets under one shared budget (spec §D1)."""
+
+    targets: list[str] = Field(min_length=1, max_length=20)
+    project: str = ""
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+class ReferencesInput(BaseModel):
+    """get_references — graph traversal incl. ranked transitive impact (spec §D1)."""
+
+    target: str = Field(min_length=1)
+    direction: Literal["callers", "callees", "inherits", "impact"] = "callers"
+    project: str = ""
+    limit: int = Field(default_factory=lambda: _LIMIT_DEFAULT, ge=1)
+
+    @field_validator("target")
+    @classmethod
+    def _check_target(cls, v: str) -> str:
+        if not _TARGET_RE.match(v):
+            raise ValueError("target must be a dotted identifier like 'pkg.mod.Class.method'")
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+    @field_validator("limit")
+    @classmethod
+    def _check_limit_max(cls, v: int) -> int:
+        # Read ``_LIMIT_MAX`` at call time so YAML reloads (or test
+        # overrides) take effect on every ``ReferencesInput(...)`` rather
+        # than being frozen at class-definition time — mirrors LookupInput.
+        if v > _LIMIT_MAX:
+            raise ValueError(
+                f"limit must be <= {_LIMIT_MAX} (configured via reference_graph.output.max_limit)"
+            )
+        return v
+
+
+class WhyInput(BaseModel):
+    """get_why — decision search / per-target governing decisions / dashboard (spec §D11)."""
+
+    query: str = ""
+    targets: list[str] | None = Field(None, min_length=1, max_length=20)
+    project: str = ""
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
