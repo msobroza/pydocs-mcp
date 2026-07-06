@@ -36,9 +36,18 @@ def test_skeleton_gives_full_bodies_to_most_central_only() -> None:
 
 
 def test_in_degree_breaks_ties_when_pagerank_absent() -> None:
+    # body_ratio=0.2 caps max_bodies at 1 (ceil(0.2*3)), so exactly ONE node
+    # earns a full body — the tie-break between a (in_degree=9) and b
+    # (in_degree=1) decides which. Asserting a's body renders before b's block
+    # (and b stays signature-only) tests the in_degree fallback path in
+    # _rank_context_nodes; flipping the degrees flips which node gets the body,
+    # so this assertion actually exercises the ranking rather than fixed lead
+    # text. (The bare `out.index("a")` anchored on the 'a' in "max depth" and
+    # was vacuous.)
     nodes = (_node("seed", 0), _node("a", 1, in_degree=9), _node("b", 1, in_degree=1))
-    out = format_context(nodes, target="seed", token_budget=200, render="skeleton", body_ratio=0.4)
-    assert out.index("a") < out.index("b")
+    out = format_context(nodes, target="seed", token_budget=200, render="skeleton", body_ratio=0.2)
+    assert "return 1" in out.split("## `b`")[0]  # a's body rendered before b's block
+    assert "return 1" not in out.split("## `b`")[1]  # b: signature-only, no body
 
 
 def test_render_full_preserves_hop_graded_bytes() -> None:
