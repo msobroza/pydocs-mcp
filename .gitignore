@@ -44,8 +44,13 @@ docs/_build/
 # Sphinx docs build output
 documentation/_build/
 
-# Claude Code — local settings, worktrees, session state
-.claude/
+# Claude Code — local settings, worktrees, session state stay ignored, but
+# project skills are tracked: they are agent-facing docs that ship with the
+# repo (like CLAUDE.md), so the skills directory is carved out of the ignore.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/comparing-retrieval-methods/
 
 # Secrets / local environment (e.g. OPENAI_API_KEY for tree-reasoning runs)
 .env
