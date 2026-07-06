@@ -18,10 +18,11 @@ from any extraction noise.
 
 ``index()`` IGNORES ``corpus_dir``: DS-1000's ``corpus_source`` is
 ``/dev/null`` (the rows come from ``rows_source`` / HF, never from disk),
-and the runner ``rmtree``s ``/dev/null`` harmlessly. Otherwise it
-replicates the parent's tmp-SQLite + ``uow_factory`` + FTS-rebuild +
-pipeline scaffolding verbatim so the inherited ``search()`` /
-``teardown()`` work unchanged.
+and the runner ``rmtree``s ``/dev/null`` harmlessly. Otherwise it reuses
+the parent's ``_create_tmp_db`` / ``_build_write_factory`` /
+``_rebuild_fts`` / ``_build_search_pipeline`` hooks, overriding only
+``_populate``, so the inherited ``search()`` / ``teardown()`` work
+unchanged.
 
 ``rows_source`` is INJECTABLE so hermetic tests pass 5 canned rows with NO
 ``datasets`` import and NO network; real runs leave it ``None`` and the
@@ -32,7 +33,6 @@ DEFERRED inside ``index()`` so this module imports without either.
 from __future__ import annotations
 
 import os
-import tempfile
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +44,7 @@ from .pydocs import PydocsMcpSystem
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.strategies.embedders import Embedder
     from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.protocols import UnitOfWork
 
     from ..gold_resolver import GoldResolver
 
@@ -102,14 +103,33 @@ class PydocsOracleSystem(PydocsMcpSystem):
     embedder: Embedder | None = field(default=None)
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:
-        # WHY: imports deferred so constructing the system (which the
-        # registry does on a bare ``build()``) doesn't drag in the whole
-        # ``pydocs_mcp.retrieval`` chain — and so the module imports even
-        # without ``pydocs_mcp`` / ``datasets`` present.
+        # WHY: ``corpus_dir`` is deliberately UNUSED — the oracle's chunk
+        # source is the library-documentation rows, not files on disk
+        # (DS-1000 hands a ``/dev/null`` corpus here). The oracle also
+        # deliberately BYPASSES ``_bench_cache``, unlike the parent: its
+        # rows come from HF / injected sources, so a corpus-dir cache key
+        # could not distinguish two oracle corpora.
+        del corpus_dir
+        await self.teardown()
+        self._db_path = self._create_tmp_db()
+        uow_factory = self._build_write_factory(config)
+        await self._populate(Path(os.devnull), config, uow_factory)
+        await self._rebuild_fts()
+        self._pipeline = self._build_search_pipeline(config)
+
+    async def _populate(
+        self,
+        corpus_dir: Path,
+        config: AppConfig,
+        uow_factory: Callable[[], UnitOfWork],
+    ) -> None:
+        """Bypass extraction: write ``library-documentation`` rows straight
+        into the store behind ``uow_factory`` — one chunk per row, plus the
+        dense vectors ``EmbedChunksStage`` would have produced."""
+        # WHY: imports deferred so the module imports without ``pydocs_mcp``
+        # / ``datasets`` present (hermetic construction via the registry).
         from dataclasses import replace
 
-        from pydocs_mcp.db import open_index_database
-        from pydocs_mcp.storage.factories import build_connection_provider
         from pydocs_mcp.deps import normalize_package_name
         from pydocs_mcp.extraction.strategies.embedders import build_embedder
         from pydocs_mcp.models import (
@@ -119,42 +139,12 @@ class PydocsOracleSystem(PydocsMcpSystem):
             Package,
             PackageOrigin,
         )
-        from pydocs_mcp.retrieval.config import build_chunk_pipeline_from_config
-        from pydocs_mcp.retrieval.factories import build_retrieval_context
-        from pydocs_mcp.storage.factories import build_composite_uow_factory
-        from pydocs_mcp.storage.search_backend import build_search_backend
-        from pydocs_mcp.storage.sqlite import SqliteChunkRepository
 
-        # WHY: ``corpus_dir`` is deliberately UNUSED — the oracle's chunk
-        # source is the library-documentation rows, not files on disk.
-        # DS-1000 hands a ``/dev/null`` corpus here.
-        del corpus_dir
+        del corpus_dir  # rows come from rows_source / HF, never from disk
 
-        # WHY: a second ``index()`` without an intervening ``teardown()``
-        # would orphan the prior tmp SQLite once ``_db_path`` is overwritten.
-        # Teardown is idempotent and a no-op on first call.
-        await self.teardown()
-
-        # WHY: mirror the parent — ``mkstemp`` returns an open fd we close
-        # immediately because ``open_index_database`` reopens the path. We
-        # own the lifecycle and remove it in ``teardown``.
-        fd, name = tempfile.mkstemp(suffix=".sqlite")
-        os.close(fd)
-        self._db_path = Path(name)
-        open_index_database(self._db_path).close()
-
-        # WHY: route through the SAME composite write path production uses
-        # so ``uow.vectors`` is a real TurboQuant store (not a silent
-        # ``NullVectorStore``). ``build_search_backend(...).write_uow_children()``
-        # yields the SQLite + TurboQuant child UoW factories; without this the
-        # dense ``.tq`` sidecar is never written and every dense / hybrid config
-        # over the oracle eval silently degrades to BM25. Mirrors
-        # ``PydocsMcpSystem._do_index``.
-        backend = build_search_backend(config, self._db_path)
-        uow_factory = build_composite_uow_factory(backend.write_uow_children())
-
-        # Resolve the embedder once. The injected fake wins (hermetic tests);
-        # real runs build the configured embedder, matching production wiring.
+        # Resolve the embedder once. The injected fake wins (hermetic
+        # tests); real runs build the configured embedder, matching
+        # production wiring.
         embedder = self.embedder or build_embedder(config.embedding)
 
         rows = self._load_rows()
@@ -243,18 +233,6 @@ class PydocsOracleSystem(PydocsMcpSystem):
                 await uow.vectors.add_vectors(ids, embs)
 
             await uow.commit()
-
-        # WHY: bulk-insert path defers the FTS5 content-backed rebuild —
-        # without this call ``chunks_fts MATCH ?`` returns zero rows even
-        # though ``chunks`` is populated (exactly as ``PydocsMcpSystem.index``
-        # does at the end of every index run).
-        chunk_repo = SqliteChunkRepository(
-            provider=build_connection_provider(self._db_path),
-        )
-        await chunk_repo.rebuild_index()
-
-        context = build_retrieval_context(self._db_path, config)
-        self._pipeline = build_chunk_pipeline_from_config(config, context)
 
     def _load_rows(self) -> list[Mapping]:
         """Materialize the documentation rows.
