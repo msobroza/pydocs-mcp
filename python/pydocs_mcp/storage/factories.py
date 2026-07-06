@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from pydocs_mcp.application.freshness import IndexFreshnessProbe, resolve_git_head
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.models import Chunk
@@ -28,7 +29,11 @@ from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
-from pydocs_mcp.storage.index_metadata import IndexMetadata, write_index_metadata
+from pydocs_mcp.storage.index_metadata import (
+    IndexMetadata,
+    read_index_metadata,
+    write_index_metadata,
+)
 from pydocs_mcp.storage.sqlite import (
     CHUNK_COLUMNS,
     SqliteChunkRepository,
@@ -477,4 +482,37 @@ def build_project_indexer(
         check_integrity=_check_integrity,
         rebuild_fts=_rebuild_fts,
         stamp_metadata=_stamp_metadata,
+    )
+
+
+def build_freshness_probe(
+    *,
+    db_path: Path,
+    project_root: Path,
+    enabled: bool,
+    ttl_seconds: float,
+) -> IndexFreshnessProbe:
+    """Freshness probe for one loaded db — sync closures, threaded by the probe."""
+
+    def _read() -> IndexMetadata | None:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            return read_index_metadata(conn)
+        finally:
+            conn.close()
+
+    def _count() -> int:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            return conn.execute("SELECT COUNT(*) FROM packages").fetchone()[0]
+        finally:
+            conn.close()
+
+    return IndexFreshnessProbe(
+        enabled=enabled,
+        ttl_seconds=ttl_seconds,
+        read_metadata=_read,
+        resolve_live_head=lambda: resolve_git_head(project_root),
+        count_packages=_count,
     )

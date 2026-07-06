@@ -124,6 +124,9 @@ async def test_routers_search_over_empty_workspace_returns_no_matches(tmp_path: 
         dim=cfg.embedding.dim,
     )
     search_router, _l, _s = build_routers(cfg, workspace=tmp_path)
-    # Empty (schema-only) dbs -> union across both -> nothing to return.
+    # Empty (schema-only) dbs -> union across both -> nothing to return. The
+    # envelope wraps the body with a freshness header (probe reads the FIRST
+    # project); the body itself is still the empty-state message.
     out = await search_router.search(SearchInput(query="anything"))
-    assert out == "No matches found."
+    assert out.startswith("[index: ")
+    assert "No matches found." in out
