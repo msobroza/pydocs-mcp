@@ -456,14 +456,13 @@ async def _run_indexing(args: argparse.Namespace) -> None:
 
     # Detect a model rename in YAML — packages tagged with the old
     # ``embedding_model`` carry vectors that the new model cannot match
-    # at query time (different vector space). Clearing ``content_hash``
-    # routes them through the existing hash-skip path so the next sweep
-    # re-extracts + re-embeds them under the current model. Skipped
-    # under ``--force``: that path already wipes the cache wholesale.
+    # at query time (different vector space). ``invalidate_stale_embeddings``
+    # clears their ``content_hash`` (find + clear in ONE transaction) so
+    # the next sweep re-extracts + re-embeds them under the current
+    # model via the existing hash-skip path. Skipped under ``--force``:
+    # that path already wipes the cache wholesale.
     if not args.force:
-        from dataclasses import replace as dc_replace
-
-        stale_pkg_names = await indexing_service.find_stale_packages(
+        stale_pkg_names = await indexing_service.invalidate_stale_embeddings(
             current_model=config.embedding.model_name,
         )
         if stale_pkg_names:
@@ -472,18 +471,6 @@ async def _run_indexing(args: argparse.Namespace) -> None:
                 len(stale_pkg_names),
                 ", ".join(stale_pkg_names),
             )
-            async with uow_factory() as uow:
-                for name in stale_pkg_names:
-                    pkg = await uow.packages.get(name)
-                    if pkg is not None:
-                        # Empty content_hash will not equal the freshly-
-                        # extracted package's real hash, so the skip check
-                        # in ProjectIndexer (existing.content_hash ==
-                        # pkg.content_hash) falls through to a full reindex.
-                        await uow.packages.upsert(
-                            dc_replace(pkg, content_hash=""),
-                        )
-                await uow.commit()
 
     # Construct the embedder once at startup so the rest of the pipeline
     # can share it. Failing here (e.g., OPENAI_API_KEY missing) surfaces

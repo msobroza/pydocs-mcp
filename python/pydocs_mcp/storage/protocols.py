@@ -496,7 +496,7 @@ class Embedder(Protocol):
     # Identifier string the embedder embedded with — written to
     # ``Package.embedding_model`` by ``EmbedChunksStage`` so a YAML
     # ``embedding.model_name`` swap triggers the re-embed sweep in
-    # :func:`find_packages_with_stale_embeddings`.
+    # :meth:`IndexingService.invalidate_stale_embeddings`.
     model_name: str = ""
 
     async def embed_query(self, text: str) -> Embedding: ...

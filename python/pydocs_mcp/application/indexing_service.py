@@ -565,23 +565,3 @@ def _add_qnames(node: DocumentNode, out: set[str]) -> None:
     out.add(node.qualified_name)
     for child in node.children:
         _add_qnames(child, out)
-
-
-async def find_packages_with_stale_embeddings(
-    *,
-    uow_factory: Callable[[], UnitOfWork],
-    current_model: str,
-) -> list[str]:
-    """Thin backwards-compat wrapper around :meth:`IndexingService.find_stale_packages`.
-
-    Task 7 (I17): the canonical staleness check now lives as a method on
-    :class:`IndexingService`, making the ``uow_factory`` dependency
-    explicit on the service rather than implicit on this module-level
-    callable. This wrapper exists so legacy callers that hold only a
-    ``uow_factory`` (and not yet an :class:`IndexingService`) continue to
-    work without churning callsites — but new code should use
-    ``IndexingService(uow_factory=...).find_stale_packages(...)``.
-    """
-    return await IndexingService(uow_factory=uow_factory).find_stale_packages(
-        current_model=current_model,
-    )

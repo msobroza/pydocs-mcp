@@ -201,8 +201,8 @@ def test_embed_chunks_rejects_nonpositive_batch_size() -> None:
 @pytest.mark.asyncio
 async def test_embed_chunks_updates_package_embedding_model() -> None:
     """After embedding, ``state.package.embedding_model`` reflects the
-    embedder's identity so ``find_packages_with_stale_embeddings`` can
-    detect a YAML ``embedding.model_name`` swap and trigger re-embed
+    embedder's identity so ``IndexingService.invalidate_stale_embeddings``
+    can detect a YAML ``embedding.model_name`` swap and trigger re-embed
     (the production round-trip needed for AC-26)."""
     embedder = MockEmbedder(dim=4, model_name="mock-v1")
     pkg = Package(
