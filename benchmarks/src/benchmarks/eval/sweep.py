@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 # populated before any sweep runs — and, transitively, before ``runner.py``
 # renders ``--help`` (it imports this module at its top). AC3 (help text
 # lists registered names) depends on this side effect.
+from . import _bench_cache
 from . import datasets as _datasets  # noqa: F401 -- registry side-effects
 from . import metrics as _metrics_pkg  # noqa: F401 -- registry side-effects
 from . import systems as _systems  # noqa: F401 -- registry side-effects
@@ -377,6 +378,21 @@ def _validate_config_paths(config_paths: tuple[Path, ...]) -> None:
         )
 
 
+def _validate_corpus_dir(corpus_dir: Path | None) -> None:
+    """Fail loud on a bad corpus override BEFORE any leg runs.
+
+    A typo'd corpus dir would otherwise index an empty directory, scoring
+    ~0 across the sweep with no error — silently misleading. Lives here
+    (not argparse) so programmatic callers get the same fast-fail as the
+    CLI; the ``parser.error`` duplicate in ``main()`` is gone.
+    """
+    if corpus_dir is not None and not corpus_dir.is_dir():
+        raise NotADirectoryError(
+            f"corpus_dir is not an existing directory: {corpus_dir}. Pass an "
+            "existing directory (the sweep never creates or deletes it)."
+        )
+
+
 def _build_trackers(
     tracker_names: tuple[str, ...],
     tracker_kwargs: Mapping[str, Mapping[str, object]] | None,
@@ -397,6 +413,7 @@ async def run_sweep_detailed(
     limit: int | None = None,
     corpus_dir: Path | None = None,
     gpu: bool = False,
+    bench_cache: bool | None = None,
 ) -> SweepOutcome:
     """Run a (system × config) sweep, returning per-task detail per leg.
 
@@ -406,6 +423,14 @@ async def run_sweep_detailed(
     tracker JSONL.
     """
     _validate_config_paths(config_paths)
+    _validate_corpus_dir(corpus_dir)
+    # WHY the None default: leave the ``_bench_cache`` process-global
+    # untouched for existing direct callers and the toggle-and-restore test
+    # fixtures. The canonical enabled-default lives in
+    # ``_bench_cache._ENABLED`` — do NOT restate it here (single source of
+    # truth).
+    if bench_cache is not None:
+        _bench_cache.set_enabled(bench_cache)
 
     # WHY: build the dataset once — the iterator is consumed by every
     # (system, config) leg. ``async for`` triggers a fresh iteration each
@@ -452,6 +477,7 @@ async def run_sweep(
     limit: int | None = None,
     corpus_dir: Path | None = None,
     gpu: bool = False,
+    bench_cache: bool | None = None,
 ) -> tuple[SweepResults, int]:
     """Run a (system × config) sweep over a dataset.
 
@@ -487,6 +513,9 @@ async def run_sweep(
             ``AppConfig.with_device(gpu=True)`` for every leg (device is
             excluded from the index cache key, so toggling it doesn't force a
             re-index). ``False`` (default) keeps inference on CPU.
+        bench_cache: ``None`` (default) leaves the process-global
+            index-cache toggle untouched; a bool sets it for this process
+            before any leg runs.
 
     Returns:
         ``(sweep_results, tasks_ran)`` where ``sweep_results`` is
@@ -506,6 +535,7 @@ async def run_sweep(
         limit=limit,
         corpus_dir=corpus_dir,
         gpu=gpu,
+        bench_cache=bench_cache,
     )
     return outcome.results, outcome.tasks_ran
 

@@ -113,32 +113,22 @@ def test_corpus_dir_resolved_to_absolute_path(tmp_path: Path) -> None:
     assert args.corpus_dir.is_absolute()
 
 
-def test_corpus_dir_missing_dir_fast_fails(tmp_path: Path) -> None:
-    """A non-existent ``--corpus-dir`` makes ``main()`` ``parser.error`` out
-    (SystemExit) BEFORE launching the sweep — a typo'd path can't silently
-    index an empty dir and score ~0. Driven through ``main()`` with a patched
-    ``argv`` so no real sweep runs."""
-    import sys
-
-    from benchmarks.eval import runner
-
+async def test_corpus_dir_missing_dir_fast_fails(tmp_path: Path) -> None:
+    """A non-existent ``corpus_dir`` makes ``run_sweep`` raise
+    ``NotADirectoryError`` BEFORE launching any leg — the check lives in
+    ONE place (the sweep) so programmatic callers get the same fast-fail
+    the CLI used to implement separately via ``parser.error``."""
+    overlay = tmp_path / "baseline.yaml"
+    overlay.write_text("")
     bad_dir = tmp_path / "does-not-exist"
-    argv = [
-        "prog",
-        "--configs",
-        "x.yaml",
-        "--corpus-dir",
-        str(bad_dir),
-    ]
-    orig_argv = sys.argv
-    sys.argv = argv
-    try:
-        with pytest.raises(SystemExit) as excinfo:
-            runner.main()
-    finally:
-        sys.argv = orig_argv
-    # argparse's parser.error() exits with status 2.
-    assert excinfo.value.code == 2
+    with pytest.raises(NotADirectoryError, match="does-not-exist"):
+        await run_sweep(
+            systems=(),
+            config_paths=(overlay,),
+            dataset_name="ds1000",
+            dataset_kwargs={"fixture_path": _FIXTURE},
+            corpus_dir=bad_dir,
+        )
 
 
 # ── --corpus-dir override + rmtree guard ────────────────────────────────────

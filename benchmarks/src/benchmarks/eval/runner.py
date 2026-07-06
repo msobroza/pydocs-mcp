@@ -51,10 +51,6 @@ def _parse_csv(value: str) -> tuple[str, ...]:
     return tuple(s.strip() for s in value.split(",") if s.strip())
 
 
-def _apply_bench_cache_flag(value: str) -> None:
-    _bench_cache.set_enabled(value == "on")
-
-
 def _maybe_cleanup_bench_cache(*, enabled: bool) -> None:
     if enabled:
         _bench_cache.evict()
@@ -217,49 +213,68 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_dataset_kwargs(
+    *,
+    fixture_path: Path | None = None,
+    library_filter: tuple[str, ...] | None = None,
+    full_prompt: bool = False,
+    split: str = "all",
+) -> dict[str, object]:
+    """Assemble ``dataset_kwargs`` for ``run_sweep`` with the gating every
+    caller must otherwise reproduce by hand: each kwarg is added ONLY when
+    non-default, because datasets that don't accept it (RepoQA) crash on
+    unknown constructor kwargs. Exported so programmatic callers encode
+    the trap exactly once.
+
+    Example::
+
+        run_sweep(..., dataset_kwargs=build_dataset_kwargs(split="dev"))
+    """
+    dataset_kwargs: dict[str, object] = {}
+    if fixture_path is not None:
+        dataset_kwargs["fixture_path"] = fixture_path
+    # WHY: only add ``library_filter`` when the flag is set so the kwarg is
+    # absent for datasets that don't accept it (RepoQA). An empty/omitted
+    # flag must not pass ``library_filter=()`` — that would still be a kwarg
+    # RepoQA's constructor rejects.
+    if library_filter is not None:
+        dataset_kwargs["library_filter"] = library_filter
+    # WHY: only add ``strip_query`` when ``--dataset-full-prompt`` is set so
+    # the kwarg is absent for the common case AND for datasets that don't
+    # accept it (RepoQA has no ``strip_query`` field). Mirrors the
+    # ``library_filter`` / ``split`` gating — passing it unconditionally
+    # would crash RepoQA's constructor with an unknown kwarg.
+    if full_prompt:
+        dataset_kwargs["strip_query"] = False
+    # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
+    # kwarg is absent for the common case AND for datasets that don't accept
+    # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``
+    # gating above — passing ``split="all"`` would be a no-op for DS-1000 but
+    # would still crash RepoQA's constructor.
+    if split != "all":
+        dataset_kwargs["split"] = split
+    return dataset_kwargs
+
+
 def main() -> None:
     """``python -m benchmarks.benchmarks.eval.runner`` entry point."""
     parser = _build_arg_parser()
     args = parser.parse_args()
 
-    # WHY fast-fail here: a typo'd --corpus-dir would otherwise index an empty
-    # directory, scoring ~0 across the sweep with no error — silently
-    # misleading for operators. Catch the bad path before launching anything.
-    # (--corpus-dir's argparse type already resolved it to an absolute Path.)
-    if args.corpus_dir is not None and not args.corpus_dir.is_dir():
-        parser.error(f"--corpus-dir not a directory: {args.corpus_dir}")
-
-    # WHY here: toggle the per-(corpus, ingestion-hash) index cache before the
-    # sweep launches so every task in the run observes the same setting.
-    _apply_bench_cache_flag(args.bench_cache)
-
     # WHY try/finally: ``--bench-cache-cleanup`` must free the disk even when
     # the sweep raises (a crashed run still leaves a populated cache behind).
     try:
         config_paths = tuple(Path(p) for p in _parse_csv(args.configs))
-        dataset_kwargs: dict[str, object] = {}
-        if args.fixture is not None:
-            dataset_kwargs["fixture_path"] = args.fixture
-        # WHY: only add ``library_filter`` when the flag is set so the kwarg is
-        # absent for datasets that don't accept it (RepoQA). An empty/omitted
-        # flag must not pass ``library_filter=()`` — that would still be a kwarg
-        # RepoQA's constructor rejects.
-        if args.dataset_library_filter is not None:
-            dataset_kwargs["library_filter"] = _parse_csv(args.dataset_library_filter)
-        # WHY: only add ``strip_query`` when ``--dataset-full-prompt`` is set so
-        # the kwarg is absent for the common case AND for datasets that don't
-        # accept it (RepoQA has no ``strip_query`` field). Mirrors the
-        # ``library_filter`` / ``split`` gating — passing it unconditionally
-        # would crash RepoQA's constructor with an unknown kwarg.
-        if args.dataset_full_prompt:
-            dataset_kwargs["strip_query"] = False
-        # WHY: only add ``split`` when it's NOT the default ``"all"`` so the
-        # kwarg is absent for the common case AND for datasets that don't accept
-        # it (RepoQA has no ``split`` field). Mirrors the ``library_filter``
-        # gating above — passing ``split="all"`` would be a no-op for DS-1000 but
-        # would still crash RepoQA's constructor.
-        if args.split != "all":
-            dataset_kwargs["split"] = args.split
+        dataset_kwargs = build_dataset_kwargs(
+            fixture_path=args.fixture,
+            library_filter=(
+                _parse_csv(args.dataset_library_filter)
+                if args.dataset_library_filter is not None
+                else None
+            ),
+            full_prompt=args.dataset_full_prompt,
+            split=args.split,
+        )
 
         results, tasks_ran = asyncio.run(
             run_sweep(
@@ -272,6 +287,11 @@ def main() -> None:
                 limit=args.limit,
                 corpus_dir=args.corpus_dir,
                 gpu=args.gpu,
+                # WHY here (not a standalone global mutation before the
+                # try): every task in the run observes the same setting,
+                # and the toggle travels with the sweep call so
+                # programmatic callers control it the same way.
+                bench_cache=(args.bench_cache == "on"),
             ),
         )
 
