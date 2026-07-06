@@ -346,41 +346,20 @@ def _load_indexing_config(args: argparse.Namespace, app_config_cls: type[AppConf
 
 
 async def _run_indexing(args: argparse.Namespace) -> None:
-    """Run :class:`ProjectIndexer` end-to-end for ``index`` / ``serve``.
+    """Thin driver for ``index`` / ``serve`` / ``watch`` reindex passes.
 
-    Kept as a module-level coroutine so both ``_cmd_index`` and
-    ``_cmd_serve`` can drive it through a single ``asyncio.run`` — mirrors
-    the pre-PR pattern where one event loop wrapped the whole indexing
-    phase so sub-loops (async SQLite writes, ``to_thread`` extractions)
-    shared the same context.
-
-    Wires the strategy-based classes from :mod:`pydocs_mcp.extraction`:
-    :class:`PipelineChunkExtractor` (driven by the YAML ingestion pipeline),
-    :class:`InspectMemberExtractor` (with :class:`AstMemberExtractor` fallback)
-    or plain :class:`AstMemberExtractor` for ``--no-inspect``, and
-    :class:`StaticDependencyResolver`.
+    Kept as a module-level coroutine so ``_cmd_index``, ``_cmd_serve``, and
+    the watch loop's ``_on_change`` callback can drive it through a single
+    ``asyncio.run``. All write-side wiring lives in
+    ``storage.factories.build_project_indexer`` (the composition root); the
+    pass sequence (integrity sweep -> stale-model invalidation -> index ->
+    FTS rebuild -> metadata stamp) lives in ``application.run_index_pass``.
+    This function only resolves CLI flags into arguments for those two.
     """
-    from pydocs_mcp.application import ProjectIndexer
-    from pydocs_mcp.extraction import (
-        AstMemberExtractor,
-        InspectMemberExtractor,
-        PipelineChunkExtractor,
-        StaticDependencyResolver,
-        build_ingestion_pipeline,
-    )
-    from pydocs_mcp.extraction.strategies.embedders import build_embedder
+    from pydocs_mcp.application import run_index_pass
+    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.retrieval.llm_clients import build_llm_client
-    from pydocs_mcp.storage.factories import (
-        build_composite_uow_factory,
-        build_connection_provider,
-        check_integrity_and_repair,
-    )
-    from pydocs_mcp.storage.search_backend import (
-        build_search_backend,
-        format_capabilities,
-    )
-    from pydocs_mcp.storage.sqlite import SqliteChunkRepository
+    from pydocs_mcp.storage.factories import build_project_indexer
 
     project, db_path = _project_and_db(args)
 
@@ -388,182 +367,43 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     open_index_database(db_path).close()
 
     use_inspect = not args.no_inspect
-    mode = "inspect" if use_inspect else "static"
-    log.info("Project: %s (mode=%s)", project, mode)
+    log.info("Project: %s (mode=%s)", project, "inspect" if use_inspect else "static")
 
-    # Sub-PR #5: build THE ingestion pipeline once and share it across
-    # project + dependency extraction. ``AppConfig.load`` honours the
-    # optional ``--config`` override the CLI already passes to search /
-    # serve so ingestion pipeline overrides (spec §7.3) stay consistent
-    # with the rest of the config.
     config = _load_indexing_config(args, AppConfig)
     # Push YAML-loaded settings into module-level slots read by
-    # ``LookupInput`` validators and ``ReferenceCaptureStage`` (sub-PR #5c
-    # Task 8). Indexing uses the latter via ``ReferenceCaptureStage`` in
-    # the ingestion pipeline; reads use the former.
-    from pydocs_mcp.application.mcp_inputs import configure_from_app_config
-
+    # ``LookupInput`` validators and ``ReferenceCaptureStage``. Global side
+    # effect — kept as an explicit call here, NOT hidden inside the factory.
     configure_from_app_config(config)
 
-    # Hybrid-search composition root: source the write-side UoW children from
-    # the SAME SearchBackend that retrieval + the benchmark use, so indexing
-    # wires dense (and late-interaction, when enabled) consistently with the
-    # read path — no separate child-assembly that could drift. The composite
-    # UoW makes ``reindex_package`` write chunks AND vectors atomically, and
-    # ``IndexingService`` + ``ProjectIndexer`` share the one factory so the
-    # indexing transaction spans every backend without per-service branching.
-    backend = build_search_backend(config, db_path)
-    # Capability diagnostic (spec invariant C): one log line so an operator
-    # can see at index time which retrieval capabilities the configured
-    # backend actually serves — the visibility whose absence let the
-    # dense/LI wiring bug stay silent.
-    log.info(format_capabilities(backend))
-    uow_factory = build_composite_uow_factory(backend.write_uow_children())
-    # ``.tq`` sidecar path for the integrity sweep below. The backend derives
-    # its TurboQuant sidecar as ``db_path.with_suffix(".tq")``; mirror that
-    # here so the two always point at the same on-disk file. ``db_path``
-    # already carries the per-project ``<dirname>_<hash>`` slug (and any
-    # ``--cache-dir`` override), so the suffix swap lands the sidecar right
-    # beside the SQLite cache under whatever root the CLI picked.
-    tq_path = db_path.with_suffix(".tq")
-    # Cache integrity sweep — drift between SQLite and the ``.tq`` sidecar
-    # (process killed mid-commit, etc.) is detected and repaired by
-    # clearing ``packages.content_hash`` so the next pass re-extracts.
-    # No-op on a fresh project (both counts == 0). Under ``--force`` the
-    # subsequent ``index_project(force=True)`` calls ``IndexingService.clear_all``
-    # which atomically wipes SQLite + TurboQuant via the composite UoW —
-    # post-clear, chunks=vectors=0, so this check sees a consistent state
-    # and is a clean no-op rather than the false-positive trigger it would
-    # have been before clear_all was atomic.
-    repaired = await check_integrity_and_repair(
-        db_path=db_path,
-        tq_path=tq_path,
-        dim=config.embedding.dim,
-        bit_width=config.embedding.bit_width,
+    # CLI flag wins over YAML; YAML wins over hard-coded fallback. Depth
+    # resolution stays client-side so the factory carries no argparse
+    # knowledge — undocumented defaults at the wiring layer are silent traps.
+    inspect_depth = (
+        args.depth if args.depth is not None else config.extraction.members.inspect_depth
     )
-    if repaired:
-        log.warning(
-            "Cache integrity: cleared content_hash on %d package(s); "
-            "they will be re-extracted this run",
-            len(repaired),
-        )
-
-    from pydocs_mcp.application.indexing_service import IndexingService
-
-    indexing_service = IndexingService(
-        uow_factory=uow_factory,
-        node_scores_enabled=config.reference_graph.node_scores.enabled,
-    )
-
-    # Detect a model rename in YAML — packages tagged with the old
-    # ``embedding_model`` carry vectors that the new model cannot match
-    # at query time (different vector space). ``invalidate_stale_embeddings``
-    # clears their ``content_hash`` (find + clear in ONE transaction) so
-    # the next sweep re-extracts + re-embeds them under the current
-    # model via the existing hash-skip path. Skipped under ``--force``:
-    # that path already wipes the cache wholesale.
-    if not args.force:
-        stale_pkg_names = await indexing_service.invalidate_stale_embeddings(
-            current_model=config.embedding.model_name,
-        )
-        if stale_pkg_names:
-            log.warning(
-                "Embedding model changed; re-embedding %d package(s): %s",
-                len(stale_pkg_names),
-                ", ".join(stale_pkg_names),
-            )
-
-    # Construct the embedder once at startup so the rest of the pipeline
-    # can share it. Failing here (e.g., OPENAI_API_KEY missing) surfaces
-    # the issue immediately rather than at first query.
-    embedder = build_embedder(config.embedding)
-    # Compute the ingestion pipeline_hash ONCE at startup. This identity
-    # slot (embedder + raw ingestion-YAML bytes) is threaded through the
-    # BuildContext so ``AssignChunkContentHashStage`` can stamp every
-    # chunk's content_hash with it. Any embedder swap or YAML edit
-    # invalidates every chunk hash, the diff-merge sees them as 'added',
-    # and the existing add path re-embeds them — no separate force-re-embed
-    # code path needed (spec Decisions 4 + 12).
-    pipeline_hash = config.compute_ingestion_pipeline_hash()
-    # Construct the LLM client once at startup so any future ingestion-time
-    # LLM stage can be wired without another composition change. Symmetric
-    # with ``embedder``: build once, thread through. No shipped ingestion
-    # stage consumes ``llm_client`` today; the retrieval pipeline does
-    # (LlmTreeReasoningStep) but goes through ``build_retrieval_context``
-    # which constructs its own client.
-    llm_client = build_llm_client(config.llm)
-    ingestion_pipeline = build_ingestion_pipeline(
+    bundle = build_project_indexer(
         config,
-        embedder=embedder,
-        uow_factory=uow_factory,
-        pipeline_hash=pipeline_hash,
-        llm_client=llm_client,
-    )
-    chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
-
-    ast_member = AstMemberExtractor()
-    members_cfg = config.extraction.members
-    # CLI flag wins over YAML; YAML wins over hard-coded fallback. This
-    # mirrors the pattern for every other tunable knob — undocumented
-    # defaults at the wiring layer become silent traps.
-    inspect_depth = args.depth if args.depth is not None else members_cfg.inspect_depth
-    member_extractor = (
-        InspectMemberExtractor(
-            static_fallback=ast_member,
-            depth=inspect_depth,
-            members_per_module_cap=members_cfg.members_per_module_cap,
-            signature_max_chars=members_cfg.signature_max_chars,
-            docstring_max_chars=members_cfg.docstring_max_chars,
-        )
-        if use_inspect
-        else ast_member
+        db_path,
+        use_inspect=use_inspect,
+        inspect_depth=inspect_depth,
     )
 
-    orchestrator = ProjectIndexer(
-        indexing_service=indexing_service,
-        dependency_resolver=StaticDependencyResolver(),
-        chunk_extractor=chunk_extractor,
-        member_extractor=member_extractor,
-        uow_factory=uow_factory,
-    )
-
-    if args.force:
-        log.info("Cache cleared")
-
-    stats = await orchestrator.index_project(
-        project,
+    stats = await run_index_pass(
+        orchestrator=bundle.orchestrator,
+        indexing_service=bundle.indexing_service,
+        pipeline_hash=bundle.pipeline_hash,
+        project=project,
+        embedding_provider=config.embedding.provider,
+        embedding_model=config.embedding.model_name,
+        embedding_dim=config.embedding.dim,
         force=args.force,
         include_project_source=not args.skip_project,
         include_dependencies=not args.skip_deps,
         workers=args.workers,
+        check_integrity=bundle.check_integrity,
+        rebuild_fts=bundle.rebuild_fts,
+        stamp_metadata=bundle.stamp_metadata,
     )
-    # FTS rebuild is a maintenance op, not transactional — use a direct
-    # SqliteChunkRepository handle. Post-#5a-2 IndexingService no longer
-    # exposes a chunk_store attribute (Decision C).
-    chunk_repo = SqliteChunkRepository(provider=build_connection_provider(db_path))
-    await chunk_repo.rebuild_index()
-
-    # Stamp the database identity (project name/root + embedder identity + recency)
-    # so a portable load can reject a mismatched-embedder .tq and multi-repo search
-    # can route/dedup by project. Written last — only a fully-indexed db is stamped.
-    import time
-
-    from pydocs_mcp.storage.index_metadata import IndexMetadata, write_index_metadata
-
-    stamp_conn = open_index_database(db_path)
-    write_index_metadata(
-        stamp_conn,
-        IndexMetadata(
-            project_name=project.name,
-            project_root=str(project),
-            embedding_provider=config.embedding.provider,
-            embedding_model=config.embedding.model_name,
-            embedding_dim=config.embedding.dim,
-            pipeline_hash=pipeline_hash,
-            indexed_at=time.time(),
-        ),
-    )
-    stamp_conn.close()
 
     kb = db_path.stat().st_size / 1024 if db_path.exists() else 0.0
     log.info(
