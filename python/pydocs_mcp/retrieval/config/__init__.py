@@ -25,6 +25,9 @@ from pydocs_mcp.retrieval.config.embedder_models import (
     LlmConfig,
 )
 from pydocs_mcp.retrieval.config.models import (
+    _DEFAULT_CONTEXT_MAX_DEPTH,
+    _DEFAULT_CONTEXT_TOKEN_BUDGET,
+    _DEFAULT_IMPACT_MAX_DEPTH,
     ContextConfig,
     HandlerConfig,
     ImpactConfig,
@@ -40,9 +43,6 @@ from pydocs_mcp.retrieval.config.models import (
     ServeConfig,
     SimilarEdgesConfig,
     WatchConfig,
-    _DEFAULT_CONTEXT_MAX_DEPTH,
-    _DEFAULT_CONTEXT_TOKEN_BUDGET,
-    _DEFAULT_IMPACT_MAX_DEPTH,
 )
 from pydocs_mcp.retrieval.config.pipeline_assembly import (
     _resolve_pipeline_path,
@@ -55,6 +55,9 @@ from pydocs_mcp.retrieval.config.pipeline_assembly import (
 # surface (see the layout test) — listing them here keeps ruff F401 quiet
 # and makes the re-export explicit for mypy.
 __all__ = [
+    "_DEFAULT_CONTEXT_MAX_DEPTH",
+    "_DEFAULT_CONTEXT_TOKEN_BUDGET",
+    "_DEFAULT_IMPACT_MAX_DEPTH",
     "AppConfig",
     "ContextConfig",
     "EmbeddingConfig",
@@ -74,9 +77,6 @@ __all__ = [
     "ServeConfig",
     "SimilarEdgesConfig",
     "WatchConfig",
-    "_DEFAULT_CONTEXT_MAX_DEPTH",
-    "_DEFAULT_CONTEXT_TOKEN_BUDGET",
-    "_DEFAULT_IMPACT_MAX_DEPTH",
     "_resolve_pipeline_path",
     "_shipped_pipelines_dir",
     "build_chunk_pipeline_from_config",

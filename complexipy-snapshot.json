@@ -1,15 +1,5 @@
 [
   {
-    "path": "pydocs_mcp/__main__.py",
-    "file_name": "__main__.py",
-    "functions": [
-      {
-        "name": "_run_indexing",
-        "complexity": 18
-      }
-    ]
-  },
-  {
     "path": "pydocs_mcp/application/module_inspector.py",
     "file_name": "module_inspector.py",
     "functions": [
@@ -46,16 +36,6 @@
       {
         "name": "_collect_symbols",
         "complexity": 20
-      }
-    ]
-  },
-  {
-    "path": "pydocs_mcp/extraction/strategies/reference_resolver.py",
-    "file_name": "reference_resolver.py",
-    "functions": [
-      {
-        "name": "ReferenceResolver::_resolve_one",
-        "complexity": 27
       }
     ]
   },
@@ -109,17 +89,7 @@
     "functions": [
       {
         "name": "LlmTreeReasoningStep::run",
-        "complexity": 26
-      }
-    ]
-  },
-  {
-    "path": "pydocs_mcp/retrieval/tree_prompt/doc_excerpt.py",
-    "file_name": "doc_excerpt.py",
-    "functions": [
-      {
-        "name": "doc_sections",
-        "complexity": 19
+        "complexity": 32
       }
     ]
   },
@@ -140,6 +110,16 @@
       {
         "name": "WeightedScoreInterpolationStep::run",
         "complexity": 16
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/retrieval/tree_prompt/doc_excerpt.py",
+    "file_name": "doc_excerpt.py",
+    "functions": [
+      {
+        "name": "doc_sections",
+        "complexity": 19
       }
     ]
   },

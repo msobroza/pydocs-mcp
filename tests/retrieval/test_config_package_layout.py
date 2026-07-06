@@ -12,10 +12,10 @@ def test_config_is_a_package() -> None:
 
 
 def test_submodules_exist() -> None:
-    import pydocs_mcp.retrieval.config.app_config  # noqa: F401
-    import pydocs_mcp.retrieval.config.embedder_models  # noqa: F401
-    import pydocs_mcp.retrieval.config.models  # noqa: F401
-    import pydocs_mcp.retrieval.config.pipeline_assembly  # noqa: F401
+    import pydocs_mcp.retrieval.config.app_config
+    import pydocs_mcp.retrieval.config.embedder_models
+    import pydocs_mcp.retrieval.config.models
+    import pydocs_mcp.retrieval.config.pipeline_assembly
 
 
 def test_every_externally_imported_name_is_on_the_package_root() -> None:
@@ -24,7 +24,7 @@ def test_every_externally_imported_name_is_on_the_package_root() -> None:
     # five private names external code imports: lookup_service (the three
     # _DEFAULT_* fallbacks), extraction/factories (_resolve_pipeline_path),
     # tests/pipelines (_shipped_pipelines_dir).
-    from pydocs_mcp.retrieval.config import (  # noqa: F401
+    from pydocs_mcp.retrieval.config import (
         AppConfig,
         ContextConfig,
         EmbeddingConfig,

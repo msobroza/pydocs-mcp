@@ -144,9 +144,7 @@ def test_graph_expand_emits_non_defaults_tuples_as_lists() -> None:
 
 
 def test_llm_tree_reasoning_default_emits_bare_type() -> None:
-    step = LlmTreeReasoningStep(
-        llm_client=FakeLlmClient(), uow_factory=make_fake_uow_factory()
-    )
+    step = LlmTreeReasoningStep(llm_client=FakeLlmClient(), uow_factory=make_fake_uow_factory())
     assert step.to_dict() == {"type": "llm_tree_reasoning"}
 
 

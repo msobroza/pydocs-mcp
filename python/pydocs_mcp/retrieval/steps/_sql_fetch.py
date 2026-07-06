@@ -80,8 +80,7 @@ def execute_fetch(
     cache_path = getattr(provider, "cache_path", None)
     if cache_path is None:
         raise TypeError(
-            f"{step_label} requires a provider exposing 'cache_path'; "
-            f"got {type(provider).__name__}"
+            f"{step_label} requires a provider exposing 'cache_path'; got {type(provider).__name__}"
         )
     conn = sqlite3.connect(str(cache_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row

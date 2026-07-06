@@ -324,16 +324,14 @@ class LlmTreeReasoningStep(RetrieverStep):
         kwargs = yaml_kwargs(data, cls, cls._YAML_KEYS)
         if kwargs["doc_excerpt"] not in DOC_EXCERPT_MODES:
             raise ValueError(
-                f"doc_excerpt must be one of {DOC_EXCERPT_MODES}; "
-                f"got {kwargs['doc_excerpt']!r}",
+                f"doc_excerpt must be one of {DOC_EXCERPT_MODES}; got {kwargs['doc_excerpt']!r}",
             )
         doc_excerpt_max_chars = kwargs["doc_excerpt_max_chars"]
         # A non-positive cap would silently under-cap (negative slice drops the
         # tail instead of bounding) — fail fast at YAML-build time.
         if not isinstance(doc_excerpt_max_chars, int) or doc_excerpt_max_chars < 1:
             raise ValueError(
-                f"doc_excerpt_max_chars must be a positive int; "
-                f"got {doc_excerpt_max_chars!r}",
+                f"doc_excerpt_max_chars must be a positive int; got {doc_excerpt_max_chars!r}",
             )
         # Migration aid: the budget is now token-based; reject the old word param.
         if "max_tree_words" in data:
@@ -348,8 +346,7 @@ class LlmTreeReasoningStep(RetrieverStep):
             not isinstance(max_tree_tokens, int) or max_tree_tokens < 1
         ):
             raise ValueError(
-                f"max_tree_tokens must be a positive int or null (auto); "
-                f"got {max_tree_tokens!r}",
+                f"max_tree_tokens must be a positive int or null (auto); got {max_tree_tokens!r}",
             )
         return cls(
             llm_client=context.llm_client,

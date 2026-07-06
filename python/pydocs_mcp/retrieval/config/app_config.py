@@ -24,10 +24,10 @@ from pydantic_settings import (
 
 from pydocs_mcp.extraction.config import ExtractionConfig
 from pydocs_mcp.retrieval.config.embedder_models import (
+    _DEFAULT_DEVICE,
     EmbeddingConfig,
     LateInteractionConfig,
     LlmConfig,
-    _DEFAULT_DEVICE,
 )
 from pydocs_mcp.retrieval.config.models import (
     HandlerConfig,

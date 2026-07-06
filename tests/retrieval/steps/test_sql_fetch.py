@@ -36,9 +36,7 @@ def test_read_pre_filter_result_returns_typed_result() -> None:
         query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
         scratch={PRE_FILTER_SCRATCH_KEY: published},
     )
-    result = read_pre_filter_result(
-        state, step_label="X", step_name="x", pipeline_yaml="y.yaml"
-    )
+    result = read_pre_filter_result(state, step_label="X", step_name="x", pipeline_yaml="y.yaml")
     assert result is published
 
 
@@ -97,17 +95,13 @@ def test_execute_fetch_requires_cache_path() -> None:
 
 
 def test_require_fetch_context_raises_on_missing_app_config() -> None:
-    with pytest.raises(
-        ValueError, match="MemberFetcherStep requires BuildContext.app_config"
-    ):
+    with pytest.raises(ValueError, match="MemberFetcherStep requires BuildContext.app_config"):
         require_fetch_context(BuildContext(), "MemberFetcherStep")
 
 
 def test_require_fetch_context_raises_on_missing_provider() -> None:
     ctx = BuildContext(app_config=object())  # type: ignore[arg-type]
-    with pytest.raises(
-        ValueError, match="requires BuildContext.connection_provider"
-    ):
+    with pytest.raises(ValueError, match="requires BuildContext.connection_provider"):
         require_fetch_context(ctx, "ChunkFetcherStep")
 
 
