@@ -15,6 +15,7 @@ from pydocs_mcp.application.multi_project_search import (
     _merge_ranked,
 )
 from pydocs_mcp.application.null_services import NullDecisionService
+from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
@@ -94,6 +95,7 @@ def _svc(project: LoadedProject, ranked=(), composite="SINGLE", lookup="") -> Pr
         api=_FakeApi(),
         lookup=_FakeLookup(lookup),
         symbol_source=SymbolSourceService(uow_factory=make_fake_uow_factory()),
+        overview=OverviewService(uow_factory=make_fake_uow_factory(), scripts={}),
         decisions=NullDecisionService(),
     )
 

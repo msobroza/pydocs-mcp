@@ -248,38 +248,43 @@ class TestToolSurface:
 # ── get_overview ───────────────────────────────────────────────────────────
 
 
-class TestOverviewPackagesList:
-    def test_empty_package_lists_packages(self, server_tools) -> None:
+class TestOverviewStructuralCard:
+    """get_overview renders the §D17 structural orientation card (blocks 1,
+    3-7) — NOT a package-doc listing. The card scopes to a package
+    (``__project__`` by default), reports the corpus census, and degrades the
+    communities block to an enablement hint because the basic fixture seeds no
+    node_scores."""
+
+    def test_empty_package_scopes_to_project_card(self, server_tools) -> None:
         tools, _ = server_tools
         out = _arun(tools["get_overview"](package=""))
-        assert "__project__" in out
-        assert "fastapi" in out
-        assert "0.100" in out
+        # H1 scopes to the project package; the four §D17 H2 blocks are present.
+        assert "# Overview — __project__" in out
+        assert "## Module map" in out and "## Entry points" in out
+        assert "## Structure communities" in out and "## Dependency profile" in out
+        # The census counts every loaded package (2) even though the card
+        # scopes symbols/modules to __project__.
+        assert "2 packages" in out
 
-
-class TestOverviewPackageDoc:
-    def test_returns_package_doc(self, server_tools) -> None:
+    def test_named_package_scopes_the_card(self, server_tools) -> None:
         tools, _ = server_tools
         out = _arun(tools["get_overview"](package="fastapi"))
-        assert "fastapi" in out
-        assert "0.100" in out
+        assert "# Overview — fastapi" in out
 
-    def test_includes_homepage(self, server_tools) -> None:
+    def test_communities_hint_without_node_scores(self, server_tools) -> None:
+        # The basic fixture seeds no node_scores → the communities block
+        # renders the enablement hint anchored on the YAML knob.
         tools, _ = server_tools
-        out = _arun(tools["get_overview"](package="fastapi"))
-        assert "https://fastapi.example.com" in out
+        out = _arun(tools["get_overview"](package=""))
+        assert "enable reference_graph.node_scores" in out
 
-    def test_includes_deps(self, server_tools) -> None:
+    def test_unknown_package_returns_empty_card_not_error(self, server_tools) -> None:
+        # Unlike the 2a package-doc path, the structural card never raises for
+        # a missing package — it builds an empty-ish card (all blocks present,
+        # no rows). The census still counts the loaded corpus.
         tools, _ = server_tools
-        out = _arun(tools["get_overview"](package="fastapi"))
-        assert "starlette" in out
-
-    def test_unknown_package_raises_not_found(self, server_tools) -> None:
-        from pydocs_mcp.application import NotFoundError
-
-        tools, _ = server_tools
-        with pytest.raises(NotFoundError):
-            _arun(tools["get_overview"](package="nonexistent_pkg"))
+        out = _arun(tools["get_overview"](package="nonexistent_pkg"))
+        assert "# Overview — nonexistent_pkg" in out
 
 
 class TestSymbolWithTreeService:

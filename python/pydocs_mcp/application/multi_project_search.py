@@ -32,6 +32,7 @@ from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
 from pydocs_mcp.application.null_services import NullDecisionService
+from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.search_query import build_search_query
 from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ModuleMember
@@ -64,6 +65,7 @@ class ProjectServices:
     api: ApiSearch
     lookup: LookupService
     symbol_source: SymbolSourceService
+    overview: OverviewService
     decisions: NullDecisionService  # slice 3 widens this to a DecisionNavigator Protocol
 
 

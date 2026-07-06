@@ -49,6 +49,7 @@ from pydocs_mcp.models import (
 )
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.overview_service import OverviewCard
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.models import SearchResponse
     from pydocs_mcp.storage.node_reference import NodeReference
@@ -551,6 +552,89 @@ def format_context(
         )
     )
     out = "".join(blocks)
+    return out if out.endswith("\n") else out + "\n"
+
+
+# The communities block degrades to this hint when node_scores is off — the
+# community partition is derived from PageRank/Leiden, so with scores disabled
+# there is nothing to show. Anchored on the YAML knob so the agent's fix is
+# one config edit away (spec §D17 block 5).
+_COMMUNITIES_DISABLED_HINT = (
+    "Community structure is unavailable — enable reference_graph.node_scores to see it.\n"
+)
+
+
+def _overview_stats_line(card: OverviewCard) -> str:
+    """One-line corpus census — ``doc_coverage`` rendered as an integer percent."""
+    pct = round(card.doc_coverage * 100)
+    return (
+        f"[{card.package_count} packages · {card.module_count} modules · "
+        f"{card.symbol_count} symbols · {pct}% documented]\n"
+    )
+
+
+def _overview_module_block(card: OverviewCard) -> str:
+    """Centrality-ranked module map — each line points at ``get_context`` via
+    the ``lookup-show:<module>:context`` token (resolved per surface)."""
+    lines = [
+        f"- `{m.qualified_name}` — {m.first_doc_line} "
+        f"{pointer_token('lookup-show', m.qualified_name, 'context')}\n"
+        for m in card.modules
+    ]
+    return "## Module map\n" + "".join(lines)
+
+
+def _overview_entry_points_block(card: OverviewCard) -> str:
+    """Entry-point union (scripts / __main__ / graph roots), each pointing at
+    ``get_symbol`` via a plain ``lookup`` token."""
+    lines = [
+        f"- `{e.name}` ({e.kind}) {pointer_token('lookup', e.name)}\n" for e in card.entry_points
+    ]
+    return "## Entry points\n" + "".join(lines)
+
+
+def _overview_communities_block(card: OverviewCard) -> str:
+    """Structure communities with cohesion, OR the enablement hint when
+    ``node_scores`` is off (nothing to partition without centrality)."""
+    if not card.node_scores_available:
+        return "## Structure communities\n" + _COMMUNITIES_DISABLED_HINT
+    lines = [
+        f"- {c.label} — {c.size} members, cohesion {c.cohesion:.2f}, top `{c.top_member}`\n"
+        for c in card.communities
+    ]
+    return "## Structure communities\n" + "".join(lines)
+
+
+def _overview_dependency_block(card: OverviewCard) -> str:
+    """External dependency profile by import count — each points at
+    ``get_symbol`` for the package via a ``lookup`` token."""
+    lines = [
+        f"- {pkg} ({count} imports) {pointer_token('lookup', pkg)}\n"
+        for pkg, count in card.dependency_profile
+    ]
+    return "## Dependency profile\n" + "".join(lines)
+
+
+def format_overview_card(card: OverviewCard) -> str:
+    """Render an :class:`OverviewCard` as the §D17 structural orientation card.
+
+    Pure rendering (no I/O): H1 + one stats line, then the four §D17 H2 blocks
+    in order — Module map, Entry points, Structure communities, Dependency
+    profile. Each block obeys the module byte-parity contract (``## {title}\\n``
+    then body lines, blocks joined with ``"\\n"`` so a blank line separates
+    them). The communities block degrades to an enablement hint when
+    ``node_scores`` is disabled. Always ends with a single trailing ``\\n``.
+    """
+    h1 = f"# Overview — {card.package}\n"
+    header = h1 + _overview_stats_line(card)
+    blocks = [
+        header,
+        _overview_module_block(card),
+        _overview_entry_points_block(card),
+        _overview_communities_block(card),
+        _overview_dependency_block(card),
+    ]
+    out = "\n".join(blocks)
     return out if out.endswith("\n") else out + "\n"
 
 

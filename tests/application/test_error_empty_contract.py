@@ -22,6 +22,7 @@ from pydocs_mcp.storage.index_metadata import IndexMetadata
 from ._router_fakes import (
     FakeApi,
     FakeDocs,
+    FakeOverview,
     FakeSymbolSource,
     make_envelope,
     make_services,
@@ -60,6 +61,7 @@ def _raising_services() -> tuple[ProjectServices, ...]:
             api=FakeApi(),
             lookup=_RaisingLookup(),
             symbol_source=FakeSymbolSource(),
+            overview=FakeOverview(),
             decisions=NullDecisionService(),
         )
         for name, indexed_at in (("a", 1.0), ("b", 2.0))
@@ -101,6 +103,7 @@ def _empty_search_router() -> ToolRouter:
             api=_EmptyApi(),
             lookup=base.lookup,
             symbol_source=base.symbol_source,
+            overview=base.overview,
             decisions=base.decisions,
         ),
     )

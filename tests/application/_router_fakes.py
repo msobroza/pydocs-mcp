@@ -14,6 +14,12 @@ from pydocs_mcp.application.freshness import EnvelopeInfo
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.multi_project_search import ProjectServices
 from pydocs_mcp.application.null_services import NullDecisionService
+from pydocs_mcp.application.overview_service import (
+    CommunityEntry,
+    EntryPoint,
+    ModuleEntry,
+    OverviewCard,
+)
 from pydocs_mcp.models import ChunkList, ModuleMemberList, SearchResponse
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.storage.index_metadata import IndexMetadata
@@ -81,6 +87,26 @@ class FakeSymbolSource:
         return f"# Source — `{target}`\n\n```python\ndef f():\n    return 1\n```\n"
 
 
+class FakeOverview:
+    """A build() that returns a fixed OverviewCard so ToolRouter's get_overview
+    routing (svc.overview.build → format_overview_card) is observable without
+    the real OverviewService + uow."""
+
+    async def build(self, package: str = "") -> OverviewCard:
+        return OverviewCard(
+            package=package or "__project__",
+            package_count=1,
+            module_count=1,
+            symbol_count=2,
+            doc_coverage=0.5,
+            modules=(ModuleEntry("pkg.mod", "A module.", 0.5),),
+            entry_points=(EntryPoint("pkg.__main__", "module"),),
+            communities=(CommunityEntry("pkg", 2, 0.5, "pkg.mod"),),
+            dependency_profile=(("numpy", 1),),
+            node_scores_available=True,
+        )
+
+
 def make_project() -> LoadedProject:
     meta = IndexMetadata(
         project_name="solo",
@@ -102,6 +128,7 @@ def make_services() -> tuple[ProjectServices, ...]:
             api=FakeApi(),
             lookup=FakeLookup(),
             symbol_source=FakeSymbolSource(),
+            overview=FakeOverview(),
             decisions=NullDecisionService(),
         ),
     )

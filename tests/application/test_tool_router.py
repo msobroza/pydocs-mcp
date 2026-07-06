@@ -68,6 +68,11 @@ def test_why_raises_service_unavailable() -> None:
         asyncio.run(_tool_router().get_why(WhyInput(query="why")))
 
 
-def test_overview_lists_packages() -> None:
+def test_overview_renders_structural_card() -> None:
     out = asyncio.run(_tool_router().get_overview(OverviewInput()))
-    assert out.startswith("[index:") and "# Overview" in out
+    # Enveloped (freshness header first), then the §D17 card: H1 + stats +
+    # the four H2 blocks rendered from the fake service's OverviewCard.
+    assert out.startswith("[index:")
+    assert "# Overview — __project__" in out
+    assert "## Module map" in out and "## Entry points" in out
+    assert "## Structure communities" in out and "## Dependency profile" in out

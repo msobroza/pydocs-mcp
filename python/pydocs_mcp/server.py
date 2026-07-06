@@ -48,10 +48,15 @@ def _build_project_services(loaded, config):
     from pydocs_mcp.retrieval.factories import build_retrieval_context
     from pydocs_mcp.storage.factories import (
         build_sqlite_lookup_service,
+        build_sqlite_overview_service,
         build_sqlite_symbol_source_service,
     )
 
     context = build_retrieval_context(loaded.db_path, config)
+    # The persisted project root feeds get_overview's entry-point detector its
+    # [project.scripts] table; an empty root (read-only bundles carry none)
+    # degrades to "." — parse_project_scripts returns {} for a missing file.
+    project_root = Path(loaded.metadata.project_root or ".")
     return ProjectServices(
         project=loaded,
         docs=DocsSearch(chunk_pipeline=build_chunk_pipeline_from_config(config, context)),
@@ -62,8 +67,13 @@ def _build_project_services(loaded, config):
         # get_symbol(depth="source") reads verbatim chunk text via its own uow;
         # ``build_sqlite_symbol_source_service`` threads the YAML line cap
         # (``symbol_source.max_lines``) so the CLI and server never drift.
-        # decisions is the Null impl until the slice-3 decision layer lands.
         symbol_source=build_sqlite_symbol_source_service(loaded.db_path, config=config),
+        # get_overview reads the §D17 structural card; the factory threads the
+        # YAML caps + parses [project.scripts] from the project root.
+        overview=build_sqlite_overview_service(
+            loaded.db_path, project_root=project_root, config=config
+        ),
+        # decisions is the Null impl until the slice-3 decision layer lands.
         decisions=NullDecisionService(),
     )
 

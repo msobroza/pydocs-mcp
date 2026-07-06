@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
+    from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
     from pydocs_mcp.application.symbol_source import SymbolSourceService
     from pydocs_mcp.retrieval.config import AppConfig
@@ -166,6 +167,36 @@ def build_sqlite_symbol_source_service(
     return SymbolSourceService(
         uow_factory=build_sqlite_uow_factory(db_path),
         max_lines=max_lines,
+    )
+
+
+def build_sqlite_overview_service(
+    db_path: Path,
+    *,
+    project_root: Path,
+    config: AppConfig | None = None,
+) -> OverviewService:
+    """Compose a wired ``OverviewService`` from a SQLite DB path.
+
+    Sibling of ``build_sqlite_lookup_service`` / ``build_sqlite_symbol_source_service``:
+    the CLI and the MCP server both build ``get_overview``'s backing service
+    here so they never drift on the card caps or on where the entry-point
+    ``[project.scripts]`` come from. Caps are YAML settings (``overview.*``),
+    NOT MCP params — threaded from ``config`` when given, else the sub-config
+    defaults. ``scripts`` is parsed ONCE at composition from
+    ``project_root/pyproject.toml`` (missing / malformed → ``{}``: entry points
+    are advisory card content, never a reason to fail an overview).
+    """
+    from pydocs_mcp.application.overview_service import OverviewService
+    from pydocs_mcp.deps import parse_project_scripts
+    from pydocs_mcp.retrieval.config import OverviewConfig
+
+    overview_cfg = config.overview if config is not None else OverviewConfig()
+    return OverviewService(
+        uow_factory=build_sqlite_uow_factory(db_path),
+        scripts=parse_project_scripts(str(project_root / "pyproject.toml")),
+        max_modules=overview_cfg.max_modules,
+        max_communities=overview_cfg.max_communities,
     )
 
 

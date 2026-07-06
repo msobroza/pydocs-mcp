@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
-from pydocs_mcp.application.formatting import pointer_token
+from pydocs_mcp.application.formatting import format_overview_card, pointer_token
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
     LookupInput,
@@ -29,6 +29,7 @@ from pydocs_mcp.application.multi_project_search import (
     ProjectServices,
     _select_service,
 )
+from pydocs_mcp.application.overview_service import OverviewService
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -110,11 +111,11 @@ class ToolRouter:
         return await self.envelope.wrap(_body)
 
     async def get_overview(self, payload: OverviewInput) -> str:
-        body = LookupInput(target=payload.package, show="default", project=payload.project)
+        svc = self._svc(payload.project)
+        return await self.envelope.wrap(lambda: _render_overview(svc.overview, payload.package))
 
-        async def _card() -> str:
-            listing = await self.lookup_router._lookup_body(body)
-            title = payload.package or "all indexed packages"
-            return f"# Overview — {title}\n\n{listing}"
 
-        return await self.envelope.wrap(_card)
+async def _render_overview(service: OverviewService, package: str) -> str:
+    """Build + render the §D17 structural card. Module-level so ``get_overview``
+    stays a one-liner and the service/render seam is directly testable."""
+    return format_overview_card(await service.build(package))
