@@ -517,9 +517,7 @@ class TestRunIndexingDelegation:
 
     def test_no_inspect_flag_forwarded(self, seeded_project, delegation_capture):
         captured, _bundle = delegation_capture
-        with patch(
-            "sys.argv", ["pydocs-mcp", "index", str(seeded_project), "--no-inspect"]
-        ):
+        with patch("sys.argv", ["pydocs-mcp", "index", str(seeded_project), "--no-inspect"]):
             from pydocs_mcp.__main__ import main
 
             assert main() == 0

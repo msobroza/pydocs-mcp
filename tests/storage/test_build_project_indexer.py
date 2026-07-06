@@ -59,18 +59,13 @@ def test_bundle_shape_and_shared_wiring(db_path: Path) -> None:
     assert bundle.orchestrator.uow_factory is bundle.uow_factory
     assert bundle.indexing_service.uow_factory is bundle.uow_factory
     assert bundle.orchestrator.indexing_service is bundle.indexing_service
-    assert (
-        bundle.indexing_service.node_scores_enabled
-        is config.reference_graph.node_scores.enabled
-    )
+    assert bundle.indexing_service.node_scores_enabled is config.reference_graph.node_scores.enabled
 
 
 def test_bundle_is_frozen(db_path: Path) -> None:
     from pydocs_mcp.storage.factories import build_project_indexer
 
-    bundle = build_project_indexer(
-        AppConfig.load(), db_path, use_inspect=True, inspect_depth=None
-    )
+    bundle = build_project_indexer(AppConfig.load(), db_path, use_inspect=True, inspect_depth=None)
     with pytest.raises(dataclasses.FrozenInstanceError):
         bundle.pipeline_hash = "clobbered"  # type: ignore[misc]
 
@@ -79,9 +74,7 @@ def test_inspect_depth_explicit_wins(db_path: Path) -> None:
     from pydocs_mcp.extraction import InspectMemberExtractor
     from pydocs_mcp.storage.factories import build_project_indexer
 
-    bundle = build_project_indexer(
-        AppConfig.load(), db_path, use_inspect=True, inspect_depth=7
-    )
+    bundle = build_project_indexer(AppConfig.load(), db_path, use_inspect=True, inspect_depth=7)
     extractor = bundle.orchestrator.member_extractor
     assert isinstance(extractor, InspectMemberExtractor)
     assert extractor.depth == 7
@@ -92,27 +85,21 @@ def test_inspect_depth_none_falls_back_to_yaml(db_path: Path) -> None:
 
     config = AppConfig.load()
     bundle = build_project_indexer(config, db_path, use_inspect=True, inspect_depth=None)
-    assert bundle.orchestrator.member_extractor.depth == (
-        config.extraction.members.inspect_depth
-    )
+    assert bundle.orchestrator.member_extractor.depth == (config.extraction.members.inspect_depth)
 
 
 def test_no_inspect_uses_ast_extractor(db_path: Path) -> None:
     from pydocs_mcp.extraction import AstMemberExtractor
     from pydocs_mcp.storage.factories import build_project_indexer
 
-    bundle = build_project_indexer(
-        AppConfig.load(), db_path, use_inspect=False, inspect_depth=None
-    )
+    bundle = build_project_indexer(AppConfig.load(), db_path, use_inspect=False, inspect_depth=None)
     assert isinstance(bundle.orchestrator.member_extractor, AstMemberExtractor)
 
 
 async def test_maintenance_callables_run_against_the_db(db_path: Path) -> None:
     from pydocs_mcp.storage.factories import build_project_indexer
 
-    bundle = build_project_indexer(
-        AppConfig.load(), db_path, use_inspect=True, inspect_depth=None
-    )
+    bundle = build_project_indexer(AppConfig.load(), db_path, use_inspect=True, inspect_depth=None)
 
     # Fresh schema: chunks(embedded=1)==0 and the synthesized empty .tq
     # index==0, so the sweep is a clean no-op.
