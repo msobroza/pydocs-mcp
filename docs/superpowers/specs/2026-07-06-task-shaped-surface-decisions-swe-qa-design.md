@@ -1,6 +1,6 @@
 # Task-shaped MCP surface, decision capture, and SWE-QA evaluation — Design
 
-**Date:** 2026-07-06 (rev 2 — post four-lens design review)
+**Date:** 2026-07-06 (rev 3 — post four-lens design review + overview enrichment)
 **Status:** Draft (pending user review)
 **Goal:** Replace the two-tool MCP surface with a six-tool task-shaped surface
 (mirrored 1:1 by the CLI), add an architectural-decision capture pipeline and
@@ -15,7 +15,10 @@ SWE-QA / SWE-QA-Pro evaluation track to the benchmark harness.
 > distance). Rev 2 corrects both, renumbers migrations to v13/v14, moves the
 > freshness state onto `index_metadata`, pins previously ambiguous dispatch
 > and lifecycle semantics, and aligns every config key with the shipped
-> `<feature>.<sub>` nesting.
+> `<feature>.<sub>` nesting. **Rev 3** expands `get_overview` from a
+> package-listing into a full orientation card (§D17), with two
+> user-approved scope additions (index-time activity aggregates; opt-in
+> cached LLM architecture summary).
 
 ## Problem
 
@@ -59,6 +62,12 @@ decorative. Reviewer sign-off on these three is part of approving this spec:
   counts and the stalest records (read-only aggregation over one table).
 - **D12 opt-in LLM structuring** — default **off**; deterministic capture is
   complete without it.
+- **D17 activity block** (approved 2026-07-06) — per-module commit-count
+  aggregates for the overview card, computed at index time by the same
+  bounded git pass as decision capture. Ownership/bus-factor analytics
+  remain excluded.
+- **D17 LLM architecture summary** (approved 2026-07-06) — opt-in, default
+  **off**, cached at index time.
 
 ## Design decisions
 
@@ -68,7 +77,7 @@ Each tool answers one agent-workflow question, named by task:
 
 | Tool | Question it answers | Today's equivalent |
 |---|---|---|
-| `get_overview` | "Orient me: what is indexed, what's the shape of this repo/package?" | `lookup(target="")`, package overview |
+| `get_overview` | "Orient me: what is indexed, what's the shape of this repo/package?" (card contents: §D17) | `lookup(target="")`, package overview |
 | `search_codebase` | "Find code/docs/decisions about a topic I can't name exactly" | `search(...)` |
 | `get_symbol` | "Details (or verbatim source) for a dotted path I already know" | `lookup(show="default"/"tree")` |
 | `get_context` | "Everything I need to understand these targets, under a token budget" | `lookup(show="context")` (single-target) |
@@ -336,8 +345,10 @@ Commit history is read via `asyncio.create_subprocess_exec("git", "log",
 "--name-only", "--max-count=<max_commits>", …)` under an
 `asyncio.wait_for` timeout (`decision_capture.commit_messages.timeout_seconds`,
 default 30). No git / shallow history / timeout → the source logs and skips
-(stage-level failure isolation below). Tests feed raw `git log` text through
-the Protocol seam — no subprocess in the test suite.
+(stage-level failure isolation below). The same log pass feeds the §D17
+activity aggregator — when both features are enabled, git history is read
+once per index run. Tests feed raw `git log` text through the Protocol
+seam — no subprocess in the test suite.
 
 Every record stores its **evidence verbatim**: the exact source span (file,
 line range or commit SHA, raw text). Nothing is paraphrased at capture time.
@@ -394,7 +405,10 @@ CREATE TABLE decision_records (
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL           -- latest EVIDENCE date, not row-touch time (§D10)
 );
--- plus, same migration: ALTER TABLE chunks ADD COLUMN decision_id INTEGER;  -- nullable
+-- plus, same migration:
+--   ALTER TABLE chunks ADD COLUMN decision_id INTEGER;             -- nullable
+--   ALTER TABLE index_metadata ADD COLUMN activity_summary TEXT;   -- §D17 block 9 (JSON)
+--   ALTER TABLE index_metadata ADD COLUMN overview_summary TEXT;   -- §D17 block 2 (JSON)
 ```
 
 Evidence stays a JSON column in v1 (YAGNI: a separate evidence table earns
@@ -605,16 +619,19 @@ Five PR-sized slices, each with tests:
    (`index_metadata.git_head`) with its `IndexingService` write, pointer
    table emitting current-surface (`lookup`/`search`) calls, truncation
    ledger. Mostly rendering, plus one additive migration.
-2. **Task-shaped surface** (D1, D2, D3, D6, D13) — all six tools (with
-   `get_why` wired to `NullDecisionService` until slice 3, so the surface
-   and CLAUDE.md amendment ship whole), CLI parity, docstring overhaul,
-   skeleton rendering, pointer table swapped to the six-tool names (golden
-   tests updated in the same slice).
-3. **Decision capture + real `get_why`** (D8–D12) — **schema v14**
-   (`decision_records` + `chunks.decision_id`), capture stage, repository,
-   `DecisionService` replacing the Null wiring behind the already-shipped
-   tool and `why` subcommand, `decision_search.yaml` preset,
-   `kind="decision"` routing.
+2. **Task-shaped surface** (D1, D2, D3, D6, D13, D17 structural blocks) —
+   all six tools (with `get_why` wired to `NullDecisionService` until
+   slice 3, so the surface and CLAUDE.md amendment ship whole), CLI parity,
+   docstring overhaul, skeleton rendering, the structural overview card
+   (§D17 blocks 1, 3–7), pointer table swapped to the six-tool names
+   (golden tests updated in the same slice).
+3. **Decision capture + real `get_why` + overview enrichment** (D8–D12,
+   D17 blocks 2/8/9) — **schema v14** (`decision_records`,
+   `chunks.decision_id`, the two `index_metadata` JSON columns), capture
+   stage, repository, `DecisionService` replacing the Null wiring behind
+   the already-shipped tool and `why` subcommand, `decision_search.yaml`
+   preset, `kind="decision"` routing, activity aggregates, opt-in cached
+   LLM architecture summary.
 4. **SWE-QA phase 1** (D14).
 5. **SWE-QA phase 2** (D15).
 
@@ -622,6 +639,69 @@ Ordering: 1 → 2 → 3 are sequential (2 rebases onto 1's renderers; 3 fills
 the Null service slice 2 registered). 4 is independent (its Why-category
 breakout becomes meaningful once 3 lands); 5 depends on 2 (the MCP arm
 exposes the new surface) and benefits from 3.
+
+### D17 — The `get_overview` orientation card
+
+`get_overview` is the agent's first call on an unfamiliar repo; a bare
+package listing wastes that position. The card renders the following blocks,
+in order — every block sourced from data the index already holds, every list
+capped "to stay within token budgets" (caps in YAML), every entry carrying a
+next-step pointer (§D5):
+
+1. **Header stats** — one line: project name, Python requirement, package /
+   module / symbol / doc-chunk counts, direct-dependency count. Sources:
+   `packages`, `module_members`, `chunks`, `index_metadata`.
+2. **Architecture summary** *(opt-in, default off)* — a 2–4 sentence
+   LLM-written paragraph (what the project is, main layers, data flow),
+   generated at index time via the existing `llm:` config, cached in
+   `index_metadata.overview_summary` (JSON: text + module-map fingerprint +
+   generated-at) and regenerated **only when the module-map fingerprint
+   changes** — one LLM call per structural change, zero at query time.
+   Deterministic deployments never see it.
+3. **Module map** — top `overview.max_modules` (default 20) modules ranked
+   by structural centrality (`node_scores.pagerank`; in-degree proxy from
+   `node_references` when node scores are off — the same degradation rule as
+   §D6/§D11), each with its first docstring line. Pointer: `get_context`.
+4. **Entry points** — union of three deterministic detectors, test paths
+   excluded: `[project.scripts]` console entries from `pyproject.toml`
+   (already parsed by `deps.py`), `__main__` modules, and CALLS-graph
+   roots (zero in-degree, out-degree above the card median). Pointer:
+   `get_symbol`.
+5. **Structure communities** — top `overview.max_communities` (default 10)
+   Louvain communities from `node_scores.community`: deterministic label
+   (longest shared module prefix of members), member count, and cohesion
+   (intra-community edge fraction, one bounded SQL over `node_references`).
+   Omitted with an enablement hint when node scores are disabled.
+6. **Dependency profile** — direct deps plus the most-imported external
+   packages (IMPORTS edges grouped by target package).
+7. **Documentation coverage** — % of public members with docstrings; count
+   of indexed doc pages.
+8. **Decisions summary** *(after slice 3)* — counts by status, stalest
+   record, pointer to `get_why()`. **Silently omitted** when capture is
+   disabled: unlike `get_why` (an explicit request for decisions, which must
+   raise), the overview is an aggregate — omission misleads nobody.
+9. **Recent activity** — most-active modules over
+   `overview.git_activity.window_days` (default 90) with a 30d-vs-prior-30d
+   trend ratio. Computed **at index time** from the same single bounded
+   `git log --name-only` pass that feeds decision capture (§D8) — when both
+   are enabled the log is read once — and stored as an aggregate in
+   `index_metadata.activity_summary` (JSON). Zero git calls at query time;
+   omitted on non-git trees. Ownership / bus-factor / knowledge-silo
+   analytics remain out of scope.
+
+**Package mode** (`get_overview(package="fastapi")`) renders the same card
+scoped to one package (module map, entry points, communities, doc coverage);
+blocks 8–9 are `__project__`-only.
+
+The two `index_metadata` JSON columns (`activity_summary`,
+`overview_summary`) ride the **v14** migration (§D9). Structural blocks
+(1, 3–7) land in rollout slice 2 with the tool; blocks 2, 8, 9 land in
+slice 3 (they depend on the git pass, the decisions table, and the LLM
+plumbing shipping there).
+
+YAML (`overview:` block): `max_modules: 20`, `max_communities: 10`,
+`git_activity: { enabled: true, window_days: 90 }`,
+`llm_summary: { enabled: false }`.
 
 ## Testing strategy
 
@@ -636,7 +716,9 @@ exposes the new surface) and benefits from 3.
   syntax); D6 skeleton tests (pagerank ranking, in-degree fallback,
   body-ratio math, golden card); docstring lint (six sections + size
   budgets); dispatch tests for `get_symbol` depth values incl. `source`
-  line-span output; error/empty-contract tests.
+  line-span output; error/empty-contract tests; D17 structural-card tests
+  (golden card, entry-point detector table tests, community
+  labeling/cohesion math, centrality fallback, package-mode scoping).
 - **Slice 3:** per-source table-driven capture tests on fixture trees (ADR
   dir, marker-bearing sources, synthetic `git log` text via the Protocol
   seam — no subprocess); merge/accretion and confidence-formula tests
@@ -645,7 +727,10 @@ exposes the new surface) and benefits from 3.
   tests (empty affected-files, evidence-date semantics); grounding-gate
   tests with canned LLM outputs; D11 mode-dispatch, target-classification,
   and dashboard goldens (with/without `node_scores`); migration test for
-  v14; `kind="decision"` routing test.
+  v14; `kind="decision"` routing test; D17 enrichment tests (activity
+  aggregation math from synthetic log text, trend-ratio edge cases,
+  non-git omission, LLM-summary fingerprint caching with canned outputs,
+  decisions-block omission when capture is disabled).
 - **Slices 4–5:** adapter tests on committed 5-question mini fixtures;
   pseudo-qrel extraction tests; metrics math tests; paired-aggregation math
   on synthetic `RunMetrics`.
@@ -660,9 +745,10 @@ exposes the new surface) and benefits from 3.
   holds).
 - Decision capture over dependency packages (flag exists, default off,
   implementation deferred).
-- Governance analytics beyond the `get_why()` dashboard (ownership metrics,
-  high-churn module ranking) — these require per-commit analytics we
-  deliberately don't build here.
+- Ownership, bus-factor, and knowledge-silo analytics — per-author git
+  attribution we deliberately don't build. (Per-module activity *counts*
+  are in scope via §D17 block 9; anything keyed to *who* wrote code is
+  not.)
 - A server-side omission store for truncated content (§D7 rationale).
 - Publishing absolute IR-quality claims from pseudo-qrels (§D14 caveat).
 - Automated code-quality or maintenance-risk scoring of any kind.
@@ -683,6 +769,11 @@ decision_capture:             # §D8 block, see above (incl. merge_jaccard,
                               #   commit timeout, llm_structuring.{grounding_threshold,batch_size})
 decisions:
   output: { default_limit: 10, max_limit: 100 }
+overview:                     # §D17
+  max_modules: 20
+  max_communities: 10
+  git_activity: { enabled: true, window_days: 90 }
+  llm_summary: { enabled: false }
 ```
 
 All defaults follow the single-source-of-truth rule (`_DEFAULT_*` constants
