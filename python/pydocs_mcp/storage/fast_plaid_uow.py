@@ -75,7 +75,7 @@ def _ensure_fast_plaid_imported() -> None:
         # actually monkeypatching ``sys.modules``.
         raise ImportError(_INSTALL_HINT) from _FAST_PLAID_IMPORT_ERROR
     try:
-        from fast_plaid import search as _search  # type: ignore[import-not-found]
+        from fast_plaid import search as _search
 
         _FastPlaidCls = _search.FastPlaid
     except ImportError as e:  # pragma: no cover - exercised when extra is missing

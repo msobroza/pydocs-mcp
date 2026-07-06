@@ -226,7 +226,7 @@ ignore_errors = true
 # tests / benchmarks / 3rd-party-only-from-ignored-modules (mcp, watchdog,
 # openai) are NOT listed — adding them triggers `unused section` warnings.
 [[tool.mypy.overrides]]
-module = ["fastembed.*", "turbovec.*", "yaml.*", "numpy", "numpy.*"]
+module = ["fast_plaid.*", "fastembed.*", "turbovec.*", "yaml.*", "numpy", "numpy.*"]
 follow_imports = "skip"
 ignore_missing_imports = true
 

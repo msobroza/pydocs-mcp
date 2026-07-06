@@ -25,8 +25,8 @@ import matplotlib
 if "MPLBACKEND" not in os.environ:
     matplotlib.use("Agg")  # headless-safe by default
 
-import matplotlib.pyplot as plt  # noqa: E402 -- after backend selection
-import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt  # after backend selection
+import numpy as np
 
 # (label, recall@1, recall@5, recall@10) — all RepoQA small_test, 30 needles,
 # embedder fixed at codefuse-ai/F2LLM-v2-330M (896-d). Only the fusion step

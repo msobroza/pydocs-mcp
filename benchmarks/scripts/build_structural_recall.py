@@ -161,7 +161,7 @@ async def _build_rows_for_repo(
             seen: set[str] = set()
             cands: list[tuple[str, str, Any]] = []
             for nq, gold_kind in _neighbours_of(callers, callees, kinds_ok):
-                if nq in seen or nq == seed_qname or nq == dense_top1:
+                if nq in seen or nq in (seed_qname, dense_top1):
                     continue
                 seen.add(nq)
                 chunk = by_qname.get(nq)
