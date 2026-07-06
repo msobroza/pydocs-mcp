@@ -19,11 +19,16 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
     anywhere in this module.
   - The 100-char remainder gate: if the next piece does not fit but
     ``max_chars - total > 100`` chars remain, the piece is truncated and
-    appended; otherwise nothing extra is emitted.
+    appended; otherwise nothing extra is emitted. ``format_context``
+    historically used ``>=`` (partial IS emitted at exactly 100 chars
+    remaining); ``_take_within_budget`` preserves both gates verbatim via
+    ``inclusive_gate`` — pinned by boundary tests, to be unified only by a
+    deliberate decision.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Literal
 
 from pydocs_mcp.constants import (
@@ -56,6 +61,64 @@ _CHARS_PER_TOKEN = 4
 _TRUNCATION_MIN_REMAINDER = 100
 
 
+def _take_within_budget(
+    pieces: Iterable[str],
+    max_chars: int,
+    *,
+    start_total: int = 0,
+    inclusive_gate: bool = False,
+) -> list[str]:
+    """Accumulate ``pieces`` until ``max_chars``; truncate the overflow piece.
+
+    Single source of truth for the budget loop the module header pins.
+    Joining stays with the caller — and so does whether separators count
+    toward the budget: the chunk/member formatters join with ``"\\n"``
+    WITHOUT charging the separators, ``format_context`` joins with ``""``
+    and pre-charges its header via ``start_total``. Both quirks are part
+    of the byte-parity contract.
+
+    ``inclusive_gate`` preserves ``format_context``'s historical ``>=``
+    truncation gate (partial emitted at exactly
+    ``_TRUNCATION_MIN_REMAINDER`` chars remaining) versus the strict ``>``
+    of the other two callers. The divergence predates this helper; it is
+    pinned by regression tests rather than silently unified.
+    """
+    parts: list[str] = []
+    total = start_total
+    for piece in pieces:
+        if total + len(piece) > max_chars:
+            remaining = max_chars - total
+            emit_partial = (
+                remaining >= _TRUNCATION_MIN_REMAINDER
+                if inclusive_gate
+                else remaining > _TRUNCATION_MIN_REMAINDER
+            )
+            if emit_partial:
+                parts.append(piece[:remaining])
+            break
+        parts.append(piece)
+        total += len(piece)
+    return parts
+
+
+def _chunk_piece(chunk: Chunk) -> str:
+    title = chunk.metadata.get(ChunkFilterField.TITLE.value, "") or ""
+    text = chunk.text or ""
+    return f"## {title}\n{text}\n"
+
+
+def _member_piece(member: ModuleMember) -> str:
+    md = member.metadata
+    pkg = md.get(ModuleMemberFilterField.PACKAGE.value, "") or ""
+    module = md.get(ModuleMemberFilterField.MODULE.value, "") or ""
+    name = md.get(ModuleMemberFilterField.NAME.value, "") or ""
+    kind = md.get(ModuleMemberFilterField.KIND.value, "") or ""
+    signature = md.get("signature", "") or ""
+    docstring = md.get("docstring", "") or ""
+    header = f"**[{pkg}] {module}.{name}{signature}** ({kind})"
+    return f"{header}\n{docstring}\n"
+
+
 def format_chunks_markdown_within_budget(
     chunks: tuple[Chunk, ...],
     budget_tokens: int,
@@ -73,21 +136,12 @@ def format_chunks_markdown_within_budget(
     Returns:
         Concatenated markdown. Empty string when ``chunks`` is empty.
     """
-    max_chars = budget_tokens * _CHARS_PER_TOKEN
-    parts: list[str] = []
-    total = 0
-    for chunk in chunks:
-        title = chunk.metadata.get(ChunkFilterField.TITLE.value, "") or ""
-        text = chunk.text or ""
-        piece = f"## {title}\n{text}\n"
-        if total + len(piece) > max_chars:
-            remaining = max_chars - total
-            if remaining > _TRUNCATION_MIN_REMAINDER:
-                parts.append(piece[:remaining])
-            break
-        parts.append(piece)
-        total += len(piece)
-    return "\n".join(parts)
+    return "\n".join(
+        _take_within_budget(
+            (_chunk_piece(c) for c in chunks),
+            budget_tokens * _CHARS_PER_TOKEN,
+        )
+    )
 
 
 def format_packages_list(packages: tuple[Package, ...]) -> str:
@@ -141,27 +195,12 @@ def format_members_markdown_within_budget(
     Same byte-parity contract as :func:`format_chunks_markdown_within_budget`:
     pieces are ``"\\n".join``-ed, so between blocks there is a blank line.
     """
-    max_chars = budget_tokens * _CHARS_PER_TOKEN
-    parts: list[str] = []
-    total = 0
-    for member in members:
-        md = member.metadata
-        pkg = md.get(ModuleMemberFilterField.PACKAGE.value, "") or ""
-        module = md.get(ModuleMemberFilterField.MODULE.value, "") or ""
-        name = md.get(ModuleMemberFilterField.NAME.value, "") or ""
-        kind = md.get(ModuleMemberFilterField.KIND.value, "") or ""
-        signature = md.get("signature", "") or ""
-        docstring = md.get("docstring", "") or ""
-        header = f"**[{pkg}] {module}.{name}{signature}** ({kind})"
-        piece = f"{header}\n{docstring}\n"
-        if total + len(piece) > max_chars:
-            remaining = max_chars - total
-            if remaining > _TRUNCATION_MIN_REMAINDER:
-                parts.append(piece[:remaining])
-            break
-        parts.append(piece)
-        total += len(piece)
-    return "\n".join(parts)
+    return "\n".join(
+        _take_within_budget(
+            (_member_piece(m) for m in members),
+            budget_tokens * _CHARS_PER_TOKEN,
+        )
+    )
 
 
 # Per-``show`` rendering vocabulary (spec §5.7, appendix §A.1):
@@ -355,18 +394,15 @@ def format_context(
         f"{len(nodes)} symbols in the closure (max depth {max_hop}). Graded fidelity: "
         "focus = full source, ring = signature, rest = outline.\n"
     )
-    max_chars = token_budget * _CHARS_PER_TOKEN
     blocks = [h1, lead]
-    total = len(h1) + len(lead)
-    for node in nodes:
-        piece = _render_context_node(node)
-        if total + len(piece) > max_chars:
-            remaining = max_chars - total
-            if remaining >= _TRUNCATION_MIN_REMAINDER:
-                blocks.append(piece[:remaining])
-            break
-        blocks.append(piece)
-        total += len(piece)
+    blocks.extend(
+        _take_within_budget(
+            (_render_context_node(node) for node in nodes),
+            token_budget * _CHARS_PER_TOKEN,
+            start_total=len(h1) + len(lead),
+            inclusive_gate=True,
+        )
+    )
     out = "".join(blocks)
     return out if out.endswith("\n") else out + "\n"
 
