@@ -1,0 +1,47 @@
+# Two-stage retrieval — RepoQA experiment suite.
+# Stage 1: DENSE (embedding) candidate generation; top_k trims to 200.
+# Stage 2: LLM tree-reasoning reranks ONLY that subset (rerank_candidates: true)
+#          — it scopes the project tree to the candidates' qualified_names,
+#          writes its ranked picks to state.candidates, and backfills the
+#          unpicked remainder after them.
+# WHY dense seeding: the BM25-seeded pool structurally misses golds with
+# near-zero lexical overlap (full-corpus BM25 ranks 480/246 for two needles
+# that dense F2LLM-330M ranks at 1 — PAGEINDEX_DIVS.md F4). Identical to
+# pipelines/exp_bm25_tree_rerank.yaml EXCEPT stage 1 is dense_fetcher +
+# dense_scorer, so the only variable between the two runs is the candidate
+# generator. Requires an embedder (the `embedding:` config) at index + search
+# time AND an LLM client (the `llm:` config + OPENAI_API_KEY) at search time.
+# Referenced by ../repoqa_dense_tree_rerank_gpt55.yaml.
+name: exp_dense_tree_rerank
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params:
+      # Fetch well above k so top_k(200) isn't starved (default fetch is 50).
+      limit: 300
+  - name: score
+    type: dense_scorer
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: topk
+    type: top_k_filter
+    params:
+      k: 200
+  - name: tree_rerank
+    type: llm_tree_reasoning
+    params:
+      prompt_template: tree_reasoning_pydocs_v1
+      # Scope the LLM-visible tree to the dense top-200 and write the tree's
+      # ranked picks (+ backfilled remainder) straight to state.candidates.
+      rerank_candidates: true
+  - name: limit
+    type: limit
+    params:
+      max_results: 10
