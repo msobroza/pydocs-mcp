@@ -265,6 +265,42 @@ Adding one means: drop a `Dataset` Protocol implementation under
 `@dataset_registry.register("<name>")`, point a config at it, and write one
 README subsection mirroring the shape above. No harness changes required.
 
+## Sweep protocol
+
+The RepoQA `small_test` slice has absorbed many recorded tuning sweeps
+(method comparison, fusion weights, graph A/B) — treat every test-derived
+split as **held out**, never as an iteration surface. All tuning iterates on
+`small_dev`: the same-size mirror of `small_test` drawn from the `dev`
+partition (same Hamilton largest-remainder apportionment, same seed, same
+~30-task target — see `benchmarks/src/benchmarks/eval/datasets/_split.py`).
+
+The promotion ladder is strictly one-way:
+
+1. **Iterate on `--split small_dev`** — unlimited sweeps, warm index cache
+   (`--bench-cache on`). Compare configs on recall@5 (headline) with MRR as
+   the tiebreaker.
+2. **Promote to full `--split dev`** only configs that beat the frozen
+   baseline beyond noise. At ~30 tasks, bootstrap CIs on recall@1 are
+   ±0.15-wide, so require non-overlapping CIs or — better — a paired
+   per-task check (McNemar / paired bootstrap on the per-task 0/1 outcomes;
+   the harness already writes per-task JSONL events, so this is pure
+   post-processing).
+3. **One confirmatory run** on full `--split test`, with `--bench-cache
+   off`, plus the structural gate: recall@10 on `--dataset
+   repoqa-structural` must not regress (do-no-harm). A config that loses at
+   test goes back to `small_dev` — its variants do not get fresh test
+   shots.
+
+A config graduates to the frozen baseline when it (a) wins on dev, (b)
+confirms on test with the paired check, and (c) does not regress the
+structural gate. Then commit its result JSON to `benchmarks/baselines/`
+(config path + git SHA inside), flip the shipped YAML default, and it
+becomes the new gate. The baselines directory doubles as the audit log of
+how many times the test split has been consumed — budget roughly one
+confirmatory batch per release. Any RepoQA-tuned promotion must also not
+regress DS-1000 `--split test` — the cheap insurance against tuning into
+RepoQA's clean one-sentence query idiom.
+
 ## Results
 
 ### Method comparison (RepoQA `small_test`)
@@ -822,9 +858,13 @@ python -m benchmarks.eval.runner --dataset ds1000 \
     --dataset-library-filter pandas,numpy ...
 ```
 
-`--split {all,dev,test}` (default `all`) partitions each library independently —
-preserving every library's corpus proportion — into a seeded dev head and test
-tail, so you can tune on `dev` without contaminating the held-out `test` numbers.
+`--split {all,dev,test,small_test,small_dev}` (default `all`) partitions each
+library independently — preserving every library's corpus proportion — into a
+seeded dev head and test tail, so you can tune on `dev` without contaminating
+the held-out `test` numbers. `small_test` and `small_dev` are fixed-size
+(~30-task) Hamilton-apportioned stratified subsamples of the `test` tail and
+the `dev` head respectively — same apportionment, same seed, same target size;
+see [Sweep protocol](#sweep-protocol) for which one a sweep should use.
 The same `--split` applies to RepoQA (partitioned by repo).
 `--dataset-library-filter` takes a comma-separated list matched against the
 normalized (lower-cased) library name. `--dataset-full-prompt` (DS-1000 only)
