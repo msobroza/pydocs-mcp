@@ -233,64 +233,53 @@ class ReferenceResolver:
         return None
 
 
+def split_symbol_qname(node_id: str) -> tuple[str, str | None]:
+    """Split a chunker qname into ``(module_qname, class_qname_or_None)``.
+
+    Single owner of the uppercase-segment heuristic: the second-to-last
+    dotted segment names a class iff there are >= 3 segments and it
+    starts uppercase (PEP 8). ``pkg.mod.Cls.method`` →
+    ``("pkg.mod", "pkg.mod.Cls")``; ``pkg.mod.fn`` → ``("pkg.mod", None)``.
+
+    Deliberate delta vs the two pre-unification copies (which disagreed
+    on the guard, ``>= 3`` vs ``>= 2``): a 2-part id with an uppercase
+    first segment (``HTTP.client``) now yields module ``"HTTP"`` instead
+    of ``""`` — the old two-segment strip could never match the alias
+    table anyway. Safe either way: both consumers treat a wrong split as
+    a silent table miss, never a crash (false negatives skip a lookup;
+    false positives are filtered by ``class_attribute_types`` membership
+    or the qname-universe gate in ``_infer_self_type``).
+
+    TODO: this heuristic depends on
+    :class:`~pydocs_mcp.extraction.strategies.chunkers.ast_python.AstPythonChunker`
+    stamping method qnames as ``<module>.<Class>.<method>``. If that
+    convention ever changes (nested classes inside functions, PEP 695
+    generic params in the qname), update this function in lockstep —
+    it is the ONLY site encoding the rule.
+    """
+    parts = node_id.split(".")
+    if len(parts) >= 3 and parts[-2] and parts[-2][0].isupper():
+        return ".".join(parts[:-2]), ".".join(parts[:-1])
+    return ".".join(parts[:-1]), None
+
+
 def _enclosing_class_qname(from_node_id: str) -> str | None:
     """Return the class qname enclosing ``from_node_id``, or None.
 
-    The chunker stamps method qnames as ``pkg.mod.ClassName.method``; the
-    second-to-last segment is the class name and starts uppercase by PEP 8.
-    Free functions and module-level captures fall through with None.
-
-    Same heuristic as ``_module_part_of`` (one segment up), inverted to
-    return the class-qname rather than the module-qname.
-
-    Safety: false negatives (e.g. a snake_case class ``my_helper`` or an
-    UPPERCASE module ``pkg.HTTP.client``) simply miss the table lookup
-    and Rule 5 short-circuits the reference unchanged. False positives
-    are impossible to leak into a real resolution because both inference
-    paths in :meth:`ReferenceResolver._infer_self_type` either consult
-    the captured ``class_attribute_types`` table (which only contains
-    real classes) or gate on qname-universe membership (the self-as-
-    class fallback). Misfires lose accuracy, never correctness.
-
-    TODO: this heuristic depends on the chunker stamping method qnames
-    as ``<module>.<Class>.<method>``. If
-    :class:`~pydocs_mcp.extraction.strategies.chunkers.ast_python.AstPythonChunker`
-    ever changes that convention (e.g. to support nested classes inside
-    functions, or PEP 695 generic params in the qname), update this
-    heuristic in lockstep.
+    Free functions and module-level captures fall through with None —
+    Rule 5 then short-circuits the reference unchanged, so a miss loses
+    accuracy, never correctness. Heuristic lives in
+    :func:`split_symbol_qname`.
     """
-    parts = from_node_id.split(".")
-    if len(parts) >= 3 and parts[-2] and parts[-2][0].isupper():
-        return ".".join(parts[:-1])
-    return None
+    return split_symbol_qname(from_node_id)[1]
 
 
 def _module_part_of(node_id: str) -> str:
     """Return the dotted prefix that names the MODULE containing node_id.
 
-    The from_node_id is the chunker's qname for the source node —
-    ``pkg.mod.fn`` (function) or ``pkg.mod.ClassName.method`` or
-    ``pkg.mod`` (the module itself for IMPORTS). The alias table is
-    keyed by MODULE qname, not by symbol qname.
-
-    Implementation: walk-from-left over the dotted parts and return the
-    longest prefix that exists in self.aliases — but we don't have access
-    to self.aliases here. Simpler: return everything before the LAST
-    segment for symbols inside a module. For module-level (IMPORTS from
-    `pkg.mod`), the whole thing IS the module qname. The resolver
-    handles both via `self.aliases.get(...)` which returns {} on miss —
-    a wrong split silently misses the alias but never crashes.
+    The alias table is keyed by MODULE qname, not symbol qname; the
+    resolver consults ``self.aliases.get(...)`` which returns ``{}`` on a
+    miss — a wrong split silently misses the alias but never crashes.
+    Heuristic lives in :func:`split_symbol_qname`.
     """
-    # Heuristic: if the second-to-last segment starts with a capital,
-    # assume it's a class (e.g. ``pkg.mod.Cls.method``); strip TWO segments.
-    # Otherwise strip ONE (e.g. ``pkg.mod.fn`` → ``pkg.mod``). For module-
-    # level captures (from_node_id == module qname) the caller passes the
-    # full module qname through; this function's output won't match the
-    # alias table for those cases, which is fine — they don't need
-    # rewriting (the alias table is consulted for SYMBOL captures inside
-    # a module, not for module-level IMPORTS captures whose to_name is
-    # already absolute).
-    parts = node_id.split(".")
-    if len(parts) >= 2 and parts[-2] and parts[-2][0].isupper():
-        return ".".join(parts[:-2])
-    return ".".join(parts[:-1])
+    return split_symbol_qname(node_id)[0]
