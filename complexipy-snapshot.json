@@ -108,12 +108,18 @@
     "file_name": "llm_tree_reasoning.py",
     "functions": [
       {
-        "name": "_doc_sections",
-        "complexity": 19
-      },
-      {
         "name": "LlmTreeReasoningStep::run",
         "complexity": 26
+      }
+    ]
+  },
+  {
+    "path": "pydocs_mcp/retrieval/tree_prompt/doc_excerpt.py",
+    "file_name": "doc_excerpt.py",
+    "functions": [
+      {
+        "name": "doc_sections",
+        "complexity": 19
       }
     ]
   },

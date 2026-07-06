@@ -1,7 +1,7 @@
 """LlmTreeReasoningStep context-budget pruning (measured in tiktoken tokens).
 
 Regression for the 400 `context_length_exceeded` a large repo's project tree
-triggers: `_fit_trees_to_budget` must prune the LLM-visible tree to fit
+triggers: `fit_trees_to_budget` must prune the LLM-visible tree to fit
 `max_tree_tokens` (real tokens, so the prompt can't exceed the context window),
 and the step must apply it so the prompt is bounded.
 """
@@ -12,11 +12,11 @@ import json
 
 import pytest
 
-from pydocs_mcp.retrieval.steps.llm_tree_reasoning import (
-    _fit_trees_to_budget,
-    _prune_to_node_budget,
-    _token_count,
-    _total_nodes,
+from pydocs_mcp.retrieval.tree_prompt.tree_budget_fitter import (
+    fit_trees_to_budget,
+    prune_to_node_budget,
+    token_count,
+    total_nodes,
 )
 
 _MODEL = "gpt-4o-mini"  # selects the tiktoken encoding the pruner counts with
@@ -48,24 +48,24 @@ def _big_forest(n_modules: int = 40, per_module: int = 25) -> list[dict]:
 
 def test_small_tree_is_unchanged() -> None:
     forest = [_node("a"), _node("b")]
-    out, reduction = _fit_trees_to_budget(forest, 1_000_000, _MODEL)
+    out, reduction = fit_trees_to_budget(forest, 1_000_000, _MODEL)
     assert reduction == ""
     assert out == forest
 
 
 def test_oversized_tree_is_pruned_to_fit() -> None:
     forest = _big_forest()  # no `doc` fields -> stripping docs is a no-op
-    budget = _token_count(forest, _MODEL) // 4
-    out, reduction = _fit_trees_to_budget(forest, budget, _MODEL)
+    budget = token_count(forest, _MODEL) // 4
+    out, reduction = fit_trees_to_budget(forest, budget, _MODEL)
     assert reduction == "nodes"
-    assert _token_count(out, _MODEL) <= budget
-    assert _total_nodes(out) < _total_nodes(forest)
+    assert token_count(out, _MODEL) <= budget
+    assert total_nodes(out) < total_nodes(forest)
     assert len(out) >= 1  # at least the first root(s) survive (BFS keeps shallow first)
 
 
 def test_prune_keeps_a_valid_orphan_free_tree() -> None:
-    pruned = _prune_to_node_budget(_big_forest(5, 5), max_nodes=8)
-    assert _total_nodes(pruned) <= 8
+    pruned = prune_to_node_budget(_big_forest(5, 5), max_nodes=8)
+    assert total_nodes(pruned) <= 8
 
     def well_formed(n: dict) -> bool:
         return {"qualified_name", "title", "kind", "summary", "nodes"} <= n.keys() and all(
@@ -77,9 +77,9 @@ def test_prune_keeps_a_valid_orphan_free_tree() -> None:
 
 def test_extreme_budget_floors_to_one_node() -> None:
     # Smaller than even a single node — best effort floors to one node, never crashes.
-    out, reduction = _fit_trees_to_budget(_big_forest(), 3, _MODEL)
+    out, reduction = fit_trees_to_budget(_big_forest(), 3, _MODEL)
     assert reduction == "nodes"
-    assert _total_nodes(out) == 1
+    assert total_nodes(out) == 1
 
 
 # ── content-first reduction: drop doc excerpts before whole nodes ──────────
@@ -99,29 +99,29 @@ def _node_with_doc(qn: str) -> dict:
 
 
 def _docless_tokens(forest: list[dict]) -> int:
-    return _token_count([{k: v for k, v in n.items() if k != "doc"} for n in forest], _MODEL)
+    return token_count([{k: v for k, v in n.items() if k != "doc"} for n in forest], _MODEL)
 
 
 def test_docs_dropped_before_nodes_when_strip_suffices() -> None:
     forest = [_node_with_doc(f"f{i}") for i in range(10)]
     docless = _docless_tokens(forest)
-    full = _token_count(forest, _MODEL)
+    full = token_count(forest, _MODEL)
     budget = (docless + full) // 2  # fits without docs, not with them
     assert docless <= budget < full
-    out, reduction = _fit_trees_to_budget(forest, budget, _MODEL)
+    out, reduction = fit_trees_to_budget(forest, budget, _MODEL)
     assert reduction == "docs"
-    assert _total_nodes(out) == _total_nodes(forest)  # EVERY node preserved
+    assert total_nodes(out) == total_nodes(forest)  # EVERY node preserved
     assert all("doc" not in n for n in out)  # only the optional doc dropped
-    assert _token_count(out, _MODEL) <= budget
+    assert token_count(out, _MODEL) <= budget
 
 
 def test_nodes_dropped_when_docless_still_too_big() -> None:
     forest = [_node_with_doc(f"f{i}") for i in range(30)]
     budget = _docless_tokens(forest) // 2  # too big even without docs
-    out, reduction = _fit_trees_to_budget(forest, budget, _MODEL)
+    out, reduction = fit_trees_to_budget(forest, budget, _MODEL)
     assert reduction == "nodes"
-    assert _total_nodes(out) < _total_nodes(forest)
-    assert _token_count(out, _MODEL) <= budget
+    assert total_nodes(out) < total_nodes(forest)
+    assert token_count(out, _MODEL) <= budget
 
 
 def _big_tree_step(**step_kw):
