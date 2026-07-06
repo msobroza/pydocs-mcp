@@ -29,9 +29,10 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Literal
 
+from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
 from pydocs_mcp.constants import (
     LIST_PACKAGES_MAX,
     PACKAGE_DOC_LINE_MAX,
@@ -103,6 +104,7 @@ def _take_within_budget(
     *,
     start_total: int = 0,
     inclusive_gate: bool = False,
+    on_elide: Callable[[int], TruncationEntry | None] | None = None,
 ) -> list[str]:
     """Accumulate ``pieces`` until ``max_chars``; truncate the overflow piece.
 
@@ -121,7 +123,9 @@ def _take_within_budget(
     """
     parts: list[str] = []
     total = start_total
-    for piece in pieces:
+    elided = 0
+    iterator = iter(pieces)
+    for piece in iterator:
         if total + len(piece) > max_chars:
             remaining = max_chars - total
             emit_partial = (
@@ -131,9 +135,17 @@ def _take_within_budget(
             )
             if emit_partial:
                 parts.append(piece[:remaining])
+            # A partially-emitted piece still counts as elided — its tail was
+            # dropped. Draining the iterator counts what never rendered.
+            elided = 1 + sum(1 for _ in iterator)  # this piece + the rest
             break
         parts.append(piece)
         total += len(piece)
+    if elided and on_elide is not None:
+        ledger = get_active_ledger()
+        entry = on_elide(elided)
+        if ledger is not None and entry is not None:
+            ledger.record(entry)
     return parts
 
 
@@ -182,10 +194,19 @@ def format_chunks_markdown_within_budget(
     Returns:
         Concatenated markdown. Empty string when ``chunks`` is empty.
     """
+
+    def _entry(count: int) -> TruncationEntry:
+        first_qname = next((str(c.metadata.get("qualified_name") or "") for c in chunks), "")
+        return TruncationEntry(
+            description=f"{count} result(s) elided by the token budget",
+            recovery=pointer_token("lookup", first_qname) if first_qname else "",
+        )
+
     return "\n".join(
         _take_within_budget(
             (_chunk_piece(c) for c in chunks),
             budget_tokens * _CHARS_PER_TOKEN,
+            on_elide=_entry,
         )
     )
 
@@ -241,10 +262,25 @@ def format_members_markdown_within_budget(
     Same byte-parity contract as :func:`format_chunks_markdown_within_budget`:
     pieces are ``"\\n".join``-ed, so between blocks there is a blank line.
     """
+
+    def _entry(count: int) -> TruncationEntry:
+        target = ""
+        for m in members:
+            module = m.metadata.get(ModuleMemberFilterField.MODULE.value, "") or ""
+            name = m.metadata.get(ModuleMemberFilterField.NAME.value, "") or ""
+            if module and name:
+                target = f"{module}.{name}"
+                break
+        return TruncationEntry(
+            description=f"{count} result(s) elided by the token budget",
+            recovery=pointer_token("lookup", target) if target else "",
+        )
+
     return "\n".join(
         _take_within_budget(
             (_member_piece(m) for m in members),
             budget_tokens * _CHARS_PER_TOKEN,
+            on_elide=_entry,
         )
     )
 
@@ -312,6 +348,22 @@ def format_references(
         f"{len(rows)} references found "
         f"({resolved_count} resolved, {unresolved_count} unresolved).\n"
     )
+
+    # A full page (``len(rows) == limit``) can't distinguish "exactly this many"
+    # from "the limit clipped more" — record the elision so the envelope surfaces
+    # the recovery pointer (spec §D7).
+    if len(rows) == limit:
+        ledger = get_active_ledger()
+        if ledger is not None:
+            ledger.record(
+                TruncationEntry(
+                    description=(
+                        f"exactly {limit} rows returned — possibly more exist; "
+                        "raise reference_graph.output.default_limit to see them"
+                    ),
+                    recovery=pointer_token("lookup-show", target, show),
+                )
+            )
 
     # Group by from_package preserving FIRST-SEEN order — appendix §A.1's
     # example renders packages in the order they appear in ``rows``.
@@ -440,6 +492,15 @@ def format_context(
         f"{len(nodes)} symbols in the closure (max depth {max_hop}). Graded fidelity: "
         "focus = full source, ring = signature, rest = outline.\n"
     )
+
+    def _context_entry(count: int) -> TruncationEntry:
+        # ``"context"`` is not in ``_SHOW_VOCAB`` — it doesn't need to be; the
+        # pointer token's show-word round-trips verbatim through resolve_pointers.
+        return TruncationEntry(
+            description=f"{count} closure symbol(s) elided by the context budget",
+            recovery=pointer_token("lookup-show", target, "context"),
+        )
+
     blocks = [h1, lead]
     blocks.extend(
         _take_within_budget(
@@ -447,6 +508,7 @@ def format_context(
             token_budget * _CHARS_PER_TOKEN,
             start_total=len(h1) + len(lead),
             inclusive_gate=True,
+            on_elide=_context_entry,
         )
     )
     out = "".join(blocks)
