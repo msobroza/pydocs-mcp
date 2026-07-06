@@ -40,9 +40,7 @@ Or from the command line::
 from __future__ import annotations
 
 import argparse
-import json
 from collections.abc import Iterable
-from dataclasses import dataclass
 from pathlib import Path
 
 # Import matplotlib BEFORE pyplot so a headless backend can be picked up
@@ -56,9 +54,15 @@ import seaborn as sns
 from matplotlib.container import BarContainer
 from matplotlib.figure import Figure
 
+from .baseline_record import BaselineRecord
+
 # Single source of truth — referenced by both the public defaults and the
 # CLI parser so bumping one updates the other (CLAUDE.md §"Default values").
 _DEFAULT_PALETTE = "colorblind"
+# Single source of truth for figure export resolution — previously the
+# ``dpi=150`` literal was repeated in all three save blocks (CLAUDE.md
+# §"Default values").
+_SAVEFIG_DPI = 150
 _DEFAULT_METRICS: tuple[str, ...] = (
     "recall@1",
     "recall@5",
@@ -81,66 +85,6 @@ _TIMING_PRETTY: dict[str, str] = {
     "indexing_seconds": "Indexing time (seconds)",
     "search_seconds": "Per-query search latency (seconds)",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class BaselineRecord:
-    """A loaded baseline JSON ready for plotting.
-
-    Mirrors the shape written by Task 6's heredoc in
-    ``benchmarks/baselines/*.json``: ``dataset``, ``system``, ``config``,
-    ``label``, ``tasks_ran``, ``metrics``, ``captured_at``, ``git_sha``,
-    ``source_jsonl``.
-    """
-
-    system: str
-    config: str
-    label: str
-    dataset: str
-    tasks_ran: int
-    metrics: dict[str, dict[str, float]]
-    captured_at: str | None
-    git_sha: str | None
-
-    @classmethod
-    def from_path(cls, path: Path) -> BaselineRecord:
-        """Load a baseline JSON from disk."""
-        data = json.loads(path.read_text())
-        return cls(
-            system=data["system"],
-            config=data["config"],
-            label=data.get("label", "<unlabeled>"),
-            dataset=data["dataset"],
-            tasks_ran=int(data["tasks_ran"]),
-            metrics=data["metrics"],
-            captured_at=data.get("captured_at"),
-            git_sha=data.get("git_sha"),
-        )
-
-    @property
-    def display_label(self) -> str:
-        """Legend label disambiguating the baseline.
-
-        Format: ``"<system> / <config> (<label>)"``. The ``label`` field
-        is included so two baselines that share ``system`` + ``config``
-        but report from different sweeps (e.g. fixture-5-needles vs
-        real-100-needles) don't collide on the X-axis hue.
-        """
-        return f"{self.system} / {self.config} ({self.label})"
-
-    @property
-    def legend_suffix(self) -> str:
-        """Compact provenance string ``[<git_sha[:7]>, n=<tasks>]``.
-
-        Sized to fit comfortably in a matplotlib legend without clipping.
-        ``label`` is intentionally NOT duplicated here — it's already in
-        :attr:`display_label`.
-        """
-        parts: list[str] = []
-        if self.git_sha:
-            parts.append(self.git_sha[:7])
-        parts.append(f"n={self.tasks_ran}")
-        return f" [{', '.join(parts)}]"
 
 
 def plot_baselines(
@@ -178,17 +122,14 @@ def plot_baselines(
     Raises:
         ValueError: if ``baselines`` or ``metrics`` is empty.
     """
-    records = _load_records(baselines, fn_name="plot_baselines")
+    records = _prepare(baselines, fn_name="plot_baselines", font_scale=1.1)
 
     metrics = tuple(metrics)
     if not metrics:
         raise ValueError("plot_baselines requires at least one metric")
 
-    _validate_same_dataset(records, fn_name="plot_baselines")
-
     df = _long_dataframe(records, metrics)
 
-    sns.set_theme(style="whitegrid", context="paper", font_scale=1.1)
     fig, ax = plt.subplots(figsize=figsize)
 
     system_order = [r.display_label for r in records]
@@ -215,7 +156,7 @@ def plot_baselines(
     ax.set_ylim(0.0, 1.0)
 
     if title is None:
-        title = f"{records[0].dataset} ({records[0].tasks_ran} tasks)"
+        title = _default_title(records)
     ax.set_title(title)
 
     # Legend with compact provenance suffix per system.
@@ -228,9 +169,7 @@ def plot_baselines(
 
     fig.tight_layout()
 
-    if output is not None:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output, dpi=150, bbox_inches="tight")
+    _save_figure(fig, output)
 
     return fig
 
@@ -271,6 +210,42 @@ def _validate_same_dataset(
             f"datasets: {sorted(datasets)}. Records: {per_dataset}. "
             f"Call {fn_name} once per dataset instead."
         )
+
+
+def _prepare(
+    baselines: Iterable[BaselineRecord | Path],
+    *,
+    fn_name: str,
+    font_scale: float,
+) -> list[BaselineRecord]:
+    """Shared figure prelude: load records, apples-to-apples guard, theme.
+
+    WHY one helper: all three plot functions repeated this block verbatim;
+    a fourth plot type must not copy it a fourth time. Title placement and
+    layout deliberately STAY in the callers — plot_timings uses
+    ``fig.suptitle`` + constrained_layout while the others use
+    ``ax.set_title`` + ``tight_layout``, so folding them here would change
+    visual output. NOTE: the same-dataset guard now runs before the
+    empty-metrics check in plot_baselines/plot_timings (error-precedence
+    swap only; both inputs still raise ValueError).
+    """
+    records = _load_records(baselines, fn_name=fn_name)
+    _validate_same_dataset(records, fn_name=fn_name)
+    sns.set_theme(style="whitegrid", context="paper", font_scale=font_scale)
+    return records
+
+
+def _default_title(records: list[BaselineRecord]) -> str:
+    """``"<dataset> (<tasks_ran> tasks)"`` from the first record."""
+    return f"{records[0].dataset} ({records[0].tasks_ran} tasks)"
+
+
+def _save_figure(fig: Figure, output: Path | None) -> None:
+    """Save when an output path was given; parent dirs auto-created."""
+    if output is None:
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output, dpi=_SAVEFIG_DPI, bbox_inches="tight")
 
 
 def plot_timings(
@@ -315,13 +290,10 @@ def plot_timings(
         ValueError: if ``baselines`` or ``metrics`` is empty, or if the
             baselines span multiple datasets.
     """
-    records = _load_records(baselines, fn_name="plot_timings")
+    records = _prepare(baselines, fn_name="plot_timings", font_scale=1.0)
     metrics = tuple(metrics)
     if not metrics:
         raise ValueError("plot_timings requires at least one metric")
-    _validate_same_dataset(records, fn_name="plot_timings")
-
-    sns.set_theme(style="whitegrid", context="paper", font_scale=1.0)
 
     if figsize is None:
         width = 10.0
@@ -349,12 +321,10 @@ def plot_timings(
         _plot_timing_axis(ax, records, metric, colors)
 
     if title is None:
-        title = f"{records[0].dataset} ({records[0].tasks_ran} tasks)"
+        title = _default_title(records)
     fig.suptitle(title, fontsize=11, y=1.02)
 
-    if output is not None:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output, dpi=150, bbox_inches="tight")
+    _save_figure(fig, output)
 
     return fig
 
@@ -409,10 +379,7 @@ def plot_metric_vs_latency(
     Raises:
         ValueError: empty baselines, or mixed datasets.
     """
-    records = _load_records(baselines, fn_name="plot_metric_vs_latency")
-    _validate_same_dataset(records, fn_name="plot_metric_vs_latency")
-
-    sns.set_theme(style="whitegrid", context="paper", font_scale=1.0)
+    records = _prepare(baselines, fn_name="plot_metric_vs_latency", font_scale=1.0)
     fig, ax = plt.subplots(figsize=figsize)
 
     colors = sns.color_palette(palette, n_colors=max(len(records), 3))
@@ -474,7 +441,7 @@ def plot_metric_vs_latency(
     ax.set_xlim(left=0.0)
 
     if title is None:
-        title = f"{records[0].dataset} ({records[0].tasks_ran} tasks)"
+        title = _default_title(records)
     ax.set_title(title)
 
     # The annotations already identify each point — keep the legend off
@@ -482,9 +449,7 @@ def plot_metric_vs_latency(
     # want a legend can grab handles/labels off the returned Figure.
     fig.tight_layout()
 
-    if output is not None:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output, dpi=150, bbox_inches="tight")
+    _save_figure(fig, output)
 
     return fig
 

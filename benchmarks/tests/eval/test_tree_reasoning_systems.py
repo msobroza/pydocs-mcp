@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from benchmarks.eval.systems.pydocs import (
@@ -28,29 +26,20 @@ def test_tree_parallel_system_uses_correct_config() -> None:
     "system_cls",
     [PydocsTreeOnlySystem, PydocsTreeParallelSystem],
 )
-def test_tree_preset_index_carries_runner_gpu_device(
+def test_tree_preset_override_carries_runner_gpu_device(
     system_cls: type[PydocsMcpSystem],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The reloaded preset override must inherit the runner's --gpu device.
+    """The reloaded preset must inherit the runner's --gpu device.
 
     The runner applies ``.with_device`` to the config it threads into
-    ``index``. The tree-preset variants reload their own preset YAML, which
+    ``index``; ``_preset_override`` reloads the pinned preset YAML, which
     would otherwise discard that device stamp and silently embed on CPU.
     """
-    captured: dict[str, AppConfig] = {}
-
-    async def _capture(self, corpus_dir: Path, config: AppConfig) -> None:
-        captured["config"] = config
-
-    monkeypatch.setattr(PydocsMcpSystem, "index", _capture)
-
     incoming = AppConfig().with_device(gpu=True)
     assert incoming.embedding.device == "cuda"  # guard: precondition holds
 
-    import asyncio
+    override = system_cls()._preset_override(incoming)
 
-    asyncio.run(system_cls().index(Path("corpus"), incoming))
-
-    assert captured["config"].embedding.device == "cuda"
-    assert captured["config"].late_interaction.device == "cuda"
+    assert override is not incoming  # the preset really was reloaded
+    assert override.embedding.device == "cuda"
+    assert override.late_interaction.device == "cuda"

@@ -12,10 +12,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from benchmarks.eval.datasets.base_dataset import Dataset
-from benchmarks.eval.datasets.ds1000 import (
-    _PINNED_DS1000_REVISION,
-    _PINNED_LIBDOCS_REVISION,
-    Ds1000Dataset,
+from benchmarks.eval.datasets.ds1000 import Ds1000Dataset
+from benchmarks.eval.datasets.ds1000_schema import (
+    PINNED_DS1000_REVISION,
+    PINNED_LIBDOCS_REVISION,
 )
 from benchmarks.eval.serialization import dataset_registry
 
@@ -111,7 +111,7 @@ async def test_library_filter_slices_rows() -> None:
 
 async def test_library_filter_normalizes_title_case_input() -> None:
     """REGRESSION: ``library_filter`` values are normalized through the same
-    ``_normalize_library`` canonicalization as the row library before
+    ``to_pypi_canonical`` canonicalization as the row library before
     comparing, so the casing a user sees in DS-1000 (title-case ``"Pandas"``)
     matches. ``("Pandas",)``, ``("pandas",)``, and ``("PANDAS",)`` must all
     select exactly the 3 pandas rows, each tagged with the normalized
@@ -234,7 +234,7 @@ def test_split_sort_key_derives_from_gold_title_on_real_rows() -> None:
     ``_gold_doc_fields``. On real HF rows (``docs[*].title``, no ``doc_id``)
     reading the legacy key directly would yield ``""`` for every row, silently
     collapsing the stratification key to the prompt for the whole corpus."""
-    from benchmarks.eval.datasets.ds1000 import _split_sort_key
+    from benchmarks.eval.datasets.ds1000_schema import _split_sort_key
 
     real = {"prompt": "P", "docs": [{"function": "np.imag", "title": "numpy.imag", "text": "x"}]}
     assert _split_sort_key(real) == "numpy.imag"
@@ -263,11 +263,11 @@ async def test_library_name_normalized_to_lowercase() -> None:
     # PyTorch normalization: a "Pytorch" raw field → "torch" (PyPI canonical).
     # The fixture may not include a pytorch row (count constraint: 3+2+1+1+1=8),
     # so verify the normalization map directly.
-    from benchmarks.eval.datasets.ds1000 import _LIBRARY_NORMALIZATION
+    from benchmarks.eval.datasets.ds1000_schema import to_pypi_canonical
 
-    assert _LIBRARY_NORMALIZATION["Pytorch"] == "torch"
-    assert _LIBRARY_NORMALIZATION["Pandas"] == "pandas"
-    assert _LIBRARY_NORMALIZATION["Scikit-learn"] == "scikit-learn"
+    assert to_pypi_canonical("Pytorch") == "torch"
+    assert to_pypi_canonical("Pandas") == "pandas"
+    assert to_pypi_canonical("Scikit-learn") == "scikit-learn"
 
 
 # --- Metadata-nested library + empty-gold filtering (real HF row shape) -----
@@ -322,7 +322,7 @@ def test_has_gold_handles_list_and_json_string_and_empty() -> None:
     """``_has_gold`` parses the ``docs`` field robustly: a real list, a JSON
     string (``'[]'`` / ``'["..."]'``), and parse failures all resolve to the
     right has-gold verdict (>=1 doc => True; empty / unparseable => False)."""
-    from benchmarks.eval.datasets.ds1000 import _has_gold
+    from benchmarks.eval.datasets.ds1000_schema import _has_gold
 
     # Actual list forms.
     assert _has_gold({"docs": [{"doc_id": "a", "doc_content": "x"}]}) is True
@@ -340,7 +340,7 @@ def test_resolve_library_prefers_top_level_then_metadata() -> None:
     else reads it from ``metadata`` — handling both the live ``datasets`` DICT
     shape and a defensive repr-dict STRING; and returns ``""`` on absence /
     parse failure (never raises)."""
-    from benchmarks.eval.datasets.ds1000 import _resolve_library
+    from benchmarks.eval.datasets.ds1000_schema import _resolve_library
 
     # Top-level wins, even when metadata also carries a (different) library.
     assert _resolve_library({"library": "Pandas", "metadata": {"library": "Numpy"}}) == "Pandas"
@@ -361,7 +361,7 @@ def test_lift_metadata_fields_lifts_library_and_perturbation_from_dict() -> None
     top level when absent, preferring an existing top-level value. Without the
     perturbation lift, every real row would collapse to a colliding
     ``ds1000/<lib>//`` task id."""
-    from benchmarks.eval.datasets.ds1000 import _lift_metadata_fields
+    from benchmarks.eval.datasets.ds1000_schema import _lift_metadata_fields
 
     row = {
         "metadata": {
@@ -420,7 +420,7 @@ def test_dataset_is_registered_under_ds1000() -> None:
 def test_pinned_revisions_are_real_strings() -> None:
     """Both HF revision pins must be non-empty strings — they're passed
     through to ``datasets.load_dataset(revision=...)`` in full runs."""
-    assert isinstance(_PINNED_DS1000_REVISION, str)
-    assert isinstance(_PINNED_LIBDOCS_REVISION, str)
-    assert _PINNED_DS1000_REVISION  # non-empty
-    assert _PINNED_LIBDOCS_REVISION  # non-empty
+    assert isinstance(PINNED_DS1000_REVISION, str)
+    assert isinstance(PINNED_LIBDOCS_REVISION, str)
+    assert PINNED_DS1000_REVISION  # non-empty
+    assert PINNED_LIBDOCS_REVISION  # non-empty

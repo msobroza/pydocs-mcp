@@ -21,7 +21,7 @@ from pathlib import Path
 
 from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
 from benchmarks.eval.metrics.base_metric import Scorer
-from benchmarks.eval.runner import (
+from benchmarks.eval.sweep_support import (
     _capture_library_resolution,
     _maybe_set_library,
     _resolve_and_inject,

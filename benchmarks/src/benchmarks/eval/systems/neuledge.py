@@ -36,7 +36,8 @@ import httpx
 
 from ..gold_resolver import _DEFAULT_FUZZ_THRESHOLD, LazyFuzzyGoldResolver
 from ..serialization import system_registry
-from .base_system import RetrievedItem
+from ._mcp_http import _DEFAULT_TIMEOUT, McpHttpClient
+from .base_system import RetrievedItem, single_blob_items
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
@@ -66,7 +67,7 @@ def _parse_sse_json(text: str) -> dict:
     return json.loads(text)
 
 
-class NeuledgeClient:
+class NeuledgeClient(McpHttpClient):
     """Async context-manager client for Neuledge Context MCP tools.
 
     Usage::
@@ -75,33 +76,39 @@ class NeuledgeClient:
             docs = await client.get_docs("pandas", "DataFrame merge")
     """
 
+    error_cls = NeuledgeError
+
     def __init__(
         self,
         base_url: str = "http://localhost:8080/mcp",
-        timeout: float = 30.0,
-    ):
-        self._base_url = base_url
-        self._timeout = timeout
-        self._http: httpx.AsyncClient | None = None
-        self._request_id: int = 0
+        timeout: float = _DEFAULT_TIMEOUT,
+    ) -> None:
+        super().__init__(base_url, timeout)
         self._session_id: str | None = None
 
     async def __aenter__(self) -> NeuledgeClient:
-        self._http = httpx.AsyncClient(
-            timeout=self._timeout,
-            headers={"Accept": "application/json, text/event-stream"},
-        )
+        # WHY the override: Neuledge requires an MCP initialize handshake
+        # before any tool call (Context7 is sessionless and skips it).
+        await super().__aenter__()
         await self._initialize()
         return self
 
-    async def __aexit__(self, *exc) -> None:
-        if self._http:
-            await self._http.aclose()
-            self._http = None
+    def _headers(self) -> dict[str, str]:
+        # WHY: Neuledge's Streamable HTTP transport is session-ful — echo
+        # the Mcp-Session-Id captured during initialize on every request.
+        if self._session_id:
+            return {"Mcp-Session-Id": self._session_id}
+        return {}
 
-    def _next_id(self) -> int:
-        self._request_id += 1
-        return self._request_id
+    def _decode(self, resp: httpx.Response) -> dict:
+        return _parse_sse_json(resp.text)
+
+    def _extract_text(self, result: dict) -> str:
+        # Join ALL text blocks — Neuledge may split docs across blocks and
+        # interleave non-text content (filtered out here).
+        content = result.get("content", [])
+        texts = [c["text"] for c in content if c.get("type") == "text"]
+        return "\n".join(texts)
 
     async def _initialize(self) -> None:
         """Send MCP initialize handshake (required before tool calls)."""
@@ -136,42 +143,6 @@ class NeuledgeClient:
             headers["Mcp-Session-Id"] = self._session_id
         await self._http.post(self._base_url, json=notif, headers=headers)
 
-    async def _call_tool(self, tool_name: str, arguments: dict) -> str:
-        """POST a JSON-RPC tool call and return the first text content block."""
-        assert self._http is not None
-        payload = {
-            "jsonrpc": "2.0",
-            "id": self._next_id(),
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        }
-        headers = {}
-        if self._session_id:
-            headers["Mcp-Session-Id"] = self._session_id
-
-        try:
-            resp = await self._http.post(self._base_url, json=payload, headers=headers)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise NeuledgeError(f"HTTP {exc.response.status_code}") from exc
-        except httpx.RequestError as exc:
-            raise NeuledgeError(f"Network error: {exc}") from exc
-
-        data = _parse_sse_json(resp.text)
-
-        if "error" in data:
-            raise NeuledgeError(f"MCP error: {data['error']}")
-
-        result = data.get("result", {})
-        if result.get("isError"):
-            content = result.get("content", [{}])
-            msg = content[0].get("text", str(content)) if content else "unknown error"
-            raise NeuledgeError(f"Tool error: {msg}")
-
-        content = result.get("content", [])
-        texts = [c["text"] for c in content if c.get("type") == "text"]
-        return "\n".join(texts)
-
     async def get_docs(self, library: str, topic: str) -> str:
         """Search documentation for a library by topic.
 
@@ -183,7 +154,7 @@ class NeuledgeClient:
         Returns:
             Documentation text from Neuledge Context.
         """
-        return await self._call_tool(
+        return await self.call_tool(
             "get_docs",
             {
                 "library": library,
@@ -224,15 +195,10 @@ class NeuledgeSystem:
                 "NeuledgeSystem.search called before index, or library unset",
             )
         text = await self._client.get_docs(library=self.library, topic=query)
-        if not text:
-            return ()
-        return (
-            RetrievedItem(
-                rank=1,
-                text=text,
-                source_path=self.library,
-                qualified_name=self.library,
-            ),
+        return single_blob_items(
+            text,
+            source_path=self.library,
+            qualified_name=self.library,
         )
 
     @property

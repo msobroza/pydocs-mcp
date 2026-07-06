@@ -15,20 +15,6 @@ def test_flag_accepts_off() -> None:
     assert args.bench_cache == "off"
 
 
-def test_set_enabled_maps_off(monkeypatch) -> None:
-    # Helper the runner uses to translate the flag into the module toggle.
-    from benchmarks.eval.runner import _apply_bench_cache_flag
-
-    original = _bench_cache.is_enabled()
-    try:
-        _apply_bench_cache_flag("off")
-        assert _bench_cache.is_enabled() is False
-        _apply_bench_cache_flag("on")
-        assert _bench_cache.is_enabled() is True
-    finally:
-        _bench_cache.set_enabled(original)
-
-
 def test_cleanup_flag_defaults_false() -> None:
     args = _build_arg_parser().parse_args(["--configs", "x.yaml"])
     assert args.bench_cache_cleanup is False
