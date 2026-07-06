@@ -32,6 +32,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
 from pydocs_mcp.retrieval.config.models import (
     HandlerConfig,
     OutputConfig,
+    OverviewConfig,
     ReferenceGraphConfig,
     SearchBackendConfig,
     SearchConfig,
@@ -106,6 +107,11 @@ class AppConfig(BaseSettings):
     # deployment-time rendering knobs, NOT MCP tool params. The MCP surface
     # (search, lookup) stays fixed.
     output: OutputConfig = Field(default_factory=OutputConfig)
+    # get_overview card caps (spec §D17): list caps keep the orientation
+    # card inside token budgets. Per CLAUDE.md §"MCP API surface vs YAML
+    # configuration": these are deployment-time rendering bounds, NOT MCP
+    # tool params — the MCP surface (search, lookup) stays fixed.
+    overview: OverviewConfig = Field(default_factory=OverviewConfig)
     # Serve-command tunables (file watcher today; future HTTP transport
     # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
     # configuration": CLI ``--watch`` overrides ``serve.watch.enabled``;

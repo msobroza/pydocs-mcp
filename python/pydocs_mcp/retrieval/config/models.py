@@ -298,6 +298,15 @@ class OutputConfig(BaseModel):
     next_pointers: NextPointersConfig = NextPointersConfig()
 
 
+class OverviewConfig(BaseModel):
+    """get_overview card caps (spec §D17) — list caps keep the card inside token budgets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_modules: int = Field(20, ge=1, le=200)
+    max_communities: int = Field(10, ge=1, le=50)
+
+
 # Single source of truth for the debounce bounds (CLAUDE.md §"Default
 # values: single source of truth"). Used both for the pydantic Field
 # default AND the cross-field validator's ceiling check below.

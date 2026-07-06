@@ -94,6 +94,10 @@ output:
   next_pointers:
     enabled: true
 
+overview:                     # get_overview card caps (spec §D17)
+  max_modules: 20
+  max_communities: 10
+
 # File-watcher tunables for `pydocs-mcp serve --watch` (CLI flag overrides
 # `enabled` — leave it false here so plain `pydocs-mcp serve` is identical
 # to today). Debounce naturally collapses editor atomic-save sequences
