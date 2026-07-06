@@ -18,8 +18,7 @@ types remain here:
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import AsyncIterator
-from contextlib import AbstractContextManager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import Protocol, runtime_checkable
 
 from pydocs_mcp.models import Chunk, ModuleMember
@@ -42,7 +41,13 @@ class ConnectionProvider(Protocol):
       ``check_same_thread=False``.
     """
 
-    def acquire(self) -> AsyncIterator[sqlite3.Connection]: ...
+    # WHY AbstractAsyncContextManager (not AsyncIterator): every caller uses
+    # ``async with provider.acquire()``, and ``@asynccontextmanager``-decorated
+    # implementations return an async CM. The old AsyncIterator annotation
+    # misdescribed that contract; the mismatch was masked while
+    # ``build_connection_provider`` was untyped (implicit Any) and surfaced
+    # when the factory gained its concrete return type.
+    def acquire(self) -> AbstractAsyncContextManager[sqlite3.Connection]: ...
 
     def acquire_sync(self) -> AbstractContextManager[sqlite3.Connection]:
         """Sync acquire — yields a ``sqlite3.Connection`` from a ``with`` block.
