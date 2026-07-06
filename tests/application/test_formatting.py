@@ -270,3 +270,90 @@ def test_render_top_composite_empty_string_passthrough():
         query=_DUMMY_QUERY,
     )
     assert render_top_composite(response, empty_msg="") == ""
+
+
+# ---------- remaining == 100 boundary (the drifted truncation gate) ----------
+#
+# format_chunks/format_members gate the partial-piece append with
+# `remaining > 100` (strict); format_context uses `remaining >= 100`
+# (inclusive). These tests pin the exact bytes at remaining == 100 for each
+# caller so the shared _take_within_budget helper provably preserves the
+# historical divergence.
+
+from pydocs_mcp.application.formatting import format_context
+from pydocs_mcp.application.reference_service import ContextNode
+
+
+def test_format_chunks_strict_gate_drops_partial_at_exactly_100_remaining():
+    # piece = "## T\n" + 294*"x" + "\n" → 300 chars; budget 100 tokens = 400
+    # chars; after piece 1, remaining == 100 exactly → strict `>` gate says
+    # NO partial: output is piece 1 alone.
+    first = Chunk(text="x" * 294, metadata={ChunkFilterField.TITLE.value: "T"})
+    second = Chunk(text="y" * 294, metadata={ChunkFilterField.TITLE.value: "U"})
+    out = format_chunks_markdown_within_budget((first, second), budget_tokens=100)
+    assert out == "## T\n" + "x" * 294 + "\n"
+
+
+def test_format_chunks_strict_gate_appends_partial_at_101_remaining():
+    # piece 1 = 299 chars → remaining == 101 > 100 → partial of piece 2
+    # (300 chars, sliced to 101) IS appended, "\n"-joined.
+    first = Chunk(text="x" * 293, metadata={ChunkFilterField.TITLE.value: "T"})
+    second = Chunk(text="y" * 294, metadata={ChunkFilterField.TITLE.value: "U"})
+    out = format_chunks_markdown_within_budget((first, second), budget_tokens=100)
+    piece1 = "## T\n" + "x" * 293 + "\n"
+    piece2 = "## U\n" + "y" * 294 + "\n"
+    assert out == piece1 + "\n" + piece2[:101]
+
+
+def test_format_members_strict_gate_drops_partial_at_exactly_100_remaining():
+    def member(name: str) -> ModuleMember:
+        header = f"**[p] m.{name}** (c)"
+        # piece = header + "\n" + doc + "\n" — pad doc so the piece is
+        # exactly 300 chars, leaving remaining == 100 of the 400-char budget.
+        doc = "d" * (300 - len(header) - 2)
+        return ModuleMember(
+            metadata={
+                ModuleMemberFilterField.PACKAGE.value: "p",
+                ModuleMemberFilterField.MODULE.value: "m",
+                ModuleMemberFilterField.NAME.value: name,
+                ModuleMemberFilterField.KIND.value: "c",
+                "signature": "",
+                "docstring": doc,
+            }
+        )
+
+    m1, m2 = member("A"), member("B")
+    out = format_members_markdown_within_budget((m1, m2), budget_tokens=100)
+    header1 = "**[p] m.A** (c)"
+    expected = header1 + "\n" + "d" * (300 - len(header1) - 2) + "\n"
+    assert out == expected
+
+
+def test_format_context_inclusive_gate_appends_partial_at_exactly_100_remaining():
+    # format_context historically uses `>=`: at remaining == 100 exactly the
+    # partial piece IS emitted (unlike the chunk/member formatters above).
+    target = "pkg.mod.fn"
+    n1 = ContextNode(qualified_name="a" * 50, hop=2, pagerank=0.0, in_degree=0, source_text="")
+    n2 = ContextNode(qualified_name="b" * 200, hop=2, pagerank=0.0, in_degree=0, source_text="")
+    nodes = (n1, n2)
+    lead = (
+        f"{len(nodes)} symbols in the closure (max depth 2). Graded fidelity: "
+        "focus = full source, ring = signature, rest = outline.\n"
+    )
+    piece1 = f"- `{n1.qualified_name}` (hop 2)\n"
+    # token budgets are whole tokens (max_chars = budget * 4); pad the target
+    # until header + piece1 + 100 is divisible by 4 so remaining lands on
+    # exactly 100.
+    h1 = f"# Context for `{target}` — its dependency closure\n"
+    needed = len(h1) + len(lead) + len(piece1) + 100
+    while needed % 4:
+        target += "x"
+        h1 = f"# Context for `{target}` — its dependency closure\n"
+        needed = len(h1) + len(lead) + len(piece1) + 100
+
+    out = format_context(nodes, target=target, token_budget=needed // 4)
+
+    piece2 = f"- `{n2.qualified_name}` (hop 2)\n"
+    # The 100-char slice of piece2 has no trailing \n, so format_context's
+    # final single-\n fixup appends one.
+    assert out == h1 + lead + piece1 + piece2[:100] + "\n"

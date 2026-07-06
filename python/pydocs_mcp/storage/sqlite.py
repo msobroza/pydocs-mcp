@@ -421,8 +421,8 @@ def _package_to_row(pkg: Package) -> dict[str, object]:
         "content_hash": pkg.content_hash,
         "origin": pkg.origin.value,
         # ``embedding_model`` round-trips so the startup staleness check
-        # (find_packages_with_stale_embeddings) can detect a YAML model
-        # rename and trigger re-embed of the affected packages.
+        # (IndexingService.invalidate_stale_embeddings) can detect a YAML
+        # model rename and trigger re-embed of the affected packages.
         "embedding_model": pkg.embedding_model,
     }
 

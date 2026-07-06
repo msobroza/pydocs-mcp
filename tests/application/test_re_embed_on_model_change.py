@@ -5,7 +5,9 @@ recorded against each package, the composition root must clear
 ``content_hash`` on the affected rows so the next hash-skip check treats
 them as stale and re-extracts (re-embedding the chunks in the process).
 The reusable check is exposed as
-:func:`pydocs_mcp.application.indexing_service.find_packages_with_stale_embeddings`.
+:meth:`pydocs_mcp.application.indexing_service.IndexingService.find_stale_packages`
+(read-only) and :meth:`...IndexingService.invalidate_stale_embeddings`
+(find + clear in one transaction).
 
 Two coverage points:
 
@@ -13,7 +15,7 @@ Two coverage points:
    ``package.embedding_model`` through ``uow.packages.upsert`` so the
    field actually lands in the SQLite cache (the helper has nothing to
    match on otherwise).
-2. ``find_packages_with_stale_embeddings`` returns the right set of
+2. ``IndexingService.find_stale_packages`` returns the right set of
    package names for both the "model changed" and "model unchanged"
    cases. Packages with ``embedding_model=None`` (legacy / pre-embedding
    caches) stay out of the stale list — flipping them on a model rename
@@ -27,10 +29,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pydocs_mcp.application.indexing_service import (
-    IndexingService,
-    find_packages_with_stale_embeddings,
-)
+from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.models import Chunk, Package, PackageOrigin
 from pydocs_mcp.storage.factories import (
@@ -139,17 +138,11 @@ async def test_model_change_detected_via_stored_embedding_model(
     )
 
     # Model changed → both packages flagged stale.
-    stale = await find_packages_with_stale_embeddings(
-        uow_factory=factory,
-        current_model="model-B",
-    )
+    stale = await svc.find_stale_packages(current_model="model-B")
     assert set(stale) == {"pkg-a", "pkg-b"}
 
     # Same model → empty list (no spurious re-embeds).
-    stale_no_change = await find_packages_with_stale_embeddings(
-        uow_factory=factory,
-        current_model="model-A",
-    )
+    stale_no_change = await svc.find_stale_packages(current_model="model-A")
     assert stale_no_change == []
 
 
@@ -161,7 +154,7 @@ async def test_legacy_packages_with_no_embedding_model_are_not_stale(
 
     They were never embedded (no vectors in the .tq sidecar to mismatch)
     and re-embedding them on a model rename would burn cycles re-indexing
-    every legacy dependency. The helper deliberately skips them — they'll
+    every legacy dependency. ``find_stale_packages`` deliberately skips them — they'll
     pick up an embedding model on their next natural reindex.
     """
     db_path = tmp_path / "x.db"
@@ -181,8 +174,42 @@ async def test_legacy_packages_with_no_embedding_model_are_not_stale(
         module_members=(),
     )
 
-    stale = await find_packages_with_stale_embeddings(
-        uow_factory=factory,
-        current_model="model-X",
-    )
+    stale = await svc.find_stale_packages(current_model="model-X")
     assert stale == []
+
+
+@pytest.mark.asyncio
+async def test_invalidate_stale_embeddings_clears_content_hash_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """Against real SQLite: one service call names the stale packages AND
+    empties their ``content_hash`` so the next index pass re-extracts."""
+    db_path = tmp_path / "x.db"
+    tq_path = tmp_path / "x.tq"
+    open_index_database(db_path).close()
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    svc = IndexingService(uow_factory=factory)
+    await svc.reindex_package(
+        _pkg("pkg-a", embedding_model="model-A"),
+        (
+            Chunk(
+                text="a",
+                embedding=_vec(0.1, 0.2),
+                metadata={"package": "pkg-a", "title": "a"},
+            ),
+        ),
+        module_members=(),
+    )
+
+    stale = await svc.invalidate_stale_embeddings(current_model="model-B")
+
+    assert stale == ["pkg-a"]
+    async with factory() as uow:
+        pkg = await uow.packages.get("pkg-a")
+    assert pkg is not None
+    assert pkg.content_hash == ""

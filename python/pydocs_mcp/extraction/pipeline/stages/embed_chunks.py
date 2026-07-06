@@ -79,9 +79,9 @@ class EmbedChunksStage:
 
         # Stamp the package with embedder identity iff this package HAS
         # embeddings under the policy (any eligible chunk, cached or fresh) —
-        # so ``find_packages_with_stale_embeddings`` re-embeds it on a model
-        # change. Packages with no eligible chunks keep embedding_model NULL
-        # and are intentionally never flagged stale.
+        # so ``IndexingService.invalidate_stale_embeddings`` re-embeds it on
+        # a model change. Packages with no eligible chunks keep
+        # embedding_model NULL and are intentionally never flagged stale.
         new_package = state.package
         if state.package is not None and eligible:
             new_package = replace(

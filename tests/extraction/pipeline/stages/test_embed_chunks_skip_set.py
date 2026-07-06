@@ -118,6 +118,6 @@ async def test_package_embedding_model_still_updated() -> None:
     out = await stage.run(state)
     # When everything is skipped, the model_name is still 'observed' for this
     # package — the stage should stamp it. (If we change this contract, also
-    # update Task 28's find_packages_with_stale_embeddings semantics.)
+    # update IndexingService.find_stale_packages' None-is-not-stale semantics.)
     assert out.package is not None
     assert out.package.embedding_model == embedder.model_name

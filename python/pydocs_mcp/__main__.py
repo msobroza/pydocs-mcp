@@ -7,15 +7,16 @@ Each subcommand is a thin wrapper over the application-layer services
 * ``query`` / ``api`` route through :class:`DocsSearch` /
   :class:`ApiSearch`, rendering the top composite chunk's text.
 
-Every subcommand delegates to :func:`_run_cmd`, the single top-level
-exception handler. On failure it prints ``Error: <msg>`` to stderr and
-exits non-zero. Under ``-v``/``--verbose`` it additionally prints the
-traceback (via ``traceback.print_exc`` plus ``log.exception`` for
-structured-log consumers); without it, a one-line hint points users at
-``--verbose`` and only ``log.error`` records the failure so the
-traceback stays out of the user's stderr pipeline. The four
-``# noqa: BLE001`` annotations previously attached to each ``_cmd_*``
-collapse into one inside ``_run_cmd``.
+Every subcommand routes its failures through :func:`_report_cli_failure`,
+the single owner of the diagnostic policy: on failure it prints
+``Error: <msg>`` to stderr and exits non-zero. Under ``-v``/``--verbose``
+it additionally prints the traceback (via ``traceback.print_exc`` plus
+``log.exception`` for structured-log consumers); without it, a one-line
+hint points users at ``--verbose`` and only ``log.error`` records the
+failure so the traceback stays out of the user's stderr pipeline. Async
+commands enter via :func:`_run_cmd`; the blocking serve/watch entry
+points enter via :func:`_run_blocking`, which adds the
+KeyboardInterrupt-as-success contract (Ctrl+C is a graceful shutdown).
 """
 
 from __future__ import annotations
@@ -456,14 +457,13 @@ async def _run_indexing(args: argparse.Namespace) -> None:
 
     # Detect a model rename in YAML — packages tagged with the old
     # ``embedding_model`` carry vectors that the new model cannot match
-    # at query time (different vector space). Clearing ``content_hash``
-    # routes them through the existing hash-skip path so the next sweep
-    # re-extracts + re-embeds them under the current model. Skipped
-    # under ``--force``: that path already wipes the cache wholesale.
+    # at query time (different vector space). ``invalidate_stale_embeddings``
+    # clears their ``content_hash`` (find + clear in ONE transaction) so
+    # the next sweep re-extracts + re-embeds them under the current
+    # model via the existing hash-skip path. Skipped under ``--force``:
+    # that path already wipes the cache wholesale.
     if not args.force:
-        from dataclasses import replace as dc_replace
-
-        stale_pkg_names = await indexing_service.find_stale_packages(
+        stale_pkg_names = await indexing_service.invalidate_stale_embeddings(
             current_model=config.embedding.model_name,
         )
         if stale_pkg_names:
@@ -472,18 +472,6 @@ async def _run_indexing(args: argparse.Namespace) -> None:
                 len(stale_pkg_names),
                 ", ".join(stale_pkg_names),
             )
-            async with uow_factory() as uow:
-                for name in stale_pkg_names:
-                    pkg = await uow.packages.get(name)
-                    if pkg is not None:
-                        # Empty content_hash will not equal the freshly-
-                        # extracted package's real hash, so the skip check
-                        # in ProjectIndexer (existing.content_hash ==
-                        # pkg.content_hash) falls through to a full reindex.
-                        await uow.packages.upsert(
-                            dc_replace(pkg, content_hash=""),
-                        )
-                await uow.commit()
 
     # Construct the embedder once at startup so the rest of the pipeline
     # can share it. Failing here (e.g., OPENAI_API_KEY missing) surfaces
@@ -761,39 +749,64 @@ async def _run_lookup(args: argparse.Namespace) -> None:
     print(await lookup_router.lookup(payload))
 
 
-def _run_cmd(coro: Awaitable[None], *, verbose: bool) -> int:
-    """Single top-level exception boundary for every CLI subcommand.
+def _report_cli_failure(exc: Exception, *, verbose: bool) -> int:
+    """Single source of truth for the user-facing CLI failure report.
 
-    Wraps the per-command coroutine in one ``try / except Exception`` so
-    diagnostic policy lives in one place instead of being copy-pasted into
-    four ``_cmd_*`` bodies. Under ``--verbose`` the full traceback lands
-    on stderr (via ``traceback.print_exc``) and the logger records the
-    failure with traceback via ``log.exception`` for any structured-log
-    consumer that swapped out the default stderr handler. Without
-    ``--verbose`` only the short ``Error: <msg>`` line plus a hint to
-    re-run verbose are printed — the traceback stays out of the user's
-    output pipeline, and only ``log.error`` (no traceback) is recorded
-    so the default stderr-attached logger never leaks the traceback.
+    Under ``--verbose`` the full traceback lands on stderr (via
+    ``traceback.print_exc``) AND the logger records it via
+    ``log.exception``. With the default stderr-attached handler that
+    duplicates the traceback — intentionally: a user who reconfigures the
+    logger to a file or JSON formatter still needs the traceback there,
+    and ``print_exc`` alone wouldn't reach a non-stderr handler. Without
+    ``--verbose`` only the short ``Error: <msg>`` line plus a hint is
+    printed, and ``log.error`` (no traceback) keeps the default
+    stderr-attached logger from leaking it.
+
+    Must be called from inside an ``except`` block — ``print_exc`` and
+    ``log.exception`` read the active exception context.
+    """
+    print(f"Error: {exc}", file=sys.stderr)
+    if verbose:
+        traceback.print_exc(file=sys.stderr)
+        log.exception("CLI command failed")
+    else:
+        print("(re-run with --verbose to see the traceback)", file=sys.stderr)
+        log.error("CLI command failed: %s", exc)
+    return 1
+
+
+def _run_blocking(fn: Callable[[], None], *, verbose: bool) -> int:
+    """Run a blocking (sync) entry point under the shared error policy.
+
+    ``fn`` executes synchronously on the CALLER's thread — no thread hop —
+    so when the caller is the main thread, Python's default SIGINT handler
+    still reaches the blocking ``mcp.run`` / asyncio loops inside ``fn``
+    (Python delivers SIGINT only to the main thread).
+    KeyboardInterrupt is a graceful Ctrl+C shutdown, not an error: exit 0.
+    """
+    try:
+        fn()
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:
+        return _report_cli_failure(exc, verbose=verbose)
+
+
+def _run_cmd(coro: Awaitable[None], *, verbose: bool) -> int:
+    """Async entry-point wrapper: run ``coro`` under the shared error policy.
+
+    The diagnostic policy itself lives in :func:`_report_cli_failure`;
+    this wrapper only owns the ``asyncio.run`` hop. Unlike
+    :func:`_run_blocking` it does NOT treat KeyboardInterrupt as success —
+    index/search/lookup have no long-running loop a user would Ctrl+C out
+    of as a normal exit.
     """
     try:
         asyncio.run(coro)
         return 0
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        if verbose:
-            traceback.print_exc(file=sys.stderr)
-            # ``log.exception`` also includes the traceback; with the
-            # default ``_configure_logging(verbose=True)`` handler aimed
-            # at ``sys.stderr`` this duplicates ``print_exc`` above. The
-            # duplication is intentional for the structured-log consumer
-            # case — if a user reconfigures the logger to a file or a
-            # JSON formatter, they still need the traceback. ``print_exc``
-            # alone wouldn't reach a non-stderr handler.
-            log.exception("CLI command failed")
-        else:
-            print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-            log.error("CLI command failed: %s", exc)
-        return 1
+        return _report_cli_failure(exc, verbose=verbose)
 
 
 def _cmd_index(args: argparse.Namespace) -> int:
@@ -814,27 +827,16 @@ def _serve_run(
     """
     from pydocs_mcp.server import run
 
-    try:
-        run(
+    return _run_blocking(
+        lambda: run(
             db_path,
             config_path=getattr(args, "config", None),
             gpu=getattr(args, "gpu", False),
             workspace=workspace,
             db_paths=db_paths,
-        )
-        return 0
-    except KeyboardInterrupt:
-        # Graceful shutdown via Ctrl+C — not an error.
-        return 0
-    except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        if getattr(args, "verbose", False):
-            traceback.print_exc(file=sys.stderr)
-            log.exception("CLI command failed")
-        else:
-            print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-            log.error("CLI command failed: %s", exc)
-        return 1
+        ),
+        verbose=getattr(args, "verbose", False),
+    )
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -867,20 +869,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         # SIGINT reaches it directly. With `--watch`, the asyncio loop
         # is also running here, so the loop owns SIGINT; `run(...)`
         # exits via thread-pool unwind when the loop is cancelled.
-        try:
-            asyncio.run(_run_watch_loop(args, db_path=db_path))
-            return 0
-        except KeyboardInterrupt:
-            return 0
-        except Exception as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            if args.verbose:
-                traceback.print_exc(file=sys.stderr)
-                log.exception("CLI command failed")
-            else:
-                print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-                log.error("CLI command failed: %s", exc)
-            return 1
+        return _run_blocking(
+            lambda: asyncio.run(_run_watch_loop(args, db_path=db_path)),
+            verbose=args.verbose,
+        )
 
     # Phase 2 (no-watch path) — unchanged from today.
     # ``server.run`` calls ``anyio.run(self.run_stdio_async)`` internally,
@@ -913,21 +905,10 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     # propagates through the asyncio loop and cancels the watcher's
     # ``run_until_cancelled``, which then tears down the Observer via
     # the try/finally inside ``FileWatcher.run_until_cancelled``.
-    try:
-        asyncio.run(_run_watch_only(args))
-        return 0
-    except KeyboardInterrupt:
-        # Graceful shutdown via Ctrl+C — not an error.
-        return 0
-    except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        if args.verbose:
-            traceback.print_exc(file=sys.stderr)
-            log.exception("CLI command failed")
-        else:
-            print("(re-run with --verbose to see the traceback)", file=sys.stderr)
-            log.error("CLI command failed: %s", exc)
-        return 1
+    return _run_blocking(
+        lambda: asyncio.run(_run_watch_only(args)),
+        verbose=args.verbose,
+    )
 
 
 def _cmd_search(args: argparse.Namespace) -> int:

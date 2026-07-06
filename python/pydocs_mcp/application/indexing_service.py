@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.models import (
@@ -504,36 +504,60 @@ class IndexingService:
             await uow.commit()
         log.info("node_scores: recomputed %d nodes", len(scores))
 
+    @staticmethod
+    def _stale_packages(
+        packages: Sequence[Package],
+        current_model: str,
+    ) -> list[Package]:
+        """Packages whose recorded embedder differs from ``current_model``.
+
+        ``embedding_model is None`` rows are intentionally NOT stale: they
+        predate the embedding feature (no vectors in the .tq sidecar to
+        mismatch) and pick up a model tag on their next natural reindex.
+        Flipping them here would trigger a blanket re-extract on every
+        model rename for callers who haven't enabled embeddings yet.
+        """
+        return [
+            p
+            for p in packages
+            if p.embedding_model is not None and p.embedding_model != current_model
+        ]
+
     async def find_stale_packages(self, *, current_model: str) -> list[str]:
         """Return packages whose stored ``embedding_model`` differs from
         ``current_model``.
 
-        Task 7 (I17): the legacy free function
-        :func:`find_packages_with_stale_embeddings` is now a thin wrapper
-        around this method, making the ``uow_factory`` dependency
-        explicit on the service rather than implicit on a module-level
-        callable.
-
-        Used at startup (see ``__main__._run_indexing``) to detect when
-        the YAML's ``embedding.model_name`` has changed since the last
-        index pass. The composition root clears each returned package's
-        ``content_hash`` so the next sweep re-extracts + re-embeds them
-        via the existing hash-skip code path — no manual cache surgery.
-
-        Packages with ``embedding_model is None`` are intentionally NOT
-        flagged stale: they predate the embedding feature (no vectors in
-        the .tq sidecar to mismatch) and will pick up a model tag on
-        their next natural reindex. Flipping them here would trigger a
-        blanket re-extract on every model rename for callers who haven't
-        enabled embeddings yet.
+        Read-only companion to :meth:`invalidate_stale_embeddings`, which
+        additionally clears each stale package's ``content_hash`` in the
+        same transaction. See :meth:`_stale_packages` for why
+        ``embedding_model is None`` rows are skipped.
         """
         async with self.uow_factory() as uow:
             all_pkgs = await uow.packages.list()
-        return [
-            p.name
-            for p in all_pkgs
-            if p.embedding_model is not None and p.embedding_model != current_model
-        ]
+        return [p.name for p in self._stale_packages(all_pkgs, current_model)]
+
+    async def invalidate_stale_embeddings(self, *, current_model: str) -> list[str]:
+        """Clear ``content_hash`` on every package embedded with another model.
+
+        One UoW = one transaction: the stale-set read and the clearing
+        upserts land atomically — no read/write gap where a concurrent
+        index pass could observe half-cleared state. An empty
+        ``content_hash`` never equals a freshly-extracted package's real
+        hash, so the skip check in ``ProjectIndexer``
+        (``existing.content_hash == pkg.content_hash``) falls through to a
+        full re-extract + re-embed under the current model.
+
+        Returns the stale package names (for the caller's log line).
+        """
+        async with self.uow_factory() as uow:
+            all_pkgs = await uow.packages.list()
+            stale = self._stale_packages(all_pkgs, current_model)
+            if not stale:
+                return []
+            for pkg in stale:
+                await uow.packages.upsert(replace(pkg, content_hash=""))
+            await uow.commit()
+        return [p.name for p in stale]
 
 
 def _add_qnames(node: DocumentNode, out: set[str]) -> None:
@@ -541,23 +565,3 @@ def _add_qnames(node: DocumentNode, out: set[str]) -> None:
     out.add(node.qualified_name)
     for child in node.children:
         _add_qnames(child, out)
-
-
-async def find_packages_with_stale_embeddings(
-    *,
-    uow_factory: Callable[[], UnitOfWork],
-    current_model: str,
-) -> list[str]:
-    """Thin backwards-compat wrapper around :meth:`IndexingService.find_stale_packages`.
-
-    Task 7 (I17): the canonical staleness check now lives as a method on
-    :class:`IndexingService`, making the ``uow_factory`` dependency
-    explicit on the service rather than implicit on this module-level
-    callable. This wrapper exists so legacy callers that hold only a
-    ``uow_factory`` (and not yet an :class:`IndexingService`) continue to
-    work without churning callsites — but new code should use
-    ``IndexingService(uow_factory=...).find_stale_packages(...)``.
-    """
-    return await IndexingService(uow_factory=uow_factory).find_stale_packages(
-        current_model=current_model,
-    )
