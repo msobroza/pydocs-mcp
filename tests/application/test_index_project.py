@@ -58,12 +58,21 @@ def _harness(*, repaired: list[str] | None = None, stale: list[str] | None = Non
     return calls, stamped, orchestrator, service, check_integrity, rebuild_fts, stamp_metadata
 
 
-async def _run(orchestrator, service, check_integrity, rebuild_fts, stamp_metadata, *, force=False):
+async def _run(
+    orchestrator,
+    service,
+    check_integrity,
+    rebuild_fts,
+    stamp_metadata,
+    *,
+    force=False,
+    project=Path("/tmp/proj"),
+):
     return await run_index_pass(
         orchestrator=orchestrator,
         indexing_service=service,
         pipeline_hash="hash-1",
-        project=Path("/tmp/proj"),
+        project=project,
         embedding_provider="fastembed",
         embedding_model="model-b",
         embedding_dim=384,
@@ -75,6 +84,16 @@ async def _run(orchestrator, service, check_integrity, rebuild_fts, stamp_metada
         rebuild_fts=rebuild_fts,
         stamp_metadata=stamp_metadata,
     )
+
+
+async def _run_index_pass_with_fakes(*, project: Path, stamp_metadata) -> None:
+    """Drive ``run_index_pass`` with this file's fakes, overriding only ``project``.
+
+    Used by the git-head stamp tests, which care solely about ``project`` (whether
+    it is a git repo) and the ``stamp_metadata`` callback that captures the result.
+    """
+    _calls, _stamped, orch, svc, ci, rf, _sm = _harness()
+    await _run(orch, svc, ci, rf, stamp_metadata, project=project)
 
 
 async def test_sequence_and_forwarding() -> None:
@@ -121,6 +140,26 @@ async def test_metadata_stamp_carries_identity_and_recency() -> None:
     assert meta.embedding_dim == 384
     assert meta.pipeline_hash == "hash-1"
     assert meta.indexed_at > 0.0
+
+
+async def test_stamp_includes_git_head_when_project_is_a_repo(tmp_path) -> None:
+    # Arrange a minimal git layout so resolve_git_head returns a sha.
+    sha = "d" * 40
+    git = tmp_path / ".git"
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    (git / "refs" / "heads" / "main").write_text(f"{sha}\n")
+
+    stamped: list = []
+    await _run_index_pass_with_fakes(project=tmp_path, stamp_metadata=stamped.append)
+
+    assert stamped and stamped[0].git_head == sha
+
+
+async def test_stamp_git_head_empty_for_non_git_tree(tmp_path) -> None:
+    stamped: list = []
+    await _run_index_pass_with_fakes(project=tmp_path, stamp_metadata=stamped.append)
+    assert stamped and stamped[0].git_head == ""
 
 
 async def test_repair_and_stale_warnings_logged(caplog) -> None:

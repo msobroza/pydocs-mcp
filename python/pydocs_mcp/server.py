@@ -74,18 +74,21 @@ def _resolve_projects(db_path, workspace, db_paths):
     return [load_project(db_path)], False
 
 
-def build_routers(config, *, db_path=None, workspace=None, db_paths=None):
+def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surface="mcp"):
     """Resolve + validate + build the per-project services and the two routers.
 
     Shared by ``run`` (MCP server) and the CLI ``search`` / ``lookup`` commands so
-    both select, validate, and load databases identically. Returns
+    both select, validate, and load databases identically. ``surface`` ("mcp" |
+    "cli") picks the pointer syntax the shared envelope resolves to. Returns
     ``(search_router, lookup_router, services)``.
     """
+    from pydocs_mcp.application.envelope import ResponseEnvelope
     from pydocs_mcp.application.multi_project_search import (
         MultiProjectLookup,
         MultiProjectSearch,
     )
     from pydocs_mcp.multirepo import validate_project_embedders
+    from pydocs_mcp.storage.factories import build_freshness_probe
 
     projects, read_only = _resolve_projects(db_path, workspace, db_paths)
     if read_only:
@@ -93,7 +96,27 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None):
             projects, model=config.embedding.model_name, dim=config.embedding.dim
         )
     services = tuple(_build_project_services(p, config) for p in projects)
-    return MultiProjectSearch(services=services), MultiProjectLookup(services=services), services
+
+    # Probe facts come from the FIRST loaded project. Multi-repo per-project
+    # staleness is slice-2 ``get_overview`` territory — one envelope for both
+    # routers keeps the two surfaces from drifting.
+    first = services[0].project
+    probe = build_freshness_probe(
+        db_path=first.db_path,
+        project_root=Path(first.metadata.project_root or "."),
+        enabled=config.output.envelope.enabled,
+        ttl_seconds=config.output.envelope.head_check_ttl_seconds,
+    )
+    envelope = ResponseEnvelope(
+        probe=probe,
+        surface=surface,
+        pointers_enabled=config.output.next_pointers.enabled,
+    )
+    return (
+        MultiProjectSearch(services=services, envelope=envelope),
+        MultiProjectLookup(services=services, envelope=envelope),
+        services,
+    )
 
 
 def run(

@@ -31,6 +31,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
 )
 from pydocs_mcp.retrieval.config.models import (
     HandlerConfig,
+    OutputConfig,
     ReferenceGraphConfig,
     SearchBackendConfig,
     SearchConfig,
@@ -93,6 +94,12 @@ class AppConfig(BaseSettings):
     # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
     # surface stays fixed; only deployment-time bounds are configurable.
     search: SearchConfig = Field(default_factory=SearchConfig)
+    # Response conventions (spec §D4/§D5): freshness-envelope + per-hit
+    # next-step pointer toggles shared by every search/lookup response.
+    # Per CLAUDE.md §"MCP API surface vs YAML configuration": these are
+    # deployment-time rendering knobs, NOT MCP tool params. The MCP surface
+    # (search, lookup) stays fixed.
+    output: OutputConfig = Field(default_factory=OutputConfig)
     # Serve-command tunables (file watcher today; future HTTP transport
     # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
     # configuration": CLI ``--watch`` overrides ``serve.watch.enabled``;

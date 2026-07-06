@@ -557,6 +557,7 @@ async def _run_search(args: argparse.Namespace) -> None:
         db_path=_query_db_path(args),
         workspace=args.workspace,
         db_paths=args.db_paths,
+        surface="cli",
     )
     payload = SearchInput(
         query=args.query,
@@ -583,6 +584,7 @@ async def _run_lookup(args: argparse.Namespace) -> None:
         db_path=_query_db_path(args),
         workspace=args.workspace,
         db_paths=args.db_paths,
+        surface="cli",
     )
     payload = LookupInput(target=args.target, show=args.show, project=args.project_scope)
     print(await lookup_router.lookup(payload))

@@ -80,6 +80,17 @@ search:
     default_limit: 10
     max_limit: 1000
 
+# Response conventions (spec §D4/§D5): the freshness envelope line and
+# per-hit next-step pointers on every search/lookup response. Disable
+# envelope for byte-stable golden pipelines; disable next_pointers to
+# restore pre-envelope output bytes exactly.
+output:
+  envelope:
+    enabled: true
+    head_check_ttl_seconds: 5
+  next_pointers:
+    enabled: true
+
 # File-watcher tunables for `pydocs-mcp serve --watch` (CLI flag overrides
 # `enabled` — leave it false here so plain `pydocs-mcp serve` is identical
 # to today). Debounce naturally collapses editor atomic-save sequences

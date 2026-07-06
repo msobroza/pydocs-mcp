@@ -20,10 +20,12 @@ from typing import Any, TypeVar
 
 from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.docs_search import DocsSearch
+from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
     render_top_composite,
+    strip_pointers,
 )
 from pydocs_mcp.application.lookup_service import LookupService
 from pydocs_mcp.application.mcp_errors import NotFoundError
@@ -123,8 +125,15 @@ class MultiProjectSearch:
 
     services: tuple[ProjectServices, ...]
     budget_tokens: int = _DEFAULT_BUDGET_TOKENS
+    envelope: ResponseEnvelope | None = None
 
     async def search(self, payload: SearchInput) -> str:
+        if self.envelope is not None:
+            return await self.envelope.wrap(lambda: self._search_body(payload))
+        # Legacy/no-envelope path: never leak raw pointer tokens.
+        return strip_pointers(await self._search_body(payload))
+
+    async def _search_body(self, payload: SearchInput) -> str:
         if payload.project:
             svc = _select_service(self.services, payload.project)
             return await render_single_search(payload, svc.docs, svc.api)
@@ -163,8 +172,15 @@ class MultiProjectLookup:
     """Routes a lookup to one project (``project=``) or resolves across all."""
 
     services: tuple[ProjectServices, ...]
+    envelope: ResponseEnvelope | None = None
 
     async def lookup(self, payload: LookupInput) -> str:
+        if self.envelope is not None:
+            return await self.envelope.wrap(lambda: self._lookup_body(payload))
+        # Legacy/no-envelope path: never leak raw pointer tokens.
+        return strip_pointers(await self._lookup_body(payload))
+
+    async def _lookup_body(self, payload: LookupInput) -> str:
         if payload.project:
             return await _select_service(self.services, payload.project).lookup.lookup(payload)
         if len(self.services) == 1:
