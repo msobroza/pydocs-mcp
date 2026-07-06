@@ -360,7 +360,6 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     :class:`StaticDependencyResolver`.
     """
     from pydocs_mcp.application import ProjectIndexer
-    from pydocs_mcp.db import build_connection_provider
     from pydocs_mcp.extraction import (
         AstMemberExtractor,
         InspectMemberExtractor,
@@ -373,6 +372,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     from pydocs_mcp.retrieval.llm_clients import build_llm_client
     from pydocs_mcp.storage.factories import (
         build_composite_uow_factory,
+        build_connection_provider,
         check_integrity_and_repair,
     )
     from pydocs_mcp.storage.search_backend import (

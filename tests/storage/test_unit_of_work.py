@@ -6,7 +6,8 @@ import sqlite3
 
 import pytest
 
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import Package, PackageOrigin
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.sqlite import (

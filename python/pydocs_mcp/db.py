@@ -503,11 +503,3 @@ def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
         pipeline_hash=row["pipeline_hash"] or "",
         indexed_at=row["indexed_at"] or 0.0,
     )
-
-
-from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider  # noqa: E402
-
-
-def build_connection_provider(cache_path: Path):
-    """Factory — returns the default ConnectionProvider for a given DB path."""
-    return PerCallConnectionProvider(cache_path=cache_path)

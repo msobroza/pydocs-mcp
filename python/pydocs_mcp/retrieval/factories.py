@@ -14,13 +14,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from pydocs_mcp.db import build_connection_provider
 from pydocs_mcp.extraction.strategies.embedders import (
     build_embedder,
     build_multi_vector_embedder,
 )
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.retrieval.llm_clients import build_llm_client
+from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.factories import build_composite_uow_factory
@@ -46,7 +46,7 @@ def build_retrieval_context(db_path: Path, config: AppConfig) -> BuildContext:
     factory is cheap — defers concrete-class imports until the first call
     — so paying for it at every retrieval composition is acceptable.
     """
-    provider = build_connection_provider(db_path)
+    provider = PerCallConnectionProvider(cache_path=db_path)
     # Wire the single-vector embedder so retrieval steps that need it
     # (DenseFetcherStep, DenseScorerStep, LateInteractionScorerStep's
     # query-side encode) find it in the ambient context. Without this,

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.application.indexing_service import IndexingService
-from pydocs_mcp.db import build_connection_provider
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,

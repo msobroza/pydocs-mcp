@@ -25,7 +25,8 @@ import pytest
 
 from pydocs_mcp.application.tree_service import TreeService
 from pydocs_mcp.application.project_indexer import ProjectIndexer
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.extraction import (
     AstMemberExtractor,
     PipelineChunkExtractor,

@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import SearchQuery
 from pydocs_mcp.retrieval.config import (
     AppConfig,
