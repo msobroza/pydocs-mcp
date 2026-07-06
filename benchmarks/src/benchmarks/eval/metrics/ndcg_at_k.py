@@ -20,6 +20,17 @@ from ..systems.base_system import RetrievedItem
 from ._relevance import is_relevant
 
 
+def _n_gt(task: EvalTask) -> int:
+    """Ground-truth count for the IDCG denominator, keyed on the SAME
+    dispatch order as ``is_relevant``: RepoQA (ast_body) -> 1; DS-1000
+    (resolved set) -> len(resolved); SWE-QA (file_set) -> len(file_set)."""
+    if task.gold.ast_body is not None:
+        return 1
+    if "resolved_chunk_ids" in task.gold.extra:
+        return len(task.gold.extra["resolved_chunk_ids"])  # type: ignore[arg-type]
+    return len(task.gold.file_set)
+
+
 @metric_registry.register("ndcg@k")
 @dataclass(frozen=True, slots=True)
 class NDCGAtK:
@@ -40,10 +51,8 @@ class NDCGAtK:
         )
         # WHY (same discriminator as the relevance predicate): RepoQA has a
         # single gold body (n_gt=1); DS-1000's ground-truth count is the size
-        # of the resolved set.
-        n_gt = (
-            len(task.gold.extra.get("resolved_chunk_ids", ())) if task.gold.ast_body is None else 1
-        )
+        # of the resolved set; SWE-QA's is the number of cited gold files.
+        n_gt = _n_gt(task)
         # WHY: guard BEFORE IDCG. pydocs-on-RepoQA gets an injected EMPTY
         # resolved set (ast_body None) and a store-less DS-1000 task also
         # yields n_gt=0 — both would make IDCG 0 and divide 0/0.
