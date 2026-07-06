@@ -253,6 +253,26 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+# Single source of truth for the get_symbol(depth="source") line cap — the
+# YAML-canonical default lives here; ``SymbolSourceService`` carries its own
+# construction-time fallback constant (wired config→service in a later task).
+_DEFAULT_MAX_LINES_SYMBOL_SOURCE = 400
+
+
+class SymbolSourceConfig(BaseModel):
+    """Line cap for ``get_symbol(depth="source")`` verbatim output (spec §D7).
+
+    Bounds how many source lines the per-symbol source view renders before it
+    truncates with a recovery note pointing at the on-disk file (the terminal
+    §D7 recovery step). Server-side tunable, NOT an MCP parameter — the fixed
+    surface stays at ``search`` + ``lookup``/``get_symbol``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_lines: int = Field(_DEFAULT_MAX_LINES_SYMBOL_SOURCE, ge=20, le=5000)
+
+
 class EnvelopeConfig(BaseModel):
     """Freshness envelope on every MCP/CLI response (spec §D4).
 

@@ -36,6 +36,7 @@ from pydocs_mcp.retrieval.config.models import (
     SearchBackendConfig,
     SearchConfig,
     ServeConfig,
+    SymbolSourceConfig,
 )
 
 # ── Tunable user-config path override ───────────────────────────────────
@@ -94,6 +95,11 @@ class AppConfig(BaseSettings):
     # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
     # surface stays fixed; only deployment-time bounds are configurable.
     search: SearchConfig = Field(default_factory=SearchConfig)
+    # get_symbol(depth="source") line cap (spec §D7). Bounds the verbatim
+    # per-symbol source view; wired config→service in a later task. Per
+    # CLAUDE.md §"MCP API surface vs YAML configuration": a deployment-time
+    # rendering bound, NOT an MCP tool param — the surface stays fixed.
+    symbol_source: SymbolSourceConfig = Field(default_factory=SymbolSourceConfig)
     # Response conventions (spec §D4/§D5): freshness-envelope + per-hit
     # next-step pointer toggles shared by every search/lookup response.
     # Per CLAUDE.md §"MCP API surface vs YAML configuration": these are

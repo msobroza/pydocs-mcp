@@ -80,6 +80,9 @@ search:
     default_limit: 10
     max_limit: 1000
 
+symbol_source:
+  max_lines: 400            # get_symbol(depth="source") bound (spec §D7)
+
 # Response conventions (spec §D4/§D5): the freshness envelope line and
 # per-hit next-step pointers on every search/lookup response. Disable
 # envelope for byte-stable golden pipelines; disable next_pointers to
