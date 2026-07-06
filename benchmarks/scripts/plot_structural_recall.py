@@ -58,7 +58,7 @@ def _render() -> Path:
     width = 0.26
 
     fig, ax = plt.subplots(figsize=(10.5, 6.5))
-    for i, (metric, color) in enumerate(zip(METRICS, COLORS)):
+    for i, (metric, color) in enumerate(zip(METRICS, COLORS, strict=True)):
         vals = [row[1 + i] for row in DATA]
         bars = ax.bar(
             x + (i - 1) * width,
@@ -69,7 +69,7 @@ def _render() -> Path:
             edgecolor="white",
             linewidth=0.5,
         )
-        for bar, v in zip(bars, vals):
+        for bar, v in zip(bars, vals, strict=True):
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 v + 0.012,

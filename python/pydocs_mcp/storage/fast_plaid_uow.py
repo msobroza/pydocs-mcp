@@ -75,7 +75,15 @@ def _ensure_fast_plaid_imported() -> None:
         # actually monkeypatching ``sys.modules``.
         raise ImportError(_INSTALL_HINT) from _FAST_PLAID_IMPORT_ERROR
     try:
-        from fast_plaid import search as _search  # type: ignore[import-not-found]
+        # import-untyped fires when the extra is installed (fast_plaid ships
+        # no py.typed); import-not-found fires when it's absent. mypy's
+        # per-code unused-ignore analysis would flag whichever doesn't fire,
+        # so unused-ignore keeps the line clean under both install states.
+        # The ignore must sit on the statement's FIRST physical line —
+        # mypy anchors import errors there, not on continuation lines.
+        from fast_plaid import (  # type: ignore[import-untyped, import-not-found, unused-ignore]
+            search as _search,
+        )
 
         _FastPlaidCls = _search.FastPlaid
     except ImportError as e:  # pragma: no cover - exercised when extra is missing

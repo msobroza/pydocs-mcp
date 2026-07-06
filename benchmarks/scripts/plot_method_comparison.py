@@ -25,9 +25,9 @@ import matplotlib
 if "MPLBACKEND" not in os.environ:
     matplotlib.use("Agg")  # headless-safe by default
 
-import matplotlib.pyplot as plt  # noqa: E402 -- after backend selection
-import numpy as np  # noqa: E402
-from matplotlib.lines import Line2D  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.lines import Line2D
 
 # (label, recall@1, recall@5, recall@10, partial_run, search_p50_seconds)
 #   — mirrors the README table. `partial_run` rows ran on 21/30 needles and get
@@ -73,7 +73,7 @@ def _render_bars() -> Path:
     width = 0.26
 
     fig, ax = plt.subplots(figsize=(12.5, 6.5))
-    for i, (metric, color) in enumerate(zip(METRICS, COLORS)):
+    for i, (metric, color) in enumerate(zip(METRICS, COLORS, strict=True)):
         vals = [row[1 + i] for row in DATA]
         bars = ax.bar(
             x + (i - 1) * width,
@@ -84,7 +84,7 @@ def _render_bars() -> Path:
             edgecolor="white",
             linewidth=0.5,
         )
-        for bar, v in zip(bars, vals):
+        for bar, v in zip(bars, vals, strict=True):
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 v + 0.012,
