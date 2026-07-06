@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from pydocs_mcp.models import (
     Chunk,
@@ -40,7 +40,12 @@ from pydocs_mcp.models import (
 )
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
-from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+from pydocs_mcp.retrieval.serialization import (
+    BuildContext,
+    step_registry,
+    step_to_yaml_dict,
+    yaml_kwargs,
+)
 from pydocs_mcp.retrieval.steps._sql_fetch import (
     execute_fetch,
     read_pre_filter_result,
@@ -110,6 +115,9 @@ class ChunkFetcherStep(RetrieverStep):
     retriever_name: str = field(default=_DEFAULT_RETRIEVER_NAME, kw_only=True)
     filter_adapter: FilterAdapter = field(kw_only=True)
     name: str = field(default="chunk_fetcher", kw_only=True)
+    # WHY name is excluded: this step has never serialized ``name`` (parity-
+    # pinned drift; unifying across steps is a follow-up).
+    _YAML_KEYS: ClassVar[tuple[str, ...]] = ("limit", "retriever_name")
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         fulltext = _build_fts_match_query(state.query.terms)
@@ -176,18 +184,12 @@ class ChunkFetcherStep(RetrieverStep):
         return cls(
             provider=provider,
             allowed_fields=allowed,
-            limit=data.get("limit", _DEFAULT_LIMIT),
-            retriever_name=data.get("retriever_name", _DEFAULT_RETRIEVER_NAME),
             filter_adapter=context.filter_adapter,
+            **yaml_kwargs(data, cls, cls._YAML_KEYS),
         )
 
     def to_dict(self) -> dict:
-        d: dict = {"type": "chunk_fetcher"}
-        if self.limit != _DEFAULT_LIMIT:
-            d["limit"] = self.limit
-        if self.retriever_name != _DEFAULT_RETRIEVER_NAME:
-            d["retriever_name"] = self.retriever_name
-        return d
+        return step_to_yaml_dict(self, type_name="chunk_fetcher", keys=self._YAML_KEYS)
 
 
 def _row_to_candidate(row: sqlite3.Row, retriever_name: str) -> Chunk:

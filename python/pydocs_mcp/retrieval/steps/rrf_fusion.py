@@ -19,10 +19,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from typing import ClassVar
 
 from pydocs_mcp.models import Chunk, ChunkList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
-from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
+from pydocs_mcp.retrieval.serialization import (
+    BuildContext,
+    step_registry,
+    step_to_yaml_dict,
+    yaml_kwargs,
+)
 from pydocs_mcp.retrieval.steps._constants import DEFAULT_BRANCH_KEYS
 
 # WHY: literature default for RRF (Cormack et al. 2009). Single source of
@@ -121,6 +127,9 @@ class RRFFusionStep(RetrieverStep):
         kw_only=True,
     )
     name: str = field(default="rrf_fusion", kw_only=True)
+    # WHY name is excluded: this step has never serialized ``name`` — the
+    # parity tests pin that drift; unifying it across steps is a follow-up.
+    _YAML_KEYS: ClassVar[tuple[str, ...]] = ("k", "branch_keys")
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         ranked_lists: list[tuple[Chunk, ...]] = []
@@ -137,19 +146,11 @@ class RRFFusionStep(RetrieverStep):
         return replace(state, candidates=ChunkList(items=fused))
 
     def to_dict(self) -> dict:
-        d: dict = {"type": "rrf_fusion"}
-        if self.k != _DEFAULT_K:
-            d["k"] = self.k
-        if self.branch_keys != DEFAULT_BRANCH_KEYS:
-            d["branch_keys"] = list(self.branch_keys)
-        return d
+        return step_to_yaml_dict(self, type_name="rrf_fusion", keys=self._YAML_KEYS)
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> RRFFusionStep:
-        return cls(
-            k=data.get("k", _DEFAULT_K),
-            branch_keys=tuple(data.get("branch_keys", DEFAULT_BRANCH_KEYS)),
-        )
+        return cls(**yaml_kwargs(data, cls, cls._YAML_KEYS))
 
 
 __all__ = ("RRFFusionStep", "RRFResultFuser")
