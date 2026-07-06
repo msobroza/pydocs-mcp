@@ -71,3 +71,11 @@ def test_transaction_module_owns_the_ambient_contextvar() -> None:
     # break ambient-transaction reuse.
     assert sqlite_pkg._sqlite_transaction is transaction._sqlite_transaction
     assert sqlite_pkg._maybe_acquire is transaction._maybe_acquire
+
+
+def test_row_mappers_module_owns_the_mappers() -> None:
+    from pydocs_mcp.storage.sqlite import row_mappers
+
+    assert sqlite_pkg.row_to_chunk is row_mappers.row_to_chunk
+    assert sqlite_pkg._chunk_to_row is row_mappers._chunk_to_row
+    assert sqlite_pkg._row_to_package is row_mappers._row_to_package
