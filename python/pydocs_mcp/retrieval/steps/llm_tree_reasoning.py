@@ -211,6 +211,15 @@ class LlmTreeReasoningStep(RetrieverStep):
 
             picked = _parse_node_list(response, trees)
             if not picked:
+                if self.rerank_candidates:
+                    # A silent passthrough once masqueraded as a real rerank
+                    # run for weeks (PAGEINDEX_DIVS.md F6.4) — degradation to
+                    # the stage-1 ranking must be observable.
+                    log.warning(
+                        "llm_tree_reasoning: rerank produced no valid picks "
+                        "(empty or fully-hallucinated node_list); passing "
+                        "stage-1 candidates through unchanged.",
+                    )
                 return state
 
             # WHY: fetch by package only (the InMemoryChunkStore and the
@@ -226,6 +235,12 @@ class LlmTreeReasoningStep(RetrieverStep):
             picked_set = set(picked)
             matched = tuple(c for c in all_chunks if c.metadata.get("qualified_name") in picked_set)
             if not matched:
+                if self.rerank_candidates:
+                    log.warning(
+                        "llm_tree_reasoning: no picked qualified_name matched "
+                        "a project chunk; passing stage-1 candidates through "
+                        "unchanged.",
+                    )
                 return state
 
             ranked = _score_by_position(matched, picked)
@@ -288,11 +303,19 @@ class LlmTreeReasoningStep(RetrieverStep):
                 # one-step extension work per EXTENSIONS.md.
                 new_scratch[f"{self.output_scratch_key}.refs"] = tuple(surfaced)
 
-            # In rerank mode the tree's picks ARE the pipeline output, so write
-            # them straight to state.candidates (no downstream fusion step).
+            # In rerank mode the tree's picks lead the pipeline output, and
+            # the unpicked stage-1 remainder is backfilled after them — an
+            # LLM omission must not drop a candidate stage 1 already
+            # surfaced (PAGEINDEX_DIVS.md F6.1). The scratch key keeps the
+            # picks-only list so fusion consumers read the genuine LLM
+            # ranking.
             return replace(
                 state,
-                candidates=ranked if self.rerank_candidates else state.candidates,
+                candidates=(
+                    _backfill_unpicked(ranked, state.candidates)
+                    if self.rerank_candidates
+                    else state.candidates
+                ),
                 scratch=new_scratch,
             )
 
@@ -777,6 +800,38 @@ def _score_by_position(
             continue
         scored.append(replace(chunk, relevance=1.0 - rank / n))
     return ChunkList(items=tuple(scored))
+
+
+def _chunk_key(chunk: Chunk) -> str:
+    """Dedupe identity for pick/backfill: ``qualified_name`` when present
+    (unique per tree node), else ``content_hash`` (always populated by
+    ``Chunk.__post_init__``)."""
+    return str(chunk.metadata.get("qualified_name") or chunk.content_hash)
+
+
+def _backfill_unpicked(ranked: ChunkList, incoming: ChunkList | None) -> ChunkList:
+    """Append stage-1 candidates the LLM did not pick after the picks.
+
+    WHY: rerank mode used to hard-replace ``state.candidates`` with the
+    picks, so one LLM omission dropped a gold the stage-1 retriever had
+    already surfaced — the only measured regression vs the pure stage-1
+    ranking (PAGEINDEX_DIVS.md F6.1). Appending the unpicked remainder in
+    stage-1 order is strictly non-negative for recall@k. Relevance is
+    re-imputed positionally (``1 - i/n``) over the combined list so the
+    score field stays strictly decreasing across the pick/backfill
+    boundary for downstream limit / formatting steps.
+    """
+    if incoming is None:
+        return ranked
+    picked_keys = {_chunk_key(c) for c in ranked.items}
+    tail = tuple(c for c in incoming.items if _chunk_key(c) not in picked_keys)
+    if not tail:
+        return ranked
+    combined = tuple(ranked.items) + tail
+    n = len(combined)
+    return ChunkList(
+        items=tuple(replace(c, relevance=1.0 - i / n) for i, c in enumerate(combined)),
+    )
 
 
 __all__ = ("LlmTreeReasoningStep",)
