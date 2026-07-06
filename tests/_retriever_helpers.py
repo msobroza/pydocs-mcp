@@ -232,6 +232,7 @@ def retrieve_module_members(
     fetcher = MemberFetcherStep(
         name="fetch",
         provider=provider,
+        filter_adapter=SqliteFilterAdapter(),
         allowed_fields=_MEMBER_ALLOWED_FIELDS,
         limit=limit,
     )

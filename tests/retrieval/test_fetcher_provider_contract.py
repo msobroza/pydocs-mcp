@@ -49,3 +49,13 @@ def test_chunk_fetcher_from_dict_rejects_none_filter_adapter(tmp_path: Path) -> 
     )
     with pytest.raises(ValueError, match="ChunkFetcherStep requires.*filter_adapter"):
         ChunkFetcherStep.from_dict({}, ctx)
+
+
+def test_member_fetcher_from_dict_rejects_none_filter_adapter(tmp_path: Path) -> None:
+    """Same contract as the chunk-side guard — see that test's docstring."""
+    ctx = BuildContext(
+        connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "unused.db"),
+        app_config=AppConfig(),
+    )
+    with pytest.raises(ValueError, match="MemberFetcherStep requires.*filter_adapter"):
+        MemberFetcherStep.from_dict({}, ctx)

@@ -22,7 +22,7 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
-from pydocs_mcp.storage.sqlite import SqliteModuleMemberRepository
+from pydocs_mcp.storage.sqlite import SqliteFilterAdapter, SqliteModuleMemberRepository
 
 
 def _member(package: str, module: str, name: str, kind: str, docstring: str = "") -> ModuleMember:
@@ -60,7 +60,9 @@ async def populated_db(tmp_path: Path) -> Path:
 async def test_member_fetcher_returns_matching_members(populated_db: Path) -> None:
     """A LIKE-style query for 'add' returns ≥1 candidate whose name contains 'add'."""
     provider = build_connection_provider(populated_db)
-    step = MemberFetcherStep(name="fetch", provider=provider, limit=10)
+    step = MemberFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     state = RetrieverState(query=SearchQuery(terms="add", max_results=10))
     out = await step.run(state)
     assert isinstance(out.candidates, ModuleMemberList)
@@ -75,7 +77,9 @@ async def test_member_fetcher_returns_matching_members(populated_db: Path) -> No
 async def test_member_fetcher_respects_limit(populated_db: Path) -> None:
     """limit caps the returned candidate count."""
     provider = build_connection_provider(populated_db)
-    step = MemberFetcherStep(name="fetch", provider=provider, limit=1)
+    step = MemberFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=1
+    )
     state = RetrieverState(query=SearchQuery(terms="add", max_results=10))
     out = await step.run(state)
     assert isinstance(out.candidates, ModuleMemberList)
@@ -85,7 +89,9 @@ async def test_member_fetcher_respects_limit(populated_db: Path) -> None:
 async def test_member_fetcher_satisfies_retriever_step_protocol(populated_db: Path) -> None:
     """MemberFetcherStep is a RetrieverStep and writes ModuleMemberList candidates."""
     provider = build_connection_provider(populated_db)
-    step = MemberFetcherStep(name="fetch", provider=provider, limit=10)
+    step = MemberFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     assert isinstance(step, RetrieverStep)
     state = RetrieverState(query=SearchQuery(terms="add", max_results=10))
     out = await step.run(state)
@@ -97,7 +103,9 @@ async def test_member_fetcher_reads_pre_filter_from_scratch(populated_db: Path) 
     state.scratch['pre_filter.result'], the fetcher consumes it directly without
     re-parsing state.query.pre_filter."""
     provider = build_connection_provider(populated_db)
-    step = MemberFetcherStep(name="fetch", provider=provider, limit=10)
+    step = MemberFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     state = RetrieverState(
         query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
     )
@@ -128,7 +136,9 @@ async def test_member_fetcher_raises_if_pre_filter_set_but_scratch_missing(
     upstream (scratch lacks 'pre_filter'), the fetcher raises a clear
     error pointing at the missing pipeline step."""
     provider = build_connection_provider(populated_db)
-    step = MemberFetcherStep(name="fetch", provider=provider, limit=10)
+    step = MemberFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
     state = RetrieverState(
         query=SearchQuery(terms="add", max_results=10, pre_filter={"package": "demo"}),
     )

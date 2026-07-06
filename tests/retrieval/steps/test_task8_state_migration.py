@@ -250,6 +250,7 @@ async def test_member_fetcher_pushes_pre_filter_into_sql(members_db: Path) -> No
     fetch = MemberFetcherStep(
         name="fetch",
         provider=provider,
+        filter_adapter=SqliteFilterAdapter(),
         allowed_fields=frozenset({"package", "scope", "module", "name", "kind"}),
         limit=10,
     )
