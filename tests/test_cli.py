@@ -575,13 +575,40 @@ class TestTaskShapedSubcommands:
             main()
         assert "# Overview" in capsys.readouterr().out
 
-    def test_why_reports_unavailable(self, seeded_project, capsys, monkeypatch):
+    def test_why_succeeds_with_capture_enabled(self, seeded_project, capsys, monkeypatch):
+        """Default config (``decision_capture.enabled=True``) wires the real
+        ``DecisionService`` — ``why <query>`` runs the semantic search and, with
+        no mined decisions in this fixture, renders the empty-state on stdout
+        (exit 0), NOT the Null impl's unavailable error."""
         monkeypatch.chdir(seeded_project)
         with patch("sys.argv", ["pydocs-mcp", "index", "."]):
             from pydocs_mcp.__main__ import main
 
             main()
         with patch("sys.argv", ["pydocs-mcp", "why", "anything", "--project-dir", "."]):
+            rc = main()
+        assert rc == 0
+        out = capsys.readouterr().out
+        # Real service empty-state (no decisions mined for this minimal fixture).
+        assert "No decisions found." in out
+
+    def test_why_reports_unavailable_when_capture_disabled(
+        self, seeded_project, capsys, monkeypatch
+    ):
+        """A ``--config`` overlay with ``decision_capture.enabled=false`` keeps the
+        ``NullDecisionService`` wired — ``why`` raises and the error points the
+        user at the YAML knob (exit != 0)."""
+        monkeypatch.chdir(seeded_project)
+        overlay = seeded_project / "no-capture.yaml"
+        overlay.write_text("decision_capture:\n  enabled: false\n")
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        with patch(
+            "sys.argv",
+            ["pydocs-mcp", "--config", str(overlay), "why", "anything", "--project-dir", "."],
+        ):
             rc = main()
         assert rc != 0
         # NullDecisionService points the user at the YAML knob `decision_capture`.

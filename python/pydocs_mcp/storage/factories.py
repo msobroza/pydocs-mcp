@@ -47,6 +47,8 @@ from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.decision_service import DecisionService
+    from pydocs_mcp.application.docs_search import DocsSearch
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
@@ -199,6 +201,35 @@ def build_sqlite_overview_service(
         scripts=parse_project_scripts(str(project_root / "pyproject.toml")),
         max_modules=overview_cfg.max_modules,
         max_communities=overview_cfg.max_communities,
+    )
+
+
+def build_sqlite_decision_service(
+    db_path: Path,
+    *,
+    docs: DocsSearch,
+    config: AppConfig | None = None,
+) -> DecisionService:
+    """Compose a wired ``DecisionService`` from a SQLite DB path + shared ``docs``.
+
+    Sibling of ``build_sqlite_lookup_service`` / ``build_sqlite_overview_service``:
+    the composition root builds ``get_why``'s real backing here so the swap on
+    ``decision_capture.enabled`` (server ``_build_project_services``) is one
+    branch. ``docs`` is the SAME per-project :class:`DocsSearch` the search /
+    card tools use — passed in rather than rebuilt so decision ranking and plain
+    search share ONE semantic-retrieval pipeline (no second chunk pipeline). The
+    read-record cap is a YAML setting (``decisions.output.default_limit``), NOT
+    an MCP param — threaded from ``config`` when given, else the sub-config
+    default for direct/test construction.
+    """
+    from pydocs_mcp.application.decision_service import DecisionService
+    from pydocs_mcp.retrieval.config import DecisionsConfig
+
+    decisions_cfg = config.decisions if config is not None else DecisionsConfig()
+    return DecisionService(
+        uow_factory=build_sqlite_uow_factory(db_path),
+        docs=docs,
+        default_limit=decisions_cfg.output.default_limit,
     )
 
 
