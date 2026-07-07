@@ -1,7 +1,9 @@
 """EmitGovernsEdgesStage tests — decisions-as-graph-nodes projection (spec §D18).
 
-The stage rides the ``capture_decisions`` sub-pipeline AFTER ``merge_decisions``,
-projecting one GOVERNS edge per ``affected_qname`` of each merged decision:
+The stage rides the ``capture_decisions`` sub-pipeline AFTER ``mine_decisions``
+(so ``state.decisions`` is materialized — mining and the Jaccard merge are one
+stage), projecting one GOVERNS edge per ``affected_qname`` of each merged
+decision:
 ``from_node_id="decision:<key>"``, ``to_name=qname``, ``to_node_id=None`` (the
 resolver fills it later, exactly like MENTIONS), ``kind="governs"``. It appends
 onto the existing ``state.refs.references`` so CALLS/IMPORTS/etc from
@@ -94,25 +96,16 @@ async def test_decision_with_no_qnames_emits_no_edges() -> None:
     assert not any(r.kind is ReferenceKind.GOVERNS for r in out.refs.references)
 
 
-def test_stage_registered_in_capture_pipeline() -> None:
+def test_stage_positioned_after_mine_in_capture_pipeline() -> None:
     # The stage tuple is hardcoded in CaptureDecisionsPipeline.from_dict — assert
-    # emit_governs_edges runs after merge_decisions (state.decisions materialized).
+    # emit_governs_edges runs after mine_decisions (state.decisions materialized:
+    # mining and the Jaccard merge are one stage).
     from pydocs_mcp.extraction.pipeline.stages.decisions.capture_decisions import (
         CaptureDecisionsPipeline,
     )
 
     pipeline = CaptureDecisionsPipeline.from_dict({"type": "capture_decisions"}, context=None)
     names = [type(stage).__name__ for stage in pipeline.stages]
-    assert "MergeDecisionsStage" in names
+    assert "MineDecisionsStage" in names
     assert "EmitGovernsEdgesStage" in names
-    assert names.index("EmitGovernsEdgesStage") > names.index("MergeDecisionsStage")
-
-
-def test_stage_serialization_roundtrip() -> None:
-    # to_dict / from_dict symmetry with the other decision sub-stages.
-    stage = EmitGovernsEdgesStage()
-    assert stage.to_dict() == {"type": "emit_governs_edges"}
-    assert isinstance(
-        EmitGovernsEdgesStage.from_dict({"type": "emit_governs_edges"}, context=None),
-        EmitGovernsEdgesStage,
-    )
+    assert names.index("EmitGovernsEdgesStage") > names.index("MineDecisionsStage")

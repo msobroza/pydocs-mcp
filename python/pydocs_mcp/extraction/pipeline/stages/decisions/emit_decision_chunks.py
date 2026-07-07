@@ -14,18 +14,14 @@ normal path. Empty ``decisions`` → identity out (no chunk appended).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any
 
 from pydocs_mcp.extraction.decisions._types import RawDecision
 from pydocs_mcp.extraction.decisions.engine import decision_key
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
-from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.models import Chunk, ChunkOrigin
 
 
-@stage_registry.register("emit_decision_chunks")
 @dataclass(frozen=True, slots=True)
 class EmitDecisionChunksStage:
     """Append one searchable decision-as-chunk per merged decision."""
@@ -43,13 +39,6 @@ class EmitDecisionChunksStage:
         )
         new_chunks = replace(state.chunks, chunks=(*state.chunks.chunks, *decision_chunks))
         return replace(state, chunks=new_chunks)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any], context: Any) -> EmitDecisionChunksStage:
-        return cls()
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"type": "emit_decision_chunks"}
 
 
 def _decision_to_chunk(decision: RawDecision, *, package: str) -> Chunk:

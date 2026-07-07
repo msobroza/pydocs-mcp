@@ -11,7 +11,7 @@ Module layout:
 - :mod:`.file_read` — :class:`FileReadStage`
 - :mod:`.chunking` — :class:`ChunkingStage`
 - :mod:`.reference_capture` — :class:`ReferenceCaptureStage` + ``_get_capture_config`` / ``_set_capture_config``
-- :mod:`.decisions` — the ``capture_decisions`` sub-pipeline: :class:`MineDecisionsStage` / :class:`MergeDecisionsStage` / :class:`StructureDecisionsStage` / :class:`EmitDecisionChunksStage` composed by :class:`CaptureDecisionsPipeline`
+- :mod:`.decisions` — the ``capture_decisions`` sub-pipeline: decision sub-stages composed by :class:`CaptureDecisionsPipeline` (which owns the project-only + ``enabled`` guard)
 - :mod:`.flatten` — :class:`FlattenStage`
 - :mod:`.assign_chunk_content_hash` — :class:`AssignChunkContentHashStage`
 - :mod:`.load_existing_chunk_hashes` — :class:`LoadExistingChunkHashesStage`
@@ -35,7 +35,7 @@ from pydocs_mcp.extraction.pipeline.stages.content_hash import ContentHashStage
 from pydocs_mcp.extraction.pipeline.stages.decisions import (
     CaptureDecisionsPipeline,
     EmitDecisionChunksStage,
-    MergeDecisionsStage,
+    EmitGovernsEdgesStage,
     MineDecisionsStage,
     StructureDecisionsStage,
 )
@@ -73,12 +73,12 @@ __all__ = (
     "EmbedChunksMultiVectorStage",
     "EmbedChunksStage",
     "EmitDecisionChunksStage",
+    "EmitGovernsEdgesStage",
     "FileDiscoveryStage",
     "FileReadStage",
     "FlattenStage",
     "IngestionStage",
     "LoadExistingChunkHashesStage",
-    "MergeDecisionsStage",
     "MineDecisionsStage",
     "PackageBuildStage",
     "ReferenceCaptureStage",

@@ -142,12 +142,6 @@ class IngestionState:
     refs: ReferenceBundle = field(default_factory=ReferenceBundle)
     package: Package | None = None
     existing_chunk_hashes: dict[str, int] | None = None
-    # Raw per-source mined decisions (spec §D8) BEFORE the merge pass —
-    # populated by MineDecisionsStage on project targets, consumed by
-    # MergeDecisionsStage. Intermediate scratch between the mine and merge
-    # sub-stages of the capture_decisions sub-pipeline; empty on dependency
-    # targets and any pipeline without the mine stage.
-    decisions_raw: tuple[Any, ...] = ()
     # Merged mined decisions (spec §D8) — populated by the capture_decisions
     # sub-pipeline on project targets, consumed by
     # IndexingService.reindex_package (reconcile + persist). Additive,

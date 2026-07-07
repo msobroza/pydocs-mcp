@@ -67,6 +67,15 @@ class ComponentRegistry(Generic[C]):
             return from_dict(data, context, _depth=_depth)
         return from_dict(data, context)
 
+    def get(self, type_name: str) -> type[C] | None:
+        """Return the class registered under ``type_name``, or ``None``.
+
+        The lookup twin of :meth:`build` for callers that need
+        skip-with-warning semantics instead of ``build``'s raise-on-unknown
+        (which also requires a decodable ``{"type": ...}`` dict).
+        """
+        return self._types.get(type_name)
+
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._types))
 
