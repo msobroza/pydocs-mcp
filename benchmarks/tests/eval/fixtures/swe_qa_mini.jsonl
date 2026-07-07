@@ -1,0 +1,5 @@
+{"question": "How does the PGF backend read LaTeX output?", "answer": "Implementation details (from `backend_pgf.py` lines 240-252):\n1. **Character-by-character reading**: reads from `self.latex.stdout`."}
+{"question": "Where is the LatexManager class defined?", "answer": "The LatexManager class lives in `backend_pgf.py` lines 1-40."}
+{"question": "What triggers a LaTeX restart?", "answer": "A restart is triggered on a stale process (backend_pgf.py: line 55-70)."}
+{"question": "Why is the process kept persistent?", "answer": "Keeping it persistent avoids per-figure startup cost (backend_pgf.py: lines 80-95)."}
+{"question": "What is the module about?", "answer": "It is a rendering backend, described in prose with no file citation."}

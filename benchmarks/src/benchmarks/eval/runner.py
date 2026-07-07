@@ -2,7 +2,8 @@
 
 Argparse + ``main()`` only. The sweep orchestration lives in ``sweep.py``
 (``run_sweep`` / ``run_sweep_detailed``); this module translates flags
-into one ``run_sweep`` call and renders the markdown report.
+into one ``run_sweep_detailed`` call and renders the markdown report
+(including the per-task ``## By qa_type`` breakout from the detailed legs).
 """
 
 from __future__ import annotations
@@ -30,6 +31,9 @@ from .sweep import (
 )
 from .sweep import (
     LATENCY_KEYS as LATENCY_KEYS,
+)
+from .sweep import (
+    LegResult,
 )
 from .sweep import (
     SweepOutcome as SweepOutcome,
@@ -256,6 +260,27 @@ def build_dataset_kwargs(
     return dataset_kwargs
 
 
+def _task_rows_from_legs(
+    legs: dict[tuple[str, str], LegResult],
+) -> dict[tuple[str, str], tuple[dict[str, object], ...]]:
+    """Project ``SweepOutcome.legs`` into ``report.format_report``'s
+    ``task_rows`` shape — one ``{"metadata": ..., "scores": ...}`` row per
+    observation, keyed like ``sweep_results``.
+
+    WHY: the ``## By qa_type`` breakout groups per-task scores by
+    ``metadata["qa_type"]``, which the aggregated ``SweepResults`` has already
+    pooled away. This is the ONLY place per-task metadata + scores are handed
+    to the report; cache-hit observations are kept (a warm task still scored
+    the quality metrics — only its indexing latency is suppressed elsewhere).
+    """
+    return {
+        key: tuple(
+            {"metadata": dict(obs.metadata), "scores": dict(obs.scores)} for obs in leg.observations
+        )
+        for key, leg in legs.items()
+    }
+
+
 def main() -> None:
     """``python -m benchmarks.benchmarks.eval.runner`` entry point."""
     parser = _build_arg_parser()
@@ -276,8 +301,14 @@ def main() -> None:
             split=args.split,
         )
 
-        results, tasks_ran = asyncio.run(
-            run_sweep(
+        # WHY run_sweep_detailed (not run_sweep): the report's
+        # ``## By qa_type`` breakout needs per-task metadata + scores, which the
+        # aggregated SweepResults has already pooled away. The detailed outcome
+        # carries the per-leg ``LegResult.observations`` series so the CLI can
+        # actually emit the breakout SWE-QA-Pro documents — run_sweep's
+        # ``(results, tasks_ran)`` shape can't.
+        outcome = asyncio.run(
+            run_sweep_detailed(
                 systems=_parse_csv(args.systems),
                 config_paths=config_paths,
                 dataset_name=args.dataset,
@@ -297,14 +328,18 @@ def main() -> None:
 
         # WHY: render the report after the sweep so the run can crash without
         # leaking a half-written markdown file. ``tasks_ran`` is the actual
-        # per-leg task count returned by ``run_sweep`` — accurate on both
+        # per-leg task count returned by the sweep — accurate on both
         # ``--limit N`` and full-dataset runs.
         from .report import format_report
 
         report = format_report(
-            sweep_results=results,
+            sweep_results=outcome.results,
             dataset_name=args.dataset,
-            n_tasks=tasks_ran,
+            n_tasks=outcome.tasks_ran,
+            # Per-task metadata + scores → the ``## By qa_type`` breakout. For
+            # datasets without ``metadata["qa_type"]`` (RepoQA, DS-1000) the
+            # report renders byte-identical to the no-task_rows path.
+            task_rows=_task_rows_from_legs(outcome.legs),
         )
         if args.report is not None:
             args.report.write_text(report)

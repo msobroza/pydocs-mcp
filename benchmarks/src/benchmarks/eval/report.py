@@ -13,6 +13,8 @@ rather than retrofitting a Protocol.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 # WHY: metric row order is part of the report contract — downstream
 # regression-diff scripts walk the rows top-to-bottom and key on this
 # sequence. Derive from ``runner.DEFAULT_METRIC_SPECS`` so the CLI
@@ -25,12 +27,27 @@ from __future__ import annotations
 from .runner import DEFAULT_METRIC_SPECS as _METRIC_ROW_ORDER
 from .runner import LATENCY_KEYS as _LATENCY_ROW_ORDER
 
+# WHY: SWE-QA-Pro tags each task with a category (What/Where/How/Why) under
+# ``metadata["qa_type"]``. A category breakout only carries signal when the
+# dataset actually mixes categories — RepoQA, DS-1000, and any other dataset
+# without the key must render exactly as before. Require ≥2 distinct values
+# so a single-category run (or a keyless one) suppresses the section entirely.
+_CATEGORY_KEY = "qa_type"
+_MIN_BREAKOUT_CATEGORIES = 2
+
+# Per-task detail the breakout needs: one row per task, keyed like
+# ``sweep_results`` so the breakout sub-table shares the main table's columns.
+# ``{(system, config): ({"metadata": {...}, "scores": {metric: value}}, …)}``.
+TaskRow = Mapping[str, object]
+TaskRows = Mapping[tuple[str, str], Sequence[TaskRow]]
+
 
 def format_report(
     *,
     sweep_results: dict[tuple[str, str], dict[str, tuple[float, float, float]]],
     dataset_name: str,
     n_tasks: int,
+    task_rows: TaskRows | None = None,
 ) -> str:
     """Render a markdown table from a sweep's aggregated results.
 
@@ -39,6 +56,11 @@ def format_report(
             as returned by ``runner.run_sweep``.
         dataset_name: Human-readable dataset label for the title.
         n_tasks: Number of tasks aggregated, for the title line.
+        task_rows: Optional per-task detail keyed like ``sweep_results``.
+            When ≥2 distinct ``metadata["qa_type"]`` values are present the
+            report grows a ``## By qa_type`` section with one row per category
+            (per-category metric means). Absent or single-category → the top
+            table renders byte-identical to a call without this argument.
 
     Returns:
         A markdown string. The runner writes it to ``report.md`` and logs
@@ -66,7 +88,15 @@ def format_report(
 
     table = "\n".join(_format_row(r) for r in rows)
     title = f"# Benchmark report — {dataset_name} ({n_tasks} tasks)"
-    return f"{title}\n\n{table}\n"
+    report = f"{title}\n\n{table}\n"
+
+    # WHY: append the category breakout AFTER the top table so the headline
+    # numbers stay first and the top table is untouched when the section is
+    # suppressed (keeps the no-``task_rows`` render byte-identical).
+    breakout = _format_category_breakout(task_rows)
+    if breakout:
+        report += f"\n{breakout}\n"
+    return report
 
 
 def _is_latency_metric(name: str) -> bool:
@@ -101,3 +131,84 @@ def _format_cell(
 
 def _format_row(cells: list[str]) -> str:
     return "| " + " | ".join(cells) + " |"
+
+
+def _distinct_categories(task_rows: TaskRows) -> tuple[str, ...]:
+    """Ordered-unique ``qa_type`` values across every leg's task rows.
+
+    Insertion order (first-seen) so the breakout rows follow the order the
+    categories appear in the dataset stream — deterministic across runs.
+    """
+    seen: dict[str, None] = {}
+    for rows in task_rows.values():
+        for row in rows:
+            metadata = row.get("metadata")
+            if not isinstance(metadata, Mapping):
+                continue
+            category = metadata.get(_CATEGORY_KEY)
+            if isinstance(category, str):
+                seen.setdefault(category, None)
+    return tuple(seen)
+
+
+def _category_mean(
+    task_rows: TaskRows,
+    category: str,
+    metric_name: str,
+) -> float | None:
+    """Mean of ``metric_name`` over every task tagged ``category``.
+
+    Pools across all (system, config) legs — the breakout answers "how does
+    this category do overall", not per-leg. ``None`` when no tagged task
+    scored the metric → rendered as ``—`` so the column count stays fixed on
+    partial coverage.
+    """
+    values: list[float] = []
+    for rows in task_rows.values():
+        for row in rows:
+            metadata = row.get("metadata")
+            if not isinstance(metadata, Mapping) or metadata.get(_CATEGORY_KEY) != category:
+                continue
+            scores = row.get("scores")
+            if not isinstance(scores, Mapping):
+                continue
+            value = scores.get(metric_name)
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _format_category_breakout(task_rows: TaskRows | None) -> str:
+    """A ``## By qa_type`` section: one row per category, one metric column each.
+
+    Empty string when ``task_rows`` is absent or carries fewer than
+    ``_MIN_BREAKOUT_CATEGORIES`` distinct ``qa_type`` values — the caller
+    then leaves the top table untouched.
+    """
+    if not task_rows:
+        return ""
+    categories = _distinct_categories(task_rows)
+    if len(categories) < _MIN_BREAKOUT_CATEGORIES:
+        return ""
+
+    # WHY: the breakout reuses the main table's quality-metric names as
+    # columns so a reader compares category means against the overall row
+    # metric-for-metric. Latency keys are excluded — per-category timing
+    # percentiles aren't a per-category quality signal. Means pool ACROSS
+    # (system, config) legs: the breakout answers "how does this category do
+    # overall", not per-leg.
+    header_cells = [_CATEGORY_KEY, *_METRIC_ROW_ORDER]
+    sep_cells = ["---"] * len(header_cells)
+    rows: list[list[str]] = [header_cells, sep_cells]
+
+    for category in categories:
+        cells = [category]
+        for metric_name in _METRIC_ROW_ORDER:
+            mean = _category_mean(task_rows, category, metric_name)
+            cells.append("—" if mean is None else f"{mean:.1%}")
+        rows.append(cells)
+
+    table = "\n".join(_format_row(r) for r in rows)
+    return f"## By {_CATEGORY_KEY}\n\n{table}"
