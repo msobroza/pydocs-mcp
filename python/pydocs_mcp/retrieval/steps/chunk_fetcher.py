@@ -78,7 +78,7 @@ if TYPE_CHECKING:
 # BY of ``-m.rank`` (descending) since the data is the same magnitudes.
 _FETCH_SQL_TEMPLATE = (
     "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
-    "c.qualified_name, m.rank AS rank "
+    "c.qualified_name, c.decision_id, m.rank AS rank "
     "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
     "WHERE {where} "
     "ORDER BY m.rank LIMIT ?"
@@ -218,6 +218,14 @@ def _row_to_candidate(row: sqlite3.Row, retriever_name: str) -> Chunk:
     qname = row["qualified_name"]
     if qname:
         metadata["qualified_name"] = qname
+    # decision_id is the nullable v14 backlink (spec §D9): populated only on
+    # decision-as-chunk rows. get_why's decision_search preset ranks through this
+    # BM25 fetcher, so the backlink MUST survive here for DecisionService.search
+    # to hydrate the record — mirrors storage.sqlite.row_to_chunk (surface only
+    # when set so non-decision candidates stay key-free).
+    decision_id = row["decision_id"]
+    if decision_id is not None:
+        metadata["decision_id"] = decision_id
     return Chunk(
         text=row["text"] or "",
         id=row["id"],

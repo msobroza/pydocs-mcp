@@ -163,3 +163,37 @@ async def test_fetcher_surfaces_qualified_name(tmp_path: Path) -> None:
     assert isinstance(out.candidates, ChunkList)
     hit = next(c for c in out.candidates.items if "def add" in c.text)
     assert hit.metadata.get("qualified_name") == "demo.m.add"
+
+
+async def test_fetcher_surfaces_decision_id(tmp_path: Path) -> None:
+    """BM25 candidates carry the ``decision_id`` backlink (schema v14) so the
+    ``decision_search`` preset can hydrate get_why records from ranked chunks.
+    Without it ``DecisionService.search`` finds the chunk but can't map it to
+    its ``decision_records`` row, so ``why "<term>"`` returns "No decisions found."
+    """
+    db_path = tmp_path / "did.db"
+    open_index_database(db_path).close()
+    provider = build_connection_provider(db_path)
+    repo = SqliteChunkRepository(provider=provider)
+    await repo.upsert(
+        [
+            Chunk(
+                text="greeting stays pure\n# DECISION: greeting stays pure",
+                metadata={
+                    ChunkFilterField.PACKAGE.value: "demo",
+                    ChunkFilterField.TITLE.value: "greeting stays pure",
+                    ChunkFilterField.ORIGIN.value: "decision_record",
+                    "decision_id": 7,
+                },
+            ),
+        ]
+    )
+    await repo.rebuild_index()
+    step = ChunkFetcherStep(
+        name="fetch", provider=provider, filter_adapter=SqliteFilterAdapter(), limit=10
+    )
+    state = RetrieverState(query=SearchQuery(terms="greeting", max_results=10))
+    out = await step.run(state)
+    assert isinstance(out.candidates, ChunkList)
+    hit = next(c for c in out.candidates.items if "DECISION" in c.text)
+    assert hit.metadata.get("decision_id") == 7

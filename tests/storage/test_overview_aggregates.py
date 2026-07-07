@@ -71,6 +71,28 @@ def test_degree_by_package_counts_in_and_out(provider) -> None:
     assert degrees["a"] == (0, 1)
 
 
+def test_degree_by_package_excludes_synthetic_decision_nodes(provider) -> None:
+    """A ``decision:<key>`` GOVERNS source is a synthetic graph node, not a
+    resolved qname — it must NOT enter the centrality map, or it leaks into the
+    overview's entry-points (in_deg 0, out_deg > 0 reads as a graph root) and the
+    dashboard's ungoverned-modules list (spec §D17/§D18)."""
+    _insert_refs(
+        provider,
+        [
+            # A real CALLS edge so the qname side is populated normally.
+            ("__project__", "app.main", "app.greet", "app.greet", "calls"),
+            # The synthetic GOVERNS edge Task-9's emit_governs_edges stamps.
+            ("__project__", "decision:greeting-stays-pure", "app", "app", "governs"),
+        ],
+    )
+    store = SqliteReferenceStore(provider=provider)
+    degrees = asyncio.run(store.degree_by_package("__project__"))
+    assert "decision:greeting-stays-pure" not in degrees
+    # The real qnames still count (governed target keeps its inbound edge).
+    assert degrees["app"][0] == 1  # in_degree from the GOVERNS edge
+    assert degrees["app.main"][1] == 1  # out_degree from the CALLS edge
+
+
 def test_imports_grouped_by_target_package(provider) -> None:
     # IMPORTS edges: x->numpy.array, y->numpy.linalg.solve, z->pydantic.BaseModel
     _insert_refs(

@@ -221,9 +221,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_search.add_argument(
         "--kind",
-        choices=["docs", "api", "any"],
+        choices=["docs", "api", "any", "decision"],
         default="any",
-        help="Which index to search: 'docs' = prose / README, 'api' = functions / classes, 'any' = both (default).",
+        help="Which index to search: 'docs' = prose / README, 'api' = functions / classes, 'decision' = mined architectural decisions, 'any' = both docs+api (default).",
     )
     sp_search.add_argument(
         "-p",

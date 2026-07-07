@@ -248,7 +248,11 @@ class SqliteReferenceStore:
         rides ``ix_refs_from`` / ``ix_refs_to_node`` for the ``from_package``
         filter; nodes appearing on only one side get a 0 on the missing axis.
         The in-degree scan drops unresolved edges (``to_node_id IS NULL``) since
-        an unresolved target names nothing in the indexed universe.
+        an unresolved target names nothing in the indexed universe. The out-degree
+        scan drops synthetic ``decision:<key>`` GOVERNS sources: a decision node is
+        not a resolved code qname, so leaving it in would leak it into the overview
+        entry-points (in_deg 0 / out_deg > 0 reads as a graph root) and the
+        governance dashboard's ungoverned-modules list (spec §D18).
         """
         in_sql = (
             "SELECT to_node_id AS q, COUNT(*) AS c FROM node_references "
@@ -256,11 +260,14 @@ class SqliteReferenceStore:
         )
         out_sql = (
             "SELECT from_node_id AS q, COUNT(*) AS c FROM node_references "
-            "WHERE from_package = ? GROUP BY from_node_id"
+            "WHERE from_package = ? AND from_node_id NOT LIKE ? GROUP BY from_node_id"
         )
+        decision_glob = f"{_DECISION_NODE_PREFIX}%"
         async with _maybe_acquire(self.provider) as conn:
             in_rows = await asyncio.to_thread(lambda: conn.execute(in_sql, (package,)).fetchall())
-            out_rows = await asyncio.to_thread(lambda: conn.execute(out_sql, (package,)).fetchall())
+            out_rows = await asyncio.to_thread(
+                lambda: conn.execute(out_sql, (package, decision_glob)).fetchall()
+            )
         degrees: dict[str, tuple[int, int]] = {}
         for r in in_rows:
             degrees[r["q"]] = (r["c"], 0)
