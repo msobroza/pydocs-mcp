@@ -100,6 +100,29 @@ overview:                     # get_overview card caps (spec §D17)
   max_modules: 20
   max_communities: 10
 
+# Index-time decision mining (spec §D8): deterministic sources feed the
+# `capture_decisions` ingestion stage, emitting one decision-as-chunk per
+# merged record. `enabled: false` skips the stage entirely. `llm_structuring`
+# is default-OFF — deterministic mining ships the verbatim record with no LLM
+# in the index path.
+decision_capture:
+  enabled: true
+  sources: [adr_files, inline_markers, commit_messages, changelog, docs_prose]
+  merge_jaccard: 0.85
+  inline_markers:
+    context_lines: 20
+  commit_messages:
+    max_commits: 2000
+    timeout_seconds: 30
+  docs_prose:
+    max_files: 10
+    max_kb_per_file: 50
+  include_deps: false
+  llm_structuring:            # §D12
+    enabled: false
+    grounding_threshold: 0.60
+    batch_size: 5
+
 # File-watcher tunables for `pydocs-mcp serve --watch` (CLI flag overrides
 # `enabled` — leave it false here so plain `pydocs-mcp serve` is identical
 # to today). Debounce naturally collapses editor atomic-save sequences

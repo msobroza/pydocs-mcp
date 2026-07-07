@@ -36,6 +36,7 @@ import numpy as np
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
+from pydocs_mcp.storage.decision_record import DecisionRecord
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
@@ -644,6 +645,58 @@ class InMemoryNodeScoreStore:
         self.by_key.clear()
 
 
+@dataclass
+class InMemoryDecisionStore:
+    """Structurally satisfies DecisionStore — async methods only.
+
+    Mirrors :class:`SqliteDecisionRepository`'s insert-or-update-by-id
+    contract: a record with ``id is None`` is inserted with a freshly assigned
+    monotonic id; a record with a concrete ``id`` updates the stored row while
+    PRESERVING its original ``created_at`` (so the SQLite ``created_at``-not-in-
+    SET semantics match). ``list_for_package`` returns rows ordered by id.
+    """
+
+    by_id: dict[int, DecisionRecord] = field(default_factory=dict)
+    calls: list[_Call] = field(default_factory=list)
+    _next_id: int = 1
+
+    async def upsert(self, records, *, uow=None) -> tuple[int, ...]:
+        materialised = tuple(records)
+        self.calls.append(_Call("upsert", materialised))
+        out: list[int] = []
+        for record in materialised:
+            if record.id is None:
+                rid = self._next_id
+                self._next_id += 1
+                self.by_id[rid] = replace(record, id=rid)
+            else:
+                rid = record.id
+                existing = self.by_id.get(rid)
+                created_at = existing.created_at if existing is not None else record.created_at
+                self.by_id[rid] = replace(record, created_at=created_at)
+            out.append(rid)
+        return tuple(out)
+
+    async def list_for_package(self, package: str) -> tuple[DecisionRecord, ...]:
+        self.calls.append(_Call("list_for_package", package))
+        rows = [r for r in self.by_id.values() if r.package == package]
+        return tuple(sorted(rows, key=lambda r: r.id or 0))
+
+    async def delete_by_ids(self, ids, *, uow=None) -> None:
+        materialised = tuple(ids)
+        self.calls.append(_Call("delete_by_ids", materialised))
+        for rid in materialised:
+            self.by_id.pop(rid, None)
+
+    async def delete_for_package(self, package, *, uow=None) -> None:
+        self.calls.append(_Call("delete_for_package", package))
+        self.by_id = {rid: r for rid, r in self.by_id.items() if r.package != package}
+
+    async def delete_all(self, *, uow=None) -> None:
+        self.calls.append(_Call("delete_all", None))
+        self.by_id.clear()
+
+
 # ── FakeUnitOfWork ───────────────────────────────────────────────────────
 
 
@@ -679,6 +732,7 @@ class FakeUnitOfWork:
     trees_store: InMemoryDocumentTreeStore = field(default_factory=InMemoryDocumentTreeStore)
     references_store: InMemoryReferenceStore = field(default_factory=InMemoryReferenceStore)
     node_scores_store: InMemoryNodeScoreStore = field(default_factory=InMemoryNodeScoreStore)
+    decisions_store: InMemoryDecisionStore = field(default_factory=InMemoryDecisionStore)
     # Spec S15: ``vectors`` is always present; tests get a
     # :class:`NullVectorStore` by default. Override via
     # :func:`make_fake_uow_factory(vectors=...)` when a test needs to
@@ -700,6 +754,7 @@ class FakeUnitOfWork:
     trees: Any = field(init=False, repr=False)
     references: Any = field(init=False, repr=False)
     node_scores: Any = field(init=False, repr=False)
+    decisions: Any = field(init=False, repr=False)
     vectors: Any = field(init=False, repr=False)
     multi_vectors: Any = field(init=False, repr=False)
 
@@ -710,6 +765,7 @@ class FakeUnitOfWork:
         self.trees = _NotEnteredProxy("trees")
         self.references = _NotEnteredProxy("references")
         self.node_scores = _NotEnteredProxy("node_scores")
+        self.decisions = _NotEnteredProxy("decisions")
         # ``vectors`` is always-present per spec S15, even outside the
         # context — application code should never need to branch on
         # backend identity. Tests that want the not-entered guard can
@@ -730,6 +786,7 @@ class FakeUnitOfWork:
         self.trees = self.trees_store
         self.references = self.references_store
         self.node_scores = self.node_scores_store
+        self.decisions = self.decisions_store
         self.vectors = self.vectors_store
         self.multi_vectors = self.multi_vectors_store
         return self
@@ -745,6 +802,7 @@ class FakeUnitOfWork:
         self.trees = _NotEnteredProxy("trees")
         self.references = _NotEnteredProxy("references")
         self.node_scores = _NotEnteredProxy("node_scores")
+        self.decisions = _NotEnteredProxy("decisions")
         self.vectors = self.vectors_store  # always-present (spec S15)
         self.multi_vectors = self.multi_vectors_store  # always-present
         return False
@@ -769,6 +827,7 @@ class FakeUnitOfWork:
         await self.trees_store.delete_all()
         await self.references_store.delete_all()
         await self.node_scores_store.delete_all()
+        await self.decisions_store.delete_all()
         await self.packages_store.delete(None)
         await self.vectors_store.clear_all()
         await self.multi_vectors_store.clear_all()
@@ -785,6 +844,7 @@ def make_fake_uow_factory(
     trees: InMemoryDocumentTreeStore | None = None,
     references: InMemoryReferenceStore | None = None,
     node_scores: InMemoryNodeScoreStore | None = None,
+    decisions: InMemoryDecisionStore | None = None,
     vectors: Any = None,
     multi_vectors: Any = None,
 ) -> Callable[[], FakeUnitOfWork]:
@@ -810,6 +870,7 @@ def make_fake_uow_factory(
     trs = trees or InMemoryDocumentTreeStore()
     rfs = references or InMemoryReferenceStore()
     nss = node_scores or InMemoryNodeScoreStore()
+    dcs = decisions or InMemoryDecisionStore()
     # Cross-store aggregate: community_cohesion partitions the reference
     # store's edges by community, mirroring the SQLite node_references⋈
     # node_scores join. Link the shared reference store so the fake matches.
@@ -826,6 +887,7 @@ def make_fake_uow_factory(
             trees_store=trs,
             references_store=rfs,
             node_scores_store=nss,
+            decisions_store=dcs,
             vectors_store=vec,
             multi_vectors_store=mv,
         )
@@ -998,6 +1060,7 @@ __all__ = (
     "FakeObserver",
     "FakeUnitOfWork",
     "InMemoryChunkStore",
+    "InMemoryDecisionStore",
     "InMemoryDocumentTreeStore",
     "InMemoryModuleMemberStore",
     "InMemoryPackageStore",

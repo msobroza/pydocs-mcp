@@ -87,6 +87,9 @@ class FakeIndexingService:
         references: tuple = (),
         reference_aliases: dict[str, dict[str, str]] | None = None,
         class_attribute_types: dict[str, dict[str, str]] | None = None,
+        decisions: tuple = (),  # spec §D8 — decision capture seam
+        decision_structured=None,  # spec §D12 — LLM-structured overlay seam
+        project_root=None,  # staleness scorer root (project path)
     ) -> None:
         self.reindex_calls.append(package)
 

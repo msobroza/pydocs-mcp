@@ -139,3 +139,34 @@ async def test_insert_persists_content_hash(tmp_path: Path) -> None:
     async with factory() as uow:
         pairs = await uow.chunks.list_id_hash_pairs(filter={"package": "demo"})
     assert pairs[0][1] == explicit_hash
+
+
+@pytest.mark.asyncio
+async def test_decision_id_round_trips_through_sqlite(tmp_path: Path) -> None:
+    """A chunk carrying ``metadata['decision_id']`` persists it to the column (§D9).
+
+    The read side (get_why, a later slice) hydrates decision records from
+    ranked decision chunks via ``chunks.decision_id`` — the backlink is dead
+    unless the write mapper threads the metadata field into the column and the
+    read mapper hydrates it back.
+    """
+    db_path = tmp_path / "cache.db"
+    open_index_database(db_path).close()
+    factory = build_sqlite_uow_factory(db_path)
+
+    decision_chunk = Chunk(
+        text="Use a sidecar file",
+        metadata={"package": "demo", "title": "Use a sidecar file", "decision_id": 42},
+    )
+    plain_chunk = Chunk(text="def foo(): ...", metadata={"package": "demo", "title": "foo"})
+    async with factory() as uow:
+        await uow.chunks.insert((decision_chunk, plain_chunk))
+        await uow.commit()
+
+    async with factory() as uow:
+        stored = await uow.chunks.list(filter={"package": "demo"})
+
+    by_title = {c.metadata.get("title"): c for c in stored}
+    assert by_title["Use a sidecar file"].metadata.get("decision_id") == 42
+    # Non-decision chunks carry no decision_id (nullable column → absent key).
+    assert "decision_id" not in by_title["foo"].metadata

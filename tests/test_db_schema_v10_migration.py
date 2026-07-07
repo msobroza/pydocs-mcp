@@ -14,7 +14,7 @@ from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
 
 
 def test_schema_version_is_10() -> None:
-    assert SCHEMA_VERSION == 13
+    assert SCHEMA_VERSION == 14
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:

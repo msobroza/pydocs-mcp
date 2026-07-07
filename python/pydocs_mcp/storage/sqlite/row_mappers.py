@@ -36,6 +36,11 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
         # as its own column (schema v7) so it survives the round-trip — the tree
         # reasoning step joins LLM-picked nodes on it.
         "qualified_name": md.get("qualified_name", ""),
+        # Nullable backlink (schema v14) from a decision-as-chunk to its
+        # ``decision_records`` row (spec §D9). None for every non-decision chunk;
+        # the read side (get_why) hydrates decision records from ranked chunks
+        # via this column, so it MUST survive the round-trip.
+        "decision_id": md.get("decision_id"),
     }
 
 
@@ -64,6 +69,12 @@ def row_to_chunk(row) -> Chunk:
     qname = row["qualified_name"]
     if qname:
         metadata["qualified_name"] = qname
+    # decision_id is a nullable int backlink (schema v14): populated only on
+    # decision-as-chunk rows, NULL everywhere else. Surface it as a metadata key
+    # ONLY when set so non-decision chunks stay key-free (mirrors qualified_name).
+    decision_id = row["decision_id"]
+    if decision_id is not None:
+        metadata["decision_id"] = decision_id
     # Defensive against NULL: legacy rows (pre-content_hash wiring) carry
     # NULL in this column. Empty-string preserves the existing __post_init__
     # auto-compute path (which fires when content_hash is falsy).

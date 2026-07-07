@@ -14,6 +14,7 @@ from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.storage.sqlite.chunk_repository import SqliteChunkRepository
+from pydocs_mcp.storage.sqlite.decision_repository import SqliteDecisionRepository
 from pydocs_mcp.storage.sqlite.document_tree_store import SqliteDocumentTreeStore
 from pydocs_mcp.storage.sqlite.module_member_repository import SqliteModuleMemberRepository
 from pydocs_mcp.storage.sqlite.node_score_repository import SqliteNodeScoreRepository
@@ -31,12 +32,13 @@ class SqliteUnitOfWork:
     Async context manager: ``__aenter__`` acquires a single connection
     from ``provider.acquire()``, runs ``BEGIN``, sets the
     ``_sqlite_transaction`` ContextVar (so repo writes routed through
-    ``_maybe_acquire`` reuse the held connection — without this the five
+    ``_maybe_acquire`` reuse the held connection — without this the
     repository attributes would each open their own connection and
     atomicity would be lost), and exposes ``packages`` / ``chunks`` /
-    ``module_members`` / ``trees`` / ``references`` as attributes.
-    The ``references`` attribute is the cross-node reference-graph store
-    (CALLS / IMPORTS / INHERITS / MENTIONS edges).
+    ``module_members`` / ``trees`` / ``references`` / ``node_scores`` /
+    ``decisions`` as attributes. The ``references`` attribute is the
+    cross-node reference-graph store (CALLS / IMPORTS / INHERITS /
+    MENTIONS edges); ``decisions`` is the mined-decision store (§D8-§D10).
 
     The ``asyncio.Lock`` lives on the instance and is exposed via the
     ContextVar so ``_maybe_acquire`` can serialise concurrent repo calls
@@ -78,6 +80,7 @@ class SqliteUnitOfWork:
     _trees: SqliteDocumentTreeStore | None = field(default=None, init=False, repr=False)
     _references: SqliteReferenceStore | None = field(default=None, init=False, repr=False)
     _node_scores: SqliteNodeScoreRepository | None = field(default=None, init=False, repr=False)
+    _decisions: SqliteDecisionRepository | None = field(default=None, init=False, repr=False)
     # Spec S15: ``uow.vectors`` is always present; the SQLite-only UoW
     # exposes a :class:`NullVectorStore` so application code does not
     # need to ``getattr(uow, "vectors", None)`` guards. The composite
@@ -123,6 +126,7 @@ class SqliteUnitOfWork:
             self._trees = SqliteDocumentTreeStore(provider=self.provider)
             self._references = SqliteReferenceStore(provider=self.provider)
             self._node_scores = SqliteNodeScoreRepository(provider=self.provider)
+            self._decisions = SqliteDecisionRepository(provider=self.provider)
             self._committed = False
             self._entered = True
             return self
@@ -168,6 +172,7 @@ class SqliteUnitOfWork:
             self._trees = None
             self._references = None
             self._node_scores = None
+            self._decisions = None
             self._committed = False
             self._entered = False
         return False
@@ -201,6 +206,7 @@ class SqliteUnitOfWork:
         await self.trees.delete_all()
         await self.references.delete_all()
         await self.node_scores.delete_all()
+        await self.decisions.delete_all()
         await self.packages.delete_all()
         await self.vectors.clear_all()
 
@@ -239,3 +245,9 @@ class SqliteUnitOfWork:
         if self._node_scores is None:
             raise UnitOfWorkNotEnteredError("node_scores")
         return self._node_scores
+
+    @property
+    def decisions(self) -> SqliteDecisionRepository:
+        if self._decisions is None:
+            raise UnitOfWorkNotEnteredError("decisions")
+        return self._decisions

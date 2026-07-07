@@ -30,6 +30,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
     LlmConfig,
 )
 from pydocs_mcp.retrieval.config.models import (
+    DecisionCaptureConfig,
     HandlerConfig,
     OutputConfig,
     OverviewConfig,
@@ -112,6 +113,12 @@ class AppConfig(BaseSettings):
     # configuration": these are deployment-time rendering bounds, NOT MCP
     # tool params — the MCP surface (search, lookup) stays fixed.
     overview: OverviewConfig = Field(default_factory=OverviewConfig)
+    # Index-time decision mining (spec §D8): which deterministic sources the
+    # capture_decisions ingestion stage runs, merge/dedupe threshold, per-source
+    # bounds, and the default-off LLM structuring gate. Per CLAUDE.md §"MCP API
+    # surface vs YAML configuration": deployment-time tuning knobs, NOT MCP tool
+    # params — the six task-shaped tools stay fixed.
+    decision_capture: DecisionCaptureConfig = Field(default_factory=DecisionCaptureConfig)
     # Serve-command tunables (file watcher today; future HTTP transport
     # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
     # configuration": CLI ``--watch`` overrides ``serve.watch.enabled``;

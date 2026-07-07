@@ -35,10 +35,18 @@ on backend identity.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.extraction.decisions._types import RawDecision
+from pydocs_mcp.extraction.decisions.engine import (
+    decision_key,
+    reconcile,
+    staleness_score,
+)
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -49,6 +57,7 @@ from pydocs_mcp.models import (
     Package,
     is_multi_vector,
 )
+from pydocs_mcp.storage.decision_record import DecisionRecord
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 if TYPE_CHECKING:
@@ -102,6 +111,9 @@ class IndexingService:
         references: Sequence[NodeReference] = (),
         reference_aliases: dict[str, dict[str, str]] | None = None,
         class_attribute_types: dict[str, dict[str, str]] | None = None,
+        decisions: Sequence[RawDecision] = (),
+        decision_structured: Mapping[str, tuple[dict[str, object], str]] | None = None,
+        project_root: Path | None = None,
     ) -> None:
         """Replace every row for ``package.name`` atomically (spec §13.3).
 
@@ -121,7 +133,16 @@ class IndexingService:
         this method using the cross-package qname universe loaded from
         ``uow.trees`` (so it sees the just-upserted trees).
 
-        Implementation: a thin orchestrator over :meth:`_diff_merge_chunks`
+        ``decisions`` is the merged :class:`RawDecision` tuple emitted by
+        the ``capture_decisions`` sub-pipeline (project targets only; dependency
+        packages pass ``()``). They are reconciled + persisted BEFORE the
+        chunk diff so each decision chunk's ``decision_id`` metadata can be
+        stamped from the ``decision_key`` → id map before it lands
+        (spec §D8-§D10). ``project_root`` is where the staleness scorer
+        ``os.stat``\\s the affected files; when absent, staleness is left at 0.
+
+        Implementation: a thin orchestrator over :meth:`_persist_decisions`
+        (reconcile + upsert + delete + backlink map), :meth:`_diff_merge_chunks`
         (chunk diff + stale-vector cleanup) and :meth:`_persist_references`
         (sweep + resolve + save + cross-package re-resolution). Each helper
         is independently testable; the orchestrator reads as a sequence of
@@ -131,6 +152,20 @@ class IndexingService:
         # safe-columns whitelist also derives from; the ``packages`` table
         # keys on ``name`` (no matching enum), so that one stays literal.
         async with self.uow_factory() as uow:
+            # Decisions first: reconcile + persist so each decision chunk gets
+            # its record id stamped into metadata BEFORE the chunk diff inserts
+            # it. ``decision_id`` is not a content_hash input (the hash keys on
+            # package/module/title/text only), so stamping never re-triggers a
+            # re-embed — it just backlinks the searchable projection to its row.
+            key_to_id = await self._persist_decisions(
+                uow,
+                package_name=package.name,
+                decisions=decisions,
+                decision_structured=decision_structured or {},
+                project_root=project_root,
+            )
+            chunks = _stamp_decision_ids(chunks, key_to_id)
+
             # ``removed_ids`` is computed for the parallel vector-removal branch
             # in ``reindex_package``; the upsert path here doesn't need it
             # because the followup ``packages.delete`` + cascading FK clears the
@@ -210,6 +245,83 @@ class IndexingService:
             await uow.vectors.remove_vectors(removed_ids)
 
         return removed_ids, added_chunks
+
+    async def _persist_decisions(
+        self,
+        uow: UnitOfWork,
+        *,
+        package_name: str,
+        decisions: Sequence[RawDecision],
+        decision_structured: Mapping[str, tuple[dict[str, object], str]],
+        project_root: Path | None,
+    ) -> dict[str, int]:
+        """Reconcile + persist mined decisions, return the ``decision_key`` → id map.
+
+        Loads the persisted rows for this package, reconciles the merged
+        incoming decisions against them (preserving ids / created_at /
+        supersession, §D9), scores each upsert's staleness against
+        ``project_root`` mtimes (§D10), overlays the §D12 LLM-structured fields
+        + verification tier where present, writes the upserts, deletes the
+        vanished rows, and returns a ``decision_key`` → assigned-id map so the
+        caller can backlink each decision chunk's ``decision_id`` metadata.
+
+        Empty ``decisions`` still runs: reconcile against ``()`` deletes every
+        persisted row for the package (all sources vanished) and returns an
+        empty map. Dependency packages therefore pass ``decisions=()`` and this
+        cleans up any decisions a prior project-mode index left behind.
+        """
+        existing = await uow.decisions.list_for_package(package_name)
+        merged = tuple(decisions)
+        result = reconcile(
+            existing=existing, incoming=merged, now=time.time(), package=package_name
+        )
+        scored = tuple(
+            self._apply_structured(
+                replace(
+                    record,
+                    staleness_score=self._score_staleness(record, project_root),
+                ),
+                decision_structured,
+            )
+            for record in result.upserts
+        )
+        assigned_ids = await uow.decisions.upsert(scored)
+        if result.delete_ids:
+            await uow.decisions.delete_by_ids(result.delete_ids)
+        return {
+            decision_key(record.title): decision_id
+            for record, decision_id in zip(scored, assigned_ids, strict=True)
+        }
+
+    @staticmethod
+    def _score_staleness(record: DecisionRecord, project_root: Path | None) -> float:
+        """Staleness for one record (0.0 when ``project_root`` is unknown)."""
+        if project_root is None:
+            return 0.0
+        return staleness_score(
+            affected_files=record.affected_files,
+            updated_at=record.updated_at,
+            now=time.time(),
+            root=project_root,
+        )
+
+    @staticmethod
+    def _apply_structured(
+        record: DecisionRecord,
+        overlay: Mapping[str, tuple[dict[str, object], str]],
+    ) -> DecisionRecord:
+        """Overlay the §D12 grounded structured fields + verification tier.
+
+        ``overlay`` maps ``decision_key(title) -> (grounded fields, tier)``. A
+        record whose key isn't in the overlay passes through untouched — keeping
+        the engine's ``structured=None`` / ``verification="verbatim"`` default
+        (the deterministic-mining path, which never touches an LLM).
+        """
+        entry = overlay.get(decision_key(record.title))
+        if entry is None:
+            return record
+        fields, verification = entry
+        return replace(record, structured=fields, verification=verification)
 
     async def _persist_references(
         self,
@@ -558,6 +670,29 @@ class IndexingService:
                 await uow.packages.upsert(replace(pkg, content_hash=""))
             await uow.commit()
         return [p.name for p in stale]
+
+
+def _stamp_decision_ids(chunks: tuple[Chunk, ...], key_to_id: dict[str, int]) -> tuple[Chunk, ...]:
+    """Backlink decision chunks to their persisted rows via ``decision_id``.
+
+    A decision chunk carries a ``decision_key`` in its metadata; this rewrites
+    that chunk's metadata with the matching ``decision_id`` from ``key_to_id``.
+    Non-decision chunks (and decision chunks whose key didn't resolve) pass
+    through untouched. ``decision_id`` is NOT a ``content_hash`` input, so the
+    rewrite never disturbs the chunk diff.
+    """
+    if not key_to_id:
+        return chunks
+    stamped: list[Chunk] = []
+    for chunk in chunks:
+        key = chunk.metadata.get("decision_key")
+        decision_id = key_to_id.get(key) if isinstance(key, str) else None
+        if decision_id is None:
+            stamped.append(chunk)
+            continue
+        new_metadata = {**dict(chunk.metadata), "decision_id": decision_id}
+        stamped.append(replace(chunk, metadata=new_metadata))
+    return tuple(stamped)
 
 
 def _add_qnames(node: DocumentNode, out: set[str]) -> None:

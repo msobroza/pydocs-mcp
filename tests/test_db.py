@@ -311,8 +311,8 @@ class TestSchemaV3:
         # version stamp simply moved forward.
         conn = open_index_database(tmp_path / "v3.db")
         try:
-            assert SCHEMA_VERSION == 13
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+            assert SCHEMA_VERSION == 14
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         finally:
             conn.close()
 
@@ -384,7 +384,7 @@ class TestSchemaV3:
         # Walks v2 → … → v7 in a single open.
         migrated = open_index_database(db_file)
         try:
-            assert migrated.execute("PRAGMA user_version").fetchone()[0] == 13
+            assert migrated.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
             # Old rows must survive.
             pkg = migrated.execute(
@@ -521,8 +521,8 @@ def test_schema_version_is_4_after_open(tmp_path):
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
     finally:
         conn.close()
-    assert ver == 13
-    assert SCHEMA_VERSION == 13
+    assert ver == SCHEMA_VERSION
+    assert SCHEMA_VERSION == 14
 
 
 def test_node_references_table_created_on_fresh_db(tmp_path):
@@ -603,7 +603,7 @@ def test_v3_to_v4_migration_preserves_existing_rows(tmp_path):
     # Walks v3 → … → v7 in a single open.
     conn = open_index_database(db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         # The package row survives.
         row = conn.execute("SELECT name FROM packages WHERE name='pkg'").fetchone()
         assert row is not None
