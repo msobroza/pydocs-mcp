@@ -116,8 +116,8 @@ class ToolRouter:
         async def _body() -> str:
             if payload.query and payload.targets:
                 # §D11 both-set mode: targets filtered by query — the Null
-                # service raises either way; slice 3 implements the filter.
-                return await svc.decisions.for_targets(list(payload.targets))
+                # service raises either way; the real service implements the filter.
+                return await svc.decisions.for_targets(list(payload.targets), query=payload.query)
             if payload.query:
                 return await svc.decisions.search(payload.query)
             if payload.targets:

@@ -317,6 +317,46 @@ class OverviewConfig(BaseModel):
     max_communities: int = Field(10, ge=1, le=50)
 
 
+class DecisionsOutputConfig(BaseModel):
+    """Per-deployment bounds for the ``get_why`` decision-read output (spec §D9/§D11).
+
+    Parity with :class:`ReferenceOutputConfig` / :class:`SearchOutputConfig` —
+    two YAML knobs (``default_limit`` / ``max_limit``) bounding how many decision
+    records the real ``DecisionService`` renders. Kept as its own sub-model (not
+    reusing ``search.output``) because decisions are a distinct surface with its
+    own historical default (10 records vs the search default). The cross-field
+    validator below ensures the default can never exceed the ceiling.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_limit: int = Field(10, ge=1)
+    max_limit: int = Field(100, ge=1)
+
+    @model_validator(mode="after")
+    def _default_le_max(self) -> DecisionsOutputConfig:
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                f"decisions.output.default_limit={self.default_limit} "
+                f"> max_limit={self.max_limit}; the decision-read default "
+                f"would always exceed the ceiling. Adjust YAML.",
+            )
+        return self
+
+
+class DecisionsConfig(BaseModel):
+    """Namespace for ``get_why`` decision-read tunables (parity with ``search``).
+
+    Distinct from ``decision_capture`` (index-time mining): this owns the
+    *read-side* output bounds. Only ``output`` lives here today; future
+    read-side knobs (rendering caps, dashboard limits) get an obvious home.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    output: DecisionsOutputConfig = Field(default_factory=DecisionsOutputConfig)
+
+
 # Single source of truth for the default decision-mining source order (spec
 # §D8). Referenced by ``DecisionCaptureConfig.sources`` default_factory so the
 # literal tuple lives in exactly one place; YAML restates it for user clarity.

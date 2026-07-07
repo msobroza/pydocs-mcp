@@ -123,6 +123,14 @@ decision_capture:
     grounding_threshold: 0.60
     batch_size: 5
 
+# get_why decision-read output bounds (spec §D9/§D11) — the read-side sibling
+# of `decision_capture` (index-time mining). Bounds how many decision records
+# the real DecisionService renders per get_why call.
+decisions:
+  output:
+    default_limit: 10
+    max_limit: 100
+
 # File-watcher tunables for `pydocs-mcp serve --watch` (CLI flag overrides
 # `enabled` — leave it false here so plain `pydocs-mcp serve` is identical
 # to today). Debounce naturally collapses editor atomic-save sequences
