@@ -308,6 +308,35 @@ class OutputConfig(BaseModel):
     next_pointers: NextPointersConfig = NextPointersConfig()
 
 
+class GitActivityConfig(BaseModel):
+    """§D17 block 9 (Recent activity) index-time aggregation knobs.
+
+    ``enabled`` gates the extra index-end ``git log`` spawn + the aggregate
+    write; ``window_days`` bounds how far back commits count toward the block.
+    Deployment-time tuning, NOT an MCP param (CLAUDE.md §"MCP API surface").
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    window_days: int = Field(90, ge=1, le=3650)
+
+
+class LlmSummaryConfig(BaseModel):
+    """§D17 block 2 (Architecture) opt-in LLM summary knob.
+
+    ``enabled`` gates the index-time LLM call that generates the architecture
+    orientation paragraph; default OFF because it costs an LLM round-trip per
+    index whose module set changed (fingerprint-cached: unchanged module set →
+    no call). Deployment-time tuning, NOT an MCP param (CLAUDE.md §"MCP API
+    surface"). The LLM provider / model come from the top-level ``llm:`` section.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+
+
 class OverviewConfig(BaseModel):
     """get_overview card caps (spec §D17) — list caps keep the card inside token budgets."""
 
@@ -315,6 +344,48 @@ class OverviewConfig(BaseModel):
 
     max_modules: int = Field(20, ge=1, le=200)
     max_communities: int = Field(10, ge=1, le=50)
+    git_activity: GitActivityConfig = Field(default_factory=GitActivityConfig)
+    llm_summary: LlmSummaryConfig = Field(default_factory=LlmSummaryConfig)
+
+
+class DecisionsOutputConfig(BaseModel):
+    """Per-deployment bounds for the ``get_why`` decision-read output (spec §D9/§D11).
+
+    Parity with :class:`ReferenceOutputConfig` / :class:`SearchOutputConfig` —
+    two YAML knobs (``default_limit`` / ``max_limit``) bounding how many decision
+    records the real ``DecisionService`` renders. Kept as its own sub-model (not
+    reusing ``search.output``) because decisions are a distinct surface with its
+    own historical default (10 records vs the search default). The cross-field
+    validator below ensures the default can never exceed the ceiling.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_limit: int = Field(10, ge=1)
+    max_limit: int = Field(100, ge=1)
+
+    @model_validator(mode="after")
+    def _default_le_max(self) -> DecisionsOutputConfig:
+        if self.default_limit > self.max_limit:
+            raise ValueError(
+                f"decisions.output.default_limit={self.default_limit} "
+                f"> max_limit={self.max_limit}; the decision-read default "
+                f"would always exceed the ceiling. Adjust YAML.",
+            )
+        return self
+
+
+class DecisionsConfig(BaseModel):
+    """Namespace for ``get_why`` decision-read tunables (parity with ``search``).
+
+    Distinct from ``decision_capture`` (index-time mining): this owns the
+    *read-side* output bounds. Only ``output`` lives here today; future
+    read-side knobs (rendering caps, dashboard limits) get an obvious home.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    output: DecisionsOutputConfig = Field(default_factory=DecisionsOutputConfig)
 
 
 # Single source of truth for the default decision-mining source order (spec

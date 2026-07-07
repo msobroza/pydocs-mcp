@@ -47,6 +47,7 @@ def _build_project_services(loaded, config):
     )
     from pydocs_mcp.retrieval.factories import build_retrieval_context
     from pydocs_mcp.storage.factories import (
+        build_sqlite_decision_service,
         build_sqlite_lookup_service,
         build_sqlite_overview_service,
         build_sqlite_symbol_source_service,
@@ -57,9 +58,12 @@ def _build_project_services(loaded, config):
     # [project.scripts] table; an empty root (read-only bundles carry none)
     # degrades to "." — parse_project_scripts returns {} for a missing file.
     project_root = Path(loaded.metadata.project_root or ".")
+    # ``docs`` is composed once and shared: the search / card tools AND the real
+    # ``DecisionService`` (when capture is on) rank over the same chunk pipeline.
+    docs = DocsSearch(chunk_pipeline=build_chunk_pipeline_from_config(config, context))
     return ProjectServices(
         project=loaded,
-        docs=DocsSearch(chunk_pipeline=build_chunk_pipeline_from_config(config, context)),
+        docs=docs,
         api=ApiSearch(member_pipeline=build_member_pipeline_from_config(config, context)),
         # ``build_sqlite_lookup_service`` owns LookupService composition so the CLI
         # and MCP server never drift on which stores back ``lookup``.
@@ -73,8 +77,14 @@ def _build_project_services(loaded, config):
         overview=build_sqlite_overview_service(
             loaded.db_path, project_root=project_root, config=config
         ),
-        # decisions is the Null impl until the slice-3 decision layer lands.
-        decisions=NullDecisionService(),
+        # get_why's real backing when decision capture is on; otherwise the Null
+        # impl (raises a YAML-anchored ServiceUnavailableError). One wiring
+        # branch — the swap lives here, keyed by ``decision_capture.enabled``.
+        decisions=(
+            build_sqlite_decision_service(loaded.db_path, docs=docs, config=config)
+            if config.decision_capture.enabled
+            else NullDecisionService()
+        ),
     )
 
 

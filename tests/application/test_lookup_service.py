@@ -645,12 +645,13 @@ async def test_null_ref_svc_callers_raises_yaml_anchored_message(
 
 
 @pytest.mark.asyncio
-async def test_ref_getters_table_has_three_keys() -> None:
-    """I8: the dispatch table covers exactly the three reference-graph
-    show modes — callers/callees/inherits.  Pinning the keyset prevents
-    silent drift (e.g. a future show='subclasses' added to the input
-    schema without a matching table entry would fall through to
-    InvalidArgumentError, which the symmetric test above catches)."""
+async def test_ref_getters_table_has_expected_keys() -> None:
+    """I8: the dispatch table covers exactly the reference-graph show modes —
+    callers/callees/inherits plus the §D18 governed_by decisions-as-graph-nodes
+    direction.  Pinning the keyset prevents silent drift (e.g. a future
+    show='subclasses' added to the input schema without a matching table entry
+    would fall through to InvalidArgumentError, which the symmetric test above
+    catches)."""
     from pydocs_mcp.application.lookup_service import _REF_GETTERS
 
-    assert set(_REF_GETTERS) == {"callers", "callees", "inherits"}
+    assert set(_REF_GETTERS) == {"callers", "callees", "inherits", "governed_by"}

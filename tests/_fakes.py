@@ -561,6 +561,50 @@ class InMemoryReferenceStore:
             profile[top] = profile.get(top, 0) + 1
         return profile
 
+    async def find_governing(self, qname: str) -> list[str]:
+        """In-memory mirror of SqliteReferenceStore.find_governing (§D18).
+
+        Cross-package; matches RESOLVED GOVERNS edges (``to_node_id == qname``)
+        and strips the ``decision:`` prefix, de-duped in first-seen order.
+        """
+        self.calls.append(_Call("find_governing", qname))
+        keys: list[str] = []
+        seen: set[str] = set()
+        for rs in self.by_package.values():
+            for r in rs:
+                if str(r.kind) != "governs" or r.to_node_id != qname:
+                    continue
+                key = r.from_node_id.removeprefix("decision:")
+                if key not in seen:
+                    seen.add(key)
+                    keys.append(key)
+        return keys
+
+    async def find_governed_by(self, decision_key: str) -> list[str]:
+        """In-memory mirror of SqliteReferenceStore.find_governed_by (§D18)."""
+        self.calls.append(_Call("find_governed_by", decision_key))
+        from_id = f"decision:{decision_key}"
+        governed: list[str] = []
+        seen: set[str] = set()
+        for rs in self.by_package.values():
+            for r in rs:
+                if str(r.kind) != "governs" or r.from_node_id != from_id:
+                    continue
+                if r.to_node_id is not None and r.to_node_id not in seen:
+                    seen.add(r.to_node_id)
+                    governed.append(r.to_node_id)
+        return governed
+
+    async def governed_qnames(self) -> frozenset[str]:
+        """In-memory mirror of SqliteReferenceStore.governed_qnames (§D18)."""
+        self.calls.append(_Call("governed_qnames", None))
+        return frozenset(
+            r.to_node_id
+            for rs in self.by_package.values()
+            for r in rs
+            if str(r.kind) == "governs" and r.to_node_id is not None
+        )
+
 
 @dataclass
 class InMemoryNodeScoreStore:

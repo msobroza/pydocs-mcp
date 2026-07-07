@@ -221,9 +221,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_search.add_argument(
         "--kind",
-        choices=["docs", "api", "any"],
+        choices=["docs", "api", "any", "decision"],
         default="any",
-        help="Which index to search: 'docs' = prose / README, 'api' = functions / classes, 'any' = both (default).",
+        help="Which index to search: 'docs' = prose / README, 'api' = functions / classes, 'decision' = mined architectural decisions, 'any' = both docs+api (default).",
     )
     sp_search.add_argument(
         "-p",
@@ -271,7 +271,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_refs.add_argument("target")
     p_refs.add_argument(
         "--direction",
-        choices=["callers", "callees", "inherits", "impact"],
+        choices=["callers", "callees", "inherits", "impact", "governed_by"],
         default="callers",
     )
     p_refs.add_argument("--limit", type=int, default=None)
@@ -279,7 +279,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_why = sub.add_parser("why", help=TOOL_DOCS["get_why"].splitlines()[0])
     p_why.add_argument("query", nargs="?", default="")
-    p_why.add_argument("--target", action="append", dest="targets", default=None)
+    p_why.add_argument(
+        "--target",
+        action="append",
+        dest="targets",
+        default=None,
+        # §D11 target classification, mirrored from ``_classify_target``: a value
+        # with ``/`` or a source-file extension is a path (``a/b.py``); a dotted
+        # value is a qname (``pkg.mod``); a bare single token tries both.
+        help=(
+            "decisions affecting a target; repeatable. A path (a/b.py) or a "
+            "qualified name (pkg.mod) — a value with / or a source-file "
+            "extension is treated as a path, a dotted value as a qname, a bare "
+            "token as both."
+        ),
+    )
     _add_query_flags(p_why)
 
     sp_lookup = sub.add_parser(
@@ -311,7 +325,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_lookup.add_argument(
         "--show",
-        choices=["default", "tree", "callers", "callees", "inherits", "impact", "context"],
+        choices=[
+            "default",
+            "tree",
+            "callers",
+            "callees",
+            "inherits",
+            "impact",
+            "context",
+            "governed_by",
+        ],
         default="default",
         help=(
             "What to show: 'default' = symbol summary + immediate children (start here); "
@@ -320,6 +343,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "'callees' = what this calls — use to answer 'what does X depend on?'; "
             "'inherits' = base classes / interface chain — use to answer 'what does X extend?'; "
             "'impact' = everything that transitively calls this, ranked — 'what breaks if I change X?'; "
+            "'governed_by' = which mined decisions govern this symbol — 'why is X the way it is?'; "
             "'context' = dependency closure packed under a token budget — 'everything to understand X'."
         ),
     )
@@ -438,6 +462,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         check_integrity=bundle.check_integrity,
         rebuild_fts=bundle.rebuild_fts,
         stamp_metadata=bundle.stamp_metadata,
+        write_aggregates=bundle.write_aggregates,
     )
 
     kb = db_path.stat().st_size / 1024 if db_path.exists() else 0.0
@@ -664,7 +689,9 @@ async def _run_refs(args: argparse.Namespace) -> None:
 async def _run_why(args: argparse.Namespace) -> None:
     """Mirror the MCP ``get_why`` tool — decision search / per-target / dashboard.
 
-    Until the decision layer lands, this routes to ``NullDecisionService`` which
+    When ``decision_capture.enabled`` (the shipped default) the router dispatches
+    to the real ``DecisionService`` (query → search, ``--target`` → per-target
+    cards, neither → dashboard). With capture disabled the ``NullDecisionService``
     raises ``ServiceUnavailableError`` (a typed :class:`MCPToolError`); the
     ``_run_cmd`` boundary maps it to ``Error: …`` on stderr + exit 1, exactly
     like the MCP handler's error path.
@@ -680,7 +707,7 @@ async def _run_why(args: argparse.Namespace) -> None:
 # depths; the graph shows map 1:1 to get_references directions. ``context`` and
 # empty-target ("list packages") are handled separately in ``_run_lookup``.
 _ALIAS_DEPTH = {"default": "summary", "tree": "tree"}
-_ALIAS_DIRECTION = frozenset({"callers", "callees", "inherits", "impact"})
+_ALIAS_DIRECTION = frozenset({"callers", "callees", "inherits", "impact", "governed_by"})
 
 
 async def _run_lookup(args: argparse.Namespace) -> None:

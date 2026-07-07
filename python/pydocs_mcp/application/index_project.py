@@ -48,6 +48,7 @@ async def run_index_pass(
     check_integrity: Callable[[], Awaitable[list[str]]],
     rebuild_fts: Callable[[], Awaitable[None]],
     stamp_metadata: Callable[[IndexMetadata], None],
+    write_aggregates: Callable[[Path], Awaitable[None]],
 ) -> IndexingStats:
     """Run one end-to-end indexing pass; return the orchestrator's stats.
 
@@ -69,7 +70,12 @@ async def run_index_pass(
             check_integrity=bundle.check_integrity,
             rebuild_fts=bundle.rebuild_fts,
             stamp_metadata=bundle.stamp_metadata,
+            write_aggregates=bundle.write_aggregates,
         )
+
+    ``write_aggregates`` runs LAST (after the stamp): a bounded index-time
+    ``git log`` spawn feeds the §D17 overview activity block; a no-op closure
+    when ``overview.git_activity.enabled`` is false.
     """
     repaired = await check_integrity()
     if repaired:
@@ -122,6 +128,13 @@ async def run_index_pass(
             git_head=resolve_git_head(project) or "",
         ),
     )
+
+    # Overview aggregates (§D17 blocks 9/2) are written AFTER the stamp: they
+    # live in columns the stamp deliberately leaves untouched, and one extra
+    # bounded git-log spawn per index is accepted (threading the capture stage's
+    # text out through IngestionState→ExtractionResult would buy one spawn at the
+    # cost of three plumbing seams). A no-op closure when the feature is disabled.
+    await write_aggregates(project)
     return stats
 
 

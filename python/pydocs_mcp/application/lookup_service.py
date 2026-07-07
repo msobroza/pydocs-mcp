@@ -192,6 +192,9 @@ _REF_GETTERS: dict[
         n,
         kind=ReferenceKind.INHERITS,
     ),
+    # GOVERNS edges pointing AT the target (decisions-as-graph-nodes, spec §D18):
+    # "which decisions govern this symbol?" rendered through format_references.
+    "governed_by": lambda svc, p, n: svc.governed_by(p, n),
 }
 
 # Show modes that render the page-index JSON for a tree/node.

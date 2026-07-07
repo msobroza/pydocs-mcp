@@ -53,9 +53,21 @@ def _harness(*, repaired: list[str] | None = None, stale: list[str] | None = Non
         calls.append("stamp_metadata")
         stamped.append(meta)
 
+    async def write_aggregates(_project: Path) -> None:
+        calls.append("write_aggregates")
+
     orchestrator = FakeIndexOrchestrator(calls, IndexingStats(indexed=2, cached=1))
     service = FakeInvalidatingService(calls, list(stale or []))
-    return calls, stamped, orchestrator, service, check_integrity, rebuild_fts, stamp_metadata
+    return (
+        calls,
+        stamped,
+        orchestrator,
+        service,
+        check_integrity,
+        rebuild_fts,
+        stamp_metadata,
+        write_aggregates,
+    )
 
 
 async def _run(
@@ -64,6 +76,7 @@ async def _run(
     check_integrity,
     rebuild_fts,
     stamp_metadata,
+    write_aggregates,
     *,
     force=False,
     project=Path("/tmp/proj"),
@@ -83,6 +96,7 @@ async def _run(
         check_integrity=check_integrity,
         rebuild_fts=rebuild_fts,
         stamp_metadata=stamp_metadata,
+        write_aggregates=write_aggregates,
     )
 
 
@@ -92,13 +106,13 @@ async def _run_index_pass_with_fakes(*, project: Path, stamp_metadata) -> None:
     Used by the git-head stamp tests, which care solely about ``project`` (whether
     it is a git repo) and the ``stamp_metadata`` callback that captures the result.
     """
-    _calls, _stamped, orch, svc, ci, rf, _sm = _harness()
-    await _run(orch, svc, ci, rf, stamp_metadata, project=project)
+    _calls, _stamped, orch, svc, ci, rf, _sm, wa = _harness()
+    await _run(orch, svc, ci, rf, stamp_metadata, wa, project=project)
 
 
 async def test_sequence_and_forwarding() -> None:
-    calls, _stamped, orch, svc, ci, rf, sm = _harness()
-    stats = await _run(orch, svc, ci, rf, sm)
+    calls, _stamped, orch, svc, ci, rf, sm, wa = _harness()
+    stats = await _run(orch, svc, ci, rf, sm, wa)
 
     assert calls == [
         "check_integrity",
@@ -106,6 +120,7 @@ async def test_sequence_and_forwarding() -> None:
         "index_project",
         "rebuild_fts",
         "stamp_metadata",
+        "write_aggregates",
     ]
     assert stats.indexed == 2
     assert stats.cached == 1
@@ -120,8 +135,8 @@ async def test_sequence_and_forwarding() -> None:
 
 
 async def test_force_skips_stale_invalidation() -> None:
-    calls, _stamped, orch, svc, ci, rf, sm = _harness()
-    await _run(orch, svc, ci, rf, sm, force=True)
+    calls, _stamped, orch, svc, ci, rf, sm, wa = _harness()
+    await _run(orch, svc, ci, rf, sm, wa, force=True)
 
     assert "invalidate" not in calls
     assert orch.kwargs is not None
@@ -129,8 +144,8 @@ async def test_force_skips_stale_invalidation() -> None:
 
 
 async def test_metadata_stamp_carries_identity_and_recency() -> None:
-    _calls, stamped, orch, svc, ci, rf, sm = _harness()
-    await _run(orch, svc, ci, rf, sm)
+    _calls, stamped, orch, svc, ci, rf, sm, wa = _harness()
+    await _run(orch, svc, ci, rf, sm, wa)
 
     (meta,) = stamped
     assert meta.project_name == "proj"
@@ -163,20 +178,20 @@ async def test_stamp_git_head_empty_for_non_git_tree(tmp_path) -> None:
 
 
 async def test_repair_and_stale_warnings_logged(caplog) -> None:
-    calls, _stamped, orch, svc, ci, rf, sm = _harness(
+    calls, _stamped, orch, svc, ci, rf, sm, wa = _harness(
         repaired=["numpy"], stale=["fastapi", "attrs"]
     )
     with caplog.at_level(logging.INFO, logger="pydocs-mcp"):
-        await _run(orch, svc, ci, rf, sm)
+        await _run(orch, svc, ci, rf, sm, wa)
 
     assert "Cache integrity" in caplog.text
     assert "Embedding model changed; re-embedding 2 package(s): fastapi, attrs" in caplog.text
 
 
 async def test_force_logs_cache_cleared(caplog) -> None:
-    _calls, _stamped, orch, svc, ci, rf, sm = _harness()
+    _calls, _stamped, orch, svc, ci, rf, sm, wa = _harness()
     with caplog.at_level(logging.INFO, logger="pydocs-mcp"):
-        await _run(orch, svc, ci, rf, sm, force=True)
+        await _run(orch, svc, ci, rf, sm, wa, force=True)
 
     assert "Cache cleared" in caplog.text
 

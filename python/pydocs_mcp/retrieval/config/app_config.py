@@ -31,6 +31,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
 )
 from pydocs_mcp.retrieval.config.models import (
     DecisionCaptureConfig,
+    DecisionsConfig,
     HandlerConfig,
     OutputConfig,
     OverviewConfig,
@@ -119,6 +120,12 @@ class AppConfig(BaseSettings):
     # surface vs YAML configuration": deployment-time tuning knobs, NOT MCP tool
     # params — the six task-shaped tools stay fixed.
     decision_capture: DecisionCaptureConfig = Field(default_factory=DecisionCaptureConfig)
+    # get_why decision-read output bounds (spec §D9/§D11) — the read-side
+    # sibling of ``decision_capture`` (index-time mining). Same wiring pattern
+    # as ``search.output``: two YAML knobs pushed into the decision-read
+    # default/ceiling. Per CLAUDE.md §"MCP API surface vs YAML configuration":
+    # deployment-time bounds, NOT MCP tool params — the surface stays fixed.
+    decisions: DecisionsConfig = Field(default_factory=DecisionsConfig)
     # Serve-command tunables (file watcher today; future HTTP transport
     # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
     # configuration": CLI ``--watch`` overrides ``serve.watch.enabled``;

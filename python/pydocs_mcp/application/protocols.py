@@ -126,6 +126,17 @@ class TreeNavigator(Protocol):
 
 
 @runtime_checkable
+class DecisionNavigator(Protocol):
+    """The get_why backing contract — Null and real services share it (spec §D9/§D11)."""
+
+    async def search(self, query: str) -> str: ...
+
+    async def for_targets(self, targets: list[str], *, query: str = "") -> str: ...
+
+    async def dashboard(self) -> str: ...
+
+
+@runtime_checkable
 class ReferenceNavigator(Protocol):
     """Read-side reference-graph navigation consumed by ``LookupService``.
 
@@ -143,6 +154,8 @@ class ReferenceNavigator(Protocol):
     async def find_by_name(
         self, name: str, /, *, kind: ReferenceKind | None = None
     ) -> tuple[NodeReference, ...]: ...
+
+    async def governed_by(self, package: str, node_qname: str, /) -> tuple[NodeReference, ...]: ...
 
     async def impact(
         self, package: str, qname: str, /, *, max_depth: int, limit: int

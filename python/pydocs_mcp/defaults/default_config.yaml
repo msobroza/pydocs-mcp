@@ -9,6 +9,12 @@ metadata_schemas:
 
 pipelines:
   chunk:
+    # search_codebase(kind="decision") stamps origin="decision_record" (see
+    # build_search_query); route those queries to the BM25 ∥ dense decision
+    # preset so mined design rationale fuses across both signals. Checked first
+    # so it wins over scope-based routes for a decision query.
+    - predicate: kind_is_decision
+      pipeline_path: pipelines/decision_search.yaml
     # scope=deps queries route to the BM25 ∥ dense-doc-pages preset (dependency
     # code is FTS-indexed but vectorless under embedding.dependency_policy:
     # doc_pages, so pure dense would miss it). Everything else stays on the
@@ -99,6 +105,11 @@ output:
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20
   max_communities: 10
+  git_activity:               # block 9 (Recent activity): index-time git-log aggregation
+    enabled: true
+    window_days: 90
+  llm_summary:                # block 2 (Architecture): opt-in cached LLM summary (uses llm:)
+    enabled: false
 
 # Index-time decision mining (spec §D8): deterministic sources feed the
 # `capture_decisions` ingestion stage, emitting one decision-as-chunk per
@@ -122,6 +133,14 @@ decision_capture:
     enabled: false
     grounding_threshold: 0.60
     batch_size: 5
+
+# get_why decision-read output bounds (spec §D9/§D11) — the read-side sibling
+# of `decision_capture` (index-time mining). Bounds how many decision records
+# the real DecisionService renders per get_why call.
+decisions:
+  output:
+    default_limit: 10
+    max_limit: 100
 
 # File-watcher tunables for `pydocs-mcp serve --watch` (CLI flag overrides
 # `enabled` — leave it false here so plain `pydocs-mcp serve` is identical

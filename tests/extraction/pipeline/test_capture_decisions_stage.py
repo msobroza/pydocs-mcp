@@ -171,7 +171,8 @@ def test_from_dict_builds_no_client_when_structuring_off() -> None:
     )
 
     pipeline = _pipeline(DecisionCaptureConfig())
-    structure = pipeline.stages[2]
+    # Index 3: mine, merge, emit_governs_edges, structure, emit_decision_chunks.
+    structure = pipeline.stages[3]
     assert isinstance(structure, StructureDecisionsStage)
     assert structure.llm_client is None
 
@@ -184,7 +185,8 @@ def test_from_dict_builds_client_when_structuring_on(monkeypatch) -> None:
 
     cfg = DecisionCaptureConfig(llm_structuring={"enabled": True})  # type: ignore[arg-type]
     pipeline = _pipeline(cfg)
-    structure = pipeline.stages[2]
+    # Index 3: mine, merge, emit_governs_edges, structure, emit_decision_chunks.
+    structure = pipeline.stages[3]
     assert isinstance(structure.llm_client, FakeLlmClient)
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from pydocs_mcp.models import ChunkFilterField, SearchScope
+from pydocs_mcp.models import ChunkFilterField, ChunkOrigin, SearchScope
 from pydocs_mcp.retrieval.pipeline import PipelineState
 
 PipelinePredicate = Callable[[PipelineState], bool]
@@ -105,6 +105,15 @@ def _scope_is_project_only(state: PipelineState) -> bool:
 def _scope_is_dependencies_only(state: PipelineState) -> bool:
     """Fires ONLY for scope=deps — see scope_is_project_only for the rationale."""
     return _scope_value(state) == SearchScope.DEPENDENCIES_ONLY.value
+
+
+@predicate("kind_is_decision")
+def _kind_is_decision(state: PipelineState) -> bool:
+    """Fires when search_codebase(kind="decision") stamped the decision-record
+    origin pushdown (build_search_query) — routes the query to the
+    decision_search preset (BM25 ∥ dense over decision chunks)."""
+    pf = state.query.pre_filter or {}
+    return pf.get(ChunkFilterField.ORIGIN.value) == ChunkOrigin.DECISION_RECORD.value
 
 
 _IS_LONG_QUERY_THRESHOLD = 8

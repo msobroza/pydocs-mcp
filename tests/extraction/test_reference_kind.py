@@ -16,13 +16,15 @@ def test_reference_kind_is_str_enum() -> None:
 
 def test_reference_kind_values_are_the_known_kinds() -> None:
     """Three AST-precise kinds (calls / imports / inherits), the regex-fuzzy
-    MENTIONS, and the index-time synthetic SIMILAR (embedding-kNN edges)."""
+    MENTIONS, the index-time synthetic SIMILAR (embedding-kNN edges), and the
+    index-time projected GOVERNS (decisions-as-graph-nodes, spec §D18)."""
     assert {k.value for k in ReferenceKind} == {
         "calls",
         "imports",
         "inherits",
         "mentions",
         "similar",
+        "governs",
     }
 
 
@@ -34,3 +36,5 @@ def test_reference_kind_string_identity() -> None:
     assert str(ReferenceKind.IMPORTS) == "imports"
     assert str(ReferenceKind.INHERITS) == "inherits"
     assert str(ReferenceKind.MENTIONS) == "mentions"
+    assert str(ReferenceKind.SIMILAR) == "similar"
+    assert str(ReferenceKind.GOVERNS) == "governs"

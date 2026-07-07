@@ -29,7 +29,7 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from math import ceil
 from typing import TYPE_CHECKING, Literal
 
@@ -51,9 +51,11 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.decision_service import DecisionDashboard
     from pydocs_mcp.application.overview_service import OverviewCard
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.models import SearchResponse
+    from pydocs_mcp.storage.decision_record import DecisionRecord
     from pydocs_mcp.storage.node_reference import NodeReference
 
 # Approximate characters per token (conservative estimate for English text).
@@ -75,8 +77,13 @@ _TRUNCATION_MIN_REMAINDER = 100
 # contract): it takes an EMPTY target (``[[next:overview:]]``) because
 # get_overview scopes to a package, not a symbol — the target group is ``*``
 # (not ``+``) so the empty payload parses.
+#
+# The ``why`` action deepens into the decision surface (spec §D17 block 8): with
+# an EMPTY target it opens the governance dashboard (``get_why()``); with a
+# non-empty target it runs a decision search over that query. The target group is
+# ``*`` so both shapes parse.
 _POINTER_RE = re.compile(
-    r"\[\[next:(lookup|lookup-show|search|overview):([^:\]]*)(?::([^:\]]+))?\]\]"
+    r"\[\[next:(lookup|lookup-show|search|overview|why):([^:\]]*)(?::([^:\]]+))?\]\]"
 )
 
 # show-mode → (mcp renderer, cli renderer). context maps to a one-element
@@ -111,16 +118,37 @@ def pointer_token(action: str, target: str, show: str = "") -> str:
     return f"[[next:{action}:{target}]]"
 
 
+# Per-action pointer resolution — ``(cli, mcp)`` renderers keyed by action.
+# ``lookup-show`` (needs ``show``) and the ``lookup`` default fall through to
+# their own branches; the table covers the actions whose render is a pure
+# function of ``surface`` + ``target``. Keeping one small closure per action
+# holds ``_render_pointer``'s branching flat (complexity gate).
+_POINTER_RENDERERS: dict[str, tuple[Callable[[str], str], Callable[[str], str]]] = {
+    # Empty-target action: get_overview scopes to a package, so the
+    # zero-hit-search recovery pointer takes no argument.
+    "overview": (
+        lambda _t: "→ pydocs-mcp overview",
+        lambda _t: "→ get_overview()",
+    ),
+    # Empty target → the governance dashboard (get_why with no query);
+    # non-empty → a decision search over that query.
+    "why": (
+        lambda t: f'→ pydocs-mcp why "{t}"' if t else "→ pydocs-mcp why",
+        lambda t: f'→ get_why(query="{t}")' if t else "→ get_why()",
+    ),
+    "search": (
+        lambda t: f'→ pydocs-mcp search "{t}"',
+        lambda t: f'→ search_codebase(query="{t}")',
+    ),
+}
+
+
 def _render_pointer(match: re.Match[str], surface: str) -> str:
     action, target, show = match.group(1), match.group(2), match.group(3)
-    if action == "overview":
-        # Empty-target action: get_overview scopes to a package, so the
-        # zero-hit-search recovery pointer takes no argument.
-        return "→ pydocs-mcp overview" if surface == "cli" else "→ get_overview()"
-    if action == "search":
-        if surface == "cli":
-            return f'→ pydocs-mcp search "{target}"'
-        return f'→ search_codebase(query="{target}")'
+    renderers = _POINTER_RENDERERS.get(action)
+    if renderers is not None:
+        cli_render, mcp_render = renderers
+        return cli_render(target) if surface == "cli" else mcp_render(target)
     if action == "lookup-show":
         mcp_fmt, cli_fmt = _SHOW_TO_TOOL[show]
         fmt = cli_fmt if surface == "cli" else mcp_fmt
@@ -337,6 +365,9 @@ _SHOW_VOCAB: dict[str, tuple[str, str]] = {
     "callers": ("Callers of", "caller"),
     "callees": ("Callees of", "callee"),
     "inherits": ("Bases of", "base"),
+    # GOVERNS edges rendered as references (spec §D18): the from-side is a
+    # ``decision:<key>`` node, so the noun is "governing decision".
+    "governed_by": ("Governing decisions of", "governing decision"),
 }
 
 
@@ -344,7 +375,7 @@ def format_references(
     rows: tuple[NodeReference, ...],
     *,
     target: str,
-    show: Literal["callers", "callees", "inherits"],
+    show: Literal["callers", "callees", "inherits", "governed_by"],
     limit: int,
 ) -> str:
     """Render reference rows as markdown for the ``lookup`` MCP tool.
@@ -693,6 +724,20 @@ def _overview_stats_line(card: OverviewCard) -> str:
     )
 
 
+def _overview_architecture_block(card: OverviewCard) -> str:
+    """LLM architecture summary (§D17 block 2) — prose + a ``*generated*`` marker.
+
+    Omitted entirely (returns ``""``) when no summary was persisted (the
+    ``overview.llm_summary`` feature is off, or generation was skipped) — the
+    aggregate view silently drops the block. The ``*generated*`` marker flags the
+    prose as machine-written, not authored, so a reader treats it as advisory.
+    """
+    summary = card.overview_summary
+    if summary is None:
+        return ""
+    return f"## Architecture *generated*\n{summary.text}\n"
+
+
 def _overview_module_block(card: OverviewCard) -> str:
     """Centrality-ranked module map — each line points at ``get_context`` via
     the ``lookup-show:<module>:context`` token (resolved per surface)."""
@@ -735,24 +780,234 @@ def _overview_dependency_block(card: OverviewCard) -> str:
     return "## Dependency profile\n" + "".join(lines)
 
 
+# Trend-arrow bands for the activity block. A ratio > 1 is rising, < 1 falling,
+# exactly 1 (or no prior activity) is flat. Rendered, never stored — the ratio
+# is the source of truth in the persisted JSON.
+_TREND_FLAT_EPSILON = 1e-9
+
+
+def _trend_arrow(ratio: float) -> str:
+    """``↑<r>x`` / ``→`` / ``↓<r>x`` for a recent-vs-prior commit trend ratio."""
+    if ratio > 1.0 + _TREND_FLAT_EPSILON:
+        return f"↑{ratio:.1f}x"
+    if ratio < 1.0 - _TREND_FLAT_EPSILON:
+        return f"↓{ratio:.1f}x"
+    return "→"
+
+
+def _overview_decisions_block(card: OverviewCard) -> str:
+    """Decisions census block (§D17 block 8) — status counts + stalest active.
+
+    Omitted entirely (returns ``""``) when no decisions were mined (capture
+    disabled or nothing captured) — the aggregate view silently drops the block,
+    unlike ``get_why`` which raises on a disabled decision layer. When present: a
+    ``- status: n`` census (descending count) plus, when an active record exists,
+    a one-line "stalest active" digest with its §D10 band. Ends with a ``why``
+    pointer that deepens into the full ``get_why`` surface.
+    """
+    block = card.decisions_summary
+    if block is None:
+        return ""
+    ordered = sorted(block.by_status.items(), key=lambda kv: (-kv[1], kv[0]))
+    lines = [f"- {status}: {count}\n" for status, count in ordered]
+    body = "".join(lines)
+    if block.stalest_title is not None and block.stalest_score is not None:
+        band = _staleness_band(block.stalest_score)
+        body += f"Stalest active: **{block.stalest_title}** — {band}\n"
+    return f"## Decisions\n{body}{pointer_token('why', '')}\n"
+
+
+def _overview_activity_block(card: OverviewCard) -> str:
+    """Recent-activity block (§D17 block 9) — busiest modules + trend arrow.
+
+    Omitted entirely (returns ``""``) when no activity was persisted (capture
+    disabled, non-git tree, or an empty window) — an aggregate view silently
+    drops the block, unlike ``get_why`` which raises. When present: a header
+    line carrying the window + trend arrow, then one bullet per top module.
+    """
+    activity = card.activity
+    if activity is None:
+        return ""
+    arrow = _trend_arrow(activity.trend_ratio)
+    header = (
+        f"## Recent activity\n"
+        f"Last {activity.window_days}d: {activity.total_commits} commits {arrow}\n"
+    )
+    lines = [f"- `{module}` — {count} commits\n" for module, count in activity.top_modules]
+    return header + "".join(lines)
+
+
 def format_overview_card(card: OverviewCard) -> str:
     """Render an :class:`OverviewCard` as the §D17 structural orientation card.
 
-    Pure rendering (no I/O): H1 + one stats line, then the four §D17 H2 blocks
-    in order — Module map, Entry points, Structure communities, Dependency
-    profile. Each block obeys the module byte-parity contract (``## {title}\\n``
-    then body lines, blocks joined with ``"\\n"`` so a blank line separates
-    them). The communities block degrades to an enablement hint when
-    ``node_scores`` is disabled. Always ends with a single trailing ``\\n``.
+    Pure rendering (no I/O): H1 + one stats line, then the §D17 H2 blocks in
+    order — the opt-in Architecture summary (block 2), Module map, Entry points,
+    Structure communities, Dependency profile, Decisions (block 8), Recent
+    activity (block 9). Each block obeys the module byte-parity contract
+    (``## {title}\\n`` then body lines, blocks joined with ``"\\n"`` so a blank
+    line separates them). The Architecture, Decisions, and Recent-activity blocks
+    are omitted when their aggregate wasn't persisted / nothing was mined; the
+    communities block degrades to an enablement hint when ``node_scores`` is
+    disabled. Always ends with a single trailing ``\\n``.
     """
     h1 = f"# Overview — {card.package}\n"
     header = h1 + _overview_stats_line(card)
     blocks = [
         header,
+        _overview_architecture_block(card),
         _overview_module_block(card),
         _overview_entry_points_block(card),
         _overview_communities_block(card),
         _overview_dependency_block(card),
+        _overview_decisions_block(card),
+        _overview_activity_block(card),
+    ]
+    # Empty blocks (block 2 without an LLM summary, block 8 without decisions,
+    # block 9 without activity) are dropped so they don't inject a doubled blank
+    # line between the blocks that remain.
+    out = "\n".join(block for block in blocks if block)
+    return out if out.endswith("\n") else out + "\n"
+
+
+# Staleness interpretation bands (spec §D10) — rendered, never stored. The
+# score is a re-verify flag for humans/agents, not a truth claim: ``< 0.3``
+# fresh, ``0.3–0.5`` drifting, ``> 0.5`` stale. Single source of truth for the
+# two thresholds so the band logic and any future consumer never drift.
+_STALENESS_DRIFTING_MIN = 0.3
+_STALENESS_STALE_MIN = 0.5
+
+# Cap on how many affected-qname next-step pointers a single record renders.
+# One pointer per qname floods a card that lists many affected symbols; §D5
+# wants a deepening hint, not an exhaustive index — three is the compromise.
+_MAX_AFFECTED_POINTERS = 3
+
+# Structured fields (spec §D12) rendered as prose sections when present, in this
+# order. Keys mirror ``extraction/decisions/structuring._STRUCTURED_FIELDS``;
+# ``title`` is omitted (it duplicates the record's bold header).
+_STRUCTURED_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("context", "Context"),
+    ("decision", "Decision"),
+    ("rationale", "Rationale"),
+    ("alternatives", "Alternatives"),
+    ("consequences", "Consequences"),
+)
+
+
+def _staleness_band(score: float) -> str:
+    """Map a staleness score to its interpretation band (spec §D10).
+
+    ``< 0.3`` → ``"fresh"``, ``0.3–0.5`` (inclusive) → ``"drifting"``,
+    ``> 0.5`` → ``"stale"``. Bands are a human/agent re-verify flag, not a
+    truth claim.
+    """
+    if score < _STALENESS_DRIFTING_MIN:
+        return "fresh"
+    if score <= _STALENESS_STALE_MIN:
+        return "drifting"
+    return "stale"
+
+
+def _decision_evidence_lines(record: DecisionRecord) -> str:
+    """One bullet per verbatim evidence span — ``locator`` cited verbatim (§D8)."""
+    return "".join(f"- `{ev.locator}` — {ev.text}\n" for ev in record.evidence)
+
+
+def _decision_structured_sections(record: DecisionRecord) -> str:
+    """Render the opt-in LLM-structured fields (§D12) as prose sections.
+
+    Only fields present in ``record.structured`` render. Empty when the record
+    carries no structured payload — the ``unverified`` caveat is emitted by the
+    block renderer, not here, since it applies to the whole record (§D12).
+    """
+    structured = record.structured
+    if not structured:
+        return ""
+    lines = [
+        f"_{label}:_ {value}\n"
+        for key, label in _STRUCTURED_SECTIONS
+        if (value := structured.get(key))
+    ]
+    return "".join(lines)
+
+
+def _decision_pointer_lines(record: DecisionRecord) -> str:
+    """One ``lookup`` pointer per affected qname, capped at ``_MAX_AFFECTED_POINTERS``."""
+    return "".join(
+        f"{pointer_token('lookup', qname)}\n"
+        for qname in record.affected_qnames[:_MAX_AFFECTED_POINTERS]
+    )
+
+
+def _decision_record_block(record: DecisionRecord) -> str:
+    """Render one decision record as a self-contained markdown card.
+
+    Layout: bold title + ``status · confidence · band`` line, verbatim evidence
+    citations, structured sections (when present), the supersession link (when
+    superseded), and one next-step pointer per affected qname (capped).
+    """
+    band = _staleness_band(record.staleness_score)
+    header = f"**{record.title}** — {record.status} · confidence {record.confidence:.2f} · {band}\n"
+    parts = [header, _decision_evidence_lines(record)]
+    # The unverified caveat is record-level (§D12): the record's fields came from
+    # an LLM structuring pass that wasn't evidence-grounded, so flag it whether or
+    # not structured prose is present.
+    if record.verification == "unverified":
+        parts.append("_unverified — not evidence-grounded_\n")
+    parts.append(_decision_structured_sections(record))
+    if record.superseded_by is not None:
+        parts.append(f"_superseded by #{record.superseded_by}_\n")
+    parts.append(_decision_pointer_lines(record))
+    return "".join(parts)
+
+
+def format_decision_records(records: tuple[DecisionRecord, ...], *, heading: str) -> str:
+    """Render mined decision records as the ``get_why`` search/target card body.
+
+    ``heading`` is the H1 (e.g. ``"Decisions matching 'sidecar'"`` or a target
+    card title). Each record renders via :func:`_decision_record_block`; blocks
+    are joined with ``"\\n"`` so a blank line separates consecutive cards, per
+    the module byte-parity contract. Always ends with a single trailing ``\\n``.
+    """
+    h1 = f"# {heading}\n"
+    if not records:
+        return f"{h1}\nNo decisions found.\n"
+    blocks = [h1, *(_decision_record_block(r) for r in records)]
+    out = "\n".join(blocks)
+    return out if out.endswith("\n") else out + "\n"
+
+
+def _decision_count_block(title: str, counts: Mapping[str, int]) -> str:
+    """``## {title}`` H2 with ``- key: n`` bullets in descending-count order."""
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    body = "".join(f"- {key}: {n}\n" for key, n in ordered)
+    return f"## {title}\n{body}"
+
+
+def _decision_summary_line(record: DecisionRecord) -> str:
+    """One-line record digest for dashboard lists — title + status + band."""
+    band = _staleness_band(record.staleness_score)
+    return f"- **{record.title}** — {record.status} · {band}\n"
+
+
+def format_decision_dashboard(summary: DecisionDashboard) -> str:
+    """Render the ``get_why`` governance dashboard (spec §D11 dashboard mode).
+
+    Five H2 blocks in fixed order — By status, By source, Stalest active,
+    Awaiting review, Ungoverned high-centrality modules — joined with ``"\\n"``
+    so a blank line separates them (module byte-parity contract). The stalest /
+    awaiting lists and ungoverned modules are already sliced/ranked by the
+    service. Always ends with a single trailing ``\\n``.
+    """
+    stalest_body = "".join(_decision_summary_line(r) for r in summary.stalest)
+    awaiting_body = "".join(_decision_summary_line(r) for r in summary.awaiting_review)
+    ungoverned_body = "".join(f"- `{qname}`\n" for qname in summary.ungoverned_modules)
+    blocks = [
+        "# Decision dashboard\n",
+        _decision_count_block("By status", summary.by_status),
+        _decision_count_block("By source", summary.by_source),
+        f"## Stalest active\n{stalest_body}",
+        f"## Awaiting review\n{awaiting_body}",
+        f"## Ungoverned high-centrality modules\n{ungoverned_body}",
     ]
     out = "\n".join(blocks)
     return out if out.endswith("\n") else out + "\n"

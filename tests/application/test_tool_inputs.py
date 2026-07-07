@@ -36,7 +36,7 @@ def test_references_input_direction_enum_and_limit() -> None:
     payload = ReferencesInput(target="pkg.mod.f")
     assert payload.direction == "callers"
     assert payload.limit >= 1  # YAML-wired default, not a literal here
-    for direction in ("callers", "callees", "inherits", "impact"):
+    for direction in ("callers", "callees", "inherits", "impact", "governed_by"):
         assert ReferencesInput(target="t", direction=direction).direction == direction
     with pytest.raises(ValidationError):
         ReferencesInput(target="t", direction="uses")
