@@ -39,7 +39,7 @@ from pydocs_mcp.extraction.pipeline.ingestion import (
 from pydocs_mcp.extraction.pipeline.stages import (
     DependencyDocPagesStage,
     AssignChunkContentHashStage,
-    CaptureDecisionsStage,
+    CaptureDecisionsPipeline,
     ChunkingStage,
     ContentHashStage,
     EmbedChunksStage,
@@ -108,7 +108,7 @@ def test_load_ingestion_pipeline_success() -> None:
         ChunkingStage,
         ReferenceCaptureStage,
         FlattenStage,
-        CaptureDecisionsStage,
+        CaptureDecisionsPipeline,
         DependencyDocPagesStage,
         AssignChunkContentHashStage,
         LoadExistingChunkHashesStage,

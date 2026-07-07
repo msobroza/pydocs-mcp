@@ -11,7 +11,7 @@ Module layout:
 - :mod:`.file_read` — :class:`FileReadStage`
 - :mod:`.chunking` — :class:`ChunkingStage`
 - :mod:`.reference_capture` — :class:`ReferenceCaptureStage` + ``_get_capture_config`` / ``_set_capture_config``
-- :mod:`.capture_decisions` — :class:`CaptureDecisionsStage`
+- :mod:`.decisions` — the ``capture_decisions`` sub-pipeline: :class:`MineDecisionsStage` / :class:`MergeDecisionsStage` / :class:`StructureDecisionsStage` / :class:`EmitDecisionChunksStage` composed by :class:`CaptureDecisionsPipeline`
 - :mod:`.flatten` — :class:`FlattenStage`
 - :mod:`.assign_chunk_content_hash` — :class:`AssignChunkContentHashStage`
 - :mod:`.load_existing_chunk_hashes` — :class:`LoadExistingChunkHashesStage`
@@ -30,9 +30,15 @@ from pydocs_mcp.extraction.pipeline.stages.assign_chunk_content_hash import (
     AssignChunkContentHashStage,
 )
 from pydocs_mcp.extraction.pipeline.stages.base_stage import IngestionStage
-from pydocs_mcp.extraction.pipeline.stages.capture_decisions import CaptureDecisionsStage
 from pydocs_mcp.extraction.pipeline.stages.chunking import ChunkingStage
 from pydocs_mcp.extraction.pipeline.stages.content_hash import ContentHashStage
+from pydocs_mcp.extraction.pipeline.stages.decisions import (
+    CaptureDecisionsPipeline,
+    EmitDecisionChunksStage,
+    MergeDecisionsStage,
+    MineDecisionsStage,
+    StructureDecisionsStage,
+)
 from pydocs_mcp.extraction.pipeline.stages.dependency_doc_pages import (
     DependencyDocPagesStage,
 )
@@ -60,19 +66,23 @@ from pydocs_mcp.extraction.pipeline.stages.synthesize_similar_edges import (
 
 __all__ = (
     "AssignChunkContentHashStage",
-    "CaptureDecisionsStage",
+    "CaptureDecisionsPipeline",
     "ChunkingStage",
     "ContentHashStage",
     "DependencyDocPagesStage",
     "EmbedChunksMultiVectorStage",
     "EmbedChunksStage",
+    "EmitDecisionChunksStage",
     "FileDiscoveryStage",
     "FileReadStage",
     "FlattenStage",
     "IngestionStage",
     "LoadExistingChunkHashesStage",
+    "MergeDecisionsStage",
+    "MineDecisionsStage",
     "PackageBuildStage",
     "ReferenceCaptureStage",
+    "StructureDecisionsStage",
     "SynthesizeSimilarEdgesStage",
     "_get_capture_config",
     "_get_similar_config",

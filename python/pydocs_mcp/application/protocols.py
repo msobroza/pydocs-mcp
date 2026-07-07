@@ -68,9 +68,10 @@ class ExtractionResult:
     # (self.X.Y inference); carried alongside ``reference_aliases``
     # because both feed the same resolver pass.
     class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
-    # Merged mined decisions (spec §D8) — populated by CaptureDecisionsStage on
-    # project targets only; dependency extractions leave it empty. Threaded into
-    # ``IndexingService.reindex_package`` for reconcile + persistence.
+    # Merged mined decisions (spec §D8) — populated by the capture_decisions
+    # sub-pipeline on project targets only; dependency extractions leave it
+    # empty. Threaded into ``IndexingService.reindex_package`` for reconcile +
+    # persistence.
     decisions: tuple[RawDecision, ...] = field(default=())
     # Optional §D12 LLM-structured overlay: ``decision_key(title) -> (grounded
     # structured fields, verification tier)``. Populated ONLY when the default-off

@@ -134,7 +134,7 @@ class IndexingService:
         ``uow.trees`` (so it sees the just-upserted trees).
 
         ``decisions`` is the merged :class:`RawDecision` tuple emitted by
-        :class:`CaptureDecisionsStage` (project targets only; dependency
+        the ``capture_decisions`` sub-pipeline (project targets only; dependency
         packages pass ``()``). They are reconciled + persisted BEFORE the
         chunk diff so each decision chunk's ``decision_id`` metadata can be
         stamped from the ``decision_key`` → id map before it lands
