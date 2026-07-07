@@ -118,10 +118,20 @@ def _merge_ranked(tagged: list[tuple[LoadedProject, _R]], limit: int) -> tuple[_
     return tuple(survivors[:limit])
 
 
-async def render_single_search(payload: SearchInput, docs: DocsSearch, api: ApiSearch) -> str:
+async def render_single_search(
+    payload: SearchInput,
+    docs: DocsSearch,
+    api: ApiSearch,
+    decisions: DecisionNavigator,
+) -> str:
     """Single-database search render — dispatch by ``kind`` (the ``server._do_search``
     behavior, shared so a 1-project router is byte-identical to a single-db server)."""
     query = build_search_query(payload)
+    if payload.kind == "decision":
+        # Delegate to the DecisionNavigator so decision rendering has ONE
+        # authority (get_why and search_codebase(kind="decision") share it) —
+        # no second decision-record render path in the search layer.
+        return await decisions.search(payload.query)
     if payload.kind == "docs":
         return render_top_composite(await docs.search(query), empty_msg=_EMPTY_DOCS_MSG)
     if payload.kind == "api":
@@ -158,10 +168,17 @@ class MultiProjectSearch:
     async def _search_body(self, payload: SearchInput) -> str:
         if payload.project:
             svc = _select_service(self.services, payload.project)
-            return await render_single_search(payload, svc.docs, svc.api)
+            return await render_single_search(payload, svc.docs, svc.api, svc.decisions)
         if len(self.services) == 1:
             svc = self.services[0]
-            return await render_single_search(payload, svc.docs, svc.api)
+            return await render_single_search(payload, svc.docs, svc.api, svc.decisions)
+        # kind="decision" has no cross-project union path (decisions are
+        # project-local rationale, not a shared corpus): resolve to the
+        # most-recently-indexed project's DecisionNavigator, mirroring the
+        # recency preference the ranked-union dedup applies elsewhere.
+        if payload.kind == "decision":
+            newest = max(self.services, key=lambda s: s.project.indexed_at)
+            return await newest.decisions.search(payload.query)
 
         query = build_search_query(payload)
         parts: list[str] = []

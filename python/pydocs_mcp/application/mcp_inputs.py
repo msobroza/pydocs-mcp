@@ -172,7 +172,7 @@ class SearchInput(BaseModel):
     """Input for the ``search`` MCP tool (spec §4.1)."""
 
     query: str = Field(min_length=1, max_length=30000)
-    kind: Literal["docs", "api", "any"] = "any"
+    kind: Literal["docs", "api", "any", "decision"] = "any"
     package: str = ""
     scope: Literal["project", "deps", "all"] = "all"
     # Multi-repo corpus selector (sibling of ``package`` / ``scope``): restrict

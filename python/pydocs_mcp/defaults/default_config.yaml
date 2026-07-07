@@ -9,6 +9,12 @@ metadata_schemas:
 
 pipelines:
   chunk:
+    # search_codebase(kind="decision") stamps origin="decision_record" (see
+    # build_search_query); route those queries to the BM25 ∥ dense decision
+    # preset so mined design rationale fuses across both signals. Checked first
+    # so it wins over scope-based routes for a decision query.
+    - predicate: kind_is_decision
+      pipeline_path: pipelines/decision_search.yaml
     # scope=deps queries route to the BM25 ∥ dense-doc-pages preset (dependency
     # code is FTS-indexed but vectorless under embedding.dependency_policy:
     # doc_pages, so pure dense would miss it). Everything else stays on the

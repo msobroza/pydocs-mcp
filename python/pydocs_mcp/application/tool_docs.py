@@ -35,6 +35,7 @@ Examples:
 
 When to use: keyword/concept/partial-name queries; "how do I X"; "where is the code for X".
 When NOT to use: you know the exact dotted path (get_symbol); you're asking WHY code is designed a certain way (get_why).
+kind="decision" searches recorded design decisions (get_why is the richer entry).
 {_WORKFLOW}
 {_CONTRACT}
 Examples:

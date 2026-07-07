@@ -13,6 +13,7 @@ from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     ChunkFilterField,
+    ChunkOrigin,
     SearchQuery,
     SearchScope,
 )
@@ -41,4 +42,9 @@ def build_search_query(payload: SearchInput) -> SearchQuery:
     pre_filter: dict = {ChunkFilterField.SCOPE.value: scope_from_string(payload.scope).value}
     if payload.package:
         pre_filter[ChunkFilterField.PACKAGE.value] = normalize_pkg_filter_value(payload.package)
+    # kind="decision" narrows the corpus to mined decision-record chunks; the
+    # origin pushdown both scopes retrieval and lets the YAML router select the
+    # decision_search preset (kind_is_decision reads this same key).
+    if payload.kind == "decision":
+        pre_filter[ChunkFilterField.ORIGIN.value] = ChunkOrigin.DECISION_RECORD.value
     return SearchQuery(terms=payload.query, pre_filter=pre_filter)
