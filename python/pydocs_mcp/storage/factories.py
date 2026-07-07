@@ -27,14 +27,18 @@ from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.overview_aggregates import (
     ActivitySummary,
     OverviewAggregates,
+    OverviewSummary,
     activity_from_json,
     activity_to_json,
     compute_activity,
+    generate_overview_summary,
+    summary_from_json,
+    summary_to_json,
 )
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.models import Chunk
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
-from pydocs_mcp.retrieval.protocols import ConnectionProvider
+from pydocs_mcp.retrieval.protocols import ConnectionProvider, LlmClient
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
 from pydocs_mcp.storage.index_metadata import (
@@ -55,6 +59,11 @@ from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 
 logger = logging.getLogger(__name__)
+
+# (module_qnames, central_symbols, cached_summary) — the inputs the index-end
+# LLM architecture-summary generator needs (block 2). Named so the writer's
+# ``_read_summary_inputs`` signature stays legible.
+_SummaryInputs = tuple[tuple[str, ...], tuple[str, ...], OverviewSummary | None]
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.decision_service import DecisionService
@@ -233,14 +242,19 @@ def build_overview_aggregates_reader(
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         try:
-            activity_json, _overview_json = read_overview_aggregates(conn)
+            activity_json, overview_json = read_overview_aggregates(conn)
         except sqlite3.Error:
             # A pre-v14 db (no columns) or a transient read error → empty
             # aggregates; the overview still renders its structural blocks.
             return OverviewAggregates()
         finally:
             conn.close()
-        return OverviewAggregates(activity=activity_from_json(activity_json or ""))
+        # Each column deserialises independently — a malformed activity JSON must
+        # not drop the LLM summary block (or vice-versa).
+        return OverviewAggregates(
+            activity=activity_from_json(activity_json or ""),
+            summary=summary_from_json(overview_json or ""),
+        )
 
     return _read
 
@@ -610,45 +624,9 @@ def build_project_indexer(
         write_index_metadata(stamp_conn, meta)
         stamp_conn.close()
 
-    activity_cfg = config.overview.git_activity
-    commit_cfg = config.decision_capture.commit_messages
-
-    def _compute_activity(project_root: Path) -> ActivitySummary | None:
-        # Sync half (subprocess + pure aggregation) so ``_write_aggregates`` can
-        # run it off the event loop in one ``to_thread`` hop. Reuses the 3a
-        # ``read_git_log`` (bounded by the SAME ``commit_messages`` window the
-        # decision miner uses — one git-log budget, not two) and the pure
-        # ``compute_activity`` aggregator.
-        from pydocs_mcp.extraction.decisions._git import read_git_log
-
-        log_text = read_git_log(
-            project_root,
-            max_commits=commit_cfg.max_commits,
-            timeout_seconds=commit_cfg.timeout_seconds,
-        )
-        return compute_activity(log_text, window_days=activity_cfg.window_days, now=time.time())
-
-    async def _write_aggregates(project_root: Path) -> None:
-        # Overview §D17 block 9: one extra bounded ``git log`` spawn per index
-        # (index-time only, never per request). Disabled → no-op, no spawn, no
-        # write. ``read_git_log`` is sync + subprocess-bound → run off the event
-        # loop; a non-git tree / empty window degrades to no activity (block
-        # omitted), so nothing is written in that case.
-        if not activity_cfg.enabled:
-            return
-        summary = await asyncio.to_thread(_compute_activity, project_root)
-        if summary is None:
-            return
-        activity_json = activity_to_json(summary)
-
-        def _write() -> None:
-            conn = open_index_database(db_path)
-            try:
-                update_overview_aggregates(conn, activity_json=activity_json, overview_json=None)
-            finally:
-                conn.close()
-
-        await asyncio.to_thread(_write)
+    write_aggregates = build_overview_aggregates_writer(
+        config, db_path, uow_factory=uow_factory, llm_client=llm_client
+    )
 
     return IndexerBundle(
         orchestrator=orchestrator,
@@ -658,8 +636,153 @@ def build_project_indexer(
         check_integrity=_check_integrity,
         rebuild_fts=_rebuild_fts,
         stamp_metadata=_stamp_metadata,
-        write_aggregates=_write_aggregates,
+        write_aggregates=write_aggregates,
     )
+
+
+def build_overview_aggregates_writer(
+    config: AppConfig,
+    db_path: Path,
+    *,
+    uow_factory: Callable[[], CompositeUnitOfWork],
+    llm_client: LlmClient,
+) -> Callable[[Path], Awaitable[None]]:
+    """Build the index-end writer closure for the overview aggregates (blocks 9 + 2).
+
+    Extracted from ``build_project_indexer`` so the write-side composition root
+    stays under the complexity budget. Two independent halves, each gated by its
+    own ``overview.*`` toggle and each writing only its column:
+
+    - Block 9 (git activity): one extra bounded ``git log`` spawn per index
+      (index-time only), reusing the 3a ``read_git_log`` + the pure
+      ``compute_activity`` aggregator. Disabled → no spawn.
+    - Block 2 (LLM architecture summary): the opt-in fingerprint-cached summary,
+      reusing the ``llm_client`` already built for ingestion (no second client).
+      Disabled → no client use. Fingerprint-cached, so the LLM call fires only
+      when the module set changed; a malformed reply degrades to the old cache.
+
+    ``None`` from either half leaves that column untouched (the mapper COALESCEs);
+    nothing is written when both are absent. The per-half logic lives in
+    module-level helpers so this stays a thin wiring closure.
+    """
+
+    async def _write_aggregates(project_root: Path) -> None:
+        activity_json = await _compute_activity_json(config, project_root)
+        overview_json = await _compute_summary_json(
+            config, db_path, uow_factory=uow_factory, llm_client=llm_client
+        )
+        if activity_json is None and overview_json is None:
+            return
+        await asyncio.to_thread(_persist_overview_aggregates, db_path, activity_json, overview_json)
+
+    return _write_aggregates
+
+
+async def _compute_activity_json(config: AppConfig, project_root: Path) -> str | None:
+    """§D17 block 9 half: framed ``git log`` → ``ActivitySummary`` JSON (or ``None``).
+
+    Disabled / non-git tree / empty window → ``None`` (column left untouched).
+    ``read_git_log`` is sync + subprocess-bound so the whole compute runs off the
+    event loop in one ``to_thread`` hop.
+    """
+    activity_cfg = config.overview.git_activity
+    if not activity_cfg.enabled:
+        return None
+    commit_cfg = config.decision_capture.commit_messages
+    summary = await asyncio.to_thread(
+        _read_and_aggregate_activity,
+        project_root,
+        commit_cfg.max_commits,
+        commit_cfg.timeout_seconds,
+        activity_cfg.window_days,
+    )
+    return activity_to_json(summary) if summary is not None else None
+
+
+def _read_and_aggregate_activity(
+    project_root: Path,
+    max_commits: int,
+    timeout_seconds: int,
+    window_days: int,
+) -> ActivitySummary | None:
+    # Reuses the 3a ``read_git_log`` (bounded by the SAME ``commit_messages``
+    # window the decision miner uses — one git-log budget, not two) and the pure
+    # ``compute_activity`` aggregator.
+    from pydocs_mcp.extraction.decisions._git import read_git_log
+
+    log_text = read_git_log(project_root, max_commits=max_commits, timeout_seconds=timeout_seconds)
+    return compute_activity(log_text, window_days=window_days, now=time.time())
+
+
+async def _compute_summary_json(
+    config: AppConfig,
+    db_path: Path,
+    *,
+    uow_factory: Callable[[], CompositeUnitOfWork],
+    llm_client: LlmClient,
+) -> str | None:
+    """§D17 block 2 half: opt-in fingerprint-cached LLM summary → JSON (or ``None``).
+
+    Disabled → no client use, no write. Fingerprint-cached: a cache hit returns
+    the SAME record (nothing new to persist → ``None``); only a genuinely-fresh
+    summary yields JSON. A malformed reply degrades to the old cache inside
+    ``generate_overview_summary``.
+    """
+    if not config.overview.llm_summary.enabled:
+        return None
+    module_qnames, central, cached = await _read_summary_inputs(db_path, uow_factory)
+    if not module_qnames:
+        return None
+    produced = await generate_overview_summary(
+        module_qnames=module_qnames,
+        central_symbols=central,
+        llm_client=llm_client,
+        cached=cached,
+        now=time.time(),
+    )
+    if produced is None or produced == cached:
+        return None
+    return summary_to_json(produced)
+
+
+async def _read_summary_inputs(
+    db_path: Path,
+    uow_factory: Callable[[], CompositeUnitOfWork],
+) -> _SummaryInputs:
+    """Read the module map + most-central symbols + the cached summary.
+
+    The LLM summary is grounded in the just-indexed project's module map and its
+    most-central symbols (pagerank desc). Reading the cached summary here lets
+    ``generate_overview_summary`` skip the LLM call when the fingerprint matches.
+    """
+    async with uow_factory() as uow:
+        trees = await uow.trees.load_all_in_package(PROJECT_PACKAGE_NAME)
+        scores = await uow.node_scores.for_package(PROJECT_PACKAGE_NAME)
+    module_qnames = tuple(trees)
+    central = tuple(s.qualified_name for s in sorted(scores, key=lambda s: -s.pagerank))
+    cached = summary_from_json(_read_stored_overview_json(db_path) or "")
+    return module_qnames, central, cached
+
+
+def _read_stored_overview_json(db_path: Path) -> str | None:
+    conn = open_index_database(db_path)
+    try:
+        _activity_json, overview_json = read_overview_aggregates(conn)
+    finally:
+        conn.close()
+    return overview_json
+
+
+def _persist_overview_aggregates(
+    db_path: Path,
+    activity_json: str | None,
+    overview_json: str | None,
+) -> None:
+    conn = open_index_database(db_path)
+    try:
+        update_overview_aggregates(conn, activity_json=activity_json, overview_json=overview_json)
+    finally:
+        conn.close()
 
 
 def build_freshness_probe(

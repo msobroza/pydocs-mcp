@@ -695,6 +695,20 @@ def _overview_stats_line(card: OverviewCard) -> str:
     )
 
 
+def _overview_architecture_block(card: OverviewCard) -> str:
+    """LLM architecture summary (§D17 block 2) — prose + a ``*generated*`` marker.
+
+    Omitted entirely (returns ``""``) when no summary was persisted (the
+    ``overview.llm_summary`` feature is off, or generation was skipped) — the
+    aggregate view silently drops the block. The ``*generated*`` marker flags the
+    prose as machine-written, not authored, so a reader treats it as advisory.
+    """
+    summary = card.overview_summary
+    if summary is None:
+        return ""
+    return f"## Architecture *generated*\n{summary.text}\n"
+
+
 def _overview_module_block(card: OverviewCard) -> str:
     """Centrality-ranked module map — each line points at ``get_context`` via
     the ``lookup-show:<module>:context`` token (resolved per surface)."""
@@ -775,25 +789,29 @@ def _overview_activity_block(card: OverviewCard) -> str:
 def format_overview_card(card: OverviewCard) -> str:
     """Render an :class:`OverviewCard` as the §D17 structural orientation card.
 
-    Pure rendering (no I/O): H1 + one stats line, then the four §D17 H2 blocks
-    in order — Module map, Entry points, Structure communities, Dependency
-    profile. Each block obeys the module byte-parity contract (``## {title}\\n``
-    then body lines, blocks joined with ``"\\n"`` so a blank line separates
-    them). The communities block degrades to an enablement hint when
-    ``node_scores`` is disabled. Always ends with a single trailing ``\\n``.
+    Pure rendering (no I/O): H1 + one stats line, then the §D17 H2 blocks in
+    order — the opt-in Architecture summary (block 2), Module map, Entry points,
+    Structure communities, Dependency profile, Recent activity. Each block obeys
+    the module byte-parity contract (``## {title}\\n`` then body lines, blocks
+    joined with ``"\\n"`` so a blank line separates them). The Architecture and
+    Recent-activity blocks are omitted when their aggregate wasn't persisted; the
+    communities block degrades to an enablement hint when ``node_scores`` is
+    disabled. Always ends with a single trailing ``\\n``.
     """
     h1 = f"# Overview — {card.package}\n"
     header = h1 + _overview_stats_line(card)
     blocks = [
         header,
+        _overview_architecture_block(card),
         _overview_module_block(card),
         _overview_entry_points_block(card),
         _overview_communities_block(card),
         _overview_dependency_block(card),
         _overview_activity_block(card),
     ]
-    # Empty blocks (block 9 when no activity is persisted) are dropped so they
-    # don't inject a doubled blank line between the blocks that remain.
+    # Empty blocks (block 2 without an LLM summary, block 9 without activity)
+    # are dropped so they don't inject a doubled blank line between the blocks
+    # that remain.
     out = "\n".join(block for block in blocks if block)
     return out if out.endswith("\n") else out + "\n"
 

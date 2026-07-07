@@ -14,7 +14,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import median
 
-from pydocs_mcp.application.overview_aggregates import ActivitySummary, OverviewAggregates
+from pydocs_mcp.application.overview_aggregates import (
+    ActivitySummary,
+    OverviewAggregates,
+    OverviewSummary,
+)
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ModuleMember, Package
 from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
@@ -64,6 +68,7 @@ class OverviewCard:
     # Blocks 2/8/9 aggregates (§D17). New fields MUST default so the existing
     # construction sites (fakes / golden fixtures) that predate them still build.
     activity: ActivitySummary | None = None
+    overview_summary: OverviewSummary | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +139,7 @@ class OverviewService:
             dependency_profile=_dependency_profile(imports, own_tops),
             node_scores_available=bool(scores),
             activity=aggregates.activity,
+            overview_summary=aggregates.summary,
         )
 
 

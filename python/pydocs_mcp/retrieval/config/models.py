@@ -322,6 +322,21 @@ class GitActivityConfig(BaseModel):
     window_days: int = Field(90, ge=1, le=3650)
 
 
+class LlmSummaryConfig(BaseModel):
+    """§D17 block 2 (Architecture) opt-in LLM summary knob.
+
+    ``enabled`` gates the index-time LLM call that generates the architecture
+    orientation paragraph; default OFF because it costs an LLM round-trip per
+    index whose module set changed (fingerprint-cached: unchanged module set →
+    no call). Deployment-time tuning, NOT an MCP param (CLAUDE.md §"MCP API
+    surface"). The LLM provider / model come from the top-level ``llm:`` section.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+
+
 class OverviewConfig(BaseModel):
     """get_overview card caps (spec §D17) — list caps keep the card inside token budgets."""
 
@@ -330,6 +345,7 @@ class OverviewConfig(BaseModel):
     max_modules: int = Field(20, ge=1, le=200)
     max_communities: int = Field(10, ge=1, le=50)
     git_activity: GitActivityConfig = Field(default_factory=GitActivityConfig)
+    llm_summary: LlmSummaryConfig = Field(default_factory=LlmSummaryConfig)
 
 
 class DecisionsOutputConfig(BaseModel):

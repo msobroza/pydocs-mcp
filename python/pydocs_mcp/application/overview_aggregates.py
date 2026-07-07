@@ -1,6 +1,6 @@
-"""Index-time overview aggregates — git-activity summary (§D17 block 9).
+"""Index-time overview aggregates — git-activity (§D17 block 9) + LLM summary (block 2).
 
-Two halves, both index-time only:
+Both halves are index-time only:
 
 - :func:`compute_activity` is a PURE aggregator over the framed ``git log`` dump
   that :func:`pydocs_mcp.extraction.decisions._git.read_git_log` produces (same
@@ -9,19 +9,35 @@ Two halves, both index-time only:
   containing directory (the "module" grouping = path prefix), counts commits per
   module inside the window, and computes a 30d-vs-prior-30d trend ratio. No I/O.
 
-- :class:`ActivitySummary` serialises to/from the JSON stored in the
-  ``index_metadata.activity_summary`` column; :class:`OverviewAggregates` is the
-  read-side bundle ``OverviewService`` gets from its injected reader closure.
+- :func:`generate_overview_summary` is the opt-in LLM architecture summary (block
+  2). It is fingerprint-cached: the fingerprint is the sha256 of the SORTED module
+  qnames, so the (expensive) LLM call fires ONLY when the module set changes —
+  same fingerprint returns the cached record with zero LLM calls. A malformed
+  (blank) reply degrades to the old cache (never overwrites, never raises).
 
-The subprocess spawn (``read_git_log``) lives in the composition-root writer
-closure (``storage.factories``), NOT here — this module stays pure so the
-aggregator is unit-testable with a framed-string fixture and no git repo.
+- :class:`ActivitySummary` / :class:`OverviewSummary` serialise to/from the JSON
+  stored in the ``index_metadata.activity_summary`` / ``overview_summary`` columns;
+  :class:`OverviewAggregates` is the read-side bundle ``OverviewService`` gets from
+  its injected reader closure.
+
+The subprocess spawn (``read_git_log``) and the LLM call both live in the
+composition-root writer closure (``storage.factories``); only the pure
+aggregation + the LLM orchestration (which takes the client as a param) live
+here, so both are unit-testable with a framed-string fixture / a fake client and
+no git repo, no network.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+from pydocs_mcp.retrieval.protocols import LlmClient
+
+log = logging.getLogger("pydocs-mcp")
 
 # A commit's author-date is an epoch float; the window / trend split are in days.
 _SECONDS_PER_DAY = 86_400.0
@@ -53,10 +69,26 @@ class ActivitySummary:
 
 
 @dataclass(frozen=True, slots=True)
+class OverviewSummary:
+    """Cached LLM architecture summary for the overview's ``## Architecture`` block.
+
+    ``text`` is the 2–4 sentence prose the LLM produced; ``fingerprint`` is the
+    sha256 of the sorted module qnames the summary was generated for (so a later
+    index run can skip the LLM call when the module set is unchanged);
+    ``generated_at`` is the epoch instant it was produced.
+    """
+
+    text: str
+    fingerprint: str
+    generated_at: float
+
+
+@dataclass(frozen=True, slots=True)
 class OverviewAggregates:
-    """Read-side bundle of the persisted overview aggregates (block 9 today)."""
+    """Read-side bundle of the persisted overview aggregates (blocks 9 + 2)."""
 
     activity: ActivitySummary | None = None
+    summary: OverviewSummary | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,10 +245,147 @@ def activity_from_json(text: str) -> ActivitySummary | None:
         return None
 
 
+# ── LLM architecture summary (§D17 block 2, index_metadata.overview_summary) ──
+
+# The LLM prompt caps the reply at a fixed sentence range so the block stays a
+# terse orientation blurb, not a wall of prose. Stated in-prompt (below) so the
+# model self-limits; the code never truncates a valid reply.
+_SUMMARY_MIN_SENTENCES = 2
+_SUMMARY_MAX_SENTENCES = 4
+# The prompt lists at most this many central symbols so a large graph doesn't
+# blow the prompt budget — the top-N by centrality is plenty of grounding.
+_SUMMARY_MAX_CENTRAL = 15
+# LLM temperature for the summary — deterministic (matches LlmClient default 0.0)
+# so the same module set yields a stable summary across runs.
+_SUMMARY_TEMPERATURE = 0.0
+
+_SUMMARY_SYSTEM_PROMPT = (
+    "You are a senior engineer writing a one-paragraph architecture orientation "
+    "for a Python codebase. Given its module map and most-central symbols, "
+    f"write {_SUMMARY_MIN_SENTENCES}–{_SUMMARY_MAX_SENTENCES} plain sentences "
+    "naming the main layers and how they relate. No preamble, no bullet points, "
+    "no markdown — just the prose."
+)
+
+
+def summary_fingerprint(module_qnames: Sequence[str]) -> str:
+    """sha256 (hex) of the SORTED module qnames — the cache key for the summary.
+
+    Sorted before hashing so the module map's iteration order is irrelevant: the
+    same set of modules always yields the same fingerprint, and the LLM call
+    fires only when the set genuinely changes (a module added / removed).
+    """
+    joined = "\n".join(sorted(module_qnames))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def build_architecture_prompt(
+    module_qnames: Sequence[str],
+    central_symbols: Sequence[str],
+) -> str:
+    """Render the user prompt: the module map + the top central symbols.
+
+    Pure — the sentence cap lives in the system prompt, this just grounds the
+    model in the corpus's shape. Central symbols are capped so a large graph
+    doesn't blow the prompt budget.
+    """
+    modules_block = "\n".join(f"- {q}" for q in sorted(module_qnames))
+    central_block = "\n".join(f"- {q}" for q in central_symbols[:_SUMMARY_MAX_CENTRAL])
+    return (
+        f"Modules ({len(module_qnames)}):\n{modules_block}\n\n"
+        f"Most-central symbols:\n{central_block}"
+    )
+
+
+async def generate_overview_summary(
+    *,
+    module_qnames: Sequence[str],
+    central_symbols: Sequence[str],
+    llm_client: LlmClient,
+    cached: OverviewSummary | None,
+    now: float,
+) -> OverviewSummary | None:
+    """Produce (or reuse) the cached LLM architecture summary.
+
+    Fingerprint-cached: when ``cached`` already covers the current module set
+    (``cached.fingerprint == summary_fingerprint(module_qnames)``), the cached
+    record is returned VERBATIM and NO LLM call is made. Otherwise one
+    ``llm_client.chat`` call generates a fresh summary.
+
+    Degradation: a blank / whitespace-only reply is treated as malformed — it is
+    logged and the OLD cache is kept (``None`` when there was none). This never
+    raises: a flaky LLM must not fail an indexing run.
+
+    Example::
+
+        summary = await generate_overview_summary(
+            module_qnames=("proj.api", "proj.core"),
+            central_symbols=("proj.core.Engine",),
+            llm_client=client,
+            cached=previous,
+            now=time.time(),
+        )
+    """
+    fingerprint = summary_fingerprint(module_qnames)
+    if cached is not None and cached.fingerprint == fingerprint:
+        return cached
+    reply = await llm_client.chat(
+        [
+            {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": build_architecture_prompt(module_qnames, central_symbols)},
+        ],
+        temperature=_SUMMARY_TEMPERATURE,
+    )
+    text = reply.strip()
+    if not text:
+        # Malformed reply — keep the prior cache rather than overwrite it with
+        # an empty summary; the block just stays on the last good text.
+        log.warning("Overview LLM summary skipped: empty reply; keeping cached summary")
+        return cached
+    return OverviewSummary(text=text, fingerprint=fingerprint, generated_at=now)
+
+
+def summary_to_json(summary: OverviewSummary) -> str:
+    """Serialise an :class:`OverviewSummary` to the stored JSON string."""
+    return json.dumps(
+        {
+            "text": summary.text,
+            "fingerprint": summary.fingerprint,
+            "generated_at": summary.generated_at,
+        }
+    )
+
+
+def summary_from_json(text: str) -> OverviewSummary | None:
+    """Deserialise the stored JSON; ``None`` on empty / malformed input.
+
+    Never raises: a corrupt or absent column degrades the block to omitted
+    rather than failing the whole overview render (same contract as
+    :func:`activity_from_json`).
+    """
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+        return OverviewSummary(
+            text=str(data["text"]),
+            fingerprint=str(data["fingerprint"]),
+            generated_at=float(data["generated_at"]),
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 __all__ = (
     "ActivitySummary",
     "OverviewAggregates",
+    "OverviewSummary",
     "activity_from_json",
     "activity_to_json",
+    "build_architecture_prompt",
     "compute_activity",
+    "generate_overview_summary",
+    "summary_fingerprint",
+    "summary_from_json",
+    "summary_to_json",
 )
