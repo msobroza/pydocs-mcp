@@ -21,6 +21,7 @@ from pydocs_mcp.application.overview_aggregates import (
 )
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ModuleMember, Package
+from pydocs_mcp.storage.decision_record import DecisionRecord
 from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 from pydocs_mcp.storage.protocols import UnitOfWork
 
@@ -30,6 +31,10 @@ _DEFAULT_MAX_ROOTS = 5
 _DEFAULT_MAX_DEPENDENCIES = 10
 _TEST_PATH_MARKERS = ("test", "conftest")
 _DUNDER_MAIN_SUFFIX = ".__main__"
+# The one lifecycle state the decisions summary block ranks staleness within:
+# a rejected / superseded decision's drift is irrelevant, so the "stalest" digest
+# only considers ``active`` records (spec §D9/§D17 block 8).
+_ACTIVE_STATUS = "active"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +59,22 @@ class CommunityEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionsBlock:
+    """Decisions census for the overview's ``## Decisions`` block (§D17 block 8).
+
+    ``by_status`` is the count of mined decision records per lifecycle state;
+    ``stalest_title`` / ``stalest_score`` name the stalest ACTIVE record (the one
+    most in need of a re-verify) — both ``None`` when no active record exists.
+    The renderer maps ``stalest_score`` to its interpretation band, keeping the
+    §D10 band thresholds a single source of truth in ``formatting.py``.
+    """
+
+    by_status: Mapping[str, int]
+    stalest_title: str | None
+    stalest_score: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class OverviewCard:
     package: str
     package_count: int
@@ -69,6 +90,10 @@ class OverviewCard:
     # construction sites (fakes / golden fixtures) that predate them still build.
     activity: ActivitySummary | None = None
     overview_summary: OverviewSummary | None = None
+    # Block 8: mined-decision census. ``None`` (block omitted) when capture is off
+    # or nothing was mined — the aggregate-view silent-omit rule, unlike get_why
+    # which raises on a disabled decision layer.
+    decisions_summary: DecisionsBlock | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,9 +120,22 @@ class OverviewService:
             degrees = await uow.references.degree_by_package(target)
             imports = await uow.references.imports_grouped_by_target(target)
             cohesion = await uow.node_scores.community_cohesion(target) if scores else {}
+            # Block 8 reads the same store get_why hydrates from. When capture is
+            # off the table is empty → an empty tuple → the block is omitted, no
+            # config flag needed (the absence of records IS the disabled signal).
+            decisions = await uow.decisions.list_for_package(target)
         aggregates = await self._read_aggregates()
         return self._assemble(
-            target, packages, trees, members, scores, degrees, imports, cohesion, aggregates
+            target,
+            packages,
+            trees,
+            members,
+            scores,
+            degrees,
+            imports,
+            cohesion,
+            aggregates,
+            decisions,
         )
 
     async def _read_aggregates(self) -> OverviewAggregates:
@@ -122,6 +160,7 @@ class OverviewService:
         imports: Mapping[str, int],
         cohesion: Mapping[int, CommunityCohesion],
         aggregates: OverviewAggregates,
+        decisions: Sequence[DecisionRecord],
     ) -> OverviewCard:
         pagerank = {s.qualified_name: s.pagerank for s in scores}
         modules = _rank_modules(trees, pagerank, degrees, bool(scores), self.max_modules)
@@ -140,6 +179,7 @@ class OverviewService:
             node_scores_available=bool(scores),
             activity=aggregates.activity,
             overview_summary=aggregates.summary,
+            decisions_summary=_decisions_block(decisions),
         )
 
 
@@ -319,3 +359,25 @@ def _dependency_profile(
     external = {name: count for name, count in imports.items() if name not in own_tops}
     ordered = sorted(external.items(), key=lambda kv: (-kv[1], kv[0]))
     return tuple(ordered[:_DEFAULT_MAX_DEPENDENCIES])
+
+
+def _decisions_block(records: Sequence[DecisionRecord]) -> DecisionsBlock | None:
+    """Aggregate mined decisions into a :class:`DecisionsBlock` (``None`` if empty).
+
+    ``None`` when there are no records — capture disabled or nothing mined — so the
+    renderer omits the block (aggregate-view silent-omit, unlike get_why which
+    raises). The stalest digest ranks ONLY active records (a rejected decision's
+    drift is noise); ``by_status`` counts every record so the census is complete.
+    """
+    if not records:
+        return None
+    by_status: dict[str, int] = {}
+    for record in records:
+        by_status[record.status] = by_status.get(record.status, 0) + 1
+    active = [r for r in records if r.status == _ACTIVE_STATUS]
+    stalest = max(active, key=lambda r: r.staleness_score) if active else None
+    return DecisionsBlock(
+        by_status=by_status,
+        stalest_title=stalest.title if stalest is not None else None,
+        stalest_score=stalest.staleness_score if stalest is not None else None,
+    )

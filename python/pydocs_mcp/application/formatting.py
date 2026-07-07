@@ -77,8 +77,13 @@ _TRUNCATION_MIN_REMAINDER = 100
 # contract): it takes an EMPTY target (``[[next:overview:]]``) because
 # get_overview scopes to a package, not a symbol — the target group is ``*``
 # (not ``+``) so the empty payload parses.
+#
+# The ``why`` action deepens into the decision surface (spec §D17 block 8): with
+# an EMPTY target it opens the governance dashboard (``get_why()``); with a
+# non-empty target it runs a decision search over that query. The target group is
+# ``*`` so both shapes parse.
 _POINTER_RE = re.compile(
-    r"\[\[next:(lookup|lookup-show|search|overview):([^:\]]*)(?::([^:\]]+))?\]\]"
+    r"\[\[next:(lookup|lookup-show|search|overview|why):([^:\]]*)(?::([^:\]]+))?\]\]"
 )
 
 # show-mode → (mcp renderer, cli renderer). context maps to a one-element
@@ -113,16 +118,37 @@ def pointer_token(action: str, target: str, show: str = "") -> str:
     return f"[[next:{action}:{target}]]"
 
 
+# Per-action pointer resolution — ``(cli, mcp)`` renderers keyed by action.
+# ``lookup-show`` (needs ``show``) and the ``lookup`` default fall through to
+# their own branches; the table covers the actions whose render is a pure
+# function of ``surface`` + ``target``. Keeping one small closure per action
+# holds ``_render_pointer``'s branching flat (complexity gate).
+_POINTER_RENDERERS: dict[str, tuple[Callable[[str], str], Callable[[str], str]]] = {
+    # Empty-target action: get_overview scopes to a package, so the
+    # zero-hit-search recovery pointer takes no argument.
+    "overview": (
+        lambda _t: "→ pydocs-mcp overview",
+        lambda _t: "→ get_overview()",
+    ),
+    # Empty target → the governance dashboard (get_why with no query);
+    # non-empty → a decision search over that query.
+    "why": (
+        lambda t: f'→ pydocs-mcp why "{t}"' if t else "→ pydocs-mcp why",
+        lambda t: f'→ get_why(query="{t}")' if t else "→ get_why()",
+    ),
+    "search": (
+        lambda t: f'→ pydocs-mcp search "{t}"',
+        lambda t: f'→ search_codebase(query="{t}")',
+    ),
+}
+
+
 def _render_pointer(match: re.Match[str], surface: str) -> str:
     action, target, show = match.group(1), match.group(2), match.group(3)
-    if action == "overview":
-        # Empty-target action: get_overview scopes to a package, so the
-        # zero-hit-search recovery pointer takes no argument.
-        return "→ pydocs-mcp overview" if surface == "cli" else "→ get_overview()"
-    if action == "search":
-        if surface == "cli":
-            return f'→ pydocs-mcp search "{target}"'
-        return f'→ search_codebase(query="{target}")'
+    renderers = _POINTER_RENDERERS.get(action)
+    if renderers is not None:
+        cli_render, mcp_render = renderers
+        return cli_render(target) if surface == "cli" else mcp_render(target)
     if action == "lookup-show":
         mcp_fmt, cli_fmt = _SHOW_TO_TOOL[show]
         fmt = cli_fmt if surface == "cli" else mcp_fmt
@@ -766,6 +792,28 @@ def _trend_arrow(ratio: float) -> str:
     return "→"
 
 
+def _overview_decisions_block(card: OverviewCard) -> str:
+    """Decisions census block (§D17 block 8) — status counts + stalest active.
+
+    Omitted entirely (returns ``""``) when no decisions were mined (capture
+    disabled or nothing captured) — the aggregate view silently drops the block,
+    unlike ``get_why`` which raises on a disabled decision layer. When present: a
+    ``- status: n`` census (descending count) plus, when an active record exists,
+    a one-line "stalest active" digest with its §D10 band. Ends with a ``why``
+    pointer that deepens into the full ``get_why`` surface.
+    """
+    block = card.decisions_summary
+    if block is None:
+        return ""
+    ordered = sorted(block.by_status.items(), key=lambda kv: (-kv[1], kv[0]))
+    lines = [f"- {status}: {count}\n" for status, count in ordered]
+    body = "".join(lines)
+    if block.stalest_title is not None and block.stalest_score is not None:
+        band = _staleness_band(block.stalest_score)
+        body += f"Stalest active: **{block.stalest_title}** — {band}\n"
+    return f"## Decisions\n{body}{pointer_token('why', '')}\n"
+
+
 def _overview_activity_block(card: OverviewCard) -> str:
     """Recent-activity block (§D17 block 9) — busiest modules + trend arrow.
 
@@ -791,10 +839,11 @@ def format_overview_card(card: OverviewCard) -> str:
 
     Pure rendering (no I/O): H1 + one stats line, then the §D17 H2 blocks in
     order — the opt-in Architecture summary (block 2), Module map, Entry points,
-    Structure communities, Dependency profile, Recent activity. Each block obeys
-    the module byte-parity contract (``## {title}\\n`` then body lines, blocks
-    joined with ``"\\n"`` so a blank line separates them). The Architecture and
-    Recent-activity blocks are omitted when their aggregate wasn't persisted; the
+    Structure communities, Dependency profile, Decisions (block 8), Recent
+    activity (block 9). Each block obeys the module byte-parity contract
+    (``## {title}\\n`` then body lines, blocks joined with ``"\\n"`` so a blank
+    line separates them). The Architecture, Decisions, and Recent-activity blocks
+    are omitted when their aggregate wasn't persisted / nothing was mined; the
     communities block degrades to an enablement hint when ``node_scores`` is
     disabled. Always ends with a single trailing ``\\n``.
     """
@@ -807,11 +856,12 @@ def format_overview_card(card: OverviewCard) -> str:
         _overview_entry_points_block(card),
         _overview_communities_block(card),
         _overview_dependency_block(card),
+        _overview_decisions_block(card),
         _overview_activity_block(card),
     ]
-    # Empty blocks (block 2 without an LLM summary, block 9 without activity)
-    # are dropped so they don't inject a doubled blank line between the blocks
-    # that remain.
+    # Empty blocks (block 2 without an LLM summary, block 8 without decisions,
+    # block 9 without activity) are dropped so they don't inject a doubled blank
+    # line between the blocks that remain.
     out = "\n".join(block for block in blocks if block)
     return out if out.endswith("\n") else out + "\n"
 
