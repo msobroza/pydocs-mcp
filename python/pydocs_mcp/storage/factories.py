@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,13 @@ import numpy as np
 
 from pydocs_mcp.application.freshness import IndexFreshnessProbe, resolve_git_head
 from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.application.overview_aggregates import (
+    ActivitySummary,
+    OverviewAggregates,
+    activity_from_json,
+    activity_to_json,
+    compute_activity,
+)
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.models import Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
@@ -32,6 +40,8 @@ from pydocs_mcp.storage.filters import Filter
 from pydocs_mcp.storage.index_metadata import (
     IndexMetadata,
     read_index_metadata,
+    read_overview_aggregates,
+    update_overview_aggregates,
     write_index_metadata,
 )
 from pydocs_mcp.storage.sqlite import (
@@ -201,7 +211,38 @@ def build_sqlite_overview_service(
         scripts=parse_project_scripts(str(project_root / "pyproject.toml")),
         max_modules=overview_cfg.max_modules,
         max_communities=overview_cfg.max_communities,
+        aggregates_reader=build_overview_aggregates_reader(db_path),
     )
+
+
+def build_overview_aggregates_reader(
+    db_path: Path,
+) -> Callable[[], OverviewAggregates]:
+    """Build the sync reader closure that hydrates the persisted overview aggregates.
+
+    Mirrors the freshness-probe pattern (``build_freshness_probe``): a sync
+    sqlite3 reader over the ``index_metadata`` JSON columns (block 9 activity
+    today, block 2 LLM summary later). Each stored column deserialises
+    independently; a missing / malformed value degrades to ``None`` (the block is
+    omitted) rather than failing the whole overview. Called synchronously inside
+    ``OverviewService._read_aggregates``; the SQLite read is quick and the caller
+    already runs off the request path.
+    """
+
+    def _read() -> OverviewAggregates:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            activity_json, _overview_json = read_overview_aggregates(conn)
+        except sqlite3.Error:
+            # A pre-v14 db (no columns) or a transient read error → empty
+            # aggregates; the overview still renders its structural blocks.
+            return OverviewAggregates()
+        finally:
+            conn.close()
+        return OverviewAggregates(activity=activity_from_json(activity_json or ""))
+
+    return _read
 
 
 def build_sqlite_decision_service(
@@ -428,6 +469,7 @@ class IndexerBundle:
     check_integrity: Callable[[], Awaitable[list[str]]]
     rebuild_fts: Callable[[], Awaitable[None]]
     stamp_metadata: Callable[[IndexMetadata], None]
+    write_aggregates: Callable[[Path], Awaitable[None]]
 
 
 def build_project_indexer(
@@ -568,6 +610,46 @@ def build_project_indexer(
         write_index_metadata(stamp_conn, meta)
         stamp_conn.close()
 
+    activity_cfg = config.overview.git_activity
+    commit_cfg = config.decision_capture.commit_messages
+
+    def _compute_activity(project_root: Path) -> ActivitySummary | None:
+        # Sync half (subprocess + pure aggregation) so ``_write_aggregates`` can
+        # run it off the event loop in one ``to_thread`` hop. Reuses the 3a
+        # ``read_git_log`` (bounded by the SAME ``commit_messages`` window the
+        # decision miner uses — one git-log budget, not two) and the pure
+        # ``compute_activity`` aggregator.
+        from pydocs_mcp.extraction.decisions._git import read_git_log
+
+        log_text = read_git_log(
+            project_root,
+            max_commits=commit_cfg.max_commits,
+            timeout_seconds=commit_cfg.timeout_seconds,
+        )
+        return compute_activity(log_text, window_days=activity_cfg.window_days, now=time.time())
+
+    async def _write_aggregates(project_root: Path) -> None:
+        # Overview §D17 block 9: one extra bounded ``git log`` spawn per index
+        # (index-time only, never per request). Disabled → no-op, no spawn, no
+        # write. ``read_git_log`` is sync + subprocess-bound → run off the event
+        # loop; a non-git tree / empty window degrades to no activity (block
+        # omitted), so nothing is written in that case.
+        if not activity_cfg.enabled:
+            return
+        summary = await asyncio.to_thread(_compute_activity, project_root)
+        if summary is None:
+            return
+        activity_json = activity_to_json(summary)
+
+        def _write() -> None:
+            conn = open_index_database(db_path)
+            try:
+                update_overview_aggregates(conn, activity_json=activity_json, overview_json=None)
+            finally:
+                conn.close()
+
+        await asyncio.to_thread(_write)
+
     return IndexerBundle(
         orchestrator=orchestrator,
         indexing_service=indexing_service,
@@ -576,6 +658,7 @@ def build_project_indexer(
         check_integrity=_check_integrity,
         rebuild_fts=_rebuild_fts,
         stamp_metadata=_stamp_metadata,
+        write_aggregates=_write_aggregates,
     )
 
 

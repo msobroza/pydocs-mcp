@@ -671,6 +671,7 @@ class TestRunIndexingDelegation:
             check_integrity=object(),
             rebuild_fts=object(),
             stamp_metadata=object(),
+            write_aggregates=object(),
         )
 
         def _fake_build(config, db_path, *, use_inspect, inspect_depth):
@@ -711,6 +712,7 @@ class TestRunIndexingDelegation:
         assert kwargs["check_integrity"] is sentinel_bundle.check_integrity
         assert kwargs["rebuild_fts"] is sentinel_bundle.rebuild_fts
         assert kwargs["stamp_metadata"] is sentinel_bundle.stamp_metadata
+        assert kwargs["write_aggregates"] is sentinel_bundle.write_aggregates
         assert kwargs["project"] == seeded_project.resolve()
         assert kwargs["force"] is False
         assert kwargs["include_project_source"] is True

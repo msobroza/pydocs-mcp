@@ -308,6 +308,20 @@ class OutputConfig(BaseModel):
     next_pointers: NextPointersConfig = NextPointersConfig()
 
 
+class GitActivityConfig(BaseModel):
+    """§D17 block 9 (Recent activity) index-time aggregation knobs.
+
+    ``enabled`` gates the extra index-end ``git log`` spawn + the aggregate
+    write; ``window_days`` bounds how far back commits count toward the block.
+    Deployment-time tuning, NOT an MCP param (CLAUDE.md §"MCP API surface").
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    window_days: int = Field(90, ge=1, le=3650)
+
+
 class OverviewConfig(BaseModel):
     """get_overview card caps (spec §D17) — list caps keep the card inside token budgets."""
 
@@ -315,6 +329,7 @@ class OverviewConfig(BaseModel):
 
     max_modules: int = Field(20, ge=1, le=200)
     max_communities: int = Field(10, ge=1, le=50)
+    git_activity: GitActivityConfig = Field(default_factory=GitActivityConfig)
 
 
 class DecisionsOutputConfig(BaseModel):

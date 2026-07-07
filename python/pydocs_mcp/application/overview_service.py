@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import median
 
+from pydocs_mcp.application.overview_aggregates import ActivitySummary, OverviewAggregates
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ModuleMember, Package
 from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
@@ -59,6 +60,9 @@ class OverviewCard:
     communities: tuple[CommunityEntry, ...]  # empty + hint when node_scores off
     dependency_profile: tuple[tuple[str, int], ...]
     node_scores_available: bool
+    # Blocks 2/8/9 aggregates (§D17). New fields MUST default so the existing
+    # construction sites (fakes / golden fixtures) that predate them still build.
+    activity: ActivitySummary | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +71,11 @@ class OverviewService:
     scripts: dict[str, str]  # [project.scripts], parsed at composition
     max_modules: int = _DEFAULT_MAX_MODULES
     max_communities: int = _DEFAULT_MAX_COMMUNITIES
+    # Index-time aggregates (block 9 git activity, later block 2 LLM summary)
+    # read via an injected closure — the freshness-probe pattern (sync sqlite3
+    # reader built in ``storage.factories``, threaded off the event loop). ``None``
+    # when the deployment doesn't persist them → the block is simply omitted.
+    aggregates_reader: Callable[[], OverviewAggregates] | None = None
 
     async def build(self, package: str = "") -> OverviewCard:
         target = package or PROJECT_PACKAGE_NAME
@@ -78,7 +87,16 @@ class OverviewService:
             degrees = await uow.references.degree_by_package(target)
             imports = await uow.references.imports_grouped_by_target(target)
             cohesion = await uow.node_scores.community_cohesion(target) if scores else {}
-        return self._assemble(target, packages, trees, members, scores, degrees, imports, cohesion)
+        aggregates = self._read_aggregates()
+        return self._assemble(
+            target, packages, trees, members, scores, degrees, imports, cohesion, aggregates
+        )
+
+    def _read_aggregates(self) -> OverviewAggregates:
+        """Load the persisted aggregates via the injected reader (empty without one)."""
+        if self.aggregates_reader is None:
+            return OverviewAggregates()
+        return self.aggregates_reader()
 
     def _assemble(
         self,
@@ -90,6 +108,7 @@ class OverviewService:
         degrees: Mapping[str, tuple[int, int]],
         imports: Mapping[str, int],
         cohesion: Mapping[int, CommunityCohesion],
+        aggregates: OverviewAggregates,
     ) -> OverviewCard:
         pagerank = {s.qualified_name: s.pagerank for s in scores}
         modules = _rank_modules(trees, pagerank, degrees, bool(scores), self.max_modules)
@@ -106,6 +125,7 @@ class OverviewService:
             communities=communities,
             dependency_profile=_dependency_profile(imports, own_tops),
             node_scores_available=bool(scores),
+            activity=aggregates.activity,
         )
 
 

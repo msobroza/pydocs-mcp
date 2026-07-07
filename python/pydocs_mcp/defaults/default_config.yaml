@@ -105,6 +105,9 @@ output:
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20
   max_communities: 10
+  git_activity:               # block 9 (Recent activity): index-time git-log aggregation
+    enabled: true
+    window_days: 90
 
 # Index-time decision mining (spec §D8): deterministic sources feed the
 # `capture_decisions` ingestion stage, emitting one decision-as-chunk per

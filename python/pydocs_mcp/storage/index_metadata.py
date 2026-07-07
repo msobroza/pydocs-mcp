@@ -97,6 +97,48 @@ def write_index_metadata(connection: sqlite3.Connection, meta: IndexMetadata) ->
     connection.commit()
 
 
+def update_overview_aggregates(
+    connection: sqlite3.Connection,
+    *,
+    activity_json: str | None,
+    overview_json: str | None,
+) -> None:
+    """Update ONLY the two overview-aggregate columns on the single metadata row.
+
+    Separate from :func:`write_index_metadata` (whose upsert deliberately omits
+    these columns so a plain re-stamp preserves aggregates): this runs at index
+    end, AFTER the stamp, to refresh the git-activity JSON (block 9) and the
+    cached LLM summary (block 2). ``None`` leaves that column untouched — the
+    activity writer and the summary writer update independently. Uses an upsert
+    on ``id=1`` so it stands up its own row if the stamp somehow hasn't yet.
+    """
+    connection.execute(
+        "INSERT INTO index_metadata (id, activity_summary, overview_summary) "
+        "VALUES (1, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "activity_summary=COALESCE(excluded.activity_summary, activity_summary), "
+        "overview_summary=COALESCE(excluded.overview_summary, overview_summary)",
+        (activity_json, overview_json),
+    )
+    connection.commit()
+
+
+def read_overview_aggregates(
+    connection: sqlite3.Connection,
+) -> tuple[str | None, str | None]:
+    """Return ``(activity_summary, overview_summary)`` — the raw JSON columns.
+
+    ``(None, None)`` for a pre-v14 database (no row / no columns). The caller
+    deserialises each column; a malformed value degrades to an omitted block.
+    """
+    row = connection.execute(
+        "SELECT activity_summary, overview_summary FROM index_metadata WHERE id=1"
+    ).fetchone()
+    if row is None:
+        return (None, None)
+    return (row["activity_summary"], row["overview_summary"])
+
+
 def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
     """Return the stored :class:`IndexMetadata`, or ``None`` for a pre-v11 database."""
     row = connection.execute(

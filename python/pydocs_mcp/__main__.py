@@ -452,6 +452,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         check_integrity=bundle.check_integrity,
         rebuild_fts=bundle.rebuild_fts,
         stamp_metadata=bundle.stamp_metadata,
+        write_aggregates=bundle.write_aggregates,
     )
 
     kb = db_path.stat().st_size / 1024 if db_path.exists() else 0.0

@@ -737,6 +737,41 @@ def _overview_dependency_block(card: OverviewCard) -> str:
     return "## Dependency profile\n" + "".join(lines)
 
 
+# Trend-arrow bands for the activity block. A ratio > 1 is rising, < 1 falling,
+# exactly 1 (or no prior activity) is flat. Rendered, never stored — the ratio
+# is the source of truth in the persisted JSON.
+_TREND_FLAT_EPSILON = 1e-9
+
+
+def _trend_arrow(ratio: float) -> str:
+    """``↑<r>x`` / ``→`` / ``↓<r>x`` for a recent-vs-prior commit trend ratio."""
+    if ratio > 1.0 + _TREND_FLAT_EPSILON:
+        return f"↑{ratio:.1f}x"
+    if ratio < 1.0 - _TREND_FLAT_EPSILON:
+        return f"↓{ratio:.1f}x"
+    return "→"
+
+
+def _overview_activity_block(card: OverviewCard) -> str:
+    """Recent-activity block (§D17 block 9) — busiest modules + trend arrow.
+
+    Omitted entirely (returns ``""``) when no activity was persisted (capture
+    disabled, non-git tree, or an empty window) — an aggregate view silently
+    drops the block, unlike ``get_why`` which raises. When present: a header
+    line carrying the window + trend arrow, then one bullet per top module.
+    """
+    activity = card.activity
+    if activity is None:
+        return ""
+    arrow = _trend_arrow(activity.trend_ratio)
+    header = (
+        f"## Recent activity\n"
+        f"Last {activity.window_days}d: {activity.total_commits} commits {arrow}\n"
+    )
+    lines = [f"- `{module}` — {count} commits\n" for module, count in activity.top_modules]
+    return header + "".join(lines)
+
+
 def format_overview_card(card: OverviewCard) -> str:
     """Render an :class:`OverviewCard` as the §D17 structural orientation card.
 
@@ -755,8 +790,11 @@ def format_overview_card(card: OverviewCard) -> str:
         _overview_entry_points_block(card),
         _overview_communities_block(card),
         _overview_dependency_block(card),
+        _overview_activity_block(card),
     ]
-    out = "\n".join(blocks)
+    # Empty blocks (block 9 when no activity is persisted) are dropped so they
+    # don't inject a doubled blank line between the blocks that remain.
+    out = "\n".join(block for block in blocks if block)
     return out if out.endswith("\n") else out + "\n"
 
 
