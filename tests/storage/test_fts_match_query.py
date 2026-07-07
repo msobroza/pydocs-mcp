@@ -37,8 +37,11 @@ def test_clean_operator_expression_passes_through() -> None:
     assert build_fts_match_query("foo OR bar") == "foo OR bar"
 
 
-def test_operator_at_edge_passes_through() -> None:
-    assert build_fts_match_query("x OR") == "x OR"
+def test_operator_at_edge_falls_back_to_quoting() -> None:
+    """A trailing operator is invalid infix FTS5 ("fts5: syntax error near ''"),
+    so it must NOT take the raw path. Full edge-position coverage lives in
+    tests/storage/test_fts_operator_edge_queries.py."""
+    assert build_fts_match_query("x OR") != "x OR"
 
 
 def test_stray_operator_word_in_natural_language_is_quoted() -> None:
