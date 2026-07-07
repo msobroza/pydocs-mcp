@@ -7,8 +7,11 @@ recreates from the current DDL. See spec §5.4-5.5.
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
 from pathlib import Path
+
+log = logging.getLogger("pydocs-mcp")
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
@@ -411,31 +414,14 @@ def _apply_v14_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "index_metadata", "overview_summary TEXT")
 
 
-def open_index_database(path: Path) -> sqlite3.Connection:
-    """Open (or create) the database, migrating or rebuilding per user_version.
+def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
+    """Run the version-appropriate additive sweeps and stamp ``user_version``.
 
-    - v9 already: re-run v3..v7 sweeps (additive, idempotent; drift recovery),
-      data preserved.
-    - v2 / v3 / v4 / v6 / v7 / v8 → v9: walk all forward (additive, idempotent)
-      structure sweeps, then clear ``packages.content_hash`` so the next index
-      re-extracts every package — repopulating ``document_trees`` with the FULL
-      multi-line ``extra_metadata["signature"]`` header + decorator call args
-      (``@app.route('/x')``), neither of which any content_hash covers (v8
-      forced the same re-extraction for pageindex decorators). NON-DESTRUCTIVE:
-      every row survives; chunks + the ``.tq`` / multi-vector sidecars stay in
-      place (the chunk content_hash is unchanged, so the re-extract diff skips
-      re-embedding), and the stale trees keep serving until re-extraction
-      replaces them.
-    - v5 / any other mismatch: drop every known table and recreate from current
-      DDL (v5 was a deliberate wipe to force a fresh fast-plaid index build).
+    Raises ``sqlite3.OperationalError`` when the DB has drifted beyond what
+    the idempotent sweeps can heal (e.g. a missing CORE table like ``chunks``
+    makes ``_try_add_column`` fail with "no such table") — the caller falls
+    back to a full rebuild so the open NEVER crash-loops.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-
-    current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current == SCHEMA_VERSION:
         # v14 — re-run additive sweeps for drift recovery; data preserved.
         # (No embedded-flag backfill here: flags written under a selective
@@ -450,16 +436,23 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         _apply_v12_additions(conn)
         _apply_v13_additions(conn)
         _apply_v14_additions(conn)
-    elif current == 13:
-        # v13 → v14 — purely additive decision layer (decision_records +
-        # chunks.decision_id + index_metadata JSON aggregates). NO embedded
-        # backfill: v13 flags may have been written under a selective policy.
-        _apply_v14_additions(conn)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif current == 12:
-        # v12 → v14 — one additive column (v13 git_head) + the decision layer
-        # (v14). NO embedded backfill here: v12 flags may have been written
-        # under a selective embed policy.
+    elif current in (12, 13):
+        # v12/v13 → v14 — additive git_head (v13, no-op on v13 DBs) + the
+        # decision layer (v14). The FULL sweep chain runs (not just the tail):
+        # each sweep is idempotent, and the early ones heal structural drift
+        # in place — a v13-stamped DB missing ``index_metadata`` gets the
+        # table recreated by the v11 sweep instead of crash-looping on the
+        # v13/v14 ALTERs ("no such table" raised before the version stamp,
+        # so every subsequent open died identically). NO embedded backfill:
+        # v12/v13 flags may have been written under a selective embed policy.
+        _apply_v3_additions(conn)
+        _apply_v4_additions(conn)
+        _apply_v5_additions(conn)
+        _apply_v6_additions(conn)
+        _apply_v7_additions(conn)
+        _apply_v10_additions(conn)
+        _apply_v11_additions(conn)
+        _apply_v12_additions(conn)
         _apply_v13_additions(conn)
         _apply_v14_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -508,9 +501,61 @@ def open_index_database(path: Path) -> sqlite3.Connection:
         conn.execute("UPDATE packages SET content_hash = NULL")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     else:
-        _drop_all_known_tables(conn)
-        conn.executescript(_DDL)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        _rebuild_from_scratch(conn)
+
+
+def _rebuild_from_scratch(conn: sqlite3.Connection) -> None:
+    _drop_all_known_tables(conn)
+    conn.executescript(_DDL)
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def open_index_database(path: Path) -> sqlite3.Connection:
+    """Open (or create) the database, migrating or rebuilding per user_version.
+
+    - v9 already: re-run v3..v7 sweeps (additive, idempotent; drift recovery),
+      data preserved.
+    - v12 / v13 → v14: the full additive sweep chain (idempotent), so
+      structural drift in older tables is healed in place; data preserved,
+      NO ``embedded`` backfill (selective-policy flags survive).
+    - v2 / v3 / v4 / v6 / v7 / v8 → v9: walk all forward (additive, idempotent)
+      structure sweeps, then clear ``packages.content_hash`` so the next index
+      re-extracts every package — repopulating ``document_trees`` with the FULL
+      multi-line ``extra_metadata["signature"]`` header + decorator call args
+      (``@app.route('/x')``), neither of which any content_hash covers (v8
+      forced the same re-extraction for pageindex decorators). NON-DESTRUCTIVE:
+      every row survives; chunks + the ``.tq`` / multi-vector sidecars stay in
+      place (the chunk content_hash is unchanged, so the re-extract diff skips
+      re-embedding), and the stale trees keep serving until re-extraction
+      replaces them.
+    - v5 / any other mismatch: drop every known table and recreate from current
+      DDL (v5 was a deliberate wipe to force a fresh fast-plaid index build).
+    - drift the sweeps cannot heal (a missing CORE table makes an ALTER raise
+      "no such table"): rebuild from scratch instead of letting the error
+      escape. The error used to propagate BEFORE the version stamp, so every
+      subsequent open re-took the same branch and crashed identically — a
+      permanent crash-loop only fixable by manually deleting the ``.db``. The
+      cache is derived data; an empty working DB beats a bricked one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    try:
+        _migrate_in_place(conn, current)
+    except sqlite3.OperationalError as exc:
+        log.warning(
+            "in-place migration from user_version=%s failed (%s) — "
+            "rebuilding the index cache from scratch; the next `pydocs-mcp "
+            "index` run repopulates it",
+            current,
+            exc,
+        )
+        conn.rollback()
+        _rebuild_from_scratch(conn)
     conn.commit()
     return conn
 
