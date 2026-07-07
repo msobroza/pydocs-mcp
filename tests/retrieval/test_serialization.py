@@ -79,6 +79,21 @@ def test_unknown_type_raises_listing_known(tmp_path):
         registry.build({"type": "missing"}, _ctx(tmp_path))
 
 
+def test_get_returns_registered_class_or_none():
+    # The lookup twin of build() for callers that need skip-with-warning
+    # semantics instead of build()'s raise-on-unknown (e.g. mine_decisions'
+    # defensive source lookup).
+    registry: ComponentRegistry = ComponentRegistry()
+
+    @registry.register("present")
+    @dataclass(frozen=True, slots=True)
+    class Present:
+        name: str = "present"
+
+    assert registry.get("present") is Present
+    assert registry.get("absent") is None
+
+
 def test_shared_registries_exist():
     assert isinstance(step_registry, ComponentRegistry)
     assert isinstance(formatter_registry, ComponentRegistry)

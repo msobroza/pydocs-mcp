@@ -1,6 +1,6 @@
 """EmitGovernsEdgesStage — project decisions as GOVERNS graph edges (spec §D18).
 
-Runs in the ``capture_decisions`` sub-pipeline AFTER ``merge_decisions`` (so
+Runs in the ``capture_decisions`` sub-pipeline AFTER ``mine_decisions`` (so
 ``state.decisions`` is materialized) and BEFORE the chunk / hash stages. For each
 merged decision it projects one GOVERNS edge per ``affected_qname``:
 
@@ -26,18 +26,14 @@ identity for those targets.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any
 
 from pydocs_mcp.extraction.decisions.engine import decision_key
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.storage.node_reference import NodeReference
 
 
-@stage_registry.register("emit_governs_edges")
 @dataclass(frozen=True, slots=True)
 class EmitGovernsEdgesStage:
     """Append one unresolved GOVERNS edge per decision ``affected_qname``."""
@@ -62,13 +58,6 @@ class EmitGovernsEdgesStage:
             return state
         new_refs = replace(state.refs, references=(*state.refs.references, *edges))
         return replace(state, refs=new_refs)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any], context: Any) -> EmitGovernsEdgesStage:
-        return cls()
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"type": "emit_governs_edges"}
 
 
 def _governs_edge(*, package: str, key: str, qname: str) -> NodeReference:
