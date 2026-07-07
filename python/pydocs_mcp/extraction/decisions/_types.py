@@ -79,7 +79,7 @@ class DecisionSource(Protocol):
 
 # Reuses the retrieval ``ComponentRegistry`` decorator (same ``.register`` /
 # ``.names`` contract as ``stage_registry``); sources are looked up by name, not
-# YAML-decoded, so only ``register`` / ``names`` are exercised here.
+# YAML-decoded, so only ``register`` / ``names`` / ``get`` are exercised here.
 decision_source_registry: ComponentRegistry[DecisionSource] = ComponentRegistry()
 """Decorator-populated registry for ``@decision_source_registry.register('name')``.
 
