@@ -78,6 +78,26 @@ async def test_swe_qa_infers_repo_from_split_and_resolves_bare_names() -> None:
     assert tasks[0].metadata["repo"] == "matplotlib"
 
 
+async def test_swe_qa_unpinned_repo_row_is_skipped_and_logged(caplog) -> None:
+    # A repo absent from _REPO_PINS is a data error: the row must be skipped
+    # (not built with a wrong URL + empty sha that dies inside git) AND the
+    # exclusion counted with a log line naming the unpinned repo. fixture_path
+    # tags every row with the requested split, so an unpinned split label
+    # drives the unpinned-repo branch without tripping __post_init__.
+    ds = SweQaDataset(
+        fixture_path=_SWEQA_FIXTURE,
+        split="notarealrepo",
+        repo_cache=_FakeRepoCache(),
+    )
+    with caplog.at_level(logging.INFO):
+        tasks = [t async for t in ds.tasks()]
+    assert tasks == []
+    assert any(
+        "notarealrepo" in rec.getMessage() and "unpinned" in rec.getMessage().lower()
+        for rec in caplog.records
+    )
+
+
 async def test_both_datasets_satisfy_protocol() -> None:
     pro = SweQaProDataset(fixture_path=_PRO_FIXTURE, repo_cache=_FakeRepoCache())
     swe = SweQaDataset(fixture_path=_SWEQA_FIXTURE, split="matplotlib", repo_cache=_FakeRepoCache())

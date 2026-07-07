@@ -107,13 +107,28 @@ class SweQaDataset:
             else:
                 self._rows_cache = await asyncio.to_thread(self._load_from_release)
         excluded = 0
+        unpinned: dict[str, int] = {}
         for i, row in enumerate(self._rows_cache):
+            repo = row["repo"]
+            # A repo absent from the pins is a data error, not a citation-free
+            # row: building a task would hand RepoCache.checkout a guessed URL
+            # + EMPTY sha and die inside git with a confusing error. Skip it and
+            # surface the offending repo in its own log line (§D14 no-silent-caps).
+            if repo not in _REPO_PINS:
+                unpinned[repo] = unpinned.get(repo, 0) + 1
+                continue
             task = self._row_to_task(row, i)
             if task is None:
                 excluded += 1
                 continue
             yield task
         log.info("swe-qa: excluded %d citation-free row(s) of %d", excluded, len(self._rows_cache))
+        if unpinned:
+            log.info(
+                "swe-qa: skipped %d row(s) for unpinned repo(s) %s (absent from _REPO_PINS)",
+                sum(unpinned.values()),
+                sorted(unpinned),
+            )
 
     def _load_from_fixture(self) -> list[dict[str, Any]]:
         # Fixture is a single per-repo jsonl; tag every row with the requested
@@ -152,8 +167,11 @@ class SweQaDataset:
         tmp.replace(target)
 
     def _row_to_task(self, row: dict[str, Any], index: int) -> EvalTask | None:
+        # PRECONDITION: caller (``tasks``) has already filtered unpinned repos,
+        # so ``repo`` is guaranteed present in ``_REPO_PINS`` — no guessed-URL /
+        # empty-sha fallback that would die inside git.
         repo = row["repo"]
-        url, sha = _REPO_PINS.get(repo, (f"https://github.com/{repo}/{repo}.git", ""))
+        url, sha = _REPO_PINS[repo]
         citations = extract_path_citations(row.get("answer", ""))
         tree = self.repo_cache.file_tree(url, sha)
         resolved, dropped = resolve_bare_filenames(citations, tree)

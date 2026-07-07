@@ -3,7 +3,8 @@ top-k retrieved (spec §4.11).
 
 ``DCG = Σ rel_i / log2(i+1)`` over ``retrieved[:k]`` with ``rel_i`` the
 unified ``is_relevant`` predicate (RepoQA -> ast match; DS-1000 -> resolved
-set). The ideal DCG normalizes by ``min(k, |gt|)`` perfectly-ranked
+set; SWE-QA -> gold file_set membership). The ideal DCG normalizes by
+``min(k, |gt|)`` perfectly-ranked
 relevant items, so ``ndcg@k`` lands in ``[0, 1]``.
 
 Reference: https://en.wikipedia.org/wiki/Discounted_cumulative_gain
