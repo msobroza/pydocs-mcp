@@ -271,7 +271,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_refs.add_argument("target")
     p_refs.add_argument(
         "--direction",
-        choices=["callers", "callees", "inherits", "impact"],
+        choices=["callers", "callees", "inherits", "impact", "governed_by"],
         default="callers",
     )
     p_refs.add_argument("--limit", type=int, default=None)
@@ -325,7 +325,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_lookup.add_argument(
         "--show",
-        choices=["default", "tree", "callers", "callees", "inherits", "impact", "context"],
+        choices=[
+            "default",
+            "tree",
+            "callers",
+            "callees",
+            "inherits",
+            "impact",
+            "context",
+            "governed_by",
+        ],
         default="default",
         help=(
             "What to show: 'default' = symbol summary + immediate children (start here); "
@@ -334,6 +343,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "'callees' = what this calls — use to answer 'what does X depend on?'; "
             "'inherits' = base classes / interface chain — use to answer 'what does X extend?'; "
             "'impact' = everything that transitively calls this, ranked — 'what breaks if I change X?'; "
+            "'governed_by' = which mined decisions govern this symbol — 'why is X the way it is?'; "
             "'context' = dependency closure packed under a token budget — 'everything to understand X'."
         ),
     )
@@ -697,7 +707,7 @@ async def _run_why(args: argparse.Namespace) -> None:
 # depths; the graph shows map 1:1 to get_references directions. ``context`` and
 # empty-target ("list packages") are handled separately in ``_run_lookup``.
 _ALIAS_DEPTH = {"default": "summary", "tree": "tree"}
-_ALIAS_DIRECTION = frozenset({"callers", "callees", "inherits", "impact"})
+_ALIAS_DIRECTION = frozenset({"callers", "callees", "inherits", "impact", "governed_by"})
 
 
 async def _run_lookup(args: argparse.Namespace) -> None:

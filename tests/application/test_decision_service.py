@@ -6,16 +6,17 @@ fake ``DocsSearch`` that returns ranked ``decision_record`` chunks carrying the
 
 - ``search(query)`` — semantic search → hydrate ranked chunks back to structured
   records → render (empty ⇒ empty-state line + overview pointer).
-- ``for_targets(targets, *, query="")`` — §D11 path/qname classification, match by
-  file suffix / dotted prefix, parent-module fallback, optional query token filter;
-  one ``## Target `` card per target.
+- ``for_targets(targets, *, query="")`` — §D11 path/qname classification, governing
+  decisions resolved through the GOVERNS reference graph (``find_governing``, §D18),
+  parent-module fallback, optional query token filter; one ``## Target `` card per target.
 - ``dashboard()`` — counts by status/source, stalest active, awaiting review,
-  ungoverned high-centrality modules.
+  ungoverned high-centrality modules (GOVERNS-edge anti-join, §D18).
 """
 
 from __future__ import annotations
 
 from pydocs_mcp.application.decision_service import DecisionService, _classify_target
+from pydocs_mcp.extraction.decisions.engine import decision_key
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ChunkList
 from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
@@ -143,19 +144,18 @@ def test_target_classification_rule() -> None:
 
 
 async def test_for_targets_matches_files_and_qname_prefixes() -> None:
-    rec_file = _record(
-        id=1,
-        title="DB path decision",
-        affected_files=("python/pydocs_mcp/db.py",),
-        affected_qnames=(),
-    )
-    rec_qname = _record(
-        id=2,
-        title="Storage package decision",
-        affected_files=(),
-        affected_qnames=("pydocs_mcp.storage.sqlite",),
-    )
-    svc = _service(records=(rec_file, rec_qname))
+    # Edge-backed (§D18): a PATH target reduces to its dotted qname form and
+    # matches via the GOVERNS edge resolved to that qname; a qname target matches
+    # directly. The GOVERNS edge's to_node_id is the resolver-backed qname.
+    rec_file = _record(id=1, title="DB path decision")
+    rec_qname = _record(id=2, title="Storage package decision")
+    references = InMemoryReferenceStore()
+    references.by_package[_PKG] = [
+        # ``python/pydocs_mcp/db.py`` → ``python.pydocs_mcp.db`` (path→qname form).
+        _governs_edge(key=decision_key("DB path decision"), qname="python.pydocs_mcp.db"),
+        _governs_edge(key=decision_key("Storage package decision"), qname="pydocs_mcp.storage"),
+    ]
+    svc = _service(records=(rec_file, rec_qname), references=references)
     out = await svc.for_targets(["python/pydocs_mcp/db.py", "pydocs_mcp.storage"])
     assert out.count("## Target ") == 2  # one card per target, §D11
     assert "DB path decision" in out
@@ -163,18 +163,29 @@ async def test_for_targets_matches_files_and_qname_prefixes() -> None:
 
 
 async def test_for_targets_parent_module_fallback() -> None:
-    # No record affects ``pkg.mod.sub`` directly; the parent module ``pkg.mod``
-    # is covered, so the fallback surfaces the parent's decision.
-    rec = _record(id=1, title="Parent module decision", affected_qnames=("pkg.mod",))
-    svc = _service(records=(rec,))
+    # No GOVERNS edge resolves to ``pkg.mod.sub`` directly; the parent module
+    # ``pkg.mod`` is governed, so the fallback surfaces the parent's decision.
+
+    rec = _record(id=1, title="Parent module decision")
+    references = InMemoryReferenceStore()
+    references.by_package[_PKG] = [
+        _governs_edge(key=decision_key("Parent module decision"), qname="pkg.mod"),
+    ]
+    svc = _service(records=(rec,), references=references)
     out = await svc.for_targets(["pkg.mod.sub"])
     assert "Parent module decision" in out
 
 
 async def test_for_targets_with_query_filters_by_token_overlap() -> None:
-    rec_hit = _record(id=1, title="Use SQLite sidecar", affected_qnames=("pkg.mod",))
-    rec_miss = _record(id=2, title="Unrelated decision", affected_qnames=("pkg.mod",))
-    svc = _service(records=(rec_hit, rec_miss))
+
+    rec_hit = _record(id=1, title="Use SQLite sidecar")
+    rec_miss = _record(id=2, title="Unrelated decision")
+    references = InMemoryReferenceStore()
+    references.by_package[_PKG] = [
+        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
+        _governs_edge(key=decision_key("Unrelated decision"), qname="pkg.mod"),
+    ]
+    svc = _service(records=(rec_hit, rec_miss), references=references)
     out = await svc.for_targets(["pkg/mod.py"], query="sidecar vectors")
     assert "Use SQLite sidecar" in out
     assert "Unrelated decision" not in out
@@ -189,7 +200,6 @@ async def test_dashboard_counts_and_ungoverned_modules() -> None:
         title="Stale active",
         status="active",
         staleness_score=0.9,
-        affected_qnames=("pkg.covered",),
     )
     active_fresh = _record(
         id=2,
@@ -197,16 +207,15 @@ async def test_dashboard_counts_and_ungoverned_modules() -> None:
         status="active",
         staleness_score=0.1,
         source="adr_files",
-        affected_qnames=("pkg.covered",),
     )
     proposed = _record(
         id=3,
         title="Awaiting review",
         status="proposed",
-        affected_qnames=("pkg.covered",),
     )
-    # Two central modules: ``pkg.covered`` (has a decision) and ``pkg.hot``
-    # (no decision) — only the latter should surface as ungoverned.
+    # Two central modules: ``pkg.covered`` (has an inbound GOVERNS edge) and
+    # ``pkg.hot`` (no edge) — only the latter surfaces as ungoverned. Coverage is
+    # the GOVERNS-edge anti-join (§D18), NOT an affected_qnames scan.
     node_scores = InMemoryNodeScoreStore()
     for qn, pr in (("pkg.hot", 0.9), ("pkg.covered", 0.5)):
         node_scores.by_key[(_PKG, qn)] = NodeScore(
@@ -215,9 +224,14 @@ async def test_dashboard_counts_and_ungoverned_modules() -> None:
             pagerank=pr,
             community=0,
         )
+    references = InMemoryReferenceStore()
+    references.by_package[_PKG] = [
+        _governs_edge(key=decision_key("Stale active"), qname="pkg.covered"),
+    ]
     svc = _service(
         records=(active_stale, active_fresh, proposed),
         node_scores=node_scores,
+        references=references,
     )
     out = await svc.dashboard()
     assert "## By status" in out
@@ -251,3 +265,60 @@ async def test_dashboard_ungoverned_falls_back_to_in_degree() -> None:
     out = await svc.dashboard()
     assert "## Ungoverned high-centrality modules" in out
     assert "`pkg.hot`" in out
+
+
+# ── edge-backed resolution (spec §D18) ────────────────────────────────────
+
+
+def _governs_edge(*, key: str, qname: str) -> NodeReference:
+    """A RESOLVED GOVERNS edge from ``decision:<key>`` to ``qname``."""
+    return NodeReference(
+        from_package=_PKG,
+        from_node_id=f"decision:{key}",
+        to_name=qname,
+        to_node_id=qname,
+        kind=ReferenceKind.GOVERNS,
+    )
+
+
+async def test_for_targets_resolves_via_governs_edges_not_string_scan() -> None:
+    # The record's affected_qnames does NOT name the target — only the
+    # resolver-backed GOVERNS edge does. The edge-backed path must surface it;
+    # a live affected_qnames substring scan would miss it.
+
+    rec = _record(id=1, title="Use SQLite sidecar", affected_qnames=("stale.provenance.only",))
+    references = InMemoryReferenceStore()
+    references.by_package[_PKG] = [
+        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.storage.sqlite"),
+    ]
+    svc = _service(records=(rec,), references=references)
+    out = await svc.for_targets(["pkg.storage.sqlite"])
+    assert "Use SQLite sidecar" in out
+
+
+async def test_for_targets_no_governing_edge_renders_empty_card() -> None:
+    rec = _record(id=1, title="Use SQLite sidecar", affected_qnames=("pkg.storage.sqlite",))
+    references = InMemoryReferenceStore()  # no GOVERNS edges at all
+    svc = _service(records=(rec,), references=references)
+    out = await svc.for_targets(["pkg.storage.sqlite"])
+    # Edge-backed: no inbound GOVERNS edge ⇒ the record does not surface even
+    # though its affected_qnames names the target.
+    assert "Use SQLite sidecar" not in out
+    assert "## Target " in out  # the card frame still renders
+
+
+async def test_dashboard_ungoverned_is_governs_edge_anti_join() -> None:
+    # pkg.hot is central AND has an inbound GOVERNS edge ⇒ governed ⇒ NOT
+    # ungoverned. pkg.cold is central with no GOVERNS edge ⇒ ungoverned. The
+    # anti-join keys on edges, not on any record's affected_qnames.
+    node_scores = InMemoryNodeScoreStore()
+    for qn, pr in (("pkg.hot", 0.9), ("pkg.cold", 0.8)):
+        node_scores.by_key[(_PKG, qn)] = NodeScore(
+            package=_PKG, qualified_name=qn, pagerank=pr, community=0
+        )
+    references = InMemoryReferenceStore()
+    references.by_package[_PKG] = [_governs_edge(key="hot-decision", qname="pkg.hot")]
+    svc = _service(records=(), node_scores=node_scores, references=references)
+    out = await svc.dashboard()
+    assert "`pkg.cold`" in out
+    assert "`pkg.hot`" not in out  # governed by an edge ⇒ excluded

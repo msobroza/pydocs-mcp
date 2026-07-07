@@ -285,6 +285,42 @@ async def test_lookup_impact_threads_configured_max_depth() -> None:
     ref_svc.impact.assert_awaited_once_with("pkg", "pkg.helpers.compute", max_depth=5, limit=7)
 
 
+# ── Test 7: governed_by — GOVERNS edges rendered via format_references ──────
+
+
+@pytest.mark.asyncio
+async def test_lookup_governed_by_renders_via_ref_svc() -> None:
+    """``show='governed_by'`` → ``ref_svc.governed_by(package, qname)`` 2-arg,
+    output flows through ``format_references`` (decisions-as-graph-nodes, §D18).
+
+    The inbound GOVERNS edges (``from_node_id='decision:<key>'``) render as
+    reference rows so a client can ask "which decisions govern this symbol?"
+    through the same ``get_references`` surface as callers/callees."""
+    tree = _real_node_tree("pkg.helpers.compute")
+    tree_svc = _tree_svc_for_module("pkg.helpers", tree)
+
+    edge = NodeReference(
+        from_package="__project__",
+        from_node_id="decision:greeting-pure",
+        to_name="pkg.helpers.compute",
+        to_node_id="pkg.helpers.compute",
+        kind=ReferenceKind.GOVERNS,
+    )
+    ref_svc = MagicMock()
+    ref_svc.governed_by = AsyncMock(return_value=(edge,))
+
+    svc = LookupService(
+        package_lookup=_pkg_lookup_mock(),
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
+    )
+    out = await svc.lookup(LookupInput(target="pkg.helpers.compute", show="governed_by"))
+
+    ref_svc.governed_by.assert_awaited_once_with("pkg", "pkg.helpers.compute")
+    assert out.startswith("# Governing decisions of `pkg.helpers.compute`\n"), out
+    assert "- `decision:greeting-pure` → `pkg.helpers.compute`" in out, out
+
+
 @pytest.mark.asyncio
 async def test_lookup_impact_with_null_ref_svc_raises_with_yaml_message() -> None:
     """``NullReferenceService.impact`` raises the YAML-anchored error."""

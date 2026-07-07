@@ -365,6 +365,9 @@ _SHOW_VOCAB: dict[str, tuple[str, str]] = {
     "callers": ("Callers of", "caller"),
     "callees": ("Callees of", "callee"),
     "inherits": ("Bases of", "base"),
+    # GOVERNS edges rendered as references (spec §D18): the from-side is a
+    # ``decision:<key>`` node, so the noun is "governing decision".
+    "governed_by": ("Governing decisions of", "governing decision"),
 }
 
 
@@ -372,7 +375,7 @@ def format_references(
     rows: tuple[NodeReference, ...],
     *,
     target: str,
-    show: Literal["callers", "callees", "inherits"],
+    show: Literal["callers", "callees", "inherits", "governed_by"],
     limit: int,
 ) -> str:
     """Render reference rows as markdown for the ``lookup`` MCP tool.

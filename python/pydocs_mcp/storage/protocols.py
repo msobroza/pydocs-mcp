@@ -459,6 +459,38 @@ class ReferenceStore(GraphSearchable, Protocol):
         """IMPORTS edge counts grouped by the target's top-level package (§D17 block 6)."""
         ...
 
+    async def find_governing(self, qname: str) -> list[str]:
+        """Decision keys whose GOVERNS edge RESOLVES to ``qname`` (spec §D18).
+
+        A GOVERNS edge is ``from_node_id='decision:<key>'`` → ``to_name=qname``,
+        ``kind='governs'``; "resolves to" means ``to_node_id == qname`` (the
+        resolver flipped it), so unresolved edges (``to_node_id IS NULL``, a
+        qname outside the indexed universe) are excluded. Returns the bare
+        ``<key>`` (the ``decision:`` prefix stripped) — the read side maps it to
+        a record via ``decision_key(record.title)``. This is the edge-backed
+        replacement for the ``affected_qnames`` substring scan.
+        """
+        ...
+
+    async def find_governed_by(self, decision_key: str) -> list[str]:
+        """Resolved qnames a decision governs — the reverse of ``find_governing``.
+
+        Given a ``decision_key`` (the ``from_node_id`` is ``decision:<key>``),
+        return every RESOLVED ``to_node_id`` its GOVERNS edges point at. Unresolved
+        edges are excluded (they name nothing in the indexed universe).
+        """
+        ...
+
+    async def governed_qnames(self) -> frozenset[str]:
+        """Every resolved qname with ≥1 inbound GOVERNS edge (spec §D18).
+
+        The set backing the dashboard's ungoverned-modules graph anti-join: a
+        central module qname NOT in this set is ungoverned. One ``SELECT DISTINCT
+        to_node_id WHERE kind='governs' AND to_node_id IS NOT NULL`` — cross-package
+        (governance is not package-scoped), unresolved edges excluded.
+        """
+        ...
+
 
 @runtime_checkable
 class NodeScoreStore(Protocol):

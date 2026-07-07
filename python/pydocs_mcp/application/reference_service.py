@@ -126,6 +126,25 @@ class ReferenceService:
             rows = await uow.references.find_by_name(name, kind)
         return tuple(rows)
 
+    async def governed_by(
+        self,
+        package: str,
+        node_qname: str,
+    ) -> tuple[NodeReference, ...]:
+        """GOVERNS edges pointing AT ``node_qname`` — its governing decisions (§D18).
+
+        The inbound GOVERNS edges (``from_node_id='decision:<key>'``,
+        ``to_node_id == node_qname``, ``kind='governs'``) render as reference
+        rows so ``get_references(direction='governed_by')`` answers "which
+        decisions govern this symbol?" through the same surface as callers /
+        callees. Resolver-backed (matches on ``to_node_id``, so an unresolved
+        GOVERNS edge naming this qname is excluded). ``package`` is informational
+        (governance is cross-package, like ``callers``). Read-only.
+        """
+        async with self.uow_factory() as uow:
+            rows = await uow.references.find_callers(target_node_id=node_qname)
+        return tuple(r for r in rows if r.kind is ReferenceKind.GOVERNS)
+
     async def impact(
         self,
         package: str,

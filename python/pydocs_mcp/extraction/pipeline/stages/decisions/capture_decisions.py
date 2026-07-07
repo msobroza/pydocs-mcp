@@ -1,20 +1,22 @@
 """capture_decisions — the decision-capture sub-pipeline (spec §D8-§D12).
 
 The decision capture is expressed as a composed :class:`IngestionPipeline` of
-four :class:`IngestionStage`\\s — reusing the same abstraction every other
+five :class:`IngestionStage`\\s — reusing the same abstraction every other
 extraction stage uses instead of a hand-rolled monolith. Because
 :class:`IngestionPipeline` IS itself an :class:`IngestionStage` (it has
 ``async def run(state) -> state``), the sub-pipeline plugs into the parent
 ``ingestion.yaml`` as a single ``{ type: capture_decisions }`` entry — the
 "Pipeline-IS-a-Stage" composition, mirroring the retrieval side.
 
-The four sub-stages run in order:
+The five sub-stages run in order:
 
 1. ``mine_decisions`` — project-only guard + the 5-source concurrent fan-out
    → ``state.decisions_raw``.
 2. ``merge_decisions`` — Jaccard-merge the raws → ``state.decisions``.
-3. ``structure_decisions`` — opt-in §D12 LLM structuring → ``state.decision_structured``.
-4. ``emit_decision_chunks`` — one decision-as-chunk per merged decision →
+3. ``emit_governs_edges`` — one GOVERNS edge per decision ``affected_qname`` →
+   appended to ``state.refs.references`` (decisions-as-graph-nodes, spec §D18).
+4. ``structure_decisions`` — opt-in §D12 LLM structuring → ``state.decision_structured``.
+5. ``emit_decision_chunks`` — one decision-as-chunk per merged decision →
    appended to ``state.chunks.chunks``.
 
 Keeping the project-only concern cohesive inside this sub-pipeline (rather than
@@ -31,6 +33,9 @@ from typing import Any
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionPipeline
 from pydocs_mcp.extraction.pipeline.stages.decisions.emit_decision_chunks import (
     EmitDecisionChunksStage,
+)
+from pydocs_mcp.extraction.pipeline.stages.decisions.emit_governs_edges import (
+    EmitGovernsEdgesStage,
 )
 from pydocs_mcp.extraction.pipeline.stages.decisions.merge_decisions import MergeDecisionsStage
 from pydocs_mcp.extraction.pipeline.stages.decisions.mine_decisions import MineDecisionsStage
@@ -58,6 +63,7 @@ class CaptureDecisionsPipeline(IngestionPipeline):
         stages = (
             MineDecisionsStage.from_dict({"type": "mine_decisions"}, context),
             MergeDecisionsStage.from_dict({"type": "merge_decisions"}, context),
+            EmitGovernsEdgesStage.from_dict({"type": "emit_governs_edges"}, context),
             StructureDecisionsStage.from_dict({"type": "structure_decisions"}, context),
             EmitDecisionChunksStage.from_dict({"type": "emit_decision_chunks"}, context),
         )

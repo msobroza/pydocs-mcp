@@ -291,6 +291,62 @@ class SqliteReferenceStore:
             profile[top] = profile.get(top, 0) + r["c"]
         return profile
 
+    async def find_governing(self, qname: str) -> list[str]:
+        """Decision keys whose RESOLVED GOVERNS edge points at ``qname`` (§D18).
+
+        Matches on ``to_node_id`` (the resolver-backed target) so an unresolved
+        edge — one whose ``to_name`` names nothing in the indexed universe —
+        never answers governance for that qname. Strips the ``decision:`` prefix
+        the ``emit_governs_edges`` stage stamped so the read side maps the bare
+        key to a record via ``decision_key(title)``.
+        """
+        sql = (
+            "SELECT DISTINCT from_node_id FROM node_references "
+            "WHERE kind = 'governs' AND to_node_id = ?"
+        )
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, (qname,)).fetchall())
+        return [_strip_decision_prefix(r["from_node_id"]) for r in rows]
+
+    async def find_governed_by(self, decision_key: str) -> list[str]:
+        """Resolved qnames a decision governs — reverse of :meth:`find_governing`.
+
+        Selects the RESOLVED ``to_node_id`` of every GOVERNS edge whose
+        ``from_node_id`` is ``decision:<decision_key>``; unresolved edges
+        (``to_node_id IS NULL``) are dropped since they name no indexed qname.
+        """
+        sql = (
+            "SELECT DISTINCT to_node_id FROM node_references "
+            "WHERE kind = 'governs' AND from_node_id = ? AND to_node_id IS NOT NULL"
+        )
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, (f"decision:{decision_key}",)).fetchall()
+            )
+        return [r["to_node_id"] for r in rows]
+
+    async def governed_qnames(self) -> frozenset[str]:
+        """Every resolved qname with an inbound GOVERNS edge (§D18 anti-join set)."""
+        sql = (
+            "SELECT DISTINCT to_node_id FROM node_references "
+            "WHERE kind = 'governs' AND to_node_id IS NOT NULL"
+        )
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(lambda: conn.execute(sql).fetchall())
+        return frozenset(r["to_node_id"] for r in rows)
+
+
+# GOVERNS edges key decisions by ``decision:<key>`` in ``from_node_id`` (spec
+# §D18) — a single-source prefix so the read side strips it consistently.
+_DECISION_NODE_PREFIX = "decision:"
+
+
+def _strip_decision_prefix(from_node_id: str) -> str:
+    """``decision:<key>`` → ``<key>`` (identity for a malformed / prefixless id)."""
+    if from_node_id.startswith(_DECISION_NODE_PREFIX):
+        return from_node_id[len(_DECISION_NODE_PREFIX) :]
+    return from_node_id
+
 
 def _row_to_node_reference(row) -> NodeReference:
     return NodeReference(

@@ -220,9 +220,16 @@ class LookupInput(BaseModel):
     """Input for the ``lookup`` MCP tool (spec §4.1)."""
 
     target: str = ""
-    show: Literal["default", "tree", "callers", "callees", "inherits", "impact", "context"] = (
-        "default"
-    )
+    show: Literal[
+        "default",
+        "tree",
+        "callers",
+        "callees",
+        "inherits",
+        "impact",
+        "context",
+        "governed_by",
+    ] = "default"
     # Multi-repo corpus selector: resolve the target inside one loaded project by
     # name. "" = resolve across all loaded projects (most-recent first). No effect
     # on a single-project server.
@@ -334,7 +341,7 @@ class ReferencesInput(BaseModel):
     """get_references — graph traversal incl. ranked transitive impact (spec §D1)."""
 
     target: str = Field(min_length=1)
-    direction: Literal["callers", "callees", "inherits", "impact"] = "callers"
+    direction: Literal["callers", "callees", "inherits", "impact", "governed_by"] = "callers"
     project: str = ""
     limit: int = Field(default_factory=lambda: _LIMIT_DEFAULT, ge=1)
 
