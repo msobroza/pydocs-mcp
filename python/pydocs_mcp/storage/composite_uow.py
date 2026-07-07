@@ -130,7 +130,27 @@ class CompositeUnitOfWork:
 
     async def __aenter__(self) -> CompositeUnitOfWork:
         for child in self._children:
-            await child.__aenter__()
+            try:
+                await child.__aenter__()
+            except BaseException as enter_exc:
+                # Python never calls __aexit__ when __aenter__ raises, so
+                # children entered before the failure must be unwound HERE —
+                # otherwise a SqliteUnitOfWork child keeps the ambient
+                # _sqlite_transaction ContextVar set and its BEGIN'd
+                # connection held, silently rerouting every later repo call
+                # in this task onto a never-committed connection.
+                for entered in reversed(self._entered):
+                    try:
+                        await entered.__aexit__(type(enter_exc), enter_exc, enter_exc.__traceback__)
+                    except Exception as unwind_exc:
+                        logger.warning(
+                            "CompositeUnitOfWork unwind after failed enter "
+                            "raised on %r: %r — original failure NOT masked.",
+                            entered,
+                            unwind_exc,
+                        )
+                self._entered.clear()
+                raise
             self._entered.append(child)
         # Rescan: SqliteUnitOfWork-shaped children expose their repos
         # only after __aenter__ runs. The eager __init__ pass skipped
