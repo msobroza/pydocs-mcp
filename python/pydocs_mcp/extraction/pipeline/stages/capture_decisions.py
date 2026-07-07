@@ -37,10 +37,12 @@ from pydocs_mcp.extraction.decisions._types import (
     decision_source_registry,
 )
 from pydocs_mcp.extraction.decisions.engine import decision_key, merge_raw_decisions
+from pydocs_mcp.extraction.decisions.structuring import structure_decisions
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState, TargetKind
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.models import Chunk, ChunkOrigin
 from pydocs_mcp.retrieval.config import DecisionCaptureConfig
+from pydocs_mcp.retrieval.protocols import LlmClient
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -59,6 +61,11 @@ class CaptureDecisionsStage:
 
     config: DecisionCaptureConfig = None  # type: ignore[assignment]
     pipeline_hash: str = ""
+    # Wired ONLY when ``llm_structuring.enabled`` (built in ``from_dict`` from
+    # ``app_config.llm``). ``None`` = the default-off path: no client, no LLM
+    # touched during indexing. Kept as a field (not built in ``run``) so the
+    # eager OpenAI import cost is paid at composition time, not per-index-call.
+    llm_client: LlmClient | None = None
     name: str = "capture_decisions"
 
     def __post_init__(self) -> None:
@@ -85,7 +92,22 @@ class CaptureDecisionsStage:
             _decision_to_chunk(decision, package=state.files.package_name) for decision in merged
         )
         new_chunks = replace(state.chunks, chunks=(*state.chunks.chunks, *decision_chunks))
-        return replace(state, chunks=new_chunks, decisions=merged)
+        structured = await self._structure(merged)
+        return replace(state, chunks=new_chunks, decisions=merged, decision_structured=structured)
+
+    async def _structure(
+        self, merged: tuple[RawDecision, ...]
+    ) -> dict[str, tuple[dict[str, object], str]]:
+        """Optional §D12 structuring: LLM-structure + ground the merged decisions.
+
+        A no-op unless the gate is enabled AND a client was wired in
+        ``from_dict`` — the deterministic path never touches an LLM.
+        ``structure_decisions`` already short-circuits on a disabled config, so
+        the client-presence guard is what keeps the off path allocation-free.
+        """
+        if self.llm_client is None:
+            return {}
+        return await structure_decisions(merged, self.llm_client, self.config.llm_structuring)
 
     async def _build_context(self, state: IngestionState, root: Path) -> CaptureContext:
         """Read the bounded git log ONCE, then bundle the source input."""
@@ -126,10 +148,29 @@ class CaptureDecisionsStage:
     def from_dict(cls, data: Mapping[str, Any], context: Any) -> CaptureDecisionsStage:
         app_config = getattr(context, "app_config", None)
         config = getattr(app_config, "decision_capture", None) or DecisionCaptureConfig()
-        return cls(config=config, pipeline_hash=getattr(context, "pipeline_hash", ""))
+        return cls(
+            config=config,
+            pipeline_hash=getattr(context, "pipeline_hash", ""),
+            llm_client=_maybe_build_llm_client(config, app_config),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": "capture_decisions"}
+
+
+def _maybe_build_llm_client(config: DecisionCaptureConfig, app_config: Any) -> LlmClient | None:
+    """Build the structuring client ONLY when the default-off gate is enabled.
+
+    Off path (the default): return ``None`` without importing or constructing
+    any client, so ``from_dict`` pays no eager OpenAI-import cost. On path: build
+    via the shared ``build_llm_client`` from ``app_config.llm`` — imported lazily
+    so the module attribute (and test patches of it) resolve at call time.
+    """
+    if not config.llm_structuring.enabled or app_config is None:
+        return None
+    from pydocs_mcp.retrieval.llm_clients import build_llm_client
+
+    return build_llm_client(app_config.llm)
 
 
 def _enabled_sources(names: list[str]) -> tuple[DecisionSource, ...]:

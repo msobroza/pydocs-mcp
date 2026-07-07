@@ -147,6 +147,13 @@ class IngestionState:
     # persist). Additive, default (), mirroring how ``refs`` travels the state:
     # dependency targets and any pipeline without the stage leave it empty.
     decisions: tuple[Any, ...] = ()
+    # Optional LLM-structured overlay for a subset of ``decisions`` (spec §D12),
+    # keyed by ``decision_key(title)`` → (grounded structured fields,
+    # verification tier). Populated ONLY when the default-off structuring gate is
+    # enabled AND a client is wired; empty otherwise. Additive so the persistence
+    # layer can stamp ``structured`` / ``verification`` on matching records
+    # without changing RawDecision's shape.
+    decision_structured: dict[str, tuple[dict[str, object], str]] = field(default_factory=dict)
 
 
 @runtime_checkable
