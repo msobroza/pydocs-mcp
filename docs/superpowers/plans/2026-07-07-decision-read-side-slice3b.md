@@ -191,10 +191,26 @@ class DecisionService:
 
 ---
 
-### Task 9: Full gates + live smoke
+### Task 9: Decisions as graph nodes — `GOVERNS` edge projection (spec §D18)
+
+**Files:**
+- Modify: `python/pydocs_mcp/extraction/reference_kind.py` (add `GOVERNS`), `python/pydocs_mcp/storage/protocols.py` + `storage/sqlite/reference_store.py` (edge query methods), the decision capture pipeline (new `emit_governs_edges` stage — rides the §D8 composed sub-pipeline the #145 refactor produced), `python/pydocs_mcp/application/decision_service.py` (for_targets → edge query), `python/pydocs_mcp/application/overview_service.py` (ungoverned modules → edge anti-join)
+- Test: `tests/extraction/test_governs_edges.py`, `tests/storage/test_reference_governs_queries.py`, plus updates to the Task 3/8 tests
+
+- [ ] **Step 1: Failing tests** — capture emits one `node_references` row per affected qname (`from_node_id="decision:<key>"`, `to_name=qname`, `to_node_id` resolved via the existing resolver or NULL, `kind="governs"`); `ReferenceStore.find_governing(qname)` returns decision keys whose GOVERNS edge resolves to that qname; `find_governed_by(decision_key)` the reverse; a dependency-target reindex emits NO governs edges; per-package cleanup sweeps stale governs edges on re-index.
+
+- [ ] **Step 2-3: Implement.** Add `ReferenceKind.GOVERNS = "governs"`. Add an `emit_governs_edges` `IngestionStage` to the decision capture sub-pipeline (after the records/decisions exist on state), emitting the edges into the state's references bundle so they flow through the existing `IndexingService` reference-save + resolver path (NULL `to_node_id` for unmined names, exactly like MENTIONS — no new resolver code). Add `find_governing`/`find_governed_by` read methods to `ReferenceStore` (+ SQLite impl + fake). **Switch the read side from string-matching to edges:** `DecisionService.for_targets` resolves each target's governing decisions via `find_governing` (exact, resolver-backed) instead of the Task-3 `affected_qnames` substring scan; the overview's "ungoverned high-centrality modules" (Task 8 / §D17) becomes a graph anti-join (central module qnames with no inbound GOVERNS edge). `affected_qnames` stays on the record for provenance/rendering; the edges are the resolution index. `get_references(target, direction="governed_by")` becomes expressible — wire it into the existing `get_references` direction handling.
+
+- [ ] **Step 4-5:** Green (incl. the Task 3/8 tests updated to assert edge-backed resolution) → **Commit** `feat(decisions): GOVERNS edge projection — decisions as first-class graph nodes`
+
+> **Ordering note:** the GOVERNS foundation (ReferenceKind + `emit_governs_edges` + `find_governing`) is a dependency of Task 3's `for_targets` and Task 8's ungoverned-modules block. Build order options: either land this task's foundation FIRST and have Tasks 3/8 consume edges from the start (preferred — no build-then-rewire), or build Tasks 3/8 with the string-match placeholder and let this task swap them. The implementer picks; the acceptance state is identical (edge-backed resolution, no live `affected_qnames` string scan in the read path).
+
+---
+
+### Task 10: Full gates + live smoke
 
 - [ ] Full suite + benchmarks suite + ruff check/format + mypy (pre-existing noise excepted) + coverage ≥90 + complexipy on changed files (restore snapshot).
-- [ ] Live smoke on the scratch project: add `# DECISION: greeting stays pure` to `app.py`, commit there, reindex, then verify all three read paths: `pydocs-mcp why "greeting"` renders the record; `pydocs-mcp why --target app.py` renders the target card; `pydocs-mcp why` renders the dashboard; `pydocs-mcp search "greeting" --kind decision` renders the record; `pydocs-mcp overview` shows the `## Decisions` and `## Recent activity` blocks. Commit fixups as `fix(slice3b): gate fixups`.
+- [ ] Live smoke on the scratch project: add `# DECISION: greeting stays pure` to `app.py`, commit there, reindex, then verify all read paths: `pydocs-mcp why "greeting"` renders the record; `pydocs-mcp why --target app.py` renders the target card (edge-backed); `pydocs-mcp why` renders the dashboard; `pydocs-mcp refs app.greet --direction governed_by` lists the governing decision; `pydocs-mcp search "greeting" --kind decision` renders the record; `pydocs-mcp overview` shows the `## Decisions` and `## Recent activity` blocks. Commit fixups as `fix(slice3b): gate fixups`.
 
 ---
 
@@ -204,3 +220,4 @@ class DecisionService:
 - Decision capture over dependencies (config exists, default off).
 - Any `benchmarks/` change (slices 4–5 own that tree).
 - Re-tuning `decision_search.yaml` weights — ship the RRF default; A/B belongs to the benchmark harness later.
+- Automatic reversal detection between decisions (spec Out-of-scope); the GOVERNS edge (Task 9) only projects `affected_qnames`, it does not infer decision-to-decision contradiction edges.

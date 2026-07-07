@@ -710,6 +710,58 @@ YAML (`overview:` block): `max_modules: 20`, `max_communities: 10`,
 `git_activity: { enabled: true, window_days: 90 }`,
 `llm_summary: { enabled: false }`.
 
+### D18 — Decisions as graph nodes via a `GOVERNS` edge projection (added 2026-07-07)
+
+Rev-1 of the decision layer (§D8–§D12) stores `affected_qnames` as a
+denormalized JSON column on `decision_records` and resolves it at query time
+by string-matching (§D11 targets mode). That makes the decision→code link
+one-directional, fuzzy, and invisible to the reference graph: you cannot ask
+"what decisions govern this symbol?" by traversal, decisions get no
+centrality, and the overview's "ungoverned high-centrality modules" is a
+set-difference rather than a graph query. This decision makes decisions
+**first-class graph participants** while keeping `decision_records` the
+structured source of truth.
+
+Mechanism — a **projection**, exactly like decisions-as-chunks (§D9):
+
+- A new `ReferenceKind.GOVERNS` value (`"governs"`) joins
+  CALLS/IMPORTS/INHERITS/MENTIONS/SIMILAR — the Open/Closed extension path the
+  reference graph is built for. `MENTIONS` is the precedent: a fuzzy,
+  name-based edge whose `to_node_id` may be NULL (unresolved), which is
+  exactly what a mined `affected_qname` is.
+- At capture time (a new stage in the §D8/refactored composed
+  decision-capture pipeline — it rides that pipeline's structure, one more
+  `emit_governs_edges` stage after the records exist), each decision emits one
+  `node_references` row per affected qname: `from_package = "__project__"`,
+  `from_node_id = f"decision:{decision_key}"` (a synthetic, stable node id
+  keyed on the reconcile key so it survives reindex like the record's `id`),
+  `to_name = affected_qname`, `to_node_id` filled by the **existing reference
+  resolver** (NULL when unresolved, same as MENTIONS), `kind = "governs"`.
+  `affected_files` stays a `decision_records` column (files aren't graph
+  nodes); only qnames project to edges.
+- **The read side consumes edges, not strings.** §D11's targets mode and the
+  overview's decisions/ungoverned-modules blocks query `node_references`
+  (`kind="governs"`) instead of scanning `affected_qnames` — resolution
+  becomes *exact* (resolver-backed) rather than best-effort substring
+  matching, a real quality win. `get_references(target, direction="governed_by")`
+  becomes expressible (reverse edges: rows whose `to_node_id` is the target
+  and `kind="governs"`), and a decision governing a high-PageRank module reads
+  as important because it now sits in the graph the centrality pass walks.
+- `decision_records` is unchanged as the source of truth (evidence, status,
+  staleness, supersession live there); the GOVERNS edges are a queryable
+  projection of its `affected_qnames`, regenerated on every reindex alongside
+  the record reconciliation, and swept per-package by the existing
+  `node_references` cleanup so stale governance edges never survive a
+  re-index.
+
+Scope: **slice 3b** (the decision read side) owns this end to end — it adds
+the `emit_governs_edges` capture stage AND switches `get_why`/overview to the
+edge-backed queries in the same slice, so the projection and its only
+consumers land together. It composes cleanly with the §D8 capture-pipeline
+refactor (the edge emitter is simply the next stage in that sub-pipeline).
+`affected_qnames` remains on the record for provenance/rendering; the graph
+edges are the *resolution* index.
+
 ## Testing strategy
 
 - **Slice 1:** pure-function unit tests for envelope/pointers in
