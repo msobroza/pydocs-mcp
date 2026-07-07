@@ -224,9 +224,9 @@ def build_overview_aggregates_reader(
     sqlite3 reader over the ``index_metadata`` JSON columns (block 9 activity
     today, block 2 LLM summary later). Each stored column deserialises
     independently; a missing / malformed value degrades to ``None`` (the block is
-    omitted) rather than failing the whole overview. Called synchronously inside
-    ``OverviewService._read_aggregates``; the SQLite read is quick and the caller
-    already runs off the request path.
+    omitted) rather than failing the whole overview. ``OverviewService._read_aggregates``
+    invokes this sync closure via ``asyncio.to_thread``, so the blocking sqlite3
+    read runs off the event loop (CLAUDE.md Async Patterns).
     """
 
     def _read() -> OverviewAggregates:

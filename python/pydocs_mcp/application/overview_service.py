@@ -9,6 +9,7 @@ git activity) land with the decision layer.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import median
@@ -73,8 +74,10 @@ class OverviewService:
     max_communities: int = _DEFAULT_MAX_COMMUNITIES
     # Index-time aggregates (block 9 git activity, later block 2 LLM summary)
     # read via an injected closure — the freshness-probe pattern (sync sqlite3
-    # reader built in ``storage.factories``, threaded off the event loop). ``None``
-    # when the deployment doesn't persist them → the block is simply omitted.
+    # reader built in ``storage.factories``). ``build`` hops it off the event
+    # loop via ``asyncio.to_thread`` (the reader opens its own sqlite3 connection
+    # and does blocking I/O). ``None`` when the deployment doesn't persist them →
+    # the block is simply omitted.
     aggregates_reader: Callable[[], OverviewAggregates] | None = None
 
     async def build(self, package: str = "") -> OverviewCard:
@@ -87,16 +90,21 @@ class OverviewService:
             degrees = await uow.references.degree_by_package(target)
             imports = await uow.references.imports_grouped_by_target(target)
             cohesion = await uow.node_scores.community_cohesion(target) if scores else {}
-        aggregates = self._read_aggregates()
+        aggregates = await self._read_aggregates()
         return self._assemble(
             target, packages, trees, members, scores, degrees, imports, cohesion, aggregates
         )
 
-    def _read_aggregates(self) -> OverviewAggregates:
-        """Load the persisted aggregates via the injected reader (empty without one)."""
+    async def _read_aggregates(self) -> OverviewAggregates:
+        """Load the persisted aggregates via the injected reader (empty without one).
+
+        The reader is a sync sqlite3 closure doing blocking I/O, so hop it off the
+        event loop via ``asyncio.to_thread`` (CLAUDE.md Async Patterns) — same as
+        ``IndexFreshnessProbe.envelope_info`` threads its sync compute closure.
+        """
         if self.aggregates_reader is None:
             return OverviewAggregates()
-        return self.aggregates_reader()
+        return await asyncio.to_thread(self.aggregates_reader)
 
     def _assemble(
         self,
