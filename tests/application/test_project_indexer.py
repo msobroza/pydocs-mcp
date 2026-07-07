@@ -107,6 +107,7 @@ class FakeIndexingService:
         reference_aliases: dict[str, dict[str, str]] | None = None,  # sub-PR #5b
         class_attribute_types: dict[str, dict[str, str]] | None = None,  # sub-PR #5d
         decisions: tuple = (),  # spec §D8 — decision capture seam
+        decision_structured=None,  # spec §D12 — LLM-structured overlay seam
         project_root=None,  # staleness scorer root (project path)
     ) -> None:
         self._call_counter += 1

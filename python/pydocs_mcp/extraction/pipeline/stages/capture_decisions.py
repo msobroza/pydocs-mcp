@@ -92,6 +92,10 @@ class CaptureDecisionsStage:
             _decision_to_chunk(decision, package=state.files.package_name) for decision in merged
         )
         new_chunks = replace(state.chunks, chunks=(*state.chunks.chunks, *decision_chunks))
+        # ``decision_structured`` is threaded via ExtractionResult into
+        # IndexingService.reindex_package, which stamps the grounded fields +
+        # verification tier onto the matching DecisionRecord before persistence
+        # (§D12). Empty on the default-off path → records keep their verbatim tier.
         structured = await self._structure(merged)
         return replace(state, chunks=new_chunks, decisions=merged, decision_structured=structured)
 
@@ -104,6 +108,11 @@ class CaptureDecisionsStage:
         ``from_dict`` — the deterministic path never touches an LLM.
         ``structure_decisions`` already short-circuits on a disabled config, so
         the client-presence guard is what keeps the off path allocation-free.
+
+        The returned ``decision_key -> (grounded fields, tier)`` map is NOT
+        consumed here — it rides ``state.decision_structured`` out to the
+        persistence layer, which stamps it onto ``DecisionRecord.structured`` /
+        ``verification`` (see ``IndexingService._apply_structured``).
         """
         if self.llm_client is None:
             return {}

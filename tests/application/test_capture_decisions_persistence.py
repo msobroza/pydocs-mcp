@@ -150,3 +150,51 @@ async def test_dependency_package_skips_decisions(tmp_path: Path) -> None:
     dep = _pkg("fastapi", origin=PackageOrigin.DEPENDENCY)
     await svc.reindex_package(dep, (), (), decisions=(), project_root=tmp_path)
     assert decisions_store.by_id == {}
+
+
+async def test_structured_overlay_stamped_onto_record(tmp_path: Path) -> None:
+    """The §D12 LLM overlay lands on ``DecisionRecord.structured`` + verification.
+
+    ``decision_structured`` maps ``decision_key(title) -> (fields, tier)``.
+    ``reindex_package`` must stamp the matching record's ``structured`` and
+    ``verification`` before persistence — otherwise the overlay is computed
+    then discarded.
+    """
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "mod.py").write_text("x = 1\n")
+    decisions_store = InMemoryDecisionStore()
+    factory = make_fake_uow_factory(decisions=decisions_store)
+    svc = IndexingService(uow_factory=factory)
+
+    raw = _raw()
+    overlay = {
+        decision_key(raw.title): ({"decision": "sidecar file for vectors"}, "verified"),
+    }
+    await svc.reindex_package(
+        _pkg(),
+        (_decision_chunk(),),
+        (),
+        decisions=(raw,),
+        decision_structured=overlay,
+        project_root=tmp_path,
+    )
+
+    record = next(iter(decisions_store.by_id.values()))
+    assert record.structured == {"decision": "sidecar file for vectors"}
+    assert record.verification == "verified"
+
+
+async def test_no_overlay_leaves_verbatim_default(tmp_path: Path) -> None:
+    """Without an overlay entry, the record keeps the engine's verbatim default."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "mod.py").write_text("x = 1\n")
+    decisions_store = InMemoryDecisionStore()
+    factory = make_fake_uow_factory(decisions=decisions_store)
+    svc = IndexingService(uow_factory=factory)
+
+    await svc.reindex_package(
+        _pkg(), (_decision_chunk(),), (), decisions=(_raw(),), project_root=tmp_path
+    )
+    record = next(iter(decisions_store.by_id.values()))
+    assert record.structured is None
+    assert record.verification == "verbatim"

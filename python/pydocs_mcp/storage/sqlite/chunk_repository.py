@@ -27,6 +27,19 @@ from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 # only from this constant — never caller input.
 _TABLE = "chunks"
 
+# Single source of truth for the chunk write column list (spec §5.3): ``upsert``
+# and ``insert`` share it verbatim (SQLite INSERT with no conflict clause IS the
+# insert-only semantic), so the column set can't drift between the two paths.
+# ``decision_id`` (schema v14) is a nullable backlink — None for non-decision
+# chunks; :func:`_chunk_to_row` supplies it. All values are named params bound
+# from the row dict, never interpolated, so there's no injection surface.
+_INSERT_CHUNK_SQL = (
+    "INSERT INTO chunks "
+    "(package, module, title, text, origin, content_hash, qualified_name, decision_id) "
+    "VALUES "
+    "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name, :decision_id)"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SqliteChunkRepository:
@@ -46,14 +59,7 @@ class SqliteChunkRepository:
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.executemany,
-                "INSERT INTO chunks "
-                "(package, module, title, text, origin, content_hash, qualified_name) "
-                "VALUES "
-                "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name)",
-                rows,
-            )
+            await asyncio.to_thread(conn.executemany, _INSERT_CHUNK_SQL, rows)
 
     async def list(
         self,
@@ -138,14 +144,7 @@ class SqliteChunkRepository:
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.executemany,
-                "INSERT INTO chunks "
-                "(package, module, title, text, origin, content_hash, qualified_name) "
-                "VALUES "
-                "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name)",
-                rows,
-            )
+            await asyncio.to_thread(conn.executemany, _INSERT_CHUNK_SQL, rows)
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""

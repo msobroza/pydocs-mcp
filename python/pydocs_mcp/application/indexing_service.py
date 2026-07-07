@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -112,6 +112,7 @@ class IndexingService:
         reference_aliases: dict[str, dict[str, str]] | None = None,
         class_attribute_types: dict[str, dict[str, str]] | None = None,
         decisions: Sequence[RawDecision] = (),
+        decision_structured: Mapping[str, tuple[dict[str, object], str]] | None = None,
         project_root: Path | None = None,
     ) -> None:
         """Replace every row for ``package.name`` atomically (spec §13.3).
@@ -160,6 +161,7 @@ class IndexingService:
                 uow,
                 package_name=package.name,
                 decisions=decisions,
+                decision_structured=decision_structured or {},
                 project_root=project_root,
             )
             chunks = _stamp_decision_ids(chunks, key_to_id)
@@ -250,6 +252,7 @@ class IndexingService:
         *,
         package_name: str,
         decisions: Sequence[RawDecision],
+        decision_structured: Mapping[str, tuple[dict[str, object], str]],
         project_root: Path | None,
     ) -> dict[str, int]:
         """Reconcile + persist mined decisions, return the ``decision_key`` → id map.
@@ -257,7 +260,8 @@ class IndexingService:
         Loads the persisted rows for this package, reconciles the merged
         incoming decisions against them (preserving ids / created_at /
         supersession, §D9), scores each upsert's staleness against
-        ``project_root`` mtimes (§D10), writes the upserts, deletes the
+        ``project_root`` mtimes (§D10), overlays the §D12 LLM-structured fields
+        + verification tier where present, writes the upserts, deletes the
         vanished rows, and returns a ``decision_key`` → assigned-id map so the
         caller can backlink each decision chunk's ``decision_id`` metadata.
 
@@ -272,9 +276,12 @@ class IndexingService:
             existing=existing, incoming=merged, now=time.time(), package=package_name
         )
         scored = tuple(
-            replace(
-                record,
-                staleness_score=self._score_staleness(record, project_root),
+            self._apply_structured(
+                replace(
+                    record,
+                    staleness_score=self._score_staleness(record, project_root),
+                ),
+                decision_structured,
             )
             for record in result.upserts
         )
@@ -297,6 +304,24 @@ class IndexingService:
             now=time.time(),
             root=project_root,
         )
+
+    @staticmethod
+    def _apply_structured(
+        record: DecisionRecord,
+        overlay: Mapping[str, tuple[dict[str, object], str]],
+    ) -> DecisionRecord:
+        """Overlay the §D12 grounded structured fields + verification tier.
+
+        ``overlay`` maps ``decision_key(title) -> (grounded fields, tier)``. A
+        record whose key isn't in the overlay passes through untouched — keeping
+        the engine's ``structured=None`` / ``verification="verbatim"`` default
+        (the deterministic-mining path, which never touches an LLM).
+        """
+        entry = overlay.get(decision_key(record.title))
+        if entry is None:
+            return record
+        fields, verification = entry
+        return replace(record, structured=fields, verification=verification)
 
     async def _persist_references(
         self,

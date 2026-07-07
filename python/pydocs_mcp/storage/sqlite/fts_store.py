@@ -71,9 +71,12 @@ class SqliteLexicalStore:
             params.extend(filter_params)
         params.append(limit)
 
+        # ``c.decision_id`` rides along so ``row_to_chunk`` can hydrate the §D9
+        # backlink on decision-as-chunk BM25 hits — get_why ranks these chunks
+        # and needs the id to fetch the source record.
         sql = (
             "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
-            "c.content_hash, c.qualified_name, -m.rank AS rank "
+            "c.content_hash, c.qualified_name, c.decision_id, -m.rank AS rank "
             "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
             f"WHERE {' AND '.join(where_parts)} "
             "ORDER BY rank LIMIT ?"

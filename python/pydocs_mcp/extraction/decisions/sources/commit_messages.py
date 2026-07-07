@@ -167,5 +167,17 @@ def _commit_to_raw(commit: _Commit, project_root: Path) -> RawDecision | None:
 
 
 def _existing_files(files: tuple[str, ...], project_root: Path) -> tuple[str, ...]:
-    """Commit files filtered to paths that still exist under the project root."""
+    """Commit files filtered to paths that still exist under the project root.
+
+    WHY on-disk (not indexed-set): spec §D8 wants the affected files narrowed to
+    the *indexed* tree set, but ``CaptureContext`` exposes ``trees`` whose
+    ``source_path`` values are dotted-module paths turned to slashes (e.g.
+    ``pkg/sub``, no ``.py``) — the package-trie shape, not the on-disk relative
+    file paths git reports (``pkg/sub/mod.py``). The two can't be compared
+    without reconstructing every module's file path, which the context doesn't
+    carry at this point. An on-disk existence check is the faithful
+    approximation: it drops files deleted since the commit (the case §D8 cares
+    about) while a non-indexed-but-present file is a harmless over-inclusion.
+    Tighten to the true indexed set if the context ever surfaces file paths.
+    """
     return tuple(rel for rel in files if (project_root / rel).is_file())

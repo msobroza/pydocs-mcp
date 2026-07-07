@@ -72,6 +72,12 @@ class ExtractionResult:
     # project targets only; dependency extractions leave it empty. Threaded into
     # ``IndexingService.reindex_package`` for reconcile + persistence.
     decisions: tuple[RawDecision, ...] = field(default=())
+    # Optional §D12 LLM-structured overlay: ``decision_key(title) -> (grounded
+    # structured fields, verification tier)``. Populated ONLY when the default-off
+    # structuring gate is enabled; empty otherwise. Threaded into
+    # ``reindex_package`` so ``DecisionRecord.structured`` / ``verification`` are
+    # stamped from it before persistence (the deliverable, not a discarded value).
+    decision_structured: dict[str, tuple[dict[str, object], str]] = field(default_factory=dict)
 
 
 @runtime_checkable
