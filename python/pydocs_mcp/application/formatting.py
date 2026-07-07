@@ -29,7 +29,7 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from math import ceil
 from typing import TYPE_CHECKING, Literal
 
@@ -51,9 +51,11 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.decision_service import DecisionDashboard
     from pydocs_mcp.application.overview_service import OverviewCard
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.models import SearchResponse
+    from pydocs_mcp.storage.decision_record import DecisionRecord
     from pydocs_mcp.storage.node_reference import NodeReference
 
 # Approximate characters per token (conservative estimate for English text).
@@ -753,6 +755,150 @@ def format_overview_card(card: OverviewCard) -> str:
         _overview_entry_points_block(card),
         _overview_communities_block(card),
         _overview_dependency_block(card),
+    ]
+    out = "\n".join(blocks)
+    return out if out.endswith("\n") else out + "\n"
+
+
+# Staleness interpretation bands (spec §D10) — rendered, never stored. The
+# score is a re-verify flag for humans/agents, not a truth claim: ``< 0.3``
+# fresh, ``0.3–0.5`` drifting, ``> 0.5`` stale. Single source of truth for the
+# two thresholds so the band logic and any future consumer never drift.
+_STALENESS_DRIFTING_MIN = 0.3
+_STALENESS_STALE_MIN = 0.5
+
+# Cap on how many affected-qname next-step pointers a single record renders.
+# One pointer per qname floods a card that lists many affected symbols; §D5
+# wants a deepening hint, not an exhaustive index — three is the compromise.
+_MAX_AFFECTED_POINTERS = 3
+
+# Structured fields (spec §D12) rendered as prose sections when present, in this
+# order. Keys mirror ``extraction/decisions/structuring._STRUCTURED_FIELDS``;
+# ``title`` is omitted (it duplicates the record's bold header).
+_STRUCTURED_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("context", "Context"),
+    ("decision", "Decision"),
+    ("rationale", "Rationale"),
+    ("alternatives", "Alternatives"),
+    ("consequences", "Consequences"),
+)
+
+
+def _staleness_band(score: float) -> str:
+    """Map a staleness score to its interpretation band (spec §D10).
+
+    ``< 0.3`` → ``"fresh"``, ``0.3–0.5`` (inclusive) → ``"drifting"``,
+    ``> 0.5`` → ``"stale"``. Bands are a human/agent re-verify flag, not a
+    truth claim.
+    """
+    if score < _STALENESS_DRIFTING_MIN:
+        return "fresh"
+    if score <= _STALENESS_STALE_MIN:
+        return "drifting"
+    return "stale"
+
+
+def _decision_evidence_lines(record: DecisionRecord) -> str:
+    """One bullet per verbatim evidence span — ``locator`` cited verbatim (§D8)."""
+    return "".join(f"- `{ev.locator}` — {ev.text}\n" for ev in record.evidence)
+
+
+def _decision_structured_sections(record: DecisionRecord) -> str:
+    """Render the opt-in LLM-structured fields (§D12) as prose sections.
+
+    Only fields present in ``record.structured`` render. Empty when the record
+    carries no structured payload — the ``unverified`` caveat is emitted by the
+    block renderer, not here, since it applies to the whole record (§D12).
+    """
+    structured = record.structured
+    if not structured:
+        return ""
+    lines = [
+        f"_{label}:_ {value}\n"
+        for key, label in _STRUCTURED_SECTIONS
+        if (value := structured.get(key))
+    ]
+    return "".join(lines)
+
+
+def _decision_pointer_lines(record: DecisionRecord) -> str:
+    """One ``lookup`` pointer per affected qname, capped at ``_MAX_AFFECTED_POINTERS``."""
+    return "".join(
+        f"{pointer_token('lookup', qname)}\n"
+        for qname in record.affected_qnames[:_MAX_AFFECTED_POINTERS]
+    )
+
+
+def _decision_record_block(record: DecisionRecord) -> str:
+    """Render one decision record as a self-contained markdown card.
+
+    Layout: bold title + ``status · confidence · band`` line, verbatim evidence
+    citations, structured sections (when present), the supersession link (when
+    superseded), and one next-step pointer per affected qname (capped).
+    """
+    band = _staleness_band(record.staleness_score)
+    header = f"**{record.title}** — {record.status} · confidence {record.confidence:.2f} · {band}\n"
+    parts = [header, _decision_evidence_lines(record)]
+    # The unverified caveat is record-level (§D12): the record's fields came from
+    # an LLM structuring pass that wasn't evidence-grounded, so flag it whether or
+    # not structured prose is present.
+    if record.verification == "unverified":
+        parts.append("_unverified — not evidence-grounded_\n")
+    parts.append(_decision_structured_sections(record))
+    if record.superseded_by is not None:
+        parts.append(f"_superseded by #{record.superseded_by}_\n")
+    parts.append(_decision_pointer_lines(record))
+    return "".join(parts)
+
+
+def format_decision_records(records: tuple[DecisionRecord, ...], *, heading: str) -> str:
+    """Render mined decision records as the ``get_why`` search/target card body.
+
+    ``heading`` is the H1 (e.g. ``"Decisions matching 'sidecar'"`` or a target
+    card title). Each record renders via :func:`_decision_record_block`; blocks
+    are joined with ``"\\n"`` so a blank line separates consecutive cards, per
+    the module byte-parity contract. Always ends with a single trailing ``\\n``.
+    """
+    h1 = f"# {heading}\n"
+    if not records:
+        return f"{h1}\nNo decisions found.\n"
+    blocks = [h1, *(_decision_record_block(r) for r in records)]
+    out = "\n".join(blocks)
+    return out if out.endswith("\n") else out + "\n"
+
+
+def _decision_count_block(title: str, counts: Mapping[str, int]) -> str:
+    """``## {title}`` H2 with ``- key: n`` bullets in descending-count order."""
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    body = "".join(f"- {key}: {n}\n" for key, n in ordered)
+    return f"## {title}\n{body}"
+
+
+def _decision_summary_line(record: DecisionRecord) -> str:
+    """One-line record digest for dashboard lists — title + status + band."""
+    band = _staleness_band(record.staleness_score)
+    return f"- **{record.title}** — {record.status} · {band}\n"
+
+
+def format_decision_dashboard(summary: DecisionDashboard) -> str:
+    """Render the ``get_why`` governance dashboard (spec §D11 dashboard mode).
+
+    Five H2 blocks in fixed order — By status, By source, Stalest active,
+    Awaiting review, Ungoverned high-centrality modules — joined with ``"\\n"``
+    so a blank line separates them (module byte-parity contract). The stalest /
+    awaiting lists and ungoverned modules are already sliced/ranked by the
+    service. Always ends with a single trailing ``\\n``.
+    """
+    stalest_body = "".join(_decision_summary_line(r) for r in summary.stalest)
+    awaiting_body = "".join(_decision_summary_line(r) for r in summary.awaiting_review)
+    ungoverned_body = "".join(f"- `{qname}`\n" for qname in summary.ungoverned_modules)
+    blocks = [
+        "# Decision dashboard\n",
+        _decision_count_block("By status", summary.by_status),
+        _decision_count_block("By source", summary.by_source),
+        f"## Stalest active\n{stalest_body}",
+        f"## Awaiting review\n{awaiting_body}",
+        f"## Ungoverned high-centrality modules\n{ungoverned_body}",
     ]
     out = "\n".join(blocks)
     return out if out.endswith("\n") else out + "\n"
