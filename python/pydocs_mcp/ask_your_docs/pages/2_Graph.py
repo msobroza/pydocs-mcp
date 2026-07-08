@@ -116,13 +116,14 @@ svc = GraphService(SqliteBundleReader(db), hide_tests=hide_tests)
 focus_key = f"graph_focus::{project}::{content}"
 focus: str = st.session_state.get(focus_key, "")
 
-# Breadcrumb: each segment zooms back out to that level.
+# Breadcrumb: each segment zooms back out to that level. Weight each column by its
+# label length (+ a trailing spacer) so a long name keeps its button on one line —
+# a flat width-1 column squeezed long names into a tall one-char-per-line box.
 crumbs = _crumbs(focus, project)
-cols = st.columns([1] * len(crumbs) + [6])
-for i, (label, target) in enumerate(crumbs):
-    if cols[i].button(
-        ("📁 " if i == 0 else "") + label, key=f"crumb_{i}", disabled=(target == focus)
-    ):
+crumb_labels = [("📁 " if i == 0 else "") + label for i, (label, _t) in enumerate(crumbs)]
+cols = st.columns([*(max(4, len(lbl) + 2) for lbl in crumb_labels), 3])
+for i, (_label, target) in enumerate(crumbs):
+    if cols[i].button(crumb_labels[i], key=f"crumb_{i}", disabled=(target == focus)):
         st.session_state[focus_key] = target
         st.session_state.pop("graph_selected", None)
         st.rerun()
