@@ -98,7 +98,7 @@ ask-your-docs --workspace ~/pydocs-index --config configs/serve_cpu_openvino.yam
 `ask-your-docs` launches the Streamlit UI. Flags (`--workspace`, `--model`,
 `--base-url`, `--config`, `--port`) prefill the sidebar; anything after `--`
 is forwarded to `streamlit run` (e.g. `-- --server.headless true`). You can
-also set `PYDOCS_WORKSPACE`, `PYDOCS_MODEL`, `OPENAI_BASE_URL`, `PYDOCS_CONFIG`
+also set `PYDOCS_WORKSPACE`, `LLM_MODEL`, `OPENAI_BASE_URL`, `PYDOCS_CONFIG`
 in the environment instead. Answers cite `project` + `package.module` and
 render code in fenced blocks.
 

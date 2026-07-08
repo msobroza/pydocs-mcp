@@ -1,7 +1,7 @@
 """Streamlit chat UI for the ask-your-docs agent.
 
 Launched by the ``ask-your-docs`` CLI (``ask_your_docs.cli``). Connection
-settings prefill from env: PYDOCS_WORKSPACE, PYDOCS_MODEL, OPENAI_BASE_URL,
+settings prefill from env: PYDOCS_WORKSPACE, LLM_MODEL, OPENAI_BASE_URL,
 PYDOCS_CONFIG.
 """
 
@@ -63,7 +63,7 @@ with st.sidebar:
 
     st.markdown('<div class="side-label">Connection</div>', unsafe_allow_html=True)
     workspace = st.text_input("Workspace", os.environ.get("PYDOCS_WORKSPACE", ""))
-    model = st.text_input("Model", os.environ.get("PYDOCS_MODEL", "gpt-4o-mini"))
+    model = st.text_input("Model", os.environ.get("LLM_MODEL", "gpt-4o-mini"))
     base_url = st.text_input("Base URL (optional)", os.environ.get("OPENAI_BASE_URL", ""))
     config = st.text_input("pydocs config (optional)", os.environ.get("PYDOCS_CONFIG", ""))
     st.caption("Point Workspace at a folder of pydocs-mcp index bundles.")

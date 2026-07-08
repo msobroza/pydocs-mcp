@@ -17,7 +17,7 @@ from pydocs_mcp.ask_your_docs.theme import streamlit_theme_flags
 
 _ENV = {
     "workspace": "PYDOCS_WORKSPACE",
-    "model": "PYDOCS_MODEL",
+    "model": "LLM_MODEL",
     "base_url": "OPENAI_BASE_URL",
     "config": "PYDOCS_CONFIG",
 }
