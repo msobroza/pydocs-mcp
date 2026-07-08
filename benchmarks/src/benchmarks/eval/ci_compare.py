@@ -52,15 +52,18 @@ def main() -> int:
     args = parser.parse_args()
 
     # WHY BaselineRecord: the single read model for baseline JSONs
-    # (stdlib-only module) instead of re-encoding the JSON shape here. A
-    # malformed baseline — missing top-level field OR missing metric — is
-    # an input error → exit 2.
+    # (stdlib-only module) instead of re-encoding the JSON shape here. ANY
+    # unreadable baseline is an input error → exit 2: missing file
+    # (FileNotFoundError ⊂ OSError), corrupt JSON (JSONDecodeError ⊂
+    # ValueError), missing top-level field or metric (KeyError). Letting
+    # these escape as tracebacks made the interpreter exit 1 — the
+    # "regression detected" code — misclassifying input errors.
     try:
         baseline = BaselineRecord.from_path(args.baseline)
         baseline_mean = baseline.metrics[args.metric]["mean"]
-    except KeyError:
+    except (OSError, ValueError, KeyError) as exc:
         print(
-            f"::error::Baseline {args.baseline} is missing metric {args.metric!r}",
+            f"::error::Cannot read metric {args.metric!r} from baseline {args.baseline}: {exc!r}",
             file=sys.stderr,
         )
         return 2
@@ -76,7 +79,11 @@ def main() -> int:
     latest = max(jsonl_files, key=lambda p: Path(p).stat().st_mtime)
     current_mean: float | None = None
     for line in Path(latest).read_text().splitlines():
-        rec = json.loads(line)
+        try:
+            rec = json.loads(line)
+        except ValueError as exc:
+            print(f"::error::Corrupt JSONL line in {latest}: {exc!r}", file=sys.stderr)
+            return 2
         if rec.get("_event") == "metric" and rec.get("name") == f"{args.metric}_mean":
             current_mean = float(rec["value"])
 
