@@ -145,3 +145,43 @@ def expand(db_path: Path, node_id: str, node_type: str, kinds: frozenset[str]) -
         edges.append(Edge(from_id, to_id, kind))
         nodes[other] = Node(other, _short(other), member_types.get(other, "function"))
     return Graph(tuple(nodes.values()), tuple(edges), truncated=max(0, total - len(edges)))
+
+
+_STRUCTURAL = frozenset({"contains", "documents", "concerns"})
+
+
+def node_meta(db_path: Path, node_id: str, node_type: str) -> NodeMeta | None:
+    """Detail card for one node: name + signature + docstring for a class/function,
+    path + member count for a module, else ``None``."""
+    with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
+        if node_type in {"class", "function"}:
+            module, _, name = node_id.rpartition(".")
+            row = conn.execute(
+                "SELECT name, signature, docstring FROM module_members "
+                "WHERE package=? AND module=? AND name=?",
+                (_OWN, module, name),
+            ).fetchone()
+            if row is None:
+                return None
+            body = "\n\n".join(part for part in (row[1], row[2]) if part)
+            return NodeMeta(node_id, node_type, row[0], body)
+        if node_type == "module":
+            members = conn.execute(
+                "SELECT COUNT(*) FROM module_members WHERE package=? AND module=?",
+                (_OWN, node_id),
+            ).fetchone()[0]
+            return NodeMeta(node_id, "module", node_id, f"{members} members")
+    return None
+
+
+def induce(g: Graph, node_types: frozenset[str], edge_kinds: frozenset[str]) -> Graph:
+    """Keep nodes whose type is enabled; keep an edge when both endpoints survive
+    AND (its kind is enabled OR it is structural)."""
+    nodes = tuple(n for n in g.nodes if n.node_type in node_types)
+    ids = {n.id for n in nodes}
+    edges = tuple(
+        e
+        for e in g.edges
+        if e.source in ids and e.target in ids and (e.kind in edge_kinds or e.kind in _STRUCTURAL)
+    )
+    return Graph(nodes, edges, g.truncated)

@@ -113,3 +113,37 @@ def test_expand_caps_neighbors(tmp_path):
     g = graph.expand(db, "hub.f", "function", kinds=frozenset({"calls"}))
     assert g.truncated == 5
     assert len(g.edges) == graph.MAX_NEIGHBORS
+
+
+def test_node_meta_member_has_signature_and_docstring(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[("mod_a", "Foo", "class")],
+        docstrings={"mod_a.Foo": "The Foo class."},
+    )
+    meta = graph.node_meta(db, "mod_a.Foo", "class")
+    assert meta is not None and "Foo" in meta.title and "The Foo class." in meta.body
+
+
+def test_induce_filters_by_node_type_and_edge_kind():
+    from pydocs_mcp.ask_your_docs import graph
+
+    g = graph.Graph(
+        nodes=(
+            graph.Node("m", "m", "module"),
+            graph.Node("m.C", "C", "class"),
+            graph.Node("m.f", "f", "function"),
+        ),
+        edges=(
+            graph.Edge("m", "m.C", "contains"),
+            graph.Edge("m.C", "m.f", "calls"),
+        ),
+    )
+    out = graph.induce(
+        g, node_types=frozenset({"module", "class"}), edge_kinds=frozenset({"calls"})
+    )
+    assert {n.id for n in out.nodes} == {"m", "m.C"}
+    assert {(e.source, e.target, e.kind) for e in out.edges} == {("m", "m.C", "contains")}
