@@ -49,12 +49,23 @@ def _check_schema_version_readable(db_path: Path) -> None:
     through ``open_index_database`` — that function's job is to migrate (or,
     for unrecognized versions, rebuild) the file it opens, which is exactly
     the destructive path this check exists to preempt.
+
+    Raises ``sqlite3.DatabaseError`` naming ``db_path`` if the file is not a
+    readable SQLite database (truncated/garbage bytes, a directory named
+    ``*.db``, a permission-denied file, ...). ``sqlite3``'s own message
+    ("file is not a database") never includes the path, which is unlocatable
+    in a workspace of many bundles (see :func:`discover_workspace`) — wrap and
+    re-raise with ``db_path`` attached so the operator can identify the
+    offending bundle without bisecting the workspace by hand.
     """
-    conn = sqlite3.connect(str(db_path))
     try:
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-    finally:
-        conn.close()
+        conn = sqlite3.connect(str(db_path))
+        try:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        raise sqlite3.DatabaseError(f"{db_path}: {exc}") from exc
     if version > SCHEMA_VERSION:
         raise FutureSchemaError(
             f"index database {db_path} was built with schema version {version}, "

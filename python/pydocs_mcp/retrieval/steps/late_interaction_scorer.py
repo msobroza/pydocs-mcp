@@ -17,6 +17,7 @@ mutation follows the "fresh dict" rule
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -26,6 +27,8 @@ from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.protocols import MultiVectorEmbedder
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 from pydocs_mcp.storage.protocols import UnitOfWork
+
+log = logging.getLogger(__name__)
 
 # WHY: single source of truth for the late-interaction cutoff.
 # Referenced from the dataclass field default + to_dict (omit-when-default)
@@ -94,6 +97,21 @@ class LateInteractionScorerStep(RetrieverStep):
             for cid, score in ranked
             if cid in chunk_by_id
         ]
+        # WHY: a dropped candidate is a silent recall collapse when it
+        # happens at scale (e.g. late_interaction.enabled flipped on
+        # against a pre-existing index, or a failed fast-plaid write) —
+        # indistinguishable from "no matches" to the caller. Log loudly
+        # so the operator can diagnose partial multi-vector ingestion
+        # instead of mistaking it for a genuinely empty result set.
+        dropped = len(ids) - len(scored)
+        if dropped:
+            log.warning(
+                "late_interaction_scorer: %d/%d candidate(s) had no "
+                "persisted multi-vector and were dropped (partial "
+                "multi-vector ingestion — see chunk_multi_vector_ids)",
+                dropped,
+                len(ids),
+            )
         # Backend returns ranked already, but re-sort defensively so the
         # output contract is "descending by relevance" regardless of
         # backend ordering quirks.

@@ -41,15 +41,27 @@ def render_envelope_header(info: EnvelopeInfo | None) -> str:
     return "\n".join(lines)
 
 
-def render_envelope_footer(ledger: TruncationLedger, surface: str) -> str:
-    """The ``[truncated: …]`` block — one line per elision, pointer resolved."""
+def render_envelope_footer(
+    ledger: TruncationLedger, surface: str, *, pointers_enabled: bool
+) -> str:
+    """The ``[truncated: …]`` block — one line per elision, pointer resolved.
+
+    ``pointers_enabled`` mirrors the body-side contract in ``wrap()``: a
+    deployment with pointers disabled must not leak "-> get_symbol(...)"
+    syntax anywhere in the response, footer included.
+    """
     if not ledger.entries:
         return ""
     n = len(ledger.entries)
     plural = "" if n == 1 else "s"
     lines = [f"[truncated: {n} section{plural} — recovery pointers inline]"]
     for entry in ledger.entries:
-        recovery = resolve_pointers(entry.recovery, surface) if entry.recovery else ""
+        if not entry.recovery:
+            recovery = ""
+        elif pointers_enabled:
+            recovery = resolve_pointers(entry.recovery, surface)
+        else:
+            recovery = strip_pointers(entry.recovery).rstrip("\n")
         lines.append(f"- {entry.description} {recovery}".rstrip())
     return "\n".join(lines)
 
@@ -69,6 +81,8 @@ class ResponseEnvelope:
             resolve_pointers(body, self.surface) if self.pointers_enabled else strip_pointers(body)
         )
         header = render_envelope_header(await self.probe.envelope_info())
-        footer = render_envelope_footer(ledger, self.surface)
+        footer = render_envelope_footer(
+            ledger, self.surface, pointers_enabled=self.pointers_enabled
+        )
         parts = [p for p in (header, body.rstrip("\n"), footer) if p]
         return "\n\n".join(parts) + "\n"

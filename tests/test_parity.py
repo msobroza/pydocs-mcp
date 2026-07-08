@@ -34,12 +34,12 @@ class TestParsePyFileParity:
 
     def test_multibyte_docstring_straddling_lookahead(self):
         # 300 two-byte (é) code points: 300 chars but 600 bytes, so this
-        # closes within a code-point-bounded 500-char lookahead but not a
-        # byte-bounded 500-byte one. Both sides now use byte-bounded
-        # DOCSTRING_LOOKAHEAD (src/lib.rs's safe_truncate, mirrored by
-        # _fallback._safe_truncate) so both should identically fail to find
-        # the docstring here — this pins that parity (constants.py's "SYNC:"
-        # note).
+        # closes within a code-point-bounded 500-char lookahead but past a
+        # byte-bounded 500-byte one. Both sides truncate DOCSTRING_LOOKAHEAD
+        # by CHARACTERS (src/lib.rs's safe_truncate is char-based; the
+        # Python fallback's plain `[:N]` slice is char-based on `str`), so
+        # both engines find the docstring in full here — this pins that
+        # parity (constants.py's "SYNC:" note).
         doc_body = "é" * 300
         src = f'def foo(x):\n    """{doc_body}"""\n    pass\n'
         assert len(doc_body) < DOCSTRING_LOOKAHEAD
@@ -77,10 +77,9 @@ class TestExtractModuleDocParity:
 
     def test_multibyte_docstring_beyond_max(self):
         # 2-byte code points, well past MODULE_DOCSTRING_MAX in both chars and
-        # bytes. Both sides truncate to MODULE_DOCSTRING_MAX *bytes* (Rust's
-        # safe_truncate, mirrored by _fallback._safe_truncate), rounded down
-        # to a char boundary — for 2-byte text that keeps roughly half as
-        # many characters as a naive code-point slice would. A drop-in
+        # bytes. Both sides truncate to MODULE_DOCSTRING_MAX *characters*
+        # (Rust's safe_truncate counts chars via char_indices; the Python
+        # fallback's plain `[:N]` slice counts chars on `str`) — a drop-in
         # fallback (per CLAUDE.md's fallback contract) must match exactly.
         doc_body = "é" * (MODULE_DOCSTRING_MAX + 1000)
         src = f'"""{doc_body}"""\n\nimport os\n'
