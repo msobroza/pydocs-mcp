@@ -147,12 +147,15 @@ async def test_vector_store_text_search_invalid_column(db_file):
         )
 
 
-def test_lexical_store_rename_keeps_deprecated_alias() -> None:
-    """SqliteLexicalStore is the real name (FTS5/BM25 TextSearchable leg);
-    SqliteVectorStore survives one release as a deprecated alias so
-    external imports keep working."""
+def test_lexical_store_is_the_only_exported_name() -> None:
+    """SqliteLexicalStore is the real name (FTS5/BM25 TextSearchable leg).
+    The deprecated SqliteVectorStore alias from the rename has been removed —
+    guard against it silently reappearing in the export surface."""
+    import pydocs_mcp.storage as storage_pkg
+    import pydocs_mcp.storage.sqlite as sqlite_pkg
     from pydocs_mcp.storage import SqliteLexicalStore as pkg_export
-    from pydocs_mcp.storage.sqlite import SqliteLexicalStore, SqliteVectorStore
+    from pydocs_mcp.storage.sqlite import SqliteLexicalStore
 
-    assert SqliteVectorStore is SqliteLexicalStore
     assert pkg_export is SqliteLexicalStore
+    assert not hasattr(sqlite_pkg, "SqliteVectorStore")
+    assert not hasattr(storage_pkg, "SqliteVectorStore")

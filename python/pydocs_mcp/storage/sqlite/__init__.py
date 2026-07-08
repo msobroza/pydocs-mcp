@@ -37,10 +37,7 @@ from pydocs_mcp.storage.sqlite.filter_adapter import (
     SqliteFilterAdapter,
     _SqliteFilterTranslator,
 )
-from pydocs_mcp.storage.sqlite.fts_store import (
-    SqliteLexicalStore,
-    SqliteVectorStore,
-)
+from pydocs_mcp.storage.sqlite.fts_store import SqliteLexicalStore
 from pydocs_mcp.storage.sqlite.module_member_repository import SqliteModuleMemberRepository
 from pydocs_mcp.storage.sqlite.node_score_repository import (
     SqliteNodeScoreRepository,
@@ -80,7 +77,6 @@ __all__ = [
     "SqlitePackageRepository",
     "SqliteReferenceStore",
     "SqliteUnitOfWork",
-    "SqliteVectorStore",
     "_SqliteFilterTranslator",
     "_build_fts_match_query",
     "_chunk_to_row",

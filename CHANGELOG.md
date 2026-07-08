@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`SqliteVectorStore` deprecated alias** — the class was renamed
+  `SqliteLexicalStore` (it is the FTS5/BM25 lexical store, not a vector
+  store); the back-compat alias is gone from `pydocs_mcp.storage` and
+  `pydocs_mcp.storage.sqlite`. Import `SqliteLexicalStore` instead.
+
 ### Fixed
 
 - **Docs modernized to the six task-shaped MCP surface** — README,

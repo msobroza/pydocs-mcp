@@ -99,9 +99,3 @@ class SqliteLexicalStore:
                 )
             )
         return tuple(items)
-
-
-# Deprecated alias — the class was renamed because it is the FTS5/BM25
-# LEXICAL store (TextSearchable), not a vector store (the dense store is
-# TurboQuantVectorStore). Kept one release so external imports keep working.
-SqliteVectorStore = SqliteLexicalStore

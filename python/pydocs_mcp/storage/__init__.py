@@ -37,7 +37,6 @@ from pydocs_mcp.storage.sqlite import (
     SqlitePackageRepository,
     SqliteReferenceStore,
     SqliteUnitOfWork,
-    SqliteVectorStore,
 )
 
 __all__ = [
@@ -68,7 +67,6 @@ __all__ = [
     "SqlitePackageRepository",
     "SqliteReferenceStore",
     "SqliteUnitOfWork",
-    "SqliteVectorStore",
     "TextSearchable",
     "UnitOfWork",
     "UnitOfWorkNotEnteredError",

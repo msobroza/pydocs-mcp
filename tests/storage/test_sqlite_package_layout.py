@@ -16,7 +16,7 @@ import pydocs_mcp.storage.sqlite as sqlite_pkg
 # Exact mirror of the pre-split module namespace (post-PR-D: FTS builder
 # was already extracted to storage/fts_query, so _FTS_OPS / _FTS_SAFE_TOKEN
 # are absent; SqliteLexicalStore is the canonical class name for the FTS5
-# text-search view with SqliteVectorStore kept as a deprecated alias).
+# text-search view — its deprecated SqliteVectorStore alias has been removed).
 _EXPECTED_SURFACE = (
     "CHUNK_COLUMNS",
     "SqliteChunkMultiVectorRepository",
@@ -29,7 +29,6 @@ _EXPECTED_SURFACE = (
     "SqlitePackageRepository",
     "SqliteReferenceStore",
     "SqliteUnitOfWork",
-    "SqliteVectorStore",
     "_MEMBER_COLUMNS",
     "_PACKAGE_COLUMNS",
     "_SqliteFilterTranslator",
