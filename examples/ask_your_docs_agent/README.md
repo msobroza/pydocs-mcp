@@ -79,6 +79,15 @@ choice is enforced deterministically rather than trusted to the model. The
 question is also prefixed with a `[pinned scope: ...]` note so the agent knows
 why. Toggle **Light mode** at the top of the sidebar to switch the palette.
 
+### Graph explorer
+
+The app has a second page (sidebar → **Graph**) that visualizes a project's
+structure: a module overview, click a node to open its connections, docstrings
+in a side panel, and filters for node type and relationship (calls / imports /
+inherits). Click **➕ Add to question** on a node to attach it to your next chat
+question. The page reads the index bundles directly (read-only) — no model
+calls.
+
 ## Why two embedding configs?
 
 Embedding the *corpus* is the expensive part, so it runs once on GPU
