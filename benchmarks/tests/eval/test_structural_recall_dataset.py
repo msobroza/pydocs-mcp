@@ -87,7 +87,10 @@ def test_exp_dense_graph_pipeline_inserts_graph_expand_before_topk() -> None:
     types = [s["type"] for s in cfg["steps"]]
     assert "graph_expand" in types
     assert "rrf_fusion" not in types and "bm25_scorer" not in types  # embedding-centric
-    assert types.index("dense_scorer") < types.index("graph_expand") < types.index("top_k_filter")
+    # No dense_scorer in a pure-dense pipeline: dense_fetcher's ANN index score
+    # IS the turbovec relevance (dense_scorer is a POST-FUSION re-ranker only).
+    assert "dense_scorer" not in types
+    assert types.index("dense_fetcher") < types.index("graph_expand") < types.index("top_k_filter")
 
 
 @pytest.mark.parametrize("cfg_name", ["repoqa_dense_graph_f2llm330m", "repoqa_dense_f2llm330m"])

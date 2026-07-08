@@ -13,9 +13,6 @@ steps:
   - name: fetch
     type: dense_fetcher
     params: {}
-  - name: score
-    type: dense_scorer
-    params: {}
   - name: filter
     type: metadata_post_filter
     params: {}

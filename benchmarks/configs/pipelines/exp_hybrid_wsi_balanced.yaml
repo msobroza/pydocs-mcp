@@ -21,7 +21,6 @@ steps:
         - name: dense
           steps:
             - {name: fetch, type: dense_fetcher, params: {}}
-            - {name: score, type: dense_scorer, params: {}}
             - {name: filter, type: metadata_post_filter, params: {}}
             - {name: topk, type: top_k_filter, params: {publish_to: dense.ranked}}
   - name: fuse
@@ -29,6 +28,9 @@ steps:
     params:
       branch_keys: [bm25.ranked, dense.ranked]
       weights: [0.5, 0.5]
+  - name: dense_rerank
+    type: dense_scorer
+    params: {}
   - name: limit
     type: limit
     params:
