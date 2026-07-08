@@ -127,6 +127,18 @@ def scope_prefix(scope: ToolScope) -> str:
     return f"[pinned scope: {', '.join(parts)}] " if parts else ""
 
 
+def weave_attachments(attached: list[str], question: str) -> str:
+    """Prepend de-duped attached symbols to a question as plain context text."""
+    seen: dict[str, None] = {}
+    for a in attached:
+        if a:
+            seen.setdefault(a, None)
+    if not seen:
+        return question
+    names = ", ".join(f"`{a}`" for a in seen)
+    return f"Regarding {names}: {question}"
+
+
 async def build_agent(
     workspace: str,
     model: str,
