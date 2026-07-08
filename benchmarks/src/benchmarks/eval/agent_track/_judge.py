@@ -253,11 +253,14 @@ class RealJudge:
         prompt, label_map = build_judge_prompt(
             question=question, gold=gold, answers=answers, rng_seed=self.rng_seed
         )
+        # no_tools=True yields --allowedTools "" — the judge is tool-less so it
+        # scores on the two answers + gold alone, never the filesystem. max_turns=1
+        # bounds it further; the empty tool surface is what actually enforces it.
         arm = ArmConfig(
             name="judge",
             model=self.judge_model,
             max_turns=_JUDGE_MAX_TURNS,
-            mcp=False,
+            no_tools=True,
         )
         metrics: RunMetrics | None = await self.runner.run(
             arm, prompt=prompt, cwd=self.cwd, mcp_config=None

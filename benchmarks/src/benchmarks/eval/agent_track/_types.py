@@ -82,14 +82,28 @@ class JudgeScore:
 
 @dataclass(frozen=True, slots=True)
 class ArmConfig:
-    """One arm's CLI knobs. ``mcp`` is the arm's defining difference: the
-    bare arm runs with file tools only; the indexed arm attaches the
-    pydocs-mcp MCP server."""
+    """One arm's CLI knobs. ``mcp`` is the arm's defining difference between the
+    two measured arms: the bare arm runs with file tools only; the indexed arm
+    attaches the pydocs-mcp MCP server. ``no_tools`` is a THIRD profile the blind
+    judge uses — an empty tool surface (``--allowedTools ""``) so it scores on the
+    two answers + gold alone and cannot go exploring the filesystem. ``no_tools``
+    takes precedence over ``mcp`` (a tool-less arm has no MCP either)."""
 
     name: str
     model: str = _DEFAULT_MODEL
     max_turns: int = _DEFAULT_MAX_TURNS
     mcp: bool = False
+    no_tools: bool = False
+
+    def __post_init__(self) -> None:
+        # A tool-less arm attaching an MCP server is contradictory — the empty
+        # tool surface is the whole point of the judge arm. Fail loud at the
+        # boundary rather than silently emit a surface that grants MCP tools.
+        if self.no_tools and self.mcp:
+            raise ValueError(
+                f"arm {self.name!r} sets both no_tools and mcp: a tool-less arm "
+                "cannot attach an MCP server (no_tools takes precedence)"
+            )
 
 
 def _default_arms() -> tuple[ArmConfig, ArmConfig]:

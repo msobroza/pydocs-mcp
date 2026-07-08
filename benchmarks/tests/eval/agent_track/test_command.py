@@ -27,12 +27,21 @@ def _arm(*, mcp: bool) -> ArmConfig:
     return ArmConfig(name="indexed" if mcp else "bare", mcp=mcp)
 
 
+def _allowed_tools_value(cmd: list[str]) -> str:
+    # The token immediately after ``--allowedTools`` is the grant string; return
+    # it as a first-class value so a test can pin its exact contents (e.g. "").
+    idx = cmd.index("--allowedTools")
+    return cmd[idx + 1]
+
+
 def test_bare_arm_restricts_to_file_tools(tmp_path: Path) -> None:
     cmd = build_claude_command(_arm(mcp=False), prompt="q?", cwd=tmp_path, mcp_config=None)
     joined = " ".join(cmd)
     assert "--allowedTools" in joined and "mcp__" not in joined
     assert "--output-format" in joined and "stream-json" in joined
     assert "--model claude-sonnet-5" in joined and "--max-turns 40" in joined
+    # Bare arm keeps its file tools exactly (unchanged by the no-tools profile).
+    assert _allowed_tools_value(cmd) == "Read Grep Glob Bash"
 
 
 def test_indexed_arm_attaches_strict_mcp_config(tmp_path: Path) -> None:
@@ -40,6 +49,28 @@ def test_indexed_arm_attaches_strict_mcp_config(tmp_path: Path) -> None:
     cmd = build_claude_command(_arm(mcp=True), prompt="q?", cwd=tmp_path, mcp_config=cfg)
     joined = " ".join(cmd)
     assert f"--mcp-config {cfg}" in joined and "--strict-mcp-config" in joined
+    # Indexed arm keeps file tools + the pydocs-mcp wildcard (unchanged).
+    assert _allowed_tools_value(cmd) == "Read Grep Glob Bash mcp__pydocs-mcp__*"
+
+
+def test_no_tools_arm_emits_empty_allowed_tools(tmp_path: Path) -> None:
+    # The judge arm is tool-less: --allowedTools must be followed by exactly the
+    # empty string, and NO file/search/MCP grant may appear anywhere in the argv.
+    arm = ArmConfig(name="judge", no_tools=True)
+    cmd = build_claude_command(arm, prompt="q?", cwd=tmp_path, mcp_config=None)
+    assert _allowed_tools_value(cmd) == ""
+    joined = " ".join(cmd)
+    for grant in ("Read", "Grep", "Glob", "Bash", "mcp__"):
+        assert grant not in joined
+
+
+def test_no_tools_arm_ignores_mcp_config(tmp_path: Path) -> None:
+    # A tool-less arm attaches no MCP server even if a config path is supplied —
+    # the empty tool surface is the whole point (mcp defaults False, no_tools wins).
+    arm = ArmConfig(name="judge", no_tools=True)
+    cmd = build_claude_command(arm, prompt="q?", cwd=tmp_path, mcp_config=tmp_path / "mcp.json")
+    joined = " ".join(cmd)
+    assert "--mcp-config" not in joined and "--strict-mcp-config" not in joined
 
 
 def test_mcp_json_launches_pydocs_serve(tmp_path: Path) -> None:

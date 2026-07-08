@@ -47,6 +47,19 @@ def test_arm_config_command_relevant_fields() -> None:
     bare = ArmConfig(name="bare", model="claude-sonnet-5", max_turns=40, mcp=False)
     indexed = ArmConfig(name="indexed", model="claude-sonnet-5", max_turns=40, mcp=True)
     assert bare.mcp is False and indexed.mcp is True
+    # no_tools defaults False so the two measured arms keep their current surface.
+    assert bare.no_tools is False and indexed.no_tools is False
+
+
+def test_arm_config_tool_less_profile() -> None:
+    judge = ArmConfig(name="judge", no_tools=True)
+    assert judge.no_tools is True and judge.mcp is False
+
+
+def test_arm_config_rejects_tool_less_with_mcp() -> None:
+    # A tool-less arm cannot also attach MCP — contradictory, fails at construction.
+    with pytest.raises(ValueError):
+        ArmConfig(name="judge", no_tools=True, mcp=True)
 
 
 def test_track_config_defaults_and_guardrails() -> None:

@@ -32,9 +32,13 @@ _CLI_FLAGS = {
 }
 
 # Bare arm: file/search tools only — no MCP surface. The indexed arm appends the
-# pydocs-mcp wildcard so its runs may call the six task-shaped MCP tools.
+# pydocs-mcp wildcard so its runs may call the six task-shaped MCP tools. The
+# tool-less arm (blind judge) grants NOTHING — the empty string passed to
+# ``--allowedTools`` so the judge scores on answers + gold alone and cannot
+# inspect the filesystem. Single source of truth for each profile's grant.
 _BARE_TOOLS = "Read Grep Glob Bash"
 _MCP_WILDCARD = "mcp__pydocs-mcp__*"
+_NO_TOOLS = ""
 
 # stream-json is required for per-event tool_use / usage folding (see _parse.py);
 # --verbose is required by the CLI when stream-json is combined with -p.
@@ -55,12 +59,18 @@ def build_claude_command(
 ) -> list[str]:
     """Assemble the headless ``claude -p`` argv for one arm.
 
-    Both arms share model / turns / output-format / prompt; the ONLY difference
-    is the tool surface — the bare arm restricts to ``Read Grep Glob Bash``, the
-    indexed arm additionally allows ``mcp__pydocs-mcp__*`` and attaches exactly
-    one strict MCP config. ``cwd`` is the repository the process runs in; the
-    subprocess adapter (later task) passes it as the child's working directory,
-    so it is not an argv flag here.
+    All arms share model / turns / output-format / prompt; the ONLY difference is
+    the tool surface, driven by three profiles:
+
+    - bare (``mcp=False``): restricts to ``Read Grep Glob Bash``.
+    - indexed (``mcp=True``): additionally allows ``mcp__pydocs-mcp__*`` and
+      attaches exactly one strict MCP config.
+    - tool-less (``no_tools=True``): grants NOTHING — ``--allowedTools ""`` and no
+      MCP config, so the blind judge scores on answers + gold alone and cannot
+      inspect the filesystem. ``no_tools`` takes precedence over ``mcp``.
+
+    ``cwd`` is the repository the process runs in; the subprocess adapter passes
+    it as the child's working directory, so it is not an argv flag here.
 
     Example:
         >>> build_claude_command(  # doctest: +SKIP
@@ -69,7 +79,7 @@ def build_claude_command(
         ['claude', '-p', 'q?', '--output-format', 'stream-json', ...]
     """
     _ = cwd  # child process cwd, wired by the subprocess adapter — not an argv flag
-    allowed = _BARE_TOOLS if not arm.mcp else f"{_BARE_TOOLS} {_MCP_WILDCARD}"
+    allowed = _allowed_tools(arm)
     cmd = [
         "claude",
         _CLI_FLAGS["print"],
@@ -93,6 +103,15 @@ def build_claude_command(
             _CLI_FLAGS["strict_mcp_config"],
         ]
     return cmd
+
+
+def _allowed_tools(arm: ArmConfig) -> str:
+    # Select the arm's tool grant. ``no_tools`` wins over ``mcp`` (a tool-less arm
+    # has no MCP either); ``ArmConfig.__post_init__`` already rejects the
+    # contradictory ``no_tools and mcp`` combination, so the order here is safe.
+    if arm.no_tools:
+        return _NO_TOOLS
+    return f"{_BARE_TOOLS} {_MCP_WILDCARD}" if arm.mcp else _BARE_TOOLS
 
 
 def render_mcp_config(*, corpus_dir: Path, python: Path) -> str:

@@ -15,13 +15,15 @@ from pathlib import Path
 import pytest
 
 from benchmarks.eval.agent_track import _judge
+from benchmarks.eval.agent_track._command import build_claude_command
 from benchmarks.eval.agent_track._judge import (
     FakeJudge,
     Judge,
+    RealJudge,
     build_judge_prompt,
     parse_judge_reply,
 )
-from benchmarks.eval.agent_track._types import JudgeScore
+from benchmarks.eval.agent_track._types import ArmConfig, JudgeScore, RunMetrics
 
 # Pin the exported downstream seam (slice-6 contract): the ``Judge`` Protocol is
 # imported so a rename fails this module, not just Task 6's orchestrator tests.
@@ -142,3 +144,50 @@ async def test_fake_judge_can_return_none() -> None:
     # Judge failure is a first-class outcome the orchestrator must handle.
     judge = FakeJudge(scores=None)
     assert await judge.score(question="q", gold="g", answers=_ANS) is None
+
+
+class _CapturingRunner:
+    """Records the ``ArmConfig`` the judge hands the runner, then scripts a reply.
+
+    Lets a subprocess-free test assert the judge builds a TOOL-LESS arm — the
+    captured arm is fed straight into ``build_claude_command`` so the pinned
+    surface is the real one the subprocess adapter would spawn.
+    """
+
+    def __init__(self) -> None:
+        self.arm: ArmConfig | None = None
+
+    async def run(self, arm, *, prompt, cwd, mcp_config) -> RunMetrics:
+        _ = (prompt, cwd, mcp_config)
+        self.arm = arm
+        return RunMetrics(
+            cost_usd=0.0,
+            wall_seconds=0.0,
+            turns=1,
+            tool_calls=0,
+            distinct_files_read=0,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            answer=(
+                '{"A": {"correctness": 9, "completeness": 8, "relevance": 9, '
+                '"clarity": 9, "reasoning": 8}, '
+                '"B": {"correctness": 4, "completeness": 3, "relevance": 5, '
+                '"clarity": 6, "reasoning": 4}}'
+            ),
+        )
+
+
+async def test_real_judge_arm_is_tool_less(tmp_path: Path) -> None:
+    # FINDING FIX: the blind judge must be tool-less. Capture the arm the judge
+    # builds and assert the actual command it drives emits --allowedTools "" with
+    # no file/shell/MCP grant — so the judge scores on answers + gold alone.
+    runner = _CapturingRunner()
+    judge = RealJudge(runner=runner, judge_model="claude-sonnet-5", rng_seed=0, cwd=tmp_path)
+    await judge.score(question="q?", gold="g", answers=_ANS)
+    assert runner.arm is not None
+    cmd = build_claude_command(runner.arm, prompt="q?", cwd=tmp_path, mcp_config=None)
+    idx = cmd.index("--allowedTools")
+    assert cmd[idx + 1] == ""  # exactly the empty string — no tools granted
+    joined = " ".join(cmd)
+    for grant in ("Read", "Bash", "Grep", "Glob", "mcp__"):
+        assert grant not in joined
