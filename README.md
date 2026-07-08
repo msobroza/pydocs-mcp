@@ -155,6 +155,23 @@ over a dependency copy, and among duplicate dependencies the most-recently-index
 one is kept. Every loaded db must share the configured embedder — a mismatch
 fails fast (a read-only load can't re-embed an absent project).
 
+### Ask your docs — chat agent (optional)
+
+A LangGraph ReAct agent plus a Streamlit chat UI over the MCP server, for
+asking questions across your indexed repos in natural language. Install the
+`ask-your-docs` extra and run its command:
+
+```bash
+pip install 'pydocs-mcp[ask-your-docs]'
+ask-your-docs --workspace ~/pydocs-index
+```
+
+Sidebar pickers pin a project / package / own-code-vs-dependency slice (enforced
+on every tool call, not left to the model), and answers cite `project` +
+`package.module` with a runnable usage snippet. Configuration and the
+GPU-index / CPU-serve recipe live in
+[examples/ask_your_docs_agent](examples/ask_your_docs_agent/README.md).
+
 ### Fast dependency indexing (selective embedding)
 
 Everything is BM25/FTS-indexed, but **dense embedding is selective by package

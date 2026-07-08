@@ -1,8 +1,9 @@
 # Ask-your-docs agent
 
-A minimal **LangGraph ReAct** conversational agent that uses **pydocs-mcp** as
-its tool server to answer questions about the documentation and code of your
-indexed projects — as a Streamlit webapp or in a notebook.
+A **LangGraph ReAct** conversational agent that uses **pydocs-mcp** as its tool
+server to answer questions about the documentation and code of your indexed
+projects, with a **Streamlit** chat UI. It ships inside pydocs-mcp behind the
+`ask-your-docs` extra, so installing it adds the `ask-your-docs` command.
 
 What it demonstrates:
 
@@ -11,7 +12,13 @@ What it demonstrates:
 - **Grounded answers**: a system prompt that forces every answer through the
   pydocs-mcp tools (`search_codebase`, `get_symbol`, `get_references`, …),
   cites `project` + `package.module`, infers the right project when the user
-  doesn't name one, and asks a clarifying question when things stay ambiguous.
+  doesn't name one, asks a clarifying question when things stay ambiguous, and
+  ends with a runnable usage-example snippet built from the retrieved
+  signatures.
+- **Scoped retrieval**: sidebar pickers pin a project / package / own-code-vs-
+  dependencies slice, enforced deterministically on the tool calls (a
+  `langchain-mcp-adapters` interceptor rewrites the arguments) rather than left
+  to the model.
 - **Conversation memory**: the last N messages are kept, and follow-up
   questions are **reformulated** into standalone queries before hitting the
   tools ("what does *it* return?" → "what does `backend.db.Pool.acquire`
@@ -21,13 +28,24 @@ What it demonstrates:
 - **GPU indexing, CPU serving**: embed the corpus once on GPU
   (Qwen3-Embedding-4B, torch), then serve queries on CPU via OpenVINO.
 
+The code lives in `pydocs_mcp/ask_your_docs/`; this directory holds the two
+embedding configs and this guide.
+
 ## Setup
 
 ```bash
-cd examples/ask_your_docs_agent
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # pydocs-mcp from this repo + agent + streamlit
-export OPENAI_API_KEY=sk-...             # any placeholder works for local servers
+pip install "pydocs-mcp[ask-your-docs]"          # from PyPI
+# ...or from a checkout of this repo:
+#   pip install -e ".[ask-your-docs]"
+
+export OPENAI_API_KEY=sk-...   # any placeholder works for local servers
+```
+
+The agent works out of the box with the default fastembed embedder. For the
+Qwen3 GPU-index / CPU-serve recipe below, also install the embedder extras:
+
+```bash
+pip install "pydocs-mcp[ask-your-docs,sentence-transformers,openvino]"
 ```
 
 ## 1. Index your repos (GPU, once per repo)
@@ -40,31 +58,26 @@ pydocs-mcp --config configs/index_gpu.yaml index ~/code/backend  --cache-dir ~/p
 Each run writes a portable `{name}_{hash}.db` + `.tq` bundle into the
 workspace directory.
 
-## 2. Chat (Streamlit)
+## 2. Chat
 
 ```bash
-streamlit run streamlit_app.py
+ask-your-docs --workspace ~/pydocs-index --config configs/serve_cpu_openvino.yaml
 ```
 
-Set the workspace, model, base URL (for a local vLLM / Ollama endpoint) and
-optional pydocs config in the sidebar — or pre-fill them via
-`PYDOCS_WORKSPACE`, `PYDOCS_MODEL`, `OPENAI_BASE_URL`, `PYDOCS_CONFIG`.
-Answers cite `project` + `package.module` and render code in fenced blocks.
+`ask-your-docs` launches the Streamlit UI. Flags (`--workspace`, `--model`,
+`--base-url`, `--config`, `--port`) prefill the sidebar; anything after `--`
+is forwarded to `streamlit run` (e.g. `-- --server.headless true`). You can
+also set `PYDOCS_WORKSPACE`, `PYDOCS_MODEL`, `OPENAI_BASE_URL`, `PYDOCS_CONFIG`
+in the environment instead. Answers cite `project` + `package.module` and
+render code in fenced blocks.
 
-## 3. Or in a notebook
-
-See [`notebook.ipynb`](notebook.ipynb) — the same two calls:
-
-```python
-from agent import build_agent, ask
-
-agent, llm = await build_agent("~/pydocs-index", model="gpt-4o-mini",
-                               base_url=None,  # e.g. "http://localhost:8000/v1" for vLLM / Ollama / LiteLLM
-                               pydocs_config="configs/serve_cpu_openvino.yaml")
-history = []
-print(await ask(agent, history, "how do I open a database pool?"))
-print(await ask(agent, history, "and what does it return?"))
-```
+The sidebar's **Scope** pickers (project / own code vs dependencies / package)
+pin every question to a slice of the corpus. A `langchain-mcp-adapters` tool
+interceptor forces the pin onto the tool calls — the `project` on every tool,
+and the `package` / own-vs-dependency filters on the search tools — so the
+choice is enforced deterministically rather than trusted to the model. The
+question is also prefixed with a `[pinned scope: ...]` note so the agent knows
+why. Toggle **Light mode** at the top of the sidebar to switch the palette.
 
 ## Why two embedding configs?
 
@@ -88,6 +101,6 @@ re-embed the whole corpus on CPU.
 space, different runtime — which is exactly why the serve file is serve-only.)
 
 Prefer a lighter setup? Swap both configs to
-`Qwen/Qwen3-Embedding-0.6B` + `dim: 1024` (or drop `--pydocs-config` entirely
-to use the built-in `BAAI/bge-small-en-v1.5` default — then index without a
-config too, so the embedders match).
+`Qwen/Qwen3-Embedding-0.6B` + `dim: 1024` (or drop `--config` entirely to use
+the built-in `BAAI/bge-small-en-v1.5` default — then index without a config
+too, so the embedders match).

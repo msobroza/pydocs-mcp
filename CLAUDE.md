@@ -40,6 +40,9 @@ pydocs-mcp serve . --no-inspect --depth 2 --workers 8
 pydocs-mcp serve . --watch    # MCP server + file watcher ([watch] extra)
 pydocs-mcp watch .            # watcher only — keep the index fresh for CLI queries
 
+# Ask-your-docs chat agent ([ask-your-docs] extra: langgraph + langchain + streamlit)
+ask-your-docs --workspace ~/pydocs-index --config configs/serve_cpu_openvino.yaml
+
 # Index only (no server)
 pydocs-mcp index .
 pydocs-mcp index . --force        # Atomic SQLite + .tq wipe via IndexingService.clear_all
@@ -96,7 +99,8 @@ python/pydocs_mcp/
 │   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning, late_interaction_scorer
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
 ├── pipelines/     # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
-└── server.py      # MCP handlers over services
+├── server.py      # MCP handlers over services
+└── ask_your_docs/ # Optional [ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme); imports langgraph/streamlit lazily so core install stays lean
 src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
 ```
 
@@ -118,6 +122,7 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 ## Key Technical Details
 
 - Python 3.11+ required. Required runtime deps: `mcp>=1.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `pyyaml>=6.0`, `numpy>=1.26`, `turbovec>=0.5,<1.0`, `fastembed>=0.4,<1.0`, `openai>=1.40,<2.0` (~90MB transitively — `onnxruntime` + `tokenizers` + the `openai` client).
+- Optional extras (opt-in, never in the default install): `[watch]`, `[sentence-transformers]`, `[openvino]`, `[late-interaction]`, `[graph]`, and `[ask-your-docs]` (langgraph + langchain-mcp-adapters + langchain-openai + streamlit; ships the `ask-your-docs` command from `pydocs_mcp/ask_your_docs/`). The subpackage is `mypy`-excluded (untyped agent deps not installed in the typecheck job) and imported lazily, so `import pydocs_mcp` never pulls in langgraph/streamlit.
 - `retrieval/` uses a uniform `RetrieverStep` ABC + composable `RetrieverPipeline` (Pipeline IS a Step, so sub-pipelines compose directly without a SubPipelineStep adapter — named, addressable steps a la sklearn's `Pipeline([(name, step), ...])`)
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)

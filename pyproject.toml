@@ -77,6 +77,16 @@ openvino = ["sentence-transformers[openvino]>=5.0,<6.0", "transformers>=4.48"]
 # community-diversity rerank steps. networkx is pure-Python + light; imported
 # lazily (a guard), so the default install never pays for it. Opt-in.
 graph = ["networkx>=3.0,<4.0"]
+# "Ask your docs" — a LangGraph ReAct agent + Streamlit chat UI over the MCP
+# server (see pydocs_mcp/ask_your_docs/). Ships the `ask-your-docs` command.
+# Uses the default fastembed embedder out of the box; add [sentence-transformers]
+# / [openvino] for the Qwen3 GPU-index / CPU-serve recipe under examples/.
+ask-your-docs = [
+    "langgraph>=0.2",
+    "langchain-mcp-adapters>=0.3",   # tool_interceptors API (landed in 0.1.12)
+    "langchain-openai>=0.2",
+    "streamlit>=1.36",
+]
 
 [dependency-groups]
 # PEP 735 developer-only groups — explicit-only via
@@ -112,6 +122,8 @@ dev = [
 
 [project.scripts]
 pydocs-mcp = "pydocs_mcp.__main__:main"
+# Provided by the [ask-your-docs] extra (langgraph + langchain + streamlit).
+ask-your-docs = "pydocs_mcp.ask_your_docs.cli:main"
 
 # Security: bump vulnerable TRANSITIVE deps to fixed versions (the `security`
 # CI job runs `uv export --frozen | pip-audit --strict`). starlette &
@@ -203,6 +215,11 @@ max-complexity = 12
 [tool.mypy]
 python_version = "3.11"
 files = ["python/pydocs_mcp"]
+# The optional ask-your-docs agent (langgraph + langchain + streamlit) is
+# integration/demo code over untyped third-party libs, and its extra isn't
+# installed in the typecheck job — exclude it from the gate. Nothing in the
+# core imports it, so excluding it here fully removes it from discovery.
+exclude = ['^python/pydocs_mcp/ask_your_docs/']
 # Lenient initial baseline so the typecheck step ships green without a giant
 # cleanup PR. Ratchet plan: once green at the floor, flip
 # disallow_untyped_defs=true and clean up the surfaced errors in a follow-up.
