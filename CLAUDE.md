@@ -37,6 +37,8 @@ maturin develop --release
 # Run MCP server
 pydocs-mcp serve /path/to/project
 pydocs-mcp serve . --no-inspect --depth 2 --workers 8
+pydocs-mcp serve . --watch    # MCP server + file watcher ([watch] extra)
+pydocs-mcp watch .            # watcher only — keep the index fresh for CLI queries
 
 # Index only (no server)
 pydocs-mcp index .

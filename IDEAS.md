@@ -9,8 +9,9 @@ as [gortex](https://github.com/zzet/gortex)).
 
 **Invariants every idea honors:**
 1. **No new MCP params / tools.** New behavior lands as registered `RetrieverStep`s
-   + YAML blueprints, or new `search(kind=…)` / `lookup(show=…)` *values* — the
-   surface stays fixed at `search` / `lookup`.
+   + YAML blueprints, or new `search_codebase(kind=…)` / `get_symbol(depth=…)` /
+   `get_references(direction=…)` *values* — the surface stays fixed at the six
+   task-shaped tools.
 2. **SQLite stays the source of truth.** Any derived artifact (e.g. `node_scores`)
    is a rebuildable projection of `node_references`, never a second master.
 3. **Read-only, local, Python-only.** Write/refactor + a shared daemon / HTTP
@@ -42,12 +43,13 @@ The graph is now a ranked retrieval signal, not just single-hop lookup:
   graph-neighbor slice); decay default 0.9.
 - **Identity prereq resolved** — chunk↔graph join is `qualified_name` end-to-end;
   the `node_id` vs `qualified_name` concern was verified a non-bug for code nodes.
-- **Graph-native `lookup` readers (was backlog A1/A2)** — two multi-hop
+- **Graph-native readers (was backlog A1/A2)** — two multi-hop
   reference-graph reads behind the fixed surface:
-  - `lookup(show="impact")` — ranked reverse blast-radius ("what transitively
-    calls X / what breaks if I change X"): `SqliteReferenceStore.find_transitive_callers`
+  - `get_references(direction="impact")` — ranked reverse blast-radius ("what
+    transitively calls X / what breaks if I change X"):
+    `SqliteReferenceStore.find_transitive_callers`
     (bounded reverse recursive-CTE) → `ReferenceService.impact` → `format_impact`.
-  - `lookup(show="context")` — forward dependency-closure packed under one token
+  - `get_context(targets=…)` — forward dependency-closure packed under one token
     budget at graded fidelity (focus = full source, ring = signature, rest =
     outline): `find_transitive_callees` → `ReferenceService.context` →
     `format_context`.
@@ -87,30 +89,31 @@ The graph is now a ranked retrieval signal, not just single-hop lookup:
 
 ## New — agent-facing features (gortex-inspired)
 
-All land **behind the fixed surface** (`search(kind=…)` / `lookup(show=…)` / YAML
-steps). Difficulty: **S** = hours–1 day · **M** = days · **L** = 1–2 weeks.
+All land **behind the fixed surface** (`search_codebase(kind=…)` /
+`get_symbol(depth=…)` / `get_references(direction=…)` / YAML steps).
+Difficulty: **S** = hours–1 day · **M** = days · **L** = 1–2 weeks.
 
 > **A1 (`smart_context`) and A2 (ranked blast-radius) have SHIPPED** as
-> `lookup(show="context")` / `lookup(show="impact")` — see the Shipped section
+> `get_context` / `get_references(direction="impact")` — see the Shipped section
 > above. The remaining open features keep their original A-labels (stable IDs).
 
 | # | Feature | What it does | Difficulty | Impact | Where (code → benefit) |
 |---|---------|--------------|-----------|--------|------------------------|
 | A3 | **Default-on graph-ranked hybrid** | Ship a `*_ranked` hybrid preset as the **default** instead of BM25-only | **S** | **High** | `defaults/default_config.yaml`, `pipelines/chunk_search.yaml`. Flips the shipped graph/dense investment on out-of-box. **Caveat:** default index then builds the `.tq` sidecar (+ `[graph]` extra for ranking) — A/B on the RepoQA harness first |
 | A4 | **LSP / compiler-grade resolution (pyright/jedi)** | Resolve CALLS/IMPORTS edges through a type engine; stamp an edge-confidence `tier` | **L** | **High** | `extraction/strategies/reference_resolver.py` (opt-in pass) + edge `tier` column in `db.py`. **Quality multiplier on all shipped graph features** — PageRank/community/`similar` anchoring are only as good as the edges (today: name/suffix heuristic) |
-| A5 | **Structural + literal code search — `search(kind="ast"\|"text")`** | Trigram literal/regex search + tree-sitter AST-pattern queries alongside BM25 | **M** | **Med–High** | trigram index table + AST query in `retrieval/steps/`; new `kind=` value. Benefit: exact/regex/structural nav semantic search can't do (e.g. every `except: pass`) |
-| A6 | **Cold-start repo orientation — `lookup("__project__", show="outline")`** | One-call map: top packages, PageRank hubs, Louvain subsystems, entry points | **M** | **Med** | `application/` rollup over `node_scores` + new `show=`. Nearly free post-`node_scores`; also wires the latent `show="tree"` path. Agent onboarding, fewer wasted calls |
+| A5 | **Structural + literal code search — `search_codebase(kind="ast"\|"text")`** | Trigram literal/regex search + tree-sitter AST-pattern queries alongside BM25 | **M** | **Med–High** | trigram index table + AST query in `retrieval/steps/`; new `kind=` value. Benefit: exact/regex/structural nav semantic search can't do (e.g. every `except: pass`) |
+| A6 | **Cold-start repo orientation — richer `get_overview(package="__project__")` blocks** | One-call map: top packages, PageRank hubs, Louvain subsystems, entry points | **M** | **Med** | `application/` rollup over `node_scores` behind `get_overview`. Nearly free post-`node_scores`; also wires the `get_symbol(depth="tree")` path. Agent onboarding, fewer wasted calls |
 | A7 | **Token economy** | ETag `if_none_match` conditional fetch + real pagination cursors + a `tokens_saved` counter | **M** / **M** / **S** | **Med** | `server.py` responses + `application/formatting.py`. Cheaper repeat calls on unchanged code (today: only a char-budget truncator) |
-| A8 | **Per-reference usage contexts** | Classify each caller by role (`parameter` / `return` / `field` / `call`) + filter | **M** | **Med** | capture role in `extraction/strategies/references.py` + filter on `lookup(show="callers")`. Precision navigation |
+| A8 | **Per-reference usage contexts** | Classify each caller by role (`parameter` / `return` / `field` / `call`) + filter | **M** | **Med** | capture role in `extraction/strategies/references.py` + filter on `get_references(direction="callers")`. Precision navigation |
 | A9 | **No-LLM query expansion** | Equivalence-class vocabulary (`auth ≈ authentication`) without an LLM call | **M** | **Med** | new `retrieval/steps/` expansion step. Recall lift at zero LLM cost |
 
 ### Recommended next
 With A1/A2 shipped, the graph reads exist but the graph/dense infra still isn't
 on out-of-box. **A3 (default-on graph-ranked hybrid)** is the cheapest
 high-impact move — settle the default indexing-cost tradeoff via a RepoQA A/B
-first. **A6 (`lookup("__project__", show="outline")`)** is the next-cheapest: a
+first. **A6 (cold-start repo orientation via `get_overview`)** is the next-cheapest: a
 cold-start repo map that's nearly free now that `node_scores` exists and reuses
-the same `lookup(show=…)` seam A1/A2 just extended. **A4 (LSP-grade edge
+the same graph-reader seam A1/A2 just extended. **A4 (LSP-grade edge
 resolution)** is the highest-ceiling but heaviest — it's a quality multiplier on
 every shipped graph feature (edges are only as good as the name/suffix heuristic
 today).

@@ -208,17 +208,19 @@ pydocs-mcp index . --skip-project   # only index deps, not the project
 pydocs-mcp index . --skip-deps      # only index the project, not its deps
 pydocs-mcp index . --gpu            # index with CUDA-accelerated embeddings
 
-# Search (mirrors the MCP `search` tool)
+# Search (mirrors the MCP `search_codebase` tool)
 pydocs-mcp search "batch inference"
 pydocs-mcp search "predict" --kind api -p vllm
 pydocs-mcp search "handle request" -p __project__
 
-# Navigate to a specific target (mirrors the MCP `lookup` tool)
-pydocs-mcp lookup                                      # list packages
-pydocs-mcp lookup fastapi.routing.APIRouter            # class overview
-pydocs-mcp lookup fastapi.routing.APIRouter --show tree
-pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
-pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
+# Navigate to a specific target (mirrors the other five MCP tools)
+pydocs-mcp overview                                    # list indexed packages (get_overview)
+pydocs-mcp symbol fastapi.routing.APIRouter            # class overview (get_symbol)
+pydocs-mcp symbol fastapi.routing.APIRouter --depth tree
+pydocs-mcp refs fastapi.routing.APIRouter.include_router --direction callers
+pydocs-mcp refs requests.auth.HTTPBasicAuth --direction inherits
+pydocs-mcp context fastapi.routing.APIRouter fastapi.applications.FastAPI
+pydocs-mcp why "how does routing work"                 # recorded design rationale (get_why)
 ```
 
 ### GPU inference (`--gpu`)
@@ -272,19 +274,26 @@ pydocs-mcp search "celery beat" --project-dir /path/to/other/project
 pydocs-mcp search "tokenizer" --no-rust
 ```
 
-`search` finds candidates by relevance; `lookup` jumps to a specific known name.
-`lookup`'s `--show` accepts `{default, tree, callers, callees, inherits}`.
+`search` finds candidates by relevance; `symbol` / `refs` / `context` jump to a
+specific known name. `symbol`'s `--depth` accepts `{summary, tree, source}`;
+`refs`' `--direction` accepts `{callers, callees, inherits, impact}`. The
+deprecated `lookup` command still works as an alias but warns — use the
+task-shaped commands directly.
 
 ### MCP tool reference
 
-The surface is **intentionally fixed at two tools** — they cover every workflow,
-and pinning them keeps MCP clients stable across server retunes (see
-[Configuration](#configuration)).
+The surface is **intentionally fixed at six task-shaped tools** — they cover
+every workflow, and pinning them keeps MCP clients stable across server retunes
+(see [Configuration](#configuration)).
 
 | Tool | Signature | Purpose |
 |---|---|---|
-| `search` | `search(query, kind, package, scope, limit, project)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any}`. `package` / `scope` / `project` are corpus-scope filters (`project` selects one loaded repo in a multi-repo server). |
-| `lookup` | `lookup(target, show, project)` | Navigate to a specific named target. `show` ∈ `{default, tree, callers, callees, inherits, impact, context}`. `project` resolves the target inside one loaded repo. Empty target lists indexed packages. |
+| `get_overview` | `get_overview(package, project)` | Orient yourself: what is indexed and what shape a repo/package has. Empty `package` covers the whole workspace. |
+| `search_codebase` | `search_codebase(query, kind, package, scope, limit, project)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any, decision}`. `package` / `scope` / `project` are corpus-scope filters (`project` selects one loaded repo in a multi-repo server). |
+| `get_symbol` | `get_symbol(target, depth, project)` | Navigate to a known dotted path. `depth` ∈ `{summary, tree, source}`. `project` resolves the target inside one loaded repo. |
+| `get_context` | `get_context(targets, project)` | Everything needed to understand one or more symbols, packed in a single call. |
+| `get_references` | `get_references(target, direction, limit, project)` | Traverse the reference graph. `direction` ∈ `{callers, callees, inherits, impact, governed_by}`. |
+| `get_why` | `get_why(query, targets, project)` | Recorded architectural decisions and rationale for a topic or target. |
 
 ---
 
@@ -314,7 +323,7 @@ logical identifiers only — no absolute paths), stamped at index time with an
   difference between bundles (same model, qint8 vs full precision) is not
   caught here; single-db deployments catch it via the pipeline hash.
 
-`lookup(target)` without `project` resolves across loaded repos most-recent-first
+`get_symbol(target)` without `project` resolves across loaded repos most-recent-first
 and returns the first repo that has the target (its reference-graph traversal stays
 within that repo).
 
@@ -328,13 +337,13 @@ different workflow:
 
 ```bash
 pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients connected over stdio)
-pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh for CLI `search` / `lookup`)
+pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh for CLI `search` / `symbol` / `refs`)
 ```
 
 Use `serve --watch` when an AI client (Claude Code, Cursor, Continue.dev)
 is connected over stdio and you want the index to refresh as you edit.
 Use `watch` when you don't need an MCP server running — for example, you
-prefer the CLI `search` / `lookup` commands, or you want to keep the
+prefer the CLI `search` / `symbol` / `refs` commands, or you want to keep the
 index fresh from an IDE-driven workflow without leaving an idle FastMCP
 stdio process. Both modes share the same YAML knobs under `serve.watch.*`.
 
@@ -379,7 +388,7 @@ Without the `[watch]` extras, both `pydocs-mcp serve --watch` and
 ### YAML knobs (`serve.watch.*`)
 
 All tunables live in YAML — no MCP tool params change (the MCP
-surface stays at the fixed 2 tools: `search`, `lookup`). The CLI
+surface stays fixed at the six task-shaped tools). The CLI
 `--watch` flag overrides `enabled` at runtime.
 
 ```yaml
@@ -416,15 +425,15 @@ serve:
 
 At indexing time the AST walker captures **`CALLS` / `IMPORTS` / `INHERITS`**
 edges (and optionally **`MENTIONS`** in markdown, via a YAML toggle) into the
-`node_references` SQLite table. `lookup(target, show=…)` answers four shapes over
-the same surface:
+`node_references` SQLite table. `get_references(target, direction=…)` answers the
+graph shapes, and `get_symbol(target, depth="tree")` the structural one:
 
-- `show="callers"` — every site that calls this method, project-wide (your code
-  + every dep).
-- `show="callees"` — every method this one calls.
-- `show="inherits"` — the inheritance graph above this class.
-- `show="tree"` — the structural `DocumentNode` tree for the module, the same
-  shape used for structural rendering.
+- `direction="callers"` — every site that calls this method, project-wide (your
+  code + every dep).
+- `direction="callees"` — every method this one calls.
+- `direction="inherits"` — the inheritance graph above this class.
+- `get_symbol(…, depth="tree")` — the structural `DocumentNode` tree for the
+  module, the same shape used for structural rendering.
 
 Cross-package edges resolve through a rule-based resolver (see
 `python/pydocs_mcp/application/reference_service.py` and the resolver it
@@ -554,7 +563,7 @@ safe.
 
 ## Configuration
 
-The MCP tool surface is pinned at two tools forever. Every other knob — ranking
+The MCP tool surface is pinned at the six task-shaped tools. Every other knob — ranking
 weights, fusion algorithm, embedder identity, reference-graph capture toggles,
 chunking strategies, output limits, formatter choice — lives in `AppConfig`
 (pydantic-settings) with **layered defaults**:
@@ -692,12 +701,12 @@ erDiagram
 
 | Table | What it stores | Where it's read |
 |---|---|---|
-| `packages` | One row per indexed package + the cache-skip `content_hash`. Project source is stored under the sentinel `name = "__project__"`. | Indexing skip-check, `lookup` (list packages) |
-| `chunks` | Documentation + source chunks (markdown sections, docstrings, code blocks). `content_hash` powers the chunk-level reindex-skip; the dense vector for each chunk lives in the `.tq` sidecar, not in this row. | `search(query, kind="docs")` via FTS5 + dense scoring |
-| `chunks_fts` | FTS5 virtual table mirroring `chunks.title` + `chunks.text` + `chunks.package`, with Porter stemming + unicode61. | `search` BM25 ranking (fused with dense via RRF) |
-| `module_members` | Functions, classes, methods, attributes — name + signature + docstring + kind. | `search(query, kind="api")`, `lookup(target)` |
-| `document_trees` | The hierarchical `DocumentNode` tree per module. | `lookup(…, show="tree")` |
-| `node_references` | The reference graph: one row per (`from_node`, `to_name`, `kind`) edge. | `lookup(…, show="callers"\|"callees"\|"inherits")` |
+| `packages` | One row per indexed package + the cache-skip `content_hash`. Project source is stored under the sentinel `name = "__project__"`. | Indexing skip-check, `get_overview` (list packages) |
+| `chunks` | Documentation + source chunks (markdown sections, docstrings, code blocks). `content_hash` powers the chunk-level reindex-skip; the dense vector for each chunk lives in the `.tq` sidecar, not in this row. | `search_codebase(query, kind="docs")` via FTS5 + dense scoring |
+| `chunks_fts` | FTS5 virtual table mirroring `chunks.title` + `chunks.text` + `chunks.package`, with Porter stemming + unicode61. | `search_codebase` BM25 ranking (fused with dense via RRF) |
+| `module_members` | Functions, classes, methods, attributes — name + signature + docstring + kind. | `search_codebase(query, kind="api")`, `get_symbol(target)` |
+| `document_trees` | The hierarchical `DocumentNode` tree per module. | `get_symbol(…, depth="tree")` |
+| `node_references` | The reference graph: one row per (`from_node`, `to_name`, `kind`) edge. | `get_references(…, direction="callers"\|"callees"\|"inherits")` |
 
 The schema is documented in [python/pydocs_mcp/db.py](python/pydocs_mcp/db.py).
 
@@ -728,7 +737,7 @@ pydocs-mcp/
 ├── pyproject.toml              # Python package config (maturin mixed layout)
 ├── src/lib.rs                  # Rust: walker, hasher, chunker, parser (PyO3)
 └── python/pydocs_mcp/
-    ├── __main__.py             # CLI entry (serve / index / search / lookup)
+    ├── __main__.py             # CLI entry (serve / index / search / symbol / refs / …)
     ├── _fast.py / _fallback.py # Rust-or-pure-Python substitution boundary
     ├── db.py                   # SQLite schema + cache lifecycle + FTS rebuild
     ├── deps.py                 # Dependency resolution
@@ -738,7 +747,7 @@ pydocs-mcp/
     ├── retrieval/              # RetrieverStep ABC + RetrieverPipeline + steps/
     ├── defaults/               # Shipped default_config.yaml
     ├── pipelines/              # Built-in pipeline YAML blueprints
-    └── server.py               # MCP server (2 tools: search + lookup)
+    └── server.py               # MCP server (six task-shaped tools)
 ```
 
 Every layer boundary is a Protocol and every swappable component has a registry,
@@ -876,10 +885,10 @@ pydocs-mcp serve /path/to/project
 Example client invocations (ask your LLM to run these once connected):
 
 ```
-search("batch inference vllm", kind="api", package="vllm", limit=20)
-lookup("fastapi.routing.APIRouter")
-lookup("fastapi.routing.APIRouter.include_router", show="callers")
-lookup("requests.auth.HTTPBasicAuth", show="inherits")
+search_codebase("batch inference vllm", kind="api", package="vllm", limit=20)
+get_symbol("fastapi.routing.APIRouter")
+get_references("fastapi.routing.APIRouter.include_router", direction="callers")
+get_references("requests.auth.HTTPBasicAuth", direction="inherits")
 ```
 
 ---
@@ -896,9 +905,9 @@ optimizing for different things.
 | Version match | Whatever you have in `site-packages` — automatic | Library + version selectable in the prompt | Latest from the registry |
 | Languages | Python only | Multi-language | Multi-language (~100+ libraries) |
 | Retrieval | BM25 + dense embeddings, fused into hybrid (RRF) | Not publicly documented | BM25 over SQLite FTS5 |
-| Code-structure queries | **Reference graph** — `lookup(target, show="callers"\|"callees"\|"inherits")` | None (doc retrieval only) | None (doc retrieval only) |
+| Code-structure queries | **Reference graph** — `get_references(target, direction="callers"\|"callees"\|"inherits")` | None (doc retrieval only) | None (doc retrieval only) |
 | Project source indexing | Indexes your own code under `__project__` | No (external docs only) | No (registry packages only) |
-| MCP tools | `search`, `lookup` (pinned at 2) | `resolve-library-id`, `query-docs` | Doc-retrieval tools |
+| MCP tools | Six task-shaped tools, pinned (`get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why`) | `resolve-library-id`, `query-docs` | Doc-retrieval tools |
 | Privacy | **Fully offline** with the default embedder — zero network calls | Queries hit Upstash; OAuth + API key | Local once packages are downloaded |
 | Customization | YAML pipelines (chunkers, scorers, filters, fusion, formatters) via `AppConfig` | API key + HTTP headers | Registry-package mechanics |
 | Cost | **$0** — OSS (MIT), no keys / rate limits / fees | Free tier (rate-limited, API key) + paid | **$0** — OSS (Apache-2.0), local-first |

@@ -17,15 +17,22 @@ from langgraph.prebuilt import create_react_agent
 
 SYSTEM_PROMPT = """\
 You are a documentation and code assistant for the indexed projects listed below.
-You answer ONLY from the results of your two tools — never from memory:
+You answer ONLY from the results of your tools — never from memory:
 
-- `search(query, kind, package, scope, limit, project)` — topics, keywords,
-  "how do I..." questions. Use kind="docs" for prose, kind="api" for
+- `search_codebase(query, kind, package, scope, limit, project)` — topics,
+  keywords, "how do I..." questions. Use kind="docs" for prose, kind="api" for
   functions/classes. Use project="<name>" to scope one repo, package="<name>"
   for one library, scope="project"|"deps" to split own-code vs dependencies.
-- `lookup(target, show, project)` — exact dotted paths (pkg.mod.Class.method)
-  and code-graph questions: show="callers" (who uses X), "callees",
-  "impact" (what breaks if X changes), "context" (everything to understand X).
+- `get_symbol(target, depth, project)` — exact dotted paths
+  (pkg.mod.Class.method); depth="source" for the full body.
+- `get_references(target, direction, project)` — code-graph questions:
+  direction="callers" (who uses X), "callees", "inherits",
+  "impact" (what breaks if X changes).
+- `get_context(targets, project)` — everything needed to understand one or
+  more symbols in a single call.
+- `get_overview(package, project)` — what is indexed and the shape of a
+  repo/package; empty package = the whole workspace.
+- `get_why(query, targets, project)` — recorded design decisions and rationale.
 
 Rules:
 1. Users often don't know the framework or project name. Infer it from the
@@ -70,8 +77,8 @@ async def build_agent(
 
     # Fold the indexed projects/packages listing into the prompt so the model
     # can infer which project a task refers to.
-    lookup = next(t for t in tools if t.name == "lookup")
-    listing = await lookup.ainvoke({"target": ""})
+    overview = next(t for t in tools if t.name == "get_overview")
+    listing = await overview.ainvoke({"package": ""})
     prompt = f"{SYSTEM_PROMPT}\nIndexed projects and packages:\n{listing}"
 
     llm = ChatOpenAI(model=model, base_url=base_url)

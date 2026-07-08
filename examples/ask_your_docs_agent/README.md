@@ -9,9 +9,9 @@ What it demonstrates:
 - **Multi-repo**: one agent over a directory of pre-built pydocs-mcp indexes
   (`pydocs-mcp serve --workspace ...`, read-only).
 - **Grounded answers**: a system prompt that forces every answer through the
-  `search` / `lookup` tools, cites `project` + `package.module`, infers the
-  right project when the user doesn't name one, and asks a clarifying
-  question when things stay ambiguous.
+  pydocs-mcp tools (`search_codebase`, `get_symbol`, `get_references`, …),
+  cites `project` + `package.module`, infers the right project when the user
+  doesn't name one, and asks a clarifying question when things stay ambiguous.
 - **Conversation memory**: the last N messages are kept, and follow-up
   questions are **reformulated** into standalone queries before hitting the
   tools ("what does *it* return?" → "what does `backend.db.Pool.acquire`

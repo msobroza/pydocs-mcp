@@ -65,9 +65,10 @@ Three steps, all on your machine (see the diagram above):
      differ from the docs', via a small model that runs locally.
    - **Reasoning** — for broad or structural questions, an LLM walks your code's
      map (titles + summaries, no embeddings) to pick the best spots.
-3. **Answer** — results flow back to your agent through two simple tools:
-   `search` (find by relevance) and `lookup` (jump to a known name, or trace its
-   callers, callees, and inheritance).
+3. **Answer** — results flow back to your agent through six task-shaped tools:
+   `search_codebase` (find by relevance), `get_symbol` / `get_context` (jump to
+   known names), `get_references` (trace callers, callees, inheritance, impact),
+   `get_overview` (map what's indexed), and `get_why` (recorded design rationale).
 
 The only call that ever leaves your machine is the optional reasoning mode — and
 only if you turn it on with your own key.
@@ -100,7 +101,7 @@ Then index your project and start the server:
 pydocs-mcp serve .                            # index project + deps, serve over MCP (stdio)
 pydocs-mcp serve . --gpu                      # …same, with CUDA-accelerated embeddings
 pydocs-mcp search "batch inference"           # the same search, from the CLI
-pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
+pydocs-mcp refs requests.auth.HTTPBasicAuth --direction inherits
 ```
 
 Embeddings run on CPU by default. Add `--gpu` to `serve` / `index` (or the
@@ -118,7 +119,7 @@ If you edit code while you want the index to stay fresh, install the
 ```bash
 pip install 'pydocs-mcp[watch]'
 pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients)
-pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh for CLI `search` / `lookup`)
+pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh for CLI `search` / `symbol` / `refs`)
 ```
 
 Both modes share the same YAML tunables: debounce, file extensions, and
@@ -147,8 +148,8 @@ pydocs-mcp search "db pool" --workspace ~/pydocs-index --project backend
 ```
 
 On the MCP surface the selector is the `project` filter, a sibling of
-`package`/`scope`: `search(query="db pool", project="backend")` /
-`lookup(target="app.db.Pool", project="backend")`; omit it to search every loaded
+`package`/`scope`: `search_codebase(query="db pool", project="backend")` /
+`get_symbol(target="app.db.Pool", project="backend")`; omit it to search every loaded
 repo. When the same package appears in several repos, a root-project copy wins
 over a dependency copy, and among duplicate dependencies the most-recently-indexed
 one is kept. Every loaded db must share the configured embedder — a mismatch
@@ -168,7 +169,7 @@ sklearn) carry tens of thousands of code chunks:
 
 So torch indexes in seconds (≈one embedding per module) instead of an hour,
 while its docs stay *semantically* searchable and all of its code stays
-keyword-searchable + navigable (`lookup`, `kind="api"`). `scope=deps` queries
+keyword-searchable + navigable (`get_symbol`, `kind="api"`). `scope=deps` queries
 automatically route to a BM25 ∥ dense fusion pipeline that covers both. Set
 `dependency_policy: full` to restore embed-everything, or `none` for BM25-only
 dependencies:
@@ -195,7 +196,7 @@ agent can mount all three and route by intent.
 | **Version match** | Exactly what's in your `site-packages` — automatic | Library + version chosen in the prompt | Latest from the registry |
 | **Languages** | Python | Multi-language | Multi-language (~100+ libraries) |
 | **Retrieval** | Keyword (BM25) + dense embeddings + LLM tree reasoning, fused via RRF or weighted scores | Not publicly documented | BM25 over SQLite FTS5 |
-| **Code-structure queries** | Reference graph — `lookup(show=callers\|callees\|inherits)` | None (doc retrieval only) | None (doc retrieval only) |
+| **Code-structure queries** | Reference graph — `get_references(direction=callers\|callees\|inherits\|impact)` | None (doc retrieval only) | None (doc retrieval only) |
 | **Indexes your code** | Yes — under the `__project__` package | No | No |
 | **Privacy** | Fully offline with the default embedder — zero network calls | Queries hit Upstash; OAuth + API key | Local once packages are downloaded |
 | **Dependencies** | Lean — no PyTorch, no FAISS (Rust TurboQuant store + small ONNX embedder) | Hosted service (nothing to install) | Local service |
@@ -392,17 +393,17 @@ Beyond embeddings, pydocs-mcp captures a **graph of how code
 references code** during indexing: `CALLS`, `IMPORTS`, `INHERITS`,
 and optional `MENTIONS` (backtick-quoted dotted names in markdown).
 The same surface answers an AI's *"what calls this?"* / *"what does
-this extend?"* questions through the `lookup(show=…)` MCP tool:
+this extend?"* questions through the `get_references(direction=…)` MCP tool:
 
 ```bash
-pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
-pydocs-mcp lookup my_module.Parser.parse --show callers
+pydocs-mcp refs requests.auth.HTTPBasicAuth --direction inherits
+pydocs-mcp refs my_module.Parser.parse --direction callers
 ```
 
 Capture is on by default and tunable under `reference_graph:` in YAML
 (toggle, kinds-to-emit, output bounds).
 
-The graph is also a **search** signal, not just a `lookup` surface:
+The graph is also a **search** signal, not just a navigation surface:
 the [`chunk_search_graph.yaml`](python/pydocs_mcp/pipelines/chunk_search_graph.yaml)
 preset seeds graph expansion from the top dense hits to recover
 structurally-adjacent answers a dense embedder misses (callers / callees /
@@ -417,7 +418,7 @@ rerankers and synthetic embedding-kNN edges — see
 
 - **[examples/ask_your_docs_agent/](examples/ask_your_docs_agent/)** — a
   minimal LangGraph ReAct chat agent (terminal or notebook) that answers
-  questions about your indexed repos through the `search` / `lookup` tools.
+  questions about your indexed repos through the task-shaped MCP tools.
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval
   pipeline, reference graph, cache, configuration, database schema, and the full
   CLI reference.

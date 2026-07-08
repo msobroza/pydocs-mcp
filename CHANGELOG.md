@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Docs modernized to the six task-shaped MCP surface** — README,
+  DOCUMENTATION, SPEC, IDEAS, EXTENSIONS, and the benchmarks README no longer
+  describe the retired two-tool `search` / `lookup` surface; CLI examples use
+  the `overview` / `symbol` / `context` / `refs` / `why` subcommands.
+- **`examples/ask_your_docs_agent` crashed on startup** — the agent fetched
+  the removed `lookup` tool (`StopIteration` on connect); it now targets the
+  six task-shaped tools and reads the indexed-projects listing via
+  `get_overview`.
+
 ## [0.4.1] — 2026-07-03
 
 ### Added

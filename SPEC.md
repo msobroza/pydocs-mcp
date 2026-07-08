@@ -12,19 +12,19 @@ AI coding assistants hallucinate outdated APIs because their training data is mo
 
 ## Solution
 
-Point pydocs-mcp at your project directory. It reads `pyproject.toml` (or `requirements.txt`), finds every installed dependency, and indexes everything into a single SQLite file with FTS5 full-text search plus a reference-graph table. Your project code, dependency docs, and the cross-cutting call graph become queryable through one unified MCP interface — two tools, fixed surface.
+Point pydocs-mcp at your project directory. It reads `pyproject.toml` (or `requirements.txt`), finds every installed dependency, and indexes everything into a single SQLite file with FTS5 full-text search plus a reference-graph table. Your project code, dependency docs, and the cross-cutting call graph become queryable through one unified MCP interface — six task-shaped tools, fixed surface.
 
 ## Key differentiators
 
 1. **Zero config** — pass a directory, it discovers everything automatically.
 2. **Project + deps together** — search your code AND dependency docs in one query.
-3. **Reference graph** — `lookup(target=X, show="callers")` traverses CALLS/IMPORTS/INHERITS edges captured at index time.
+3. **Reference graph** — `get_references(target=X, direction="callers")` traverses CALLS/IMPORTS/INHERITS edges captured at index time.
 4. **Fully offline** — no network, no API keys, no Node.js.
 5. **Smart cache** — hash-based skip on re-runs, per-project `.db` isolation.
 6. **Dual indexing mode** — `inspect` (richer, default) or `--no-inspect` / static (faster, no side effects).
 7. **Rust-accelerated** — optional native extension for ~4× I/O speedup.
 8. **Portable** — copy the `.db` file to another machine, it just works.
-9. **Stable MCP surface** — 2 tools (`search`, `lookup`); all tuning happens via YAML config so clients don't version-bump on server-side changes.
+9. **Stable MCP surface** — six task-shaped tools (`get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why`); all tuning happens via YAML config so clients don't version-bump on server-side changes.
 10. **sklearn-style pipeline composition** — every retrieval step is a `RetrieverStep` subclass; pipelines are named, addressable, swappable.
 
 ## Architecture
@@ -60,7 +60,7 @@ pydocs-mcp/
         │   └── steps/          #   One file per step (chunk_fetcher, bm25_scorer, top_k_filter, …)
         ├── defaults/           # Shipped default_config.yaml (lowest-priority AppConfig layer)
         ├── pipelines/          # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
-        └── server.py           # MCP server (2 tools: search + lookup)
+        └── server.py           # MCP server (six task-shaped tools)
 ```
 
 For the detailed architecture rules (SOLID, async patterns, MCP API surface vs YAML configuration, single-source-of-truth defaults), see [CLAUDE.md](CLAUDE.md). For the extensibility surface (how to add new storage backends, filter formats, retrieval steps, formatters), see [EXTENSIONS.md](EXTENSIONS.md).
@@ -86,7 +86,7 @@ Normalize package names: lowercase, replace hyphens with underscores, strip vers
 3. Compare against stored hash. Skip entirely if unchanged.
 4. For each `.py` file: extract docstrings + chunks (AST or regex), member definitions (functions/classes/methods), and references (CALLS / IMPORTS / INHERITS edges).
 5. For each `.md` file: chunk at heading boundaries.
-6. Batch insert chunks, module members, and references; capture into a `DocumentNode` tree for `lookup(..., show="tree")` queries.
+6. Batch insert chunks, module members, and references; capture into a `DocumentNode` tree for `get_symbol(..., depth="tree")` queries.
 
 ### Step 3 — Dependency indexing
 
@@ -165,7 +165,7 @@ CREATE TABLE module_members (
     docstring TEXT
 );
 
--- DocumentNode tree for lookup(..., show="tree")
+-- DocumentNode tree for get_symbol(..., depth="tree")
 CREATE TABLE document_trees (
     package TEXT NOT NULL,
     module TEXT NOT NULL,
@@ -252,30 +252,42 @@ maturin develop --release    # Development
 maturin build --release      # Wheel for distribution
 ```
 
-## MCP surface — 2 tools
+## MCP surface — six task-shaped tools
 
 The MCP surface is intentionally minimal. Every behavioral knob lives in YAML, not in tool parameters (see CLAUDE.md §"MCP API surface vs YAML configuration").
 
-### `search(query, kind, package, scope, limit)`
+### `search_codebase(query, kind, package, scope, limit, project)`
 
-BM25-ranked full-text search across indexed chunks (project + deps).
+Hybrid-ranked full-text search across indexed chunks (project + deps).
 
 - `query` — search terms
-- `kind` ∈ `{"docs", "api", "any"}` — narrow to documentation, API surface, or both
+- `kind` ∈ `{"docs", "api", "any", "decision"}` — narrow to documentation, API surface, recorded decisions, or everything
 - `package` — optional package filter; `"__project__"` searches your code only
 - `scope` ∈ `{"project", "deps", "all"}` — corpus scope
 - `limit` — max results (default `10`, validated 1..1000)
+- `project` — one loaded repo in a multi-repo server; omit to union across all
 
 Returns a token-budgeted composite chunk by default. The `chunk_search_ranked.yaml` preset returns top-K separate items for benchmarking.
 
-### `lookup(target, show)`
+### `get_overview(package, project)`
 
-Navigate the indexed corpus by qualified name.
+Orient yourself: what is indexed and what shape a repo/package has. Empty `package` covers the whole workspace (lists indexed packages).
 
-- `target` — dotted path like `"fastapi.routing.APIRouter"`. Empty target lists indexed packages.
-- `show` ∈ `{"default", "tree", "callers", "callees", "inherits"}` — what to render.
+### `get_symbol(target, depth, project)`
 
-`show="tree"` returns the `DocumentNode` tree (table of contents). `show="callers"` / `"callees"` / `"inherits"` traverse the reference graph (CALLS / INHERITS edges).
+Navigate to a known qualified name — `target` is a dotted path like `"fastapi.routing.APIRouter"`. `depth` ∈ `{"summary", "tree", "source"}`: `"tree"` returns the `DocumentNode` tree (table of contents), `"source"` the full body.
+
+### `get_context(targets, project)`
+
+Everything needed to understand one or more symbols, packed in a single token-budgeted call.
+
+### `get_references(target, direction, limit, project)`
+
+`direction` ∈ `{"callers", "callees", "inherits", "impact", "governed_by"}` traverses the reference graph (CALLS / IMPORTS / INHERITS edges), including ranked transitive impact.
+
+### `get_why(query, targets, project)`
+
+Recorded architectural decisions and rationale for a topic or target.
 
 ## CLI
 
@@ -295,18 +307,20 @@ pydocs-mcp index .
 pydocs-mcp index . --force              # clear cache, re-index all
 pydocs-mcp index . --skip-project       # only index deps
 
-# Search from CLI (mirrors the MCP `search` tool)
+# Search from CLI (mirrors the MCP `search_codebase` tool)
 pydocs-mcp search "batch inference"
 pydocs-mcp search "middleware" -p fastapi
 pydocs-mcp search "handle request" -p __project__
 pydocs-mcp search "predict" --kind api -p vllm
 
-# Lookup from CLI (mirrors the MCP `lookup` tool)
-pydocs-mcp lookup                                            # list packages
-pydocs-mcp lookup fastapi.routing.APIRouter                  # class overview
-pydocs-mcp lookup fastapi.routing.APIRouter --show tree
-pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show callers
-pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits
+# Navigate from CLI (mirrors the other five MCP tools)
+pydocs-mcp overview                                          # list packages (get_overview)
+pydocs-mcp symbol fastapi.routing.APIRouter                  # class overview (get_symbol)
+pydocs-mcp symbol fastapi.routing.APIRouter --depth tree
+pydocs-mcp refs fastapi.routing.APIRouter.include_router --direction callers
+pydocs-mcp refs requests.auth.HTTPBasicAuth --direction inherits
+pydocs-mcp context fastapi.routing.APIRouter fastapi.applications.FastAPI
+pydocs-mcp why "how does routing work"                       # design rationale (get_why)
 
 # Verbose logging
 pydocs-mcp -v serve .

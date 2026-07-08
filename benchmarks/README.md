@@ -122,8 +122,8 @@ long, real-world code repositories. Each task hands the system under test a
 multi-file repo slice and a one-sentence English description of one function
 ("the needle"); the system returns a ranked list of candidate chunks; the
 harness counts whether an AST-equivalent match of the needle's body appears in
-the top-K. This is the dominant query shape for `search(query, kind, ...)` on
-the MCP surface.
+the top-K. This is the dominant query shape for `search_codebase(query, kind, ...)`
+on the MCP surface.
 
 **Example task** (from
 `benchmarks/tests/eval/fixtures/repoqa_mini.json`, the 5-needle fixture shipped
