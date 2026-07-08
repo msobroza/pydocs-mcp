@@ -275,3 +275,57 @@ def decision_nodes(db_path: Path, project: str) -> Graph:
     nodes = [project_node] + [Node(f"decision:{cid}", title, "decision") for cid, title in rows]
     edges = [Edge(f"decision:{cid}", project_node.id, "concerns") for cid, _ in rows]
     return Graph(tuple(nodes), tuple(edges))
+
+
+def modules(db_path: Path) -> set[str]:
+    """The project's own modules in import-path form (for the page's typing)."""
+    with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
+        return set(_modules(conn))
+
+
+def type_of(node_id: str, module_set: set[str]) -> str:
+    """Node category from the id alone (so the page can expand without a lookup)."""
+    if node_id.startswith(("doc:", "section:")):
+        return "doc"
+    if node_id.startswith("decision:"):
+        return "decision"
+    if node_id.startswith("project:"):
+        return "module"
+    return _type_of(node_id, module_set)
+
+
+def edges_for(db_path: Path, visible: set[str], kinds: frozenset[str]) -> tuple[Edge, ...]:
+    """Reference edges among the visible nodes, each raw edge collapsed to its
+    nearest visible endpoint.
+
+    A member's ``calls``/``inherits``/``imports`` edge is drawn between the two
+    members when both are shown, or between their modules when the members are
+    hidden — so relationships appear at whatever depth the user has drilled to
+    (module overview OR expanded members), and re-collapse when a node implodes.
+    """
+    with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
+        mods = _modules(conn)
+        rows = conn.execute(
+            "SELECT from_node_id, to_node_id, kind FROM node_references WHERE from_package=?",
+            (_OWN,),
+        ).fetchall()
+
+    def anchor(nid: str | None) -> str | None:
+        if not nid:
+            return None
+        if nid in visible:
+            return nid
+        m = _module_of(nid, mods)
+        return m if m in visible else None
+
+    seen: set[tuple[str, str, str]] = set()
+    out: list[Edge] = []
+    for from_id, to_id, kind in rows:
+        if kind not in kinds:
+            continue
+        a = anchor(from_id)
+        b = anchor(to_id)
+        if a and b and a != b and (a, b, kind) not in seen:
+            seen.add((a, b, kind))
+            out.append(Edge(a, b, kind))
+    return tuple(out)

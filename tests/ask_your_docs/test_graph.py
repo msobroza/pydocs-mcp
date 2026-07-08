@@ -231,3 +231,41 @@ def test_decision_nodes_grouped_under_project(tmp_path):
     assert types == {"decision"}
     assert len([n for n in g.nodes if n.node_type == "decision"]) == 2
     assert all(e.kind == "concerns" for e in g.edges)
+
+
+def test_edges_for_collapses_to_nearest_visible(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[("mod_a", "Foo", "class"), ("mod_a", "helper", "def"), ("mod_b", "bar", "def")],
+        refs=[
+            ("mod_a.Foo", "mod_a.helper", "calls"),  # intra-module
+            ("mod_a.Foo", "mod_b.bar", "calls"),
+        ],  # cross-module
+    )
+    # Overview level: only modules visible -> member edges collapse to modules.
+    e = graph.edges_for(db, {"mod_a", "mod_b"}, frozenset({"calls"}))
+    pairs = {(x.source, x.target) for x in e}
+    assert ("mod_a", "mod_b") in pairs  # cross-module edge shows at module level
+    assert ("mod_a", "mod_a") not in pairs  # intra-module self-loop is dropped
+
+    # Members visible -> the intra-module member edge shows at member level.
+    e2 = graph.edges_for(db, {"mod_a.Foo", "mod_a.helper", "mod_b"}, frozenset({"calls"}))
+    p2 = {(x.source, x.target) for x in e2}
+    assert ("mod_a.Foo", "mod_a.helper") in p2  # sibling members now related
+    assert ("mod_a.Foo", "mod_b") in p2  # cross edge collapses to module mod_b
+
+
+def test_type_of_from_id_prefixes():
+    from pydocs_mcp.ask_your_docs import graph
+
+    mods = {"pkg.a"}
+    assert graph.type_of("doc:README.md", mods) == "doc"
+    assert graph.type_of("section:5", mods) == "doc"
+    assert graph.type_of("decision:2", mods) == "decision"
+    assert graph.type_of("project:demo", mods) == "module"
+    assert graph.type_of("pkg.a", mods) == "module"
+    assert graph.type_of("pkg.a.Foo", mods) == "class"
+    assert graph.type_of("pkg.a.run", mods) == "function"
