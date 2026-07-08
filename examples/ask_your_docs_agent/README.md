@@ -31,6 +31,32 @@ What it demonstrates:
 The code lives in `pydocs_mcp/ask_your_docs/`; this directory holds the two
 embedding configs and this guide.
 
+## Architecture
+
+The chat agent is a **LangGraph ReAct** loop, shown here exactly as LangGraph
+draws its own graph (`agent.get_graph().draw_mermaid_png()`):
+
+<p align="center">
+  <img src="agent-graph.png" width="210"
+       alt="LangGraph agent graph: __start__ to agent; agent loops to tools and back; agent to __end__">
+</p>
+
+- **`agent`** — the LLM (your OpenAI-protocol model). Each turn it either calls a
+  pydocs-mcp tool or, once it has enough grounding, returns the final answer
+  (`agent ⇢ __end__`).
+- **`tools`** — the six pydocs-mcp tools (`search_codebase`, `get_symbol`,
+  `get_references`, `get_context`, `get_overview`, `get_why`). Results flow back
+  into `agent`, which loops until it can answer.
+
+End to end: **Streamlit UI → LangGraph agent → pydocs-mcp (stdio subprocess) →
+read-only `.db` + `.tq` index bundles.** Before any tool runs, a
+`langchain-mcp-adapters` interceptor rewrites its arguments to the sidebar's
+pinned project / package / code scope, so retrieval stays inside the chosen
+slice no matter what the model asks for.
+
+<!-- agent-graph.png is the compiled agent's own graph, regenerated with
+     agent.get_graph().draw_mermaid_png() (see pydocs_mcp.ask_your_docs.agent). -->
+
 ## Setup
 
 ```bash
