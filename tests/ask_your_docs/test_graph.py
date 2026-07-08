@@ -279,3 +279,20 @@ def test_is_test_flags_test_modules():
     assert graph.is_test("pkg.conftest")
     assert not graph.is_test("pkg.adapters.base")
     assert not graph.is_test("pkg.renderer.render_for")
+
+
+def test_expand_module_lists_defined_classes_even_if_unreferenced(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    # 'Widget' is a class DEFINED in mod_a but never referenced in the call graph;
+    # only 'run' is referenced. Expanding the module must still reveal the class.
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[("mod_a", "Widget", "class"), ("mod_a", "run", "def")],
+        refs=[("mod_a.run", "x.y", "calls")],
+    )
+    g = graph.expand(db, "mod_a", "module", frozenset({"calls"}))
+    ids = {n.id: n.node_type for n in g.nodes}
+    assert ids.get("mod_a.Widget") == "class", "defined-but-unreferenced class must show"
+    assert ids.get("mod_a.run") == "function"

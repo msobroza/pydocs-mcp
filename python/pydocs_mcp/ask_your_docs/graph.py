@@ -126,14 +126,24 @@ def _type_of(node_id: str, modules: set[str]) -> str:
     return "class" if _short(node_id)[:1].isupper() else "function"
 
 
-def _direct_members(node_ids: set[str], module: str) -> list[str]:
-    """Referenced symbols exactly one segment below ``module`` (its own members)."""
-    out = [
-        nid
-        for nid in node_ids
-        if nid.startswith(module + ".") and "." not in nid[len(module) + 1 :]
-    ]
-    return sorted(out)
+def _defined_members(
+    conn: sqlite3.Connection, module: str, node_ids: set[str]
+) -> list[tuple[str, str]]:
+    """(name, kind) for every class/def DEFINED in ``module``.
+
+    Reads ``module_members`` (the authoritative definition list) and reconciles
+    each fs-derived module path to the import-path ``module``, so ALL defined
+    classes/functions show — not just the ones that happen to be referenced in
+    the call graph. Deduped by name across worktree-copy module rows.
+    """
+    prefixes = _prefixes(node_ids)
+    seen: dict[str, str] = {}
+    for raw, name, kind in conn.execute(
+        "SELECT module, name, kind FROM module_members WHERE package=?", (_OWN,)
+    ):
+        if _normalize(raw, prefixes) == module:
+            seen.setdefault(name, kind)
+    return sorted(seen.items())
 
 
 def overview(db_path: Path, project: str) -> Graph:
@@ -175,8 +185,11 @@ def expand(db_path: Path, node_id: str, node_type: str, kinds: frozenset[str]) -
             contains = tuple(Edge(node_id, n.id, "contains") for n in section_nodes)
             return Graph(section_nodes, contains)
         if node_type == "module":
-            members = _direct_members(node_ids, node_id)
-            member_nodes = tuple(Node(m, _short(m), _type_of(m, modules)) for m in members)
+            members = _defined_members(conn, node_id, node_ids)
+            member_nodes = tuple(
+                Node(f"{node_id}.{name}", name, "class" if kind == "class" else "function")
+                for name, kind in members
+            )
             contains = tuple(Edge(node_id, n.id, "contains") for n in member_nodes)
             return Graph(member_nodes, contains)
 
@@ -217,7 +230,7 @@ def node_meta(db_path: Path, node_id: str, node_type: str) -> NodeMeta | None:
             body = "\n\n".join(part for part in (row[1], row[2]) if part)
             return NodeMeta(node_id, node_type, row[0], body)
         if node_type == "module":
-            count = len(_direct_members(_node_ids(conn), node_id))
+            count = len(_defined_members(conn, node_id, _node_ids(conn)))
             return NodeMeta(node_id, "module", node_id, f"{count} members")
         if node_type in {"doc", "decision"}:
             if node_id.startswith(("section:", "decision:")):
