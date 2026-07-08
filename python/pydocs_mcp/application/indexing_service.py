@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -224,6 +225,17 @@ class IndexingService:
         NULL-hash rows always count as 'removed' so they self-heal on
         the first reindex per package (spec AC-8).
 
+        MULTISET, not set, semantics: a package can legitimately carry
+        several chunks whose identity tuple (package/module/title/text)
+        — and therefore ``content_hash`` — is identical (#69). A plain
+        hash-SET diff is blind to multiplicity: dropping one of two
+        duplicate-hash rows would leave both persisted (the surviving
+        hash is still "in" the incoming set), and adding a second
+        duplicate-hash chunk would be silently excluded (the hash is
+        already "in" the existing set). Per-hash COUNTS fix both
+        directions: for each hash, keep min(existing, incoming) rows,
+        delete the existing excess, and insert the incoming excess.
+
         Returns ``(removed_ids, added_chunks)``. The caller is responsible
         for inserting ``added_chunks`` and forwarding their embeddings —
         keeping the insert here would couple the diff to the vector path
@@ -236,16 +248,38 @@ class IndexingService:
         existing_pairs = await uow.chunks.list_id_hash_pairs(
             filter={ChunkFilterField.PACKAGE.value: package_name},
         )
-        incoming_hashes = {c.content_hash for c in incoming_chunks}
-        existing_by_hash = {h: cid for cid, h in existing_pairs if h}
-        removed_ids = [cid for cid, h in existing_pairs if not h or h not in incoming_hashes]
-        added_chunks = tuple(c for c in incoming_chunks if c.content_hash not in existing_by_hash)
+        # Group persisted ids by hash (NULL/empty hash never matches any
+        # incoming chunk, so its rows always end up in the removed side).
+        existing_ids_by_hash: dict[str, list[int]] = defaultdict(list)
+        for cid, h in existing_pairs:
+            if h:
+                existing_ids_by_hash[h].append(cid)
+
+        incoming_by_hash: dict[str, list[Chunk]] = defaultdict(list)
+        for c in incoming_chunks:
+            incoming_by_hash[c.content_hash].append(c)
+
+        removed_ids: list[int] = [cid for cid, h in existing_pairs if not h]
+        added_chunks: list[Chunk] = []
+        for h, existing_ids in existing_ids_by_hash.items():
+            incoming_for_hash = incoming_by_hash.get(h, [])
+            keep_count = min(len(existing_ids), len(incoming_for_hash))
+            # Keep the first `keep_count` existing rows; the rest are stale
+            # excess (multiplicity shrank) and get removed.
+            removed_ids.extend(existing_ids[keep_count:])
+            # Any incoming chunks beyond `keep_count` are genuinely new
+            # (multiplicity grew) and get added.
+            added_chunks.extend(incoming_for_hash[keep_count:])
+        # Hashes with no existing rows at all are entirely new.
+        for h, incoming_for_hash in incoming_by_hash.items():
+            if h not in existing_ids_by_hash:
+                added_chunks.extend(incoming_for_hash)
 
         if removed_ids:
             await uow.chunks.delete_by_ids(removed_ids)
             await uow.vectors.remove_vectors(removed_ids)
 
-        return removed_ids, added_chunks
+        return removed_ids, tuple(added_chunks)
 
     async def _persist_decisions(
         self,
@@ -376,11 +410,12 @@ class IndexingService:
         Diff-merge variant: ``input_chunks`` is the ``added_chunks``
         subset, NOT the full incoming batch. The persisted snapshot
         still includes the UNCHANGED rows the diff kept in place, so a
-        positional align would map the wrong row to the wrong
-        embedding. We match by ``content_hash`` instead — the hash is
-        unique per (package, module, title, text, pipeline_hash) tuple,
-        so it picks out exactly the freshly-inserted row for each input
-        chunk.
+        naive positional align would map the wrong row to the wrong
+        embedding, and a naive hash-only match would collapse multiple
+        same-hash rows onto one. ``_build_persisted_queue_by_hash`` does
+        a MULTISET match by ``content_hash`` — see its docstring — so
+        each input chunk pairs with its own freshly-inserted row, even
+        when several chunks share a hash (#69).
         """
         input_hashes = {c.content_hash for c in input_chunks}
         if not input_hashes:
@@ -398,49 +433,20 @@ class IndexingService:
             filter={ChunkFilterField.PACKAGE.value: package.name},
         )
         persisted_for_input = [p for p in persisted if p.content_hash in input_hashes]
-        if len(persisted_for_input) != len(input_chunks):
-            # Defensive: a hash-set mismatch means INSERT didn't land what
-            # we asked for (or two inputs share a hash — should be
-            # impossible given the hash inputs include title + text).
-            # Silently skipping is safer than corrupting the .tq index.
-            log.warning(
-                "Skipping vector write for %s: persisted matching count %d "
-                "does not match input chunk count %d.",
-                package.name,
-                len(persisted_for_input),
-                len(input_chunks),
-            )
+        persisted_queue_by_hash = _build_persisted_queue_by_hash(
+            persisted_for_input,
+            input_chunks,
+            package_name=package.name,
+        )
+        if persisted_queue_by_hash is None:
             return
-        by_hash = {p.content_hash: p for p in persisted_for_input}
         # Late-interaction split: dispatch each chunk's embedding to the
-        # store that matches its shape. ``np.ndarray`` → ``uow.vectors``
-        # (TurboQuant .tq sidecar), ``list[np.ndarray]`` → ``uow.multi_vectors``
-        # (PLAID-style ColBERT store). The two stores have distinct row
-        # shapes, so mis-routing would corrupt the backing index.
-        sv_ids: list[int] = []
-        sv_embeddings: list[Embedding] = []
-        mv_ids: list[int] = []
-        mv_embeddings: list[MultiVector] = []
-        seen_ids: set[int] = set()
-        for input_chunk in input_chunks:
-            persisted_chunk = by_hash[input_chunk.content_hash]
-            if input_chunk.embedding is None or persisted_chunk.id is None:
-                continue
-            # WHY: a package can carry >1 chunk with identical
-            # (package, module, title, text) -> identical content_hash, which
-            # by_hash collapses to one persisted row. Emitting that id more than
-            # once trips IdMapIndex.add_with_ids ("id N already present"). The
-            # colliding chunks are content-identical (same embedding), so writing
-            # the id's vector once is lossless.
-            if persisted_chunk.id in seen_ids:
-                continue
-            seen_ids.add(persisted_chunk.id)
-            if is_multi_vector(input_chunk.embedding):
-                mv_ids.append(persisted_chunk.id)
-                mv_embeddings.append(input_chunk.embedding)
-            else:
-                sv_ids.append(persisted_chunk.id)
-                sv_embeddings.append(input_chunk.embedding)
+        # store that matches its shape (single-vector .tq vs multi-vector
+        # PLAID). Extracted to ``_route_embeddings_by_shape`` to keep this
+        # method under the complexity gate.
+        sv_ids, sv_embeddings, mv_ids, mv_embeddings = _route_embeddings_by_shape(
+            input_chunks, persisted_queue_by_hash
+        )
         if sv_ids:
             await uow.vectors.add_vectors(sv_ids, sv_embeddings)
             # Stamp chunks.embedded in the SAME transaction as the vector
@@ -698,6 +704,99 @@ def _require_matching_package(package_name: str, chunks: tuple[Chunk, ...]) -> N
                 f"package.name {package_name!r}; expected metadata[{ChunkFilterField.PACKAGE.value!r}] "
                 f"== {package_name!r} (chunk title={chunk.metadata.get(ChunkFilterField.TITLE.value)!r})"
             )
+
+
+def _build_persisted_queue_by_hash(
+    persisted_for_input: list[Chunk],
+    input_chunks: tuple[Chunk, ...],
+    *,
+    package_name: str,
+) -> dict[str, list[Chunk]] | None:
+    """Pair each ``input_chunks`` entry with its OWN freshly-inserted persisted row.
+
+    MULTISET match, not a single-valued dict or a bare length check:
+    ``input_chunks`` can legitimately contain >1 chunk sharing a hash (#69
+    content-identical chunks), each persisted as its OWN row via
+    ``insert()``. ``persisted_for_input`` can ALSO legitimately exceed
+    ``len(input_chunks)`` per hash — e.g. one same-hash row was kept by the
+    diff (unchanged) while a second same-hash row was freshly added, so the
+    re-fetch returns both but ``input_chunks`` only covers the added one.
+    ``uow.chunks.list`` returns rows in ascending (insertion) rowid order,
+    and ``insert()`` assigns strictly increasing autoincrement ids — so for
+    any hash, the freshly-added rows are always the numerically-LAST rows
+    for that hash. This groups persisted rows per hash (ascending id
+    order) and keeps only the tail slice of size ``count`` (the
+    just-inserted rows), reversed so the caller's ``.pop()`` yields them
+    front-to-back — pairing the Nth added input chunk for a hash with the
+    Nth freshly-inserted row for that hash, never a row that predates this
+    reindex.
+
+    Returns ``None`` if any hash has fewer persisted rows than expected
+    (INSERT didn't land what was asked for) — the caller must skip the
+    vector write entirely rather than risk corrupting the ``.tq`` index.
+    """
+    persisted_by_hash: dict[str, list[Chunk]] = defaultdict(list)
+    for p in persisted_for_input:
+        persisted_by_hash[p.content_hash].append(p)
+
+    queue_by_hash: dict[str, list[Chunk]] = {}
+    for content_hash, count in Counter(c.content_hash for c in input_chunks).items():
+        rows_for_hash = persisted_by_hash.get(content_hash, [])
+        if len(rows_for_hash) < count:
+            log.warning(
+                "Skipping vector write for %s: persisted matching count %d "
+                "for hash is less than input chunk count %d.",
+                package_name,
+                len(rows_for_hash),
+                count,
+            )
+            return None
+        tail = rows_for_hash[-count:] if count else []
+        tail.reverse()
+        queue_by_hash[content_hash] = tail
+    return queue_by_hash
+
+
+def _route_embeddings_by_shape(
+    input_chunks: tuple[Chunk, ...],
+    persisted_queue_by_hash: dict[str, list[Chunk]],
+) -> tuple[list[int], list[Embedding], list[int], list[MultiVector]]:
+    """Pair each input chunk with its own freshly-inserted persisted row and
+    split by embedding shape. Extracted from ``_maybe_write_vectors`` to keep
+    that method under the cognitive-complexity gate.
+
+    Multiset pairing: a package can carry >1 chunk with identical
+    ``(package, module, title, text)`` -> identical ``content_hash``. Each
+    persisted row is popped exactly once per matching input chunk, so
+    genuinely distinct rows each get their own vector write — no id is emitted
+    twice (which would trip ``IdMapIndex.add_with_ids``: "id N already
+    present") and no row is silently starved of its embedding. ``np.ndarray``
+    embeddings route to the single-vector store, ``list[np.ndarray]`` to the
+    multi-vector store — distinct row shapes, so mis-routing would corrupt the
+    backing index.
+    """
+    sv_ids: list[int] = []
+    sv_embeddings: list[Embedding] = []
+    mv_ids: list[int] = []
+    mv_embeddings: list[MultiVector] = []
+    seen_ids: set[int] = set()
+    for input_chunk in input_chunks:
+        queue = persisted_queue_by_hash[input_chunk.content_hash]
+        if not queue:
+            continue
+        persisted_chunk = queue.pop()
+        if input_chunk.embedding is None or persisted_chunk.id is None:
+            continue
+        if persisted_chunk.id in seen_ids:
+            continue
+        seen_ids.add(persisted_chunk.id)
+        if is_multi_vector(input_chunk.embedding):
+            mv_ids.append(persisted_chunk.id)
+            mv_embeddings.append(input_chunk.embedding)
+        else:
+            sv_ids.append(persisted_chunk.id)
+            sv_embeddings.append(input_chunk.embedding)
+    return sv_ids, sv_embeddings, mv_ids, mv_embeddings
 
 
 def _stamp_decision_ids(chunks: tuple[Chunk, ...], key_to_id: dict[str, int]) -> tuple[Chunk, ...]:

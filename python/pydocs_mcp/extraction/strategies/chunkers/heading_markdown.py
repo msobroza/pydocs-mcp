@@ -24,6 +24,7 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _docstring_summary,
     _module_from_doc_path,
     _relpath,
+    _unclosed_fence_start,
 )
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
@@ -88,8 +89,16 @@ def _parse_md_headings(
     is code, not a heading. Pre-fix, the regex matched both and
     polluted the tree with phantom level-1 headings drawn from code
     comments.
+
+    An unclosed trailing fence (author error / truncated file) is masked
+    to end-of-document too, per CommonMark §4.5 — otherwise every
+    ``#``-prefixed comment line inside it re-parses as a phantom heading
+    (the same bug, resurrected for the unclosed case).
     """
     fenced_ranges = [(m.start(), m.end()) for m in _FENCED_RE.finditer(content)]
+    unclosed_start = _unclosed_fence_start(content)
+    if unclosed_start is not None:
+        fenced_ranges.append((unclosed_start, len(content)))
 
     def _in_fence(pos: int) -> bool:
         return any(start <= pos < end for start, end in fenced_ranges)

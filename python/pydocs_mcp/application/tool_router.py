@@ -62,6 +62,20 @@ class ToolRouter:
             return _select_service(self.services, project)
         return self.services[0]
 
+    async def _resolve_source(self, target: str, project: str) -> str:
+        """``depth='source'`` body — mirrors ``MultiProjectLookup._lookup_body``'s
+        project-routing shape (explicit project → single service; single-project
+        deployment → services[0]; otherwise resolve by recency) so a target
+        indexed only in a non-first project still resolves (spec §D7)."""
+        if project:
+            return await self._svc(project).symbol_source.source_for(target)
+        if len(self.services) == 1:
+            return await self.services[0].symbol_source.source_for(target)
+        return await self.lookup_router._resolve_by_recency(
+            lambda svc: svc.symbol_source.source_for(target),
+            target=target,
+        )
+
     async def search_codebase(self, payload: SearchInput) -> str:
         async def _body() -> str:
             body = await self.search_router._search_body(payload)
@@ -76,8 +90,14 @@ class ToolRouter:
 
     async def get_symbol(self, payload: SymbolInput) -> str:
         if payload.depth == "source":
-            svc = self._svc(payload.project)
-            return await self.envelope.wrap(lambda: svc.symbol_source.source_for(payload.target))
+            # Route through the SAME project-routing / recency resolution
+            # depth="summary"/"tree" use (MultiProjectLookup._resolve_by_recency)
+            # instead of hard-querying services[0] — otherwise a target indexed
+            # only in a NON-first project resolves for summary/tree but 404s for
+            # source, breaking the §D7 truncation-card recovery pointer.
+            return await self.envelope.wrap(
+                lambda: self._resolve_source(payload.target, payload.project)
+            )
         body = LookupInput(
             target=payload.target,
             show=_DEPTH_TO_SHOW[payload.depth],

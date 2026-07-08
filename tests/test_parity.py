@@ -49,6 +49,26 @@ class TestParsePyFileParity:
         py_syms = [(s.name, s.docstring) for s in py.parse_py_file(src)]
         assert rust_syms == py_syms
 
+    def test_nested_paren_default_arg(self):
+        # Regression: the old `\(([^)]*)\)` charclass in both engines can't
+        # span a nested ')' inside a default value, so a signature like
+        # `def resize(size=(640, 480)):` (ubiquitous in vision/ML libs)
+        # never matched at all — the symbol silently vanished from
+        # module_members on both sides. Pinning cross-engine parity here so
+        # a future fix to only one side (Rust src/lib.rs or the Python
+        # fallback) shows up as a parity failure, not a silent divergence.
+        src = (
+            "def resize(size=(640, 480)):\n"
+            '    """Resize."""\n'
+            "    pass\n\n"
+            "class A(B, metaclass=Meta()):\n"
+            '    """Uses a call in the base list."""\n'
+            "    pass\n"
+        )
+        rust_syms = [(s.name, s.kind, s.signature, s.docstring) for s in rust.parse_py_file(src)]
+        py_syms = [(s.name, s.kind, s.signature, s.docstring) for s in py.parse_py_file(src)]
+        assert rust_syms == py_syms
+
 
 class TestExtractModuleDocParity:
     def test_basic(self):

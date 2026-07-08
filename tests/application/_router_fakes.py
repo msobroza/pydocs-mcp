@@ -11,6 +11,7 @@ from pathlib import Path
 from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.formatting import pointer_token
 from pydocs_mcp.application.freshness import EnvelopeInfo
+from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.multi_project_search import ProjectServices
 from pydocs_mcp.application.null_services import NullDecisionService
@@ -98,9 +99,24 @@ class FakeLookup:
 
 
 class FakeSymbolSource:
-    """Verbatim-source stand-in for ToolRouter's ``depth='source'`` route."""
+    """Verbatim-source stand-in for ToolRouter's ``depth='source'`` route.
+
+    ``known_targets=None`` (default) resolves ANY target — the single-project
+    router tests don't care which symbol. Pass an explicit set to model a
+    real per-project ``SymbolSourceService``, which raises ``NotFoundError``
+    for a target not indexed in ITS OWN db (mirrors the real service's
+    ``uow.chunks.list`` miss) — needed to reproduce the multi-project
+    recency-skip gap where only one loaded project holds the target.
+    """
+
+    def __init__(self, known_targets: frozenset[str] | None = None) -> None:
+        self._known_targets = known_targets
 
     async def source_for(self, target: str) -> str:
+        if self._known_targets is not None and target not in self._known_targets:
+            raise NotFoundError(
+                f"'{target}' has no indexed source. {pointer_token('search', target)}"
+            )
         return f"# Source — `{target}`\n\n```python\ndef f():\n    return 1\n```\n"
 
 
@@ -145,16 +161,25 @@ def make_project(name: str = "solo", indexed_at: float = 0.0) -> LoadedProject:
 
 
 def make_service(
-    name: str = "solo", *, package_count: int = 1, indexed_at: float = 0.0
+    name: str = "solo",
+    *,
+    package_count: int = 1,
+    indexed_at: float = 0.0,
+    symbol_source: object | None = None,
 ) -> ProjectServices:
     """One fake project's service set — parametrized so multi-repo router tests
-    can load several distinguishable projects (workspace-card scenarios)."""
+    can load several distinguishable projects (workspace-card scenarios).
+
+    ``symbol_source`` lets a caller inject a project-scoped ``FakeSymbolSource``
+    (e.g. ``FakeSymbolSource(known_targets=frozenset({...}))``) to model a
+    target that is indexed in only ONE of several loaded projects.
+    """
     return ProjectServices(
         project=make_project(name, indexed_at),
         docs=FakeDocs(),
         api=FakeApi(),
         lookup=FakeLookup(),
-        symbol_source=FakeSymbolSource(),
+        symbol_source=symbol_source if symbol_source is not None else FakeSymbolSource(),
         overview=FakeOverview(package_count),
         decisions=NullDecisionService(),
     )

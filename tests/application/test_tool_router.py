@@ -19,7 +19,13 @@ from pydocs_mcp.application.multi_project_search import (
 )
 from pydocs_mcp.application.tool_router import ToolRouter
 
-from ._router_fakes import make_envelope, make_project, make_service, make_services
+from ._router_fakes import (
+    FakeSymbolSource,
+    make_envelope,
+    make_project,
+    make_service,
+    make_services,
+)
 
 
 def _tool_router() -> ToolRouter:
@@ -183,3 +189,46 @@ def test_overview_package_mode_bypasses_workspace_card() -> None:
     out = asyncio.run(_workspace_router().get_overview(OverviewInput(package="fastapi")))
     assert "# Overview — fastapi" in out
     assert "# Workspace overview" not in out
+
+
+def test_symbol_source_depth_resolves_via_recency_across_projects() -> None:
+    """depth='source' must use the SAME recency-loop resolution as
+    depth='summary'/'tree' (spec §D7 recovery chain).
+
+    Two projects loaded, no project= selector. The target is indexed ONLY in
+    "frontend" — the SECOND-loaded project but the MOST-RECENTLY-indexed one
+    (higher ``indexed_at``). ``_svc('')`` naively returns ``services[0]``
+    ("backend") unconditionally; a target present only in "frontend" must
+    still resolve when depth='source', exactly as it already does for
+    depth='summary' (which goes through ``_resolve_by_recency``).
+    """
+    target = "pkg.mod.OnlyInFrontend"
+    services = (
+        make_service(
+            "backend",
+            indexed_at=1.0,
+            symbol_source=FakeSymbolSource(known_targets=frozenset()),
+        ),
+        make_service(
+            "frontend",
+            indexed_at=2.0,
+            symbol_source=FakeSymbolSource(known_targets=frozenset({target})),
+        ),
+    )
+    router = ToolRouter(
+        services=services,
+        envelope=make_envelope(),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+
+    # Sanity check: depth='summary' already resolves cross-project via the
+    # recency loop (FakeLookup answers unconditionally regardless of project).
+    summary_out = asyncio.run(router.get_symbol(SymbolInput(target=target, depth="summary")))
+    assert target in summary_out
+
+    # The actual gap: depth='source' must resolve the SAME target instead of
+    # hard-querying services[0] ("backend", which doesn't know this symbol).
+    source_out = asyncio.run(router.get_symbol(SymbolInput(target=target, depth="source")))
+    assert "```python" in source_out
+    assert f"`{target}`" in source_out

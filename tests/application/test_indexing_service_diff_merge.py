@@ -229,6 +229,123 @@ async def test_reindex_sqlite_only_uow_works(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reindex_duplicate_hash_collapse_drops_stale_row(
+    tmp_path: Path,
+) -> None:
+    """Multiset gap: v1 has 2 identical-hash chunks, v2 has only 1.
+
+    ``_diff_merge_chunks`` diffs via ``{hash}`` SETS on both sides
+    (``incoming_hashes`` and ``existing_by_hash``), so hash multiplicity is
+    invisible to the diff. When v2 still contains one chunk with hash H,
+    the set-membership check ``h not in incoming_hashes`` is False for
+    BOTH persisted H-rows, so ``removed_ids`` stays empty and the stale
+    duplicate survives forever — no subsequent reindex can repair it
+    because the set diff can never see multiplicity.
+
+    Expected (multiset-correct) behavior: persisted row count tracks the
+    incoming multiplicity, i.e. drops from 2 to 1.
+    """
+    db_path = tmp_path / "x.db"
+    tq_path = tmp_path / "x.tq"
+    open_index_database(db_path).close()
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    svc = IndexingService(uow_factory=factory)
+
+    def _dup_chunk() -> Chunk:
+        # Fixed identity tuple (package/module/title/text) → same
+        # auto-derived content_hash across both instances (legitimate
+        # per #69's content-identical-chunks case).
+        return Chunk(
+            text="identical body",
+            metadata={"package": "demo", "module": "demo.mod", "title": "dup"},
+            embedding=_vec(0.1),
+        )
+
+    c1, c2 = _dup_chunk(), _dup_chunk()
+    assert c1.content_hash == c2.content_hash
+    await svc.reindex_package(_pkg("demo"), (c1, c2), ())
+
+    async with factory() as uow:
+        pairs_v1 = await uow.chunks.list_id_hash_pairs(filter={"package": "demo"})
+    assert len(pairs_v1) == 2  # precondition: both duplicate rows persisted
+
+    # v2 drops one of the two identical-hash chunks — only ONE H-chunk
+    # remains in the source.
+    await svc.reindex_package(_pkg("demo"), (_dup_chunk(),), ())
+
+    async with factory() as uow:
+        pairs_v2 = await uow.chunks.list_id_hash_pairs(filter={"package": "demo"})
+        tq_size_v2 = uow.vectors.size()
+
+    # Multiset-correct: exactly ONE row (and one vector) should survive.
+    assert len(pairs_v2) == 1
+    assert tq_size_v2 == 1
+
+
+@pytest.mark.asyncio
+async def test_reindex_duplicate_hash_expansion_adds_missing_row(
+    tmp_path: Path,
+) -> None:
+    """Multiset gap, reverse direction: v1 has 1 chunk, v2 has 2 identical-hash chunks.
+
+    ``added_chunks`` is filtered via ``c.content_hash not in existing_by_hash``
+    — a set-membership check. Since H is already a key in ``existing_by_hash``
+    after v1, BOTH incoming v2 chunks with hash H are excluded from
+    ``added_chunks``, so the source's second occurrence of H is silently
+    dropped and the persisted row count stays at 1 even though the source
+    now has 2 chunks with that identity tuple.
+
+    Expected (multiset-correct) behavior: persisted row count tracks the
+    incoming multiplicity, i.e. grows from 1 to 2.
+    """
+    db_path = tmp_path / "x.db"
+    tq_path = tmp_path / "x.tq"
+    open_index_database(db_path).close()
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    svc = IndexingService(uow_factory=factory)
+
+    def _dup_chunk() -> Chunk:
+        return Chunk(
+            text="identical body",
+            metadata={"package": "demo", "module": "demo.mod", "title": "dup"},
+            embedding=_vec(0.1),
+        )
+
+    # v1: a single chunk with hash H.
+    await svc.reindex_package(_pkg("demo"), (_dup_chunk(),), ())
+
+    async with factory() as uow:
+        pairs_v1 = await uow.chunks.list_id_hash_pairs(filter={"package": "demo"})
+    assert len(pairs_v1) == 1  # precondition
+
+    # v2: the source now carries TWO content-identical (same-hash) chunks.
+    c1, c2 = _dup_chunk(), _dup_chunk()
+    assert c1.content_hash == c2.content_hash
+    await svc.reindex_package(_pkg("demo"), (c1, c2), ())
+
+    async with factory() as uow:
+        pairs_v2 = await uow.chunks.list_id_hash_pairs(filter={"package": "demo"})
+        tq_size_v2 = uow.vectors.size()
+
+    # Multiset-correct: TWO rows should be persisted (v1's kept row + the
+    # freshly-added one), tracking the source's multiplicity — and each
+    # distinct row gets its OWN vector (#69 multiset pairing), so the .tq
+    # sidecar holds 2 vectors, not 1.
+    assert len(pairs_v2) == 2
+    assert tq_size_v2 == 2
+
+
+@pytest.mark.asyncio
 async def test_remove_package_wipes_vectors_atomically(tmp_path: Path) -> None:
     """AC-4: remove_package deletes chunks AND wipes their vectors."""
     db_path = tmp_path / "x.db"

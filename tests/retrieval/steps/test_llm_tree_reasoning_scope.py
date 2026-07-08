@@ -8,6 +8,7 @@ straight to ``state.candidates`` (no fusion step).
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 
@@ -186,6 +187,87 @@ async def test_rerank_empty_candidates_skips_llm() -> None:
     out = await step.run(state)
     assert out is state
     assert llm._calls == []  # no LLM call when there's nothing to rerank
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_without_qname_metadata_logs_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Realistic BM25-over-full-corpus stage 1: non-empty candidates whose
+    chunks carry no ``qualified_name`` metadata at all. ``_candidate_qnames``
+    yields an empty set, ``_scope_trees_to_candidates`` yields an empty
+    forest, and the ``if not trees: return state`` branch used to return
+    silently — unlike the zero-picks / no-matched-chunks branches, which log
+    the "passing stage-1 candidates through unchanged" warning
+    (PAGEINDEX_DIVS.md F6.4). This is the same silent-degradation failure
+    mode reached via a different early-return path."""
+    chunk_store = InMemoryChunkStore()
+    uow_factory = make_fake_uow_factory(
+        trees=InMemoryDocumentTreeStore(by_package={"__project__": [_module()]}),
+        chunks=chunk_store,
+    )
+    llm = FakeLlmClient(responses={"find a": json.dumps({"thinking": "", "node_list": []})})
+    step = LlmTreeReasoningStep(
+        llm_client=llm,
+        uow_factory=uow_factory,
+        prompt_template="tree_reasoning_pydocs_v1",
+        rerank_candidates=True,
+    )
+    # Non-empty candidates, but no chunk carries a qualified_name — e.g. a
+    # dependency chunk surfaced by BM25 over the full corpus.
+    no_qname_candidates = ChunkList(
+        items=(Chunk(text="some dependency text", metadata={"package": "numpy"}),)
+    )
+    state = _state(no_qname_candidates)
+    await _seed(chunk_store)
+
+    with caplog.at_level(logging.WARNING):
+        out = await step.run(state)
+
+    assert out is state  # passthrough: stage-1 candidates unchanged
+    assert llm._calls == []  # zero LLM calls — scoping short-circuited before the prompt
+    assert any(
+        "passing stage-1 candidates through unchanged" in r.getMessage() for r in caplog.records
+    ), "candidate-scoping-emptied-the-tree passthrough must log a warning like the other branches"
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_qnames_absent_from_tree_logs_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Candidates DO carry qualified_name metadata, but none of them exist
+    in the ``__project__`` tree (e.g. dependency qnames from a BM25-over-
+    full-corpus stage 1). ``_candidate_qnames`` is non-empty but
+    ``_filter_tree_to_qnames`` prunes every tree to None, so
+    ``_scope_trees_to_candidates`` still yields an empty forest and the
+    same silent early return is reached — must also warn."""
+    chunk_store = InMemoryChunkStore()
+    uow_factory = make_fake_uow_factory(
+        trees=InMemoryDocumentTreeStore(by_package={"__project__": [_module()]}),
+        chunks=chunk_store,
+    )
+    llm = FakeLlmClient(responses={"find a": json.dumps({"thinking": "", "node_list": []})})
+    step = LlmTreeReasoningStep(
+        llm_client=llm,
+        uow_factory=uow_factory,
+        prompt_template="tree_reasoning_pydocs_v1",
+        rerank_candidates=True,
+    )
+    # Qualified names present but foreign to the project tree entirely.
+    foreign_candidates = ChunkList(
+        items=(_chunk("numpy.ndarray.reshape"), _chunk("numpy.ndarray.flatten"))
+    )
+    state = _state(foreign_candidates)
+    await _seed(chunk_store)
+
+    with caplog.at_level(logging.WARNING):
+        out = await step.run(state)
+
+    assert out is state  # passthrough: stage-1 candidates unchanged
+    assert llm._calls == []  # zero LLM calls — scoping short-circuited before the prompt
+    assert any(
+        "passing stage-1 candidates through unchanged" in r.getMessage() for r in caplog.records
+    ), "candidate-scoping-emptied-the-tree passthrough must log a warning like the other branches"
 
 
 @pytest.mark.asyncio
