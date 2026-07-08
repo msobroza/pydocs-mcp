@@ -7,8 +7,9 @@
 # WHY dense seeding: the BM25-seeded pool structurally misses golds with
 # near-zero lexical overlap (full-corpus BM25 ranks 480/246 for two needles
 # that dense F2LLM-330M ranks at 1 — PAGEINDEX_DIVS.md F4). Identical to
-# pipelines/exp_bm25_tree_rerank.yaml EXCEPT stage 1 is dense_fetcher +
-# dense_scorer, so the only variable between the two runs is the candidate
+# pipelines/exp_bm25_tree_rerank.yaml EXCEPT stage 1 is dense_fetcher (its ANN
+# index score IS the candidate relevance — no separate dense_scorer step), so
+# the only variable between the two runs is the candidate
 # generator. Requires an embedder (the `embedding:` config) at index + search
 # time AND an LLM client (the `llm:` config + OPENAI_API_KEY) at search time.
 # Referenced by ../repoqa_dense_tree_rerank_gpt55.yaml.
@@ -24,9 +25,6 @@ steps:
     params:
       # Fetch well above k so top_k(200) isn't starved (default fetch is 50).
       limit: 300
-  - name: score
-    type: dense_scorer
-    params: {}
   - name: filter
     type: metadata_post_filter
     params: {}

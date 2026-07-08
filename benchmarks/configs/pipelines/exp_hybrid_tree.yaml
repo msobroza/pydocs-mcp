@@ -30,13 +30,15 @@ steps:
         - name: dense
           steps:
             - {name: fetch, type: dense_fetcher, params: {}}
-            - {name: score, type: dense_scorer, params: {}}
             - {name: filter, type: metadata_post_filter, params: {}}
             - {name: topk, type: top_k_filter, params: {publish_to: hybrid.dense.ranked}}
   - name: hybrid_rrf
     type: rrf_fusion
     params:
       branch_keys: [hybrid.bm25.ranked, hybrid.dense.ranked]
+  - name: dense_rerank
+    type: dense_scorer
+    params: {}
   - name: hybrid_publish
     type: top_k_filter
     params:

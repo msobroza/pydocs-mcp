@@ -626,8 +626,9 @@ measure top-K hits.
 
 The real-100-needle row is the headline figure. A **dense + hybrid retriever
 already ships in `pydocs-mcp`** (the `chunk_search_dense*` / `chunk_search_hybrid*`
-pipeline presets, with embedding-backed `dense_fetcher` / `dense_scorer` and RRF
-fusion) and works end-to-end in both the MCP server and the benchmark harness
+pipeline presets: an embedding-backed `dense_fetcher` for candidate generation,
+RRF fusion, and a post-fusion `dense_scorer` re-rank) and works end-to-end in
+both the MCP server and the benchmark harness
 (the harness persists the dense `.tq` sidecar at index time). No dense baseline
 has been recorded yet; when one is, it should beat `recall@10 = 18%` to be worth
 adopting as the default.

@@ -24,13 +24,18 @@ steps:
         - name: dense
           steps:
             - {name: fetch, type: dense_fetcher, params: {}}
-            - {name: score, type: dense_scorer, params: {}}
             - {name: filter, type: metadata_post_filter, params: {}}
             - {name: topk, type: top_k_filter, params: {publish_to: dense.ranked}}
   - name: fuse
     type: rrf_fusion
     params:
       k: 60
+  # Post-fusion dense re-rank of the fused candidate subset (turbovec allowlist
+  # score); BM25-only chunks keep their fused order and sink below. Runs before
+  # graph_expand so structural expansion seeds from the re-ranked top hits.
+  - name: dense_rerank
+    type: dense_scorer
+    params: {}
   # Graph expansion after fusion (recovers structural neighbours the fused set
   # missed), then centrality rerank toward the graph-central API. graph_expand
   # is pure SQL (no extra); centrality_prior reads node_scores (needs the
