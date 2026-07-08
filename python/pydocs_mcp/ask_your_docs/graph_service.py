@@ -9,7 +9,6 @@ and NO SQL and NO Streamlit, so it unit-tests against a fake reader.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydocs_mcp.ask_your_docs.bundle import BundleReader
@@ -59,10 +58,14 @@ def _module_of(node_id: str | None, modules: list[str]) -> str | None:
 
 
 def is_test(node_id: str) -> bool:
-    """True for test modules/files (``test``/``tests`` package, ``test_*`` or
-    ``*_test`` module, or ``conftest``)."""
+    """True for test modules/files: a ``test``/``tests`` package segment, a
+    ``conftest`` module, or a ``test_*`` / ``*_test`` / ``*_tests`` module.
+
+    Deliberately name-based (module/file granularity): a segment like ``testing``
+    or ``contest`` is NOT a test, so real modules such as ``pkg.testing`` survive.
+    """
     for seg in node_id.split("."):
-        if seg in _TEST_SEGMENTS or seg.startswith("test_") or seg.endswith("_test"):
+        if seg in _TEST_SEGMENTS or seg.startswith("test_") or seg.endswith(("_test", "_tests")):
             return True
     return False
 
@@ -93,13 +96,14 @@ def induce(g: Graph, node_types: frozenset[str], edge_kinds: frozenset[str]) -> 
     return Graph(nodes, edges, g.truncated)
 
 
-def _namespace_children(mods: set[str], focus: str, keep: Callable[[str], bool]) -> list[Node]:
+def _namespace_children(mods: set[str], focus: str) -> list[Node]:
     """The next dotted segment under ``focus``: a module if that exact prefix is a
-    module, else a package (it has modules deeper still)."""
+    module, else a package (it has modules deeper still). ``mods`` is assumed
+    already test-filtered by the caller, so test packages never appear."""
     prefix = focus + "." if focus else ""
     segs: dict[str, str] = {}
     for m in mods:
-        if not m.startswith(prefix) or not keep(m):
+        if not m.startswith(prefix):
             continue
         rest = m[len(prefix) :]
         if not rest:
@@ -115,8 +119,14 @@ def _namespace_children(mods: set[str], focus: str, keep: Callable[[str], bool])
 @dataclass(frozen=True, slots=True)
 class GraphService:
     reader: BundleReader
+    hide_tests: bool = True
+    """When set (default), test modules/files are excluded from every view —
+    a graph-wide invariant, not something individual methods opt into."""
 
     def _node_ids(self) -> set[str]:
+        # NB: unfiltered on purpose — the full reference space is what
+        # ``_normalize`` matches fs-derived modules against. Test exclusion
+        # happens on the *derived* module/neighbour sets, not here.
         ids: set[str] = set()
         for a, b, _kind in self.reader.reference_rows():
             if a:
@@ -125,12 +135,42 @@ class GraphService:
                 ids.add(b)
         return ids
 
-    def _module_set(self, prefixes: set[str]) -> set[str]:
-        return {
+    def _test_module_ids(self, prefixes: set[str]) -> frozenset[str]:
+        """Import-path ids of test modules. Detected on the RAW fs-derived module
+        (``member_rows``), which keeps its ``tests``/``test``/``conftest`` package
+        prefix even when ``_normalize`` would strip it — so a src-layout / path-root
+        mismatch can't smuggle a test module past a name check on the stripped id.
+        Empty when not hiding tests, so callers can skip the membership test."""
+        if not self.hide_tests:
+            return frozenset()
+        return frozenset(
             norm
             for (raw, _name, _kind) in self.reader.member_rows()
-            if (norm := _normalize(raw, prefixes))
-        }
+            if (norm := _normalize(raw, prefixes)) and (is_test(raw) or is_test(norm))
+        )
+
+    @staticmethod
+    def _under_test_module(node_id: str, test_mods: frozenset[str]) -> bool:
+        """True iff ``node_id`` is, or lives under, a test module. This is the ONLY
+        way test-ness is judged for nodes/edges — deliberately module-granular, so a
+        production symbol merely NAMED ``test_*`` (e.g. ``app.db.test_connection``)
+        is never hidden."""
+        return any(node_id == m or node_id.startswith(m + ".") for m in test_mods)
+
+    def _module_set(self, prefixes: set[str]) -> set[str]:
+        """Own modules in import-path form; test modules dropped when hiding tests.
+        This is the master switch — overview nodes, namespace children and the
+        module/package views all derive from here. Test-ness is judged on the RAW
+        module too, so a stripped ``tests.`` prefix can't leak the module back in."""
+        out: set[str] = set()
+        for raw, _name, _kind in self.reader.member_rows():
+            norm = _normalize(raw, prefixes)
+            if not norm:
+                continue
+            if self.hide_tests and (is_test(raw) or is_test(norm)):
+                continue
+            out.add(norm)
+        return out
 
     def modules(self) -> set[str]:
         """Own modules in import-path form (reconciled with the reference graph)."""
@@ -170,6 +210,8 @@ class GraphService:
 
         prefixes = _prefixes(self._node_ids())
         if node_type == "module":
+            # A surviving module is non-test, so ALL its members show — including a
+            # production def merely named ``test_*``. Test filtering is module-level.
             members = self._defined_members(node_id, prefixes)
             member_nodes = tuple(
                 Node(f"{node_id}.{name}", name, "class" if kind == "class" else "function")
@@ -178,6 +220,7 @@ class GraphService:
             return Graph(member_nodes, tuple(Edge(node_id, n.id, "contains") for n in member_nodes))
 
         module_set = self._module_set(prefixes)
+        test_mods = self._test_module_ids(prefixes)
         edges: list[Edge] = []
         nodes: dict[str, Node] = {}
         total = 0
@@ -185,7 +228,7 @@ class GraphService:
             if kind not in kinds or not to_id:
                 continue
             other = to_id if from_id == node_id else from_id
-            if other == node_id:
+            if other == node_id or self._under_test_module(other, test_mods):
                 continue
             total += 1
             if len(edges) >= MAX_NEIGHBORS:
@@ -196,7 +239,10 @@ class GraphService:
 
     def edges_for(self, visible: set[str], kinds: frozenset[str]) -> tuple[Edge, ...]:
         """Reference edges among the visible nodes, each raw edge collapsed to the
-        nearest visible *ancestor* (longest visible dotted prefix of an endpoint)."""
+        nearest visible *ancestor* (longest visible dotted prefix of an endpoint).
+        Edges whose collapsed anchor is a test module are dropped (defensive — the
+        visible set is normally already test-free)."""
+        test_mods = self._test_module_ids(_prefixes(self._node_ids()))
         vis = sorted(visible, key=len, reverse=True)
 
         def anchor(nid: str | None) -> str | None:
@@ -214,20 +260,18 @@ class GraphService:
                 continue
             a = anchor(from_id)
             b = anchor(to_id)
-            if a and b and a != b and (a, b, kind) not in seen:
-                seen.add((a, b, kind))
-                out.append(Edge(a, b, kind))
+            if not (a and b) or a == b or (a, b, kind) in seen:
+                continue
+            if self._under_test_module(a, test_mods) or self._under_test_module(b, test_mods):
+                continue
+            seen.add((a, b, kind))
+            out.append(Edge(a, b, kind))
         return tuple(out)
 
-    def children(
-        self, focus: str, content: str = "Codebase", hide_tests: bool = True
-    ) -> tuple[Node, ...]:
+    def children(self, focus: str, content: str = "Codebase") -> tuple[Node, ...]:
         """Direct namespace children of ``focus`` for the zoom view (root -> top
-        packages/modules -> members -> methods; doc file -> sections)."""
-
-        def keep(nid: str) -> bool:
-            return not (hide_tests and is_test(nid))
-
+        packages/modules -> members -> methods; doc file -> sections). Test
+        modules/files are excluded per the service's ``hide_tests`` flag."""
         if focus.startswith("doc:"):
             return self.expand(focus, "doc", frozenset()).nodes
 
@@ -238,27 +282,24 @@ class GraphService:
         if focus == "":
             nodes: list[Node] = []
             if content != "Documentation":
-                nodes += _namespace_children(mods, "", keep)
+                nodes += _namespace_children(mods, "")
             if content != "Codebase":
                 nodes += self._doc_decision_children()
             return tuple(nodes)
 
-        if focus in mods:  # module -> its defined members
+        if focus in mods:  # module -> its defined members (module is non-test)
             members = self._defined_members(focus, prefixes)
             return tuple(
                 Node(f"{focus}.{name}", name, "class" if kind == "class" else "function")
                 for name, kind in members
-                if keep(f"{focus}.{name}")
             )
 
         if any(m.startswith(focus + ".") for m in mods):  # a package prefix
-            return tuple(_namespace_children(mods, focus, keep))
+            return tuple(_namespace_children(mods, focus))
 
         # a class (or leaf) -> its methods (ids one segment beyond ``focus``)
         methods = sorted(
-            nid
-            for nid in ids
-            if nid.startswith(focus + ".") and "." not in nid[len(focus) + 1 :] and keep(nid)
+            nid for nid in ids if nid.startswith(focus + ".") and "." not in nid[len(focus) + 1 :]
         )
         return tuple(Node(mid, _short(mid), "function") for mid in methods)
 

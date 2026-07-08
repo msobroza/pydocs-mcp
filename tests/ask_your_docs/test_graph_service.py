@@ -227,8 +227,14 @@ def test_children_root_includes_docs_and_decisions(tmp_path):
 def test_is_test_flags_test_modules():
     assert gs.is_test("pkg.tests.unit.test_cli")
     assert gs.is_test("pkg.foo_test")
+    assert gs.is_test("pkg.foo_tests")  # *_tests suffix
+    assert gs.is_test("pkg.test.helpers")  # singular `test` package segment
     assert gs.is_test("pkg.conftest")
     assert not gs.is_test("pkg.adapters.base")
+    # false-positive guards: name-based, module granularity — these stay visible
+    assert not gs.is_test("needle.testing")  # a real "testing utilities" module
+    assert not gs.is_test("app.contest.latest")  # 'contest'/'latest' are not tests
+    assert not gs.is_test("pkg.pytest_plugin")  # a plugin, not a test file
 
 
 def test_type_of_from_id_prefixes():
@@ -238,6 +244,144 @@ def test_type_of_from_id_prefixes():
     assert gs.type_of("pkg.a", mods) == "module"
     assert gs.type_of("pkg.a.Foo", mods) == "class"
     assert gs.type_of("pkg.a.run", mods) == "function"
+
+
+# --- test-file exclusion is a graph-wide invariant --------------------------
+
+
+def _mixed_bundle(tmp_path: Path) -> Path:
+    """One real package (``app``) plus a ``tests`` package that calls into it."""
+    return make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[
+            ("app.cli", "main", "def"),
+            ("tests.test_cli", "test_main", "def"),
+            ("tests.conftest", "fixture", "def"),
+        ],
+        refs=[("tests.test_cli.test_main", "app.cli.main", "calls")],
+    )
+
+
+def test_children_hides_test_package_by_default(tmp_path):
+    db = _mixed_bundle(tmp_path)
+    on = {n.id for n in _svc(db).children("")}  # default hide_tests=True
+    assert "app" in on and "tests" not in on
+
+
+def test_overview_excludes_tests_by_default(tmp_path):
+    nodes = {n.id for n in _svc(_mixed_bundle(tmp_path)).overview("demo").nodes}
+    assert "app.cli" in nodes
+    assert not any(gs.is_test(n) for n in nodes)  # no tests.* module leaks
+
+
+def test_overview_edges_never_touch_test_modules(tmp_path):
+    g = _svc(_mixed_bundle(tmp_path)).overview("demo")
+    endpoints = {e.source for e in g.edges} | {e.target for e in g.edges}
+    assert not any(gs.is_test(x) for x in endpoints)
+
+
+def test_expand_symbol_drops_test_neighbors_by_default(tmp_path):
+    # app.cli.main is *called by* a test; that test neighbour must not appear.
+    g = _svc(_mixed_bundle(tmp_path)).expand("app.cli.main", "function", frozenset({"calls"}))
+    assert not any(gs.is_test(n.id) for n in g.nodes)
+
+
+def test_hide_tests_off_restores_every_view(tmp_path):
+    db = _mixed_bundle(tmp_path)
+    svc = GraphService(SqliteBundleReader(db), hide_tests=False)
+    assert "tests" in {n.id for n in svc.children("")}
+    assert "tests.test_cli" in {n.id for n in svc.overview("demo").nodes}
+    neighbors = {n.id for n in svc.expand("app.cli.main", "function", frozenset({"calls"})).nodes}
+    assert "tests.test_cli.test_main" in neighbors
+
+
+def test_edges_for_drops_edges_collapsing_to_a_test_ancestor(tmp_path):
+    db = _mixed_bundle(tmp_path)
+    # Even if a test node is (wrongly) in the visible set, its edges are dropped.
+    edges = _svc(db).edges_for({"app.cli", "tests.test_cli"}, frozenset({"calls"}))
+    assert all(not gs.is_test(e.source) and not gs.is_test(e.target) for e in edges)
+
+
+def test_edges_for_drops_edge_into_a_test_target(tmp_path):
+    # A real module referencing a test symbol: the edge's TARGET anchor is a test
+    # module and must be dropped (pins the b-side guard, not just the a-side).
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[("app.cli", "main", "def"), ("tests.test_cli", "helper", "def")],
+        refs=[("app.cli.main", "tests.test_cli.helper", "calls")],
+    )
+    assert _svc(db).edges_for({"app.cli", "tests.test_cli"}, frozenset({"calls"})) == ()
+
+
+def _stripped_test_bundle(tmp_path: Path) -> Path:
+    """The fs module keeps its ``tests.`` prefix, but the reference graph records
+    it stripped (src-layout / path-root mismatch) — the case is_test-on-normalized
+    used to leak."""
+    return make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[("app.core", "go", "def"), ("tests.support.factory", "build", "def")],
+        refs=[("support.factory.build", "app.core.go", "calls")],
+    )
+
+
+def test_prefix_stripped_test_module_stays_hidden(tmp_path):
+    db = _stripped_test_bundle(tmp_path)
+    svc = _svc(db)
+    assert "support.factory" not in svc.modules()
+    assert "support.factory" not in {n.id for n in svc.overview("demo").nodes}
+    assert "support" not in {n.id for n in svc.children("")}
+    # toggle off brings the (correctly test) module back
+    off = GraphService(SqliteBundleReader(db), hide_tests=False)
+    assert "support.factory" in {n.id for n in off.overview("demo").nodes}
+
+
+def test_expand_hides_prefix_stripped_test_neighbor(tmp_path):
+    db = _stripped_test_bundle(tmp_path)
+    kept = {n.id for n in _svc(db).expand("app.core.go", "function", frozenset({"calls"})).nodes}
+    assert "support.factory.build" not in kept
+    off = {
+        n.id
+        for n in GraphService(SqliteBundleReader(db), hide_tests=False)
+        .expand("app.core.go", "function", frozenset({"calls"}))
+        .nodes
+    }
+    assert "support.factory.build" in off
+
+
+def test_production_test_named_members_are_not_hidden(tmp_path):
+    # test filtering is module-granular: a production def NAMED `test_*` inside a
+    # non-test module must NOT be hidden (no member-name over-exclusion).
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[
+            ("app.db", "connect", "def"),
+            ("app.db", "test_connection", "def"),
+            ("app.db", "smoke_test", "def"),
+        ],
+        refs=[("app.db.connect", "x.y", "calls")],
+    )
+    svc = _svc(db)  # default hide_tests=True
+    via_children = {n.id for n in svc.children("app.db")}
+    via_expand = {n.id for n in svc.expand("app.db", "module", frozenset()).nodes}
+    for ids in (via_children, via_expand):
+        assert {"app.db.connect", "app.db.test_connection", "app.db.smoke_test"} <= ids
+
+
+def test_expand_truncated_counts_only_kept_neighbors(tmp_path):
+    # A hub with >MAX_NEIGHBORS non-test callees PLUS test callees. Hidden test
+    # neighbours must not inflate `truncated` (guard runs before the counter).
+    n_real = gs.MAX_NEIGHBORS + 5
+    members = [("app.hub", "run", "def")]
+    members += [("app.leaf", f"g{i}", "def") for i in range(n_real)]
+    members += [("tests.t", f"t{i}", "def") for i in range(10)]
+    refs = [("app.hub.run", f"app.leaf.g{i}", "calls") for i in range(n_real)]
+    refs += [("app.hub.run", f"tests.t.t{i}", "calls") for i in range(10)]
+    g = _svc(make_bundle(tmp_path / "demo_0123456789.db", members=members, refs=refs)).expand(
+        "app.hub.run", "function", frozenset({"calls"})
+    )
+    assert len(g.edges) == gs.MAX_NEIGHBORS
+    assert g.truncated == 5  # only the capped NON-test neighbours; the 10 tests don't count
+    assert not any(gs.is_test(n.id) for n in g.nodes)
 
 
 # --- the seam: GraphService runs on a fake reader (no SQLite) ---------------
