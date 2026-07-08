@@ -57,9 +57,9 @@ def _load_watchdog():
     the no-extras case without touching the actual site-packages tree.
 
     The matching `FileSystemEventHandler` class is NOT imported here —
-    `_Handler` (inside `run_until_cancelled`) uses duck typing
-    (watchdog's `Observer.schedule(handler, ...)` only calls
-    `handler.on_any_event(event)`; no isinstance check). Decoupling
+    `_Handler` (inside `run_until_cancelled`) uses duck typing: watchdog's
+    `BaseObserver` invokes `handler.dispatch(event)` with no isinstance
+    check, so implementing `dispatch` directly is sufficient. Decoupling
     keeps the test path watchdog-free when callers pass
     `observer_factory=FakeObserver`.
     """
@@ -132,22 +132,35 @@ class FileWatcher:
         watcher_self = self
 
         # Plain class (no FileSystemEventHandler parent): watchdog's
-        # Observer.schedule() is duck-typed — it only calls
-        # `handler.on_any_event(event)`. Dropping the inheritance keeps the
-        # test path watchdog-free when callers pass `observer_factory=
-        # FakeObserver`, so unit tests don't depend on the `[watch]` extras.
+        # BaseObserver dispatches every event via `handler.dispatch(event)`,
+        # so implementing `dispatch` directly satisfies the REAL contract
+        # while keeping the test path watchdog-free when callers pass
+        # `observer_factory=FakeObserver`. (A handler with only
+        # `on_any_event` dies with AttributeError in the emitter thread —
+        # watch mode then silently never fires.)
         class _Handler:
-            def on_any_event(self, event) -> None:
+            def dispatch(self, event) -> None:
                 # WHY: `watchdog` calls this from its own native thread.
                 # `loop.call_soon_threadsafe(queue.put_nowait, ...)` is the
                 # documented bridge — never `queue.put_nowait` directly,
                 # which would race the asyncio side.
-                path = Path(event.src_path)
-                if not watcher_self._matches(path):
+                #
+                # Moved events (atomic-save editors: write `app.py.tmp`,
+                # rename over `app.py`) carry the real file only in
+                # `dest_path`; non-move events default it to "". Consult
+                # BOTH ends so a tmp→real rename triggers reindex and a
+                # real→elsewhere rename (content removed) does too.
+                candidates = [Path(event.src_path)]
+                dest = getattr(event, "dest_path", "")
+                if dest:
+                    candidates.append(Path(dest))
+                matched = [p for p in candidates if watcher_self._matches(p)]
+                if not matched:
                     return
                 # Loop closed (observer being torn down): drop the event.
                 with contextlib.suppress(RuntimeError):
-                    loop.call_soon_threadsafe(queue.put_nowait, path)
+                    for path in matched:
+                        loop.call_soon_threadsafe(queue.put_nowait, path)
 
         observer = self.observer_factory()  # type: ignore[misc]
         observer.schedule(_Handler(), str(self.root), recursive=True)
