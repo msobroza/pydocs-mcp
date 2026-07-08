@@ -260,6 +260,15 @@ async def test_on_change_isolates_reindex_failure(tmp_path, monkeypatch, caplog)
 
     monkeypatch.setattr("pydocs_mcp.__main__._run_indexing", _raising_run_indexing)
 
+    # Inject FakeObserver so the test is independent of the optional `[watch]`
+    # extra: FileWatcher.__post_init__ resolves watchdog at construction and
+    # raises ServiceUnavailableError when it isn't installed (the CI base env),
+    # which has nothing to do with the on_change reindex-isolation under test.
+    from pydocs_mcp.serve import watcher as watcher_mod
+    from tests._fakes import FakeObserver
+
+    monkeypatch.setattr(watcher_mod, "_load_watchdog", lambda: FakeObserver)
+
     _watcher, on_change = _build_watcher_and_callback(args, watch_cfg)
 
     with caplog.at_level(logging.ERROR, logger="pydocs-mcp"):
