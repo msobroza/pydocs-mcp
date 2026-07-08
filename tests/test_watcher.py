@@ -70,7 +70,9 @@ def test_watcher_construction_succeeds_when_watchdog_present(tmp_path: Path) -> 
 def test_fake_observer_injects_events_synchronously() -> None:
     """The FakeObserver test helper records start/stop/schedule calls
     and exposes a `.fire(path)` hook tests can call to inject events
-    without filesystem timing nondeterminism."""
+    without filesystem timing nondeterminism. Injection goes through
+    `handler.dispatch(event)` — the entrypoint the real watchdog
+    Observer calls; the fake must not be more lenient than watchdog."""
     from tests._fakes import FakeObserver
 
     obs = FakeObserver()
@@ -81,7 +83,7 @@ def test_fake_observer_injects_events_synchronously() -> None:
     fired: list[str] = []
 
     class _Handler:
-        def on_any_event(self, event):
+        def dispatch(self, event):
             fired.append(event.src_path)
 
     obs.schedule(_Handler(), "/tmp/some/dir", recursive=True)
@@ -93,9 +95,33 @@ def test_fake_observer_injects_events_synchronously() -> None:
     obs.join()  # idempotent no-op
 
 
-def test_fake_observer_fire_event_has_src_path_attr() -> None:
-    """`fire(path)` synthesizes an event with the `src_path` attr the
-    watchdog handler expects (mirrors `watchdog.events.FileSystemEvent`)."""
+def test_fake_observer_rejects_handler_without_dispatch() -> None:
+    """A handler exposing only `on_any_event` dies with AttributeError in
+    the REAL watchdog emitter thread (`BaseObserver.dispatch_events` calls
+    `handler.dispatch(event)`). The fake enforces the same contract so a
+    dispatch-less handler can never pass unit tests while being broken in
+    production."""
+    import pytest
+
+    from tests._fakes import FakeObserver
+
+    obs = FakeObserver()
+    obs.start()
+
+    class _OnAnyEventOnly:
+        def on_any_event(self, event):  # pragma: no cover — must not be called
+            raise AssertionError("real watchdog never calls on_any_event directly")
+
+    obs.schedule(_OnAnyEventOnly(), "/x", recursive=True)
+    with pytest.raises(AttributeError):
+        obs.fire("/x/a.py")
+
+
+def test_fake_observer_fire_event_has_src_and_dest_path_attrs() -> None:
+    """`fire(path)` synthesizes an event with the `src_path` / `dest_path`
+    attrs the watchdog handler expects (mirrors
+    `watchdog.events.FileSystemEvent`, whose non-move events default
+    `dest_path` to '')."""
     from tests._fakes import FakeObserver
 
     obs = FakeObserver()
@@ -103,13 +129,17 @@ def test_fake_observer_fire_event_has_src_path_attr() -> None:
     captured: list[object] = []
 
     class _Handler:
-        def on_any_event(self, event):
+        def dispatch(self, event):
             captured.append(event)
 
     obs.schedule(_Handler(), "/x", recursive=True)
     obs.fire("/x/a.py")
-    assert hasattr(captured[0], "src_path")
     assert captured[0].src_path == "/x/a.py"
+    assert captured[0].dest_path == ""
+
+    obs.fire_moved("/x/a.py.tmp", "/x/a.py")
+    assert captured[1].src_path == "/x/a.py.tmp"
+    assert captured[1].dest_path == "/x/a.py"
 
 
 async def test_watcher_filters_unrelated_events(tmp_path: Path) -> None:

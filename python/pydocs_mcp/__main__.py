@@ -508,11 +508,20 @@ def _build_watcher_and_callback(
         debounce_ms=watch_cfg.debounce_ms,
     )
 
+    # File-change reindexes must NEVER inherit --force: force wipes the
+    # whole cache (SQLite + .tq via IndexingService.clear_all) and re-embeds
+    # project + dependencies — what the user asked for on the INITIAL pass,
+    # catastrophic on every save (and in serve --watch mode, queries during
+    # the re-embed window would hit an empty index). Copy the namespace so
+    # the caller-driven initial pass keeps its force semantics.
+    watch_args = argparse.Namespace(**vars(args))
+    watch_args.force = False
+
     async def _on_change() -> None:
         # Reindex via the same Phase 1 helper used at startup. Cache
         # makes the no-change case <100ms (spec §2).
         try:
-            await _run_indexing(args)
+            await _run_indexing(watch_args)
         except Exception as exc:
             # WHY: a reindex failure during the watch loop should NOT
             # take down the consumer (MCP server in --watch mode; the
