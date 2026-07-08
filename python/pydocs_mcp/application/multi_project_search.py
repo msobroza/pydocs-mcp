@@ -29,7 +29,7 @@ from pydocs_mcp.application.formatting import (
     strip_pointers,
 )
 from pydocs_mcp.application.lookup_service import LookupService
-from pydocs_mcp.application.mcp_errors import NotFoundError
+from pydocs_mcp.application.mcp_errors import InvalidArgumentError, NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
 from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.protocols import DecisionNavigator
@@ -146,8 +146,20 @@ async def render_single_search(
 
 
 def _select_service(services: tuple[ProjectServices, ...], project_name: str) -> ProjectServices:
-    """Resolve the one ``ProjectServices`` whose loaded db matches ``project_name``."""
-    chosen = select_project([s.project for s in services], project_name)
+    """Resolve the one ``ProjectServices`` whose loaded db matches ``project_name``.
+
+    ``select_project`` raises ``KeyError`` for an unknown name — that's a
+    storage-layer detail, not an MCP error type. Left uncaught it would fall
+    through server._run_tool's generic ``except Exception`` arm and surface
+    as ``ServiceUnavailableError``, misleading a client into believing the
+    server is down rather than that their own ``project=`` argument was
+    wrong. Re-raise as ``InvalidArgumentError`` (typed, passes through
+    _run_tool unchanged) so a bad selector reads as a client-input error.
+    """
+    try:
+        chosen = select_project([s.project for s in services], project_name)
+    except KeyError as e:
+        raise InvalidArgumentError(str(e)) from e
     return next(s for s in services if s.project.db_path == chosen.db_path)
 
 

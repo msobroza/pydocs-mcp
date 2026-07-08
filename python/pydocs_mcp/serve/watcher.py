@@ -204,49 +204,93 @@ class FileWatcher:
         # discards each task when it completes via `add_done_callback`.
         bg_tasks: set[asyncio.Task] = set()
 
-        async def _drain_and_fire(paths: list[Path]) -> None:
-            self._log_trigger(paths)
-            await on_change()
-
-        async def _trigger_with_followup(paths: list[Path]) -> None:
-            # If a reindex is in flight, accumulate the paths so the
-            # in-flight reindex's post-fire drain can carry them into the
-            # follow-up log line.
-            if reindex_lock.locked():
-                deferred_paths.extend(paths)
-                log.debug("watch: in-flight reindex; queued follow-up")
-                return
-            async with reindex_lock:
-                await _drain_and_fire(paths)
-                # `while` (not `if`): a continuously-edited workspace can
-                # queue more events DURING the follow-up reindex itself;
-                # keep draining until idle so we don't silently miss a
-                # burst that lands while we're still inside the lock.
-                while deferred_paths:
-                    follow_up = deferred_paths.copy()
-                    deferred_paths.clear()
-                    log.info("watch: in-flight follow-up reindex firing")
-                    await _drain_and_fire(follow_up)
-
-        while True:
-            first_path = await queue.get()
-            pending_paths: list[Path] = [first_path]
+        try:
             while True:
-                try:
-                    nxt = await asyncio.wait_for(queue.get(), timeout=debounce_s)
-                    pending_paths.append(nxt)
-                except TimeoutError:
-                    break
-            # Fire-and-forget so the consumer loop can immediately resume
-            # draining queue events into `pending["flag"]` while the
-            # current reindex runs. Hold a strong ref in `bg_tasks` to
-            # prevent the event loop from GC-ing the pending task.
-            task = asyncio.create_task(
-                _trigger_with_followup(pending_paths),
-                name="watcher-trigger",
-            )
-            bg_tasks.add(task)
-            task.add_done_callback(bg_tasks.discard)
+                first_path = await queue.get()
+                pending_paths: list[Path] = [first_path]
+                while True:
+                    try:
+                        nxt = await asyncio.wait_for(queue.get(), timeout=debounce_s)
+                        pending_paths.append(nxt)
+                    except TimeoutError:
+                        break
+                # Fire-and-forget so the consumer loop can immediately resume
+                # draining queue events while the current reindex runs. Hold a
+                # strong ref in `bg_tasks` to prevent the event loop from
+                # GC-ing the pending task.
+                task = asyncio.create_task(
+                    self._run_trigger(
+                        pending_paths,
+                        reindex_lock=reindex_lock,
+                        deferred_paths=deferred_paths,
+                        on_change=on_change,
+                    ),
+                    name="watcher-trigger",
+                )
+                bg_tasks.add(task)
+                task.add_done_callback(bg_tasks.discard)
+        finally:
+            # WHY: `run_until_cancelled` cancellation (server shutdown mid-
+            # reindex) must not leave a "watcher-trigger" task running
+            # unsupervised after this coroutine returns — it would keep
+            # writing SQLite until interpreter/loop teardown cancels it
+            # mid-transaction, or get GC'd with a "Task was destroyed but
+            # it is pending" warning. Cancel + await every still-running
+            # trigger task here so shutdown has a defined order: in-flight
+            # reindex is cancelled and observed before `_consume` returns.
+            for bg_task in bg_tasks:
+                bg_task.cancel()
+            if bg_tasks:
+                await asyncio.gather(*bg_tasks, return_exceptions=True)
+
+    async def _run_trigger(
+        self,
+        paths: list[Path],
+        *,
+        reindex_lock: asyncio.Lock,
+        deferred_paths: list[Path],
+        on_change: Callable[[], Awaitable[None]],
+    ) -> None:
+        """One fired trigger: reindex ``paths``, then drain any paths that
+        arrived mid-flight. Extracted from :meth:`_consume` so the consumer
+        loop stays under the cognitive-complexity gate; scheduled
+        fire-and-forget (one task per debounced burst).
+
+        ``reindex_lock`` / ``deferred_paths`` are owned by the ``_consume``
+        frame and shared by reference — safe because ``_consume`` is the
+        single async consumer and every write here is serialized through the
+        event loop.
+        """
+        # If a reindex is in flight, accumulate the paths so the in-flight
+        # reindex's post-fire drain carries them into the follow-up log line.
+        if reindex_lock.locked():
+            deferred_paths.extend(paths)
+            log.debug("watch: in-flight reindex; queued follow-up")
+            return
+
+        async def _drain_guarded(batch: list[Path]) -> None:
+            # `on_change` (e.g. `_run_indexing`) can raise — a transient sqlite
+            # "database is locked" is the canonical case. A raise must NOT skip
+            # draining `deferred_paths` (those paths would sit stranded until an
+            # unrelated future event, silently losing edits in an idle
+            # workspace) or leave the task exception unretrieved. Guarding every
+            # drain keeps the `while` loop below running regardless of failures.
+            self._log_trigger(batch)
+            try:
+                await on_change()
+            except Exception:
+                log.exception("watch: reindex failed")
+
+        async with reindex_lock:
+            await _drain_guarded(paths)
+            # `while` (not `if`): a continuously-edited workspace can queue more
+            # events DURING the follow-up reindex itself; keep draining until
+            # idle so we don't silently miss a burst that lands mid-lock.
+            while deferred_paths:
+                follow_up = deferred_paths.copy()
+                deferred_paths.clear()
+                log.info("watch: in-flight follow-up reindex firing")
+                await _drain_guarded(follow_up)
 
     def _log_trigger(self, paths: list[Path]) -> None:
         """Log the trigger paths (cap at 3 + a count to keep logs sane).

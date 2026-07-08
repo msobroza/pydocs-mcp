@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from pydocs_mcp.application.mcp_errors import InvalidArgumentError, ServiceUnavailableError
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.storage.index_metadata import write_index_metadata
 from pydocs_mcp.multirepo import EmbedderMismatchError
@@ -195,3 +196,76 @@ async def test_get_overview_project_scope_renders_that_projects_card(tmp_path: P
     out = await tools.get_overview(OverviewInput(project="backend"))
     assert "# Overview — __project__" in out
     assert "# Workspace overview" not in out
+
+
+async def _load_frontend_backend_workspace(tmp_path: Path):
+    from pydocs_mcp.server import build_routers
+
+    cfg = _default_config()
+    _stamp_db(
+        tmp_path / "frontend_1010101010.db",
+        name="frontend",
+        model=cfg.embedding.model_name,
+        dim=cfg.embedding.dim,
+    )
+    _stamp_db(
+        tmp_path / "backend_2020202020.db",
+        name="backend",
+        model=cfg.embedding.model_name,
+        dim=cfg.embedding.dim,
+    )
+    tools, services = build_routers(cfg, workspace=tmp_path)
+    return tools, services
+
+
+@pytest.mark.asyncio
+async def test_search_codebase_unknown_project_raises_invalid_argument(tmp_path: Path) -> None:
+    # A typo'd project= selector on a multi-repo server (e.g. "fronten" instead
+    # of "frontend") is a client-input error, NOT a backend/service-availability
+    # failure. Before the fix, select_project's KeyError propagated through
+    # ToolRouter._svc / MultiProjectSearch._search_body uncaught by _run_tool's
+    # typed-error passthrough, so server._run_tool's generic Exception arm wrapped
+    # it in ServiceUnavailableError — misleading a client into thinking the
+    # server (not their argument) was unavailable.
+    from pydocs_mcp.application.mcp_inputs import SearchInput
+
+    tools, _services = await _load_frontend_backend_workspace(tmp_path)
+
+    with pytest.raises(InvalidArgumentError) as exc_info:
+        await tools.search_codebase(SearchInput(query="anything", project="fronten"))
+    message = str(exc_info.value)
+    # The offending value AND the available project names must both survive
+    # into the surfaced error — a regression that swallows either half (e.g.
+    # collapsing to a bare "not found") should fail this assertion.
+    assert "fronten" in message
+    assert "frontend" in message and "backend" in message
+
+
+@pytest.mark.asyncio
+async def test_get_overview_unknown_project_raises_invalid_argument(tmp_path: Path) -> None:
+    from pydocs_mcp.application.mcp_inputs import OverviewInput
+
+    tools, _services = await _load_frontend_backend_workspace(tmp_path)
+
+    with pytest.raises(InvalidArgumentError) as exc_info:
+        await tools.get_overview(OverviewInput(project="gone"))
+    message = str(exc_info.value)
+    assert "gone" in message
+    assert "frontend" in message and "backend" in message
+
+
+@pytest.mark.asyncio
+async def test_search_codebase_unknown_project_is_not_service_unavailable(tmp_path: Path) -> None:
+    # Pin the negative: a bad project= selector must NOT surface as
+    # ServiceUnavailableError (that class is reserved for genuine backend
+    # failures — SQLite errors, pipeline crashes — per mcp_errors.py).
+    from pydocs_mcp.application.mcp_inputs import SearchInput
+
+    tools, _services = await _load_frontend_backend_workspace(tmp_path)
+
+    try:
+        await tools.search_codebase(SearchInput(query="anything", project="fronten"))
+    except ServiceUnavailableError:
+        pytest.fail("unknown project= must not surface as ServiceUnavailableError")
+    except InvalidArgumentError:
+        pass

@@ -95,6 +95,16 @@ const SKIP_DIRS: &[&str] = &[
 /// unit-testable (see PyO3 boundary pattern in CLAUDE.md: thin boundary,
 /// pure-Rust core).
 fn walk_py_files_impl(root_path: &Path) -> Vec<String> {
+    // Parity with the Python fallback's os.walk(root): os.walk() yields
+    // nothing when root is a file or doesn't exist (it never treats root
+    // itself as a discoverable entry). WalkDir, left unchecked, yields the
+    // root entry itself when root is a .py file, silently indexing a lone
+    // file as if it were a package root. Bail out early so both engines
+    // agree at the substitution boundary (fallback contract, CLAUDE.md).
+    if !root_path.is_dir() {
+        return Vec::new();
+    }
+
     let mut result: Vec<String> = WalkDir::new(root_path)
         .into_iter()
         // Skip excluded directories early (before reading their contents).
@@ -457,5 +467,37 @@ mod tests {
             found.contains(&linked_str),
             "expected {found:?} to contain {linked_str}"
         );
+    }
+
+    // Regression: passing a .py FILE as root used to make WalkDir yield the
+    // root entry itself (it passes the dir-only filter_entry, then is_file()
+    // + .py extension matches), returning [root]. The Python fallback's
+    // os.walk() yields nothing for a non-directory root, so this was a
+    // cross-engine divergence at the substitution boundary — a caller
+    // mis-passing a file path got a one-file index under Rust and an empty
+    // index under Python. walk_py_files_impl now requires root to be a
+    // directory, matching os.walk() semantics on both sides.
+    #[test]
+    fn walk_py_files_root_is_a_py_file_returns_empty() {
+        let path = unique_temp_path("root_is_file");
+        fs::write(&path, "x = 1\n").expect("write temp file");
+
+        let found = walk_py_files_impl(&path);
+        let _ = fs::remove_file(&path);
+
+        assert!(found.is_empty(), "expected no files, got {found:?}");
+    }
+
+    #[test]
+    fn walk_py_files_root_does_not_exist_returns_empty() {
+        let missing = std::env::temp_dir().join(format!(
+            "pydocs_mcp_native_test_missing_root_{}_{}",
+            std::process::id(),
+            "does-not-exist"
+        ));
+        assert!(!missing.exists());
+
+        let found = walk_py_files_impl(&missing);
+        assert!(found.is_empty(), "expected no files, got {found:?}");
     }
 }

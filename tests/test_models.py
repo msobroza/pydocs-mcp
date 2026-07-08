@@ -274,6 +274,28 @@ def test_search_query_model_validator_rejects_boolean_ops():
         SearchQuery(terms="x", pre_filter={"$and": [{"package": "fastapi"}]})
 
 
+def test_search_query_unregistered_filter_format_raises_validation_error():
+    """`MetadataFilterFormat` declares five formats but `format_registry`
+    only seeds MULTIFIELD (see `pydocs_mcp/filters.py`). Constructing a
+    `SearchQuery` with a declared-but-unregistered format (e.g. CHROMADB)
+    must raise a pydantic `ValidationError` -- not a raw `KeyError` -- so
+    the construction-time-validation contract ("invalid filters fail before
+    any pipeline runs") holds for every enum member, not just registered
+    ones. The message should name the offending format and the registered
+    alternatives so a caller can self-diagnose."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        SearchQuery(
+            terms="x",
+            pre_filter={"package": "fastapi"},
+            pre_filter_format=MetadataFilterFormat.CHROMADB,
+        )
+    message = str(exc_info.value)
+    assert "chromadb" in message.lower()
+    assert "multifield" in message.lower()
+
+
 def test_search_response_construction():
     q = SearchQuery(terms="x")
     cl = ChunkList(items=())

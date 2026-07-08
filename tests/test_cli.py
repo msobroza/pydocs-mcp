@@ -828,3 +828,111 @@ class TestRunIndexingDelegation:
 
         _db_path, use_inspect, _depth = captured["factory"]
         assert use_inspect is False
+
+    def test_full_dep_and_gpu_flags_reach_app_config(self, seeded_project, delegation_capture):
+        """``--full-dep`` (repeatable, globs allowed) and ``--gpu`` must land on
+        the ``AppConfig`` that ``_load_indexing_config`` builds — pinning the
+        ``getattr(args, "full_deps", None)`` / ``getattr(args, "gpu", False)``
+        wiring. A dest-name typo (argparse dest is ``full_deps``) would silently
+        drop every promotion via the ``or ()`` fallback with no test failing."""
+        captured, _bundle = delegation_capture
+        with patch(
+            "sys.argv",
+            [
+                "pydocs-mcp",
+                "index",
+                str(seeded_project),
+                "--full-dep",
+                "numpy",
+                "--full-dep",
+                "pand*",
+                "--gpu",
+            ],
+        ):
+            from pydocs_mcp.__main__ import main
+
+            assert main() == 0
+
+        config = captured["config"]
+        assert "numpy" in config.embedding.full_index_dependencies
+        assert "pand*" in config.embedding.full_index_dependencies
+        assert config.embedding.device == "cuda"
+        assert config.late_interaction.device == "cuda"
+
+
+class TestCacheDirSlugPreservation:
+    """``--cache-dir`` must preserve the per-project ``<dirname>_<hash>.db``
+    slug (not collapse to a fixed filename) and the index/search paths must
+    resolve the SAME file for a given project."""
+
+    def test_two_projects_same_cache_dir_get_distinct_slugged_files(self, tmp_path):
+        from pydocs_mcp.db import cache_path_for_project
+
+        cache_dir = tmp_path / "shared-cache"
+        project_a = tmp_path / "project_a"
+        project_a.mkdir()
+        (project_a / "pyproject.toml").write_text("[project]\ndependencies = []\n")
+        (project_a / "app.py").write_text('def hello():\n    """Say hello."""\n    return "hi"\n')
+
+        project_b = tmp_path / "project_b"
+        project_b.mkdir()
+        (project_b / "pyproject.toml").write_text("[project]\ndependencies = []\n")
+        (project_b / "app.py").write_text('def world():\n    """Say world."""\n    return "w"\n')
+
+        with patch(
+            "sys.argv",
+            ["pydocs-mcp", "index", str(project_a), "--cache-dir", str(cache_dir)],
+        ):
+            from pydocs_mcp.__main__ import main
+
+            assert main() == 0
+        with patch(
+            "sys.argv",
+            ["pydocs-mcp", "index", str(project_b), "--cache-dir", str(cache_dir)],
+        ):
+            assert main() == 0
+
+        db_files = sorted(cache_dir.glob("*.db"))
+        assert len(db_files) == 2, f"expected 2 distinct cache files, got {db_files}"
+        expected_a = cache_path_for_project(project_a).name
+        expected_b = cache_path_for_project(project_b).name
+        assert expected_a != expected_b
+        assert {p.name for p in db_files} == {expected_a, expected_b}
+
+    def test_search_after_index_with_cache_dir_resolves_same_file(
+        self, seeded_project, capsys, tmp_path
+    ):
+        """index --cache-dir then search --cache-dir must hit the same .db."""
+        cache_dir = tmp_path / "shared-cache"
+        (seeded_project / "app.py").write_text(
+            'def hello():\n    """Say hello to the world with a greeting message."""\n'
+            '    return "hi"\n'
+        )
+        with patch(
+            "sys.argv",
+            ["pydocs-mcp", "index", str(seeded_project), "--cache-dir", str(cache_dir)],
+        ):
+            from pydocs_mcp.__main__ import main
+
+            assert main() == 0
+
+        from pydocs_mcp.db import cache_path_for_project
+
+        assert not cache_path_for_project(seeded_project).exists()
+        with patch(
+            "sys.argv",
+            [
+                "pydocs-mcp",
+                "search",
+                "hello",
+                "--kind=docs",
+                "--project-dir",
+                str(seeded_project),
+                "--cache-dir",
+                str(cache_dir),
+            ],
+        ):
+            rc = main()
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "hello" in captured.out.lower() or "\u2500" in captured.out

@@ -119,6 +119,57 @@ async def test_integrity_partial_embedding_is_steady_state(tmp_path: Path) -> No
     assert conn.execute("SELECT content_hash FROM packages").fetchone()[0] == "h"
 
 
+@pytest.mark.parametrize("n", [500, 501, 1000])
+@pytest.mark.asyncio
+async def test_mark_embedded_flips_every_row_across_batch_boundary(tmp_path: Path, n: int) -> None:
+    """mark_embedded batches at 500 (SQLITE_MAX_VARIABLE_NUMBER headroom).
+
+    range(0, len(ids), 500) must not drop the tail batch — exercise exactly
+    at (500), just past (501), and two full batches (1000) so an off-by-one
+    in the slicing loop cannot silently leave a partial batch unflagged.
+    """
+    db = tmp_path / "x.db"
+    conn = open_index_database(db)
+    ids = [_insert_chunk(conn, "pkg", f"c{i}") for i in range(n)]
+    conn.commit()
+    conn.close()
+
+    factory = build_sqlite_uow_factory(db)
+    async with factory() as uow:
+        await uow.chunks.mark_embedded(ids)
+        await uow.commit()
+
+    conn = open_index_database(db)
+    count = conn.execute("SELECT COUNT(*) FROM chunks WHERE embedded = 1").fetchone()[0]
+    assert count == n
+
+
+@pytest.mark.parametrize("n", [500, 501, 1000])
+@pytest.mark.asyncio
+async def test_delete_by_ids_removes_every_row_across_batch_boundary(
+    tmp_path: Path, n: int
+) -> None:
+    """delete_by_ids shares the same 500-row batching loop as mark_embedded.
+
+    Same boundary sweep (500 / 501 / 1000) — a tail-batch bug here would
+    silently leave stale rows behind instead of the deletion being total.
+    """
+    db = tmp_path / "x.db"
+    conn = open_index_database(db)
+    ids = [_insert_chunk(conn, "pkg", f"c{i}") for i in range(n)]
+    conn.commit()
+    conn.close()
+
+    factory = build_sqlite_uow_factory(db)
+    async with factory() as uow:
+        await uow.chunks.delete_by_ids(ids)
+        await uow.commit()
+
+    conn = open_index_database(db)
+    remaining = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert remaining == 0
+
+
 @pytest.mark.asyncio
 async def test_integrity_real_drift_still_repairs(tmp_path: Path) -> None:
     """Two chunks CLAIM vectors but only one landed (crash drift) -> repair fires."""
