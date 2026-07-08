@@ -96,6 +96,18 @@ def induce(g: Graph, node_types: frozenset[str], edge_kinds: frozenset[str]) -> 
     return Graph(nodes, edges, g.truncated)
 
 
+def _anchor(node_id: str | None, visible_by_len: list[str]) -> str | None:
+    """The nearest visible ancestor of ``node_id``: the longest visible dotted
+    prefix of it (or the id itself). ``visible_by_len`` must be sorted
+    longest-first so the first match is the nearest ancestor."""
+    if not node_id:
+        return None
+    for v in visible_by_len:
+        if node_id == v or node_id.startswith(v + "."):
+            return v
+    return None
+
+
 def _namespace_children(mods: set[str], focus: str) -> list[Node]:
     """The next dotted segment under ``focus``: a module if that exact prefix is a
     module, else a package (it has modules deeper still). ``mods`` is assumed
@@ -245,21 +257,13 @@ class GraphService:
         test_mods = self._test_module_ids(_prefixes(self._node_ids()))
         vis = sorted(visible, key=len, reverse=True)
 
-        def anchor(nid: str | None) -> str | None:
-            if not nid:
-                return None
-            for v in vis:
-                if nid == v or nid.startswith(v + "."):
-                    return v
-            return None
-
         seen: set[tuple[str, str, str]] = set()
         out: list[Edge] = []
         for from_id, to_id, kind in self.reader.reference_rows():
             if kind not in kinds:
                 continue
-            a = anchor(from_id)
-            b = anchor(to_id)
+            a = _anchor(from_id, vis)
+            b = _anchor(to_id, vis)
             if not (a and b) or a == b or (a, b, kind) in seen:
                 continue
             if self._under_test_module(a, test_mods) or self._under_test_module(b, test_mods):
