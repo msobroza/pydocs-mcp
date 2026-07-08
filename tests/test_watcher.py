@@ -270,6 +270,49 @@ async def test_watcher_matches_extension_case_insensitively(tmp_path: Path) -> N
         pass
 
 
+def test_matches_normalizes_uppercase_configured_extension(tmp_path: Path) -> None:
+    """Regression test: a user overlay configuring `extensions: ['.PY']`
+    (uppercase) must still match `.py` files.
+
+    `_matches` lowercases the FILE's suffix (`path.suffix.lower()`) but,
+    before this fix, never normalized the CONFIGURED `extensions` tuple —
+    `'.py' not in ('.PY',)` is True, so `_matches` silently returned False
+    for every source file and only manifests (`pyproject.toml` /
+    `requirements*.txt`) still fired. Normalizing at construction
+    (`__post_init__`) closes the gap symmetrically with the file-suffix
+    case-insensitivity already documented on `_matches`.
+    """
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".PY",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: object(),
+    )
+    assert fw._matches(tmp_path / "app.py") is True
+
+
+def test_matches_normalizes_configured_extension_missing_leading_dot(
+    tmp_path: Path,
+) -> None:
+    """Regression test: a user overlay configuring `extensions: ['py']`
+    (no leading dot) must still match `.py` files — `path.suffix` always
+    includes the dot, so an un-dotted configured extension can never
+    match without normalization at construction time."""
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=("py",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: object(),
+    )
+    assert fw._matches(tmp_path / "app.py") is True
+
+
 async def test_watcher_debounces_burst_edits(tmp_path: Path) -> None:
     """AC-4: 3 events within `debounce_ms` produce exactly 1 callback."""
     from tests._fakes import FakeObserver

@@ -119,3 +119,19 @@ def test_paired_bootstrap_length_mismatch_raises() -> None:
     # is undefined — so abort loudly rather than silently degrade.
     with pytest.raises(ValueError):
         paired_bootstrap_ci([0.1, 0.2, 0.3], [0.1, 0.2])
+
+
+def test_mean_bootstrap_zero_resamples_raises_value_error() -> None:
+    # WHY: n_resamples is a public keyword; 0 looks like a natural "skip the
+    # CI" value to a programmatic caller. Before the guard this indexed into
+    # an empty resample_means list and raised a bare IndexError with none of
+    # the offending value or expected shape — a caller-bug case like the
+    # length-mismatch check above, so it must raise loudly and informatively
+    # instead of degrading silently or crashing opaquely.
+    with pytest.raises(ValueError, match="n_resamples"):
+        mean_with_bootstrap_ci([1.0, 0.0], n_resamples=0)
+
+
+def test_paired_bootstrap_zero_resamples_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="n_resamples"):
+        paired_bootstrap_ci([1.0, 0.0], [0.0, 1.0], n_resamples=0)

@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, ClassVar
 
 from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
     Chunk,
     ChunkFilterField,
     ChunkList,
@@ -143,22 +144,25 @@ class ChunkFetcherStep(RetrieverStep):
         if filter_sql:
             where_parts.append(filter_sql)
             params.extend(filter_params)
+        # BUG (see gap: chunk_fetcher scope filter runs after SQL LIMIT):
+        # scope can't ride the FilterAdapter pushdown (it's a semantic
+        # field, not a real column), but it MUST still join the SQL WHERE
+        # — applying it only in Python after the LIMIT-bounded fetch
+        # silently drops in-scope hits ranked below the LIMIT window
+        # (e.g. project chunks buried under dependency chunks for a
+        # generic query). Pushing scope into SQL keeps LIMIT applied
+        # AFTER scope filtering, matching the needle-match ordering
+        # MemberFetcherStep already documents for the same reason.
+        scope_sql, scope_params = _build_scope_where_clause(scope)
+        if scope_sql:
+            where_parts.append(scope_sql)
+            params.extend(scope_params)
         params.append(self.limit)
         sql = _FETCH_SQL_TEMPLATE.format(where=" AND ".join(where_parts))
         rows = await asyncio.to_thread(
             execute_fetch, self.provider, sql, params, step_label=_STEP_LABEL
         )
         chunks = tuple(_row_to_candidate(row, self.retriever_name) for row in rows)
-        if scope is not None:
-            # Lazy import — break the storage→extraction→retrieval.config→
-            # retrieval.steps cycle (see module docstring).
-            from pydocs_mcp.retrieval.filter_helpers import _matches_scope
-
-            chunks = tuple(
-                c
-                for c in chunks
-                if _matches_scope(c.metadata.get(ChunkFilterField.PACKAGE.value, ""), scope)
-            )
         return replace(state, candidates=ChunkList(items=chunks))
 
     def _build_where_clause(self, tree) -> tuple[str, tuple]:
@@ -190,6 +194,34 @@ class ChunkFetcherStep(RetrieverStep):
 
     def to_dict(self) -> dict:
         return step_to_yaml_dict(self, type_name="chunk_fetcher", keys=self._YAML_KEYS)
+
+
+def _build_scope_where_clause(
+    scope: frozenset[SearchScope] | None,
+) -> tuple[str, tuple]:
+    """Translate a parsed ``scope`` set into a SQL predicate on ``c.package``.
+
+    Mirrors :func:`pydocs_mcp.retrieval.filter_helpers._matches_scope`
+    exactly (kept as a defense-in-depth Python re-check is unnecessary
+    here since this predicate is exact, unlike LIKE/ESCAPE quirks) —
+    ``ALL`` matches every row (no predicate needed), ``PROJECT_ONLY`` /
+    ``DEPENDENCIES_ONLY`` become equality / inequality on the special
+    ``__project__`` package name, and a multi-value scope set (from a
+    ``FieldIn``) becomes an ``OR`` of the per-scope predicates — a row is
+    kept iff *any* requested scope matches, matching ``_matches_scope``'s
+    "any" semantics.
+    """
+    if scope is None or SearchScope.ALL in scope:
+        return "", ()
+    clauses: list[str] = []
+    for s in scope:
+        if s is SearchScope.PROJECT_ONLY:
+            clauses.append("c.package = ?")
+        elif s is SearchScope.DEPENDENCIES_ONLY:
+            clauses.append("c.package != ?")
+    if not clauses:
+        return "", ()
+    return f"({' OR '.join(clauses)})", tuple(PROJECT_PACKAGE_NAME for _ in clauses)
 
 
 def _row_to_candidate(row: sqlite3.Row, retriever_name: str) -> Chunk:

@@ -281,3 +281,55 @@ async def test_run_dense_only_when_neighbour_has_no_chunk() -> None:
     state = _state([_chunk("pkg.seed", 0.9)])
     out = await step.run(state)
     assert [c.metadata["qualified_name"] for c in out.candidates.items] == ["pkg.seed"]
+
+
+@pytest.mark.asyncio
+async def test_run_hop2_decays_from_originating_seed_not_parent() -> None:
+    # Linear chain seed(A) -> B -> C via callee edges, max_depth=2. C must
+    # score seed_sim * decay**2 with decay anchored to A's ORIGINAL
+    # similarity — NOT B's already-decayed score (which would compound to
+    # seed_sim * decay**2 * decay = decay**3, a distinct, wrong, value).
+    refs = [
+        _ref("pkg.A", "pkg.B", "pkg.B", ReferenceKind.CALLS),
+        _ref("pkg.B", "pkg.C", "pkg.C", ReferenceKind.CALLS),
+    ]
+    chunks = [_chunk("pkg.B", 0.0), _chunk("pkg.C", 0.0)]
+    step = GraphExpandStep(uow_factory=_factory(refs, chunks), max_depth=2)
+    out = await step.run(_state([_chunk("pkg.A", 0.8)]))
+    by = _by_qname(out)
+    assert by["pkg.B"].relevance == pytest.approx(0.8 * _DEFAULT_DECAY)
+    assert by["pkg.C"].relevance == pytest.approx(0.8 * _DEFAULT_DECAY**2)
+
+
+@pytest.mark.asyncio
+async def test_run_node_reachable_from_two_seeds_keeps_max_score() -> None:
+    # Both seeds (S1 higher sim, S2 lower) call N. N must be scored via S1's
+    # decayed similarity (the max), not S2's, and not overwritten by whichever
+    # seed's frontier entry is processed last.
+    refs = [
+        _ref("pkg.S1", "pkg.N", "pkg.N", ReferenceKind.CALLS),
+        _ref("pkg.S2", "pkg.N", "pkg.N", ReferenceKind.CALLS),
+    ]
+    chunks = [_chunk("pkg.N", 0.0)]
+    step = GraphExpandStep(uow_factory=_factory(refs, chunks), top_s=2)
+    out = await step.run(_state([_chunk("pkg.S1", 0.9), _chunk("pkg.S2", 0.4)]))
+    by = _by_qname(out)
+    assert by["pkg.N"].relevance == pytest.approx(0.9 * _DEFAULT_DECAY)
+
+
+@pytest.mark.asyncio
+async def test_neighbors_per_seed_caps_jointly_across_directions() -> None:
+    # One caller edge + one callee edge from the same seed; neighbors_per_seed=1
+    # must cap the TWO directions COMBINED (not 1-per-direction), and the cap
+    # applies after kind filtering (both edges are CALLS, so both pass the
+    # filter and compete for the single slot).
+    refs = [
+        _ref("pkg.caller", "pkg.seed", "pkg.seed", ReferenceKind.CALLS),
+        _ref("pkg.seed", "pkg.callee", "pkg.callee", ReferenceKind.CALLS),
+    ]
+    chunks = [_chunk("pkg.caller", 0.0), _chunk("pkg.callee", 0.0)]
+    step = GraphExpandStep(uow_factory=_factory(refs, chunks), neighbors_per_seed=1)
+    out = await step.run(_state([_chunk("pkg.seed", 0.9)]))
+    by = _by_qname(out)
+    discovered = {"pkg.caller", "pkg.callee"} & by.keys()
+    assert len(discovered) == 1, f"expected exactly 1 neighbour, got {discovered}"

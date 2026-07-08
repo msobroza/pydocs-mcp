@@ -328,6 +328,29 @@ def test_doc_excerpt_negative_cap_is_clamped_to_empty() -> None:
     assert doc_excerpt("abcdefghij", "full", -3) == ""
 
 
+def test_from_dict_rejects_removed_max_tree_words_key() -> None:
+    # max_tree_words was renamed to max_tree_tokens (word budget -> real
+    # tiktoken token budget). yaml_kwargs() only reads _YAML_KEYS, so an old
+    # config's max_tree_words is silently dropped there — this hand-written
+    # guard in from_dict is the only thing that stops a stale deployment from
+    # falling back to the auto-derived budget with no error and no warning.
+    with pytest.raises(ValueError, match="max_tree_tokens"):
+        LlmTreeReasoningStep.from_dict(
+            {"type": "llm_tree_reasoning", "max_tree_words": 50000}, _ctx()
+        )
+
+
+def test_from_dict_requires_uow_factory() -> None:
+    from pydocs_mcp.retrieval.serialization import BuildContext
+    from tests._fakes import FakeLlmClient
+
+    with pytest.raises(ValueError, match="uow_factory"):
+        LlmTreeReasoningStep.from_dict(
+            {"type": "llm_tree_reasoning"},
+            BuildContext(llm_client=FakeLlmClient(responses={}), uow_factory=None),
+        )
+
+
 # ── _doc_sections: unrecognized sections must NOT leak ─────────────────────
 
 

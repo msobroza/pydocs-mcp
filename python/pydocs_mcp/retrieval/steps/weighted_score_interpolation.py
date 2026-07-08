@@ -158,6 +158,17 @@ class WeightedScoreInterpolationStep(RetrieverStep):
         context: BuildContext,
     ) -> WeightedScoreInterpolationStep:
         weights = tuple(data.get("weights", _DEFAULT_WEIGHTS))
+        # WHY: a sum-to-1.0 check alone lets negative/compensating pairs
+        # through (e.g. [1.5, -0.5] sums to exactly 1.0). A negative
+        # weight inverts that branch's contribution — its best hits get
+        # pushed to the bottom of the fused ranking — silently. This is
+        # exactly the "silently redistributed weights" failure the
+        # strict-branch philosophy (see class docstring) exists to
+        # prevent, so negativity is gated independently of the sum.
+        if any(w < 0.0 for w in weights):
+            raise ValueError(
+                f"WeightedScoreInterpolationStep weights must be non-negative; got {weights}",
+            )
         if abs(sum(weights) - 1.0) > _WEIGHT_SUM_TOLERANCE:
             raise ValueError(
                 f"WeightedScoreInterpolationStep weights must sum to ~1.0 "

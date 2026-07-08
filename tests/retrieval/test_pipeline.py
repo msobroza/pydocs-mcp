@@ -174,3 +174,40 @@ def test_from_dict_steps_with_names_round_trip(tmp_path):
     assert len(pipeline.stages) == 1
     # Limit stage carries the configured cap.
     assert pipeline.stages[0].max_results == 3
+    # The YAML ``name:`` must survive into the loaded step, not just the
+    # step's TYPE default — this is what makes the ``<step_name>.<field>``
+    # scratch-key convention (RetrieverState.scratch mutation discipline)
+    # actually distinguish two same-typed steps in one pipeline.
+    assert pipeline.stages[0].name == "trim"
+
+
+def test_from_dict_rejects_duplicate_step_names(tmp_path):
+    """A pipeline YAML with two same-named steps must fail to load.
+
+    Mirrors ``RetrieverPipeline.__post_init__``'s duplicate-name guard
+    (retrieval/pipeline/base.py) — ``CodeRetrieverPipeline.from_dict`` is
+    the YAML-loadable sibling and documents the same "unique 'name'"
+    contract in its own error text (see the "must declare a unique
+    'name'" message below), so it must enforce it too. Without this
+    check, two steps publishing scratch under the same
+    ``<step_name>.<field>`` key silently clobber each other
+    (last-write-wins) with no error at load time.
+    """
+    from pydocs_mcp.retrieval.pipeline import (
+        PerCallConnectionProvider,
+        PipelineLoadError,
+    )
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    context = BuildContext(
+        connection_provider=PerCallConnectionProvider(cache_path=tmp_path / "x.db"),
+    )
+    data = {
+        "name": "p",
+        "steps": [
+            {"name": "trim", "type": "limit", "params": {"max_results": 3}},
+            {"name": "trim", "type": "limit", "params": {"max_results": 5}},
+        ],
+    }
+    with pytest.raises(PipelineLoadError, match="unique 'name'"):
+        CodeRetrieverPipeline.from_dict(data, context)

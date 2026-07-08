@@ -37,6 +37,22 @@ from pydocs_mcp.retrieval.steps._constants import DEFAULT_BRANCH_KEYS
 _DEFAULT_K = 60
 
 
+def _validate_k(k: int, *, cls_name: str) -> None:
+    """Reject k <= 0 — ``_rrf_fuse`` divides by ``k + rank`` with rank
+
+    starting at 0 (``enumerate``), so k=0 raises ``ZeroDivisionError`` on
+    the very first item and negative k crashes once rank reaches ``-k``.
+    ``k: 0`` is a plausible YAML experiment (the classic RRF formula
+    assumes rank starts at 1, so "pure reciprocal rank" tuning sets k=0)
+    — fail loudly at construction time instead of query time, matching
+    every other step's from_dict-validation philosophy.
+    """
+    if k < 1:
+        raise ValueError(
+            f"{cls_name}: k must be >= 1 (got {k!r}) — k=0 or negative divides by zero in RRF scoring"
+        )
+
+
 def _rrf_fuse(
     ranked_lists: Sequence[Sequence[Chunk]],
     *,
@@ -93,6 +109,9 @@ class RRFResultFuser:
 
     k: int = _DEFAULT_K
 
+    def __post_init__(self) -> None:
+        _validate_k(self.k, cls_name=type(self).__name__)
+
     async def fuse(
         self,
         ranked_lists: Sequence[Sequence[Chunk]],
@@ -130,6 +149,9 @@ class RRFFusionStep(RetrieverStep):
     # WHY name is excluded: this step has never serialized ``name`` — the
     # parity tests pin that drift; unifying it across steps is a follow-up.
     _YAML_KEYS: ClassVar[tuple[str, ...]] = ("k", "branch_keys")
+
+    def __post_init__(self) -> None:
+        _validate_k(self.k, cls_name=type(self).__name__)
 
     async def run(self, state: RetrieverState) -> RetrieverState:
         ranked_lists: list[tuple[Chunk, ...]] = []

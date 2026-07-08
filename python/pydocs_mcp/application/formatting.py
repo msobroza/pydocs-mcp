@@ -322,6 +322,11 @@ def format_package_doc(doc: PackageDoc) -> str:
 
     Byte-parity with sub-PR #4 ``server.py::_render_package_doc`` (AC #6):
     blocks joined with ``"\\n\\n"``, capped at ``PACKAGE_DOC_MAX`` chars.
+
+    When the cap bites, a ``TruncationEntry`` is recorded on the active
+    ledger (spec §D7: "no renderer drops content without registering an
+    entry") — this was the one budgeted renderer in the module that hard-
+    sliced silently.
     """
     pkg = doc.package
     parts = [f"# {pkg.name} {pkg.version}\n{pkg.summary}"]
@@ -345,7 +350,20 @@ def format_package_doc(doc: PackageDoc) -> str:
             first_line = docstring.split("\n")[0][:PACKAGE_DOC_LINE_MAX]
             rendered.append(f"- `{kind} {name}{signature}` — {first_line}")
         parts.append("## API\n" + "\n".join(rendered))
-    return "\n\n".join(parts)[:PACKAGE_DOC_MAX]
+
+    rendered_doc = "\n\n".join(parts)
+    if len(rendered_doc) > PACKAGE_DOC_MAX:
+        ledger = get_active_ledger()
+        if ledger is not None:
+            ledger.record(
+                TruncationEntry(
+                    description=(
+                        f"package doc for {pkg.name} truncated at {PACKAGE_DOC_MAX} chars"
+                    ),
+                    recovery=pointer_token("overview", pkg.name),
+                )
+            )
+    return rendered_doc[:PACKAGE_DOC_MAX]
 
 
 def format_members_markdown_within_budget(

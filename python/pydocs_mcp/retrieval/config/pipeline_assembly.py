@@ -175,6 +175,14 @@ def _build_handler_pipeline(
     # the extraction-side reference-capture stage at import time.
     from pydocs_mcp.retrieval.steps import RouteCase, RouteStep
 
+    if not handler_config.routes:
+        # WHY: fail at config-load time, not on the first live query. An
+        # empty route list previously assembled a RouteStep(routes=(),
+        # default=None) whose run() returns the input state unchanged —
+        # every search against this handler silently yielded zero results,
+        # indistinguishable from an empty index.
+        raise ValueError(f"{handler_name}: handler has no routes")
+
     routes: list[RouteCase] = []
     default: CodeRetrieverPipeline | None = None
     for entry in handler_config.routes:
@@ -207,6 +215,12 @@ def _build_handler_pipeline(
         # callers inspecting pipeline.stages see the preset's stage list,
         # not a RouteStep wrapper (preserves sub-PR #2's golden parity).
         return CodeRetrieverPipeline(name=default.name, stages=default.stages)
+    if default is None:
+        # WHY: fail at config-load time, not on the first live query. A
+        # predicate-only route list with no default previously built a
+        # RouteStep that silently no-ops (returns the state unchanged) for
+        # any query matching none of the predicates.
+        raise ValueError(f"{handler_name}: handler has no default route")
     return CodeRetrieverPipeline(
         name=f"{handler_name}_from_config",
         stages=(RouteStep(routes=tuple(routes), default=default),),

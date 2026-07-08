@@ -85,6 +85,31 @@ def test_from_dict_validates_weights_sum() -> None:
         )
 
 
+def test_from_dict_rejects_negative_weights_that_sum_to_one() -> None:
+    """weights=[1.5, -0.5] sum to exactly 1.0, so the sum-tolerance gate
+    alone would pass it through — but a negative weight inverts that
+    branch's contribution (its BEST hits get pushed to the bottom of the
+    fused ranking) with no error. This is exactly the "silently
+    redistributed weights" failure the strict-branch philosophy exists
+    to prevent, so from_dict must reject it independently of the sum
+    check.
+    """
+    from pydocs_mcp.retrieval.serialization import BuildContext
+
+    with pytest.raises(ValueError, match="[Nn]egative") as exc_info:
+        WeightedScoreInterpolationStep.from_dict(
+            {
+                "type": "weighted_score_interpolation",
+                "weights": [1.5, -0.5],
+                "branch_keys": ["a", "b"],
+            },
+            BuildContext(),
+        )
+    # Carries the offending tuple so the error is actionable without a debugger.
+    assert "1.5" in str(exc_info.value)
+    assert "-0.5" in str(exc_info.value)
+
+
 def test_round_trip_yaml() -> None:
     """to_dict / from_dict round-trips structural equality."""
     from pydocs_mcp.retrieval.serialization import BuildContext

@@ -6,6 +6,7 @@ import pytest
 
 from pydocs_mcp.models import Chunk, SearchQuery
 from pydocs_mcp.retrieval.pipeline import RetrieverState
+from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.retrieval.steps.rrf_fusion import RRFFusionStep, RRFResultFuser
 
 
@@ -126,3 +127,47 @@ def test_rrf_step_registered_under_rrf_fusion_key() -> None:
     assert "rrf_fusion" in step_registry.names()
     assert "rrf" not in step_registry.names()
     assert "reciprocal_rank_fusion" not in step_registry.names()
+
+
+def test_rrf_fusion_step_from_dict_rejects_k_zero() -> None:
+    """'k: 0' is a plausible experiment (classic RRF assumes rank starts at
+
+    1, so 'pure reciprocal rank' tuning sets k=0) but crashes at query time:
+    _rrf_fuse computes 1.0 / (k + rank) with rank from enumerate() starting
+    at 0, so the first item of the first branch divides by zero. Every other
+    step's from_dict philosophy is to fail loudly at build time, not at
+    query time — so k <= 0 must raise ValueError out of from_dict, naming
+    the offending value, instead of reaching _rrf_fuse at all.
+    """
+    with pytest.raises(ValueError, match="0"):
+        RRFFusionStep.from_dict({"type": "rrf_fusion", "k": 0}, BuildContext())
+
+
+def test_rrf_fusion_step_from_dict_rejects_negative_k() -> None:
+    with pytest.raises(ValueError, match="-5"):
+        RRFFusionStep.from_dict({"type": "rrf_fusion", "k": -5}, BuildContext())
+
+
+def test_rrf_fusion_step_construction_rejects_k_zero() -> None:
+    """Direct construction (not just from_dict) must also reject k<=0 —
+
+    RRFResultFuser and RRFFusionStep are both reachable without going
+    through YAML (e.g. hybrid retriever composition), so the guard belongs
+    on the dataclass itself, not only the decoder.
+    """
+    with pytest.raises(ValueError, match="0"):
+        RRFFusionStep(k=0)
+
+
+@pytest.mark.asyncio
+async def test_rrf_result_fuser_k_equals_one_does_not_crash() -> None:
+    """k=1 is the smallest valid k (rank starts at 0, so k+rank=1 at rank 0).
+
+    Regression test pinning the minimal valid boundary fuses without
+    raising ZeroDivisionError.
+    """
+    fuser = RRFResultFuser(k=1)
+    a = Chunk(text="A", id=1)
+    b = Chunk(text="B", id=2)
+    fused = await fuser.fuse([(a, b)], limit=10)
+    assert [c.id for c in fused] == [1, 2]

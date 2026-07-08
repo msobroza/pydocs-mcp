@@ -739,3 +739,91 @@ def test_clear_all_packages_clears_node_references(tmp_path):
         assert cnt == 0
     finally:
         conn.close()
+
+
+def test_future_version_db_is_wiped_and_restamped_on_open(tmp_path):
+    """Gap (core-db-models): a DB stamped ABOVE SCHEMA_VERSION (user downgrades
+    pydocs-mcp after a newer version already wrote the cache) falls into the
+    "any other mismatch" branch of ``_migrate_in_place`` — same destructive
+    path as an unrecognized-old version. Pins the CURRENT documented contract
+    (open_index_database.__doc__: "v5 / any other mismatch: drop every known
+    table and recreate") for the downgrade direction specifically, since no
+    existing test opens a DB stamped above SCHEMA_VERSION (only 0/2/3/5..12
+    appear elsewhere in this file).
+
+    This is a silent, total wipe: every table is dropped and recreated empty,
+    chunk rowids restart at 1, and the .tq sidecar (out of db.py's reach) is
+    left untouched — stale vectors keyed to reused chunk ids could then be
+    served until the next integrity sweep clears content_hash (see
+    tests/storage/test_integrity_check.py for the id-reuse mechanism this
+    sets up downstream).
+    """
+    db = tmp_path / "future.db"
+
+    # Hand-stamp a CURRENT-shape DB (the real DDL) at a version one past what
+    # this code line knows about, with one row in every _KNOWN_TABLES table —
+    # simulates reopening a cache last written by a newer pydocs-mcp release.
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    from pydocs_mcp.db import _DDL, SCHEMA_VERSION
+
+    conn.executescript(_DDL)
+    conn.execute(
+        "INSERT INTO packages(name,version,summary,homepage,dependencies,content_hash,origin) "
+        "VALUES('future_pkg','1.0','','','[]','h','dependency')"
+    )
+    conn.execute(
+        "INSERT INTO chunks(package,module,title,text,origin) "
+        "VALUES('future_pkg','future_pkg.mod','T','body','dependency_doc_file')"
+    )
+    conn.execute(
+        "INSERT INTO module_members(package,module,name,kind,signature,return_annotation,parameters,docstring) "
+        "VALUES('future_pkg','future_pkg.mod','fn','function','()','None','[]','')"
+    )
+    conn.execute(
+        "INSERT INTO document_trees(package,module,tree_json) VALUES('future_pkg','future_pkg.mod','{}')"
+    )
+    conn.execute(
+        "INSERT INTO node_references VALUES('future_pkg','future_pkg.mod.fn','other',NULL,'calls')"
+    )
+    conn.execute(
+        "INSERT INTO node_scores(package,qualified_name) VALUES('future_pkg','future_pkg.mod.fn')"
+    )
+    conn.execute(
+        "INSERT INTO decision_records"
+        "(id,package,title,status,source,confidence,evidence,affected_files,affected_qnames,created_at,updated_at) "
+        "VALUES(1,'future_pkg','t','open','mined',0.5,'[]','[]','[]',0.0,0.0)"
+    )
+    conn.execute("INSERT INTO index_metadata(id,project_name) VALUES(1,'future_pkg')")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    conn.commit()
+    conn.close()
+
+    reopened = open_index_database(db)
+    try:
+        # Contract: restamped back down to the version THIS code line knows —
+        # not left at the future stamp, so subsequent opens don't re-wipe forever.
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+        # Contract: every known table was dropped and recreated EMPTY — the
+        # future-written rows above are gone (silent total index loss).
+        for table in (
+            "packages",
+            "chunks",
+            "module_members",
+            "document_trees",
+            "node_references",
+            "node_scores",
+            "decision_records",
+            "index_metadata",
+        ):
+            count = reopened.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+            assert count == 0, (
+                f"{table} should be empty after a future-version wipe, got {count} row(s)"
+            )
+
+        # Contract: the rebuilt DB is immediately usable (fresh DDL applied).
+        cols = {r["name"] for r in reopened.execute("PRAGMA table_info(chunks)").fetchall()}
+        assert "content_hash" in cols
+    finally:
+        reopened.close()

@@ -248,6 +248,73 @@ async def test_dense_fetcher_empty_query_short_circuits() -> None:
     assert store_called is False
 
 
+async def test_dense_fetcher_pre_filter_set_but_scratch_missing_is_unrestricted() -> None:
+    """Documented asymmetry (dense_fetcher.py's 'Silent-None fallback' docstring):
+    unlike ChunkFetcherStep/MemberFetcherStep (which raise RuntimeError — see
+    tests/retrieval/steps/test_chunk_fetcher.py::test_chunk_fetcher_raises_if_pre_filter_set_but_scratch_missing),
+    DenseFetcherStep falls back to filter=None and runs an UNRESTRICTED ANN
+    search when state.query.pre_filter is set but PreFilterStep never wrote
+    'pre_filter.result' to scratch (e.g. pipeline composed without pre_filter
+    before dense_fetcher). This pins that leak-shaped behavior so a future
+    change to either fetcher's contract is a deliberate, visible diff."""
+    embedder = MockEmbedder(dim=_DIM)
+    received_filter: object = "unset"
+
+    class _RecordingStore:
+        async def vector_search(self, query_vector, limit, filter=None):
+            nonlocal received_filter
+            received_filter = filter
+            return ()
+
+    step = DenseFetcherStep(store=_RecordingStore(), embedder=embedder, limit=10)  # type: ignore[arg-type]
+    state = RetrieverState(
+        query=SearchQuery(
+            terms="alpha",
+            max_results=10,
+            pre_filter={"package": "demo"},
+        ),
+    )
+    # No state.scratch['pre_filter.result'] entry — PreFilterStep did not run.
+    out = await step.run(state)
+
+    # The caller asked to restrict to package=demo; the store instead saw an
+    # unrestricted (filter=None) call, and candidates are not scoped at all.
+    assert received_filter is None
+    assert isinstance(out.candidates, ChunkList)
+
+
+async def test_dense_fetcher_pre_filter_set_but_scratch_wrong_type_is_unrestricted() -> None:
+    """Same asymmetry as above, triggered by a scratch-key collision: some
+    non-PreFilterResult object occupies 'pre_filter.result' (e.g. a
+    differently-typed step wrote to the same key inside a ParallelStep
+    branch). isinstance(..., PreFilterResult) fails the same way as a
+    missing key, so DenseFetcherStep silently degrades to filter=None
+    rather than raising."""
+    embedder = MockEmbedder(dim=_DIM)
+    received_filter: object = "unset"
+
+    class _RecordingStore:
+        async def vector_search(self, query_vector, limit, filter=None):
+            nonlocal received_filter
+            received_filter = filter
+            return ()
+
+    step = DenseFetcherStep(store=_RecordingStore(), embedder=embedder, limit=10)  # type: ignore[arg-type]
+    state = RetrieverState(
+        query=SearchQuery(
+            terms="alpha",
+            max_results=10,
+            pre_filter={"package": "demo"},
+        ),
+    )
+    # Wrong-typed object at the exact scratch key PreFilterStep normally uses.
+    state.scratch["pre_filter.result"] = {"tree": "not-a-PreFilterResult"}
+    out = await step.run(state)
+
+    assert received_filter is None
+    assert isinstance(out.candidates, ChunkList)
+
+
 def test_dense_fetcher_from_dict_requires_vector_store_and_embedder() -> None:
     """from_dict raises a clear ValueError when context fields are missing."""
     # Build a minimal context with NEITHER vector_store NOR embedder.

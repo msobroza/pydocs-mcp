@@ -201,6 +201,84 @@ async def test_chunk_fetcher_strips_scope_for_sql_pushdown(fts_db: Path) -> None
 
 
 @pytest.fixture
+async def scope_recall_db(tmp_path: Path) -> Path:
+    """6 dependency chunks + 1 __project__ chunk, all matching "widget".
+
+    Ranked by FTS5 BM25, the dependency chunks are seeded with the term
+    repeated so they consistently out-rank the single-occurrence project
+    chunk — the project chunk lands at the tail of the ranked set, past
+    a tight SQL LIMIT, mirroring a real index where generic terms are
+    dominated by dependency chunks.
+    """
+    db_path = tmp_path / "scope_recall.db"
+    open_index_database(db_path).close()
+    provider = build_connection_provider(db_path)
+    repo = SqliteChunkRepository(provider=provider)
+    dep_chunks = [
+        Chunk(
+            text="widget widget widget",
+            metadata={
+                ChunkFilterField.PACKAGE.value: f"deppkg{i}",
+                ChunkFilterField.TITLE.value: f"Dep {i}",
+                ChunkFilterField.MODULE.value: f"deppkg{i}.mod",
+            },
+        )
+        for i in range(6)
+    ]
+    project_chunk = Chunk(
+        text="widget",
+        metadata={
+            ChunkFilterField.PACKAGE.value: "__project__",
+            ChunkFilterField.TITLE.value: "Project widget",
+            ChunkFilterField.MODULE.value: "myproject.widget",
+        },
+    )
+    await repo.upsert([*dep_chunks, project_chunk])
+    await repo.rebuild_index()
+    return db_path
+
+
+async def test_chunk_fetcher_scope_filter_loses_recall_beyond_sql_limit(
+    scope_recall_db: Path,
+) -> None:
+    """Post-fetch scope filtering must not silently drop in-scope hits that
+    rank below the SQL LIMIT window.
+
+    scope=project_only strips the ``scope`` clause from the SQL pushdown
+    (by design — SQLite can't push down the semantic scope field) and
+    re-applies it in-process via ``_matches_scope`` AFTER the LIMIT-bounded
+    fetch runs. With limit=5 and 6 higher-ranked dependency chunks ahead of
+    the single project chunk, the project chunk never enters the fetched
+    row set, so the post-fetch scope filter has nothing to keep — recall is
+    silently lost even though a genuine in-scope match exists in the index.
+    """
+    provider = build_connection_provider(scope_recall_db)
+    pre_filter_step = PreFilterStep(
+        allowed_fields=frozenset({"package", "scope", "module", "title"}),
+        schema_name="chunk",
+        target_field="chunk",
+    )
+    fetch = ChunkFetcherStep(
+        name="fetch",
+        provider=provider,
+        filter_adapter=SqliteFilterAdapter(),
+        allowed_fields=frozenset({"package", "scope", "module", "title"}),
+        limit=5,
+    )
+    state = RetrieverState(
+        query=SearchQuery(terms="widget", pre_filter={"scope": "project_only"}),
+    )
+    state = await pre_filter_step.run(state)
+    out = await fetch.run(state)
+    assert isinstance(out.candidates, ChunkList)
+    packages = [c.metadata.get(ChunkFilterField.PACKAGE.value) for c in out.candidates.items]
+    assert "__project__" in packages, (
+        "project chunk ranked below the SQL LIMIT window was silently "
+        f"dropped by post-fetch scope filtering; got packages={packages}"
+    )
+
+
+@pytest.fixture
 async def members_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "members.db"
     open_index_database(db_path).close()

@@ -95,6 +95,12 @@ def _resolve_projects(db_path, workspace, db_paths):
     load each named bundle; both are read-only (the real source may be absent, so
     the embedder is validated and no reindex/watch happens). A single ``db_path``
     is the index-and-serve target (read-write; its embedder was just written).
+
+    Raises ``ValueError`` if none of the three selectors was given (or
+    ``db_paths`` was an empty list) — without this guard the call falls through
+    to ``load_project(None)``, which raises a bare, unrelated-looking
+    ``AttributeError`` ('NoneType' object has no attribute 'exists') instead of
+    naming the three selection modes a caller can fix.
     """
     from pydocs_mcp.multirepo import discover_workspace, load_project
 
@@ -102,6 +108,10 @@ def _resolve_projects(db_path, workspace, db_paths):
         return discover_workspace(workspace), True
     if db_paths:
         return [load_project(p) for p in db_paths], True
+    if db_path is None:
+        raise ValueError(
+            "no database specified: pass one of db_path, workspace, or a non-empty db_paths"
+        )
     return [load_project(db_path)], False
 
 

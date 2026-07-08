@@ -85,8 +85,19 @@ class PerCallConnectionProvider:
         # cross the opening thread.
         conn = sqlite3.connect(str(self.cache_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.OperationalError:
+            # A read-only cache path (CI image baking a pre-built index, a
+            # shared ~/.pydocs-mcp with restrictive permissions, ...) can't
+            # create the -wal/-shm sidecars WAL needs, so this pragma raises
+            # "attempt to write a readonly database" before any query runs —
+            # even though pure reads against an already-committed db need no
+            # write access at all. Degrade to the connection's existing
+            # journal mode instead of failing every read on a read-only
+            # deployment that never asked to write.
+            pass
         return conn
 
 

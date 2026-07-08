@@ -28,7 +28,7 @@ Both subclass :class:`RetrieverStep`, so they compose uniformly under
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.exceptions import PydocsMCPError
@@ -155,6 +155,20 @@ class CodeRetrieverPipeline(RetrieverStep):
                     "See pipelines/chunk_search.yaml for the canonical shape."
                 )
             stages.append(_step_from_dict(step, context, _depth=_depth))
+        # WHY: the "missing 'name:'" error above advertises "must declare a
+        # unique 'name'" but nothing enforced uniqueness — two steps named
+        # the same YAML ``name:`` loaded silently and both fell back to
+        # their step TYPE's default name (see _step_from_dict), corrupting
+        # the ``<step_name>.<field>`` scratch-key convention (last-write-wins,
+        # no error). Mirrors RetrieverPipeline.__post_init__'s duplicate
+        # check (pipeline/base.py).
+        step_names = [step["name"] for step in steps_data]
+        if len(step_names) != len(set(step_names)):
+            raise PipelineLoadError(
+                f"pipeline {pipeline_name!r}: duplicate step names in 'steps:': "
+                f"{step_names}. Every step in a 'steps:' list must declare a "
+                "unique 'name'."
+            )
         return cls(name=pipeline_name, stages=tuple(stages))
 
 
@@ -194,7 +208,20 @@ def _step_from_dict(
     # having to learn the nested-params shape.
     merged: dict = dict(params)
     merged["type"] = step["type"]
-    return context.step_registry.build(merged, context, _depth=_depth)
+    built = context.step_registry.build(merged, context, _depth=_depth)
+    # WHY: only 2 of ~20 step decoders read ``data.get("name")`` themselves
+    # (community_diversity, weighted_score_interpolation) — every other
+    # decoder ignores the YAML ``name:`` and the built step keeps its step
+    # TYPE's dataclass default (e.g. every ``limit`` step loads as
+    # name="limit"). Forwarding the YAML-declared name here, generically,
+    # after construction is the single choke point that makes every step
+    # type honor the "unique name" contract without editing ~20 decoders.
+    # A no-op when the decoder already set the name itself (replace with
+    # the same value).
+    step_name = step["name"]
+    if getattr(built, "name", None) != step_name:
+        built = replace(built, name=step_name)
+    return built
 
 
 __all__ = ("CodeRetrieverPipeline", "PipelineLoadError")
