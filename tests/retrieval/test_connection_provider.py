@@ -15,6 +15,7 @@ import threading
 import pytest
 
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+from pydocs_mcp.retrieval.pipeline.connection import CacheNotIndexedError
 
 
 def test_acquire_sync_returns_sqlite_connection(tmp_path):
@@ -62,3 +63,40 @@ def test_acquire_sync_closes_connection_on_exit(tmp_path):
     # SQLite raises ProgrammingError when used after close().
     with pytest.raises(sqlite3.ProgrammingError):
         captured.execute("SELECT 1")
+
+
+def test_acquire_sync_missing_cache_raises_actionable_error_and_no_file(tmp_path):
+    """A query against a never-indexed project must not create a stray .db.
+
+    Regression for: sqlite3.connect(path) creates a 4096-byte empty
+    database file as a side effect of merely opening a connection to a
+    nonexistent path. Before this fix, that stray file then caused (a) a
+    raw ``OperationalError: no such table: chunks_fts`` instead of an
+    actionable "project not indexed" message, and (b) a schema-less
+    sidecar left behind at ``cache_path`` that misleads any later
+    existence-based "is this project indexed?" check.
+    """
+    cache_path = tmp_path / "never_indexed.db"
+    assert not cache_path.exists()
+
+    provider = PerCallConnectionProvider(cache_path=cache_path)
+    with pytest.raises(CacheNotIndexedError, match=r"pydocs-mcp index"):
+        with provider.acquire_sync() as _conn:
+            pass
+
+    # The core assertion: opening a connection to index/query a
+    # never-indexed project must not fabricate an empty sidecar file.
+    assert not cache_path.exists()
+
+
+async def test_acquire_missing_cache_raises_actionable_error_and_no_file(tmp_path):
+    """Async ``acquire()`` mirrors the sync path's missing-cache behavior."""
+    cache_path = tmp_path / "never_indexed_async.db"
+    assert not cache_path.exists()
+
+    provider = PerCallConnectionProvider(cache_path=cache_path)
+    with pytest.raises(CacheNotIndexedError, match=r"pydocs-mcp index"):
+        async with provider.acquire() as _conn:
+            pass
+
+    assert not cache_path.exists()

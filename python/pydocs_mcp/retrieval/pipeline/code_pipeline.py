@@ -117,18 +117,45 @@ class CodeRetrieverPipeline(RetrieverStep):
                 f"(pipeline name={data.get('name', '<unnamed>')!r}). "
                 "See pipelines/chunk_search.yaml for the canonical shape."
             )
+        if "name" not in data:
+            raise PipelineLoadError(
+                "pipeline YAML missing required 'name:' key. "
+                "See pipelines/chunk_search.yaml for the canonical shape."
+            )
+        pipeline_name = data["name"]
         steps_data = data["steps"]
+        # A hand-edited overlay can easily produce ``steps:`` with an empty
+        # block (parses to None), a mapping, or a list of bare strings — all
+        # of which would otherwise blow up as a raw TypeError/AttributeError
+        # deep in the loop below instead of naming the pipeline/step.
+        if not isinstance(steps_data, list):
+            raise PipelineLoadError(
+                f"pipeline {pipeline_name!r}: 'steps:' must be a list of step "
+                f"mappings; got {type(steps_data).__name__}. "
+                "See pipelines/chunk_search.yaml for the canonical shape."
+            )
         stages: list = []
         for idx, step in enumerate(steps_data):
+            if not isinstance(step, dict):
+                raise PipelineLoadError(
+                    f"pipeline {pipeline_name!r}: step #{idx} must be a mapping "
+                    f"with 'name:' and 'type:'; got {type(step).__name__}."
+                )
             if "name" not in step:
                 raise PipelineLoadError(
                     f"pipeline step #{idx} missing required 'name:' "
-                    f"(pipeline name={data.get('name', '<unnamed>')!r}, "
+                    f"(pipeline name={pipeline_name!r}, "
                     f"type={step.get('type', '<missing>')!r}). "
                     "Every step in a 'steps:' list must declare a unique 'name'."
                 )
+            if "type" not in step:
+                raise PipelineLoadError(
+                    f"pipeline {pipeline_name!r}: step #{idx} ({step['name']!r}) "
+                    "missing required 'type:'. "
+                    "See pipelines/chunk_search.yaml for the canonical shape."
+                )
             stages.append(_step_from_dict(step, context, _depth=_depth))
-        return cls(name=data["name"], stages=tuple(stages))
+        return cls(name=pipeline_name, stages=tuple(stages))
 
 
 def _step_to_dict(stage: object, idx: int) -> dict:

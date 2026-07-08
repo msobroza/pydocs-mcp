@@ -198,3 +198,43 @@ def test_load_project_future_schema_version_preserves_data(tmp_path: Path) -> No
         verify.close()
     assert row_count == 1, "future-schema bundle must survive load_project untouched"
     assert version == 99, "future-schema bundle's version stamp must survive untouched"
+
+
+# ── corrupt/unopenable bundle must name the offending file ──
+
+
+def test_load_project_corrupt_db_names_the_path(tmp_path: Path) -> None:
+    """A truncated/garbage ``.db`` must fail with the offending path IN the message.
+
+    ``_check_schema_version_readable`` opens a throwaway raw ``sqlite3.connect``
+    (deliberately bypassing ``open_index_database``'s corrupt-file recovery,
+    which is destructive — see ``FutureSchemaError`` docstring). On a bundle
+    that isn't a SQLite database at all, ``PRAGMA user_version`` raises
+    ``sqlite3.DatabaseError('file is not a database')`` with NO file path in
+    the message. In a multi-repo workspace of many bundles, that error is
+    unlocatable: the operator can't tell which of N `.db` files is broken.
+    Per the project's error contract (errors carry the offending value), the
+    raised error must name ``db_path``.
+    """
+    bad = tmp_path / "bad_0000000000.db"
+    bad.write_bytes(b"garbage, not a sqlite database, definitely not")
+
+    with pytest.raises(sqlite3.DatabaseError) as exc_info:
+        load_project(bad)
+    assert str(bad) in str(exc_info.value)
+
+
+def test_discover_workspace_corrupt_db_names_the_path_not_just_error(tmp_path: Path) -> None:
+    """One corrupt bundle among many valid ones must fail naming the culprit.
+
+    Regression for the "which of the 20 bundles?" failure mode: a workspace
+    load must not abort with a bare, unlocatable ``sqlite3.DatabaseError``
+    when one bundle is corrupt/truncated garbage.
+    """
+    _build_db(tmp_path / "good_0000000000.db", name="good")
+    bad = tmp_path / "bad_1111111111.db"
+    bad.write_bytes(b"\x00\x01\x02\x03truncated")
+
+    with pytest.raises(sqlite3.DatabaseError) as exc_info:
+        discover_workspace(tmp_path)
+    assert str(bad) in str(exc_info.value)

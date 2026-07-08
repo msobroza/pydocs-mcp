@@ -16,6 +16,30 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_mcp.exceptions import PydocsMCPError
+
+
+class CacheNotIndexedError(PydocsMCPError, FileNotFoundError):
+    """Raised when a query targets a project that has never been indexed.
+
+    ``sqlite3.connect(path)`` silently creates an empty 4096-byte database
+    file as a side effect of opening a connection to a nonexistent path —
+    without this guard, a query against a never-indexed project (a) fails
+    deep inside the FTS layer with a raw and unhelpful
+    ``OperationalError: no such table: chunks_fts``, and (b) leaves behind
+    a schema-less sidecar at ``cache_path`` that later existence-based
+    "is this project indexed?" checks (or a human inspecting the cache
+    dir) would misread as evidence of a real index. Raised BEFORE
+    ``sqlite3.connect`` so the file is never created.
+    """
+
+    def __init__(self, cache_path: Path) -> None:
+        super().__init__(
+            f"{cache_path} does not exist — this project has not been "
+            "indexed yet. Run `pydocs-mcp index <path>` first.",
+        )
+        self.cache_path = cache_path
+
 
 @dataclass(frozen=True, slots=True)
 class PerCallConnectionProvider:
@@ -48,6 +72,13 @@ class PerCallConnectionProvider:
             connection.close()
 
     def _open(self) -> sqlite3.Connection:
+        # Stat before connect: sqlite3.connect() silently creates an empty
+        # DB file when cache_path doesn't exist, which both masks a
+        # never-indexed project behind a confusing FTS OperationalError
+        # and leaves a schema-less stray sidecar on disk. Raise the
+        # actionable error before that side effect can happen.
+        if not self.cache_path.exists():
+            raise CacheNotIndexedError(self.cache_path)
         # check_same_thread=False is REQUIRED — both ``acquire`` (whose
         # close() runs through ``asyncio.to_thread``) and ``acquire_sync``
         # (called from retrieval steps' own ``asyncio.to_thread`` workers)
@@ -59,4 +90,4 @@ class PerCallConnectionProvider:
         return conn
 
 
-__all__ = ("PerCallConnectionProvider",)
+__all__ = ("CacheNotIndexedError", "PerCallConnectionProvider")

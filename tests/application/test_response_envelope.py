@@ -116,3 +116,25 @@ def test_footer_renders_ledger_entries() -> None:
     out = asyncio.run(_envelope(_fresh_info()).wrap(truncating_body))
     assert "[truncated: 1 section" in out
     assert out.rstrip().endswith('2 result(s) elided → get_symbol(target="pkg.mod.X")')
+
+
+def test_footer_respects_pointers_disabled() -> None:
+    # Same truncating body as test_footer_renders_ledger_entries, but with
+    # pointers_enabled=False. wrap() strips pointer tokens from the BODY
+    # (envelope.py's `strip_pointers` branch) but render_envelope_footer
+    # unconditionally calls resolve_pointers() on each ledger entry's
+    # recovery token — so a "pointers disabled" deployment still emits
+    # "→ get_symbol(...)" syntax in the truncation footer. Pin that this
+    # is stripped, matching the body-side contract: no pointer syntax of
+    # any kind survives when pointers_enabled=False.
+    async def truncating_body() -> str:
+        get_active_ledger().record(
+            TruncationEntry(description="2 result(s) elided", recovery="[[next:lookup:pkg.mod.X]]")
+        )
+        return "body\n"
+
+    out = asyncio.run(_envelope(_fresh_info(), pointers=False).wrap(truncating_body))
+    assert "[truncated: 1 section" in out
+    assert "[[next:" not in out
+    assert "→" not in out
+    assert "get_symbol" not in out
