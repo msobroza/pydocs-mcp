@@ -177,3 +177,39 @@ def test_node_meta_resolves_docstring_across_src_prefix(tmp_path):
     )
     meta = graph.node_meta(db, "pkg.a.Foo", "class")
     assert meta is not None and "Docstring for Foo." in meta.body
+
+
+def test_doc_nodes_one_per_file_attached_to_project(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        markdown=[
+            ("README.md", "Intro", "hello"),
+            ("README.md", "Usage", "run it"),
+            ("CLAUDE.md", "Rules", "be nice"),
+        ],
+    )
+    g = graph.doc_nodes(db, "demo")
+    files = {n.id: n.node_type for n in g.nodes}
+    assert files == {
+        "doc:README.md": "doc",
+        "doc:CLAUDE.md": "doc",
+        "project:demo": "module",
+    }
+    assert all(e.kind == "documents" and e.target == "project:demo" for e in g.edges)
+
+
+def test_expand_doc_file_reveals_sections(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        markdown=[("README.md", "Intro", "hello"), ("README.md", "Usage", "run it")],
+    )
+    g = graph.expand(db, "doc:README.md", "doc", kinds=frozenset())
+    labels = sorted(n.label for n in g.nodes)
+    assert labels == ["Intro", "Usage"]
+    assert all(e.kind == "contains" for e in g.edges)

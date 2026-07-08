@@ -162,6 +162,18 @@ def expand(db_path: Path, node_id: str, node_type: str, kinds: frozenset[str]) -
     with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
         modules = set(_modules(conn))
         node_ids = _node_ids(conn)
+        if node_type == "doc":
+            file = node_id.removeprefix("doc:")
+            section_rows = conn.execute(
+                "SELECT id, title FROM chunks WHERE package=? AND origin='markdown_section' "
+                "AND module=? ORDER BY id",
+                (_OWN, file),
+            ).fetchall()
+            section_nodes = tuple(
+                Node(f"section:{cid}", title, "doc") for cid, title in section_rows
+            )
+            contains = tuple(Edge(node_id, n.id, "contains") for n in section_nodes)
+            return Graph(section_nodes, contains)
         if node_type == "module":
             members = _direct_members(node_ids, node_id)
             member_nodes = tuple(Node(m, _short(m), _type_of(m, modules)) for m in members)
@@ -221,3 +233,21 @@ def induce(g: Graph, node_types: frozenset[str], edge_kinds: frozenset[str]) -> 
         if e.source in ids and e.target in ids and (e.kind in edge_kinds or e.kind in _STRUCTURAL)
     )
     return Graph(nodes, edges, g.truncated)
+
+
+def doc_nodes(db_path: Path, project: str) -> Graph:
+    """One node per markdown file, each linked to the project by a ``documents``
+    edge (markdown files document the project, not a single code module)."""
+    with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
+        files = [
+            row[0]
+            for row in conn.execute(
+                "SELECT DISTINCT module FROM chunks "
+                "WHERE package=? AND origin='markdown_section' ORDER BY module",
+                (_OWN,),
+            )
+        ]
+    project_node = Node(f"project:{project}", project, "module")
+    nodes = [project_node] + [Node(f"doc:{f}", f, "doc") for f in files]
+    edges = [Edge(f"doc:{f}", project_node.id, "documents") for f in files]
+    return Graph(tuple(nodes), tuple(edges))
