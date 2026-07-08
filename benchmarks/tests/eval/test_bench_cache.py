@@ -103,6 +103,51 @@ def test_commit_loses_race_drops_tmp(tmp_path, monkeypatch) -> None:
     assert not build.exists()  # loser dropped
 
 
+def test_commit_lost_race_mid_window_uses_winner(tmp_path, monkeypatch) -> None:
+    """TOCTOU: the other process promotes its entry BETWEEN commit's
+    `final.exists()` check and its `build_dir.replace(final)` — the rename
+    then hits a non-empty directory and raises ENOTEMPTY. The loser must
+    drop its build dir and serve the winner's entry, exactly like the
+    already-tested pre-check race — not crash the sweep leg and leak the
+    pid-suffixed tmp dir."""
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    build = _bench_cache.reserve("k")
+    (build / "index.sqlite").write_text("loser")
+
+    real_replace = Path.replace
+
+    def _racing_replace(self: Path, target):
+        target_path = Path(target)
+        if target_path == _bench_cache.entry_dir("k") and not target_path.exists():
+            # Simulate the winner promoting inside the check-to-rename window.
+            target_path.mkdir(parents=True)
+            (target_path / "index.sqlite").write_text("winner")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _racing_replace)
+
+    db = _bench_cache.commit("k", build)
+    assert db == _bench_cache.db_path_for("k")
+    assert db.read_text() == "winner"
+    assert not build.exists(), "loser's build dir leaked"
+
+
+def test_commit_reraises_replace_failure_without_a_winner(tmp_path, monkeypatch) -> None:
+    """A rename failure with NO usable winner entry (cross-device link,
+    permissions) is a real error — commit must re-raise instead of silently
+    returning a path to a database that does not exist."""
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    build = _bench_cache.reserve("k")
+    (build / "index.sqlite").write_text("data")
+
+    def _broken_replace(self: Path, target):
+        raise OSError(18, "Invalid cross-device link")
+
+    monkeypatch.setattr(Path, "replace", _broken_replace)
+    with pytest.raises(OSError):
+        _bench_cache.commit("k", build)
+
+
 def test_evict_removes_everything(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
     d = _bench_cache.entry_dir("k")
