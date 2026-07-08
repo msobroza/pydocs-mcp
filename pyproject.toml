@@ -74,9 +74,14 @@ sentence-transformers = ["sentence-transformers>=5.0,<6.0", "transformers>=4.48"
 openvino = ["sentence-transformers[openvino]>=5.0,<6.0", "transformers>=4.48"]
 # Reference-graph analytics: PageRank + Louvain community detection over the
 # node_references graph, computed at index time for the centrality-prior and
-# community-diversity rerank steps. networkx is pure-Python + light; imported
-# lazily (a guard), so the default install never pays for it. Opt-in.
-graph = ["networkx>=3.0,<4.0"]
+# community-diversity rerank steps. Imported lazily (a guard), so the default
+# install never pays for it. scipy is pinned explicitly because networkx 3.x
+# computes pagerank() on its scipy solver, yet scipy is only an *optional*
+# networkx dep (`networkx[default]`) — so a bare `networkx` requirement lets
+# `pip install pydocs-mcp[graph]` resolve networkx WITHOUT scipy, and the first
+# PageRank run then dies with `ModuleNotFoundError: No module named 'scipy'`.
+# Opt-in.
+graph = ["networkx>=3.0,<4.0", "scipy>=1.10,<2.0"]
 
 [dependency-groups]
 # PEP 735 developer-only groups — explicit-only via

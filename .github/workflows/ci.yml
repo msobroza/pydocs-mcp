@@ -34,6 +34,25 @@ jobs:
             echo 'include=[{"os":"ubuntu-latest","python-version":"3.13"}]' >> "$GITHUB_OUTPUT"
           fi
 
+  # WHY: `uv sync --frozen` (python job below) installs uv.lock AS-IS and never
+  # checks it against pyproject.toml — so pyproject/lock drift accumulates
+  # silently while CI stays green (a stale lock once pinned pydocs-mcp 0.3.1
+  # against a 0.4.1 pyproject, and a declared optional-dependency extra was
+  # missing from the lock, all undetected). `uv lock --check` re-resolves and
+  # asserts the committed lock is up-to-date, reddening CI the moment they
+  # diverge. Standalone + cheap: no OpenBLAS, no full install — just resolve
+  # and compare — and it runs once, not per matrix cell. Fix: run `uv lock`.
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Assert uv.lock matches pyproject.toml
+        run: uv lock --check
+
   python:
     needs: matrix-config
     runs-on: ${{ matrix.os }}
@@ -179,6 +198,29 @@ jobs:
         if: runner.os != 'Linux'
         run: |
           uv run python -m pytest tests/ -v --ignore=tests/test_parity.py --cov=pydocs_mcp --cov-report=term-missing --cov-fail-under=90
+
+      # WHY: the [graph] extra (networkx + scipy) is intentionally OUT of the
+      # --group dev closure, so the PageRank / Louvain node-score tests
+      # importorskip("networkx") and SKIP in the coverage run above — the
+      # reference-graph feature otherwise ships never exercised by CI. This step
+      # installs the extra into the same venv and runs those two files so the
+      # node-score path actually executes. networkx 3.x computes pagerank() via
+      # its scipy solver, and scipy is only an *optional* networkx dep — hence
+      # the extra pins scipy explicitly; without it these tests would crash on a
+      # missing scipy instead of validating the feature. Kept OUT of the main
+      # run so that run stays a faithful default-install (no-extra) check: a
+      # stray top-level `import networkx` would still redden the default cell.
+      # Linux-only: reuses this job's OpenBLAS setup + LD_PRELOAD (the
+      # IndexingService node-score test pulls turbovec transitively).
+      - name: Test graph extra (PageRank / community detection, Linux)
+        if: runner.os == 'Linux'
+        env:
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
+        run: |
+          uv sync --frozen --group dev --extra graph
+          uv run python -m pytest \
+            tests/application/test_node_score_compute.py \
+            tests/application/test_indexing_service_node_scores.py -v
 
       - name: Upload coverage artifact
         # WHY: only one upload per run — pin to the Linux + 3.13 cell, which
