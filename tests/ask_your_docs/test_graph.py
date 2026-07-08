@@ -296,3 +296,48 @@ def test_expand_module_lists_defined_classes_even_if_unreferenced(tmp_path):
     ids = {n.id: n.node_type for n in g.nodes}
     assert ids.get("mod_a.Widget") == "class", "defined-but-unreferenced class must show"
     assert ids.get("mod_a.run") == "function"
+
+
+def test_children_navigates_the_namespace(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[
+            ("app.adapters.base", "Adapter", "class"),
+            ("app.adapters.base", "helper", "def"),
+            ("app.cli", "main", "def"),
+        ],
+        refs=[
+            ("app.adapters.base.Adapter", "app.cli.main", "calls"),
+            ("app.adapters.base.Adapter.run", "app.cli.main", "calls"),
+        ],
+    )
+    root = {(n.id, n.node_type) for n in graph.children(db, "")}
+    assert root == {("app", "package")}
+
+    app = {(n.id, n.node_type) for n in graph.children(db, "app")}
+    assert ("app.adapters", "package") in app
+    assert ("app.cli", "module") in app
+
+    base = {(n.id, n.node_type) for n in graph.children(db, "app.adapters.base")}
+    assert ("app.adapters.base.Adapter", "class") in base
+    assert ("app.adapters.base.helper", "function") in base
+
+    methods = {n.id for n in graph.children(db, "app.adapters.base.Adapter")}
+    assert "app.adapters.base.Adapter.run" in methods
+
+
+def test_edges_for_collapses_to_visible_ancestor(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[("app.a.mod", "Foo", "class"), ("app.b.mod", "bar", "def")],
+        refs=[("app.a.mod.Foo", "app.b.mod.bar", "calls")],
+    )
+    # zoomed out to packages: the member edge collapses to package<->package
+    e = graph.edges_for(db, {"app.a", "app.b"}, frozenset({"calls"}))
+    assert ("app.a", "app.b", "calls") in {(x.source, x.target, x.kind) for x in e}

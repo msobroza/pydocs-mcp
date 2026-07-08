@@ -232,6 +232,9 @@ def node_meta(db_path: Path, node_id: str, node_type: str) -> NodeMeta | None:
         if node_type == "module":
             count = len(_defined_members(conn, node_id, _node_ids(conn)))
             return NodeMeta(node_id, "module", node_id, f"{count} members")
+        if node_type == "package":
+            n = sum(1 for m in _modules(conn) if m == node_id or m.startswith(node_id + "."))
+            return NodeMeta(node_id, "package", node_id, f"{n} modules")
         if node_type in {"doc", "decision"}:
             if node_id.startswith(("section:", "decision:")):
                 cid = int(node_id.split(":", 1)[1])
@@ -308,28 +311,29 @@ def type_of(node_id: str, module_set: set[str]) -> str:
 
 
 def edges_for(db_path: Path, visible: set[str], kinds: frozenset[str]) -> tuple[Edge, ...]:
-    """Reference edges among the visible nodes, each raw edge collapsed to its
-    nearest visible endpoint.
+    """Reference edges among the visible nodes, each raw edge collapsed to the
+    nearest visible *ancestor* (the longest visible dotted prefix of an endpoint).
 
-    A member's ``calls``/``inherits``/``imports`` edge is drawn between the two
-    members when both are shown, or between their modules when the members are
-    hidden — so relationships appear at whatever depth the user has drilled to
-    (module overview OR expanded members), and re-collapse when a node implodes.
+    So a member's ``calls``/``inherits``/``imports`` edge is drawn between whatever
+    two visible nodes contain its endpoints — package↔package at a coarse zoom,
+    member↔member when zoomed into a module. Endpoints with no visible ancestor
+    (external targets, or nodes outside the current view) are dropped.
     """
     with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
-        mods = _modules(conn)
         rows = conn.execute(
             "SELECT from_node_id, to_node_id, kind FROM node_references WHERE from_package=?",
             (_OWN,),
         ).fetchall()
 
+    vis = sorted(visible, key=len, reverse=True)  # longest prefix wins
+
     def anchor(nid: str | None) -> str | None:
         if not nid:
             return None
-        if nid in visible:
-            return nid
-        m = _module_of(nid, mods)
-        return m if m in visible else None
+        for v in vis:
+            if nid == v or nid.startswith(v + "."):
+                return v
+        return None
 
     seen: set[tuple[str, str, str]] = set()
     out: list[Edge] = []
@@ -354,3 +358,87 @@ def is_test(node_id: str) -> bool:
         if seg in _TEST_SEGMENTS or seg.startswith("test_") or seg.endswith("_test"):
             return True
     return False
+
+
+def _namespace_children(mods: set[str], focus: str, keep) -> list[Node]:
+    """The next dotted segment under ``focus``: a module if that exact prefix is
+    a module, else a package (it has modules deeper still)."""
+    prefix = focus + "." if focus else ""
+    segs: dict[str, str] = {}
+    for m in mods:
+        if not m.startswith(prefix) or not keep(m):
+            continue
+        rest = m[len(prefix) :]
+        if not rest:
+            continue
+        child = prefix + rest.split(".", 1)[0]
+        segs[child] = "module" if child in mods else "package"
+    return [Node(cid, _short(cid), kind) for cid, kind in sorted(segs.items())]
+
+
+def _doc_decision_children(conn: sqlite3.Connection) -> list[Node]:
+    docs = [
+        Node(f"doc:{f}", f, "doc")
+        for (f,) in conn.execute(
+            "SELECT DISTINCT module FROM chunks "
+            "WHERE package=? AND origin='markdown_section' ORDER BY module",
+            (_OWN,),
+        )
+    ]
+    decisions = [
+        Node(f"decision:{cid}", title, "decision")
+        for cid, title in conn.execute(
+            "SELECT id, title FROM chunks WHERE package=? AND origin='decision_record' ORDER BY id",
+            (_OWN,),
+        )
+    ]
+    return docs + decisions
+
+
+def children(
+    db_path: Path, focus: str, content: str = "Codebase", hide_tests: bool = True
+) -> tuple[Node, ...]:
+    """Direct namespace children of ``focus`` for the zoom view.
+
+    Levels: root ("") -> top packages/modules; package -> sub-packages/modules;
+    module -> its classes/functions; class -> its methods. ``content`` adds the
+    project's markdown files + decision records at the root. Functions, methods,
+    decisions and doc sections are leaves (return no children).
+    """
+
+    def keep(nid: str) -> bool:
+        return not (hide_tests and is_test(nid))
+
+    if focus.startswith("doc:"):
+        return expand(db_path, focus, "doc", frozenset()).nodes
+
+    with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
+        mods = set(_modules(conn))
+        node_ids = _node_ids(conn)
+
+        if focus == "":
+            nodes: list[Node] = []
+            if content != "Documentation":
+                nodes += _namespace_children(mods, "", keep)
+            if content != "Codebase":
+                nodes += _doc_decision_children(conn)
+            return tuple(nodes)
+
+        if focus in mods:  # module -> defined members
+            members = _defined_members(conn, focus, node_ids)
+            return tuple(
+                Node(f"{focus}.{name}", name, "class" if kind == "class" else "function")
+                for name, kind in members
+                if keep(f"{focus}.{name}")
+            )
+
+        if any(m.startswith(focus + ".") for m in mods):  # package prefix
+            return tuple(_namespace_children(mods, focus, keep))
+
+        # class (or leaf) -> its methods (ids one segment beyond ``focus``)
+        methods = sorted(
+            nid
+            for nid in node_ids
+            if nid.startswith(focus + ".") and "." not in nid[len(focus) + 1 :] and keep(nid)
+        )
+        return tuple(Node(mid, _short(mid), "function") for mid in methods)

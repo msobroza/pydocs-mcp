@@ -82,11 +82,15 @@ why. Toggle **Light mode** at the top of the sidebar to switch the palette.
 ### Graph explorer
 
 The app has a second page (sidebar → **Graph**) that visualizes a project's
-structure: a module overview, click a node to open its connections, docstrings
-in a side panel, and filters for node type and relationship (calls / imports /
-inherits). Click **➕ Add to question** on a node to attach it to your next chat
-question. The page reads the index bundles directly (read-only) — no model
-calls.
+structure as a **zoom / drill-down**: the canvas shows the direct children of
+the current focus (a breadcrumb up top), and clicking a container — package
+`⬡`, module `◆`, class `■`, or doc file `▲` — zooms into it; click a breadcrumb
+segment to zoom back out. Node types are shown by shape + colour (legend) and
+edges are coloured by relationship (calls / imports / inherits). Leaves
+(functions, methods, decisions) open a docstring panel. A **Hide test files**
+toggle and node/edge filters trim the view. Click **➕ Add to question** on any
+node to attach it to your next chat question. The page reads the index bundles
+directly (read-only) — no model calls.
 
 Use the **Content** selector to switch between **Codebase** (modules, classes,
 functions), **Documentation** (markdown files and architectural decisions), or
