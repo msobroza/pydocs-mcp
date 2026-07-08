@@ -1,10 +1,10 @@
-"""Graph explorer — second page of the ask-your-docs app.
+"""Graph explorer — presentation layer only (Streamlit + streamlit-agraph).
 
 A zoom / drill-down view: the canvas shows the direct children of the current
-focus (a breadcrumb up top), and clicking a container node (package / module /
-class / doc file) zooms into it. Click a breadcrumb segment to zoom back out.
-Leaves (functions, methods, decisions, doc sections) just open the side panel.
-Node types are shown by shape + colour (legend); edges are coloured by kind.
+focus (a breadcrumb up top); clicking a container node (package / module / class
+/ doc file) zooms in, a breadcrumb segment zooms out. All data comes from a
+``GraphService`` (domain) over a ``SqliteBundleReader`` (data access) — this file
+holds no SQL and no graph logic.
 """
 
 from __future__ import annotations
@@ -12,8 +12,9 @@ from __future__ import annotations
 import os
 
 import streamlit as st
-from pydocs_mcp.ask_your_docs import graph
-from pydocs_mcp.ask_your_docs.catalog import workspace_catalog
+from pydocs_mcp.ask_your_docs.bundle import SqliteBundleReader
+from pydocs_mcp.ask_your_docs.catalog import CatalogService
+from pydocs_mcp.ask_your_docs.graph_service import GraphService, type_of
 from pydocs_mcp.ask_your_docs.theme import THEMES, theme_css
 from streamlit_agraph import Config, agraph
 from streamlit_agraph import Edge as AEdge
@@ -58,22 +59,8 @@ def _crumbs(focus: str, project: str) -> list[tuple[str, str]]:
 
 
 @st.cache_data(ttl=60)
-def _catalog(workspace: str) -> dict[str, list[str]]:
-    return workspace_catalog(workspace)
-
-
-def _db_for(workspace: str, project: str):
-    import sqlite3
-    from contextlib import closing
-    from pathlib import Path
-
-    from pydocs_mcp.ask_your_docs.catalog import _project_name, _ro_uri
-
-    for db in sorted(Path(workspace).expanduser().glob("*.db")):
-        with closing(sqlite3.connect(_ro_uri(db), uri=True)) as conn:
-            if _project_name(conn, db) == project:
-                return db
-    return None
+def _projects(workspace: str) -> dict[str, list[str]]:
+    return CatalogService(workspace).projects()
 
 
 workspace = os.environ.get("PYDOCS_WORKSPACE", "")
@@ -83,7 +70,7 @@ with st.sidebar:
     projects: dict[str, list[str]] = {}
     if workspace:
         try:
-            projects = _catalog(workspace)
+            projects = _projects(workspace)
         except Exception as exc:  # unreadable dir / no bundles
             st.warning(f"Couldn't scan workspace: {exc}")
     project = st.selectbox("Project", list(projects) or ["—"], key="graph_project")
@@ -111,10 +98,11 @@ if not workspace or not projects:
     st.info("Set a workspace with pydocs-mcp bundles (same as the chat page).")
     st.stop()
 
-db = _db_for(workspace, project)
+db = CatalogService(workspace).bundle_path(project)
 if db is None:
     st.warning(f"No bundle found for project {project!r}.")
     st.stop()
+svc = GraphService(SqliteBundleReader(db))
 
 focus_key = f"graph_focus::{project}::{content}"
 focus: str = st.session_state.get(focus_key, "")
@@ -132,15 +120,13 @@ for i, (label, target) in enumerate(crumbs):
 
 # Children of the current focus + reference edges among them.
 allowed = picked_types | {"package", "doc", "decision"}
-kids = tuple(n for n in graph.children(db, focus, content, hide_tests) if n.node_type in allowed)
+kids = tuple(n for n in svc.children(focus, content, hide_tests) if n.node_type in allowed)
 if not kids:
     st.info("Nothing to show here — zoom out, or widen the filters / content type.")
     st.stop()
 ids = {n.id for n in kids}
 type_map = {n.id: n.node_type for n in kids}
-edges = tuple(
-    e for e in graph.edges_for(db, ids, edge_kinds) if e.source in ids and e.target in ids
-)
+edges = tuple(e for e in svc.edges_for(ids, edge_kinds) if e.source in ids and e.target in ids)
 
 # Legend.
 _node_legend = " ".join(
@@ -202,8 +188,8 @@ selected = st.session_state.get("graph_selected")
 if selected:
     with st.sidebar:
         st.markdown('<div class="side-label">Selected</div>', unsafe_allow_html=True)
-        ntype = type_map.get(selected) or graph.type_of(selected, graph.modules(db))
-        meta = graph.node_meta(db, selected, ntype)
+        ntype = type_map.get(selected) or type_of(selected, svc.modules())
+        meta = svc.node_meta(selected, ntype)
         if meta:
             st.markdown(f"**{meta.title}**  \n`{meta.id}`")
             if meta.body:

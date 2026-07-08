@@ -1,70 +1,57 @@
-"""Read-only workspace bundle scan.
+"""Application layer for reading a workspace of bundles (the project catalog).
 
-Reads each project's name and dependency packages straight from its ``*.db``
-bundle over a ``mode=ro`` connection. It deliberately does NOT go through
-``pydocs_mcp.multirepo.discover_workspace`` / ``open_index_database``: those
-open bundles read-write and may migrate or even rebuild them, so a UI-side
-scan through that path could mutate (or wipe) the user's index just by
-listing it. Names/packages here still match what the server's ``project=`` /
-``package=`` filters expect.
+``CatalogService`` scans a directory of pre-built ``*.db`` bundles through the
+read-only :class:`~pydocs_mcp.ask_your_docs.bundle.SqliteBundleReader` (no SQL
+here, no migrate/rebuild path). ``workspace_catalog`` / ``render_catalog`` are
+thin module-level wrappers the agent prompt uses.
 """
 
 from __future__ import annotations
 
-import re
-import sqlite3
-from contextlib import closing
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
-# Cache files are named ``{project}_{md5[:10]}.db`` (pydocs_mcp.multirepo).
-_SLUG_RE = re.compile(r"^(.*)_[0-9a-f]{10}$")
+from pydocs_mcp.ask_your_docs.bundle import BundleReader, SqliteBundleReader
 
 
-def _ro_uri(db: Path) -> str:
-    # Path.as_uri() percent-encodes %, ?, #, spaces — so appending the query is
-    # safe even for a workspace path like ~/indexes/C#-port/.
-    return db.resolve().as_uri() + "?mode=ro"
+@dataclass(frozen=True, slots=True)
+class CatalogService:
+    """Read a workspace of bundles: list projects, resolve a project's bundle.
 
+    ``reader_factory`` builds a :class:`BundleReader` for one bundle path
+    (defaults to :class:`SqliteBundleReader`); inject a fake to test offline.
+    """
 
-def _scalar(conn: sqlite3.Connection, sql: str) -> object | None:
-    """First column of the first row, or None if the table/row is absent."""
-    try:
-        row = conn.execute(sql).fetchone()
-    except sqlite3.OperationalError:
-        return None  # pre-v11 bundle: no index_metadata table
-    return row[0] if row else None
+    workspace: str
+    reader_factory: Callable[[Path], BundleReader] = field(default=SqliteBundleReader)
 
+    def _bundles(self) -> list[Path]:
+        return sorted(Path(self.workspace).expanduser().glob("*.db"))
 
-def _project_name(conn: sqlite3.Connection, db: Path) -> str:
-    name = _scalar(conn, "SELECT project_name FROM index_metadata LIMIT 1")
-    if name:
-        return str(name)
-    m = _SLUG_RE.match(db.stem)  # legacy bundle: recover from the filename
-    return m.group(1) if m else db.stem
+    def projects(self) -> dict[str, list[str]]:
+        """Map each project to its dependency packages (own code excluded). On
+        duplicate names the newest bundle wins (mirrors the server routing)."""
+        best: dict[str, tuple[float, list[str]]] = {}
+        for db in self._bundles():
+            reader = self.reader_factory(db)
+            name = reader.project_name()
+            indexed_at = reader.indexed_at()
+            if name not in best or indexed_at > best[name][0]:
+                best[name] = (indexed_at, reader.packages())
+        return {name: packages for name, (_, packages) in sorted(best.items())}
+
+    def bundle_path(self, project: str) -> Path | None:
+        """The ``.db`` whose project identity matches ``project``, or None."""
+        for db in self._bundles():
+            if self.reader_factory(db).project_name() == project:
+                return db
+        return None
 
 
 def workspace_catalog(workspace: str) -> dict[str, list[str]]:
-    """Map each indexed project to its dependency packages (own code excluded).
-
-    On duplicate project names the newest bundle wins, mirroring the server's
-    ``max(indexed_at)`` routing (and, like it, keeping the first on a tie).
-    """
-    best: dict[str, tuple[float, list[str]]] = {}
-    for db in sorted(Path(workspace).expanduser().glob("*.db")):
-        with closing(sqlite3.connect(_ro_uri(db), uri=True)) as conn:
-            name = _project_name(conn, db)
-            indexed_at = float(
-                _scalar(conn, "SELECT indexed_at FROM index_metadata LIMIT 1") or 0.0
-            )
-            packages = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM packages WHERE name != '__project__' ORDER BY name"
-                )
-            ]
-        if name not in best or indexed_at > best[name][0]:
-            best[name] = (indexed_at, packages)
-    return {name: packages for name, (_, packages) in sorted(best.items())}
+    """Project -> dependency packages for the whole workspace (agent prompt)."""
+    return CatalogService(workspace).projects()
 
 
 def render_catalog(catalog: dict[str, list[str]]) -> str:
