@@ -278,10 +278,62 @@ async def _run(args: argparse.Namespace) -> str:
     pairs = await run_agent_track(
         cfg, dataset=dataset, runner=runner, judge=judge, ledger_path=args.ledger
     )
-    spend = sum((p.bare.cost_usd + p.indexed.cost_usd) for p in pairs if p.bare and p.indexed)
+    # Honest footer (no-silent-caps): source discard count + spend from the LEDGER,
+    # not from the admitted ``pairs`` alone. ``run_agent_track`` returns only the
+    # admitted pairs, so ``pairs`` cannot reveal how many tasks the orchestrator
+    # discarded (half-pair / judge-failed) nor the money burned on their arms.
+    # The ledger is the truth: the orchestrator logs every discard AND every
+    # admitted pair's per-arm cost to it, so reading it back gives a real
+    # discarded count and a spend total that already includes any per-arm cost the
+    # ledger records for discarded tasks (recovered automatically once the
+    # orchestrator writes them — the summation keys on cost fields, not line kind).
+    discarded, spend = _footer_stats_from_ledger(args.ledger)
     return format_agent_track_report(
-        pairs, dataset_name=args.dataset, rng_seed=cfg.rng_seed, spend_usd=spend
+        pairs,
+        dataset_name=args.dataset,
+        rng_seed=cfg.rng_seed,
+        discarded=discarded,
+        spend_usd=spend,
     )
+
+
+# Ledger keys carrying real per-arm spend. Summing these across EVERY line (admitted
+# or discarded) yields the true total spend, so a discard line that later records
+# an arm's cost is counted without changing this caller. Single source of truth.
+_LEDGER_COST_KEYS = ("bare_cost", "indexed_cost")
+
+
+def _footer_stats_from_ledger(ledger_path: Path) -> tuple[int, float]:
+    """Read the ledger back for the honest footer: (discarded count, total spend).
+
+    ``run_agent_track`` returns only admitted pairs, so the discard count and the
+    spend on discarded arms are invisible to the caller. The ledger is the record
+    of truth — ``orchestrator._append_discard`` writes one ``discarded``-keyed line
+    per drop, and ``_append_admitted`` writes each admitted pair's per-arm cost — so
+    counting ``discarded`` lines and summing every ``_LEDGER_COST_KEYS`` field
+    across all lines reconstructs both honestly. A missing ledger (no run yet)
+    yields ``(0, 0.0)``.
+
+    Example:
+        >>> _footer_stats_from_ledger(Path("/does/not/exist.jsonl"))
+        (0, 0.0)
+    """
+    if not ledger_path.exists():
+        return 0, 0.0
+    discarded = 0
+    spend = 0.0
+    for line in ledger_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        record = json.loads(stripped)
+        if "discarded" in record:
+            discarded += 1
+        for key in _LEDGER_COST_KEYS:
+            value = record.get(key)
+            if isinstance(value, (int, float)):
+                spend += float(value)
+    return discarded, spend
 
 
 def main() -> None:
