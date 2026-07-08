@@ -88,6 +88,10 @@ inherits). Click **➕ Add to question** on a node to attach it to your next cha
 question. The page reads the index bundles directly (read-only) — no model
 calls.
 
+Use the **Content** selector to switch between **Codebase** (modules, classes,
+functions), **Documentation** (markdown files and architectural decisions), or
+both — with `documents` / `concerns` links from docs and decisions to the code.
+
 ## Why two embedding configs?
 
 Embedding the *corpus* is the expensive part, so it runs once on GPU
