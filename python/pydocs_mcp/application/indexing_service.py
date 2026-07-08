@@ -148,6 +148,7 @@ class IndexingService:
         is independently testable; the orchestrator reads as a sequence of
         named writes under one UoW (Task 7 I2).
         """
+        _require_matching_package(package.name, chunks)
         # Enum-typed filter keys are the single source of truth the
         # safe-columns whitelist also derives from; the ``packages`` table
         # keys on ``name`` (no matching enum), so that one stays literal.
@@ -670,6 +671,33 @@ class IndexingService:
                 await uow.packages.upsert(replace(pkg, content_hash=""))
             await uow.commit()
         return [p.name for p in stale]
+
+
+def _require_matching_package(package_name: str, chunks: tuple[Chunk, ...]) -> None:
+    """Reject chunks whose ``metadata["package"]`` is missing or diverges from
+    ``package_name`` BEFORE any write happens.
+
+    ``_chunk_to_row`` (storage/sqlite/row_mappers.py) defaults a missing
+    ``package`` key to ``""``, and every package-scoped re-fetch in this
+    service (``_diff_merge_chunks``, ``_maybe_write_vectors``) filters
+    strictly on ``package_name``. A chunk persisted under the wrong package
+    value is therefore invisible to those re-fetches: it silently trips the
+    ``_maybe_write_vectors`` length-mismatch guard (skipping vector writes
+    for the WHOLE batch, not just the bad chunk) and — because it never
+    matches ``package_name`` on a later diff — is re-inserted as "new" on
+    every subsequent reindex, an orphan row ``remove_package(name)`` can
+    never see. Failing loudly here, with the offending chunk's metadata,
+    surfaces the extractor bug immediately instead of degrading dense
+    search for every well-formed sibling chunk.
+    """
+    for chunk in chunks:
+        chunk_package = chunk.metadata.get(ChunkFilterField.PACKAGE.value)
+        if chunk_package != package_name:
+            raise ValueError(
+                f"chunk package metadata {chunk_package!r} does not match "
+                f"package.name {package_name!r}; expected metadata[{ChunkFilterField.PACKAGE.value!r}] "
+                f"== {package_name!r} (chunk title={chunk.metadata.get(ChunkFilterField.TITLE.value)!r})"
+            )
 
 
 def _stamp_decision_ids(chunks: tuple[Chunk, ...], key_to_id: dict[str, int]) -> tuple[Chunk, ...]:

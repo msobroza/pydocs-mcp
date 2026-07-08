@@ -58,13 +58,15 @@ if TYPE_CHECKING:
 # retrieval.config→retrieval.steps cycle at module-load time.
 
 
-# Legacy LIKE-based query — Task 4 split fetcher from filter, Task 8
-# folds pre-filter pushdown into the fetcher (mirroring
-# ChunkFetcherStep). NOTE: legacy ``LikeMemberRetriever`` fetched WITHOUT
-# the LIKE constraint (relying on Python substring post-filter), so
-# parity requires the same flow here — the SQL pre-filter only carries
-# the metadata filter (package/module/name/kind), and the LIKE pass
-# happens post-fetch via ``_keep_by_terms``.
+# Task 4 split fetcher from filter, Task 8 folds pre-filter pushdown into
+# the fetcher (mirroring ChunkFetcherStep). The needle match is pushed
+# down to SQL (LIKE on name/docstring) rather than post-filtered in
+# Python: LIMIT must apply AFTER the substring match, not before, or
+# matches sitting past the LIMIT window in fetch order are silently
+# dropped (recall collapse on any table with more rows than `limit`).
+# ``_keep_by_terms`` stays as a defense-in-depth re-check post-fetch
+# (see its docstring) since ESCAPE semantics differ subtly from Python
+# ``in``.
 _FETCH_SQL_TEMPLATE = (
     "SELECT id, package, module, name, kind, signature, return_annotation, "
     "parameters, docstring "
@@ -72,6 +74,21 @@ _FETCH_SQL_TEMPLATE = (
     "{where_clause}"
     "LIMIT ?"
 )
+
+# SQLite LIKE wildcards that must be escaped so the needle is matched as a
+# literal substring (parity with Python's ``needle in value``), not a
+# pattern. Order matters: escape the escape character itself first.
+_LIKE_ESCAPE_CHAR = "\\"
+_LIKE_WILDCARDS = ("%", "_")
+
+
+def _escape_like_needle(needle: str) -> str:
+    """Escape ``%``/``_`` so ``LIKE ? ESCAPE '\\'`` matches literal substrings."""
+    escaped = needle.replace(_LIKE_ESCAPE_CHAR, _LIKE_ESCAPE_CHAR * 2)
+    for wildcard in _LIKE_WILDCARDS:
+        escaped = escaped.replace(wildcard, _LIKE_ESCAPE_CHAR + wildcard)
+    return escaped
+
 
 # WHY: single source of truth for the member-fetch defaults. Referenced
 # from the dataclass field defaults + to_dict (omit-when-default) +
@@ -122,23 +139,28 @@ class MemberFetcherStep(RetrieverStep):
             if result.tree is not None:
                 filter_sql, filter_params = self._build_where_clause(result.tree)
 
-        where_clause = ""
+        conditions: list[str] = []
         params: list = []
         if filter_sql:
-            where_clause = f"WHERE {filter_sql} "
+            conditions.append(filter_sql)
             params.extend(filter_params)
+        # Push the needle match into SQL so LIMIT applies AFTER filtering
+        # (see _FETCH_SQL_TEMPLATE comment) — a Python post-filter after a
+        # SQL LIMIT silently truncates matches beyond the LIMIT window.
+        like_needle = f"%{_escape_like_needle(needle)}%"
+        conditions.append("(name LIKE ? ESCAPE '\\' OR docstring LIKE ? ESCAPE '\\')")
+        params.extend((like_needle, like_needle))
+        where_clause = f"WHERE {' AND '.join(conditions)} "
         params.append(self.limit)
         sql = _FETCH_SQL_TEMPLATE.format(where_clause=where_clause)
         rows = await asyncio.to_thread(
             execute_fetch, self.provider, sql, params, step_label=_STEP_LABEL
         )
         members = tuple(_row_to_candidate(row, self.retriever_name) for row in rows)
-        # Apply LIKE-style substring match in-process (matches legacy
-        # LikeMemberRetriever's Python-side `needle in name or needle in
-        # docstring` post-filter). Single-pass walrus form keeps the
-        # intermediate element type as ``ModuleMember`` (the two-step
-        # form widened to ``ModuleMember | None`` even though the second
-        # pass dropped the Nones — mypy correctly flagged that).
+        # Defense-in-depth re-check: SQLite's LIKE is case-insensitive only
+        # for ASCII by default, matching the ``.lower()`` needle here, but
+        # re-applying the Python substring check keeps behavior pinned to
+        # ``_keep_by_terms`` semantics regardless of SQLite build options.
         members = tuple(kept for m in members if (kept := _keep_by_terms(m, needle)) is not None)
         if scope is not None:
             # Lazy import — break the storage→extraction→retrieval.config→
@@ -195,9 +217,11 @@ class MemberFetcherStep(RetrieverStep):
 
 
 def _keep_by_terms(member: ModuleMember, needle: str) -> ModuleMember | None:
-    """LIKE-style in-process post-filter — drop members whose name AND
-    docstring miss the needle. Mirrors the legacy
-    ``LikeMemberRetriever`` substring check exactly."""
+    """Defense-in-depth substring re-check — drop members whose name AND
+    docstring miss the needle. The SQL LIKE clause in ``run`` is the
+    primary filter (so LIMIT applies after matching, not before); this
+    keeps results pinned to Python's exact ``in`` semantics regardless of
+    SQLite build-specific LIKE/ESCAPE quirks."""
     name_value = str(member.metadata.get(ModuleMemberFilterField.NAME.value, "")).lower()
     doc_value = str(member.metadata.get("docstring", "")).lower()
     if needle in name_value or needle in doc_value:

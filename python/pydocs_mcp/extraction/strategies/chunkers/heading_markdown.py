@@ -129,11 +129,12 @@ def _build_heading_nodes(
     """
     lines = content.splitlines()
     nodes: list[DocumentNode] = []
+    slug_counts: dict[str, int] = {}
     for i, h in enumerate(headings):
         start_line = h["line"] + 1
         end_line = headings[i + 1]["line"] - 1 if i + 1 < len(headings) else len(lines)
         raw_text = "\n".join(lines[start_line - 1 : end_line]) if start_line <= end_line else ""
-        qname = f"{module}#{_slugify(h['title'])}"
+        qname = f"{module}#{_dedup_slug(_slugify(h['title']), slug_counts)}"
         cleaned, examples = _extract_md_fenced_examples(
             raw_text,
             qname,
@@ -229,6 +230,24 @@ def _slugify(text: str) -> str:
     slug falls back to ``"untitled"`` so every heading has a stable id."""
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return s or "untitled"
+
+
+def _dedup_slug(slug: str, seen: dict[str, int]) -> str:
+    """Disambiguate a repeated slug with a ``-N`` suffix (mirrors the
+    ``__imports__N`` scheme in ``ast_python.py``).
+
+    Two headings that slugify identically — repeated titles ('### Fixed'
+    in every CHANGELOG release section) or non-ASCII titles that both
+    collapse to the empty-slug ``"untitled"`` fallback — would otherwise
+    share one ``node_id``/``qualified_name``. ``find_node_by_qualified_name``
+    only ever returns the first match, so the collision silently hides
+    every subsequent same-slug section. ``seen`` is mutated in place; it
+    is a fresh local dict per ``build_tree`` call (single-threaded, one
+    dict per document), never shared across parallel branches.
+    """
+    count = seen.get(slug, 0)
+    seen[slug] = count + 1
+    return slug if count == 0 else f"{slug}-{count + 1}"
 
 
 __all__ = ("HeadingMarkdownChunker",)

@@ -55,9 +55,15 @@ def hash_files(paths: list[str]) -> str:
     # usedforsecurity=False signals intent to ruff/bandit.
     h = hashlib.md5(usedforsecurity=False)
     for p in paths:
+        # Separators mirror src/lib.rs's hash_files (':' after the path, '\n'
+        # after each entry) so distinct path lists can't collide by having
+        # their concatenated path+mtime bytes read as the same byte stream
+        # (e.g. ["a", "1234"] vs ["a1234"] for two missing paths).
         h.update(p.encode())
+        h.update(b":")
         with contextlib.suppress(OSError):
             h.update(str(Path(p).stat().st_mtime_ns).encode())
+        h.update(b"\n")
     return h.hexdigest()[:16]
 
 
@@ -73,8 +79,12 @@ class ParsedMember:
 
 def parse_py_file(source: str) -> list[ParsedMember]:
     """Extract top-level functions and classes using regex."""
+    # Paren group is optional: paren-less `class Config:` is the idiomatic,
+    # most common class form in modern Python (no base classes). `def`/`async def`
+    # always carry parens in valid syntax, so making the group optional here
+    # cannot introduce false positives for functions.
     def_re = re.compile(
-        r"^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:",
+        r"^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?\s*(?:->[\s\w\[\],.|]*)?:",
         re.MULTILINE,
     )
     doc_re = re.compile(r'(?s)^(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
@@ -94,7 +104,8 @@ def parse_py_file(source: str) -> list[ParsedMember]:
                 :FUNC_DOCSTRING_MAX
             ]
 
-        members.append(ParsedMember(name, kind, f"({sig.strip()})", docstring))
+        # sig is None for paren-less classes (regex group is optional; see above).
+        members.append(ParsedMember(name, kind, f"({sig.strip() if sig else ''})", docstring))
     return members
 
 
@@ -108,9 +119,15 @@ def extract_module_doc(source: str) -> str:
 
 
 def read_file(path: str) -> str:
-    """Read a file, return empty string on error."""
+    """Read a file, return empty string on error.
+
+    Uses errors="replace" (not "ignore") so invalid UTF-8 bytes become
+    U+FFFD instead of being silently dropped — this must match the Rust
+    reader's String::from_utf8_lossy semantics byte-for-byte (see
+    CLAUDE.md "Fallback contract"; src/lib.rs read_file/read_files_parallel).
+    """
     try:
-        return Path(path).read_text(encoding="utf-8", errors="ignore")
+        return Path(path).read_text(encoding="utf-8", errors="replace")
     except Exception:
         return ""
 

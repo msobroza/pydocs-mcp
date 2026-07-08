@@ -148,6 +148,53 @@ async def test_member_fetcher_raises_if_pre_filter_set_but_scratch_missing(
         await step.run(state)
 
 
+@pytest.fixture
+async def db_with_late_match(tmp_path: Path) -> Path:
+    """60 module_members rows where only the 55th (rowid order) matches
+    the needle 'zzzneedle'. Pins the gap: MemberFetcherStep.limit (default
+    50) is applied as SQL LIMIT before the Python substring post-filter
+    (_keep_by_terms) runs, so a match sitting past the LIMIT window is
+    silently dropped even though it's a true substring match."""
+    db_path = tmp_path / "fixtures_late_match.db"
+    open_index_database(db_path).close()
+    provider = build_connection_provider(db_path)
+    repo = SqliteModuleMemberRepository(provider=provider)
+    members = [
+        _member("demo", "demo.m", f"filler_{i}", MemberKind.FUNCTION.value, "") for i in range(60)
+    ]
+    # Row 55 (1-indexed among 60) is the only one whose name matches.
+    members[54] = _member("demo", "demo.m", "predict_zzzneedle", MemberKind.FUNCTION.value, "")
+    await repo.upsert_many(members)
+    return db_path
+
+
+async def test_member_fetcher_finds_match_beyond_sql_limit_window(
+    db_with_late_match: Path,
+) -> None:
+    """A match that sits past the first `limit` rows in fetch order must
+    still be returned — the LIKE-style substring filter must not be
+    truncated away by the SQL LIMIT applied ahead of it.
+
+    Regression for: MemberFetcherStep applies SQL LIMIT before the
+    in-Python substring filter (_keep_by_terms), so on a real project
+    with more rows than `limit` (default 50), matches sitting past the
+    window are silently lost — recall collapses to near-zero.
+    """
+    provider = build_connection_provider(db_with_late_match)
+    step = MemberFetcherStep(
+        name="fetch",
+        provider=provider,
+        filter_adapter=SqliteFilterAdapter(),
+        limit=MemberFetcherStep.__dataclass_fields__["limit"].default,
+    )
+    state = RetrieverState(query=SearchQuery(terms="zzzneedle", max_results=10))
+    out = await step.run(state)
+    names = [
+        str(m.metadata.get(ModuleMemberFilterField.NAME.value, "")) for m in out.candidates.items
+    ]
+    assert "predict_zzzneedle" in names
+
+
 def test_member_fetcher_keep_by_terms_drops_none_in_one_pass() -> None:
     """Regression: the two-step filter (build None-tagged tuple, then
     drop the Nones) widens the tuple element type to

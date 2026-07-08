@@ -137,6 +137,93 @@ async def test_integrity_check_passes_when_counts_match(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_integrity_check_misses_disjoint_id_drift_with_matching_counts(
+    tmp_path: Path,
+) -> None:
+    """Count-based check is blind to stale .tq ids colliding with reused
+    chunk rowids (gap: storage — "Stale .tq vector ids collide with reused
+    chunk rowids; the count-based integrity check cannot see this drift").
+
+    ``chunks.id`` is ``INTEGER PRIMARY KEY`` without ``AUTOINCREMENT``
+    (db.py), so SQLite reuses rowids after a delete. Simulate the
+    documented non-ACID crash window (SQLite child committed, TurboQuant
+    commit not reached — CompositeUnitOfWork docstring) by writing
+    TurboQuant vectors under an OLD id set ({101, 102}) directly, then
+    persisting chunks with a DISJOINT NEW id set ({1, 2}, SQLite's natural
+    reissue for an empty table) that both claim ``embedded = 1``. The two
+    backends have the SAME count (2 == 2) but disjoint identities — dense
+    search would silently hydrate the old vector content onto the new
+    chunk rows (wrong relevance, no error).
+
+    Today's count-only check cannot see this: ``embedded_count == vec_count``
+    so it returns ``[]`` even though the ids never overlap. This test pins
+    that blind spot; a future content-aware check (id-set comparison, not
+    just counts) should turn this red.
+    """
+    db_path = tmp_path / "w.db"
+    tq_path = tmp_path / "w.tq"
+    open_index_database(db_path).close()
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    # Old generation: vectors land under ids {101, 102} in TurboQuant only
+    # (simulates a prior index run whose chunk rows have since been
+    # deleted — SQLite's rowid counter resets for an empty table, so
+    # those high ids are now permanently free for a DIFFERENT future
+    # generation to reuse at low numbers; deliberately chosen far from
+    # SQLite's next-assigned {1, 2} so overlap here can only mean the
+    # check is comparing identities, not merely counts).
+    async with factory() as uow:
+        await uow.vectors.add_vectors(
+            [101, 102],
+            [_vec(0.1, 0.2, 0.3, 0.4), _vec(0.5, 0.6, 0.7, 0.8)],
+        )
+        await uow.commit()
+    # New generation: SQLite alone commits fresh chunks into the still-empty
+    # ``chunks`` table. ``INTEGER PRIMARY KEY`` without AUTOINCREMENT
+    # (db.py) means SQLite reissues rowids starting at 1 for an empty
+    # table — ids {1, 2}, disjoint from the TurboQuant ids {101, 102}
+    # above. This is the exact mechanism the gap describes: a crash left
+    # stale vectors under old ids, and the counts now match (2 == 2) even
+    # though the identities never overlap.
+    async with factory() as uow:
+        await uow.packages.upsert(_pkg("demo"))
+        await uow.chunks.upsert(
+            (
+                _chunk("a", "demo"),
+                _chunk("b", "demo"),
+            )
+        )
+        persisted = await uow.chunks.list(filter={"package": "demo"})
+        new_ids = sorted(c.id for c in persisted if c.id is not None)
+        assert set(new_ids).isdisjoint({101, 102}), (
+            "test setup requires disjoint ids to reproduce the drift; "
+            f"got overlapping ids {new_ids}"
+        )
+        await uow.chunks.mark_embedded(new_ids)
+        await uow.commit()
+
+    repaired = await check_integrity_and_repair(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    # DESIRED: drift should be flagged (repaired == ["demo"]) because the
+    # embedded chunk ids and the TurboQuant vector ids are disjoint sets
+    # despite equal counts. CURRENT behavior: the count-only check sees
+    # 2 == 2 and passes silently — pin that gap explicitly here.
+    assert repaired == [], (
+        "count-based check unexpectedly detected disjoint-id drift; "
+        "if this now fails, the integrity check has been upgraded to "
+        "compare id sets — update this test to assert repaired == ['demo']."
+    )
+
+
+@pytest.mark.asyncio
 async def test_integrity_check_no_op_on_fresh_project(tmp_path: Path) -> None:
     """Both chunks=0 and vectors=0 → no repair needed (fresh project / never
     indexed). The integrity check must not false-alarm in this case because

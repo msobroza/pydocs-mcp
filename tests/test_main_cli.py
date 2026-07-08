@@ -90,6 +90,34 @@ def test_cli_no_verbose_omits_traceback(tmp_path: Path) -> None:
     assert "re-run with --verbose" in result.stderr
 
 
+def test_cli_index_nonexistent_config_path_fails_loud(tmp_path: Path) -> None:
+    """A typo'd ``--config`` path must fail with a non-zero exit and name the
+    offending path, not silently index against shipped defaults.
+
+    Regression guard: ``AppConfig.settings_customise_sources`` drops any user
+    layer that fails ``.exists()`` with no diagnostic, so a mistyped overlay
+    used to index/serve/watch with the wrong embedder / pipeline / capture
+    toggles and exit 0. ``AppConfig.load`` now rejects a missing explicit
+    path outright, so this reaches the shared ``Error: <msg>`` policy.
+    """
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    missing_config = tmp_path / "typo.yaml"
+    result = _run_cli(
+        "--config",
+        str(missing_config),
+        "index",
+        str(project_dir),
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    )
+    assert result.returncode != 0, (
+        f"expected nonzero exit; got stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "typo.yaml" in result.stderr
+    assert "Error:" in result.stderr
+
+
 def test_cmd_serve_does_not_wrap_run_in_to_thread() -> None:
     """CQ-1: ``pydocs-mcp serve``'s blocking MCP ``run(...)`` must execute
     on the main thread so Python's default SIGINT handler reaches it.

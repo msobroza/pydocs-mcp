@@ -22,10 +22,32 @@ def total_nodes(tree_jsons: list[dict[str, Any]]) -> int:
 
 
 def token_count(tree_jsons: list[dict[str, Any]], model_name: str) -> int:
-    """Real tiktoken token count of the serialized pageindex forest under the
-    LLM's encoding — the exact unit the model's context window is measured in
-    (whitespace words under-count code by ~3x)."""
-    return count_tokens(json.dumps(tree_jsons), model_name)
+    """Real tiktoken token count of the forest AS THE PROMPT TEMPLATE RENDERS
+    IT — the exact unit the model's context window is measured in.
+
+    WHY not compact ``json.dumps``: the prompt templates
+    (``tree_reasoning_pydocs_v1.j2`` / ``tree_reasoning_pageindex_v1.j2``)
+    render the tree via Jinja2's ``{{ trees | tojson(indent=2) }}``, which
+    ALWAYS (regardless of ``Environment(autoescape=False)``) sorts keys,
+    indents, and HTML-safe-escapes ``<``, ``>``, ``&``, ``'`` to ``\\uXXXX``
+    sequences (``jinja2.utils.htmlsafe_json_dumps``). Every function/method
+    title contains ``->`` via ``pageindex_serializer.enriched_title``, so
+    ``>`` becomes ``\\u003e`` in every such node — systematic, not an edge
+    case. Measuring compact/unescaped ``json.dumps`` here let a forest sit
+    "within budget" while the actually-rendered prompt ran ~30-36% larger,
+    reintroducing the 400 ``context_length_exceeded`` the token-budget
+    migration was meant to eliminate. ``sort_keys=True`` + ``indent=2`` +
+    the four-character replace mirror ``htmlsafe_json_dumps`` exactly, so
+    this counts the SAME bytes the template emits.
+    """
+    rendered = (
+        json.dumps(tree_jsons, sort_keys=True, indent=2)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("'", "\\u0027")
+    )
+    return count_tokens(rendered, model_name)
 
 
 def prune_to_node_budget(tree_jsons: list[dict[str, Any]], max_nodes: int) -> list[dict[str, Any]]:

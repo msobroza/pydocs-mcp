@@ -78,7 +78,12 @@ def _safe_load_cells(content: str, path: str) -> list[dict] | None:
 
     Returns ``None`` on malformed JSON / unexpected shape so the caller
     can fall back to a single MODULE — we prefer a lossy-but-searchable
-    chunk over crashing the ingestion pipeline on a corrupt file.
+    chunk over crashing the ingestion pipeline on a corrupt file. Every
+    entry must itself be a dict: a hand-edited/corrupt notebook can parse
+    as valid JSON with a "cells" list containing null/str/int entries,
+    which previously reached ``cell.get(...)`` in ``_notebook_cell_node``
+    and raised AttributeError past this guard — validate the whole shape
+    up front so one bad cell can't erase the whole notebook.
     """
     try:
         nb = json.loads(content)
@@ -89,8 +94,8 @@ def _safe_load_cells(content: str, path: str) -> list[dict] | None:
         log.warning("notebook top-level is not an object: %s", path)
         return None
     cells = nb.get("cells", [])
-    if not isinstance(cells, list):
-        log.warning("notebook 'cells' is not a list: %s", path)
+    if not isinstance(cells, list) or not all(isinstance(c, dict) for c in cells):
+        log.warning("notebook 'cells' is not a list of objects: %s", path)
         return None
     return cells
 

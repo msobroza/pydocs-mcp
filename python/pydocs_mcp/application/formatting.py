@@ -150,7 +150,17 @@ def _render_pointer(match: re.Match[str], surface: str) -> str:
         cli_render, mcp_render = renderers
         return cli_render(target) if surface == "cli" else mcp_render(target)
     if action == "lookup-show":
-        mcp_fmt, cli_fmt = _SHOW_TO_TOOL[show]
+        # ``show`` is None (no show word) or an unrecognized word whenever a
+        # pointer-SHAPED literal comes from indexed chunk content rather than
+        # ``pointer_token()`` — e.g. this repo indexes its own tests/docs as
+        # __project__, and test/doc bodies quote the grammar verbatim. Only a
+        # renderer-produced token is guaranteed to have a valid show word, so
+        # an unknown one means "not actually a live token" — leave it as-is
+        # rather than KeyError on ``_SHOW_TO_TOOL``.
+        renderer = _SHOW_TO_TOOL.get(show) if show is not None else None
+        if renderer is None:
+            return match.group(0)
+        mcp_fmt, cli_fmt = renderer
         fmt = cli_fmt if surface == "cli" else mcp_fmt
         return "→ " + fmt.format(t=target)
     if surface == "cli":

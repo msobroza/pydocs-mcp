@@ -170,10 +170,17 @@ class LlmClient(Protocol):
         messages: Sequence[ChatMessage],
         *,
         response_format: Literal["text", "json_object"] = "text",
-        temperature: float = 0.0,
+        temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        """Async chat completion. Returns the assistant's response text."""
+        """Async chat completion. Returns the assistant's response text.
+
+        ``temperature`` / ``max_tokens`` default to ``None``, meaning "use
+        this client's configured default" (set via ``LlmConfig`` ->
+        ``build_llm_client``) rather than silently forcing 0.0 / no cap —
+        callers only pass an explicit value to override the configured one
+        for a single call (e.g. a deterministic-summary use case).
+        """
         ...
 
     def chat_sync(
@@ -181,7 +188,7 @@ class LlmClient(Protocol):
         messages: Sequence[ChatMessage],
         *,
         response_format: Literal["text", "json_object"] = "text",
-        temperature: float = 0.0,
+        temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
         """Sync chat completion. Same contract as ``chat()``."""

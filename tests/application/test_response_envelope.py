@@ -83,6 +83,29 @@ def test_no_info_renders_body_only() -> None:
     assert not out.startswith("[index:")
 
 
+async def _body_with_pointer_shaped_chunk_content() -> str:
+    # Mirrors real indexed content: this repo indexes itself as __project__,
+    # and tests/application/test_next_pointers.py's own source (once
+    # indexed) contains these exact pointer-shaped literals inside chunk
+    # text — a show-less lookup-show token and an unknown show word. Both
+    # previously KeyError'd out of resolve_pointers (called unconditionally
+    # by ResponseEnvelope.wrap at the surface boundary).
+    return (
+        "## Hit\n"
+        "see [[next:lookup-show:x]] and [[next:lookup-show:x:frobnicate]] in source\n"
+        "[[next:lookup:pkg.mod.X]]\n"
+    )
+
+
+def test_wrap_does_not_crash_on_pointer_shaped_chunk_content() -> None:
+    out = asyncio.run(_envelope(_fresh_info()).wrap(_body_with_pointer_shaped_chunk_content))
+    # The one renderer-emitted token still resolves normally...
+    assert '→ get_symbol(target="pkg.mod.X")' in out
+    # ...while the pointer-shaped content bytes are left verbatim, not raised.
+    assert "[[next:lookup-show:x]]" in out
+    assert "[[next:lookup-show:x:frobnicate]]" in out
+
+
 def test_footer_renders_ledger_entries() -> None:
     async def truncating_body() -> str:
         get_active_ledger().record(

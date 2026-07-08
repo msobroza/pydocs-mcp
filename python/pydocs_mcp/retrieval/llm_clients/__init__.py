@@ -36,6 +36,8 @@ def build_llm_client(cfg: LlmConfig) -> LlmClient:
         return OpenAiLlmClient(
             model_name=cfg.model_name,
             api_key=cfg.api_key,
+            temperature=cfg.temperature,
+            max_tokens=cfg.max_tokens,
         )
     raise ValueError(
         f"Unknown LLM provider: {cfg.provider!r}. Supported: 'openai'.",

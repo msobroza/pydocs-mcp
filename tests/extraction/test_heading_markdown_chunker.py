@@ -365,3 +365,76 @@ def test_doc_path_module_ids_pairwise_distinct_for_same_stem(
     assert ids == {"pkg.foo", "pkg.foo.md", "pkg.foo.ipynb"}, (
         f"F20 PK-collision regression — same-stem siblings produced non-distinct module ids: {ids}"
     )
+
+
+# -- 17. Duplicate / non-ASCII heading titles must not collide on node_id -----
+
+
+def test_duplicate_heading_titles_produce_distinct_node_ids(tmp_path: Path) -> None:
+    """CHANGELOG-shaped doc: '### Fixed' / '### Added' repeated per release.
+
+    Pre-fix, ``_slugify`` alone drove the qname, so both 'Fixed' sections
+    (and both 'Added' sections) collapsed onto the SAME node_id/qualified_name
+    (``...#fixed`` / ``...#added``). Downstream, ``find_node_by_qualified_name``
+    only ever returns the first match, silently hiding the second release's
+    content, and identical-text duplicates additionally collide on
+    content_hash and get merged/dropped by the diff-merge.
+    """
+    src = (
+        "## v2.0.0\n"
+        "### Fixed\n"
+        "Fixed the frobnicator.\n"
+        "### Added\n"
+        "Added a widget.\n"
+        "## v1.0.0\n"
+        "### Fixed\n"
+        "Fixed the wobbulator.\n"
+        "### Added\n"
+        "Added a gadget.\n"
+    )
+    root = _build(src, path="CHANGELOG.md", root=tmp_path)
+    headings = [c for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    node_ids = [h.node_id for h in headings]
+    qnames = [h.qualified_name for h in headings]
+    assert len(node_ids) == len(set(node_ids)), (
+        f"duplicate heading titles collided on node_id: {node_ids}"
+    )
+    assert len(qnames) == len(set(qnames)), (
+        f"duplicate heading titles collided on qualified_name: {qnames}"
+    )
+
+
+def test_non_ascii_headings_produce_distinct_node_ids(tmp_path: Path) -> None:
+    """Two distinct CJK-only headings both slugify to '' → 'untitled'.
+
+    ``_slugify`` strips every char outside ``[a-z0-9]``, so an all-CJK or
+    all-Cyrillic heading (no ASCII letters/digits at all) collapses to the
+    empty-slug fallback ``"untitled"`` regardless of the actual title text.
+    Two such headings in one doc must still get pairwise-distinct node_ids.
+    """
+    src = "## 安装\nInstall steps.\n## Установка\nInstall steps in Russian.\n"
+    root = _build(src, path="README.md", root=tmp_path)
+    headings = [c for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    assert [h.title for h in headings] == ["安装", "Установка"]
+    node_ids = [h.node_id for h in headings]
+    assert len(node_ids) == len(set(node_ids)), (
+        f"non-ASCII headings collided on node_id: {node_ids}"
+    )
+
+
+def test_duplicate_heading_code_example_children_also_distinct(tmp_path: Path) -> None:
+    """CODE_EXAMPLE children are keyed off the parent heading's qname
+    (``{parent_qname}.__example_{i}__``); if two headings share a qname,
+    their first code example also collides. Pins the child-level fallout
+    of the same root cause."""
+    src = "### Fixed\n```python\nx = 1\n```\n### Fixed\n```python\ny = 2\n```\n"
+    root = _build(src, path="CHANGELOG.md", root=tmp_path)
+    headings = [c for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    assert len(headings) == 2
+    example_ids = [
+        ex.node_id for h in headings for ex in h.children if ex.kind == NodeKind.CODE_EXAMPLE
+    ]
+    assert len(example_ids) == 2
+    assert len(set(example_ids)) == 2, (
+        f"CODE_EXAMPLE children of duplicate-titled headings collided: {example_ids}"
+    )

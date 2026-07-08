@@ -565,7 +565,14 @@ async def _run_watch_loop(
     try:
         # ``run(...)`` is blocking; offload to a worker thread so the
         # watcher_task keeps draining events on the asyncio loop.
-        await asyncio.to_thread(run, db_path, config_path=getattr(args, "config", None))
+        # ``gpu`` must mirror the no-watch path (``_serve_run``) — otherwise
+        # `serve --watch --gpu` silently falls back to CPU query embedding.
+        await asyncio.to_thread(
+            run,
+            db_path,
+            config_path=getattr(args, "config", None),
+            gpu=getattr(args, "gpu", False),
+        )
     finally:
         watcher_task.cancel()
         try:

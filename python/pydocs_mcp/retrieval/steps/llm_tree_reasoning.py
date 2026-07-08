@@ -180,10 +180,14 @@ class LlmTreeReasoningStep(RetrieverStep):
                 query=state.query.terms,
                 trees=tree_jsons,
             )
+            # WHY no explicit temperature/max_tokens: forcing temperature=0.0
+            # here used to clobber whatever LlmConfig.temperature the
+            # deployment configured (build_llm_client threads it onto the
+            # client as its default). Omitting the override lets the
+            # client's configured temperature/max_tokens reach the request.
             response = await self.llm_client.chat(
                 [{"role": "user", "content": prompt}],
                 response_format="json_object",
-                temperature=0.0,
             )
 
             picked = _parse_node_list(response, trees)
@@ -447,6 +451,14 @@ def _parse_node_list(
     gracefully to fewer chunks rather than crashing. A malformed
     ``node_list`` (non-list) raises ValueError so a broken prompt /
     LLM-format regression surfaces immediately.
+
+    Repeated qualified_names are deduped, keeping the FIRST occurrence's
+    position — real LLMs commonly re-mention a symbol they already picked.
+    Without this, ``_score_by_position`` would append one scored ``Chunk``
+    per occurrence, producing duplicate chunks in the final ranking (and,
+    in rerank mode, a duplicate leaking into ``state.candidates`` since
+    ``_backfill_unpicked`` only dedupes incoming-vs-picked, not within the
+    picks themselves).
     """
     data = json.loads(response)
     node_list = data.get("node_list", [])
@@ -457,7 +469,13 @@ def _parse_node_list(
     known: set[str] = set()
     for tree in trees:
         _collect_qnames(tree, known)
-    return tuple(qn for qn in node_list if isinstance(qn, str) and qn in known)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for qn in node_list:
+        if isinstance(qn, str) and qn in known and qn not in seen:
+            seen.add(qn)
+            deduped.append(qn)
+    return tuple(deduped)
 
 
 def _score_by_position(

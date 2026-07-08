@@ -84,6 +84,19 @@ def test_appconfig_explicit_path_wins_over_cwd(tmp_path, monkeypatch):
     assert config.log_level == "warning"
 
 
+def test_appconfig_explicit_path_missing_raises(tmp_path):
+    """A typo'd ``--config`` path must fail loudly, not silently fall back to
+    shipped defaults. ``settings_customise_sources`` guards the user layer
+    with ``user_path.exists()``, which drops a missing explicit path with no
+    diagnostic; ``AppConfig.load`` must reject it before that guard ever
+    runs, so a mistyped overlay path can't silently swap in the wrong
+    embedder / pipeline / capture toggles and exit 0."""
+    missing = tmp_path / "typo.yaml"
+    assert not missing.exists()
+    with pytest.raises(FileNotFoundError, match=r"typo\.yaml"):
+        AppConfig.load(explicit_path=missing)
+
+
 def test_appconfig_env_config_path_used_when_no_explicit(tmp_path, monkeypatch):
     user_file = tmp_path / "env.yaml"
     user_file.write_text("log_level: warning\n")
@@ -316,7 +329,10 @@ def test_compute_ingestion_pipeline_hash_cached(tmp_path: Path) -> None:
     yaml_path.write_text("name: test\nstages: []\n")
     # explicit_path makes tmp_path the user-config dir so yaml_path is inside
     # the pipeline_path allowlist used by compute_ingestion_pipeline_hash.
-    cfg = AppConfig.load(explicit_path=tmp_path / "pydocs-mcp.yaml")
+    # The file must exist: AppConfig.load rejects a missing explicit path.
+    user_config_path = tmp_path / "pydocs-mcp.yaml"
+    user_config_path.write_text("")
+    cfg = AppConfig.load(explicit_path=user_config_path)
     cfg.extraction.ingestion.pipeline_path = yaml_path
 
     # Wrap read_bytes so we count calls against ``yaml_path`` specifically —

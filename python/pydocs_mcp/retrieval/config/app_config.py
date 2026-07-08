@@ -244,7 +244,20 @@ class AppConfig(BaseSettings):
 
         ``explicit_path`` wins over env / cwd / XDG home for the user layer;
         the shipped baseline always applies underneath.
+
+        A user-typed ``explicit_path`` (CLI ``--config``) that doesn't exist
+        raises immediately: ``settings_customise_sources`` silently drops any
+        user_path that fails ``.exists()`` (so the env/cwd/XDG candidates can
+        legitimately be absent — those are best-effort probes, not user
+        intent). Skipping that guard for an *explicit* path would run the
+        whole command against shipped defaults with no diagnostic, which can
+        also shift ``ingestion_pipeline_hash`` and silently trigger a full
+        re-embed.
         """
+        if explicit_path is not None and not explicit_path.exists():
+            raise FileNotFoundError(
+                f"--config path does not exist: {explicit_path}",
+            )
         token = _USER_CONFIG_PATH_OVERRIDE.set(explicit_path)
         resolved: Path | None = _resolved_user_config_path()
         resolved_token = _RESOLVED_USER_CONFIG_PATH.set(resolved)

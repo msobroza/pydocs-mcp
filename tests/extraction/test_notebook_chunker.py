@@ -212,3 +212,50 @@ def test_empty_markdown_source_falls_back_title(tmp_path: Path) -> None:
     root = _build(_nb({"cell_type": "markdown", "source": ""}), root=tmp_path)
     # With no first line we still want a stable title.
     assert root.children[0].title == "cell 0"
+
+
+# -- 14. Non-dict cell entries fall back to full-content MODULE ---------------
+#
+# A hand-edited/corrupt .ipynb can parse as valid JSON while a "cells" entry
+# is null, a string, or a number. ``_safe_load_cells`` only validates that
+# ``cells`` itself is a list, not that each entry is a dict — so a
+# non-dict entry previously reached ``cell.get(...)`` in
+# ``_notebook_cell_node`` and raised AttributeError, which propagated out of
+# ``build_tree``. ``ChunkingStage._chunk_one`` catches that and returns
+# None, silently dropping the whole notebook from the index — directly
+# contradicting this module's documented contract (malformed shape falls
+# back to a lossy-but-searchable single MODULE, never a crash).
+
+
+def test_null_cell_entry_falls_back_to_module_full_content(tmp_path: Path) -> None:
+    src = json.dumps({"cells": [None]})
+    root = _build(src, root=tmp_path)
+    assert root.kind == NodeKind.MODULE
+    assert root.children == ()
+    assert root.text == src
+
+
+def test_string_cell_entry_falls_back_to_module_full_content(tmp_path: Path) -> None:
+    src = json.dumps({"cells": ["oops"]})
+    root = _build(src, root=tmp_path)
+    assert root.kind == NodeKind.MODULE
+    assert root.children == ()
+    assert root.text == src
+
+
+def test_number_cell_entry_falls_back_to_module_full_content(tmp_path: Path) -> None:
+    src = json.dumps({"cells": [42]})
+    root = _build(src, root=tmp_path)
+    assert root.kind == NodeKind.MODULE
+    assert root.children == ()
+    assert root.text == src
+
+
+def test_mixed_valid_and_invalid_cell_entries_falls_back_to_module(tmp_path: Path) -> None:
+    # Even one bad entry among otherwise-valid cells must not erase the
+    # whole notebook — the fallback is all-or-nothing, not per-cell.
+    src = json.dumps({"cells": [{"cell_type": "code", "source": "x = 1"}, None]})
+    root = _build(src, root=tmp_path)
+    assert root.kind == NodeKind.MODULE
+    assert root.children == ()
+    assert root.text == src
