@@ -669,3 +669,97 @@ async def test_project_indexer_uses_own_uow_factory_for_cache_check(tmp_path: Pa
     assert stats.project_indexed is False
     # Reach-through proof: pkg_store.calls shows the get.
     assert any(c.method == "get" and c.payload == "__project__" for c in pkg_store.calls)
+
+
+@pytest.mark.asyncio
+async def test_index_one_dependency_cache_hit_skips_member_extraction_and_reindex(
+    tmp_path: Path,
+) -> None:
+    """Dependency branch of _index_one_dependency (project_indexer.py:114-126):
+    when the freshly-extracted dep package's content_hash matches the
+    persisted row, the branch must:
+      - increment stats.cached (not stats.indexed)
+      - return BEFORE calling member_extractor.extract_from_dependency at all
+      - never call indexing_service.reindex_package for that dep
+
+    This is the dependency-path sibling of
+    ``test_project_indexer_uses_own_uow_factory_for_cache_check`` (project
+    source path) — the gap report flags the dependency branch as untested
+    (project_indexer.py:113-130): only a canned fake exercises stats.cached
+    in test_index_project.py, so a regression that moves the member-extractor
+    call above the hash check (re-importing every cached dependency) or
+    that compares hashes wrongly would pass the suite undetected.
+    """
+    cached_httpx = Package(
+        name="httpx",
+        version="1.0.0",
+        summary="httpx summary",
+        homepage="",
+        dependencies=(),
+        content_hash="h",  # identical hash → cache hit
+        origin=PackageOrigin.DEPENDENCY,
+    )
+    fresh_httpx = _pkg("httpx")  # also content_hash="h" (see _pkg helper)
+
+    service, idx, resolver, chunks_ex, members_ex, pkg_store = _make_service(
+        deps=("httpx",),
+        dep_chunk_returns={"httpx": ((_chunk("httpx", "Client"),), fresh_httpx)},
+        cached_packages={"httpx": cached_httpx},
+    )
+
+    stats = await service.index_project(tmp_path, include_project_source=False)
+
+    assert resolver.resolve_calls == [tmp_path]
+    assert chunks_ex.dep_calls == ["httpx"]
+    # Member extraction must be skipped entirely on a cache hit.
+    assert members_ex.dep_calls == []
+    # reindex_package must never fire for the cached dep.
+    assert idx.reindex_calls == []
+    assert stats.cached == 1
+    assert stats.indexed == 0
+    assert stats.failed == 0
+    assert any(c.method == "get" and c.payload == "httpx" for c in pkg_store.calls)
+
+
+@pytest.mark.asyncio
+async def test_index_one_dependency_invalidated_hash_falls_through_to_reindex(
+    tmp_path: Path,
+) -> None:
+    """Post-invalidation contract: ``invalidate_stale_embeddings`` sets the
+    persisted row's ``content_hash`` to ``""``. That empty string must NOT
+    equal the freshly-extracted package's real hash, so the branch falls
+    through to a full reindex (member extraction + reindex_package) rather
+    than being (incorrectly) treated as a cache hit.
+    """
+    invalidated_httpx = Package(
+        name="httpx",
+        version="1.0.0",
+        summary="httpx summary",
+        homepage="",
+        dependencies=(),
+        content_hash="",  # invalidated — must never cache-match
+        origin=PackageOrigin.DEPENDENCY,
+    )
+    fresh_httpx = _pkg("httpx")  # content_hash="h" — non-empty, real hash
+    fresh_members = (_member("httpx", "Client"),)
+
+    service, idx, resolver, chunks_ex, members_ex, pkg_store = _make_service(
+        deps=("httpx",),
+        dep_chunk_returns={"httpx": ((_chunk("httpx", "Client"),), fresh_httpx)},
+        dep_member_returns={"httpx": fresh_members},
+        cached_packages={"httpx": invalidated_httpx},
+    )
+
+    stats = await service.index_project(tmp_path, include_project_source=False)
+
+    assert resolver.resolve_calls == [tmp_path]
+    assert chunks_ex.dep_calls == ["httpx"]
+    # Invalidated row must NOT short-circuit — member extraction runs.
+    assert members_ex.dep_calls == ["httpx"]
+    # And the dep is fully reindexed, not counted as cached.
+    assert len(idx.reindex_calls) == 1
+    assert idx.reindex_calls[0][0] is fresh_httpx
+    assert stats.indexed == 1
+    assert stats.cached == 0
+    assert stats.failed == 0
+    assert any(c.method == "get" and c.payload == "httpx" for c in pkg_store.calls)

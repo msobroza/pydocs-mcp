@@ -97,6 +97,9 @@ class ReferenceCaptureStage:
         # Deferred imports — strategies pull in ast + reference value objects
         # which are otherwise irrelevant at stage-registry construction time.
         from pydocs_mcp.extraction.strategies.chunkers import _module_from_path
+        from pydocs_mcp.extraction.strategies.chunkers._shared import (
+            _module_from_doc_path,
+        )
         from pydocs_mcp.extraction.strategies.references import (
             ReferenceCollector,
             capture_calls,
@@ -193,7 +196,14 @@ class ReferenceCaptureStage:
             # capture, opt-in per spec §5.3).
             if path.endswith(".md") and "mentions" in allowed:
                 try:
-                    from_node_id = _module_from_path(path, root)
+                    # WORKAROUND: markdown identity uses the suffix-preserving
+                    # doc-path rule (HeadingMarkdownChunker._module_from_doc_path
+                    # -> "pkg.README.md"), NOT the .py qname rule
+                    # (_module_from_path -> "pkg.README"). Using the wrong rule
+                    # here produces MENTIONS rows whose from_node_id matches no
+                    # persisted tree node / chunk, so the edges can never be
+                    # joined back to their source.
+                    from_node_id = _module_from_doc_path(path, root)
                     capture_mentions(
                         source,
                         from_package=package_name,

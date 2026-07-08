@@ -279,10 +279,23 @@ def format_chunks_markdown_within_budget(
     """
 
     def _entry(count: int) -> TruncationEntry:
-        first_qname = next((str(c.metadata.get("qualified_name") or "") for c in chunks), "")
+        # Scan for the first NON-EMPTY qname rather than taking the
+        # leader's — a prose/README hit (no qualified_name) commonly ranks
+        # first on mixed prose+code result pages, and ``next()`` on the raw
+        # generator would silently take its empty string even when a later,
+        # budget-elided chunk IS code-backed and has a valid lookup target.
+        # Mirrors the loop in ``format_members_markdown_within_budget``.
+        target = next(
+            (
+                str(c.metadata.get("qualified_name") or "")
+                for c in chunks
+                if c.metadata.get("qualified_name")
+            ),
+            "",
+        )
         return TruncationEntry(
             description=f"{count} result(s) elided by the token budget",
-            recovery=pointer_token("lookup", first_qname) if first_qname else "",
+            recovery=pointer_token("lookup", target) if target else "",
         )
 
     return "\n".join(

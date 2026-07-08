@@ -489,7 +489,12 @@ def _parse_node_list(
     silently dropped — well-known LLM behavior; the step degrades
     gracefully to fewer chunks rather than crashing. A malformed
     ``node_list`` (non-list) raises ValueError so a broken prompt /
-    LLM-format regression surfaces immediately.
+    LLM-format regression surfaces immediately. Top-level-valid JSON that
+    isn't an object (e.g. a bare list, ``null``, or a string — a degraded
+    gateway or a non-OpenAI provider behind the LlmClient Protocol can
+    return this) is rejected the same way: ``.get`` only exists on dicts,
+    so without this gate a non-object top level raises AttributeError
+    instead of the documented ValueError shape.
 
     Repeated qualified_names are deduped, keeping the FIRST occurrence's
     position — real LLMs commonly re-mention a symbol they already picked.
@@ -500,6 +505,10 @@ def _parse_node_list(
     picks themselves).
     """
     data = json.loads(response)
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"LLM response must be a JSON object; got {type(data).__name__}",
+        )
     node_list = data.get("node_list", [])
     if not isinstance(node_list, list):
         raise ValueError(

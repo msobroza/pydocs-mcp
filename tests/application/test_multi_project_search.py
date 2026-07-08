@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.application.mcp_errors import NotFoundError
+from pydocs_mcp.application.mcp_errors import InvalidArgumentError, NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
 from pydocs_mcp.application.multi_project_search import (
     MultiProjectLookup,
@@ -155,6 +155,27 @@ async def test_single_project_delegates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_unknown_project_raises_typed_invalid_argument() -> None:
+    # A typo'd project= selector must surface as a typed client-input error
+    # (InvalidArgumentError), not the raw KeyError select_project raises nor
+    # the ServiceUnavailableError server._run_tool's generic except-Exception
+    # arm would produce if the KeyError escaped uncaught. Drives the unknown
+    # name through MultiProjectSearch itself (not just the full ToolRouter),
+    # pinning the _select_service seam directly.
+    router = MultiProjectSearch(
+        services=(
+            _svc(_project("frontend", 1.0), composite="FRONT"),
+            _svc(_project("backend", 2.0), composite="BACK"),
+        )
+    )
+    with pytest.raises(InvalidArgumentError) as exc_info:
+        await router.search(SearchInput(query="x", kind="docs", project="nope"))
+    message = str(exc_info.value)
+    assert "nope" in message
+    assert "frontend" in message and "backend" in message
+
+
+@pytest.mark.asyncio
 async def test_project_scope_routes_to_one() -> None:
     router = MultiProjectSearch(
         services=(
@@ -194,6 +215,23 @@ async def test_lookup_project_scope_routes() -> None:
     )
     out = await router.lookup(LookupInput(target="x.y", project="a"))
     assert out == "ANSWER_A"
+
+
+@pytest.mark.asyncio
+async def test_lookup_unknown_project_raises_typed_invalid_argument() -> None:
+    # Same seam as the search-side test above, for MultiProjectLookup's
+    # project= routing path (_select_service is shared by both routers).
+    router = MultiProjectLookup(
+        services=(
+            _svc(_project("a", 1.0), lookup="ANSWER_A"),
+            _svc(_project("b", 2.0), lookup="ANSWER_B"),
+        )
+    )
+    with pytest.raises(InvalidArgumentError) as exc_info:
+        await router.lookup(LookupInput(target="x.y", project="nope"))
+    message = str(exc_info.value)
+    assert "nope" in message
+    assert "a" in message and "b" in message
 
 
 @pytest.mark.asyncio
