@@ -5,6 +5,11 @@ server to answer questions about the documentation and code of your indexed
 projects, with a **Streamlit** chat UI. It ships inside pydocs-mcp behind the
 `ask-your-docs` extra, so installing it adds the `ask-your-docs` command.
 
+<p align="center">
+  <img src="screenshot-chat.png" width="860"
+       alt="Ask-your-docs chat UI — sidebar scope pickers (project / package / own-vs-dependency) beside the grounded-answer chat">
+</p>
+
 What it demonstrates:
 
 - **Multi-repo**: one agent over a directory of pre-built pydocs-mcp indexes
@@ -106,6 +111,11 @@ question is also prefixed with a `[pinned scope: ...]` note so the agent knows
 why. Toggle **Light mode** at the top of the sidebar to switch the palette.
 
 ### Graph explorer
+
+<p align="center">
+  <img src="screenshot-graph.png" width="860"
+       alt="Graph explorer — a project's packages as a node-link graph, coloured by relationship, with shape/colour node-type filters and a Hide test files toggle">
+</p>
 
 The app has a second page (sidebar → **Graph**) that visualizes a project's
 structure as a **zoom / drill-down**: the canvas shows the direct children of
