@@ -65,6 +65,33 @@ def list_dependency_manifest_files(root: str) -> list[str]:
     return found
 
 
+def _collect_toml_dep_specs(data: dict) -> list[str]:
+    """Gather raw dependency specs from a parsed pyproject: ``[project]``
+    dependencies + PEP 621 optional-dependencies extras + PEP 735
+    dependency-groups. Split out of :func:`parse_pyproject_dependencies` to
+    keep that orchestrator under the cognitive-complexity gate.
+
+    Every non-list container and non-str item is rejected: a malformed-but-valid
+    manifest can write ``dependencies = "requests"`` (a bare string), and
+    ``list()``/``extend()`` over a string yields its CHARACTERS — each a
+    single-char str that would survive a naive ``isinstance(d, str)`` filter.
+    """
+    project = data.get("project", {})
+    raw_deps = project.get("dependencies", [])
+    specs: list[str] = list(raw_deps) if isinstance(raw_deps, list) else []
+    # PEP 621 extras: {extra_name: [specs]} under [project.optional-dependencies].
+    for extra in project.get("optional-dependencies", {}).values():
+        if isinstance(extra, list):
+            specs.extend(extra)
+    # PEP 735 groups: {group_name: [spec | {include-group=name}]} at the top
+    # level. Skip the include-group dict refs — the referenced group's specs
+    # are collected on its own iteration.
+    for group in data.get("dependency-groups", {}).values():
+        if isinstance(group, list):
+            specs.extend(item for item in group if isinstance(item, str))
+    return [d for d in specs if isinstance(d, str) and d.strip()]
+
+
 def parse_pyproject_dependencies(path: str) -> list[str]:
     """Extract dependency names from a pyproject.toml file path.
 
@@ -82,25 +109,7 @@ def parse_pyproject_dependencies(path: str) -> list[str]:
 
         with pyproject_path.open("rb") as f:
             data = tomllib.load(f)
-        project = data.get("project", {})
-        # A malformed-but-valid manifest can write `dependencies = "requests"`
-        # (string) instead of a list. list()/extend() over a bare string yields
-        # its characters, and each single-char str survives the `isinstance(d,
-        # str)` filter below — so every non-list value must be rejected up front
-        # rather than iterated.
-        raw_deps = project.get("dependencies", [])
-        specs: list[str] = list(raw_deps) if isinstance(raw_deps, list) else []
-        # PEP 621 extras: {extra_name: [specs]} under [project.optional-dependencies].
-        for extra in project.get("optional-dependencies", {}).values():
-            if isinstance(extra, list):
-                specs.extend(extra)
-        # PEP 735 groups: {group_name: [spec | {include-group=name}]} at the top
-        # level. Skip the include-group dict refs — the referenced group's specs
-        # are collected on its own iteration.
-        for group in data.get("dependency-groups", {}).values():
-            if isinstance(group, list):
-                specs.extend(item for item in group if isinstance(item, str))
-        return [normalize_package_name(d) for d in specs if isinstance(d, str) and d.strip()]
+        return [normalize_package_name(d) for d in _collect_toml_dep_specs(data)]
     except Exception:
         # Best-effort parsing: malformed pyproject.toml shouldn't crash discovery;
         # log at debug level so the failure isn't entirely silent for an operator.
