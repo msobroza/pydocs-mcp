@@ -153,6 +153,46 @@ def test_defaults() -> None:
     )
 
 
+# ── kind_weights serialization ────────────────────────────────────────────
+
+
+def test_kind_weights_default_empty() -> None:
+    step = GraphExpandStep(uow_factory=make_fake_uow_factory())
+    assert step.kind_weights == ()
+    # default stays omitted from YAML (byte-parity with pre-kind_weights output).
+    assert "kind_weights" not in step.to_dict()
+
+
+def test_to_dict_kind_weights_emitted_as_mapping() -> None:
+    step = GraphExpandStep(
+        uow_factory=make_fake_uow_factory(),
+        kind_weights=(("mentions", 0.5),),
+    )
+    assert step.to_dict()["kind_weights"] == {"mentions": 0.5}
+
+
+def test_from_dict_kind_weights_mapping_normalized_and_round_trips() -> None:
+    # YAML mapping in; canonical sorted pair-tuple on the step; 1.0 entries are
+    # no-ops and dropped so omit-when-default round-trips cleanly.
+    step = GraphExpandStep.from_dict(
+        {"type": "graph_expand", "kind_weights": {"mentions": 0.5, "calls": 1.0}},
+        _ctx(),
+    )
+    assert step.kind_weights == (("mentions", 0.5),)
+    rebuilt = step_registry.build(step.to_dict(), _ctx())
+    assert isinstance(rebuilt, GraphExpandStep)
+    assert rebuilt.kind_weights == (("mentions", 0.5),)
+
+
+@pytest.mark.parametrize("bad", [0, -0.5, "heavy"])
+def test_from_dict_rejects_invalid_kind_weight(bad: object) -> None:
+    with pytest.raises(ValueError, match="kind_weights"):
+        GraphExpandStep.from_dict(
+            {"type": "graph_expand", "kind_weights": {"mentions": bad}},
+            _ctx(),
+        )
+
+
 # ── safety contract ───────────────────────────────────────────────────────
 
 
@@ -315,6 +355,76 @@ async def test_run_node_reachable_from_two_seeds_keeps_max_score() -> None:
     out = await step.run(_state([_chunk("pkg.S1", 0.9), _chunk("pkg.S2", 0.4)]))
     by = _by_qname(out)
     assert by["pkg.N"].relevance == pytest.approx(0.9 * _DEFAULT_DECAY)
+
+
+# ── kind_weights scoring ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_kind_weight_scales_neighbour_score() -> None:
+    # A weighted MENTIONS edge scores seed_sim * decay * weight.
+    refs = [_ref("pkg.README.md", "pkg.seed", "pkg.seed", ReferenceKind.MENTIONS)]
+    chunks = [_chunk("pkg.README.md", 0.0, text="doc body")]
+    step = GraphExpandStep(
+        uow_factory=_factory(refs, chunks),
+        kinds=("calls", "inherits", "mentions"),
+        kind_weights=(("mentions", 0.5),),
+    )
+    out = await step.run(_state([_chunk("pkg.seed", 0.9)]))
+    by = _by_qname(out)
+    assert by["pkg.README.md"].relevance == pytest.approx(0.9 * _DEFAULT_DECAY * 0.5)
+
+
+@pytest.mark.asyncio
+async def test_run_unlisted_kind_defaults_to_weight_one() -> None:
+    # kind_weights only lists mentions; a CALLS edge keeps the unweighted score.
+    refs = [_ref("pkg.caller", "pkg.seed", "pkg.seed", ReferenceKind.CALLS)]
+    chunks = [_chunk("pkg.caller", 0.0)]
+    step = GraphExpandStep(
+        uow_factory=_factory(refs, chunks),
+        kind_weights=(("mentions", 0.5),),
+    )
+    out = await step.run(_state([_chunk("pkg.seed", 0.9)]))
+    assert _by_qname(out)["pkg.caller"].relevance == pytest.approx(0.9 * _DEFAULT_DECAY)
+
+
+@pytest.mark.asyncio
+async def test_run_kind_weight_max_across_parallel_edges() -> None:
+    # The same neighbour is reachable via CALLS (weight 1.0 implicit) and
+    # MENTIONS (weight 0.5) — max wins, so the unweighted CALLS path scores it.
+    refs = [
+        _ref("pkg.N", "pkg.seed", "pkg.seed", ReferenceKind.CALLS),
+        _ref("pkg.N", "pkg.seed", "pkg.seed", ReferenceKind.MENTIONS),
+    ]
+    chunks = [_chunk("pkg.N", 0.0)]
+    step = GraphExpandStep(
+        uow_factory=_factory(refs, chunks),
+        kinds=("calls", "inherits", "mentions"),
+        kind_weights=(("mentions", 0.5),),
+    )
+    out = await step.run(_state([_chunk("pkg.seed", 0.9)]))
+    assert _by_qname(out)["pkg.N"].relevance == pytest.approx(0.9 * _DEFAULT_DECAY)
+
+
+@pytest.mark.asyncio
+async def test_run_kind_weights_compound_along_path() -> None:
+    # Chain seed(A) -calls-> B -mentions-> C at depth 2: C's score compounds
+    # the per-edge weights (1.0 * 0.5) on top of decay**2, anchored to A's sim.
+    refs = [
+        _ref("pkg.A", "pkg.B", "pkg.B", ReferenceKind.CALLS),
+        _ref("pkg.B", "pkg.C", "pkg.C", ReferenceKind.MENTIONS),
+    ]
+    chunks = [_chunk("pkg.B", 0.0), _chunk("pkg.C", 0.0)]
+    step = GraphExpandStep(
+        uow_factory=_factory(refs, chunks),
+        max_depth=2,
+        kinds=("calls", "inherits", "mentions"),
+        kind_weights=(("mentions", 0.5),),
+    )
+    out = await step.run(_state([_chunk("pkg.A", 0.8)]))
+    by = _by_qname(out)
+    assert by["pkg.B"].relevance == pytest.approx(0.8 * _DEFAULT_DECAY)
+    assert by["pkg.C"].relevance == pytest.approx(0.8 * _DEFAULT_DECAY**2 * 0.5)
 
 
 @pytest.mark.asyncio

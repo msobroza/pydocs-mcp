@@ -19,7 +19,9 @@ Flow (runs AFTER the dense fetch+score, BEFORE top-k/limit):
    ``find_callees`` for what-the-seed-delegates-to), keeping only the
    configured edge ``kinds``. Bounded depth + a ``visited`` set guard the
    cycles that CALLS/IMPORTS edges form. Each discovered neighbour scores
-   ``seed_relevance * decay**hop``.
+   ``seed_relevance * decay**hop``, further scaled by the product of the
+   traversed edges' ``kind_weights`` (per-kind trust: a MENTIONS edge is
+   weaker evidence than a CALLS edge; unlisted kinds weigh 1.0).
 3. Re-hydrate discovered qnames to chunks and **merge** them into the dense
    list keyed on ``qualified_name``, keeping ``max(dense_sim, graph_score)``.
    No reciprocal-rank fusion, no second branch — a single embedding-centric
@@ -32,9 +34,10 @@ this step to a pipeline can only help (it degrades to dense-only).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import math
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydocs_mcp.filters import FieldIn
 from pydocs_mcp.models import Chunk, ChunkList
@@ -62,6 +65,9 @@ _DEFAULT_DECAY = 0.9
 _DEFAULT_DIRECTIONS: tuple[str, ...] = ("callers", "callees")
 _DEFAULT_KINDS: tuple[str, ...] = ("calls", "inherits")
 _DEFAULT_NEIGHBORS_PER_SEED = 25
+# Empty means every traversed kind weighs 1.0 — byte-identical to the
+# pre-kind_weights behaviour, so the benchmarked default ranking is untouched.
+_DEFAULT_KIND_WEIGHTS: tuple[tuple[str, float], ...] = ()
 _DEFAULT_NAME = "graph_expand"
 
 # Depth is clamped to this — two indexed single-hop rounds is the practical
@@ -78,6 +84,32 @@ def _qname(chunk: Chunk) -> str | None:
     """The chunk's graph join key, or None if it carries no qualified_name."""
     value = chunk.metadata.get(_QNAME_KEY)
     return value if value else None
+
+
+def _normalize_kind_weights(value: Any) -> tuple[tuple[str, float], ...]:
+    """Canonicalize a YAML ``kind_weights`` mapping (or pair sequence).
+
+    Weights must be finite numbers > 0 — a zero/negative weight is edge
+    *removal*, which is what ``kinds`` is for. Entries of exactly 1.0 are
+    no-ops and dropped, so omit-when-default ``to_dict`` round-trips cleanly.
+    Output is sorted by kind for a deterministic YAML byte encoding.
+    """
+    pairs = value.items() if isinstance(value, Mapping) else value
+    weights: dict[str, float] = {}
+    for kind, weight in pairs:
+        if (
+            isinstance(weight, bool)
+            or not isinstance(weight, (int, float))
+            or not math.isfinite(weight)
+            or weight <= 0
+        ):
+            raise ValueError(
+                f"GraphExpandStep.kind_weights[{kind!r}] must be a finite "
+                f"number > 0; got {weight!r}."
+            )
+        if weight != 1.0:
+            weights[str(kind)] = float(weight)
+    return tuple(sorted(weights.items()))
 
 
 @step_registry.register("graph_expand")
@@ -99,6 +131,10 @@ class GraphExpandStep(RetrieverStep):
     directions: tuple[str, ...] = field(default=_DEFAULT_DIRECTIONS, kw_only=True)
     kinds: tuple[str, ...] = field(default=_DEFAULT_KINDS, kw_only=True)
     neighbors_per_seed: int = field(default=_DEFAULT_NEIGHBORS_PER_SEED, kw_only=True)
+    # Canonical (kind, weight) pairs — YAML-facing shape is a mapping
+    # (``kind_weights: {mentions: 0.5}``); pairs keep the frozen dataclass
+    # hashable. A kind absent here weighs 1.0.
+    kind_weights: tuple[tuple[str, float], ...] = field(default=_DEFAULT_KIND_WEIGHTS, kw_only=True)
     name: str = field(default=_DEFAULT_NAME, kw_only=True)
     _YAML_KEYS: ClassVar[tuple[str, ...]] = (
         "top_s",
@@ -107,6 +143,7 @@ class GraphExpandStep(RetrieverStep):
         "directions",
         "kinds",
         "neighbors_per_seed",
+        "kind_weights",
         "name",
     )
 
@@ -159,17 +196,20 @@ class GraphExpandStep(RetrieverStep):
     ) -> dict[str, float]:
         """Bounded BFS over the reference graph; returns qname -> best score.
 
-        Carries each frontier node's *originating seed similarity* forward so
-        a neighbour ``hop`` edges out scores ``seed_sim * decay**hop``. A
-        ``visited`` set bounds the cycles CALLS/IMPORTS edges form; ``max``
-        keeps the strongest score when a node is reachable from several seeds.
+        Carries each frontier node's *originating seed similarity* and the
+        product of per-edge ``kind_weights`` along its path forward, so a
+        neighbour ``hop`` edges out scores ``seed_sim * decay**hop *
+        path_weight``. A ``visited`` set bounds the cycles CALLS/IMPORTS
+        edges form; ``max`` keeps the strongest score when a node is
+        reachable from several seeds.
         """
+        weight_of = dict(self.kind_weights)
         best_score: dict[str, float] = {}
         visited: set[str] = {qname for qname, _ in seeds}
-        frontier = list(seeds)
+        frontier = [(qname, sim, 1.0) for qname, sim in seeds]
         for hop in range(1, max(1, self.max_depth) + 1):
             frontier = await self._expand_one_hop(
-                uow, frontier, self.decay**hop, best_score, visited
+                uow, frontier, self.decay**hop, weight_of, best_score, visited
             )
             if not frontier:
                 break
@@ -178,28 +218,36 @@ class GraphExpandStep(RetrieverStep):
     async def _expand_one_hop(
         self,
         uow: UnitOfWork,
-        frontier: list[tuple[str, float]],
+        frontier: list[tuple[str, float, float]],
         score_factor: float,
+        weight_of: dict[str, float],
         best_score: dict[str, float],
         visited: set[str],
-    ) -> list[tuple[str, float]]:
+    ) -> list[tuple[str, float, float]]:
         """One BFS hop: score each frontier node's neighbours, return the next
         frontier. Mutates ``best_score`` (max per qname) and ``visited`` (cycle
         guard) in place; ``base_sim`` (the originating seed similarity) is
-        carried forward so the next hop decays from the seed, not the parent."""
-        next_frontier: list[tuple[str, float]] = []
-        for qname, base_sim in frontier:
-            score = base_sim * score_factor
-            for neighbour in await self._neighbours(uow, qname):
+        carried forward so the next hop decays from the seed, not the parent,
+        and ``path_weight`` compounds the traversed edges' kind weights. The
+        first-discovered path claims a node's frontier slot (same rule as the
+        cycle guard); ``best_score`` still takes the max across all paths."""
+        next_frontier: list[tuple[str, float, float]] = []
+        for qname, base_sim, path_weight in frontier:
+            for neighbour, kind_weight in await self._neighbours(uow, qname, weight_of):
+                weight = path_weight * kind_weight
+                score = base_sim * score_factor * weight
                 if score > best_score.get(neighbour, float("-inf")):
                     best_score[neighbour] = score
                 if neighbour not in visited:
                     visited.add(neighbour)
-                    next_frontier.append((neighbour, base_sim))
+                    next_frontier.append((neighbour, base_sim, weight))
         return next_frontier
 
-    async def _neighbours(self, uow: UnitOfWork, qname: str) -> list[str]:
-        """Neighbour qnames of ``qname`` across the configured directions/kinds.
+    async def _neighbours(
+        self, uow: UnitOfWork, qname: str, weight_of: dict[str, float]
+    ) -> list[tuple[str, float]]:
+        """(neighbour qname, kind weight) pairs across the configured
+        directions/kinds; a kind absent from ``weight_of`` weighs 1.0.
 
         - ``callers`` → ``find_callers(target_node_id=qname)``, neighbour is
           the edge's ``from_node_id`` (who references the seed).
@@ -207,15 +255,15 @@ class GraphExpandStep(RetrieverStep):
           edge's ``to_node_id`` (what the seed references); unresolved edges
           (``to_node_id`` None/"") are skipped — they point outside the index.
         """
-        found: list[str] = []
+        found: list[tuple[str, float]] = []
         if "callers" in self.directions:
             for ref in await uow.references.find_callers(target_node_id=qname):
                 if str(ref.kind) in self.kinds and ref.from_node_id:
-                    found.append(ref.from_node_id)
+                    found.append((ref.from_node_id, weight_of.get(str(ref.kind), 1.0)))
         if "callees" in self.directions:
             for ref in await uow.references.find_callees(from_node_id=qname):
                 if str(ref.kind) in self.kinds and ref.to_node_id:
-                    found.append(ref.to_node_id)
+                    found.append((ref.to_node_id, weight_of.get(str(ref.kind), 1.0)))
         return found[: self.neighbors_per_seed]
 
     async def _hydrate(
@@ -244,7 +292,11 @@ class GraphExpandStep(RetrieverStep):
         return [replace(c, relevance=discovered[q]) for q, c in best_chunk.items()]
 
     def to_dict(self) -> dict:
-        return step_to_yaml_dict(self, type_name="graph_expand", keys=self._YAML_KEYS)
+        out = step_to_yaml_dict(self, type_name="graph_expand", keys=self._YAML_KEYS)
+        # YAML-facing shape is a mapping, not the internal pair-tuple.
+        if "kind_weights" in out:
+            out["kind_weights"] = dict(self.kind_weights)
+        return out
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> GraphExpandStep:
@@ -255,6 +307,11 @@ class GraphExpandStep(RetrieverStep):
                 "tests must pass it explicitly.",
             )
         kwargs = yaml_kwargs(data, cls, cls._YAML_KEYS)
+        # Re-read kind_weights from the raw data: yaml_kwargs' tuple coercion
+        # would keep only a YAML mapping's KEYS and drop the weights.
+        kwargs["kind_weights"] = _normalize_kind_weights(
+            data.get("kind_weights", _DEFAULT_KIND_WEIGHTS)
+        )
         # Clamp rather than reject — out-of-range depth is a tuning typo, not a
         # wiring bug; silently bounding keeps the safety contract intact.
         kwargs["max_depth"] = max(1, min(_MAX_DEPTH_CAP, kwargs["max_depth"]))
