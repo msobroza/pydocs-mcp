@@ -23,6 +23,34 @@ that varies between runs is the retrieval pipeline:
 
 Conditions 3–5 vary the RRF rank-bias constant `k`; conditions 6–8 vary the
 BM25/dense weight split of the linear (weighted-score-interpolation) blend.
+
+### A/B: does the post-fusion dense re-ranker help? (condition 4 vs 13)
+
+`dense_scorer` became a post-fusion re-ranker: after RRF fuses the BM25 + dense
+top-K, it re-orders that fused set by the exact turbovec allowlist score
+(one `IdMapIndex.search(query, k, allowlist=fused_ids)` call — no extra
+storage). Condition 13 is condition 4 with that step **removed**, so a 4-vs-13
+delta isolates the re-ranker alone.
+
+| # | Condition | Config overlay | Pipeline | Extra dep |
+|---|-----------|----------------|----------|:---:|
+| 13 | Hybrid RRF `k=60`, **no** dense re-rank (A/B baseline) | `configs/repoqa_hybrid_rrf_k60_norerank.yaml` | `exp_hybrid_rrf_k60_norerank` | — |
+
+**Run the verdict** (needs a GPU — CPU dense indexing is 60–215 s/needle):
+
+```bash
+# full test split + the repoqa-structural do-no-harm gate, one command:
+PYDOCS_VENV=.venv-li benchmarks/scripts/compare_dense_rerank.sh
+# quick dev-split sanity first:
+SPLIT=small_test benchmarks/scripts/compare_dense_rerank.sh
+```
+
+**Adoption rule:** make the re-ranker the shipped default only if condition 4
+beats condition 13 on `recall@5` **and** `mrr` with non-overlapping 95% CIs on
+the full `test` split, **and** does not lose `recall@10` on `repoqa-structural`.
+A <2-needle delta or overlapping CIs means the quantized fetcher score was
+already sufficient — record the numbers either way (the step stays available
+via YAML, it just wouldn't ship on by default).
 Conditions 9–10 swap the single-vector dense branch for token-level
 late-interaction (ColBERT/MaxSim) re-ranking, fused with BM25 by RRF (9) or by
 the same 0.5/0.5 weighted blend (10) — a 9-vs-10 delta isolates the fusion
