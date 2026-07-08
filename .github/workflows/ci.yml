@@ -103,11 +103,13 @@ jobs:
       # transitive patch release could redden CI silently. Subsequent
       # CI commands wrap through `uv run` so they pick up the venv
       # without an explicit `source .venv/bin/activate` step.
-      # --extra ask-your-docs pulls the LangGraph/Streamlit subpackage deps so
-      # its test module (tests/ask_your_docs/) can import streamlit + langchain.
-      # Without it, test_app_attachment / test_attachment fail at import.
+      # The [ask-your-docs] extra (langgraph/langchain/streamlit) is deliberately
+      # NOT installed here: its heavy stack stays off the core matrix. The two
+      # tests that need it (tests/ask_your_docs/test_app_attachment,
+      # test_attachment) `pytest.importorskip` those modules and skip cleanly;
+      # the ask_your_docs package is excluded from the coverage gate to match.
       - name: Install project + dev group (frozen)
-        run: uv sync --frozen --group dev --extra ask-your-docs
+        run: uv sync --frozen --group dev
 
       - name: Lint
         run: uv run ruff check python/ tests/

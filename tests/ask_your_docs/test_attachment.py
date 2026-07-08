@@ -1,3 +1,10 @@
+import pytest
+
+# agent.py imports the [ask-your-docs] langchain/langgraph stack at module level;
+# that extra is not on the core CI matrix. Skip (don't fail) when it is absent.
+pytest.importorskip("langchain_core")
+
+
 def test_weave_prepends_deduped_context():
     from pydocs_mcp.ask_your_docs.agent import weave_attachments
 

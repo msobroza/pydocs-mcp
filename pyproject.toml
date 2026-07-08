@@ -164,6 +164,17 @@ markers = [
     "real_embedder: test exercises the real build_embedder factory (skips the autouse mock patch)",
 ]
 
+[tool.coverage.run]
+# The optional ask-your-docs subpackage (LangGraph agent + Streamlit UI) is
+# integration/demo code. Its heavy extra (langgraph/langchain/streamlit) is NOT
+# installed on the core CI matrix, so its Streamlit/LangChain modules cannot be
+# imported there and would report as 0% — dragging the gate below 90%. Exclude
+# the whole directory from coverage to mirror the [tool.mypy] `exclude` of the
+# same path. Its one core-installable module (graph_service) is still exercised
+# by tests/ask_your_docs/test_graph_service.py for correctness; those tests run,
+# they just don't count toward the coverage gate.
+omit = ["*/pydocs_mcp/ask_your_docs/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
