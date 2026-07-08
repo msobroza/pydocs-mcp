@@ -329,6 +329,20 @@ class ContextInput(BaseModel):
     targets: list[str] = Field(min_length=1, max_length=20)
     project: str = ""
 
+    @field_validator("targets")
+    @classmethod
+    def _check_targets(cls, v: list[str]) -> list[str]:
+        # Each item must be a non-empty dotted identifier, mirroring
+        # SymbolInput/ReferencesInput.target — an unvalidated item gets
+        # interpolated into "[[...]]" pointer tokens downstream
+        # (formatting.py), so ":" / "]]" here would corrupt the grammar.
+        for item in v:
+            if not item or not _TARGET_RE.match(item):
+                raise ValueError(
+                    "each target must be a dotted identifier like 'pkg.mod.Class.method'"
+                )
+        return v
+
     @field_validator("project")
     @classmethod
     def _check_project(cls, v: str) -> str:
@@ -378,6 +392,20 @@ class WhyInput(BaseModel):
     query: str = ""
     targets: list[str] | None = Field(None, min_length=1, max_length=20)
     project: str = ""
+
+    @field_validator("targets")
+    @classmethod
+    def _check_targets(cls, v: list[str] | None) -> list[str] | None:
+        # Mirrors ContextInput._check_targets — same pointer-token
+        # interpolation risk applies to WhyInput's per-target lookups.
+        if v is None:
+            return v
+        for item in v:
+            if not item or not _TARGET_RE.match(item):
+                raise ValueError(
+                    "each target must be a dotted identifier like 'pkg.mod.Class.method'"
+                )
+        return v
 
     @field_validator("project")
     @classmethod

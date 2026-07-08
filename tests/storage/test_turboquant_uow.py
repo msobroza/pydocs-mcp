@@ -99,6 +99,33 @@ async def test_write_is_atomic_via_tmp_rename(tmp_path: Path) -> None:
     assert tq.read_bytes() == pre_bytes
 
 
+async def test_add_vectors_with_reused_id_raises_value_error(tmp_path: Path) -> None:
+    """Pins CURRENT behavior for stale-id collision (gap: storage —
+    "Stale .tq vector ids collide with reused chunk rowids").
+
+    ``chunks.id`` is ``INTEGER PRIMARY KEY`` without ``AUTOINCREMENT``
+    (db.py), so SQLite reuses rowids once the max row is deleted. If a
+    crash lands the SQLite commit but not the TurboQuant commit (the
+    documented non-ACID window — see CompositeUnitOfWork docstring), the
+    on-disk ``.tq`` keeps a stale vector under an id that a later index
+    run can reassign to a brand-new chunk. ``TurboQuantUnitOfWork.add_vectors``
+    has no remove-then-add/upsert semantics, so re-adding a colliding id
+    crashes indexing permanently on every retry until the user manually
+    deletes the ``.tq`` — this test pins that raw ``ValueError`` as today's
+    contract so a future upsert-semantics fix has an explicit regression
+    test to flip green.
+    """
+    tq = tmp_path / "test.tq"
+    async with TurboQuantUnitOfWork(index_path=tq, dim=_DIM, bit_width=4) as uow:
+        await uow.add_vectors([1, 2], [_vec(0.1, 0.2), _vec(0.3, 0.4)])
+        await uow.commit()
+    # Fresh UoW/session — mirrors a new index run after a crash-then-retry,
+    # reassigning id 2 (reused SQLite rowid) to a chunk with new content.
+    async with TurboQuantUnitOfWork(index_path=tq, dim=_DIM, bit_width=4) as uow2:
+        with pytest.raises(ValueError, match="id 2 already present"):
+            await uow2.add_vectors([2], [_vec(0.9, 0.9)])
+
+
 async def test_guards_raise_uow_not_entered_error(tmp_path: Path) -> None:
     """All four not-entered guards raise the shared typed error with a bare
     ``Class.method`` op label — the contract unified across sidecar UoWs."""

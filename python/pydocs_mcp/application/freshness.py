@@ -83,7 +83,11 @@ def resolve_git_head(project_root: Path) -> str | None:
         if not head.startswith("ref:"):
             return head or None  # detached HEAD stores the raw sha
         return _resolve_ref(gitdir, head.split(":", 1)[1].strip())
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError from read_text() on a
+        # corrupted/non-UTF8 plumbing file (HEAD, gitfile, packed-refs) —
+        # it is NOT an OSError subclass, so it must be caught explicitly to
+        # honor the "unresolvable layout -> None" contract above.
         return None
 
 

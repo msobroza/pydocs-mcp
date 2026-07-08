@@ -15,16 +15,54 @@ absent project would otherwise re-index itself to empty).
 from __future__ import annotations
 
 import re
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.db import open_index_database
+from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
 from pydocs_mcp.storage.index_metadata import IndexMetadata, read_index_metadata
 
 # ``cache_path_for_project`` names files ``{project_name}_{md5[:10]}.db``; the
 # 10-hex-char suffix is the path slug. Strip it to recover the project name when
 # a db predates the stamped ``index_metadata.project_name``.
 _SLUG_RE = re.compile(r"^(.*)_[0-9a-f]{10}$")
+
+
+class FutureSchemaError(RuntimeError):
+    """A bundle's ``PRAGMA user_version`` is newer than this build understands.
+
+    Multi-repo serving is READ-ONLY over a portable bundle it doesn't own
+    (see module docstring). ``open_index_database``'s migration ladder maps
+    any version it doesn't recognize to ``_rebuild_from_scratch`` — correct
+    for the write-side indexing cache ("derived data, prefer working over
+    bricked"), but catastrophic here: it would silently drop every table in
+    a bundle built by a NEWER pydocs-mcp before this module ever gets to read
+    it. Detecting the future version BEFORE delegating to
+    ``open_index_database`` keeps the bundle untouched on disk.
+    """
+
+
+def _check_schema_version_readable(db_path: Path) -> None:
+    """Raise :class:`FutureSchemaError` if ``db_path`` is newer than this build.
+
+    Reads ``PRAGMA user_version`` on a throwaway connection WITHOUT going
+    through ``open_index_database`` — that function's job is to migrate (or,
+    for unrecognized versions, rebuild) the file it opens, which is exactly
+    the destructive path this check exists to preempt.
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+    if version > SCHEMA_VERSION:
+        raise FutureSchemaError(
+            f"index database {db_path} was built with schema version {version}, "
+            f"newer than this build supports (max {SCHEMA_VERSION}). Refusing to "
+            "open it read-only to avoid the migration ladder's unrecognized-version "
+            "rebuild wiping the bundle. Upgrade pydocs-mcp to a version that "
+            f"supports schema {version}."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +109,14 @@ def load_project(db_path: Path) -> LoadedProject:
     Raises ``FileNotFoundError`` if the db file is absent — loading a pre-built
     bundle that does not exist (or querying a never-indexed project) is an error,
     not an empty index (``open_index_database`` would otherwise create it).
+
+    Raises :class:`FutureSchemaError` if the bundle's stamped schema version is
+    newer than this build supports — opening it via ``open_index_database``
+    would otherwise silently drop every table and re-serve it as an empty index.
     """
     if not db_path.exists():
         raise FileNotFoundError(f"index database not found: {db_path}")
+    _check_schema_version_readable(db_path)
     conn = open_index_database(db_path)
     try:
         meta = read_index_metadata(conn)

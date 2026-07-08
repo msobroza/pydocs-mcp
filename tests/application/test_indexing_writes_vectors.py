@@ -202,3 +202,48 @@ async def test_reindex_package_with_no_embeddings_does_not_touch_tq(
     assert len(persisted) == 2
     # No ``add_vectors`` was issued → no commit fsync → no sidecar file.
     assert not tq_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_reindex_package_rolls_back_sqlite_on_vector_dim_mismatch(
+    tmp_path: Path,
+) -> None:
+    """A wrong-width embedding (e.g. ``embedding.dim`` changed in YAML
+    without a model rename) makes ``TurboQuantUnitOfWork.add_vectors``
+    raise ``ValueError`` — this must roll back the SQLite side too, not
+    just skip the vector write. ``_maybe_write_vectors`` runs inside the
+    same ``async with uow:`` body as ``chunks.insert`` and BEFORE
+    ``uow.commit()``, so the composite UoW's safety-net rollback fires on
+    both children and zero chunk rows survive for the package.
+    """
+    db_path = tmp_path / "cache.db"
+    tq_path = tmp_path / "cache.tq"
+    open_index_database(db_path).close()
+
+    # Index is provisioned for _DIM-wide vectors; this embedding is
+    # deliberately narrower — turbovec rejects the width mismatch.
+    wrong_dim_vec = np.asarray([0.1, 0.2], dtype=np.float32)
+    chunks = (_chunk("demo", "alpha", "alpha body", wrong_dim_vec),)
+    package = _pkg("demo")
+
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    svc = IndexingService(uow_factory=factory)
+
+    with pytest.raises(ValueError, match="dim mismatch"):
+        await svc.reindex_package(package, chunks, module_members=())
+
+    # Invariant under test: chunk rows, embedded flags, and vector adds
+    # live or die together. The vector failure must not leave a SQLite
+    # row persisted with no matching .tq vector.
+    async with factory() as uow:
+        persisted = await uow.chunks.list(filter={"package": "demo"})
+    assert persisted == []
+
+    # No sidecar mutation survived either — commit() on the TurboQuant
+    # child was never reached.
+    assert not tq_path.exists()

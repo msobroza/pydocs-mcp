@@ -93,15 +93,18 @@ def test_compute_ingestion_pipeline_hash_changes_on_yaml_edit(tmp_path: Path) ->
     yaml_path.write_text("name: ingestion\nstages:\n  - {type: flatten}\n")
     # explicit_path makes tmp_path the user-config dir, so the controlled
     # ingestion YAML below sits inside the pipeline_path allowlist (shipped
-    # pipelines dir OR user-config dir). The file need not exist — load()'s
-    # explicit override is honored regardless.
-    cfg_a = AppConfig.load(explicit_path=tmp_path / "pydocs-mcp.yaml")
+    # pipelines dir OR user-config dir). The file must exist: AppConfig.load
+    # rejects a missing explicit path (a typo'd --config must fail loud, not
+    # silently fall back to shipped defaults).
+    user_config_path = tmp_path / "pydocs-mcp.yaml"
+    user_config_path.write_text("")
+    cfg_a = AppConfig.load(explicit_path=user_config_path)
     cfg_a.extraction.ingestion.pipeline_path = yaml_path
     hash_a = cfg_a.compute_ingestion_pipeline_hash()
 
     # Edit YAML: comment-only change is enough (raw-bytes hash is conservative)
     yaml_path.write_text("# new comment\nname: ingestion\nstages:\n  - {type: flatten}\n")
-    cfg_b = AppConfig.load(explicit_path=tmp_path / "pydocs-mcp.yaml")
+    cfg_b = AppConfig.load(explicit_path=user_config_path)
     cfg_b.extraction.ingestion.pipeline_path = yaml_path
     hash_b = cfg_b.compute_ingestion_pipeline_hash()
 
@@ -111,7 +114,9 @@ def test_compute_ingestion_pipeline_hash_changes_on_yaml_edit(tmp_path: Path) ->
 def test_compute_ingestion_pipeline_hash_stable_when_yaml_unchanged(tmp_path: Path) -> None:
     yaml_path = tmp_path / "ingestion.yaml"
     yaml_path.write_text("stages:\n  - {type: flatten}\n")
-    cfg = AppConfig.load(explicit_path=tmp_path / "pydocs-mcp.yaml")
+    user_config_path = tmp_path / "pydocs-mcp.yaml"
+    user_config_path.write_text("")
+    cfg = AppConfig.load(explicit_path=user_config_path)
     cfg.extraction.ingestion.pipeline_path = yaml_path
     h1 = cfg.compute_ingestion_pipeline_hash()
     h2 = cfg.compute_ingestion_pipeline_hash()

@@ -189,7 +189,19 @@ def _build_handler_pipeline(
             default = sub_pipeline
         else:
             # predicate must be set — guaranteed by PipelineRouteEntry validator
-            routes.append(RouteCase(predicate_name=entry.predicate, stage=sub_pipeline))
+            predicate_name = entry.predicate
+            if predicate_name is None:
+                raise ValueError(
+                    f"{handler_name}: route entry missing predicate; "
+                    "PipelineRouteEntry validator should have caught this"
+                )
+            # WHY: fail at config-load time, not on the first live query.
+            # RouteStep.run resolves predicate names lazily via
+            # registry.get(...), so a typo'd name (e.g. "scope_is_deps_only"
+            # instead of "scope_is_dependencies_only") previously built a
+            # green pipeline and only raised KeyError from inside a request.
+            context.predicate_registry.get(predicate_name)
+            routes.append(RouteCase(predicate_name=predicate_name, stage=sub_pipeline))
     if not routes and default is not None:
         # Single-default route collapses to the inner pipeline directly so
         # callers inspecting pipeline.stages see the preset's stage list,

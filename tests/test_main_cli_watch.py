@@ -106,7 +106,7 @@ async def test_run_watch_loop_cancels_watcher_on_server_exit(tmp_path, monkeypat
     # plumbing tested separately by the existing test_main_cli.py suite.
     server_calls: list[None] = []
 
-    def _fake_run(db_path, config_path=None):
+    def _fake_run(db_path, config_path=None, **kwargs):
         server_calls.append(None)
         # Simulate the server running for ~50ms then "Ctrl+C" via return.
         import time
@@ -153,7 +153,7 @@ async def test_run_watch_loop_cancels_watcher_on_server_crash(tmp_path, monkeypa
 
     from pydocs_mcp.__main__ import _run_watch_loop
 
-    def _crashing_run(db_path, config_path=None):
+    def _crashing_run(db_path, config_path=None, **kwargs):
         raise RuntimeError("simulated server crash")
 
     monkeypatch.setattr("pydocs_mcp.server.run", _crashing_run)
@@ -170,3 +170,52 @@ async def test_run_watch_loop_cancels_watcher_on_server_crash(tmp_path, monkeypa
         await _run_watch_loop(args, db_path=tmp_path / "fake.db")
 
     assert not fake_observer.started, "Observer.stop was not called on crash"
+
+
+async def test_run_watch_loop_forwards_gpu_flag_to_server_run(tmp_path, monkeypatch) -> None:
+    """`serve --watch --gpu` must reach `server.run` with `gpu=True`.
+
+    `_serve_run` (no-watch path) forwards `gpu=getattr(args, "gpu", False)`
+    into `server.run`, which stamps `config.with_device(gpu=gpu)` for
+    query-time embedding (see test_server_gpu.py). `_run_watch_loop` must
+    forward the same flag — otherwise `--watch --gpu` silently falls back
+    to CPU embedding with no error.
+    """
+    import argparse
+
+    from tests._fakes import FakeObserver
+
+    fake_observer = FakeObserver()
+
+    args = argparse.Namespace(
+        project=str(tmp_path),
+        verbose=False,
+        watch=True,
+        gpu=True,
+        cache_dir=None,
+        no_inspect=True,
+        config=None,
+    )
+
+    from pydocs_mcp.__main__ import _run_watch_loop
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run(db_path, **kwargs):
+        captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr("pydocs_mcp.server.run", _fake_run)
+
+    from pydocs_mcp.serve import watcher as watcher_mod
+
+    monkeypatch.setattr(
+        watcher_mod,
+        "_load_watchdog",
+        lambda: lambda: fake_observer,
+    )
+
+    await _run_watch_loop(args, db_path=tmp_path / "fake.db")
+
+    assert captured_kwargs.get("gpu") is True, (
+        f"--gpu was not forwarded to server.run through the watch path: {captured_kwargs}"
+    )

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
@@ -114,3 +116,49 @@ def test_strip_restores_pre_pointer_bytes() -> None:
 def test_strip_removes_overview_token() -> None:
     with_token = "No matches found.\n[[next:overview:]]\n"
     assert strip_pointers(with_token) == "No matches found.\n"
+
+
+def test_resolve_lookup_show_missing_show_word_does_not_raise() -> None:
+    # Indexed chunk content (this repo's own tests/docs) can contain a
+    # pointer-shaped literal with no show word — e.g. quoted inside prose
+    # or example text, NOT emitted by pointer_token(). The regex's third
+    # group is optional (``?``) so ``show`` is ``None`` here; resolving
+    # must not KeyError(None) on ``_SHOW_TO_TOOL``. Pin: left verbatim.
+    text = "see [[next:lookup-show:x]] for details"
+    assert resolve_pointers(text, "mcp") == text
+    assert resolve_pointers(text, "cli") == text
+
+
+def test_resolve_lookup_show_unknown_show_word_does_not_raise() -> None:
+    # An indexed chunk can also contain a show word that was never a valid
+    # key in ``_SHOW_TO_TOOL`` (e.g. quoted in a test file as a negative
+    # example). Resolving must not KeyError('frobnicate'). Pin: verbatim.
+    text = "see [[next:lookup-show:x:frobnicate]] for details"
+    assert resolve_pointers(text, "mcp") == text
+    assert resolve_pointers(text, "cli") == text
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Known gap, not fixed here: resolve_pointers has no way to tell a "
+        "renderer-emitted token apart from a pointer-SHAPED literal that "
+        "arrives as indexed chunk content (e.g. this repo's own source, "
+        "once indexed as __project__, quotes '[[next:overview:]]' verbatim "
+        "in formatting.py's docstring and in this test file). Fixing this "
+        "for real needs a design decision — e.g. escaping/sentinel-marking "
+        "tokens at the point formatting.py embeds them into the body, or "
+        "switching the token grammar to a marker that can't occur in plain "
+        "text — which changes a contract shared across decision_service.py, "
+        "envelope.py, multi_project_search.py, symbol_source.py, and "
+        "tool_router.py. Pinned here as documented current behavior."
+    ),
+    strict=True,
+)
+def test_resolve_does_not_corrupt_valid_pointer_literal_shown_as_source() -> None:
+    # A chunk that displays SOURCE CODE containing a valid pointer literal
+    # (e.g. this test file's own body, or formatting.py's docstrings, once
+    # indexed as __project__) must round-trip byte-for-byte through
+    # resolve_pointers — it is content, not a renderer-emitted token.
+    literal = 'strip_pointers("[[next:overview:]]")'
+    assert resolve_pointers(literal, "mcp") == literal
+    assert resolve_pointers(literal, "cli") == literal

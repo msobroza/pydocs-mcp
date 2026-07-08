@@ -1,5 +1,7 @@
 """Tests for pure Python fallback implementations (_fallback.py)."""
 
+import os
+
 from pydocs_mcp._fallback import (
     extract_module_doc,
     hash_files,
@@ -25,6 +27,14 @@ class TestParsePyFile:
         )
         syms = parse_py_file(src)
         assert any(s.name == "Foo" for s in syms)
+
+    def test_finds_paren_less_class(self):
+        # Idiomatic modern-Python class with no base-class parens (`class Config:`)
+        # — regression for a regex that required the `(...)` group, silently
+        # dropping every base-less class from the static (--no-inspect) index.
+        src = 'class Config:\n    """Settings."""\n    pass\n'
+        syms = parse_py_file(src)
+        assert any(s.name == "Config" and s.kind == "class" for s in syms)
 
     def test_skips_private(self):
         src = 'def _private(x):\n    """Hidden."""\n    pass\n'
@@ -184,6 +194,30 @@ class TestHashFiles:
         assert len(h) == 16
         int(h, 16)  # valid hex
 
+    def test_mtime_change_changes_hash(self, tmp_path):
+        # This is hash_files' entire purpose: package-level cache invalidation
+        # (ContentHashStage) relies on the digest moving when a file is touched
+        # without its content changing size. A regression that drops mtime from
+        # the digest would silently skip re-indexing modified packages.
+        f = tmp_path / "file.py"
+        f.write_text("content")
+        before = hash_files([str(f)])
+
+        current = f.stat().st_mtime
+        os.utime(f, (current + 5, current + 5))
+
+        after = hash_files([str(f)])
+        assert before != after
+
+    def test_path_mtime_boundary_is_unambiguous(self, tmp_path):
+        # Fallback-only edge case: the digest must not be constructible by
+        # concatenating two different path lists' bytes into the same stream.
+        # Without a separator between path and mtime (and between entries),
+        # ['a', '1234'] (two missing paths) and ['a1234'] (one missing path)
+        # would hash identically since both contribute just b"a" + b"1234"
+        # with no mtime bytes appended (neither path exists on disk).
+        assert hash_files(["a", "1234"]) != hash_files(["a1234"])
+
 
 # ── read_file ────────────────────────────────────────────────────────────
 
@@ -206,6 +240,20 @@ class TestReadFile:
         f = tmp_path / "unicode.py"
         f.write_text("# \u65e5\u672c\u8a9e\u30c6\u30b9\u30c8", encoding="utf-8")
         assert "\u65e5\u672c\u8a9e" in read_file(str(f))
+
+    def test_invalid_utf8_byte_returns_lossy_non_empty_content(self, tmp_path):
+        # Regression: a single invalid UTF-8 byte (e.g. a latin-1 "caf\xe9"
+        # comment, common in older PyPI packages) must NOT vanish the whole
+        # file. The fallback uses errors="replace" so the invalid byte
+        # becomes U+FFFD rather than the whole file reading as "" \u2014
+        # matching the documented substitution contract that the fallback
+        # is a drop-in for the native reader on the SAME inputs (see
+        # CLAUDE.md "Fallback contract"; src/lib.rs uses
+        # String::from_utf8_lossy, which replaces the same way).
+        f = tmp_path / "bad_encoding.py"
+        f.write_bytes(b"x = 1  # caf\xe9\n")
+        content = read_file(str(f))
+        assert content == "x = 1  # caf\ufffd\n"
 
 
 # ── read_files_parallel ──────────────────────────────────────────────────

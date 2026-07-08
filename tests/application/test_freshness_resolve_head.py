@@ -63,3 +63,26 @@ def test_non_git_tree_returns_none(tmp_path) -> None:
 def test_corrupt_gitfile_returns_none(tmp_path) -> None:
     (tmp_path / ".git").write_text("not a gitdir pointer\n")
     assert resolve_git_head(tmp_path) is None
+
+
+def test_binary_head_returns_none(tmp_path) -> None:
+    # Filesystem corruption / a tool writing UTF-16 into HEAD must degrade to
+    # None like any other unresolvable layout — not raise UnicodeDecodeError
+    # (a ValueError, not an OSError) up through the freshness envelope.
+    git = tmp_path / ".git"
+    git.mkdir()
+    (git / "HEAD").write_bytes(b"\xff\xfe\x00garbage")
+    assert resolve_git_head(tmp_path) is None
+
+
+def test_binary_gitfile_returns_none(tmp_path) -> None:
+    (tmp_path / ".git").write_bytes(b"\xff\xfe\x00garbage")
+    assert resolve_git_head(tmp_path) is None
+
+
+def test_binary_packed_refs_returns_none(tmp_path) -> None:
+    git = tmp_path / ".git"
+    git.mkdir()
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    (git / "packed-refs").write_bytes(b"\xff\xfe\x00garbage")
+    assert resolve_git_head(tmp_path) is None

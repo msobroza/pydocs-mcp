@@ -91,6 +91,15 @@ def _with_retry_sync(call_factory: Callable[[], _T]) -> _T:
 class OpenAiLlmClient:
     model_name: str
     api_key: str | None = None
+    # WHY these live here (not just read from LlmConfig at call time): the
+    # client is the LlmClient Protocol boundary every caller (retrieval
+    # steps, application services) goes through, so configured
+    # temperature/max_tokens (LlmConfig -> build_llm_client) must be
+    # reachable without every caller threading the config object around.
+    # chat()/chat_sync() temperature/max_tokens params default to None
+    # ("use these") so a caller only overrides for a single call.
+    temperature: float = 0.0
+    max_tokens: int | None = None
     _async: AsyncOpenAI | None = field(default=None, init=False, repr=False)
     _sync: OpenAI | None = field(default=None, init=False, repr=False)
 
@@ -110,7 +119,7 @@ class OpenAiLlmClient:
         messages: Sequence[ChatMessage],
         *,
         response_format: Literal["text", "json_object"] = "text",
-        temperature: float = 0.0,
+        temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
         rf = {"type": "json_object"} if response_format == "json_object" else None
@@ -127,7 +136,7 @@ class OpenAiLlmClient:
         messages: Sequence[ChatMessage],
         *,
         response_format: Literal["text", "json_object"] = "text",
-        temperature: float = 0.0,
+        temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
         rf = {"type": "json_object"} if response_format == "json_object" else None
@@ -143,10 +152,15 @@ class OpenAiLlmClient:
         self,
         messages: Sequence[ChatMessage],
         response_format: dict[str, str] | None,
-        temperature: float,
+        temperature: float | None,
         max_tokens: int | None,
     ) -> dict[str, Any]:
         """Shared chat.completions kwargs for the async + sync paths.
+
+        ``temperature`` / ``max_tokens`` of ``None`` fall back to this
+        client's configured defaults (``self.temperature`` /
+        ``self.max_tokens``, threaded in from ``LlmConfig`` by
+        ``build_llm_client``) — an explicit per-call value overrides them.
 
         Reasoning models (see :func:`_is_reasoning_model`) need a different
         request shape: ``temperature`` is omitted (they reject a custom value)
@@ -154,6 +168,8 @@ class OpenAiLlmClient:
         ``max_tokens``. ``None`` caps are omitted entirely — the legacy
         ``max_tokens: null`` 400s on reasoning models and is a no-op elsewhere.
         """
+        effective_temperature = self.temperature if temperature is None else temperature
+        effective_max_tokens = self.max_tokens if max_tokens is None else max_tokens
         reasoning = _is_reasoning_model(self.model_name)
         kwargs: dict[str, Any] = {
             "model": self.model_name,
@@ -161,9 +177,9 @@ class OpenAiLlmClient:
             "response_format": response_format,
         }
         if not reasoning:
-            kwargs["temperature"] = temperature
-        if max_tokens is not None:
-            kwargs["max_completion_tokens" if reasoning else "max_tokens"] = max_tokens
+            kwargs["temperature"] = effective_temperature
+        if effective_max_tokens is not None:
+            kwargs["max_completion_tokens" if reasoning else "max_tokens"] = effective_max_tokens
         return kwargs
 
 

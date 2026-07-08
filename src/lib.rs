@@ -29,24 +29,33 @@ const FUNC_DOCSTRING_MAX: usize = 3000;
 /// Max chars stored for a module-level docstring.
 const MODULE_DOCSTRING_MAX: usize = 5000;
 
-/// Truncate a UTF-8 string to at most `max_bytes` bytes without
-/// splitting a multi-byte character.
-fn safe_truncate(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
+/// Truncate a UTF-8 string to at most `max_chars` *characters* (not bytes).
+///
+/// BUG FIX: the three limits above (DOCSTRING_LOOKAHEAD / FUNC_DOCSTRING_MAX /
+/// MODULE_DOCSTRING_MAX) are documented and named as char counts, and the
+/// Python fallback (_fallback.py) slices with `[:N]`, which is char-based.
+/// An earlier version of this function truncated by *byte* count instead,
+/// so multi-byte docstrings (CJK, emoji, accents) were cut ~3x shorter than
+/// their Python-fallback counterpart, and a docstring closing within the
+/// char-based DOCSTRING_LOOKAHEAD window but beyond the byte-based one was
+/// silently dropped entirely (DOC_RE never saw the closing quotes). This
+/// made `chunks.content_hash` diverge by which engine indexed the package.
+fn safe_truncate(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
     }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
 }
 
 // ── Static regexes (compiled once) ──────────────────────────────────────
 
+// Paren group is optional: paren-less `class Config:` is the idiomatic, most
+// common class form in modern Python (no base classes). `def`/`async def`
+// always carry parens in valid syntax, so making the group optional here
+// cannot introduce false positives for functions. Mirrors _fallback.py.
 static DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?m)^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->[\s\w\[\],.|]*)?:"#,
+        r#"(?m)^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?\s*(?:->[\s\w\[\],.|]*)?:"#,
     )
     .unwrap()
 });
@@ -192,7 +201,8 @@ fn parse_py_file(source: &str) -> Vec<ParsedMember> {
     for cap in DEF_RE.captures_iter(source) {
         let kind = cap[1].to_string();
         let name = cap[2].to_string();
-        let signature = format!("({})", cap[3].trim());
+        // Group 3 (params) is absent for paren-less classes (`class Config:`).
+        let signature = format!("({})", cap.get(3).map_or("", |m| m.as_str()).trim());
 
         // Skip private names.
         if name.starts_with('_') {
@@ -245,12 +255,20 @@ fn extract_module_doc(source: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Read a file and return its contents. Returns empty string on error.
+/// Read a file and return its contents. Returns empty string on error
+/// (e.g. missing file). Invalid UTF-8 bytes are replaced lossily rather
+/// than causing the whole file to read as empty — this must stay in sync
+/// with `_fallback.read_file`'s `errors="replace"` behavior (see
+/// CLAUDE.md "Fallback contract": same inputs must produce same outputs).
+/// A single mis-encoded byte (e.g. a latin-1 comment in an older PyPI
+/// package) must not silently drop the file from the index.
 /// This is faster than Python's open().read() for batch operations
 /// because it avoids Python's IO overhead.
 #[pyfunction]
 fn read_file(path: &str) -> String {
-    fs::read_to_string(path).unwrap_or_default()
+    fs::read(path)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default()
 }
 
 /// Read multiple files in parallel using Rayon.
@@ -264,7 +282,9 @@ fn read_files_parallel(py: Python<'_>, paths: Vec<String>) -> Vec<(String, Strin
         paths
             .par_iter()
             .map(|p| {
-                let content = fs::read_to_string(p).unwrap_or_default();
+                let content = fs::read(p)
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .unwrap_or_default();
                 (p.clone(), content)
             })
             .collect()
@@ -284,4 +304,107 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_files_parallel, m)?)?;
     m.add_class::<ParsedMember>()?;
     Ok(())
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // safe_truncate must count *characters*, not bytes, to match the
+    // char-based slicing in the Python fallback (_fallback.py).
+
+    #[test]
+    fn safe_truncate_counts_chars_not_bytes_for_cjk() {
+        let s = "中".repeat(10); // 10 chars, 30 bytes in UTF-8
+        let truncated = safe_truncate(&s, 5);
+        assert_eq!(truncated.chars().count(), 5);
+        assert_eq!(truncated, "中".repeat(5));
+    }
+
+    #[test]
+    fn safe_truncate_is_noop_when_under_limit() {
+        let s = "中".repeat(3);
+        assert_eq!(safe_truncate(&s, 10), s);
+    }
+
+    #[test]
+    fn safe_truncate_ascii_unchanged_behavior() {
+        let s = "x".repeat(20);
+        assert_eq!(safe_truncate(&s, 5), "xxxxx");
+    }
+
+    #[test]
+    fn module_docstring_truncates_by_char_count_for_cjk() {
+        // 5500 CJK chars => 16500 bytes; a byte-based truncation to
+        // MODULE_DOCSTRING_MAX (5000) would keep far fewer than 5000 chars.
+        let cjk_doc = "中".repeat(5500);
+        let src = format!("\"\"\"{cjk_doc}\"\"\"\n");
+        let doc = extract_module_doc(&src);
+        assert_eq!(doc.chars().count(), MODULE_DOCSTRING_MAX);
+        assert_eq!(
+            doc,
+            cjk_doc
+                .chars()
+                .take(MODULE_DOCSTRING_MAX)
+                .collect::<String>()
+        );
+    }
+
+    #[test]
+    fn func_docstring_closing_within_char_window_but_past_byte_window_is_found() {
+        // 200 CJK chars = 600 bytes: beyond a byte-based 500-byte lookahead
+        // window, but well within the char-based 500-char lookahead window
+        // that the Python fallback uses. Regression for the gap where Rust
+        // silently returned "" here while Python extracted the full doc.
+        let cjk_doc = "あ".repeat(200);
+        assert!(cjk_doc.chars().count() < DOCSTRING_LOOKAHEAD);
+        assert!(cjk_doc.len() > DOCSTRING_LOOKAHEAD);
+
+        let src = format!("def foo(x):\n    \"\"\"{cjk_doc}\"\"\"\n    pass\n");
+        let members = parse_py_file(&src);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].docstring, cjk_doc);
+    }
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Unique path under the OS temp dir — avoids pulling in a `tempfile`
+    /// dev-dependency for a single-file read test.
+    fn unique_temp_path(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "pydocs_mcp_native_test_{}_{}_{}.py",
+            std::process::id(),
+            n,
+            label
+        ))
+    }
+
+    // Regression: a single invalid UTF-8 byte (e.g. a latin-1 "café"
+    // comment, common in older PyPI packages) must not vanish the whole
+    // file. `read_file` previously used `fs::read_to_string(..)
+    // .unwrap_or_default()`, which discards ALL content on the first
+    // invalid byte — silently dropping the file from the index on native
+    // builds while the pure-Python fallback still indexed it. `read_file`
+    // now reads raw bytes and lossily converts, matching
+    // `_fallback.read_file`'s errors="replace" semantics byte-for-byte.
+    #[test]
+    fn read_file_lossily_decodes_invalid_utf8_instead_of_returning_empty() {
+        let path = unique_temp_path("invalid_utf8");
+        fs::write(&path, b"x = 1  # caf\xe9\n").expect("write temp file");
+
+        let content = read_file(path.to_str().expect("utf8 path"));
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(content, "x = 1  # caf\u{FFFD}\n");
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn read_file_missing_file_returns_empty_string() {
+        assert_eq!(read_file("/nonexistent/path/does-not-exist.py"), "");
+    }
 }

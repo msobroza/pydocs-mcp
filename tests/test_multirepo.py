@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from pydocs_mcp.db import open_index_database
 from pydocs_mcp.storage.index_metadata import write_index_metadata
 from pydocs_mcp.multirepo import (
     EmbedderMismatchError,
+    FutureSchemaError,
     LoadedProject,
     discover_workspace,
     load_project,
@@ -151,3 +153,48 @@ def test_validate_embedder_legacy_unknown_is_permitted(tmp_path: Path) -> None:
     # No metadata, no packages.embedding_model -> unknown identity -> permitted.
     proj = load_project(_build_db(tmp_path / "old_0000000000.db", name=None))
     validate_project_embedder(proj, model="anything", dim=999)  # no raise
+
+
+# ── future-schema bundle must not be silently wiped ──
+
+
+def test_load_project_future_schema_version_preserves_data(tmp_path: Path) -> None:
+    """A bundle stamped with an unrecognized (future) ``user_version`` must not be
+    silently destroyed and re-served as an empty index.
+
+    ``multirepo`` module docstring declares workspace/explicit-db loads
+    READ-ONLY. ``open_index_database``'s migration ladder only recognizes
+    versions up to the current ``SCHEMA_VERSION``; anything outside the known
+    ladder (e.g. a db built by a NEWER pydocs-mcp, PRAGMA user_version = 99)
+    falls into the final ``else: _rebuild_from_scratch(conn)`` branch, which
+    drops every known table and recreates empty DDL — destroying real indexed
+    data in what is supposed to be a read-only portable artifact.
+
+    ``load_project`` must reject this loudly (FutureSchemaError) BEFORE
+    delegating to ``open_index_database``, and the bundle's data must survive
+    on disk untouched.
+    """
+    db = tmp_path / "future_0000000000.db"
+    conn = open_index_database(db)
+    conn.execute(
+        "INSERT INTO chunks(package, module, title, text, origin) "
+        "VALUES('__project__', 'mod', 'title', 'some indexed text', 'src')"
+    )
+    conn.commit()
+    # Simulate a bundle built by a NEWER pydocs-mcp with a schema version this
+    # build doesn't recognize yet.
+    conn.execute("PRAGMA user_version = 99")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(FutureSchemaError, match="schema version 99"):
+        load_project(db)
+
+    verify = sqlite3.connect(str(db))
+    try:
+        row_count = verify.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        version = verify.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        verify.close()
+    assert row_count == 1, "future-schema bundle must survive load_project untouched"
+    assert version == 99, "future-schema bundle's version stamp must survive untouched"

@@ -144,6 +144,68 @@ async def test_e2e_impact_ranks_transitive_callers(tmp_path):
     assert all(not n.has_scores for n in out)  # node_scores disabled by default
 
 
+@pytest.mark.asyncio
+async def test_e2e_cross_package_reresolution_flips_unresolved_ref(tmp_path):
+    """Two DISTINCT packages, indexed in the 'wrong' (dependent-first) order.
+
+    pkg_a is indexed first with a CALLS ref to 'pkg_b.helpers.fn', which
+    stays unresolved because pkg_b isn't in the universe yet. pkg_b is
+    indexed second, carrying a tree for that exact qname.
+    ``_reresolve_cross_package`` must collect pkg_b's qnames from
+    ``uow.trees`` and call ``uow.references.resolve_unresolved`` so pkg_a's
+    row flips from ``to_node_id=None`` to the resolved qname — this is the
+    common concurrent-workers ordering (dependency indexed after the
+    package that calls into it).
+    """
+    db = tmp_path / "x.db"
+    open_index_database(db).close()
+    uow_factory = build_sqlite_uow_factory(db)
+    indexing = IndexingService(uow_factory=uow_factory)
+    ref_svc = ReferenceService(uow_factory=uow_factory)
+
+    pkg_a = _pkg("pkg_a")
+    pkg_b = _pkg("pkg_b")
+
+    # 1. Index pkg_a first. Its CALLS ref targets 'pkg_b.helpers.fn', which
+    #    is NOT yet in the universe (pkg_b hasn't been indexed), so the
+    #    resolver leaves to_node_id=None.
+    a_tree = _module_tree("pkg_a.caller")
+    unresolved_ref = _ref(
+        from_package="pkg_a",
+        from_node_id="pkg_a.caller",
+        to_name="pkg_b.helpers.fn",
+        to_node_id=None,
+    )
+    await indexing.reindex_package(
+        pkg_a,
+        chunks=(),
+        module_members=(),
+        trees=(a_tree,),
+        references=(unresolved_ref,),
+    )
+
+    # Sanity: still unresolved before pkg_b exists.
+    pre = await ref_svc.callers("pkg_b", "pkg_b.helpers.fn")
+    assert pre == ()
+
+    # 2. Index pkg_b, carrying a tree for the exact qname pkg_a's ref names.
+    #    pkg_b has no references of its own — only its qnames matter here.
+    b_tree = _module_tree("pkg_b.helpers.fn")
+    await indexing.reindex_package(
+        pkg_b,
+        chunks=(),
+        module_members=(),
+        trees=(b_tree,),
+    )
+
+    # 3. pkg_a's previously-unresolved row must now be flipped: the
+    #    cross-package caller is visible with to_node_id filled in.
+    callers = await ref_svc.callers("pkg_b", "pkg_b.helpers.fn")
+    assert len(callers) == 1
+    assert callers[0].from_node_id == "pkg_a.caller"
+    assert callers[0].to_node_id == "pkg_b.helpers.fn"
+
+
 def _src_chunk(qname: str, *, text: str) -> Chunk:
     return Chunk(text=text, metadata={"package": "pkg", "qualified_name": qname})
 

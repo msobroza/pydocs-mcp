@@ -32,6 +32,32 @@ def test_context_input_targets_bounds() -> None:
         ContextInput(targets=["x"] * 21)  # max 20
 
 
+def test_context_input_rejects_malformed_target_items() -> None:
+    """Each item in ``targets`` must pass the same ``_TARGET_RE`` grammar
+    as ``SymbolInput.target`` / ``ReferencesInput.target`` — a malformed
+    item bypassing validation here reaches pointer-token interpolation in
+    ``formatting.py`` (payloads must never contain ':' or ']]')."""
+    with pytest.raises(ValidationError):
+        ContextInput(targets=["foo..bar"])  # double-dot: not a valid dotted chain
+    with pytest.raises(ValidationError):
+        ContextInput(targets=["evil:]]x"])  # would break the "[[...]]" pointer grammar
+    with pytest.raises(ValidationError):
+        ContextInput(targets=[""])  # empty item — SymbolInput.target also rejects ""
+    with pytest.raises(ValidationError):
+        ContextInput(targets=["pkg.mod.X", "evil:]]x"])  # one bad item among good ones
+
+
+def test_why_input_rejects_malformed_target_items() -> None:
+    """Same grammar requirement as ``ContextInput.targets`` — ``WhyInput``
+    also interpolates targets into pointer tokens downstream."""
+    with pytest.raises(ValidationError):
+        WhyInput(targets=["foo..bar"])
+    with pytest.raises(ValidationError):
+        WhyInput(targets=["evil:]]x"])
+    with pytest.raises(ValidationError):
+        WhyInput(targets=[""])
+
+
 def test_references_input_direction_enum_and_limit() -> None:
     payload = ReferencesInput(target="pkg.mod.f")
     assert payload.direction == "callers"
