@@ -566,17 +566,52 @@ def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
     The reference-graph capture (``node_references``) participates in the
     per-package sweep — without this, stale refs survive a re-index and
     ``ref_svc.callers(...)`` returns references to deleted source nodes.
+
+    ``chunks_fts`` is external-content (``content=chunks``): it does NOT
+    observe the ``DELETE FROM chunks`` below, so the index must be synced
+    first via FTS5's ``'delete'`` command (which needs the old column
+    values, hence the SELECT). Skipping this left orphaned index entries:
+    SQLite reuses the freed rowids (no AUTOINCREMENT), so old-token queries
+    silently matched the NEW chunk occupying the rowid, and FTS5's
+    ``integrity-check`` reported the db as malformed.
     """
+    stale = connection.execute(
+        "SELECT id, title, text, package FROM chunks WHERE package=?",
+        (package_name,),
+    ).fetchall()
+    try:
+        connection.executemany(
+            "INSERT INTO chunks_fts(chunks_fts, rowid, title, text, package) "
+            "VALUES('delete', ?, ?, ?, ?)",
+            [(row[0], row[1], row[2], row[3]) for row in stale],
+        )
+        fts_synced = True
+    except sqlite3.DatabaseError:
+        # The 'delete' command requires the index to hold EXACTLY these
+        # values; rows inserted but never indexed (rebuild runs at the end
+        # of a full pass) or prior unsynced deletes make it raise
+        # "malformed". Fall back to a full rebuild AFTER the content
+        # deletes below — O(corpus) instead of O(package), but it also
+        # heals whatever pre-existing drift caused the mismatch.
+        fts_synced = False
     connection.execute("DELETE FROM chunks  WHERE package=?", (package_name,))
     connection.execute("DELETE FROM module_members WHERE package=?", (package_name,))
     connection.execute("DELETE FROM document_trees WHERE package=?", (package_name,))
     connection.execute("DELETE FROM node_references WHERE from_package=?", (package_name,))
     connection.execute("DELETE FROM node_scores WHERE package=?", (package_name,))
     connection.execute("DELETE FROM packages WHERE name=?", (package_name,))
+    if not fts_synced:
+        connection.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
 
 
 def clear_all_packages(connection: sqlite3.Connection) -> None:
-    """Clear every indexed package across all five entity tables."""
+    """Clear every indexed package across all five entity tables.
+
+    ``'delete-all'`` empties the external-content FTS index in the same
+    transaction — see :func:`remove_package` for why the index must not
+    be left pointing at deleted content rows.
+    """
+    connection.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')")
     connection.execute("DELETE FROM packages")
     connection.execute("DELETE FROM chunks")
     connection.execute("DELETE FROM module_members")
