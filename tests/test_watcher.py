@@ -492,6 +492,153 @@ async def test_watcher_no_two_reindexes_overlap(tmp_path: Path) -> None:
         pass
 
 
+async def test_cancelling_run_until_cancelled_waits_for_in_flight_reindex(
+    tmp_path: Path,
+) -> None:
+    """Regression: cancelling `run_until_cancelled` while a `watcher-trigger`
+    background task is mid-reindex must not leave that task unsupervised.
+
+    Before the fix, `_consume`'s `finally` (`observer.stop()` / `.join()`)
+    said nothing about `bg_tasks` — the fire-and-forget `_trigger_with_followup`
+    task kept running (and writing) after `run_until_cancelled` had already
+    returned to its caller. The contract this test pins: by the time the
+    cancelled `run_until_cancelled` task is awaited, any in-flight trigger task
+    has been cancelled and awaited — `on_change` sees a `CancelledError` at its
+    current await point, not a silent orphan run.
+    """
+    from tests._fakes import FakeObserver
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: fake,
+    )
+
+    in_flight = asyncio.Event()
+    on_change_cancelled = False
+
+    async def _blocking_on_change() -> None:
+        nonlocal on_change_cancelled
+        in_flight.set()
+        try:
+            # Blocks "mid-reindex" until the watcher task is cancelled.
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            on_change_cancelled = True
+            raise
+
+    task = asyncio.create_task(fw.run_until_cancelled(_blocking_on_change))
+    await asyncio.sleep(0.01)
+
+    fake.fire(str(tmp_path / "a.py"))
+    # Wait until the fire-and-forget "watcher-trigger" task is actually
+    # inside on_change (i.e. the reindex is in flight), not just queued.
+    await asyncio.wait_for(in_flight.wait(), timeout=1.0)
+
+    # Cancel + await the outer task exactly as server shutdown does
+    # (`_run_watch_loop`'s finally in `__main__.py`).
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=1.0)
+    except asyncio.CancelledError:
+        pass
+
+    # The defined contract: the in-flight reindex was cancelled (not left
+    # running unsupervised past the point `run_until_cancelled` returned).
+    assert on_change_cancelled, (
+        "in-flight 'watcher-trigger' task was not cancelled/awaited before "
+        "run_until_cancelled returned — it is running unsupervised"
+    )
+
+
+async def test_watcher_survives_on_change_exception_and_drains_deferred_paths(
+    tmp_path: Path,
+) -> None:
+    """Regression: `on_change` raising mid-flight must not strand paths that
+    arrived (and were appended to `deferred_paths`) during that failed call.
+
+    Trigger A holds `reindex_lock` and its `on_change()` raises (e.g. a
+    transient sqlite "database is locked"). Trigger B arrives while A is in
+    flight and appends its paths to `deferred_paths`. Before the fix, the
+    exception propagated out of `_trigger_with_followup`, skipping the
+    `while deferred_paths:` drain — B's paths sat unindexed until some
+    unrelated future event arrived (in an idle workspace: lost forever).
+
+    Pins two things `on_change` raising must NOT break: (1) B's batch still
+    drains and fires a follow-up without a third filesystem event; (2) the
+    consumer loop stays alive to keep handling later events.
+    """
+    from tests._fakes import FakeObserver
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fake = FakeObserver()
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=20,
+        observer_factory=lambda: fake,
+    )
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[list[str]] = []
+    first_call = True
+
+    async def _flaky_on_change() -> None:
+        nonlocal first_call
+        calls.append([])
+        in_flight.set()
+        # Block here so the test can fire trigger B while A is in flight.
+        await release.wait()
+        if first_call:
+            first_call = False
+            raise RuntimeError("database is locked")
+
+    task = asyncio.create_task(fw.run_until_cancelled(_flaky_on_change))
+    await asyncio.sleep(0.01)
+
+    # Trigger A: acquires reindex_lock, blocks inside on_change.
+    fake.fire(str(tmp_path / "a.py"))
+    await asyncio.wait_for(in_flight.wait(), timeout=1.0)
+    assert len(calls) == 1
+
+    # Trigger B arrives while A is in flight -> appended to deferred_paths.
+    in_flight.clear()
+    fake.fire(str(tmp_path / "b.py"))
+    await asyncio.sleep(0.05)  # let debounce collapse + queue the deferred append
+
+    # Release A: on_change raises. Without the fix, this aborts
+    # _trigger_with_followup before the `while deferred_paths:` drain,
+    # so B's follow-up never fires absent a THIRD filesystem event.
+    release.set()
+
+    # B's follow-up must fire on its own — no third event injected.
+    await asyncio.wait_for(in_flight.wait(), timeout=1.0)
+    assert len(calls) == 2, (
+        "on_change raising stranded the deferred batch; expected a "
+        "follow-up reindex for trigger B without a third filesystem event"
+    )
+
+    # The watcher task must still be alive (no unhandled task exception).
+    assert not task.done(), "watcher task died after on_change raised"
+
+    # Let the second (successful) on_change call return cleanly.
+    release.set()
+    await asyncio.sleep(0.05)
+    assert not task.done()
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 def test_index_db_wal_mode_enabled_for_concurrent_reindex(tmp_path: Path) -> None:
     """Risk R5: concurrent MCP queries + watcher-triggered reindex needs
     WAL mode so readers don't block on the reindex writer.

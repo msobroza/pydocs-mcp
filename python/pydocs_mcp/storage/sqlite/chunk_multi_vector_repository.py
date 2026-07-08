@@ -14,6 +14,12 @@ from dataclasses import dataclass
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
+# Performance: batch at 500 to stay safely under SQLITE_MAX_VARIABLE_NUMBER
+# (default 999 in older SQLite builds; 32766 in newer ones — 500 is well
+# under both). Mirrors chunk_repository.py's delete_by_ids/mark_embedded
+# batching — same ceiling, same rationale.
+_ID_BATCH_SIZE = 500
+
 
 @dataclass(frozen=True, slots=True)
 class SqliteChunkMultiVectorRepository:
@@ -81,25 +87,29 @@ class SqliteChunkMultiVectorRepository:
         ids_list = list(ids)
         if not ids_list:
             return ()
-        # ``placeholders`` is literal ``?`` chars (one per id, not user input),
-        # so the IN-clause SQL is safe; the values bind via parameters.
-        placeholders = ",".join("?" for _ in ids_list)
         async with _maybe_acquire(self.provider) as conn:
 
             def _select_then_delete() -> tuple[int, ...]:
-                plaid_ids = tuple(
-                    row[0]
-                    for row in conn.execute(
-                        "SELECT plaid_doc_id FROM chunk_multi_vector_ids "
-                        f"WHERE chunk_id IN ({placeholders})",
-                        ids_list,
+                plaid_ids: list[int] = []
+                for i in range(0, len(ids_list), _ID_BATCH_SIZE):
+                    batch = ids_list[i : i + _ID_BATCH_SIZE]
+                    # ``placeholders`` is literal ``?`` chars (one per id, not
+                    # user input), so the IN-clause SQL is safe; the values
+                    # bind via parameters.
+                    placeholders = ",".join("?" for _ in batch)
+                    plaid_ids.extend(
+                        row[0]
+                        for row in conn.execute(
+                            "SELECT plaid_doc_id FROM chunk_multi_vector_ids "
+                            f"WHERE chunk_id IN ({placeholders})",
+                            batch,
+                        )
                     )
-                )
-                conn.execute(
-                    f"DELETE FROM chunk_multi_vector_ids WHERE chunk_id IN ({placeholders})",
-                    ids_list,
-                )
-                return plaid_ids
+                    conn.execute(
+                        f"DELETE FROM chunk_multi_vector_ids WHERE chunk_id IN ({placeholders})",
+                        batch,
+                    )
+                return tuple(plaid_ids)
 
             return await asyncio.to_thread(_select_then_delete)
 
@@ -122,16 +132,23 @@ class SqliteChunkMultiVectorRepository:
         ids_list = list(ids)
         if not ids_list:
             return {}
-        # ``placeholders`` is literal ``?`` chars (one per id); values bind via parameters.
-        placeholders = ",".join("?" for _ in ids_list)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(
-                    f"SELECT id, package FROM chunks WHERE id IN ({placeholders})",
-                    ids_list,
-                ).fetchall()
-            )
-        return {row[0]: row[1] for row in rows}
+
+            def _select_batches() -> dict[int, str]:
+                result: dict[int, str] = {}
+                for i in range(0, len(ids_list), _ID_BATCH_SIZE):
+                    batch = ids_list[i : i + _ID_BATCH_SIZE]
+                    # ``placeholders`` is literal ``?`` chars (one per id);
+                    # values bind via parameters.
+                    placeholders = ",".join("?" for _ in batch)
+                    rows = conn.execute(
+                        f"SELECT id, package FROM chunks WHERE id IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                    result.update({row[0]: row[1] for row in rows})
+                return result
+
+            return await asyncio.to_thread(_select_batches)
 
     async def plaid_ids_for_chunks(self, ids: Sequence[int]) -> tuple[tuple[int, int], ...]:
         """Return ``(plaid_doc_id, chunk_id)`` pairs for the given ``chunk_id``s.
@@ -143,14 +160,21 @@ class SqliteChunkMultiVectorRepository:
         ids_list = list(ids)
         if not ids_list:
             return ()
-        # ``placeholders`` is literal ``?`` chars (one per id); values bind via parameters.
-        placeholders = ",".join("?" for _ in ids_list)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT plaid_doc_id, chunk_id FROM chunk_multi_vector_ids "
-                    f"WHERE chunk_id IN ({placeholders})",
-                    ids_list,
-                ).fetchall()
-            )
-        return tuple((row[0], row[1]) for row in rows)
+
+            def _select_batches() -> tuple[tuple[int, int], ...]:
+                pairs: list[tuple[int, int]] = []
+                for i in range(0, len(ids_list), _ID_BATCH_SIZE):
+                    batch = ids_list[i : i + _ID_BATCH_SIZE]
+                    # ``placeholders`` is literal ``?`` chars (one per id);
+                    # values bind via parameters.
+                    placeholders = ",".join("?" for _ in batch)
+                    rows = conn.execute(
+                        "SELECT plaid_doc_id, chunk_id FROM chunk_multi_vector_ids "
+                        f"WHERE chunk_id IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                    pairs.extend((row[0], row[1]) for row in rows)
+                return tuple(pairs)
+
+            return await asyncio.to_thread(_select_batches)

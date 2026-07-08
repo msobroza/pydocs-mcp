@@ -3,28 +3,38 @@
 Covers the units the extraction introduced: ``TaskObservation`` via
 ``_run_task`` (cold vs cache-hit), the ``ScorerFailure``
 latency-preservation contract, ``_aggregate``'s empty-latency omission
-(spec I2/AC15), and the per-task series ``run_sweep_detailed`` surfaces
-through ``SweepOutcome``.
+(spec I2/AC15), the per-task series ``run_sweep_detailed`` surfaces
+through ``SweepOutcome``, and the leg-level scorer-failure fan-out
+(spec §5.5: ``_run_leg`` must log latency to every tracker THEN
+re-raise the scorer's original exception THEN close every tracker
+handle as ``"failed"``, even when a tracker's own ``close_run`` raises).
 """
 
 from __future__ import annotations
 
+import json
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
+from benchmarks.eval.metrics.base_metric import Scorer
+from benchmarks.eval.serialization import system_registry
 from benchmarks.eval.sweep import (
     ScorerFailure,
     SweepOutcome,
     TaskObservation,
     _aggregate,
+    _run_leg,
     _run_task,
     run_sweep,
     run_sweep_detailed,
 )
 from benchmarks.eval.systems.base_system import RetrievedItem
+from benchmarks.eval.trackers.base_tracker import RunHandle
+from benchmarks.eval.trackers.jsonl_tracker import JsonlExperimentTracker
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 
@@ -249,3 +259,145 @@ async def test_run_sweep_wrapper_matches_detailed_shape(tmp_path: Path) -> None:
     )
     assert tasks_ran == 1
     assert set(results.keys()) == {("pydocs-mcp", "baseline")}
+
+
+# --- Leg-level scorer-failure fan-out (spec §5.5) ---------------------------
+#
+# ``_run_leg`` is the only unit that owns tracker I/O for a whole leg, so the
+# contract under test here — log latency to every tracker BEFORE re-raising
+# the scorer's ORIGINAL exception, then close every tracker handle as
+# "failed" even if one tracker's own close_run raises — can only be pinned
+# by driving ``_run_leg`` itself, not ``_run_task`` in isolation (existing
+# coverage stops at the ``ScorerFailure`` carrier raised out of ``_run_task``).
+#
+# ``_run_leg`` resolves its system through ``system_registry`` by name (it
+# takes no system instance), so a duck-typed ``_FakeSystem`` variant is
+# registered here under a test-only name — mirroring how the concrete
+# systems register themselves.
+@system_registry.register("_fake-leg-system")
+@dataclass
+class _FakeLegSystem:
+    name: str = "_fake-leg-system"
+    was_cache_hit: bool = False
+
+    async def index(self, corpus_dir: Path, config: object) -> None:
+        return None
+
+    async def search(self, query: str, limit: int) -> tuple[RetrievedItem, ...]:
+        return (RetrievedItem(rank=1, text="body", source_path="src.py"),)
+
+    async def teardown(self) -> None:
+        return None
+
+
+class _RaisingMetric:
+    """Duck-typed Metric that always raises — drives the scorer through
+    the ``ScorerFailure`` path inside ``_run_task`` -> ``_run_leg``."""
+
+    name = "boom_metric"
+
+    def compute(self, task: EvalTask, retrieved: tuple) -> float:
+        raise ValueError("metric exploded")
+
+
+@dataclass
+class _FakeLegDataset:
+    """Minimal ``Dataset``: one task, no disk I/O — corpus_source() returns
+    a tmp dir the harness rmtree's after the task."""
+
+    name: str = "fake-leg-dataset"
+    revision: str = "v0"
+    tmp_dirs: list[Path] = field(default_factory=list)
+
+    async def tasks(self):
+        def _source() -> Path:
+            d = Path(tempfile.mkdtemp(prefix="sweep_leg_corpus_"))
+            self.tmp_dirs.append(d)
+            return d
+
+        yield EvalTask(
+            task_id="leg-t1",
+            query="q",
+            gold=GoldAnswer(ast_body="def f(): ..."),
+            corpus_source=_source,
+        )
+
+
+@dataclass
+class _CloseRaisingTracker:
+    """Second tracker pinned alongside the real JSONL tracker: its
+    ``close_run`` always raises, so the test proves ``_close_all``'s swallow
+    path (spec sweep_support.py) doesn't mask the propagated scorer error
+    and doesn't stop the OTHER tracker from being closed."""
+
+    name: str = "_close_raising"
+    opened: list[RunHandle] = field(default_factory=list)
+    closed_with: list[str] = field(default_factory=list)
+
+    def open_run(self, *, system, config_name, dataset, params, tags) -> RunHandle:
+        handle = RunHandle(tracker_name=self.name, raw=object())
+        self.opened.append(handle)
+        return handle
+
+    def log_metric(self, handle, name, value, step=None) -> None:
+        return None
+
+    def log_artifact(self, handle, path, name=None) -> None:
+        return None
+
+    def close_run(self, handle: RunHandle, status: Literal["finished", "failed"]) -> None:
+        self.closed_with.append(status)
+        raise RuntimeError("tracker close blew up")
+
+
+async def test_run_leg_scorer_failure_logs_latency_then_reraises_cause_then_closes_failed(
+    tmp_path: Path,
+) -> None:
+    overlay = tmp_path / "baseline.yaml"
+    overlay.write_text("")
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_tracker = JsonlExperimentTracker(output_dir=jsonl_dir)
+    close_raising_tracker = _CloseRaisingTracker()
+    dataset = _FakeLegDataset()
+    scorer = Scorer(metrics=(_RaisingMetric(),))
+    boom = ValueError("metric exploded")
+
+    with pytest.raises(ValueError) as excinfo:
+        await _run_leg(
+            "_fake-leg-system",
+            overlay,
+            dataset,
+            scorer,
+            (jsonl_tracker, close_raising_tracker),
+            limit=None,
+            corpus_dir=None,
+            gpu=False,
+        )
+
+    # The ORIGINAL scorer exception propagates — not the ScorerFailure
+    # carrier that wrapped it inside _run_task.
+    assert type(excinfo.value) is ValueError
+    assert str(excinfo.value) == str(boom)
+    assert not isinstance(excinfo.value, ScorerFailure)
+
+    # Latency was logged for the failed task before the close fan-out —
+    # the JSONL tracker is the one we can inspect after the fact.
+    (run_file,) = jsonl_dir.glob("*.jsonl")
+    records = [json.loads(line) for line in run_file.read_text().splitlines()]
+    metric_names = [r["name"] for r in records if r["_event"] == "metric"]
+    assert "search_seconds" in metric_names
+    assert "indexing_seconds" in metric_names
+    # No quality metric was logged — the scorer never returned scores for
+    # the failed task.
+    assert "boom_metric" not in metric_names
+
+    # The leg closed every tracker's run as "failed", including the one
+    # whose own close_run subsequently raised (pinning _close_all's swallow
+    # path — the RuntimeError from close_run must not have masked/replaced
+    # the ValueError raised above).
+    run_end_statuses = [r["status"] for r in records if r["_event"] == "run_end"]
+    assert run_end_statuses == ["failed"]
+    assert close_raising_tracker.closed_with == ["failed"]
+
+    # Corpus materialized for the (failed) task was still cleaned up.
+    assert dataset.tmp_dirs and not dataset.tmp_dirs[0].exists()

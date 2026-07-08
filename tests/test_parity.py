@@ -100,6 +100,23 @@ class TestWalkPyFilesParity:
 
         assert rust.walk_py_files(str(tmp_path)) == py.walk_py_files(str(tmp_path))
 
+    def test_root_is_a_py_file(self, tmp_path):
+        # Regression: root = a .py FILE (not a directory) — a caller mistake,
+        # e.g. an off-by-one in package resolution. Rust's WalkDir used to
+        # yield the root entry itself (passes the dir-only filter_entry,
+        # then is_file() + .py extension match), returning [root]. Python's
+        # os.walk() yields nothing for a non-directory root, returning [].
+        # Both engines now require root to be a directory (see
+        # walk_py_files_impl's is_dir() guard in src/lib.rs), matching
+        # os.walk() semantics.
+        f = tmp_path / "only.py"
+        f.touch()
+        assert rust.walk_py_files(str(f)) == py.walk_py_files(str(f)) == []
+
+    def test_root_does_not_exist(self, tmp_path):
+        missing = tmp_path / "missing"
+        assert rust.walk_py_files(str(missing)) == py.walk_py_files(str(missing)) == []
+
 
 class TestHashFilesParity:
     def test_mtime_change_changes_hash(self, tmp_path):

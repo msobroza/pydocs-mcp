@@ -162,6 +162,25 @@ class TestWalkPyFiles:
     def test_empty_directory(self, tmp_path):
         assert walk_py_files(str(tmp_path)) == []
 
+    def test_root_is_a_py_file(self, tmp_path):
+        # Regression: os.walk() on a non-directory path yields nothing, so
+        # passing a .py FILE as root (a caller mistake, e.g. an off-by-one
+        # in package resolution) has always returned [] here. The Rust
+        # engine's WalkDir used to yield the root entry itself in this case
+        # (returning [root]) until walk_py_files_impl gained an is_dir()
+        # guard to match — see tests/test_parity.py::TestWalkPyFilesParity
+        # ::test_root_is_a_py_file for the cross-engine pin. This test locks
+        # in the fallback's "no directory, no files" semantics.
+        f = tmp_path / "only.py"
+        f.touch()
+        assert walk_py_files(str(f)) == []
+
+    def test_root_does_not_exist(self, tmp_path):
+        # os.walk() on a missing path yields nothing (no exception), matching
+        # the "root must be a directory that exists" contract implied above.
+        missing = tmp_path / "missing"
+        assert walk_py_files(str(missing)) == []
+
 
 # ── hash_files ───────────────────────────────────────────────────────────
 

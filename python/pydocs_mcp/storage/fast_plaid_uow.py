@@ -56,6 +56,17 @@ _INSTALL_HINT = (
     "expect ~1-5 GB depending on CUDA wheel selection)."
 )
 
+# fast_plaid.search.FastPlaid writes this file inside the index directory
+# on ``.create`` and requires it to already exist before ``.update`` will
+# run (raises ``FileNotFoundError`` otherwise) — verified against the
+# installed fast_plaid 1.3.0 source. It's our only filesystem-level
+# ground truth for "does an index already exist on disk", independent of
+# whatever chunk_multi_vector_ids currently says. Internal to fast_plaid
+# (not a published constant of that package) — if a future fast_plaid
+# release renames it, add_vectors's create/update guard degrades back to
+# trusting the SQLite offset alone, not a hard failure.
+_FAST_PLAID_INDEX_MARKER = "metadata.json"
+
 
 def _ensure_fast_plaid_imported() -> None:
     """Resolve ``fast_plaid.search.FastPlaid`` on first call; raise an
@@ -232,11 +243,34 @@ class FastPlaidUnitOfWork:
         # batch. ``next_plaid_offset`` returns 0 on the empty-index path
         # so the first batch always starts at 0.
         offset = await mapping.next_plaid_offset()
-        # fast-plaid contract: ``.create`` initializes an empty index with
-        # the first batch, ``.update`` appends to an existing one. Picking
-        # the wrong one raises — branch on offset.
+        # fast-plaid contract (verified against the installed fast_plaid
+        # source): ``.create`` unconditionally (re)initializes the index
+        # directory — safe to call any time, offset==0 always picks it, and
+        # a legitimately-emptied mapping table (e.g. after ``clear_all``,
+        # which soft-deletes plaid slots but leaves the directory in place)
+        # correctly starts a fresh index this way. ``.update`` instead
+        # RAISES unless ``<index>/metadata.json`` already exists on disk —
+        # so offset > 0 alone is NOT sufficient to pick ``.update``: a
+        # deleted/never-created ``.plaid`` directory with stale mapping
+        # rows (sidecar/DB divergence) would otherwise call ``.update``
+        # against a nonexistent index and crash. Guard that one case by
+        # checking the real on-disk marker before trusting a positive
+        # offset; a mismatch means divergence, so recover via ``.create``
+        # at a reset offset instead of raising.
+        index_exists_on_disk = (self.sidecar_path / _FAST_PLAID_INDEX_MARKER).exists()
+        use_update = offset > 0 and index_exists_on_disk
+        if offset > 0 and not index_exists_on_disk:
+            logger.warning(
+                "fast-plaid sidecar divergence detected: chunk_multi_vector_ids "
+                "has rows (offset=%d) but %r has no on-disk index. Recovering by "
+                "recreating the index — existing plaid_doc_id assignments are stale "
+                "and will be reassigned on next reindex.",
+                offset,
+                str(self.sidecar_path),
+            )
+            offset = 0
         await asyncio.to_thread(
-            handle.update if offset > 0 else handle.create,
+            handle.update if use_update else handle.create,
             doc_tensors,
         )
         packages = await mapping.packages_for_chunks(ids)

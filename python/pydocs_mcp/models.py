@@ -190,7 +190,7 @@ def compute_chunk_content_hash(
     text: str,
     pipeline_hash: str = "",
 ) -> str:
-    """SHA-256 hex digest of the null-separated chunk-identity tuple.
+    """SHA-256 hex digest of the length-prefixed chunk-identity tuple.
 
     Mirrors Package.content_hash. Used by Chunk.__post_init__ for auto-
     compute (pipeline_hash="" — test ergonomics), by
@@ -202,10 +202,19 @@ def compute_chunk_content_hash(
     The pipeline_hash slot ensures embedder swaps or ingestion YAML
     edits invalidate every chunk's hash so the diff naturally
     re-embeds via the existing add path.
+
+    Each field is length-prefixed (`len(field)\0field`) rather than
+    joined with a bare \0 separator: NUL bytes can legitimately reach
+    chunk text/titles (read_file decodes with errors="ignore" and \0 is
+    valid UTF-8), so a bare separator lets two distinct identity tuples
+    realign across an embedded \0 and collide, e.g. package="a",
+    module="b\0c" vs package="a\0b", module="c" both serialize to
+    "a\0b\0c\0...". Prefixing each field with its byte length makes the
+    boundary unambiguous regardless of the field's content.
     """
-    return hashlib.sha256(
-        f"{package}\0{module}\0{title}\0{text}\0{pipeline_hash}".encode(),
-    ).hexdigest()
+    fields = (package, module, title, text, pipeline_hash)
+    payload = "".join(f"{len(f.encode())}\0{f}" for f in fields)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,7 +395,21 @@ class SearchQuery:
             (self.post_filter, self.post_filter_format),
         ):
             if raw_filter is not None:
-                format_registry[fmt].validate(raw_filter)
+                try:
+                    fmt_impl = format_registry[fmt]
+                except KeyError as exc:
+                    # MetadataFilterFormat declares more members than
+                    # format_registry currently seeds (e.g. CHROMADB is a
+                    # future backend). Convert the raw KeyError into a
+                    # ValueError so pydantic wraps it as a ValidationError
+                    # instead of letting an undiagnosable KeyError escape
+                    # construction — see models.py class docstring.
+                    registered = sorted(f.value for f in format_registry)
+                    raise ValueError(
+                        f"no FilterFormat registered for {fmt.value!r}; "
+                        f"registered formats: {registered}"
+                    ) from exc
+                fmt_impl.validate(raw_filter)
         return self
 
 

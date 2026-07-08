@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval.datasets._repo_cache import RepoCache
+from benchmarks.eval.datasets._repo_cache import RepoCache, read_checkout_files
 
 
 def _run(cwd: Path, *args: str) -> str:
@@ -74,3 +74,40 @@ def test_file_tree_lists_tracked_files(tmp_path: Path) -> None:
     cache = RepoCache(root=tmp_path / "cache")
     tree = cache.file_tree("file://" + str(origin), first_sha)
     assert "a.py" in tree
+
+
+def test_read_checkout_files_tolerates_non_utf8_symlinks_and_py_dirs(
+    tmp_path: Path,
+) -> None:
+    """Real pinned checkouts (vintage sympy/astropy commits) can contain a
+    latin-1-encoded .py file, a broken symlink matching *.py, and a directory
+    literally named *.py — none of these should crash a multi-hour SWE-QA
+    sweep. See ``read_checkout_files`` docstring for the ``errors="replace"``
+    and ``is_file()`` defenses this test pins.
+    """
+    root = tmp_path / "checkout"
+    root.mkdir()
+
+    # (a) non-UTF-8 bytes: raw latin-1 "café" comment, invalid as UTF-8.
+    (root / "legacy.py").write_bytes(b"# caf\xe9\n")
+
+    # (b) a dangling symlink named *.py — target never created.
+    (root / "gone.py").symlink_to(root / "does_not_exist.py")
+
+    # (c) a directory literally named *.py containing a real .py file inside.
+    pkg_dir = root / "pkg.py"
+    pkg_dir.mkdir()
+    (pkg_dir / "inner.py").write_text("print('inner')\n")
+
+    files = read_checkout_files(root)
+
+    # non-UTF-8 file is decoded with replacement, not raising UnicodeDecodeError.
+    assert files["legacy.py"] == "# caf�\n"
+    # the broken symlink is skipped (is_file() is False for a dangling link).
+    assert "gone.py" not in files
+    # the directory itself is skipped (rglob("*.py") matches dirs by name too).
+    assert "pkg.py" not in files
+    # but a real .py file nested inside that directory is still read.
+    assert files["pkg.py/inner.py"] == "print('inner')\n"
+    # keys are posix-relative to root.
+    assert all("\\" not in key for key in files)

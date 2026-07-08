@@ -64,6 +64,33 @@ def test_compute_chunk_content_hash_null_byte_separators() -> None:
     assert h_a != h_b
 
 
+def test_compute_chunk_content_hash_null_byte_in_field_value_collision() -> None:
+    """A NUL byte embedded IN a field value must not realign the separators.
+
+    package="a", module="b\0c", title="d" serializes to "a\0b\0c\0d\0...\0"
+    (before hashing) which is byte-identical to package="a\0b", module="c",
+    title="d". \0 can legitimately reach chunk text/titles because
+    read_file decodes with errors="ignore" and \0 is valid UTF-8, so this
+    is a reachable collision, not just a theoretical one. Two genuinely
+    different chunk identities must not hash the same, or
+    IndexingService.reindex_package's diff-merge will treat a changed
+    chunk as unchanged and silently keep stale text/vectors.
+    """
+    h_a = compute_chunk_content_hash(
+        package="a",
+        module="b\0c",
+        title="d",
+        text="",
+    )
+    h_b = compute_chunk_content_hash(
+        package="a\0b",
+        module="c",
+        title="d",
+        text="",
+    )
+    assert h_a != h_b
+
+
 def test_chunk_auto_computes_content_hash_when_unset() -> None:
     """Constructing Chunk(text="foo") without content_hash auto-computes it."""
     c = Chunk(
