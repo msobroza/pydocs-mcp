@@ -131,3 +131,67 @@ async def test_routers_search_over_empty_workspace_returns_no_matches(tmp_path: 
     out = await tools.search_codebase(SearchInput(query="anything"))
     assert out.startswith("[index: ")
     assert "No matches found." in out
+
+
+@pytest.mark.asyncio
+async def test_get_overview_empty_selector_renders_workspace_card(tmp_path: Path) -> None:
+    # End-to-end through the real composition root: two stamped dbs -> real
+    # OverviewService per project -> the fully-empty get_overview() must render
+    # the WORKSPACE card (not the first project's §D17 card), each project line
+    # deepening via get_overview(project=...). Closes the fakes-only gap around
+    # OverviewService.package_count over a real SqliteUnitOfWork.
+    from pydocs_mcp.application.mcp_inputs import OverviewInput
+    from pydocs_mcp.server import build_routers
+
+    cfg = _default_config()
+    _stamp_db(
+        tmp_path / "frontend_8888888888.db",
+        name="frontend",
+        model=cfg.embedding.model_name,
+        dim=cfg.embedding.dim,
+    )
+    _stamp_db(
+        tmp_path / "backend_9999999999.db",
+        name="backend",
+        model=cfg.embedding.model_name,
+        dim=cfg.embedding.dim,
+    )
+    tools, _services = build_routers(cfg, workspace=tmp_path)  # surface="mcp" default
+
+    out = await tools.get_overview(OverviewInput())
+    assert out.startswith("[index: ")
+    assert "# Workspace overview" in out
+    # Both projects listed with their (schema-only -> 0) package counts.
+    assert "**frontend** — 0 packages" in out and "**backend** — 0 packages" in out
+    # Each line deepens into its own §D17 card (envelope resolved, mcp surface).
+    assert '→ get_overview(project="frontend")' in out
+    assert '→ get_overview(project="backend")' in out
+    # The first project's §D17 card must NOT masquerade as the whole workspace.
+    assert "# Overview — __project__" not in out
+
+
+@pytest.mark.asyncio
+async def test_get_overview_project_scope_renders_that_projects_card(tmp_path: Path) -> None:
+    # A project= selector on the same multi-repo load bypasses the workspace
+    # card and renders that one project's §D17 structural card.
+    from pydocs_mcp.application.mcp_inputs import OverviewInput
+    from pydocs_mcp.server import build_routers
+
+    cfg = _default_config()
+    _stamp_db(
+        tmp_path / "frontend_8888888888.db",
+        name="frontend",
+        model=cfg.embedding.model_name,
+        dim=cfg.embedding.dim,
+    )
+    _stamp_db(
+        tmp_path / "backend_9999999999.db",
+        name="backend",
+        model=cfg.embedding.model_name,
+        dim=cfg.embedding.dim,
+    )
+    tools, _services = build_routers(cfg, workspace=tmp_path)
+
+    out = await tools.get_overview(OverviewInput(project="backend"))
+    assert "# Overview — __project__" in out
+    assert "# Workspace overview" not in out

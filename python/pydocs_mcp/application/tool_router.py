@@ -8,11 +8,16 @@ so ranking/dedup/project-routing stay in exactly one place.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Literal
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
-from pydocs_mcp.application.formatting import format_overview_card, pointer_token
+from pydocs_mcp.application.formatting import (
+    format_overview_card,
+    format_workspace_overview_card,
+    pointer_token,
+)
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
     LookupInput,
@@ -29,7 +34,7 @@ from pydocs_mcp.application.multi_project_search import (
     ProjectServices,
     _select_service,
 )
-from pydocs_mcp.application.overview_service import OverviewService
+from pydocs_mcp.application.overview_service import OverviewService, WorkspaceProjectEntry
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -127,6 +132,19 @@ class ToolRouter:
         return await self.envelope.wrap(_body)
 
     async def get_overview(self, payload: OverviewInput) -> str:
+        # Fully-empty selector on a multi-repo server: routing to services[0]
+        # would silently describe ONE project as if it were the whole workspace
+        # — render the workspace orientation card instead (one line per loaded
+        # project, deepening via get_overview(project=...)). Package mode and
+        # single-project deployments keep the §D17 card unchanged.
+        #
+        # The envelope's [index: … · N packages] freshness header reports the
+        # FIRST project only (the probe is built from services[0]; server.py) —
+        # by design, one freshness stamp per router. So it legitimately differs
+        # from this card's workspace-total census; that divergence is expected,
+        # not a bug to "reconcile".
+        if not payload.project and not payload.package and len(self.services) > 1:
+            return await self.envelope.wrap(lambda: _render_workspace_overview(self.services))
         svc = self._svc(payload.project)
         return await self.envelope.wrap(lambda: _render_overview(svc.overview, payload.package))
 
@@ -135,6 +153,21 @@ async def _render_overview(service: OverviewService, package: str) -> str:
     """Build + render the §D17 structural card. Module-level so ``get_overview``
     stays a one-liner and the service/render seam is directly testable."""
     return format_overview_card(await service.build(package))
+
+
+async def _render_workspace_overview(services: tuple[ProjectServices, ...]) -> str:
+    """Build + render the workspace orientation card (multi-repo, empty selector).
+
+    Package counts are gathered concurrently — one light census read per loaded
+    project — and rendered in loaded (workspace-glob) order so the card is
+    deterministic across calls.
+    """
+    counts = await asyncio.gather(*[svc.overview.package_count() for svc in services])
+    entries = tuple(
+        WorkspaceProjectEntry(name=svc.project.name, package_count=count)
+        for svc, count in zip(services, counts, strict=True)
+    )
+    return format_workspace_overview_card(entries)
 
 
 def _split_budget(total: int, sizes: list[int]) -> list[int]:

@@ -106,6 +106,18 @@ def test_overview_action_token() -> None:
     assert resolve_pointers("[[next:overview:]]", "cli") == "→ pydocs-mcp overview"
 
 
+def test_overview_action_project_target() -> None:
+    # Non-empty target = project selector — the workspace card's per-project
+    # deepening pointer (multi-repo empty-selector rendering).
+    assert pointer_token("overview", "backend") == "[[next:overview:backend]]"
+    assert resolve_pointers("[[next:overview:backend]]", "mcp") == (
+        '→ get_overview(project="backend")'
+    )
+    assert resolve_pointers("[[next:overview:backend]]", "cli") == (
+        "→ pydocs-mcp overview --project backend"
+    )
+
+
 def test_strip_restores_pre_pointer_bytes() -> None:
     with_token = "## T\nbody\n[[next:lookup:pkg.mod.X]]\n"
     assert strip_pointers(with_token) == "## T\nbody\n"

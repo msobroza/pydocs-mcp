@@ -269,3 +269,15 @@ def test_entry_points_dedup_dunder_main_that_is_also_a_root() -> None:
     dunder = [e for e in card.entry_points if e.name == "proj.__main__"]
     assert len(dunder) == 1
     assert dunder[0].kind == "module"
+
+
+def test_package_count_counts_indexed_packages() -> None:
+    # The workspace card's per-project census: one light read, no card build.
+    packages = InMemoryPackageStore(
+        items={
+            _PKG: _package(_PKG, PackageOrigin.PROJECT),
+            "numpy": _package("numpy", PackageOrigin.DEPENDENCY),
+        }
+    )
+    service = OverviewService(uow_factory=make_fake_uow_factory(packages=packages), scripts={})
+    assert asyncio.run(service.package_count()) == 2
