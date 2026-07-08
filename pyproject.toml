@@ -86,6 +86,7 @@ ask-your-docs = [
     "langchain-mcp-adapters>=0.3",   # tool_interceptors API (landed in 0.1.12)
     "langchain-openai>=0.2",
     "streamlit>=1.36",
+    "streamlit-agraph>=0.0.45",      # interactive node-link graph + click-return (graph page)
 ]
 
 [dependency-groups]
