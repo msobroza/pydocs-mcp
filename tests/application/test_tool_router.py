@@ -19,7 +19,7 @@ from pydocs_mcp.application.multi_project_search import (
 )
 from pydocs_mcp.application.tool_router import ToolRouter
 
-from ._router_fakes import make_envelope, make_project, make_services
+from ._router_fakes import make_envelope, make_project, make_service, make_services
 
 
 def _tool_router() -> ToolRouter:
@@ -143,3 +143,43 @@ def test_overview_renders_structural_card() -> None:
     assert "# Overview — __project__" in out
     assert "## Module map" in out and "## Entry points" in out
     assert "## Structure communities" in out and "## Dependency profile" in out
+
+
+def _workspace_router() -> ToolRouter:
+    """A ToolRouter over TWO loaded projects — the multi-repo workspace shape."""
+    services = (
+        make_service("backend", package_count=3, indexed_at=2.0),
+        make_service("frontend", package_count=1, indexed_at=1.0),
+    )
+    return ToolRouter(
+        services=services,
+        envelope=make_envelope(),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+
+
+def test_overview_empty_selector_multi_project_renders_workspace_card() -> None:
+    out = asyncio.run(_workspace_router().get_overview(OverviewInput()))
+    assert out.startswith("[index:")
+    assert "# Workspace overview" in out
+    assert "**backend** — 3 packages" in out and "**frontend** — 1 packages" in out
+    # Each project line deepens into its own §D17 card (envelope-resolved).
+    assert '→ get_overview(project="backend")' in out
+    assert '→ get_overview(project="frontend")' in out
+    # The first project's card must NOT masquerade as the whole workspace.
+    assert "# Overview — __project__" not in out
+
+
+def test_overview_project_selector_bypasses_workspace_card() -> None:
+    out = asyncio.run(_workspace_router().get_overview(OverviewInput(project="frontend")))
+    assert "# Overview — __project__" in out
+    assert "# Workspace overview" not in out
+
+
+def test_overview_package_mode_bypasses_workspace_card() -> None:
+    # An explicit package request keeps the §D17 per-project card — the
+    # workspace card only replaces the fully-empty selector.
+    out = asyncio.run(_workspace_router().get_overview(OverviewInput(package="fastapi")))
+    assert "# Overview — fastapi" in out
+    assert "# Workspace overview" not in out

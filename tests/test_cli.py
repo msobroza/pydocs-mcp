@@ -575,6 +575,41 @@ class TestTaskShapedSubcommands:
             main()
         assert "# Overview" in capsys.readouterr().out
 
+    def test_overview_workspace_lists_projects_with_cli_pointers(self, tmp_path, capsys):
+        """``overview --workspace`` over >1 stamped dbs renders the workspace
+        card end-to-end, with CLI-surface deepening pointers
+        (``→ pydocs-mcp overview --project NAME``) — proving the CLI composition
+        root selects surface="cli" for the multi-repo empty-selector card."""
+        from pydocs_mcp.retrieval.config import AppConfig
+        from pydocs_mcp.storage.index_metadata import IndexMetadata, write_index_metadata
+
+        cfg = AppConfig.load()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        for name, slug in (("frontend", "aaaaaaaaaa"), ("backend", "bbbbbbbbbb")):
+            conn = open_index_database(ws / f"{name}_{slug}.db")
+            write_index_metadata(
+                conn,
+                IndexMetadata(
+                    project_name=name,
+                    project_root=f"/src/{name}",
+                    embedding_provider="fastembed",
+                    embedding_model=cfg.embedding.model_name,
+                    embedding_dim=cfg.embedding.dim,
+                    pipeline_hash="h",
+                    indexed_at=1.0,
+                ),
+            )
+            conn.close()
+        with patch("sys.argv", ["pydocs-mcp", "overview", "--workspace", str(ws)]):
+            from pydocs_mcp.__main__ import main
+
+            main()
+        out = capsys.readouterr().out
+        assert "# Workspace overview" in out
+        assert "→ pydocs-mcp overview --project frontend" in out
+        assert "→ pydocs-mcp overview --project backend" in out
+
     def test_why_succeeds_with_capture_enabled(self, seeded_project, capsys, monkeypatch):
         """Default config (``decision_capture.enabled=True``) wires the real
         ``DecisionService`` — ``why <query>`` runs the semantic search and, with

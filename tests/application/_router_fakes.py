@@ -107,12 +107,19 @@ class FakeSymbolSource:
 class FakeOverview:
     """A build() that returns a fixed OverviewCard so ToolRouter's get_overview
     routing (svc.overview.build → format_overview_card) is observable without
-    the real OverviewService + uow."""
+    the real OverviewService + uow. ``package_count`` mirrors the light census
+    read the workspace card gathers per loaded project."""
+
+    def __init__(self, package_count: int = 1) -> None:
+        self._package_count = package_count
+
+    async def package_count(self) -> int:
+        return self._package_count
 
     async def build(self, package: str = "") -> OverviewCard:
         return OverviewCard(
             package=package or "__project__",
-            package_count=1,
+            package_count=self._package_count,
             module_count=1,
             symbol_count=2,
             doc_coverage=0.5,
@@ -124,31 +131,37 @@ class FakeOverview:
         )
 
 
-def make_project() -> LoadedProject:
+def make_project(name: str = "solo", indexed_at: float = 0.0) -> LoadedProject:
     meta = IndexMetadata(
-        project_name="solo",
+        project_name=name,
         project_root="",
         embedding_provider="fastembed",
         embedding_model="bge",
         embedding_dim=384,
         pipeline_hash="h",
-        indexed_at=0.0,
+        indexed_at=indexed_at,
     )
-    return LoadedProject(name="solo", db_path=Path("/x/solo.db"), metadata=meta)
+    return LoadedProject(name=name, db_path=Path(f"/x/{name}.db"), metadata=meta)
+
+
+def make_service(
+    name: str = "solo", *, package_count: int = 1, indexed_at: float = 0.0
+) -> ProjectServices:
+    """One fake project's service set — parametrized so multi-repo router tests
+    can load several distinguishable projects (workspace-card scenarios)."""
+    return ProjectServices(
+        project=make_project(name, indexed_at),
+        docs=FakeDocs(),
+        api=FakeApi(),
+        lookup=FakeLookup(),
+        symbol_source=FakeSymbolSource(),
+        overview=FakeOverview(package_count),
+        decisions=NullDecisionService(),
+    )
 
 
 def make_services() -> tuple[ProjectServices, ...]:
-    return (
-        ProjectServices(
-            project=make_project(),
-            docs=FakeDocs(),
-            api=FakeApi(),
-            lookup=FakeLookup(),
-            symbol_source=FakeSymbolSource(),
-            overview=FakeOverview(),
-            decisions=NullDecisionService(),
-        ),
-    )
+    return (make_service(),)
 
 
 def make_envelope(surface: str = "mcp") -> ResponseEnvelope:

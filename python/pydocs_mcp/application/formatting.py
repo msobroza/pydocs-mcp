@@ -29,10 +29,11 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
 from typing import TYPE_CHECKING, Literal
 
+from pydocs_mcp.application.mcp_inputs import _PACKAGE_RE  # single source: valid project selector
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
 from pydocs_mcp.constants import (
     LIST_PACKAGES_MAX,
@@ -52,7 +53,7 @@ from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.decision_service import DecisionDashboard
-    from pydocs_mcp.application.overview_service import OverviewCard
+    from pydocs_mcp.application.overview_service import OverviewCard, WorkspaceProjectEntry
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.models import SearchResponse
     from pydocs_mcp.storage.decision_record import DecisionRecord
@@ -73,10 +74,12 @@ _TRUNCATION_MIN_REMAINDER = 100
 # layer. Token payloads are dotted names / show-mode words (no ':' or ']]'),
 # which keeps the grammar regex-parsable.
 #
-# The ``overview`` action is the zero-hit-search recovery step (spec §D1 empty
-# contract): it takes an EMPTY target (``[[next:overview:]]``) because
-# get_overview scopes to a package, not a symbol — the target group is ``*``
-# (not ``+``) so the empty payload parses.
+# The ``overview`` action's target is an optional PROJECT selector. Empty
+# (``[[next:overview:]]``) is the zero-hit-search recovery step (spec §D1 empty
+# contract) — get_overview scopes to a package, not a symbol, so no payload is
+# needed; the target group is ``*`` (not ``+``) so the empty shape parses.
+# Non-empty is the workspace card's per-project deepening pointer
+# (``get_overview(project=...)`` on a multi-repo server).
 #
 # The ``why`` action deepens into the decision surface (spec §D17 block 8): with
 # an EMPTY target it opens the governance dashboard (``get_why()``); with a
@@ -124,11 +127,11 @@ def pointer_token(action: str, target: str, show: str = "") -> str:
 # function of ``surface`` + ``target``. Keeping one small closure per action
 # holds ``_render_pointer``'s branching flat (complexity gate).
 _POINTER_RENDERERS: dict[str, tuple[Callable[[str], str], Callable[[str], str]]] = {
-    # Empty-target action: get_overview scopes to a package, so the
-    # zero-hit-search recovery pointer takes no argument.
+    # Empty target → the whole-scope orientation card (zero-hit-search
+    # recovery); non-empty → that project's card (workspace-card deepening).
     "overview": (
-        lambda _t: "→ pydocs-mcp overview",
-        lambda _t: "→ get_overview()",
+        lambda t: f"→ pydocs-mcp overview --project {t}" if t else "→ pydocs-mcp overview",
+        lambda t: f'→ get_overview(project="{t}")' if t else "→ get_overview()",
     ),
     # Empty target → the governance dashboard (get_why with no query);
     # non-empty → a decision search over that query.
@@ -877,6 +880,38 @@ def format_overview_card(card: OverviewCard) -> str:
     # line between the blocks that remain.
     out = "\n".join(block for block in blocks if block)
     return out if out.endswith("\n") else out + "\n"
+
+
+def format_workspace_overview_card(entries: Sequence[WorkspaceProjectEntry]) -> str:
+    """Render the workspace orientation card — one line per loaded project.
+
+    The multi-repo empty-selector rendering (``get_overview()`` with several
+    projects loaded): H1 + one census line, then a ``## Projects`` block whose
+    bullets carry each project's package count and an ``overview`` pointer that
+    deepens into that project's §D17 card (``get_overview(project=...)``).
+    Entries render in loaded (workspace-glob) order. Pure rendering (no I/O);
+    follows the block byte-parity contract and ends with a single ``\\n``.
+    """
+    total = sum(e.package_count for e in entries)
+    header = f"# Workspace overview\n[{len(entries)} projects · {total} packages]\n"
+    return header + "\n## Projects\n" + "".join(_workspace_project_line(e) for e in entries)
+
+
+def _workspace_project_line(entry: WorkspaceProjectEntry) -> str:
+    """One ``## Projects`` bullet: name + package count, plus the deepening
+    pointer WHEN the name is a valid selector.
+
+    Project names come from filesystem dir / db-filename-stem basenames
+    (``multirepo.LoadedProject.name``) and bypass ``OverviewInput.project``'s
+    validator, so a name carrying a selector-illegal char (``:`` / ``]`` also
+    break the pointer grammar's ``[^:\\]]`` target group) would render a token
+    that is both malformed AND rejected by ``get_overview(project=...)``. Emit
+    the pointer only for a selector-safe name; otherwise drop it so no dead /
+    leaked token surfaces — the census line (name + count) still renders."""
+    line = f"- **{entry.name}** — {entry.package_count} packages"
+    if _PACKAGE_RE.match(entry.name):
+        line += f" {pointer_token('overview', entry.name)}"
+    return line + "\n"
 
 
 # Staleness interpretation bands (spec §D10) — rendered, never stored. The

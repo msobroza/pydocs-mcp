@@ -97,6 +97,20 @@ class OverviewCard:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceProjectEntry:
+    """One loaded project's line on the workspace orientation card.
+
+    Assembled by ``ToolRouter`` (one entry per loaded project, via each
+    project's ``OverviewService.package_count``) when a multi-repo server gets
+    a fully-empty ``get_overview`` selector; rendered by
+    ``formatting.format_workspace_overview_card``.
+    """
+
+    name: str
+    package_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class OverviewService:
     uow_factory: Callable[[], UnitOfWork]
     scripts: dict[str, str]  # [project.scripts], parsed at composition
@@ -137,6 +151,21 @@ class OverviewService:
             aggregates,
             decisions,
         )
+
+    async def package_count(self) -> int:
+        """Count of indexed packages — the workspace card's per-project census.
+
+        A dedicated light read (one ``packages.list``) rather than ``build()``:
+        the workspace card needs one number per loaded project, and building N
+        full §D17 cards (trees + members + scores + references + decisions each)
+        just to read N counts would scale query cost with the workspace size.
+        """
+        # Bind inside the block, return AFTER it (mirrors ``build``): the UoW's
+        # ``__aexit__`` is typed ``-> bool``, so an in-block return trips mypy's
+        # missing-return check on the ``-> int`` signature.
+        async with self.uow_factory() as uow:
+            packages = await uow.packages.list()
+        return len(packages)
 
     async def _read_aggregates(self) -> OverviewAggregates:
         """Load the persisted aggregates via the injected reader (empty without one).

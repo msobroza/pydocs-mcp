@@ -22,7 +22,7 @@ _CONTRACT = (
 TOOL_DOCS: dict[str, str] = {
     "get_overview": f"""Orient yourself: what is indexed and what shape this repo/package has.
 
-When to use: first call on an unfamiliar project; refreshing your map after a re-index; checking what packages/modules exist before searching.
+When to use: first call on an unfamiliar project; refreshing your map after a re-index; checking what packages/modules exist before searching. With several projects loaded, the no-argument call lists them all — scope with project= to go deeper.
 When NOT to use: you already know a dotted path (get_symbol) or a topic (search_codebase).
 {_WORKFLOW}
 {_CONTRACT}
