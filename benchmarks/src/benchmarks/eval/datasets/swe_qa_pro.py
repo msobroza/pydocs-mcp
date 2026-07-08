@@ -25,6 +25,7 @@ from typing import Any
 from ..corpus import materialize_corpus
 from ..serialization import dataset_registry
 from ._citations import extract_path_citations, resolve_bare_filenames
+from ._download import check_content_length
 from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
 from .base_dataset import EvalTask, GoldAnswer
 
@@ -93,12 +94,17 @@ class SweQaProDataset:
 
     def _download_release_atomic(self, target: Path) -> None:
         # WHY: a partial download must not masquerade as a good cache file —
-        # fetch → validate each line parses → write .tmp → os.replace into place.
+        # fetch → check Content-Length → validate each line parses →
+        # write .tmp → os.replace into place. Per-line JSON validation alone
+        # cannot catch a body truncated exactly on a '\n' boundary (proxy
+        # cut-off, dropped connection flushed mid-stream): every surviving
+        # line still parses. The Content-Length comparison catches that case.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         url = _RELEASE_URL.format(revision=self.revision)
         tmp = target.with_suffix(target.suffix + ".tmp")
         with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310
             payload = resp.read()
+            check_content_length(resp, payload, url=url)
         for line in payload.decode().splitlines():
             if line.strip():
                 json.loads(line)  # raises before the .tmp write if corrupt

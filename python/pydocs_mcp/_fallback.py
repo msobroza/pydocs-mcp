@@ -33,6 +33,12 @@ SKIP_DIRS = {
     ".ruff_cache",
     "htmlcov",
     ".nox",
+    # Fallback-contract parity with src/lib.rs's SKIP_DIRS (see
+    # tests/test_skip_dirs_rust_sync.py) — a bare "egg-info" directory
+    # (distinct from "<pkg>.egg-info", handled separately by
+    # extraction/config.py's path_under_excluded) must be pruned by both
+    # engines identically.
+    "egg-info",
 }
 
 

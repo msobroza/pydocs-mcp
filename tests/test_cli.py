@@ -683,6 +683,59 @@ class TestServeCommand:
                 main()
             mock_run.assert_called_once()
 
+    def test_serve_aborts_before_server_when_indexing_fails(self, seeded_project, capsys):
+        """A Phase-1 indexing crash (corrupt cache DB, extraction failure, ...)
+        must abort ``serve`` before Phase 2 (the MCP server) ever starts.
+
+        Regression for the ``if code != 0: return code`` guard in
+        ``_cmd_serve``: a dropped early-return or a refactor that swallows
+        the Phase-1 exit code would start the MCP server over a
+        broken/empty index — clients would see empty results with exit 0
+        instead of a loud failure. Raise from ``application.run_index_pass``
+        (the real indexing entry point ``_run_indexing`` awaits) so this
+        pins the boundary the CLI actually crosses, not just a fake helper.
+        """
+        import pydocs_mcp.application as _application
+
+        async def _boom(**kwargs):
+            raise RuntimeError("corrupt cache DB")
+
+        with patch.object(_application, "run_index_pass", _boom):
+            with patch("pydocs_mcp.server.run") as mock_run:
+                with patch("sys.argv", ["pydocs-mcp", "serve", str(seeded_project)]):
+                    from pydocs_mcp.__main__ import main
+
+                    rc = main()
+
+        assert rc == 1
+        mock_run.assert_not_called()
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+
+    def test_watch_aborts_before_watcher_when_indexing_fails(self, seeded_project, capsys):
+        """Mirrors the ``serve`` guard for the standalone ``watch`` subcommand:
+        a Phase-1 indexing failure must prevent the watcher from ever being
+        constructed, so the process doesn't start watching a project it
+        never successfully indexed.
+        """
+        import pydocs_mcp.application as _application
+        import pydocs_mcp.serve.watcher as _watcher_module
+
+        async def _boom(**kwargs):
+            raise RuntimeError("corrupt cache DB")
+
+        with patch.object(_application, "run_index_pass", _boom):
+            with patch.object(_watcher_module, "FileWatcher") as mock_watcher_cls:
+                with patch("sys.argv", ["pydocs-mcp", "watch", str(seeded_project)]):
+                    from pydocs_mcp.__main__ import main
+
+                    rc = main()
+
+        assert rc == 1
+        mock_watcher_cls.assert_not_called()
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+
 
 class TestRunIndexingDelegation:
     """``_run_indexing`` is a thin wrapper: composition lives in

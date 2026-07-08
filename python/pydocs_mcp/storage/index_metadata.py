@@ -140,11 +140,25 @@ def read_overview_aggregates(
 
 
 def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
-    """Return the stored :class:`IndexMetadata`, or ``None`` for a pre-v11 database."""
-    row = connection.execute(
-        "SELECT project_name, project_root, embedding_provider, embedding_model, "
-        "embedding_dim, pipeline_hash, indexed_at, git_head FROM index_metadata WHERE id=1"
-    ).fetchone()
+    """Return the stored :class:`IndexMetadata`, or ``None`` for a pre-v11 database.
+
+    Callers that open the connection without running migrations first (e.g.
+    ``build_freshness_probe`` in storage/factories.py, which uses a plain
+    ``sqlite3.connect`` to avoid paying migration cost on every freshness poll)
+    may hand us a genuinely pre-v11 database with no ``index_metadata`` table at
+    all. The docstring promises ``None`` there too — same as the empty-table
+    case — so a missing table is caught here instead of letting
+    ``sqlite3.OperationalError`` escape.
+    """
+    try:
+        row = connection.execute(
+            "SELECT project_name, project_root, embedding_provider, embedding_model, "
+            "embedding_dim, pipeline_hash, indexed_at, git_head FROM index_metadata WHERE id=1"
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        return None
     if row is None:
         return None
     return IndexMetadata(

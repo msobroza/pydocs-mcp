@@ -153,6 +153,63 @@ def test_format_report_renders_latency_cells_as_percentile_triple() -> None:
     assert "p50 0.01s | p95 0.05s | p99 0.10s" in out
 
 
+def test_format_report_renders_non_default_metric_spec() -> None:
+    """A sweep run with ``--metrics`` outside DEFAULT_METRIC_SPECS (e.g.
+    ``ndcg@10,precision@1``) must render rows for the REQUESTED metrics, not
+    silently fall back to the five hardcoded default rows.
+
+    Regression for: format_report's row loop iterated only
+    ``(_METRIC_ROW_ORDER, _LATENCY_ROW_ORDER)`` — i.e. always
+    ``DEFAULT_METRIC_SPECS`` — regardless of what metrics the sweep actually
+    produced. A sweep_results containing only ``{"ndcg@10": (...)}`` rendered
+    recall@1/5/10, mrr, pass@1-needle all as ``—`` and ndcg@10 nowhere: an
+    all-dash report after a potentially hours-long sweep, with the real data
+    surviving only in raw tracker JSONL.
+    """
+    results: dict[tuple[str, str], dict[str, tuple[float, float, float]]] = {
+        ("pydocs-mcp", "baseline"): {
+            "ndcg@10": (0.42, 0.30, 0.55),
+            "precision@1": (0.66, 0.50, 0.80),
+        },
+    }
+    report = format_report(
+        sweep_results=results,
+        dataset_name="repoqa-fixture",
+        n_tasks=3,
+        metric_specs=("ndcg@10", "precision@1"),
+    )
+    # The requested metrics must actually appear, with their real values —
+    # not a dash.
+    assert "ndcg@10" in report
+    assert "precision@1" in report
+    assert "42.0% [30.0%, 55.0%]" in report
+    assert "66.0% [50.0%, 80.0%]" in report
+    # None of the default-only metrics (absent from this sweep) should be
+    # rendered as bogus all-dash rows — they simply don't belong in a report
+    # for a sweep that never computed them.
+    assert "recall@1" not in report
+    assert "recall@5" not in report
+    assert "recall@10" not in report
+    assert "mrr" not in report
+    assert "pass@1-needle" not in report
+
+
+def test_format_report_default_metric_order_unchanged() -> None:
+    """Omitting ``metric_specs`` must still render DEFAULT_METRIC_SPECS in
+    the historic order — the default-run contract downstream regression-diff
+    scripts key on must not regress while fixing the non-default-metric gap.
+    """
+    report = format_report(
+        sweep_results=_sample_results(),
+        dataset_name="repoqa-fixture",
+        n_tasks=5,
+    )
+    expected_order = ("recall@1", "recall@5", "recall@10", "mrr", "pass@1-needle")
+    positions = [report.find(m) for m in expected_order]
+    assert all(p >= 0 for p in positions), f"missing metric in report: {positions}"
+    assert positions == sorted(positions), f"metrics out of order: {positions}"
+
+
 def test_format_report_includes_latency_rows_after_quality() -> None:
     """Latency rows appear below the quality metrics in row order — readers
     scanning top-down see the headline quality numbers first.

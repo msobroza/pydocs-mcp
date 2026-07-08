@@ -65,3 +65,31 @@ def test_all_three_sources_combined(tmp_path: Path) -> None:
 def test_dependency_groups_only_no_project_table(tmp_path: Path) -> None:
     path = _write(tmp_path, '[dependency-groups]\ndev = ["ruff"]\n')
     assert parse_pyproject_dependencies(path) == ["ruff"]
+
+
+def test_string_dependencies_does_not_explode_into_characters(tmp_path: Path) -> None:
+    # Malformed-but-valid TOML: dependencies should be an array, not a bare string.
+    # list("requests") yields ['r','e','q','u','e','s','t','s'] — each char survives
+    # the `isinstance(d, str)` guard and would otherwise pollute the packages table
+    # with 8 one-letter garbage "packages". Guard against non-list values instead.
+    path = _write(tmp_path, '[project]\nname = "x"\ndependencies = "requests"\n')
+    assert parse_pyproject_dependencies(path) == []
+
+
+def test_string_optional_dependencies_value_does_not_explode_into_characters(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path,
+        '[project]\nname = "x"\ndependencies = ["a"]\n'
+        "[project.optional-dependencies]\n"
+        'dev = "pytest"\n',
+    )
+    assert set(parse_pyproject_dependencies(path)) == {"a"}
+
+
+def test_string_dependency_group_value_does_not_explode_into_characters(
+    tmp_path: Path,
+) -> None:
+    path = _write(tmp_path, '[dependency-groups]\ntest = "pytest"\n')
+    assert parse_pyproject_dependencies(path) == []

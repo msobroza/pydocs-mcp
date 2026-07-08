@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 
@@ -219,3 +221,68 @@ async def test_run_watch_loop_forwards_gpu_flag_to_server_run(tmp_path, monkeypa
     assert captured_kwargs.get("gpu") is True, (
         f"--gpu was not forwarded to server.run through the watch path: {captured_kwargs}"
     )
+
+
+async def test_on_change_isolates_reindex_failure(tmp_path, monkeypatch, caplog) -> None:
+    """Risk R4: `_on_change` must catch a reindex failure, log it, and
+    return normally so `FileWatcher._consume` (which awaits `on_change()`
+    directly, watcher.py) keeps draining events instead of dying on the
+    first bad edit.
+
+    Regression coverage for a gap where only a noqa-count ceiling comment
+    (tests/quality/test_noqa_count.py) referenced this contract — no test
+    exercised the actual behavior. Calls `on_change()` twice to pin that
+    the callback (and the watch loop it backs) survives repeat failures,
+    not just a single one.
+    """
+    import argparse
+
+    from pydocs_mcp.__main__ import _build_watcher_and_callback
+    from pydocs_mcp.retrieval.config.models import WatchConfig
+
+    args = argparse.Namespace(
+        project=str(tmp_path),
+        verbose=False,
+        watch=True,
+        force=True,  # must NOT propagate into watch_args; irrelevant here either way
+        cache_dir=None,
+        no_inspect=True,
+        config=None,
+    )
+    watch_cfg = WatchConfig()
+
+    call_count = 0
+
+    async def _raising_run_indexing(_args) -> None:
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError(f"simulated reindex crash #{call_count}")
+
+    monkeypatch.setattr("pydocs_mcp.__main__._run_indexing", _raising_run_indexing)
+
+    # Inject FakeObserver so the test is independent of the optional `[watch]`
+    # extra: FileWatcher.__post_init__ resolves watchdog at construction and
+    # raises ServiceUnavailableError when it isn't installed (the CI base env),
+    # which has nothing to do with the on_change reindex-isolation under test.
+    from pydocs_mcp.serve import watcher as watcher_mod
+    from tests._fakes import FakeObserver
+
+    monkeypatch.setattr(watcher_mod, "_load_watchdog", lambda: FakeObserver)
+
+    _watcher, on_change = _build_watcher_and_callback(args, watch_cfg)
+
+    with caplog.at_level(logging.ERROR, logger="pydocs-mcp"):
+        # First failure must not propagate.
+        await on_change()
+        # Second failure must ALSO not propagate — the callback keeps
+        # working across repeat failures, not just tolerating one.
+        await on_change()
+
+    assert call_count == 2, "on_change must invoke the reindex helper on every call"
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(error_records) == 2, (
+        f"expected exactly 2 error log records, got {len(error_records)}: "
+        f"{[r.getMessage() for r in error_records]}"
+    )
+    for record in error_records:
+        assert "watch: reindex failed" in record.getMessage()

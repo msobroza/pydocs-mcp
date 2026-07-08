@@ -24,6 +24,7 @@ import numpy as np
 from turbovec import IdMapIndex
 
 from pydocs_mcp.models import Embedding, is_multi_vector
+from pydocs_mcp.storage.errors import EmbeddingDimMismatchError
 from pydocs_mcp.storage.sidecar_uow import require_entered, rollback_safely
 
 logger = logging.getLogger(__name__)
@@ -54,10 +55,52 @@ class TurboQuantUnitOfWork:
         return self
 
     def _open_index(self) -> IdMapIndex:
-        """Sync helper — pick load-or-construct branch off the event loop."""
-        if self._index_path.exists():
-            return IdMapIndex.load(str(self._index_path))
-        return IdMapIndex(dim=self._dim, bit_width=self._bit_width)
+        """Sync helper — pick load-or-construct branch off the event loop.
+
+        Three failure-aware branches (a missing file just constructs fresh):
+
+        1. CORRUPT/UNREADABLE — a ``.tq`` that EXISTS but is unreadable
+           (truncated by disk trouble, hand-edited, or written by an
+           incompatible turbovec version) makes ``IdMapIndex.load`` raise
+           ``OSError`` (e.g. ``'not a TVIM file: wrong magic'``). Treat it
+           like a missing file — start a fresh empty index — rather than
+           letting it propagate: ``check_integrity_and_repair`` (whose job
+           IS repairing sidecar drift at startup) and every per-query
+           ``_TurboQuantReadStore`` open would otherwise abort. An empty
+           index has ``size() == 0``, which the integrity check already
+           treats as drift and repairs by clearing ``content_hash`` so the
+           next sweep re-embeds (spec §5.7: cache is regenerable).
+
+        2. DIM MISMATCH — a ``.tq`` that loads FINE but was built at a
+           different ``embedding.dim`` than the caller's current config.
+           turbovec's ``search`` does not validate query dim against the
+           loaded index, so writes would raise a raw un-anchored
+           ``ValueError`` mid-indexing and reads would return garbage
+           scores. Gate eagerly with an anchored
+           :class:`EmbeddingDimMismatchError` before any turbovec call.
+           (Distinct from CORRUPT: the file is a valid TVIM container, just
+           the wrong shape — a config change, not a repairable drift.)
+        """
+        if not self._index_path.exists():
+            return IdMapIndex(dim=self._dim, bit_width=self._bit_width)
+        try:
+            index = IdMapIndex.load(str(self._index_path))
+        except OSError as exc:
+            logger.warning(
+                "Unreadable TurboQuant sidecar %s (%s) — starting a fresh "
+                "empty index; the integrity check will repair the drift "
+                "on next indexing sweep.",
+                self._index_path,
+                exc,
+            )
+            return IdMapIndex(dim=self._dim, bit_width=self._bit_width)
+        if index.dim != self._dim:
+            raise EmbeddingDimMismatchError(
+                index_path=self._index_path,
+                index_dim=index.dim,
+                configured_dim=self._dim,
+            )
+        return index
 
     async def __aexit__(
         self,

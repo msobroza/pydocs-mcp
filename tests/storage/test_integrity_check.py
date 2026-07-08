@@ -224,6 +224,58 @@ async def test_integrity_check_misses_disjoint_id_drift_with_matching_counts(
 
 
 @pytest.mark.asyncio
+async def test_integrity_check_repairs_corrupt_tq_instead_of_raising(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A truncated/corrupt ``.tq`` sidecar (disk trouble, hand-edited, or
+    written by an incompatible turbovec version) must be treated as
+    repairable drift, not crash startup.
+
+    ``IdMapIndex.load`` raises ``OSError('not a TVIM file: wrong magic')``
+    for any file that exists but isn't a valid TVIM container (empirically
+    confirmed against the real turbovec extension). Before the fix,
+    ``check_integrity_and_repair`` — whose entire job is repairing sidecar
+    drift at startup — let that ``OSError`` propagate straight out of
+    ``TurboQuantUnitOfWork.__aenter__``, aborting startup for the one
+    input this function exists to protect against.
+    """
+    db_path = tmp_path / "corrupt.db"
+    tq_path = tmp_path / "corrupt.tq"
+    open_index_database(db_path).close()
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    async with factory() as uow:
+        await uow.packages.upsert(_pkg("demo"))
+        await uow.chunks.upsert((_chunk("a", "demo"),))
+        persisted = await uow.chunks.list(filter={"package": "demo"})
+        first_id = persisted[0].id
+        assert first_id is not None
+        await uow.chunks.mark_embedded([first_id])
+        await uow.commit()
+    # Truncate/corrupt the .tq sidecar AFTER it would have been written —
+    # simulates disk trouble, a hand-edit, or an incompatible turbovec
+    # version, per the gap's edge case.
+    tq_path.write_bytes(b"not a real tq file, just garbage bytes")
+
+    caplog.set_level(logging.WARNING)
+    repaired_pkg_names = await check_integrity_and_repair(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    assert "demo" in repaired_pkg_names
+    async with factory() as uow:
+        pkgs = await uow.packages.list(filter={"name": "demo"})
+        assert pkgs[0].content_hash in (None, "")
+
+
+@pytest.mark.asyncio
 async def test_integrity_check_no_op_on_fresh_project(tmp_path: Path) -> None:
     """Both chunks=0 and vectors=0 → no repair needed (fresh project / never
     indexed). The integrity check must not false-alarm in this case because
