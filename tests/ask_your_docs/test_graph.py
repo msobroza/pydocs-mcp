@@ -147,3 +147,33 @@ def test_induce_filters_by_node_type_and_edge_kind():
     )
     assert {n.id for n in out.nodes} == {"m", "m.C"}
     assert {(e.source, e.target, e.kind) for e in out.edges} == {("m", "m.C", "contains")}
+
+
+def test_overview_reconciles_src_layout_module_mismatch(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    # module_members stores fs-derived "src." module paths; node_references uses
+    # the import path (no "src."). The two must still join into a connected graph.
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[("src.pkg.a", "Foo", "class"), ("src.pkg.b", "bar", "def")],
+        refs=[("pkg.a.Foo", "pkg.b.bar", "calls")],
+    )
+    g = graph.overview(db, "demo")
+    assert {n.id for n in g.nodes} == {"pkg.a", "pkg.b"}
+    assert ("pkg.a", "pkg.b", "calls") in {(e.source, e.target, e.kind) for e in g.edges}
+
+
+def test_node_meta_resolves_docstring_across_src_prefix(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[("src.pkg.a", "Foo", "class")],
+        refs=[("pkg.a.Foo", "pkg.a.helper", "calls")],
+        docstrings={"src.pkg.a.Foo": "Docstring for Foo."},
+    )
+    meta = graph.node_meta(db, "pkg.a.Foo", "class")
+    assert meta is not None and "Docstring for Foo." in meta.body

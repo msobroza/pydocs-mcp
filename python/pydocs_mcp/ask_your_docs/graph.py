@@ -3,6 +3,12 @@
 Mirrors ``catalog.py``: every connection is ``mode=ro`` and never routes through
 ``pydocs_mcp.multirepo.open_index_database`` (which opens read-write and can
 migrate/rebuild a bundle). Stdlib-only so it imports without the agent stack.
+
+Topology comes from ``node_references`` (self-consistent import-path node ids).
+``module_members`` stores filesystem-derived module paths (e.g. ``src.pkg.mod``,
+plus worktree copies) that do NOT match the reference-graph ids, so module
+identity is reconciled by normalizing each ``module_members.module`` to its
+longest suffix that exists in the reference-graph's node-id space.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ class Edge:
 class Graph:
     nodes: tuple[Node, ...] = ()
     edges: tuple[Edge, ...] = ()
-    truncated: int = 0  # neighbors dropped by MAX_NEIGHBORS
+    truncated: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,18 +53,58 @@ class NodeMeta:
     body: str
 
 
+_STRUCTURAL = frozenset({"contains", "documents", "concerns"})
+
+
 def _short(node_id: str) -> str:
     return node_id.rsplit(".", 1)[-1] or node_id
 
 
-def _own_modules(conn: sqlite3.Connection) -> list[str]:
-    return [
-        row[0]
-        for row in conn.execute(
-            "SELECT DISTINCT module FROM module_members WHERE package=? ORDER BY module",
-            (_OWN,),
+def _node_ids(conn: sqlite3.Connection) -> set[str]:
+    """Every own-code symbol id referenced (either end) in the graph."""
+    ids: set[str] = set()
+    for a, b in conn.execute(
+        "SELECT from_node_id, to_node_id FROM node_references WHERE from_package=?",
+        (_OWN,),
+    ):
+        if a:
+            ids.add(a)
+        if b:
+            ids.add(b)
+    return ids
+
+
+def _prefixes(node_ids: set[str]) -> set[str]:
+    """Every dotted prefix of every node id (the import-path module space)."""
+    out: set[str] = set()
+    for nid in node_ids:
+        segs = nid.split(".")
+        for i in range(1, len(segs) + 1):
+            out.add(".".join(segs[:i]))
+    return out
+
+
+def _normalize(raw_module: str, prefixes: set[str]) -> str | None:
+    """The longest suffix of a filesystem-derived module that is an import path."""
+    segs = raw_module.split(".")
+    for i in range(len(segs)):
+        cand = ".".join(segs[i:])
+        if cand in prefixes:
+            return cand
+    return None
+
+
+def _modules(conn: sqlite3.Connection) -> list[str]:
+    """Own modules, in import-path form (reconciled with the reference graph)."""
+    prefixes = _prefixes(_node_ids(conn))
+    mods = {
+        norm
+        for (raw,) in conn.execute(
+            "SELECT DISTINCT module FROM module_members WHERE package=?", (_OWN,)
         )
-    ]
+        if (norm := _normalize(raw, prefixes))
+    }
+    return sorted(mods)
 
 
 def _module_of(node_id: str | None, modules: list[str]) -> str | None:
@@ -73,14 +119,27 @@ def _module_of(node_id: str | None, modules: list[str]) -> str | None:
     return best
 
 
-def overview(db_path: Path, project: str) -> Graph:
-    """The project's own modules as nodes + aggregated module->module edges.
+def _type_of(node_id: str, modules: set[str]) -> str:
+    """module if a known module, else class/function by the Capitalized-name rule."""
+    if node_id in modules:
+        return "module"
+    return "class" if _short(node_id)[:1].isupper() else "function"
 
-    ``project`` is accepted for symmetry with the UI; the bundle already scopes
-    the own code under ``__project__`` so it is not needed in the query.
-    """
+
+def _direct_members(node_ids: set[str], module: str) -> list[str]:
+    """Referenced symbols exactly one segment below ``module`` (its own members)."""
+    out = [
+        nid
+        for nid in node_ids
+        if nid.startswith(module + ".") and "." not in nid[len(module) + 1 :]
+    ]
+    return sorted(out)
+
+
+def overview(db_path: Path, project: str) -> Graph:
+    """The project's own modules as nodes + aggregated module->module edges."""
     with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
-        modules = _own_modules(conn)
+        modules = _modules(conn)
         rows = conn.execute(
             "SELECT from_node_id, to_node_id, kind FROM node_references WHERE from_package=?",
             (_OWN,),
@@ -97,33 +156,18 @@ def overview(db_path: Path, project: str) -> Graph:
     return Graph(nodes, tuple(edges))
 
 
-def _member_types(conn: sqlite3.Connection) -> dict[str, str]:
-    """node_id -> 'class' | 'function' for every own-code member."""
-    out: dict[str, str] = {}
-    for module, name, kind in conn.execute(
-        "SELECT module, name, kind FROM module_members WHERE package=?", (_OWN,)
-    ):
-        out[f"{module}.{name}"] = "class" if kind == "class" else "function"
-    return out
-
-
 def expand(db_path: Path, node_id: str, node_type: str, kinds: frozenset[str]) -> Graph:
     """Neighbors of one node. Module -> its members (contains); class/function ->
     its reference neighbors, filtered to ``kinds``. Capped at ``MAX_NEIGHBORS``."""
     with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
+        modules = set(_modules(conn))
+        node_ids = _node_ids(conn)
         if node_type == "module":
-            rows = conn.execute(
-                "SELECT name, kind FROM module_members WHERE package=? AND module=? ORDER BY name",
-                (_OWN, node_id),
-            ).fetchall()
-            member_nodes = tuple(
-                Node(f"{node_id}.{name}", name, "class" if kind == "class" else "function")
-                for name, kind in rows
-            )
+            members = _direct_members(node_ids, node_id)
+            member_nodes = tuple(Node(m, _short(m), _type_of(m, modules)) for m in members)
             contains = tuple(Edge(node_id, n.id, "contains") for n in member_nodes)
             return Graph(member_nodes, contains)
 
-        member_types = _member_types(conn)
         rows = conn.execute(
             "SELECT from_node_id, to_node_id, kind FROM node_references "
             "WHERE from_package=? AND (from_node_id=? OR to_node_id=?)",
@@ -143,34 +187,26 @@ def expand(db_path: Path, node_id: str, node_type: str, kinds: frozenset[str]) -
         if len(edges) >= MAX_NEIGHBORS:
             continue
         edges.append(Edge(from_id, to_id, kind))
-        nodes[other] = Node(other, _short(other), member_types.get(other, "function"))
+        nodes[other] = Node(other, _short(other), _type_of(other, modules))
     return Graph(tuple(nodes.values()), tuple(edges), truncated=max(0, total - len(edges)))
 
 
-_STRUCTURAL = frozenset({"contains", "documents", "concerns"})
-
-
 def node_meta(db_path: Path, node_id: str, node_type: str) -> NodeMeta | None:
-    """Detail card for one node: name + signature + docstring for a class/function,
-    path + member count for a module, else ``None``."""
     with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
         if node_type in {"class", "function"}:
-            module, _, name = node_id.rpartition(".")
+            module_part, _, name = node_id.rpartition(".")
             row = conn.execute(
                 "SELECT name, signature, docstring FROM module_members "
-                "WHERE package=? AND module=? AND name=?",
-                (_OWN, module, name),
+                "WHERE package=? AND name=? AND (module=? OR module LIKE ?)",
+                (_OWN, name, module_part, f"%.{module_part}"),
             ).fetchone()
             if row is None:
-                return None
+                return NodeMeta(node_id, node_type, name or node_id, "")
             body = "\n\n".join(part for part in (row[1], row[2]) if part)
             return NodeMeta(node_id, node_type, row[0], body)
         if node_type == "module":
-            members = conn.execute(
-                "SELECT COUNT(*) FROM module_members WHERE package=? AND module=?",
-                (_OWN, node_id),
-            ).fetchone()[0]
-            return NodeMeta(node_id, "module", node_id, f"{members} members")
+            count = len(_direct_members(_node_ids(conn), node_id))
+            return NodeMeta(node_id, "module", node_id, f"{count} members")
     return None
 
 
