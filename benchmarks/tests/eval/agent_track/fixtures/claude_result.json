@@ -1,0 +1,17 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 74213,
+  "duration_api_ms": 68020,
+  "num_turns": 12,
+  "result": "The synchronization is handled by the barrier in `sync/barrier.py`: every worker blocks on `Barrier.wait()` until the last arrives, then all release together.",
+  "session_id": "b1e2c3d4-0000-4444-8888-abcdefabcdef",
+  "total_cost_usd": 0.1834,
+  "usage": {
+    "input_tokens": 512,
+    "output_tokens": 883,
+    "cache_read_input_tokens": 84000,
+    "cache_creation_input_tokens": 12000
+  }
+}
