@@ -219,6 +219,14 @@ def node_meta(db_path: Path, node_id: str, node_type: str) -> NodeMeta | None:
         if node_type == "module":
             count = len(_direct_members(_node_ids(conn), node_id))
             return NodeMeta(node_id, "module", node_id, f"{count} members")
+        if node_type in {"doc", "decision"}:
+            if node_id.startswith(("section:", "decision:")):
+                cid = int(node_id.split(":", 1)[1])
+                row = conn.execute("SELECT title, text FROM chunks WHERE id=?", (cid,)).fetchone()
+                if row:
+                    return NodeMeta(node_id, node_type, row[0], row[1] or "")
+            if node_id.startswith("doc:"):
+                return NodeMeta(node_id, "doc", node_id.removeprefix("doc:"), "Markdown file")
     return None
 
 

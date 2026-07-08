@@ -1,7 +1,7 @@
 """Graph explorer — second page of the ask-your-docs app.
 
 Overview -> click a node to expand its connections -> read docstrings in the
-panel. Filters: content type (Phase 1 fixed to Codebase), node type, edge kind.
+panel. Filters: content type (codebase / documentation / both), node type, edge kind.
 "Add to question" pushes a node onto session_state.attached for the chat page.
 """
 
@@ -62,11 +62,18 @@ with st.sidebar:
         except Exception as exc:  # unreadable dir / no bundles
             st.warning(f"Couldn't scan workspace: {exc}")
     project = st.selectbox("Project", list(projects) or ["—"], key="graph_project")
+    content = st.radio(
+        "Content",
+        ["Codebase", "Documentation", "Documentation + codebase"],
+        key="graph_content",
+    )
 
     st.markdown('<div class="side-label">Show</div>', unsafe_allow_html=True)
     node_types = frozenset(
         t for t in ("module", "class", "function") if st.checkbox(t, value=True, key=f"nt_{t}")
     )
+    if content != "Codebase":
+        node_types = node_types | frozenset({"doc", "decision"})
     edge_kinds = frozenset(
         k for k in ("calls", "imports", "inherits") if st.checkbox(k, value=True, key=f"ek_{k}")
     )
@@ -89,19 +96,28 @@ if db is None:
     st.warning(f"No bundle found for project {project!r}.")
     st.stop()
 
-key = f"visible::{project}"
+key = f"visible::{project}::{content}"
+cats = []
+if content != "Documentation":
+    cats.append(graph.overview(db, project))
+if content != "Codebase":
+    cats.append(graph.doc_nodes(db, project))
+    cats.append(graph.decision_nodes(db, project))
+
 if key not in st.session_state:
-    st.session_state[key] = {n.id for n in graph.overview(db, project).nodes}
-    if not st.session_state[key]:
-        st.info(
-            "This bundle has no reference graph — enable `reference_graph.capture` and re-index."
-        )
+    seed = {n.id for cat in cats for n in cat.nodes}
+    st.session_state[key] = seed
+    if not seed:
+        st.info("Nothing to show for this content type in this bundle.")
         st.stop()
 visible: set[str] = st.session_state[key]
 
-full = graph.overview(db, project)
-known = {n.id: n for n in full.nodes}
-edges = list(full.edges)
+known: dict[str, graph.Node] = {}
+edges: list[graph.Edge] = []
+for cat in cats:
+    for n in cat.nodes:
+        known.setdefault(n.id, n)
+    edges.extend(cat.edges)
 for nid in list(visible):
     ntype = known[nid].node_type if nid in known else "module"
     sub = graph.expand(db, nid, ntype, edge_kinds)
