@@ -13,7 +13,7 @@ import threading
 
 import streamlit as st
 
-from pydocs_mcp.ask_your_docs.agent import ask, build_agent, reformulate
+from pydocs_mcp.ask_your_docs.agent import ask, build_agent, reformulate, weave_attachments
 from pydocs_mcp.ask_your_docs.catalog import workspace_catalog
 from pydocs_mcp.ask_your_docs.theme import THEMES, theme_css
 
@@ -122,6 +122,18 @@ for role, text in st.session_state.messages:
     with st.chat_message(role):
         st.markdown(text)
 
+attached = st.session_state.setdefault("attached", [])
+if attached:
+    st.caption("Attached from the graph:")
+    cols = st.columns(len(attached) + 1)
+    for i, sym in enumerate(list(attached)):
+        if cols[i].button(f"✕ {sym.rsplit('.', 1)[-1]}", key=f"chip_{sym}"):
+            attached.remove(sym)
+            st.rerun()
+    if cols[-1].button("clear all", key="chip_clear"):
+        attached.clear()
+        st.rerun()
+
 if question := st.chat_input("Ask about your indexed projects…"):
     st.session_state.messages.append(("user", question))
     with st.chat_message("user"):
@@ -130,7 +142,9 @@ if question := st.chat_input("Ask about your indexed projects…"):
         agent, llm = get_agent(workspace, model, base_url, config)
         # A fresh immutable snapshot per question — not shared across sessions.
         scope = {"project": project_pin, "package": package_pin, "code": code_pin}
-        standalone = run(reformulate(llm, st.session_state.history, question))
+        woven = weave_attachments(attached, question)
+        st.session_state.attached = []
+        standalone = run(reformulate(llm, st.session_state.history, woven))
         answer = run(ask(agent, st.session_state.history, standalone, scope=scope))
         st.markdown(answer)
     st.session_state.messages.append(("assistant", answer))
