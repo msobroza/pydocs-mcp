@@ -104,6 +104,18 @@ def theme_css(p: dict[str, str]) -> str:
         color: {p["accent"]} !important; font-weight: 600;
     }}
 
+    /* ---- buttons (breadcrumb + graph actions) ---- */
+    /* Streamlit's default hover recolours text/border to the native primaryColor
+       (the dark-mode teal), which is low-contrast on a light button. Drive the
+       hover from the active palette accent instead, readable in both themes. */
+    .stButton button {{ color: {p["text"]}; background: {p["surface"]}; border: 1px solid {p["border"]}; }}
+    .stButton button:enabled:hover, .stButton button:enabled:focus {{
+        color: {p["accent"]} !important;
+        border-color: {p["accent"]} !important;
+        background: {p["wash"]} !important;
+    }}
+    .stButton button:disabled {{ color: {p["muted"]} !important; background: transparent; opacity: .6; }}
+
     /* ---- re-theme Streamlit widgets (the CLI sets only the dark base) ---- */
     [data-testid="stWidgetLabel"] p, .stRadio p, [data-testid="stToggle"] p {{ color: {p["text"]}; }}
     [data-testid="stCaptionContainer"] {{ color: {p["muted"]} !important; }}
