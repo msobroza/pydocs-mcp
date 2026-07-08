@@ -172,35 +172,47 @@ def test_minimum_share_floor() -> None:
 # no async router wiring required.
 
 
-def test_sum_of_shares_can_exceed_total_past_ten_targets() -> None:
-    # Pin the current (documented-but-surprising) overshoot behavior: with
-    # 20 equal-size closures the 10% floor alone sums to 2x the shared
-    # budget. This is the exact failure mode in the gap report — a batched
-    # get_context can render up to ~2x context_token_budget worth of output.
+def test_sum_never_exceeds_total_past_ten_equal_targets() -> None:
+    # ONE shared budget: 20 equal-size closures must NOT sum past `total`.
+    # The 10% floor is structurally unaffordable past 10 cards, so it degrades
+    # to a strict even split (fixes the ~2x overshoot the gap reported).
     shares = _split_budget(1000, [1] * 20)
-    assert sum(shares) == 2000
+    assert sum(shares) <= 1000
+    assert shares == [50] * 20  # even split of the whole budget
 
 
-def test_sum_of_shares_bounded_at_or_below_ten_targets() -> None:
-    # At <=10 equal-size targets the floor still sums within `total` — the
-    # contract holds up to the point the floor ratio structurally allows.
-    for n in range(1, 11):
+def test_sum_never_exceeds_total_across_target_counts() -> None:
+    # The shared-budget cap holds for EVERY allowed target count (1..20),
+    # equal sizes.
+    for n in range(1, 21):
         shares = _split_budget(1000, [1] * n)
         assert sum(shares) <= 1000, f"n={n} overshot: {shares}"
 
 
+def test_sum_never_exceeds_total_under_size_skew() -> None:
+    # The overshoot was never really "past 10 targets" — ANY floor-bound card
+    # (a tiny closure beside big ones) used to push max(floor, proportional)
+    # over `total`. Even a 2-card 99:1 skew must stay within budget, with the
+    # tiny card still guaranteed its floor.
+    shares = _split_budget(1000, [99, 1])
+    assert sum(shares) <= 1000
+    floor = int(1000 * 0.10)
+    assert min(shares) >= floor  # the tiny closure still renders
+    assert shares[0] > shares[1]  # bigger closure still gets more
+
+
 def test_all_empty_closures_split_evenly() -> None:
-    # denom == 0 branch (every closure resolves empty). Even split, not a
-    # ZeroDivisionError, and every share is still bounded by the floor.
+    # denom == 0 branch (every closure resolves empty). Even split within the
+    # affordable-floor regime — each card gets floor + an even share of the
+    # remainder; sum stays within `total`.
     shares = _split_budget(1000, [0, 0])
     assert shares == [500, 500]
 
 
-def test_all_empty_closures_split_evenly_past_ten_targets() -> None:
-    # Same denom == 0 branch, but with >10 targets (the gap's exact repro:
-    # 12 all-empty closures) — the even split collapses below the floor per
-    # card, so max(floor, even) pins every share to the floor, and the floor
-    # again sums past `total` for the same reason as the proportional path.
+def test_all_empty_closures_never_exceed_total_past_ten_targets() -> None:
+    # denom == 0 with >10 targets (the gap's 12-all-empty repro): the floor is
+    # unaffordable, so a strict even split — bounded by `total`, not the old
+    # 1200 overshoot.
     shares = _split_budget(1000, [0] * 12)
-    assert shares == [100] * 12
-    assert sum(shares) == 1200
+    assert sum(shares) <= 1000
+    assert shares == [1000 // 12] * 12
