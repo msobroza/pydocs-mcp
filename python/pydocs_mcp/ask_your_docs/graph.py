@@ -251,3 +251,19 @@ def doc_nodes(db_path: Path, project: str) -> Graph:
     nodes = [project_node] + [Node(f"doc:{f}", f, "doc") for f in files]
     edges = [Edge(f"doc:{f}", project_node.id, "documents") for f in files]
     return Graph(tuple(nodes), tuple(edges))
+
+
+def decision_nodes(db_path: Path, project: str) -> Graph:
+    """One node per decision record, grouped under the project via ``concerns``.
+
+    (Symbol-level backlinks are not present in current bundles, so decisions
+    attach to the project node; refine to per-symbol edges when available.)"""
+    with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
+        rows = conn.execute(
+            "SELECT id, title FROM chunks WHERE package=? AND origin='decision_record' ORDER BY id",
+            (_OWN,),
+        ).fetchall()
+    project_node = Node(f"project:{project}", project, "module")
+    nodes = [project_node] + [Node(f"decision:{cid}", title, "decision") for cid, title in rows]
+    edges = [Edge(f"decision:{cid}", project_node.id, "concerns") for cid, _ in rows]
+    return Graph(tuple(nodes), tuple(edges))

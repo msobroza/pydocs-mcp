@@ -213,3 +213,21 @@ def test_expand_doc_file_reveals_sections(tmp_path):
     labels = sorted(n.label for n in g.nodes)
     assert labels == ["Intro", "Usage"]
     assert all(e.kind == "contains" for e in g.edges)
+
+
+def test_decision_nodes_grouped_under_project(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    db = make_bundle(
+        tmp_path / "demo_0123456789.db",
+        decisions=[
+            ("Use RRF fusion", "We chose RRF because ..."),
+            ("SQLite over DuckDB", "Simplicity ..."),
+        ],
+    )
+    g = graph.decision_nodes(db, "demo")
+    types = {n.node_type for n in g.nodes if n.id.startswith("decision:")}
+    assert types == {"decision"}
+    assert len([n for n in g.nodes if n.node_type == "decision"]) == 2
+    assert all(e.kind == "concerns" for e in g.edges)
