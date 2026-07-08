@@ -109,6 +109,37 @@ class _TurboQuantReadStore:
             )
             return await store.vector_search(query_vector, limit, filter)
 
+    async def score(
+        self,
+        query_vector: Sequence[float],
+        *,
+        subset_chunk_ids: Sequence[int],
+        top_k: int,
+    ) -> tuple[tuple[int, float], ...]:
+        """Open a fresh TurboQuantUnitOfWork and delegate to the real store.
+
+        Mirrors :meth:`vector_search` above. Missing/empty ``.tq`` degrades
+        to ``()`` via the same empty-index path ``TurboQuantVectorStore``
+        already handles (no vectors added → ``index.contains`` is always
+        False → the present-ids intersection is empty).
+        """
+        async with TurboQuantUnitOfWork(
+            index_path=self.tq_path,
+            dim=self.dim,
+            bit_width=self.bit_width,
+        ) as uow:
+            store = TurboQuantVectorStore(
+                uow=uow,
+                candidate_id_resolver=self.candidate_id_resolver,
+                chunk_hydrator=self.chunk_hydrator,
+                retriever_name=self.retriever_name,
+            )
+            return await store.score(
+                query_vector,
+                subset_chunk_ids=subset_chunk_ids,
+                top_k=top_k,
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class _FastPlaidReadStore:

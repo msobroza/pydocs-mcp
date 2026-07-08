@@ -13,6 +13,9 @@
 # composite variants is what LLM clients typically want. Use this
 # preset for benchmark sweeps + offline evaluation, not as the live
 # MCP default.
+#
+# No dense_scorer: dense_fetcher's ANN index score IS the turbovec score
+# for this single-branch candidate set — see chunk_search_dense.yaml.
 name: chunk_search_dense_ranked
 steps:
   - name: pre_filter
@@ -22,9 +25,6 @@ steps:
       target_field: chunk
   - name: fetch
     type: dense_fetcher
-    params: {}
-  - name: score
-    type: dense_scorer
     params: {}
   - name: filter
     type: metadata_post_filter

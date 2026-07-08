@@ -17,19 +17,25 @@
 #   pre_filter
 #     │
 #     parallel_retrieval
-#     ├── branch bm25:  fetch (FTS5) → score (bm25)   → filter → topk (→ scratch[bm25.ranked])
-#     └── branch dense: fetch (ANN)  → score (cosine) → filter → topk (→ scratch[dense.ranked])
+#     ├── branch bm25:  fetch (FTS5) → score (bm25) → filter → topk (→ scratch[bm25.ranked])
+#     └── branch dense: fetch (ANN)                 → filter → topk (→ scratch[dense.ranked])
 #     │
 #   rrf_fusion (reads scratch[bm25.ranked] + scratch[dense.ranked]; writes state.candidates)
+#     │
+#   dense_scorer (POST-FUSION re-rank: turbovec allowlist score over the
+#                 fused candidate subset — descending sort for chunks
+#                 present in the .tq; BM25-only/absent chunks keep their
+#                 fused order and sink below, so BM25 recall survives)
 #     │
 #   limit (cap final item count for AC parity)
 #     │
 #   token_budget_formatter (composite render for MCP output)
 #
 # Requires BuildContext.embedder + BuildContext.vector_store at load
-# time for the dense branch (DenseFetcherStep / DenseScorerStep raise
-# on None). Provided by build_retrieval_context(...) when the server /
-# CLI boots with the embedder + TurboQuant store configured.
+# time for the dense branch AND the post-fusion re-rank (DenseFetcherStep
+# / DenseScorerStep raise on None). Provided by build_retrieval_context(...)
+# when the server / CLI boots with the embedder + TurboQuant store
+# configured.
 name: chunk_search_hybrid
 steps:
   - name: pre_filter
@@ -62,9 +68,6 @@ steps:
             - name: fetch
               type: dense_fetcher
               params: {}
-            - name: score
-              type: dense_scorer
-              params: {}
             - name: filter
               type: metadata_post_filter
               params: {}
@@ -74,6 +77,9 @@ steps:
                 publish_to: dense.ranked
   - name: fuse
     type: rrf_fusion
+    params: {}
+  - name: dense_rerank
+    type: dense_scorer
     params: {}
   - name: limit
     type: limit

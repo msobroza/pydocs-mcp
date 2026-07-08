@@ -1,31 +1,31 @@
-"""DenseScorerStep silently no-ops on real read-path candidates.
+"""DenseScorerStep re-ranks real read-path candidates by turbovec score.
 
-``TurboQuantVectorStore`` hydrates vector-search hits through
+``TurboQuantVectorStore.vector_search`` hydrates vector-search hits through
 ``build_sqlite_chunk_hydrator`` -> ``row_to_chunk``, and ``row_to_chunk``
 never populates ``Chunk.embedding`` (models.py documents this: "stays
 ``None`` on read paths because dense vectors live in the ``.tq`` sidecar
-and the SQL row does not carry them back into Chunk (S13)"). Every
-shipped dense pipeline (chunk_search_dense.yaml, chunk_search_graph.yaml,
-chunk_search_hybrid.yaml) chains ``dense_fetcher`` -> ``dense_scorer`` and
-the YAML comments promise the scorer "overwrite[s] relevance with exact
-cosine sim" because "the fetcher's ANN index score is approximate".
+and the SQL row does not carry them back into Chunk (S13)"). The OLD
+``DenseScorerStep`` read ``candidate.embedding`` directly and had an
+explicit ``if c.embedding is None: pass through unchanged`` branch — so on
+the real read path every candidate hit that branch and the scorer was a
+silent no-op in every shipped dense/hybrid pipeline.
 
-``DenseScorerStep.run`` has an explicit ``if c.embedding is None: pass
-through unchanged`` branch (dense_scorer.py) — so on the real read path
-every candidate takes that branch and the promised exact-cosine re-rank
-never happens. ``tests/retrieval/steps/test_dense_scorer.py`` never
-catches this because it hand-constructs ``Chunk`` objects WITH embeddings,
-a shape that real read-path candidates never have.
-
-This test drives the SAME path production uses end to end: index chunks
-with embeddings through IndexingService -> SearchBackend's composite
-UoW, then fetch through ``backend.dense()`` (the real
-``TurboQuantVectorStore`` + ``build_sqlite_chunk_hydrator`` wiring) and
-run ``DenseScorerStep`` on the hydrated candidates.
+The FIX turns ``DenseScorerStep`` into a POST-FUSION re-ranker that calls
+``store.score(query_vector, subset_chunk_ids=ids, top_k=K)`` —
+:class:`TurboQuantVectorStore.score` uses turbovec's allowlist-search hook
+to re-score the given id subset directly from the ``.tq`` index, so it
+needs no ``Chunk.embedding`` at all. This test drives the SAME path
+production uses end to end: index chunks with embeddings through
+IndexingService -> SearchBackend's composite UoW, fetch through
+``backend.dense()`` (real hydrated candidates, ``embedding=None``), then
+run ``DenseScorerStep`` wired to the real ``backend.dense()`` store and
+assert the relevance values actually CHANGE (a real re-rank, not a
+pass-through) and match the exact turbovec score for that subset.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -73,51 +73,20 @@ def _chunk(pkg: str, title: str, text: str, vec: np.ndarray) -> ChunkModel:
     )
 
 
-def _cosine_sim(u: np.ndarray, v: np.ndarray) -> float:
-    nu = float(np.linalg.norm(u))
-    nv = float(np.linalg.norm(v))
-    if nu == 0.0 or nv == 0.0:
-        return 0.0
-    return float(np.dot(u, v) / (nu * nv))
-
-
-@pytest.mark.xfail(
-    reason=(
-        "Known gap, unresolved by design decision (not a code bug fixable "
-        "in isolation): row_to_chunk() (storage/sqlite/row_mappers.py) never "
-        "populates Chunk.embedding on read paths (models.py S13 comment), "
-        "and turbovec.IdMapIndex exposes no reconstruct/get-vector API — it "
-        "stores only a quantized representation (bit_width=4 default), so "
-        "there is no full-precision vector anywhere on the read path for "
-        "DenseScorerStep to score against. Fixing this for real requires "
-        "either (a) a new SQLite schema version that persists raw float32 "
-        "chunk vectors alongside/instead of relying on the .tq quantized "
-        "index, wired through row_to_chunk + IndexingService's write path, "
-        "or (b) deleting dense_scorer from the shipped dense YAMLs "
-        "(chunk_search_dense.yaml / chunk_search_graph.yaml / "
-        "chunk_search_hybrid.yaml) and updating their now-inaccurate "
-        "'exact cosine re-rank' comments to document that ranking uses the "
-        "approximate ANN index score. Both are genuine design decisions "
-        "(schema migration vs. changed ranking contract) — see gap "
-        "'DenseScorerStep is a silent no-op in every shipped dense "
-        "pipeline'. This test pins CURRENT (broken) behavior; remove the "
-        "xfail once either fix lands."
-    ),
-    strict=True,
-)
 @pytest.mark.asyncio
-async def test_dense_scorer_rescopres_real_hydrated_candidates_with_exact_cosine(
+async def test_dense_scorer_reranks_real_hydrated_candidates_via_turboquant_score(
     tmp_path: Path,
 ) -> None:
     """End-to-end: index -> dense_fetcher-equivalent hydration -> dense_scorer.
 
     Candidates come from ``backend.dense().vector_search(...)`` — the exact
     hydration path ``DenseFetcherStep`` uses in every shipped dense YAML.
-    If ``DenseScorerStep`` is doing its documented job, each candidate's
-    ``relevance`` after scoring must equal the exact cosine similarity
-    between the query vector and that chunk's ORIGINAL embedding (the one
-    it was indexed with) — not the approximate ANN index score, and not a
-    pass-through no-op.
+    The rewritten ``DenseScorerStep`` re-ranks them via
+    ``backend.dense().score(...)`` (turbovec allowlist search over the
+    candidate subset) instead of reading ``candidate.embedding`` — so
+    ``relevance`` changes from whatever the fused/ANN input carried to the
+    fresh turbovec score, even though every candidate's ``embedding`` is
+    still ``None`` (the read-path contract is unchanged).
     """
     db_path = tmp_path / "index.sqlite"
     open_index_database(db_path).close()
@@ -129,10 +98,8 @@ async def test_dense_scorer_rescopres_real_hydrated_candidates_with_exact_cosine
     uow_factory = build_composite_uow_factory(backend.write_uow_children())
 
     # Two chunks with distinct dim-sized embeddings, differing enough in
-    # their leading components that exact cosine ranks them differently
-    # from a naive tie — if the scorer is a no-op vs a real re-rank the
-    # ordering could otherwise coincide by luck; asserting exact values
-    # rules that out.
+    # their leading components that turbovec ranks them differently from a
+    # naive tie.
     original_vecs = {
         "alpha": _vec(dim, 1.0, 0.0, 0.0, 0.0),
         "beta": _vec(dim, 0.6, 0.8, 0.0, 0.0),
@@ -157,32 +124,56 @@ async def test_dense_scorer_rescopres_real_hydrated_candidates_with_exact_cosine
     hits = await vector_store.vector_search(list(query_vec), limit=5)
     assert len(hits) == 2, "expected both indexed chunks to come back as candidates"
 
-    # Confirms the edge case: real hydrated candidates carry embedding=None
-    # (models.py S13) — this is the precondition that makes DenseScorerStep's
-    # `if c.embedding is None: pass through unchanged` branch fire in
-    # production.
+    # Confirms the read-path contract is unchanged: hydrated candidates
+    # still carry embedding=None (models.py S13) — DenseScorerStep must NOT
+    # need Chunk.embedding to do its job any more.
     assert all(c.embedding is None for c in hits), (
         "hydrated candidates unexpectedly carry embeddings — "
         "if this starts failing, the read-path hydration contract changed "
-        "and DenseScorerStep may no longer be a no-op (re-evaluate this test)"
+        "and this test's premise should be re-evaluated"
+    )
+    # Overwrite the incoming relevance/retriever_name with sentinel values
+    # a real dense_fetcher+RRF fusion would NEVER produce (e.g. a BM25-
+    # flavoured rank-fusion score), so any surviving sentinel proves a
+    # pass-through no-op — the OLD DenseScorerStep's failure mode (it read
+    # ``candidate.embedding`` which is always None on the read path, hit
+    # the ``if c.embedding is None: pass through`` branch, and left
+    # relevance/retriever_name completely untouched).
+    sentinel_hits = tuple(
+        replace(c, relevance=-999.0, retriever_name="rrf_fusion_sentinel") for c in hits
     )
 
     state = RetrieverState(
         query=SearchQuery(terms=query_text, max_results=10),
-        candidates=ChunkList(items=hits),
+        candidates=ChunkList(items=sentinel_hits),
     )
-    step = DenseScorerStep(name="dense_scorer", embedder=embedder)
+    step = DenseScorerStep(store=vector_store, embedder=embedder, top_k=10)
     out = await step.run(state)
 
     by_title = {c.metadata.get("title"): c for c in out.candidates.items}
+    assert set(by_title) == {"alpha", "beta"}
 
-    for title, orig_vec in original_vecs.items():
-        expected = _cosine_sim(query_vec, orig_vec)
-        actual = by_title[title].relevance
-        assert actual == pytest.approx(expected, rel=1e-5), (
-            f"dense_scorer did not rewrite relevance to the exact cosine "
-            f"similarity for chunk {title!r} (real hydrated candidate with "
-            f"embedding=None) — got {actual!r}, expected {expected!r} "
-            f"(the approximate ANN index score, unchanged, is the observed "
-            f"failure mode)"
+    for title in original_vecs:
+        chunk = by_title[title]
+        assert chunk.relevance is not None
+        assert chunk.relevance != -999.0, (
+            f"dense_scorer left the sentinel relevance untouched for chunk "
+            f"{title!r} — this is the pass-through no-op failure mode "
+            f"(OLD DenseScorerStep read candidate.embedding, which is "
+            f"always None on the read path, and skipped scoring entirely)"
         )
+        assert chunk.retriever_name == "turboquant_dense", (
+            f"dense_scorer did not stamp retriever_name for chunk {title!r} "
+            f"— got {chunk.retriever_name!r}, still the sentinel means the "
+            f"real turbovec re-score never ran"
+        )
+        expected = await vector_store.score(list(query_vec), subset_chunk_ids=[chunk.id], top_k=1)
+        assert expected, f"turboquant re-score returned nothing for chunk {title!r}"
+        assert chunk.relevance == pytest.approx(expected[0][1]), (
+            f"dense_scorer's relevance for chunk {title!r} does not match "
+            f"the exact turbovec score for its id"
+        )
+
+    # The re-ranked order must be descending by the fresh score.
+    ordered = list(out.candidates.items)
+    assert ordered[0].relevance >= ordered[1].relevance

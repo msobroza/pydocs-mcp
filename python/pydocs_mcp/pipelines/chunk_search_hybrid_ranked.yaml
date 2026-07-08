@@ -13,6 +13,9 @@
 # composite variants is what LLM clients typically want. Use this
 # preset for benchmark sweeps + offline evaluation, not as the live
 # MCP default.
+#
+# dense_scorer runs POST-FUSION (after rrf_fusion, before limit) — see
+# chunk_search_hybrid.yaml for the full rationale.
 name: chunk_search_hybrid_ranked
 steps:
   - name: pre_filter
@@ -45,9 +48,6 @@ steps:
             - name: fetch
               type: dense_fetcher
               params: {}
-            - name: score
-              type: dense_scorer
-              params: {}
             - name: filter
               type: metadata_post_filter
               params: {}
@@ -57,6 +57,9 @@ steps:
                 publish_to: dense.ranked
   - name: fuse
     type: rrf_fusion
+    params: {}
+  - name: dense_rerank
+    type: dense_scorer
     params: {}
   - name: limit
     type: limit
