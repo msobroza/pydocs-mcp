@@ -161,6 +161,29 @@ class VectorSearchable(Protocol):
 
 
 @runtime_checkable
+class VectorScoreable(Protocol):
+    """Read-only single-vector re-rank view: dense score over a candidate subset.
+
+    Mirrors :class:`MultiVectorSearchable` on the single-vector side —
+    turbovec's ``IdMapIndex.search(query, k, allowlist=...)`` scores ONLY
+    the given id subset instead of an open ANN search, so a pipeline-
+    provided candidate set (e.g. the fused BM25+dense top-K) can be
+    re-ranked by exact turbovec score without a second unrestricted
+    search. Kept SEPARATE from :class:`VectorSearchable` (interface
+    segregation) — adding ``score`` there would force every consumer
+    (including read-only fetch-only backends) to implement re-ranking.
+    """
+
+    async def score(
+        self,
+        query_vector: Sequence[float],
+        *,
+        subset_chunk_ids: Sequence[int],
+        top_k: int,
+    ) -> tuple[tuple[int, float], ...]: ...
+
+
+@runtime_checkable
 class HybridSearchable(Protocol):
     async def hybrid_search(
         self,

@@ -10,6 +10,9 @@
 #   rrf_fusion (reads hybrid.bm25.ranked + hybrid.dense.ranked,
 #               writes state.candidates)
 #     |
+#   dense_scorer (POST-FUSION re-rank: turbovec allowlist score over the
+#                 fused hybrid.bm25.ranked + hybrid.dense.ranked subset)
+#     |
 #   topk (publish_to hybrid.ranked) -- lift fused result back into scratch
 #     |
 #   conditional (predicate is_long_query):
@@ -56,9 +59,6 @@ steps:
             - name: fetch
               type: dense_fetcher
               params: {}
-            - name: score
-              type: dense_scorer
-              params: {}
             - name: filter
               type: metadata_post_filter
               params: {}
@@ -70,6 +70,9 @@ steps:
     type: rrf_fusion
     params:
       branch_keys: [hybrid.bm25.ranked, hybrid.dense.ranked]
+  - name: dense_rerank
+    type: dense_scorer
+    params: {}
   - name: hybrid_publish
     type: top_k_filter
     params:

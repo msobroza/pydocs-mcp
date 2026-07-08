@@ -119,5 +119,55 @@ class TurboQuantVectorStore:
             for c in chunks
         )
 
+    async def score(
+        self,
+        query_vector: Sequence[float],
+        *,
+        subset_chunk_ids: Sequence[int],
+        top_k: int,
+    ) -> tuple[tuple[int, float], ...]:
+        """Re-score a caller-provided candidate subset via ``IdMapIndex.search``.
+
+        The single-vector twin of :class:`MultiVectorStore.score` — the
+        allowlist hook lets turbovec score ONLY ``subset_chunk_ids``
+        instead of an open ANN search, so a pipeline-fused candidate set
+        (BM25+dense top-K) gets exact turbovec scores with no extra
+        storage. Does NOT hydrate chunks — the caller (``DenseScorerStep``)
+        already holds the candidates and only needs the score.
+        """
+        if not subset_chunk_ids:
+            return ()
+
+        query = np.asarray(query_vector, dtype=np.float32).reshape(1, -1)
+
+        # Selective embed policies leave some chunks deliberately vectorless
+        # (dependency code under embedding.dependency_policy: doc_pages), and
+        # a fused candidate subset can't know which — but IdMapIndex.search
+        # raises KeyError for allowlist ids absent from the index. Intersect
+        # with present ids first, mirroring vector_search's `_present_only`.
+        def _present_only() -> np.ndarray:
+            index = self.uow.index
+            return np.asarray(
+                [i for i in subset_chunk_ids if index.contains(int(i))],
+                dtype=np.uint64,
+            )
+
+        allowlist = await asyncio.to_thread(_present_only)
+        if allowlist.size == 0:
+            return ()
+
+        scores_2d, ids_2d = await asyncio.to_thread(
+            self.uow.index.search,
+            query,
+            top_k,
+            allowlist=allowlist,
+        )
+        scores = scores_2d[0]
+        ids = ids_2d[0]
+        if len(ids) == 0:
+            return ()
+
+        return tuple((int(i), float(s)) for i, s in zip(ids.tolist(), scores.tolist(), strict=True))
+
 
 __all__ = ("CandidateIdResolver", "ChunkHydrator", "TurboQuantVectorStore")

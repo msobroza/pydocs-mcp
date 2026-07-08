@@ -54,13 +54,34 @@ def test_hybrid_preset_has_parallel_then_rrf_fusion() -> None:
     assert step_types.index("parallel_retrieval") < step_types.index("rrf_fusion")
 
 
-def test_dense_preset_uses_dense_fetcher_and_dense_scorer() -> None:
+def test_dense_preset_uses_dense_fetcher_without_redundant_dense_scorer() -> None:
+    """chunk_search_dense.yaml is a single-branch pipeline: dense_fetcher's
+    ANN index score IS the turbovec score for that candidate set, so a
+    dense_scorer re-score would be pure redundancy. dense_scorer's job is
+    POST-FUSION re-ranking of a merged BM25+dense set — see the hybrid
+    preset assertion below."""
     cfg = yaml.safe_load(
         (PIPELINES_DIR / "chunk_search_dense.yaml").read_text(encoding="utf-8"),
     )
     step_types = [s["type"] for s in cfg["steps"]]
     assert "dense_fetcher" in step_types
+    assert "dense_scorer" not in step_types
+
+
+def test_hybrid_preset_runs_dense_scorer_after_rrf_fusion() -> None:
+    """dense_scorer is the POST-FUSION re-ranker: it must sit after
+    rrf_fusion (which produces the merged BM25+dense candidate set) and
+    before the final limit, not inside the dense branch pre-fusion."""
+    cfg = yaml.safe_load(
+        (PIPELINES_DIR / "chunk_search_hybrid.yaml").read_text(encoding="utf-8"),
+    )
+    step_types = [s["type"] for s in cfg["steps"]]
     assert "dense_scorer" in step_types
+    assert (
+        step_types.index("rrf_fusion")
+        < step_types.index("dense_scorer")
+        < step_types.index("limit")
+    )
 
 
 def test_ranked_variants_drop_token_budget_formatter() -> None:
@@ -79,7 +100,11 @@ def test_graph_preset_runs_graph_expand_after_filter() -> None:
         (PIPELINES_DIR / "chunk_search_graph.yaml").read_text(encoding="utf-8"),
     )
     step_types = [s["type"] for s in cfg["steps"]]
-    assert {"dense_fetcher", "dense_scorer", "graph_expand"} <= set(step_types)
+    # No dense_scorer: single-branch dense pipeline, same rationale as
+    # chunk_search_dense.yaml (dense_fetcher's ANN score IS the turbovec
+    # score for this candidate set).
+    assert {"dense_fetcher", "graph_expand"} <= set(step_types)
+    assert "dense_scorer" not in step_types
     # graph_expand sits after the metadata filter, before the top-k cutoff.
     assert (
         step_types.index("metadata_post_filter")

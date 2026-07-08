@@ -8,7 +8,8 @@
 # recorded design rationale — get_why is the richer, structured entry point.
 #
 # Shape mirrors chunk_search_deps.yaml:
-#   pre_filter → parallel [bm25 → topk] [dense → topk] → rrf_fusion → limit → budget
+#   pre_filter → parallel [bm25 → topk] [dense → topk] → rrf_fusion →
+#   dense_scorer (post-fusion re-rank) → limit → budget
 name: decision_search
 steps:
   - name: pre_filter
@@ -41,9 +42,6 @@ steps:
             - name: fetch
               type: dense_fetcher
               params: {}
-            - name: score
-              type: dense_scorer
-              params: {}
             - name: filter
               type: metadata_post_filter
               params: {}
@@ -53,6 +51,9 @@ steps:
                 publish_to: dense.ranked
   - name: fuse
     type: rrf_fusion
+    params: {}
+  - name: dense_rerank
+    type: dense_scorer
     params: {}
   - name: limit
     type: limit

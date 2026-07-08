@@ -8,8 +8,10 @@
 #   parallel_retrieval
 #     |-- branch hybrid:
 #     |     fetch (BM25)  -> score -> filter -> topk (-> scratch[hybrid.bm25.ranked])
-#     |     fetch (dense) -> score -> filter -> topk (-> scratch[hybrid.dense.ranked])
+#     |     fetch (dense)         -> filter -> topk (-> scratch[hybrid.dense.ranked])
 #     |     rrf_fusion (reads .bm25.ranked + .dense.ranked, writes state.candidates)
+#     |     dense_scorer (POST-FUSION re-rank: turbovec allowlist score over
+#     |                   the fused .bm25.ranked + .dense.ranked subset)
 #     |     topk (publish_to hybrid.ranked) -- lifts the fused result into scratch
 #     +-- branch tree:
 #           llm_tree_reasoning (writes state.scratch[tree.ranked])
@@ -63,9 +65,6 @@ steps:
                       - name: fetch
                         type: dense_fetcher
                         params: {}
-                      - name: score
-                        type: dense_scorer
-                        params: {}
                       - name: filter
                         type: metadata_post_filter
                         params: {}
@@ -77,6 +76,9 @@ steps:
               type: rrf_fusion
               params:
                 branch_keys: [hybrid.bm25.ranked, hybrid.dense.ranked]
+            - name: dense_rerank
+              type: dense_scorer
+              params: {}
             - name: hybrid_publish
               type: top_k_filter
               params:
