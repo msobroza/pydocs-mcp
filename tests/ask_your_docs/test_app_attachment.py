@@ -1,6 +1,12 @@
 import os
 from pathlib import Path
 
+import pytest
+
+# The Streamlit UI ships only with the [ask-your-docs] extra, which the core CI
+# matrix does not install. Skip (don't fail) when streamlit is absent.
+pytest.importorskip("streamlit")
+
 
 def test_attached_symbols_render_as_chips():
     from streamlit.testing.v1 import AppTest
