@@ -1,8 +1,9 @@
 """Graph explorer — second page of the ask-your-docs app.
 
-Overview -> click a node to expand it (its members / connections) -> read the
-docstring in the panel and collapse it again with the panel toggle. Filters:
-content type (codebase / documentation / both), node type, edge kind.
+Click a node to expand it (its members / connections); read the docstring in the
+panel and collapse it again with the panel toggle. Node types are shown by shape
++ colour (see the legend); edges are coloured by relationship. Filters: content
+type (codebase / documentation / both), node type, edge kind, hide-tests.
 "Add to question" pushes a node onto session_state.attached for the chat page.
 """
 
@@ -19,10 +20,9 @@ from streamlit_agraph import Edge as AEdge
 from streamlit_agraph import Node as ANode
 
 st.set_page_config(page_title="ask your docs — graph", page_icon="✦", layout="wide")
-st.markdown(
-    theme_css(THEMES["light" if st.session_state.get("light_mode") else "dark"]),
-    unsafe_allow_html=True,
-)
+_light = bool(st.session_state.get("light_mode"))
+_pal = THEMES["light" if _light else "dark"]
+st.markdown(theme_css(_pal), unsafe_allow_html=True)
 # The chat theme caps .block-container at 46rem (a readable column); the graph
 # wants the full wide-layout width.
 st.markdown(
@@ -30,14 +30,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-_TYPE_COLOR = {
-    "module": "#34D3B7",
-    "class": "#818CF8",
-    "function": "#60A5FA",
-    "doc": "#F0997B",
-    "decision": "#EF9F27",
+# Node types: distinct SHAPE + COLOUR (shape so it never relies on colour alone).
+_TYPE_STYLE = {
+    "module": ("diamond", "#34D3B7", "◆"),
+    "class": ("square", "#818CF8", "■"),
+    "function": ("dot", "#60A5FA", "●"),
+    "doc": ("triangle", "#F0997B", "▲"),
+    "decision": ("star", "#EF9F27", "★"),
 }
-_TYPE_SIZE = {"module": 22, "class": 16, "function": 12, "doc": 16, "decision": 16}
+_TYPE_SIZE = {"module": 20, "class": 15, "function": 11, "doc": 15, "decision": 15}
+# Relationships: colour per kind (no text labels — they clutter a dense graph).
+_EDGE_COLOR = {
+    "calls": "#60A5FA",
+    "imports": "#8A97A6",
+    "inherits": "#D4537E",
+    "contains": "#2A9D8F",
+    "documents": "#F0997B",
+    "concerns": "#EF9F27",
+}
 _STRUCTURAL = {"contains", "documents", "concerns"}
 
 
@@ -86,6 +96,7 @@ with st.sidebar:
     edge_kinds = frozenset(
         k for k in ("calls", "imports", "inherits") if st.checkbox(k, value=True, key=f"ek_{k}")
     )
+    hide_tests = st.checkbox("Hide test files", value=True, key="graph_hide_tests")
     if st.button("Reset view", key="graph_reset"):
         for k in [k for k in st.session_state if k.startswith("expanded::")]:
             del st.session_state[k]
@@ -106,7 +117,13 @@ if db is None:
     st.warning(f"No bundle found for project {project!r}.")
     st.stop()
 
-# Seed nodes for the enabled content type.
+
+def _hidden(nid: str) -> bool:
+    return hide_tests and graph.is_test(nid)
+
+
+# Seed nodes for the enabled content type (test files filtered out up front, so
+# their edges collapse away too).
 cats = []
 if content != "Documentation":
     cats.append(graph.overview(db, project))
@@ -114,7 +131,7 @@ if content != "Codebase":
     cats.append(graph.doc_nodes(db, project))
     cats.append(graph.decision_nodes(db, project))
 
-known: dict[str, graph.Node] = {n.id: n for cat in cats for n in cat.nodes}
+known: dict[str, graph.Node] = {n.id: n for cat in cats for n in cat.nodes if not _hidden(n.id)}
 if not known:
     st.info("Nothing to show for this content type in this bundle.")
     st.stop()
@@ -124,17 +141,19 @@ exp_key = f"expanded::{project}::{content}"
 expanded: set[str] = st.session_state.setdefault(exp_key, set())
 
 # visible is DERIVED each run: the seed plus whatever the expanded nodes reveal.
-# Expanding/collapsing a node just toggles its membership in `expanded`, and the
-# graph recomputes — so nodes implode and explode deterministically.
+# Toggling a node's membership in `expanded` implodes / explodes it.
 visible: set[str] = set(known)
 struct_edges = [e for cat in cats for e in cat.edges if e.kind in _STRUCTURAL]
 for nid in list(expanded):
     sub = graph.expand(db, nid, graph.type_of(nid, module_set), edge_kinds)
     for n in sub.nodes:
+        if _hidden(n.id):
+            continue
         known.setdefault(n.id, n)
         visible.add(n.id)
     struct_edges += [e for e in sub.edges if e.kind in _STRUCTURAL]
-    visible.add(nid)
+    if nid in known:
+        visible.add(nid)
 
 # Reference edges among ALL visible nodes (so siblings show their relationships,
 # collapsing to modules when members are hidden).
@@ -144,17 +163,41 @@ combined = graph.Graph(
 )
 shown = graph.induce(combined, node_types, edge_kinds)
 
+# Legend — colour + shape encode meaning, so decode it.
+_present_types = [t for t in _TYPE_STYLE if t in node_types]
+_node_legend = " ".join(
+    f'<span style="color:{_TYPE_STYLE[t][1]}">{_TYPE_STYLE[t][2]}</span>'
+    f'<span style="color:{_pal["muted"]}"> {t}</span>'
+    for t in _present_types
+)
+_edge_legend = " ".join(
+    f'<span style="color:{_EDGE_COLOR[k]}">──</span><span style="color:{_pal["muted"]}"> {k}</span>'
+    for k in ("calls", "imports", "inherits", "contains")
+    if k in edge_kinds or k == "contains"
+)
+st.markdown(
+    f'<div style="display:flex;gap:1.4rem;flex-wrap:wrap;font-size:.82rem;margin:.1rem 0 .5rem;">'
+    f'<span style="color:{_pal["text"]};font-weight:600">nodes</span> {_node_legend}'
+    f'<span style="color:{_pal["text"]};font-weight:600;margin-left:.6rem">edges</span> {_edge_legend}'
+    f"</div>",
+    unsafe_allow_html=True,
+)
 st.caption(f"{len(shown.nodes)} nodes · {len(shown.edges)} edges — click a node to expand it")
+
 anodes = [
     ANode(
         id=n.id,
         label=n.label,
-        size=_TYPE_SIZE.get(n.node_type, 14),
-        color=_TYPE_COLOR.get(n.node_type, "#8A97A6"),
+        size=_TYPE_SIZE.get(n.node_type, 12),
+        color=_TYPE_STYLE.get(n.node_type, ("dot", "#8A97A6", ""))[1],
+        shape=_TYPE_STYLE.get(n.node_type, ("dot", "#8A97A6", ""))[0],
     )
     for n in shown.nodes
 ]
-aedges = [AEdge(source=e.source, target=e.target, label=e.kind) for e in shown.edges]
+aedges = [
+    AEdge(source=e.source, target=e.target, color=_EDGE_COLOR.get(e.kind, "#8A97A6"))
+    for e in shown.edges
+]
 clicked = agraph(
     nodes=anodes,
     edges=aedges,
@@ -191,10 +234,9 @@ if selected and selected in known:
             if st.button("⊟ Collapse", key="graph_collapse"):
                 expanded.discard(selected)
                 st.rerun()
-        else:
-            if st.button("⊞ Expand", key="graph_expand"):
-                expanded.add(selected)
-                st.rerun()
+        elif st.button("⊞ Expand", key="graph_expand"):
+            expanded.add(selected)
+            st.rerun()
         if st.button("➕ Add to question", key="graph_attach"):
             att = st.session_state.setdefault("attached", [])
             if selected not in att:

@@ -329,3 +329,15 @@ def edges_for(db_path: Path, visible: set[str], kinds: frozenset[str]) -> tuple[
             seen.add((a, b, kind))
             out.append(Edge(a, b, kind))
     return tuple(out)
+
+
+_TEST_SEGMENTS = frozenset({"tests", "test", "conftest"})
+
+
+def is_test(node_id: str) -> bool:
+    """True for test modules/files (a ``test``/``tests`` package, ``test_*`` or
+    ``*_test`` module, or ``conftest``) so the UI can filter them out."""
+    for seg in node_id.split("."):
+        if seg in _TEST_SEGMENTS or seg.startswith("test_") or seg.endswith("_test"):
+            return True
+    return False

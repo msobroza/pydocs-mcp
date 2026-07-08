@@ -269,3 +269,13 @@ def test_type_of_from_id_prefixes():
     assert graph.type_of("pkg.a", mods) == "module"
     assert graph.type_of("pkg.a.Foo", mods) == "class"
     assert graph.type_of("pkg.a.run", mods) == "function"
+
+
+def test_is_test_flags_test_modules():
+    from pydocs_mcp.ask_your_docs import graph
+
+    assert graph.is_test("pkg.tests.unit.test_cli")
+    assert graph.is_test("pkg.foo_test")
+    assert graph.is_test("pkg.conftest")
+    assert not graph.is_test("pkg.adapters.base")
+    assert not graph.is_test("pkg.renderer.render_for")
