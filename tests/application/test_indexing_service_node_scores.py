@@ -39,6 +39,7 @@ def _wiring():
 @pytest.mark.asyncio
 async def test_recompute_populates_when_enabled() -> None:
     pytest.importorskip("networkx")  # PageRank/Louvain need the [graph] extra
+    pytest.importorskip("scipy")  # networkx PageRank runs on the scipy solver
     _chunks, _refs, nss, uowf = _wiring()
     svc = IndexingService(uow_factory=uowf, node_scores_enabled=True)
     await svc.recompute_node_scores()
@@ -50,6 +51,7 @@ async def test_recompute_populates_when_enabled() -> None:
 @pytest.mark.asyncio
 async def test_similar_edges_excluded_from_centrality() -> None:
     pytest.importorskip("networkx")
+    pytest.importorskip("scipy")  # networkx PageRank runs on the scipy solver
     chunks = InMemoryChunkStore(by_package={"pkg": [_chunk("pkg.a"), _chunk("pkg.b")]})
     # One real CALLS edge a->b plus a synthetic 'similar' a->b: in_degree(b)
     # must count ONLY the structural edge (1), not the similar one.
