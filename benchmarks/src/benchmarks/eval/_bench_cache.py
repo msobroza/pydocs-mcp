@@ -88,7 +88,17 @@ def commit(key: str, build_dir: Path) -> Path:
         shutil.rmtree(build_dir, ignore_errors=True)
         return db_path_for(key)
     final.parent.mkdir(parents=True, exist_ok=True)
-    build_dir.replace(final)  # atomic dir rename on the same filesystem
+    try:
+        build_dir.replace(final)  # atomic dir rename on the same filesystem
+    except OSError:
+        # TOCTOU: another process promoted its entry between the exists()
+        # check above and this rename — the rename then hits a non-empty
+        # dir (ENOTEMPTY). Benign ONLY if a usable winner entry is actually
+        # there: drop ours and serve theirs. Otherwise (EXDEV, permissions)
+        # re-raise rather than return a path to a db that doesn't exist.
+        if not db_path_for(key).is_file():
+            raise
+        shutil.rmtree(build_dir, ignore_errors=True)
     return db_path_for(key)
 
 

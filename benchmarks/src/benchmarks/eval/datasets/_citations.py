@@ -10,8 +10,12 @@ from __future__ import annotations
 import re
 
 # path or bare filename, optionally backticked, with optional 'line N[-M]' tail.
+# The (?![A-Za-z0-9_]) boundary after '.py' stops backtracking from carving a
+# phantom citation out of dotted module names ('matplotlib.pyplot' would
+# otherwise cite 'matplotlib.py') and .pyx/.pyc mentions ('_speedups.pyx'
+# would cite '_speedups.py') — false cites corrupt the SWE-QA pseudo-qrels.
 _CITE_RE = re.compile(
-    r"`?(?P<path>[A-Za-z0-9_\-./]+\.py)`?"
+    r"`?(?P<path>[A-Za-z0-9_\-./]+\.py)(?![A-Za-z0-9_])`?"
     r"(?:\s*[:,(]?\s*lines?\s+(?P<start>\d+)(?:\s*[-–]\s*(?P<end>\d+))?)?"
 )
 
