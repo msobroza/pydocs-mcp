@@ -91,6 +91,46 @@ const SKIP_DIRS: &[&str] = &[
     "egg-info",
 ];
 
+/// Core traversal logic, kept free of the PyO3 boundary so it's directly
+/// unit-testable (see PyO3 boundary pattern in CLAUDE.md: thin boundary,
+/// pure-Rust core).
+fn walk_py_files_impl(root_path: &Path) -> Vec<String> {
+    let mut result: Vec<String> = WalkDir::new(root_path)
+        .into_iter()
+        // Skip excluded directories early (before reading their contents).
+        .filter_entry(|entry| {
+            if entry.file_type().is_dir() {
+                let name = entry.file_name().to_string_lossy();
+                return !SKIP_DIRS.contains(&name.as_ref());
+            }
+            true
+        })
+        // Keep only .py files. WalkDir runs with follow_links(false), so
+        // entry.file_type() reports a symlink's OWN type (neither file
+        // nor dir) even when it points at a regular file — that silently
+        // dropped symlinked .py files (common in editable installs /
+        // pyenv shims / nix-store layouts) that the Python fallback's
+        // os.walk() includes via `filenames`. Resolve symlinks through
+        // fs::metadata (follows the link) so both engines see the same
+        // file set.
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            let is_file = if entry.file_type().is_symlink() {
+                fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
+            } else {
+                entry.file_type().is_file()
+            };
+            if is_file && path.extension().and_then(|e| e.to_str()) == Some("py") {
+                return Some(path.to_string_lossy().into_owned());
+            }
+            None
+        })
+        .collect();
+    result.sort();
+    result
+}
+
 /// Walk `root` and return all .py file paths as sorted strings.
 ///
 /// Releases the GIL during directory traversal so Python threads can run
@@ -98,34 +138,7 @@ const SKIP_DIRS: &[&str] = &[
 #[pyfunction]
 fn walk_py_files(py: Python<'_>, root: &str) -> Vec<String> {
     let root = root.to_owned();
-    py.allow_threads(move || {
-        let root_path = Path::new(&root);
-
-        let mut result: Vec<String> = WalkDir::new(root_path)
-            .into_iter()
-            // Skip excluded directories early (before reading their contents).
-            .filter_entry(|entry| {
-                if entry.file_type().is_dir() {
-                    let name = entry.file_name().to_string_lossy();
-                    return !SKIP_DIRS.contains(&name.as_ref());
-                }
-                true
-            })
-            // Keep only .py files.
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                if entry.file_type().is_file() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("py") {
-                        return Some(path.to_string_lossy().into_owned());
-                    }
-                }
-                None
-            })
-            .collect();
-        result.sort();
-        result
-    })
+    py.allow_threads(move || walk_py_files_impl(Path::new(&root)))
 }
 
 // ── 2. File Hasher ───────────────────────────────────────────────────────
@@ -406,5 +419,43 @@ mod tests {
     #[test]
     fn read_file_missing_file_returns_empty_string() {
         assert_eq!(read_file("/nonexistent/path/does-not-exist.py"), "");
+    }
+
+    // Regression: WalkDir runs with follow_links(false), so a symlink
+    // entry's own file_type() is neither file nor dir even when the target
+    // is a regular .py file — that used to make walk_py_files silently drop
+    // symlinked .py files that the Python fallback's os.walk() includes.
+    // Resolving through fs::metadata (which follows the link) keeps both
+    // engines' discovered file sets identical.
+    #[test]
+    #[cfg(unix)]
+    fn walk_py_files_includes_symlinked_py_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!(
+            "pydocs_mcp_native_test_walk_symlink_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        let real = dir.join("real.py");
+        fs::write(&real, "x = 1\n").expect("write real.py");
+        let linked = dir.join("linked.py");
+        symlink(&real, &linked).expect("create symlink");
+
+        let found = walk_py_files_impl(&dir);
+        let _ = fs::remove_dir_all(&dir);
+
+        let real_str = real.to_string_lossy().into_owned();
+        let linked_str = linked.to_string_lossy().into_owned();
+        assert!(
+            found.contains(&real_str),
+            "expected {found:?} to contain {real_str}"
+        );
+        assert!(
+            found.contains(&linked_str),
+            "expected {found:?} to contain {linked_str}"
+        );
     }
 }

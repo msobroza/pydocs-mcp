@@ -19,3 +19,29 @@ class UnitOfWorkNotEnteredError(PydocsMCPError, RuntimeError):
             f"the transaction context.",
         )
         self.attr_name = attr_name
+
+
+class EmbeddingDimMismatchError(PydocsMCPError, ValueError):
+    """Raised when a loaded ``.tq`` index's on-disk dim disagrees with the
+    configured ``embedding.dim``.
+
+    ``TurboQuantUnitOfWork._open_index`` only applies ``dim`` on the
+    CONSTRUCT branch — a LOADED index keeps its stored dim. Without this
+    gate, a config-only ``embedding.dim``/model change (no reindex) either
+    crashes indexing on turbovec's raw ``add_with_ids`` ValueError, or —
+    worse — lets ``IdMapIndex.search`` run to completion with a wrong-dim
+    query and silently return meaningless similarity scores. Raised eagerly
+    in ``TurboQuantUnitOfWork.__aenter__`` right after load, before any
+    add/search call can reach turbovec.
+    """
+
+    def __init__(self, *, index_path: object, index_dim: int, configured_dim: int) -> None:
+        super().__init__(
+            f"{index_path} was built with dim={index_dim}, but the configured "
+            f"embedding.dim={configured_dim} disagrees. Reindex the project "
+            f"(pydocs-mcp index . --force) after changing embedding.dim or "
+            f"the embedding model in YAML.",
+        )
+        self.index_path = index_path
+        self.index_dim = index_dim
+        self.configured_dim = configured_dim

@@ -510,6 +510,38 @@ def _rebuild_from_scratch(conn: sqlite3.Connection) -> None:
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
+def _connect_or_recreate(path: Path) -> sqlite3.Connection:
+    """Open ``path`` as SQLite, dropping and recreating it if it's not one.
+
+    A corrupt cache file (garbage bytes from a disk-full write, a crash
+    mid-write, or a partial copy) raises ``sqlite3.DatabaseError`` on the
+    very first PRAGMA — before ``_migrate_in_place`` ever runs, so the
+    ``except sqlite3.OperationalError`` fallback in ``open_index_database``
+    never sees it (``OperationalError`` is a SUBCLASS of ``DatabaseError``,
+    not the reverse). Treated like an unknown schema version: the cache is
+    derived data, so delete + recreate beats bricking startup forever.
+    """
+    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.DatabaseError as exc:
+        log.warning(
+            "cache file %s is not a valid SQLite database (%s) — deleting "
+            "and rebuilding from scratch; the next `pydocs-mcp index` run "
+            "repopulates it",
+            path,
+            exc,
+        )
+        conn.close()
+        path.unlink(missing_ok=True)
+        conn = sqlite3.connect(str(path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
@@ -536,12 +568,17 @@ def open_index_database(path: Path) -> sqlite3.Connection:
       subsequent open re-took the same branch and crashed identically — a
       permanent crash-loop only fixable by manually deleting the ``.db``. The
       cache is derived data; an empty working DB beats a bricked one.
+    - a cache file that is not a SQLite database at all (garbage bytes from a
+      disk-full write, a crash mid-write, or a partial copy): the very first
+      PRAGMA raises ``sqlite3.DatabaseError`` — a superclass of, not a
+      subtype of, ``sqlite3.OperationalError``, so it is NOT caught by the
+      in-place-migration fallback below. Delete the corrupt file and recreate
+      it from scratch; a corrupt cache is exactly as recoverable as an
+      unknown schema version (same "cache is derived data" policy as the
+      version-mismatch branch above).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn = _connect_or_recreate(path)
 
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     try:

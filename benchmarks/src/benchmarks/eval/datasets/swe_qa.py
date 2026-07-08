@@ -23,6 +23,7 @@ from typing import Any
 from ..corpus import materialize_corpus
 from ..serialization import dataset_registry
 from ._citations import extract_path_citations, resolve_bare_filenames
+from ._download import check_content_length
 from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
 from .base_dataset import EvalTask, GoldAnswer
 
@@ -154,12 +155,17 @@ class SweQaDataset:
         return _read_jsonl(target)
 
     def _download_split_atomic(self, filename: str, target: Path) -> None:
-        # Atomic write: fetch → validate each line parses → .tmp → os.replace.
+        # Atomic write: fetch → check Content-Length → validate each line
+        # parses → .tmp → os.replace. Per-line JSON validation alone cannot
+        # catch a body truncated exactly on a '\n' boundary (proxy cut-off,
+        # dropped connection flushed mid-stream): every surviving line still
+        # parses. The Content-Length comparison catches that case.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         url = _RELEASE_URL.format(revision=self.revision, repo=filename)
         tmp = target.with_suffix(target.suffix + ".tmp")
         with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310
             payload = resp.read()
+            check_content_length(resp, payload, url=url)
         for line in payload.decode().splitlines():
             if line.strip():
                 json.loads(line)

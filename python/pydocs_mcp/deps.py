@@ -33,9 +33,16 @@ _SKIP_DIRS = frozenset(
 def normalize_package_name(raw: str) -> str:
     """Normalize a raw dependency string to a plain package name.
 
-    Examples: 'FastAPI>=0.100' -> 'fastapi', 'scikit-learn[ml]' -> 'scikit_learn'
+    Examples: 'FastAPI>=0.100' -> 'fastapi', 'scikit-learn[ml]' -> 'scikit_learn',
+    'requests~=2.31' -> 'requests', 'pkg@git+https://...' -> 'pkg'
+
+    '~' and '@' must split too: PEP 440 '~=' (compatible-release) would
+    otherwise strand a trailing '~' since the class only ate the '=', and
+    PEP 508 direct-URL refs ('name@url') have no delimiter at all without
+    '@' in the class — both produced a name matching no installed
+    distribution, silently dropping the dependency from indexing.
     """
-    name = re.split(r"[><=!;\[\s(]", raw)[0]
+    name = re.split(r"[><=!;~@\[\s(]", raw)[0]
     return name.strip().lower().replace("-", "_")
 
 
@@ -76,15 +83,23 @@ def parse_pyproject_dependencies(path: str) -> list[str]:
         with pyproject_path.open("rb") as f:
             data = tomllib.load(f)
         project = data.get("project", {})
-        specs: list[str] = list(project.get("dependencies", []))
+        # A malformed-but-valid manifest can write `dependencies = "requests"`
+        # (string) instead of a list. list()/extend() over a bare string yields
+        # its characters, and each single-char str survives the `isinstance(d,
+        # str)` filter below — so every non-list value must be rejected up front
+        # rather than iterated.
+        raw_deps = project.get("dependencies", [])
+        specs: list[str] = list(raw_deps) if isinstance(raw_deps, list) else []
         # PEP 621 extras: {extra_name: [specs]} under [project.optional-dependencies].
         for extra in project.get("optional-dependencies", {}).values():
-            specs.extend(extra)
+            if isinstance(extra, list):
+                specs.extend(extra)
         # PEP 735 groups: {group_name: [spec | {include-group=name}]} at the top
         # level. Skip the include-group dict refs — the referenced group's specs
         # are collected on its own iteration.
         for group in data.get("dependency-groups", {}).values():
-            specs.extend(item for item in group if isinstance(item, str))
+            if isinstance(group, list):
+                specs.extend(item for item in group if isinstance(item, str))
         return [normalize_package_name(d) for d in specs if isinstance(d, str) and d.strip()]
     except Exception:
         # Best-effort parsing: malformed pyproject.toml shouldn't crash discovery;

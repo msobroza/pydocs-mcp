@@ -192,3 +192,32 @@ def test_error_policy_lives_in_exactly_one_function() -> None:
 
     src = pathlib.Path(main_mod.__file__).read_text()
     assert src.count("re-run with --verbose to see the traceback") == 1
+
+
+def test_leading_verbose_survives_subparser_default() -> None:
+    """``-v`` before the subcommand must not be clobbered by the subparser's
+    re-declared ``-v``.
+
+    Regression guard: each subparser re-declares ``-v/--verbose`` (so
+    ``pydocs-mcp search x -v`` also works) using
+    ``default=argparse.SUPPRESS``. If that suppression is ever dropped —
+    e.g. as a seemingly-redundant cleanup — the subparser's ``False``
+    default overwrites a leading ``-v`` in the merged namespace, silently
+    disabling verbose diagnostics for every ``pydocs-mcp -v <cmd> ...``
+    invocation while every other existing test stays green.
+    """
+    from pydocs_mcp.__main__ import _build_parser
+
+    parser = _build_parser()
+
+    # Leading position: top-level -v must survive the subparser merge.
+    args_leading = parser.parse_args(["-v", "search", "x"])
+    assert args_leading.verbose is True
+
+    # Trailing position: subparser's own -v still works.
+    args_trailing = parser.parse_args(["search", "x", "-v"])
+    assert args_trailing.verbose is True
+
+    # Absent: default is False, not SUPPRESS leaking through as missing attr.
+    args_absent = parser.parse_args(["search", "x"])
+    assert args_absent.verbose is False

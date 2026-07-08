@@ -151,6 +151,34 @@ class TestOpenDb:
         assert row["version"] == "1.0"
         conn2.close()
 
+    def test_corrupt_cache_file_is_dropped_and_rebuilt(self, tmp_path):
+        """A cache .db file truncated/corrupted by disk-full, a crash mid-write,
+        or a partial copy must not brick startup. Unlike a version mismatch
+        (which deliberately wipes and rebuilds), garbage bytes at the cache
+        path raise ``sqlite3.DatabaseError`` — a superclass of, NOT a subtype
+        of, ``sqlite3.OperationalError`` — straight out of the very first
+        PRAGMA on the lazily-opened connection, before ``_migrate_in_place``
+        ever runs. The fix policy mirrors the existing mismatch branch: a
+        corrupt cache is exactly as recoverable as an unknown version, so
+        ``open_index_database`` must catch it, delete/recreate the file, and
+        return a fresh usable v-current DB instead of letting the raw
+        sqlite3 error propagate and permanently brick every subsequent
+        server/CLI startup.
+        """
+        db_file = tmp_path / "corrupt.db"
+        db_file.write_bytes(b"garbage not a sqlite file" * 10)
+
+        conn = open_index_database(db_file)
+        try:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            assert version == SCHEMA_VERSION
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='packages'"
+            ).fetchone()
+            assert row is not None
+        finally:
+            conn.close()
+
 
 class TestClearPkg:
     def test_removes_target_package(self, db_with_package):

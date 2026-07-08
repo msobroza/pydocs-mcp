@@ -340,8 +340,21 @@ def main() -> None:
             # datasets without ``metadata["qa_type"]`` (RepoQA, DS-1000) the
             # report renders byte-identical to the no-task_rows path.
             task_rows=_task_rows_from_legs(outcome.legs),
+            # WHY: thread the operator's actual ``--metrics`` through so a
+            # non-default sweep (e.g. ``--metrics ndcg@10,precision@1``)
+            # renders rows for the metrics that were actually computed,
+            # instead of the report's row loop silently defaulting to
+            # DEFAULT_METRIC_SPECS and rendering an all-dash table.
+            metric_specs=_parse_csv(args.metrics),
         )
         if args.report is not None:
+            # WHY mkdir(parents=True): without this, write_text() raises
+            # FileNotFoundError on a missing parent dir AFTER the sweep has
+            # already run — and because the raise happens before the
+            # print(report) below, the report would reach neither the file
+            # nor stdout, losing the whole sweep's output. Mirrors the
+            # auto-create-parent-dirs precedent in plotting.py's exporters.
+            args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(report)
         print(report)
     finally:

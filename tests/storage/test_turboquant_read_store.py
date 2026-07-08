@@ -108,3 +108,36 @@ async def test_read_store_empty_tq_returns_empty(tmp_path: Path) -> None:
     )
     out = await store.vector_search(_vec(0).tolist(), limit=5)
     assert out == ()
+
+
+@pytest.mark.asyncio
+async def test_read_store_corrupt_tq_degrades_instead_of_raising(tmp_path: Path) -> None:
+    """A ``.tq`` file that EXISTS but is unreadable (truncated by disk
+    trouble, hand-edited, or written by an incompatible turbovec version)
+    must degrade the dense leg to ``()``, not raise a raw ``OSError``.
+
+    ``_TurboQuantReadStore`` opens a FRESH ``TurboQuantUnitOfWork`` per
+    query (module docstring); every hybrid/dense search hits this same
+    path, so an unreadable sidecar would otherwise take down BM25+dense
+    fusion entirely instead of degrading to the BM25 leg alone.
+    ``IdMapIndex.load`` raises ``OSError('not a TVIM file: wrong magic')``
+    for any existing-but-invalid file — confirmed against the real
+    turbovec extension, distinct from the missing-file branch already
+    covered by ``test_read_store_empty_tq_returns_empty`` above (that one
+    never calls ``IdMapIndex.load`` at all; ``Path.exists()`` is False so
+    ``_open_index`` takes the constructor branch instead).
+    """
+    db_path = tmp_path / "x.db"
+    tq_path = tmp_path / "x.tq"
+    open_index_database(db_path).close()
+    tq_path.write_bytes(b"not a real tq file, just garbage bytes")
+
+    store = _TurboQuantReadStore(
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BIT_WIDTH,
+        candidate_id_resolver=build_sqlite_candidate_id_resolver(db_path),
+        chunk_hydrator=build_sqlite_chunk_hydrator(db_path),
+    )
+    out = await store.vector_search(_vec(0).tolist(), limit=5)
+    assert out == ()

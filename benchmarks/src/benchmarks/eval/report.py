@@ -48,6 +48,7 @@ def format_report(
     dataset_name: str,
     n_tasks: int,
     task_rows: TaskRows | None = None,
+    metric_specs: tuple[str, ...] = _METRIC_ROW_ORDER,
 ) -> str:
     """Render a markdown table from a sweep's aggregated results.
 
@@ -61,6 +62,13 @@ def format_report(
             report grows a ``## By qa_type`` section with one row per category
             (per-category metric means). Absent or single-category → the top
             table renders byte-identical to a call without this argument.
+        metric_specs: Quality-metric row order. Defaults to
+            ``DEFAULT_METRIC_SPECS`` (the historic row order downstream
+            regression-diff scripts key on). Callers whose sweep used a
+            non-default ``--metrics`` (e.g. ``ndcg@10,precision@1``) MUST
+            pass the actual specs here — otherwise those metrics have no row
+            and the default rows all render as ``—`` (the values simply
+            aren't in ``sweep_results`` under the default names).
 
     Returns:
         A markdown string. The runner writes it to ``report.md`` and logs
@@ -79,7 +87,7 @@ def format_report(
     # (infrastructure cost). The two row groups share the same column
     # layout but use different cell renderers — _format_cell picks the
     # renderer by metric-name suffix.
-    for metric_name in (*_METRIC_ROW_ORDER, *_LATENCY_ROW_ORDER):
+    for metric_name in (*metric_specs, *_LATENCY_ROW_ORDER):
         row = [metric_name]
         for key in columns:
             triple = sweep_results.get(key, {}).get(metric_name)

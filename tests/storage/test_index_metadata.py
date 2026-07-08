@@ -78,6 +78,25 @@ def test_single_row_check_constraint(tmp_path: Path) -> None:
     assert raised
 
 
+def test_read_returns_none_on_genuinely_pre_v11_db_without_migration(tmp_path: Path) -> None:
+    """A pre-v11 db opened via plain sqlite3.connect (no open_index_database) has
+    no ``index_metadata`` table at all — the docstring promises ``None`` here (that
+    is what ``legacy_fallback`` exists for), but a bare SELECT used to raise
+    ``sqlite3.OperationalError: no such table: index_metadata`` instead. This is
+    exactly what ``build_freshness_probe._read`` does (storage/factories.py) and
+    what any multi-repo loader reading a sibling repo's db would do.
+    """
+    db = tmp_path / "legacy_no_migration.db"
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE packages (name TEXT PRIMARY KEY, embedding_model TEXT)")
+    conn.execute("INSERT INTO packages(name, embedding_model) VALUES('__project__', 'bge')")
+    conn.commit()
+
+    assert read_index_metadata(conn) is None
+    conn.close()
+
+
 def test_legacy_fallback_dim_unknown() -> None:
     meta = IndexMetadata.legacy_fallback(project_name="p", embedding_model="bge")
     assert meta.embedding_dim == -1 and meta.indexed_at == 0.0

@@ -81,6 +81,25 @@ class TestWalkPyFilesParity:
         (tmp_path / "visible.py").touch()
         assert rust.walk_py_files(str(tmp_path)) == py.walk_py_files(str(tmp_path))
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="symlink creation needs elevated privileges on Windows"
+    )
+    def test_symlinked_py_file(self, tmp_path):
+        # Regression: a symlink to a real .py file inside the walked root
+        # (common in editable installs / pyenv shims / nix-store layouts).
+        # WalkDir (Rust) runs with follow_links disabled and filters on the
+        # entry's OWN file_type, so a symlink entry is neither a dir nor a
+        # file per file_type().is_file() -> Rust drops it. os.walk (Python)
+        # puts symlinks-to-files in `filenames` regardless -> the fallback
+        # includes it. Engine switch must not change the discovered file
+        # set (different members indexed, different packages.content_hash).
+        real = tmp_path / "real.py"
+        real.write_text("x = 1\n")
+        linked = tmp_path / "linked.py"
+        os.symlink(real, linked)
+
+        assert rust.walk_py_files(str(tmp_path)) == py.walk_py_files(str(tmp_path))
+
 
 class TestHashFilesParity:
     def test_mtime_change_changes_hash(self, tmp_path):
