@@ -191,21 +191,39 @@ async def _render_workspace_overview(services: tuple[ProjectServices, ...]) -> s
 
 
 def _split_budget(total: int, sizes: list[int]) -> list[int]:
-    """Split ``total`` tokens across cards proportionally to closure ``sizes``.
+    """Split ``total`` tokens across cards — ONE shared budget, never exceeded.
 
-    ``share_i = max(floor, total * size_i / Σsizes)`` with
-    ``floor = int(total * _MIN_SHARE_RATIO)`` — every card is guaranteed the
-    floor so a tiny closure batched beside a huge one still renders (a bigger
-    closure just gets proportionally more of the remaining budget). When every
-    closure is empty (``Σsizes == 0``) the budget splits evenly, so each card
-    still gets a usable share instead of collapsing to the floor.
+    Reserve the per-card floor (``int(total * _MIN_SHARE_RATIO)``) for every
+    card, then distribute the REMAINING budget proportionally to closure
+    ``sizes`` (empty closures share the remainder evenly). This guarantees the
+    invariant ``sum(shares) <= total`` while still giving a tiny closure
+    batched beside a huge one its guaranteed floor.
 
-    Module-level + pure so the proportional-split math is unit-testable apart
-    from the async two-phase orchestration in ``ToolRouter.get_context``.
+    WHY not ``max(floor, proportional)``: that layered the floor ON TOP of an
+    already-full proportional split, so any floor-bound card pushed the total
+    over budget — up to ~2x with 20 equal cards (``ContextInput.targets`` caps
+    at 20), and past budget for any skewed batch with a small closure. The
+    floor is only affordable while ``len(sizes) * floor <= total`` (i.e. up to
+    ``1/_MIN_SHARE_RATIO`` = 10 cards); beyond that the floor guarantee is
+    structurally impossible, so it degrades to a strict even split of ``total``.
+
+    Module-level + pure so the split math is unit-testable apart from the async
+    two-phase orchestration in ``ToolRouter.get_context``.
     """
+    n = len(sizes)
     floor = int(total * _MIN_SHARE_RATIO)
+    # Floor unaffordable (> 1/ratio cards): can't honor it without overshooting,
+    # so split the whole budget evenly instead.
+    if n * floor > total:
+        even = total // n
+        return [even for _ in sizes]
+    # Floor affordable: reserve it for every card, hand out the remainder
+    # proportionally (empty closures -> even remainder). ``floor + remainder``
+    # per card sums to at most ``total`` because the proportional parts sum to
+    # at most ``remainder`` under floor division.
+    remainder = total - n * floor
     denom = sum(sizes)
     if denom == 0:
-        even = total // len(sizes)
-        return [max(floor, even) for _ in sizes]
-    return [max(floor, total * size // denom) for size in sizes]
+        extra = remainder // n
+        return [floor + extra for _ in sizes]
+    return [floor + remainder * size // denom for size in sizes]
