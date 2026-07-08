@@ -44,6 +44,36 @@ def test_no_ledger_active_is_harmless() -> None:
     assert format_chunks_markdown_within_budget(chunks, budget_tokens=200)
 
 
+def test_prose_first_chunk_still_gets_recovery_pointer() -> None:
+    # Top-ranked hit is a prose/README chunk with no qualified_name — a
+    # docs-search page mixing prose + code results. The elided chunk (budget
+    # cut off after the first block) IS code-backed, so a recovery pointer
+    # must still surface: the ledger entry should scan past the qname-less
+    # leader instead of taking its empty string (spec §D7 "no renderer drops
+    # content without registering an entry carrying a recovery pointer").
+    prose_chunk = Chunk.from_test_inputs(
+        title="README",
+        text="x" * 400,
+        package="pkg",
+        module="pkg.docs",
+        metadata={},  # no qualified_name: prose hit
+    )
+    code_chunk = Chunk.from_test_inputs(
+        title="T1",
+        text="x" * 400,
+        package="pkg",
+        module="pkg.mod",
+        metadata={"qualified_name": "pkg.mod.f1"},
+    )
+    with ledger_scope() as ledger:
+        # Budget fits only the prose chunk; the code chunk is elided.
+        format_chunks_markdown_within_budget((prose_chunk, code_chunk), budget_tokens=200)
+    assert len(ledger.entries) == 1
+    entry = ledger.entries[0]
+    assert entry.recovery.startswith("[[next:lookup:"), entry.recovery
+    assert "pkg.mod.f1" in entry.recovery
+
+
 def test_references_limit_hit_records_entry() -> None:
     rows = tuple(
         NodeReference(

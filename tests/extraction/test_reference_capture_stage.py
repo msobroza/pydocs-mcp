@@ -14,6 +14,7 @@ from pydocs_mcp.extraction.pipeline.ingestion import (
 )
 from pydocs_mcp.extraction.pipeline.stages import ReferenceCaptureStage
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.extraction.strategies.chunkers.heading_markdown import HeadingMarkdownChunker
 from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
 
 
@@ -195,6 +196,46 @@ async def test_capture_stage_emits_mentions_for_markdown_when_kinds_include_ment
     mentions = [r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS]
     names = {r.to_name for r in mentions}
     assert {"pkg.helpers.compute", "pkg.utils.runner"} <= names
+
+
+@pytest.mark.asyncio
+async def test_capture_stage_mentions_from_node_id_matches_markdown_chunker_identity(
+    monkeypatch,
+):
+    """MENTIONS ``from_node_id`` must equal the ``qualified_name`` the
+    markdown chunker assigns the SAME file, or the edge can never be
+    joined back to a persisted tree node / chunk.
+
+    ``HeadingMarkdownChunker.build_tree`` keys the MODULE node via
+    ``_module_from_doc_path`` (suffix-preserving: ``pkg.README.md``).
+    ``ReferenceCaptureStage._capture_all`` must derive the same identity
+    for its markdown branch — using the ``.py``-only ``_module_from_path``
+    (suffix-stripped: ``pkg.README``) produces a MENTIONS row whose
+    ``from_node_id`` matches no tree node or chunk, so ``get_references``
+    on the doc node silently returns nothing.
+    """
+    monkeypatch.setattr(
+        stages_mod,
+        "_CAPTURE_CONFIG",
+        ReferenceCaptureConfig(
+            enabled=True,
+            kinds=["calls", "imports", "inherits", "mentions"],
+        ),
+    )
+    path = "pkg/README.md"
+    content = "# Docs\nSee `pkg.helpers.compute` for the entry point.\n"
+    root = Path()
+
+    stage = ReferenceCaptureStage()
+    state = _state(((path, content),))
+    new_state = await stage.run(state)
+    mentions = [r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS]
+    assert mentions, "expected at least one MENTIONS edge"
+
+    tree = HeadingMarkdownChunker().build_tree(path, content, "pkg", root)
+    expected_from_node_id = tree.qualified_name
+
+    assert {m.from_node_id for m in mentions} == {expected_from_node_id}
 
 
 @pytest.mark.asyncio

@@ -107,6 +107,52 @@ async def test_node_list_not_a_list_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_top_level_json_array_raises_value_error() -> None:
+    """LLM returns valid JSON that is a top-level array, not an object.
+
+    json.loads succeeds but ``data.get("node_list", [])`` would raise
+    AttributeError on a list (no ``.get``). The docstring promises a
+    ValueError shape gate so a prompt/format regression surfaces as a
+    catchable error, not an uncontracted crash.
+    """
+    llm = FakeLlmClient(responses={"q": '["proj.entry"]'})
+    uow_factory = make_fake_uow_factory(
+        trees=InMemoryDocumentTreeStore(by_package={"__project__": [_project_tree()]}),
+    )
+    step = LlmTreeReasoningStep(llm_client=llm, uow_factory=uow_factory)
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        await step.run(_state("q"))
+
+
+@pytest.mark.asyncio
+async def test_top_level_json_null_raises_value_error() -> None:
+    """LLM returns the JSON literal ``null`` -> data is None, not a dict.
+
+    ``None.get(...)`` would raise AttributeError; must surface as
+    ValueError instead (see test_top_level_json_array_raises_value_error).
+    """
+    llm = FakeLlmClient(responses={"q": "null"})
+    uow_factory = make_fake_uow_factory(
+        trees=InMemoryDocumentTreeStore(by_package={"__project__": [_project_tree()]}),
+    )
+    step = LlmTreeReasoningStep(llm_client=llm, uow_factory=uow_factory)
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        await step.run(_state("q"))
+
+
+@pytest.mark.asyncio
+async def test_top_level_json_string_raises_value_error() -> None:
+    """LLM returns a bare JSON string -> data is str, not a dict."""
+    llm = FakeLlmClient(responses={"q": '"ok"'})
+    uow_factory = make_fake_uow_factory(
+        trees=InMemoryDocumentTreeStore(by_package={"__project__": [_project_tree()]}),
+    )
+    step = LlmTreeReasoningStep(llm_client=llm, uow_factory=uow_factory)
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        await step.run(_state("q"))
+
+
+@pytest.mark.asyncio
 async def test_empty_tree_returns_state_unchanged() -> None:
     llm = FakeLlmClient(responses={})  # never called
     uow_factory = make_fake_uow_factory(

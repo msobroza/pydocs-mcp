@@ -5,10 +5,14 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from openai import RateLimitError
+from openai import APIStatusError, RateLimitError
 
 from pydocs_mcp.retrieval.llm_clients.openai import OpenAiLlmClient
 from pydocs_mcp.retrieval.protocols import LlmClient
+
+
+def _rate_limit_error() -> RateLimitError:
+    return RateLimitError(message="rate limit", response=MagicMock(), body=None)
 
 
 def test_openai_client_satisfies_protocol() -> None:
@@ -217,3 +221,101 @@ async def test_openai_client_retries_on_rate_limit() -> None:
         )
     assert call_count["n"] == 3
     assert "ok" in result
+
+
+@pytest.mark.asyncio
+async def test_openai_client_async_reraises_after_exhausting_retries() -> None:
+    """Persistent RateLimitError (all 3 attempts fail) must re-raise the
+    same exception type after exactly 3 create() calls, sleeping with the
+    documented exponential backoff schedule (2.0s, then 4.0s)."""
+    client = OpenAiLlmClient(model_name="gpt-4o-mini", api_key="test-key")
+    call_count = {"n": 0}
+
+    async def always_fails(*args, **kwargs):
+        call_count["n"] += 1
+        raise _rate_limit_error()
+
+    sdk = client._async_client()
+    with (
+        patch.object(sdk.chat.completions, "create", new=always_fails),
+        patch(
+            "pydocs_mcp.retrieval.llm_clients.openai.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ) as mock_sleep,
+        pytest.raises(RateLimitError),
+    ):
+        await client.chat([{"role": "user", "content": "x"}])
+    assert call_count["n"] == 3
+    # Exactly 2 sleeps (between attempts 1->2 and 2->3), backoff 2.0 then 4.0.
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [2.0, 4.0]
+
+
+def test_openai_client_sync_reraises_after_exhausting_retries() -> None:
+    """chat_sync's retry loop (_with_retry_sync) had zero coverage: mirror
+    the async exhaustion case using time.sleep instead of asyncio.sleep."""
+    client = OpenAiLlmClient(model_name="gpt-4o-mini", api_key="test-key")
+    call_count = {"n": 0}
+
+    def always_fails(*args, **kwargs):
+        call_count["n"] += 1
+        raise _rate_limit_error()
+
+    sdk = client._sync_client()
+    with (
+        patch.object(sdk.chat.completions, "create", new=always_fails),
+        patch(
+            "pydocs_mcp.retrieval.llm_clients.openai.time.sleep",
+            return_value=None,
+        ) as mock_sleep,
+        pytest.raises(RateLimitError),
+    ):
+        client.chat_sync([{"role": "user", "content": "x"}])
+    assert call_count["n"] == 3
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [2.0, 4.0]
+
+
+@pytest.mark.asyncio
+async def test_openai_client_non_rate_limit_error_propagates_without_retry() -> None:
+    """A non-RateLimitError APIStatusError (e.g. 401 auth failure) must
+    propagate immediately after exactly 1 create() call — retrying an
+    auth error 3x would be wrong (it can never succeed) and would needlessly
+    delay the caller."""
+    client = OpenAiLlmClient(model_name="gpt-4o-mini", api_key="test-key")
+    call_count = {"n": 0}
+
+    async def auth_fails(*args, **kwargs):
+        call_count["n"] += 1
+        raise APIStatusError(message="invalid api key", response=MagicMock(), body=None)
+
+    sdk = client._async_client()
+    with (
+        patch.object(sdk.chat.completions, "create", new=auth_fails),
+        patch(
+            "pydocs_mcp.retrieval.llm_clients.openai.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ) as mock_sleep,
+        pytest.raises(APIStatusError),
+    ):
+        await client.chat([{"role": "user", "content": "x"}])
+    assert call_count["n"] == 1
+    mock_sleep.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chat_returns_empty_string_when_content_is_none() -> None:
+    """SDK responses can carry message.content=None (e.g. a tool-call-only
+    or empty completion). chat() must degrade to "" rather than propagate
+    None — a caller like the tree-reasoning step feeds this straight into
+    json.loads(), where None would TypeError instead of the cleaner
+    JSONDecodeError on ""."""
+    client = OpenAiLlmClient(model_name="gpt-4o-mini", api_key="test-key")
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content=None))]
+    sdk = client._async_client()
+    with patch.object(
+        sdk.chat.completions,
+        "create",
+        new=AsyncMock(return_value=fake_completion),
+    ):
+        result = await client.chat([{"role": "user", "content": "hello"}])
+    assert result == ""

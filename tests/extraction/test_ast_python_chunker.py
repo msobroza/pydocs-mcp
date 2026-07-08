@@ -20,7 +20,11 @@ Covers:
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from pydocs_mcp.extraction.strategies.chunkers import AstPythonChunker
 from pydocs_mcp.extraction.config import ChunkingConfig
@@ -308,6 +312,45 @@ def test_absolute_path_with_root_yields_dotted_module(tmp_path: Path) -> None:
         root=tmp_path,
     )
     assert root.qualified_name == "pkg.sub.mod"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.symlink needs elevated perms on Windows")
+def test_symlinked_file_outside_root_keeps_project_relative_qname(tmp_path: Path) -> None:
+    """Monorepo symlink case: ``pkg/shared_utils.py`` is a symlink to a file
+    that lives OUTSIDE the indexing root (e.g. ``../../lib/shared_utils.py``).
+
+    ``os.walk`` lists symlinked files (``followlinks=False`` only prunes
+    symlinked DIRECTORIES from traversal, not individual symlinked files),
+    so the discoverer hands this path to the chunker like any other. Pre-fix,
+    ``_relative_module_parts`` called ``p.resolve()`` — which follows the
+    symlink to its OUTSIDE-root target — before ``relative_to(root)``, so the
+    relative_to() raised ValueError and the module id fell back to the bare
+    basename stem ``shared_utils`` instead of the project-relative
+    ``pkg.shared_utils``. Two same-basename symlinks in different packages
+    would then collide on the ``(package, module)`` DocumentTreeStore PK.
+    """
+    outside_dir = tmp_path.parent / f"{tmp_path.name}_outside_lib"
+    outside_dir.mkdir(exist_ok=True)
+    real_target = outside_dir / "shared_utils.py"
+    real_target.write_text("def helper():\n    return 1\n", encoding="utf-8")
+
+    root = tmp_path / "project"
+    pkg_dir = root / "pkg"
+    pkg_dir.mkdir(parents=True)
+    symlink_path = pkg_dir / "shared_utils.py"
+    os.symlink(real_target, symlink_path)
+
+    result = AstPythonChunker().build_tree(
+        path=str(symlink_path),
+        content=real_target.read_text(encoding="utf-8"),
+        package="pkg",
+        root=root,
+    )
+    # The module id must reflect the symlink's LOCATION inside the indexed
+    # project (pkg.shared_utils), never the resolved target's bare stem
+    # (shared_utils) — that bare form is what two colliding symlinks in
+    # different packages would both produce.
+    assert result.qualified_name == "pkg.shared_utils"
 
 
 # ── 16. Fenced code block language tag captured ────────────────────────────

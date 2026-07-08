@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -70,11 +71,22 @@ def _relative_module_parts(path: str, root: Path) -> tuple[list[str], Path]:
     differs. Paths outside ``root`` fall back to the basename stem so
     tests using fake paths and vendored files still produce a stable
     module id.
+
+    Uses ``os.path.abspath`` (normalizes ``.``/``..``, does NOT follow
+    symlinks) rather than ``Path.resolve()`` (follows symlinks). A monorepo
+    file symlinked from inside ``root`` to a target outside it must keep its
+    IN-TREE location as its identity — resolving the symlink target made
+    ``relative_to(root)`` raise on paths that are legitimately inside the
+    indexed tree, falling back to the bare basename stem and colliding two
+    same-named symlinks from different packages on the module qname.
     """
     p = Path(path)
-    root_abs = root.resolve() if root.is_absolute() else Path.cwd() / root
+    # WORKAROUND: os.path.abspath (not Path.resolve()) — resolve() follows
+    # symlinks, which is exactly what must NOT happen here (see docstring).
+    p_abs = Path(os.path.abspath(path))  # noqa: PTH100
+    root_abs = Path(os.path.abspath(root))  # noqa: PTH100
     try:
-        rel = p.resolve().relative_to(root_abs)
+        rel = p_abs.relative_to(root_abs)
     except ValueError:
         rel = Path(p.name)
     return list(rel.with_suffix("").parts), p
@@ -102,9 +114,17 @@ def _module_from_doc_path(path: str, root: Path) -> str:
 
 def _relpath(path: str, root: Path) -> str:
     """Relative source path from the indexing root; opaque strings pass
-    through unchanged (satisfies spec §4.3 ``source_path`` contract)."""
+    through unchanged (satisfies spec §4.3 ``source_path`` contract).
+
+    ``os.path.abspath`` (not ``Path.resolve()``) so a symlinked file keeps
+    its in-tree location as ``source_path`` instead of leaking the resolved
+    target's absolute filesystem path — see ``_relative_module_parts`` for
+    the identical symlink-preserving rationale.
+    """
     try:
-        return str(Path(path).resolve().relative_to(root.resolve()))
+        # WORKAROUND: os.path.abspath, not Path.resolve() — see
+        # _relative_module_parts docstring for the symlink rationale.
+        return str(Path(os.path.abspath(path)).relative_to(os.path.abspath(root)))  # noqa: PTH100
     except ValueError:
         return path
 
