@@ -49,16 +49,28 @@ fn safe_truncate(s: &str, max_chars: usize) -> &str {
 
 // ── Static regexes (compiled once) ──────────────────────────────────────
 
+// Header only: matches up to (and captures) an optional opening '(' but does
+// NOT try to capture the whole parenthesized group. A `[^)]*` charclass
+// can't span a nested ')' inside a default value (tuple/call/dict literal —
+// e.g. `def resize(size=(640, 480)):`, ubiquitous in vision/ML libs), so the
+// old combined regex silently failed to match the entire definition whenever
+// one appeared. The matching close paren is instead found by a depth-aware
+// scan (`scan_matching_paren`), mirroring _fallback.py's parse_py_file.
+//
 // Paren group is optional: paren-less `class Config:` is the idiomatic, most
 // common class form in modern Python (no base classes). `def`/`async def`
 // always carry parens in valid syntax, so making the group optional here
-// cannot introduce false positives for functions. Mirrors _fallback.py.
-static DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?m)^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?\s*(?:->[\s\w\[\],.|]*)?:"#,
-    )
-    .unwrap()
+// cannot introduce false positives for functions.
+static HEADER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*(\()?"#).unwrap()
 });
+
+// Matches what must immediately follow the closing paren (or the name, for a
+// paren-less class): an optional `-> ...` return annotation, then `:`. The
+// annotation charclass has no quote character, so `-> "Foo":` (a forward
+// reference) is tolerated by `.*?` non-greedy matching through to the `:`
+// rather than being excluded outright.
+static TAIL_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*(?:->.*?)?:"#).unwrap());
 
 static DOC_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?s)^(?:"""(.*?)"""|'''(.*?)''')"#).unwrap());
@@ -211,6 +223,36 @@ struct ParsedMember {
     docstring: String, // first triple-quoted string after definition
 }
 
+/// Bound the paren-balance scan so a pathological unclosed '(' can't walk
+/// the rest of a huge source file byte-by-byte.
+const PAREN_SCAN_LIMIT: usize = 4000;
+
+/// Return the byte index just past the ')' matching the '(' at `open_idx`.
+///
+/// Plain depth counting (not a `[^)]*` regex charclass) so a nested ')'
+/// inside a default value doesn't terminate the scan early. Mirrors
+/// `_fallback._scan_matching_paren`. Returns `None` if unclosed within
+/// `PAREN_SCAN_LIMIT` bytes (caller treats the definition as unparseable,
+/// same as a regex non-match).
+fn scan_matching_paren(source: &str, open_idx: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let end = (open_idx + PAREN_SCAN_LIMIT).min(bytes.len());
+    let mut depth = 0i32;
+    for (i, &b) in bytes.iter().enumerate().take(end).skip(open_idx) {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Extract top-level functions and classes from Python source code.
 ///
 /// This uses regex, not a full parser, so it's fast and fault-tolerant.
@@ -221,19 +263,40 @@ struct ParsedMember {
 fn parse_py_file(source: &str) -> Vec<ParsedMember> {
     let mut members = Vec::new();
 
-    for cap in DEF_RE.captures_iter(source) {
+    for cap in HEADER_RE.captures_iter(source) {
         let kind = cap[1].to_string();
         let name = cap[2].to_string();
-        // Group 3 (params) is absent for paren-less classes (`class Config:`).
-        let signature = format!("({})", cap.get(3).map_or("", |m| m.as_str()).trim());
 
         // Skip private names.
         if name.starts_with('_') {
             continue;
         }
 
+        let header_end = cap.get(0).unwrap().end();
+        let (signature, after_paren) = match cap.get(3) {
+            // Paren present: header_end is right after '(' (the capture is
+            // the '(' itself), so open_idx = header_end - 1.
+            Some(_) => match scan_matching_paren(source, header_end - 1) {
+                Some(close_idx) => (
+                    source[header_end..close_idx - 1].trim().to_string(),
+                    close_idx,
+                ),
+                // Unclosed within the scan bound — skip, don't misparse.
+                None => continue,
+            },
+            // Paren-less class (`class Config:`).
+            None => (String::new(), header_end),
+        };
+
+        // `-> ...:` (or paren-less `:`) must immediately follow, else this
+        // wasn't actually a def/class header.
+        let tail_source = &source[after_paren..];
+        let Some(tail_match) = TAIL_RE.find(tail_source) else {
+            continue;
+        };
+        let match_end = after_paren + tail_match.end();
+
         // Find the docstring: look only at the first ~500 chars after the definition.
-        let match_end = cap.get(0).unwrap().end();
         let rest_full = &source[match_end..];
         let rest = safe_truncate(rest_full, DOCSTRING_LOOKAHEAD);
 
@@ -253,7 +316,7 @@ fn parse_py_file(source: &str) -> Vec<ParsedMember> {
         members.push(ParsedMember {
             name,
             kind,
-            signature,
+            signature: format!("({})", signature),
             docstring,
         });
     }
@@ -389,6 +452,38 @@ mod tests {
         let members = parse_py_file(&src);
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].docstring, cjk_doc);
+    }
+
+    // Regression: `\(([^)]*)\)` (the old combined header+params regex)
+    // cannot span a nested ')' inside a default value, so a top-level
+    // `def resize(size=(640, 480)):` (ubiquitous in vision/ML libs) never
+    // matched at all — the whole symbol silently vanished from
+    // module_members. HEADER_RE + scan_matching_paren must find it and
+    // capture the full nested signature text.
+    #[test]
+    fn parse_py_file_finds_def_with_nested_paren_default() {
+        let src = "def resize(size=(640, 480)):\n    \"\"\"Resize.\"\"\"\n    pass\n";
+        let members = parse_py_file(src);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "resize");
+        assert_eq!(members[0].signature, "(size=(640, 480))");
+    }
+
+    #[test]
+    fn parse_py_file_finds_class_with_call_in_bases() {
+        let src = "class A(B, metaclass=Meta()):\n    \"\"\"Doc.\"\"\"\n    pass\n";
+        let members = parse_py_file(src);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "A");
+        assert_eq!(members[0].kind, "class");
+    }
+
+    #[test]
+    fn parse_py_file_finds_def_with_quoted_return_annotation() {
+        let src = "def f() -> \"Foo\":\n    \"\"\"Doc.\"\"\"\n    pass\n";
+        let members = parse_py_file(src);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "f");
     }
 
     use std::sync::atomic::{AtomicU64, Ordering};

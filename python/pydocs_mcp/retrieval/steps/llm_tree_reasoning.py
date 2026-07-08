@@ -338,6 +338,22 @@ class LlmTreeReasoningStep(RetrieverStep):
             raise ValueError(
                 f"doc_excerpt_max_chars must be a positive int; got {doc_excerpt_max_chars!r}",
             )
+        reference_neighbors_limit = kwargs["reference_neighbors_limit"]
+        # Same negative-slice bug class as doc_excerpt_max_chars above:
+        # ``callers[: self.reference_neighbors_limit]`` with a negative value
+        # keeps all-but-the-last N callers instead of capping, and 0 (or
+        # bool False, an int subclass) silently disables the
+        # include_references=True feature the user opted into. Fail fast at
+        # YAML-build time.
+        if (
+            not isinstance(reference_neighbors_limit, int)
+            or isinstance(reference_neighbors_limit, bool)
+            or reference_neighbors_limit < 1
+        ):
+            raise ValueError(
+                "reference_neighbors_limit must be a positive int; got "
+                f"{reference_neighbors_limit!r}",
+            )
         # Migration aid: the budget is now token-based; reject the old word param.
         if "max_tree_words" in data:
             raise ValueError(
@@ -386,13 +402,36 @@ def _scope_trees_to_candidates(
     state: RetrieverState,
 ) -> tuple[DocumentNode, ...]:
     """Restrict the project trees to the incoming candidates' qualified_names.
-    Empty result signals 'nothing to rerank' (the caller passes state through)."""
+    Empty result signals 'nothing to rerank' (the caller passes state through).
+
+    WHY warn only when candidates is non-empty: a genuinely empty stage-1
+    (``state.candidates is None`` or has zero items) is a legitimate no-op —
+    there's nothing to rerank, and callers already treat it silently. But
+    NON-empty stage-1 candidates whose chunks either carry no qualified_name
+    metadata or carry only dependency qnames absent from the __project__
+    trees (a realistic BM25-over-full-corpus stage 1) also collapse to an
+    empty forest here — that case must be observable, or a rerank run
+    silently degrades to stage-1 ranking with no signal (PAGEINDEX_DIVS.md
+    F6.4). The caller's ``if not trees: return state`` can't tell these two
+    causes apart, so the warning is emitted at the source of the emptying.
+    """
     allowed = _candidate_qnames(state)
-    if not allowed:
-        return ()
-    return tuple(
-        pruned for t in trees if (pruned := _filter_tree_to_qnames(t, allowed)) is not None
+    scoped = (
+        ()
+        if not allowed
+        else tuple(
+            pruned for t in trees if (pruned := _filter_tree_to_qnames(t, allowed)) is not None
+        )
     )
+    had_candidates = state.candidates is not None and bool(state.candidates.items)
+    if not scoped and had_candidates:
+        log.warning(
+            "llm_tree_reasoning: candidate scoping left no project tree "
+            "nodes to rerank (candidates carry no qualified_name, or none "
+            "match the project tree); passing stage-1 candidates through "
+            "unchanged.",
+        )
+    return scoped
 
 
 def _log_reductions(

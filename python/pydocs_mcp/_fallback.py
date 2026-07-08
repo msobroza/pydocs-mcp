@@ -83,26 +83,79 @@ class ParsedMember:
     docstring: str
 
 
+# Bound the paren-balance scan (_scan_matching_paren) so a pathological
+# unclosed '(' can't walk the rest of a huge source file char-by-char.
+_PAREN_SCAN_LIMIT = 4000
+
+
+def _scan_matching_paren(source: str, open_idx: int) -> int | None:
+    """Return the index just past the ``)`` matching the ``(`` at ``open_idx``.
+
+    Plain depth counting (not a `[^)]*` regex charclass) so a nested ``)``
+    inside a default value (tuple literal, call, dict) doesn't terminate the
+    scan early — see ``def resize(size=(640, 480)):`` in vision/ML libs,
+    which the old `\\(([^)]*)\\)` pattern could never match at all because
+    the inner ``)`` closed the regex's paren group before the real one.
+    Returns None if unclosed within `_PAREN_SCAN_LIMIT` chars (caller treats
+    the definition as unparseable, same as a regex non-match today).
+    """
+    depth = 0
+    end = min(len(source), open_idx + _PAREN_SCAN_LIMIT)
+    for i in range(open_idx, end):
+        ch = source[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
 def parse_py_file(source: str) -> list[ParsedMember]:
-    """Extract top-level functions and classes using regex."""
+    """Extract top-level functions and classes using regex + a paren-balance scan."""
     # Paren group is optional: paren-less `class Config:` is the idiomatic,
     # most common class form in modern Python (no base classes). `def`/`async def`
     # always carry parens in valid syntax, so making the group optional here
     # cannot introduce false positives for functions.
-    def_re = re.compile(
-        r"^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?\s*(?:->[\s\w\[\],.|]*)?:",
+    #
+    # The '(' is matched but NOT captured with `[^)]*)` here — that charclass
+    # can't span a nested ')' inside a tuple/call default, so the whole
+    # definition would fail to match. Instead we only anchor on the opening
+    # paren and hand off to _scan_matching_paren for depth-aware balancing.
+    header_re = re.compile(
+        r"^(async\s+def|def|class)\s+([A-Za-z_]\w*)\s*(\()?",
         re.MULTILINE,
     )
+    tail_re = re.compile(r"\s*(?:->[\s\w\[\],.|\"']*)?:")
     doc_re = re.compile(r'(?s)^(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')')
 
     members = []
-    for m in def_re.finditer(source):
-        kind, name, sig = m.group(1), m.group(2), m.group(3)
+    for m in header_re.finditer(source):
+        kind, name, has_paren = m.group(1), m.group(2), m.group(3)
         if name.startswith("_"):
             continue
 
+        if has_paren:
+            close_idx = _scan_matching_paren(source, m.end() - 1)
+            if close_idx is None:
+                continue  # unclosed paren within scan bound — skip, don't misparse.
+            sig = source[m.end() : close_idx - 1]
+            after_paren = close_idx
+        else:
+            sig = None
+            after_paren = m.end()
+
+        # `-> ...:` (or paren-less `:`) must immediately follow, else this
+        # wasn't actually a def/class header (e.g. a call that happens to
+        # start with "def"-like text is already excluded by \b via \s+).
+        tail_match = tail_re.match(source, after_paren)
+        if tail_match is None:
+            continue
+        end = tail_match.end()
+
         # Look for docstring immediately after the definition (colon consumed by regex).
-        rest = source[m.end() :][:DOCSTRING_LOOKAHEAD].lstrip()
+        rest = source[end:][:DOCSTRING_LOOKAHEAD].lstrip()
         docstring = ""
         doc_match = doc_re.match(rest)
         if doc_match:
@@ -110,7 +163,7 @@ def parse_py_file(source: str) -> list[ParsedMember]:
                 :FUNC_DOCSTRING_MAX
             ]
 
-        # sig is None for paren-less classes (regex group is optional; see above).
+        # sig is None for paren-less classes (has_paren is falsy; see above).
         members.append(ParsedMember(name, kind, f"({sig.strip() if sig else ''})", docstring))
     return members
 

@@ -422,6 +422,36 @@ def test_non_ascii_headings_produce_distinct_node_ids(tmp_path: Path) -> None:
     )
 
 
+# -- 18. Unclosed fence at EOF must still mask to end-of-document -------------
+
+
+def test_unclosed_fence_at_eof_masks_hashes_to_end_of_document(tmp_path: Path) -> None:
+    """CommonMark §4.5: an opened fence with no matching closer runs to
+    end-of-document — the whole remainder is still code, not prose.
+
+    ``_FENCED_RE`` only matches opener+closer PAIRS, so a truncated /
+    author-error file (final ```python fence never closed) leaves that
+    trailing code region invisible to ``_in_fence``. Every ``# comment``
+    line inside the unclosed fence then re-parses as a level-1 Markdown
+    heading — the same phantom-heading bug F16 fixed, resurrected for
+    the unclosed case.
+    """
+    src = (
+        "# Real Heading\n"
+        "Intro.\n"
+        "\n"
+        "```python\n"
+        "# not a heading\n"
+        "def foo():\n"
+        "    pass\n"
+    )  # note: no closing ``` — fence runs to EOF per CommonMark
+    root = _build(src, root=tmp_path)
+    titles = [c.title for c in root.children if c.kind == NodeKind.MARKDOWN_HEADING]
+    assert titles == ["Real Heading"], (
+        f"phantom heading from unclosed fence — expected only the real heading, got {titles}"
+    )
+
+
 def test_duplicate_heading_code_example_children_also_distinct(tmp_path: Path) -> None:
     """CODE_EXAMPLE children are keyed off the parent heading's qname
     (``{parent_qname}.__example_{i}__``); if two headings share a qname,

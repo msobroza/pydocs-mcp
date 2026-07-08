@@ -33,6 +33,34 @@ _FENCED_RE = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 
+# Matches ANY fence opener line, closed or not — used only to detect an
+# unclosed trailing fence (see ``_unclosed_fence_start``). ``_FENCED_RE``
+# can't see this case because it requires a matching closer.
+_FENCE_OPENER_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})[^\n]*$", re.MULTILINE)
+
+
+def _unclosed_fence_start(content: str) -> int | None:
+    """Return the start offset of an unclosed trailing fence, or ``None``.
+
+    CommonMark §4.5: a fence opener with no matching closer runs to
+    end-of-document — the remainder is still code. ``_FENCED_RE`` only
+    matches opener+closer PAIRS, so a truncated / author-error file (final
+    fence never closed) leaves that trailing region invisible to masking
+    logic built solely on ``_FENCED_RE`` matches. Callers that mask fenced
+    regions from heading/text scanning must also mask
+    ``[start, len(content))`` when this returns non-``None``.
+
+    Finds the first fence-opener line not already covered by a matched
+    (closed) fence range; that opener has no closer of its own kind, so it
+    masks everything after it, per CommonMark.
+    """
+    closed_ranges = [(m.start(), m.end()) for m in _FENCED_RE.finditer(content)]
+    for m in _FENCE_OPENER_RE.finditer(content):
+        if any(start <= m.start() < end for start, end in closed_ranges):
+            continue
+        return m.start()
+    return None
+
 
 def _relative_module_parts(path: str, root: Path) -> tuple[list[str], Path]:
     """Return ``(parts_without_suffix, Path(path))`` relative to ``root``.
@@ -218,4 +246,5 @@ __all__ = (
     "_relative_module_parts",
     "_relpath",
     "_slice_lines",
+    "_unclosed_fence_start",
 )

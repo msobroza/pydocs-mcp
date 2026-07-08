@@ -31,7 +31,7 @@ from pydocs_mcp.application.multi_project_search import (
 )
 from pydocs_mcp.application.null_services import NullDecisionService
 from pydocs_mcp.application.reference_service import ContextNode
-from pydocs_mcp.application.tool_router import ToolRouter
+from pydocs_mcp.application.tool_router import ToolRouter, _split_budget
 
 from ._router_fakes import (
     FakeApi,
@@ -160,3 +160,47 @@ def test_minimum_share_floor() -> None:
     out = asyncio.run(router.get_context(ContextInput(targets=["pkg.A", "pkg.B"])))
     _, card_b = out.split("# Context for `pkg.B`")
     assert "pkg.B.dep0" in card_b
+
+
+# --- Unit-level coverage of _split_budget's "ONE shared budget" contract ---
+#
+# ContextInput.targets allows up to 20 (mcp_inputs.py). Each card is
+# guaranteed a 10% floor (_MIN_SHARE_RATIO), so once more than 10 cards are
+# batched, floor * len(sizes) alone exceeds `total` — the "shared budget"
+# contract the floor exists to protect breaks down for its own stated
+# purpose. These are pure-function tests directly against `_split_budget`,
+# no async router wiring required.
+
+
+def test_sum_of_shares_can_exceed_total_past_ten_targets() -> None:
+    # Pin the current (documented-but-surprising) overshoot behavior: with
+    # 20 equal-size closures the 10% floor alone sums to 2x the shared
+    # budget. This is the exact failure mode in the gap report — a batched
+    # get_context can render up to ~2x context_token_budget worth of output.
+    shares = _split_budget(1000, [1] * 20)
+    assert sum(shares) == 2000
+
+
+def test_sum_of_shares_bounded_at_or_below_ten_targets() -> None:
+    # At <=10 equal-size targets the floor still sums within `total` — the
+    # contract holds up to the point the floor ratio structurally allows.
+    for n in range(1, 11):
+        shares = _split_budget(1000, [1] * n)
+        assert sum(shares) <= 1000, f"n={n} overshot: {shares}"
+
+
+def test_all_empty_closures_split_evenly() -> None:
+    # denom == 0 branch (every closure resolves empty). Even split, not a
+    # ZeroDivisionError, and every share is still bounded by the floor.
+    shares = _split_budget(1000, [0, 0])
+    assert shares == [500, 500]
+
+
+def test_all_empty_closures_split_evenly_past_ten_targets() -> None:
+    # Same denom == 0 branch, but with >10 targets (the gap's exact repro:
+    # 12 all-empty closures) — the even split collapses below the floor per
+    # card, so max(floor, even) pins every share to the floor, and the floor
+    # again sums past `total` for the same reason as the proportional path.
+    shares = _split_budget(1000, [0] * 12)
+    assert shares == [100] * 12
+    assert sum(shares) == 1200

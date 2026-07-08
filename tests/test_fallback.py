@@ -60,6 +60,41 @@ class TestParsePyFile:
     def test_empty_source(self):
         assert parse_py_file("") == []
 
+    def test_finds_def_with_tuple_default_arg(self):
+        # Regression: `\(([^)]*)\)` cannot span a nested ')' inside a default
+        # value, so a top-level `def resize(size=(640, 480)):` (ubiquitous in
+        # vision/ML libs) never matched at all — the whole symbol silently
+        # vanished from module_members, not just its signature.
+        src = 'def resize(size=(640, 480)):\n    """Resize image."""\n    pass\n'
+        syms = parse_py_file(src)
+        assert any(s.name == "resize" and s.kind == "def" for s in syms)
+
+    def test_finds_def_with_call_default_arg(self):
+        src = 'def f(x=dict()):\n    """Uses a call default."""\n    pass\n'
+        syms = parse_py_file(src)
+        assert any(s.name == "f" for s in syms)
+
+    def test_finds_class_with_call_in_bases(self):
+        src = 'class A(B, metaclass=Meta()):\n    """Uses a call in the base list."""\n    pass\n'
+        syms = parse_py_file(src)
+        assert any(s.name == "A" and s.kind == "class" for s in syms)
+
+    def test_captures_full_signature_with_nested_parens(self):
+        # Not just "found" — the captured signature text must include the
+        # nested-paren default, not truncate at the first ')'.
+        src = "def resize(size=(640, 480)):\n    pass\n"
+        syms = parse_py_file(src)
+        resize = next(s for s in syms if s.name == "resize")
+        assert resize.signature == "(size=(640, 480))"
+
+    def test_finds_def_with_quoted_return_annotation(self):
+        # `-> "Foo":` — the tail pattern's charclass (`[\s\w\[\],.|]`) has no
+        # quote character, so a forward-referenced (string) return annotation
+        # must still be tolerated even though it isn't captured verbatim.
+        src = 'def f() -> "Foo":\n    """Returns a Foo."""\n    pass\n'
+        syms = parse_py_file(src)
+        assert any(s.name == "f" for s in syms)
+
 
 # ── extract_module_doc ───────────────────────────────────────────────────
 

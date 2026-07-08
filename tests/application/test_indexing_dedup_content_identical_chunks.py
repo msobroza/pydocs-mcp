@@ -3,17 +3,24 @@
 A package can legitimately carry two (or more) chunks whose
 ``(package, module, title, text)`` identity tuple is identical — so their
 auto-derived ``content_hash`` is EQUAL. Those collisions persist as
-SEPARATE SQLite rows (distinct autoincrement ``chunks.id``), but
-``IndexingService._maybe_write_vectors`` keys the persisted snapshot by
-``content_hash`` (``by_hash``). Pre-fix, the per-input-chunk loop emitted
-the SHARED persisted id once per colliding input chunk, so
-``uow.vectors.add_vectors`` handed the same id to TurboQuant twice →
-``IdMapIndex.add_with_ids`` raised ``ValueError: id N already present``,
-crashing ``reindex_package`` for any package with content-identical
-chunks (real dependencies, DS-1000 reference libs).
+SEPARATE SQLite rows (distinct autoincrement ``chunks.id``). Originally
+``IndexingService._maybe_write_vectors`` keyed the persisted snapshot by
+``content_hash`` via a plain ``{hash: chunk}`` dict, which collapsed both
+distinct rows to a single (last-write-wins) persisted id — the
+per-input-chunk loop then emitted that SHARED id once per colliding input
+chunk, so ``uow.vectors.add_vectors`` handed the same id to TurboQuant
+twice -> ``IdMapIndex.add_with_ids`` raised
+``ValueError: id N already present``, crashing ``reindex_package`` for
+any package with content-identical chunks (real dependencies, DS-1000
+reference libs).
 
-The fix dedups by persisted id at the caller: each id's vector is written
-exactly once. That is lossless — colliding chunks share an embedding.
+MULTISET fix (mirrors the diff-merge multiset fix that closed the
+matching row-count gap): ``_maybe_write_vectors`` now pairs each input
+chunk with its OWN distinct persisted row instead of collapsing by hash,
+so both SEPARATE rows get their OWN vector written — 2 rows, 2 vectors,
+still zero crashes. Collapsing to 1 vector would have silently left one
+persisted row's id with no vector in the ``.tq`` sidecar, which is its
+own latent bug (dense lookups for that id would come back empty).
 """
 
 from __future__ import annotations
@@ -57,7 +64,7 @@ def _identical_chunk() -> Chunk:
 async def test_reindex_package_dedups_content_identical_chunks(
     tmp_path: Path,
 ) -> None:
-    """Two content-identical chunks → one deduped vector, no crash (#69)."""
+    """Two content-identical chunks → two distinct rows, two vectors, no crash (#69)."""
     db_path = tmp_path / "cache.db"
     tq_path = tmp_path / "cache.tq"
     open_index_database(db_path).close()
@@ -96,12 +103,13 @@ async def test_reindex_package_dedups_content_identical_chunks(
         persisted = await uow.chunks.list(filter={"package": "demo"})
     assert len(persisted) == 2
 
-    # The shared persisted id's vector is written EXACTLY ONCE (deduped),
-    # so the TurboQuant sidecar holds a single vector, not two.
+    # Each of the two distinct persisted rows gets its OWN vector (multiset
+    # pairing) — the TurboQuant sidecar holds two vectors, one per row id,
+    # not one collapsed-by-hash vector. Zero crashes either way.
     assert tq_path.exists()
     async with TurboQuantUnitOfWork(
         index_path=tq_path,
         dim=_DIM,
         bit_width=_BW,
     ) as tq_uow:
-        assert tq_uow.size() == 1
+        assert tq_uow.size() == 2
