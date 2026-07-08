@@ -181,6 +181,25 @@ class AppConfig(BaseSettings):
         extra="ignore",
     )
 
+    def _model_copy_fresh_hash(self, *, update: Mapping[str, object]) -> AppConfig:
+        """``model_copy(update=...)`` that never leaks a stale cached hash.
+
+        ``ingestion_pipeline_hash`` is a ``cached_property`` — once read, its
+        value sits in ``self.__dict__``. Pydantic's ``model_copy`` copies the
+        *entire* ``__dict__`` (including that memoized entry) before applying
+        ``update``, so a copy whose ``embedding`` (or anything else the hash
+        folds in) changed would otherwise keep returning the PRE-copy hash.
+        That silently breaks the chunk-cache invalidation contract: reindex
+        would see unchanged chunk hashes and skip re-embedding against the
+        new model. Popping the memoized entry forces the next access to
+        recompute against the copy's own fields — cheap (I/O happens once,
+        lazily, on first real access) and correct regardless of which fields
+        ``update`` touches.
+        """
+        copy = self.model_copy(update=dict(update))
+        copy.__dict__.pop("ingestion_pipeline_hash", None)
+        return copy
+
     def with_full_index_dependencies(self, names: tuple[str, ...]) -> AppConfig:
         """Return a copy with ``names`` merged into ``embedding.full_index_dependencies``.
 
@@ -191,7 +210,7 @@ class AppConfig(BaseSettings):
         if not names:
             return self
         merged = list(dict.fromkeys([*self.embedding.full_index_dependencies, *names]))
-        return self.model_copy(
+        return self._model_copy_fresh_hash(
             update={
                 "embedding": self.embedding.model_copy(
                     update={"full_index_dependencies": merged},
@@ -208,7 +227,7 @@ class AppConfig(BaseSettings):
         function — the receiver is unmutated (pydantic ``model_copy``).
         """
         device = "cuda" if gpu else _DEFAULT_DEVICE
-        return self.model_copy(
+        return self._model_copy_fresh_hash(
             update={
                 "embedding": self.embedding.model_copy(update={"device": device}),
                 "late_interaction": self.late_interaction.model_copy(

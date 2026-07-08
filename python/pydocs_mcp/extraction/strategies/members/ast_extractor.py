@@ -35,6 +35,25 @@ from pydocs_mcp.models import (
 )
 
 
+def _module_from_rel_path(rel: str) -> str:
+    """Convert a root-relative ``.py`` path to a dotted module name.
+
+    Strips a trailing ``__init__`` PATH SEGMENT (not substring) — mirrors
+    the chunker's ``_module_from_path`` (extraction/strategies/chunkers/
+    ast_python.py) so member and chunk sides agree on module identity for
+    the same file. The previous ``rel.replace(".__init__", "")`` matched
+    the substring anywhere in the dotted path: ``pkg/__init__x.py`` (a
+    filename that merely starts with ``__init__``, not the real package
+    marker) became ``pkg.__init__x`` -> ``pkgx`` (prefix silently glued to
+    the next real module), and a root-level ``__init__.py`` produced the
+    bare literal ``__init__`` since it has no leading '.' to match.
+    """
+    parts = rel.replace(os.sep, ".").removesuffix(".py").split(".")
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
 @dataclass(frozen=True, slots=True)
 class AstMemberExtractor:
     async def extract_from_project(
@@ -96,7 +115,7 @@ class AstMemberExtractor:
                 rel = os.path.relpath(filepath, str(root))
             except ValueError:
                 continue
-            module = rel.replace(os.sep, ".").removesuffix(".py").replace(".__init__", "")
+            module = _module_from_rel_path(rel)
             for symbol in parse_py_file(source):
                 members.append(
                     ModuleMember(

@@ -416,6 +416,148 @@ class TestLookupCommand:
             )
 
 
+class TestLookupShowRouting:
+    """Gap: deprecated ``lookup --show`` routing table (``_ALIAS_DEPTH`` /
+    ``_ALIAS_DIRECTION`` in ``__main__.py``) was entirely unexercised beyond
+    the default show. Pins that every ``--show`` value routes to the
+    documented new-router tool and renders that tool's distinctive output,
+    so a mapping regression (wrong tool invoked, or a branch reordered ahead
+    of the ``context``/direction checks) fails loudly instead of silently
+    changing what a deprecated-alias script gets back."""
+
+    @pytest.fixture
+    def symbol_project(self, tmp_path):
+        """A project dir whose cache DB holds a resolvable ``mypkg.core.*``
+        symbol PLUS a class node with a resolved INHERITS edge.
+
+        Reuses the shared ``_seed_resolvable_symbol_db`` (function-shaped
+        ``greet``/``farewell`` nodes covering callers/callees/impact/context)
+        and additively seeds a ``mypkg.core.Dog`` CLASS node + INHERITS edge
+        on top of the same DB — ``show='inherits'`` is only valid on CLASS
+        nodes (``LookupService``), so the function-shaped nodes above can't
+        exercise that branch.
+        """
+        import asyncio
+        import sqlite3
+
+        from pydocs_mcp.db import cache_path_for_project
+        from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+        from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+        from pydocs_mcp.storage.sqlite.document_tree_store import SqliteDocumentTreeStore
+
+        project = tmp_path / "symproject"
+        project.mkdir()
+        db_path = cache_path_for_project(project)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        _seed_resolvable_symbol_db(db_path)
+
+        def _node(node_id, kind, title, start, end, text="", children=()):
+            return DocumentNode(
+                node_id=node_id,
+                qualified_name=node_id,
+                title=title,
+                kind=kind,
+                source_path="mypkg/core.py",
+                start_line=start,
+                end_line=end,
+                text=text,
+                content_hash="h_" + node_id,
+                summary=title,
+                children=children,
+            )
+
+        # Re-save the WHOLE ``mypkg.core`` module tree with ``Dog`` appended
+        # as a sibling of ``greet``/``farewell`` — ``_symbol_lookup`` resolves
+        # symbols via ``tree.find_node_by_qualified_name`` against the parsed
+        # MODULE's tree, so a class saved as its own top-level tree would
+        # parse as a module target and never reach the show='inherits' branch.
+        greet = _node(
+            "mypkg.core.greet",
+            NodeKind.FUNCTION,
+            "def greet()",
+            1,
+            3,
+            "def greet():\n    return farewell()\n",
+        )
+        farewell = _node(
+            "mypkg.core.farewell",
+            NodeKind.FUNCTION,
+            "def farewell()",
+            5,
+            7,
+            "def farewell():\n    return 'bye'\n",
+        )
+        dog = _node(
+            "mypkg.core.Dog",
+            NodeKind.CLASS,
+            "class Dog(Animal)",
+            10,
+            12,
+            "class Dog(Animal):\n    pass\n",
+        )
+        module = _node(
+            "mypkg.core", NodeKind.MODULE, "core", 1, 12, children=(greet, farewell, dog)
+        )
+        asyncio.run(
+            SqliteDocumentTreeStore(provider=PerCallConnectionProvider(db_path)).save_many(
+                [module], package="mypkg"
+            )
+        )
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO node_references (from_package, from_node_id, to_name, "
+            "to_node_id, kind) VALUES (?, ?, ?, ?, ?)",
+            ("mypkg", "mypkg.core.Dog", "Animal", "mypkg.core.Animal", "inherits"),
+        )
+        conn.commit()
+        conn.close()
+        return project
+
+    @pytest.mark.parametrize(
+        ("show", "target", "expected_marker"),
+        [
+            # default/tree -> get_symbol: LookupService renders the PageIndex
+            # JSON tree for both shows, keyed on the resolved node_id.
+            ("default", "mypkg.core.greet", '"node_id": "mypkg.core.greet"'),
+            ("tree", "mypkg.core.greet", '"node_id": "mypkg.core.greet"'),
+            # graph shows -> get_references: format_references's per-show H1.
+            ("callers", "mypkg.core.greet", "Callers of"),
+            ("callees", "mypkg.core.greet", "Callees of"),
+            ("inherits", "mypkg.core.Dog", "Bases of"),
+            ("impact", "mypkg.core.greet", "Impact of"),
+            ("governed_by", "mypkg.core.greet", "Governing decisions of"),
+            # context -> get_context: format_context's per-target H1.
+            ("context", "mypkg.core.greet", "# Context for"),
+        ],
+    )
+    def test_show_routes_to_documented_tool(
+        self,
+        symbol_project,
+        capsys,
+        show,
+        target,
+        expected_marker,
+    ):
+        from pydocs_mcp.__main__ import main
+
+        with patch(
+            "sys.argv",
+            [
+                "pydocs-mcp",
+                "lookup",
+                target,
+                "--show",
+                show,
+                "--project-dir",
+                str(symbol_project),
+            ],
+        ):
+            rc = main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert expected_marker in out
+
+
 def _seed_resolvable_symbol_db(db_path: Path) -> None:
     """Seed a cache DB with a symbol the CLI target parser can resolve.
 

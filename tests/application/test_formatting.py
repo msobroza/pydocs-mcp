@@ -11,14 +11,20 @@ from __future__ import annotations
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
+    format_package_doc,
     render_top_composite,
 )
+from pydocs_mcp.application.truncation import ledger_scope
+from pydocs_mcp.constants import PACKAGE_DOC_MAX
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
     ChunkList,
     ModuleMember,
     ModuleMemberFilterField,
+    Package,
+    PackageDoc,
+    PackageOrigin,
     SearchQuery,
     SearchResponse,
 )
@@ -366,3 +372,71 @@ def test_format_context_inclusive_gate_appends_partial_at_exactly_100_remaining(
     # The 100-char slice of piece2 has no trailing \n, so format_context's
     # final single-\n fixup appends one.
     assert out == h1 + lead + piece1 + piece2[:100] + "\n"
+
+
+# ---------- format_package_doc over-cap ledger recording (spec §D7) ----------
+
+
+def _big_package_doc() -> PackageDoc:
+    """A PackageDoc whose rendered markdown exceeds PACKAGE_DOC_MAX.
+
+    Ten chunks of 4000 chars each (40,000 chars of body alone) blow well past
+    the 30,000-char cap so the final ``[:PACKAGE_DOC_MAX]`` slice in
+    ``format_package_doc`` is guaranteed to bite mid-block.
+    """
+    package = Package(
+        name="bigpkg",
+        version="1.0.0",
+        summary="A package with a lot of documentation.",
+        homepage="",
+        dependencies=(),
+        content_hash="deadbeef",
+        origin=PackageOrigin.DEPENDENCY,
+    )
+    chunks = tuple(
+        Chunk.from_test_inputs(
+            package="bigpkg",
+            module="bigpkg.mod",
+            title=f"Section {i}",
+            text="x" * 4000,
+        )
+        for i in range(10)
+    )
+    return PackageDoc(package=package, chunks=chunks, members=())
+
+
+def test_format_package_doc_over_cap_records_ledger_entry():
+    """§D7: 'no renderer drops content without registering an entry'.
+
+    ``format_package_doc`` hard-slices at PACKAGE_DOC_MAX with a bare
+    ``[:PACKAGE_DOC_MAX]`` — unlike every other budgeted formatter in this
+    module, it did not record a TruncationEntry when it truncated. This
+    pins the fix: the ledger must carry exactly one entry with a recovery
+    pointer, and the output must be clipped to the cap.
+    """
+    doc = _big_package_doc()
+    with ledger_scope() as ledger:
+        out = format_package_doc(doc)
+
+    assert len(out) == PACKAGE_DOC_MAX, f"output not clipped to cap: len={len(out)}"
+    assert len(ledger.entries) == 1, f"expected exactly one ledger entry, got {ledger.entries!r}"
+    entry = ledger.entries[0]
+    assert entry.recovery, "truncation entry must carry a recovery pointer (§D7)"
+    assert entry.recovery.startswith("[[next:"), entry.recovery
+
+
+def test_format_package_doc_under_cap_records_nothing():
+    """Sanity check: a doc that fits within PACKAGE_DOC_MAX elides nothing."""
+    package = Package(
+        name="smallpkg",
+        version="1.0.0",
+        summary="Small.",
+        homepage="",
+        dependencies=(),
+        content_hash="deadbeef",
+        origin=PackageOrigin.DEPENDENCY,
+    )
+    doc = PackageDoc(package=package, chunks=(), members=())
+    with ledger_scope() as ledger:
+        format_package_doc(doc)
+    assert ledger.entries == ()

@@ -291,6 +291,8 @@ class EnvelopeConfig(BaseModel):
     ~1 stat-burst per turn without ever serving minutes-stale warnings.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
     head_check_ttl_seconds: float = Field(5.0, ge=0.0)
 
@@ -298,14 +300,18 @@ class EnvelopeConfig(BaseModel):
 class NextPointersConfig(BaseModel):
     """Per-hit next-step pointer rendering toggle (spec §D5)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
 
 
 class OutputConfig(BaseModel):
     """Response-convention toggles shared by every tool output."""
 
-    envelope: EnvelopeConfig = EnvelopeConfig()
-    next_pointers: NextPointersConfig = NextPointersConfig()
+    model_config = ConfigDict(extra="forbid")
+
+    envelope: EnvelopeConfig = Field(default_factory=EnvelopeConfig)
+    next_pointers: NextPointersConfig = Field(default_factory=NextPointersConfig)
 
 
 class GitActivityConfig(BaseModel):

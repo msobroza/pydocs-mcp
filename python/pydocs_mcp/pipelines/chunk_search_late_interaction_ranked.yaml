@@ -61,7 +61,13 @@ steps:
                 publish_to: late.ranked
   - name: fuse
     type: rrf_fusion
-    params: {}
+    params:
+      # Explicit: this preset's branches publish bm25.ranked + late.ranked,
+      # NOT RRFFusionStep's shipped default ("bm25.ranked", "dense.ranked").
+      # Omitting branch_keys here silently drops late.ranked from the fused
+      # ranking (RRF is lenient on missing scratch keys) — see
+      # tests/retrieval/test_new_pipeline_presets_load.py::test_rrf_fusion_branch_keys_match_published_scratch_keys.
+      branch_keys: [bm25.ranked, late.ranked]
   - name: limit
     type: limit
     params:

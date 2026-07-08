@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import pytest
+
 from pydocs_mcp.application.index_project import run_index_pass
 from pydocs_mcp.application.indexing_service import IndexingStats
 from pydocs_mcp.storage.index_metadata import IndexMetadata
@@ -13,14 +15,23 @@ from pydocs_mcp.storage.index_metadata import IndexMetadata
 class FakeIndexOrchestrator:
     """Named fake for ProjectIndexer — records index_project kwargs."""
 
-    def __init__(self, calls: list[str], stats: IndexingStats) -> None:
+    def __init__(
+        self,
+        calls: list[str],
+        stats: IndexingStats,
+        *,
+        raises: Exception | None = None,
+    ) -> None:
         self._calls = calls
         self._stats = stats
+        self._raises = raises
         self.kwargs: dict[str, object] | None = None
 
     async def index_project(self, project: Path, **kwargs: object) -> IndexingStats:
         self._calls.append("index_project")
         self.kwargs = {"project": project, **kwargs}
+        if self._raises is not None:
+            raise self._raises
         return self._stats
 
 
@@ -38,7 +49,13 @@ class FakeInvalidatingService:
         return self._stale
 
 
-def _harness(*, repaired: list[str] | None = None, stale: list[str] | None = None):
+def _harness(
+    *,
+    repaired: list[str] | None = None,
+    stale: list[str] | None = None,
+    orchestrator_raises: Exception | None = None,
+    rebuild_fts_raises: Exception | None = None,
+):
     calls: list[str] = []
     stamped: list[IndexMetadata] = []
 
@@ -48,6 +65,8 @@ def _harness(*, repaired: list[str] | None = None, stale: list[str] | None = Non
 
     async def rebuild_fts() -> None:
         calls.append("rebuild_fts")
+        if rebuild_fts_raises is not None:
+            raise rebuild_fts_raises
 
     def stamp_metadata(meta: IndexMetadata) -> None:
         calls.append("stamp_metadata")
@@ -56,7 +75,9 @@ def _harness(*, repaired: list[str] | None = None, stale: list[str] | None = Non
     async def write_aggregates(_project: Path) -> None:
         calls.append("write_aggregates")
 
-    orchestrator = FakeIndexOrchestrator(calls, IndexingStats(indexed=2, cached=1))
+    orchestrator = FakeIndexOrchestrator(
+        calls, IndexingStats(indexed=2, cached=1), raises=orchestrator_raises
+    )
     service = FakeInvalidatingService(calls, list(stale or []))
     return (
         calls,
@@ -200,3 +221,43 @@ def test_run_index_pass_is_package_exported() -> None:
     import pydocs_mcp.application as application
 
     assert application.run_index_pass is run_index_pass
+
+
+async def test_stamp_withheld_when_orchestrator_index_project_raises() -> None:
+    """Stamp-last design: a crash inside index_project must leave no stamp.
+
+    A half-indexed db must never carry the identity stamp — a portable load
+    or multi-repo router trusts the stamp to mean "fully indexed", and a
+    stale/mismatched-embedder .tq that slips past that check returns garbage
+    dense-similarity scores with no error.
+    """
+    calls, stamped, orch, svc, ci, rf, sm, wa = _harness(
+        orchestrator_raises=RuntimeError("boom mid-index")
+    )
+
+    with pytest.raises(RuntimeError, match="boom mid-index"):
+        await _run(orch, svc, ci, rf, sm, wa)
+
+    assert stamped == []
+    assert "stamp_metadata" not in calls
+    assert "rebuild_fts" not in calls
+    assert "write_aggregates" not in calls
+    # Sanity: the crash happened where we intended it to.
+    assert calls == ["check_integrity", "invalidate", "index_project"]
+
+
+async def test_stamp_withheld_when_rebuild_fts_raises() -> None:
+    """Same stamp-last guarantee when the crash happens after index_project,
+    inside the FTS rebuild step — the stamp call must still never fire.
+    """
+    calls, stamped, orch, svc, ci, rf, sm, wa = _harness(
+        rebuild_fts_raises=RuntimeError("fts rebuild exploded")
+    )
+
+    with pytest.raises(RuntimeError, match="fts rebuild exploded"):
+        await _run(orch, svc, ci, rf, sm, wa)
+
+    assert stamped == []
+    assert "stamp_metadata" not in calls
+    assert "write_aggregates" not in calls
+    assert calls == ["check_integrity", "invalidate", "index_project", "rebuild_fts"]

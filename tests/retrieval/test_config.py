@@ -10,7 +10,12 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from pydocs_mcp.retrieval.config import AppConfig, PipelineRouteEntry, _resolve_pipeline_path
+from pydocs_mcp.retrieval.config import (
+    AppConfig,
+    EmbeddingConfig,
+    PipelineRouteEntry,
+    _resolve_pipeline_path,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -361,6 +366,73 @@ def test_compute_ingestion_pipeline_hash_cached(tmp_path: Path) -> None:
     assert cfg.compute_ingestion_pipeline_hash() == h1
 
 
+def test_model_copy_fresh_hash_recomputes_after_embedding_identity_change() -> None:
+    """Exact gap repro against the fix's own unit: access
+    ``ingestion_pipeline_hash`` (memoizing it into ``__dict__`` via
+    ``cached_property``), THEN copy via ``_model_copy_fresh_hash`` — the
+    method every public ``with_*`` copy constructor routes through — with an
+    ``embedding`` update that changes vector identity. The copy's hash must
+    match what a FRESH ``AppConfig`` built with that same embedding would
+    compute, not the memoized pre-copy value.
+
+    Neither shipped public copy constructor (``with_device`` /
+    ``with_full_index_dependencies``) changes a hash-relevant field today
+    (device and full_index_dependencies are both deliberately excluded from
+    ``compute_pipeline_hash``), so this drives the fix at the level where the
+    bug actually lives: the shared ``model_copy`` helper, exercised with an
+    update shape a future caller (or a caller composing ``with_device`` with
+    an inline ``embedding=`` override) could legitimately pass.
+    """
+    base = AppConfig()
+    stale_hash = base.ingestion_pipeline_hash
+    assert "ingestion_pipeline_hash" in base.__dict__
+
+    changed = base._model_copy_fresh_hash(
+        update={
+            "embedding": base.embedding.model_copy(
+                update={"model_name": "BAAI/bge-base-en-v1.5", "dim": 768},
+            ),
+        },
+    )
+
+    fresh_with_same_embedding = AppConfig(embedding=changed.embedding)
+    expected_hash = fresh_with_same_embedding.ingestion_pipeline_hash
+
+    assert changed.ingestion_pipeline_hash == expected_hash, (
+        "the copy must recompute against its OWN embedding identity"
+    )
+    assert changed.ingestion_pipeline_hash != stale_hash, (
+        "the copy's hash must differ from the stale pre-copy value once the "
+        "embedding model/dim changed"
+    )
+
+
+def test_with_device_evicts_cached_hash_slot_from_copy_dict() -> None:
+    """``with_device`` copies must not carry a pre-copy memoized
+    ``ingestion_pipeline_hash`` entry in ``__dict__`` at all — the slot must
+    be evicted so the copy always recomputes lazily on next access, per the
+    ``_model_copy_fresh_hash`` contract.
+
+    Directly exercises the exact ``cfg.ingestion_pipeline_hash`` (access) ->
+    ``cfg.with_device(...)`` (model_copy) -> stale-read sequence from the gap
+    report, via the real production call path.
+    """
+    base = AppConfig()
+    _ = base.ingestion_pipeline_hash  # memoize before the copy
+    assert "ingestion_pipeline_hash" in base.__dict__
+
+    gpu = base.with_device(gpu=True)
+
+    assert "ingestion_pipeline_hash" not in gpu.__dict__, (
+        "with_device must evict any pre-copy memoized hash from the copy's "
+        "__dict__ so it is recomputed fresh on next access"
+    )
+    # device is excluded from the hash, so the recomputed value happens to
+    # equal the pre-copy one here — this asserts recomputation succeeds
+    # cleanly post-eviction, not that the value must differ.
+    assert gpu.ingestion_pipeline_hash == base.ingestion_pipeline_hash
+
+
 # ── AppConfig.with_device ───────────────────────────────────────────────
 
 
@@ -382,6 +454,26 @@ def test_with_device_gpu_false_sets_cpu() -> None:
     cpu = AppConfig().with_device(gpu=False)
     assert cpu.embedding.device == "cpu"
     assert cpu.late_interaction.device == "cpu"
+
+
+def test_with_device_preserves_effective_user_config_path(tmp_path: Path) -> None:
+    """``with_device`` copies must retain ``_effective_user_config_path``.
+
+    That attribute is populated post-construction via ``object.__setattr__``
+    in ``AppConfig.load`` (it isn't a declared pydantic field), so its
+    survival through ``model_copy`` rides on a pydantic ``__dict__``-copy
+    implementation detail rather than an explicit contract. Pin it: a
+    downstream pipeline-path allowlist (``_resolve_ingestion_pipeline_path``)
+    depends on this surviving every ``with_device`` / ``with_full_index_dependencies``
+    copy server.py makes after ``AppConfig.load``.
+    """
+    user_config_path = tmp_path / "pydocs-mcp.yaml"
+    user_config_path.write_text("")
+    cfg = AppConfig.load(explicit_path=user_config_path)
+    assert cfg._user_config_path() == user_config_path
+
+    gpu = cfg.with_device(gpu=True)
+    assert gpu._user_config_path() == user_config_path
 
 
 def test_pooling_default_mean_and_validated() -> None:

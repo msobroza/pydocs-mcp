@@ -107,6 +107,34 @@ def test_build_routers_single_db_is_read_write_skips_validation(tmp_path: Path) 
     assert len(services) == 1 and services[0].project.name == "solo"
 
 
+def test_build_routers_no_selector_raises_actionable_value_error() -> None:
+    # build_routers(config) with db_path/workspace/db_paths all absent used to
+    # fall through _resolve_projects' "single db_path" branch straight into
+    # load_project(None) -> None.exists() -> a bare AttributeError. That is
+    # unrelated-looking noise from a shared composition root used by both
+    # run() (MCP server) and every CLI query subcommand via _build_cli_tools
+    # — it must instead name the three selection modes so a misconfigured
+    # invocation is diagnosable from a CLI stack trace.
+    from pydocs_mcp.server import build_routers
+
+    cfg = _default_config()
+    with pytest.raises(ValueError, match="db_path|workspace|db_paths"):
+        build_routers(cfg)
+
+
+def test_build_routers_empty_db_paths_list_raises_actionable_value_error() -> None:
+    # db_paths=[] is falsy at the "if db_paths:" check in _resolve_projects,
+    # so an empty list (reachable programmatically, distinct from the CLI's
+    # argparse default of None for an omitted --db) must be treated the same
+    # as "no selector provided" rather than silently falling through to
+    # load_project(None).
+    from pydocs_mcp.server import build_routers
+
+    cfg = _default_config()
+    with pytest.raises(ValueError, match="db_path|workspace|db_paths"):
+        build_routers(cfg, db_paths=[])
+
+
 @pytest.mark.asyncio
 async def test_routers_search_over_empty_workspace_returns_no_matches(tmp_path: Path) -> None:
     from pydocs_mcp.application.mcp_inputs import SearchInput

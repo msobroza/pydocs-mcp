@@ -95,6 +95,17 @@ class FileWatcher:
         # is easier to diagnose than mid-run "why isn't my watcher firing".
         if self.observer_factory is None:
             object.__setattr__(self, "observer_factory", _load_watchdog())
+        # WHY: `_matches` lowercases the FILE's suffix (`path.suffix.lower()`)
+        # but `path.suffix` always includes the leading dot — a configured
+        # extension that is uppercase (`.PY`) or missing the dot (`py`) would
+        # never equal it, silently disabling watching for every source file
+        # (only manifests would still fire) with zero feedback to the user.
+        # Normalizing here keeps configured extensions symmetric with the
+        # file-suffix case-insensitivity already documented on `_matches`.
+        normalized = tuple(
+            ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in self.extensions
+        )
+        object.__setattr__(self, "extensions", normalized)
 
     def _matches(self, path: Path) -> bool:
         """Pure-function event filter — returns True iff the path is

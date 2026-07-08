@@ -31,7 +31,19 @@ def mean_with_bootstrap_ci(
 
     Determinism: ``seed`` fully controls the resampling — identical inputs
     plus identical seed yield bit-identical output across runs.
+
+    Raises:
+        ValueError: if ``n_resamples`` is not positive — 0 (or negative)
+            looks like a natural "skip the CI" value to a programmatic
+            caller, but would otherwise index into an empty resample list
+            and raise a bare, uninformative ``IndexError``.
     """
+    if n_resamples <= 0:
+        raise ValueError(
+            f"n_resamples must be a positive int, got {n_resamples!r}; "
+            "there is no 0-resample bootstrap — call with the default "
+            f"({_DEFAULT_BOOTSTRAP_ITER}) or omit n_resamples entirely"
+        )
     if not values:
         return (0.0, 0.0, 0.0)
 
@@ -86,12 +98,23 @@ def paired_bootstrap_ci(
 
     Determinism: ``seed`` fully controls the resampling — identical inputs plus
     identical seed yield bit-identical output across runs.
+
+    Raises:
+        ValueError: if ``n_resamples`` is not positive — same rationale as
+            the single-sample sibling: 0 would otherwise index into an
+            empty resample list and raise a bare ``IndexError``.
     """
     if len(values_a) != len(values_b):
         raise ValueError(
             "paired_bootstrap_ci requires equal-length series "
             f"(got {len(values_a)} and {len(values_b)}); pairing is undefined "
             "for unequal lengths"
+        )
+    if n_resamples <= 0:
+        raise ValueError(
+            f"n_resamples must be a positive int, got {n_resamples!r}; "
+            "there is no 0-resample bootstrap — call with the default "
+            f"({_DEFAULT_BOOTSTRAP_ITER}) or omit n_resamples entirely"
         )
     if not values_a:
         return (0.0, 0.0, 0.0)
