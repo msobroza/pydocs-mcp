@@ -15,9 +15,15 @@ import streamlit as st
 
 from pydocs_mcp.ask_your_docs.agent import ask, build_agent, reformulate, weave_attachments
 from pydocs_mcp.ask_your_docs.catalog import workspace_catalog
-from pydocs_mcp.ask_your_docs.theme import THEMES, theme_css
+from pydocs_mcp.ask_your_docs.theme import current_palette, render_appearance_toggle, theme_css
 
-st.set_page_config(page_title="ask your docs", page_icon="✦", layout="centered")
+st.set_page_config(
+    page_title="ask your docs",
+    page_icon="✦",
+    layout="centered",
+    # Keep the sidebar (and its page-navigation menu: chat / graph) open on load.
+    initial_sidebar_state="expanded",
+)
 
 
 @st.cache_resource
@@ -53,7 +59,7 @@ _CODE_CHOICES = {"All code": "all", "Own code": "project", "Dependencies": "deps
 
 with st.sidebar:
     st.markdown('<div class="side-label">Appearance</div>', unsafe_allow_html=True)
-    light_mode = st.toggle("Light mode", value=False, key="light_mode")
+    render_appearance_toggle()
 
     st.markdown('<div class="side-label">Connection</div>', unsafe_allow_html=True)
     workspace = st.text_input("Workspace", os.environ.get("PYDOCS_WORKSPACE", ""))
@@ -94,7 +100,7 @@ with st.sidebar:
                 package_pin = "" if picked == "All packages" else picked
             st.caption("Searches run only inside this scope.")
 
-st.markdown(theme_css(THEMES["light" if light_mode else "dark"]), unsafe_allow_html=True)
+st.markdown(theme_css(current_palette()), unsafe_allow_html=True)
 st.markdown(
     '<div class="brand">ask your <span class="accent">docs</span></div>'
     '<div class="brand-sub">grounded answers from your indexed code and docs</div>',

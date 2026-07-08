@@ -12,16 +12,22 @@ from __future__ import annotations
 import os
 
 import streamlit as st
+import streamlit.components.v1 as components
 from pydocs_mcp.ask_your_docs.bundle import SqliteBundleReader
 from pydocs_mcp.ask_your_docs.catalog import CatalogService
 from pydocs_mcp.ask_your_docs.graph_service import GraphService, type_of
-from pydocs_mcp.ask_your_docs.theme import THEMES, theme_css
+from pydocs_mcp.ask_your_docs.theme import current_palette, render_appearance_toggle, theme_css
 from streamlit_agraph import Config, agraph
 from streamlit_agraph import Edge as AEdge
 from streamlit_agraph import Node as ANode
 
-st.set_page_config(page_title="ask your docs — graph", page_icon="✦", layout="wide")
-_pal = THEMES["light" if st.session_state.get("light_mode") else "dark"]
+st.set_page_config(
+    page_title="ask your docs — graph",
+    page_icon="✦",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+_pal = current_palette()
 st.markdown(theme_css(_pal), unsafe_allow_html=True)
 st.markdown(
     "<style>.block-container{max-width:100% !important;padding-left:2rem;padding-right:2rem;}</style>",
@@ -65,6 +71,9 @@ def _projects(workspace: str) -> dict[str, list[str]]:
 
 workspace = os.environ.get("PYDOCS_WORKSPACE", "")
 with st.sidebar:
+    st.markdown('<div class="side-label">Appearance</div>', unsafe_allow_html=True)
+    render_appearance_toggle()
+
     st.markdown('<div class="side-label">Workspace</div>', unsafe_allow_html=True)
     workspace = st.text_input("Workspace", workspace, key="graph_ws")
     projects: dict[str, list[str]] = {}
@@ -102,7 +111,7 @@ db = CatalogService(workspace).bundle_path(project)
 if db is None:
     st.warning(f"No bundle found for project {project!r}.")
     st.stop()
-svc = GraphService(SqliteBundleReader(db))
+svc = GraphService(SqliteBundleReader(db), hide_tests=hide_tests)
 
 focus_key = f"graph_focus::{project}::{content}"
 focus: str = st.session_state.get(focus_key, "")
@@ -120,7 +129,7 @@ for i, (label, target) in enumerate(crumbs):
 
 # Children of the current focus + reference edges among them.
 allowed = picked_types | {"package", "doc", "decision"}
-kids = tuple(n for n in svc.children(focus, content, hide_tests) if n.node_type in allowed)
+kids = tuple(n for n in svc.children(focus, content) if n.node_type in allowed)
 if not kids:
     st.info("Nothing to show here — zoom out, or widen the filters / content type.")
     st.stop()
@@ -149,6 +158,16 @@ st.markdown(
 )
 st.caption(f"{len(kids)} items · {len(edges)} edges — click a ◆/⬡/■ to zoom in")
 
+# vis-network defaults label text to #343434 (near-invisible on the dark canvas).
+# Force the theme's text colour + a background-coloured halo so every name reads
+# clearly over nodes, edges and the canvas alike, in both light and dark mode.
+_LABEL_FONT = {
+    "color": _pal["text"],
+    "size": 15,
+    "face": "Helvetica, Arial, sans-serif",
+    "strokeWidth": 4,
+    "strokeColor": _pal["bg"],
+}
 anodes = [
     ANode(
         id=n.id,
@@ -156,23 +175,53 @@ anodes = [
         size=_TYPE_SIZE.get(n.node_type, 12),
         color=_TYPE_STYLE.get(n.node_type, ("dot", "#8A97A6", ""))[1],
         shape=_TYPE_STYLE.get(n.node_type, ("dot", "#8A97A6", ""))[0],
+        font=_LABEL_FONT,
     )
     for n in kids
 ]
 aedges = [
     AEdge(source=e.source, target=e.target, color=_EDGE_COLOR.get(e.kind, "#8A97A6")) for e in edges
 ]
-clicked = agraph(
-    nodes=anodes,
-    edges=aedges,
-    config=Config(
-        width="100%",
-        height=760,
-        directed=True,
-        physics=True,
-        nodeHighlightBehavior=True,
-        highlightColor="#34D3B7",
-    ),
+# Config(width=...) appends "px", so width="100%" would become the invalid
+# "100%px" and collapse the canvas (nodes end up tiny in a corner). Build with a
+# placeholder, then set the raw CSS value so vis-network gets a responsive "100%"
+# and its stabilization `fit` frames every node centered.
+_cfg = Config(
+    height=760,
+    directed=True,
+    physics=True,
+    nodeHighlightBehavior=True,
+    highlightColor="#34D3B7",
+)
+_cfg.width = "100%"
+clicked = agraph(nodes=anodes, edges=aedges, config=_cfg)
+
+# The streamlit-agraph component renders in its own (same-origin) iframe. Two
+# things need patching there, both unreachable via Python Config / parent CSS:
+#   1. Its <body> defaults to white — jarring in the dark theme and it washes out
+#      the light node labels; repaint it to the theme background.
+#   2. Its built-in doubleClick handler runs `window.open(node.title)`, and the
+#      node title defaults to the node id — so a double-click navigates the browser
+#      to a bogus URL. Neutralise window.open inside that iframe (single-click zoom
+#      is unaffected). Both are re-applied on every Streamlit rerun.
+components.html(
+    f"""
+    <script>
+      const BG = "{_pal["bg"]}";
+      const patch = () => {{
+        try {{
+          window.parent.document.querySelectorAll('iframe').forEach((f) => {{
+            if (!(f.title || "").includes("agraph")) return;
+            if (f.contentDocument) f.contentDocument.body.style.background = BG;
+            if (f.contentWindow) f.contentWindow.open = () => null;
+          }});
+        }} catch (e) {{ /* cross-origin / not ready yet — retried by the interval */ }}
+      }};
+      patch();
+      setInterval(patch, 500);
+    </script>
+    """,
+    height=0,
 )
 
 # A click zooms into a container, or just selects a leaf. Guard on the last id so

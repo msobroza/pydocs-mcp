@@ -29,10 +29,45 @@ THEMES: dict[str, dict[str, str]] = {
         "border": "#D4DCE3",
         "text": "#17242F",
         "muted": "#5B6B79",
-        "accent": "#0B9E85",
-        "wash": "rgba(11, 158, 133, .10)",
+        # Darker teal than the dark-mode accent: #0B9E85 fails WCAG on light
+        # backgrounds (~3.1:1). #0B7A66 clears 4.5:1 on bg/surface for the brand,
+        # links, active nav and inline code that render in the accent colour.
+        "accent": "#0B7A66",
+        "wash": "rgba(11, 122, 102, .10)",
     },
 }
+
+
+_LIGHT_KEY = "ui_light"  # plain session key — persists across page switches
+_LIGHT_WIDGET = "ui_light_widget"  # the toggle's own (page-local) widget key
+
+
+def current_palette() -> dict[str, str]:
+    """The active palette from the persisted appearance choice. Read at the TOP of
+    each page (before rendering the toggle) so the whole page themes consistently.
+
+    The choice lives in a plain session key, not the toggle's widget key: Streamlit
+    drops widget-keyed state when its widget isn't re-rendered on the page you
+    navigate to, which is why light mode used to reset on page switch."""
+    import streamlit as st
+
+    return THEMES["light" if st.session_state.get(_LIGHT_KEY) else "dark"]
+
+
+def render_appearance_toggle() -> None:
+    """Render the Light-mode toggle in the current container, syncing it to the
+    persistent key. Call inside the sidebar; read the result via ``current_palette``."""
+    import streamlit as st
+
+    st.session_state.setdefault(_LIGHT_KEY, False)
+    # Re-seed the widget from the persistent value whenever it (re)appears on a page.
+    if _LIGHT_WIDGET not in st.session_state:
+        st.session_state[_LIGHT_WIDGET] = st.session_state[_LIGHT_KEY]
+
+    def _sync() -> None:
+        st.session_state[_LIGHT_KEY] = st.session_state[_LIGHT_WIDGET]
+
+    st.toggle("Light mode", key=_LIGHT_WIDGET, on_change=_sync)
 
 
 def theme_css(p: dict[str, str]) -> str:
@@ -60,6 +95,14 @@ def theme_css(p: dict[str, str]) -> str:
     section[data-testid="stSidebar"] {{ background: {p["surface"]}; border-right: 1px solid {p["border"]}; }}
     .side-label {{ color: {p["muted"]}; font-size: .72rem; font-weight: 600; letter-spacing: .08em;
                    text-transform: uppercase; margin: .2rem 0 .4rem; }}
+    /* Page-navigation menu (chat / graph): Streamlit ships it in near-black
+       #31333F, invisible on the dark sidebar — force a readable colour + an
+       accent active/hover state. */
+    [data-testid="stSidebarNav"] a span {{ color: {p["muted"]} !important; }}
+    [data-testid="stSidebarNav"] a:hover span {{ color: {p["text"]} !important; }}
+    [data-testid="stSidebarNav"] a[aria-current="page"] span {{
+        color: {p["accent"]} !important; font-weight: 600;
+    }}
 
     /* ---- re-theme Streamlit widgets (the CLI sets only the dark base) ---- */
     [data-testid="stWidgetLabel"] p, .stRadio p, [data-testid="stToggle"] p {{ color: {p["text"]}; }}
