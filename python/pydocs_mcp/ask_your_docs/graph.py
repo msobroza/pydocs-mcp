@@ -95,3 +95,53 @@ def overview(db_path: Path, project: str) -> Graph:
             seen.add((a, b, kind))
             edges.append(Edge(a, b, kind))
     return Graph(nodes, tuple(edges))
+
+
+def _member_types(conn: sqlite3.Connection) -> dict[str, str]:
+    """node_id -> 'class' | 'function' for every own-code member."""
+    out: dict[str, str] = {}
+    for module, name, kind in conn.execute(
+        "SELECT module, name, kind FROM module_members WHERE package=?", (_OWN,)
+    ):
+        out[f"{module}.{name}"] = "class" if kind == "class" else "function"
+    return out
+
+
+def expand(db_path: Path, node_id: str, node_type: str, kinds: frozenset[str]) -> Graph:
+    """Neighbors of one node. Module -> its members (contains); class/function ->
+    its reference neighbors, filtered to ``kinds``. Capped at ``MAX_NEIGHBORS``."""
+    with closing(sqlite3.connect(_ro_uri(db_path), uri=True)) as conn:
+        if node_type == "module":
+            rows = conn.execute(
+                "SELECT name, kind FROM module_members WHERE package=? AND module=? ORDER BY name",
+                (_OWN, node_id),
+            ).fetchall()
+            member_nodes = tuple(
+                Node(f"{node_id}.{name}", name, "class" if kind == "class" else "function")
+                for name, kind in rows
+            )
+            contains = tuple(Edge(node_id, n.id, "contains") for n in member_nodes)
+            return Graph(member_nodes, contains)
+
+        member_types = _member_types(conn)
+        rows = conn.execute(
+            "SELECT from_node_id, to_node_id, kind FROM node_references "
+            "WHERE from_package=? AND (from_node_id=? OR to_node_id=?)",
+            (_OWN, node_id, node_id),
+        ).fetchall()
+
+    edges: list[Edge] = []
+    nodes: dict[str, Node] = {}
+    total = 0
+    for from_id, to_id, kind in rows:
+        if kind not in kinds or not to_id:
+            continue
+        other = to_id if from_id == node_id else from_id
+        if other == node_id:
+            continue
+        total += 1
+        if len(edges) >= MAX_NEIGHBORS:
+            continue
+        edges.append(Edge(from_id, to_id, kind))
+        nodes[other] = Node(other, _short(other), member_types.get(other, "function"))
+    return Graph(tuple(nodes.values()), tuple(edges), truncated=max(0, total - len(edges)))

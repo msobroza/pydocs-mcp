@@ -59,3 +59,57 @@ def test_overview_read_only_never_migrates_bundle(tmp_path):
     graph.overview(db, "demo")
     with sqlite3.connect(db) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 99
+
+
+def _expand_bundle(tmp_path):
+    from tests.ask_your_docs._fixture import make_bundle
+
+    return make_bundle(
+        tmp_path / "demo_0123456789.db",
+        members=[
+            ("mod_a", "Foo", "class"),
+            ("mod_a", "helper", "def"),
+            ("mod_b", "bar", "def"),
+        ],
+        refs=[
+            ("mod_a.Foo", "mod_b.bar", "calls"),
+            ("mod_a.Foo", "mod_a.helper", "calls"),
+            ("mod_b.Base", "mod_a.Foo", "inherits"),
+        ],
+    )
+
+
+def test_expand_module_reveals_members_with_contains(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+
+    g = graph.expand(_expand_bundle(tmp_path), "mod_a", "module", kinds=frozenset())
+    ids = {n.id: n.node_type for n in g.nodes}
+    assert ids.get("mod_a.Foo") == "class"
+    assert ids.get("mod_a.helper") == "function"
+    assert all(e.kind == "contains" and e.source == "mod_a" for e in g.edges)
+
+
+def test_expand_symbol_reveals_reference_neighbors_filtered(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+
+    db = _expand_bundle(tmp_path)
+    only_calls = graph.expand(db, "mod_a.Foo", "class", kinds=frozenset({"calls"}))
+    kinds = {e.kind for e in only_calls.edges}
+    assert kinds == {"calls"}
+    targets = {e.target for e in only_calls.edges} | {e.source for e in only_calls.edges}
+    assert "mod_b.bar" in targets
+    assert all(e.kind != "inherits" for e in only_calls.edges)
+
+
+def test_expand_caps_neighbors(tmp_path):
+    from pydocs_mcp.ask_your_docs import graph
+    from tests.ask_your_docs._fixture import make_bundle
+
+    refs = [("hub.f", f"leaf.g{i}", "calls") for i in range(graph.MAX_NEIGHBORS + 5)]
+    members = [("hub", "f", "def")] + [
+        ("leaf", f"g{i}", "def") for i in range(graph.MAX_NEIGHBORS + 5)
+    ]
+    db = make_bundle(tmp_path / "demo_0123456789.db", members=members, refs=refs)
+    g = graph.expand(db, "hub.f", "function", kinds=frozenset({"calls"}))
+    assert g.truncated == 5
+    assert len(g.edges) == graph.MAX_NEIGHBORS
