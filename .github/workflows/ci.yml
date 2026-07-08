@@ -34,6 +34,25 @@ jobs:
             echo 'include=[{"os":"ubuntu-latest","python-version":"3.13"}]' >> "$GITHUB_OUTPUT"
           fi
 
+  # WHY: `uv sync --frozen` (python job below) installs uv.lock AS-IS and never
+  # checks it against pyproject.toml — so pyproject/lock drift accumulates
+  # silently while CI stays green (a stale lock once pinned pydocs-mcp 0.3.1
+  # against a 0.4.1 pyproject, and a declared optional-dependency extra was
+  # missing from the lock, all undetected). `uv lock --check` re-resolves and
+  # asserts the committed lock is up-to-date, reddening CI the moment they
+  # diverge. Standalone + cheap: no OpenBLAS, no full install — just resolve
+  # and compare — and it runs once, not per matrix cell. Fix: run `uv lock`.
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Assert uv.lock matches pyproject.toml
+        run: uv lock --check
+
   python:
     needs: matrix-config
     runs-on: ${{ matrix.os }}
