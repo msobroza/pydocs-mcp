@@ -42,6 +42,7 @@ For **quality** comparisons a warm bench cache is expected and correct — leave
 | Late interaction | `repoqa_li.yaml` | needs `pip install -e ".[late-interaction]"` (~1–5 GB) |
 | LLM tree rerank | `repoqa_bm25_tree_rerank_gpt55.yaml` | needs `OPENAI_API_KEY` (`set -a; source .env; set +a`) |
 | Graph expansion | `repoqa_dense_graph_f2llm330m.yaml` | pairs with the `repoqa-structural` dataset gate |
+| Graph + MENTIONS edges | `repoqa_dense_graph_mentions_f2llm330m.yaml` | `_weighted` variant down-weights doc edges via `graph_expand.kind_weights`; structural gate can't show mentions wins (golds are calls/inherits-minted) |
 | Ranked project baseline | `baseline.yaml` | |
 
 ## Choosing dataset and split

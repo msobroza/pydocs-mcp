@@ -1,0 +1,34 @@
+# Dense + reference-graph expansion, with MENTIONS edges traversed unweighted.
+# exp_dense_graph.yaml plus `mentions` in graph_expand's kinds: doc→code edges
+# (a README section that names a symbol) become expansion paths, so docs-heavy
+# answers with no call/inherit edge to the dense hits are reachable. Pair with
+# a config that enables MENTIONS capture (reference_graph.capture.kinds) —
+# without captured mentions rows this is byte-identical to exp_dense_graph.
+# Referenced by ../repoqa_dense_graph_mentions_f2llm330m.yaml.
+name: exp_dense_graph_mentions
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: graph
+    type: graph_expand
+    params:
+      top_s: 10
+      max_depth: 1
+      decay: 0.9
+      kinds: [calls, inherits, mentions]
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

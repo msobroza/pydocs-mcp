@@ -1,0 +1,21 @@
+# RepoQA experiment — dense + graph expansion traversing MENTIONS edges,
+# with codefuse-ai/F2LLM-v2-330M. Apples-to-apples counterpart of
+# repoqa_dense_graph_f2llm330m.yaml: SAME embedder and graph params, the only
+# differences are MENTIONS capture (index-time) and `mentions` in
+# graph_expand's kinds (search-time). Measures whether doc→code edges recover
+# answers the calls/inherits graph cannot reach. See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: sentence_transformers
+  model_name: codefuse-ai/F2LLM-v2-330M
+  dim: 896
+  batch_size: 8
+  max_seq_length: 2048
+
+reference_graph:
+  capture:
+    kinds: [calls, imports, inherits, mentions]
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense_graph_mentions.yaml

@@ -356,3 +356,38 @@ done
 
 Regenerate the chart after editing the README table:
 `.venv/bin/python benchmarks/scripts/plot_graph_default_ab.py`.
+
+## MENTIONS-traversal sweep (dense + graph, docs edges)
+
+Does traversing doc→code MENTIONS edges recover answers the calls/inherits
+graph cannot reach? Two conditions on top of the shipped dense+graph default,
+same F2LLM-v2-330M embedder — the only variables are MENTIONS capture
+(index-time, `reference_graph.capture.kinds`) and traversal trust
+(search-time, `graph_expand.kind_weights`):
+
+| Method | Config | Pipeline |
+|---|---|---|
+| Dense + graph + mentions (unweighted) | `configs/repoqa_dense_graph_mentions_f2llm330m.yaml` | `exp_dense_graph_mentions` |
+| Dense + graph + mentions (weight 0.6) | `configs/repoqa_dense_graph_mentions_weighted_f2llm330m.yaml` | `exp_dense_graph_mentions_weighted` |
+
+Compare against `repoqa_dense_graph_f2llm330m.yaml` (no mentions) on both
+splits. Watch standard `small_test` recall@1 for the centrality failure mode
+(structural win, standard precision loss) — the weighted condition exists to
+measure whether down-weighting regex-fuzzy doc edges keeps any docs win
+without that noise:
+
+```bash
+CFGS=benchmarks/configs/repoqa_dense_graph_f2llm330m.yaml,\
+benchmarks/configs/repoqa_dense_graph_mentions_f2llm330m.yaml,\
+benchmarks/configs/repoqa_dense_graph_mentions_weighted_f2llm330m.yaml
+for SPLIT in "repoqa --split small_test" "repoqa-structural"; do
+  benchmarks/scripts/run_eval_gpu.sh --systems pydocs-mcp --dataset $SPLIT \
+    --configs "$CFGS" --metrics recall@1,recall@5,recall@10,mrr \
+    --bench-cache off --report benchmarks/results/mentions_${SPLIT// /_}.md
+done
+```
+
+Interpretation caveat: `repoqa-structural` golds are minted from
+caller/callee/override neighbours only, so this sweep can register *harm* on
+the structural gate but not mentions-specific *wins* — those show up (diluted)
+on the standard split until the fixture builder grows a mentions gold slice.
