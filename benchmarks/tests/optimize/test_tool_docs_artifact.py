@@ -48,3 +48,27 @@ def test_seed_validates_clean_and_fingerprint_is_stable() -> None:
 
 def test_registered_as_tool_docs() -> None:
     assert isinstance(artifact_registry.build("tool_docs"), ToolDocsArtifact)
+
+
+def test_importing_package_registers_tool_docs() -> None:
+    # Regression: importing the artifacts PACKAGE (not the concrete module) must
+    # eager-register the artifact, mirroring metrics/datasets. The registry check
+    # confirms the decorator fired; asserting the package re-exports the class
+    # catches an empty ``__init__`` even if some other import already registered
+    # tool_docs in-process (the masking the reviewer flagged) — the re-export
+    # only exists if ``__init__`` eager-imports the concrete module.
+    import benchmarks.optimize.artifacts as artifacts_pkg
+
+    assert "tool_docs" in artifact_registry.names()
+    assert artifacts_pkg.ToolDocsArtifact is ToolDocsArtifact
+
+
+def test_round_trip_is_idempotent_after_first_normalization() -> None:
+    # The delimited grammar trims one trailing newline per section on parse, so
+    # render(parse(render(seed))) is NOT byte-equal to render(seed). It IS
+    # idempotent from that first normalized surface onward — this pins the real
+    # invariant the docstrings now promise, guarding future D6-overlay callers.
+    seed = ToolDocsArtifact().render()
+    once = render_delimited(parse_delimited(seed))
+    twice = render_delimited(parse_delimited(once))
+    assert once == twice

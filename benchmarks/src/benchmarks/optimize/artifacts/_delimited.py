@@ -7,6 +7,15 @@ every following line up to the next header or EOF, with a single trailing
 newline trimmed. Because a content line that itself looks like a header is a
 declared violation (``find_header_collisions``), no escaping is ever needed —
 that rule is the whole reason the format stays escaping-free.
+
+Round-trip semantics: ``parse_delimited`` trims exactly one trailing newline
+per section (the one ``render_delimited`` appends). So ``render → parse →
+render`` is NOT byte-stable when a section's content already ended in a
+newline — that inner newline is dropped on the first parse. It IS idempotent
+after that first normalization: ``render(parse(render(x)))`` equals
+``render(parse(render(parse(render(x)))))``. Fingerprints therefore compare
+normalized surfaces; normalize a candidate through one ``parse``/``render``
+pass before hashing if byte-for-byte equality across passes matters.
 """
 
 from __future__ import annotations
@@ -23,8 +32,11 @@ def render_delimited(sections: Mapping[str, str]) -> str:
     """Render ``{key: content}`` to the delimited document, in insertion order.
 
     Each section is ``=== <key> ===`` followed by its content and one trailing
-    newline (the newline ``parse_delimited`` trims), so ``render → parse →
-    render`` is byte-stable.
+    newline. ``parse_delimited`` trims exactly that one newline, so the pair is
+    idempotent after the first normalization pass (``render(parse(render(x)))``
+    round-trips unchanged from there) — but NOT byte-stable on the first pass
+    when a section's content already ended in a newline; see the module
+    docstring for the exact invariant.
 
     Example:
         >>> render_delimited({"SERVER_INSTRUCTIONS": "hi"})
