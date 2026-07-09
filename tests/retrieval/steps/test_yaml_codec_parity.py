@@ -100,6 +100,7 @@ def test_graph_and_tree_steps_declare_yaml_keys() -> None:
         "directions",
         "kinds",
         "neighbors_per_seed",
+        "kind_weights",
         "name",
     )
     assert LlmTreeReasoningStep._YAML_KEYS == (
