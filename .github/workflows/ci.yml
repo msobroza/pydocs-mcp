@@ -224,6 +224,7 @@ jobs:
           uv sync --frozen --group dev --extra graph
           uv run python -m pytest \
             tests/application/test_node_score_compute.py \
+            tests/application/test_node_score_compute_pagerank_fallback.py \
             tests/application/test_indexing_service_node_scores.py -v
 
       - name: Upload coverage artifact
