@@ -120,3 +120,148 @@ operator-run, preflight-gated, ledgered, manual evaluation. The offline test
 suite covers every pure and Protocol-seamed part of it (`benchmarks/tests/eval/
 agent_track/`); the paid path is exercised only by an operator who ran the
 preflight first.
+
+---
+
+## Optimization — improving the harness's own text artifacts
+
+The optimize layer (`benchmarks/src/benchmarks/optimize/`) turns the paired
+agent track into a *fitness function* and searches for better versions of two
+text artifacts the harness ships:
+
+- **`tool_docs`** — the product's `TOOL_DOCS` + `SERVER_INSTRUCTIONS` surface
+  (`python/pydocs_mcp/application/tool_docs.py`), served to arm B's MCP client;
+- **`usage_skill`** — the seed skill document
+  (`benchmarks/src/benchmarks/optimize/artifacts/usage_skill_seed.md`) that
+  reaches the evaluated agent through `task_prompt(skill=...)`.
+
+Two co-equal optimizers propose candidates — `critique_refine` (an LLM
+critique/rewrite loop) and `skillopt` (an adapter to an external search repo).
+Each candidate is scored on the same paired agent harness, run up a
+**fitness ladder** (cheap screening rungs then a full finals rung), and
+**accepted only on a held-out split with a real margin**. An optimizer proposes
+a diff a human lands — never runtime self-modification.
+
+> **The same guardrail applies, doubled.** A real optimization run is *many*
+> paired runs. It is manual, preflight-gated, budget-capped, and never CI. The
+> offline suite (`benchmarks/tests/optimize/`) covers every pure and
+> Protocol-seamed part; the paid search is exercised only by an operator who ran
+> the preflight *and* a `--dry-run` first, and who has an explicit go to spend.
+
+### Preflight first — always (agent-track preflight, then `--dry-run`)
+
+Because the optimizer's fitness *is* the paired agent track, its environment
+contract is the agent track's. Before any paid optimization run, in order:
+
+1. **Agent-track preflight** — the same five fail-fast checks a paired run
+   needs (headless CLI present, JSON contract at ≤ $0.01, `pydocs_mcp`
+   importable, MCP config boots, disk headroom):
+
+   ```bash
+   python -m benchmarks.eval.agent_track --preflight
+   ```
+
+2. **Optimize `--dry-run`** — walks the *whole* optimize pipeline spending
+   `$0.00`: it validates the seed against its §D13 firewall, echoes the wired
+   ladder, checks the train/holdout split predicate is deterministic and
+   both-sided, reports each optimizer adapter's availability (`skillopt` shows
+   SKIPPED when its `[optimizers-skillopt]` extra is absent — a dry run must
+   never require it), and runs one full orchestrator pass on a zero-cost fake
+   fitness with `FakeAgentRunner` / `FakeJudge`:
+
+   ```bash
+   python -m benchmarks.optimize --config \
+       benchmarks/src/benchmarks/optimize/configs/optimize_tool_docs.yaml --dry-run
+   ```
+
+If either step fails, fix the reported condition before spending. That is the
+entire point of the two-step gate.
+
+### The three-layer spend model
+
+Spend has three layers, precedence stated (spec §D5):
+
+1. **`OptimizationBudget.max_usd` is the outer cap** the orchestrator enforces
+   across all rungs it runs *and* the holdout gate — checked before starting any
+   paid unit of work. Hitting it stops the search and returns
+   `OptimizationResult(accepted=False, ...)` with the trials so far.
+2. **For `critique_refine`,** every rollout is a `run_agent_track` call under
+   its own `--max-usd`, nested beneath the outer cap.
+3. **For `skillopt`,** its internal spend is bounded by the **mapped** budget
+   config (`OptimizationBudget.max_usd` → SkillOpt's own budget field in the
+   generated `configs/<name>.yaml`), which the outer cap **cannot** interrupt
+   mid-`train.py`; the outer cap applies only to the surrounding holdout-gate
+   runs, which *do* go through our harness. This asymmetry is why the SkillOpt
+   adapter pins the mapping in a test — the outer `--max-usd` never reaches
+   inside `train.py`, so the mapped config is the only thing bounding the
+   external search.
+
+`--dry-run` walks the whole pipeline (seed validation, ladder wiring, split
+determinism, adapter import/stub) with a `FakeAgentRunner`, spending nothing.
+
+### Configuring a run
+
+Runs are configured by a benchmarks-local YAML (like the eval overlay configs —
+*not* product `AppConfig`). Two ship:
+
+- `optimize_tool_docs.yaml` — `tool_docs` via `critique_refine`;
+- `optimize_usage_skill.yaml` — `usage_skill` via `skillopt`.
+
+Registry keys in the YAML (`paired_agent`, `retrieval`, `critique_refine`,
+`skillopt`, artifact names) are **byte-identical** to the registered names — a
+typo is a load-time `KeyError`, not a silent no-op. The knobs: the artifact +
+optimizer, the ladder rungs as `[fitness, max_tasks, survivors]`, the fitness
+`weights` + `judge_parity_floor` (the parity *pre-gate*: a candidate whose blind
+judge mean drops more than the floor is rejected before its efficiency counts),
+the `accept_margin`, the `budget`, and (for `critique_refine`) the `llm` block.
+Both configs live under
+`benchmarks/src/benchmarks/optimize/configs/`.
+
+### Reading an `OptimizationResult`
+
+The run returns an `OptimizationResult` (a rejected search is *still*
+information — `accepted=False` with both holdout scores is a first-class outcome,
+not an error):
+
+- **`accepted`** — `True` only when the candidate beat the seed on the holdout
+  split by more than `accept_margin` (0.02). A tie, a non-finite candidate
+  score, or a missing holdout score all mean *rejected*.
+- **`seed_holdout` / `candidate_holdout`** — the two scores the acceptance
+  decision compares; `candidate_holdout − seed_holdout > accept_margin` is the
+  gate. Both are weighted fractional-reduction sums (higher = better).
+- **`proposal_diff`** — the human-landable unified diff (empty when nothing beat
+  the seed). This is what you apply by hand.
+- **`trials`** — every candidate's journey up the ladder (fingerprint, rung
+  scores, cost, and `validate()` violations — an empty violations tuple means
+  the candidate passed the §D13 firewall).
+- **`total_usd`** / **`provenance`** — what the run cost and the audit trail
+  (seed fingerprint, dataset revision, model ids, optimizer) that makes a landed
+  proposal reproducible months later.
+
+### Landing a proposal
+
+An accepted result hands you a diff, not a live change. Land it by hand:
+
+1. **Apply the `proposal_diff`** to the artifact's source of truth —
+   `python/pydocs_mcp/application/tool_docs.py` for `tool_docs`, or the seed
+   skill `usage_skill_seed.md` for `usage_skill`. Each artifact's
+   `landing_note()` states its exact target file.
+2. **Rerun the §D13 lint + the full suite.** For `tool_docs`, the same
+   importable constants the artifact's firewall used back the product lint
+   (`tests/application/test_tool_docs_lint.py`) — rerun it plus `pytest tests/`.
+   For `usage_skill`, rerun the optimize `--dry-run` to confirm the edited seed
+   still validates.
+3. **Commit it as an ordinary reviewed change.** No special path — it is a
+   normal edit to a product/seed file with a normal PR and normal review.
+
+### Cost expectations
+
+A single paired run is ~$5–10 per arm per repo (see [Cost
+expectations](#cost-expectations) above). An optimization run multiplies that by
+the trials it scores across the ladder. As a rough anchor: a 20-trial
+`critique_refine` run at ladder rung sizes 6 / 24 costs roughly **2×–3× a single
+24-task paired run** — the cheap screening rung (6 tasks) prunes most candidates
+before the expensive finals rung (24 tasks) touches the survivors. Budget
+generously and keep `budget.max_usd` set: it is the hard outer cap that stops the
+search before it overruns.
+
