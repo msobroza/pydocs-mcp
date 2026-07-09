@@ -5,7 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## v0.5.0 (unreleased)
+
+Headline: the MCP surface becomes **six task-shaped tools**, every response now
+travels in a **freshness / next-step / truncation envelope**, and the index
+grows an **architectural-decision layer** (mine decisions at index time, ask
+`get_why` at query time).
+
+### Added
+
+- **Six task-shaped MCP tools + full CLI parity** — the surface is now
+  `get_overview`, `search_codebase`, `get_symbol`, `get_context`,
+  `get_references`, and `get_why`, each mirrored by a CLI subcommand
+  (`overview` / `search` / `symbol` / `context` / `refs` / `why`). `get_context`
+  packs one or more targets under a shared token budget; `get_overview` returns a
+  structural orientation card for a package or the whole workspace. The old
+  `search` / `lookup` pair is retired (`lookup` stays as a deprecated CLI alias).
+  (#141)
+- **Response conventions — one envelope around every answer** — each response
+  (MCP or CLI) carries a freshness header (`[index: <sha> · <N>d old · <M>
+  packages]`, plus a stale warning when the working tree has moved past the
+  indexed commit), inline next-step pointers resolved to the calling surface,
+  and a recoverable truncation footer (`[truncated: …]`) that names every clipped
+  section and the pointer to fetch it in full. On by default; tunable under
+  `output.envelope`. (#139)
+- **Architectural-decision layer** — decisions are mined from your project at
+  index time (ADR files, inline markers, commit messages, changelog, docs prose,
+  deduplicated; optional LLM structuring). The read side exposes them via the new
+  `get_why` tool (free-text or by-target), `search_codebase(kind="decision")`,
+  `get_references(direction="governed_by")`, and dedicated overview blocks; each
+  decision is a graph node with `GOVERNS` edges to the symbols it affects.
+  Configured under `decision_capture:` (write) and `decisions.output` (read);
+  schema v14. (#145, #146)
+- **Multi-repo workspace orientation card** — an empty `get_overview` against a
+  multi-repo server now returns one line per loaded repo with its package count,
+  so a freshly connected agent can orient before narrowing to a `project`. (#153)
+- **`graph_expand` per-edge-kind trust (`kind_weights`) + `MENTIONS` traversal** —
+  graph expansion can now traverse weaker edge kinds at a discounted weight (the
+  weight compounds along each path), with sweep configs for tuning. (#166)
+- **`ask-your-docs` as a first-class install extra** — the LangGraph ReAct agent
+  + Streamlit chat UI now ship inside the package (`pydocs_mcp/ask_your_docs/`)
+  behind `pip install 'pydocs-mcp[ask-your-docs]'` and the `ask-your-docs`
+  console command, with sidebar project/package/scope pickers enforced on every
+  tool call and a read-only interactive graph-explorer page. (#157)
+- **Benchmark harness expansion** — the harness is now a first-class programmatic
+  surface with a paired agent-efficiency track (indexed vs bare, blind judge,
+  spend guardrails), a SWE-QA / SWE-QA-Pro retrieval track, a `small_dev` split,
+  and a `comparing-retrieval-methods` guide. Developer tooling under
+  `benchmarks/`. (#132, #133, #144, #171)
+
+### Changed
+
+- **`dense_scorer` is now a post-fusion re-ranker** — instead of a standalone
+  dense retriever, it re-scores the fused candidate subset against the TurboQuant
+  vectors via an allowlist search (no fresh ANN scan) and sorts the vector-scored
+  hits to the top; candidates without a dense vector keep their fused order and
+  trail behind, so recall is preserved. Mirrors the late-interaction scorer on
+  the single-vector side. (#154)
+- **Docs modernized to the six task-shaped surface** — README, DOCUMENTATION,
+  SPEC, IDEAS, EXTENSIONS, and the benchmarks README no longer describe the
+  retired two-tool `search` / `lookup` surface; the root README is now
+  vendor-neutral (no named third-party comparisons). (#141)
+- **Storage / retrieval internals refactored** for maintainability — `sqlite.py`
+  split into a per-repository package with shared CRUD helpers, the CLI
+  write-side composition root extracted into `storage/factories`, the retrieval
+  config split into a package, and several hexagonal-seam leaks closed
+  (`FilterAdapter` wiring, FTS builder dedup, `db.py` layering). No user-facing
+  behavior change. (#128, #130, #135, #136, #137)
 
 ### Removed
 
@@ -16,14 +82,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Docs modernized to the six task-shaped MCP surface** — README,
-  DOCUMENTATION, SPEC, IDEAS, EXTENSIONS, and the benchmarks README no longer
-  describe the retired two-tool `search` / `lookup` surface; CLI examples use
-  the `overview` / `symbol` / `context` / `refs` / `why` subcommands.
+- **Two audit-hardening waves — ~65 bug fixes with regression tests** — a
+  high-risk wave (18 fixes + 24 new regression-test files) followed by a
+  medium/low wave across storage, db, server, retrieval, extraction, the
+  envelope, the CLI, the watcher, and the Rust core. Includes three reproduced
+  crash bugs (FTS5 operator queries, composite-UoW enter-leak, migration
+  crash-loop), dead watch mode with the real watchdog, `--force` inherited on
+  every save, and `chunks_fts` desync on package deletes.
+  (#148, #150, #152, #158, #159, #160, #161, #162, #163, #164)
+- **`get_context` budget accounting** — `_split_budget` now honors one shared
+  budget so the summed output never exceeds the requested total. (#161)
 - **`examples/ask_your_docs_agent` crashed on startup** — the agent fetched
   the removed `lookup` tool (`StopIteration` on connect); it now targets the
   six task-shaped tools and reads the indexed-projects listing via
   `get_overview`.
+
+### CI
+
+- **`uv lock --check` drift gate** added; the `[graph]` extra now pulls `scipy`
+  (PageRank stopped crashing) and is exercised in CI; the heavy `ask-your-docs`
+  extra is kept off the core test matrix. (#168, #169, #170, #173, #174)
 
 ## [0.4.1] — 2026-07-03
 
@@ -288,7 +366,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
-[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.4.0...HEAD
+[v0.5.0]: https://github.com/msobroza/pydocs-mcp/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.4.1
 [0.4.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.4.0
 [0.3.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.3.1
 [0.3.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.3.0
