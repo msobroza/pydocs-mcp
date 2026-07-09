@@ -69,9 +69,34 @@ Three steps, all on your machine (see the diagram above):
    `search_codebase` (find by relevance), `get_symbol` / `get_context` (jump to
    known names), `get_references` (trace callers, callees, inheritance, impact),
    `get_overview` (map what's indexed), and `get_why` (recorded design rationale).
+   Every response is wrapped in a consistent envelope so the agent always knows
+   where it stands — see [Response conventions](#response-conventions).
 
 The only call that ever leaves your machine is the optional reasoning mode — and
 only if you turn it on with your own key.
+
+## Response conventions
+
+Every tool response — over MCP or the CLI — is wrapped in one shared envelope so
+the agent never has to guess whether an answer is stale, complete, or a
+dead end. Three conventions travel with every result:
+
+- **Freshness header.** A one-line stamp — `[index: 9bfd0c7 · 2d old · 214
+  packages]` — tells the agent which commit the index was built from, how old it
+  is, and how much it covers. If your working tree has moved past the indexed
+  commit, a `[⚠ index stale: … — run pydocs-mcp index .]` warning is appended, so
+  the agent knows to re-index instead of trusting drifted results.
+- **Next-step pointers.** Results carry inline, runnable suggestions for the
+  obvious follow-up call (jump to a symbol, widen the scope, trace a caller),
+  resolved to whichever surface asked — an MCP tool call for clients, a CLI
+  invocation on the terminal.
+- **Truncation ledger.** When a result is clipped to fit a token budget, a
+  `[truncated: N sections — recovery pointers inline]` footer lists exactly what
+  was cut and the pointer that fetches each dropped piece in full — nothing goes
+  missing silently.
+
+The three are on by default and tunable under `output.envelope` in your
+`pydocs-mcp.yaml`.
 
 ## Quick start
 
@@ -155,6 +180,11 @@ over a dependency copy, and among duplicate dependencies the most-recently-index
 one is kept. Every loaded db must share the configured embedder — a mismatch
 fails fast (a read-only load can't re-embed an absent project).
 
+Calling `get_overview` with no selector on a multi-repo server returns a
+**workspace orientation card** — one line per loaded repo with its package
+count — so an agent that has just connected can see everything on offer before
+it narrows to a `project`.
+
 ### Ask your docs — chat agent (optional)
 
 A LangGraph ReAct agent plus a Streamlit chat UI over the MCP server, for
@@ -195,40 +225,45 @@ dependencies:
 pydocs-mcp index . --full-dep my-internal-lib --full-dep "acme-*"
 ```
 
-Point Claude Code, Cursor, or Continue.dev at it over stdio — copy-paste client
-configs are in [DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration), and
-install troubleshooting (including the `libopenblas` fallback) is in
+Point any MCP-capable AI coding client or editor at it over stdio — copy-paste
+client configs are in [DOCUMENTATION.md](DOCUMENTATION.md#mcp-client-integration),
+and install troubleshooting (including the `libopenblas` fallback) is in
 [INSTALL.md](INSTALL.md).
 
-## How it compares
+## What makes it different
 
-pydocs-mcp, **Context7**, and **Neuledge Context** all feed docs to an AI agent
-over MCP, but optimize for different things. They aren't mutually exclusive — an
-agent can mount all three and route by intent.
+Plenty of MCP servers feed documentation to an AI agent. pydocs-mcp is built for
+one job — grounding your agent in the exact code and versions on *your* machine —
+and a few properties fall out of that:
 
-| | **pydocs-mcp** | **Context7** | **Neuledge Context** |
-|---|---|---|---|
-| **Deployment** | Local stdio MCP server | Hosted MCP (`mcp.context7.com`) | Local stdio MCP server |
-| **Doc source** | Your installed Python deps + your own project, indexed in place | Curated community docs hosted by Upstash | Community registry (~100+ libraries), pulled then queried locally |
-| **Version match** | Exactly what's in your `site-packages` — automatic | Library + version chosen in the prompt | Latest from the registry |
-| **Languages** | Python | Multi-language | Multi-language (~100+ libraries) |
-| **Retrieval** | Keyword (BM25) + dense embeddings + LLM tree reasoning, fused via RRF or weighted scores | Not publicly documented | BM25 over SQLite FTS5 |
-| **Code-structure queries** | Reference graph — `get_references(direction=callers\|callees\|inherits\|impact)` | None (doc retrieval only) | None (doc retrieval only) |
-| **Indexes your code** | Yes — under the `__project__` package | No | No |
-| **Privacy** | Fully offline with the default embedder — zero network calls | Queries hit Upstash; OAuth + API key | Local once packages are downloaded |
-| **Dependencies** | Lean — no PyTorch, no FAISS (Rust TurboQuant store + small ONNX embedder) | Hosted service (nothing to install) | Local service |
-| **Cost** | **$0** — OSS (MIT); no keys, limits, or fees | Free tier (rate-limited) + paid plans | **$0** — OSS (Apache-2.0) |
+- **Version-matched, automatically.** It reads the exact releases in your
+  `site-packages`, not a curated or hosted snapshot, so an answer can never
+  describe a version you don't have installed.
+- **Indexes your own code too.** Your project source is a first-class citizen
+  (under the `__project__` package), not just third-party docs — so an agent can
+  reason about your code and its dependencies in one search.
+- **Answers code-structure questions.** A reference graph powers
+  `get_references(direction=callers|callees|inherits|impact|governed_by)` — "what
+  calls this?", "what breaks if I change it?", "which decisions govern it?" — not
+  just relevance-ranked doc retrieval.
+- **Local and private by default.** With the default on-device embedder every
+  query stays on your machine — no accounts, no keys, no network calls, no
+  per-query fees.
+- **Lean.** No PyTorch and no FAISS in the default install — a small ONNX
+  embedder plus the Rust TurboQuant vector store — so it stays quick and the
+  on-disk index stays tiny.
 
-**In short:** choose pydocs-mcp for offline, version-matched Python retrieval
-where you also navigate code structure; Context7 for hosted, multi-language docs;
-Neuledge for a local-first multi-language registry.
+It's OSS (MIT) and mounts alongside any other MCP servers your agent uses, so you
+can route by intent rather than pick one.
 
 ## Benchmarked, not hand-waved
 
 pydocs-mcp ships a real benchmark harness that scores retrieval quality on public
-benchmarks (RepoQA, DS-1000) and head-to-head against Context7 and Neuledge —
-with confidence intervals and plots. See
-[benchmarks/README.md](benchmarks/README.md).
+code-retrieval benchmarks (RepoQA, DS-1000) with confidence intervals and plots,
+so pipeline changes are measured, not asserted. The harness is developer tooling
+that lives in its own package under [`benchmarks/`](benchmarks/) — see
+[benchmarks/README.md](benchmarks/README.md); its internals are out of scope for
+this README.
 
 ## Retrieval methods & R&D
 
@@ -385,6 +420,14 @@ hard cases for single-vector retrievers).
   `α · score_a + (1 − α) · score_b` with min-max normalization, for
   cases where the score distributions are well-calibrated and rank
   isn't enough. `α` is tunable from YAML.
+- **Post-fusion dense re-rank (`dense_scorer`)** — an optional final
+  step that takes the fused candidate list and re-scores just that
+  subset against the TurboQuant vectors (an allowlist search, no fresh
+  ANN scan), sorting the vector-scored hits to the top. Candidates with
+  no dense vector — BM25-only, or skipped by the selective-embed policy —
+  keep their fused order and trail behind, so recall is preserved while
+  the embedded results get the sharper ordering. Mirrors the
+  late-interaction scorer on the single-vector side.
 
 ### LLM tree reasoning — opt-in
 
@@ -410,7 +453,9 @@ Beyond embeddings, pydocs-mcp captures a **graph of how code
 references code** during indexing: `CALLS`, `IMPORTS`, `INHERITS`,
 and optional `MENTIONS` (backtick-quoted dotted names in markdown).
 The same surface answers an AI's *"what calls this?"* / *"what does
-this extend?"* questions through the `get_references(direction=…)` MCP tool:
+this extend?"* questions through the `get_references(direction=…)` MCP tool
+— `callers`, `callees`, `inherits`, `impact` (everything that transitively
+depends on a symbol), and `governed_by` (which recorded decisions govern it):
 
 ```bash
 pydocs-mcp refs requests.auth.HTTPBasicAuth --direction inherits
@@ -426,10 +471,42 @@ preset seeds graph expansion from the top dense hits to recover
 structurally-adjacent answers a dense embedder misses (callers / callees /
 overrides) — on a structural-recall split this lifts recall@10 from 0.30 to
 1.00 (see [benchmarks](benchmarks/README.md#structural-recall-graph-expansion)).
+The `graph_expand` step's `kind_weights` YAML knob assigns a per-edge-kind
+trust so a weak signal (say `MENTIONS`) can be traversed but discounted —
+its weight compounds along each expansion path.
 Two opt-in index-time analytics (`reference_graph.node_scores` /
 `reference_graph.similar_edges`, `[graph]` extra) add PageRank/community
 rerankers and synthetic embedding-kNN edges — see
 [DOCUMENTATION.md](DOCUMENTATION.md#graph-analytics-opt-in).
+
+### Architectural decisions — the *why* behind the code
+
+Reading code tells your agent *what* it does; it rarely tells it *why*. During
+indexing (your project only), pydocs-mcp mines **architectural decisions** from
+the artifacts that already record them — ADR files, inline decision markers,
+commit messages, the changelog, and prose docs — deduplicates near-identical
+findings, and stores each as a first-class, searchable record. An optional LLM
+pass structures a chosen record into fields (context / decision / consequences)
+when you turn it on.
+
+Two surfaces expose them:
+
+- **`get_why`** — ask *"why is this the way it is?"* by free-text query or by
+  target symbol/file, and get the governing decisions back:
+
+  ```bash
+  pydocs-mcp why "why do we cache embeddings per chunk"
+  pydocs-mcp why --target pydocs_mcp.storage.sqlite.chunk_repository
+  ```
+- **`search_codebase(kind="decision")`** — search the mined decisions directly,
+  alongside the usual `docs` / `api` kinds (`pydocs-mcp search "vector store
+  choice" --kind decision`).
+
+Each decision also becomes a graph node linked to the symbols it affects, so
+`get_references(direction="governed_by")` traces from a symbol back to the
+decisions that govern it. Capture is on by default and tunable under
+`decision_capture:` (which sources run, dedup threshold, the optional LLM
+structuring); read-side output bounds live under `decisions.output`.
 
 ## Learn more
 
@@ -465,8 +542,7 @@ rerankers and synthetic embedding-kNN edges — see
 - Reciprocal Rank Fusion — *Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods* · [Cormack, Clarke & Buettcher, SIGIR 2009](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) — the rank-fusion baseline (k=60)
 - [PageIndex](https://github.com/VectifyAI/PageIndex) — inspiration for the LLM tree-reasoning mode
 
-**Protocol & comparable tools**
+**Protocol**
 - [Model Context Protocol](https://modelcontextprotocol.io) — the MCP standard
-- [Context7](https://github.com/upstash/context7) · [Neuledge Context](https://github.com/neuledge/context)
 
 License: MIT.
