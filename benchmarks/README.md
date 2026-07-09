@@ -339,6 +339,47 @@ taxonomy.
 The **pseudo-qrel caveat** above applies identically to this corpus —
 comparative, not absolute, IR quality.
 
+### Agent track (paired agent-efficiency, manual — never CI)
+
+**What it measures.** Not retrieval quality, but *agent efficiency at answer
+quality parity*. The same headless coding agent answers repository questions
+twice per task: once with bare file/search tools (`Read` / `Grep` / `Glob` /
+`Bash`), once with the pydocs-mcp server attached. A blind LLM judge scores both
+answers against the gold answer, and the report aggregates the cost / wall-clock
+/ turn / tool-call / file-read / cache-token deltas **per task, paired** — so the
+efficiency numbers are honest only where the two arms scored at quality parity.
+
+**This is manual and expensive by design — it never runs in CI.** A full run
+spawns a real headless agent per arm and spends real money (~$5–10 per arm per
+repo). Everything pure and Protocol-seamed is unit-tested offline
+([`tests/eval/agent_track/`](tests/eval/agent_track/)); only an operator runs the
+paid path, and only after the preflight passes.
+
+- **Preflight first.** Before any paid run, verify the environment contract —
+  the headless CLI is present, its JSON output carries the parsed fields (a
+  one-token probe capped at $0.01), `pydocs_mcp` imports, the MCP config boots,
+  and there is disk headroom:
+
+  ```bash
+  python -m benchmarks.eval.agent_track --preflight
+  ```
+
+- **Run it.** Resumable through a JSONL ledger (re-running skips completed
+  pairs and never re-attempts a discarded task); `--max-tasks` / `--max-usd`
+  bound the run:
+
+  ```bash
+  python -m benchmarks.eval.agent_track \
+      --dataset swe-qa-pro \
+      --max-tasks 12 \
+      --max-usd 60 \
+      --report runs/agent_track_report.md
+  ```
+
+The full runbook — cost expectations, the preflight-first rule, resume
+semantics, and how to read the paired-delta report — lives in
+[`AGENT_TRACK.md`](AGENT_TRACK.md).
+
 ### Roadmap: additional benchmarks
 
 Each future benchmark gets its own subsection following the same four-question
