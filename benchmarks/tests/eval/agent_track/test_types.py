@@ -2,7 +2,7 @@
 
 import pytest
 
-from benchmarks.eval.agent_track._types import (
+from pydocs_eval.agent_track._types import (
     AgentRunResult,
     AgentTrackConfig,
     ArmConfig,

@@ -3,12 +3,12 @@
 import inspect
 from pathlib import Path
 
-from benchmarks.optimize import _agent_track_binding as b
+from pydocs_eval.optimize import _agent_track_binding as b
 
 # WHY: derive the package root from __file__, not a CWD-relative literal, so the
 # guard resolves identically regardless of pytest's invocation directory (F.I.R.S.T.
 # repeatability). From benchmarks/tests/optimize/test_*.py, parents[2] is benchmarks/.
-_OPTIMIZE_PKG = Path(__file__).resolve().parents[2] / "src" / "benchmarks" / "optimize"
+_OPTIMIZE_PKG = Path(__file__).resolve().parents[2] / "src" / "pydocs_eval" / "optimize"
 
 
 def test_binding_reexports_full_contract() -> None:
@@ -47,7 +47,7 @@ def test_track_config_carries_seed_and_guardrails() -> None:
 
 def test_binding_is_the_only_agent_track_import() -> None:
     # Scan the optimize package source: no .py file other than the binding
-    # imports benchmarks.eval.agent_track. Path.rglob over *.py (not a grep
+    # imports pydocs_eval.agent_track. Path.rglob over *.py (not a grep
     # subprocess) so the assertion is immune to compiled __pycache__ artifacts
     # and stays inside the fully-offline test convention (no subprocess).
     importers = sorted(

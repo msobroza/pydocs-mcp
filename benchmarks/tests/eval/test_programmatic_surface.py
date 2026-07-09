@@ -7,9 +7,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from benchmarks.eval import _bench_cache
-from benchmarks.eval.runner import build_dataset_kwargs
-from benchmarks.eval.sweep import run_sweep, run_sweep_detailed
+from pydocs_eval import _bench_cache
+from pydocs_eval.runner import build_dataset_kwargs
+from pydocs_eval.sweep import run_sweep, run_sweep_detailed
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 

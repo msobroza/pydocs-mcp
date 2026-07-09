@@ -19,12 +19,12 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval.agent_track._runner import (
+from pydocs_eval.agent_track._runner import (
     ClaudeAgentRunner,
     CorpusPrep,
     FakeAgentRunner,
 )
-from benchmarks.eval.agent_track._types import ArmConfig, RunMetrics
+from pydocs_eval.agent_track._types import ArmConfig, RunMetrics
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 # The committed stream fixture ends with a ``result`` line carrying cost/turns —
@@ -71,7 +71,7 @@ async def test_timeout_returns_none_not_raise(monkeypatch, tmp_path) -> None:
 async def test_prepare_corpus_indexes_once(monkeypatch, tmp_path) -> None:
     calls: list[Path] = []
     monkeypatch.setattr(
-        "benchmarks.eval.agent_track._runner._run_index",
+        "pydocs_eval.agent_track._runner._run_index",
         lambda p: calls.append(p),
     )
     corpus = tmp_path / "co"

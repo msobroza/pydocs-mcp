@@ -13,15 +13,15 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from benchmarks.optimize._types import FitnessReport, OptimizationBudget
-from benchmarks.optimize.artifacts.tool_docs import ToolDocsArtifact
-from benchmarks.optimize.ladder import FitnessLadder, Rung
-from benchmarks.optimize.optimizers.critique_refine import (
+from pydocs_eval.optimize._types import FitnessReport, OptimizationBudget
+from pydocs_eval.optimize.artifacts.tool_docs import ToolDocsArtifact
+from pydocs_eval.optimize.ladder import FitnessLadder, Rung
+from pydocs_eval.optimize.optimizers.critique_refine import (
     CritiqueRefineOptimizer,
     CritiqueReply,
     FakeCritiqueClient,
 )
-from benchmarks.optimize.registries import optimizer_registry
+from pydocs_eval.optimize.registries import optimizer_registry
 
 # The one rung every fake ladder in this module references.
 _FITNESS_NAME = "fake"

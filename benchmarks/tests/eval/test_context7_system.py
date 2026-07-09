@@ -12,8 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import Context7System
+from pydocs_eval.serialization import system_registry
+from pydocs_eval.systems import Context7System
 from pydocs_mcp.retrieval.config import AppConfig
 
 
@@ -48,7 +48,7 @@ async def test_context7_index_closes_client_when_resolve_raises(
     # WHY: ``Context7Client`` is now defined in the same module as
     # ``Context7System``; the system's index() resolves it from the
     # module-level scope, so patch the symbol on that module.
-    import benchmarks.eval.systems.context7 as c7
+    import pydocs_eval.systems.context7 as c7
 
     monkeypatch.setattr(c7, "Context7Client", lambda *a, **kw: stub)
 

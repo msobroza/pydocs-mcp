@@ -1,6 +1,6 @@
 """Pseudo-qrel citation extraction (spec §D14): answers → file-level labels."""
 
-from benchmarks.eval.datasets._citations import extract_path_citations, resolve_bare_filenames
+from pydocs_eval.datasets._citations import extract_path_citations, resolve_bare_filenames
 
 _PRO_ANSWER = (
     "First, it calls the parent constructor super().__init__() to inherit QAOA's "

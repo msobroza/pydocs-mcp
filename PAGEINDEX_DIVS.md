@@ -57,7 +57,7 @@ Recounted from their raw `Mafin2.5-FinanceBench/result_gpt4o.json`:
   "Multiple-Valid-Approaches" + 1 "Same-Evidence-Different-Conclusion" rows as correct:
   148/150 = 98.7%. **Strict answers-aligned grading of their own published data =
   136/150 = 90.7%.** Ours is binary recall@k where the hit must AST-match one exact
-  function body (`benchmarks/src/benchmarks/eval/ast_match.py:81-113`) — no generation,
+  function body (`benchmarks/src/pydocs_eval/ast_match.py:81-113`) — no generation,
   no judge, no partial credit.
 - **Candidate space**: section selection inside ONE effectively pre-identified financial
   PDF (132/150 questions name company + fiscal year); their example annual-report tree

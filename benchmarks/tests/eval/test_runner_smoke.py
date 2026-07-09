@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from benchmarks.eval.runner import run_sweep
-from benchmarks.eval.serialization import system_registry
+from pydocs_eval.runner import run_sweep
+from pydocs_eval.serialization import system_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
@@ -253,7 +253,7 @@ async def test_runner_run_sweep_gpu_reaches_embedder_with_cuda(tmp_path: Path) -
 
 
 def test_arg_parser_accepts_gpu_flag() -> None:
-    from benchmarks.eval.runner import _build_arg_parser
+    from pydocs_eval.runner import _build_arg_parser
 
     parser = _build_arg_parser()
     args = parser.parse_args(["--configs", "x.yaml", "--gpu"])
@@ -269,7 +269,7 @@ def test_runner_seeds_library_on_systems_before_index() -> None:
     ``index()`` is called. Helper is sync; only the system-facing
     boundary is async.
     """
-    from benchmarks.eval.sweep_support import _maybe_set_library
+    from pydocs_eval.sweep_support import _maybe_set_library
 
     class _Recorder:
         name = "recorder"
@@ -289,7 +289,7 @@ def test_maybe_set_library_noop_on_system_without_fields() -> None:
     runner helper must be a strict no-op (no ``setattr`` fallback that
     would invent attributes on unrelated systems). Finding I5.
     """
-    from benchmarks.eval.sweep_support import _maybe_set_library
+    from pydocs_eval.sweep_support import _maybe_set_library
 
     class _Bare:
         name = "bare"
@@ -304,7 +304,7 @@ def test_maybe_set_library_noop_when_metadata_missing_repo() -> None:
     """If ``task.metadata`` lacks ``'repo'``, the helper must not touch
     the system. Defensive against datasets that don't carry the field.
     """
-    from benchmarks.eval.sweep_support import _maybe_set_library
+    from pydocs_eval.sweep_support import _maybe_set_library
 
     class _Recorder:
         library_name: str = "initial"
@@ -360,7 +360,7 @@ async def test_runner_smoke_returns_full_dataset_task_count(tmp_path: Path) -> N
     fixture pins this to 5 (matching ``repoqa_mini.json``). The report's
     title carries the same count.
     """
-    from benchmarks.eval.report import format_report
+    from pydocs_eval.report import format_report
 
     overlay = _empty_overlay(tmp_path)
     jsonl_dir = tmp_path / "jsonl"

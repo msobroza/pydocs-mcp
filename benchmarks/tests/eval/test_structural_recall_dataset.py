@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 import yaml
-from benchmarks.eval.datasets.base_dataset import Dataset
-from benchmarks.eval.datasets.structural_recall import StructuralRecallDataset
-from benchmarks.eval.serialization import dataset_registry
+from pydocs_eval.datasets.base_dataset import Dataset
+from pydocs_eval.datasets.structural_recall import StructuralRecallDataset
+from pydocs_eval.serialization import dataset_registry
 
 _FIXTURE = {
     "python": [

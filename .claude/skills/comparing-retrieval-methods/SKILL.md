@@ -16,7 +16,7 @@ Full CLI flags, DS-1000 recipes, baseline schema, and JSONL format: see [harness
 Run from the repo root — the runner resolves `--configs` paths relative to the **current working directory**, and all examples assume it is the repo root. The `PYTHONPATH` prefix is mandatory unless `benchmarks` is pip-installed (`uv pip install -e benchmarks`):
 
 ```bash
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
   --split small_test \
@@ -65,7 +65,7 @@ For **quality** comparisons a warm bench cache is expected and correct — leave
 - Regression gate against a recorded baseline:
 
 ```bash
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.ci_compare \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.ci_compare \
   --baseline benchmarks/baselines/repoqa_fixture_baseline.json \
   --current 'benchmarks/results/jsonl/*.jsonl' \
   --metric recall@10 --threshold 0.02
@@ -79,6 +79,6 @@ PYTHONPATH=benchmarks/src python -m benchmarks.eval.ci_compare \
 | Reading `indexing_seconds` from a warm-cache run | Cache HITs record no indexing time. Take indexing timings only from a cold run (`--bench-cache off` or after `bench_cache_cli evict`). |
 | Calling a <2-needle delta a win on `small_test` | n=30 → one needle = 3.3 points; recall CIs are ±0.15 wide. Require non-overlapping CIs or a paired per-needle comparison from the per-task JSONL events; confirm on full `test`. |
 | Running dense sweeps on CPU with bare `--gpu` | onnxruntime silently falls back to CPU without torch's NVIDIA libs on `LD_LIBRARY_PATH`. Use `benchmarks/scripts/run_eval_gpu.sh`. CPU dense-indexing is 60–215 s/needle. |
-| Following the README's `scripts/run_repoqa.sh` | It does not exist. Invoke `python -m benchmarks.eval.runner` directly. |
+| Following the README's `scripts/run_repoqa.sh` | It does not exist. Invoke `python -m pydocs_eval.runner` directly. |
 | Editing a corpus in place between cached runs | The bench cache does not detect in-place corpus edits — `evict` or `--bench-cache off` after editing. |
 | Tree/LLM configs failing silently | They need `OPENAI_API_KEY` in the environment before the sweep starts. |

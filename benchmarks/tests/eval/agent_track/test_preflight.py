@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmarks.eval.agent_track.__main__ import PreflightCheck, preflight_checks
+from pydocs_eval.agent_track.__main__ import PreflightCheck, preflight_checks
 
 
 def test_preflight_checks_are_enumerated() -> None:

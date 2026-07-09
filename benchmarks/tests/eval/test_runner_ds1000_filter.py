@@ -25,11 +25,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.datasets.ds1000 import Ds1000Dataset
-from benchmarks.eval.runner import _build_arg_parser, run_sweep
-from benchmarks.eval.serialization import dataset_registry, system_registry
-from benchmarks.eval.systems.base_system import RetrievedItem
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.datasets.ds1000 import Ds1000Dataset
+from pydocs_eval.runner import _build_arg_parser, run_sweep
+from pydocs_eval.serialization import dataset_registry, system_registry
+from pydocs_eval.systems.base_system import RetrievedItem
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig

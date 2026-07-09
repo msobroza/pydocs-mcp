@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from benchmarks.eval.systems.pydocs import (
+from pydocs_eval.systems.pydocs import (
     PydocsMcpSystem,
     PydocsTreeOnlySystem,
     PydocsTreeParallelSystem,

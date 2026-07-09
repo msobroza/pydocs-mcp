@@ -21,15 +21,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.gold_resolver import (
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.gold_resolver import (
     _DEFAULT_FUZZ_THRESHOLD,
     GoldResolver,
     LazyFuzzyGoldResolver,
     PydocsFuzzyGoldResolver,
     _item_key,
 )
-from benchmarks.eval.systems.base_system import RetrievedItem
+from pydocs_eval.systems.base_system import RetrievedItem
 
 # ── fakes (no pydocs_mcp) ──────────────────────────────────────────────────
 

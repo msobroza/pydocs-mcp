@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from benchmarks.eval.datasets.ds1000 import Ds1000Dataset
+from pydocs_eval.datasets.ds1000 import Ds1000Dataset
 
 # Mirror ``test_ds1000_dataset.py``'s fixture-finding: this test lives in
 # ``benchmarks/tests/eval/`` so ``Path(__file__).parent`` is that dir and

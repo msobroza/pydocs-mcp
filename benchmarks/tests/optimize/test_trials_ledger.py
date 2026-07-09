@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from benchmarks.optimize.trials_ledger import TrialsLedger
+from pydocs_eval.optimize.trials_ledger import TrialsLedger
 
 
 def test_record_and_lookup_by_fingerprint_and_split(tmp_path) -> None:

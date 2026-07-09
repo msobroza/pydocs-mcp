@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmarks.eval.runner import main
+from pydocs_eval.runner import main
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 

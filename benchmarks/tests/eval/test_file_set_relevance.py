@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.metrics._relevance import is_relevant
-from benchmarks.eval.systems.base_system import RetrievedItem
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.metrics._relevance import is_relevant
+from pydocs_eval.systems.base_system import RetrievedItem
 
 
 def _task(gold: GoldAnswer) -> EvalTask:

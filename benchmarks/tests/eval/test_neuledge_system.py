@@ -14,9 +14,9 @@ from typing import Any
 
 import httpx
 import pytest
-from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import NeuledgeSystem
-from benchmarks.eval.systems.neuledge import (
+from pydocs_eval.serialization import system_registry
+from pydocs_eval.systems import NeuledgeSystem
+from pydocs_eval.systems.neuledge import (
     NeuledgeClient,
     NeuledgeError,
     _parse_sse_json,
@@ -106,7 +106,7 @@ def _client_with_stub(
     """Patch the httpx.AsyncClient constructor so NeuledgeClient uses a stub."""
     stub = _StubHttpClient(responses=responses, raise_on_post=raise_on_post)
     monkeypatch.setattr(
-        "benchmarks.eval.systems.neuledge.httpx.AsyncClient",
+        "pydocs_eval.systems.neuledge.httpx.AsyncClient",
         lambda *args, **kwargs: stub,
     )
     return NeuledgeClient(base_url="http://stub/mcp"), stub
@@ -282,7 +282,7 @@ async def test_system_index_opens_client(
     tmp_path: Path,
 ) -> None:
     stub = _StubNeuledgeClient()
-    import benchmarks.eval.systems.neuledge as nl
+    import pydocs_eval.systems.neuledge as nl
 
     monkeypatch.setattr(nl, "NeuledgeClient", lambda *a, **kw: stub)
     system = system_registry.build("neuledge")
@@ -297,7 +297,7 @@ async def test_system_search_returns_one_item_with_library_metadata(
     tmp_path: Path,
 ) -> None:
     stub = _StubNeuledgeClient(docs="merging dataframes\n…")
-    import benchmarks.eval.systems.neuledge as nl
+    import pydocs_eval.systems.neuledge as nl
 
     monkeypatch.setattr(nl, "NeuledgeClient", lambda *a, **kw: stub)
     system = system_registry.build("neuledge")
@@ -317,7 +317,7 @@ async def test_system_search_returns_empty_tuple_on_empty_docs(
     tmp_path: Path,
 ) -> None:
     stub = _StubNeuledgeClient(docs="")
-    import benchmarks.eval.systems.neuledge as nl
+    import pydocs_eval.systems.neuledge as nl
 
     monkeypatch.setattr(nl, "NeuledgeClient", lambda *a, **kw: stub)
     system = system_registry.build("neuledge")
@@ -352,7 +352,7 @@ async def test_system_teardown_closes_client_and_clears_field(
     tmp_path: Path,
 ) -> None:
     stub = _StubNeuledgeClient()
-    import benchmarks.eval.systems.neuledge as nl
+    import pydocs_eval.systems.neuledge as nl
 
     monkeypatch.setattr(nl, "NeuledgeClient", lambda *a, **kw: stub)
     system = system_registry.build("neuledge")

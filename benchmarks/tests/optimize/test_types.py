@@ -6,14 +6,14 @@ import math
 
 import pytest
 
-from benchmarks.optimize._types import (
+from pydocs_eval.optimize._types import (
     FitnessReport,
     OptimizationBudget,
     OptimizationResult,
     Provenance,
     Trial,
 )
-from benchmarks.optimize.registries import (
+from pydocs_eval.optimize.registries import (
     artifact_registry,
     fitness_registry,
     optimizer_registry,

@@ -6,10 +6,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from benchmarks.eval.systems._mcp_http import McpHttpClient
-from benchmarks.eval.systems.base_system import single_blob_items
-from benchmarks.eval.systems.context7 import Context7Client, Context7Error
-from benchmarks.eval.systems.neuledge import NeuledgeClient
+from pydocs_eval.systems._mcp_http import McpHttpClient
+from pydocs_eval.systems.base_system import single_blob_items
+from pydocs_eval.systems.context7 import Context7Client, Context7Error
+from pydocs_eval.systems.neuledge import NeuledgeClient
 
 
 def test_both_clients_share_the_base() -> None:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from benchmarks.optimize.artifacts._delimited import parse_delimited, render_delimited
-from benchmarks.optimize.artifacts.tool_docs import ToolDocsArtifact
-from benchmarks.optimize.registries import artifact_registry
+from pydocs_eval.optimize.artifacts._delimited import parse_delimited, render_delimited
+from pydocs_eval.optimize.artifacts.tool_docs import ToolDocsArtifact
+from pydocs_eval.optimize.registries import artifact_registry
 
 
 def test_render_parse_round_trip_preserves_order_and_bytes() -> None:
@@ -57,7 +57,7 @@ def test_importing_package_registers_tool_docs() -> None:
     # catches an empty ``__init__`` even if some other import already registered
     # tool_docs in-process (the masking the reviewer flagged) — the re-export
     # only exists if ``__init__`` eager-imports the concrete module.
-    import benchmarks.optimize.artifacts as artifacts_pkg
+    import pydocs_eval.optimize.artifacts as artifacts_pkg
 
     assert "tool_docs" in artifact_registry.names()
     assert artifacts_pkg.ToolDocsArtifact is ToolDocsArtifact

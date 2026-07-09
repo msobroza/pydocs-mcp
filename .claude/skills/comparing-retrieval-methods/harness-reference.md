@@ -10,15 +10,15 @@ uv pip install -e benchmarks                # core: jsonl tracker + RepoQA loade
 uv pip install -e "benchmarks[mlflow]"      # + MLflow tracker (only if --trackers mlflow)
 uv pip install -e "benchmarks[all]"         # everything (needed for pytest suite)
 ```
-If NOT installed, prefix every `python -m benchmarks.…` command with `PYTHONPATH=benchmarks/src` (PyPA src-layout; the package lives at `benchmarks/src/benchmarks/`). Run everything from the repo root.
+If NOT installed, prefix every `python -m benchmarks.…` command with `PYTHONPATH=benchmarks/src` (PyPA src-layout; the package lives at `benchmarks/src/pydocs_eval/`). Run everything from the repo root.
 
 ## 1. Exact sweep commands
 
-The runner is `python -m benchmarks.eval.runner` (`benchmarks/src/benchmarks/eval/runner.py`). It runs the matrix `(systems × configs)` on one dataset. Configs are comma-separated `AppConfig` overlay YAMLs from `benchmarks/configs/`; the file **stem** becomes the config column key / run name.
+The runner is `python -m pydocs_eval.runner` (`benchmarks/src/pydocs_eval/runner.py`). It runs the matrix `(systems × configs)` on one dataset. Configs are comma-separated `AppConfig` overlay YAMLs from `benchmarks/configs/`; the file **stem** becomes the config column key / run name.
 
 **A. Fast path — RepoQA, hermetic, no network (5-needle bundled fixture):**
 ```bash
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
   --fixture benchmarks/tests/eval/fixtures/repoqa_mini.json \
@@ -29,7 +29,7 @@ PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
 
 **A'. Fast iteration on real data — RepoQA `small_test` (~30 stratified needles; network on FIRST run only, then cached at `~/.cache/pydocs-mcp/repoqa/`):**
 ```bash
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
   --split small_test \
@@ -42,7 +42,7 @@ Note: `--fixture` and `--split small_test` are different things — the fixture 
 
 **B. Full RepoQA (100 needles, 10 real repos; downloads `repoqa-2024-06-23` on first run):**
 ```bash
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
   --configs benchmarks/configs/baseline.yaml,benchmarks/configs/repoqa_dense.yaml \
@@ -65,14 +65,14 @@ cd -
 Three canonical runs (different output shapes):
 ```bash
 # Run 1 — cross-system, single-blob (rank-1 metrics only):
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --dataset ds1000 \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --dataset ds1000 \
   --systems pydocs-mcp-composite,context7,neuledge \
   --configs benchmarks/configs/ds1000_composite.yaml \
   --metrics recall@1,mrr,precision@1,coverage,library_resolution@1 \
   --trackers jsonl
 
 # Run 2 — pydocs-only ranked top-K (needs the reference project):
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --dataset ds1000 \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --dataset ds1000 \
   --systems pydocs-mcp \
   --configs benchmarks/configs/ds1000_ranked.yaml \
   --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
@@ -80,7 +80,7 @@ PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --dataset ds1000 \
   --corpus-dir benchmarks/fixtures/ds1000_reference_project
 
 # Run 3 — oracle indexing, THE CodeRAG-Bench-comparable run (BM25 ref NDCG@10 ≈ 5.2):
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --dataset ds1000 \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --dataset ds1000 \
   --systems pydocs-oracle \
   --dataset-full-prompt \
   --configs benchmarks/configs/ds1000_ranked.yaml \
@@ -109,10 +109,10 @@ Registered names — systems: `pydocs-mcp`, `pydocs-mcp-composite`, `pydocs-mcp-
 Each `(corpus, ingestion-config-hash)` is indexed once into `~/.pydocs-mcp/bench/` and reused across tasks AND across sweeps sharing an ingestion pipeline — a warm re-sweep skips all indexing. Controlled by `--bench-cache on|off` (default on).
 
 ```bash
-python -m benchmarks.eval.bench_cache_cli info    # list entries (key, MB, mtime)
-python -m benchmarks.eval.bench_cache_cli evict   # wipe all entries
-python -m benchmarks.eval.runner --bench-cache-cleanup ...  # run, then wipe ENTIRE cache (even on error)
-python -m benchmarks.eval.runner --bench-cache off ...      # fresh tmp DB per task (pre-cache behavior)
+python -m pydocs_eval.bench_cache_cli info    # list entries (key, MB, mtime)
+python -m pydocs_eval.bench_cache_cli evict   # wipe all entries
+python -m pydocs_eval.runner --bench-cache-cleanup ...  # run, then wipe ENTIRE cache (even on error)
+python -m pydocs_eval.runner --bench-cache off ...      # fresh tmp DB per task (pre-cache behavior)
 ```
 Key facts: the cache key folds the ingestion pipeline hash, so changing embedder / ingestion YAML rebuilds automatically; **editing corpus contents in place is NOT detected** — `evict` or `--bench-cache off` after. `--gpu` is excluded from the key (no re-index on toggle). **Cache HITs record NO `indexing_seconds`** — take true indexing timings only from a cold run (post-`evict` or `--bench-cache off`). `--bench-cache-cleanup` wipes the whole cache, not just this run's entries — never use with a concurrent sweep.
 
@@ -120,17 +120,17 @@ Key facts: the cache key folds the ingestion pipeline hash, so changing embedder
 
 - **Format:** tracked JSON in `benchmarks/baselines/` (`repoqa_snf.json` = real 100 needles, `repoqa_fixture_baseline.json` = 5-needle CI gate). Schema: `{dataset, system, config, tasks_ran, metrics: {"<name>": {mean, ci_low, ci_high}} plus {indexing_seconds|search_seconds: {p50, p95, p99}}, captured_at, git_sha, source_jsonl, label}`.
 - **Recording is manual** — there is no baseline-writer CLI. Copy the `_mean`/`_ci_low`/`_ci_high` aggregates out of a run's JSONL into this schema; set `source_jsonl` to that file, `git_sha` to the sweep commit.
-- **Comparing — `benchmarks/src/benchmarks/eval/ci_compare.py`:**
+- **Comparing — `benchmarks/src/pydocs_eval/ci_compare.py`:**
   ```bash
-  PYTHONPATH=benchmarks/src python -m benchmarks.eval.ci_compare \
+  PYTHONPATH=benchmarks/src python -m pydocs_eval.ci_compare \
     --baseline benchmarks/baselines/repoqa_fixture_baseline.json \
     --current 'benchmarks/results/jsonl/*.jsonl' \
     --metric recall@10 --threshold 0.02
   ```
   Reads `metrics.<metric>.mean` from the baseline, finds `<metric>_mean` in the **most-recently-modified** JSONL matching the glob. Exit 0 = OK, 1 = mean dropped > threshold (flat percentage points, default 0.02 — deliberately not CI-based), 2 = input error. This is exactly what `.github/workflows/benchmark.yml` runs (fixture-vs-fixture; the real 100-needle baseline is documentation only).
-- **Plotting:** `python -m benchmarks.eval.plotting <baseline.json> [<baseline2.json>...] --output x.png --metrics recall@1,recall@5,mrr` — grouped bars with CI error bars; all baselines in one figure MUST share the same `dataset` field (raises `ValueError` otherwise).
+- **Plotting:** `python -m pydocs_eval.plotting <baseline.json> [<baseline2.json>...] --output x.png --metrics recall@1,recall@5,mrr` — grouped bars with CI error bars; all baselines in one figure MUST share the same `dataset` field (raises `ValueError` otherwise).
 
-## 5. Metrics (registered in `src/benchmarks/eval/metrics/`)
+## 5. Metrics (registered in `src/pydocs_eval/metrics/`)
 
 | Name (spec) | Meaning |
 |---|---|
@@ -147,7 +147,7 @@ Relevance backing all of them: `metrics/_relevance.py:is_relevant` — AST-equiv
 
 ## 6. Gotchas
 
-- **`scripts/run_repoqa.sh` referenced in the README does not exist** in `benchmarks/scripts/` — only `run_eval_gpu.sh` and the plot/build scripts. Use `python -m benchmarks.eval.runner` directly.
+- **`scripts/run_repoqa.sh` referenced in the README does not exist** in `benchmarks/scripts/` — only `run_eval_gpu.sh` and the plot/build scripts. Use `python -m pydocs_eval.runner` directly.
 - **PYTHONPATH:** `PYTHONPATH=benchmarks/src` is required unless `benchmarks` is pip-installed (CI and all docs use the prefix).
 - **Ranked vs composite configs:** the MCP default pipeline collapses to ONE composite chunk, which structurally caps `recall@k>1` at 0. Sweeps measuring top-K must use a ranked-preset config (e.g. `baseline.yaml` / `ds1000_ranked.yaml` → `chunk_search_ranked.yaml`); composite configs pair with rank-1 metrics only.
 - **GPU:** `--gpu` alone is not enough for FastEmbed — onnxruntime silently falls back to CPU without torch's bundled NVIDIA libs on `LD_LIBRARY_PATH`. Use `benchmarks/scripts/run_eval_gpu.sh` (forces `--gpu`, sets `LD_LIBRARY_PATH` + `PYTHONPATH`; venv override `PYDOCS_VENV=`, default `.venv-li`). CPU dense-indexing RepoQA is 60–215 s/needle (days for a full sweep).
@@ -157,4 +157,4 @@ Relevance backing all of them: `metrics/_relevance.py:is_relevant` — AST-equiv
 - **`--metrics` names are exact strings** including `@k` (e.g. `ndcg@10`, `pass@1-needle`); the JSONL aggregate names append `_mean`/`_ci_low`/`_ci_high`.
 - Sweep is sequential (one task at a time) — cold-run timings are uncontended; don't parallelize sweeps sharing the bench cache with `--bench-cache-cleanup`.
 
-Key files: `benchmarks/src/benchmarks/eval/runner.py` (sweep + CLI), `metrics/` (metric impls), `trackers/jsonl_tracker.py`, `trackers/mlflow_tracker.py`, `ci_compare.py`, `bench_cache_cli.py`, `_bench_cache.py`, `plotting.py`, `report.py`, `benchmarks/configs/*.yaml`, `benchmarks/baselines/*.json`, `benchmarks/EXPERIMENTS.md` (12-condition small_test playbook), `.github/workflows/benchmark.yml` (CI gate example).
+Key files: `benchmarks/src/pydocs_eval/runner.py` (sweep + CLI), `metrics/` (metric impls), `trackers/jsonl_tracker.py`, `trackers/mlflow_tracker.py`, `ci_compare.py`, `bench_cache_cli.py`, `_bench_cache.py`, `plotting.py`, `report.py`, `benchmarks/configs/*.yaml`, `benchmarks/baselines/*.json`, `benchmarks/EXPERIMENTS.md` (12-condition small_test playbook), `.github/workflows/benchmark.yml` (CI gate example).

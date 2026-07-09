@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from benchmarks.eval.datasets.ds1000_schema import (
+from pydocs_eval.datasets.ds1000_schema import (
     PINNED_DS1000_REVISION,
     PINNED_LIBDOCS_REVISION,
     to_pypi_canonical,

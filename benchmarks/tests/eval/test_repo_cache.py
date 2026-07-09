@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval.datasets._repo_cache import RepoCache, read_checkout_files
+from pydocs_eval.datasets._repo_cache import RepoCache, read_checkout_files
 
 
 def _run(cwd: Path, *args: str) -> str:

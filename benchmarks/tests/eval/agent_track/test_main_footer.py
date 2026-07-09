@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from benchmarks.eval.agent_track.__main__ import _footer_stats_from_ledger
+from pydocs_eval.agent_track.__main__ import _footer_stats_from_ledger
 
 
 def _write_ledger(path: Path, records: list[dict[str, object]]) -> None:

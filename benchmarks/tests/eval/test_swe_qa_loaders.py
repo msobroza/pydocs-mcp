@@ -8,10 +8,10 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from benchmarks.eval.datasets.base_dataset import Dataset
-from benchmarks.eval.serialization import dataset_registry
-from benchmarks.eval.datasets.swe_qa import SweQaDataset
-from benchmarks.eval.datasets.swe_qa_pro import SweQaProDataset
+from pydocs_eval.datasets.base_dataset import Dataset
+from pydocs_eval.serialization import dataset_registry
+from pydocs_eval.datasets.swe_qa import SweQaDataset
+from pydocs_eval.datasets.swe_qa_pro import SweQaProDataset
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _PRO_FIXTURE = _FIXTURES / "swe_qa_pro_mini.jsonl"

@@ -17,12 +17,12 @@ from __future__ import annotations
 import pytest
 
 import pydocs_mcp.application.tool_docs as td
-from benchmarks.optimize._overlay_server import (
+from pydocs_eval.optimize._overlay_server import (
     OverlayValidationError,
     serve_with_overlay,
 )
-from benchmarks.optimize.artifacts._delimited import parse_delimited, render_delimited
-from benchmarks.optimize.artifacts.tool_docs import ToolDocsArtifact
+from pydocs_eval.optimize.artifacts._delimited import parse_delimited, render_delimited
+from pydocs_eval.optimize.artifacts.tool_docs import ToolDocsArtifact
 
 
 @pytest.fixture(autouse=True)
@@ -115,10 +115,10 @@ def test_delegates_through_shared_db_resolution(monkeypatch, tmp_path) -> None:
 def test_main_parses_project_and_overlay(monkeypatch, tmp_path) -> None:
     calls = {}
     monkeypatch.setattr(
-        "benchmarks.optimize._overlay_server.serve_with_overlay",
+        "pydocs_eval.optimize._overlay_server.serve_with_overlay",
         lambda *, project, overlay: calls.setdefault("call", (project, overlay)),
     )
-    from benchmarks.optimize._overlay_server import main
+    from pydocs_eval.optimize._overlay_server import main
 
     overlay = tmp_path / "o.txt"
     overlay.write_text("x")

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval import _bench_cache
-from benchmarks.eval.systems.pydocs import PydocsMcpSystem
+from pydocs_eval import _bench_cache
+from pydocs_eval.systems.pydocs import PydocsMcpSystem
 
 
 def _tiny_corpus(tmp_path: Path) -> Path:

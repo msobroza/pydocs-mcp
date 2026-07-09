@@ -8,8 +8,8 @@ deterministic for a fixed seed (the slice-6 comparison contract).
 
 from __future__ import annotations
 
-from benchmarks.eval.agent_track._types import JudgeScore, PairResult, RunMetrics
-from benchmarks.eval.agent_track.report import (
+from pydocs_eval.agent_track._types import JudgeScore, PairResult, RunMetrics
+from pydocs_eval.agent_track.report import (
     bootstrap_ci,
     format_agent_track_report,
 )

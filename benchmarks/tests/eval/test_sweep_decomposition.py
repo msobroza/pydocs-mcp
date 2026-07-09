@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.metrics.base_metric import Scorer
-from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.sweep import (
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.metrics.base_metric import Scorer
+from pydocs_eval.serialization import system_registry
+from pydocs_eval.sweep import (
     ScorerFailure,
     SweepOutcome,
     TaskObservation,
@@ -32,9 +32,9 @@ from benchmarks.eval.sweep import (
     run_sweep,
     run_sweep_detailed,
 )
-from benchmarks.eval.systems.base_system import RetrievedItem
-from benchmarks.eval.trackers.base_tracker import RunHandle
-from benchmarks.eval.trackers.jsonl_tracker import JsonlExperimentTracker
+from pydocs_eval.systems.base_system import RetrievedItem
+from pydocs_eval.trackers.base_tracker import RunHandle
+from pydocs_eval.trackers.jsonl_tracker import JsonlExperimentTracker
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 

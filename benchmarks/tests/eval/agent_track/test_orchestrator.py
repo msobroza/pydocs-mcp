@@ -27,19 +27,19 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from benchmarks.eval.agent_track._judge import Judge
-from benchmarks.eval.agent_track._runner import CorpusPrep
-from benchmarks.eval.agent_track._types import (
+from pydocs_eval.agent_track._judge import Judge
+from pydocs_eval.agent_track._runner import CorpusPrep
+from pydocs_eval.agent_track._types import (
     AgentTrackConfig,
     ArmConfig,
     JudgeScore,
     PairResult,
     RunMetrics,
 )
-from benchmarks.eval.agent_track.orchestrator import run_agent_track
-from benchmarks.eval.datasets._repo_cache import RepoCacheLike
-from benchmarks.eval.datasets.base_dataset import Dataset, EvalTask
-from benchmarks.eval.datasets.swe_qa_pro import SweQaProDataset
+from pydocs_eval.agent_track.orchestrator import run_agent_track
+from pydocs_eval.datasets._repo_cache import RepoCacheLike
+from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
+from pydocs_eval.datasets.swe_qa_pro import SweQaProDataset
 
 import pytest
 

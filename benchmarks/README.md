@@ -86,23 +86,23 @@ in-process pipeline (`pydocs-mcp`) be measured with one metric suite. See
 Every `(system × config × dataset)` run reports the metrics below per task, plus
 an aggregate value with a 95% bootstrap confidence interval (1000 resamples,
 seed=0). The aggregator lives in
-`benchmarks/src/benchmarks/eval/metrics/aggregate.py`.
+`benchmarks/src/pydocs_eval/metrics/aggregate.py`.
 
 ### How relevance is decided
 
 A single predicate — `is_relevant(item, task)`, in
-`benchmarks/src/benchmarks/eval/metrics/_relevance.py` — backs every metric, so
+`benchmarks/src/pydocs_eval/metrics/_relevance.py` — backs every metric, so
 none of them branch on the dataset. It picks one of two definitions from the
 shape of the gold answer:
 
 - **RepoQA** gold carries an AST body → relevance is an AST-equivalence match
   (whitespace- and comment-tolerant), in
-  `benchmarks/src/benchmarks/eval/ast_match.py`.
+  `benchmarks/src/pydocs_eval/ast_match.py`.
 - **DS-1000** gold carries doc contents / doc-IDs → relevance is set membership
   in the per-task `resolved_chunk_ids` set.
 
 That set is populated, before metrics run, by a per-system **`GoldResolver`**
-(`benchmarks/src/benchmarks/eval/gold_resolver.py`): native `pydocs-mcp`
+(`benchmarks/src/pydocs_eval/gold_resolver.py`): native `pydocs-mcp`
 fuzzy-matches each indexed chunk against the gold doc contents (rapidfuzz
 `partial_ratio`, threshold 85); `pydocs-oracle` matches each chunk's preserved
 `doc_id` exactly; Context7 and Neuledge — whose stores cannot be enumerated —
@@ -267,7 +267,7 @@ graph expansion from a dense hit.
   the query, but it calls / is called by / overrides a function that does).
 - **Gold.** The neighbour's function body, AST-matched (same scorer as RepoQA).
 - **Registered as** `repoqa-structural`
-  ([`datasets/structural_recall.py`](src/benchmarks/eval/datasets/structural_recall.py)).
+  ([`datasets/structural_recall.py`](src/pydocs_eval/datasets/structural_recall.py)).
   The fixture (`fixtures/structural_recall.json`) is a **thin overlay** — repo
   source is reconstructed from the cached RepoQA release at eval time, so it stays
   tiny (no duplicated repo trees).
@@ -293,7 +293,7 @@ whole real-world codebases (not single needles).
   against the pinned repo's file tree, become `GoldAnswer.file_set`. Rows whose
   answer cites no resolvable file are dropped **with a logged count** (no silent
   caps). Registered as `swe-qa-pro`
-  ([`datasets/swe_qa_pro.py`](src/benchmarks/eval/datasets/swe_qa_pro.py)); the
+  ([`datasets/swe_qa_pro.py`](src/pydocs_eval/datasets/swe_qa_pro.py)); the
   committed mini fixture (`fixtures/swe_qa_pro_mini.jsonl`) drives hermetic CI
   without network access.
 - **Per-category reporting.** Because every row is tagged with a `qa_type`, the
@@ -305,7 +305,7 @@ whole real-world codebases (not single needles).
 
   ```bash
   # Config zoo: benchmarks/configs/swe_qa_pro_{bm25,dense,hybrid_rrf_k60,graph}.yaml
-  python -m benchmarks.eval.runner \
+  python -m pydocs_eval.runner \
       --dataset swe-qa-pro \
       --configs benchmarks/configs/swe_qa_pro_bm25.yaml,benchmarks/configs/swe_qa_pro_hybrid_rrf_k60.yaml
   ```
@@ -343,7 +343,7 @@ taxonomy.
 - **Gold.** File-level pseudo-qrels, same extraction as SWE-QA-Pro; citations are
   noisier (~8% bare filenames resolved by unique basename), citation-free rows
   drop with a logged count. Registered as `swe-qa`
-  ([`datasets/swe_qa.py`](src/benchmarks/eval/datasets/swe_qa.py)); the committed
+  ([`datasets/swe_qa.py`](src/pydocs_eval/datasets/swe_qa.py)); the committed
   mini fixture (`fixtures/swe_qa_mini.jsonl`) drives hermetic CI. There is **no
   per-question taxonomy** in the release, so per-category breakouts come from
   SWE-QA-Pro; SWE-QA gets per-repo breakouts only.
@@ -351,7 +351,7 @@ taxonomy.
 
   ```bash
   # --split selects one repo (e.g. matplotlib) or "default" for all 15.
-  python -m benchmarks.eval.runner \
+  python -m pydocs_eval.runner \
       --dataset swe-qa \
       --configs benchmarks/configs/swe_qa_pro_bm25.yaml \
       --split matplotlib
@@ -386,7 +386,7 @@ paid path, and only after the preflight passes.
   and there is disk headroom:
 
   ```bash
-  python -m benchmarks.eval.agent_track --preflight
+  python -m pydocs_eval.agent_track --preflight
   ```
 
 - **Run it.** Resumable through a JSONL ledger (re-running skips completed
@@ -394,7 +394,7 @@ paid path, and only after the preflight passes.
   bound the run:
 
   ```bash
-  python -m benchmarks.eval.agent_track \
+  python -m pydocs_eval.agent_track \
       --dataset swe-qa-pro \
       --max-tasks 12 \
       --max-usd 60 \
@@ -415,8 +415,8 @@ manual, preflight-gated, budget-capped, and never CI. Walk the whole pipeline
 spending nothing first:
 
 ```bash
-python -m benchmarks.optimize \
-    --config benchmarks/src/benchmarks/optimize/configs/optimize_tool_docs.yaml --dry-run
+python -m pydocs_eval.optimize \
+    --config benchmarks/src/pydocs_eval/optimize/configs/optimize_tool_docs.yaml --dry-run
 ```
 
 The spend model, how to read an `OptimizationResult`, and how to land a proposed
@@ -434,7 +434,7 @@ pattern. Planned additions:
 | **CodeRAG-Bench ODEX** | Library-docs retrieval on the execution-driven ODEX split (open-domain StackOverflow problems), complementing the DS-1000 split. Wang et al., arXiv:2406.14497 (2024). | Roadmap (DS-1000 split shipped — see the [DS-1000 subsection](#ds-1000-coderag-bench-flavor)). |
 
 Adding one means: drop a `Dataset` Protocol implementation under
-`benchmarks/src/benchmarks/eval/datasets/`, register it via
+`benchmarks/src/pydocs_eval/datasets/`, register it via
 `@dataset_registry.register("<name>")`, point a config at it, and write one
 README subsection mirroring the shape above. No harness changes required.
 
@@ -445,7 +445,7 @@ The RepoQA `small_test` slice has absorbed many recorded tuning sweeps
 split as **held out**, never as an iteration surface. All tuning iterates on
 `small_dev`: the same-size mirror of `small_test` drawn from the `dev`
 partition (same Hamilton largest-remainder apportionment, same seed, same
-~30-task target — see `benchmarks/src/benchmarks/eval/datasets/_split.py`).
+~30-task target — see `benchmarks/src/pydocs_eval/datasets/_split.py`).
 
 The promotion ladder is strictly one-way:
 
@@ -718,7 +718,7 @@ adopting as the default.
 
 ### Visualizing baselines
 
-`benchmarks.eval.plotting` turns baseline JSON files into figures. All commands
+`pydocs_eval.plotting` turns baseline JSON files into figures. All commands
 below assume the package is installed (see [Install](#install)); from a source
 checkout without installing, prefix them with `PYTHONPATH=benchmarks/src`.
 
@@ -745,7 +745,7 @@ compliant).
 
 ```bash
 # Single baseline on the real 100 needles. Method is in the legend, not the title.
-python -m benchmarks.eval.plotting \
+python -m pydocs_eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_real.png \
     --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle \
@@ -753,7 +753,7 @@ python -m benchmarks.eval.plotting \
 
 # Side-by-side compare on the SAME dataset (e.g. a dense baseline vs current BM25).
 # The plot picks up the second bar group automatically — no code change.
-python -m benchmarks.eval.plotting \
+python -m pydocs_eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
     benchmarks/baselines/repoqa_snf_dense.json \
     --output benchmarks/results/plots/repoqa_real_with_dense.png \
@@ -770,7 +770,7 @@ Programmatic API — same behavior, handy in a notebook:
 
 ```python
 from pathlib import Path
-from benchmarks.eval.plotting import plot_baselines
+from pydocs_eval.plotting import plot_baselines
 
 fig = plot_baselines(
     baselines=[
@@ -796,7 +796,7 @@ The bar marks p50, a whisker extends to p95, and the right edge is annotated wit
 the full p50 / p95 / p99 triple (µs / ms / s by magnitude).
 
 ```bash
-python -m benchmarks.eval.plotting \
+python -m pydocs_eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_timings.png \
     --timings \
@@ -807,7 +807,7 @@ python -m benchmarks.eval.plotting \
 
 ```python
 from pathlib import Path
-from benchmarks.eval.plotting import plot_timings
+from pydocs_eval.plotting import plot_timings
 
 fig = plot_timings(
     baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
@@ -828,7 +828,7 @@ trade-off line where dense / hybrid retrievers buy recall at higher latency.
 
 ```bash
 # Today: a single dot (BM25 only). A recorded dense baseline adds a second dot.
-python -m benchmarks.eval.plotting \
+python -m pydocs_eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_quality_vs_latency.png \
     --scatter \
@@ -836,7 +836,7 @@ python -m benchmarks.eval.plotting \
     --title "RepoQA-2024-06-23 (Python, n=100) — recall@10 vs latency"
 
 # Swap the X-axis to indexing cost for a quality-vs-indexing-cost view.
-python -m benchmarks.eval.plotting \
+python -m pydocs_eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_quality_vs_indexing.png \
     --scatter \
@@ -849,7 +849,7 @@ python -m benchmarks.eval.plotting \
 
 ```python
 from pathlib import Path
-from benchmarks.eval.plotting import plot_metric_vs_latency
+from pydocs_eval.plotting import plot_metric_vs_latency
 
 fig = plot_metric_vs_latency(
     baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
@@ -903,7 +903,7 @@ The runner is a module entry-point. Each comma-separated config is one
     --trackers jsonl
 
 # Equivalent direct invocation (and --help for the full flag list).
-python -m benchmarks.eval.runner --help
+python -m pydocs_eval.runner --help
 
 # View results in MLflow UI (requires the [mlflow] extra).
 mlflow ui --backend-store-uri file://./benchmarks/mlruns/
@@ -952,7 +952,7 @@ three runs separate those concerns.
 systems:
 
 ```bash
-python -m benchmarks.eval.runner --dataset ds1000 \
+python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-mcp-composite,context7,neuledge \
     --configs ds1000_composite.yaml \
     --metrics recall@1,mrr,precision@1,coverage,library_resolution@1 \
@@ -967,7 +967,7 @@ scores Context7's library-router accuracy and is `0.0` for the other rows.
 **2. Pydocs-only ranked** — keep the ranked-list signal:
 
 ```bash
-python -m benchmarks.eval.runner --dataset ds1000 \
+python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-mcp \
     --configs ds1000_ranked.yaml \
     --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
@@ -988,7 +988,7 @@ the **standard DS-1000 retrieval eval**: it mirrors CodeRAG-Bench's own setup
 their published reference points.
 
 ```bash
-python -m benchmarks.eval.runner --dataset ds1000 \
+python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-oracle \
     --dataset-full-prompt \
     --configs ds1000_ranked.yaml \
@@ -1024,11 +1024,11 @@ costs — run 3 is the ceiling with chunking removed.
 
 ```bash
 # Tune on the dev partition, then evaluate on held-out test.
-python -m benchmarks.eval.runner --dataset ds1000 --split dev   ...
-python -m benchmarks.eval.runner --dataset ds1000 --split test  ...
+python -m pydocs_eval.runner --dataset ds1000 --split dev   ...
+python -m pydocs_eval.runner --dataset ds1000 --split test  ...
 
 # Restrict to specific libraries (case-insensitive, normalized).
-python -m benchmarks.eval.runner --dataset ds1000 \
+python -m pydocs_eval.runner --dataset ds1000 \
     --dataset-library-filter pandas,numpy ...
 ```
 
@@ -1068,15 +1068,15 @@ and across sweeps that share an ingestion pipeline. Controlled by
 
 ```bash
 # inspect / clear the cache
-python -m benchmarks.eval.bench_cache_cli info
-python -m benchmarks.eval.bench_cache_cli evict
+python -m pydocs_eval.bench_cache_cli info
+python -m pydocs_eval.bench_cache_cli evict
 
 # run all experiments, then free the disk (cache used during the run,
 # wiped when it finishes — even if the run errors)
-python -m benchmarks.eval.runner --bench-cache-cleanup ...
+python -m pydocs_eval.runner --bench-cache-cleanup ...
 
 # reproduce pre-cache numbers exactly
-python -m benchmarks.eval.runner --bench-cache off ...
+python -m pydocs_eval.runner --bench-cache off ...
 ```
 
 The cache key folds the ingestion pipeline hash, so changing the embedder

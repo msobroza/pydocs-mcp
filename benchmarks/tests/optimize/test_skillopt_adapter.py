@@ -17,16 +17,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from benchmarks.optimize._types import OptimizationBudget
-from benchmarks.optimize.artifacts.usage_skill import UsageSkillArtifact
-from benchmarks.optimize.ladder import FitnessLadder, Rung
-from benchmarks.optimize.optimizers.skillopt import (
+from pydocs_eval.optimize._types import OptimizationBudget
+from pydocs_eval.optimize.artifacts.usage_skill import UsageSkillArtifact
+from pydocs_eval.optimize.ladder import FitnessLadder, Rung
+from pydocs_eval.optimize.optimizers.skillopt import (
     _CONSUMED_SKILLOPT_SURFACE,
     SkillOptConfig,
     SkillOptOptimizer,
     generate_env_plugin,
 )
-from benchmarks.optimize.registries import optimizer_registry
+from pydocs_eval.optimize.registries import optimizer_registry
 
 # The committed seed already satisfies the §D6 firewall, so it doubles as the
 # "valid best" a fake SkillOpt run emits — a parsed best that ``validate()``s clean.
@@ -84,7 +84,7 @@ async def test_best_skill_parsed_and_validated(monkeypatch, tmp_path) -> None:
         (run_dir / "best_skill.md").write_text(_VALID_SKILL_TEXT)
         return 0
 
-    monkeypatch.setattr("benchmarks.optimize.optimizers.skillopt._invoke_train", fake_invoke)
+    monkeypatch.setattr("pydocs_eval.optimize.optimizers.skillopt._invoke_train", fake_invoke)
     opt = SkillOptOptimizer(python=Path("/venv/bin/python"))
     result = await opt.optimize(_usage_skill_seed(), _ladder(), OptimizationBudget(max_trials=2))
     assert result.best is not None and result.best.validate() == ()

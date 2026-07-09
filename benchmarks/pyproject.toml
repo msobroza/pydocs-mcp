@@ -47,14 +47,14 @@ all = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["benchmarks*"]
+include = ["pydocs_eval*"]
 
 # The usage_skill seed + the shipped run-config YAMLs ship as package data so
 # importlib.resources.files() resolves them in a built install, not just from
 # the PYTHONPATH source tree.
 [tool.setuptools.package-data]
-"benchmarks.optimize.artifacts" = ["*.md"]
-"benchmarks.optimize.configs" = ["*.yaml"]
+"pydocs_eval.optimize.artifacts" = ["*.md"]
+"pydocs_eval.optimize.configs" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
