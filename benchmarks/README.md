@@ -405,6 +405,23 @@ The full runbook — cost expectations, the preflight-first rule, resume
 semantics, and how to read the paired-delta report — lives in
 [`AGENT_TRACK.md`](AGENT_TRACK.md).
 
+### Optimizing the harness's own text artifacts (manual — never CI)
+
+The optimize layer turns the paired agent track into a fitness function and
+searches for better versions of two text artifacts — the product `tool_docs`
+surface and the `usage_skill` seed document — accepting a candidate only on a
+held-out split with a real margin. It is a stack of many paired runs, so it is
+manual, preflight-gated, budget-capped, and never CI. Walk the whole pipeline
+spending nothing first:
+
+```bash
+python -m benchmarks.optimize \
+    --config benchmarks/src/benchmarks/optimize/configs/optimize_tool_docs.yaml --dry-run
+```
+
+The spend model, how to read an `OptimizationResult`, and how to land a proposed
+diff live in the [`AGENT_TRACK.md`](AGENT_TRACK.md) "Optimization" chapter.
+
 ### Roadmap: additional benchmarks
 
 Each future benchmark gets its own subsection following the same four-question

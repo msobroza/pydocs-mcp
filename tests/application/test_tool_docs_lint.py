@@ -1,6 +1,21 @@
 """§D13 docstring contract: six sections, size budgets, cross-references."""
 
-from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS, TOOL_DOCS
+from pydocs_mcp.application.tool_docs import (
+    CHARS_PER_TOKEN as _CHARS_PER_TOKEN,
+)
+from pydocs_mcp.application.tool_docs import (
+    PER_TOOL_TOKEN_BUDGET as _PER_TOOL_TOKEN_BUDGET,
+)
+from pydocs_mcp.application.tool_docs import (
+    REQUIRED_MARKERS as _REQUIRED_MARKERS,
+)
+from pydocs_mcp.application.tool_docs import (
+    SERVER_INSTRUCTIONS,
+    TOOL_DOCS,
+)
+from pydocs_mcp.application.tool_docs import (
+    TOTAL_TOKEN_BUDGET as _TOTAL_TOKEN_BUDGET,
+)
 
 _TOOLS = (
     "get_overview",
@@ -10,16 +25,6 @@ _TOOLS = (
     "get_references",
     "get_why",
 )
-_REQUIRED_MARKERS = (
-    "When to use",
-    "When NOT to use",
-    "Workflow",
-    "Response contract",
-    "Examples",
-)
-_CHARS_PER_TOKEN = 4
-_PER_TOOL_TOKEN_BUDGET = 500
-_TOTAL_TOKEN_BUDGET = 2400
 
 
 def test_all_six_tools_documented() -> None:
@@ -54,3 +59,15 @@ def test_docs_reference_sibling_tools_not_old_surface() -> None:
 def test_project_scoped_example_everywhere() -> None:
     for name, doc in TOOL_DOCS.items():
         assert 'project="' in doc, f"{name} missing a project= example"
+
+
+def test_contract_constants_are_importable_and_pinned() -> None:
+    from pydocs_mcp.application.tool_docs import (
+        CHARS_PER_TOKEN,
+        PER_TOOL_TOKEN_BUDGET,
+        REQUIRED_MARKERS,
+        TOTAL_TOKEN_BUDGET,
+    )
+
+    assert (CHARS_PER_TOKEN, PER_TOOL_TOKEN_BUDGET, TOTAL_TOKEN_BUDGET) == (4, 500, 2400)
+    assert len(REQUIRED_MARKERS) == 5

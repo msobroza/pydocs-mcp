@@ -1,0 +1,19 @@
+# optimize_usage_skill.yaml — canonical run config (spec §D7).
+#
+# Improves the usage_skill seed document with the skillopt optimizer. Registry
+# keys (artifact / optimizer / rung fitness names) are BYTE-IDENTICAL to the
+# registered names — a typo is a load-time KeyError, not a silent no-op (§D7).
+#
+# YAML restates the Python field defaults for user-facing clarity; the
+# no-duplicate-literal rule exempts config files.
+artifact: usage_skill
+optimizer: skillopt               # or critique_refine — both v1
+ladder:
+  - [paired_agent, 6, 4]          # [fitness, max_tasks, survivors] — screening
+  - [paired_agent, 24, 1]         # finals
+fitness:
+  judge_parity_floor: -0.25       # pre-gate: candidate judge mean may not drop more than this
+  weights: { tokens: 0.5, tool_calls: 0.3, files_read: 0.2 }
+accept_margin: 0.02               # holdout improvement must exceed this
+budget: { max_trials: 20, max_usd: 40.0, wall_timeout_seconds: 14400 }
+dataset: { name: swe-qa-pro }

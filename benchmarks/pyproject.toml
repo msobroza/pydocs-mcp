@@ -13,6 +13,12 @@ dependencies = [
     "httpx>=0.27",
     "rich>=13.0",
     "rapidfuzz>=3.0",
+    # The optimize layer's run config (OptimizeRunConfig) is a pydantic model
+    # loaded from YAML (spec §D7); pyyaml parses the shipped configs + the
+    # skillopt env-plugin. Both are transitively present via pydocs-mcp but the
+    # optimize layer depends on them directly, so declare them here.
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
     # Plotting: pulled in here (not under an extra) so `plot_baselines`
     # works straight from `uv pip install -e benchmarks`. seaborn brings
     # matplotlib transitively, but pinning matplotlib explicitly keeps
@@ -28,11 +34,27 @@ dependencies = [
 
 [project.optional-dependencies]
 mlflow = ["mlflow>=2.0"]
-all = ["mlflow>=2.0"]
+# The skillopt optimizer adapter installs microsoft/SkillOpt from source (a research
+# repo, not a PyPI wheel), pinned by full commit SHA so a version bump is a deliberate
+# edit here — the adapter's _CONSUMED_SKILLOPT_SURFACE canary guards the API contract.
+optimizers-skillopt = [
+    "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
+]
+all = [
+    "mlflow>=2.0",
+    "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["benchmarks*"]
+
+# The usage_skill seed + the shipped run-config YAMLs ship as package data so
+# importlib.resources.files() resolves them in a built install, not just from
+# the PYTHONPATH source tree.
+[tool.setuptools.package-data]
+"benchmarks.optimize.artifacts" = ["*.md"]
+"benchmarks.optimize.configs" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
