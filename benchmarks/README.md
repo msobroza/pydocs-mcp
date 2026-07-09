@@ -868,18 +868,43 @@ color across all three plot types.
 
 ### Install
 
-`uv`-friendly extras pull in only what you need (`pip` works too — the extras are
-stock PEP 508):
+The suite publishes to PyPI as **`pydocs-mcp-eval`** (import package
+`pydocs_eval`). Extras are split **by coupling, not by feature**: the base
+install serves the black-box [agent-efficiency track](#agent-track-paired-agent-efficiency-manual--never-ci)
+(it drives the `pydocs-mcp` CLI as a subprocess, so it needs only that CLI on
+your `PATH` for real runs — not the `pydocs_mcp` library), while the
+retrieval-quality benchmarks and the optimizer import `pydocs_mcp` in-process
+and live behind the `[retrieval]` extra.
 
 ```bash
-uv pip install -e benchmarks                # core only — JSONL tracker, stdlib RepoQA loader
-uv pip install -e "benchmarks[mlflow]"      # + MLflow tracker
+# Agent-efficiency track. Needs the `pydocs-mcp` CLI on PATH for real runs
+# (`pip install pydocs-mcp`); the base package itself does NOT pull it in.
+pip install pydocs-mcp-eval
+
+# + retrieval-quality benchmarks (RepoQA / DS-1000 systems) and the optimizer.
+# The [retrieval] extra declares `pydocs-mcp` as a library dependency, so this
+# one command installs it for you.
+pip install "pydocs-mcp-eval[retrieval]"
+
+pip install "pydocs-mcp-eval[mlflow]"       # + MLflow tracker (JSONL ships in base)
+pip install "pydocs-mcp-eval[all]"          # retrieval + mlflow + skillopt optimizer
+```
+
+**Dev mode (editable, from a source checkout).** `pydocs-mcp` is not a base
+dependency, so a from-source dev setup is two steps — install the product
+first, then the suite editable from the `benchmarks/` subdirectory:
+
+```bash
+uv pip install -e ".[dev]"                  # the pydocs-mcp product (repo root)
+uv pip install -e benchmarks                # the suite (agent track only)
+uv pip install -e "benchmarks[retrieval]"   # + retrieval systems + optimizer
 uv pip install -e "benchmarks[all]"         # everything
 ```
 
-The package follows the PyPA src-layout (`benchmarks/src/`). Commands below
-assume it is installed; from a bare source checkout, prefix any
-`python -m benchmarks.…` command with `PYTHONPATH=benchmarks/src`.
+(`pip` works too — the extras are stock PEP 508.) The package follows the PyPA
+src-layout (`benchmarks/src/`). Commands below assume it is installed; from a
+bare source checkout, prefix any `python -m pydocs_eval.…` command with
+`PYTHONPATH=benchmarks/src`.
 
 ### Running a sweep
 
