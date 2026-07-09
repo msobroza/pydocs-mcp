@@ -86,29 +86,6 @@ jobs:
           sudo update-alternatives --set libblas.so.3-x86_64-linux-gnu \
             /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 || true
 
-      # WHY: prior fix attempts (libopenblas-dev, then libopenblas-pthread-dev
-      # + update-alternatives) still failed with `undefined symbol: cblas_sgemm`
-      # when turbovec/_turbovec.abi3.so was loaded. Diagnostic prints which
-      # libopenblas variants are installed and which actually export the CBLAS
-      # entry points — informs the LD_PRELOAD path on the next step.
-      # TODO: remove this diagnostic step once CI is reliably green.
-      - name: Diagnose BLAS availability (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          echo "=== installed openblas pkgs ==="
-          dpkg -l | grep -i openblas || echo "(no openblas pkgs)"
-          echo "=== libopenblas .so files ==="
-          find / -name 'libopenblas*' 2>/dev/null || true
-          echo "=== cblas symbols in candidates ==="
-          for so in $(find / -name 'libopenblas*.so*' 2>/dev/null); do
-            if readelf -d "$so" >/dev/null 2>&1; then
-              echo "--- $so ---"
-              nm -D "$so" 2>/dev/null | grep -E "cblas_sgemm|sgemm" | head -3
-            fi
-          done
-          echo "=== libblas alternatives ==="
-          update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>&1 || true
-
       # WHY: dev deps moved to PEP 735 [dependency-groups] so they stay
       # out of wheel METADATA. `--group dev` requires uv or pip >= 25.1 —
       # uv is the established install path in release.yml.
@@ -183,8 +160,7 @@ jobs:
       # is resolvable at .so-load time. update-alternatives selects a
       # provider for libblas.so.3 callers but does not affect the bare
       # libopenblas.so.0 SONAME that turbovec hard-codes via -lopenblas at
-      # link time. The diagnostic step above prints the actual path if the
-      # canonical /usr/lib/x86_64-linux-gnu/libopenblas.so.0 doesn't exist.
+      # link time.
       # macOS / Windows resolve CBLAS via Accelerate / MSVC runtime, so no
       # LD_PRELOAD is needed (and the env var itself is Linux-only).
       - name: Test with coverage (Linux)
