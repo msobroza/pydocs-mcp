@@ -34,6 +34,11 @@ all = ["mlflow>=2.0"]
 where = ["src"]
 include = ["benchmarks*"]
 
+# The usage_skill seed ships as package data so importlib.resources.files()
+# resolves it in a built install, not just from the PYTHONPATH source tree.
+[tool.setuptools.package-data]
+"benchmarks.optimize.artifacts" = ["*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

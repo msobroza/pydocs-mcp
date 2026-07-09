@@ -9,7 +9,9 @@ The shared delimited format lives in ``_delimited`` so ``render``/
 from __future__ import annotations
 
 from .tool_docs import ToolDocsArtifact
+from .usage_skill import UsageSkillArtifact
 
 __all__ = [
     "ToolDocsArtifact",
+    "UsageSkillArtifact",
 ]
