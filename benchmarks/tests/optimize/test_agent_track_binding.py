@@ -5,7 +5,10 @@ from pathlib import Path
 
 from benchmarks.optimize import _agent_track_binding as b
 
-_OPTIMIZE_PKG = Path("benchmarks/src/benchmarks/optimize")
+# WHY: derive the package root from __file__, not a CWD-relative literal, so the
+# guard resolves identically regardless of pytest's invocation directory (F.I.R.S.T.
+# repeatability). From benchmarks/tests/optimize/test_*.py, parents[2] is benchmarks/.
+_OPTIMIZE_PKG = Path(__file__).resolve().parents[2] / "src" / "benchmarks" / "optimize"
 
 
 def test_binding_reexports_full_contract() -> None:
