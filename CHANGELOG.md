@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optimizer artifacts import them to share the §D13 tool-docs validation logic,
   so they need a published release that exposes them.
 
-## v0.5.0 (unreleased)
+## v0.5.0
 
 Headline: the MCP surface becomes **six task-shaped tools**, every response now
 travels in a **freshness / next-step / truncation envelope**, and the index
