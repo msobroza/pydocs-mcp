@@ -11,10 +11,14 @@ As-landed contract (verified 2026-07-09 against ``main@92b40be``, the slice-5
 merge — every name below exists with the stated signature; no import-and-rename
 was needed, so these are plain re-exports):
 
-- ``AgentTrackConfig`` / ``PairResult`` / ``RunMetrics`` / ``JudgeScore`` live in
-  ``eval.agent_track._types``. ``AgentTrackConfig`` carries ``rng_seed`` plus the
-  guardrails (``max_usd`` / ``max_tasks`` / ``task_timeout_seconds`` / ``arms`` /
-  ``judge_model``); ``task_prompt`` takes a keyword-only ``skill: str = ""``.
+- ``AgentTrackConfig`` / ``ArmConfig`` / ``PairResult`` / ``RunMetrics`` /
+  ``JudgeScore`` live in ``eval.agent_track._types``. ``AgentTrackConfig`` carries
+  ``rng_seed`` plus the guardrails (``max_usd`` / ``max_tasks`` /
+  ``task_timeout_seconds`` / ``arms`` / ``judge_model``); ``task_prompt`` takes a
+  keyword-only ``skill: str = ""``. ``ArmConfig`` is re-exported for the one-shot
+  tool-less critique arm (``optimizers/critique_refine.py``), which reuses the
+  same ``AgentRunner`` invocation pattern as ``RealJudge`` — the binding stays the
+  single import point so that arm never reaches into ``eval.agent_track`` itself.
 - ``AgentRunner`` Protocol + scripted ``FakeAgentRunner`` in ``eval.agent_track._runner``.
 - ``Judge`` Protocol + scripted ``FakeJudge`` in ``eval.agent_track._judge``.
 - ``task_prompt`` in ``eval.agent_track._command``.
@@ -31,6 +35,7 @@ from benchmarks.eval.agent_track._judge import FakeJudge, Judge
 from benchmarks.eval.agent_track._runner import AgentRunner, FakeAgentRunner
 from benchmarks.eval.agent_track._types import (
     AgentTrackConfig,
+    ArmConfig,
     JudgeScore,
     PairResult,
     RunMetrics,
@@ -40,6 +45,7 @@ from benchmarks.eval.agent_track.orchestrator import run_agent_track
 __all__ = [
     "AgentRunner",
     "AgentTrackConfig",
+    "ArmConfig",
     "FakeAgentRunner",
     "FakeJudge",
     "Judge",
