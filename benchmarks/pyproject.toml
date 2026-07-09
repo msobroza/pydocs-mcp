@@ -28,7 +28,16 @@ dependencies = [
 
 [project.optional-dependencies]
 mlflow = ["mlflow>=2.0"]
-all = ["mlflow>=2.0"]
+# The skillopt optimizer adapter installs microsoft/SkillOpt from source (a research
+# repo, not a PyPI wheel), pinned by full commit SHA so a version bump is a deliberate
+# edit here — the adapter's _CONSUMED_SKILLOPT_SURFACE canary guards the API contract.
+optimizers-skillopt = [
+    "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
+]
+all = [
+    "mlflow>=2.0",
+    "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
