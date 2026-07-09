@@ -34,8 +34,20 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import pydocs_mcp.application.tool_docs as td
-from pydocs_mcp.db import cache_path_for_project
+from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
+
+# Module-level ``pydocs_mcp`` boundary: this overlay wrapper re-binds the
+# product's ``tool_docs`` module attributes and delegates to the product's
+# serve path, so it is inherently library-coupled. A base install without the
+# [retrieval] extra gets the actionable install hint instead of a bare
+# ModuleNotFoundError. (``pydocs_mcp.server`` stays deferred inside
+# ``serve_with_overlay`` so a monkeypatch of ``server.run`` in tests takes
+# effect — see the call-site note below.)
+try:
+    import pydocs_mcp.application.tool_docs as td
+    from pydocs_mcp.db import cache_path_for_project
+except ImportError as exc:
+    raise_missing_retrieval_extra(exc)
 
 from pydocs_eval.optimize.artifacts._delimited import parse_delimited
 from pydocs_eval.optimize.artifacts.tool_docs import ToolDocsArtifact

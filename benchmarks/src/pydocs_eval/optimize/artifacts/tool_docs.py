@@ -12,14 +12,23 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, replace
 
-from pydocs_mcp.application.tool_docs import (
-    CHARS_PER_TOKEN,
-    PER_TOOL_TOKEN_BUDGET,
-    REQUIRED_MARKERS,
-    SERVER_INSTRUCTIONS,
-    TOOL_DOCS,
-    TOTAL_TOKEN_BUDGET,
-)
+from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
+
+# Module-level ``pydocs_mcp`` boundary (the §D13 lint constants ARE the
+# validation contract — there is no library-free way to define this artifact).
+# A base install without the [retrieval] extra gets the actionable install hint
+# instead of a bare ModuleNotFoundError.
+try:
+    from pydocs_mcp.application.tool_docs import (
+        CHARS_PER_TOKEN,
+        PER_TOOL_TOKEN_BUDGET,
+        REQUIRED_MARKERS,
+        SERVER_INSTRUCTIONS,
+        TOOL_DOCS,
+        TOTAL_TOKEN_BUDGET,
+    )
+except ImportError as exc:
+    raise_missing_retrieval_extra(exc)
 
 from pydocs_eval.optimize.artifacts._delimited import (
     find_header_collisions,

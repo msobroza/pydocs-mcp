@@ -20,7 +20,16 @@ import hashlib
 from dataclasses import dataclass, replace
 from importlib.resources import files
 
-from pydocs_mcp.application.tool_docs import CHARS_PER_TOKEN, TOOL_DOCS
+from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
+
+# Module-level ``pydocs_mcp`` boundary: the token-budget rule and the live
+# tool-name list come from the product's importable constants (single source of
+# truth). A base install without the [retrieval] extra gets the actionable
+# install hint instead of a bare ModuleNotFoundError.
+try:
+    from pydocs_mcp.application.tool_docs import CHARS_PER_TOKEN, TOOL_DOCS
+except ImportError as exc:
+    raise_missing_retrieval_extra(exc)
 
 from pydocs_eval.optimize.registries import artifact_registry
 

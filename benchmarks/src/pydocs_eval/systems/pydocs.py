@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .. import _bench_cache
+from .._retrieval_extra import require_retrieval_extra
 from ..gold_resolver import (
     _DEFAULT_FUZZ_THRESHOLD,
     LazyFuzzyGoldResolver,
@@ -89,6 +90,12 @@ class PydocsMcpSystem:
         return self._was_cache_hit
 
     async def index(self, corpus_dir: Path, config: AppConfig) -> None:
+        # ``[retrieval]`` extra boundary: ``index()`` is the runner's first
+        # call (contract: index -> search* -> teardown), so every downstream
+        # ``pydocs_mcp`` import is reachable only after this guard. A base
+        # install without the extra gets the actionable install hint here
+        # instead of a bare ModuleNotFoundError deeper in ``_do_index``.
+        require_retrieval_extra()
         # WHY: imports deferred so constructing the system (which the
         # registry does on a bare ``build()``) doesn't drag in the whole
         # ``pydocs_mcp.retrieval`` chain when only ``search()`` callers

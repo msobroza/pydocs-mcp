@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyctx7-benchmarks"
+name = "pydocs-mcp-eval"
 version = "0.1.0"
 description = "Benchmark suite for pydocs-mcp (RepoQA-SNF + MLflow)"
 readme = "README.md"
@@ -26,13 +26,20 @@ dependencies = [
     "matplotlib>=3.7",
     "seaborn>=0.13",
 ]
-# Note: pydocs-mcp is NOT a declared dependency. Install it separately
-# from the project root (`uv pip install -e ".[dev]"`) before installing
-# this package. The pre-PR `pydocs-mcp @ file://../` PEP 508 direct URL
-# worked under `pip` (lenient about relative file URLs) but is rejected
-# by `uv` (strict). Decoupling the install steps is the portable fix.
-
+# Extras are split BY COUPLING, not by feature. The base install
+# (dependencies above) serves the black-box agent-efficiency track, which
+# needs only the pydocs-mcp CLI on PATH — NOT the pydocs_mcp Python library.
+# The library-coupled parts (in-process retrieval systems, the optimize
+# overlay server, the tool_docs / usage_skill artifacts) import pydocs_mcp
+# directly and are gated behind the [retrieval] extra below. Import guards at
+# those boundaries (pydocs_eval._retrieval_extra) turn a missing-extra
+# ModuleNotFoundError into an actionable install hint.
 [project.optional-dependencies]
+# The indexed-retrieval library. Declared as a published PyPI dependency
+# (pydocs-mcp is live on PyPI); pin the floor at the version whose importable
+# surface (tool_docs lint constants, retrieval/storage factories) these
+# adapters consume.
+retrieval = ["pydocs-mcp>=0.5"]
 mlflow = ["mlflow>=2.0"]
 # The skillopt optimizer adapter installs microsoft/SkillOpt from source (a research
 # repo, not a PyPI wheel), pinned by full commit SHA so a version bump is a deliberate
@@ -40,7 +47,9 @@ mlflow = ["mlflow>=2.0"]
 optimizers-skillopt = [
     "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
 ]
+# The union of every extra — one install target for a full-featured dev/CI env.
 all = [
+    "pydocs-mcp>=0.5",
     "mlflow>=2.0",
     "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
 ]

@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .._retrieval_extra import require_retrieval_extra
 from ..datasets.ds1000_schema import PINNED_LIBDOCS_REVISION, to_pypi_canonical
 from ..serialization import system_registry
 from .pydocs import PydocsMcpSystem
@@ -99,6 +100,13 @@ class PydocsOracleSystem(PydocsMcpSystem):
         # deliberately BYPASSES ``_bench_cache``, unlike the parent: its
         # rows come from HF / injected sources, so a corpus-dir cache key
         # could not distinguish two oracle corpora.
+        # ``[retrieval]`` extra boundary: this override does NOT call
+        # ``super().index()`` but reaches the same library-coupled helpers
+        # (``_create_tmp_db`` / ``_build_write_factory`` / ``_rebuild_fts`` /
+        # ``_build_search_pipeline``) and ``_populate``. Guard here so a base
+        # install without the extra gets the actionable install hint instead
+        # of a bare ModuleNotFoundError.
+        require_retrieval_extra()
         del corpus_dir
         await self.teardown()
         self._db_path = self._create_tmp_db()

@@ -72,6 +72,19 @@ grows an **architectural-decision layer** (mine decisions at index time, ask
   config split into a package, and several hexagonal-seam leaks closed
   (`FilterAdapter` wiring, FTS builder dedup, `db.py` layering). No user-facing
   behavior change. (#128, #130, #135, #136, #137)
+- **Benchmark suite repackaged for PyPI as `pydocs-mcp-eval`** — the benchmark
+  distribution is renamed from `pyctx7-benchmarks` to **`pydocs-mcp-eval`**, and
+  its import package is hoisted from `benchmarks.eval.*` / `benchmarks.optimize`
+  to **`pydocs_eval.*`** (`pydocs_eval.datasets`, `pydocs_eval.systems`,
+  `pydocs_eval.optimize`, …); the `benchmarks/` directory name is unchanged. The
+  optional-dependency extras are now split **by coupling, not by feature**: the
+  base install serves the black-box agent-efficiency track (needs only the
+  `pydocs-mcp` CLI on `PATH`), and a new **`[retrieval]`** extra declares
+  `pydocs-mcp>=0.5` for the library-coupled parts (in-process retrieval systems,
+  the optimize overlay server, the `tool_docs` / `usage_skill` artifacts). Those
+  boundaries now carry import guards that raise an actionable
+  `pip install "pydocs-mcp-eval[retrieval]"` hint instead of a bare
+  `ModuleNotFoundError` when the extra is absent.
 
 ### Removed
 
