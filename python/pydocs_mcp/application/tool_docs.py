@@ -8,6 +8,19 @@ edits here fail fast instead of drifting.
 
 from __future__ import annotations
 
+# --- §D13 contract constants (importable: the offline optimizer's validate()
+# shares them; drift here is drift in the lint) ---
+REQUIRED_MARKERS = (
+    "When to use",
+    "When NOT to use",
+    "Workflow",
+    "Response contract",
+    "Examples",
+)
+CHARS_PER_TOKEN = 4
+PER_TOOL_TOKEN_BUDGET = 500
+TOTAL_TOKEN_BUDGET = 2400
+
 _WORKFLOW = (
     "Workflow: get_overview → search_codebase → get_context → "
     "get_symbol / get_references; get_why before architectural changes."
