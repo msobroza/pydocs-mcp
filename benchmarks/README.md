@@ -14,6 +14,31 @@ For a ready-to-run comparison of BM25 / dense / hybrid (RRF + weighted) / tree
 retrieval strategies on a small RepoQA slice (`--split small_test`), see
 [`EXPERIMENTS.md`](EXPERIMENTS.md).
 
+## How the systems compare (qualitative)
+
+pydocs-mcp, **Context7**, and **Neuledge Context** all feed docs to an AI agent
+over MCP, but optimize for different things. They aren't mutually exclusive — an
+agent can mount all three and route by intent. This table is the qualitative
+side; the rest of this document is the same three systems scored head-to-head on
+identical tasks and gold answers.
+
+| | **pydocs-mcp** | **Context7** | **Neuledge Context** |
+|---|---|---|---|
+| **Deployment** | Local stdio MCP server | Hosted MCP (`mcp.context7.com`) | Local stdio MCP server |
+| **Doc source** | Your installed Python deps + your own project, indexed in place | Curated community docs hosted by Upstash | Community registry (~100+ libraries), pulled then queried locally |
+| **Version match** | Exactly what's in your `site-packages` — automatic | Library + version chosen in the prompt | Latest from the registry |
+| **Languages** | Python | Multi-language | Multi-language (~100+ libraries) |
+| **Retrieval** | Keyword (BM25) + dense embeddings + LLM tree reasoning, fused via RRF or weighted scores; optional late-interaction (ColBERT-style) and reference-graph expansion | Not publicly documented | BM25 over SQLite FTS5 |
+| **Code-structure queries** | Reference graph — `get_references(direction=callers\|callees\|inherits\|impact\|governed_by)` | None (doc retrieval only) | None (doc retrieval only) |
+| **Indexes your code** | Yes — under the `__project__` package | No | No |
+| **Privacy** | Fully offline with the default embedder — zero network calls | Queries hit Upstash; OAuth + API key | Local once packages are downloaded |
+| **Dependencies** | Lean — no PyTorch, no FAISS (Rust TurboQuant store + small ONNX embedder) | Hosted service (nothing to install) | Local service |
+| **Cost** | **$0** — OSS (MIT); no keys, limits, or fees | Free tier (rate-limited) + paid plans | **$0** — OSS (Apache-2.0) |
+
+**In short:** choose pydocs-mcp for offline, version-matched Python retrieval
+where you also navigate code structure; Context7 for hosted, multi-language docs;
+Neuledge for a local-first multi-language registry.
+
 ```mermaid
 flowchart TB
     DS["Dataset loader<br/>(RepoQA · DS-1000)"]

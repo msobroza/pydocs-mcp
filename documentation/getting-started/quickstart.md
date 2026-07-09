@@ -2,7 +2,7 @@
 
 ```{include} ../../README.md
 :start-after: "## Quick start"
-:end-before: "## How it compares"
+:end-before: "## What makes it different"
 :relative-docs: ..
 :relative-images:
 ```
