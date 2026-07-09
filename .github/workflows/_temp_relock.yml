@@ -1,0 +1,25 @@
+# TEMPORARY: regenerates uv.lock on Linux (matching CI's resolution) and uploads
+# it as an artifact. Local macOS uv diverges from CI's Linux uv for the
+# openvino/ML stack, so the lock must be produced here. Removed once retrieved.
+name: _temp_relock
+on:
+  push:
+    branches: [ci/scipy-graph-relock]
+  workflow_dispatch:
+jobs:
+  relock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Regenerate lock, then assert it is consistent
+        run: |
+          uv lock
+          uv lock --check
+      - name: Upload regenerated uv.lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: relocked-uv-lock
+          path: uv.lock
+          if-no-files-found: error
