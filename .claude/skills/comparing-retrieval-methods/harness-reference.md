@@ -10,7 +10,7 @@ uv pip install -e benchmarks                # core: jsonl tracker + RepoQA loade
 uv pip install -e "benchmarks[mlflow]"      # + MLflow tracker (only if --trackers mlflow)
 uv pip install -e "benchmarks[all]"         # everything (needed for pytest suite)
 ```
-If NOT installed, prefix every `python -m benchmarks.…` command with `PYTHONPATH=benchmarks/src` (PyPA src-layout; the package lives at `benchmarks/src/pydocs_eval/`). Run everything from the repo root.
+If NOT installed, prefix every `python -m pydocs_eval.…` command with `PYTHONPATH=benchmarks/src` (PyPA src-layout; the package lives at `benchmarks/src/pydocs_eval/`). Run everything from the repo root.
 
 ## 1. Exact sweep commands
 

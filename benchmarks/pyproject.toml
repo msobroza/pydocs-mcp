@@ -36,10 +36,11 @@ dependencies = [
 # ModuleNotFoundError into an actionable install hint.
 [project.optional-dependencies]
 # The indexed-retrieval library. Declared as a published PyPI dependency
-# (pydocs-mcp is live on PyPI); pin the floor at the version whose importable
-# surface (tool_docs lint constants, retrieval/storage factories) these
-# adapters consume.
-retrieval = ["pydocs-mcp>=0.5"]
+# (pydocs-mcp is live on PyPI); pin the floor at 0.5.1 — the first version
+# exporting the tool_docs contract constants (CHARS_PER_TOKEN,
+# PER_TOOL_TOKEN_BUDGET, REQUIRED_MARKERS, TOTAL_TOKEN_BUDGET) that the
+# tool_docs / usage_skill artifacts consume (they landed after the v0.5.0 tag).
+retrieval = ["pydocs-mcp>=0.5.1"]
 mlflow = ["mlflow>=2.0"]
 # The skillopt optimizer adapter installs microsoft/SkillOpt from source (a research
 # repo, not a PyPI wheel), pinned by full commit SHA so a version bump is a deliberate
@@ -49,7 +50,7 @@ optimizers-skillopt = [
 ]
 # The union of every extra — one install target for a full-featured dev/CI env.
 all = [
-    "pydocs-mcp>=0.5",
+    "pydocs-mcp>=0.5.1",
     "mlflow>=2.0",
     "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
 ]

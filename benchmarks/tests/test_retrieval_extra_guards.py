@@ -38,6 +38,10 @@ import pytest
 # sentence. Matches ``pydocs_eval._retrieval_extra._INSTALL_HINT``.
 _EXPECTED_PIP_HINT = 'pip install "pydocs-mcp-eval[retrieval]"'
 
+# The upgrade hint the version-skew path raises. The ``-U`` distinguishes it
+# from the missing-extra hint (which has no ``-U``).
+_EXPECTED_UPGRADE_HINT = 'pip install -U "pydocs-mcp-eval[retrieval]"'
+
 
 def _hide_pydocs_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
     """Block every ``import pydocs_mcp[...]`` for the duration of the test.
@@ -75,6 +79,62 @@ def test_require_retrieval_extra_is_noop_when_library_present() -> None:
     from pydocs_eval._retrieval_extra import require_retrieval_extra
 
     require_retrieval_extra()  # must not raise
+
+
+# --- Version-aware branch: missing extra vs version skew --------------------
+
+
+def test_missing_extra_path_raises_install_hint_not_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Module ABSENT (find_spec is None): the guard must name the missing-extra
+    # install command and must NOT mislead the user toward an -U upgrade.
+    from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
+
+    _hide_pydocs_mcp(monkeypatch)
+    with pytest.raises(RuntimeError) as excinfo:
+        raise_missing_retrieval_extra(ImportError("No module named 'pydocs_mcp'"))
+    message = str(excinfo.value)
+    assert _EXPECTED_PIP_HINT in message
+    assert _EXPECTED_UPGRADE_HINT not in message
+
+
+def test_version_skew_path_raises_upgrade_hint_naming_floor() -> None:
+    # Module PRESENT (find_spec resolves in this dev repo) but a symbol import
+    # failed: the guard must diagnose version skew — name the required floor and
+    # advise the -U upgrade, NOT the plain missing-extra install. Offline: we
+    # invoke the guard directly with a simulated symbol-missing ImportError
+    # while pydocs_mcp stays importable (no reload, no network).
+    from pydocs_eval._retrieval_extra import (
+        _REQUIRED_PYDOCS_MCP,
+        raise_missing_retrieval_extra,
+    )
+
+    symbol_error = ImportError(
+        "cannot import name 'TOTAL_TOKEN_BUDGET' from 'pydocs_mcp.application.tool_docs'"
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        raise_missing_retrieval_extra(symbol_error)
+    message = str(excinfo.value)
+    # Names the floor from the single-source constant (no duplicated literal).
+    assert _REQUIRED_PYDOCS_MCP in message
+    assert f"pydocs-mcp>={_REQUIRED_PYDOCS_MCP}" in message
+    # Advises the upgrade, not the plain install — this user HAS the extra.
+    assert _EXPECTED_UPGRADE_HINT in message
+
+
+def test_version_skew_hint_reports_installed_version_when_known() -> None:
+    # In this dev repo pydocs-mcp IS installed with resolvable metadata, so the
+    # skew message must surface the concrete installed version ("you have X"),
+    # helping the user see the gap between installed and required.
+    from importlib.metadata import version
+
+    from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
+
+    installed = version("pydocs-mcp")
+    with pytest.raises(RuntimeError) as excinfo:
+        raise_missing_retrieval_extra(ImportError("symbol missing"))
+    assert f"you have {installed}" in str(excinfo.value)
 
 
 # --- Deferred (method-level) boundary: retrieval systems --------------------
