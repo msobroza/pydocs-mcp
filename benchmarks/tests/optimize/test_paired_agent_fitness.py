@@ -10,6 +10,7 @@ and candidate ``run_agent_track`` passes.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -117,6 +118,30 @@ class _PromptCapturingRunner:
     ) -> RunMetrics | None:
         self.total_calls += 1
         self.prompts.append(prompt)
+        answer = _CANDIDATE_MARKER if _CANDIDATE_MARKER in prompt else "seed"
+        return replace(_metrics(tokens=10, tools=1, files=1), answer=answer)
+
+
+@dataclass
+class _McpConfigCapturingRunner:
+    """Records each ``.mcp.json`` the indexed arm is handed (as parsed JSON).
+
+    The overlay wrapper rewrites this file in place BEFORE the inner runner sees
+    it, so reading it here observes the rewritten arm-B server command.
+    """
+
+    configs: list[dict] = field(default_factory=list)
+
+    async def run(
+        self,
+        arm: ArmConfig,
+        *,
+        prompt: str,
+        cwd: Path,
+        mcp_config: Path | None,
+    ) -> RunMetrics | None:
+        if mcp_config is not None:
+            self.configs.append(json.loads(mcp_config.read_text(encoding="utf-8")))
         answer = _CANDIDATE_MARKER if _CANDIDATE_MARKER in prompt else "seed"
         return replace(_metrics(tokens=10, tools=1, files=1), answer=answer)
 
@@ -249,6 +274,7 @@ def _fitness(
     ledger: Path,
     runner=None,
     artifact_kind: str = "usage_skill",
+    inject=_skill_inject,
 ) -> PairedAgentFitness:
     _ = artifact_kind  # both kinds use the skill-based inject in these tests
     if runner is None:
@@ -263,7 +289,7 @@ def _fitness(
         ledger_path=ledger,
         agent_cfg=AgentTrackConfig(max_tasks=8, max_usd=1_000_000.0),
         seed_artifact=_seed_artifact(),
-        inject=_skill_inject,
+        inject=inject,
     )
 
 
@@ -315,3 +341,39 @@ async def test_usage_skill_candidate_reaches_task_prompt(tmp_path) -> None:
     fit = _fitness(runner=capturing, artifact_kind="usage_skill", ledger=tmp_path / "l.jsonl")
     await fit.evaluate(_skill_artifact("ALWAYS start with get_overview"), split="train")
     assert any("ALWAYS start with get_overview" in p for p in capturing.prompts)
+
+
+async def test_overlay_injection_names_overlay_server_in_arm_b_command(tmp_path) -> None:
+    # spec §D6: when an overlay is injected, arm B's rendered .mcp.json is rewritten
+    # so its server command boots the ``_overlay_server`` wrapper (not ``pydocs_mcp
+    # serve``). The bare arm carries no config, so only arm B's command changes.
+    capturing = _McpConfigCapturingRunner()
+    overlay = tmp_path / "overlay.txt"
+    overlay.write_text("ignored-by-the-scripted-runner")
+    fit = _fitness(
+        runner=capturing,
+        ledger=tmp_path / "l.jsonl",
+        inject=lambda artifact: ArtifactInjection(overlay_path=overlay),
+    )
+    await fit.evaluate(_candidate_artifact(), split="train")
+    # Both passes (seed + candidate) run the indexed arm; every captured arm-B
+    # command must name the overlay wrapper and carry the overlay path.
+    assert capturing.configs
+    for config in capturing.configs:
+        args = config["mcpServers"]["pydocs-mcp"]["args"]
+        assert "benchmarks.optimize._overlay_server" in args
+        assert str(overlay) in args
+
+
+async def test_no_overlay_leaves_arm_b_command_on_plain_serve(tmp_path) -> None:
+    # Regression: without an overlay, arm B's command must stay the plain
+    # ``pydocs_mcp serve`` the orchestrator renders — the overlay wrapper is
+    # never spliced in when ``overlay_path`` is None.
+    capturing = _McpConfigCapturingRunner()
+    fit = _fitness(runner=capturing, ledger=tmp_path / "l.jsonl")
+    await fit.evaluate(_candidate_artifact(), split="train")
+    assert capturing.configs
+    for config in capturing.configs:
+        args = config["mcpServers"]["pydocs-mcp"]["args"]
+        assert "benchmarks.optimize._overlay_server" not in args
+        assert "serve" in args

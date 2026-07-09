@@ -16,11 +16,11 @@ efficiency is disqualified, never ranked.
 
 The two threads a candidate can pull are carried by ``ArtifactInjection``:
 ``skill`` threads into every arm's task prompt (byte-identical to
-``task_prompt(question, skill=...)``); ``overlay_path`` is carried for the arm-B
-server command but is only WIRED by a later task — this fitness merely passes the
-value through. The seed baseline is computed once per ``(seed.fingerprint,
-split)`` and cached in-memory, so a run that scores many candidates pays for the
-baseline exactly once.
+``task_prompt(question, skill=...)``); ``overlay_path`` rewrites arm B's rendered
+``.mcp.json`` to boot the §D6 overlay wrapper (``_overlay_server``) so the indexed
+arm serves the candidate ``tool_docs`` surface. The seed baseline is computed
+once per ``(seed.fingerprint, split)`` and cached in-memory, so a run that scores
+many candidates pays for the baseline exactly once.
 
 Everything expensive is injected behind the agent-track Protocols (``runner`` /
 ``judge``), so the whole fitness is exercised offline with scripted doubles — no
@@ -29,6 +29,7 @@ subprocess, no socket, no live LLM (slice-6 contract).
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,13 @@ _DEFAULT_WEIGHTS: Mapping[str, float] = {"tokens": 0.5, "tool_calls": 0.3, "file
 _DEFAULT_PARITY_FLOOR = -0.25
 _EPS = 1e-9
 
+# WHY: single source of truth for the arm-B overlay wrapper's module path. When
+# an overlay is injected, the rendered ``.mcp.json`` server command is rewritten
+# to boot this module (``python -m <_OVERLAY_SERVER_MODULE> <corpus> --overlay
+# <file>``) in place of ``pydocs_mcp serve`` (spec §D6).
+_OVERLAY_SERVER_MODULE = "benchmarks.optimize._overlay_server"
+_OVERLAY_FLAG = "--overlay"
+
 # Each efficiency metric summed over BOTH arms of one pair (spec §D3). The key is
 # the weight key AND the ``<metric>_fraction`` component prefix, so the three stay
 # in lockstep — adding a metric is one row plus one weight.
@@ -69,8 +77,8 @@ class ArtifactInjection:
 
     ``skill`` is appended to every arm's task prompt (byte-identical to
     ``task_prompt(question, skill=...)``); ``overlay_path`` is the arm-B server
-    overlay file — carried here but wired into the server command by a later
-    task, so this fitness only threads the value through.
+    overlay file — when set, the fitness rewrites arm B's ``.mcp.json`` to boot
+    the §D6 overlay wrapper with this overlay injected.
     """
 
     skill: str = ""
@@ -169,7 +177,13 @@ class PairedAgentFitness:
         pass from cross-contaminating the agent-track resume set.
         """
         injection = self.inject(artifact)
-        runner = _SkillAppendingRunner(inner=self.runner, skill=injection.skill)
+        runner: object = _SkillAppendingRunner(inner=self.runner, skill=injection.skill)
+        if injection.overlay_path is not None:
+            # Arm B only: swap the rendered ``.mcp.json`` server command for the
+            # §D6 overlay wrapper so the indexed arm boots ``_overlay_server``
+            # with this candidate's overlay injected (spec §D6). The bare arm
+            # carries no mcp_config, so the wrapper is a pass-through there.
+            runner = _OverlayInjectingRunner(inner=runner, overlay_path=injection.overlay_path)
         dataset = _SplitDataset(inner=self.dataset, keep=split_ids)
         ledger = self._pass_ledger(artifact.fingerprint, split)
         pairs = await run_agent_track(
@@ -213,6 +227,49 @@ class _SkillAppendingRunner:
     ) -> RunMetrics | None:
         threaded = f"{prompt}\n\n{self.skill}" if self.skill else prompt
         return await self.inner.run(arm, prompt=threaded, cwd=cwd, mcp_config=mcp_config)
+
+
+@dataclass(frozen=True, slots=True)
+class _OverlayInjectingRunner:
+    """Rewrites arm B's ``.mcp.json`` to boot the §D6 overlay server (spec §D6).
+
+    ``run_agent_track`` renders the indexed arm's ``.mcp.json`` to boot
+    ``pydocs_mcp serve <corpus>``. When an overlay is injected we rewrite that
+    file's server ``args`` to ``-m <_OVERLAY_SERVER_MODULE> <corpus> --overlay
+    <file>`` before delegating, so the indexed arm serves the candidate surface
+    with ZERO product hook. The bare arm passes ``mcp_config=None``, so this
+    wrapper is a pass-through there (only arm B carries a config to rewrite).
+    """
+
+    inner: object
+    overlay_path: Path
+
+    async def run(
+        self,
+        arm: object,
+        *,
+        prompt: str,
+        cwd: Path,
+        mcp_config: Path | None,
+    ) -> RunMetrics | None:
+        if mcp_config is not None:
+            _rewrite_mcp_config_for_overlay(mcp_config, overlay=self.overlay_path)
+        return await self.inner.run(arm, prompt=prompt, cwd=cwd, mcp_config=mcp_config)
+
+
+def _rewrite_mcp_config_for_overlay(mcp_config: Path, *, overlay: Path) -> None:
+    """In-place rewrite each server's ``args`` to boot ``_overlay_server``.
+
+    Preserves the interpreter (``command``) and the corpus-dir argument the
+    orchestrator baked in — only the module + ``--overlay`` tail changes — so the
+    served ``pydocs_mcp`` still matches the harness interpreter and indexes the
+    same corpus, now under the overlay wrapper.
+    """
+    config = json.loads(mcp_config.read_text(encoding="utf-8"))
+    for server in config.get("mcpServers", {}).values():
+        corpus_arg = server["args"][-1]  # ``... serve <corpus_dir>`` → the corpus
+        server["args"] = ["-m", _OVERLAY_SERVER_MODULE, corpus_arg, _OVERLAY_FLAG, str(overlay)]
+    mcp_config.write_text(json.dumps(config), encoding="utf-8")
 
 
 @dataclass(frozen=True, slots=True)
