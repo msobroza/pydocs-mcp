@@ -256,6 +256,11 @@ and a few properties fall out of that:
 It's OSS (MIT) and mounts alongside any other MCP servers your agent uses, so you
 can route by intent rather than pick one.
 
+Prefer names and numbers over adjectives? The [benchmark
+suite](benchmarks/README.md#how-the-systems-compare-qualitative) carries a
+side-by-side table of the alternatives it implements as baselines — and scores
+them head-to-head on identical tasks and gold answers.
+
 ## Benchmarked, not hand-waved
 
 pydocs-mcp ships a real benchmark harness that scores retrieval quality on public
