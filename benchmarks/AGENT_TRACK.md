@@ -165,8 +165,7 @@ contract is the agent track's. Before any paid optimization run, in order:
    `$0.00`: it validates the seed against its §D13 firewall, echoes the wired
    ladder, checks the train/holdout split predicate is deterministic and
    both-sided, reports each optimizer adapter's availability (`skillopt` shows
-   SKIPPED when the source-installed `skillopt` library is absent — the
-   adapter's error prints the SHA-pinned `pip install` command; a dry run must
+   SKIPPED when its `[optimizers-skillopt]` extra is absent — a dry run must
    never require it), and runs one full orchestrator pass on a zero-cost fake
    fitness with `FakeAgentRunner` / `FakeJudge`:
 
@@ -188,14 +187,15 @@ Spend has three layers, precedence stated (spec §D5):
    `OptimizationResult(accepted=False, ...)` with the trials so far.
 2. **For `critique_refine`,** every rollout is a `run_agent_track` call under
    its own `--max-usd`, nested beneath the outer cap.
-3. **For `skillopt`,** its internal spend is bounded by the **mapped** budget
-   config (`OptimizationBudget.max_usd` → SkillOpt's own budget field in the
-   generated `configs/<name>.yaml`), which the outer cap **cannot** interrupt
-   mid-`train.py`; the outer cap applies only to the surrounding holdout-gate
-   runs, which *do* go through our harness. This asymmetry is why the SkillOpt
-   adapter pins the mapping in a test — the outer `--max-usd` never reaches
-   inside `train.py`, so the mapped config is the only thing bounding the
-   external search.
+3. **For `skillopt`,** there is no native spend knob at all — skillopt 0.2.x
+   has no budget/USD config key, so `OptimizationBudget.max_trials` maps onto
+   its **rollout counts** (epochs / batch size / selection-eval size in the
+   generated `configs/<name>.yaml`) and `max_usd` is recorded there as an
+   explanatory comment ONLY. The outer cap **cannot** interrupt a
+   `skillopt-train` run mid-flight; it applies only to the surrounding
+   holdout-gate runs, which *do* go through our harness. This asymmetry is why
+   the SkillOpt adapter pins the mapping in a test — the mapped rollout counts
+   are the only thing bounding the external search.
 
 `--dry-run` walks the whole pipeline (seed validation, ladder wiring, split
 determinism, adapter import/stub) with a `FakeAgentRunner`, spending nothing.
