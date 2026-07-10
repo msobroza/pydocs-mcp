@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.5.0 (unreleased)
+## v0.5.1
+
+### Changed
+
+- The tool-docs contract constants — `REQUIRED_MARKERS`, `CHARS_PER_TOKEN`,
+  `PER_TOOL_TOKEN_BUDGET`, and `TOTAL_TOKEN_BUDGET` — are now part of the public
+  importable surface of `pydocs_mcp.application.tool_docs`. The `pydocs-mcp-eval`
+  optimizer artifacts import them to share the §D13 tool-docs validation logic,
+  so they need a published release that exposes them.
+
+## v0.5.0
 
 Headline: the MCP surface becomes **six task-shaped tools**, every response now
 travels in a **freshness / next-step / truncation envelope**, and the index
