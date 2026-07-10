@@ -2,7 +2,7 @@
 
 ```{include} ../../DOCUMENTATION.md
 :start-after: "## Retrieval pipeline"
-:end-before: "---"
+:end-before: "## CLI reference"
 :relative-docs: ..
 :relative-images:
 ```

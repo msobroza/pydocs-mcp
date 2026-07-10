@@ -1,13 +1,23 @@
 # Late-interaction ingestion pipeline.
 #
-# Drop-in replacement for ``ingestion.yaml`` when
+# Replacement for ``ingestion.yaml`` when
 # ``late_interaction.enabled: true`` in the active AppConfig YAML: swaps
 # the single-vector ``embed_chunks`` stage for ``embed_chunks_multi_vector``
 # so the configured ``MultiVectorEmbedder`` populates ``uow.multi_vectors``
-# (the fast-plaid-backed multi-vector store) during indexing. Every other
-# stage — file discovery, chunking, reference capture, content-hash
-# rewrite + skip set, package_build — is identical to the default
-# ingestion preset.
+# (the fast-plaid-backed multi-vector store) during indexing. The core
+# stages — file discovery, chunking, reference capture, content-hash
+# rewrite + skip set, package_build — match the default ingestion preset.
+#
+# NOT stage-for-stage identical to ``ingestion.yaml``: three stages the
+# default preset ships are absent here. ``capture_decisions`` (index-time
+# decision mining, ``get_why``'s data source — on by default via
+# ``decision_capture.enabled``) and ``dependency_doc_pages`` (per-module
+# docstring pages, the embedded doc unit under ``dependency_policy:
+# doc_pages``) are simply not included — switching to this preset loses
+# both; copy their stage lines from ``ingestion.yaml`` (between ``flatten``
+# and ``assign_chunk_content_hash``) to keep them.
+# ``synthesize_similar_edges`` is omitted because it requires single-vector
+# embeddings and skips multi-vector chunks, so it would be inert here.
 #
 # Override via ``extraction.ingestion.pipeline_path`` in your config YAML;
 # the loader resolves the path against the shipped pipelines dir or the

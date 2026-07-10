@@ -34,7 +34,7 @@ steps:
       # the excerpt depth: "sections" (first line + Args/Returns/Raises;
       # default), "full" (whole docstring, bounded), or "off" (no doc
       # field). doc_excerpt_max_chars bounds it. Larger excerpts trade
-      # prompt budget for discriminative context; the tree word-budget
+      # prompt budget for discriminative context; the tree token-budget
       # pruner counts them, so big excerpts simply prune sooner.
       doc_excerpt: sections
       doc_excerpt_max_chars: 240

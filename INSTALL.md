@@ -61,7 +61,8 @@ No additional packages — CBLAS is provided by the MSVC runtime.
 ```bash
 git clone https://github.com/msobroza/pydocs-mcp
 cd pydocs-mcp
-pip install -e ".[dev]"
+pip install -e .
+pip install --group dev
 ```
 
 If you have Rust installed and want the native acceleration module:

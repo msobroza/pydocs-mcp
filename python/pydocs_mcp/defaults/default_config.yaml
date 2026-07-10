@@ -76,9 +76,9 @@ reference_graph:
     enabled: false                          # synthetic embedding-kNN 'similar' edges (densify the graph)
     top_m: 5                                # neighbours per node when enabled (1-25)
   impact:
-    max_depth: 3                            # reverse-traversal depth for lookup(show="impact"), 1-6
+    max_depth: 3                            # reverse-traversal depth for get_references(direction="impact"), 1-6
   context:
-    max_depth: 2                            # forward dependency-closure depth for lookup(show="context"), 1-6
+    max_depth: 2                            # forward dependency-closure depth for get_context, 1-6
     token_budget: 2048                      # token cap for the packed context (graded fidelity)
     render: skeleton                        # "skeleton" (signatures + bodies for the most-central nodes) | "full" (hop-graded fidelity)
     skeleton_body_ratio: 0.35               # fraction of token_budget spent on FULL bodies in skeleton mode, 0<r<=1
@@ -222,7 +222,7 @@ search_backend:
 #   provider: openai
 #   model_name: gpt-4o-mini
 #   temperature: 0.0
-#   max_tokens: 1024
+#   max_tokens: null            # default: unbounded (SDK default)
 
 # Late-interaction (ColBERT / PyLate) embedder — sibling of `embedding` /
 # `llm`. Opt-in (enabled=false by default); when enabled, consumed by

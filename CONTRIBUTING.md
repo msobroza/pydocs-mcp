@@ -27,16 +27,29 @@ See `INSTALL.md` for details.
 - `make lint` — `ruff check` + `ruff format --check`
 - `make lint-rust` — `cargo fmt --check` + `cargo clippy`
 - `make typecheck` — `mypy` on `python/pydocs_mcp`
+- `make gate` — the full CI-equivalent local gate: lint + format + types +
+  the cognitive-complexity ceiling (`complexipy`, max 15) + the dead-code
+  check (`vulture`, min confidence 80) + the test suite with the 90%
+  coverage threshold. Run this before pushing to catch what CI catches.
 
 `pre-commit install` once after cloning will run the cheap checks on every
 commit automatically.
 
 ## Pull-request expectations
 
-- Tests pass on Ubuntu 3.11 / 3.12 / 3.13 (the CI matrix runs all of these
-  plus macOS 13/14 and Windows; you can rely on CI rather than running them
-  all locally).
-- Coverage threshold (`--cov-fail-under=90`) is enforced by CI.
+- Tests pass on Ubuntu + Python 3.13 (the single cell CI runs on every PR
+  and push to `main`). The full OS x Python matrix — Ubuntu / macOS 14 /
+  Windows x 3.11 / 3.12 / 3.13 — only runs on a release tag or a manual
+  workflow dispatch, so a PR run won't surface platform-specific issues;
+  call those out in the PR description if your change is platform-sensitive.
+- Coverage threshold (`--cov-fail-under=90`) is enforced by CI, alongside a
+  benchmark-import smoke check (renaming an internal `pydocs_mcp` module can
+  silently break `benchmarks/`, which lives outside `tests/`) and a
+  dedicated test pass for the `[graph]` extra (PageRank / community
+  detection).
+- CI also runs `uv lock --check` — run `uv lock` after editing
+  `pyproject.toml` dependencies so the committed lockfile doesn't drift —
+  and `pip-audit --strict` against the locked dependency set.
 - New user-facing behaviour gets an entry in `CHANGELOG.md` under
   `[Unreleased]` in Keep-a-Changelog format.
 

@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "pydocs-mcp"
 version = "0.5.1"
-description = "Local Python docs MCP server, accelerated with Rust"
+description = "Local, version-aware code & docs search with hybrid retrieval and reference graphs for your AI coding agent, accelerated with Rust"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "LICENSE-third-party"]
@@ -25,6 +25,7 @@ keywords = [
     "bm25",
     "colbert",
     "late-interaction",
+    "reference-graph",
     "rust",
 ]
 classifiers = [

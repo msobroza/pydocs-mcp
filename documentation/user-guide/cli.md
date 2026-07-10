@@ -2,7 +2,7 @@
 
 ```{include} ../../DOCUMENTATION.md
 :start-after: "## CLI reference"
-:end-before: "---"
+:end-before: "## Multi-repo serving"
 :relative-docs: ..
 :relative-images:
 ```

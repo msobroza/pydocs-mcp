@@ -1,7 +1,8 @@
 """Single source of truth for tool documentation (spec §D13).
 
-``TOOL_DOCS[name]`` becomes the MCP tool description AND the CLI subcommand
-help text; ``SERVER_INSTRUCTIONS`` is the FastMCP server-level orientation.
+``TOOL_DOCS[name]`` becomes the MCP tool description AND (first line only) the
+CLI subcommand help text; ``SERVER_INSTRUCTIONS`` is the FastMCP server-level
+orientation.
 The §D13 lint test enforces the six-section structure and size budgets, so
 edits here fail fast instead of drifting.
 """
@@ -28,8 +29,9 @@ _WORKFLOW = (
 _CONTRACT = (
     "Response contract: every response starts with an [index: …] freshness "
     "line — silence means current; a [⚠ index stale…] line means re-index "
-    "before trusting details. Hits end with a ready-made follow-up call. "
-    "Elided content always carries a recovery pointer."
+    "before trusting details. Code-backed hits end with a ready-made "
+    "follow-up call. Elided content carries a recovery pointer whenever a "
+    "target is resolvable."
 )
 
 TOOL_DOCS: dict[str, str] = {
@@ -58,7 +60,7 @@ Examples:
 """,
     "get_symbol": f"""Details — or verbatim source — for a dotted path you already know.
 
-When to use: known package/module/class/method paths; depth="tree" for the full nested subtree; depth="source" for the exact source bytes (this is how you recover content a truncated response elided).
+When to use: known package/module/class/method paths; depth="tree" for the full nested subtree; depth="source" for the verbatim source, up to the configured line cap (this is how you recover content a truncated response elided).
 When NOT to use: you only have a keyword (search_codebase); you want the whole dependency closure (get_context).
 {_WORKFLOW}
 {_CONTRACT}
@@ -69,7 +71,7 @@ Examples:
 """,
     "get_context": f"""Everything needed to understand one or more targets, packed under a token budget.
 
-When to use: before reading or modifying code — one call replaces separate doc/signature/caller reads. Pass ALL targets in ONE call: one shared budget beats N sequential calls.
+When to use: before reading or modifying code — one call replaces separate doc/signature/dependency reads. Pass ALL targets (up to 20) in ONE call: one shared budget beats N sequential calls.
 When NOT to use: single known symbol, full source wanted (get_symbol); pure who-calls-what (get_references).
 {_WORKFLOW}
 {_CONTRACT}
@@ -89,13 +91,13 @@ Examples:
 """,
     "get_why": f"""Why is this code the way it is — which recorded decisions govern it?
 
-When to use: before proposing architectural changes; questions like "why sqlite here?"; pass ALL paths of interest in ONE call via targets. No arguments = governance dashboard.
+When to use: before proposing architectural changes; questions like "why sqlite here?"; pass ALL symbols of interest (up to 20) in ONE call via targets. No arguments = governance dashboard.
 When NOT to use: what/where questions (search_codebase); implementation details (get_symbol).
 {_WORKFLOW}
 {_CONTRACT}
 Examples:
   get_why(query="why are vectors in a sidecar file")
-  get_why(targets=["python/pydocs_mcp/db.py"], project="backend")
+  get_why(targets=["pydocs_mcp.db"], project="backend")
 """,
 }
 

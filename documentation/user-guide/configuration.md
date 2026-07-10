@@ -10,8 +10,8 @@
 ## Database schema
 
 ```{include} ../../DOCUMENTATION.md
-:start-after: "## Database schema"
-:end-before: "---"
+:start-after: "## Database schema (simplified)"
+:end-before: "## Architecture"
 :relative-docs: ..
 :relative-images:
 ```

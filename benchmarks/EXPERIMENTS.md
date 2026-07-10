@@ -120,7 +120,7 @@ sudo apt-get install -y libopenblas-pthread-dev   # see INSTALL.md for fallbacks
 - **Hugging Face access** is needed the first time you run any condition: the
   ingestion pipeline embeds chunks at index time, so even the BM25 condition
   downloads the FastEmbed `bge-small` model once (cached afterwards).
-- **`OPENAI_API_KEY`** is needed only for conditions 9 and 10 (the tree step
+- **`OPENAI_API_KEY`** is needed only for conditions 11 and 12 (the tree step
   calls the LLM, default `gpt-4o-mini`, once per query). Put it in a
   gitignored `.env` and load it before those runs:
 
@@ -228,8 +228,9 @@ benchmarks/configs/repoqa_hybrid_tree.yaml \
   --report benchmarks/results/repoqa_smalltest_tree.md
 ```
 
-With `OPENAI_API_KEY` exported you can also fold all ten `--configs` into a
-single sweep (one combined report column per config).
+With `OPENAI_API_KEY` exported (and the `[late-interaction]` extra installed)
+you can also fold all twelve `--configs` into a single sweep (one combined
+report column per config).
 
 The default metrics (`recall@1,recall@5,recall@10,mrr,pass@1-needle`) are
 used unless you pass `--metrics`. Add `--limit N` for a quick smoke run over
@@ -245,10 +246,11 @@ so the first run pays the indexing cost and every later run (tuning a config,
 re-plotting, debugging) is near-instant. The cache lives at
 `~/.pydocs-mcp/bench/`, outside the repo.
 
-Because every condition here uses the same default ingestion pipeline, the
-first condition you run indexes all 30 needles; the other nine reuse those
-cached indexes — so a full ten-condition sweep indexes the 30 repos once, not
-ten times.
+Because every condition except the two late-interaction ones uses the same
+default ingestion pipeline, the first condition you run indexes all 30 needles
+and the rest reuse those cached indexes; conditions 9–10 index once more under
+`ingestion_late_interaction.yaml` (their cache key differs). So a full
+twelve-condition sweep indexes the 30 repos twice, not twelve times.
 
 ```bash
 # inspect / clear the cache
@@ -276,7 +278,7 @@ under the same path is NOT auto-detected — `bench_cache_cli evict` (or
 ## 5. Results → plots
 
 Each `(system, config)` leg writes one JSONL file under
-`benchmarks/results/jsonl/` (named `pydocs-mcp_<config>_repoqa@<rev>_<ts>.jsonl`)
+`benchmarks/results/jsonl/` (named `pydocs-mcp_<config>_repoqa_at_<rev>_<ts>.jsonl`)
 with per-task metric/latency events and final `*_mean` / `*_ci_low` /
 `*_ci_high` aggregates, plus the markdown report at the `--report` path.
 `benchmarks/results/` is gitignored.
@@ -307,7 +309,7 @@ Then compare DENSE-ONLY vs DENSE+GRAPH (embedding-centric — no BM25, no RRF):
 ```bash
 PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
     --systems pydocs-mcp --dataset repoqa-structural \
-    --configs repoqa_dense_f2llm330m,repoqa_dense_graph_f2llm330m \
+    --configs benchmarks/configs/repoqa_dense_f2llm330m.yaml,benchmarks/configs/repoqa_dense_graph_f2llm330m.yaml \
     --metrics recall@1,recall@5,recall@10,mrr --gpu \
     --report benchmarks/results/structural_recall.md
 ```

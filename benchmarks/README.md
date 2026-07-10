@@ -184,8 +184,8 @@ the gold high.
 
 **Dataset size:** 100 needles total — 10 real Python repos (HuggingFace
 Transformers, vLLM, FastAPI, sympy, …) × ~10 needles each. The shipped fixture
-(`repoqa_mini.json`) has 5 needles from one synthetic repo for hermetic CI runs
-that don't touch the network.
+(`repoqa_mini.json`) has 5 needles across two synthetic repos for hermetic CI
+runs that don't touch the network.
 
 **Source:** Liu, J. et al. *RepoQA: Evaluating Long Context Code Understanding.*
 arXiv:2406.06025, June 2024. Apache-2.0, by the EvalPlus team. Downloaded on
@@ -294,7 +294,7 @@ whole real-world codebases (not single needles).
   answer cites no resolvable file are dropped **with a logged count** (no silent
   caps). Registered as `swe-qa-pro`
   ([`datasets/swe_qa_pro.py`](src/pydocs_eval/datasets/swe_qa_pro.py)); the
-  committed mini fixture (`fixtures/swe_qa_pro_mini.jsonl`) drives hermetic CI
+  committed mini fixture (`tests/eval/fixtures/swe_qa_pro_mini.jsonl`) drives hermetic CI
   without network access.
 - **Per-category reporting.** Because every row is tagged with a `qa_type`, the
   report grows a `## By qa_type` breakout (What / Where / How / Why) whenever ≥2
@@ -310,10 +310,11 @@ whole real-world codebases (not single needles).
       --configs benchmarks/configs/swe_qa_pro_bm25.yaml,benchmarks/configs/swe_qa_pro_hybrid_rrf_k60.yaml
   ```
 
-  The loader fetches the pinned `data/test.jsonl` and clones each repo pin into
-  `~/.cache/pydocs-mcp/swe-qa-pro/` on first run, then reuses the cache. Corpora
-  are redistributed-by-download — cloned into the cache, never committed (they
-  belong to their authors).
+  The loader fetches the pinned `data/test.jsonl` into
+  `~/.cache/pydocs-mcp/swe-qa-pro/` and clones each repo pin into the shared
+  `~/.cache/pydocs-mcp/swe-qa-repos/` on first run, then reuses both caches.
+  Corpora are redistributed-by-download — cloned into the cache, never
+  committed (they belong to their authors).
 
 **Pseudo-qrel caveat** — the same caveat governs both SWE-QA corpora, so read it
 once here:
@@ -344,7 +345,7 @@ taxonomy.
   noisier (~8% bare filenames resolved by unique basename), citation-free rows
   drop with a logged count. Registered as `swe-qa`
   ([`datasets/swe_qa.py`](src/pydocs_eval/datasets/swe_qa.py)); the committed
-  mini fixture (`fixtures/swe_qa_mini.jsonl`) drives hermetic CI. There is **no
+  mini fixture (`tests/eval/fixtures/swe_qa_mini.jsonl`) drives hermetic CI. There is **no
   per-question taxonomy** in the release, so per-category breakouts come from
   SWE-QA-Pro; SWE-QA gets per-repo breakouts only.
 - **Run it.**
@@ -357,8 +358,9 @@ taxonomy.
       --split matplotlib
   ```
 
-  The loader fetches the per-repo `data/<repo>.jsonl` files and clones each pin
-  into `~/.cache/pydocs-mcp/swe-qa/` on first run. Corpora are
+  The loader fetches the per-repo `data/<repo>.jsonl` files into
+  `~/.cache/pydocs-mcp/swe-qa/` and clones each pin into the shared
+  `~/.cache/pydocs-mcp/swe-qa-repos/` on first run. Corpora are
   redistributed-by-download — never committed.
 
 The **pseudo-qrel caveat** above applies identically to this corpus —
@@ -479,8 +481,8 @@ RepoQA's clean one-sentence query idiom.
 ### Method comparison (RepoQA `small_test`)
 
 Retrieval methods on the RepoQA `small_test` split — each query is a
-function description and the gold is that function (one notebook per method lives
-in [`notebooks/`](../notebooks/)). Higher is better.
+function description and the gold is that function (notebooks for most methods
+live in [`notebooks/`](../notebooks/)). Higher is better.
 
 ![recall@k by retrieval method](assets/method_comparison.png)
 
@@ -492,7 +494,7 @@ in [`notebooks/`](../notebooks/)). Higher is better.
 | Dense (bge-small, 384-d) | `repoqa_dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
 | Dense (gte-modernbert-base, 768-d) | `repoqa_dense_modernbert.yaml` | 0.533 | 0.733 | 0.733 | 0.601 | 30 |
 | Dense (Qwen3-0.6B, 1024-d) | `repoqa_dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
-| Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm_330m.yaml` | 0.700 | 0.767 | 0.767 | 0.725 | 30 |
+| Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm330m.yaml` | 0.700 | 0.767 | 0.767 | 0.725 | 30 |
 | **Dense (F2LLM-v2-0.6B, 1024-d)** | `repoqa_dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
 | Late-interaction (ColBERT / MaxSim) | `repoqa_li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
 | LLM tree reasoning (gpt-4o-mini) | `repoqa_tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
@@ -597,7 +599,7 @@ pure dense.**
 
 | Fusion | Config | recall@1 | recall@5 | recall@10 | MRR |
 |---|---|---:|---:|---:|---:|
-| **Pure dense (no fusion)** | `repoqa_dense_f2llm_330m.yaml` | **0.700** | **0.767** | **0.767** | **0.725** |
+| **Pure dense (no fusion)** | `repoqa_dense_f2llm330m.yaml` | **0.700** | **0.767** | **0.767** | **0.725** |
 | WSI dense-heavy (0.3 BM25 / 0.7 dense) | `repoqa_hybrid_wsi_dense_f2llm.yaml` | 0.633 | 0.767 | 0.767 | 0.674 |
 | WSI balanced (0.5 / 0.5) | `repoqa_hybrid_wsi_balanced_f2llm.yaml` | 0.433 | 0.733 | 0.767 | 0.573 |
 | WSI BM25-heavy (0.7 BM25 / 0.3 dense) | `repoqa_hybrid_wsi_bm25_f2llm.yaml` | 0.333 | 0.500 | 0.600 | 0.401 |
@@ -979,7 +981,7 @@ systems:
 ```bash
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-mcp-composite,context7,neuledge \
-    --configs ds1000_composite.yaml \
+    --configs benchmarks/configs/ds1000_composite.yaml \
     --metrics recall@1,mrr,precision@1,coverage,library_resolution@1 \
     --trackers jsonl
 ```
@@ -994,7 +996,7 @@ scores Context7's library-router accuracy and is `0.0` for the other rows.
 ```bash
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-mcp \
-    --configs ds1000_ranked.yaml \
+    --configs benchmarks/configs/ds1000_ranked.yaml \
     --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
     --trackers jsonl \
     --corpus-dir benchmarks/fixtures/ds1000_reference_project
@@ -1016,7 +1018,7 @@ their published reference points.
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-oracle \
     --dataset-full-prompt \
-    --configs ds1000_ranked.yaml \
+    --configs benchmarks/configs/ds1000_ranked.yaml \
     --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
     --trackers jsonl
 ```

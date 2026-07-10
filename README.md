@@ -41,7 +41,7 @@ machine, in seconds. Your agent connects over MCP and gets answers grounded in
   local ONNX embedder plus the Rust [TurboQuant](https://arxiv.org/abs/2504.19874)
   vector store ([`turbovec`](https://github.com/RyanCodrai/turbovec)), which packs
   embeddings **~16× smaller than float32** (a 1536-dim vector drops from 6,144 to
-  384 bytes; a 10M-doc corpus fits in 4 GB instead of 31 GB) and benchmarks
+  384 bytes; a 10M-doc corpus fits in ~4 GB instead of ~61 GB) and benchmarks
   **faster than FAISS FastScan**. The on-disk index stays tiny and search stays
   quick.
 - **Cheap to keep current.** Edit a doc and only the *changed* chunks are
@@ -72,8 +72,8 @@ Three steps, all on your machine (see the diagram above):
    Every response is wrapped in a consistent envelope so the agent always knows
    where it stands — see [Response conventions](#response-conventions).
 
-The only call that ever leaves your machine is the optional reasoning mode — and
-only if you turn it on with your own key.
+Nothing ever leaves your machine unless you opt into a remote provider — the
+reasoning mode or `embedding.provider: openai` — with your own key.
 
 ## Response conventions
 
@@ -95,8 +95,8 @@ dead end. Three conventions travel with every result:
   was cut and the pointer that fetches each dropped piece in full — nothing goes
   missing silently.
 
-The three are on by default and tunable under `output.envelope` in your
-`pydocs-mcp.yaml`.
+The three are on by default and tunable under `output.envelope` and
+`output.next_pointers` in your `pydocs-mcp.yaml`.
 
 ## Quick start
 
@@ -363,7 +363,7 @@ through the fusion steps below.
   ([turbovec](https://github.com/RyanCodrai/turbovec)) — Online Vector
   Quantization with near-optimal distortion. **~16× smaller than
   float32** (a 1536-dim vector drops from 6,144 to 384 bytes; a 10 M-doc
-  corpus fits in 4 GB instead of 31 GB) and faster than FAISS FastScan
+  corpus fits in ~4 GB instead of ~61 GB) and faster than FAISS FastScan
   at the same recall. Persists as a `.tq` sidecar next to the SQLite DB.
 
 ### Late-interaction (multi-vector / MaxSim) — opt-in

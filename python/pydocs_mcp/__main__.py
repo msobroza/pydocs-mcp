@@ -1,11 +1,14 @@
-"""CLI: ``python -m pydocs_mcp {serve,index,query,api} /path/to/project``.
+"""CLI: ``python -m pydocs_mcp
+{serve,index,watch,search,overview,symbol,context,refs,why,lookup}``.
 
-Each subcommand is a thin wrapper over the application-layer services
-(spec §5.6, AC #9, #16):
+Each subcommand is a thin wrapper over the application-layer services:
 
-* ``serve`` / ``index`` route through :class:`ProjectIndexer`.
-* ``query`` / ``api`` route through :class:`DocsSearch` /
-  :class:`ApiSearch`, rendering the top composite chunk's text.
+* ``serve`` / ``index`` / ``watch`` route through :class:`ProjectIndexer`.
+* ``search`` / ``overview`` / ``symbol`` / ``context`` / ``refs`` / ``why``
+  mirror the six task-shaped MCP tools 1:1 (``search_codebase``,
+  ``get_overview``, ``get_symbol``, ``get_context``, ``get_references``,
+  ``get_why``); ``lookup`` is the deprecated alias that routes onto
+  symbol/refs/context (and overview for an empty target).
 
 Every subcommand routes its failures through :func:`_report_cli_failure`,
 the single owner of the diagnostic policy: on failure it prints
@@ -54,7 +57,12 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Local Python docs MCP server (optionally Rust-accelerated)",
     )
     p.add_argument("-v", "--verbose", action="store_true")
-    p.add_argument("--config", type=Path, help="Path to pydocs-mcp.yaml")
+    p.add_argument(
+        "--config",
+        type=Path,
+        help="Path to pydocs-mcp.yaml (must precede the subcommand: "
+        "pydocs-mcp --config x.yaml serve .)",
+    )
     sub = p.add_subparsers(dest="cmd")
 
     _no_rust = dict(
@@ -64,7 +72,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ``--cache-dir`` overrides the directory the SQLite cache (and ``.tq``
     # sidecar) live in. CLI-only knob — never plumbed through to the MCP
     # tool surface. Common to every subcommand so the four wirings stay in
-    # sync. (Per-deployment knob; no impact on the fixed 2-tool MCP API.)
+    # sync. (Per-deployment knob; no impact on the fixed six-tool MCP API.)
     _cache_dir = dict(
         type=Path,
         default=None,
@@ -196,7 +204,8 @@ def _build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--workspace", **_workspace)
             sp.add_argument("--db", **_db)
 
-    # sub-PR #6: replace query/api with 2 tools matching the MCP surface.
+    # ``search`` is the CLI face of the ``search_codebase`` MCP tool — one of
+    # the six task-shaped tools (see the block below for the other five).
     sp_search = sub.add_parser(
         "search",
         help="Semantic + keyword search over project + deps",
@@ -242,7 +251,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--limit",
         type=int,
         default=10,
-        help="Max number of results (1-1000, default: 10).",
+        help="Result cap for multi-repo union searches (--workspace/--db with "
+        "2+ projects; 1-1000, default: 10). Single-project result count is "
+        "set by the retrieval pipeline YAML, not this flag.",
     )
     _add_query_flags(sp_search)
 
@@ -300,6 +311,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "lookup",
         help="[deprecated] Alias for symbol/refs/context — use those directly",
         description=(
+            "[deprecated] Alias for symbol/refs/context (and overview for an empty "
+            "target) — use those subcommands directly. "
             "Navigate to a known symbol (dotted path) and optionally traverse its "
             "reference graph — callers, callees, base classes. Use this when you "
             "know the exact target; use 'search' when you only have a keyword or topic."

@@ -27,10 +27,13 @@ benchmarks/configs/repoqa_tree.yaml \
 PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --dataset ds1000 --split small_test --systems pydocs-mcp \
   --configs benchmarks/configs/ds1000_ranked.yaml,\
-benchmarks/configs/ds1000_hybrid_li_rrf.yaml,\
-benchmarks/configs/ds1000_tree.yaml \
+benchmarks/configs/ds1000_hybrid_li_rrf.yaml \
   --report benchmarks/reports/late_interaction_eval/ds1000.md
 ```
+
+No tree-reasoning overlay ships for DS-1000 yet (only
+`benchmarks/configs/repoqa_tree.yaml` exists), so the DS-1000 command
+compares the first two methods.
 
 The late-interaction extra is required:
 

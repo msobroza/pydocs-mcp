@@ -8,11 +8,11 @@ An MCP server that indexes your Python project source code and installed depende
 
 ## Problem
 
-AI coding assistants hallucinate outdated APIs because their training data is months behind. Existing solutions (Context7, Docfork) require Node.js, cloud access, or manual per-library setup. None of them index your own project code alongside dependencies, and none of them expose a reference graph for "who calls this function" queries.
+AI coding assistants hallucinate outdated APIs because their training data is months behind. Existing documentation servers typically require Node.js, cloud access, or manual per-library setup — and rarely index your own project code alongside dependencies or expose a reference graph for "who calls this function" queries.
 
 ## Solution
 
-Point pydocs-mcp at your project directory. It reads `pyproject.toml` (or `requirements.txt`), finds every installed dependency, and indexes everything into a single SQLite file with FTS5 full-text search plus a reference-graph table. Your project code, dependency docs, and the cross-cutting call graph become queryable through one unified MCP interface — six task-shaped tools, fixed surface.
+Point pydocs-mcp at your project directory. It scans the tree for dependency manifests (`pyproject.toml`, `requirements*.txt`), finds every installed dependency, and indexes everything into a per-project hybrid index: a SQLite file with FTS5 full-text search plus a reference-graph table, and a TurboQuant `.tq` sidecar holding the dense embedding vectors. Your project code, dependency docs, and the cross-cutting call graph become queryable through one unified MCP interface — six task-shaped tools, fixed surface.
 
 ## Key differentiators
 
@@ -20,10 +20,10 @@ Point pydocs-mcp at your project directory. It reads `pyproject.toml` (or `requi
 2. **Project + deps together** — search your code AND dependency docs in one query.
 3. **Reference graph** — `get_references(target=X, direction="callers")` traverses CALLS/IMPORTS/INHERITS edges captured at index time.
 4. **Fully offline** — no network, no API keys, no Node.js.
-5. **Smart cache** — hash-based skip on re-runs, per-project `.db` isolation.
+5. **Smart cache** — hash-based skip on re-runs, per-project `.db` + `.tq` isolation.
 6. **Dual indexing mode** — `inspect` (richer, default) or `--no-inspect` / static (faster, no side effects).
 7. **Rust-accelerated** — optional native extension for ~4× I/O speedup.
-8. **Portable** — copy the `.db` file to another machine, it just works.
+8. **Portable** — copy the `.db` + `.tq` pair to another machine, it just works (the `.tq` sidecar carries the dense vectors).
 9. **Stable MCP surface** — six task-shaped tools (`get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why`); all tuning happens via YAML config so clients don't version-bump on server-side changes.
 10. **sklearn-style pipeline composition** — every retrieval step is a `RetrieverStep` subclass; pipelines are named, addressable, swappable.
 
@@ -34,14 +34,14 @@ pydocs-mcp/
 ├── Cargo.toml                  # Rust dependencies
 ├── pyproject.toml              # Python package config (maturin mixed layout)
 ├── src/
-│   └── lib.rs                  # Rust: walker, hasher, chunker, parser (6 PyO3 functions)
+│   └── lib.rs                  # Rust: walker, hasher, parser, reader (6 PyO3 functions)
 └── python/
     └── pydocs_mcp/
         ├── __init__.py         # Package version
-        ├── __main__.py         # CLI entry (serve / index / search / lookup)
+        ├── __main__.py         # CLI entry (serve / index / watch / search / overview / symbol / context / refs / why / lookup)
         ├── _fast.py            # Try Rust, fall back to Python (substitution boundary)
         ├── _fallback.py        # Pure Python equivalents of all Rust functions
-        ├── db.py               # SQLite schema (v4) + cache lifecycle + FTS rebuild
+        ├── db.py               # SQLite schema (v14) + cache lifecycle + FTS rebuild
         ├── deps.py             # Dependency resolution (pyproject.toml, requirements.txt)
         ├── models.py           # Domain dataclasses (Chunk, ModuleMember, Package, …)
         ├── extraction/         # Write-side: chunkers, member extractors, ingestion pipeline
@@ -52,9 +52,12 @@ pydocs-mcp/
         │   #   IndexingService, ProjectIndexer (writes)
         │   #   DocsSearch, ApiSearch, PackageLookup, ModuleInspector (reads)
         │   #   formatting.py (single source of truth for rendering)
-        ├── storage/            # Persistence — Protocols + Sqlite* concrete adapters
+        ├── storage/            # Persistence — Protocols + Sqlite*/TurboQuant* concrete adapters
         │   #   SqlitePackageRepository / SqliteChunkRepository / …
-        │   #   UnitOfWork, ConnectionProvider, Filter tree + FilterAdapter
+        │   #   TurboQuantVectorStore (.tq sidecar) + SearchBackend / SqliteCompositeBackend
+        │   #   SqliteUnitOfWork + TurboQuantUnitOfWork + CompositeUnitOfWork
+        │   #   ConnectionProvider, Filter tree + FilterAdapter
+        │   #   opt-in fast-plaid multi-vector index ([late-interaction] extra)
         ├── retrieval/          # Read-side pipeline machinery (sklearn-style)
         │   ├── pipeline/       #   RetrieverStep ABC, RetrieverPipeline, RetrieverState, ConnectionProvider
         │   └── steps/          #   One file per step (chunk_fetcher, bm25_scorer, top_k_filter, …)
@@ -71,21 +74,20 @@ The ingestion pipeline is composed of named stages (`IngestionStage` Protocol) a
 
 ### Step 1 — Dependency resolution
 
-Read dependencies from the project directory. Priority order:
+Recursively scan the project tree for every dependency manifest (skipping `.venv`, build artefacts, etc.) and union the results:
 
-1. `pyproject.toml` → `[project] dependencies`
-2. `requirements.txt`
-3. `requirements/base.txt` or `requirements/prod.txt`
+1. Every `pyproject.toml` — `[project] dependencies`, plus PEP 621 `optional-dependencies` extras and PEP 735 `dependency-groups`.
+2. Every `requirements*.txt` anywhere in the tree (e.g. `requirements.txt`, `requirements-dev.txt`).
 
-Normalize package names: lowercase, replace hyphens with underscores, strip version specifiers.
+There is no priority order — all manifests contribute to one deduplicated set. Normalize package names: lowercase, replace hyphens with underscores, strip version specifiers.
 
 ### Step 2 — Project source indexing
 
-1. Walk all `.py` and `.md` files using Rust `walkdir` (or Python `os.walk`), skipping `.venv`, `__pycache__`, `node_modules`, `build`, `dist`, etc.
+1. Walk all `.py`, `.md`, and `.ipynb` files (the default `include_extensions`, YAML-tunable) using Rust `walkdir` (or Python `os.walk`), skipping `.venv`, `__pycache__`, `node_modules`, `build`, `dist`, etc.
 2. Hash file paths + modification times with xxh3 (or md5 fallback).
 3. Compare against stored hash. Skip entirely if unchanged.
 4. For each `.py` file: extract docstrings + chunks (AST or regex), member definitions (functions/classes/methods), and references (CALLS / IMPORTS / INHERITS edges).
-5. For each `.md` file: chunk at heading boundaries.
+5. For each `.md` file: chunk at heading boundaries; each `.ipynb` notebook goes through the dedicated notebook chunker.
 6. Batch insert chunks, module members, and references; capture into a `DocumentNode` tree for `get_symbol(..., depth="tree")` queries.
 
 ### Step 3 — Dependency indexing
@@ -107,7 +109,7 @@ Two modes, selectable at runtime:
 Both modes also collect:
 - Package metadata (version, summary, homepage, dependencies) from `importlib.metadata`.
 - Long description / README from the package metadata payload.
-- Doc files (`.md`, `.rst`, `.txt`) shipped in site-packages.
+- Doc files (`.md`, `.ipynb`) shipped in site-packages — the same YAML-tunable `include_extensions` allowlist as project indexing; widen it to also pick up `.rst` / `.txt`.
 
 Each dependency is hashed as `name:version`. Unchanged packages are skipped.
 
@@ -119,7 +121,7 @@ After capture, the `ReferenceResolver` walks every `node_references` row whose `
 
 After all inserts, rebuild the FTS5 index once for optimal query performance.
 
-## Database schema (v4)
+## Database schema (v14)
 
 ```sql
 -- Package metadata
@@ -131,7 +133,8 @@ CREATE TABLE packages (
     dependencies TEXT,        -- JSON array of dependency names
     content_hash TEXT,        -- Cache hash for skip detection
     origin TEXT,              -- 'pypi' | '__project__' | ...
-    local_path TEXT           -- For project source / editable installs
+    local_path TEXT,          -- For project source / editable installs
+    embedding_model TEXT      -- Embedder identity used for this package's vectors
 );
 
 -- Text chunks (docs, READMEs, source code, docstrings)
@@ -142,7 +145,10 @@ CREATE TABLE chunks (
     title TEXT,               -- Section heading or symbol name
     text TEXT,                -- Chunk content
     origin TEXT,              -- 'readme', 'doc', 'docstring', 'source', …
-    content_hash TEXT
+    content_hash TEXT,
+    qualified_name TEXT,      -- Dotted symbol path (tree-reasoning join key)
+    embedded INTEGER NOT NULL DEFAULT 0,  -- 1 = dense vector written to the .tq sidecar
+    decision_id INTEGER       -- Backlink to decision_records
 );
 
 -- FTS5 virtual table for BM25-ranked search
@@ -175,14 +181,65 @@ CREATE TABLE document_trees (
     PRIMARY KEY (package, module)
 );
 
--- Reference graph (CALLS / IMPORTS / INHERITS / MENTIONS edges)
+-- Reference graph (CALLS / IMPORTS / INHERITS / MENTIONS / SIMILAR / GOVERNS edges)
 CREATE TABLE node_references (
     from_package TEXT NOT NULL,
     from_node_id TEXT NOT NULL,
     to_name      TEXT NOT NULL,
     to_node_id   TEXT,
     kind         TEXT NOT NULL,    -- 'calls' | 'imports' | 'inherits' | 'mentions'
+                                   -- | 'similar' (opt-in embedding-kNN synthetic edges)
+                                   -- | 'governs' (decision→qname edges backing
+                                   --    get_references(direction="governed_by"))
     PRIMARY KEY (from_package, from_node_id, to_name, kind)
+);
+
+-- chunk_id ↔ fast-plaid doc-id bridge for multi-vector retrieval
+-- ([late-interaction] extra; the multi-vectors live in fast-plaid's index)
+CREATE TABLE chunk_multi_vector_ids (
+    chunk_id      INTEGER PRIMARY KEY,
+    plaid_doc_id  INTEGER NOT NULL UNIQUE,
+    package       TEXT    NOT NULL,
+    pipeline_hash TEXT    NOT NULL
+);
+
+-- Graph analytics over node_references (in-degree / PageRank / community;
+-- populated when the [graph] extra is installed)
+CREATE TABLE node_scores (
+    package        TEXT    NOT NULL,
+    qualified_name TEXT    NOT NULL,
+    in_degree      INTEGER NOT NULL DEFAULT 0,
+    pagerank       REAL    NOT NULL DEFAULT 0.0,
+    community      INTEGER NOT NULL DEFAULT -1,
+    PRIMARY KEY (package, qualified_name)
+);
+
+-- Recorded architectural decisions backing get_why and kind="decision" search
+CREATE TABLE decision_records (
+    id              INTEGER PRIMARY KEY,
+    package         TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    confidence      REAL NOT NULL,
+    evidence        TEXT NOT NULL,
+    affected_files  TEXT NOT NULL,
+    affected_qnames TEXT NOT NULL,
+    staleness_score REAL NOT NULL DEFAULT 0.0,
+    superseded_by   INTEGER,
+    verification    TEXT NOT NULL DEFAULT 'verbatim',
+    structured      TEXT,
+    created_at      REAL NOT NULL,
+    updated_at      REAL NOT NULL
+);
+
+-- Single-row index provenance card (embedder identity, pipeline hash, git HEAD)
+CREATE TABLE index_metadata (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    project_name TEXT, project_root TEXT,
+    embedding_provider TEXT, embedding_model TEXT, embedding_dim INTEGER,
+    pipeline_hash TEXT, indexed_at REAL, git_head TEXT,
+    activity_summary TEXT, overview_summary TEXT
 );
 
 -- Indexes
@@ -194,22 +251,28 @@ CREATE INDEX idx_trees_package         ON document_trees(package);
 CREATE INDEX ix_refs_from              ON node_references(from_package, from_node_id);
 CREATE INDEX ix_refs_to_name           ON node_references(to_name);
 CREATE INDEX ix_refs_to_node           ON node_references(to_node_id);
+CREATE INDEX idx_cmv_plaid_doc_id      ON chunk_multi_vector_ids(plaid_doc_id);
+CREATE INDEX idx_cmv_package           ON chunk_multi_vector_ids(package);
+CREATE INDEX ix_node_scores_qname      ON node_scores(qualified_name);
+CREATE INDEX ix_node_scores_package    ON node_scores(package);
+CREATE INDEX ix_decisions_package      ON decision_records(package);
 ```
 
-The schema is versioned via `PRAGMA user_version`. Opening a DB whose version doesn't match drops all tables and re-indexes from scratch; idempotent additive migrations (v2→v3, v3→v4) run when possible.
+The schema is versioned via `PRAGMA user_version`. Opening a DB whose version doesn't match drops all tables and re-indexes from scratch; idempotent additive migration sweeps run through the current version when possible (a DB drifted beyond what the sweeps can heal falls back to a full rebuild).
 
 ## Cache strategy
 
-Each project gets its own database file:
+Each project gets its own database file plus a TurboQuant vector sidecar:
 
 ```
 ~/.pydocs-mcp/
-├── my-rasa-bot_a3f2c1b0e9.db
+├── my-rasa-bot_a3f2c1b0e9.db     # SQLite: chunks, members, trees, references
+├── my-rasa-bot_a3f2c1b0e9.tq     # TurboQuant: dense embedding vectors
 ├── llm-optimizer_7d4e8f1a23.db
-└── another-proj_c9b2d4e6f1.db
+└── llm-optimizer_7d4e8f1a23.tq
 ```
 
-The filename is `{directory_name}_{md5(absolute_path)[:10]}.db`.
+The filename is `{directory_name}_{md5(absolute_path)[:10]}.db`; the `.tq` sidecar shares the same slug. The two files live side-by-side so a `--force` cache clear deletes both — and moving an index to another machine means copying the pair.
 
 Cache invalidation:
 
@@ -230,7 +293,6 @@ Optional for `pip install` users — the prebuilt wheels (Linux x86_64/aarch64, 
 |---|---|---|
 | `walk_py_files(root)` | Find .py files, skip excluded dirs | ~10× |
 | `hash_files(paths)` | xxh3 hash of paths + mtimes | ~3× |
-| `chunk_text(text, max_chars)` | Split at heading boundaries | ~10× |
 | `parse_py_file(source)` | Extract functions/classes via regex | ~5× |
 | `extract_module_doc(source)` | Get module-level docstring | ~5× |
 | `read_file(path)` | Read one file | ~2× |
@@ -299,8 +361,12 @@ pydocs-mcp serve .
 # Static mode (no imports, faster, safer)
 pydocs-mcp serve . --no-inspect
 
-# More options
-pydocs-mcp serve . --depth 2 --workers 8 --no-inspect --config ./my-pydocs.yaml
+# More options (--config is a global flag — it goes BEFORE the subcommand)
+pydocs-mcp --config ./my-pydocs.yaml serve . --depth 2 --workers 8 --no-inspect
+
+# Watch mode — keep the index fresh on file edits (requires the [watch] extra)
+pydocs-mcp serve . --watch              # MCP server + file watcher
+pydocs-mcp watch .                      # watcher only, no MCP server
 
 # Index only, no server
 pydocs-mcp index .
@@ -407,38 +473,13 @@ Then connect via `http://localhost:8080/sse`.
 
 ## Comparison
 
-### vs Context7
+Rather than proxying a cloud documentation service or grepping local files, pydocs-mcp builds a local hybrid index of your project and its installed dependencies. In practice that means:
 
-| | pydocs-mcp | Context7 |
-|---|---|---|
-| Network | never | always (cloud) |
-| Node.js | no | yes |
-| Indexes your project | yes | no |
-| Auto-discovers deps | yes (pyproject.toml) | no |
-| Reference graph (callers/callees/inherits) | yes | no |
-| Docstrings + signatures | yes | no (docs only) |
-| Type hints | yes | no |
-| Cost | free | 1000 req/month free, $10/month |
-| Fully offline | yes | no |
-
-### vs Neuledge
-
-| | pydocs-mcp | Neuledge |
-|---|---|---|
-| Node.js required | no | yes |
-| Indexes your project | yes | manual |
-| Auto-discovers deps | yes | manual per library |
-| Python-specific features | yes (inspect, types, reference graph) | no (generic docs) |
-| Deps from site-packages | yes | no |
-
-### vs filesystem-operations-mcp
-
-| | pydocs-mcp | filesystem-operations-mcp |
-|---|---|---|
-| Search method | FTS5 BM25 + reference graph | ripgrep text match |
-| Understands Python | yes (functions, classes, callers/callees/inherits) | no (plain text) |
-| Installed deps | yes | no (local files only) |
-| Smart cache | yes (hash-based, per-project SQLite) | no |
+- **Fully local and offline** — no network calls, no API keys, no usage quotas; everything runs against per-project `.db` + `.tq` files on disk.
+- **Version-exact** — docs, signatures, and type hints come from the packages actually installed in your environment, not from whatever version a remote index happens to host.
+- **Python-aware retrieval** — hybrid BM25 + dense search over chunks, plus a reference graph (callers / callees / inherits / impact) that plain text matching can't answer.
+- **Project + dependencies together** — your own code is indexed under `__project__` next to site-packages, so one query spans both.
+- **Zero per-library setup** — dependencies are discovered from the project's manifests automatically; no manual registration.
 
 ## Performance
 
@@ -448,7 +489,7 @@ Then connect via `http://localhost:8080/sse`.
 |---|---|---|
 | File walk (1000 .py) | ~200ms | ~20ms |
 | File hashing | ~150ms | ~30ms |
-| Text chunking | ~100ms | ~10ms |
+| Text chunking | ~100ms | ~100ms (Python-only) |
 | Source parsing | ~300ms | ~50ms |
 | `inspect.getmembers` | ~1.5s | ~1.5s (Python-only) |
 | Reference capture + resolution | ~400ms | ~400ms |
@@ -470,7 +511,8 @@ Then connect via `http://localhost:8080/sse`.
 # From PyPI — prebuilt wheels bundle the Rust core (Linux x86_64/aarch64,
 # macOS arm64, Windows amd64); pure-Python fallback on other platforms.
 pip install pydocs-mcp
-# Optional extras: 'pydocs-mcp[watch]' / '[sentence-transformers]' / '[late-interaction]'
+# Optional extras: 'pydocs-mcp[watch]' / '[sentence-transformers]' / '[openvino]'
+# / '[late-interaction]' / '[graph]' / '[ask-your-docs]'
 
 # …or from source for development (Rust core optional — pure Python works everywhere):
 pip install -e .
