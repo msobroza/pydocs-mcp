@@ -192,8 +192,6 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
----
-
 ## CLI reference
 
 The CLI mirrors the MCP tools one-to-one — same pipelines, same scoring, same
@@ -321,8 +319,6 @@ every workflow, and pinning them keeps MCP clients stable across server retunes
 | `get_context` | `get_context(targets, project)` | Everything needed to understand one or more symbols, packed in a single call. |
 | `get_references` | `get_references(target, direction, limit, project)` | Traverse the reference graph. `direction` ∈ `{callers, callees, inherits, impact, governed_by}`. |
 | `get_why` | `get_why(query, targets, project)` | Recorded architectural decisions and rationale for a topic or target. |
-
----
 
 ## Multi-repo serving
 
@@ -779,8 +775,6 @@ erDiagram
 
 The schema is documented in [python/pydocs_mcp/db.py](python/pydocs_mcp/db.py).
 
----
-
 ## Architecture
 
 Hexagonal layout. `application/` services
@@ -917,8 +911,6 @@ backend / step / service usually reduces to copying one of these.
 The full contributor-facing rule set — naming conventions, async
 patterns, SSOT defaults, the MCP-API-vs-YAML rule, and the README
 jargon audit — lives in [CLAUDE.md](CLAUDE.md).
-
----
 
 ## MCP client integration
 
