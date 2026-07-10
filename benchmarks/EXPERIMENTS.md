@@ -192,6 +192,27 @@ benchmarks/configs/repoqa_hybrid_wsi_dense.yaml \
 
 ### Late-interaction conditions (need the `[late-interaction]` extra)
 
+> **⚠️ LI results recorded before 2026-07-10 are not comparable.** Two fixes
+> landed that day:
+>
+> 1. The hybrid-LI overlays (conditions 9–10 and `ds1000_hybrid_li_rrf.yaml`)
+>    declared their ingestion pipeline under a `pipelines.ingestion` key,
+>    which `config.pipelines` silently ignores (it only handles
+>    chunk/member). They therefore ingested with the default single-vector
+>    pipeline: fast-plaid stayed empty, the late-interaction branch scored
+>    nothing, and the recorded "hybrid LI" numbers are effectively BM25-only.
+>    They now set `extraction.ingestion.pipeline_path` like `repoqa_li.yaml`
+>    (which was unaffected) always did.
+> 2. The config-local copy of `ingestion_late_interaction.yaml` was deleted;
+>    all LI overlays now fall back to the shipped preset, which includes the
+>    `capture_decisions` + `dependency_doc_pages` stages — so LI columns
+>    index the same corpus as every non-LI column again
+>    (`benchmarks/tests/eval/test_li_ingestion_configs_resolve_shipped.py`
+>    guards this).
+>
+> Both change the ingestion pipeline hash, so the bench cache re-indexes
+> cold on the next LI run (use the GPU script for dense/LI cold runs).
+
 ```bash
 pip install -e ".[late-interaction]"   # pylate + fast-plaid + torch (~1-5 GB)
 

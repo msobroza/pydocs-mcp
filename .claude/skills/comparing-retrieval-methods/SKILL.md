@@ -81,4 +81,5 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.ci_compare \
 | Running dense sweeps on CPU with bare `--gpu` | onnxruntime silently falls back to CPU without torch's NVIDIA libs on `LD_LIBRARY_PATH`. Use `benchmarks/scripts/run_eval_gpu.sh`. CPU dense-indexing is 60–215 s/needle. |
 | Following the README's `scripts/run_repoqa.sh` | It does not exist. Invoke `python -m pydocs_eval.runner` directly. |
 | Editing a corpus in place between cached runs | The bench cache does not detect in-place corpus edits — `evict` or `--bench-cache off` after editing. |
+| Trusting hybrid-LI results recorded before 2026-07-10 | Their overlays set ingestion under a dead `pipelines.ingestion` key, so fast-plaid was never populated — the LI branch scored nothing and those "hybrid LI" numbers are effectively BM25-only. Re-run; see benchmarks/EXPERIMENTS.md §Late-interaction conditions. |
 | Tree/LLM configs failing silently | They need `OPENAI_API_KEY` in the environment before the sweep starts. |

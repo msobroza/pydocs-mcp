@@ -17,10 +17,18 @@
 late_interaction:
   enabled: true
 
-pipelines:
+# The ingestion pipeline is selected by extraction.ingestion.pipeline_path,
+# NOT by a `pipelines.ingestion` key (config.pipelines only handles
+# chunk/member — an `ingestion` route list is silently ignored, which
+# previously left this config on the default single-vector ingestion:
+# fast-plaid stayed empty and the LI branch scored nothing, silently
+# degrading the "hybrid" to BM25-only). The relative path falls back to
+# the shipped preset via pipeline_path search-path semantics.
+extraction:
   ingestion:
-    - default: true
-      pipeline_path: pipelines/ingestion_late_interaction.yaml
+    pipeline_path: pipelines/ingestion_late_interaction.yaml
+
+pipelines:
   chunk:
     - default: true
       pipeline_path: pipelines/exp_hybrid_li_wsi.yaml
