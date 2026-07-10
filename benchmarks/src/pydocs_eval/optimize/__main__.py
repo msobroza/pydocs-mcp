@@ -191,8 +191,8 @@ def _print_optimizer_availability(cfg: OptimizeRunConfig) -> None:
 
     ``critique_refine`` is proven importable by constructing it with an empty
     ``FakeCritiqueClient`` (it never completes). ``skillopt`` calls
-    ``ensure_available()``; a missing ``[optimizers-skillopt]`` extra is reported
-    SKIPPED — a dry run must not require the extra (spec §D7).
+    ``ensure_available()``; a missing source-installed ``skillopt`` library is
+    reported SKIPPED — a dry run must not require it (spec §D7).
     """
     print(f"  optimizer: run config selects {cfg.optimizer!r}")
     # critique_refine constructs offline with the scripted fake client.

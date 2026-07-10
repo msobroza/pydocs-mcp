@@ -42,17 +42,18 @@ dependencies = [
 # tool_docs / usage_skill artifacts consume (they landed after the v0.5.0 tag).
 retrieval = ["pydocs-mcp>=0.5.1"]
 mlflow = ["mlflow>=2.0"]
-# The skillopt optimizer adapter installs microsoft/SkillOpt from source (a research
-# repo, not a PyPI wheel), pinned by full commit SHA so a version bump is a deliberate
-# edit here — the adapter's _CONSUMED_SKILLOPT_SURFACE canary guards the API contract.
-optimizers-skillopt = [
-    "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
-]
+# NOTE: there is deliberately NO extra for the skillopt optimizer adapter.
+# It needs microsoft/SkillOpt installed from source at a pinned commit (the
+# released PyPI wheel lacks the `skillopt.train` CLI the adapter drives), and
+# PyPI rejects uploads whose metadata carries direct-URL requirements
+# ("Can't have direct dependency"). The SHA-pinned install command lives in
+# `pydocs_eval.optimize.optimizers.skillopt._SKILLOPT_PIN` — the adapter's
+# `ensure_available()` error prints it, and the _CONSUMED_SKILLOPT_SURFACE
+# canary gates any SHA bump.
 # The union of every extra — one install target for a full-featured dev/CI env.
 all = [
     "pydocs-mcp>=0.5.1",
     "mlflow>=2.0",
-    "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065",
 ]
 
 [tool.setuptools.packages.find]

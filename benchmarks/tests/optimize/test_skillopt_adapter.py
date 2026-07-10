@@ -92,7 +92,7 @@ async def test_best_skill_parsed_and_validated(monkeypatch, tmp_path) -> None:
 
 async def test_missing_skillopt_module_raises_actionable(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "skillopt", None)
-    with pytest.raises(RuntimeError, match=r"optimizers-skillopt"):
+    with pytest.raises(RuntimeError, match=r"git\+https://github\.com/microsoft/SkillOpt@"):
         SkillOptOptimizer(python=Path("/venv/bin/python")).ensure_available()
 
 

@@ -59,10 +59,18 @@ _CONSUMED_SKILLOPT_SURFACE = (
     "output: <run_dir>/best_skill.md",
 )
 
-# The importable module SkillOpt installs; the extra that provides it. Both named
-# in ``ensure_available``'s actionable error so a human knows the one fix.
+# The importable module SkillOpt installs; the SHA-pinned source install that
+# provides it. Both named in ``ensure_available``'s actionable error so a human
+# knows the one fix. WHY a git pin and not a PyPI version: the released
+# ``skillopt`` wheel (0.2.0) does not ship the ``skillopt.train`` CLI this
+# adapter drives — only the pinned commit satisfies _CONSUMED_SKILLOPT_SURFACE.
+# PyPI forbids direct-URL Requires-Dist entries, so the pin lives HERE (the
+# single source of truth), not in a pyproject extra; bumping the SHA is a
+# deliberate edit gated by the canary test.
 _SKILLOPT_MODULE = "skillopt"
-_SKILLOPT_EXTRA = "optimizers-skillopt"
+_SKILLOPT_PIN = (
+    "skillopt @ git+https://github.com/microsoft/SkillOpt@e4ea6a6771e797ef820cdd8bfea64c57e0481065"
+)
 
 # The generated env-plugin's fixed config basename (spec §D4). The usage_skill
 # artifact is the v1 SkillOpt target; the name is stable so ``optimize`` and the
@@ -209,12 +217,13 @@ class SkillOptOptimizer:
 
         Preflight check (never called by ``optimize`` — the CLI/orchestrator calls
         it before a paid run). Uses ``find_spec`` so no import side effects fire;
-        the error names the ``[optimizers-skillopt]`` extra that provides it.
+        the error carries the exact SHA-pinned install command.
         """
         if importlib.util.find_spec(_SKILLOPT_MODULE) is None:
             raise RuntimeError(
-                f"{_SKILLOPT_MODULE!r} is not installed — install the "
-                f"[{_SKILLOPT_EXTRA}] benchmarks extra to run the skillopt optimizer"
+                f"{_SKILLOPT_MODULE!r} is not installed — run "
+                f'pip install "{_SKILLOPT_PIN}" to run the skillopt optimizer '
+                f"(source-only install; the released PyPI wheel lacks the train CLI)"
             )
 
     async def optimize(
