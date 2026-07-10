@@ -14,7 +14,7 @@ from contextvars import ContextVar
 from functools import cache, cached_property
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -67,6 +67,11 @@ _RESOLVED_USER_CONFIG_PATH: ContextVar[Path | None | object] = ContextVar(
     "_RESOLVED_USER_CONFIG_PATH",
     default=_UNSET,
 )
+
+# The ONLY handler names ``pipeline_assembly`` consumes
+# (``config.pipelines["chunk"]`` / ``["member"]``). Any other key under
+# ``pipelines:`` is dead config — see ``_reject_unknown_pipeline_handlers``.
+_SUPPORTED_PIPELINE_HANDLERS = frozenset({"chunk", "member"})
 
 
 class AppConfig(BaseSettings):
@@ -180,6 +185,35 @@ class AppConfig(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
     )
+
+    @field_validator("pipelines")
+    @classmethod
+    def _reject_unknown_pipeline_handlers(
+        cls,
+        value: Mapping[str, HandlerConfig],
+    ) -> Mapping[str, HandlerConfig]:
+        """Unknown handler keys are dead config — fail loudly instead.
+
+        ``extra="ignore"`` plus the open ``Mapping`` type meant a stray
+        ``pipelines.ingestion`` route list loaded fine and did nothing (the
+        ingestion pipeline is selected by
+        ``extraction.ingestion.pipeline_path``) — which silently degraded the
+        hybrid late-interaction benchmark conditions to BM25-only for weeks
+        (see benchmarks/EXPERIMENTS.md §Late-interaction conditions).
+        """
+        unknown = sorted(set(value) - _SUPPORTED_PIPELINE_HANDLERS)
+        if not unknown:
+            return value
+        hint = (
+            " ('ingestion' is not a pipelines handler — set"
+            " extraction.ingestion.pipeline_path instead)"
+            if "ingestion" in unknown
+            else ""
+        )
+        raise ValueError(
+            f"pipelines: unknown handler key(s) {unknown}; supported handlers"
+            f" are {sorted(_SUPPORTED_PIPELINE_HANDLERS)}{hint}"
+        )
 
     def _model_copy_fresh_hash(self, *, update: Mapping[str, object]) -> AppConfig:
         """``model_copy(update=...)`` that never leaks a stale cached hash.
