@@ -50,7 +50,7 @@ HuggingFace download, fully reproducible.
 
 ## Run order
 
-Start with `00_setup.ipynb`, then run `01`–`05` in order. Each method notebook is
+Start with `00_setup.ipynb`, then run `01`–`07` in order. Each method notebook is
 independent: it indexes the sample, then searches. Re-running an index cell is cheap
 for this small repo (BM25/dense/tree are quick; Qwen3 and late-interaction are slower
 because they build a heavier index).

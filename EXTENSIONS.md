@@ -28,7 +28,9 @@
 │    DenseFetcherStep, DenseScorerStep, PreFilterStep,             │
 │    TopKFilterStep, MetadataPostFilterStep, LimitStep,            │
 │    TokenBudgetStep, RouteStep, ConditionalStep, ParallelStep,    │
-│    RRFFusionStep                                                 │
+│    RRFFusionStep, GraphExpandStep, CentralityPriorStep,          │
+│    CommunityDiversityStep, LateInteractionScorerStep,            │
+│    LlmTreeReasoningStep, WeightedScoreInterpolationStep          │
 │    ResultFormatter, PredicateRegistry                            │
 │    AppConfig (pydantic-settings + YAML)                          │
 └──────────────────────────┬───────────────────────────────────────┘
@@ -99,7 +101,7 @@ Every primitive subclasses `RetrieverStep` (ABC) and uses **registry + decorator
 
 | Extension | Where |
 |---|---|
-| New `AppConfig` field | `retrieval/config.py` — pydantic-settings handles YAML + env-var overrides automatically |
+| New `AppConfig` field | `retrieval/config/app_config.py` — pydantic-settings handles YAML + env-var overrides automatically |
 | New metadata schema (retriever-category field allowlist) | `AppConfig.metadata_schemas[<name>]` — zero code change, YAML edit only |
 | New pipeline route | Add entry under `pipelines.<handler>` in `pydocs-mcp.yaml` |
 | New env-var override | Already wired: `PYDOCS_<FIELD>` via pydantic-settings |
@@ -136,7 +138,7 @@ Every primitive subclasses `RetrieverStep` (ABC) and uses **registry + decorator
 | New filter format (`ChromaFormat`, etc.) | ~80 | 1 new class + registry entry | None |
 | New vector-store backend | ~400 | 1 new file in `storage/` + `FilterAdapter` | `server.py` startup wires it |
 | New `UnitOfWork` | ~80 | 1 new file | `server.py` startup |
-| New `AppConfig` field | ~3 | `retrieval/config.py` | None |
+| New `AppConfig` field | ~3 | `retrieval/config/app_config.py` | None |
 | New MCP tool | ~40 | `server.py` + use case in `application/` | None |
 
 ---
@@ -226,7 +228,7 @@ N. **Add capability-aware ingestion (`REQUIRES` declarations + auto-derivation)*
     New abstractions added by this PR:
 
     - `LlmClient` Protocol in `storage/protocols.py` mirroring `Embedder` but exposing BOTH `async chat()` and `chat_sync()` — LLM calls surface in more contexts than embedding calls. First concrete: `OpenAiLlmClient` using `openai>=1.40` (already a required dep, no new dependencies). New providers (Anthropic, Gemini, LiteLLM) land as one-file additions per SOLID open/closed.
-    - `LlmConfig` sub-model in `retrieval/config.py` mirroring `EmbeddingConfig` (`provider: Literal["openai", ...]`, `model_name`, `temperature`, `max_tokens`).
+    - `LlmConfig` sub-model in `retrieval/config/embedder_models.py` mirroring `EmbeddingConfig` (`provider: Literal["openai", ...]`, `model_name`, `temperature`, `max_tokens`).
     - Two Jinja2 prompt templates under `python/pydocs_mcp/retrieval/prompts/`: `tree_reasoning_pageindex_v1.j2` (verbatim PageIndex baseline) and `tree_reasoning_pydocs_v1.j2` (adapted for code-doc queries). Prompts are versioned (`_vN` suffix); selected at runtime via a `prompt_template` dataclass field on the step. Versioned prompts make A/B comparison and rollback a YAML edit instead of a code change.
 
     Inspired by [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) (MIT). **Re-implemented locally — no `pageindex` package dependency.** The single-shot algorithm is small (one Jinja2 prompt + one `json.loads` + one chunk fetch through the existing `uow.chunks`); vendoring the logic ≈30 LOC, avoids growing the install surface (already +90 MB after the FastEmbed/OpenAI promotion), and keeps prompt versioning + reproducibility in our repo instead of someone else's release schedule. PageIndex isn't on PyPI under `pageindex` anyway (`pageindex-rs` is an unrelated Rust port).

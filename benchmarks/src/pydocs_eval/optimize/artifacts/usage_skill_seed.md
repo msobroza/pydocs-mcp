@@ -14,19 +14,24 @@ blindly — retrieve first, then open exactly what the answer points to.
 - `search_codebase` — the workhorse for "where / which code does X?" Give it a
   behavior or capability in natural language ("where are embeddings written to
   disk", "which function fuses BM25 and dense results"). It returns ranked chunks
-  with file + symbol locations. Reach for this whenever you do not already know
-  the exact symbol name.
+  with file + symbol locations. Narrow with kind ("docs" / "api" / "any" /
+  "decision" — the last searches recorded design decisions, though get_why is
+  the richer entry) and scope ("project" / "deps" / "all"). Reach for this
+  whenever you do not already know the exact symbol name.
 - `get_symbol` — you already know ONE fully-qualified symbol
   (`pkg.module.ClassName` or `pkg.module.func`) and want its signature,
   docstring, or source. Use when the question names a specific thing, not when
   you are still hunting for it.
-- `get_context` — you have TWO OR MORE known symbols and want how they relate:
-  shared call sites, common collaborators, the surface that ties them together.
-  Use for "how do A and B interact" once you know both names.
+- `get_context` — you have ONE OR MORE known symbols and want the context
+  around them: shared call sites, common collaborators, the surface that ties
+  them together, packed under one token budget. Pass all targets in a single
+  call — works for one symbol's budgeted context card or for "how do A and B
+  interact".
 - `get_references` — the reference graph. Answers callers ("what calls X"),
-  callees ("what X calls"), inheritance ("what subclasses X"), and impact
-  ("what breaks if X changes"). Use for blast-radius and dependency questions
-  once you have the target symbol.
+  callees ("what X calls"), inheritance ("what subclasses X"), impact
+  ("what breaks if X changes"), and governed_by ("which recorded decisions
+  govern X"). Use for blast-radius and dependency questions once you have the
+  target symbol.
 - `get_why` — rationale and decision questions ("why is the FTS rebuild
   deferred", "why does the cache key include a pipeline hash"). Returns the
   design notes and commentary behind a choice, not the mechanics of it.
@@ -40,9 +45,11 @@ Before reading any file, break the question into at most three retrieval steps:
 2. Turn the core ask into ONE `search_codebase` query phrased in behavior terms.
    If the question has two distinct behaviors, that is two queries, not one
    sprawling query.
-3. If a query returns a promising symbol, escalate to the precise tool:
-   `get_symbol` for its definition, `get_references` for its callers/impact,
-   `get_context` to relate it to a second symbol, `get_why` for its rationale.
+3. If a query returns a promising symbol, escalate to the precise tool —
+   `get_context` first for the budgeted picture around the symbol(s), then
+   `get_symbol` for its full definition or `get_references` for its
+   callers/impact. Run `get_why` before proposing architectural changes: it is
+   the rationale gate, not another search.
 
 Prefer several sharp queries over one broad one. Two focused searches beat a
 single vague sentence that mixes concerns.

@@ -12,7 +12,8 @@ Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this reposit
 
 **Current state:**
 
-- **Reference graph** (CALLS / IMPORTS / INHERITS / MENTIONS edges) lives in the indexer and is queried via the existing MCP surface as `get_references(target=X, direction="callers" | "callees" | "inherits" | "impact")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`.
+- **Reference graph** (CALLS / IMPORTS / INHERITS / MENTIONS / SIMILAR / GOVERNS edges) lives in the indexer and is queried via the existing MCP surface as `get_references(target=X, direction="callers" | "callees" | "inherits" | "impact" | "governed_by")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`. SIMILAR (embedding-kNN densification) is opt-in; GOVERNS projects mined decisions into the graph as first-class nodes.
+- **Architectural-decision layer** — deterministic decision mining at index time (`extraction/decisions/`: ADR files, inline markers, commit messages, changelog, docs prose; tuned via `decision_capture:` in YAML) persists to the `decision_records` table and backs `get_why`, `search --kind decision`, and `get_references(direction="governed_by")` through `application/decision_service.py`.
 - **Hybrid retrieval** — BM25 (FTS5) + dense embeddings (FastEmbed by default, OpenAI optional) fused via RRF. Retrieval sources its stores from a capability-based `SearchBackend` (`SqliteCompositeBackend` by default, in `storage/search_backend.py`): lexical via SQLite FTS5, dense via the TurboQuant `.tq` sidecar, multi-vector via fast-plaid (opt-in); hybrid is fused at the pipeline level (parallel retrieval + RRF), not by a single combined engine. Writes flow through `CompositeUnitOfWork`.
 - **Chunk-level cache + atomic vector cleanup** — `chunks.content_hash` (SHA-256 of `package+module+title+text+pipeline_hash`) skips re-embedding unchanged chunks on reindex; `pipeline_hash` invalidates every chunk hash when the embedder or `ingestion.yaml` changes; `IndexingService.reindex_package` / `remove_package` / `clear_all` keep SQLite + TurboQuant coherent atomically through the UoW.
 - **LLM tree reasoning + weighted fusion** — opt-in retrieval steps (`weighted_score_interpolation`, `llm_tree_reasoning`) compose with the existing pipeline. Tuned via the `llm:` section in `AppConfig` (provider / model / temperature / max_tokens), mirroring `embedding:`. Three preset YAMLs ship under `python/pydocs_mcp/pipelines/` (`tree_only.yaml`, `chunk_search_with_tree_reasoning_parallel.yaml`, `chunk_search_with_tree_reasoning_after.yaml`).
@@ -41,7 +42,7 @@ pydocs-mcp serve . --watch    # MCP server + file watcher ([watch] extra)
 pydocs-mcp watch .            # watcher only — keep the index fresh for CLI queries
 
 # Ask-your-docs chat agent ([ask-your-docs] extra: langgraph + langchain + streamlit)
-ask-your-docs --workspace ~/pydocs-index --config configs/serve_cpu_openvino.yaml
+ask-your-docs --workspace ~/pydocs-index --config examples/ask_your_docs_agent/configs/serve_cpu_openvino.yaml
 
 # Index only (no server)
 pydocs-mcp index .
@@ -66,14 +67,24 @@ pydocs-mcp -v serve .
 ## Tests & Lint
 
 ```bash
-# Python suite (1367 unit + 283 benchmark tests on the current main)
+# Python suite (unit tests under tests/, eval-suite tests under benchmarks/tests/ — run both)
 pytest -q
 PYTHONPATH=benchmarks/src pytest benchmarks/tests/ -q
 
 # Python lint
 ruff check python/ tests/ benchmarks/
 
-# Rust checks
+# Full CI gate set (.github/workflows/ci.yml) — run ALL of these before pushing
+ruff format --check python/ tests/ benchmarks/
+mypy python/pydocs_mcp
+complexipy python/pydocs_mcp --max-complexity-allowed 15
+vulture python/pydocs_mcp --min-confidence 80
+pytest tests/ --ignore=tests/test_parity.py --cov=pydocs_mcp --cov-fail-under=90
+uv lock --check                     # lockfile must match pyproject.toml
+uv export --frozen --no-emit-project --no-group docs --format requirements-txt > requirements-audit.txt
+uvx pip-audit --strict --requirement requirements-audit.txt
+
+# Rust checks (CI's rust job additionally runs the maturin-built parity tests, tests/test_parity.py)
 cargo fmt --check
 cargo clippy -- -D warnings
 cargo test
@@ -88,19 +99,26 @@ python/pydocs_mcp/
 ├── _fallback.py   # Pure Python implementations of all Rust functions
 ├── db.py          # SQLite schema + cache lifecycle + FTS rebuild (no row mappers)
 ├── deps.py        # Dependency resolution (pyproject.toml, requirements.txt)
+├── constants.py   # Named constants for text truncation and display limits
+├── exceptions.py  # Public exception hierarchy (PydocsMCPError root)
+├── filters.py     # Canonical filter-tree vocabulary + MultiFieldFormat + MetadataSchema + format_registry
+├── models.py      # Canonical domain models — single source of the domain vocabulary
+├── multirepo.py   # Multi-repo .db bundle discovery / naming / selection (one server, several indexed projects)
 ├── extraction/    # Strategy-based extraction (subdivided):
 │   ├── strategies/  #   chunkers, members, discovery, dependencies
 │   ├── pipeline/    #   IngestionPipeline, stages, PipelineChunkExtractor
-│   └── model/       #   DocumentNode, NodeKind, tree helpers
-├── application/   # Use-case services — IndexingService + ProjectIndexer + PackageLookup + DocsSearch + ApiSearch + ModuleInspector + ReferenceService + shared formatting helpers
+│   ├── model/       #   DocumentNode, NodeKind, tree helpers
+│   └── decisions/   #   decision-mining engine (ADR files, inline markers, commits, changelog, docs prose + structuring)
+├── application/   # Use-case services — IndexingService + ProjectIndexer + PackageLookup + DocsSearch + ApiSearch + ModuleInspector + ReferenceService + LookupService + OverviewService + DecisionService + tool_router + tool_docs (TOOL_DOCS single source for CLI/MCP tool descriptions) + shared formatting helpers
 ├── storage/       # Filter tree, Protocols, SQLite repositories + TurboQuant store + SearchBackend / SqliteCompositeBackend (storage/search_backend.py) + SqliteUnitOfWork + TurboQuantUnitOfWork + FastPlaidUnitOfWork (opt-in, [late-interaction] extra) + CompositeUnitOfWork
 ├── retrieval/     # sklearn-style RetrieverPipeline + RetrieverStep ABC; one file per step under steps/; pipeline/ holds Step/Pipeline base + RetrieverState + ConnectionProvider; YAML config
 │   ├── pipeline/    #   RetrieverStep ABC, RetrieverPipeline, RetrieverState, PerCallConnectionProvider, CodeRetrieverPipeline (legacy entry-point shim)
-│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning, late_interaction_scorer
+│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning, late_interaction_scorer, graph_expand, centrality_prior, community_diversity
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
-├── pipelines/     # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
+├── pipelines/     # Built-in pipeline YAML blueprints (18 YAMLs: chunk_search* variants — chunk_search_graph.yaml is the default docs pipeline — member_search, decision_search, tree_only, ingestion + ingestion_late_interaction)
+├── serve/         # Serve-side helpers — file watcher (--watch / watch command, [watch] extra)
 ├── server.py      # MCP handlers over services
-└── ask_your_docs/ # Optional [ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph.py); imports langgraph/streamlit lazily so core install stays lean
+└── ask_your_docs/ # Optional [ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph_service.py); imports langgraph/streamlit lazily so core install stays lean
 src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
 ```
 
@@ -121,13 +139,13 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 
 ## Key Technical Details
 
-- Python 3.11+ required. Required runtime deps: `mcp>=1.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `pyyaml>=6.0`, `numpy>=1.26`, `turbovec>=0.5,<1.0`, `fastembed>=0.4,<1.0`, `openai>=1.40,<2.0` (~90MB transitively — `onnxruntime` + `tokenizers` + the `openai` client).
+- Python 3.11+ required. Required runtime deps: `mcp>=1.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `pyyaml>=6.0`, `numpy>=1.26`, `turbovec>=0.5,<1.0`, `fastembed>=0.4,<1.0`, `openai>=1.40,<2.0`, `jinja2>=3.0,<4.0`, `tiktoken>=0.7,<1.0` (~90MB transitively — `onnxruntime` + `tokenizers` + the `openai` client).
 - Optional extras (opt-in, never in the default install): `[watch]`, `[sentence-transformers]`, `[openvino]`, `[late-interaction]`, `[graph]`, and `[ask-your-docs]` (langgraph + langchain-mcp-adapters + langchain-openai + streamlit; ships the `ask-your-docs` command from `pydocs_mcp/ask_your_docs/`). The subpackage is `mypy`-excluded (untyped agent deps not installed in the typecheck job) and imported lazily, so `import pydocs_mcp` never pulls in langgraph/streamlit.
 - `retrieval/` uses a uniform `RetrieverStep` ABC + composable `RetrieverPipeline` (Pipeline IS a Step, so sub-pipelines compose directly without a SubPipelineStep adapter — named, addressable steps a la sklearn's `Pipeline([(name, step), ...])`)
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
 - Entry point: `pydocs-mcp = "pydocs_mcp.__main__:main"`
-- DB has six tables: `packages`, `chunks` (+ `chunks_fts` FTS5 virtual table), `module_members`, `document_trees`, `node_references`. Dense vectors live in the `.tq` sidecar, NOT in SQLite. When the `[late-interaction]` extra is enabled, the `chunk_multi_vector_ids` mapping table bridges `chunk_id` ↔ fast-plaid `plaid_doc_id` (multi-vectors live in fast-plaid's on-disk index, NOT in SQLite).
+- DB has ten tables: `packages`, `chunks` (+ `chunks_fts` FTS5 virtual table), `module_members`, `document_trees`, `node_references`, `chunk_multi_vector_ids`, `node_scores` (graph rerank scores), `decision_records` (the `get_why` decision layer), and `index_metadata` (project/embedder identity). Dense vectors live in the `.tq` sidecar, NOT in SQLite. `chunk_multi_vector_ids` is always created but only *populated* under the `[late-interaction]` extra — it bridges `chunk_id` ↔ fast-plaid `plaid_doc_id` (multi-vectors live in fast-plaid's on-disk index, NOT in SQLite).
 - FTS5 uses porter stemming + unicode61 tokenizer
 - The project code itself is indexed under the special package name `__project__`
 

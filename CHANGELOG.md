@@ -389,7 +389,8 @@ grows an **architectural-decision layer** (mine decisions at index time, ask
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
-[v0.5.0]: https://github.com/msobroza/pydocs-mcp/compare/v0.4.1...HEAD
+[0.5.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.1
+[0.5.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.0
 [0.4.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.4.1
 [0.4.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.4.0
 [0.3.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.3.1

@@ -19,21 +19,21 @@ inside another for sub-routing, and address any step by name
 
 ### The default chunk-search pipeline (dense + graph expansion)
 
-The shipped default (`python/pydocs_mcp/pipelines/chunk_search_graph.yaml`) is an
-eight-step dense + reference-graph chain:
+The shipped default (`python/pydocs_mcp/pipelines/chunk_search_graph.yaml`) is a
+seven-step dense + reference-graph chain:
 
 1. `pre_filter` — parse + validate + scope-split; writes a typed result to
    `state.scratch` for the fetcher.
 2. `dense_fetcher` — embed the query, ANN-search the `.tq` sidecar; writes the
-   candidate set.
-3. `dense_scorer` — cosine similarity → relevance.
-4. `metadata_post_filter` — apply any remaining `SearchQuery.post_filter`
+   candidate set (the ANN index score is used directly as relevance — no
+   separate scorer step).
+3. `metadata_post_filter` — apply any remaining `SearchQuery.post_filter`
    in-memory.
-5. `graph_expand` — seed from the top dense hits, add their 1-hop caller/callee
+4. `graph_expand` — seed from the top dense hits, add their 1-hop caller/callee
    neighbours (the structurally-adjacent code an embedding alone misses).
-6. `top_k_filter` — sort by relevance, keep top K.
-7. `limit` — cap the final item count.
-8. `token_budget_formatter` — render the composite chunk for MCP output.
+5. `top_k_filter` — sort by relevance, keep top K.
+6. `limit` — cap the final item count.
+7. `token_budget_formatter` — render the composite chunk for MCP output.
 
 The former BM25-only chain (`chunk_search.yaml`) remains a shipped preset. On the
 RepoQA benchmark, this dense + graph default lifts recall@10 from 0.40 (BM25) to
@@ -44,14 +44,16 @@ RepoQA benchmark, this dense + graph default lifts recall@10 from 0.40 (BM25) to
 Several more retrieval modes ship as opt-in pipeline presets:
 
 - **Dense** (`chunk_search_dense.yaml`, `chunk_search_dense_ranked.yaml`) — a
-  `DenseFetcherStep` + `DenseScorerStep` query the TurboQuant vector store using
+  `DenseFetcherStep` queries the TurboQuant vector store using
   embeddings from the configured `Embedder` (FastEmbed `BAAI/bge-small-en-v1.5`
   by default; OpenAI and the on-device `sentence_transformers` provider —
   `Qwen/Qwen3-Embedding-0.6B`, `Alibaba-NLP/gte-modernbert-base`, or the
-  code-strong `codefuse-ai/F2LLM-v2-0.6B` — optional).
+  code-strong `codefuse-ai/F2LLM-v2-0.6B` — optional). Its ANN index score is
+  used directly as relevance, so the dense presets carry no separate scorer step.
 - **Hybrid** (`chunk_search_hybrid.yaml`, `chunk_search_hybrid_ranked.yaml`) — a
   `ParallelStep` runs the BM25 and dense branches concurrently, then an
-  `RRFFusionStep` merges them with reciprocal-rank fusion into one ranking.
+  `RRFFusionStep` merges them with reciprocal-rank fusion into one ranking,
+  followed by a post-fusion `DenseScorerStep` re-rank over the fused candidates.
 - **Graph (dense + reference-graph expansion)** (`chunk_search_graph.yaml`,
   `chunk_search_graph_ranked.yaml`) — a `GraphExpandStep` seeds from the top
   dense hits and pulls in their 1-hop reference-graph neighbours (callers /
@@ -120,7 +122,7 @@ import tempfile
 from pathlib import Path
 
 from pydocs_mcp.application import ProjectIndexer
-from pydocs_mcp.db import build_connection_provider, open_index_database
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.extraction import (
     AstMemberExtractor,
     PipelineChunkExtractor,
@@ -129,6 +131,7 @@ from pydocs_mcp.extraction import (
 )
 from pydocs_mcp.models import SearchQuery
 from pydocs_mcp.retrieval.config import AppConfig
+from pydocs_mcp.retrieval.formatters import ChunkFormatter
 from pydocs_mcp.retrieval.pipeline import (
     PerCallConnectionProvider,
     RetrieverPipeline,
@@ -143,10 +146,11 @@ from pydocs_mcp.retrieval.steps import (
     TopKFilterStep,
 )
 from pydocs_mcp.storage.factories import (
+    build_connection_provider,
     build_sqlite_indexing_service,
     build_sqlite_uow_factory,
 )
-from pydocs_mcp.storage.sqlite import SqliteChunkRepository
+from pydocs_mcp.storage.sqlite import SqliteChunkRepository, SqliteFilterAdapter
 
 
 async def main() -> None:
@@ -170,12 +174,12 @@ async def main() -> None:
     pipeline = RetrieverPipeline(
         name="chunk_search",
         steps=(
-            ("fetch", ChunkFetcherStep(provider=provider)),
+            ("fetch", ChunkFetcherStep(provider=provider, filter_adapter=SqliteFilterAdapter())),
             ("score", BM25ScorerStep(name="bm25_scorer")),
             ("post_filter", MetadataPostFilterStep(name="metadata_post_filter")),
             ("topk", TopKFilterStep(name="top_k_filter")),
             ("limit", LimitStep(name="limit")),
-            ("budget", TokenBudgetStep(name="token_budget_formatter")),
+            ("budget", TokenBudgetStep(formatter=ChunkFormatter(), budget=2000, name="token_budget_formatter")),
         ),
     )
 
@@ -188,8 +192,6 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
----
-
 ## CLI reference
 
 The CLI mirrors the MCP tools one-to-one — same pipelines, same scoring, same
@@ -198,7 +200,8 @@ rendering.
 ```bash
 # Serve as an MCP server (the most common entry point)
 pydocs-mcp serve /path/to/project
-pydocs-mcp serve . --no-inspect --depth 2 --workers 8 --config ./my-pydocs.yaml
+# --config is a global flag: it goes BEFORE the subcommand
+pydocs-mcp --config ./my-pydocs.yaml serve . --no-inspect --depth 2 --workers 8
 pydocs-mcp serve . --gpu            # run embedder inference on CUDA (see "GPU inference" below)
 
 # Index only (no server) — useful for one-shot benchmark setups
@@ -247,9 +250,10 @@ CUDA. The benchmark runner takes the same `--gpu` flag.
 ### `search` flags
 
 ```bash
-# --kind docs  → markdown / docstring chunks only
-# --kind api   → ModuleMember rows (functions, classes, signatures)
-# --kind any   → both, merged + scored together (default)
+# --kind docs     → markdown / docstring chunks only
+# --kind api      → ModuleMember rows (functions, classes, signatures)
+# --kind any      → both, merged + scored together (default)
+# --kind decision → mined architectural-decision records
 pydocs-mcp search "predict" --kind api
 pydocs-mcp search "router include" --kind any --limit 20
 
@@ -276,9 +280,30 @@ pydocs-mcp search "tokenizer" --no-rust
 
 `search` finds candidates by relevance; `symbol` / `refs` / `context` jump to a
 specific known name. `symbol`'s `--depth` accepts `{summary, tree, source}`;
-`refs`' `--direction` accepts `{callers, callees, inherits, impact}`. The
+`refs`' `--direction` accepts `{callers, callees, inherits, impact, governed_by}`. The
 deprecated `lookup` command still works as an alias but warns — use the
 task-shaped commands directly.
+
+### Shared flags
+
+```bash
+# Every subcommand accepts:
+#   --cache-dir DIR       override where the .db / .tq cache bundles live
+#                         (default: ~/.pydocs-mcp)
+# serve / index / watch also accept:
+#   --full-dep NAME       promote a dependency to full dense embedding
+#                         (repeatable; fnmatch globs; merges into
+#                         embedding.full_index_dependencies — see
+#                         "Selective dependency embedding")
+# serve and every query command also accept the multi-repo loaders
+# (see "Multi-repo serving"):
+#   --workspace DIR       load every pre-built .db bundle in DIR (read-only)
+#   --db FILE             load a specific bundle (repeatable; read-only)
+#   --project NAME        restrict a query to one loaded repo (query commands)
+# why also accepts:
+#   --target PATH|QNAME   decisions affecting a target — a file path (a/b.py)
+#                         or a qualified name (pkg.mod); repeatable
+```
 
 ### MCP tool reference
 
@@ -294,8 +319,6 @@ every workflow, and pinning them keeps MCP clients stable across server retunes
 | `get_context` | `get_context(targets, project)` | Everything needed to understand one or more symbols, packed in a single call. |
 | `get_references` | `get_references(target, direction, limit, project)` | Traverse the reference graph. `direction` ∈ `{callers, callees, inherits, impact, governed_by}`. |
 | `get_why` | `get_why(query, targets, project)` | Recorded architectural decisions and rationale for a topic or target. |
-
----
 
 ## Multi-repo serving
 
@@ -396,7 +419,7 @@ surface stays fixed at the six task-shaped tools). The CLI
 serve:
   watch:
     enabled: false              # CLI --watch overrides this at runtime
-    debounce_ms: 500            # 1 .. 60_000 ms; 500ms is editor-safe
+    debounce_ms: 500            # 1 .. 59_999 ms (must be < 60_000); 500ms is editor-safe
     extensions: [".py", ".md", ".ipynb"]
     ignore_globs:
       - "**/__pycache__/**"
@@ -432,13 +455,19 @@ graph shapes, and `get_symbol(target, depth="tree")` the structural one:
   code + every dep).
 - `direction="callees"` — every method this one calls.
 - `direction="inherits"` — the inheritance graph above this class.
+- `direction="impact"` — the transitive reverse dependencies of a symbol
+  (everything a change to it could affect), walked backward up to
+  `reference_graph.impact.max_depth` hops.
+- `direction="governed_by"` — the recorded architectural decisions governing a
+  symbol (inbound `GOVERNS` edges from the decision graph).
 - `get_symbol(…, depth="tree")` — the structural `DocumentNode` tree for the
   module, the same shape used for structural rendering.
 
-Cross-package edges resolve through a rule-based resolver (see
-`python/pydocs_mcp/application/reference_service.py` and the resolver it
-composes): it matches an edge's target name against indexed qualified names,
-preferring exact matches and falling back to suffix matches under strictness
+Cross-package edges resolve through a rule-based resolver (`ReferenceResolver`
+in `python/pydocs_mcp/extraction/strategies/reference_resolver.py`, composed by
+`application/indexing_service.py` at index time): it matches an edge's target
+name against indexed qualified names, preferring exact matches and falling
+back to suffix matches under strictness
 controls, with guards to avoid combinatorial blow-ups on deeply nested
 attribute chains. Unresolved targets are still stored (with a null
 `to_node_id`) so a later index pass can resolve them.
@@ -515,8 +544,9 @@ Subsequent indexing runs do a quick metadata scan and skip when nothing changed
 (typically <100 ms):
 
 - For every package (your project + each dep), the indexer collects
-  `(file_path, mtime)` pairs, joins them into one buffer, and hashes it with
-  **xxh3-64** → stored in `packages.content_hash`.
+  `(file_path, mtime)` pairs, joins them into one buffer, and hashes it —
+  **xxh3-64** in the Rust build, a truncated MD5 fingerprint in the
+  pure-Python fallback — → stored in `packages.content_hash`.
 - Before re-indexing a package, it recomputes the hash and compares. **Match →
   skip the whole package** (no parsing, no chunking, no embedding, no writes).
   Mismatch → re-extract that package only.
@@ -530,8 +560,14 @@ When a package *is* re-extracted, work happens at chunk granularity. Each chunk
 carries a `content_hash`:
 
 ```
-content_hash = SHA-256( package \0 module \0 title \0 text \0 pipeline_hash )
+content_hash = SHA-256( length-prefixed fields:
+                        package, module, title, text, "{pipeline_hash}|tier:{tier}" )
 ```
+
+Each field is length-prefixed (`len(field)\0field`) rather than joined on a
+bare separator, so two distinct identity tuples can't realign into a collision;
+the `|tier:…` suffix is the embed-tier fold described under *Selective
+dependency embedding*.
 
 `IndexingService.reindex_package` diffs incoming chunks against the persisted set
 by this hash: unchanged chunks keep their row **and** their vector, removed
@@ -541,7 +577,12 @@ and only added chunks are re-embedded.
 The `pipeline_hash` slot is what makes model swaps automatic:
 
 ```
-pipeline_hash = SHA-256( embedder identity (provider, model_name, dim, bit_width)
+pipeline_hash = SHA-256( embedder identity (provider, model_name, dim, bit_width,
+                           max_seq_length, normalize — plus backend /
+                           model_file_name / pooling when non-default)
+                         |  search-backend identity
+                         |  late-interaction identity (only when the ingestion
+                            YAML uses the multi-vector embed stage)
                          |  ingestion.yaml raw bytes )
 ```
 
@@ -571,9 +612,15 @@ chunking strategies, output limits, formatter choice — lives in `AppConfig`
 ```
 shipped defaults/default_config.yaml   (lowest priority)
   → shipped pipeline blueprints (pipelines/*.yaml)
-  → your overlay (--config ./my-pydocs.yaml or PYDOCS_CONFIG_PATH)
+  → your overlay — the first of: --config PATH → PYDOCS_CONFIG_PATH
+      → ./pydocs-mcp.yaml → ~/.config/pydocs-mcp/config.yaml
   → env vars (PYDOCS_*)                (highest priority)
 ```
+
+The overlay is auto-discovered: with no `--config` flag and no
+`PYDOCS_CONFIG_PATH`, a `pydocs-mcp.yaml` in the current directory wins,
+falling back to `~/.config/pydocs-mcp/config.yaml`, then to the shipped
+baseline alone.
 
 This keeps MCP clients (Claude Code, Cursor, IDE extensions) stable across
 deployments while giving you per-project experiment tracking: two YAMLs produce
@@ -590,6 +637,15 @@ what the [benchmark harness](benchmarks/README.md) exploits.)
 - `pipelines/chunk_search_dense.yaml` / `…_dense_ranked.yaml` — dense retrieval.
 - `pipelines/chunk_search_hybrid.yaml` / `…_hybrid_ranked.yaml` — BM25 + dense
   fused via RRF.
+- `pipelines/decision_search.yaml` — an **active default route**, not an opt-in
+  preset: `kind=decision` queries route here via the `kind_is_decision`
+  predicate (BM25 ∥ dense over mined decision records, RRF-fused).
+- `pipelines/chunk_search_deps.yaml` — also an **active default route**:
+  `scope=deps` queries route here via the `scope_is_dependencies_only`
+  predicate (BM25 over all dep chunks ∥ dense over their doc pages, RRF-fused).
+- `pipelines/chunk_search_late_interaction.yaml` /
+  `…_late_interaction_ranked.yaml` — late-interaction (ColBERT / PyLate) MaxSim
+  re-scoring (`[late-interaction]` extra).
 - `pipelines/tree_only.yaml` — LLM tree-reasoning only (vectorless).
 - `pipelines/chunk_search_with_tree_reasoning_parallel.yaml` — hybrid + LLM
   tree-reasoning in a parallel branch, fused downstream.
@@ -598,6 +654,8 @@ what the [benchmark harness](benchmarks/README.md) exploits.)
 - `pipelines/member_search.yaml` — default member search.
 - `pipelines/ingestion.yaml` — default ingestion (discovery → read → chunk →
   reference capture → flatten → content-hash → embed → package build).
+- `pipelines/ingestion_late_interaction.yaml` — ingestion with the multi-vector
+  embed stage (`[late-interaction]` extra).
 
 ### Pipeline schema
 
@@ -634,7 +692,7 @@ reference_graph:
 ```
 
 ```bash
-pydocs-mcp serve . --config ./my-pydocs.yaml
+pydocs-mcp --config ./my-pydocs.yaml serve .    # --config is global — it precedes the subcommand
 # or: PYDOCS_CONFIG_PATH=./my-pydocs.yaml pydocs-mcp serve .
 ```
 
@@ -645,10 +703,13 @@ read it as the canonical reference.
 
 ## Database schema (simplified)
 
-The SQLite file holds six tables. The schema is versioned via
-`PRAGMA user_version`; a mismatch on open drops the known tables and re-indexes
-from scratch. Dense vectors are **not** in SQLite — they live in the per-project
-`.tq` TurboQuant sidecar.
+The SQLite file holds ten tables (schema v14): the six core tables diagrammed
+below plus `chunk_multi_vector_ids`, `node_scores`, `decision_records`, and
+`index_metadata` (covered in the read-path table underneath). The schema is
+versioned via `PRAGMA user_version`; known older versions are migrated in
+place with additive, data-preserving sweeps — only an unrecognized version
+drops the known tables and re-indexes from scratch. Dense vectors are **not**
+in SQLite — they live in the per-project `.tq` TurboQuant sidecar.
 
 ```mermaid
 erDiagram
@@ -689,7 +750,7 @@ erDiagram
         TEXT from_package PK
         TEXT from_node_id PK
         TEXT to_name PK
-        TEXT kind PK "CALLS | IMPORTS | INHERITS | MENTIONS"
+        TEXT kind PK "CALLS | IMPORTS | INHERITS | MENTIONS | SIMILAR (opt-in) | GOVERNS"
         TEXT to_node_id "null if unresolved"
     }
     packages ||--o{ chunks                : has
@@ -706,22 +767,27 @@ erDiagram
 | `chunks_fts` | FTS5 virtual table mirroring `chunks.title` + `chunks.text` + `chunks.package`, with Porter stemming + unicode61. | `search_codebase` BM25 ranking (fused with dense via RRF) |
 | `module_members` | Functions, classes, methods, attributes — name + signature + docstring + kind. | `search_codebase(query, kind="api")`, `get_symbol(target)` |
 | `document_trees` | The hierarchical `DocumentNode` tree per module. | `get_symbol(…, depth="tree")` |
-| `node_references` | The reference graph: one row per (`from_node`, `to_name`, `kind`) edge. | `get_references(…, direction="callers"\|"callees"\|"inherits")` |
+| `node_references` | The reference graph: one row per (`from_node`, `to_name`, `kind`) edge. | `get_references(…, direction="callers"\|"callees"\|"inherits"\|"impact"\|"governed_by")` |
+| `chunk_multi_vector_ids` | Bridges `chunk_id` ↔ fast-plaid `plaid_doc_id` for late-interaction retrieval (`[late-interaction]` extra; the multi-vectors themselves live in fast-plaid's on-disk index). | `late_interaction_scorer` retrieval step |
+| `node_scores` | Per-symbol in-degree, PageRank, and Louvain community (opt-in via `reference_graph.node_scores.enabled`). | `centrality_prior` / `community_diversity` rerank steps, `direction="impact"` ranking |
+| `decision_records` | Mined architectural-decision records. | `get_why` |
+| `index_metadata` | Per-bundle stamp: project name/root, embedder identity, `indexed_at`. | Multi-repo loading (`serve --workspace` / `--db`) + the embedder guard |
 
 The schema is documented in [python/pydocs_mcp/db.py](python/pydocs_mcp/db.py).
-
----
 
 ## Architecture
 
 Hexagonal layout. `application/` services
 (`IndexingService`, `ProjectIndexer`, `DocsSearch`, `ApiSearch`, `PackageLookup`,
-`ModuleInspector`, `LookupService`, `ReferenceService`, `TreeService`) depend
+`ModuleInspector`, `LookupService`, `ReferenceService`, `TreeService`,
+`OverviewService`, `DecisionService`, `MultiProjectSearch`) depend
 only on **Protocols** defined in `storage/protocols.py` — `ChunkStore`,
 `PackageStore`, `ModuleMemberStore`, `DocumentTreeStore`, `ReferenceStore`,
-`Embedder`, `UnitOfWork`, `TextSearchable`, `VectorSearchable`,
-`HybridSearchable`, `ResultFuser`, `FilterAdapter`. Concrete adapters
-(`Sqlite*` repositories, `TurboQuantStore` / `TurboQuantUnitOfWork`,
+`UnitOfWork`, `TextSearchable`, `VectorSearchable`, `HybridSearchable`,
+`FilterAdapter`, plus the newer `GraphSearchable`, `NodeScoreStore`,
+`DecisionStore`, and `MultiVectorStore` — and in `retrieval/protocols.py`
+(`Embedder`, `ResultFuser`). Concrete adapters
+(`Sqlite*` repositories, `TurboQuantVectorStore` / `TurboQuantUnitOfWork`,
 the `SearchBackend` / `SqliteCompositeBackend` capability factory,
 `CompositeUnitOfWork`) live behind them.
 
@@ -735,16 +801,21 @@ both sides, so the package works with or without the compiled extension.
 pydocs-mcp/
 ├── Cargo.toml                  # Rust dependencies
 ├── pyproject.toml              # Python package config (maturin mixed layout)
-├── src/lib.rs                  # Rust: walker, hasher, chunker, parser (PyO3)
+├── src/lib.rs                  # Rust: walker, hasher, parser, file readers (PyO3)
 └── python/pydocs_mcp/
     ├── __main__.py             # CLI entry (serve / index / search / symbol / refs / …)
     ├── _fast.py / _fallback.py # Rust-or-pure-Python substitution boundary
     ├── db.py                   # SQLite schema + cache lifecycle + FTS rebuild
     ├── deps.py                 # Dependency resolution
+    ├── models.py               # Value objects (Package / Chunk / SearchQuery, content hashing)
+    ├── filters.py              # Canonical backend-neutral filter-tree module
+    ├── multirepo.py            # Multi-repo bundle loading (serve --workspace / --db)
     ├── extraction/             # Chunkers, member extractors, ingestion pipeline, embedders
     ├── application/            # Use-case services (indexing, search, lookup, references, trees)
     ├── storage/                # SQLite + TurboQuant adapters, Protocols, UnitOfWork
     ├── retrieval/              # RetrieverStep ABC + RetrieverPipeline + steps/
+    ├── serve/                  # File watcher (pydocs-mcp watch / serve --watch)
+    ├── ask_your_docs/          # Optional [ask-your-docs] extra: LangGraph agent + Streamlit UI
     ├── defaults/               # Shipped default_config.yaml
     ├── pipelines/              # Built-in pipeline YAML blueprints
     └── server.py               # MCP server (six task-shaped tools)
@@ -773,15 +844,15 @@ backend / step / service usually reduces to copying one of these.
 | Pattern | Where in the code | What it buys |
 |---|---|---|
 | **Hexagonal / Ports & Adapters** | `storage/protocols.py`, `application/protocols.py`, `retrieval/protocols.py` define the ports; `Sqlite*` / `TurboQuant*` / `FastPlaidUnitOfWork` are the adapters, fronted by the `SearchBackend` / `SqliteCompositeBackend` capability factory (`storage/search_backend.py`). | Application code never imports a concrete `Sqlite*` type — swapping SQLite for Postgres / DuckDB / a hosted vector store is a pure adapter change, not a service rewrite. |
-| **Repository pattern** | One class per persisted entity: `SqlitePackageRepository`, `SqliteChunkRepository`, `SqliteModuleMemberRepository`, `SqliteDocumentTreeStore`, `SqliteReferenceRepository`. | Each entity's SQL lives in exactly one place. New columns mean editing one file. |
+| **Repository pattern** | One class per persisted entity: `SqlitePackageRepository`, `SqliteChunkRepository`, `SqliteModuleMemberRepository`, `SqliteDocumentTreeStore`, `SqliteReferenceStore`, `SqliteChunkMultiVectorRepository`, `SqliteNodeScoreRepository`, `SqliteDecisionRepository`. | Each entity's SQL lives in exactly one place. New columns mean editing one file. |
 | **Unit of Work + Composite UoW** | `SqliteUnitOfWork`, `TurboQuantUnitOfWork`, `FastPlaidUnitOfWork`, plus `CompositeUnitOfWork` (`storage/composite_uow.py`) that fans out to children. | Multi-store writes (chunks → vectors → multi-vectors → mapping table) commit or roll back atomically. Application services depend on `uow_factory: Callable[[], UnitOfWork]` and don't know which backends are wired. |
 | **Pipeline pattern (sklearn-shaped)** | `RetrieverPipeline = [(name, RetrieverStep), …]` for reads; `IngestionPipeline` + `IngestionStage` for writes. `Pipeline` IS a `Step`, so sub-pipelines nest without an adapter. | YAML presets compose by name. Parallel branches, fusion, re-rankers all land as new steps without touching existing ones. |
 | **Strategy pattern** | Chunkers (`AstPythonChunker`, etc.), member extractors (`AstMemberExtractor`, `InspectMemberExtractor`), dependency resolvers, single-vector embedders (`FastEmbedEmbedder`, `OpenAIEmbedder`), multi-vector embedders (`PyLateEmbedder`). | Swap behavior at the boundary that needs it. Each strategy is one file. |
 | **Composition root** | `server.py`, `__main__.py`, `storage/factories.py`. Everywhere else takes a closure. | Wiring decisions live in exactly three files. Every other module is testable in isolation. |
 | **Registry + decorator** | `@step_registry.register("name")`, `@stage_registry.register("name")`, `@predicate("name")`, `@formatter_registry.register("name")`. | Extensions become YAML-addressable with one decorator. The shipped `EXTENSIONS.md` menu IS the registry. |
 | **Substitution boundary** | `_fast.py` resolves to either the compiled Rust `_native` extension or the pure-Python `_fallback.py`. Identical signatures both sides. | The package works with or without the Rust extension; tests don't have to fork by build mode. |
-| **Null Object pattern** | `NullTreeService`, `NullReferenceService` (read-loud), `NullVectorStore`, `NullMultiVectorStore` (write-silent). Wired by the composition root when a backend is disabled. | `if x is not None:` guards disappear from every consumer. The Protocol field is *always* present; behavior just becomes a no-op or an actionable error. |
-| **Filter tree → Adapter (hexagonal seam)** | Retrieval emits backend-neutral `Filter` trees (`storage/filters.py`); the `FilterAdapter` Protocol translates to SQL at the storage boundary. The same tree feeds fast-plaid via the `subset=` argument for late-interaction. | No retrieval step ever imports `SqliteFilterAdapter` at runtime. Same tree, two backends, zero leakage. |
+| **Null Object pattern** | `NullTreeService`, `NullReferenceService`, `NullDecisionService` (read-loud), `NullVectorStore`, `NullMultiVectorStore` (write-silent). Wired by the composition root when a backend is disabled. | `if x is not None:` guards disappear from every consumer. The Protocol field is *always* present; behavior just becomes a no-op or an actionable error. |
+| **Filter tree → Adapter (hexagonal seam)** | Retrieval emits backend-neutral `Filter` trees (canonical module: `pydocs_mcp/filters.py`; `storage/filters.py` remains a compat re-export shim); the `FilterAdapter` Protocol translates to SQL at the storage boundary. The same tree feeds fast-plaid via the `subset=` argument for late-interaction. | No retrieval step ever imports `SqliteFilterAdapter` at runtime. Same tree, two backends, zero leakage. |
 
 ### Code-level idioms
 
@@ -841,8 +912,6 @@ The full contributor-facing rule set — naming conventions, async
 patterns, SSOT defaults, the MCP-API-vs-YAML rule, and the README
 jargon audit — lives in [CLAUDE.md](CLAUDE.md).
 
----
-
 ## MCP client integration
 
 Start the server over stdio, then point your client at it.
@@ -893,30 +962,22 @@ get_references("requests.auth.HTTPBasicAuth", direction="inherits")
 
 ---
 
-## How it compares (Context7 / Neuledge)
+## Positioning
 
-Three open-source projects in roughly the same MCP-doc-retrieval space, each
-optimizing for different things.
+pydocs-mcp is a local-first retriever. It indexes the exact package versions
+installed in your environment (plus your own project source under
+`__project__`) into an on-disk hybrid index (BM25 + dense embeddings, fused
+via RRF), serves a fixed set of six task-shaped MCP tools over stdio, and runs
+fully offline with the default embedder — no accounts, API keys, or rate
+limits. Your data stays in two sidecar files (SQLite `.db` + TurboQuant `.tq`)
+you can read, move, or delete.
 
-| Aspect | **pydocs-mcp** | **Context7** ([upstash/context7](https://github.com/upstash/context7)) | **Neuledge Context** ([neuledge/context](https://github.com/neuledge/context)) |
-|---|---|---|---|
-| Deployment | Local stdio MCP server | Hosted MCP at `mcp.context7.com` (or `ctx7` CLI) | Local stdio MCP server (`context serve`) |
-| Doc source | **Your installed Python deps** + your project source, indexed in place | Curated community library docs hosted by Upstash | Community-driven package registry (~100+ libraries) downloaded then queried locally |
-| Version match | Whatever you have in `site-packages` — automatic | Library + version selectable in the prompt | Latest from the registry |
-| Languages | Python only | Multi-language | Multi-language (~100+ libraries) |
-| Retrieval | BM25 + dense embeddings, fused into hybrid (RRF) | Not publicly documented | BM25 over SQLite FTS5 |
-| Code-structure queries | **Reference graph** — `get_references(target, direction="callers"\|"callees"\|"inherits")` | None (doc retrieval only) | None (doc retrieval only) |
-| Project source indexing | Indexes your own code under `__project__` | No (external docs only) | No (registry packages only) |
-| MCP tools | Six task-shaped tools, pinned (`get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why`) | `resolve-library-id`, `query-docs` | Doc-retrieval tools |
-| Privacy | **Fully offline** with the default embedder — zero network calls | Queries hit Upstash; OAuth + API key | Local once packages are downloaded |
-| Customization | YAML pipelines (chunkers, scorers, filters, fusion, formatters) via `AppConfig` | API key + HTTP headers | Registry-package mechanics |
-| Cost | **$0** — OSS (MIT), no keys / rate limits / fees | Free tier (rate-limited, API key) + paid | **$0** — OSS (Apache-2.0), local-first |
-| Vendor lock-in | None — your data is a SQLite file you can read/delete/move | Reliance on the hosted service (closed-source crawling/parsing) | None — retrieval + storage stay local |
-| License | MIT | MIT | Apache-2.0 |
-
-**Pick pydocs-mcp** for offline, version-matched-to-your-install retrieval in
-Python, when you care about navigating code structure (callers / callees /
-inheritance), not just reading docs. **Pick Context7** for a hosted service with
-up-to-date docs across many languages. **Pick Neuledge** for local-first
-multi-language coverage from a community registry. They're not exclusive — mount
-all three and route by intent.
+Other tools in the MCP documentation-retrieval space typically optimize for
+breadth instead: hosted services and community doc registries offer curated,
+multi-language library documentation at the cost of a network dependency and
+docs that may not match the versions you actually have installed. pydocs-mcp
+optimizes for version fidelity (whatever is in your `site-packages` is what
+gets indexed), code-structure navigation (`get_references` across callers /
+callees / inheritance / impact / governing decisions), and zero network
+dependency. The approaches are complementary — you can mount more than one
+documentation server and route by intent.
