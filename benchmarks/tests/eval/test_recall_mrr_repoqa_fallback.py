@@ -17,11 +17,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmarks.eval.ast_match import find_first_match_rank
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.metrics import MRR, RecallAtK
-from benchmarks.eval.metrics._relevance import first_relevant_rank
-from benchmarks.eval.systems.base_system import RetrievedItem
+from pydocs_eval.ast_match import find_first_match_rank
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.metrics import MRR, RecallAtK
+from pydocs_eval.metrics._relevance import first_relevant_rank
+from pydocs_eval.systems.base_system import RetrievedItem
 
 GOLD = "def f(): return 1"
 

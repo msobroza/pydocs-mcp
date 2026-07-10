@@ -3,7 +3,7 @@
 ``fastembed`` is now a required dep (the shipped default config selects
 ``provider=fastembed``), so ``build_embedder(config.embedding)`` — called
 by the pydocs benchmark adapter at
-``benchmarks/src/benchmarks/eval/systems/pydocs.py`` during ``index()`` —
+``benchmarks/src/pydocs_eval/systems/pydocs.py`` during ``index()`` —
 imports successfully. The catch: constructing ``FastEmbedEmbedder``
 triggers a ~80MB ONNX model download on first inference, which would
 balloon local pytest runtime and require network access.

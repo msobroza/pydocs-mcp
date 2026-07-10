@@ -23,10 +23,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.gold_resolver import PydocsOracleGoldResolver, _item_key
-from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import PydocsOracleSystem
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.gold_resolver import PydocsOracleGoldResolver, _item_key
+from pydocs_eval.serialization import system_registry
+from pydocs_eval.systems import PydocsOracleSystem
 from pydocs_mcp.retrieval.config import AppConfig
 
 

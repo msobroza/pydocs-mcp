@@ -17,18 +17,18 @@ from typing import Literal
 
 import pytest
 
-from benchmarks.optimize._types import (
+from pydocs_eval.optimize._types import (
     OptimizationBudget,
     OptimizationResult,
     Provenance,
 )
-from benchmarks.optimize.ladder import FitnessLadder, Rung
-from benchmarks.optimize.orchestrator import (
+from pydocs_eval.optimize.ladder import FitnessLadder, Rung
+from pydocs_eval.optimize.orchestrator import (
     _ACCEPT_MARGIN,
     SeedView,
     run_optimization,
 )
-from benchmarks.optimize.trials_ledger import TrialsLedger
+from pydocs_eval.optimize.trials_ledger import TrialsLedger
 
 # The rung fitness name every fake ladder in this module references.
 _FITNESS_NAME = "fake"

@@ -1,8 +1,8 @@
 # benchmarks/tests/eval/test_runner_bench_cache_flag.py
 from __future__ import annotations
 
-from benchmarks.eval import _bench_cache
-from benchmarks.eval.runner import _build_arg_parser
+from pydocs_eval import _bench_cache
+from pydocs_eval.runner import _build_arg_parser
 
 
 def test_flag_defaults_on() -> None:
@@ -26,7 +26,7 @@ def test_cleanup_flag_sets_true() -> None:
 
 
 def test_maybe_cleanup_evicts_when_enabled(tmp_path, monkeypatch) -> None:
-    from benchmarks.eval.runner import _maybe_cleanup_bench_cache
+    from pydocs_eval.runner import _maybe_cleanup_bench_cache
 
     monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
     d = _bench_cache.entry_dir("k")
@@ -38,7 +38,7 @@ def test_maybe_cleanup_evicts_when_enabled(tmp_path, monkeypatch) -> None:
 
 
 def test_maybe_cleanup_noop_when_disabled(tmp_path, monkeypatch) -> None:
-    from benchmarks.eval.runner import _maybe_cleanup_bench_cache
+    from pydocs_eval.runner import _maybe_cleanup_bench_cache
 
     monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
     d = _bench_cache.entry_dir("k")

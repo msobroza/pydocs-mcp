@@ -8,8 +8,8 @@ These tests pin the single-source-of-truth wiring.
 
 from __future__ import annotations
 
-from benchmarks.eval.datasets._split import VALID_SPLITS
-from benchmarks.eval.runner import _build_arg_parser
+from pydocs_eval.datasets._split import VALID_SPLITS
+from pydocs_eval.runner import _build_arg_parser
 
 
 def test_split_choices_mirror_valid_splits() -> None:

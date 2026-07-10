@@ -37,7 +37,7 @@ budget generously:
 Before **any** paid run, verify the environment contract:
 
 ```bash
-python -m benchmarks.eval.agent_track --preflight
+python -m pydocs_eval.agent_track --preflight
 ```
 
 This runs five checks in fail-fast order and exits non-zero on the first
@@ -60,7 +60,7 @@ full run — that is the entire point of the check.
 ## Running the harness
 
 ```bash
-python -m benchmarks.eval.agent_track \
+python -m pydocs_eval.agent_track \
     --dataset swe-qa-pro \
     --max-tasks 12 \
     --max-usd 60 \
@@ -125,14 +125,14 @@ preflight first.
 
 ## Optimization — improving the harness's own text artifacts
 
-The optimize layer (`benchmarks/src/benchmarks/optimize/`) turns the paired
+The optimize layer (`benchmarks/src/pydocs_eval/optimize/`) turns the paired
 agent track into a *fitness function* and searches for better versions of two
 text artifacts the harness ships:
 
 - **`tool_docs`** — the product's `TOOL_DOCS` + `SERVER_INSTRUCTIONS` surface
   (`python/pydocs_mcp/application/tool_docs.py`), served to arm B's MCP client;
 - **`usage_skill`** — the seed skill document
-  (`benchmarks/src/benchmarks/optimize/artifacts/usage_skill_seed.md`) that
+  (`benchmarks/src/pydocs_eval/optimize/artifacts/usage_skill_seed.md`) that
   reaches the evaluated agent through `task_prompt(skill=...)`.
 
 Two co-equal optimizers propose candidates — `critique_refine` (an LLM
@@ -158,7 +158,7 @@ contract is the agent track's. Before any paid optimization run, in order:
    importable, MCP config boots, disk headroom):
 
    ```bash
-   python -m benchmarks.eval.agent_track --preflight
+   python -m pydocs_eval.agent_track --preflight
    ```
 
 2. **Optimize `--dry-run`** — walks the *whole* optimize pipeline spending
@@ -170,8 +170,8 @@ contract is the agent track's. Before any paid optimization run, in order:
    fitness with `FakeAgentRunner` / `FakeJudge`:
 
    ```bash
-   python -m benchmarks.optimize --config \
-       benchmarks/src/benchmarks/optimize/configs/optimize_tool_docs.yaml --dry-run
+   python -m pydocs_eval.optimize --config \
+       benchmarks/src/pydocs_eval/optimize/configs/optimize_tool_docs.yaml --dry-run
    ```
 
 If either step fails, fix the reported condition before spending. That is the
@@ -215,7 +215,7 @@ optimizer, the ladder rungs as `[fitness, max_tasks, survivors]`, the fitness
 judge mean drops more than the floor is rejected before its efficiency counts),
 the `accept_margin`, the `budget`, and (for `critique_refine`) the `llm` block.
 Both configs live under
-`benchmarks/src/benchmarks/optimize/configs/`.
+`benchmarks/src/pydocs_eval/optimize/configs/`.
 
 ### Reading an `OptimizationResult`
 

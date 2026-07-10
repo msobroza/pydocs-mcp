@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval.agent_track._parse import (
+from pydocs_eval.agent_track._parse import (
     parse_result_json,
     parse_stream_events,
 )

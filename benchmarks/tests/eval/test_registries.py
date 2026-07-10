@@ -5,7 +5,7 @@ can fix the typo without grepping the codebase."""
 from __future__ import annotations
 
 import pytest
-from benchmarks.eval.serialization import (
+from pydocs_eval.serialization import (
     _Registry,
     dataset_registry,
     metric_registry,

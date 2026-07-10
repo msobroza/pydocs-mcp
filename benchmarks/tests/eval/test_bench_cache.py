@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval import _bench_cache
+from pydocs_eval import _bench_cache
 
 
 class _FakeConfig:

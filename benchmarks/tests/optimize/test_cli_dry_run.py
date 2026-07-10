@@ -14,11 +14,11 @@ from __future__ import annotations
 from importlib.resources import files
 from pathlib import Path
 
-from benchmarks.optimize.__main__ import cli_main
+from pydocs_eval.optimize.__main__ import cli_main
 
 
 def _shipped(name: str) -> Path:
-    return Path(str(files("benchmarks.optimize.configs").joinpath(name)))
+    return Path(str(files("pydocs_eval.optimize.configs").joinpath(name)))
 
 
 async def test_dry_run_walks_pipeline_spending_nothing(tmp_path, capsys) -> None:

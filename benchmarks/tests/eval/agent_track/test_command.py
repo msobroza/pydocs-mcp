@@ -15,12 +15,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from benchmarks.eval.agent_track._command import (
+from pydocs_eval.agent_track._command import (
     build_claude_command,
     render_mcp_config,
     task_prompt,
 )
-from benchmarks.eval.agent_track._types import ArmConfig
+from pydocs_eval.agent_track._types import ArmConfig
 
 
 def _arm(*, mcp: bool) -> ArmConfig:

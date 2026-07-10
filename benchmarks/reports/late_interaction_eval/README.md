@@ -17,14 +17,14 @@ Reproduce locally:
 ```bash
 set -a; source python/pydocs_mcp/.env; set +a   # OPENAI_API_KEY for the tree config
 
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --dataset repoqa --split small_test --systems pydocs-mcp \
   --configs benchmarks/configs/repoqa_bm25.yaml,\
 benchmarks/configs/repoqa_hybrid_li_rrf.yaml,\
 benchmarks/configs/repoqa_tree.yaml \
   --report benchmarks/reports/late_interaction_eval/repoqa.md
 
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --dataset ds1000 --split small_test --systems pydocs-mcp \
   --configs benchmarks/configs/ds1000_ranked.yaml,\
 benchmarks/configs/ds1000_hybrid_li_rrf.yaml,\

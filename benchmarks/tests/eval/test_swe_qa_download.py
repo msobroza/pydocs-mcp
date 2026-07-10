@@ -21,9 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from benchmarks.eval.datasets._download import TruncatedDownloadError
-from benchmarks.eval.datasets.swe_qa import SweQaDataset
-from benchmarks.eval.datasets.swe_qa_pro import SweQaProDataset
+from pydocs_eval.datasets._download import TruncatedDownloadError
+from pydocs_eval.datasets.swe_qa import SweQaDataset
+from pydocs_eval.datasets.swe_qa_pro import SweQaProDataset
 
 
 @dataclass

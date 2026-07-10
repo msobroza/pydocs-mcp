@@ -9,8 +9,8 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from benchmarks.eval.datasets.base_dataset import Dataset
-from benchmarks.eval.datasets.repoqa import (
+from pydocs_eval.datasets.base_dataset import Dataset
+from pydocs_eval.datasets.repoqa import (
     RepoQADataset,
     _extract_body,
 )

@@ -1,8 +1,8 @@
 # benchmarks/tests/eval/test_bench_cache_cli.py
 from __future__ import annotations
 
-from benchmarks.eval import _bench_cache
-from benchmarks.eval.bench_cache_cli import main
+from pydocs_eval import _bench_cache
+from pydocs_eval.bench_cache_cli import main
 
 
 def test_cli_info_empty(tmp_path, monkeypatch, capsys) -> None:

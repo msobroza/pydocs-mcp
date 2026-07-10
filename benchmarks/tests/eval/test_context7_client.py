@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from benchmarks.eval.systems.context7 import Context7Client, Context7Error
+from pydocs_eval.systems.context7 import Context7Client, Context7Error
 
 
 @pytest.mark.asyncio

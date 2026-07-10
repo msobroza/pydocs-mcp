@@ -8,7 +8,7 @@
 # falls back to CPU for the FastEmbed/bge path (dense-indexing the RepoQA repos
 # on CPU is 60-215 s/needle — a full sweep takes days). This wrapper prepends
 # those libs, sets PYTHONPATH, forces `--gpu`, and passes every other arg
-# straight through to `benchmarks.eval.runner`.
+# straight through to `pydocs_eval.runner`.
 #
 # Usage (args pass through verbatim):
 #   benchmarks/scripts/run_eval_gpu.sh \
@@ -30,4 +30,4 @@ NV="$("$PY" -c "import os,glob,nvidia; print(':'.join(sorted(glob.glob(os.path.d
 export LD_LIBRARY_PATH="${NV}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONPATH="benchmarks/src${PYTHONPATH:+:$PYTHONPATH}"
 
-exec "$PY" -m benchmarks.eval.runner --gpu "$@"
+exec "$PY" -m pydocs_eval.runner --gpu "$@"

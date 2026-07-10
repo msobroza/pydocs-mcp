@@ -6,15 +6,15 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.runner import run_sweep
-from benchmarks.eval.serialization import (
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.runner import run_sweep
+from pydocs_eval.serialization import (
     dataset_registry,
     system_registry,
     tracker_registry,
 )
-from benchmarks.eval.systems.base_system import RetrievedItem
-from benchmarks.eval.trackers.base_tracker import RunHandle
+from pydocs_eval.systems.base_system import RetrievedItem
+from pydocs_eval.trackers.base_tracker import RunHandle
 
 # Module-level sink the fake tracker appends to (run_sweep builds the
 # tracker via the registry with no handle to our list otherwise).

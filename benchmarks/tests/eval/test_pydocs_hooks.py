@@ -12,8 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from benchmarks.eval import _bench_cache
-from benchmarks.eval.systems.pydocs import (
+from pydocs_eval import _bench_cache
+from pydocs_eval.systems.pydocs import (
     PydocsMcpSystem,
     PydocsTreeOnlySystem,
     PydocsTreeParallelSystem,

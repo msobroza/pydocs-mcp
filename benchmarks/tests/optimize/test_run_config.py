@@ -14,12 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.optimize.run_config import load_run_config
+from pydocs_eval.optimize.run_config import load_run_config
 
 
 def _shipped(name: str) -> Path:
     """Resolve a shipped ``optimize/configs/<name>`` YAML to a real filesystem path."""
-    return Path(str(files("benchmarks.optimize.configs").joinpath(name)))
+    return Path(str(files("pydocs_eval.optimize.configs").joinpath(name)))
 
 
 def test_both_shipped_configs_load_typed() -> None:

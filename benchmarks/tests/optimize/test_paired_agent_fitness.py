@@ -17,14 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval.agent_track._types import (
+from pydocs_eval.agent_track._types import (
     ArmConfig,
     JudgeScore,
     RunMetrics,
 )
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.optimize._agent_track_binding import AgentTrackConfig
-from benchmarks.optimize.fitness.paired_agent import (
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.optimize._agent_track_binding import AgentTrackConfig
+from pydocs_eval.optimize.fitness.paired_agent import (
     ArtifactInjection,
     PairedAgentFitness,
 )
@@ -361,7 +361,7 @@ async def test_overlay_injection_names_overlay_server_in_arm_b_command(tmp_path)
     assert capturing.configs
     for config in capturing.configs:
         args = config["mcpServers"]["pydocs-mcp"]["args"]
-        assert "benchmarks.optimize._overlay_server" in args
+        assert "pydocs_eval.optimize._overlay_server" in args
         assert str(overlay) in args
 
 
@@ -375,5 +375,5 @@ async def test_no_overlay_leaves_arm_b_command_on_plain_serve(tmp_path) -> None:
     assert capturing.configs
     for config in capturing.configs:
         args = config["mcpServers"]["pydocs-mcp"]["args"]
-        assert "benchmarks.optimize._overlay_server" not in args
+        assert "pydocs_eval.optimize._overlay_server" not in args
         assert "serve" in args

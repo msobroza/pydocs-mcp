@@ -15,7 +15,7 @@ the slot-preference logic is exercised without an index round-trip.
 from __future__ import annotations
 
 import pytest
-from benchmarks.eval.systems.pydocs import PydocsMcpSystem
+from pydocs_eval.systems.pydocs import PydocsMcpSystem
 from pydocs_mcp.models import Chunk, ChunkList
 
 

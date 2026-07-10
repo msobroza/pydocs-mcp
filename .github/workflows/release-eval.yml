@@ -1,0 +1,54 @@
+name: Release (eval)
+
+# Publishes the `pydocs-mcp-eval` benchmark distribution to PyPI. It is a
+# pure-Python package built from the benchmarks/ subdirectory, so — unlike
+# release.yml (which cross-compiles the Rust wheel per platform) — one Linux
+# job producing a single `py3-none-any` wheel + sdist is all that's needed.
+# Tag it `eval-v<version>` so it never collides with the product's `v<version>`
+# tags that drive release.yml.
+
+on:
+  push:
+    tags: ["eval-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/eval-v')
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/eval-v}
+          sed -i.bak "s/^version = .*/version = \"$VERSION\"/" benchmarks/pyproject.toml
+          rm -f benchmarks/*.bak
+          echo "Synced pydocs-mcp-eval version to $VERSION"
+        shell: bash
+      - uses: astral-sh/setup-uv@v4
+      - name: Build (sdist + wheel) from benchmarks/
+        run: uv build benchmarks/ --out-dir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-dist
+          path: dist/*
+
+  publish:
+    name: Publish to PyPI
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: eval-dist
+          path: dist
+      - uses: astral-sh/setup-uv@v4
+      - run: uv publish dist/*

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from benchmarks.optimize.artifacts.usage_skill import (
+from pydocs_eval.optimize.artifacts.usage_skill import (
     _SKILL_TOKEN_BUDGET,
     UsageSkillArtifact,
 )
-from benchmarks.optimize.registries import artifact_registry
+from pydocs_eval.optimize.registries import artifact_registry
 
 
 def test_seed_loads_validates_clean_and_names_all_six_tools() -> None:

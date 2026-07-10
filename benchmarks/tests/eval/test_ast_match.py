@@ -4,7 +4,7 @@ whole eval run because one chunk had a stray paren)."""
 
 from __future__ import annotations
 
-from benchmarks.eval.ast_match import ast_equivalent
+from pydocs_eval.ast_match import ast_equivalent
 
 
 def test_whitespace_tolerance() -> None:

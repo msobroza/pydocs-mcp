@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval.report import format_report
-from benchmarks.eval.runner import _task_rows_from_legs, run_sweep, run_sweep_detailed
+from pydocs_eval.report import format_report
+from pydocs_eval.runner import _task_rows_from_legs, run_sweep, run_sweep_detailed
 
 _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
 _FIXTURES = Path(__file__).parent / "fixtures"

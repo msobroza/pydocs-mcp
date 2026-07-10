@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from benchmarks.eval.systems import PydocsMcpSystem
+from pydocs_eval.systems import PydocsMcpSystem
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.retrieval.config import AppConfig
 

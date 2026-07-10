@@ -36,9 +36,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from benchmarks.eval.runner import run_sweep
-from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems.base_system import RetrievedItem
+from pydocs_eval.runner import run_sweep
+from pydocs_eval.serialization import system_registry
+from pydocs_eval.systems.base_system import RetrievedItem
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig

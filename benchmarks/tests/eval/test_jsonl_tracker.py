@@ -8,8 +8,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from benchmarks.eval.serialization import tracker_registry
-from benchmarks.eval.trackers import JsonlExperimentTracker
+from pydocs_eval.serialization import tracker_registry
+from pydocs_eval.trackers import JsonlExperimentTracker
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:

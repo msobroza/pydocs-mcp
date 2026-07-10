@@ -123,8 +123,8 @@ async def _build_rows_for_repo(
     config: Any,
     seed_top_k: int,
 ) -> list[dict[str, Any]]:
-    from benchmarks.eval.corpus import materialize_corpus
-    from benchmarks.eval.systems.pydocs import PydocsMcpSystem
+    from pydocs_eval.corpus import materialize_corpus
+    from pydocs_eval.systems.pydocs import PydocsMcpSystem
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
@@ -198,7 +198,7 @@ async def _build_rows_for_repo(
 async def _run(args: argparse.Namespace) -> int:
     import json
 
-    from benchmarks.eval.datasets.repoqa import RepoQADataset
+    from pydocs_eval.datasets.repoqa import RepoQADataset
     from pydocs_mcp.retrieval.config import AppConfig
 
     config = AppConfig.load(explicit_path=args.config).with_device(gpu=args.gpu)

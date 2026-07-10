@@ -6,13 +6,13 @@ disjoint (so a system name can't shadow a tracker etc.).
 
 from __future__ import annotations
 
-from benchmarks.eval.serialization import (
+from pydocs_eval.serialization import (
     dataset_registry,
     metric_registry,
     system_registry,
     tracker_registry,
 )
-from benchmarks.eval.systems import (
+from pydocs_eval.systems import (
     Context7System,
     NeuledgeSystem,
     PydocsMcpSystem,

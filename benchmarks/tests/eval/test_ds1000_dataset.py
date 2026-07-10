@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmarks.eval.datasets.base_dataset import Dataset
-from benchmarks.eval.datasets.ds1000 import Ds1000Dataset
-from benchmarks.eval.datasets.ds1000_schema import (
+from pydocs_eval.datasets.base_dataset import Dataset
+from pydocs_eval.datasets.ds1000 import Ds1000Dataset
+from pydocs_eval.datasets.ds1000_schema import (
     PINNED_DS1000_REVISION,
     PINNED_LIBDOCS_REVISION,
 )
-from benchmarks.eval.serialization import dataset_registry
+from pydocs_eval.serialization import dataset_registry
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_mini.json"
 # Mirrors the real ``code-rag-bench/ds1000`` HF row shape: NO top-level
@@ -234,7 +234,7 @@ def test_split_sort_key_derives_from_gold_title_on_real_rows() -> None:
     ``_gold_doc_fields``. On real HF rows (``docs[*].title``, no ``doc_id``)
     reading the legacy key directly would yield ``""`` for every row, silently
     collapsing the stratification key to the prompt for the whole corpus."""
-    from benchmarks.eval.datasets.ds1000_schema import _split_sort_key
+    from pydocs_eval.datasets.ds1000_schema import _split_sort_key
 
     real = {"prompt": "P", "docs": [{"function": "np.imag", "title": "numpy.imag", "text": "x"}]}
     assert _split_sort_key(real) == "numpy.imag"
@@ -263,7 +263,7 @@ async def test_library_name_normalized_to_lowercase() -> None:
     # PyTorch normalization: a "Pytorch" raw field → "torch" (PyPI canonical).
     # The fixture may not include a pytorch row (count constraint: 3+2+1+1+1=8),
     # so verify the normalization map directly.
-    from benchmarks.eval.datasets.ds1000_schema import to_pypi_canonical
+    from pydocs_eval.datasets.ds1000_schema import to_pypi_canonical
 
     assert to_pypi_canonical("Pytorch") == "torch"
     assert to_pypi_canonical("Pandas") == "pandas"
@@ -322,7 +322,7 @@ def test_has_gold_handles_list_and_json_string_and_empty() -> None:
     """``_has_gold`` parses the ``docs`` field robustly: a real list, a JSON
     string (``'[]'`` / ``'["..."]'``), and parse failures all resolve to the
     right has-gold verdict (>=1 doc => True; empty / unparseable => False)."""
-    from benchmarks.eval.datasets.ds1000_schema import _has_gold
+    from pydocs_eval.datasets.ds1000_schema import _has_gold
 
     # Actual list forms.
     assert _has_gold({"docs": [{"doc_id": "a", "doc_content": "x"}]}) is True
@@ -340,7 +340,7 @@ def test_resolve_library_prefers_top_level_then_metadata() -> None:
     else reads it from ``metadata`` — handling both the live ``datasets`` DICT
     shape and a defensive repr-dict STRING; and returns ``""`` on absence /
     parse failure (never raises)."""
-    from benchmarks.eval.datasets.ds1000_schema import _resolve_library
+    from pydocs_eval.datasets.ds1000_schema import _resolve_library
 
     # Top-level wins, even when metadata also carries a (different) library.
     assert _resolve_library({"library": "Pandas", "metadata": {"library": "Numpy"}}) == "Pandas"
@@ -361,7 +361,7 @@ def test_lift_metadata_fields_lifts_library_and_perturbation_from_dict() -> None
     top level when absent, preferring an existing top-level value. Without the
     perturbation lift, every real row would collapse to a colliding
     ``ds1000/<lib>//`` task id."""
-    from benchmarks.eval.datasets.ds1000_schema import _lift_metadata_fields
+    from pydocs_eval.datasets.ds1000_schema import _lift_metadata_fields
 
     row = {
         "metadata": {
@@ -409,10 +409,10 @@ async def test_dataset_satisfies_protocol() -> None:
 
 
 def test_dataset_is_registered_under_ds1000() -> None:
-    """Importing ``benchmarks.eval.datasets`` fires the registry decorator —
+    """Importing ``pydocs_eval.datasets`` fires the registry decorator —
     the runner looks the loader up by name (``"ds1000"``)."""
     # Force-import the package so the decorator fires.
-    import benchmarks.eval.datasets
+    import pydocs_eval.datasets
 
     assert "ds1000" in dataset_registry.names()
 

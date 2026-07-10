@@ -163,18 +163,18 @@ of `--split test`, small enough to run the LLM-tree conditions affordably.
 
 To change the size or seed, edit the dataclass defaults on `RepoQADataset`
 (`small_test_size`, `split_seed`) in
-`benchmarks/src/benchmarks/eval/datasets/repoqa.py` — they are not CLI flags
+`benchmarks/src/pydocs_eval/datasets/repoqa.py` — they are not CLI flags
 (mirrors `dev_fraction` / `split_seed`).
 
 ## 3. Run the experiments
 
 All commands run from the repo root. The harness module path is
-`benchmarks.eval.runner` under `PYTHONPATH=benchmarks/src`.
+`pydocs_eval.runner` under `PYTHONPATH=benchmarks/src`.
 
 ### Core conditions (no API key) — BM25, dense, hybrid, weighted
 
 ```bash
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
   --split small_test \
@@ -195,7 +195,7 @@ benchmarks/configs/repoqa_hybrid_wsi_dense.yaml \
 ```bash
 pip install -e ".[late-interaction]"   # pylate + fast-plaid + torch (~1-5 GB)
 
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
   --split small_test \
@@ -218,7 +218,7 @@ experiments") — switching models triggers a one-time re-index.
 ```bash
 set -a; source .env; set +a   # load OPENAI_API_KEY
 
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
   --split small_test \
@@ -252,14 +252,14 @@ ten times.
 
 ```bash
 # inspect / clear the cache
-python -m benchmarks.eval.bench_cache_cli info
-python -m benchmarks.eval.bench_cache_cli evict
+python -m pydocs_eval.bench_cache_cli info
+python -m pydocs_eval.bench_cache_cli evict
 
 # run all conditions, then free the disk when the sweep finishes
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --bench-cache-cleanup ...
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --bench-cache-cleanup ...
 
 # reproduce pre-cache numbers exactly (a fresh index per needle)
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner --bench-cache off ...
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --bench-cache off ...
 ```
 
 The cache key folds the ingestion-pipeline hash, so changing the embedder or
@@ -305,7 +305,7 @@ PYTHONPATH=benchmarks/src python benchmarks/scripts/build_structural_recall.py \
 Then compare DENSE-ONLY vs DENSE+GRAPH (embedding-centric — no BM25, no RRF):
 
 ```bash
-PYTHONPATH=benchmarks/src python -m benchmarks.eval.runner \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
     --systems pydocs-mcp --dataset repoqa-structural \
     --configs repoqa_dense_f2llm330m,repoqa_dense_graph_f2llm330m \
     --metrics recall@1,recall@5,recall@10,mrr --gpu \

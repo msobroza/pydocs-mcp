@@ -6,8 +6,8 @@ import hashlib
 
 import pytest
 
-from benchmarks.optimize._split import partition_task_ids, task_split
-from benchmarks.optimize.ladder import FitnessLadder, Rung
+from pydocs_eval.optimize._split import partition_task_ids, task_split
+from pydocs_eval.optimize.ladder import FitnessLadder, Rung
 
 
 def test_split_predicate_is_the_pinned_sha256_mod2() -> None:

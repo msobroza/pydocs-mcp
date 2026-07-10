@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from benchmarks.eval.datasets.repoqa import RepoQADataset
+from pydocs_eval.datasets.repoqa import RepoQADataset
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
 

@@ -12,9 +12,9 @@ from dataclasses import dataclass, replace
 
 import pytest
 
-from benchmarks.optimize._types import FitnessReport
-from benchmarks.optimize.fitness import retrieval as retrieval_mod
-from benchmarks.optimize.fitness.retrieval import RetrievalFitness
+from pydocs_eval.optimize._types import FitnessReport
+from pydocs_eval.optimize.fitness import retrieval as retrieval_mod
+from pydocs_eval.optimize.fitness.retrieval import RetrievalFitness
 
 
 @dataclass(frozen=True, slots=True)

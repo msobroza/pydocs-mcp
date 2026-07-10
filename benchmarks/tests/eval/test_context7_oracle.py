@@ -20,8 +20,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from benchmarks.eval.serialization import system_registry
-from benchmarks.eval.systems import Context7System
+from pydocs_eval.serialization import system_registry
+from pydocs_eval.systems import Context7System
 from pydocs_mcp.retrieval.config import AppConfig
 
 
@@ -54,7 +54,7 @@ async def test_oracle_mode_skips_resolve_library_id(
     tmp_path: Path,
 ) -> None:
     client = _RecordingClient()
-    import benchmarks.eval.systems.context7 as c7
+    import pydocs_eval.systems.context7 as c7
 
     monkeypatch.setattr(c7, "Context7Client", lambda *a, **kw: client)
 
@@ -84,7 +84,7 @@ async def test_default_mode_calls_resolve_and_caches(
     tmp_path: Path,
 ) -> None:
     client = _RecordingClient(resolved="/pandas-dev/pandas")
-    import benchmarks.eval.systems.context7 as c7
+    import pydocs_eval.systems.context7 as c7
 
     monkeypatch.setattr(c7, "Context7Client", lambda *a, **kw: client)
 

@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.metrics import LibraryResolution1
-from benchmarks.eval.serialization import metric_registry
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.metrics import LibraryResolution1
+from pydocs_eval.serialization import metric_registry
 
 
 def _task(resolved: object, library: str) -> EvalTask:

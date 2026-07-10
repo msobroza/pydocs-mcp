@@ -14,9 +14,9 @@ test needs no ``pydocs_mcp`` install.
 
 from __future__ import annotations
 
-from benchmarks.eval.sweep_support import _maybe_set_index_dependencies
-from benchmarks.eval.systems.base_system import IndexesDependencies
-from benchmarks.eval.systems.pydocs import PydocsMcpSystem
+from pydocs_eval.sweep_support import _maybe_set_index_dependencies
+from pydocs_eval.systems.base_system import IndexesDependencies
+from pydocs_eval.systems.pydocs import PydocsMcpSystem
 
 
 def test_pydocs_system_opts_into_protocol_and_defaults_true() -> None:

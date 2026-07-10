@@ -16,9 +16,9 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.metrics import NDCGAtK
-from benchmarks.eval.systems.base_system import RetrievedItem
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.metrics import NDCGAtK
+from pydocs_eval.systems.base_system import RetrievedItem
 
 
 def _ds1000_task(resolved: frozenset[str]) -> EvalTask:

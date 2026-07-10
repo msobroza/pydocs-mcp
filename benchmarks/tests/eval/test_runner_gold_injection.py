@@ -19,14 +19,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from benchmarks.eval.datasets.base_dataset import EvalTask, GoldAnswer
-from benchmarks.eval.metrics.base_metric import Scorer
-from benchmarks.eval.sweep_support import (
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.metrics.base_metric import Scorer
+from pydocs_eval.sweep_support import (
     _capture_library_resolution,
     _maybe_set_library,
     _resolve_and_inject,
 )
-from benchmarks.eval.systems.base_system import RetrievedItem
+from pydocs_eval.systems.base_system import RetrievedItem
 
 # ── fakes (no pydocs_mcp) ──────────────────────────────────────────────────
 

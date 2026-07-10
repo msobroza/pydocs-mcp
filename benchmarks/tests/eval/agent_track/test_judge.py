@@ -14,16 +14,16 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.eval.agent_track import _judge
-from benchmarks.eval.agent_track._command import build_claude_command
-from benchmarks.eval.agent_track._judge import (
+from pydocs_eval.agent_track import _judge
+from pydocs_eval.agent_track._command import build_claude_command
+from pydocs_eval.agent_track._judge import (
     FakeJudge,
     Judge,
     RealJudge,
     build_judge_prompt,
     parse_judge_reply,
 )
-from benchmarks.eval.agent_track._types import ArmConfig, JudgeScore, RunMetrics
+from pydocs_eval.agent_track._types import ArmConfig, JudgeScore, RunMetrics
 
 # Pin the exported downstream seam (slice-6 contract): the ``Judge`` Protocol is
 # imported so a rename fails this module, not just Task 6's orchestrator tests.
