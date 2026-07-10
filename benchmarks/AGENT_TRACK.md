@@ -165,7 +165,8 @@ contract is the agent track's. Before any paid optimization run, in order:
    `$0.00`: it validates the seed against its §D13 firewall, echoes the wired
    ladder, checks the train/holdout split predicate is deterministic and
    both-sided, reports each optimizer adapter's availability (`skillopt` shows
-   SKIPPED when its `[optimizers-skillopt]` extra is absent — a dry run must
+   SKIPPED when the source-installed `skillopt` library is absent — the
+   adapter's error prints the SHA-pinned `pip install` command; a dry run must
    never require it), and runs one full orchestrator pass on a zero-cost fake
    fitness with `FakeAgentRunner` / `FakeJudge`:
 
