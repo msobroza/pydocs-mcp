@@ -76,6 +76,53 @@ def test_ingestion_late_interaction_swaps_embedder_stage() -> None:
     assert "embed_chunks" not in stage_types
 
 
+def test_ingestion_late_interaction_captures_decisions_and_dep_doc_pages() -> None:
+    """Decision mining + dependency doc pages ship in the LI preset too.
+
+    Both stages landed in ``ingestion.yaml`` after this preset was created
+    and were missed here (drift): a late-interaction deployment silently
+    lost index-time decision capture (``get_why``'s data source) and
+    per-module dependency doc pages. Mirror the default preset's ordering
+    — both sit between ``flatten`` and ``assign_chunk_content_hash`` so
+    the chunks they emit get content hashes and embeddings.
+    """
+    doc = yaml.safe_load(
+        _shipped("ingestion_late_interaction.yaml").read_text(encoding="utf-8"),
+    )
+    types = [stage.get("type") for stage in doc["stages"]]
+    flatten_idx = types.index("flatten")
+    hash_idx = types.index("assign_chunk_content_hash")
+    assert flatten_idx < types.index("capture_decisions") < hash_idx
+    assert flatten_idx < types.index("dependency_doc_pages") < hash_idx
+
+
+def test_ingestion_late_interaction_tracks_default_preset() -> None:
+    """Anti-drift guard: stage list == ``ingestion.yaml`` modulo two deltas.
+
+    The only sanctioned differences from the default preset:
+
+    - ``embed_chunks`` → ``embed_chunks_multi_vector`` (the preset's point).
+    - ``synthesize_similar_edges`` omitted: its stage only reads
+      single-vector embeddings (``_eligible`` skips multi-vector chunks),
+      so it would be inert in a preset where every chunk is multi-vector.
+
+    A stage added to ``ingestion.yaml`` fails this test until someone
+    decides whether the late-interaction preset needs it too.
+    """
+    default_doc = yaml.safe_load(
+        _shipped("ingestion.yaml").read_text(encoding="utf-8"),
+    )
+    li_doc = yaml.safe_load(
+        _shipped("ingestion_late_interaction.yaml").read_text(encoding="utf-8"),
+    )
+    expected = [
+        "embed_chunks_multi_vector" if t == "embed_chunks" else t
+        for t in (stage.get("type") for stage in default_doc["stages"])
+        if t != "synthesize_similar_edges"
+    ]
+    assert [stage.get("type") for stage in li_doc["stages"]] == expected
+
+
 def test_chunk_search_late_interaction_ships() -> None:
     """Preset file ships in the shipped pipelines directory."""
     path = _shipped("chunk_search_late_interaction.yaml")
