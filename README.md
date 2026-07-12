@@ -301,7 +301,9 @@ through the fusion steps below.
   served via [sentence-transformers](https://www.sbert.net/) (torch). It is
   GPU-reliable — torch frees CUDA memory between sequential index-builds — and
   the weights download at runtime on first use. Install the extra
-  (`pip install 'pydocs-mcp[sentence-transformers]'`, ~1-5 GB with torch),
+  (`pip install 'pydocs-mcp[sentence-transformers]'`, ~1-5 GB with torch;
+  torchvision is **not** included — if a model load demands it, the
+  construction-time error message walks through the remedies),
   then set it in your YAML:
 
   ```yaml
@@ -342,7 +344,7 @@ through the fusion steps below.
   - [`Alibaba-NLP/gte-modernbert-base`](https://huggingface.co/Alibaba-NLP/gte-modernbert-base)
     (768-dim) — built on [ModernBERT](https://arxiv.org/abs/2412.13663) with a
     native 8192-token context; general-purpose and symmetric. Needs a recent
-    `transformers` (≥ 4.48).
+    `transformers` (≥ 4.48, < 6).
   - [`codefuse-ai/F2LLM-v2-0.6B`](https://huggingface.co/codefuse-ai/F2LLM-v2-0.6B)
     (1024-dim) — the CodeFuse F2LLM embedder; the **strongest dense model in our
     [benchmark](benchmarks/README.md)** on RepoQA code retrieval (recall@10 ≈ 0.93).
@@ -357,7 +359,13 @@ through the fusion steps below.
   an arbitrary ONNX folder doesn't carry it — and note fastembed pools only
   `mean`/`cls`, so last-token models like Qwen3-Embedding must use
   `provider: sentence_transformers` (which reads the recipe from the model
-  directory itself). `openai` rejects a local path. See
+  directory itself). `openai` rejects a local path.
+  Package mirrors: the `[sentence-transformers]` extra never pulls
+  torchvision, so offline package mirrors need no torchvision wheel; if a
+  model load does demand it, the mirror must add a torchvision wheel whose
+  version exactly matches the mirrored torch wheel (e.g. torchvision
+  0.26.0 ↔ torch 2.11.0, 0.28.0 ↔ torch 2.13.0) — a skewed pair is
+  unresolvable offline. See
   `python/pydocs_mcp/defaults/default_config.yaml` for full examples.
 - **Vector store.** [TurboQuant](https://arxiv.org/abs/2504.19874)
   ([turbovec](https://github.com/RyanCodrai/turbovec)) — Online Vector
