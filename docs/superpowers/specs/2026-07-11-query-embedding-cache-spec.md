@@ -180,11 +180,11 @@ is fixed) and never as CLI flags.
   content-hash cache (`models.py:186-217`, `compute_chunk_content_hash` with
   its `pipeline_hash` slot) already skips re-embedding unchanged chunks;
   document texts are long, high-cardinality, and write-side.
-- **No multi-vector result cache.** `MultiVectorEmbedder`
-  (`retrieval/protocols.py:108-133`) returns per-token matrices — much larger
-  entries, opt-in `[late-interaction]` extra, single call site
-  (`late_interaction_scorer.py:77`). The **instance sharing** (G1) covers it;
-  a result cache for it is a possible follow-up (§7).
+- ~~**No multi-vector result cache.**~~ *Scope widened during review*: the
+  multi-vector twin ships in the same change (§3.11). The original concern —
+  per-token matrices are much larger entries (`retrieval/protocols.py:108-133`)
+  — is answered by a separate LI-sized `late_interaction.query_cache` block
+  (default `max_entries: 128`) rather than by sharing the single-vector LRU.
 - **No persistent / cross-process cache** in this iteration (§4.1 alternative B).
 - **No new dependencies.** Stdlib only (`collections.OrderedDict`,
   `asyncio`, `time.monotonic`); the default install stays ~90MB.
@@ -723,13 +723,53 @@ logs periodic hit/miss stats at DEBUG only (CLAUDE.md: debug logs are JSON
 with named fields). No metrics endpoint, no new tool — observability stays
 server-side.
 
+### 3.11 Core extraction + the multi-vector twin (scope widened in review)
+
+The caching/coalescing machinery — hit test, TTL, LRU eviction, singleflight
+leader election, error fan-out, stats — is **value-type-agnostic**: it never
+looks inside the cached value. It is therefore extracted into
+`retrieval/_query_cache_core.py` as `SingleFlightLRU(Generic[V])`, and the
+two adapters become thin Protocol-conformance shells composing it:
+
+- `CachingEmbedder` = `SingleFlightLRU[Embedding]` behind the `Embedder`
+  Protocol (public constructor unchanged from §3.2.3).
+- `CachingMultiVectorEmbedder` = `SingleFlightLRU[list[np.ndarray]]` behind
+  the `MultiVectorEmbedder` Protocol, wired via
+  `wrap_multi_vector_query_cache(mv, config.late_interaction)` (a `None`
+  embedder — `[late-interaction]` extra off — passes through untouched).
+
+SOLID rationale: SRP (the engine has one reason to change; each adapter owns
+only its Protocol surface), OCP (a future cached protocol composes a new
+`SingleFlightLRU[NewV]` without modifying the engine), DIP (adapters depend
+on the engine's one-method interface + their Protocol). The ~20-line shell
+that remains duplicated between the adapters IS the two distinct Protocol
+contracts — kept explicit on purpose. See §4.4 for why composition beat both
+a syntactic decorator and a base class.
+
+Two LI-specific simplifications versus the single-vector case:
+
+- **Identity**: `LateInteractionConfig.compute_pipeline_hash()` is used
+  directly as `query_identity` — it already folds the query-shaping knobs
+  (`query_length`, `pool_factor`) and PyLate has no `query_prompt_name`, so
+  the §3.2.1 derived-hash subtlety does not arise.
+- **Sizing**: `late_interaction.query_cache` defaults to `max_entries: 128`
+  (`_DEFAULT_LI_QUERY_CACHE_MAX_ENTRIES`) because one entry is a
+  `query_length × dim` matrix, ~30-60× a pooled vector. Same
+  `QueryCacheConfig` model, LI-sized default via `default_factory`. As with
+  the embedding block, the field is excluded from `compute_pipeline_hash`.
+
+This also closes the W2-for-LI gap noted in §3.1: with the wrapper in place,
+concurrent identical LI query encodes across a multi-repo fan-out coalesce
+exactly like the single-vector path.
+
 ### 3.10 Files touched (complete list)
 
 | File | Change |
 |---|---|
-| `python/pydocs_mcp/retrieval/caching_embedder.py` | **NEW** — `normalize_query_text`, `CachingEmbedder` |
-| `python/pydocs_mcp/retrieval/config/embedder_models.py` | **NEW** `QueryCacheConfig`; `EmbeddingConfig.query_cache` field; `compute_query_identity_hash()`; `compute_pipeline_hash` untouched |
-| `python/pydocs_mcp/retrieval/factories.py` | `wrap_query_cache()`; `build_retrieval_context(*, embedder=None, multi_vector_embedder=None, llm_client=None)`; delete stale cheap-construction comment |
+| `python/pydocs_mcp/retrieval/_query_cache_core.py` | **NEW** — `SingleFlightLRU(Generic[V])`, the value-type-agnostic LRU+TTL+singleflight engine (§3.11) |
+| `python/pydocs_mcp/retrieval/caching_embedder.py` | **NEW** — `normalize_query_text`, `CachingEmbedder`, `CachingMultiVectorEmbedder` (both compose the core) |
+| `python/pydocs_mcp/retrieval/config/embedder_models.py` | **NEW** `QueryCacheConfig`; `EmbeddingConfig.query_cache` + `LateInteractionConfig.query_cache` (LI-sized default) fields; `compute_query_identity_hash()`; both `compute_pipeline_hash`es untouched |
+| `python/pydocs_mcp/retrieval/factories.py` | `wrap_query_cache()` + `wrap_multi_vector_query_cache()` + `build_shared_retrieval_deps()`; `build_retrieval_context(*, embedder=None, multi_vector_embedder=None, llm_client=None)`; delete stale cheap-construction comment |
 | `python/pydocs_mcp/server.py` | `build_routers` builds embedder/mv/llm ONCE (after the mismatch guard) and threads them through `_build_project_services` |
 | `python/pydocs_mcp/retrieval/steps/dense_scorer.py` | `.strip()` + empty-guard alignment with `dense_fetcher` (W4) |
 | `python/pydocs_mcp/defaults/default_config.yaml` | `embedding.query_cache:` block |
@@ -844,6 +884,43 @@ on same-key/different-recipe collision (`fastembed.py:20-91`).
   registers *recipes* (cheap metadata), not multi-GB live models. **Rejected
   for the serve path**; if W6 is later fixed, prefer hoisting inside the
   watch loop (hold one indexer bundle across reindexes) over a global memo.
+
+### 4.4 Adapter application point (how the Decorator is applied)
+
+`CachingEmbedder` is the GoF Decorator pattern either way — same Protocol,
+wraps an inner, adds behavior invisibly. The alternative is only *where* the
+decoration is applied.
+
+**A. Runtime composition at the composition root (chosen).**
+`wrap_query_cache(build_embedder(cfg), cfg)` inside `build_routers` /
+`build_retrieval_context` (§3.5).
+
+- Pros: one application site covers every `Embedder` implementation,
+  including future providers (Open/Closed — a new concrete gets caching for
+  free); the wrapper is constructed *after* `AppConfig.load(...)`, so
+  `enabled` / `max_entries` / `ttl_seconds` / `query_identity` are plain
+  constructor arguments — no late-bound global state; the cache stays a
+  read-side concern living in `retrieval/`, with the concretes in
+  `extraction/strategies/embedders/` untouched (§0 component table); unit
+  tests exercise the wrapper against a fake inner in isolation (AC-1…AC-10).
+
+**B. Syntactic `@decorator` on the concretes' `embed_query` methods**
+(e.g. `@cached_query_embedding` on each of FastEmbed / SentenceTransformers /
+OpenAI / PyLate).
+
+- Pros: caching is visible at the method definition; no wiring change at the
+  composition root.
+- Cons: must be repeated on every concrete — a future provider silently
+  ships uncached (the exact class of drift the adapter kills); decorators
+  bind at import/class-definition time, *before* `AppConfig` exists, so the
+  cache settings and `query_identity` would have to come from module-global
+  mutable state — the same objection that rejected the memoized factory
+  (§4.3-B); it smears a serve-time retrieval concern into the write-side
+  `extraction/` package; and cache behavior becomes testable only through
+  each concrete, entangling cache tests with model-loading tests.
+  **Rejected.** `wrap_query_cache` at the root delivers the same
+  transparency with none of these; when `enabled: false` it returns the
+  inner unwrapped, so call sites never branch either way.
 
 ## 5. Testing & acceptance criteria
 
@@ -986,11 +1063,11 @@ module needs its own coverage since coverage is a hard gate.
    cross-restart query repetition (or meaningful OpenAI spend on repeated
    queries), revisit §4.1-B; the `(query_identity, normalized_text)` key was
    designed to port unchanged.
-6. **Multi-vector query cache.** Should `late_interaction_scorer`'s
-   `MultiVectorEmbedder.embed_query` get the same wrapper (bigger entries —
-   per-token matrices — so `max_entries` sizing differs)? Sharing (G1) covers
-   the instance; a `CachingMultiVectorEmbedder` is a mechanical sequel if the
-   `[late-interaction]` path shows the same duplication in practice.
+6. **Multi-vector query cache.** ~~Should `late_interaction_scorer`'s
+   `MultiVectorEmbedder.embed_query` get the same wrapper?~~ **RESOLVED —
+   implemented in the same change** (§3.11): `CachingMultiVectorEmbedder`
+   composes the shared `SingleFlightLRU` core, keyed on the LI pipeline
+   hash, sized by the separate `late_interaction.query_cache` block.
 7. **Hit-rate telemetry in benchmarks.** Should the eval harness record
    `stats()` per run so cache configs are A/B-comparable on latency? Natural
    fit with the "A/B-testable ⇒ YAML" rule; needs a small harness hook.

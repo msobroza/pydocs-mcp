@@ -373,6 +373,14 @@ through the fusion steps below.
   float32** (a 1536-dim vector drops from 6,144 to 384 bytes; a 10 M-doc
   corpus fits in ~4 GB instead of ~61 GB) and faster than FAISS FastScan
   at the same recall. Persists as a `.tq` sidecar next to the SQLite DB.
+- **Query-embedding cache.** At serve time, repeated and concurrent
+  identical queries are embedded once — an in-process LRU plus in-flight
+  request coalescing, on by default and tunable (or disabled) via
+  `embedding.query_cache.*` in your `pydocs-mcp.yaml`; a multi-repo
+  workspace also shares a single embedder model load across all projects.
+  Late-interaction query encodes get the same treatment via a separate,
+  smaller-by-default `late_interaction.query_cache.*` block (per-token
+  matrices are bigger entries).
 
 ### Late-interaction (multi-vector / MaxSim) — opt-in
 

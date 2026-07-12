@@ -23,6 +23,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
     EmbeddingConfig,
     LateInteractionConfig,
     LlmConfig,
+    QueryCacheConfig,
 )
 from pydocs_mcp.retrieval.config.models import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
@@ -89,6 +90,7 @@ __all__ = [
     "NodeScoresConfig",
     "OverviewConfig",
     "PipelineRouteEntry",
+    "QueryCacheConfig",
     "ReferenceCaptureConfig",
     "ReferenceGraphConfig",
     "ReferenceOutputConfig",

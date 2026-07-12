@@ -78,7 +78,16 @@ class DenseScorerStep(RetrieverStep):
         if not ids:
             return state
 
-        query_vec = await self.embedder.embed_query(state.query.terms)
+        query_text = state.query.terms.strip()
+        if not query_text:
+            # Empty-terms guard mirrors DenseFetcherStep: skip scoring rather
+            # than embed whitespace. Real SearchQuery objects strip at
+            # construction, so this only defends direct RetrieverState
+            # builders — but the strip keeps the embedded text identical to
+            # the fetcher's, so both share one query-cache key (W4).
+            return state
+
+        query_vec = await self.embedder.embed_query(query_text)
         if is_multi_vector(query_vec):
             # Multi-vector → degraded single-vector fallback (matches
             # DenseFetcherStep). TurboQuant persistence is single-vector

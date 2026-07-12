@@ -34,7 +34,9 @@ def _capture_config(monkeypatch: pytest.MonkeyPatch) -> dict[str, AppConfig]:
 
     import pydocs_mcp.retrieval.factories as factories
 
-    def _capture(db_path, config):
+    def _capture(db_path, config, **shared_deps):
+        # ``build_routers`` threads the shared embedder/mv/llm instances as
+        # keyword-only args; this seam only cares about the config.
         captured["config"] = config
         raise _Sentinel
 

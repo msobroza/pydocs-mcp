@@ -43,6 +43,34 @@ _KNOWN_MODEL_DIMS: dict[str, int] = {
 }
 
 
+# Query-embedding cache defaults (single source of truth — the YAML
+# restatement in default_config.yaml is the sanctioned user-facing copy).
+_DEFAULT_QUERY_CACHE_ENABLED = True
+_DEFAULT_QUERY_CACHE_MAX_ENTRIES = 512
+_DEFAULT_QUERY_CACHE_TTL_SECONDS = 0.0  # 0 = entries never expire by age
+# Late-interaction entries are per-token matrices (query_length × dim) —
+# ~30-60× larger than one pooled vector — so the LI cache defaults to a
+# smaller LRU. Every other default is shared with QueryCacheConfig.
+_DEFAULT_LI_QUERY_CACHE_MAX_ENTRIES = 128
+
+
+class QueryCacheConfig(BaseModel):
+    """Query-embedding result cache + singleflight coalescing tunables.
+
+    Consumed by ``wrap_query_cache`` at the composition roots — never
+    surfaced as an MCP param or CLI flag (CLAUDE.md §"MCP API surface vs
+    YAML configuration"). ``ttl_seconds`` exists only as a memory-hygiene
+    escape hatch: embeddings are deterministic per identity, so age-based
+    expiry buys correctness nothing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=_DEFAULT_QUERY_CACHE_ENABLED)
+    max_entries: int = Field(default=_DEFAULT_QUERY_CACHE_MAX_ENTRIES, ge=1)
+    ttl_seconds: float = Field(default=_DEFAULT_QUERY_CACHE_TTL_SECONDS, ge=0.0)
+
+
 class EmbeddingConfig(BaseModel):
     """Embedding + vector-quantization config (spec §5.10).
 
@@ -111,6 +139,10 @@ class EmbeddingConfig(BaseModel):
     # Dependencies promoted to the project-grade `full` tier — exact PyPI names
     # or fnmatch globs ("internal-*"). CLI `--full-dep NAME` merges into this.
     full_index_dependencies: list[str] = Field(default_factory=list)
+    # Serve-time query-embedding cache + singleflight tunables. Deliberately
+    # NOT folded into compute_pipeline_hash: a cache setting changes no
+    # stored document vector, so toggling it must never force a reindex.
+    query_cache: QueryCacheConfig = Field(default_factory=QueryCacheConfig)
 
     @field_validator("dim")
     @classmethod
@@ -205,6 +237,24 @@ class EmbeddingConfig(BaseModel):
         identity = "|".join(parts)
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
+    def compute_query_identity_hash(self) -> str:
+        """Identity of QUERY-time embeddings (the query-cache key component).
+
+        ``compute_pipeline_hash`` deliberately excludes ``query_prompt_name``
+        because it only shapes query vectors, never stored document vectors
+        (see its docstring). A query-embedding cache is the dual case: the
+        prompt name CHANGES the query vector (the sentence_transformers
+        provider injects it as ``prompt_name`` at encode time), so it MUST
+        be folded in here — reusing ``compute_pipeline_hash`` verbatim would
+        wrongly serve cached query vectors across a prompt change. ``device``
+        stays excluded (numerically equivalent output) and ``query_cache``
+        settings stay excluded from BOTH hashes (a cache tunable is not part
+        of vector identity).
+        """
+        base = self.compute_pipeline_hash()
+        prompt = self.query_prompt_name or ""
+        return hashlib.sha256(f"{base}|query_prompt={prompt}".encode()).hexdigest()[:16]
+
 
 class LlmConfig(BaseModel):
     """LLM chat-completion client configuration.
@@ -245,6 +295,13 @@ class LateInteractionConfig(BaseModel):
     pool_factor: int = Field(default=1, ge=1)
     # Execution device. NOT folded into compute_pipeline_hash — see _DEFAULT_DEVICE.
     device: Literal["cpu", "cuda"] = _DEFAULT_DEVICE
+    # Serve-time multi-vector query cache. Same shape as
+    # ``embedding.query_cache`` but LI-sized (see the WHY on
+    # _DEFAULT_LI_QUERY_CACHE_MAX_ENTRIES). NOT folded into
+    # compute_pipeline_hash — a cache tunable never changes stored vectors.
+    query_cache: QueryCacheConfig = Field(
+        default_factory=lambda: QueryCacheConfig(max_entries=_DEFAULT_LI_QUERY_CACHE_MAX_ENTRIES)
+    )
 
     @property
     def dim(self) -> int:
