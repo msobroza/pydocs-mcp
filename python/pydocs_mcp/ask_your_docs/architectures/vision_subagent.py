@@ -19,21 +19,7 @@ from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentBuildContext,
     effective_tools,
 )
-
-_VISION_EXTRACTION_PROMPT = """\
-You are a vision analyst for a code-documentation assistant. Look at the
-attached image(s) and extract ONLY facts relevant to answering this question:
-
-{question}
-
-Return concise bullet lines, one fact per line, using these prefixes:
-- ERROR: <verbatim error/exception text>
-- SYMBOL: <function/class/module name visible in the image>
-- PATH: <file path visible in the image>
-- TEXT: <other verbatim text relevant to the question>
-- VISUAL: <relevant non-text observation (arrows, highlights, chart shape)>
-Do not answer the question. Do not speculate about code you cannot see.
-"""
+from pydocs_mcp.ask_your_docs.prompts import vision_extraction_prompt
 
 
 @agent_registry.register("vision_subagent")
@@ -61,7 +47,7 @@ class VisionSubagentArchitecture(AgentArchitecture):
                         content=[
                             {
                                 "type": "text",
-                                "text": _VISION_EXTRACTION_PROMPT.format(question=question),
+                                "text": vision_extraction_prompt(question=question),
                             },
                             *images,
                         ]

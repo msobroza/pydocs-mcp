@@ -13,21 +13,16 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from pydocs_mcp.ask_your_docs.architectures import agent_registry
+from pydocs_mcp.ask_your_docs.prompts import IMAGE_ANALYSIS_PROMPT_SECTION
+
+# Back-compat alias — the prompt text lives in ask_your_docs/prompts/.
+_IMAGE_ANALYSIS_PROMPT_SECTION = IMAGE_ANALYSIS_PROMPT_SECTION
+
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
     effective_tools,
 )
-
-_IMAGE_ANALYSIS_PROMPT_SECTION = """
-Image handling:
-- The user may attach screenshots or diagrams. FIRST extract what is relevant
-  to the question (error messages verbatim, symbol names, file paths, axis
-  labels, box/arrow labels), THEN use your tools to ground every extracted
-  name in the indexed corpus before citing it.
-- Never answer from the image alone when a tool can verify; never invent
-  symbols the image does not show.
-"""
 
 
 @agent_registry.register("inline")

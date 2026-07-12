@@ -20,6 +20,24 @@ _env = Environment(
 )
 
 
+def render_prompt_from(package: str, template_name: str, **variables: Any) -> str:
+    """Load ``<template_name>.j2`` from ``package`` and render it.
+
+    One Jinja environment repo-wide (DRY): the retrieval templates and the
+    ask-your-docs agent prompts both render through here — ``package`` is a
+    positional parameter (not keyword-only) so a template variable named
+    ``package`` can never collide with it.
+    """
+    pkg = resources.files(package)
+    template_file = pkg.joinpath(f"{template_name}.j2")
+    if not template_file.is_file():
+        raise FileNotFoundError(
+            f"Prompt template {template_name!r} not found under {package.replace('.', '/')}/.",
+        )
+    template = _env.from_string(template_file.read_text(encoding="utf-8"))
+    return template.render(**variables)
+
+
 def render_prompt(template_name: str, **variables: Any) -> str:
     """Load ``<template_name>.j2`` from this package and render it.
 
@@ -27,11 +45,4 @@ def render_prompt(template_name: str, **variables: Any) -> str:
     is serialized via Jinja2's ``tojson`` filter; the template is
     responsible for wrapping it appropriately.
     """
-    pkg = resources.files("pydocs_mcp.retrieval.prompts")
-    template_file = pkg.joinpath(f"{template_name}.j2")
-    if not template_file.is_file():
-        raise FileNotFoundError(
-            f"Prompt template {template_name!r} not found under pydocs_mcp/retrieval/prompts/.",
-        )
-    template = _env.from_string(template_file.read_text(encoding="utf-8"))
-    return template.render(**variables)
+    return render_prompt_from("pydocs_mcp.retrieval.prompts", template_name, **variables)

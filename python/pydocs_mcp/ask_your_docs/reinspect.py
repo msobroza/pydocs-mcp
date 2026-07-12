@@ -26,24 +26,6 @@ from __future__ import annotations
 
 from typing import Any
 
-_REINSPECT_DESCRIPTION = (
-    "Re-read previously attached image(s) against the CURRENT question. "
-    "EXPENSIVE: every call costs a full vision-model call and a per-turn "
-    "budget applies — call it ONLY when the answer genuinely depends on an "
-    "earlier image's content that is not already in the conversation "
-    "(existing [image analysis] facts stay valid — reuse them instead of "
-    "re-reading). History marks earlier attachments as "
-    "'[attached images: <names>]'. Pass ONLY the relevant names and the "
-    "current question; returns fresh ERROR:/SYMBOL:/PATH:/TEXT:/VISUAL: "
-    "fact lines."
-)
-
-_BUDGET_MESSAGE = (
-    "reinspect budget for this turn is exhausted — answer from the image "
-    "facts you already have in the conversation, or ask the user to "
-    "re-attach the image if something essential is still missing."
-)
-
 
 def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
     """Build the tool bound to ``llm`` (must be vision-capable — architectures
@@ -53,8 +35,10 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
     from langchain_core.tools import StructuredTool
 
     from pydocs_mcp.ask_your_docs.agent import _active_image_store, _reinspect_state
-    from pydocs_mcp.ask_your_docs.architectures.vision_subagent import (
-        _VISION_EXTRACTION_PROMPT,
+    from pydocs_mcp.ask_your_docs.prompts import (
+        BUDGET_MESSAGE,
+        REINSPECT_DESCRIPTION,
+        vision_extraction_prompt,
     )
 
     async def reinspect_images(names: list[str], question: str) -> str:
@@ -80,7 +64,7 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
         if memo_key in state["memo"]:  # repeat call — free
             return state["memo"][memo_key]
         if state["calls"] >= max_per_turn:
-            return _BUDGET_MESSAGE
+            return BUDGET_MESSAGE
         state["calls"] += 1
         selected = [store[n] for n in names]
         reply = await llm.ainvoke(
@@ -89,7 +73,7 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
                     content=[
                         {
                             "type": "text",
-                            "text": _VISION_EXTRACTION_PROMPT.format(question=question),
+                            "text": vision_extraction_prompt(question=question),
                         },
                         *(att.as_content_block() for att in selected),
                     ]
@@ -103,7 +87,7 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
     return StructuredTool.from_function(
         coroutine=reinspect_images,
         name="reinspect_images",
-        description=_REINSPECT_DESCRIPTION,
+        description=REINSPECT_DESCRIPTION,
     )
 
 

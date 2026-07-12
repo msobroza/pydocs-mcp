@@ -1176,3 +1176,14 @@ disables) — beyond which the tool refuses and directs the model to the facts
 it already has. Budget/memo state rides a per-turn contextvar set in
 `ask()`; the tool description states the cost explicitly. AC26 extends:
 memoized repeats and over-budget calls make no vision call.
+
+**A1 prompt centralization (same-day follow-up):** every model-facing prompt
+string moved to `ask_your_docs/prompts/` — versioned `.j2` templates
+(`system_react_v1`, `rewrite_v1`, `image_analysis_section_v1`,
+`vision_extraction_v1`, `reinspect_description_v1`,
+`reinspect_budget_message_v1`) rendered byte-identically to the previous
+inline constants through the shared retrieval loader
+(`render_prompt_from`), following the `retrieval/prompts` never-edit-shipped-
+versions rule. Old import paths re-export where consumers existed. Variant
+SELECTION (a YAML knob) is deliberately deferred to the agent
+auto-optimization spec.
