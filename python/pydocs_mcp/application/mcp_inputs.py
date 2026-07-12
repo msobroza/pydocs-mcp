@@ -282,8 +282,8 @@ class LookupInput(BaseModel):
 # ── Task-shaped tool inputs (spec §D1) ──────────────────────────────────
 #
 # The six task-shaped tools reuse the same YAML-wired limit slots and the
-# same ``_PACKAGE_RE`` / ``_TARGET_RE`` boundary validators as the two-tool
-# ``SearchInput`` / ``LookupInput`` surface above. ``project`` carries the
+# same ``_PACKAGE_RE`` / ``_TARGET_RE`` boundary validators as
+# ``SearchInput`` / ``LookupInput`` above. ``project`` carries the
 # identical multi-repo corpus-selector semantics on every model that has it.
 
 

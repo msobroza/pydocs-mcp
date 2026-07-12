@@ -251,12 +251,51 @@ def _all_option_strings() -> set[str]:
 
 def test_prose_flags_exist_on_a_parser() -> None:
     """AC7: a backticked `--flag` in prose must be a real option string —
-    catches docs inventing a flag outside a fenced block."""
+    catches docs inventing a flag outside a fenced block. Scope: bare-flag
+    spans (`--watch`) and entry-point-prefixed spans (`pydocs-mcp serve
+    --watch`); spans naming a foreign tool first (`maturin build --zig`,
+    `pytest --cov`) are that tool's business."""
     registered = _all_option_strings()
     for rel in _DOC_FILES:
-        for m in re.finditer(r"`(--[a-z][a-z0-9-]*)", _prose_text(rel)):
-            flag = m.group(1)
-            assert flag in registered, f"{rel}: prose names unknown flag {flag}"
+        for span_m in re.finditer(r"`([^`\n]+)`", _prose_text(rel)):
+            span = span_m.group(1).strip()
+            is_ours = span.split()[0] in _ENTRY_POINTS if span else False
+            if not is_ours and not re.fullmatch(r"--[a-z][a-z0-9-]*", span):
+                continue
+            for m in re.finditer(r"(?:^|\s)(--[a-z][a-z0-9-]*)", span):
+                flag = m.group(1)
+                assert flag in registered, f"{rel}: prose names unknown flag {flag}"
+
+
+def test_alternation_expansion_validates_all_variants() -> None:
+    """AC6 mechanism: `serve|index|watch --gpu` expands to three invocations,
+    each parsing against the real tree. The corpus instance of this pattern
+    (INSTALL.md's --gpu sentence) lives in PROSE, not a fenced block — the
+    spec's fenced-block anchor was prose at spec time too — so the mechanism
+    is pinned synthetically here and the prose fragment by the test below."""
+    variants = _expand_alternation(["pydocs-mcp", "serve|index|watch", ".", "--gpu"])
+    assert [v[1] for v in variants] == ["serve", "index", "watch"]
+    for tokens in variants:
+        _parse_or_raise(tuple(tokens))
+
+
+def test_prose_subcommand_alternations_are_real_subcommands() -> None:
+    """AC6 corpus half: a prose fragment like `pydocs-mcp serve|index|watch`
+    must name only registered subcommands — renaming one reds this."""
+    parser = _parser_for("pydocs-mcp")
+    action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    subcommands = set(action.choices)
+    seen = 0
+    for rel in _DOC_FILES:
+        for span in re.finditer(r"`pydocs-mcp ([a-z|]+)`", _prose_text(rel)):
+            if "|" not in span.group(1):
+                continue
+            seen += 1
+            for alt in span.group(1).split("|"):
+                assert alt in subcommands, (
+                    f"{rel}: `{span.group(0)}` names unknown subcommand {alt}"
+                )
+    assert seen > 0, "no prose subcommand alternations found — INSTALL.md sentence moved?"
 
 
 def test_extras_install_lines_are_shell_quoted() -> None:
@@ -450,9 +489,16 @@ def _submodel_types(annotation: object) -> list[type[pydantic.BaseModel]]:
 
 
 def _is_dict_annotation(annotation: object) -> bool:
+    # AppConfig's dict-shaped fields (pipelines, metadata_schemas) are
+    # annotated Mapping[str, …], so the abc origins must count as dicts too.
+    import collections.abc
     import typing
 
-    return typing.get_origin(annotation) is dict
+    return typing.get_origin(annotation) in (
+        dict,
+        collections.abc.Mapping,
+        collections.abc.MutableMapping,
+    )
 
 
 def _valid_dotted_paths(model: type[pydantic.BaseModel], prefix: str = "") -> set[str]:
@@ -495,16 +541,23 @@ def _flatten_yaml(data: object, prefix: str = "") -> Iterator[str]:
             yield from _flatten_yaml(value, dotted)
 
 
+# Non-AppConfig yaml snippets the corpus legitimately carries (client
+# configs). Anything else with zero AppConfig roots fails — a lone typo'd
+# root (`embeddng:`) must not slip through as "foreign".
+_FOREIGN_YAML_ROOTS = frozenset({"mcpServers"})
+
+
 def _validate_yaml_block(block: FencedBlock, data: dict, valid: set[str], roots: set[str]) -> None:
     if "steps" in data:  # pipeline blueprint → step registry, not AppConfig
         _validate_blueprint(block, data)
         return
     top = set(data)
-    if not top & roots:
-        return  # client-config or foreign snippet (e.g. mcpServers) — parse-only
+    if not top & roots and top <= _FOREIGN_YAML_ROOTS:
+        return  # known client-config snippet — parse-only
     unknown_roots = top - roots
     assert not unknown_roots, (
-        f"{block.file}:{block.line}: unknown top-level config keys {unknown_roots}"
+        f"{block.file}:{block.line}: unknown top-level config keys {unknown_roots} "
+        f"(AppConfig roots or the _FOREIGN_YAML_ROOTS allowlist)"
     )
     for dotted in _flatten_yaml(data):
         assert _path_is_valid(dotted, valid), (
@@ -537,7 +590,10 @@ def test_doc_yaml_blocks_validate_against_app_config() -> None:
         if block.language != "yaml":
             continue
         seen += 1
-        data = yaml.safe_load(block.text)  # a non-parsing doc YAML block is itself a defect
+        try:
+            data = yaml.safe_load(block.text)  # a non-parsing doc YAML block is itself a defect
+        except yaml.YAMLError as exc:
+            pytest.fail(f"{block.file}:{block.line}: yaml block does not parse: {exc}")
         if isinstance(data, dict):
             _validate_yaml_block(block, data, valid, roots)
     assert seen > 0, "no yaml blocks harvested — extractor broken?"
@@ -545,7 +601,9 @@ def test_doc_yaml_blocks_validate_against_app_config() -> None:
 
 def test_yaml_validator_rejects_synthetic_drift() -> None:
     """AC13 mutation coverage: a bogus leaf and a top-level typo both fail —
-    including the AppConfig extra='ignore' top-level blind spot."""
+    including the AppConfig extra='ignore' top-level blind spot. A lone
+    typo'd root must fail too (the corpus's dominant shape is single-root
+    snippets); only the explicit foreign-roots allowlist is parse-only."""
     app_config = _app_config_model()
     valid = _valid_dotted_paths(app_config)
     roots = set(app_config.model_fields)
@@ -554,8 +612,22 @@ def test_yaml_validator_rejects_synthetic_drift() -> None:
         _validate_yaml_block(fake, {"search": {"output": {"bogus_knob": 1}}}, valid, roots)
     with pytest.raises(AssertionError, match="retreival"):
         _validate_yaml_block(fake, {"retreival": {}, "search": {}}, valid, roots)
+    with pytest.raises(AssertionError, match="embeddng"):
+        _validate_yaml_block(fake, {"embeddng": {"provider": "openai"}}, valid, roots)
+    _validate_yaml_block(fake, {"mcpServers": {"pydocs": {}}}, valid, roots)  # allowlisted
     with pytest.raises(AssertionError, match="unregistered"):
         _validate_blueprint(fake, {"steps": [{"type": "not_a_real_step"}]})
+
+
+def test_mapping_typed_fields_terminate_the_path_walk() -> None:
+    """AC12/AC14 mechanism: Mapping-typed AppConfig fields (pipelines,
+    metadata_schemas) legalize any subkey — a doc referencing
+    `pipelines.<name>.<key>` must not false-red."""
+    valid = _valid_dotted_paths(_app_config_model())
+    assert "pipelines.*" in valid, "Mapping termination never fired — annotation drift?"
+    assert _path_is_valid("pipelines.chunk.blueprint", valid)
+    assert _path_is_valid("metadata_schemas.custom", valid)
+    assert not _path_is_valid("pipelines_typo.chunk", valid)
 
 
 def test_prose_dotted_paths_exist_in_app_config() -> None:
@@ -633,9 +705,9 @@ def test_fenced_json_blocks_parse() -> None:
 
 
 def test_gpu_prose_names_all_three_subcommands() -> None:
-    """D9 regression: the README and DOCUMENTATION `--gpu` sentences name
-    serve, index AND watch (argparse registers --gpu on all three)."""
-    for rel in ("README.md", "DOCUMENTATION.md"):
+    """D9 regression: the README, DOCUMENTATION and INSTALL `--gpu` sentences
+    name serve, index AND watch (argparse registers --gpu on all three)."""
+    for rel in ("README.md", "DOCUMENTATION.md", "INSTALL.md"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         m = re.search(r"[^.]*`--gpu`[^.]*\.", text)
         assert m, f"{rel}: no --gpu sentence found"

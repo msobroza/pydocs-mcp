@@ -83,3 +83,15 @@ Branch: `fix/cli-mcp-docs-audit` off a815e8a. No Co-Authored-By. Three commits.
 - **Commit-split deviation from §6:** ask-your-docs refactor moved commit 2 → commit 1 (harness needs `_build_parser`; §3.4's own text justifies it). D5/D7 harness extensions land in commit 2 with their fixes so every commit boundary is green.
 - **Scout-found extras beyond the spec:** DOCUMENTATION.md:258 (uncited `--limit` example) gets D2 treatment; `app_config.py:136` override comment gets D3 treatment.
 - **No placeholders; every edit carries exact text or a verified anchor + decision rule.**
+
+---
+
+## Post-review addendum (adversarial AC review, 5 refuters + cross-check)
+
+Three confirmed majors, all fixed:
+
+1. **AC6** — the spec's alternation anchor (`serve|index|watch --gpu`, INSTALL.md) was PROSE at spec time too (spec-internal inconsistency): the fenced-block harvester can never see it. Fixed by pinning the mechanism synthetically (`test_alternation_expansion_validates_all_variants` — three variants, each parsed) and the corpus fragment directly (`test_prose_subcommand_alternations_are_real_subcommands` — renaming a subcommand reds INSTALL.md's sentence); D9's prose assertion extended to INSTALL.md.
+2. **AC12/AC14** — `_is_dict_annotation` only matched `dict` origin; AppConfig's dict-shaped fields are `Mapping[…]`, so the subkey-termination branch was dead and `pipelines.<name>` refs would false-red. Fixed (+ `test_mapping_typed_fields_terminate_the_path_walk`).
+3. **AC13** — the zero-root parse-only escape let a lone typo'd root pass. Fixed with an explicit `_FOREIGN_YAML_ROOTS` allowlist (`mcpServers` only); any other zero-intersection dict fails.
+
+Minors: AC7 regex widened to entry-point-prefixed spans + bare-flag spans (foreign-tool flags like `maturin build --zig` are correctly out of scope); AC12 yaml parse errors now fail with `file:line`; the stale "two-tool surface" section comment in `mcp_inputs.py` reworded. **Declined with rationale:** blueprint `params`-vs-`dataclasses.fields` validation (params pass through each step's `from_dict` translation — e.g. `chunk_fetcher`'s `schema_name` is not a field — so the check would false-red the real corpus block; registry-name validation is the honest static check) and the AC10 refs-default assertion (no doc surface states the refs default today — nothing to pin; the search default is the only live claim).
