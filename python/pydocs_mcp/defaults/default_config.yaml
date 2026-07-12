@@ -182,6 +182,15 @@ embedding:
   # Dependencies promoted to the project-grade full tier (names or fnmatch
   # globs); the CLI --full-dep flag merges into this list.
   full_index_dependencies: []
+  # Serve-time query-embedding cache: LRU + in-flight coalescing around
+  # embed_query. Never touches stored document vectors — toggling it never
+  # forces a reindex. Env: PYDOCS_EMBEDDING__QUERY_CACHE__*.
+  query_cache:
+    enabled: true        # off → embed_query hits the model on every call
+    max_entries: 512     # LRU capacity (one entry ≈ dim × 4 bytes)
+    ttl_seconds: 0       # 0 = never expire by age (embeddings are
+                         # deterministic per model — TTL exists only as a
+                         # memory-hygiene escape hatch)
 
 # Airgap / offline: set model_name to a LOCAL DIRECTORY of side-loaded
 # weights and nothing is ever downloaded (HF offline is forced). For

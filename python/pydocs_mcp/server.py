@@ -31,12 +31,16 @@ log = logging.getLogger("pydocs-mcp")
 # ── server ────────────────────────────────────────────────────────────────
 
 
-def _build_project_services(loaded, config):
+def _build_project_services(
+    loaded, config, *, embedder=None, multi_vector_embedder=None, llm_client=None
+):
     """Build one project's read-side service set (docs + api + lookup) from its db.
 
     Extracted so a single-db server and a multi-repo server share ONE per-project
     wiring — the services are constructor-injected (no globals), so building N of
-    them is just calling this N times.
+    them is just calling this N times. ``embedder`` / ``multi_vector_embedder`` /
+    ``llm_client`` are the process-shared, config-only instances built once by
+    ``build_routers`` (N bundles must not mean N model loads — W1).
     """
     from pydocs_mcp.application import ApiSearch, DocsSearch
     from pydocs_mcp.application.multi_project_search import ProjectServices
@@ -53,7 +57,13 @@ def _build_project_services(loaded, config):
         build_sqlite_symbol_source_service,
     )
 
-    context = build_retrieval_context(loaded.db_path, config)
+    context = build_retrieval_context(
+        loaded.db_path,
+        config,
+        embedder=embedder,
+        multi_vector_embedder=multi_vector_embedder,
+        llm_client=llm_client,
+    )
     # The persisted project root feeds get_overview's entry-point detector its
     # [project.scripts] table; an empty root (read-only bundles carry none)
     # degrades to "." — parse_project_scripts returns {} for a missing file.
@@ -124,6 +134,8 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surfac
     ``(ToolRouter, services)`` — the router fronts the six task-shaped tools over
     the multi-project ``MultiProjectSearch`` / ``MultiProjectLookup`` bodies.
     """
+    import json
+
     from pydocs_mcp.application.envelope import ResponseEnvelope
     from pydocs_mcp.application.multi_project_search import (
         MultiProjectLookup,
@@ -131,6 +143,7 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surfac
     )
     from pydocs_mcp.application.tool_router import ToolRouter
     from pydocs_mcp.multirepo import validate_project_embedders
+    from pydocs_mcp.retrieval.factories import build_shared_retrieval_deps
     from pydocs_mcp.storage.factories import build_freshness_probe
 
     projects, read_only = _resolve_projects(db_path, workspace, db_paths)
@@ -138,7 +151,32 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surfac
         validate_project_embedders(
             projects, model=config.embedding.model_name, dim=config.embedding.dim
         )
-    services = tuple(_build_project_services(p, config) for p in projects)
+    # Shared, config-only deps built ONCE — after the mismatch guard, so a
+    # mismatched workspace fails BEFORE any model load (previously it loaded
+    # the model N times and then failed). The guard is also what makes one
+    # embedder instance semantically valid for every loaded project.
+    embedder, multi_vector_embedder, llm_client = build_shared_retrieval_deps(config)
+    if config.embedding.query_cache.enabled:
+        log.debug(
+            json.dumps(
+                {
+                    "event": "query_cache_enabled",
+                    "max_entries": config.embedding.query_cache.max_entries,
+                    "ttl_seconds": config.embedding.query_cache.ttl_seconds,
+                    "query_identity": config.embedding.compute_query_identity_hash(),
+                }
+            )
+        )
+    services = tuple(
+        _build_project_services(
+            p,
+            config,
+            embedder=embedder,
+            multi_vector_embedder=multi_vector_embedder,
+            llm_client=llm_client,
+        )
+        for p in projects
+    )
 
     # Probe facts come from the FIRST loaded project. Multi-repo per-project
     # staleness is ``get_overview`` territory — one envelope for the whole
