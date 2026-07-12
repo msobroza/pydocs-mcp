@@ -68,11 +68,19 @@ late-interaction = ["pylate>=1.0,<2.0", "fast-plaid>=1.4,<2.0", "transformers>=4
 # Heavy (~1-5 GB with torch). Opt-in; default install stays ~90 MB.
 # transformers>=4.48 is required for ModernBERT (Alibaba-NLP/gte-modernbert-base);
 # the bare sentence-transformers>=5.0 pin alone can resolve an older transformers.
-sentence-transformers = ["sentence-transformers>=5.0,<6.0", "transformers>=4.48"]
+# transformers<6 caps the float to the majors validated against this provider
+# (4.57 and 5.x); transformers 5.0-5.9 hard-raise "requires the Torchvision
+# library" on torchvision-backed classes with no fallback (>=5.10 falls back
+# to Pillow), and torchvision is deliberately NOT a dependency here — it
+# exact-pins its torch sibling (e.g. 0.26.0 <-> torch==2.11.0), which would
+# couple our torch resolution and break CUDA-index and air-gapped installs.
+# The provider re-raises torchvision-mentioning construction failures with
+# an actionable hint (extraction/strategies/embedders/sentence_transformers.py).
+sentence-transformers = ["sentence-transformers>=5.0,<6.0", "transformers>=4.48,<6.0"]
 # OpenVINO CPU inference for the sentence_transformers provider
 # (embedding.backend: openvino, optionally + a qint8 model_file_name).
 # Pulls optimum-intel + openvino on top of the torch stack.
-openvino = ["sentence-transformers[openvino]>=5.0,<6.0", "transformers>=4.48"]
+openvino = ["sentence-transformers[openvino]>=5.0,<6.0", "transformers>=4.48,<6.0"]
 # Reference-graph analytics: PageRank + Louvain community detection over the
 # node_references graph, computed at index time for the centrality-prior and
 # community-diversity rerank steps. Imported lazily (a guard), so the default

@@ -84,7 +84,11 @@ you use (the CPU packages are the default):
 - FastEmbed dense: `pip install fastembed-gpu` (replaces `fastembed`; the two
   conflict — install one).
 - `sentence_transformers` dense provider: a CUDA build of torch (pulled by the
-  `[sentence-transformers]` extra on a CUDA host).
+  `[sentence-transformers]` extra on a CUDA host). The extra does **not** pull
+  torchvision; if a model load demands it, install a torchvision build that
+  exactly matches your installed torch (torchvision exact-pins its torch
+  sibling — e.g. torchvision 0.26.0 ↔ torch 2.11.0), or upgrade
+  `transformers` to ≥ 5.10, which falls back to Pillow for image processors.
 - PyLate late-interaction: a CUDA build of torch (already pulled by the
   `[late-interaction]` extra on a CUDA host).
 

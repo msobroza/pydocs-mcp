@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from pydocs_mcp.extraction.strategies.embedders.sentence_transformers import (
+    _TORCHVISION_HINT,
     SentenceTransformersEmbedder,
 )
 
@@ -221,6 +222,107 @@ def test_torch_backend_construction_failure_propagates_raw(monkeypatch) -> None:
     _install_fake_st_module(monkeypatch, records, fail=RuntimeError("boom"))
     with pytest.raises(RuntimeError, match="boom"):
         SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+
+
+# ── torchvision-mentioning construction failures get an actionable hint ──
+# (spec docs/superpowers/specs/2026-07-11-sentence-transformers-torchvision-bug-spec.md §5)
+
+
+def test_torchvision_failure_gets_hint_on_torch_backend(monkeypatch) -> None:
+    """AC1: a torchvision-mentioning ImportError during construction on the
+    default torch backend is re-raised as _TORCHVISION_HINT, chained."""
+    records: list[dict] = []
+    original = ImportError(
+        "`SomeImageProcessorFast` requires the Torchvision library but it "
+        "was not found in your environment"
+    )
+    _install_fake_st_module(monkeypatch, records, fail=original)
+    with pytest.raises(ImportError) as excinfo:
+        SentenceTransformersEmbedder(model_name="Qwen/Qwen3-Embedding-0.6B", dim=1024)
+    msg = str(excinfo.value)
+    assert msg == _TORCHVISION_HINT
+    assert "torchvision" in msg
+    assert "transformers>=5.10" in msg
+    assert "exact-pins" in msg
+    assert "sentence-transformers[image]" in msg
+    assert excinfo.value.__cause__ is original
+
+
+def test_chained_torchvision_failure_detected_via_cause(monkeypatch) -> None:
+    """AC2: the torchvision marker one level down the __cause__ chain (the
+    exact shape ST's suggest_extra_on_exception produces — outer message is
+    torchvision-free, forcing a genuine chain walk) is still detected."""
+    inner = ImportError(
+        "`SomeImageProcessorFast` requires the Torchvision library but it "
+        "was not found in your environment"
+    )
+    outer = ImportError(
+        'To install the required dependencies, run: pip install -U "sentence-transformers[image]"'
+    )
+    outer.__cause__ = inner
+    records: list[dict] = []
+    _install_fake_st_module(monkeypatch, records, fail=outer)
+    with pytest.raises(ImportError) as excinfo:
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+    assert str(excinfo.value) == _TORCHVISION_HINT
+    assert excinfo.value.__cause__ is outer
+
+
+def test_torchvision_failure_on_nontorch_backend_gets_torchvision_hint(monkeypatch) -> None:
+    """AC3: the torchvision check runs FIRST — an openvino-backend torchvision
+    failure must NOT be misdiagnosed as a missing-optimum problem."""
+    records: list[dict] = []
+    _install_fake_st_module(
+        monkeypatch,
+        records,
+        fail=ImportError("X requires the Torchvision library but it was not found"),
+    )
+    with pytest.raises(ImportError) as excinfo:
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM, backend="openvino")
+    assert str(excinfo.value) == _TORCHVISION_HINT
+    assert "sentence-transformers[openvino]" not in str(excinfo.value)
+
+
+def test_non_torchvision_import_error_on_torch_backend_propagates_raw(monkeypatch) -> None:
+    """AC4(b): a plain ImportError (no torchvision mention) on the torch
+    backend escapes un-rewrapped — the widened guard reroutes exactly this
+    case, so the existing RuntimeError test alone cannot pin it."""
+    err = ImportError("No module named 'foo'")
+    records: list[dict] = []
+    _install_fake_st_module(monkeypatch, records, fail=err)
+    with pytest.raises(ImportError) as excinfo:
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+    assert excinfo.value is err
+
+
+def test_non_torchvision_attribute_error_propagates_raw(monkeypatch) -> None:
+    """AC6: the catch widens to AttributeError only to INSPECT, never to
+    swallow — an unrelated AttributeError escapes untouched."""
+    err = AttributeError("module 'transformers' has no attribute 'Whatever'")
+    records: list[dict] = []
+    _install_fake_st_module(monkeypatch, records, fail=err)
+    with pytest.raises(AttributeError) as excinfo:
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+    assert excinfo.value is err
+
+
+def test_module_import_never_touches_heavy_stack() -> None:
+    """AC7: importing the provider module must never pull torch / torchvision /
+    sentence_transformers at import time. Checked in a fresh subprocess: in a
+    dev venv that HAS the extra installed, sibling tests legitimately land
+    torch in sys.modules (close() best-effort-imports it), which would
+    false-fail an in-process check."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "import pydocs_mcp.extraction.strategies.embedders.sentence_transformers\n"
+        "assert 'torchvision' not in sys.modules\n"
+        "assert 'torch' not in sys.modules\n"
+        "assert 'sentence_transformers' not in sys.modules\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 # ── airgap (spec D5): local model dir forces HF offline ──
