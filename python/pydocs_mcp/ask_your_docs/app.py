@@ -19,6 +19,7 @@ from pydocs_mcp.ask_your_docs.agent import ask, build_agent, reformulate, weave_
 from pydocs_mcp.ask_your_docs.attachments import (
     ImageAttachment,
     text_only_policy,
+    update_image_store,
     validate_attachment,
 )
 from pydocs_mcp.ask_your_docs.catalog import workspace_catalog
@@ -226,13 +227,18 @@ if submission := st.chat_input(
         st.error(verdict.message)
         st.info(f"Your question (not sent): {question}")
         st.stop()
+    transient_note = ""
     if verdict is not None and verdict.kind == "describe":
         st.warning("The model cannot see the attached image(s); answering from text only.")
-        question_for_llm = f"{verdict.message}\n{question}"
+        # The cannot-see note rides ask()'s transient_note (attached AFTER
+        # reformulation, never persisted) — the scope-pin pattern.
+        transient_note = verdict.message
         images = ()
-    else:
-        question_for_llm = question
     st.session_state.image_chips = [att.name for att in images]
+    # Session image store: bytes from recent turns stay reinspectable by the
+    # reinspect_images tool (history itself keeps only the placeholder).
+    image_store = st.session_state.setdefault("image_store", {})
+    update_image_store(image_store, images, retention=ayd_cfg.images.session_retention)
     shown = question + ("\n\n" + " ".join(f"`🖼 {att.name}`" for att in images) if images else "")
     st.session_state.messages.append(("user", shown))
     with st.chat_message("user"):
@@ -241,11 +247,21 @@ if submission := st.chat_input(
         agent, llm = get_agent(workspace, model, base_url, config)
         # A fresh immutable snapshot per question — not shared across sessions.
         scope = {"project": project_pin, "package": package_pin, "code": code_pin}
-        woven = weave_attachments(attached, question_for_llm)
+        woven = weave_attachments(attached, question)
         st.session_state.attached = []
         # reformulate is text-only by contract (§3.6): it runs on the woven
         # question BEFORE image blocks are attached.
         standalone = run(reformulate(llm, st.session_state.history, woven))
-        answer = run(ask(agent, st.session_state.history, standalone, scope=scope, images=images))
+        answer = run(
+            ask(
+                agent,
+                st.session_state.history,
+                standalone,
+                scope=scope,
+                images=images,
+                image_store=dict(image_store),  # per-question snapshot
+                transient_note=transient_note,
+            )
+        )
         st.markdown(answer)
     st.session_state.messages.append(("assistant", answer))

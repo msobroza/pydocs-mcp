@@ -73,3 +73,4 @@
 - **Commit granularity:** spec stages 3+4 landed as one commit (registry + all four architectures) — the AC1/AC9 tests presume the full name set, and the PR is the revert unit.
 - **Deprecation caveat carried:** `create_react_agent` warns (moved upstream to `langchain.agents`) in the locked langgraph-prebuilt 1.1.0 — pre-existing usage, migration out of scope, WHY comment at the import site.
 - **`ask()` reject-path note:** the UI preserves the unsent question as visible text (chat_input cannot be programmatically pre-filled — the spec's "preserved in the input box" is approximated with an explicit "not sent" info line).
+- **Amendment A1 (user-directed, folded in-flight):** the `reinspect_images` agent-local tool + session image store + `images.session_retention` config — spec updated in-file (Amendment A1, AC26-AC28); tests in `tests/ask_your_docs/test_reinspect_tool.py` + store/config tests.

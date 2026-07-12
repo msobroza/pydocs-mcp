@@ -84,3 +84,44 @@ def test_text_only_fallback_literal() -> None:
 
     with pytest.raises(ValidationError):
         MultimodalConfig(text_only_fallback="ignore")
+
+
+def test_images_session_retention_default_and_bounds() -> None:
+    """Reinspect extension: the session image store keeps the last N attached
+    images for the reinspect_images tool; 0 disables retention."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import ImagesConfig
+
+    assert ImagesConfig().session_retention == 12
+    assert ImagesConfig(session_retention=0).session_retention == 0
+    with pytest.raises(ValidationError):
+        ImagesConfig(session_retention=51)
+
+
+@pytest.fixture(autouse=True)
+def _clean_config_env(monkeypatch, tmp_path):
+    """Hermeticity (repo convention): AppConfig.load() probes env/cwd/XDG for
+    user configs — a dev machine's ambient PYDOCS_* vars or pydocs-mcp.yaml
+    must not leak into these assertions."""
+    import os
+
+    for var in list(os.environ):
+        if var.startswith("PYDOCS_"):
+            monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+
+def test_default_yaml_ships_the_block_keys() -> None:
+    """AC24 presence half: deleting the ask_your_docs: block from the shipped
+    YAML must fail this test (defaults filling in would mask the deletion)."""
+    from pathlib import Path as _P
+
+    import yaml
+
+    root = _P(__file__).resolve().parents[1]
+    shipped = yaml.safe_load(
+        (root / "python/pydocs_mcp/defaults/default_config.yaml").read_text(encoding="utf-8")
+    )
+    block = shipped["ask_your_docs"]
+    assert block["architecture"] == "auto"
+    assert block["multimodal"]["detection"]["static_table"] is True
+    assert block["images"]["session_retention"] == 12

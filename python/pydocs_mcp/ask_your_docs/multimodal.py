@@ -53,6 +53,7 @@ _MULTIMODAL_MODEL_PREFIXES: tuple[str, ...] = (
     "pixtral",
     "internvl",
     "minicpm-v",
+    "deepseek-vl",
     "phi-3-vision",
     "phi-3.5-vision",
     "phi-4-multimodal",
@@ -60,15 +61,22 @@ _MULTIMODAL_MODEL_PREFIXES: tuple[str, ...] = (
     "idefics",
     "smolvlm",
 )
+# WHY (2026-07-12, review): a NEGATIVE static verdict is decisive — it blocks
+# the opt-in probes from correcting it — so mixed-capability families
+# (mistral: Small 3.1 sees, most don't; deepseek: -vl sees, -r1 doesn't) get
+# only their unambiguous members listed and otherwise FALL THROUGH to the
+# probes/default. o3-mini is text-only while o3 sees (longest prefix wins).
 _TEXT_ONLY_MODEL_PREFIXES: tuple[str, ...] = (
     "gpt-3.5",
     "gpt-4-0",
+    "o3-mini",
     "davinci",
     "text-",
     "qwen2.5-coder",
     "qwen2.5-math",
-    "deepseek",
-    "mistral-",
+    "deepseek-r1",
+    "deepseek-coder",
+    "deepseek-v3",
     "mixtral",
     "llama-3.1",
     "llama-3-",
@@ -94,7 +102,7 @@ _PROBE_BACKOFF_SECONDS = (2.0, 4.0)  # mirrors llm_clients/openai._with_retry_as
 
 # Process-level cache per (model, base_url) — detection of a fixed pair does
 # not change between questions (spec §3.7; persisted cache deferred, §7 Q2).
-_detection_cache: dict[tuple[str, str | None], ModelCapabilities] = {}
+_detection_cache: dict[tuple, ModelCapabilities] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,8 +216,13 @@ async def detect_capabilities(
     http_get: HttpGet | None = None,
     probe_llm: ProbeLlm | None = None,
 ) -> ModelCapabilities:
-    """Run the detection ladder (spec §3.9), cached per (model, base_url)."""
-    key = (model, base_url)
+    """Run the detection ladder (spec §3.9), cached per (model, base_url, cfg).
+
+    The cfg fingerprint is part of the key so the advertised escape hatch
+    (flipping ``detection.override`` in YAML) takes effect without a process
+    restart — a (model, base_url)-only key would pin the stale verdict.
+    """
+    key = (model, base_url, cfg.override, cfg.static_table, cfg.endpoint_probe, cfg.image_probe)
     if key in _detection_cache:
         return _detection_cache[key]
     caps = await _run_ladder(model, base_url, cfg, http_get=http_get, probe_llm=probe_llm)

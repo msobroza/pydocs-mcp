@@ -197,3 +197,53 @@ def test_policy_none_when_capable_or_no_images() -> None:
     text = ModelCapabilities(multimodal=False, source="default")
     assert text_only_policy((_att(),), vision, MultimodalConfig(), model="m") is None
     assert text_only_policy((), text, MultimodalConfig(), model="m") is None
+
+
+# ── session image store (reinspect extension) ──
+
+
+def test_update_image_store_appends_and_evicts_oldest() -> None:
+    from pydocs_mcp.ask_your_docs.attachments import update_image_store
+
+    store: dict[str, ImageAttachment] = {}
+    for i in range(5):
+        update_image_store(store, (_att(f"img{i}.png"),), retention=3)
+    assert list(store) == ["img2.png", "img3.png", "img4.png"]  # oldest evicted
+
+
+def test_update_image_store_reattach_refreshes_position() -> None:
+    from pydocs_mcp.ask_your_docs.attachments import update_image_store
+
+    store: dict[str, ImageAttachment] = {}
+    update_image_store(store, (_att("a.png"), _att("b.png")), retention=3)
+    update_image_store(store, (_att("a.png"),), retention=3)  # re-attach a
+    update_image_store(store, (_att("c.png"), _att("d.png")), retention=3)
+    assert list(store) == ["a.png", "c.png", "d.png"]  # b evicted, a survived
+
+
+def test_update_image_store_zero_retention_disables() -> None:
+    from pydocs_mcp.ask_your_docs.attachments import update_image_store
+
+    store: dict[str, ImageAttachment] = {}
+    update_image_store(store, (_att("a.png"),), retention=0)
+    assert store == {}
+
+
+def test_describe_note_rides_transient_note_not_history() -> None:
+    """AC22 wiring (review fix): the cannot-see note attaches AFTER
+    reformulation via ask(transient_note=...) — it reaches the sent message
+    deterministically and never persists into history."""
+    pytest.importorskip("langgraph")
+    import asyncio
+
+    from pydocs_mcp.ask_your_docs.agent import ask
+
+    agent = _RecordingAgent()
+    history: list = []
+    asyncio.run(
+        ask(agent, history, "what does the image show?", transient_note="[note: cannot see]")
+    )
+    sent = agent.payloads[0]["messages"][-1].content
+    assert sent.startswith("[note: cannot see]\n")
+    assert "what does the image show?" in sent
+    assert history[0].content == "what does the image show?"  # bare — no note

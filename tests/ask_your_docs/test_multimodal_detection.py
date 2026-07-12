@@ -98,7 +98,7 @@ def test_endpoint_probe_positive_absent_and_error(monkeypatch) -> None:
     assert _detect("my-vlm", cfg, http_get=bare) == ModelCapabilities(False, "default")
     down = FakeModelsEndpoint(error=ConnectionError("refused"))
     assert _detect("my-vlm", cfg, http_get=down) == ModelCapabilities(False, "default")
-    assert down.calls <= 3
+    assert down.calls == 3  # the full bounded-retry envelope ran
 
 
 def test_image_probe_outcomes() -> None:

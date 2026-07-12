@@ -49,12 +49,17 @@ class MultimodalConfig(BaseModel):
 
 
 class ImagesConfig(BaseModel):
-    """Per-turn image attachment limits."""
+    """Per-turn image attachment limits + the session reinspect store size."""
 
     model_config = ConfigDict(extra="forbid")
 
     max_per_turn: int = Field(default=3, ge=1, le=10)
     max_bytes: int = Field(default=5_000_000, ge=1)
+    # How many recently-attached images the session keeps (bytes live OUTSIDE
+    # conversation history) so the reinspect_images tool can re-read earlier
+    # attachments against a NEW question without re-paying vision tokens
+    # per turn. 0 disables retention (the tool then finds no stored images).
+    session_retention: int = Field(default=12, ge=0, le=50)
 
 
 class AskYourDocsConfig(BaseModel):

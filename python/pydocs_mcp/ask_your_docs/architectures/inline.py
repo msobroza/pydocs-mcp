@@ -16,6 +16,7 @@ from pydocs_mcp.ask_your_docs.architectures import agent_registry
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
+    effective_tools,
 )
 
 _IMAGE_ANALYSIS_PROMPT_SECTION = """
@@ -39,7 +40,7 @@ class InlineMultimodalArchitecture(AgentArchitecture):
 
         return create_react_agent(
             ctx.llm,
-            ctx.tools,
+            effective_tools(ctx),
             prompt=ctx.prompt + _IMAGE_ANALYSIS_PROMPT_SECTION,
         )
 

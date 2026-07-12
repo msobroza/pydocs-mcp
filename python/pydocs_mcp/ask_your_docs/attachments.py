@@ -102,6 +102,28 @@ def text_only_policy(
     )
 
 
+def update_image_store(
+    store: dict[str, ImageAttachment],
+    images: tuple[ImageAttachment, ...],
+    *,
+    retention: int,
+) -> None:
+    """Fold this turn's images into the session store, newest-last, evicting
+    the oldest beyond ``retention``. Re-attaching a name refreshes its slot.
+
+    The store is the reinspect_images tool's source: image BYTES live here —
+    per session, outside conversation history, which keeps only the textual
+    placeholder (the history non-goal is untouched).
+    """
+    if retention <= 0:
+        return
+    for att in images:
+        store.pop(att.name, None)  # refresh position on re-attach
+        store[att.name] = att
+    while len(store) > retention:
+        del store[next(iter(store))]  # dicts preserve insertion order
+
+
 def weave_attachments(attached: list[str], question: str) -> str:
     """Prepend de-duped attached symbols to a question as plain context text."""
     seen: dict[str, None] = {}

@@ -14,6 +14,7 @@ from pydocs_mcp.ask_your_docs.architectures import agent_registry
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
+    effective_tools,
 )
 
 
@@ -30,7 +31,7 @@ class TextReactArchitecture(AgentArchitecture):
         # used it before this refactor too.
         from langgraph.prebuilt import create_react_agent
 
-        return create_react_agent(ctx.llm, ctx.tools, prompt=ctx.prompt)
+        return create_react_agent(ctx.llm, effective_tools(ctx), prompt=ctx.prompt)
 
 
 __all__ = ("TextReactArchitecture",)

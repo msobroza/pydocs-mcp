@@ -115,7 +115,10 @@ shows the verdict and its source), `multimodal.text_only_fallback`
 override of the form `PYDOCS_ASK_YOUR_DOCS__ARCHITECTURE=inline`
 (`PYDOCS_` prefix, `__`-nested path). On vision-capable models, attach
 images (screenshots, error dialogs, diagrams) with the paperclip in the
-chat input.
+chat input; recent images stay reinspectable — when a later question
+refers back to one, the agent's `reinspect_images` tool re-reads just the
+relevant image(s) against the new question (`images.session_retention`
+bounds the store).
 
 The sidebar's **Scope** pickers (project / own code vs dependencies / package)
 pin every question to a slice of the corpus. A `langchain-mcp-adapters` tool

@@ -17,6 +17,7 @@ from pydocs_mcp.ask_your_docs.architectures import agent_registry
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
+    effective_tools,
 )
 
 _VISION_EXTRACTION_PROMPT = """\
@@ -45,7 +46,7 @@ class VisionSubagentArchitecture(AgentArchitecture):
         from langgraph.graph import END, START, MessagesState, StateGraph
         from langgraph.prebuilt import create_react_agent
 
-        react = create_react_agent(ctx.llm, ctx.tools, prompt=ctx.prompt)
+        react = create_react_agent(ctx.llm, effective_tools(ctx), prompt=ctx.prompt)
 
         async def vision_extract(state: MessagesState):
             last = state["messages"][-1]

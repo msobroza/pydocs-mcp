@@ -45,6 +45,14 @@ _active_scope: contextvars.ContextVar[ToolScope | None] = contextvars.ContextVar
     "active_scope", default=None
 )
 
+# The CURRENT question's session image store (name → ImageAttachment) for the
+# reinspect_images tool. Same isolation rationale as _active_scope: the
+# compiled agent graph is cached across sessions, so per-session state must
+# ride a contextvar set inside ask(), never be baked into the tools.
+_active_image_store: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "active_image_store", default=None
+)
+
 # Which corpus filters each tool actually accepts (see pydocs_mcp.server):
 # ``project`` — all six tools; ``package`` — search_codebase + get_overview;
 # ``scope`` (own vs deps) — search_codebase only. The interceptor forces a pin
@@ -269,6 +277,8 @@ async def ask(
     max_history: int = 8,
     *,
     images: tuple = (),
+    image_store: dict | None = None,
+    transient_note: str = "",
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
 
@@ -284,8 +294,14 @@ async def ask(
     """
     scope = scope or {}
     token = _active_scope.set(scope)
+    store_token = _active_image_store.set(image_store)
     try:
-        prefixed = scope_prefix(scope) + question
+        # transient_note (e.g. the describe-mode cannot-see note) attaches
+        # AFTER reformulation, exactly like the scope prefix — prefixing it
+        # before the rewrite would let the rewrite LLM strip it, and storing
+        # it in history would leak a stale note into later reformulations.
+        note = f"{transient_note}\n" if transient_note else ""
+        prefixed = scope_prefix(scope) + note + question
         content: str | list = prefixed
         if images:
             content = [
@@ -296,6 +312,7 @@ async def ask(
         answer = result["messages"][-1].content
     finally:
         _active_scope.reset(token)
+        _active_image_store.reset(store_token)
     placeholder = f" [attached images: {', '.join(att.name for att in images)}]" if images else ""
     history += [HumanMessage(question + placeholder), AIMessage(answer)]
     del history[:-max_history]

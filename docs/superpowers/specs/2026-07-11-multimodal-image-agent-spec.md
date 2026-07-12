@@ -1120,3 +1120,48 @@ type-check), `complexipy ≤15`, `vulture`, coverage ≥90% on the core suite
    if the future `IngestionStage → IngestionStep` rename (CLAUDE.md
    §Naming) happens, `AgentArchitecture` should be revisited for naming
    consistency (`AgentBlueprint`?). No action now.
+
+---
+
+## Amendment A1 (2026-07-12, implemented with the initial PR — user-directed scope widening)
+
+**§3.10 `reinspect_images` — re-contextualizing earlier images to a new
+question.** The shipped design deliberately dropped image bytes after each
+turn (§3.6 decision 2), leaving "look at the image again" to manual
+re-attachment — the recorded con of §3.4.2 and §4.9. This amendment closes
+that gap with an **agent-local LangChain tool** (NOT an MCP tool — the
+six-tool surface stays fixed; the tool lives beside the MCP-adapter tools in
+the agent's tool list):
+
+- **Session image store.** `attachments.update_image_store` keeps the last
+  `images.session_retention` (default 12, `0` disables, new `ImagesConfig`
+  field) attached images per session, newest-last with re-attach refresh.
+  Bytes live OUTSIDE conversation history — the history non-goal ("no image
+  persistence in history beyond a textual placeholder") is untouched; the
+  store is UI session state, not message state.
+- **The tool.** `reinspect.build_reinspect_tool(llm)` →
+  `reinspect_images(names, question)`: the ReAct agent picks the relevant
+  names (history placeholders show them) and passes the CURRENT question;
+  one vision call over ONLY the selected images reuses
+  `_VISION_EXTRACTION_PROMPT`, returning the same ERROR:/SYMBOL:/… fact
+  contract. Unknown names / empty store return model-facing guidance text
+  (tools must not raise at the model).
+- **Per-session isolation.** The compiled graph is cached across sessions,
+  so the store rides a new `agent._active_image_store` contextvar set inside
+  `ask(..., image_store=...)` — exactly the `_active_scope` pattern.
+- **Capability gating.** `architectures/base.effective_tools(ctx)` appends
+  the tool only when `capabilities.multimodal` — a text-only build carries no
+  tool it can never satisfy. Consequence for AC3's "byte-identical" anchor:
+  `text_react` remains byte-identical on text-only capabilities (the
+  pre-image deployment case); on vision models its graph gains the tools
+  node — a deliberate extension.
+
+**Amended ACs:**
+- **AC26.** The tool re-inspects ONLY the selected names in ONE vision call;
+  unknown names return guidance listing the stored names; an empty store
+  returns a re-attach hint — no vision call in either failure case.
+- **AC27.** `ask()` pins the per-question store snapshot to the contextvar
+  and resets it after the turn; the store helper evicts oldest beyond
+  `session_retention`, refreshes position on re-attach, and `0` disables.
+- **AC28.** Vision-capable builds of every architecture expose the tool
+  (graph has a tools node even with zero MCP tools); text-only builds don't.

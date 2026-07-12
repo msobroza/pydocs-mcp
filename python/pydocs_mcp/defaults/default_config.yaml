@@ -275,3 +275,5 @@ ask_your_docs:
   images:
     max_per_turn: 3
     max_bytes: 5000000            # per image
+    session_retention: 12         # recent images kept reinspectable by the
+                                  # reinspect_images agent tool (0 disables)

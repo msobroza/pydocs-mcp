@@ -33,6 +33,20 @@ class AgentBuildContext:
     config: AskYourDocsConfig
 
 
+def effective_tools(ctx: AgentBuildContext) -> tuple:
+    """The MCP tools, plus ``reinspect_images`` when the model can see.
+
+    The reinspect tool needs a vision-capable llm (it re-reads stored image
+    bytes), so text-only builds omit it — the agent then has no dangling
+    tool it can never satisfy.
+    """
+    if not ctx.capabilities.multimodal:
+        return tuple(ctx.tools)
+    from pydocs_mcp.ask_your_docs.reinspect import build_reinspect_tool
+
+    return (*ctx.tools, build_reinspect_tool(ctx.llm))
+
+
 class AgentArchitecture(ABC):
     """One registrable agent architecture. Entries are stateless frozen
     dataclasses; ``build`` returns a compiled LangGraph graph exposing
