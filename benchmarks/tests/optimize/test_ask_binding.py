@@ -75,10 +75,17 @@ class TestRegistry:
         monkeypatch.setattr(ask_binding, "_resolve_build_agent", lambda: _fake_build_agent)
         monkeypatch.setattr(ask_binding, "_require_ask_extra", lambda: None)
         bridge = ask_architecture_registry.build("text_react")
-        graph = await bridge.build(_request(model="claude-x"))
+        request = _request(
+            model="claude-x",
+            base_url="http://localhost:9999/v1",
+            pydocs_config=Path("/tmp/overlay.yaml"),
+        )
+        graph = await bridge.build(request)
         assert graph == ("GRAPH", "LLM")
         assert captured["architecture"] == "text_react"
         assert captured["model"] == "claude-x"
+        assert captured["base_url"] == "http://localhost:9999/v1"
+        assert captured["pydocs_config"] == "/tmp/overlay.yaml"
 
     async def test_bridge_threads_prompts_through(self, monkeypatch) -> None:
         captured: dict[str, object] = {}
@@ -113,6 +120,26 @@ class TestExtrasGuard:
     def test_present_extra_passes_the_guard(self, monkeypatch) -> None:
         monkeypatch.setattr(ask_binding, "_ask_extra_missing_module", lambda: None)
         ask_binding._require_ask_extra()  # must not raise
+
+    def test_missing_module_probe_uses_find_spec(self, monkeypatch) -> None:
+        # The guard's REAL logic: the first find_spec miss is named.
+        import importlib.util
+
+        real_find_spec = importlib.util.find_spec
+
+        def _fake_find_spec(name, *args, **kwargs):
+            if name == "langgraph":
+                return None
+            return real_find_spec(name, *args, **kwargs)
+
+        monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
+        assert ask_binding._ask_extra_missing_module() == "langgraph"
+
+    def test_missing_module_probe_returns_none_when_complete(self, monkeypatch) -> None:
+        import importlib.util
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: object())
+        assert ask_binding._ask_extra_missing_module() is None
 
 
 class TestFakeAskRunner:

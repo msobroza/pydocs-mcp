@@ -133,3 +133,14 @@ async def test_trials_carry_every_scored_cell(pipelines_dir: Path) -> None:
     optimizer, _ = _optimizer(pipelines_dir, strategy="grid")
     result = await optimizer.optimize(_seed(pipelines_dir), _ladder(), OptimizationBudget())
     assert len(result.trials) == _CELLS
+
+
+async def test_halving_trials_carry_the_whole_rung_journey(pipelines_dir: Path) -> None:
+    # A survivor's trial records BOTH rung scores; screened-out cells one.
+    optimizer, _ = _optimizer(pipelines_dir, strategy="halving")
+    result = await optimizer.optimize(
+        _seed(pipelines_dir), _ladder(survivors=2), OptimizationBudget()
+    )
+    lengths = sorted(len(t.rung_scores) for t in result.trials)
+    assert lengths.count(2) == 2  # the two rung-1 survivors reached rung 2
+    assert lengths.count(1) == _CELLS - 2

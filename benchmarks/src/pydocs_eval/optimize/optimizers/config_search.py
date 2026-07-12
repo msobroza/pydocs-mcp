@@ -79,7 +79,7 @@ class ConfigSearchOptimizer:
             scored, finalists = await _halving(valid, ladder, fitness_of)
         else:
             scored = await _score_all(valid, ladder.rungs[-1].fitness_name, fitness_of)
-            finalists = scored
+            finalists = [(cell, reports[-1]) for cell, reports in scored]
         # WHY finalists-only: under halving, screened-out cells carry a
         # CHEAP-rung score on a different scale — only cells that reached the
         # final rung compete for best.
@@ -87,8 +87,8 @@ class ConfigSearchOptimizer:
         return OptimizationResult(
             best=best[0] if best is not None else None,
             accepted=False,  # the orchestrator owns the holdout gate
-            trials=(*violation_trials, *[_trial(a, r) for a, r in scored]),
-            total_usd=sum(r.cost_usd for _, r in scored),
+            trials=(*violation_trials, *[_trial(a, reports) for a, reports in scored]),
+            total_usd=sum(r.cost_usd for _, reports in scored for r in reports),
             provenance=_provenance(seed, seed_artifact),
         )
 
@@ -150,10 +150,10 @@ async def _score_all(
     cells: tuple[OptimizableArtifact, ...],
     final_fitness_name: str,
     fitness_of,
-) -> list[tuple[OptimizableArtifact, FitnessReport]]:
+) -> list[tuple[OptimizableArtifact, list[FitnessReport]]]:
     """grid/random: every cell end-to-end on the final rung (no screening)."""
     fitness = fitness_of(final_fitness_name)
-    return [(cell, await fitness.evaluate(cell, split="train")) for cell in cells]
+    return [(cell, [await fitness.evaluate(cell, split="train")]) for cell in cells]
 
 
 async def _halving(
@@ -161,16 +161,19 @@ async def _halving(
     ladder: FitnessLadder,
     fitness_of,
 ) -> tuple[
-    list[tuple[OptimizableArtifact, FitnessReport]],
+    list[tuple[OptimizableArtifact, list[FitnessReport]]],
     list[tuple[OptimizableArtifact, FitnessReport]],
 ]:
     """Successive halving: rung N's survivors are rung N+1's candidates.
 
-    Returns ``(all_scored, finalists)`` — every cell with the report of the
-    last rung it reached, and the subset scored on the FINAL rung.
+    Returns ``(all_scored, finalists)`` — every cell with the reports of
+    EVERY rung it reached (Trial.rung_scores keeps the whole journey), and
+    the subset scored on the FINAL rung.
     """
     alive: dict[str, OptimizableArtifact] = {c.fingerprint: c for c in cells}
-    scored: dict[str, tuple[OptimizableArtifact, FitnessReport]] = {}
+    journeys: dict[str, tuple[OptimizableArtifact, list[FitnessReport]]] = {
+        c.fingerprint: (c, []) for c in cells
+    }
     finalists: list[tuple[OptimizableArtifact, FitnessReport]] = []
     for index, rung in enumerate(ladder.rungs):
         fitness = fitness_of(rung.fitness_name)
@@ -178,19 +181,20 @@ async def _halving(
             fingerprint: await fitness.evaluate(cell, split="train")
             for fingerprint, cell in alive.items()
         }
-        scored.update({fp: (alive[fp], report) for fp, report in reports.items()})
+        for fp, report in reports.items():
+            journeys[fp][1].append(report)
         if index == len(ladder.rungs) - 1:
             finalists = [(alive[fp], report) for fp, report in reports.items()]
         survivors = rung.select_survivors({fp: r.score for fp, r in reports.items()})
         alive = {fp: alive[fp] for fp in survivors}
-    return list(scored.values()), finalists
+    return list(journeys.values()), finalists
 
 
-def _trial(artifact: OptimizableArtifact, report: FitnessReport) -> Trial:
+def _trial(artifact: OptimizableArtifact, reports: list[FitnessReport]) -> Trial:
     return Trial(
         fingerprint=artifact.fingerprint,
-        rung_scores=(report.score,),
-        cost_usd=report.cost_usd,
+        rung_scores=tuple(r.score for r in reports),
+        cost_usd=sum(r.cost_usd for r in reports),
         violations=(),
     )
 

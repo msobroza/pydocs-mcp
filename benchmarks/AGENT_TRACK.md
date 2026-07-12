@@ -312,15 +312,22 @@ python -m pydocs_eval.optimize \
 ```
 
 **Reading the sample ledger.** Next to the trials ledger, the run writes a
-per-sample sidecar (`samples.jsonl` shape: one line per
+per-sample sidecar ledger (JSONL, path set by the run wiring; one line per
 `(candidate fingerprint, split, task_id, objective hash)` with the gate
 booleans, per-criterion scores, verdict, and cost) plus a full transcript file
-per sample under `<output_dir>/samples/<fingerprint12>/<task_id>.json`. To
+per sample under `<output_dir>/samples/<fingerprint12>/<task_id>.json`
+(path separators in the task id become underscores). To
 answer "which questions did candidate N fail on grounding?", filter the ledger
 lines on `criteria.grounding` and open exactly those transcripts. Reruns
 resume from both ledgers for free; editing the rubric (or re-pinning the
 runner architecture) changes the objective hash, so old samples are never
 falsely reused.
+
+**v1 evaluation limitation.** The benchmark tasks are single questions, so
+the rewrite (follow-up reformulation) section of an `ask_prompt` candidate is
+carried, validated, and budgeted but not exercised by the evaluation loop —
+it only fires on multi-turn conversations. A multi-turn task set is the
+prerequisite for optimizing that half against measurements.
 
 **Landing procedure.** As with the text artifacts, a run emits a *proposal*:
 

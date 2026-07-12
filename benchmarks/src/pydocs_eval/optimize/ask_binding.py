@@ -207,20 +207,37 @@ class LangGraphAskRunner:
         server); the metered spend is the judge arm, bounded by
         ``budget.max_judge_calls`` — the documented spend asymmetry, mirrored
         in the runbook.
+
+        A runaway candidate (recursion-limit hit) or a hung tool call
+        (task timeout) yields a sentinel FAILED transcript rather than an
+        exception: one bad candidate must cost its own sample, never the
+        whole campaign — the gates fail the sample deterministically.
         """
         import asyncio
 
         from langchain_core.messages import AIMessage, HumanMessage
+        from langgraph.errors import GraphRecursionError
 
         graph = await self._agent()
         started = time.monotonic()
-        result = await asyncio.wait_for(
-            graph.ainvoke(  # type: ignore[attr-defined]
-                {"messages": [HumanMessage(question)]},
-                {"recursion_limit": 2 * self.request.max_agent_turns},
-            ),
-            timeout=self.task_timeout_seconds,
-        )
+        try:
+            result = await asyncio.wait_for(
+                graph.ainvoke(  # type: ignore[attr-defined]
+                    {"messages": [HumanMessage(question)]},
+                    {"recursion_limit": 2 * self.request.max_agent_turns},
+                ),
+                timeout=self.task_timeout_seconds,
+            )
+        except (GraphRecursionError, TimeoutError):
+            # turns = cap + 1 fails the max_turns gate; the empty answer
+            # fails min_answer_chars — the sample scores 0, the run goes on.
+            return AskTranscript(
+                answer="",
+                tool_calls=(),
+                turns=self.request.max_agent_turns + 1,
+                cost_usd=0.0,
+                wall_seconds=time.monotonic() - started,
+            )
         wall = time.monotonic() - started
         messages = result["messages"]
         ai_messages = [m for m in messages if isinstance(m, AIMessage)]
@@ -229,7 +246,7 @@ class LangGraphAskRunner:
             for m in ai_messages
             for tc in getattr(m, "tool_calls", ())
         )
-        answer = str(messages[-1].content) if messages else ""
+        answer = _flatten_answer(messages[-1].content) if messages else ""
         return AskTranscript(
             answer=answer,
             tool_calls=calls,
@@ -243,6 +260,24 @@ def _digest(args: object) -> str:
     """Short stable digest of a tool call's args for the transcript record."""
     rendered = json.dumps(args, sort_keys=True, default=str)
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:12]
+
+
+def _flatten_answer(content: object) -> str:
+    """A final message's text — content-block lists flatten to their text parts.
+
+    Multimodal replies carry a list of typed blocks; str() on that list would
+    put a Python repr in front of the gates and the judge.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        return " ".join(part for part in parts if part)
+    return str(content)
 
 
 _EMPTY_TRANSCRIPT = AskTranscript(answer="", tool_calls=(), turns=0, cost_usd=0.0, wall_seconds=0.0)

@@ -125,3 +125,41 @@ def test_shipped_ask_configs_load_typed() -> None:
         "retrieval_config",
         "max_agent_turns",
     }
+
+
+def test_config_search_factory_threads_the_section(tmp_path) -> None:
+    from pydocs_eval.optimize.run_config import build_config_search_optimizer
+
+    cfg = load_run_config(_shipped("optimize_ask_architecture.yaml"))
+    optimizer = build_config_search_optimizer(cfg)
+    assert optimizer.strategy == cfg.config_search.strategy
+    assert optimizer.seed == cfg.config_search.seed
+    assert optimizer.sample_size == cfg.config_search.sample_size
+    assert dict(optimizer.dimensions) == dict(cfg.config_search.dimensions)
+
+
+def test_config_search_seed_falls_back_to_rng_seed(tmp_path) -> None:
+    from pydocs_eval.optimize.run_config import build_config_search_optimizer
+
+    text = (
+        "artifact: ask_architecture\noptimizer: config_search\n"
+        "ladder: [[retrieval, 12, 1]]\nrng_seed: 41\n"
+        "config_search:\n  strategy: grid\n  dimensions: {architecture: [text_react]}\n"
+    )
+    cfg = load_run_config(_write(tmp_path, text))
+    assert build_config_search_optimizer(cfg).seed == 41
+
+
+def test_shipped_architecture_dims_resolve_against_real_pipelines() -> None:
+    # Every cell of the shipped grid must pass validate() against the REAL
+    # pipelines dir — a renamed exp_*.yaml stem fails here, not mid-campaign.
+    from pydocs_eval.optimize.artifacts.ask_architecture import AskArchitectureArtifact
+
+    cfg = load_run_config(_shipped("optimize_ask_architecture.yaml"))
+    pipelines = Path(__file__).resolve().parents[2] / "configs" / "pipelines"
+    cells = AskArchitectureArtifact.enumerate_space(
+        cfg.config_search.dimensions, pipelines_dir=pipelines
+    )
+    assert len(cells) == 1 * 2 * 1 * 3 * 2
+    for cell in cells:
+        assert cell.validate() == (), cell.render()

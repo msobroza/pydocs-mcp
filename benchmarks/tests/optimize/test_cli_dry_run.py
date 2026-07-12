@@ -11,6 +11,7 @@ reported SKIPPED, never required for a dry run).
 
 from __future__ import annotations
 
+import re
 from importlib.resources import files
 from pathlib import Path
 
@@ -55,6 +56,11 @@ async def test_dry_run_covers_both_shipped_ask_configs(tmp_path, capsys) -> None
         assert code == 0 and "$0.00" in out, name
         assert "orchestrator pass" in out, name
         assert "ask binding" in out, name
+        # AC-17: the pass runs the REAL AskRubricFitness on the scripted
+        # fakes — both doubles must have actually been exercised.
+        match = re.search(r"runner calls=(\d+), judge calls=(\d+)", out)
+        assert match is not None, name
+        assert int(match.group(1)) > 0 and int(match.group(2)) > 0, name
 
 
 async def test_dry_run_reports_missing_ask_extra_as_skipped(tmp_path, capsys, monkeypatch) -> None:

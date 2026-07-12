@@ -50,6 +50,7 @@ from pydocs_eval.optimize.ladder import FitnessLadder
 from pydocs_eval.optimize.optimizers.config_search import (
     _DEFAULT_SAMPLE_SIZE,
     _DEFAULT_STRATEGY,
+    ConfigSearchOptimizer,
 )
 from pydocs_eval.optimize.orchestrator import _ACCEPT_MARGIN
 from pydocs_eval.optimize.registries import (
@@ -192,7 +193,9 @@ class ArchitectureSearchSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     strategy: Literal["grid", "random", "halving"] = _DEFAULT_STRATEGY
-    seed: int = 0
+    # WHY None: an explicit section seed wins; unset falls back to the run's
+    # top-level rng_seed (spec §3.6 — one seed reproduces the draw).
+    seed: int | None = None
     sample_size: int = _DEFAULT_SAMPLE_SIZE
     dimensions: Mapping[str, tuple[object, ...]] = Field(default_factory=dict)
 
@@ -300,6 +303,35 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
         validate_rubric_config(
             cfg.ask_rubric.rubric_config, registered_gate_kinds=gate_registry.names()
         )
+
+
+def build_config_search_optimizer(
+    cfg: OptimizeRunConfig, *, pipelines_dir: Path | None = None
+) -> ConfigSearchOptimizer:
+    """Construct the config_search optimizer from the run config (spec §3.5).
+
+    The one place ``ArchitectureSearchSettings`` becomes a live optimizer —
+    the CLI (real path and dry-run echo) builds through here so the YAML
+    section can never silently drift from what a run executes. An explicit
+    section ``seed`` wins; unset falls back to the top-level ``rng_seed``.
+
+    Raises:
+        ValueError: the config carries no ``config_search`` section.
+    """
+    if cfg.config_search is None:
+        raise ValueError(
+            "run config has no config_search: section — required when optimizer: config_search"
+        )
+    settings = cfg.config_search
+    kwargs: dict[str, object] = {
+        "strategy": settings.strategy,
+        "seed": settings.seed if settings.seed is not None else cfg.rng_seed,
+        "sample_size": settings.sample_size,
+        "dimensions": dict(settings.dimensions),
+    }
+    if pipelines_dir is not None:
+        kwargs["pipelines_dir"] = pipelines_dir
+    return ConfigSearchOptimizer(**kwargs)  # type: ignore[arg-type]
 
 
 def _require_registered(registry: object, name: str, *, kind: str) -> None:

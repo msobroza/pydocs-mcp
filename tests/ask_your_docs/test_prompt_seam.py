@@ -60,6 +60,51 @@ class TestSystemPromptSeam:
         assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
         assert parameter.default is None
 
+    def test_build_agent_hands_the_candidate_prompt_to_the_graph_builder(self, monkeypatch) -> None:
+        """AC-1's core assertion: the prompt build_agent hands the graph
+        builder (AgentBuildContext.prompt) carries the candidate system
+        section — asserted at the boundary, not on the helper, so a future
+        re-wiring of the build path cannot silently drop the injection."""
+        from pydocs_mcp.ask_your_docs import agent as agent_mod
+        from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+
+        class _FakeMcpClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def get_tools(self):
+                return []
+
+        captured: list[str] = []
+
+        def _capture_build(name, *, llm, tools, prompt, capabilities, config, model):
+            captured.append(prompt)
+            return "GRAPH"
+
+        monkeypatch.setattr(agent_mod, "MultiServerMCPClient", _FakeMcpClient)
+        monkeypatch.setattr(agent_mod, "_build_architecture", _capture_build)
+        # ChatOpenAI requires a credential at construction; never called.
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        capabilities = ModelCapabilities(multimodal=False, source="override")
+
+        async def _build(prompts):
+            return await build_agent(
+                "/tmp/ws",
+                "m",
+                catalog=_CATALOG,
+                architecture="text_react",
+                capabilities=capabilities,
+                prompts=prompts,
+            )
+
+        asyncio.run(_build(AskPrompts(system_prompt="CANDIDATE-SYSTEM")))
+        asyncio.run(_build(None))
+        assert captured[0] == _assemble_prompt(
+            "text_react", _CATALOG, AskPrompts(system_prompt="CANDIDATE-SYSTEM")
+        )
+        assert captured[0].startswith("CANDIDATE-SYSTEM\n")
+        assert captured[1] == _assemble_prompt("text_react", _CATALOG, None)
+
 
 class TestRewriteSeam:
     def _received(self, fake: FakeLlm) -> str:
