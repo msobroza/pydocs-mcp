@@ -102,14 +102,16 @@ def test_factory_returns_none_when_disabled() -> None:
 
 
 def test_unknown_provider_raises(monkeypatch) -> None:
+    # Through the PUBLIC factory, pinning both the cfg.provider dispatch and
+    # the "Unknown multi-vector embedder provider" prefix (the embedding-side
+    # twin is pinned by test_build_embedder.py). model_construct bypasses the
+    # Literal so the runtime path is reachable.
     _install_fake_pylate(monkeypatch)
-    cfg = LateInteractionConfig(enabled=True)
-    with pytest.raises((ValueError, ValidationError)):
-        from pydocs_mcp.extraction.strategies.embedders import (
-            _build_multi_vector_embedder_for_provider,
-        )
+    from pydocs_mcp.extraction.strategies.embedders import build_multi_vector_embedder
 
-        _build_multi_vector_embedder_for_provider("vespa", cfg)
+    cfg = LateInteractionConfig.model_construct(enabled=True, provider="vespa")
+    with pytest.raises(ValueError, match="Unknown multi-vector embedder provider: 'vespa'"):
+        build_multi_vector_embedder(cfg)
 
 
 def test_lazy_import_raises_actionable(monkeypatch) -> None:

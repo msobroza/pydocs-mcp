@@ -192,7 +192,7 @@ Quick map of the patterns this codebase uses; deeper rules live in the sections 
 - **Pipeline pattern (sklearn-shaped)** — `RetrieverPipeline = [(name, RetrieverStep), …]` for read paths; `IngestionPipeline` + `IngestionStage` for the write path. Pipeline-IS-a-Step composition (a pipeline is itself a step, so sub-pipelines nest without an adapter). See §"Naming: retrieval vs ingestion pipelines".
 - **Strategy pattern** — chunkers, member extractors, dependency resolvers, embedders are swappable strategies behind Protocols.
 - **Composition root** — `server.py`, `__main__.py`, `storage/factories.py` are the only places that wire concrete adapters; everything downstream takes a `uow_factory: Callable[[], UnitOfWork]` closure.
-- **Registry + decorator** — `@step_registry.register("name")`, `@stage_registry.register("name")`, `@predicate("name")`, `@formatter_registry.register("name")` keep YAML-addressable extensions one decorator away from being usable.
+- **Registry + decorator** — `@step_registry.register("name")`, `@stage_registry.register("name")`, `@predicate("name")`, `@formatter_registry.register("name")`, `@embedder_registry.register("name")` keep YAML-addressable extensions one decorator away from being usable. Embedder-provider builders (`extraction/strategies/embedders/providers.py`) keep heavy concrete imports function-local so registration never loads a model runtime; a parity test pins each provider registry against its config `provider` Literal.
 - **Substitution boundary** — `_fast.py` resolves to either the Rust `_native` module or the pure-Python `_fallback.py`. Same signatures both sides (§"Fallback contract").
 
 **Code conventions:**

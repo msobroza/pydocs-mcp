@@ -161,3 +161,30 @@ def test_build_openai_rejects_local_directory(tmp_path) -> None:
     # The rejection must happen before any embedder work — no offline env
     # mutation (enable_hf_offline) may leak from this path.
     assert (os.environ.get("HF_HUB_OFFLINE"), os.environ.get("TRANSFORMERS_OFFLINE")) == env_before
+
+
+def test_build_openai_threads_model_and_dim() -> None:
+    # Kills the mutant class the registry review surfaced: a builder that
+    # hardcodes the model id or sources dim from the wrong config field
+    # survives every other test (the parity test compares provider NAMES
+    # only, and the local-dir rejection test never reaches the return).
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    captured = {}
+
+    class _Fake:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    fake_mod = MagicMock()
+    fake_mod.OpenAIEmbedder = _Fake
+    with patch.dict(
+        sys.modules,
+        {"pydocs_mcp.extraction.strategies.embedders.openai": fake_mod},
+    ):
+        build_embedder(
+            EmbeddingConfig(provider="openai", model_name="text-embedding-3-small", dim=1536)
+        )
+
+    assert captured == {"model_name": "text-embedding-3-small", "dim": 1536}
