@@ -56,6 +56,52 @@ def validate_attachment(att: ImageAttachment, cfg: ImagesConfig) -> None:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyVerdict:
+    """The text-only degradation decision for a turn carrying images (§3.8)."""
+
+    kind: str  # "reject" | "describe"
+    message: str  # reject: the surfaced error; describe: the question prefix note
+
+
+def text_only_policy(
+    images: tuple[ImageAttachment, ...],
+    capabilities: object,
+    cfg: object,
+    *,
+    model: str,
+) -> PolicyVerdict | None:
+    """Decide the turn's fate when images meet a text-only model.
+
+    Returns None when no policy applies (no images, or the model can see).
+    Images are user-requested content — the raising side of the Null Object
+    asymmetry — so ``reject`` (default) fails loudly with the fix in hand;
+    ``describe`` proceeds text-only with an explicit cannot-see note.
+    """
+    if not images or getattr(capabilities, "multimodal", False):
+        return None
+    names = ", ".join(att.name for att in images)
+    source = getattr(capabilities, "source", "default")
+    if getattr(cfg, "text_only_fallback", "reject") == "describe":
+        return PolicyVerdict(
+            kind="describe",
+            message=(
+                f"[note: the user attached image(s) ({names}) that this model "
+                "cannot see — say so explicitly in your answer and answer from "
+                "text only]"
+            ),
+        )
+    return PolicyVerdict(
+        kind="reject",
+        message=(
+            f"The model {model!r} was detected as text-only (source={source}), "
+            "so the attached image cannot be read. Remove the image, switch to "
+            "a vision-capable model, or — if the detection is wrong — set "
+            "ask_your_docs.multimodal.detection.override: true in your config."
+        ),
+    )
+
+
 def weave_attachments(attached: list[str], question: str) -> str:
     """Prepend de-duped attached symbols to a question as plain context text."""
     seen: dict[str, None] = {}
@@ -70,6 +116,8 @@ def weave_attachments(attached: list[str], question: str) -> str:
 
 __all__ = (
     "ImageAttachment",
+    "PolicyVerdict",
+    "text_only_policy",
     "validate_attachment",
     "weave_attachments",
 )

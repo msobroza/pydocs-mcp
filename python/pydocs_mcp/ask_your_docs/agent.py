@@ -229,11 +229,34 @@ async def build_agent(
     return graph, llm
 
 
+def _history_line(m) -> str:
+    """One REWRITE_PROMPT history line — never a Python-list repr.
+
+    History is text-by-construction (§3.6), but harden anyway: content-block
+    messages flatten to their text parts plus "[image]" markers, so a
+    multimodal message can never mangle the rewrite prompt.
+    """
+    content = m.content
+    if isinstance(content, str):
+        return f"{m.type}: {content}"
+    parts = [
+        b.get("text", "") if b.get("type") == "text" else "[image]"
+        for b in content
+        if isinstance(b, dict)
+    ]
+    return f"{m.type}: {' '.join(p for p in parts if p)}"
+
+
 async def reformulate(llm: ChatOpenAI, history: list, question: str) -> str:
-    """Condense the last question + conversation into a standalone question."""
+    """Condense the last question + conversation into a standalone question.
+
+    Text-only by contract: it runs on the woven question BEFORE image blocks
+    are attached (§3.6 decision 1), and history carries only text +
+    placeholders — ``_history_line`` enforces that shape defensively.
+    """
     if not history:
         return question
-    lines = "\n".join(f"{m.type}: {m.content}" for m in history)
+    lines = "\n".join(_history_line(m) for m in history)
     reply = await llm.ainvoke(REWRITE_PROMPT.format(history=lines, question=question))
     return str(reply.content).strip() or question
 
@@ -244,6 +267,8 @@ async def ask(
     question: str,
     scope: ToolScope | None = None,
     max_history: int = 8,
+    *,
+    images: tuple = (),
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
 
@@ -251,15 +276,27 @@ async def ask(
     the interceptor reads) and surfaced to the model as a "[pinned scope: ...]"
     note. Only the note is transient — ``history`` keeps the BARE question, so a
     later scope change can't leak a stale pin into reformulation or the answer.
+
+    ``images`` (ImageAttachment tuple) are per-turn ephemera like the scope
+    note: the blocks ride only on the CURRENT HumanMessage; history keeps a
+    textual "[attached images: ...]" placeholder so later reformulations know
+    an image existed without re-paying vision tokens (§3.6 decision 2).
     """
     scope = scope or {}
     token = _active_scope.set(scope)
     try:
         prefixed = scope_prefix(scope) + question
-        result = await agent.ainvoke({"messages": [*history, HumanMessage(prefixed)]})
+        content: str | list = prefixed
+        if images:
+            content = [
+                {"type": "text", "text": prefixed},
+                *(att.as_content_block() for att in images),
+            ]
+        result = await agent.ainvoke({"messages": [*history, HumanMessage(content=content)]})
         answer = result["messages"][-1].content
     finally:
         _active_scope.reset(token)
-    history += [HumanMessage(question), AIMessage(answer)]
+    placeholder = f" [attached images: {', '.join(att.name for att in images)}]" if images else ""
+    history += [HumanMessage(question + placeholder), AIMessage(answer)]
     del history[:-max_history]
     return answer
