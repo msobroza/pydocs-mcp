@@ -60,7 +60,10 @@ pinned project / package / code scope, so retrieval stays inside the chosen
 slice no matter what the model asks for.
 
 <!-- agent-graph.png is the compiled agent's own graph, regenerated with
-     agent.get_graph().draw_mermaid_png() (see pydocs_mcp.ask_your_docs.agent). -->
+     agent.get_graph().draw_mermaid_png() (see pydocs_mcp.ask_your_docs.agent).
+     Every registered architecture (text_react / inline / vision_subagent /
+     auto) builds a graph exposing get_graph(), so the picture can be
+     regenerated per architecture by selecting it in YAML first. -->
 
 ## Setup
 
@@ -101,6 +104,21 @@ is forwarded to `streamlit run` (e.g. `-- --server.headless true`). You can
 also set `PYDOCS_WORKSPACE`, `LLM_MODEL`, `OPENAI_BASE_URL`, `PYDOCS_CONFIG`
 in the environment instead. Answers cite `project` + `package.module` and
 render code in fenced blocks.
+
+The agent's behavior is configured under the `ask_your_docs:` block of the
+same pydocs-mcp YAML the `--config` flag points at: `architecture` (`auto`
+routes by the detected model capability; `text_react` pins the classic text
+agent; `inline` / `vision_subagent` are the image-capable graphs),
+`multimodal.detection` (the capability-detection ladder — the sidebar badge
+shows the verdict and its source), `multimodal.text_only_fallback`
+(`reject` | `describe`), and `images` limits. Every key also accepts an env
+override of the form `PYDOCS_ASK_YOUR_DOCS__ARCHITECTURE=inline`
+(`PYDOCS_` prefix, `__`-nested path). On vision-capable models, attach
+images (screenshots, error dialogs, diagrams) with the paperclip in the
+chat input; recent images stay reinspectable — when a later question
+refers back to one, the agent's `reinspect_images` tool re-reads just the
+relevant image(s) against the new question (`images.session_retention`
+bounds the store).
 
 The sidebar's **Scope** pickers (project / own code vs dependencies / package)
 pin every question to a slice of the corpus. A `langchain-mcp-adapters` tool

@@ -19,8 +19,16 @@ def test_build_parser_core_only() -> None:
 
 def test_module_import_stays_lazy() -> None:
     """Importing the cli module must not pull the agent stack (the
-    subpackage's lazy-import contract, CLAUDE.md §Key Technical Details)."""
-    import pydocs_mcp.ask_your_docs.cli
+    subpackage's lazy-import contract, CLAUDE.md §Key Technical Details).
+    Checked in a fresh subprocess: in a venv that HAS the extra installed,
+    sibling tests legitimately import streamlit, which would false-fail an
+    in-process sys.modules check."""
+    import subprocess
 
-    assert "streamlit" not in sys.modules
-    assert "langgraph" not in sys.modules
+    code = (
+        "import sys\n"
+        "import pydocs_mcp.ask_your_docs.cli\n"
+        "assert 'streamlit' not in sys.modules\n"
+        "assert 'langgraph' not in sys.modules\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

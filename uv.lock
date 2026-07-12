@@ -3466,7 +3466,7 @@ requires-dist = [
     { name = "scipy", marker = "extra == 'graph'", specifier = ">=1.10,<2.0" },
     { name = "sentence-transformers", marker = "extra == 'sentence-transformers'", specifier = ">=5.0,<6.0" },
     { name = "sentence-transformers", extras = ["openvino"], marker = "extra == 'openvino'", specifier = ">=5.0,<6.0" },
-    { name = "streamlit", marker = "extra == 'ask-your-docs'", specifier = ">=1.36" },
+    { name = "streamlit", marker = "extra == 'ask-your-docs'", specifier = ">=1.43" },
     { name = "streamlit-agraph", marker = "extra == 'ask-your-docs'", specifier = ">=0.0.45" },
     { name = "tiktoken", specifier = ">=0.7,<1.0" },
     { name = "transformers", marker = "extra == 'late-interaction'", specifier = ">=4.57.3" },

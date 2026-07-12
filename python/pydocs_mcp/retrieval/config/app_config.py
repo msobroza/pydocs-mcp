@@ -23,6 +23,7 @@ from pydantic_settings import (
 )
 
 from pydocs_mcp.extraction.config import ExtractionConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 from pydocs_mcp.retrieval.config.embedder_models import (
     _DEFAULT_DEVICE,
     EmbeddingConfig,
@@ -166,6 +167,11 @@ class AppConfig(BaseSettings):
     late_interaction: LateInteractionConfig = Field(
         default_factory=LateInteractionConfig,
     )
+    # Ask-your-docs agent config (architecture selection + multimodal policy).
+    # First agent-side AppConfig consumer — sanctioned by the YAML litmus test:
+    # which agent architecture answers a question is A/B-testable behavior.
+    # Light pydantic; the extra's heavy deps never load through this field.
+    ask_your_docs: AskYourDocsConfig = Field(default_factory=AskYourDocsConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside

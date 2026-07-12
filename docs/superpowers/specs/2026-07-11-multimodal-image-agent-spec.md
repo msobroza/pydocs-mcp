@@ -1120,3 +1120,85 @@ type-check), `complexipy ≤15`, `vulture`, coverage ≥90% on the core suite
    if the future `IngestionStage → IngestionStep` rename (CLAUDE.md
    §Naming) happens, `AgentArchitecture` should be revisited for naming
    consistency (`AgentBlueprint`?). No action now.
+
+---
+
+## Amendment A1 (2026-07-12, implemented with the initial PR — user-directed scope widening)
+
+**§3.10 `reinspect_images` — re-contextualizing earlier images to a new
+question.** The shipped design deliberately dropped image bytes after each
+turn (§3.6 decision 2), leaving "look at the image again" to manual
+re-attachment — the recorded con of §3.4.2 and §4.9. This amendment closes
+that gap with an **agent-local LangChain tool** (NOT an MCP tool — the
+six-tool surface stays fixed; the tool lives beside the MCP-adapter tools in
+the agent's tool list):
+
+- **Session image store.** `attachments.update_image_store` keeps the last
+  `images.session_retention` (default 12, `0` disables, new `ImagesConfig`
+  field) attached images per session, newest-last with re-attach refresh.
+  Bytes live OUTSIDE conversation history — the history non-goal ("no image
+  persistence in history beyond a textual placeholder") is untouched; the
+  store is UI session state, not message state.
+- **The tool.** `reinspect.build_reinspect_tool(llm)` →
+  `reinspect_images(names, question)`: the ReAct agent picks the relevant
+  names (history placeholders show them) and passes the CURRENT question;
+  one vision call over ONLY the selected images reuses
+  `_VISION_EXTRACTION_PROMPT`, returning the same ERROR:/SYMBOL:/… fact
+  contract. Unknown names / empty store return model-facing guidance text
+  (tools must not raise at the model).
+- **Per-session isolation.** The compiled graph is cached across sessions,
+  so the store rides a new `agent._active_image_store` contextvar set inside
+  `ask(..., image_store=...)` — exactly the `_active_scope` pattern.
+- **Capability gating.** `architectures/base.effective_tools(ctx)` appends
+  the tool only when `capabilities.multimodal` — a text-only build carries no
+  tool it can never satisfy. Consequence for AC3's "byte-identical" anchor:
+  `text_react` remains byte-identical on text-only capabilities (the
+  pre-image deployment case); on vision models its graph gains the tools
+  node — a deliberate extension.
+
+**Amended ACs:**
+- **AC26.** The tool re-inspects ONLY the selected names in ONE vision call;
+  unknown names return guidance listing the stored names; an empty store
+  returns a re-attach hint — no vision call in either failure case.
+- **AC27.** `ask()` pins the per-question store snapshot to the contextvar
+  and resets it after the turn; the store helper evicts oldest beyond
+  `session_retention`, refreshes position on re-attach, and `0` disables.
+- **AC28.** Vision-capable builds of every architecture expose the tool
+  (graph has a tools node even with zero MCP tools); text-only builds don't.
+
+**A1 necessity gating (same-day follow-up):** every reinspect call is a full
+vision-model call, so three deterministic guards keep it to when-necessary:
+(1) the store snapshot a turn receives holds only PRIOR turns' images (the
+current attachment was just seen/extracted — same-turn re-reads are waste);
+(2) repeated same-args calls within a turn return memoized facts (free);
+(3) a per-turn budget — `images.max_reinspect_per_turn` (default 2, 0
+disables) — beyond which the tool refuses and directs the model to the facts
+it already has. Budget/memo state rides a per-turn contextvar set in
+`ask()`; the tool description states the cost explicitly. AC26 extends:
+memoized repeats and over-budget calls make no vision call.
+
+**A1 prompt centralization (same-day follow-up):** every model-facing prompt
+string moved to `ask_your_docs/prompts/` — versioned `.j2` templates
+(`system_react_v1`, `rewrite_v1`, `image_analysis_section_v1`,
+`vision_extraction_v1`, `reinspect_description_v1`,
+`reinspect_budget_message_v1`) rendered byte-identically to the previous
+inline constants through the shared retrieval loader
+(`render_prompt_from`), following the `retrieval/prompts` never-edit-shipped-
+versions rule. Old import paths re-export where consumers existed. Variant
+SELECTION (a YAML knob) is deliberately deferred to the agent
+auto-optimization spec.
+
+**A1 per-architecture prompt namespaces (same-day follow-up):** the flat
+prompt directory became convention-bound namespaces — an architecture
+registered as ``<name>`` (via the new ``@register_architecture`` decorator,
+which sets ``architecture_name`` AND delegates to ``agent_registry``) gets
+its prompts from ``prompts/<name>/*.j2`` with ``prompts/shared/`` fallback
+(``prompts_for(name)`` / ``cls.prompts()``; unknown templates raise listing
+both searched locations). Layout: ``shared/`` carries ``system_v1``,
+``rewrite_v1``, ``vision_extraction_v1`` and the reinspect strings;
+``inline/`` carries ``system_suffix_v1``. ``build_agent`` resolves the
+system prompt through the selected architecture's namespace, so overriding
+any architecture's system prompt is one dropped-in
+``prompts/<name>/system_v1.j2`` — no code edit. (``auto`` composes with its
+own — shared — system prompt even when delegating; a per-arch override
+applies when that architecture is selected directly.)

@@ -15,3 +15,17 @@ embedding:
   dim: 2560
   batch_size: 2          # 4B model — small batches keep VRAM bounded
   max_seq_length: 2048
+
+# Agent architecture + image handling (the ask-your-docs UI reads this same
+# file). Defaults shown; uncomment to change.
+# ask_your_docs:
+#   architecture: auto            # auto | text_react | inline | vision_subagent
+#   multimodal:
+#     preferred_architecture: vision_subagent
+#     detection:
+#       override: null            # force true/false when the ladder is wrong
+#     text_only_fallback: reject  # reject | describe
+#   images:
+#     max_per_turn: 3
+#     max_bytes: 5000000
+#     max_reinspect_per_turn: 2

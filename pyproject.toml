@@ -119,7 +119,7 @@ ask-your-docs = [
     "langgraph>=0.2",
     "langchain-mcp-adapters>=0.3",   # tool_interceptors API (landed in 0.1.12)
     "langchain-openai>=0.2",
-    "streamlit>=1.36",
+    "streamlit>=1.43",               # WHY: chat_input(accept_file=...) — image attachments
     "streamlit-agraph>=0.0.45",      # interactive node-link graph + click-return (graph page)
 ]
 
@@ -184,6 +184,7 @@ include = [
   "python/pydocs_mcp/defaults/*.json",
   "python/pydocs_mcp/pipelines/*.yaml",
   "python/pydocs_mcp/retrieval/prompts/*.j2",
+  "python/pydocs_mcp/ask_your_docs/prompts/*.j2",
 ]
 
 [tool.pytest.ini_options]
