@@ -40,6 +40,7 @@ from pydocs_eval.optimize._agent_track_binding import (
     _DEFAULT_TASK_TIMEOUT_SECONDS,
 )
 from pydocs_eval.optimize._types import OptimizationBudget
+from pydocs_eval.optimize.ask_binding import _DEFAULT_ASK_ARCHITECTURE
 from pydocs_eval.optimize.fitness.paired_agent import (
     _DEFAULT_PARITY_FLOOR,
     _DEFAULT_WEIGHTS,
@@ -65,11 +66,6 @@ from pydocs_eval.optimize.rubric.model import (
 # WHY: the v1 dataset default — the primary agent-track track (spec §D14). The
 # YAML restates it for clarity; this constant is the single Python source.
 _DEFAULT_DATASET_NAME = "swe-qa-pro"
-
-# WHY: prompt campaigns pin every candidate to ONE architecture (the
-# no-joint-search rule, spec §3.3.2/§4.2). "text_react" is the product
-# agent_registry's plain text ReAct graph — the ask default on text models.
-_DEFAULT_ASK_ARCHITECTURE = "text_react"
 
 # WHY: mirrors the ask-your-docs CLI default workspace so a run config that
 # omits the key scores against the same index the interactive agent reads.

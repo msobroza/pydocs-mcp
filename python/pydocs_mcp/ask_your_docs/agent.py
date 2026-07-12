@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import logging
 import sys
+from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -140,6 +141,38 @@ def _build_architecture(
     return arch_cls().build(ctx)
 
 
+@dataclass(frozen=True, slots=True)
+class AskPrompts:
+    """Prompt overrides for evaluation harnesses. ``None`` → shipped templates.
+
+    ``system_prompt`` substitutes the system *component* at the one assembly
+    site inside :func:`build_agent` (the catalog listing and any
+    architecture-appended sections stay outside the override).
+    ``rewrite_prompt`` is a ``str.format`` template with ``{history}`` /
+    ``{question}`` placeholders consumed by :func:`reformulate` — the harness
+    threads it into its own reformulate call; ``build_agent`` never reads it.
+    """
+
+    system_prompt: str | None = None
+    rewrite_prompt: str | None = None
+
+
+def _assemble_prompt(name: str, catalog: dict[str, list[str]], prompts: AskPrompts | None) -> str:
+    """The ONE prompt-assembly site: candidate-or-shipped system + catalog.
+
+    The fallback is the per-architecture render (``prompts_for(name)``), never
+    the ``SYSTEM_PROMPT`` constant — a ``prompts/<name>/system_v1.j2``
+    override must apply whenever that architecture is selected. A second
+    assembly site is the one forbidden shape (single source of truth).
+    """
+    resolved_system = (
+        prompts.system_prompt
+        if prompts and prompts.system_prompt
+        else prompts_for(name).render("system_v1")
+    )
+    return f"{resolved_system}\nIndexed projects and packages:\n{render_catalog(catalog)}"
+
+
 async def build_agent(
     workspace: str,
     model: str,
@@ -151,6 +184,7 @@ async def build_agent(
     architecture: str | None = None,
     config: AskYourDocsConfig | None = None,
     capabilities: ModelCapabilities | None = None,
+    prompts: AskPrompts | None = None,
 ):
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
@@ -164,7 +198,9 @@ async def build_agent(
 
     ``architecture`` overrides ``config.architecture`` (default "auto" —
     routed by the detected capability); ``capabilities`` is injectable so the
-    UI can detect once and share the result with its badge.
+    UI can detect once and share the result with its badge. ``prompts`` is the
+    evaluation-harness seam (:class:`AskPrompts`) — the app and CLI never pass
+    it, so product behavior is byte-identical by default.
     """
     command, *prefix = pydocs_cmd or [sys.executable, "-m", "pydocs_mcp"]
     # --config is a root flag: it must come BEFORE the serve subcommand.
@@ -191,8 +227,7 @@ async def build_agent(
     # `auto` composes with its own (shared) system prompt even when it
     # delegates the graph — a per-arch system override applies when that
     # architecture is selected directly.
-    system = prompts_for(name).render("system_v1")
-    prompt = f"{system}\nIndexed projects and packages:\n{render_catalog(catalog)}"
+    prompt = _assemble_prompt(name, catalog, prompts)
     caps = capabilities
     if caps is None:
         caps = await detect_capabilities(model, base_url, cfg.multimodal.detection)
@@ -226,17 +261,31 @@ def _history_line(m) -> str:
     return f"{m.type}: {' '.join(p for p in parts if p)}"
 
 
-async def reformulate(llm: ChatOpenAI, history: list, question: str) -> str:
+async def reformulate(
+    llm: ChatOpenAI,
+    history: list,
+    question: str,
+    *,
+    rewrite_template: str | None = None,
+) -> str:
     """Condense the last question + conversation into a standalone question.
 
     Text-only by contract: it runs on the woven question BEFORE image blocks
     are attached (§3.6 decision 1), and history carries only text +
     placeholders — ``_history_line`` enforces that shape defensively.
+
+    ``rewrite_template`` is the evaluation-harness override (a ``str.format``
+    template with ``{history}`` / ``{question}``); ``None`` — the app's and
+    CLI's only shape — renders the shipped ``rewrite_v1`` template.
     """
     if not history:
         return question
     lines = "\n".join(_history_line(m) for m in history)
-    reply = await llm.ainvoke(rewrite_prompt(history=lines, question=question))
+    if rewrite_template is not None:
+        prompt_text = rewrite_template.format(history=lines, question=question)
+    else:
+        prompt_text = rewrite_prompt(history=lines, question=question)
+    reply = await llm.ainvoke(prompt_text)
     return str(reply.content).strip() or question
 
 

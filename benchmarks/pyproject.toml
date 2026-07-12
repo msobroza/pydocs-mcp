@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pydocs-mcp-eval"
-version = "0.1.0"
+version = "0.2.0"
 description = "Benchmark suite for pydocs-mcp (RepoQA-SNF + MLflow)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -52,9 +52,15 @@ mlflow = ["mlflow>=2.0"]
 # _CONSUMED_SKILLOPT_SURFACE constant and its canary test
 # (benchmarks/tests/optimize/test_skillopt_adapter.py).
 optimizers-skillopt = ["skillopt>=0.2,<0.3"]
+# Drives the product ask agent in-process (LangGraphAskRunner + the
+# architecture bridges in optimize/ask_binding.py). Floor = the first product
+# release shipping the build_agent(prompts=...) seam — the same version-floor
+# rationale as [retrieval]; pin the real number when that release publishes.
+ask = ["pydocs-mcp[ask-your-docs]>=0.5.2"]
 # The union of every extra — one install target for a full-featured dev/CI env.
 all = [
     "pydocs-mcp>=0.5.1",
+    "pydocs-mcp[ask-your-docs]>=0.5.2",
     "mlflow>=2.0",
     "skillopt>=0.2,<0.3",
 ]
