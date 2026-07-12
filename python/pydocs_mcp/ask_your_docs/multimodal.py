@@ -218,6 +218,35 @@ async def detect_capabilities(
     return caps
 
 
+async def _endpoint_rung(
+    model: str, base_url: str, http_get: HttpGet | None
+) -> ModelCapabilities | None:
+    """Rung 3 — positive-only signal; network trouble/absence falls through."""
+    getter = http_get or _default_http_get
+    try:
+        entry = await _with_rung_retry(lambda: getter(base_url, model, _PROBE_TIMEOUT_SECONDS))
+    except Exception:
+        return None  # network trouble → fall through, never decide
+    if isinstance(entry, dict) and _entry_hints_vision(entry):
+        return ModelCapabilities(multimodal=True, source="endpoint")
+    return None
+
+
+async def _image_probe_rung(
+    model: str, base_url: str | None, probe_llm: ProbeLlm | None
+) -> ModelCapabilities | None:
+    """Rung 4 — ground truth, opt-in (costs one real call). Only an
+    image-rejection error decides text-only; 5xx/timeout falls through."""
+    prober = probe_llm or _default_probe_llm
+    try:
+        await prober(model, base_url, _PROBE_TIMEOUT_SECONDS)
+        return ModelCapabilities(multimodal=True, source="probe")
+    except Exception as exc:
+        if _looks_like_image_rejection(exc):
+            return ModelCapabilities(multimodal=False, source="probe")
+        return None
+
+
 async def _run_ladder(
     model: str,
     base_url: str | None,
@@ -232,23 +261,14 @@ async def _run_ladder(
         verdict = _static_lookup(model)
         if verdict is not None:
             return ModelCapabilities(multimodal=verdict, source="static")
-    if cfg.endpoint_probe and base_url:  # rung 3 — positive-only signal
-        getter = http_get or _default_http_get
-        try:
-            entry = await _with_rung_retry(lambda: getter(base_url, model, _PROBE_TIMEOUT_SECONDS))
-        except Exception:
-            entry = None  # network trouble → fall through, never decide
-        if isinstance(entry, dict) and _entry_hints_vision(entry):
-            return ModelCapabilities(multimodal=True, source="endpoint")
-    if cfg.image_probe:  # rung 4 — ground truth, opt-in (costs a real call)
-        prober = probe_llm or _default_probe_llm
-        try:
-            await prober(model, base_url, _PROBE_TIMEOUT_SECONDS)
-            return ModelCapabilities(multimodal=True, source="probe")
-        except Exception as exc:
-            if _looks_like_image_rejection(exc):
-                return ModelCapabilities(multimodal=False, source="probe")
-            # 5xx / timeout / unknown error → fall through, never decide.
+    if cfg.endpoint_probe and base_url:
+        caps = await _endpoint_rung(model, base_url, http_get)
+        if caps is not None:
+            return caps
+    if cfg.image_probe:
+        caps = await _image_probe_rung(model, base_url, probe_llm)
+        if caps is not None:
+            return caps
     return ModelCapabilities(multimodal=False, source="default")  # rung 5
 
 
