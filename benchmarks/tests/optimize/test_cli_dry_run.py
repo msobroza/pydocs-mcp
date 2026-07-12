@@ -37,3 +37,40 @@ async def test_dry_run_walks_pipeline_spending_nothing(tmp_path, capsys) -> None
     # all printed.
     for check in ("seed", "ladder", "split", "optimizer"):
         assert check in out.lower()
+
+
+async def test_dry_run_covers_both_shipped_ask_configs(tmp_path, capsys) -> None:
+    # AC-17: $0.00, full orchestrator pass, on each shipped ask config.
+    for name in ("optimize_ask_prompt.yaml", "optimize_ask_architecture.yaml"):
+        code = await cli_main(
+            [
+                "--config",
+                str(_shipped(name)),
+                "--dry-run",
+                "--ledger",
+                str(tmp_path / f"{name}.jsonl"),
+            ]
+        )
+        out = capsys.readouterr().out
+        assert code == 0 and "$0.00" in out, name
+        assert "orchestrator pass" in out, name
+        assert "ask binding" in out, name
+
+
+async def test_dry_run_reports_missing_ask_extra_as_skipped(tmp_path, capsys, monkeypatch) -> None:
+    # AC-17: an absent [ask] extra is reported SKIPPED, never required.
+    from pydocs_eval.optimize import ask_binding
+
+    monkeypatch.setattr(ask_binding, "_ask_extra_missing_module", lambda: "langgraph")
+    code = await cli_main(
+        [
+            "--config",
+            str(_shipped("optimize_ask_prompt.yaml")),
+            "--dry-run",
+            "--ledger",
+            str(tmp_path / "t.jsonl"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "ask binding: SKIPPED (extra not installed)" in out

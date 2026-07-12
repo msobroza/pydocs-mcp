@@ -105,3 +105,23 @@ def test_unregistered_gate_kind_raises_at_load(tmp_path) -> None:
     bad = _ASK_RUBRIC_YAML.replace("kind: min_answer_chars", "kind: min_chars")
     with pytest.raises(KeyError, match="min_answer_chars"):
         load_run_config(_write(tmp_path, bad))
+
+
+def test_shipped_ask_configs_load_typed() -> None:
+    prompt_cfg = load_run_config(_shipped("optimize_ask_prompt.yaml"))
+    assert prompt_cfg.artifact == "ask_prompt" and prompt_cfg.optimizer == "skillopt"
+    assert [r.fitness_name for r in prompt_cfg.ladder.rungs] == ["retrieval", "ask_rubric"]
+    assert prompt_cfg.ask_rubric is not None
+    assert prompt_cfg.budget.max_judge_calls == 200
+
+    arch_cfg = load_run_config(_shipped("optimize_ask_architecture.yaml"))
+    assert arch_cfg.artifact == "ask_architecture" and arch_cfg.optimizer == "config_search"
+    assert arch_cfg.config_search is not None
+    assert arch_cfg.config_search.strategy == "halving"
+    assert set(arch_cfg.config_search.dimensions) == {
+        "architecture",
+        "rewrite_enabled",
+        "scope_pin",
+        "retrieval_config",
+        "max_agent_turns",
+    }

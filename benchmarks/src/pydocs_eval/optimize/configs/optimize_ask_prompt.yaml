@@ -1,0 +1,35 @@
+# Ask-prompt optimization campaign (ask-auto-optimization spec §3.5).
+# Values restate the Python field defaults for user-facing clarity (the
+# sanctioned YAML duplication); the pydantic Field defaults are canonical.
+artifact: ask_prompt
+optimizer: skillopt                  # or critique_refine (low-budget, interpretable)
+ladder:                              # free screen, then paid finals — the ladder
+  - [retrieval, 12, 4]               # is the outermost judge-cost short-circuit
+  - [ask_rubric, 24, 1]
+ask_rubric:
+  runner:
+    model: claude-sonnet-5           # judge + agent model id (agent-track single source)
+    architecture: text_react         # prompt campaigns pin ONE architecture
+    base_url: null
+    workspace: ~/pydocs-index
+    task_timeout_seconds: 900.0
+  gates:
+    - {name: non_empty, kind: min_answer_chars, params: {n: 40}}
+    - {name: grounded, kind: gold_substring, params: {}}
+    - {name: used_tools, kind: used_indexed_tools, params: {n: 1}}
+  criteria:
+    - {name: correctness,  weight: 0.4, description: "Factually correct against the repository."}
+    - {name: grounding,    weight: 0.3, description: "Claims traceable to retrieved symbols/paths."}
+    - {name: completeness, weight: 0.2, description: "Covers every part of the question."}
+    - {name: conciseness,  weight: 0.1, description: "No filler; do not reward verbosity."}
+  fail_fast: true                    # a lost gate spares the judge
+  gate_weight: 0.3
+  rubric_weight: 0.7
+budget:
+  max_trials: 20
+  max_usd: 40.0
+  max_judge_calls: 200
+  wall_timeout_seconds: 14400.0
+dataset:
+  name: swe-qa-pro
+rng_seed: 0

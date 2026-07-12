@@ -1,0 +1,47 @@
+# Ask-architecture search campaign (ask-auto-optimization spec §3.5).
+# The dimensions are the enumerate_space grid. architecture lists only
+# text_react in v1: auto routes to it on text models, and inline /
+# vision_subagent need a vision model + an image task set before they can be
+# measured — the grid stays meaningful via rewrite_enabled x retrieval_config
+# x max_agent_turns.
+artifact: ask_architecture
+optimizer: config_search
+config_search:
+  strategy: halving                  # grid | random | halving
+  seed: 0
+  dimensions:
+    architecture: [text_react]
+    rewrite_enabled: [true, false]
+    scope_pin: [true]
+    retrieval_config: [exp_hybrid_rrf_k60, exp_dense_graph, exp_li]
+    max_agent_turns: [8, 12]
+ladder:
+  - [retrieval, 12, 6]
+  - [ask_rubric, 24, 1]
+ask_rubric:
+  runner:
+    model: claude-sonnet-5
+    architecture: text_react         # ignored: the candidate cell carries it
+    base_url: null
+    workspace: ~/pydocs-index
+    task_timeout_seconds: 900.0
+  gates:
+    - {name: non_empty, kind: min_answer_chars, params: {n: 40}}
+    - {name: grounded, kind: gold_substring, params: {}}
+    - {name: used_tools, kind: used_indexed_tools, params: {n: 1}}
+  criteria:
+    - {name: correctness,  weight: 0.4, description: "Factually correct against the repository."}
+    - {name: grounding,    weight: 0.3, description: "Claims traceable to retrieved symbols/paths."}
+    - {name: completeness, weight: 0.2, description: "Covers every part of the question."}
+    - {name: conciseness,  weight: 0.1, description: "No filler; do not reward verbosity."}
+  fail_fast: true
+  gate_weight: 0.3
+  rubric_weight: 0.7
+budget:
+  max_trials: 24
+  max_usd: 40.0
+  max_judge_calls: 200
+  wall_timeout_seconds: 14400.0
+dataset:
+  name: swe-qa-pro
+rng_seed: 0

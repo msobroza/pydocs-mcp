@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pydocs_eval.optimize import ask_binding
 from pydocs_eval.optimize._agent_track_binding import FakeAgentRunner, FakeJudge
 from pydocs_eval.optimize._split import partition_task_ids
 from pydocs_eval.optimize._types import (
@@ -33,6 +34,7 @@ from pydocs_eval.optimize._types import (
     Provenance,
 )
 from pydocs_eval.optimize.artifacts import ToolDocsArtifact, UsageSkillArtifact  # noqa: F401
+from pydocs_eval.optimize.ask_binding import FakeAskRunner
 from pydocs_eval.optimize.ladder import FitnessLadder
 from pydocs_eval.optimize.optimizers.critique_refine import FakeCritiqueClient
 from pydocs_eval.optimize.optimizers.skillopt import SkillOptOptimizer
@@ -42,6 +44,7 @@ from pydocs_eval.optimize.registries import (
     artifact_registry,
     optimizer_registry,
 )
+from pydocs_eval.optimize.rubric.judge import FakeRubricJudge
 from pydocs_eval.optimize.run_config import OptimizeRunConfig, load_run_config
 from pydocs_eval.optimize.trials_ledger import TrialsLedger
 from pydocs_eval.serialization import dataset_registry
@@ -200,7 +203,10 @@ def _print_optimizer_availability(cfg: OptimizeRunConfig) -> None:
         "critique_refine", client=FakeCritiqueClient(replies=[]), fitness=_ZeroCostFitness()
     )
     print("    - critique_refine: importable (constructs with FakeCritiqueClient)")
+    optimizer_registry.build("config_search")
+    print("    - config_search: importable (dependency-free)")
     _report_skillopt_availability()
+    _report_ask_binding_availability()
 
 
 def _report_skillopt_availability() -> None:
@@ -211,6 +217,16 @@ def _report_skillopt_availability() -> None:
         print(f"    - skillopt: SKIPPED (extra not installed): {exc}")
         return
     print("    - skillopt: available")
+
+
+def _report_ask_binding_availability() -> None:
+    """Probe the ``[ask]`` extra; SKIPPED never fails a dry run (AC-17)."""
+    try:
+        ask_binding._require_ask_extra()
+    except RuntimeError as exc:
+        print(f"    - ask binding: SKIPPED (extra not installed): {exc}")
+        return
+    print("    - ask binding: available (LangGraphAskRunner constructible)")
 
 
 async def _dry_run(cfg: OptimizeRunConfig, *, ledger_path: Path) -> int:
@@ -238,10 +254,12 @@ async def _dry_orchestrator_pass(
     cfg: OptimizeRunConfig, seed: OptimizableArtifact, *, ledger_path: Path
 ) -> OptimizationResult:
     """One full ``run_optimization`` pass on a zero-cost fake fitness (spends $0.00)."""
-    # FakeAgentRunner / FakeJudge are constructed to prove the agent-track doubles
-    # import; the zero-cost fitness stands in for the paid paired-agent run, so the
-    # whole control loop (train firewall + holdout gate) runs without a live agent.
-    _ = (FakeAgentRunner(), FakeJudge())
+    # The scripted doubles are constructed to prove they import — agent-track's
+    # FakeAgentRunner / FakeJudge and the ask layer's FakeAskRunner /
+    # FakeRubricJudge; the zero-cost fitness stands in for the paid rungs, so
+    # the whole control loop (train firewall + holdout gate) runs without a
+    # live agent or judge.
+    _ = (FakeAgentRunner(), FakeJudge(), FakeAskRunner(scripted={}), FakeRubricJudge(scripted={}))
     fitness = _ZeroCostFitness()
     fitness_by_name: Mapping[str, object] = {
         rung.fitness_name: fitness for rung in cfg.ladder.rungs

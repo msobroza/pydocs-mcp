@@ -266,3 +266,73 @@ before the expensive finals rung (24 tasks) touches the survivors. Budget
 generously and keep `budget.max_usd` set: it is the hard outer cap that stops the
 search before it overruns.
 
+
+### Optimizing the ask agent (prompts, architecture, retrieval config)
+
+The same optimize layer drives the interactive ask agent through three
+artifact axes — `ask_prompt` (the system prompt + follow-up rewrite template),
+`ask_architecture` (which agent graph answers, rewrite on/off, retrieval
+overlay, turn cap), and `retrieval_config` (an `AppConfig` overlay YAML) —
+scored by a configurable **gate → rubric → verdict** objective instead of the
+paired judge. Shipped campaign configs:
+`optimize_ask_prompt.yaml` and `optimize_ask_architecture.yaml` under
+`benchmarks/src/pydocs_eval/optimize/configs/`.
+
+**The objective, per sample.** Deterministic gates run first and are free
+(answer length, gold path/symbol present, indexed-tool usage, turn/wall caps).
+With `fail_fast: true` (default) a lost gate zeroes the sample and **skips the
+judge** — that is where judge money is saved. Survivors get ONE judge call (a
+one-shot, tool-less arm) scoring the configured 0-10 criteria; the sample's
+verdict is `gate_weight · gate_pass_fraction + rubric_weight · rubric_score`.
+A judge reply missing any criterion **discards** the sample (never a partial
+score). Criterion weights must sum to 1.0 — a bad config fails at load time.
+
+**Spend model additions.** Everything from the three-layer spend model above
+still applies, plus:
+
+- `budget.max_judge_calls` (default 200) is a count ceiling enforced
+  *predictively* inside the `ask_rubric` fitness — the judge call that would
+  exceed it never starts; the run stops gracefully with the trials so far.
+- The ask-agent runs themselves are driven through an OpenAI-compatible
+  endpoint whose pricing the harness cannot observe, so their `cost_usd` is
+  recorded as `0.0` — the **judge arm is the metered spend** and
+  `max_judge_calls` its operative cap. Size `budget.max_usd` for the judge +
+  holdout-gate spend, and prefer local/self-hosted agent endpoints for large
+  campaigns.
+- The free `retrieval` rung screens candidates on retrieval metrics before
+  any judge money is spent — keep it first in the ladder.
+
+**Preflight.** Same rule as everything above — walk it for $0.00 first; the
+dry run also reports whether the `[ask]` extra is installed (`SKIPPED` is
+fine for a dry run, required for a paid one):
+
+```bash
+python -m pydocs_eval.optimize \
+    --config benchmarks/src/pydocs_eval/optimize/configs/optimize_ask_prompt.yaml --dry-run
+```
+
+**Reading the sample ledger.** Next to the trials ledger, the run writes a
+per-sample sidecar (`samples.jsonl` shape: one line per
+`(candidate fingerprint, split, task_id, objective hash)` with the gate
+booleans, per-criterion scores, verdict, and cost) plus a full transcript file
+per sample under `<output_dir>/samples/<fingerprint12>/<task_id>.json`. To
+answer "which questions did candidate N fail on grounding?", filter the ledger
+lines on `criteria.grounding` and open exactly those transcripts. Reruns
+resume from both ledgers for free; editing the rubric (or re-pinning the
+runner architecture) changes the objective hash, so old samples are never
+falsely reused.
+
+**Landing procedure.** As with the text artifacts, a run emits a *proposal*:
+
+- `ask_prompt` winners land as NEW versioned templates under
+  `python/pydocs_mcp/ask_your_docs/prompts/` (`_vN+1`, never editing a
+  shipped `_vN`), then rerun the prompts-package tests.
+- `ask_architecture` winners are deployment pins (the `ask_your_docs:` YAML
+  block + the serve `--config` overlay + harness turn cap) — nothing lands in
+  product code.
+- `retrieval_config` winners are copied into `benchmarks/configs/pipelines/`
+  or the deployment's serve config.
+
+The shipped eval-suite baseline on PyPI is `pydocs-mcp-eval` 0.1.1; the ask
+axes ship in the next release, and driving a real agent needs
+`pip install "pydocs-mcp-eval[ask]"`.

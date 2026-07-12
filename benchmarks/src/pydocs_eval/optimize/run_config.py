@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -46,6 +47,10 @@ from pydocs_eval.optimize.fitness.paired_agent import (
     _DEFAULT_WEIGHTS,
 )
 from pydocs_eval.optimize.ladder import FitnessLadder
+from pydocs_eval.optimize.optimizers.config_search import (
+    _DEFAULT_SAMPLE_SIZE,
+    _DEFAULT_STRATEGY,
+)
 from pydocs_eval.optimize.orchestrator import _ACCEPT_MARGIN
 from pydocs_eval.optimize.registries import (
     artifact_registry,
@@ -176,6 +181,22 @@ class AskRubricSettings(BaseModel):
         )
 
 
+class ArchitectureSearchSettings(BaseModel):
+    """The ``config_search`` optimizer's knobs (spec §3.5, §4.2).
+
+    ``dimensions`` is the ``enumerate_space`` input — the search grid comes
+    from run config, never from code. Defaults mirror the optimizer's own
+    canonical constants (imported, never re-encoded).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    strategy: Literal["grid", "random", "halving"] = _DEFAULT_STRATEGY
+    seed: int = 0
+    sample_size: int = _DEFAULT_SAMPLE_SIZE
+    dimensions: Mapping[str, tuple[object, ...]] = Field(default_factory=dict)
+
+
 class DatasetSettings(BaseModel):
     """Which dataset (and optional fixture) the run scores against (spec §D7).
 
@@ -210,6 +231,7 @@ class OptimizeRunConfig(BaseModel):
     llm: CritiqueLlmConfig | None = None
     dataset: DatasetSettings = Field(default_factory=DatasetSettings)
     ask_rubric: AskRubricSettings | None = None
+    config_search: ArchitectureSearchSettings | None = None
     # WHY: seeds config_search's RNG and task ordering; recorded in
     # provenance so two runs with identical config + ledger are identical
     # modulo LLM nondeterminism (spec §3.6).
