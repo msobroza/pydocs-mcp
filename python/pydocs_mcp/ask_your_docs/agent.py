@@ -32,7 +32,7 @@ from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities, detect_capabi
 
 # ALL prompt text is centralized under ask_your_docs/prompts/ (versioned .j2
 # templates). SYSTEM_PROMPT is re-exported here for its existing import path.
-from pydocs_mcp.ask_your_docs.prompts import SYSTEM_PROMPT, rewrite_prompt
+from pydocs_mcp.ask_your_docs.prompts import rewrite_prompt
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 logger = logging.getLogger(__name__)
@@ -177,15 +177,22 @@ async def build_agent(
     # the default project, so it can't produce this listing.
     if catalog is None:
         catalog = await asyncio.to_thread(workspace_catalog, workspace)
-    prompt = f"{SYSTEM_PROMPT}\nIndexed projects and packages:\n{render_catalog(catalog)}"
 
     llm = ChatOpenAI(model=model, base_url=base_url)
     cfg = config or AskYourDocsConfig()
+    name = architecture or cfg.architecture
+    # Per-architecture system prompt by the directory convention (an
+    # architecture without prompts/<name>/system_v1.j2 gets shared/). Note:
+    # `auto` composes with its own (shared) system prompt even when it
+    # delegates the graph — a per-arch system override applies when that
+    # architecture is selected directly.
+    system = prompts_for(name).render("system_v1")
+    prompt = f"{system}\nIndexed projects and packages:\n{render_catalog(catalog)}"
     caps = capabilities
     if caps is None:
         caps = await detect_capabilities(model, base_url, cfg.multimodal.detection)
     graph = _build_architecture(
-        architecture or cfg.architecture,
+        name,
         llm=llm,
         tools=tools,
         prompt=prompt,

@@ -38,7 +38,7 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
     from pydocs_mcp.ask_your_docs.prompts import (
         BUDGET_MESSAGE,
         REINSPECT_DESCRIPTION,
-        vision_extraction_prompt,
+        render_shared,
     )
 
     async def reinspect_images(names: list[str], question: str) -> str:
@@ -73,7 +73,7 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
                     content=[
                         {
                             "type": "text",
-                            "text": vision_extraction_prompt(question=question),
+                            "text": render_shared("vision_extraction_v1", question=question),
                         },
                         *(att.as_content_block() for att in selected),
                     ]

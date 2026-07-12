@@ -24,6 +24,24 @@ from pydocs_mcp.retrieval.serialization import ComponentRegistry
 
 agent_registry: ComponentRegistry[AgentArchitecture] = ComponentRegistry()
 
+
+def register_architecture(name: str):
+    """Register an architecture AND bind its prompt namespace in one decorator.
+
+    ``name`` becomes both the registry key and the prompt directory
+    (``prompts/<name>/`` with ``prompts/shared/`` fallback) — convention over
+    configuration, so a new architecture never hardcodes template paths.
+    Duplicate names raise ValueError at import time (ComponentRegistry).
+    """
+    registry_decorator = agent_registry.register(name)
+
+    def decorator(cls: type[AgentArchitecture]) -> type[AgentArchitecture]:
+        cls.architecture_name = name
+        return registry_decorator(cls)
+
+    return decorator
+
+
 # Side-effect imports populate the registry. Heavy langgraph imports live
 # INSIDE these modules' build() methods, which only run when the extra is
 # installed and an agent is actually built.
@@ -39,4 +57,5 @@ __all__ = [
     "AgentArchitectureError",
     "AgentBuildContext",
     "agent_registry",
+    "register_architecture",
 ]

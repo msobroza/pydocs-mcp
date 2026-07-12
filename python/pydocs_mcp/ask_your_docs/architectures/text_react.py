@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pydocs_mcp.ask_your_docs.architectures import agent_registry
+from pydocs_mcp.ask_your_docs.architectures import register_architecture
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
@@ -18,7 +18,7 @@ from pydocs_mcp.ask_your_docs.architectures.base import (
 )
 
 
-@agent_registry.register("text_react")
+@register_architecture("text_react")
 @dataclass(frozen=True, slots=True)
 class TextReactArchitecture(AgentArchitecture):
     requires_multimodal: ClassVar[bool] = False

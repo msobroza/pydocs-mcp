@@ -13,16 +13,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pydocs_mcp.ask_your_docs.architectures import agent_registry
+from pydocs_mcp.ask_your_docs.architectures import register_architecture
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
     effective_tools,
 )
-from pydocs_mcp.ask_your_docs.prompts import vision_extraction_prompt
 
 
-@agent_registry.register("vision_subagent")
+@register_architecture("vision_subagent")
 @dataclass(frozen=True, slots=True)
 class VisionSubagentArchitecture(AgentArchitecture):
     requires_multimodal: ClassVar[bool] = True
@@ -47,7 +46,9 @@ class VisionSubagentArchitecture(AgentArchitecture):
                         content=[
                             {
                                 "type": "text",
-                                "text": vision_extraction_prompt(question=question),
+                                "text": self.prompts().render(
+                                    "vision_extraction_v1", question=question
+                                ),
                             },
                             *images,
                         ]

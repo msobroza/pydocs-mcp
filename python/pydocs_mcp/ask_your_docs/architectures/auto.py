@@ -13,14 +13,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pydocs_mcp.ask_your_docs.architectures import agent_registry
+from pydocs_mcp.ask_your_docs.architectures import agent_registry, register_architecture
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
 )
 
 
-@agent_registry.register("auto")
+@register_architecture("auto")
 @dataclass(frozen=True, slots=True)
 class AutoArchitecture(AgentArchitecture):
     # Validated at ROUTE time, not build time: auto itself builds on any model.

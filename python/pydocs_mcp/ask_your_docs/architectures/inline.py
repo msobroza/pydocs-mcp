@@ -12,19 +12,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pydocs_mcp.ask_your_docs.architectures import agent_registry
+from pydocs_mcp.ask_your_docs.architectures import register_architecture
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
     effective_tools,
 )
-from pydocs_mcp.ask_your_docs.prompts import IMAGE_ANALYSIS_PROMPT_SECTION
+from pydocs_mcp.ask_your_docs.prompts import prompts_for
 
-# Back-compat alias — the prompt text lives in ask_your_docs/prompts/.
-_IMAGE_ANALYSIS_PROMPT_SECTION = IMAGE_ANALYSIS_PROMPT_SECTION
+# Back-compat alias — the text lives at prompts/inline/system_suffix_v1.j2,
+# resolved by the architecture-name convention.
+_IMAGE_ANALYSIS_PROMPT_SECTION = prompts_for("inline").render("system_suffix_v1")
 
 
-@agent_registry.register("inline")
+@register_architecture("inline")
 @dataclass(frozen=True, slots=True)
 class InlineMultimodalArchitecture(AgentArchitecture):
     requires_multimodal: ClassVar[bool] = True
@@ -35,7 +36,7 @@ class InlineMultimodalArchitecture(AgentArchitecture):
         return create_react_agent(
             ctx.llm,
             effective_tools(ctx),
-            prompt=ctx.prompt + _IMAGE_ANALYSIS_PROMPT_SECTION,
+            prompt=ctx.prompt + self.prompts().render("system_suffix_v1"),
         )
 
 

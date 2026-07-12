@@ -61,6 +61,19 @@ class AgentArchitecture(ABC):
     #: the ComponentRegistry precedent (which carries only the class itself).
     requires_multimodal: ClassVar[bool] = False
 
+    #: The registry name — set by @register_architecture, which also binds
+    #: the prompt namespace (prompts/<architecture_name>/ with shared/
+    #: fallback). Never set this by hand; the decorator is the single wiring.
+    architecture_name: ClassVar[str]
+
+    @classmethod
+    def prompts(cls):
+        """This architecture's prompt namespace (convention: its registry
+        name IS its prompt directory; shared/ serves everything else)."""
+        from pydocs_mcp.ask_your_docs.prompts import prompts_for
+
+        return prompts_for(cls.architecture_name)
+
     @abstractmethod
     def build(self, ctx: AgentBuildContext) -> Any: ...
 

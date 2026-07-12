@@ -1187,3 +1187,18 @@ inline constants through the shared retrieval loader
 versions rule. Old import paths re-export where consumers existed. Variant
 SELECTION (a YAML knob) is deliberately deferred to the agent
 auto-optimization spec.
+
+**A1 per-architecture prompt namespaces (same-day follow-up):** the flat
+prompt directory became convention-bound namespaces — an architecture
+registered as ``<name>`` (via the new ``@register_architecture`` decorator,
+which sets ``architecture_name`` AND delegates to ``agent_registry``) gets
+its prompts from ``prompts/<name>/*.j2`` with ``prompts/shared/`` fallback
+(``prompts_for(name)`` / ``cls.prompts()``; unknown templates raise listing
+both searched locations). Layout: ``shared/`` carries ``system_v1``,
+``rewrite_v1``, ``vision_extraction_v1`` and the reinspect strings;
+``inline/`` carries ``system_suffix_v1``. ``build_agent`` resolves the
+system prompt through the selected architecture's namespace, so overriding
+any architecture's system prompt is one dropped-in
+``prompts/<name>/system_v1.j2`` — no code edit. (``auto`` composes with its
+own — shared — system prompt even when delegating; a per-arch override
+applies when that architecture is selected directly.)
