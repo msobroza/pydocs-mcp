@@ -17,6 +17,10 @@ from dataclasses import dataclass
 _DEFAULT_MAX_TRIALS = 20
 _DEFAULT_MAX_USD = 40.0
 _DEFAULT_WALL_TIMEOUT = 14400.0  # 4 hours — a paid run is manual and bounded.
+# WHY 200: judge calls are the dominant per-sample cost of the ask_rubric
+# fitness; the ceiling is enforced predictively inside the fitness (spec
+# §3.4.4) as a count-based sibling of max_usd.
+_DEFAULT_MAX_JUDGE_CALLS = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +45,7 @@ class OptimizationBudget:
     max_trials: int = _DEFAULT_MAX_TRIALS
     max_usd: float = _DEFAULT_MAX_USD
     wall_timeout_seconds: float = _DEFAULT_WALL_TIMEOUT
+    max_judge_calls: int = _DEFAULT_MAX_JUDGE_CALLS
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,13 +67,16 @@ class Provenance:
     """Audit trail pinning what produced a result (spec §D4).
 
     Recorded so a landed proposal is reproducible months later: which seed,
-    which dataset revision, which models, which optimizer.
+    which dataset revision, which models, which optimizer. ``rubric_hash``
+    pins the exact objective an ask_rubric run scored against (spec §3.6);
+    ``None`` for fitnesses with a fixed in-code objective.
     """
 
     seed_fingerprint: str
     dataset_revision: str
     model_ids: tuple[str, ...]
     optimizer: str
+    rubric_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,4 +15,4 @@ from pydocs_eval.optimize.optimizers.skillopt import (
     SkillOptOptimizer,
 )
 
-__all__ = ["CritiqueRefineOptimizer", "SkillOptOptimizer"]
+__all__ = ["ConfigSearchOptimizer", "CritiqueRefineOptimizer", "SkillOptOptimizer"]

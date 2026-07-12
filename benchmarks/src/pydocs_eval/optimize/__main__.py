@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.optimize import ask_binding
 from pydocs_eval.optimize._agent_track_binding import FakeAgentRunner, FakeJudge
 from pydocs_eval.optimize._split import partition_task_ids
 from pydocs_eval.optimize._types import (
@@ -33,6 +35,8 @@ from pydocs_eval.optimize._types import (
     Provenance,
 )
 from pydocs_eval.optimize.artifacts import ToolDocsArtifact, UsageSkillArtifact  # noqa: F401
+from pydocs_eval.optimize.ask_binding import AskTranscript, FakeAskRunner, ToolCallRecord
+from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness
 from pydocs_eval.optimize.ladder import FitnessLadder
 from pydocs_eval.optimize.optimizers.critique_refine import FakeCritiqueClient
 from pydocs_eval.optimize.optimizers.skillopt import SkillOptOptimizer
@@ -42,7 +46,14 @@ from pydocs_eval.optimize.registries import (
     artifact_registry,
     optimizer_registry,
 )
-from pydocs_eval.optimize.run_config import OptimizeRunConfig, load_run_config
+from pydocs_eval.optimize.rubric.judge import FakeRubricJudge
+from pydocs_eval.optimize.rubric.model import rubric_config_hash
+from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
+from pydocs_eval.optimize.run_config import (
+    OptimizeRunConfig,
+    build_config_search_optimizer,
+    load_run_config,
+)
 from pydocs_eval.optimize.trials_ledger import TrialsLedger
 from pydocs_eval.serialization import dataset_registry
 
@@ -200,7 +211,18 @@ def _print_optimizer_availability(cfg: OptimizeRunConfig) -> None:
         "critique_refine", client=FakeCritiqueClient(replies=[]), fitness=_ZeroCostFitness()
     )
     print("    - critique_refine: importable (constructs with FakeCritiqueClient)")
+    if cfg.config_search is not None:
+        optimizer = build_config_search_optimizer(cfg)
+        print(
+            f"    - config_search: constructed from run config "
+            f"(strategy={optimizer.strategy}, seed={optimizer.seed}, "
+            f"{len(optimizer.dimensions)} dimension(s))"
+        )
+    else:
+        optimizer_registry.build("config_search")
+        print("    - config_search: importable (dependency-free)")
     _report_skillopt_availability()
+    _report_ask_binding_availability()
 
 
 def _report_skillopt_availability() -> None:
@@ -211,6 +233,16 @@ def _report_skillopt_availability() -> None:
         print(f"    - skillopt: SKIPPED (extra not installed): {exc}")
         return
     print("    - skillopt: available")
+
+
+def _report_ask_binding_availability() -> None:
+    """Probe the ``[ask]`` extra; SKIPPED never fails a dry run (AC-17)."""
+    try:
+        ask_binding._require_ask_extra()
+    except RuntimeError as exc:
+        print(f"    - ask binding: SKIPPED (extra not installed): {exc}")
+        return
+    print("    - ask binding: available (LangGraphAskRunner constructible)")
 
 
 async def _dry_run(cfg: OptimizeRunConfig, *, ledger_path: Path) -> int:
@@ -234,19 +266,83 @@ async def _dry_run(cfg: OptimizeRunConfig, *, ledger_path: Path) -> int:
     return 0
 
 
+@dataclass(slots=True)
+class _ProbeDataset:
+    """Synthetic offline tasks over the split-probe ids (dry rubric pass)."""
+
+    name: str = "dry-run-probe"
+    revision: str = "0"
+
+    async def tasks(self):
+        for task_id in _SPLIT_PROBE_IDS:
+            yield EvalTask(
+                task_id=task_id,
+                query=task_id,
+                gold=GoldAnswer(),
+                corpus_source=lambda: None,  # type: ignore[arg-type]
+            )
+
+
+def _dry_ask_rubric_fitness(
+    cfg: OptimizeRunConfig, *, ledger_path: Path
+) -> tuple[FakeAskRunner, FakeRubricJudge, AskRubricFitness]:
+    """The REAL ask_rubric fitness wired with the scripted doubles (AC-17).
+
+    Transcripts are scripted to pass the config's gates and the judge is
+    scripted to score every criterion, so the dry pass walks the whole
+    gate → judge → verdict → sample-ledger path at $0.00.
+    """
+    assert cfg.ask_rubric is not None
+    transcripts = {
+        task_id: AskTranscript(
+            answer=f"dry-run probe answer for {task_id} " + "x" * 40,
+            tool_calls=(ToolCallRecord("search_codebase", "dry"),),
+            turns=2,
+            cost_usd=0.0,
+            wall_seconds=0.1,
+        )
+        for task_id in _SPLIT_PROBE_IDS
+    }
+    scores = {
+        task_id: {c.name: 8.0 for c in cfg.ask_rubric.criteria} for task_id in _SPLIT_PROBE_IDS
+    }
+    runner = FakeAskRunner(scripted=transcripts)
+    judge = FakeRubricJudge(scripted=scores)
+    fitness = AskRubricFitness(
+        dataset=_ProbeDataset(),
+        runner_factory=lambda artifact: runner,
+        judge=judge,
+        rubric=cfg.ask_rubric.rubric_config,
+        architecture=cfg.ask_rubric.runner.architecture,
+        sample_ledger=SampleRubricLedger(ledger_path.with_suffix(".samples.jsonl")),
+        output_dir=ledger_path.parent / "dry-run-samples",
+        max_judge_calls=cfg.budget.max_judge_calls,
+        rng_seed=cfg.rng_seed,
+    )
+    return runner, judge, fitness
+
+
 async def _dry_orchestrator_pass(
     cfg: OptimizeRunConfig, seed: OptimizableArtifact, *, ledger_path: Path
 ) -> OptimizationResult:
-    """One full ``run_optimization`` pass on a zero-cost fake fitness (spends $0.00)."""
-    # FakeAgentRunner / FakeJudge are constructed to prove the agent-track doubles
-    # import; the zero-cost fitness stands in for the paid paired-agent run, so the
-    # whole control loop (train firewall + holdout gate) runs without a live agent.
+    """One full ``run_optimization`` pass spending $0.00.
+
+    The agent-track doubles are constructed to prove they import; the
+    zero-cost fitness stands in for the paid paired-agent rungs. When the
+    config carries an ``ask_rubric`` section, that rung runs the REAL
+    ``AskRubricFitness`` wired with ``FakeAskRunner`` + ``FakeRubricJudge``
+    (AC-17) — the whole gate → judge → verdict → sample-ledger path executes
+    without a live agent or judge.
+    """
     _ = (FakeAgentRunner(), FakeJudge())
     fitness = _ZeroCostFitness()
-    fitness_by_name: Mapping[str, object] = {
-        rung.fitness_name: fitness for rung in cfg.ladder.rungs
-    }
-    return await run_optimization(
+    fitness_by_name: dict[str, object] = {rung.fitness_name: fitness for rung in cfg.ladder.rungs}
+    ask_doubles: tuple[FakeAskRunner, FakeRubricJudge] | None = None
+    if cfg.ask_rubric is not None and "ask_rubric" in fitness_by_name:
+        runner, judge, ask_fitness = _dry_ask_rubric_fitness(cfg, ledger_path=ledger_path)
+        fitness_by_name["ask_rubric"] = ask_fitness
+        ask_doubles = (runner, judge)
+    result = await run_optimization(
         seed,
         _SeedEchoOptimizer(),
         cfg.ladder,
@@ -255,15 +351,33 @@ async def _dry_orchestrator_pass(
         ledger=TrialsLedger(ledger_path),
         provenance=_dry_provenance(cfg, seed),
     )
+    if ask_doubles is not None:
+        runner, judge = ask_doubles
+        print(
+            f"  ask_rubric dry pass: runner calls={runner.calls}, "
+            f"judge calls={judge.calls} (scripted fakes, $0.00)"
+        )
+    return result
 
 
 def _dry_provenance(cfg: OptimizeRunConfig, seed: OptimizableArtifact) -> Provenance:
-    """Synthesize provenance for the dry-run pass (audit shape, no real models)."""
+    """Synthesize provenance for the dry-run pass (audit shape, no real models).
+
+    ``rubric_hash`` pins the exact objective (spec §3.6/AC-19) whenever the
+    config carries one — the same expression every real-run provenance
+    builder must use.
+    """
+    rubric_hash = None
+    if cfg.ask_rubric is not None:
+        rubric_hash = rubric_config_hash(
+            cfg.ask_rubric.rubric_config, architecture=cfg.ask_rubric.runner.architecture
+        )
     return Provenance(
         seed_fingerprint=seed.fingerprint,
         dataset_revision=cfg.dataset.name,
         model_ids=(),
         optimizer=cfg.optimizer,
+        rubric_hash=rubric_hash,
     )
 
 

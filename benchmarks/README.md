@@ -424,6 +424,22 @@ python -m pydocs_eval.optimize \
 The spend model, how to read an `OptimizationResult`, and how to land a proposed
 diff live in the [`AGENT_TRACK.md`](AGENT_TRACK.md) "Optimization" chapter.
 
+The same layer also optimizes the interactive ask agent across three axes —
+its prompts (`ask_prompt`), its agent-graph configuration
+(`ask_architecture`: which architecture answers, rewrite on/off, retrieval
+overlay, turn cap), and the retrieval pipeline overlay itself
+(`retrieval_config`) — scored per question by deterministic gates plus a
+configurable judged rubric, with every sample's verdict and transcript
+persisted for inspection. Shipped campaign configs:
+`optimize_ask_prompt.yaml` (a black-box prompt optimizer over the delimited
+prompt document) and `optimize_ask_architecture.yaml` (a seeded
+grid/random/successive-halving search over the architecture grid, screened by
+the free retrieval rung before any judged rung). Both preflight with the same
+`--dry-run` at $0.00; driving a real agent requires
+`pip install "pydocs-mcp-eval[ask]"`. The rubric objective, spend model
+(including the `max_judge_calls` ceiling), sample-ledger format, and landing
+procedure live in the same [`AGENT_TRACK.md`](AGENT_TRACK.md) chapter.
+
 ### Roadmap: additional benchmarks
 
 Each future benchmark gets its own subsection following the same four-question

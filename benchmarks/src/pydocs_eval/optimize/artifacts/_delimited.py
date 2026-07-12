@@ -25,7 +25,12 @@ from collections.abc import Iterable, Mapping
 
 # WHY: single source of truth for the format — render, parse, and the
 # collision check all read this one pattern, so the grammar cannot drift.
-_HEADER_RE = re.compile(r"^=== (SERVER_INSTRUCTIONS|TOOL: [a-z_]+) ===$")
+# The header set is CLOSED: every legal section key across every delimited
+# artifact (tool_docs, ask_prompt) is enumerated here, so a key smuggled into
+# content is promoted to a section and rejected as a collision.
+_HEADER_RE = re.compile(
+    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|TOOL: [a-z_]+) ===$"
+)
 
 
 def render_delimited(sections: Mapping[str, str]) -> str:
