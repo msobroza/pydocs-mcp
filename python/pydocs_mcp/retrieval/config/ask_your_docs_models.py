@@ -60,6 +60,11 @@ class ImagesConfig(BaseModel):
     # attachments against a NEW question without re-paying vision tokens
     # per turn. 0 disables retention (the tool then finds no stored images).
     session_retention: int = Field(default=12, ge=0, le=50)
+    # Necessity gating: each reinspect call is a full vision-model call, so a
+    # per-turn budget stops a looping agent from burning them; repeated
+    # same-args calls are memoized (free) and don't count. 0 disables the
+    # tool's vision path entirely.
+    max_reinspect_per_turn: int = Field(default=2, ge=0, le=10)
 
 
 class AskYourDocsConfig(BaseModel):

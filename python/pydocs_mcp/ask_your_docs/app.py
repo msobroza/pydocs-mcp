@@ -238,6 +238,11 @@ if submission := st.chat_input(
     # Session image store: bytes from recent turns stay reinspectable by the
     # reinspect_images tool (history itself keeps only the placeholder).
     image_store = st.session_state.setdefault("image_store", {})
+    # Snapshot BEFORE folding this turn's images: the current attachment was
+    # just seen (inline) or extracted (vision node) — only LATER questions
+    # need to reinspect it, and same-turn re-reads would be wasted vision
+    # calls (necessity gating).
+    prior_images = dict(image_store)
     update_image_store(image_store, images, retention=ayd_cfg.images.session_retention)
     shown = question + ("\n\n" + " ".join(f"`🖼 {att.name}`" for att in images) if images else "")
     st.session_state.messages.append(("user", shown))
@@ -259,7 +264,7 @@ if submission := st.chat_input(
                 standalone,
                 scope=scope,
                 images=images,
-                image_store=dict(image_store),  # per-question snapshot
+                image_store=prior_images,  # PRIOR turns only — see snapshot note above
                 transient_note=transient_note,
             )
         )

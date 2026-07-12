@@ -1165,3 +1165,14 @@ the agent's tool list):
   `session_retention`, refreshes position on re-attach, and `0` disables.
 - **AC28.** Vision-capable builds of every architecture expose the tool
   (graph has a tools node even with zero MCP tools); text-only builds don't.
+
+**A1 necessity gating (same-day follow-up):** every reinspect call is a full
+vision-model call, so three deterministic guards keep it to when-necessary:
+(1) the store snapshot a turn receives holds only PRIOR turns' images (the
+current attachment was just seen/extracted — same-turn re-reads are waste);
+(2) repeated same-args calls within a turn return memoized facts (free);
+(3) a per-turn budget — `images.max_reinspect_per_turn` (default 2, 0
+disables) — beyond which the tool refuses and directs the model to the facts
+it already has. Budget/memo state rides a per-turn contextvar set in
+`ask()`; the tool description states the cost explicitly. AC26 extends:
+memoized repeats and over-budget calls make no vision call.

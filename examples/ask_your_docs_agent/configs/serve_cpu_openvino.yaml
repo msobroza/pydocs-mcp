@@ -31,3 +31,4 @@ embedding:
 #   images:
 #     max_per_turn: 3
 #     max_bytes: 5000000
+#     max_reinspect_per_turn: 2

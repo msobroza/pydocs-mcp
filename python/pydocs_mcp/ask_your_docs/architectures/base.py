@@ -44,7 +44,10 @@ def effective_tools(ctx: AgentBuildContext) -> tuple:
         return tuple(ctx.tools)
     from pydocs_mcp.ask_your_docs.reinspect import build_reinspect_tool
 
-    return (*ctx.tools, build_reinspect_tool(ctx.llm))
+    return (
+        *ctx.tools,
+        build_reinspect_tool(ctx.llm, max_per_turn=ctx.config.images.max_reinspect_per_turn),
+    )
 
 
 class AgentArchitecture(ABC):

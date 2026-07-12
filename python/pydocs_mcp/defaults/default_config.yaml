@@ -277,3 +277,5 @@ ask_your_docs:
     max_bytes: 5000000            # per image
     session_retention: 12         # recent images kept reinspectable by the
                                   # reinspect_images agent tool (0 disables)
+    max_reinspect_per_turn: 2     # vision-call budget per turn for that tool
+                                  # (repeats are memoized and free; 0 disables)

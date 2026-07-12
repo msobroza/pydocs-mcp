@@ -125,3 +125,13 @@ def test_default_yaml_ships_the_block_keys() -> None:
     assert block["architecture"] == "auto"
     assert block["multimodal"]["detection"]["static_table"] is True
     assert block["images"]["session_retention"] == 12
+
+
+def test_images_max_reinspect_per_turn_default_and_bounds() -> None:
+    """Necessity gating: the reinspect tool's per-turn vision-call budget."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import ImagesConfig
+
+    assert ImagesConfig().max_reinspect_per_turn == 2
+    assert ImagesConfig(max_reinspect_per_turn=0).max_reinspect_per_turn == 0
+    with pytest.raises(ValidationError):
+        ImagesConfig(max_reinspect_per_turn=11)

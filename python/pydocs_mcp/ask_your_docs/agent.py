@@ -53,6 +53,15 @@ _active_image_store: contextvars.ContextVar[dict | None] = contextvars.ContextVa
     "active_image_store", default=None
 )
 
+# Per-turn reinspect accounting: {"calls": <vision calls so far>, "memo":
+# {(names, question): facts}} — fresh per ask() so the budget and the memo
+# never leak across turns or sessions. Necessity gating: repeated same-args
+# calls are free (memo) and a turn cannot exceed images.max_reinspect_per_turn
+# vision calls.
+_reinspect_state: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "reinspect_state", default=None
+)
+
 # Which corpus filters each tool actually accepts (see pydocs_mcp.server):
 # ``project`` — all six tools; ``package`` — search_codebase + get_overview;
 # ``scope`` (own vs deps) — search_codebase only. The interceptor forces a pin
@@ -295,6 +304,7 @@ async def ask(
     scope = scope or {}
     token = _active_scope.set(scope)
     store_token = _active_image_store.set(image_store)
+    reinspect_token = _reinspect_state.set({"calls": 0, "memo": {}})
     try:
         # transient_note (e.g. the describe-mode cannot-see note) attaches
         # AFTER reformulation, exactly like the scope prefix — prefixing it
@@ -313,6 +323,7 @@ async def ask(
     finally:
         _active_scope.reset(token)
         _active_image_store.reset(store_token)
+        _reinspect_state.reset(reinspect_token)
     placeholder = f" [attached images: {', '.join(att.name for att in images)}]" if images else ""
     history += [HumanMessage(question + placeholder), AIMessage(answer)]
     del history[:-max_history]

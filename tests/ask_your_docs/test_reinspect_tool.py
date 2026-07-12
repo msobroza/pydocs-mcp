@@ -30,7 +30,7 @@ def _run_tool(tool, **kwargs) -> str:
 def test_reinspects_only_the_selected_images() -> None:
     """The newest question drives ONE vision call over ONLY the named images."""
     fake = FakeVisionLlm(replies=["- ERROR: Timeout in retry loop"])
-    tool = build_reinspect_tool(fake)
+    tool = build_reinspect_tool(fake, max_per_turn=5)
     store = {"a.png": _att("a.png"), "b.png": _att("b.png"), "c.png": _att("c.png")}
     token = _active_image_store.set(store)
     try:
@@ -49,7 +49,7 @@ def test_reinspects_only_the_selected_images() -> None:
 def test_unknown_name_returns_actionable_text_not_exception() -> None:
     """Tool errors are model-facing text listing the stored names."""
     fake = FakeVisionLlm()
-    tool = build_reinspect_tool(fake)
+    tool = build_reinspect_tool(fake, max_per_turn=5)
     token = _active_image_store.set({"a.png": _att("a.png")})
     try:
         out = _run_tool(tool, names=["nope.png"], question="q")
@@ -61,7 +61,7 @@ def test_unknown_name_returns_actionable_text_not_exception() -> None:
 
 def test_empty_store_returns_helpful_message() -> None:
     fake = FakeVisionLlm()
-    tool = build_reinspect_tool(fake)
+    tool = build_reinspect_tool(fake, max_per_turn=5)
     token = _active_image_store.set({})
     try:
         out = _run_tool(tool, names=["a.png"], question="q")
@@ -114,3 +114,69 @@ def test_architectures_expose_reinspect_tool_on_vision_models() -> None:
     assert "tools" in set(build("text_react", True).get_graph().nodes)
     assert "tools" not in set(build("text_react", False).get_graph().nodes)
     assert "tools" in set(build("inline", True).get_graph().nodes)
+
+
+def _pin_turn_state(store):
+    """Set the per-turn contextvars the way ask() does."""
+    from pydocs_mcp.ask_your_docs.agent import _active_image_store, _reinspect_state
+
+    return _active_image_store.set(store), _reinspect_state.set({"calls": 0, "memo": {}})
+
+
+def _reset_turn_state(tokens):
+    from pydocs_mcp.ask_your_docs.agent import _active_image_store, _reinspect_state
+
+    _active_image_store.reset(tokens[0])
+    _reinspect_state.reset(tokens[1])
+
+
+def test_repeat_same_args_call_is_memoized() -> None:
+    """Necessity gating: a repeated (names, question) call within one turn
+    returns the cached facts — zero extra vision calls."""
+    fake = FakeVisionLlm(replies=["- ERROR: boom"])
+    tool = build_reinspect_tool(fake, max_per_turn=5)
+    tokens = _pin_turn_state({"a.png": _att("a.png")})
+    try:
+        first = _run_tool(tool, names=["a.png"], question="q")
+        second = _run_tool(tool, names=["a.png"], question="q")
+    finally:
+        _reset_turn_state(tokens)
+    assert first == second
+    assert len(fake.vision_calls) == 1
+
+
+def test_per_turn_budget_refuses_after_limit() -> None:
+    """Necessity gating: beyond max_reinspect_per_turn the tool refuses with
+    a use-what-you-have message and makes no vision call."""
+    fake = FakeVisionLlm(replies=["facts-1", "facts-2"])
+    tool = build_reinspect_tool(fake, max_per_turn=2)
+    store = {f"i{k}.png": _att(f"i{k}.png") for k in range(3)}
+    tokens = _pin_turn_state(store)
+    try:
+        _run_tool(tool, names=["i0.png"], question="q0")
+        _run_tool(tool, names=["i1.png"], question="q1")
+        third = _run_tool(tool, names=["i2.png"], question="q2")
+    finally:
+        _reset_turn_state(tokens)
+    assert len(fake.vision_calls) == 2
+    assert "budget" in third.lower()
+    assert "already" in third.lower()
+
+
+def test_zero_budget_refuses_immediately() -> None:
+    fake = FakeVisionLlm()
+    tool = build_reinspect_tool(fake, max_per_turn=0)
+    tokens = _pin_turn_state({"a.png": _att("a.png")})
+    try:
+        out = _run_tool(tool, names=["a.png"], question="q")
+    finally:
+        _reset_turn_state(tokens)
+    assert fake.vision_calls == []
+    assert "budget" in out.lower()
+
+
+def test_tool_description_states_the_cost() -> None:
+    """The model-facing description must gate usage on necessity."""
+    tool = build_reinspect_tool(FakeVisionLlm(), max_per_turn=2)
+    desc = tool.description.lower()
+    assert "only" in desc and ("cost" in desc or "expensive" in desc)
