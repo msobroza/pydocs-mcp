@@ -31,8 +31,13 @@ from pydocs_mcp.ask_your_docs.catalog import render_catalog, workspace_catalog
 from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities, detect_capabilities
 
 # ALL prompt text is centralized under ask_your_docs/prompts/ (versioned .j2
-# templates). SYSTEM_PROMPT is re-exported here for its existing import path.
-from pydocs_mcp.ask_your_docs.prompts import rewrite_prompt
+# templates, one directory per architecture with a shared/ fallback).
+# SYSTEM_PROMPT is re-exported here for its existing import path.
+from pydocs_mcp.ask_your_docs.prompts import (
+    SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
+    prompts_for,
+    rewrite_prompt,
+)
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 logger = logging.getLogger(__name__)
