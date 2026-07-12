@@ -34,6 +34,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 import pydocs_eval.optimize.artifacts
 import pydocs_eval.optimize.fitness
 import pydocs_eval.optimize.optimizers  # noqa: F401  (registration side effect only)
+from pydocs_eval.optimize._agent_track_binding import (
+    _DEFAULT_MODEL,
+    _DEFAULT_RNG_SEED,
+    _DEFAULT_TASK_TIMEOUT_SECONDS,
+)
 from pydocs_eval.optimize._types import OptimizationBudget
 from pydocs_eval.optimize.fitness.paired_agent import (
     _DEFAULT_PARITY_FLOOR,
@@ -46,10 +51,29 @@ from pydocs_eval.optimize.registries import (
     fitness_registry,
     optimizer_registry,
 )
+from pydocs_eval.optimize.rubric.gates import gate_registry
+from pydocs_eval.optimize.rubric.model import (
+    _DEFAULT_FAIL_FAST,
+    _DEFAULT_GATE_WEIGHT,
+    _DEFAULT_RUBRIC_WEIGHT,
+    GateCheck,
+    RubricConfig,
+    RubricCriterion,
+    validate_rubric_config,
+)
 
 # WHY: the v1 dataset default — the primary agent-track track (spec §D14). The
 # YAML restates it for clarity; this constant is the single Python source.
 _DEFAULT_DATASET_NAME = "swe-qa-pro"
+
+# WHY: prompt campaigns pin every candidate to ONE architecture (the
+# no-joint-search rule, spec §3.3.2/§4.2). "text_react" is the product
+# agent_registry's plain text ReAct graph — the ask default on text models.
+_DEFAULT_ASK_ARCHITECTURE = "text_react"
+
+# WHY: mirrors the ask-your-docs CLI default workspace so a run config that
+# omits the key scores against the same index the interactive agent reads.
+_DEFAULT_ASK_WORKSPACE = Path("~/pydocs-index")
 
 
 class FitnessSettings(BaseModel):
@@ -80,6 +104,80 @@ class CritiqueLlmConfig(BaseModel):
     provider: str
     model_name: str
     temperature: float = 0.7
+
+
+class AskRunnerSettings(BaseModel):
+    """How the ask agent + rubric judge are driven on a paid rung (spec §3.5).
+
+    ``model`` serves both the agent and the judge (the same-family reuse the
+    agent track defaults to); ``architecture`` pins the ONE graph a prompt
+    campaign runs under — ignored when the campaign's artifact is
+    ``ask_architecture`` (the candidate carries it then).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    model: str = _DEFAULT_MODEL
+    architecture: str = _DEFAULT_ASK_ARCHITECTURE
+    base_url: str | None = None
+    workspace: Path = _DEFAULT_ASK_WORKSPACE
+    task_timeout_seconds: float = _DEFAULT_TASK_TIMEOUT_SECONDS
+
+
+class AskRubricSettings(BaseModel):
+    """The configurable gate → rubric → verdict objective (spec §3.4, §3.5).
+
+    Gates and criteria arrive as YAML rows and are coerced to the frozen
+    rubric dataclasses; ``rubric_config`` bundles them for the fitness.
+    Weight / registry validation runs in ``load_run_config`` so a bad config
+    fails at load time, never at trial 14.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    runner: AskRunnerSettings = Field(default_factory=AskRunnerSettings)
+    gates: tuple[GateCheck, ...] = ()
+    criteria: tuple[RubricCriterion, ...] = ()
+    fail_fast: bool = _DEFAULT_FAIL_FAST
+    gate_weight: float = _DEFAULT_GATE_WEIGHT
+    rubric_weight: float = _DEFAULT_RUBRIC_WEIGHT
+
+    @field_validator("gates", mode="before")
+    @classmethod
+    def _coerce_gates(cls, value: object) -> object:
+        """Build ``GateCheck`` rows from YAML mappings (pass instances through)."""
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return tuple(
+                item
+                if isinstance(item, GateCheck)
+                else GateCheck(
+                    name=item["name"], kind=item["kind"], params=dict(item.get("params", {}))
+                )
+                for item in value
+            )
+        return value
+
+    @field_validator("criteria", mode="before")
+    @classmethod
+    def _coerce_criteria(cls, value: object) -> object:
+        """Build ``RubricCriterion`` rows from YAML mappings (pass instances through)."""
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return tuple(
+                item if isinstance(item, RubricCriterion) else RubricCriterion(**item)
+                for item in value
+            )
+        return value
+
+    @property
+    def rubric_config(self) -> RubricConfig:
+        """The frozen rubric bundle the ask_rubric fitness consumes."""
+        return RubricConfig(
+            gates=self.gates,
+            criteria=self.criteria,
+            fail_fast=self.fail_fast,
+            gate_weight=self.gate_weight,
+            rubric_weight=self.rubric_weight,
+        )
 
 
 class DatasetSettings(BaseModel):
@@ -115,6 +213,11 @@ class OptimizeRunConfig(BaseModel):
     budget: OptimizationBudget = Field(default_factory=OptimizationBudget)
     llm: CritiqueLlmConfig | None = None
     dataset: DatasetSettings = Field(default_factory=DatasetSettings)
+    ask_rubric: AskRubricSettings | None = None
+    # WHY: seeds config_search's RNG and task ordering; recorded in
+    # provenance so two runs with identical config + ledger are identical
+    # modulo LLM nondeterminism (spec §3.6).
+    rng_seed: int = _DEFAULT_RNG_SEED
 
     @field_validator("ladder", mode="before")
     @classmethod
@@ -174,6 +277,11 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
     _require_registered(optimizer_registry, cfg.optimizer, kind="optimizer")
     for rung in cfg.ladder.rungs:
         _require_registered(fitness_registry, rung.fitness_name, kind="fitness")
+    if cfg.ask_rubric is not None:
+        # AC-7/AC-8: gate kinds + rubric weights fail loud at load time.
+        validate_rubric_config(
+            cfg.ask_rubric.rubric_config, registered_gate_kinds=gate_registry.names()
+        )
 
 
 def _require_registered(registry: object, name: str, *, kind: str) -> None:

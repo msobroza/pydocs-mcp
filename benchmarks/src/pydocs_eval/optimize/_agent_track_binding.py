@@ -34,6 +34,9 @@ from pydocs_eval.agent_track._command import task_prompt
 from pydocs_eval.agent_track._judge import FakeJudge, Judge
 from pydocs_eval.agent_track._runner import AgentRunner, FakeAgentRunner
 from pydocs_eval.agent_track._types import (
+    _DEFAULT_MODEL,
+    _DEFAULT_RNG_SEED,
+    _DEFAULT_TASK_TIMEOUT_SECONDS,
     AgentTrackConfig,
     ArmConfig,
     JudgeScore,
@@ -42,7 +45,13 @@ from pydocs_eval.agent_track._types import (
 )
 from pydocs_eval.agent_track.orchestrator import run_agent_track
 
+# WHY underscore names are listed: the agent-track single-source defaults the
+# ask rubric run config mirrors (spec §3.5) — re-exported here so run_config
+# never reaches into eval.agent_track itself.
 __all__ = [
+    "_DEFAULT_MODEL",
+    "_DEFAULT_RNG_SEED",
+    "_DEFAULT_TASK_TIMEOUT_SECONDS",
     "AgentRunner",
     "AgentTrackConfig",
     "ArmConfig",

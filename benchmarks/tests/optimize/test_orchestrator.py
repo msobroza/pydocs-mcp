@@ -261,3 +261,79 @@ async def test_result_carries_unified_diff_of_proposal(tmp_path) -> None:
 
 def test_accept_margin_is_two_hundredths() -> None:
     assert pytest.approx(0.02) == _ACCEPT_MARGIN
+
+
+# --------------------------------------------------------------------------- #
+# Objective identity threading (spec §3.6, AC-12, AC-19-partial)
+# --------------------------------------------------------------------------- #
+@dataclass
+class _HashedFitness(_ScriptedFitness):
+    """A scripted fitness that declares a rubric-style objective identity."""
+
+    declared_hash: str = "o" * 64
+    eval_calls: int = 0
+
+    def objective_hash(self) -> str | None:
+        return self.declared_hash
+
+    async def evaluate(self, artifact, *, split):
+        self.eval_calls += 1
+        return await super().evaluate(artifact, split=split)
+
+
+async def _run_hashed(*, tmp_path: Path, ledger_name: str, declared_hash: str) -> _HashedFitness:
+    fitness = _HashedFitness(
+        train_score=0.5,
+        holdout_score=0.1,
+        declared_hash=declared_hash,
+        holdout_by_text={"candidate": 0.2},
+    )
+    await run_optimization(
+        _TextArtifact(text="seed"),
+        _EchoOptimizer(candidate=_TextArtifact(text="candidate")),
+        _ladder(),
+        OptimizationBudget(),
+        fitness_by_name={_FITNESS_NAME: fitness},
+        ledger=TrialsLedger(tmp_path / ledger_name),
+        provenance=_provenance(),
+    )
+    return fitness
+
+
+async def test_objective_hash_is_recorded_and_resumed(tmp_path) -> None:
+    first = await _run_hashed(tmp_path=tmp_path, ledger_name="h.jsonl", declared_hash="o" * 64)
+    assert first.eval_calls > 0
+    ledger = TrialsLedger(tmp_path / "h.jsonl")
+    hit = ledger.lookup(
+        fingerprint=_TextArtifact(text="seed").fingerprint,
+        split="holdout",
+        objective_hash="o" * 64,
+    )
+    assert hit is not None and hit.objective_hash == "o" * 64
+    # Same config + same ledger → every eval resumes for free (AC-19 half).
+    second = await _run_hashed(tmp_path=tmp_path, ledger_name="h.jsonl", declared_hash="o" * 64)
+    assert second.eval_calls == 0
+
+
+async def test_different_objective_hash_never_resumes(tmp_path) -> None:
+    await _run_hashed(tmp_path=tmp_path, ledger_name="h2.jsonl", declared_hash="o" * 64)
+    rerun = await _run_hashed(tmp_path=tmp_path, ledger_name="h2.jsonl", declared_hash="x" * 64)
+    assert rerun.eval_calls > 0  # a different objective re-pays, never resumes
+
+
+async def test_hashless_fitness_still_resumes_legacy_entries(tmp_path) -> None:
+    # Existing fitnesses (objective_hash → None) keep the exact legacy behavior.
+    await _run(tmp_path=tmp_path, seed_holdout=0.1, cand_holdout=0.2)
+    ledger_path = sorted(tmp_path.glob("trials-*.jsonl"))[-1]
+    counting = _HashedFitness(train_score=0.5, holdout_score=0.1, declared_hash="unused")
+    counting.declared_hash = None  # type: ignore[assignment]
+    await run_optimization(
+        _TextArtifact(text="seed"),
+        _EchoOptimizer(candidate=_TextArtifact(text="candidate")),
+        _ladder(),
+        OptimizationBudget(),
+        fitness_by_name={_FITNESS_NAME: counting},
+        ledger=TrialsLedger(ledger_path),
+        provenance=_provenance(),
+    )
+    assert counting.eval_calls == 0

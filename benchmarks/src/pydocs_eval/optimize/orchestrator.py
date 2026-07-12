@@ -58,6 +58,18 @@ from pydocs_eval.optimize.trials_ledger import TrialsLedger
 _ACCEPT_MARGIN = 0.02
 
 
+def _objective_hash_of(fitness: object) -> str | None:
+    """Read a fitness's declared objective identity; ``None`` when undeclared.
+
+    ``objective_hash()`` is an OPTIONAL member of the ``FitnessFunction``
+    contract (spec §3.6) — existing fitnesses predate it, so the read is
+    getattr-based rather than a Protocol change that would break their
+    structural conformance.
+    """
+    reader = getattr(fitness, "objective_hash", None)
+    return reader() if callable(reader) else None
+
+
 class BudgetExhausted(Exception):
     """Control exception: the next paid eval would exceed ``budget.max_usd``.
 
@@ -105,12 +117,18 @@ async def _score_and_record(
 ) -> float:
     """Score ``artifact`` on ``split``, resuming from the ledger or paying once.
 
-    Honors the ``(fingerprint, split)`` resume key (spec §D5): an already-scored
-    candidate returns its recorded score for free. Otherwise the budget guard is
-    checked BEFORE spending; a hit raises ``BudgetExhausted``. A fresh eval is
-    appended to the ledger so a rerun resumes it.
+    Honors the ``(fingerprint, split, objective_hash)`` resume key (spec §D5,
+    §3.6): an already-scored candidate returns its recorded score for free —
+    but only under the SAME objective; a fitness that declares an
+    ``objective_hash`` (the ask_rubric one) never resumes a score computed
+    against a different rubric. Otherwise the budget guard is checked BEFORE
+    spending; a hit raises ``BudgetExhausted``. A fresh eval is appended to
+    the ledger so a rerun resumes it.
     """
-    hit = ledger.lookup(fingerprint=artifact.fingerprint, split=split)
+    objective_hash = _objective_hash_of(fitness)
+    hit = ledger.lookup(
+        fingerprint=artifact.fingerprint, split=split, objective_hash=objective_hash
+    )
     if hit is not None:
         return hit.score
     guard.check()
@@ -121,6 +139,7 @@ async def _score_and_record(
         score=report.score,
         components=report.components,
         cost_usd=report.cost_usd,
+        objective_hash=objective_hash,
     )
     guard.observe(report.cost_usd)
     return report.score
@@ -143,6 +162,10 @@ class _TrainBoundFitness:
     _ledger: TrialsLedger
     _guard: _BudgetGuard
 
+    def objective_hash(self) -> str | None:
+        """Delegate the objective identity to the wrapped fitness (spec §3.6)."""
+        return _objective_hash_of(self._inner)
+
     async def evaluate(self, artifact, *, split):
         _ = split  # the train firewall: holdout is unreachable from the optimizer
         score = await _score_and_record(
@@ -152,7 +175,11 @@ class _TrainBoundFitness:
             ledger=self._ledger,
             guard=self._guard,
         )
-        recorded = self._ledger.lookup(fingerprint=artifact.fingerprint, split="train")
+        recorded = self._ledger.lookup(
+            fingerprint=artifact.fingerprint,
+            split="train",
+            objective_hash=self.objective_hash(),
+        )
         # ``recorded`` is never None here — ``_score_and_record`` just wrote it
         # (or resumed a prior write). Surface the full report shape the
         # ``FitnessFunction`` Protocol promises so a real optimizer can read
@@ -335,7 +362,9 @@ async def _run_gate(
         # A gate eval was refused: report whichever score landed. If the seed
         # itself never scored, both stay None and the run is simply not accepted.
         pass
-    trials = _synthesize_trials(best, ledger, optimizer_trials)
+    trials = _synthesize_trials(
+        best, ledger, optimizer_trials, objective_hash=_objective_hash_of(fitness)
+    )
     return seed_holdout, cand_holdout, trials
 
 
@@ -352,6 +381,8 @@ def _synthesize_trials(
     best: OptimizableArtifact,
     ledger: TrialsLedger,
     optimizer_trials: tuple[Trial, ...],
+    *,
+    objective_hash: str | None = None,
 ) -> tuple[Trial, ...]:
     """Ensure the result carries a trial for ``best`` (spec §D4).
 
@@ -362,7 +393,9 @@ def _synthesize_trials(
     """
     by_fingerprint = {t.fingerprint: t for t in optimizer_trials}
     if best.fingerprint not in by_fingerprint:
-        train = ledger.lookup(fingerprint=best.fingerprint, split="train")
+        train = ledger.lookup(
+            fingerprint=best.fingerprint, split="train", objective_hash=objective_hash
+        )
         by_fingerprint[best.fingerprint] = Trial(
             fingerprint=best.fingerprint,
             rung_scores=(train.score,) if train is not None else (),
