@@ -3386,6 +3386,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tiktoken" },
     { name = "turbovec" },
+    { name = "watchdog" },
 ]
 
 [package.optional-dependencies]
@@ -3412,9 +3413,6 @@ openvino = [
 sentence-transformers = [
     { name = "sentence-transformers" },
     { name = "transformers" },
-]
-watch = [
-    { name = "watchdog" },
 ]
 
 [package.dev-dependencies]
@@ -3475,7 +3473,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'openvino'", specifier = ">=4.48,<6.0" },
     { name = "transformers", marker = "extra == 'sentence-transformers'", specifier = ">=4.48,<6.0" },
     { name = "turbovec", specifier = ">=0.5,<1.0" },
-    { name = "watchdog", marker = "extra == 'watch'", specifier = ">=4.0,<6.0" },
+    { name = "watchdog", specifier = ">=4.0,<6.0" },
 ]
 provides-extras = ["watch", "late-interaction", "sentence-transformers", "openvino", "graph", "ask-your-docs"]
 

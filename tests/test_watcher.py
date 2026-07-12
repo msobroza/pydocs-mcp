@@ -12,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
-
 
 def test_watcher_module_importable() -> None:
     """The module itself imports without watchdog installed.
@@ -22,32 +20,6 @@ def test_watcher_module_importable() -> None:
     constructor only, so users who never touch `--watch` pay zero cost.
     """
     from pydocs_mcp.serve import watcher
-
-
-def test_watcher_construction_raises_when_watchdog_missing(monkeypatch) -> None:
-    """AC-9: without the `[watch]` extras, constructor raises with the
-    actionable install hint pointing at `pip install pydocs-mcp[watch]`."""
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _no_watchdog(name, *args, **kwargs):
-        if name == "watchdog" or name.startswith("watchdog."):
-            raise ImportError(f"No module named {name!r}")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _no_watchdog)
-
-    from pydocs_mcp.serve.watcher import FileWatcher
-
-    with pytest.raises(ServiceUnavailableError) as exc_info:
-        FileWatcher(
-            root=Path("/tmp"),
-            extensions=(".py",),
-            ignore_globs=(),
-            debounce_ms=500,
-        )
-    assert "pip install pydocs-mcp[watch]" in str(exc_info.value)
 
 
 def test_watcher_construction_succeeds_when_watchdog_present(tmp_path: Path) -> None:

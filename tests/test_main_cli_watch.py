@@ -286,3 +286,16 @@ async def test_on_change_isolates_reindex_failure(tmp_path, monkeypatch, caplog)
     )
     for record in error_records:
         assert "watch: reindex failed" in record.getMessage()
+
+
+def test_serve_watch_help_has_no_extras_hint() -> None:
+    """AC-6 (spec 2026-07-11-watch-default-install): --watch help says what
+    the flag does, with no install lecture — watchdog is a required dep."""
+    from pydocs_mcp.__main__ import _build_parser
+
+    parser = _build_parser()
+    subparsers_action = next(a for a in parser._actions if hasattr(a, "choices") and a.choices)
+    help_text = subparsers_action.choices["serve"].format_help()
+    assert "Watch the project for changes" in help_text
+    assert "[watch]" not in help_text
+    assert "extras" not in help_text
