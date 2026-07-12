@@ -17,8 +17,9 @@ over the exact library versions installed on your machine.</strong>
 
 pydocs-mcp indexes your project plus every installed dependency, right on your
 machine, in seconds. Your agent connects over MCP and gets answers grounded in
-*your* code — fully offline. The only call that ever leaves your machine is the
-optional LLM reasoning mode, and only if you turn it on with your own key.
+*your* code — no network calls in the default configuration. Network is used
+only if you opt into the OpenAI-compatible embedding provider, LLM decision
+structuring, or the LLM reasoning retrieval steps, each with your own key.
 
 ::::{grid} 1 1 3 3
 :gutter: 3

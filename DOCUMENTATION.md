@@ -101,8 +101,8 @@ Two further reference-graph signals are computed at index time when enabled
   similar-edge graph requires a full `index --force`; an incremental reindex of
   a touched package recomputes them from its re-embedded chunks only.
 
-Embedder inference runs on CPU by default. Pass `--gpu` to `serve` / `index` to
-move it onto CUDA — same vectors, same cache, lower latency (see
+Embedder inference runs on CPU by default. Pass `--gpu` to `serve` / `index` /
+`watch` to move it onto CUDA — same vectors, same cache, lower latency (see
 [GPU inference](#gpu-inference---gpu)).
 
 ### Routing
@@ -255,7 +255,7 @@ CUDA. The benchmark runner takes the same `--gpu` flag.
 # --kind any      → both, merged + scored together (default)
 # --kind decision → mined architectural-decision records
 pydocs-mcp search "predict" --kind api
-pydocs-mcp search "router include" --kind any --limit 20
+pydocs-mcp search "router include" --kind any --limit 20   # --limit caps multi-repo unions only
 
 # Restrict to one package. PyPI names are normalized to the DB form
 # (e.g. "Flask-Login" → "flask_login"), so either spelling works.
@@ -268,7 +268,8 @@ pydocs-mcp search "handle request" -p __project__
 pydocs-mcp search "retry" --scope project
 pydocs-mcp search "retry" --scope deps
 
-# Cap client-visible results (default 10; top-K is also configurable in YAML).
+# Cap results for multi-repo union searches (default 10). Single-project
+# result count is set by the retrieval pipeline YAML, not this flag.
 pydocs-mcp search "logging" --limit 5
 
 # Point at a different project (default is cwd).
@@ -314,7 +315,7 @@ every workflow, and pinning them keeps MCP clients stable across server retunes
 | Tool | Signature | Purpose |
 |---|---|---|
 | `get_overview` | `get_overview(package, project)` | Orient yourself: what is indexed and what shape a repo/package has. Empty `package` covers the whole workspace. |
-| `search_codebase` | `search_codebase(query, kind, package, scope, limit, project)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any, decision}`. `package` / `scope` / `project` are corpus-scope filters (`project` selects one loaded repo in a multi-repo server). |
+| `search_codebase` | `search_codebase(query, kind, package, scope, limit, project)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any, decision}`. `package` / `scope` / `project` are corpus-scope filters (`project` selects one loaded repo in a multi-repo server). `limit` caps multi-repo union results only; single-project result count comes from the pipeline YAML. |
 | `get_symbol` | `get_symbol(target, depth, project)` | Navigate to a known dotted path. `depth` ∈ `{summary, tree, source}`. `project` resolves the target inside one loaded repo. |
 | `get_context` | `get_context(targets, project)` | Everything needed to understand one or more symbols, packed in a single call. |
 | `get_references` | `get_references(target, direction, limit, project)` | Traverse the reference graph. `direction` ∈ `{callers, callees, inherits, impact, governed_by}`. |
@@ -684,7 +685,9 @@ extraction:
       max_heading_level: 4         # default: 3
 search:
   output:
-    default_limit: 20              # default: 10
+    default_limit: 20              # default: 10 — bounds the client `limit` param
+                                   # (multi-repo unions); single-project count =
+                                   # the pipeline YAML's limit step
 reference_graph:
   capture:
     enabled: true
@@ -954,7 +957,7 @@ pydocs-mcp serve /path/to/project
 Example client invocations (ask your LLM to run these once connected):
 
 ```
-search_codebase("batch inference vllm", kind="api", package="vllm", limit=20)
+search_codebase("batch inference vllm", kind="api", package="vllm", limit=20)  # limit caps multi-repo unions only
 get_symbol("fastapi.routing.APIRouter")
 get_references("fastapi.routing.APIRouter.include_router", direction="callers")
 get_references("requests.auth.HTTPBasicAuth", direction="inherits")

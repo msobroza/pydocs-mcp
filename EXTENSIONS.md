@@ -219,7 +219,7 @@ N. **Add capability-aware ingestion (`REQUIRES` declarations + auto-derivation)*
 
     Composes with the existing pipeline machinery:
 
-    - **In parallel with hybrid** — `ParallelStep` branches: one runs BM25 + dense + RRF, the other runs tree reasoning; downstream `RRFFusionStep` (or the planned `WeightedScoreInterpolationStep`) fuses by `branch_keys=("hybrid.ranked", "tree.ranked")`.
+    - **In parallel with hybrid** — `ParallelStep` branches: one runs BM25 + dense + RRF, the other runs tree reasoning; downstream `RRFFusionStep` (or `WeightedScoreInterpolationStep`, registered as `weighted_score_interpolation`) fuses by `branch_keys=("hybrid.ranked", "tree.ranked")`.
     - **After hybrid** — `ConditionalStep` triggers tree reasoning only on long or structural queries (`is_long_query` predicate), using the hybrid result as a candidate filter.
     - **Standalone** — a YAML preset that skips dense entirely; useful for long-doc corpora where TOC carries signal (PageIndex cites 98.7% on FinanceBench).
 

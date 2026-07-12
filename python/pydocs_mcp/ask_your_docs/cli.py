@@ -26,6 +26,8 @@ _ENV = {
 # optional extra, so point the user at it if they run the bare install.
 _EXTRA_MODULES = ("streamlit", "langgraph", "langchain_mcp_adapters", "langchain_openai")
 
+_DEFAULT_PORT = 8501
+
 
 def _require_extra() -> None:
     from importlib.util import find_spec
@@ -38,20 +40,33 @@ def _require_extra() -> None:
         )
 
 
-def main(argv: list[str] | None = None) -> int:
-    _require_extra()
+def _build_parser() -> argparse.ArgumentParser:
+    """Construct the argparse tree — importable with core deps only.
+
+    Kept as a named helper (mirroring ``pydocs_mcp.__main__._build_parser``)
+    so doc-conformance tests can help-level-validate documented
+    ``ask-your-docs`` invocations without the ``[ask-your-docs]`` extra
+    installed; ``main`` still gates execution on ``_require_extra``.
+    """
     parser = argparse.ArgumentParser(prog="ask-your-docs", description=__doc__)
     parser.add_argument("--workspace", help="folder of pydocs-mcp .db/.tq index bundles")
     parser.add_argument("--model", help="OpenAI-protocol model name (default: gpt-4o-mini)")
     parser.add_argument("--base-url", help="OpenAI-compatible base URL (vLLM/Ollama/LiteLLM)")
     parser.add_argument("--config", help="pydocs-mcp config YAML (embedder must match the bundles)")
-    parser.add_argument("--port", type=int, default=8501, help="Streamlit port (default: 8501)")
+    parser.add_argument(
+        "--port", type=int, default=_DEFAULT_PORT, help=f"Streamlit port (default: {_DEFAULT_PORT})"
+    )
     parser.add_argument(
         "streamlit_args",
         nargs=argparse.REMAINDER,
         help="extra args after -- are passed straight to `streamlit run`",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    _require_extra()
+    args = _build_parser().parse_args(argv)
 
     env = os.environ.copy()
     for flag, var in _ENV.items():
