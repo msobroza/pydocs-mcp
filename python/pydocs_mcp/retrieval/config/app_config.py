@@ -96,9 +96,9 @@ class AppConfig(BaseSettings):
     # ``ReferenceCaptureStage`` (enabled/kinds) and ``configure_from_app_config``
     # (default_limit/max_limit → LookupInput.limit). Per CLAUDE.md §"MCP API
     # surface vs YAML configuration": these are pipeline-tuning knobs, NOT
-    # MCP tool params. The MCP surface (search, lookup) stays fixed.
+    # MCP tool params. The MCP surface stays fixed at the six task-shaped tools.
     reference_graph: ReferenceGraphConfig = Field(default_factory=ReferenceGraphConfig)
-    # Post-trilogy polish: parallel YAML knobs for the ``search`` MCP tool.
+    # Parallel YAML knobs for the ``search_codebase`` MCP tool.
     # Same wiring pattern as ``reference_graph.output`` — pushed into
     # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
     # surface stays fixed; only deployment-time bounds are configurable.
@@ -133,8 +133,9 @@ class AppConfig(BaseSettings):
     decisions: DecisionsConfig = Field(default_factory=DecisionsConfig)
     # Serve-command tunables (file watcher today; future HTTP transport
     # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
-    # configuration": CLI ``--watch`` overrides ``serve.watch.enabled``;
-    # no MCP tool param. The MCP surface (search, lookup) stays fixed.
+    # configuration": either the CLI ``--watch`` flag or
+    # ``serve.watch.enabled: true`` enables watching; no MCP tool param.
+    # The MCP surface stays fixed at the six task-shaped tools.
     serve: ServeConfig = Field(default_factory=ServeConfig)
     # Hybrid-search foundation (spec §5.10): embedding provider /
     # model / dim / batch / TurboQuant bit-width. Consumed by

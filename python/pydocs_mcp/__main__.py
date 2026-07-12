@@ -887,7 +887,19 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     _project, db_path = _project_and_db(args)
 
-    if getattr(args, "watch", False):
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    # Either switch enables watch mode: the CLI flag, or the YAML key
+    # (serve.watch.enabled — per-deployment opt-in). The flag cannot force
+    # watching OFF when the key is true. Short-circuit keeps the flag path
+    # free of a config load. Spec:
+    # docs/superpowers/specs/2026-07-11-cli-mcp-docs-audit-spec.md (D3).
+    watch_enabled = (
+        getattr(args, "watch", False)
+        or AppConfig.load(explicit_path=getattr(args, "config", None)).serve.watch.enabled
+    )
+
+    if watch_enabled:
         # Phase 2 (--watch path): server + watcher concurrently via
         # ``_run_watch_loop``. ``run(...)`` is offloaded to a worker
         # thread inside ``_run_watch_loop`` so the watcher's asyncio

@@ -162,3 +162,39 @@ def test_configure_from_app_config_accepts_real_app_config() -> None:
     # Must not raise — the function reads ``cfg.reference_graph`` and
     # ``cfg.search`` sub-trees, both present on AppConfig.
     configure_from_app_config(cfg)
+
+
+# ── WhyInput targets: slash paths are valid (D1, spec 2026-07-11-cli-mcp-docs-audit) ──
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["a/b.py", "src/pydocs_mcp/db.py", "pkg.mod", "b.py", "pkg.mod.Class.method"],
+)
+def test_why_input_target_accepts_paths_and_qnames(target: str) -> None:
+    """AC17: the documented `--target PATH|QNAME` contract — slash paths must
+    validate (DecisionService._classify_target has a path branch for them)."""
+    from pydocs_mcp.application.mcp_inputs import WhyInput
+
+    payload = WhyInput(query="q", targets=[target])
+    assert payload.targets == [target]
+
+
+@pytest.mark.parametrize("target", ["a:b", "a]]b", "", "a b.py"])
+def test_why_input_target_rejects_grammar_hostile(target: str) -> None:
+    """AC17: `:` / `]` corrupt the [[next:…]] pointer-token grammar
+    (application/formatting.py) — they stay rejected, as does empty/space."""
+    from pydocs_mcp.application.mcp_inputs import WhyInput
+
+    with pytest.raises(ValueError):
+        WhyInput(query="q", targets=[target])
+
+
+def test_why_slash_target_reaches_decision_service_path_branch() -> None:
+    """AC17: the path branch of DecisionService._classify_target is reachable
+    end-to-end from a validated WhyInput value (it was dead before D1)."""
+    from pydocs_mcp.application.decision_service import _classify_target
+    from pydocs_mcp.application.mcp_inputs import WhyInput
+
+    payload = WhyInput(query="q", targets=["src/pydocs_mcp/db.py"])
+    assert _classify_target(payload.targets[0]) == "path"

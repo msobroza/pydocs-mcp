@@ -422,7 +422,7 @@ def format_references(
     show: Literal["callers", "callees", "inherits", "governed_by"],
     limit: int,
 ) -> str:
-    """Render reference rows as markdown for the ``lookup`` MCP tool.
+    """Render reference rows as markdown for the ``get_references`` MCP tool.
 
     Spec §5.7 + appendix §A.1. Single source of truth for callers/callees/
     inherits rendering; the MCP handler and CLI both delegate here.

@@ -48,14 +48,15 @@ def test_context_input_rejects_malformed_target_items() -> None:
 
 
 def test_why_input_rejects_malformed_target_items() -> None:
-    """Same grammar requirement as ``ContextInput.targets`` — ``WhyInput``
-    also interpolates targets into pointer tokens downstream."""
-    with pytest.raises(ValidationError):
-        WhyInput(targets=["foo..bar"])
+    """Why-targets are PATH|QNAME (looser than ``ContextInput.targets`` —
+    spec 2026-07-11-cli-mcp-docs-audit D1), but the pointer-grammar-hostile
+    ``:`` / ``]`` characters and empty items stay rejected."""
     with pytest.raises(ValidationError):
         WhyInput(targets=["evil:]]x"])
     with pytest.raises(ValidationError):
         WhyInput(targets=[""])
+    # Path forms are valid now — the documented `--target a/b.py` contract.
+    assert WhyInput(targets=["a/b.py"]).targets == ["a/b.py"]
 
 
 def test_references_input_direction_enum_and_limit() -> None:

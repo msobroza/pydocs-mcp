@@ -412,14 +412,16 @@ keep resolving — it installs nothing beyond the default set.
 ### YAML knobs (`serve.watch.*`)
 
 All tunables live in YAML — no MCP tool params change (the MCP
-surface stays fixed at the six task-shaped tools). The CLI
-`--watch` flag overrides `enabled` at runtime.
+surface stays fixed at the six task-shaped tools). Either switch
+enables watching: the CLI `--watch` flag or `serve.watch.enabled:
+true` in YAML (the flag cannot force watching off when the key is
+`true`).
 
 ```yaml
 # pydocs-mcp.yaml
 serve:
   watch:
-    enabled: false              # CLI --watch overrides this at runtime
+    enabled: false              # either this key or the CLI --watch flag enables watching
     debounce_ms: 500            # 1 .. 59_999 ms (must be < 60_000); 500ms is editor-safe
     extensions: [".py", ".md", ".ipynb"]
     ignore_globs:

@@ -663,3 +663,42 @@ def test_site_index_offline_claim_names_all_network_paths() -> None:
     assert "embedding provider" in text, (
         "documentation/index.md network sentence must name the embedding provider opt-in (D8)"
     )
+
+
+def test_no_stale_two_tool_docstrings() -> None:
+    """D5 regression: the removed 2-tool surface must not be described
+    anywhere in shipped code."""
+    offenders: list[str] = []
+    for path in (ROOT / "python" / "pydocs_mcp").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for needle in ("fixed 2 tools", "``search`` MCP tool", "``lookup`` MCP tool"):
+            if needle in text:
+                offenders.append(f"{path.relative_to(ROOT)}: {needle!r}")
+    assert offenders == [], f"stale two-tool docstrings: {offenders}"
+
+
+def test_pipeline_base_docstring_example_uses_real_fields() -> None:
+    """D7 regression: every `XxxStep(...)` call in RetrieverPipeline's class
+    docstring uses only real dataclass field names of that step class."""
+    import dataclasses
+
+    import pydocs_mcp.retrieval.steps as steps_pkg
+    from pydocs_mcp.retrieval.pipeline import base as base_mod
+
+    doc = base_mod.RetrieverPipeline.__doc__ or ""
+    checked = 0
+    for m in re.finditer(r"\b([A-Z]\w+Step)\(", doc):
+        cls = getattr(steps_pkg, m.group(1), None)
+        if cls is None:
+            continue
+        field_names = {f.name for f in dataclasses.fields(cls)}
+        for call_src in _extract_calls(doc, m.group(1)):
+            call = ast.parse(call_src, mode="eval").body
+            assert isinstance(call, ast.Call)
+            for kw in call.keywords:
+                checked += 1
+                assert kw.arg in field_names, (
+                    f"RetrieverPipeline docstring: {m.group(1)}({kw.arg}=…) is not a "
+                    f"field (has: {sorted(field_names)})"
+                )
+    assert checked > 0, "no Step constructions found in the docstring — example removed?"

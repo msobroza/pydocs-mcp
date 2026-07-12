@@ -67,10 +67,10 @@ class RetrieverPipeline(RetrieverStep):
         chunk_pipeline = RetrieverPipeline(
             name="chunk_search",
             steps=(
-                ("fetch", ChunkFetcherStep(name="fetch", limit=200)),
+                ("fetch", ChunkFetcherStep(provider, filter_adapter=adapter, name="fetch", limit=200)),
                 ("score", BM25ScorerStep(name="score")),
                 ("topk", TopKFilterStep(name="topk", k=50)),
-                ("budget", TokenBudgetStep(name="budget", max_tokens=2000)),
+                ("budget", TokenBudgetStep(formatter, 2000, name="budget")),
             ),
         )
 
