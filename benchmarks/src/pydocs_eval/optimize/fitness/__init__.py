@@ -10,11 +10,13 @@ future structured-artifact slice, wired into no v1 ladder.
 
 from __future__ import annotations
 
+from .ask_rubric import AskRubricFitness
 from .paired_agent import ArtifactInjection, PairedAgentFitness
 from .retrieval import RetrievalFitness
 
 __all__ = [
     "ArtifactInjection",
+    "AskRubricFitness",
     "PairedAgentFitness",
     "RetrievalFitness",
 ]

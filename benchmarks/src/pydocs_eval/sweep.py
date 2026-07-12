@@ -292,6 +292,7 @@ async def _run_leg(
     limit: int | None,
     corpus_dir: Path | None,
     gpu: bool,
+    task_ids: frozenset[str] | None = None,
 ) -> LegResult:
     """One (system, config) leg: open_run → per-task loop → aggregate →
     close_run → teardown. Owns all tracker I/O (``_run_task`` owns none)."""
@@ -329,6 +330,11 @@ async def _run_leg(
     try:
         count = 0
         async for task in dataset.tasks():
+            # WHY the id filter precedes the limit: ``task_ids`` scopes the
+            # leg to a split subset (optimize train/holdout); the limit then
+            # caps within that subset, never counting skipped tasks.
+            if task_ids is not None and task.task_id not in task_ids:
+                continue
             if limit is not None and count >= limit:
                 break
             try:
@@ -422,6 +428,7 @@ async def run_sweep_detailed(
     corpus_dir: Path | None = None,
     gpu: bool = False,
     bench_cache: bool | None = None,
+    task_ids: frozenset[str] | None = None,
 ) -> SweepOutcome:
     """Run a (system × config) sweep, returning per-task detail per leg.
 
@@ -465,6 +472,7 @@ async def run_sweep_detailed(
             limit=limit,
             corpus_dir=corpus_dir,
             gpu=gpu,
+            task_ids=task_ids,
         )
         key = (system_name, cfg_path.stem)
         legs[key] = leg
@@ -486,6 +494,7 @@ async def run_sweep(
     corpus_dir: Path | None = None,
     gpu: bool = False,
     bench_cache: bool | None = None,
+    task_ids: frozenset[str] | None = None,
 ) -> tuple[SweepResults, int]:
     """Run a (system × config) sweep over a dataset.
 
@@ -524,6 +533,10 @@ async def run_sweep(
         bench_cache: ``None`` (default) leaves the process-global
             index-cache toggle untouched; a bool sets it for this process
             before any leg runs.
+        task_ids: Optional whitelist of ``task_id``s — every leg skips tasks
+            outside it. The optimize layer's retrieval fitness passes a
+            train/holdout split subset here; ``None`` (default) runs the
+            whole dataset.
 
     Returns:
         ``(sweep_results, tasks_ran)`` where ``sweep_results`` is
@@ -544,6 +557,7 @@ async def run_sweep(
         corpus_dir=corpus_dir,
         gpu=gpu,
         bench_cache=bench_cache,
+        task_ids=task_ids,
     )
     return outcome.results, outcome.tasks_ran
 
