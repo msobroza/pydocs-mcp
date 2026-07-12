@@ -180,3 +180,36 @@ def test_tool_description_states_the_cost() -> None:
     tool = build_reinspect_tool(FakeVisionLlm(), max_per_turn=2)
     desc = tool.description.lower()
     assert "only" in desc and ("cost" in desc or "expensive" in desc)
+
+
+def test_empty_names_returns_guidance_without_vision_call() -> None:
+    """Necessity gating: an empty selection must not burn a vision call on a
+    zero-image prompt (which would invite hallucinated facts)."""
+    fake = FakeVisionLlm()
+    tool = build_reinspect_tool(fake, max_per_turn=5)
+    tokens = _pin_turn_state({"a.png": _att("a.png")})
+    try:
+        out = _run_tool(tool, names=[], question="q")
+    finally:
+        _reset_turn_state(tokens)
+    assert fake.vision_calls == []
+    assert "a.png" in out
+
+
+def test_vision_subagent_react_node_carries_the_tool() -> None:
+    """AC28 completion: the flagship architecture's nested react subgraph has
+    a tools node on vision models (xray expands subgraphs)."""
+    from pydocs_mcp.ask_your_docs.architectures import AgentBuildContext, agent_registry
+    from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
+
+    ctx = AgentBuildContext(
+        llm=FakeVisionLlm(),
+        tools=(),
+        prompt="P",
+        capabilities=ModelCapabilities(multimodal=True, source="override"),
+        config=AskYourDocsConfig(),
+    )
+    graph = agent_registry.get("vision_subagent")().build(ctx)
+    xray_nodes = set(graph.get_graph(xray=True).nodes)
+    assert any("tools" in n for n in xray_nodes), xray_nodes

@@ -99,9 +99,9 @@ def test_images_session_retention_default_and_bounds() -> None:
 
 @pytest.fixture(autouse=True)
 def _clean_config_env(monkeypatch, tmp_path):
-    """Hermeticity (repo convention): AppConfig.load() probes env/cwd/XDG for
-    user configs — a dev machine's ambient PYDOCS_* vars or pydocs-mcp.yaml
-    must not leak into these assertions."""
+    """Hermeticity (repo convention): clears PYDOCS_* env vars and chdirs away
+    from any cwd config. (A user-level ~/.config/pydocs-mcp/config.yaml is NOT
+    isolated — the same hole as every sibling config-test fixture.)"""
     import os
 
     for var in list(os.environ):

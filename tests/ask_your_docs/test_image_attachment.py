@@ -247,3 +247,14 @@ def test_describe_note_rides_transient_note_not_history() -> None:
     assert sent.startswith("[note: cannot see]\n")
     assert "what does the image show?" in sent
     assert history[0].content == "what does the image show?"  # bare — no note
+
+
+def test_update_image_store_zero_retention_purges_existing() -> None:
+    """'0 disables' must also empty an already-populated store (an operator
+    flipping the knob mid-session revokes reinspectability)."""
+    from pydocs_mcp.ask_your_docs.attachments import update_image_store
+
+    store: dict[str, ImageAttachment] = {}
+    update_image_store(store, (_att("a.png"),), retention=3)
+    update_image_store(store, (), retention=0)
+    assert store == {}

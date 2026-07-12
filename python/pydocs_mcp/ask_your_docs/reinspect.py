@@ -64,6 +64,12 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
                 "There are no previously attached images stored in this "
                 "session — ask the user to re-attach the image."
             )
+        if not names:
+            return (
+                "No image names given — pass the relevant names from the "
+                f"'[attached images: ...]' history markers. Stored images: "
+                f"{', '.join(store)}."
+            )
         missing = [n for n in names if n not in store]
         if missing:
             return (

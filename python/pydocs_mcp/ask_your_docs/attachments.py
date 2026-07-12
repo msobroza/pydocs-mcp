@@ -116,6 +116,7 @@ def update_image_store(
     placeholder (the history non-goal is untouched).
     """
     if retention <= 0:
+        store.clear()  # 'disables' means nothing stays reinspectable
         return
     for att in images:
         store.pop(att.name, None)  # refresh position on re-attach
@@ -140,6 +141,7 @@ __all__ = (
     "ImageAttachment",
     "PolicyVerdict",
     "text_only_policy",
+    "update_image_store",
     "validate_attachment",
     "weave_attachments",
 )

@@ -115,8 +115,9 @@ def test_image_probe_outcomes() -> None:
 
 
 def test_detection_cached_per_model_base_url_pair() -> None:
-    """AC15: repeated calls for the same (model, base_url) hit the cache —
-    the probe fires exactly once."""
+    """AC15: repeated same-cfg calls for one (model, base_url) hit the cache —
+    the probe fires exactly once. (The cfg fingerprint is part of the key —
+    see test_different_cfg_reruns_the_ladder.)"""
     clear_detection_cache()
     cfg = MultimodalDetectionConfig(static_table=False, image_probe=True)
     probe = FakeProbeLlm("ok")
@@ -129,3 +130,23 @@ def test_detection_cached_per_model_base_url_pair() -> None:
     a, b = asyncio.run(twice())
     assert a == b == ModelCapabilities(True, "probe")
     assert probe.calls == 1
+
+
+def test_different_cfg_reruns_the_ladder() -> None:
+    """Regression for the cfg-fingerprinted cache key: flipping
+    detection.override for an already-detected (model, base_url) pair must
+    take effect without a process restart."""
+    clear_detection_cache()
+    probe = FakeProbeLlm("ok")
+    cfg_probe = MultimodalDetectionConfig(static_table=False, image_probe=True)
+
+    async def flip() -> tuple[ModelCapabilities, ModelCapabilities]:
+        first = await detect_capabilities("my-vlm", "http://x/v1", cfg_probe, probe_llm=probe)
+        flipped = await detect_capabilities(
+            "my-vlm", "http://x/v1", MultimodalDetectionConfig(override=False), probe_llm=probe
+        )
+        return first, flipped
+
+    first, flipped = asyncio.run(flip())
+    assert first == ModelCapabilities(True, "probe")
+    assert flipped == ModelCapabilities(False, "override")  # not the stale probe verdict
