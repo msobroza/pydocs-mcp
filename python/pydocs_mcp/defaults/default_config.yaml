@@ -253,3 +253,25 @@ search_backend:
 #   query_length: 32
 #   pool_factor: 1
 #   device: cpu
+
+# Ask-your-docs chat agent ([ask-your-docs] extra): which agent architecture
+# answers questions, and how image attachments are handled. `architecture:
+# auto` routes by the detected model capability — text-only models get the
+# classic text agent, vision models get `multimodal.preferred_architecture`.
+# Pin `architecture: text_react` to freeze pre-image behavior exactly.
+# Env overrides: PYDOCS_ASK_YOUR_DOCS__<KEY>__<SUBKEY>=... (e.g.
+# PYDOCS_ASK_YOUR_DOCS__ARCHITECTURE=inline).
+ask_your_docs:
+  architecture: auto              # one of the agent_registry names; "text_react"
+                                  # preserves pre-image behavior exactly
+  multimodal:
+    preferred_architecture: vision_subagent   # what "auto" picks on a vision model
+    detection:
+      override: null              # true | false | null (= run the ladder)
+      static_table: true          # rung 2: model-name prefix table
+      endpoint_probe: false       # rung 3: GET /v1/models metadata (opt-in)
+      image_probe: false          # rung 4: one-shot 1x1-px capability probe (opt-in)
+    text_only_fallback: reject    # reject | describe
+  images:
+    max_per_turn: 3
+    max_bytes: 5000000            # per image
