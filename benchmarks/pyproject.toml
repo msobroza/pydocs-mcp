@@ -61,9 +61,13 @@ optimizers-skillopt = ["skillopt>=0.2,<0.3"]
 # pip install "pydocs-mcp-eval[ask]" resolves nothing.
 ask = ["pydocs-mcp[ask-your-docs]>=0.5.2"]
 # The union of every extra — one install target for a full-featured dev/CI env.
+# WHY [ask] is excluded: its floor names the FIRST product release shipping
+# the build_agent(prompts=...) seam, which is unpublished — including it here
+# would make `pip install .[all]` unresolvable today (it broke the CI
+# benchmark job). Re-add it when that release exists; until then [ask] is an
+# explicit opt-in on top of a source checkout.
 all = [
     "pydocs-mcp>=0.5.1",
-    "pydocs-mcp[ask-your-docs]>=0.5.2",
     "mlflow>=2.0",
     "skillopt>=0.2,<0.3",
 ]
