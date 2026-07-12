@@ -19,6 +19,9 @@ from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
+# weave_attachments moved to attachments.py (spec 2026-07-11-multimodal-image-
+# agent §3.1); re-exported so app.py and existing tests keep this import path.
+from pydocs_mcp.ask_your_docs.attachments import weave_attachments  # noqa: F401
 from pydocs_mcp.ask_your_docs.catalog import render_catalog, workspace_catalog
 
 logger = logging.getLogger(__name__)
@@ -125,18 +128,6 @@ def scope_prefix(scope: ToolScope) -> str:
     if scope.get("code", "all") != "all":
         parts.append("own code only" if scope["code"] == "project" else "dependencies only")
     return f"[pinned scope: {', '.join(parts)}] " if parts else ""
-
-
-def weave_attachments(attached: list[str], question: str) -> str:
-    """Prepend de-duped attached symbols to a question as plain context text."""
-    seen: dict[str, None] = {}
-    for a in attached:
-        if a:
-            seen.setdefault(a, None)
-    if not seen:
-        return question
-    names = ", ".join(f"`{a}`" for a in seen)
-    return f"Regarding {names}: {question}"
 
 
 async def build_agent(
