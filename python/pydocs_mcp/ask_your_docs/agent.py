@@ -17,12 +17,19 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+
+from pydocs_mcp.ask_your_docs.architectures import (
+    AgentArchitectureError,
+    AgentBuildContext,
+    agent_registry,
+)
 
 # weave_attachments moved to attachments.py (spec 2026-07-11-multimodal-image-
 # agent §3.1); re-exported so app.py and existing tests keep this import path.
 from pydocs_mcp.ask_your_docs.attachments import weave_attachments  # noqa: F401
 from pydocs_mcp.ask_your_docs.catalog import render_catalog, workspace_catalog
+from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities, detect_capabilities
+from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +137,37 @@ def scope_prefix(scope: ToolScope) -> str:
     return f"[pinned scope: {', '.join(parts)}] " if parts else ""
 
 
+def _build_architecture(
+    name: str,
+    *,
+    llm,
+    tools,
+    prompt: str,
+    capabilities: ModelCapabilities,
+    config: AskYourDocsConfig,
+    model: str,
+):
+    """Validate + build the named architecture (spec §3.4.4).
+
+    Split out of :func:`build_agent` so tests exercise validation and graph
+    construction without an MCP server subprocess.
+    """
+    arch_cls = agent_registry.get(name)
+    if arch_cls is None:
+        raise ValueError(f"unknown architecture {name!r}; known: {agent_registry.names()}")
+    if arch_cls.requires_multimodal and not capabilities.multimodal:
+        raise AgentArchitectureError(
+            f"architecture {name!r} requires a multimodal model, but "
+            f"{model!r} was detected text-only (source={capabilities.source}). "
+            "Set ask_your_docs.multimodal.detection.override: true in your YAML "
+            "if the detection is wrong, or select architecture: auto."
+        )
+    ctx = AgentBuildContext(
+        llm=llm, tools=tools, prompt=prompt, capabilities=capabilities, config=config
+    )
+    return arch_cls().build(ctx)
+
+
 async def build_agent(
     workspace: str,
     model: str,
@@ -137,6 +175,10 @@ async def build_agent(
     pydocs_config: str | None = None,
     pydocs_cmd: list[str] | None = None,
     catalog: dict[str, list[str]] | None = None,
+    *,
+    architecture: str | None = None,
+    config: AskYourDocsConfig | None = None,
+    capabilities: ModelCapabilities | None = None,
 ):
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
@@ -147,11 +189,15 @@ async def build_agent(
     ``pydocs_cmd`` defaults to ``[sys.executable, "-m", "pydocs_mcp"]`` so the
     MCP server subprocess always runs under the SAME interpreter as this app —
     no reliance on ``pydocs-mcp`` being on the child's PATH.
+
+    ``architecture`` overrides ``config.architecture`` (default "auto" —
+    routed by the detected capability); ``capabilities`` is injectable so the
+    UI can detect once and share the result with its badge.
     """
     command, *prefix = pydocs_cmd or [sys.executable, "-m", "pydocs_mcp"]
     # --config is a root flag: it must come BEFORE the serve subcommand.
-    config = ["--config", pydocs_config] if pydocs_config else []
-    args = [*prefix, *config, "serve", "--workspace", workspace]
+    config_args = ["--config", pydocs_config] if pydocs_config else []
+    args = [*prefix, *config_args, "serve", "--workspace", workspace]
     client = MultiServerMCPClient(
         {"pydocs": {"transport": "stdio", "command": command, "args": args}},
         tool_interceptors=[_intercept],
@@ -167,7 +213,20 @@ async def build_agent(
     prompt = f"{SYSTEM_PROMPT}\nIndexed projects and packages:\n{render_catalog(catalog)}"
 
     llm = ChatOpenAI(model=model, base_url=base_url)
-    return create_react_agent(llm, tools, prompt=prompt), llm
+    cfg = config or AskYourDocsConfig()
+    caps = capabilities
+    if caps is None:
+        caps = await detect_capabilities(model, base_url, cfg.multimodal.detection)
+    graph = _build_architecture(
+        architecture or cfg.architecture,
+        llm=llm,
+        tools=tools,
+        prompt=prompt,
+        capabilities=caps,
+        config=cfg,
+        model=model,
+    )
+    return graph, llm
 
 
 async def reformulate(llm: ChatOpenAI, history: list, question: str) -> str:
