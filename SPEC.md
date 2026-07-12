@@ -364,7 +364,7 @@ pydocs-mcp serve . --no-inspect
 # More options (--config is a global flag — it goes BEFORE the subcommand)
 pydocs-mcp --config ./my-pydocs.yaml serve . --depth 2 --workers 8 --no-inspect
 
-# Watch mode — keep the index fresh on file edits (requires the [watch] extra)
+# Watch mode — keep the index fresh on file edits (included in the default install)
 pydocs-mcp serve . --watch              # MCP server + file watcher
 pydocs-mcp watch .                      # watcher only, no MCP server
 
@@ -511,7 +511,7 @@ Rather than proxying a cloud documentation service or grepping local files, pydo
 # From PyPI — prebuilt wheels bundle the Rust core (Linux x86_64/aarch64,
 # macOS arm64, Windows amd64); pure-Python fallback on other platforms.
 pip install pydocs-mcp
-# Optional extras: 'pydocs-mcp[watch]' / '[sentence-transformers]' / '[openvino]'
+# Optional extras: 'pydocs-mcp[sentence-transformers]' / '[openvino]'
 # / '[late-interaction]' / '[graph]' / '[ask-your-docs]'
 
 # …or from source for development (Rust core optional — pure Python works everywhere):

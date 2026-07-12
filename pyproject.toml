@@ -46,7 +46,23 @@ classifiers = [
     "Topic :: Text Processing :: Indexing",
     "Typing :: Typed",
 ]
-dependencies = ["mcp>=1.0", "pydantic>=2.0", "pydantic-settings>=2.0", "pyyaml>=6.0", "numpy>=1.26", "turbovec>=0.5,<1.0", "fastembed>=0.4,<1.0", "openai>=1.40,<2.0", "jinja2>=3.0,<4.0", "tiktoken>=0.7,<1.0"]
+dependencies = [
+    "mcp>=1.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "turbovec>=0.5,<1.0",
+    "fastembed>=0.4,<1.0",
+    "openai>=1.40,<2.0",
+    "jinja2>=3.0,<4.0",
+    "tiktoken>=0.7,<1.0",
+    # Live re-indexing (serve --watch / the watch verb). Promoted from the
+    # [watch] extra 2026-07: ~684 KB installed, zero transitive deps,
+    # prebuilt wheels on every supported platform. See
+    # docs/superpowers/specs/2026-07-11-watch-default-install-spec.md.
+    "watchdog>=4.0,<6.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/msobroza/pydocs-mcp"
@@ -59,7 +75,11 @@ Documentation = "https://msobroza.github.io/pydocs-mcp/"
 # User-facing extras only — installable via `pip install pydocs-mcp[<name>]`.
 # Developer-only dependencies live in [dependency-groups] (PEP 735) so they
 # stay out of wheel METADATA and can't be pulled in by end users.
-watch = ["watchdog>=4.0,<6.0"]
+# (`watch` below is a deprecated EMPTY alias, not a real extra.)
+# DEPRECATED alias: watchdog moved into the required runtime deps.
+# Kept empty so `pip install pydocs-mcp[watch]` in existing docs/scripts
+# stays a valid no-op. Removal horizon: next major version.
+watch = []
 # Heavy (~1-5 GB with torch). Opt-in; default install stays ~90 MB.
 late-interaction = ["pylate>=1.0,<2.0", "fast-plaid>=1.4,<2.0", "transformers>=4.57.3"]
 # Torch-backed on-device dense embedder (Qwen3-Embedding via

@@ -64,8 +64,8 @@ autodoc_typehints = "description"
 # If you'd rather NOT install runtime deps + libopenblas for the build, mock the
 # heavy/native imports instead and drop the apt-get / dependency install in CI:
 # autodoc_mock_imports = ["turbovec", "fastembed", "openai", "mcp", "tiktoken",
-#                         "pylate", "fast_plaid", "sentence_transformers",
-#                         "transformers", "watchdog"]
+#                         "watchdog", "pylate", "fast_plaid",
+#                         "sentence_transformers", "transformers"]
 
 # -- intersphinx -------------------------------------------------------------
 intersphinx_mapping = {

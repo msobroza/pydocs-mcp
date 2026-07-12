@@ -5,12 +5,11 @@ module runs alongside it as an asyncio task that consumes filesystem
 events from `watchdog.Observer`'s native thread and re-triggers
 indexing on debounce.
 
-Lazy import boundary: `watchdog` lives behind the `[watch]` extras
-group; importing it at module top would crash `pydocs-mcp serve`
-(no `--watch`) for users who haven't installed the extras. The
-constructor below resolves the import once at first use — if the
-extras aren't present, raises `ServiceUnavailableError` with the
-install hint instead of letting an `ImportError` bubble up cryptically.
+`watchdog` is a required runtime dependency; its import is still
+deferred to `FileWatcher` construction (see `_load_watchdog`) so tests
+can inject `FakeObserver` behavior and so importing this module stays
+cheap for callers that pass `observer_factory=...` explicitly — a seam
+for test injection and import-time cost, not extras gating.
 
 Event-loop bridge: `watchdog.Observer` runs in its own native thread.
 We give the event handler a reference to the asyncio loop + queue and
@@ -28,13 +27,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
-
 log = logging.getLogger("pydocs-mcp.watch")
-
-_INSTALL_HINT = (
-    "--watch requires the 'watch' extras. Install via:\n    pip install pydocs-mcp[watch]"
-)
 
 
 def _is_dependency_manifest(name: str) -> bool:
@@ -53,20 +46,19 @@ def _is_dependency_manifest(name: str) -> bool:
 def _load_watchdog():
     """Resolve `watchdog.observers.Observer`.
 
-    Isolated so tests can monkeypatch `builtins.__import__` to simulate
-    the no-extras case without touching the actual site-packages tree.
+    Kept as a seam (rather than a top-level import) for two reasons:
+    tests monkeypatch `watcher_mod._load_watchdog` to inject
+    `FakeObserver` behavior, and the deferred import keeps
+    `import pydocs_mcp.serve.watcher` cheap for callers that construct
+    `FileWatcher(observer_factory=...)` explicitly.
 
-    The matching `FileSystemEventHandler` class is NOT imported here —
-    `_Handler` (inside `run_until_cancelled`) uses duck typing: watchdog's
-    `BaseObserver` invokes `handler.dispatch(event)` with no isinstance
-    check, so implementing `dispatch` directly is sufficient. Decoupling
-    keeps the test path watchdog-free when callers pass
-    `observer_factory=FakeObserver`.
+    `_Handler` (inside `run_until_cancelled`) uses duck typing —
+    watchdog's `BaseObserver` invokes `handler.dispatch(event)` with no
+    isinstance check — so the `FileSystemEventHandler` class is
+    deliberately not imported.
     """
-    try:
-        from watchdog.observers import Observer
-    except ImportError as exc:
-        raise ServiceUnavailableError(_INSTALL_HINT) from exc
+    from watchdog.observers import Observer
+
     return Observer
 
 
@@ -90,9 +82,9 @@ class FileWatcher:
     observer_factory: Callable[[], object] | None = field(default=None)
 
     def __post_init__(self) -> None:
-        # WHY: resolve the watchdog import (or raise the install hint) at
-        # construction time rather than at first event — startup failure
-        # is easier to diagnose than mid-run "why isn't my watcher firing".
+        # WHY: resolve the watchdog import at construction time rather
+        # than at first event — startup failure is easier to diagnose
+        # than mid-run "why isn't my watcher firing".
         if self.observer_factory is None:
             object.__setattr__(self, "observer_factory", _load_watchdog())
         # WHY: `_matches` lowercases the FILE's suffix (`path.suffix.lower()`)

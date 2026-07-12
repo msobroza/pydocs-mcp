@@ -196,8 +196,7 @@ def _build_parser() -> argparse.ArgumentParser:
             sp.add_argument(
                 "--watch",
                 action="store_true",
-                help="Watch the project for changes and reindex on edits. "
-                "Requires the 'watch' extras: pip install pydocs-mcp[watch]",
+                help="Watch the project for changes and reindex on edits.",
             )
             # Multi-repo serve: load pre-built db bundles read-only (skips
             # indexing + watch) so one MCP server hosts several indexed repos.

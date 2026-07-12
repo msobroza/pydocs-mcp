@@ -135,14 +135,14 @@ benchmark runner) to move all embedder inference — FastEmbed, the
 re-index, identical results. Needs the matching GPU runtime — see
 [INSTALL.md](INSTALL.md#gpu-inference-optional).
 
-### Live re-indexing (optional)
+### Live re-indexing
 
-If you edit code while you want the index to stay fresh, install the
-`watch` extras and pick one of two modes — both debounce edits to
-`.py`, `.md`, and `.ipynb` files into a single reindex.
+The file watcher is part of the default install — no extra step. If you
+edit code while you want the index to stay fresh, pick one of two modes —
+both debounce edits to `.py`, `.md`, and `.ipynb` files into a single
+reindex.
 
 ```bash
-pip install 'pydocs-mcp[watch]'
 pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients)
 pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh for CLI `search` / `symbol` / `refs`)
 ```

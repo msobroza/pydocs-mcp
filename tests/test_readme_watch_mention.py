@@ -1,4 +1,5 @@
-"""AC-12: README + DOCUMENTATION.md document the `--watch` flag."""
+"""README + DOCUMENTATION.md pin the `--watch` documentation surface
+(spec 2026-07-11-watch-default-install §3.9 / AC-10)."""
 
 from __future__ import annotations
 
@@ -13,11 +14,20 @@ def test_readme_mentions_watch_flag() -> None:
     assert "--watch" in readme, "README must mention the --watch CLI flag"
 
 
-def test_readme_mentions_watch_extras_install() -> None:
+def test_readme_states_watcher_in_default_install() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    # Either the explicit `[watch]` extras OR a sentence pointing the
-    # user at the install hint — surface area must be discoverable.
-    assert "pydocs-mcp[watch]" in readme or "[watch]" in readme
+    assert "default install" in readme, "README must state the watcher ships in the default install"
+
+
+def test_no_watch_extras_install_instruction_anywhere() -> None:
+    """Promotion regression (spec 2026-07-11-watch-default-install §3.9 /
+    AC-15a): neither user doc may instruct installing the watch extra —
+    match BOTH quoting forms so the docs-audit spec's quoting lint (D10)
+    can't mask a surviving instruction."""
+    for doc in ("README.md", "DOCUMENTATION.md"):
+        text = (ROOT / doc).read_text(encoding="utf-8")
+        assert "pip install pydocs-mcp[watch]" not in text, f"unquoted watch install hint in {doc}"
+        assert "pip install 'pydocs-mcp[watch]'" not in text, f"quoted watch install hint in {doc}"
 
 
 def test_documentation_md_has_live_reindexing_subsection() -> None:
@@ -38,9 +48,12 @@ def test_documentation_md_describes_yaml_knobs() -> None:
     assert "ignore_globs" in doc
 
 
-def test_documentation_md_documents_install_hint() -> None:
+def test_documentation_md_states_default_install() -> None:
     doc = (ROOT / "DOCUMENTATION.md").read_text(encoding="utf-8")
-    assert "pip install pydocs-mcp[watch]" in doc
+    assert "part of the default install" in doc, (
+        "DOCUMENTATION.md's Live re-indexing Install subsection must state "
+        "the watcher ships in the default install"
+    )
 
 
 def test_readme_does_not_introduce_pr_jargon() -> None:

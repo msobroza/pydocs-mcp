@@ -38,7 +38,7 @@ maturin develop --release
 # Run MCP server
 pydocs-mcp serve /path/to/project
 pydocs-mcp serve . --no-inspect --depth 2 --workers 8
-pydocs-mcp serve . --watch    # MCP server + file watcher ([watch] extra)
+pydocs-mcp serve . --watch    # MCP server + file watcher
 pydocs-mcp watch .            # watcher only — keep the index fresh for CLI queries
 
 # Ask-your-docs chat agent ([ask-your-docs] extra: langgraph + langchain + streamlit)
@@ -116,7 +116,7 @@ python/pydocs_mcp/
 │   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning, late_interaction_scorer, graph_expand, centrality_prior, community_diversity
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
 ├── pipelines/     # Built-in pipeline YAML blueprints (18 YAMLs: chunk_search* variants — chunk_search_graph.yaml is the default docs pipeline — member_search, decision_search, tree_only, ingestion + ingestion_late_interaction)
-├── serve/         # Serve-side helpers — file watcher (--watch / watch command, [watch] extra)
+├── serve/         # Serve-side helpers — file watcher (--watch / watch command)
 ├── server.py      # MCP handlers over services
 └── ask_your_docs/ # Optional [ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph_service.py); imports langgraph/streamlit lazily so core install stays lean
 src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
@@ -139,8 +139,8 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 
 ## Key Technical Details
 
-- Python 3.11+ required. Required runtime deps: `mcp>=1.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `pyyaml>=6.0`, `numpy>=1.26`, `turbovec>=0.5,<1.0`, `fastembed>=0.4,<1.0`, `openai>=1.40,<2.0`, `jinja2>=3.0,<4.0`, `tiktoken>=0.7,<1.0` (~90MB transitively — `onnxruntime` + `tokenizers` + the `openai` client).
-- Optional extras (opt-in, never in the default install): `[watch]`, `[sentence-transformers]`, `[openvino]`, `[late-interaction]`, `[graph]`, and `[ask-your-docs]` (langgraph + langchain-mcp-adapters + langchain-openai + streamlit; ships the `ask-your-docs` command from `pydocs_mcp/ask_your_docs/`). The subpackage is `mypy`-excluded (untyped agent deps not installed in the typecheck job) and imported lazily, so `import pydocs_mcp` never pulls in langgraph/streamlit.
+- Python 3.11+ required. Required runtime deps: `mcp>=1.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `pyyaml>=6.0`, `numpy>=1.26`, `turbovec>=0.5,<1.0`, `fastembed>=0.4,<1.0`, `openai>=1.40,<2.0`, `jinja2>=3.0,<4.0`, `tiktoken>=0.7,<1.0`, `watchdog>=4.0,<6.0` (~90MB transitively — `onnxruntime` + `tokenizers` + the `openai` client).
+- Optional extras (opt-in, never in the default install): `[sentence-transformers]`, `[openvino]`, `[late-interaction]`, `[graph]`, and `[ask-your-docs]` (langgraph + langchain-mcp-adapters + langchain-openai + streamlit; ships the `ask-your-docs` command from `pydocs_mcp/ask_your_docs/`). The subpackage is `mypy`-excluded (untyped agent deps not installed in the typecheck job) and imported lazily, so `import pydocs_mcp` never pulls in langgraph/streamlit. `[watch]` is a deprecated empty alias (watchdog was promoted into the required deps). Promotion exception: an extra may move into the required deps only when its installed footprint is <1% of the default install, it adds zero transitive dependencies, prebuilt wheels exist for every supported platform, AND the gated feature has first-class CLI/YAML surface — watchdog (2026-07) is the precedent; the remaining extras fail that bar and stay opt-in.
 - `retrieval/` uses a uniform `RetrieverStep` ABC + composable `RetrieverPipeline` (Pipeline IS a Step, so sub-pipelines compose directly without a SubPipelineStep adapter — named, addressable steps a la sklearn's `Pipeline([(name, step), ...])`)
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
