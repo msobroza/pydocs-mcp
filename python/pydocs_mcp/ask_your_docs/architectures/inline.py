@@ -13,16 +13,15 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from pydocs_mcp.ask_your_docs.architectures import agent_registry
-from pydocs_mcp.ask_your_docs.prompts import IMAGE_ANALYSIS_PROMPT_SECTION
-
-# Back-compat alias — the prompt text lives in ask_your_docs/prompts/.
-_IMAGE_ANALYSIS_PROMPT_SECTION = IMAGE_ANALYSIS_PROMPT_SECTION
-
 from pydocs_mcp.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
     effective_tools,
 )
+from pydocs_mcp.ask_your_docs.prompts import IMAGE_ANALYSIS_PROMPT_SECTION
+
+# Back-compat alias — the prompt text lives in ask_your_docs/prompts/.
+_IMAGE_ANALYSIS_PROMPT_SECTION = IMAGE_ANALYSIS_PROMPT_SECTION
 
 
 @agent_registry.register("inline")
