@@ -64,3 +64,12 @@
 - Non-goals honored by construction (no server.py/protocols.py edits; images never touch storage/).
 - Deviation from spec §3.1: `weave_attachments` moves INTO attachments.py with agent.py re-export (the spec's own back-compat note); test_attachment.py imports stay green either way.
 - Q5 skipped with YAGNI rationale (override covers the single-model case) — flag to reviewers.
+
+---
+
+## Implementation addendum
+
+- **§3.7 chips reconciliation:** with the chosen `accept_file` design (§4.7), files arrive atomically with the question, so pre-send "removable chips" are the chat_input widget's own native file list (each entry has its ✕). The app renders the last turn's images as 🖼 markdown pills (distinct from the symbol-name buttons) driven by `session_state["image_chips"]` — the AppTest seam AC25 asserts.
+- **Commit granularity:** spec stages 3+4 landed as one commit (registry + all four architectures) — the AC1/AC9 tests presume the full name set, and the PR is the revert unit.
+- **Deprecation caveat carried:** `create_react_agent` warns (moved upstream to `langchain.agents`) in the locked langgraph-prebuilt 1.1.0 — pre-existing usage, migration out of scope, WHY comment at the import site.
+- **`ask()` reject-path note:** the UI preserves the unsent question as visible text (chat_input cannot be programmatically pre-filled — the spec's "preserved in the input box" is approximated with an explicit "not sent" info line).
