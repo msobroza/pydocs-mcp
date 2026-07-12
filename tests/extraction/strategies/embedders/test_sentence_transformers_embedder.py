@@ -257,8 +257,7 @@ def test_chained_torchvision_failure_detected_via_cause(monkeypatch) -> None:
         "was not found in your environment"
     )
     outer = ImportError(
-        "To install the required dependencies, run: "
-        'pip install -U "sentence-transformers[image]"'
+        'To install the required dependencies, run: pip install -U "sentence-transformers[image]"'
     )
     outer.__cause__ = inner
     records: list[dict] = []
