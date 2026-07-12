@@ -136,6 +136,7 @@ def validate_rubric_config(config: RubricConfig, *, registered_gate_kinds: Seque
         raise ValueError("rubric config must carry at least one of gates/criteria")
     _require_unique_gate_names(config.gates)
     _require_registered_gate_kinds(config.gates, registered_gate_kinds)
+    _require_unique_criterion_names(config.criteria)
     if config.criteria:
         total = sum(c.weight for c in config.criteria)
         if not math.isclose(total, 1.0, abs_tol=_WEIGHT_TOLERANCE):
@@ -143,12 +144,26 @@ def validate_rubric_config(config: RubricConfig, *, registered_gate_kinds: Seque
                 f"criterion weights must sum to 1.0 ± {_WEIGHT_TOLERANCE}; "
                 f"got {total} from {[c.weight for c in config.criteria]}"
             )
+    elif not math.isclose(config.rubric_weight, 0.0, abs_tol=_WEIGHT_TOLERANCE):
+        # A gates-only objective with rubric_weight > 0 silently caps every
+        # verdict at gate_weight — a config error, not a tuning choice.
+        raise ValueError(
+            f"gates-only config must set rubric_weight to 0.0 (and gate_weight "
+            f"to 1.0); got rubric_weight={config.rubric_weight}"
+        )
     layer_total = config.gate_weight + config.rubric_weight
     if not math.isclose(layer_total, 1.0, abs_tol=_WEIGHT_TOLERANCE):
         raise ValueError(
             f"gate_weight + rubric_weight must sum to 1.0 ± {_WEIGHT_TOLERANCE}; "
             f"got {config.gate_weight} + {config.rubric_weight} = {layer_total}"
         )
+
+
+def _require_unique_criterion_names(criteria: tuple[RubricCriterion, ...]) -> None:
+    names = [c.name for c in criteria]
+    if len(names) != len(set(names)):
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        raise ValueError(f"criterion names must be unique; duplicated: {duplicates}")
 
 
 def _require_unique_gate_names(gates: tuple[GateCheck, ...]) -> None:

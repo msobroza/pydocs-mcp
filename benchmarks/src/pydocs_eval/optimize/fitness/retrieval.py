@@ -74,7 +74,7 @@ class RetrievalFitness:
         ids = await _dataset_task_ids(self.dataset_name, self.dataset_kwargs)
         train, holdout = partition_task_ids(ids)
         selected = frozenset(train if split == "train" else holdout)
-        overlay = self._write_overlay(artifact)
+        overlay = self._write_overlay(artifact, _overlay_bytes(artifact))
         results, tasks_ran = await run_sweep(
             systems=self.systems,
             config_paths=(overlay,),
@@ -88,8 +88,8 @@ class RetrievalFitness:
         score, components = _score_from_sweep(results, primary=self.metric_specs[0])
         return FitnessReport(score=score, components=components, cost_usd=0.0, n_samples=tasks_ran)
 
-    def _write_overlay(self, artifact: OptimizableArtifact) -> Path:
-        """Materialize the candidate's render as the sweep's overlay file.
+    def _write_overlay(self, artifact: OptimizableArtifact, overlay_bytes: str) -> Path:
+        """Materialize the candidate's overlay as the sweep's config file.
 
         The stem carries the fingerprint prefix so tracker runs and report
         columns identify WHICH candidate a leg measured.
@@ -97,8 +97,25 @@ class RetrievalFitness:
         directory = self.output_dir or Path(tempfile.mkdtemp(prefix="retrieval-config-"))
         directory.mkdir(parents=True, exist_ok=True)
         overlay = directory / f"candidate_{artifact.fingerprint[:12]}.yaml"
-        overlay.write_text(artifact.render(), encoding="utf-8")
+        overlay.write_text(overlay_bytes, encoding="utf-8")
         return overlay
+
+
+def _overlay_bytes(artifact: OptimizableArtifact) -> str:
+    """The artifact's retrieval overlay, or a loud TypeError.
+
+    Only artifacts exposing ``retrieval_overlay()`` (retrieval_config,
+    ask_architecture) can ride the retrieval rung — sweeping a text artifact's
+    render as an AppConfig overlay would measure garbage silently.
+    """
+    reader = getattr(artifact, "retrieval_overlay", None)
+    if reader is None:
+        raise TypeError(
+            f"the 'retrieval' fitness needs an artifact with a retrieval "
+            f"overlay (retrieval_config / ask_architecture); got "
+            f"{artifact.name!r} — drop the retrieval rung for text artifacts"
+        )
+    return reader()
 
 
 def _score_from_sweep(

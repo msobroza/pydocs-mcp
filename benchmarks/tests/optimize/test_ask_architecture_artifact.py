@@ -114,3 +114,45 @@ class TestEnumerateSpace:
     def test_every_cell_passes_validate(self, pipelines_dir: Path) -> None:
         for cell in AskArchitectureArtifact.enumerate_space(_DIMS, pipelines_dir=pipelines_dir):
             assert cell.validate() == ()
+
+
+def test_null_and_wrong_typed_values_are_violations(pipelines_dir: Path) -> None:
+    # The pre-spend firewall: mutated candidates with null / wrong-typed
+    # dimensions must never pass (they would spend budget or crash mid-run).
+    doc = (
+        "architecture: null\nrewrite_enabled: true\nscope_pin: true\n"
+        'retrieval_config: null\nmax_agent_turns: "999"\n'
+    )
+    violations = _artifact(pipelines_dir).with_content(doc).validate()
+    assert any("architecture" in v for v in violations)
+    assert any("retrieval_config" in v for v in violations)
+    assert any("max_agent_turns" in v for v in violations)
+
+
+def test_bool_turns_and_non_bool_flags_are_violations(pipelines_dir: Path) -> None:
+    doc = yaml.safe_dump(
+        {
+            "architecture": "text_react",
+            "rewrite_enabled": "yes please",
+            "scope_pin": True,
+            "retrieval_config": "exp_hybrid_rrf_k60",
+            "max_agent_turns": True,
+        }
+    )
+    violations = _artifact(pipelines_dir).with_content(doc).validate()
+    assert any("rewrite_enabled" in v for v in violations)
+    assert any("max_agent_turns" in v for v in violations)
+
+
+def test_empty_stem_is_the_sanctioned_no_overlay_sentinel(pipelines_dir: Path) -> None:
+    assert _artifact(pipelines_dir, retrieval_config="").validate() == ()
+
+
+def test_retrieval_overlay_resolves_the_stem_bytes(pipelines_dir: Path) -> None:
+    overlay = _artifact(pipelines_dir).retrieval_overlay()
+    assert overlay == "search: {}\n"
+
+
+def test_retrieval_overlay_rejects_the_no_overlay_sentinel(pipelines_dir: Path) -> None:
+    with pytest.raises(ValueError, match="no retrieval overlay"):
+        _artifact(pipelines_dir, retrieval_config="").retrieval_overlay()

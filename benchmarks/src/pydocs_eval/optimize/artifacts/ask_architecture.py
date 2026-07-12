@@ -24,11 +24,15 @@ from pydocs_eval.optimize.ask_binding import (
     ask_architecture_registry,
 )
 from pydocs_eval.optimize.registries import artifact_registry
+from pydocs_eval.optimize.rubric.gates import (
+    _DEFAULT_MAX_TURNS as _GATE_DEFAULT_MAX_TURNS,
+)
 
 # WHY: only behaviors the product can already express may be searched; the
-# turn ceiling mirrors the agent-track default (one bump site).
+# turn ceiling mirrors the agent-track default and the cell default mirrors
+# the max_turns gate default (single sources, one bump site each).
 _MAX_ASK_TURNS = _DEFAULT_MAX_TURNS
-_DEFAULT_MAX_AGENT_TURNS = 12
+_DEFAULT_MAX_AGENT_TURNS = _GATE_DEFAULT_MAX_TURNS
 
 # WHY a repo-relative default: the shipped run configs name pipeline STEMS
 # under this directory; __main__ wiring passes an absolute dir at run time.
@@ -100,6 +104,22 @@ class AskArchitectureArtifact:
         """SHA-256 hex digest of the canonical render (64 chars)."""
         return hashlib.sha256(self.render().encode()).hexdigest()
 
+    def retrieval_overlay(self) -> str:
+        """The cell's retrieval overlay BYTES for the free retrieval rung.
+
+        Resolves the cell's ``retrieval_config`` stem against the pipelines
+        dir. Raises (fail-loud) on the empty no-overlay sentinel — a cell
+        without an overlay has nothing for the retrieval fitness to sweep.
+        """
+        parsed = _parse_mapping(self.render()) or {}
+        stem = parsed.get("retrieval_config", self.retrieval_config)
+        if not isinstance(stem, str) or not stem:
+            raise ValueError(
+                "cell has no retrieval overlay (empty retrieval_config) — "
+                "the retrieval rung cannot score it"
+            )
+        return (self.pipelines_dir / f"{stem}.yaml").read_text(encoding="utf-8")
+
     @classmethod
     def enumerate_space(
         cls,
@@ -151,18 +171,55 @@ def _key_violations(parsed: Mapping[str, object]) -> tuple[str, ...]:
 
 
 def _value_violations(parsed: Mapping[str, object], *, pipelines_dir: Path) -> tuple[str, ...]:
+    # WHY strict types: text-mutation optimizers may drive ANY artifact, so a
+    # null / wrong-typed dimension must be a violation, never a silent pass —
+    # this validate() is the pre-spend firewall (spec §3.2.2). Keys already
+    # checked present by _key_violations; each present value is typed here.
     violations: list[str] = []
-    architecture = parsed.get("architecture")
-    if architecture is not None and architecture not in ask_architecture_registry.names():
-        violations.append(
-            f"unknown architecture {architecture!r}; have {list(ask_architecture_registry.names())}"
-        )
-    stem = parsed.get("retrieval_config")
-    if isinstance(stem, str) and stem and not (pipelines_dir / f"{stem}.yaml").exists():
-        violations.append(
-            f"retrieval_config {stem!r} does not resolve to {pipelines_dir}/{stem}.yaml"
-        )
-    turns = parsed.get("max_agent_turns")
-    if isinstance(turns, int) and not 1 <= turns <= _MAX_ASK_TURNS:
-        violations.append(f"max_agent_turns {turns} outside 1..{_MAX_ASK_TURNS}")
+    violations += _architecture_violations(parsed)
+    violations += _overlay_violations(parsed, pipelines_dir)
+    violations += _turns_violations(parsed)
+    for flag in ("rewrite_enabled", "scope_pin"):
+        value = parsed.get(flag)
+        if flag in parsed and not isinstance(value, bool):
+            violations.append(f"{flag} must be a boolean, got {value!r}")
     return tuple(violations)
+
+
+def _architecture_violations(parsed: Mapping[str, object]) -> list[str]:
+    if "architecture" not in parsed:
+        return []
+    architecture = parsed["architecture"]
+    if not isinstance(architecture, str):
+        return [f"architecture must be a string, got {architecture!r}"]
+    if architecture not in ask_architecture_registry.names():
+        return [
+            f"unknown architecture {architecture!r}; have {list(ask_architecture_registry.names())}"
+        ]
+    return []
+
+
+def _overlay_violations(parsed: Mapping[str, object], pipelines_dir: Path) -> list[str]:
+    if "retrieval_config" not in parsed:
+        return []
+    stem = parsed["retrieval_config"]
+    if not isinstance(stem, str):
+        return [f"retrieval_config must be a string stem, got {stem!r}"]
+    # "" is the sanctioned no-overlay sentinel (serve defaults apply); any
+    # non-empty stem must resolve — AppConfig.load silently ignores missing
+    # overlays, so the artifact must not (spec §3.2.2).
+    if stem and not (pipelines_dir / f"{stem}.yaml").exists():
+        return [f"retrieval_config {stem!r} does not resolve to {pipelines_dir}/{stem}.yaml"]
+    return []
+
+
+def _turns_violations(parsed: Mapping[str, object]) -> list[str]:
+    if "max_agent_turns" not in parsed:
+        return []
+    turns = parsed["max_agent_turns"]
+    # WHY the bool exclusion: bool is an int subclass; `true` is not a turn cap.
+    if not isinstance(turns, int) or isinstance(turns, bool):
+        return [f"max_agent_turns must be an integer, got {turns!r}"]
+    if not 1 <= turns <= _MAX_ASK_TURNS:
+        return [f"max_agent_turns {turns} outside 1..{_MAX_ASK_TURNS}"]
+    return []

@@ -56,6 +56,9 @@ optimizers-skillopt = ["skillopt>=0.2,<0.3"]
 # architecture bridges in optimize/ask_binding.py). Floor = the first product
 # release shipping the build_agent(prompts=...) seam — the same version-floor
 # rationale as [retrieval]; pin the real number when that release publishes.
+# PUBLISH GATE: 0.5.2 does not exist yet — do NOT publish pydocs-mcp-eval
+# 0.2.0 to PyPI before the product release shipping the seam, or
+# pip install "pydocs-mcp-eval[ask]" resolves nothing.
 ask = ["pydocs-mcp[ask-your-docs]>=0.5.2"]
 # The union of every extra — one install target for a full-featured dev/CI env.
 all = [

@@ -300,7 +300,10 @@ still applies, plus:
   holdout-gate spend, and prefer local/self-hosted agent endpoints for large
   campaigns.
 - The free `retrieval` rung screens candidates on retrieval metrics before
-  any judge money is spent — keep it first in the ladder.
+  any judge money is spent — keep it first in the ladder of the
+  architecture / retrieval-config campaigns. It only accepts artifacts that
+  carry a retrieval overlay; the prompt campaign uses two sizes of the paid
+  rubric rung instead (a prompt cannot move retrieval metrics).
 
 **Preflight.** Same rule as everything above — walk it for $0.00 first; the
 dry run also reports whether the `[ask]` extra is installed (`SKIPPED` is

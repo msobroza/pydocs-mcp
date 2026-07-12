@@ -298,10 +298,28 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
     _require_registered(optimizer_registry, cfg.optimizer, kind="optimizer")
     for rung in cfg.ladder.rungs:
         _require_registered(fitness_registry, rung.fitness_name, kind="fitness")
+    _require_retrieval_rung_compatibility(cfg)
     if cfg.ask_rubric is not None:
         # AC-7/AC-8: gate kinds + rubric weights fail loud at load time.
         validate_rubric_config(
             cfg.ask_rubric.rubric_config, registered_gate_kinds=gate_registry.names()
+        )
+
+
+def _require_retrieval_rung_compatibility(cfg: OptimizeRunConfig) -> None:
+    """A 'retrieval' rung needs an artifact that carries a retrieval overlay.
+
+    Sweeping a text artifact's render as an AppConfig overlay would measure
+    garbage silently — reject the pairing at load time, never at rung 1.
+    """
+    names_retrieval = any(r.fitness_name == "retrieval" for r in cfg.ladder.rungs)
+    if not names_retrieval:
+        return
+    if not hasattr(artifact_registry.build(cfg.artifact), "retrieval_overlay"):
+        raise ValueError(
+            f"ladder names the 'retrieval' fitness but artifact {cfg.artifact!r} "
+            "carries no retrieval overlay (only retrieval_config / "
+            "ask_architecture do) — drop the retrieval rung for text artifacts"
         )
 
 

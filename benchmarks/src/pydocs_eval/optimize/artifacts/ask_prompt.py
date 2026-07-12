@@ -16,6 +16,7 @@ test.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, replace
 
 from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
@@ -126,7 +127,10 @@ class AskPromptArtifact:
 def _structure_violations(text: str, sections: dict[str, str]) -> tuple[str, ...]:
     violations: list[str] = []
     for key in _SECTION_ORDER:
-        occurrences = text.count(f"=== {key} ===")
+        # WHY line-anchored: a candidate legitimately QUOTING the delimiter
+        # mid-line is not a duplicate section; only a full header line is.
+        pattern = re.compile(rf"^=== {key} ===$", re.MULTILINE)
+        occurrences = len(pattern.findall(text))
         if occurrences == 0:
             violations.append(f"missing section {key!r}")
         elif occurrences > 1:

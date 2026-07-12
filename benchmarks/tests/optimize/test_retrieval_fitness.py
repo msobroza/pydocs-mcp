@@ -47,6 +47,9 @@ class _OverlayArtifact:
 
         return hashlib.sha256(self.render().encode()).hexdigest()
 
+    def retrieval_overlay(self) -> str:
+        return self.render()
+
 
 @pytest.fixture
 def sweep_capture(monkeypatch, tmp_path):
@@ -97,3 +100,23 @@ async def test_distinct_candidates_get_distinct_overlays(sweep_capture, tmp_path
     first = sweep_capture["config_paths"]
     await fit.evaluate(_OverlayArtifact(content="output: {}\n"), split="train")
     assert sweep_capture["config_paths"] != first
+
+
+async def test_artifacts_without_an_overlay_are_rejected_loudly(sweep_capture, tmp_path) -> None:
+    # A text artifact's render is NOT an AppConfig overlay — sweeping it
+    # would measure garbage silently; the fitness must refuse.
+    from dataclasses import dataclass as _dc
+
+    @_dc(frozen=True)
+    class _TextArtifact:
+        name: str = "ask_prompt"
+
+        def render(self) -> str:
+            return "=== SYSTEM_PROMPT ===\nnot an overlay\n"
+
+        @property
+        def fingerprint(self) -> str:
+            return "f" * 64
+
+    with pytest.raises(TypeError, match="retrieval overlay"):
+        await _fitness(tmp_path).evaluate(_TextArtifact(), split="train")

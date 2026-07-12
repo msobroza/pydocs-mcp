@@ -3,9 +3,11 @@
 # sanctioned YAML duplication); the pydantic Field defaults are canonical.
 artifact: ask_prompt
 optimizer: skillopt                  # or critique_refine (low-budget, interpretable)
-ladder:                              # free screen, then paid finals — the ladder
-  - [retrieval, 12, 4]               # is the outermost judge-cost short-circuit
-  - [ask_rubric, 24, 1]
+ladder:                              # small-N screening, then finals — degenerate
+  - [ask_rubric, 12, 4]              # two-rung halving over the SAME paid fitness
+  - [ask_rubric, 24, 1]              # (a prompt cannot move retrieval metrics, so
+                                     # the free retrieval rung is reserved for the
+                                     # architecture / retrieval-config campaigns)
 ask_rubric:
   runner:
     model: claude-sonnet-5           # judge + agent model id (agent-track single source)

@@ -239,3 +239,73 @@ async def test_judge_cost_flows_into_the_report(tmp_path: Path) -> None:
     fitness, _, _ = _fitness(tmp_path)
     report = await fitness.evaluate(_Artifact(), split="train")
     assert report.cost_usd == pytest.approx(0.1 * len(_TRAIN_QUESTIONS))
+
+
+async def test_discarded_samples_are_rejudged_on_resume(tmp_path: Path) -> None:
+    # A discard is a judge FAILURE, not a score — a transient timeout must
+    # not be resumed forever; the rerun re-pays exactly the discarded ones.
+    discard_question = _TRAIN_QUESTIONS[0]
+    scores = _scores()
+    scores.pop(discard_question)
+    judge = FakeRubricJudge(scripted=scores)
+    fitness, runner, _ = _fitness(tmp_path, judge=judge)
+    await fitness.evaluate(_Artifact(), split="train")
+    runner_calls, judge_calls = runner.calls, judge.calls
+    report = await fitness.evaluate(_Artifact(), split="train")
+    assert runner.calls == runner_calls + 1  # only the discarded sample re-ran
+    assert judge.calls == judge_calls + 1
+    assert report.n_samples == len(_TRAIN_QUESTIONS) - 1  # still discarded (same scripted miss)
+
+
+async def test_criterion_mean_keys_survive_all_skipped_rungs(tmp_path: Path) -> None:
+    # AC-13: EVERY configured criterion.<name>_mean is present even when the
+    # gates skipped the judge for every sample.
+    runner = FakeAskRunner(scripted={})  # empty transcripts fail gold_substring
+    fitness, _, _ = _fitness(tmp_path, runner=runner)
+    report = await fitness.evaluate(_Artifact(), split="train")
+    assert report.components["criterion.correctness_mean"] == 0.0
+    assert report.components["criterion.grounding_mean"] == 0.0
+
+
+async def test_end_to_end_rerun_through_the_orchestrator_is_free(tmp_path: Path) -> None:
+    # AC-19 end-to-end: two identical run_optimization passes against the
+    # same ledgers perform zero fake-runner and zero fake-judge calls on the
+    # second run — both resume layers (trials + samples) compose.
+    from pydocs_eval.optimize._types import OptimizationBudget, Provenance
+    from pydocs_eval.optimize.ladder import FitnessLadder, Rung
+    from pydocs_eval.optimize.orchestrator import run_optimization
+    from pydocs_eval.optimize.trials_ledger import TrialsLedger
+
+    class _EchoOpt:
+        name = "echo"
+
+        async def optimize(self, view, ladder, budget):
+            from pydocs_eval.optimize._types import OptimizationResult
+
+            fitness = view.fitness_by_name["ask_rubric"]
+            await fitness.evaluate(view.seed, split="train")
+            return OptimizationResult(
+                best=None, accepted=False, trials=(), total_usd=0.0, provenance=view.provenance
+            )
+
+    provenance = Provenance(
+        seed_fingerprint="s" * 64, dataset_revision="fake", model_ids=(), optimizer="echo"
+    )
+    ladder = FitnessLadder(rungs=(Rung("ask_rubric", max_tasks=8, survivors=1),))
+
+    async def _one_pass():
+        fitness, runner, judge = _fitness(tmp_path)
+        await run_optimization(
+            _Artifact(),
+            _EchoOpt(),
+            ladder,
+            OptimizationBudget(),
+            fitness_by_name={"ask_rubric": fitness},
+            ledger=TrialsLedger(tmp_path / "trials.jsonl"),
+            provenance=provenance,
+        )
+        return runner, judge
+
+    await _one_pass()
+    runner, judge = await _one_pass()  # fresh fitness/fakes, same ledgers on disk
+    assert runner.calls == 0 and judge.calls == 0

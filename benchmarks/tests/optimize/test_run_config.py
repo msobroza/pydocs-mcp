@@ -110,7 +110,10 @@ def test_unregistered_gate_kind_raises_at_load(tmp_path) -> None:
 def test_shipped_ask_configs_load_typed() -> None:
     prompt_cfg = load_run_config(_shipped("optimize_ask_prompt.yaml"))
     assert prompt_cfg.artifact == "ask_prompt" and prompt_cfg.optimizer == "skillopt"
-    assert [r.fitness_name for r in prompt_cfg.ladder.rungs] == ["retrieval", "ask_rubric"]
+    # Both rungs are the paid fitness (the tool_docs degenerate-halving
+    # precedent) — a prompt cannot move retrieval metrics, so the free
+    # retrieval rung is reserved for the overlay-carrying artifacts.
+    assert [r.fitness_name for r in prompt_cfg.ladder.rungs] == ["ask_rubric", "ask_rubric"]
     assert prompt_cfg.ask_rubric is not None
     assert prompt_cfg.budget.max_judge_calls == 200
 
@@ -163,3 +166,12 @@ def test_shipped_architecture_dims_resolve_against_real_pipelines() -> None:
     assert len(cells) == 1 * 2 * 1 * 3 * 2
     for cell in cells:
         assert cell.validate() == (), cell.render()
+
+
+def test_retrieval_rung_requires_an_overlay_carrying_artifact(tmp_path) -> None:
+    text = (
+        "artifact: ask_prompt\noptimizer: skillopt\n"
+        "ladder: [[retrieval, 12, 4], [ask_rubric, 24, 1]]\n"
+    )
+    with pytest.raises(ValueError, match="retrieval overlay"):
+        load_run_config(_write(tmp_path, text))

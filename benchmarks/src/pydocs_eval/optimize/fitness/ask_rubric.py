@@ -61,6 +61,8 @@ class AskRubricFitness:
     architecture: str
     sample_ledger: SampleRubricLedger
     output_dir: Path
+    # WHY per-run counter: the ceiling bounds ONE process's fresh judge
+    # calls; resumed samples are free, so a rerun only counts new spend.
     max_judge_calls: int = _DEFAULT_MAX_JUDGE_CALLS
     rng_seed: int = _DEFAULT_RNG_SEED
     name: str = "ask_rubric"
@@ -89,13 +91,21 @@ class AskRubricFitness:
                 task_id=task.task_id,
                 objective_hash=self.objective_hash(),
             )
-            if hit is not None:
+            if hit is not None and hit.discarded is None:
                 records.append(hit)
                 continue
+            # WHY discards re-run: a discard is a judge FAILURE (timeout /
+            # malformed reply), not a score — resuming it forever would make
+            # a transient judge hiccup permanent. Re-paying one judge call is
+            # bounded by max_judge_calls.
             record = await self._score_sample(artifact, task, split=split, runner=runner)
             fresh_cost += record.cost_usd
             records.append(record)
-        return _report(records, fresh_cost=fresh_cost)
+        return _report(
+            records,
+            fresh_cost=fresh_cost,
+            configured_criteria=tuple(c.name for c in self.rubric.criteria),
+        )
 
     async def _split_tasks(self, split: str) -> tuple[EvalTask, ...]:
         """The requested split's tasks in seeded deterministic order."""
@@ -197,7 +207,12 @@ class AskRubricFitness:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _report(records: list[SampleRubricRecord], *, fresh_cost: float) -> FitnessReport:
+def _report(
+    records: list[SampleRubricRecord],
+    *,
+    fresh_cost: float,
+    configured_criteria: tuple[str, ...] = (),
+) -> FitnessReport:
     """Aggregate sample records into the ladder-facing report (AC-13)."""
     admitted = [r for r in records if r.discarded is None]
     score = fmean(r.verdict for r in admitted) if admitted else -math.inf
@@ -211,17 +226,26 @@ def _report(records: list[SampleRubricRecord], *, fresh_cost: float) -> FitnessR
         "turns_mean": fmean(r.turns for r in admitted) if admitted else 0.0,
         "wall_seconds_mean": fmean(r.wall_seconds for r in admitted) if admitted else 0.0,
     }
-    components.update(_criterion_means(admitted))
+    components.update(_criterion_means(admitted, configured_criteria))
     components.update(_gate_rates(records))
     return FitnessReport(
         score=score, components=components, cost_usd=fresh_cost, n_samples=len(admitted)
     )
 
 
-def _criterion_means(admitted: list[SampleRubricRecord]) -> dict[str, float]:
-    names = sorted({name for r in admitted for name in r.criteria})
+def _criterion_means(
+    admitted: list[SampleRubricRecord], configured: tuple[str, ...]
+) -> dict[str, float]:
+    # WHY the configured union: AC-13 promises EVERY criterion.<name>_mean —
+    # a rung where every sample was gate-skipped still reports the keys
+    # (0.0) instead of silently dropping them.
+    names = sorted(set(configured) | {name for r in admitted for name in r.criteria})
     return {
-        f"criterion.{name}_mean": fmean(r.criteria[name] for r in admitted if name in r.criteria)
+        f"criterion.{name}_mean": (
+            fmean(r.criteria[name] for r in admitted if name in r.criteria)
+            if any(name in r.criteria for r in admitted)
+            else 0.0
+        )
         for name in names
     }
 

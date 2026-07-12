@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import re
 from importlib.resources import files
+
+from pydocs_eval.optimize.__main__ import _dry_provenance
+from pydocs_eval.optimize.run_config import load_run_config
+from pydocs_eval.optimize.rubric.model import rubric_config_hash
 from pathlib import Path
 
 from pydocs_eval.optimize.__main__ import cli_main
@@ -80,3 +84,17 @@ async def test_dry_run_reports_missing_ask_extra_as_skipped(tmp_path, capsys, mo
     out = capsys.readouterr().out
     assert code == 0
     assert "ask binding: SKIPPED (extra not installed)" in out
+
+
+def test_dry_provenance_pins_the_rubric_hash() -> None:
+    # AC-19: provenance.rubric_hash matches rubric_config_hash(config,
+    # architecture=<pinned runner architecture>) whenever a rubric is configured.
+    cfg = load_run_config(_shipped("optimize_ask_prompt.yaml"))
+    seed_stub = type("S", (), {"fingerprint": "f" * 64, "name": "ask_prompt"})()
+    provenance = _dry_provenance(cfg, seed_stub)
+    assert provenance.rubric_hash == rubric_config_hash(
+        cfg.ask_rubric.rubric_config, architecture=cfg.ask_rubric.runner.architecture
+    )
+
+    plain = load_run_config(_shipped("optimize_tool_docs.yaml"))
+    assert _dry_provenance(plain, seed_stub).rubric_hash is None

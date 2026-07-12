@@ -47,6 +47,7 @@ from pydocs_eval.optimize.registries import (
     optimizer_registry,
 )
 from pydocs_eval.optimize.rubric.judge import FakeRubricJudge
+from pydocs_eval.optimize.rubric.model import rubric_config_hash
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
 from pydocs_eval.optimize.run_config import (
     OptimizeRunConfig,
@@ -360,12 +361,23 @@ async def _dry_orchestrator_pass(
 
 
 def _dry_provenance(cfg: OptimizeRunConfig, seed: OptimizableArtifact) -> Provenance:
-    """Synthesize provenance for the dry-run pass (audit shape, no real models)."""
+    """Synthesize provenance for the dry-run pass (audit shape, no real models).
+
+    ``rubric_hash`` pins the exact objective (spec §3.6/AC-19) whenever the
+    config carries one — the same expression every real-run provenance
+    builder must use.
+    """
+    rubric_hash = None
+    if cfg.ask_rubric is not None:
+        rubric_hash = rubric_config_hash(
+            cfg.ask_rubric.rubric_config, architecture=cfg.ask_rubric.runner.architecture
+        )
     return Provenance(
         seed_fingerprint=seed.fingerprint,
         dataset_revision=cfg.dataset.name,
         model_ids=(),
         optimizer=cfg.optimizer,
+        rubric_hash=rubric_hash,
     )
 
 

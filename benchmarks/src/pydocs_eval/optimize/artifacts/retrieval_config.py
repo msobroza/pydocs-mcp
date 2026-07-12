@@ -85,3 +85,7 @@ class RetrievalConfigArtifact:
     def fingerprint(self) -> str:
         """SHA-256 hex digest of the rendered overlay (64 chars)."""
         return hashlib.sha256(self.render().encode()).hexdigest()
+
+    def retrieval_overlay(self) -> str:
+        """The candidate overlay bytes — this artifact's render IS the overlay."""
+        return self.render()

@@ -67,6 +67,29 @@ class TestWeightValidation:
         )
         _validate(config)
 
+    def test_duplicate_criterion_names_raise(self) -> None:
+        criteria = (
+            RubricCriterion(name="dup", weight=0.5, description="a"),
+            RubricCriterion(name="dup", weight=0.5, description="b"),
+        )
+        config = RubricConfig(
+            gates=(GateCheck(name="g", kind="max_turns", params={}),), criteria=criteria
+        )
+        with pytest.raises(ValueError, match="unique"):
+            _validate(config)
+
+    def test_gates_only_config_with_rubric_weight_raises(self) -> None:
+        # rubric_weight > 0 with no criteria silently caps every verdict at
+        # gate_weight — a config error, not a tuning choice.
+        config = RubricConfig(
+            gates=(GateCheck(name="g", kind="max_turns", params={}),),
+            criteria=(),
+            gate_weight=0.3,
+            rubric_weight=0.7,
+        )
+        with pytest.raises(ValueError, match="rubric_weight"):
+            _validate(config)
+
     def test_duplicate_gate_names_raise(self) -> None:
         gates = (
             GateCheck(name="dup", kind="min_answer_chars", params={}),
