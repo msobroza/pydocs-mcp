@@ -40,8 +40,46 @@ _INSTALL_HINT = (
     "'sentence-transformers' extra. Install with: "
     "pip install 'pydocs-mcp[sentence-transformers]' (pulls "
     "sentence-transformers + torch + transformers; expect ~1-5 GB "
-    "depending on CUDA wheel selection)."
+    "depending on CUDA wheel selection). torchvision is NOT included; "
+    "if a model load demands it, see the error raised at construction "
+    "time for remedies."
 )
+
+_TORCHVISION_HINT = (
+    "Constructing the SentenceTransformer model raised an error that "
+    "mentions 'torchvision'. torchvision is NOT part of the "
+    "'pydocs-mcp[sentence-transformers]' extra: recent transformers "
+    "releases (5.0 <= v < 5.10) hard-require it for image-processing "
+    "classes that some model repos reference. Remedies, in order:\n"
+    "  1. Upgrade transformers to >= 5.10 (adds a Pillow fallback that "
+    "removes the torchvision requirement for image processors):\n"
+    "       pip install -U 'transformers>=5.10,<6'\n"
+    "  2. Or install torchvision — NOTE it exact-pins its torch sibling "
+    "(e.g. torchvision 0.26.0 <-> torch 2.11.0), so match your installed "
+    "torch:\n"
+    "       pip install torchvision\n"
+    "  3. If embedding.model_name points at a multimodal repo by mistake, "
+    "switch to a text-only embedding model (e.g. "
+    "Qwen/Qwen3-Embedding-0.6B).\n"
+    "Do NOT follow upstream's 'pip install -U sentence-transformers[image]' "
+    "hint on transformers 4.x or 5.0.x — there that extra installs only "
+    "Pillow and does not resolve the error (transformers' vision extra "
+    "gained torchvision in 5.1)."
+)
+
+
+def _mentions_torchvision(exc: BaseException) -> bool:
+    """True when exc or anything in its __cause__/__context__ chain names
+    torchvision — ST's suggest_extra_on_exception re-raises with the
+    original as __cause__, so the marker may sit one level down."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if "torchvision" in str(cur).lower():
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 
 @dataclass
@@ -101,10 +139,20 @@ class SentenceTransformersEmbedder:
                 ctor_kwargs["model_kwargs"] = {"file_name": self.model_file_name}
             try:
                 self.model = SentenceTransformer(self.model_name, **ctor_kwargs)
-            except ImportError as e:
-                # ModuleNotFoundError (e.g. missing optimum) is an ImportError
-                # subclass, so this one clause covers it.
-                if self.backend == "torch":
+            except (ImportError, AttributeError) as e:
+                # ST >= 5.5 routes model loading through AutoProcessor wrapped
+                # in suggest_extra_on_exception(); a missing torchvision
+                # surfaces as an ImportError (or AttributeError from
+                # lazy-module resolution) whose chain mentions 'torchvision'.
+                # Upstream's own remedy hint is broken on transformers
+                # 4.x/5.0.x (there its [image] extra == Pillow only), so we
+                # own an actionable message here. See spec
+                # docs/superpowers/specs/2026-07-11-sentence-transformers-torchvision-bug-spec.md
+                if _mentions_torchvision(e):
+                    raise ImportError(_TORCHVISION_HINT) from e
+                if not isinstance(e, ImportError) or self.backend == "torch":
+                    # ModuleNotFoundError (e.g. missing optimum) is an
+                    # ImportError subclass, so the clause below covers it.
                     raise
                 # A non-torch backend fails construction when optimum /
                 # openvino aren't installed — surface the extras hint instead
