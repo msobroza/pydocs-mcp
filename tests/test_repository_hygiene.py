@@ -430,3 +430,22 @@ def test_pip_audit_job_present_in_ci() -> None:
     assert "pip-audit" in ci_yml, "ci.yml security job must run pip-audit"
     # In strict mode — advisories on indirect/transitive deps fail too.
     assert "--strict" in ci_yml, "pip-audit must run in --strict mode so transitive CVEs fail CI"
+
+
+def test_st_family_extras_bound_transformers_below_6() -> None:
+    """Both ST-family extras pin transformers>=4.48,<6.0 — guards against a
+    future edit silently re-unbounding the float (spec
+    docs/superpowers/specs/2026-07-11-sentence-transformers-torchvision-bug-spec.md
+    AC8: transformers 5.0-5.9 hard-raise on torchvision-backed classes, and
+    an uncapped range lets user installs drift into untested majors)."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = pyproject["project"]["optional-dependencies"]
+    for extra in ("sentence-transformers", "openvino"):
+        transformers_reqs = [r for r in extras[extra] if r.startswith("transformers")]
+        assert transformers_reqs == ["transformers>=4.48,<6.0"], (
+            f"[{extra}] must pin 'transformers>=4.48,<6.0'; got {transformers_reqs}"
+        )

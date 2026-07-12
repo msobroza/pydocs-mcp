@@ -3472,8 +3472,8 @@ requires-dist = [
     { name = "streamlit-agraph", marker = "extra == 'ask-your-docs'", specifier = ">=0.0.45" },
     { name = "tiktoken", specifier = ">=0.7,<1.0" },
     { name = "transformers", marker = "extra == 'late-interaction'", specifier = ">=4.57.3" },
-    { name = "transformers", marker = "extra == 'openvino'", specifier = ">=4.48" },
-    { name = "transformers", marker = "extra == 'sentence-transformers'", specifier = ">=4.48" },
+    { name = "transformers", marker = "extra == 'openvino'", specifier = ">=4.48,<6.0" },
+    { name = "transformers", marker = "extra == 'sentence-transformers'", specifier = ">=4.48,<6.0" },
     { name = "turbovec", specifier = ">=0.5,<1.0" },
     { name = "watchdog", marker = "extra == 'watch'", specifier = ">=4.0,<6.0" },
 ]
