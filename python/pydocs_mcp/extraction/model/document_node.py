@@ -82,7 +82,7 @@ class DocumentNode:
         ``start_index``, ``end_line`` → ``end_index``. ``kind`` is emitted
         as its string value (``NodeKind.value``) so consumers don't need to
         know the enum. ``nodes`` holds recursive children. Used by
-        ``LookupService`` for the ``lookup`` MCP tool response shape.
+        ``LookupService`` for the ``get_symbol`` MCP tool response shape.
         """
         return {
             "title": self.title,

@@ -69,7 +69,7 @@ pydocs-mcp -v serve .
 ```bash
 # Python suite (unit tests under tests/, eval-suite tests under benchmarks/tests/ — run both)
 pytest -q
-PYTHONPATH=benchmarks/src pytest benchmarks/tests/ -q
+PYTHONPATH=benchmarks/src pytest benchmarks/tests/ -q   # local gate — not run by any CI workflow
 
 # Python lint
 ruff check python/ tests/ benchmarks/

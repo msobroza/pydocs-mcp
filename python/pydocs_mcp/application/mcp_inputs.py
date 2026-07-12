@@ -36,6 +36,12 @@ _PACKAGE_RE = re.compile(
 _TARGET_RE = re.compile(
     r"^(?:[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)?$"
 )  # empty or dotted-identifier chain; rejects foo..bar, foo., leading digit
+_WHY_TARGET_RE = re.compile(
+    r"^[A-Za-z0-9_.\-/]+$"
+)  # get_why targets are documented as PATH|QNAME (DecisionService._classify_target
+# branches on '/'), so '/' is admitted here — unlike _TARGET_RE, which guards the
+# symbol/context tools. ':' and ']' stay forbidden: they are the only characters
+# that corrupt the [[next:…]] pointer-token grammar (application/formatting.py).
 
 # Module-level slots — installed by ``configure_from_app_config`` at
 # server / CLI startup. The initial values match the shipped
@@ -169,7 +175,7 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
 
 
 class SearchInput(BaseModel):
-    """Input for the ``search`` MCP tool (spec §4.1)."""
+    """Input for the ``search_codebase`` MCP tool."""
 
     query: str = Field(min_length=1, max_length=30000)
     kind: Literal["docs", "api", "any", "decision"] = "any"
@@ -217,7 +223,8 @@ class SearchInput(BaseModel):
 
 
 class LookupInput(BaseModel):
-    """Input for the ``lookup`` MCP tool (spec §4.1)."""
+    """Internal routing input for the deprecated ``lookup`` CLI verb — the
+    MCP surface exposes ``get_symbol`` / ``get_references`` instead."""
 
     target: str = ""
     show: Literal[
@@ -275,8 +282,8 @@ class LookupInput(BaseModel):
 # ── Task-shaped tool inputs (spec §D1) ──────────────────────────────────
 #
 # The six task-shaped tools reuse the same YAML-wired limit slots and the
-# same ``_PACKAGE_RE`` / ``_TARGET_RE`` boundary validators as the two-tool
-# ``SearchInput`` / ``LookupInput`` surface above. ``project`` carries the
+# same ``_PACKAGE_RE`` / ``_TARGET_RE`` boundary validators as
+# ``SearchInput`` / ``LookupInput`` above. ``project`` carries the
 # identical multi-repo corpus-selector semantics on every model that has it.
 
 
@@ -396,14 +403,16 @@ class WhyInput(BaseModel):
     @field_validator("targets")
     @classmethod
     def _check_targets(cls, v: list[str] | None) -> list[str] | None:
-        # Mirrors ContextInput._check_targets — same pointer-token
-        # interpolation risk applies to WhyInput's per-target lookups.
+        # Unlike ContextInput, why-targets are documented as PATH|QNAME and
+        # DecisionService._classify_target has a '/'-path branch — so this
+        # validates against _WHY_TARGET_RE (admits '/'), keeping only the
+        # pointer-grammar-hostile ':' / ']' rejected.
         if v is None:
             return v
         for item in v:
-            if not item or not _TARGET_RE.match(item):
+            if not item or not _WHY_TARGET_RE.match(item):
                 raise ValueError(
-                    "each target must be a dotted identifier like 'pkg.mod.Class.method'"
+                    "each target must be a dotted name like 'pkg.mod.Class' or a path like 'a/b.py'"
                 )
         return v
 

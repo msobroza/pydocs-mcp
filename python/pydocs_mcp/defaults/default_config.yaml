@@ -142,9 +142,11 @@ decisions:
     default_limit: 10
     max_limit: 100
 
-# File-watcher tunables for `pydocs-mcp serve --watch` (`--watch` is
-# currently the only way to enable watching — leave `enabled` false here
-# so plain `pydocs-mcp serve` is identical to today). Debounce naturally
+# File-watcher tunables for `pydocs-mcp serve --watch` (either the CLI
+# `--watch` flag or `enabled: true` here turns watching on — leave
+# `enabled` false so plain `pydocs-mcp serve` is identical to today,
+# and the flag cannot force watching off when the key is true).
+# Debounce naturally
 # collapses editor atomic-save sequences (temp create → delete → rename
 # → 1 reindex). Ignore globs default-skip the high-churn paths that
 # would otherwise produce false-positive reindexes.

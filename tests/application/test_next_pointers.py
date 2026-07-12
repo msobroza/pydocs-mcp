@@ -174,3 +174,21 @@ def test_resolve_does_not_corrupt_valid_pointer_literal_shown_as_source() -> Non
     literal = 'strip_pointers("[[next:overview:]]")'
     assert resolve_pointers(literal, "mcp") == literal
     assert resolve_pointers(literal, "cli") == literal
+
+
+def test_pointer_token_with_slash_target_round_trips() -> None:
+    """Grammar guard for the WhyInput path relaxation (spec
+    2026-07-11-cli-mcp-docs-audit Q1): '/' is not a pointer-token
+    delimiter (only ':' and ']' are), so a slash-bearing target must
+    survive emit → parse → strip untouched."""
+    from pydocs_mcp.application.formatting import (
+        _POINTER_RE,
+        pointer_token,
+        strip_pointers,
+    )
+
+    token = pointer_token("search", "src/pydocs_mcp/db.py")
+    match = _POINTER_RE.search(token)
+    assert match is not None
+    assert match.group(2) == "src/pydocs_mcp/db.py"
+    assert strip_pointers(f"before {token}\nafter") == "before after"

@@ -2,8 +2,8 @@
 
 Activates the reference graph (``node_references``: CALLS / IMPORTS /
 INHERITS / MENTIONS) as a *retrieval* signal. Today the graph is only read
-single-hop by the ``lookup`` MCP tool; it is never used to rank ``search``
-results. This step closes that gap **without** RRF or BM25 — the seeds come
+single-hop by ``get_references`` / ``get_symbol``; it is never used to rank
+``search_codebase`` results. This step closes that gap **without** RRF or BM25 — the seeds come
 from the dense (embedding) candidate list, so structural expansion starts
 from semantically-grounded anchors rather than lexical name matches (the
 weakness of substring-seeded graph-RAG systems).

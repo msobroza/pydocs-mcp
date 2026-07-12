@@ -129,8 +129,8 @@ pydocs-mcp search "batch inference"           # the same search, from the CLI
 pydocs-mcp refs requests.auth.HTTPBasicAuth --direction inherits
 ```
 
-Embeddings run on CPU by default. Add `--gpu` to `serve` / `index` (or the
-benchmark runner) to move all embedder inference — FastEmbed, the
+Embeddings run on CPU by default. Add `--gpu` to `serve` / `index` / `watch`
+(or the benchmark runner) to move all embedder inference — FastEmbed, the
 `sentence_transformers` provider, and PyLate — onto CUDA. It's a latency knob only: no YAML change, no
 re-index, identical results. Needs the matching GPU runtime — see
 [INSTALL.md](INSTALL.md#gpu-inference-optional).

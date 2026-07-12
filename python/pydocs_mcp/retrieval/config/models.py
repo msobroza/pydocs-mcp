@@ -228,7 +228,7 @@ class ReferenceGraphConfig(BaseModel):
 
 
 class SearchOutputConfig(BaseModel):
-    """Per-deployment bounds for the ``search`` MCP tool's ``limit``.
+    """Per-deployment bounds for the ``search_codebase`` MCP tool's ``limit``.
 
     Parity with :class:`ReferenceOutputConfig` — two YAML knobs (default
     and ceiling) pushed into ``SearchInput.limit`` via
@@ -502,9 +502,9 @@ class WatchConfig(BaseModel):
     """File-watcher tunables for ``pydocs-mcp serve --watch``.
 
     Per CLAUDE.md §"MCP API surface vs YAML configuration": these are
-    deployment-time knobs, NOT MCP tool params. The MCP surface stays at
-    the fixed 2 tools (``search``, ``lookup``); ``--watch`` is the only
-    CLI flag and it overrides ``enabled``.
+    deployment-time knobs, NOT MCP tool params. The MCP surface stays
+    fixed at the six task-shaped tools; watching is enabled by either
+    switch — the CLI ``--watch`` flag or ``enabled: true`` here.
 
     ``debounce_ms`` is bounded: zero/negative would fire on every byte
     of a slow-write editor (atomic-save sequences fire 2-3 events per
