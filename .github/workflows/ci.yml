@@ -108,7 +108,7 @@ jobs:
         run: uv sync --frozen --group dev
 
       - name: Lint
-        run: uv run ruff check python/ tests/
+        run: uv run ruff check python/ tests/ benchmarks/
 
       - name: Format check
         run: uv run ruff format --check python/ tests/ benchmarks/
