@@ -375,17 +375,17 @@ exits — today's behavior, unchanged.
 
 ### Install
 
-The watcher uses `watchdog`, which ships as an optional extra:
+The watcher uses `watchdog`, which is part of the default install:
 
 ```bash
-pip install pydocs-mcp[watch]
+pip install pydocs-mcp
 pydocs-mcp serve . --watch    # or:
 pydocs-mcp watch .
 ```
 
-Without the `[watch]` extras, both `pydocs-mcp serve --watch` and
-`pydocs-mcp watch` exit with an actionable install hint. Default
-`pydocs-mcp serve` (no `--watch`) does not require `watchdog`.
+The `[watch]` extra from older install instructions remains as a
+deprecated no-op alias, so existing commands and scripts that request it
+keep resolving — it installs nothing beyond the default set.
 
 ### How it works
 

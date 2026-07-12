@@ -26,7 +26,7 @@ The two are told apart by ``importlib.util.find_spec("pydocs_mcp")``: a ``None``
 spec means the top-level module can't be located (missing extra), whereas a
 present spec with a failed symbol import means version skew.
 
-Both styles mirror the product repo's ``[late-interaction]`` / ``[watch]``
+Both styles mirror the product repo's ``[late-interaction]`` / ``[graph]``
 install-hint pattern (see ``python/pydocs_mcp/storage/fast_plaid_uow.py``).
 
 Usage — two shapes depending on where ``pydocs_mcp`` is imported:

@@ -16,6 +16,23 @@ The default config uses `BAAI/bge-small-en-v1.5` via FastEmbed for
 embeddings (no API key needed). On first run, FastEmbed downloads the
 ~80MB ONNX model to its cache directory.
 
+### Air-gapped installs
+
+pydocs-mcp and all required dependencies install from a wheelhouse with
+no network access:
+
+```bash
+# On a connected machine (match the target's OS/arch/Python):
+pip download pydocs-mcp -d ./wheelhouse
+# On the air-gapped machine:
+pip install --no-index --find-links ./wheelhouse pydocs-mcp
+```
+
+The live re-indexing dependency (`watchdog`) is part of the required set
+and adds a single ~80–97 KB wheel to the wheelhouse; prebuilt wheels exist
+for Linux (x86_64/aarch64/armv7l/i686/ppc64/ppc64le/s390x), macOS
+(x86_64/arm64/universal2), and Windows — no compiler needed.
+
 ## System requirements
 
 ### Linux (Ubuntu / Debian)
