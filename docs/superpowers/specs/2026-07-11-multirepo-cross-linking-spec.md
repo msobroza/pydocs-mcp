@@ -153,17 +153,22 @@ unresolved `to_name = "repoB.mod.fn"` can exact-match repo B's persisted
 
 ### Non-goals
 
-- N1 — No workspace-wide PageRank / centrality. `node_scores` stays per-bundle
-  (`application/indexing_service.py:587-599`; PK `(package, qualified_name)`,
-  `db.py:99-106`). Cross-repo impact ranking uses hop distance as the primary
-  key (see §3.7), so per-bundle scores remain valid *within-hop* tiebreakers.
-  Workspace-level scores are a possible follow-up (Open question Q3).
-- N2 — No cross-repo `SIMILAR` or `GOVERNS` edges in v1. Default linked kinds
-  are `calls`/`imports`/`inherits` (`MENTIONS` opt-in via YAML).
-- N3 — No alias-table persistence (bundle schema v15). Rule-A alias rewrites
-  happen on a copy inside `_resolve_one`; the *original* `to_name` is what
-  `save_many` persists for unresolved rows. v1 links on Rule-B exact matching
-  of the persisted `to_name` and accepts the fidelity gap (Open question Q1).
+- N1 — **SUPERSEDED by Amendment A1 (§A1.1, 2026-07-13):** workspace-level
+  scores ARE in scope — computed at link time and stored in the OVERLAY
+  (`workspace_node_scores`), never in bundles. Per-bundle `node_scores`
+  (`application/indexing_service.py:587-599`) stay untouched and remain the
+  fallback tiebreaker when workspace scores are disabled or absent.
+- N2 — **SUPERSEDED by Amendment A1 (§A1.2, 2026-07-13):** `GOVERNS`,
+  `MENTIONS`, and `SIMILAR` are linkable in scope. Defaults stay
+  conservative: default kinds are `calls`/`imports`/`inherits`/`governs`;
+  `mentions` and `similar` are opt-in via YAML (`similar` additionally
+  requires matching embedder identities, §A1.2).
+- N3 — **PARTIALLY SUPERSEDED by Amendment A1 (§A1.3, 2026-07-13):** the
+  no-persistence half STANDS — no alias table, no bundle schema v15, ever in
+  this spec. The accept-the-fidelity-gap half is replaced by Rule-C:
+  link-time alias resolution derived from each sibling bundle's persisted
+  IMPORTS graph (v14 tables read-only), closing most of the re-export gap
+  with zero schema change.
 - N4 — No resolution into repos that are *not* in the workspace. If a target
   lives in neither the local bundle nor any sibling bundle, it stays
   unresolved, exactly as today.
@@ -234,6 +239,16 @@ CREATE TABLE linked_bundles (
     indexed_at   REAL NOT NULL,     -- copied from bundle index_metadata
     git_head     TEXT,              -- copied from bundle index_metadata
     linked_at    REAL NOT NULL
+);
+
+-- Amendment A1 (§A1.1): workspace-level scores over the union graph.
+-- Lives in the OVERLAY (workspace-derived data), never in bundles.
+CREATE TABLE workspace_node_scores (
+    project        TEXT NOT NULL,
+    qualified_name TEXT NOT NULL,
+    pagerank       REAL,             -- NULL when the [graph] extra is absent (§A1.1)
+    in_degree      INTEGER NOT NULL, -- always computed (pure dict counting, no extra)
+    PRIMARY KEY (project, qualified_name)
 );
 ```
 
@@ -389,8 +404,17 @@ docstring and in the PR description.)
    `indexed_at` recency (mirroring `select_project`,
    `multirepo.py:187-202`); (iii) exactly ONE edge is emitted per
    `(from, to_name, kind)` — never one edge per matching bundle.
-5. **Write.** `replace_edges_touching(project, edges)` per source project,
-   then `stamp_bundle(...)` with the bundle's current `indexed_at`/`git_head`.
+5. **Write.** One `replace_edges_touching(P, edges_touching_P)` call per
+   project P, where `edges_touching_P` is EVERY computed edge with
+   `from_project = P` **or** `to_project = P` — never a per-source-only
+   batch: the call's OR-delete would otherwise destroy edges another batch
+   just inserted (e.g. batch B's delete removing batch A's fresh A→B rows).
+   Since every cross-edge touches exactly two projects, each edge is written
+   twice; inserts are idempotent (`INSERT OR REPLACE` on the PK) so the
+   double write is harmless. Then `stamp_bundle(...)` with the bundle's
+   current `indexed_at`/`git_head`. (Clarified by Amendment A1 review —
+   §3.8's incremental repair always had this both-directions shape; full and
+   incremental passes now share it explicitly.)
 6. **Report.** `LinkReport` (frozen dataclass): per-bundle counts of
    unresolved scanned / edges created / collisions resolved — printed by the
    CLI verb and logged (JSON fields) on serve.
@@ -517,6 +541,7 @@ concept: an optional owning-project qualifier per row.
 - Cross-repo rows render as
   `from_node_id (project: repoA) → to_node_id [kind]`; the summary line
   becomes `N references found (R resolved, U unresolved, X cross-repo)`.
+  Bundle-local rows always render before cross-repo rows (A1.8 ordering).
 - `from_package='__project__'` in cross rows is normalized to the owning
   project's real name before rendering — the same normalization
   `_dedup_identity` already performs for search results
@@ -565,9 +590,14 @@ recorded stamps.*
   target, then recomputes (i) P's unresolved refs against all sibling
   universes and (ii) every sibling's unresolved refs against P's fresh
   universe (siblings' unresolved lists are re-read; their universes are
-  already loaded for (i)). Departed bundles get their edges dropped and their
-  stamp deleted. A full relink (`stale_projects=None`) is the same code path
-  with every project marked stale.
+  already loaded for (i)), and — Amendment A1 — (iii) when `similar` is in
+  `cross_repo.kinds`, re-runs the SIMILAR generation (§A1.2) for every pair
+  (P, sibling), embedder-gated; a missing `.tq` sidecar at repair time
+  warns and skips that pair (the AC31 posture), never raises. Departed
+  bundles get their edges dropped and their stamp deleted. A full relink
+  (`stale_projects=None`) is the same code path with every project marked
+  stale. Any relink that changed the edge set also recomputes
+  `workspace_node_scores` (§A1.1).
 - **`link_on_serve: true` (default).** Startup does detection + repair before
   the server accepts requests. A no-change startup costs one stamp
   comparison per bundle (a few reads) — consistent with the package-level
@@ -618,11 +648,16 @@ CLAUDE.md §"Default values":
 
 ```python
 # Single source of truth for cross-repo linking defaults (spec 2026-07-11).
-_DEFAULT_CROSS_REPO_ENABLED = False
+_DEFAULT_CROSS_REPO_ENABLED = True  # A1.8: default-on (was False pre-amendment)
 _DEFAULT_CROSS_REPO_LINK_ON_SERVE = True
 _DEFAULT_CROSS_REPO_MATCH_SCOPE: Literal["project_only", "all_packages"] = "project_only"
-_DEFAULT_CROSS_REPO_KINDS = ("calls", "imports", "inherits")
+_DEFAULT_CROSS_REPO_KINDS = ("calls", "imports", "inherits", "governs")  # A1.2
 _DEFAULT_CROSS_REPO_MAX_PROJECTS_PER_WALK = 8
+# Amendment A1 defaults (§A1.1-§A1.3)
+_DEFAULT_CROSS_REPO_WORKSPACE_SCORES = True
+_DEFAULT_CROSS_REPO_ALIAS_RESOLUTION: Literal["imports_graph", "off"] = "imports_graph"
+_DEFAULT_CROSS_REPO_SIMILAR_TOP_K = 5
+_DEFAULT_CROSS_REPO_SIMILAR_MIN_SCORE = 0.6
 
 class CrossRepoConfig(BaseModel):
     """Workspace-level cross-repo reference linking (spec 2026-07-11).
@@ -641,6 +676,20 @@ class CrossRepoConfig(BaseModel):
         _DEFAULT_CROSS_REPO_MAX_PROJECTS_PER_WALK, ge=1, le=32
     )
     overlay_dir: Path | None = None   # explicit overlay placement override
+    # Amendment A1 (§A1.1-§A1.3):
+    workspace_scores: bool = _DEFAULT_CROSS_REPO_WORKSPACE_SCORES
+    alias_resolution: Literal["imports_graph", "off"] = _DEFAULT_CROSS_REPO_ALIAS_RESOLUTION
+    similar: CrossRepoSimilarConfig = Field(default_factory=CrossRepoSimilarConfig)
+
+# (CrossRepoSimilarConfig is defined ABOVE CrossRepoConfig in the real module;
+#  shown after it here for reading order only.)
+
+class CrossRepoSimilarConfig(BaseModel):
+    """Bounds for opt-in cross-repo SIMILAR linking (§A1.2)."""
+    model_config = ConfigDict(extra="forbid")
+
+    top_k: int = Field(_DEFAULT_CROSS_REPO_SIMILAR_TOP_K, ge=1, le=50)
+    min_score: float = Field(_DEFAULT_CROSS_REPO_SIMILAR_MIN_SCORE, ge=0.0, le=1.0)
 
 
 class ReferenceGraphConfig(BaseModel):
@@ -655,11 +704,16 @@ the sanctioned YAML exemption):
 reference_graph:
   # ... existing keys unchanged ...
   cross_repo:
-    enabled: false            # opt-in: link references across workspace bundles
+    enabled: true             # A1.8: on by default; inert with a single bundle (N7)
     link_on_serve: true       # auto-refresh stale links at serve startup
     match_scope: project_only # project_only | all_packages
-    kinds: [calls, imports, inherits]
+    kinds: [calls, imports, inherits, governs]   # A1.2; add mentions/similar to opt in
     max_projects_per_walk: 8  # impact BFS cross-project fan-out cap
+    workspace_scores: true    # A1.1: link-time PageRank over the union graph (overlay-stored)
+    alias_resolution: imports_graph  # A1.3: imports_graph | off
+    similar:                  # A1.2: bounds for opt-in cross-repo SIMILAR (kind must be listed)
+      top_k: 5
+      min_score: 0.6
     # overlay_dir: /path      # optional: overrides sidecar placement (§3.1)
 ```
 
@@ -909,9 +963,10 @@ Numbered acceptance criteria — each independently checkable:
   carry the project qualifier, `__project__` is normalized to the owning
   project name, the summary reads `… (R resolved, U unresolved, X
   cross-repo)`, and formerly-unresolved-now-linked callees lose the `⚠`.
-- **AC17** — regression: with `enabled: false` (default) OR a single loaded
-  bundle, every `get_references` output is byte-identical to pre-feature
-  behavior (golden comparison against current fixtures).
+- **AC17** — regression: with `enabled: false` (the YAML opt-out; the
+  default is `true` per A1.8) OR a single loaded bundle, every
+  `get_references` output is byte-identical to pre-feature behavior (golden
+  comparison against current fixtures).
 - **AC18** (`tests/test_cross_repo_staleness.py`) — after reindexing bundle A
   (bump its `index_metadata.indexed_at`), startup detection marks A stale;
   with `link_on_serve: true` relink refreshes exactly the A-touching edges
@@ -944,8 +999,12 @@ Lint/type gates: all new files pass the full CI set (`ruff format --check`,
 
 ## 6. Rollout / migration / back-compat
 
-- **Default off.** `enabled: false` ships in `default_config.yaml`; zero
-  behavior change for every existing deployment, single- or multi-repo.
+- **Default ON (A1.8, was off).** `enabled: true` ships in
+  `default_config.yaml`. Single-project serving is inert regardless (N7), so
+  the only deployments that see new behavior are multi-bundle workspaces —
+  which gain cross-repo rows and the overlay sidecar automatically, the
+  feature's whole point. The YAML opt-out (`enabled: false`) restores
+  pre-feature output byte-identically (AC17).
 - **No bundle migration.** Bundles stay at `SCHEMA_VERSION = 14`; bundles
   produced before this feature link exactly as well as new ones (the feature
   reads only long-standing v14 tables). Older pydocs-mcp versions reading a
@@ -1009,3 +1068,305 @@ Lint/type gates: all new files pass the full CI set (`ruff format --check`,
   v1 scopes linking strictly to explicit workspace/`--db` serving; expanding
   to the shared cache dir raises consent and blast-radius questions
   (which bundles are "one workspace"?).
+
+---
+
+## Amendment A1 (2026-07-13) — N1/N2/N3 pulled into scope, persistence design unchanged
+
+**Directive:** the operator wants workspace-level scores (former N1), the
+full edge-kind palette (former N2), and alias fidelity (former N3) in v1 —
+**without changing how links are persisted**. Everything below lands in the
+overlay sidecar and the linker/read path. The invariants that survive
+untouched: Alternative A (+B degradation) exactly as chosen; G5 (MCP surface
+frozen); G6 (bundles stay `SCHEMA_VERSION = 14`, read-only, portable); N4,
+N6, N7 as written. The overlay stays at `_LINKS_SCHEMA_VERSION = 1` — the
+feature is unreleased, so A1 amends the v1 DDL rather than versioning over
+it.
+
+### A1.1 Workspace node scores (supersedes N1, resolves Q3)
+
+**What.** After a successful link pass, the linker computes PageRank +
+in-degree over the **union graph** — nodes: every exported universe qname
+(same `match_scope` as linking); edges: each bundle's *resolved* local
+`node_references` of the configured kinds ∪ the overlay's fresh
+`cross_references` — and stores the result in the overlay's
+`workspace_node_scores` table (§3.1 DDL). Bundles' per-bundle `node_scores`
+are never touched.
+
+**Mechanics** (corrected by the A1 adversarial review — the naive
+"reuse compute_scores as-is" reading is wrong on two counts):
+
+- **Composite node identity.** `node_score_compute.compute_scores` builds its
+  graph over BARE qname strings — in a union graph two projects exporting
+  the same qname would collide into one node. The workspace computation
+  therefore keys every node as the composite `f"{project}:{qname}"`:
+  each bundle's local resolved edges and every overlay edge get their
+  endpoints project-qualified before scoring, and the composite splits back
+  into the `(project, qualified_name)` PK on write. `compute_scores` gains a
+  generic-node-id wrapper (or a small refactor) — NOT a pure reuse; the
+  implementer's scout verifies the extraction point
+  (`application/indexing_service.py:587-599` →
+  `application/node_score_compute.py`).
+- **Union edge inputs.** Bundle-local resolved edges are read through a new
+  additive read-only `ReferenceStore.list_resolved(kinds, limit)` sibling of
+  `list_unresolved` (the existing resolved-edge read is kind-blind); overlay
+  edges come from the fresh `cross_references` set. Kinds follow
+  `cross_repo.kinds`.
+- **Two-tier scores, extra-gated honestly.** `in_degree` is pure counting —
+  computed ALWAYS (no dependency). `pagerank` requires networkx, which ships
+  behind the existing opt-in `[graph]` extra (the per-bundle `node_scores`
+  precedent is opt-in for exactly this reason). With the extra absent:
+  `pagerank` is stored NULL, a single warning is logged, and
+  `LinkReport.pagerank_available = False`. Nothing raises; §6's
+  "no NEW dependency" claim stands — the enrichment reuses the existing
+  extra.
+- **Storage seam.** The `CrossLinkStore` Protocol (§3.2) gains two members:
+  `replace_workspace_scores(rows: tuple[WorkspaceNodeScore, ...]) -> None`
+  (whole-table swap, same transaction discipline as
+  `replace_edges_touching`) and
+  `workspace_scores_for(pairs: tuple[tuple[str, str], ...]) ->
+  Mapping[tuple[str, str], WorkspaceNodeScore]`. All three impls (Sqlite /
+  InMemory / Null) implement them; the EROFS in-memory mode holds scores in
+  the same dict store — identical read semantics.
+- Recompute policy: workspace scores are a *global* derivative — ANY change
+  to the cross-edge set (any stale project relinked, any bundle
+  added/removed) drops and recomputes the whole table. Union graphs are
+  thousands of nodes (`project_only` scope); milliseconds, no incremental
+  scoring machinery warranted.
+- YAML: `cross_repo.workspace_scores: true` (default — safe because the
+  degraded no-[graph] mode is specified above). `false` drops the table.
+
+**Read-path change (§3.7-adjacent) — the ONE canonical ordering chain.**
+Impact ranking: hop asc → workspace `pagerank` desc (only when present, i.e.
+`[graph]` installed and table fresh) → workspace `in_degree` desc (whenever
+`workspace_scores` is on) → per-bundle `node_scores` (pagerank desc,
+in_degree desc) ONLY when `workspace_scores` is off — per-bundle scores are
+never compared across bundles (they are not commensurable; they serve as the
+legacy fallback ordering exactly as pre-A1) → `(project, qname)` asc.
+Deterministic in every configuration.
+
+### A1.2 Full edge-kind palette (supersedes N2, resolves Q2)
+
+**GOVERNS — promoted into the default kinds.** Decision-mined GOVERNS rows
+are deterministic, low-noise artifacts; unresolved GOVERNS rows whose
+`to_name` names a sibling symbol link via the same Rule-B/Rule-C machinery.
+**Not free, spec'd explicitly** (the review caught the base §3.4 union
+covering only callers/callees/inherits, and `find_governing` requiring
+bundle-local resolved targets):
+
+- §3.4's read federation gains a **governed_by union**: for a target
+  `(project, qname)`, `governed_by = local find_governing(qname) ∪
+  cross_links.edges_into(project, qname, kinds=("governs",))`, cross rows
+  mapping `from_node_id` (a `decision:<key>` id) back to a decision key +
+  owning project.
+- **Cross-repo decision hydration:** rendering a sibling repo's decision
+  needs its record (title/status/body), which lives in the SOURCE repo's
+  `decision_records` table. The workspace coordinator routes a second lookup
+  to the edge's `from_project` bundle through the same per-project service
+  map `MultiProjectLookup` already maintains (`DecisionService` per bundle).
+  If the source bundle is unavailable, the row renders with the decision key
+  + project qualifier and no body — degraded, never an error.
+- `get_why` surfaces these as project-qualified decision rows.
+
+**MENTIONS — supported, opt-in (unchanged posture).** Doc-prose mentions are
+noisier (Q2); the kind is fully exercised by tests but stays out of the
+default list. Adding `mentions` to `cross_repo.kinds` is the documented
+opt-in, as pre-A1.
+
+**SIMILAR — supported, opt-in, embedder-gated, query-driven.** SIMILAR
+edges are not unresolved references — they are *generated* at link time.
+The review established the real constraints: vectors are CHUNK-level, they
+live only in the quantized `.tq` sidecar, and the sidecar has **no read-back
+API** (`turboquant_store.py` exposes only query-driven search; the
+bundle-local `SynthesizeSimilarEdgesStage` runs over in-memory ingestion
+embeddings, not the `.tq`). The feasible design is therefore query-driven
+re-embedding, not vector export:
+
+- Trigger: `similar` present in `cross_repo.kinds` AND, per bundle pair, a
+  **strict** embedder-identity match: the full stamped identity fingerprint
+  (provider, model, dims, pipeline hash) of BOTH bundles AND the serving
+  config's embedder must be equal — never a permissive "compatible-ish"
+  helper. On mismatch the pair is SKIPPED with `LinkReport`'s
+  `embedder_mismatches` counter and zero edges.
+- Mechanics, per ordered pair (source S → target T): read S's project-source
+  chunk TEXTS from S's SQLite `chunks` table (texts live in the bundle;
+  vectors don't need exporting); re-embed them with the configured embedder
+  (fastembed — a required dep, no new extra); `vector_search` each query
+  vector against T's `.tq` (the API that exists); map returned `chunk_id`s
+  to qnames via T's chunk metadata, dedup per qname keeping max score; emit
+  edges with score ≥ `cross_repo.similar.min_score`, capped at
+  `cross_repo.similar.top_k` per source qname. Run both ordered pairs.
+- Persistence: rows in `cross_references` with `kind='similar'`; `to_name`
+  stores the target qname (audit analogue for a generated edge). Writes ride
+  the SAME both-directions `replace_edges_touching` batches as §3.3 step 5;
+  incremental repair regenerates them via §3.8 step (iii).
+- Cost honesty: this is a bounded re-embedding pass (project-source chunks of
+  each pair) plus one indexed search per chunk — the priciest linker feature
+  and the reason it is opt-in and lands LAST (§A1.6). Per-pair timings are
+  logged in the `LinkReport` so operators and the benchmark harness can size
+  `top_k`/`min_score` via YAML.
+
+### A1.3 Rule-C alias resolution (supersedes N3's gap-acceptance, resolves Q1)
+
+**The gap (Q1 recap).** `from repob.api import fn` where `fn` really lives at
+`repob.core.fn`: repo A's unresolved row persists `to_name="repob.api.fn"`,
+which exact-matches nothing in B's universe (Rule B), so the link is missed.
+Persisting alias tables (bundle schema v15) stays REJECTED.
+
+**Rule C — imports-graph-derived aliasing, link-time only, v14 data only.**
+When Rule B misses for `to_name = M + "." + leaf`:
+
+1. Split at the last dot: `M = "repob.api"`, `leaf = "fn"`.
+2. If `M` is a module node in a sibling's exported universe, query that
+   sibling's own persisted IMPORTS edges *from* `M` (read-only
+   `node_references`, `kind='imports'`, `from_node_id = M`).
+3. Collect resolved targets of those edges whose terminal segment equals
+   `leaf` (e.g. `to_node_id = "repob.core.fn"`).
+4. **Exactly one distinct candidate** → emit the cross-edge with
+   `to_node_id = "repob.core.fn"` (the REAL target), `to_name` keeping the
+   original `"repob.api.fn"` for audit. Zero candidates → stays unresolved
+   (as today). Two or more distinct candidates → ambiguous: NO edge, counted
+   in `LinkReport.alias_ambiguous` (precision over recall).
+5. **Relative re-exports (the dominant style — review major).** B's own
+   `from .core import fn` inside `repob/api.py` persists as an UNRESOLVED
+   IMPORTS row from `M="repob.api"` with `to_name="core.fn"` (capture drops
+   the relative level), so step 3's resolved-edges-only reading would miss
+   it. Step 3 therefore ALSO considers M's unresolved IMPORTS rows: for each
+   such row with `to_name = X`, form the candidate `parent(M) + "." + X`
+   (e.g. `"repob" + "." + "core.fn"` → `"repob.core.fn"`); if that candidate
+   is in the SIBLING's own exported universe, it joins the step-3 candidate
+   set — a bundle-side mini-resolution at link time, still v14 read-only.
+   The same unique-candidate guard (step 4) applies across resolved and
+   mini-resolved candidates combined.
+6. One hop only — no transitive re-export chains in v1 (a chain
+   `api → compat → core` resolves only its first hop; measured before
+   deepening, per Q1's measurement posture).
+
+YAML: `cross_repo.alias_resolution: imports_graph | off` (default
+`imports_graph`). `off` restores pre-A1 Rule-B-only linking — the A/B knob
+Q1's measurement pass needs.
+
+### A1.4 LinkReport additions
+
+`LinkReport` (§3.3 step 6) gains counters, all logged as JSON fields and
+printed by the `link` verb: `alias_resolved`, `alias_ambiguous`,
+`similar_edges`, `embedder_mismatches`, `workspace_scores_computed` (bool),
+`pagerank_available` (bool — False when the `[graph]` extra is absent,
+§A1.1), `per_pair_similar_seconds` (mapping).
+
+### A1.8 Local-first precedence + default-on (operator directive, 2026-07-13)
+
+**Default-on.** `cross_repo.enabled` defaults to `true`. Rationale: the
+feature is inert for single-bundle serving (N7), so the default only affects
+multi-bundle workspaces — where cross-repo answers are the reason workspaces
+exist. The YAML opt-out is the escape hatch; AC17's byte-identical guarantee
+anchors it. (This supersedes §6's original "Default off" rollout bullet.)
+
+**Local references outrank cross-references.** A cross-edge is *enrichment
+for what the local index could not see* — never a competitor to it:
+
+1. **Write-side (structural, now contractual).** The linker's input is
+   exclusively `to_node_id IS NULL` rows (§3.3 step 2). A reference the
+   bundle-local resolver already resolved — e.g. repo A indexed while repo
+   B's package was *installed* in A's environment, so A's own dependency
+   copy resolved it — is never scanned, never linked, never duplicated in
+   the overlay. This was implicit in the algorithm; it is now a named
+   contract (AC32) so no future linker change can regress it.
+2. **Read-side dedup (belt and braces).** When the merged view would contain
+   both a local resolved row and an overlay cross-edge for the same logical
+   `(from_node, target_qname, kind)` — possible transiently when a stale
+   overlay outlives a reindex-with-B-installed, or when the same target is
+   reachable through a dependency copy AND a sibling's project source — the
+   LOCAL row wins and the overlay row is suppressed from the merge
+   (dedup key: `(from_project, from_node_id, to_qname, kind)`).
+3. **Ordering.** In rendered reference lists, bundle-local rows sort before
+   cross-repo rows at equal relevance; in impact BFS, when a node is
+   reachable at the same hop through both a local edge and a cross-edge, the
+   local path is the one recorded (deterministic: local-first edge
+   iteration).
+
+The staleness protocol already narrows window (2): `replace_edges_touching`
+recomputes a reindexed project's edges from its *current* unresolved set, so
+newly-locally-resolved refs drop out of the overlay on the next link pass;
+the read-side dedup covers the in-between and the `link_on_serve: false`
+mode.
+
+### A1.5 Acceptance criteria added by A1
+
+- **AC24** (`tests/test_workspace_scores.py`) — after `link()` with
+  `workspace_scores: true`: one row per union-graph node keyed
+  `(project, qualified_name)` with a finite `in_degree` ALWAYS; `pagerank`
+  finite when the `[graph]` extra is installed, NULL (plus one warning and
+  `pagerank_available=False` in the LinkReport) when absent — never a raise;
+  two projects exporting the SAME qname get two distinct rows (composite
+  node identity); a relink of any stale project drops and recomputes the
+  whole table; with `workspace_scores: false` the table is empty and
+  bundles' `node_scores` are byte-identical before/after (G6 proof).
+- **AC25** — impact ordering follows the ONE canonical chain (§A1.1): with
+  pagerank present, a same-hop node with higher workspace pagerank ranks
+  first; with the `[graph]` extra absent, workspace `in_degree` decides;
+  with `workspace_scores: false`, ordering equals the pre-A1 AC14 ordering
+  exactly. All three configurations are run-to-run deterministic.
+- **AC26** — GOVERNS across bundles, both halves: (a) the governed_by union
+  — `get_references(direction="governed_by")` on the repo-B symbol includes
+  the repo-A decision edge, project-qualified; (b) decision hydration — the
+  row carries the decision's title/status fetched from repo A's
+  `decision_records` via the routed per-project `DecisionService`; with repo
+  A's bundle removed, the row degrades to key + qualifier without erroring.
+- **AC27** — cross-repo SIMILAR (query-driven, §A1.2): with `similar` in
+  kinds, STRICTLY matching embedder fingerprints, chunk texts in both test
+  bundles and a real `.tq` for the target, edges respect `top_k`/`min_score`
+  and are keyed qname→qname (chunk hits deduped per qname, max score kept);
+  with any fingerprint component differing, the pair is skipped,
+  `embedder_mismatches` counts it, zero similar edges exist; §3.8 step (iii)
+  regenerates similar edges after a relink of either endpoint.
+- **AC28** — Rule-C, both re-export styles: (a) absolute — bundle B holds a
+  RESOLVED IMPORTS edge `repob.api → repob.core.fn`; (b) relative (the
+  dominant style, §A1.3 step 5) — bundle B holds an UNRESOLVED IMPORTS row
+  from `repob.api` with `to_name="core.fn"` and exports `repob.core.fn` in
+  its own universe. In both fixtures, `link()` on bundle A's unresolved
+  `to_name="repob.api.fn"` emits exactly one edge with
+  `to_node_id="repob.core.fn"`, `to_name="repob.api.fn"` — with repo B not
+  installed (G4 discipline).
+- **AC29** — Rule-C ambiguity: two distinct resolved IMPORTS targets sharing
+  the leaf under the same module → NO edge, `alias_ambiguous == 1`.
+- **AC30** — `alias_resolution: off` produces Rule-B-only results
+  (byte-identical edge set to pre-A1 fixtures for the same inputs).
+- **AC31** — config: the new keys default per the `_DEFAULT_*` constants;
+  unknown keys under `cross_repo.similar:` raise at load (`extra="forbid"`);
+  `kinds: [similar]` without `.tq` sidecars present links zero similar edges
+  and warns rather than raising.
+- **AC32** (A1.8) — write-side local precedence: a reference resolved
+  bundle-locally at index time (fixture: repo A's bundle carries a RESOLVED
+  row to its own dependency copy of a qname that repo B also exports as
+  project source) is never scanned by the linker and produces NO overlay
+  edge — the overlay contains only rows that were locally unresolved.
+- **AC33** (A1.8) — read-side dedup + ordering: given a local resolved row
+  and a planted overlay edge for the same `(from_node, to_qname, kind)`, the
+  merged `get_references` output contains the local row once (no cross-repo
+  duplicate); bundle-local rows render before cross-repo rows; impact BFS
+  records the local path when both reach a node at the same hop.
+- **AC34** (A1.8) — default-on: `_DEFAULT_CROSS_REPO_ENABLED is True`; a
+  two-bundle workspace served with an untouched default config produces
+  cross-repo rows; a single-bundle serve with the same config is
+  byte-identical to pre-feature output (N7 inertness).
+
+### A1.6 Landing-order updates (§6)
+
+PR 2 (linker) additionally carries Rule-C with the relative-re-export
+extension (AC28-30) and the both-directions write-batching clarification of
+§3.3 step 5. PR 3 (read path) additionally carries the governed_by union +
+cross-repo decision hydration (AC26) and workspace-score ranking (AC25).
+PR 4 (staleness/config) additionally carries `workspace_node_scores`
+computation with the composite-node-id wrapper and the `[graph]`-absent
+degradation + the `CrossLinkStore` score members (AC24, AC31, AC32-34). A
+new **PR 5** carries query-driven cross-repo SIMILAR (AC27) — last, because
+it alone touches the embedder + `.tq` search path and must not block the
+core feature. Each PR stays independently green.
+
+### A1.7 Open-question dispositions after A1
+
+Q1 → resolved by A1.3 (Rule C + the `off` A/B knob; measurement still wanted
+before deepening to transitive chains). Q2 → resolved by A1.2 (GOVERNS
+default-on, MENTIONS stays opt-in pending benchmark data). Q3 → resolved by
+A1.1. Q4, Q5 → unchanged, still open.
