@@ -618,7 +618,18 @@ In `_build_watcher_and_callback` (`__main__.py:525`), where the
 - Best-effort churn suppression only (decision D6): correctness is owned by
   discovery. In particular, `pyproject.toml` itself always triggers as a
   manifest, so exclude-list edits still reindex (§5) even though files
-  *inside* excluded dirs stop waking the debouncer.
+  *inside* excluded dirs stop waking the debouncer. One known suppression
+  gap, accepted under the same best-effort posture: `fnmatch` has no
+  globstar (`fnmatch.translate` collapses `**` to `.*`), so the bare-name
+  glob `"<root>/**/<name>/**"` requires a literal `/<name>/` after at
+  least one intervening path segment — it suppresses nested occurrences
+  (`<root>/src/fixtures/x.py`) but NOT a top-level one
+  (`<root>/fixtures/x.py`). A top-level event therefore still fires and
+  triggers a reindex whose discovery walk excludes the directory — a
+  cached no-change pass (<100 ms), pure churn cost, zero correctness
+  cost. Do not "fix" this by widening the derived-glob shape without a
+  spec-level decision — the two glob forms above are a pinned
+  cross-section contract.
 - **Derived globs re-derive after every manifest-triggered reindex** (D6,
   shrink direction). Startup-only derivation has a hole: with `"fixtures"`
   excluded at startup, REMOVING the entry mid-session correctly re-includes
@@ -1024,9 +1035,13 @@ change to green. The full CI gate set must pass before push (`ruff format
 
 - **AC-16** Glob derivation: bare `"fixtures"` yields
   `"<root>/**/fixtures/**"`, anchored `"docs/generated"` yields
-  `"<root>/docs/generated/**"`, and both land in the constructed
-  `FileWatcher.ignore_globs` alongside the configured defaults; a path
-  inside an excluded dir does not match `FileWatcher._matches`, while the
+  `"<root>/docs/generated/**"`, and both land in the watcher's
+  derived-glob provider (`FileWatcher.derived_globs_provider`, §7.6),
+  which `_matches` consults alongside the configured `ignore_globs` —
+  the derived suffix is kept separate from the static configured tuple
+  per §7.6, so it can be swapped after each reindex (AC-25); a *nested*
+  path inside an excluded dir (e.g. `src/fixtures/x.py` under bare
+  `"fixtures"`) does not match `FileWatcher._matches`, while the
   project's root `pyproject.toml` still does (manifest rule). Collision
   case: with the project root itself placed under a directory named like a
   bare-name exclude (tmp root `<tmp>/docs/myproj`, exclude `"docs"`), the
@@ -1039,13 +1054,19 @@ change to green. The full CI gate set must pass before push (`ruff format
   with a valid `exclude_dirs` triggers a reindex that applies it (§8 watch
   row).
 - **AC-25** Shrink re-derivation (§7.6): with startup excludes
-  `["fixtures"]`, an event for `fixtures/x.py` does not match
-  `FileWatcher._matches`; after a manifest-triggered reindex whose fresh
-  effective set is empty (fake loader flips), the `derived_globs_provider`
-  is swapped and the same event DOES match — edits inside the re-included
-  directory fire reindexes again without a restart. The configured YAML
-  `ignore_globs` are unchanged throughout (only the derived suffix
-  refreshes).
+  `["fixtures"]`, an event for the *nested* `src/fixtures/x.py` does not
+  match `FileWatcher._matches`; after a manifest-triggered reindex whose
+  fresh effective set is empty (fake loader flips), the
+  `derived_globs_provider` is swapped and the same event DOES match —
+  edits inside the re-included directory fire reindexes again without a
+  restart. The configured YAML `ignore_globs` are unchanged throughout
+  (only the derived suffix refreshes). The example path is nested on
+  purpose: a TOP-LEVEL occurrence of a bare-name exclude
+  (`<root>/fixtures/x.py`) is not glob-suppressed at all — `fnmatch` has
+  no globstar, so `"<root>/**/fixtures/**"` requires a literal
+  `/fixtures/` after at least one intervening segment (§7.6). That
+  top-level miss is the sanctioned D6 best-effort gap: each such event
+  costs one cheap cached reindex; discovery owns correctness.
 
 ### End-to-end (extend `tests/extraction/test_end_to_end.py` or peer)
 
