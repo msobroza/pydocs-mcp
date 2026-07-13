@@ -983,7 +983,12 @@ def _cmd_link(args: argparse.Namespace) -> int:
     from pydocs_mcp.application.workspace_linker import WorkspaceLinker, detect_stale
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.server import _bundle_handles, _open_overlay_store, _resolve_projects
+    from pydocs_mcp.server import (
+        _build_similar_generator,
+        _bundle_handles,
+        _open_overlay_store,
+        _resolve_projects,
+    )
 
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     workspace = Path(args.workspace).expanduser() if args.workspace else None
@@ -1019,6 +1024,7 @@ def _cmd_link(args: argparse.Namespace) -> int:
             match_scope=cross_cfg.match_scope,
             alias_resolution=cross_cfg.alias_resolution,
             workspace_scores=cross_cfg.workspace_scores,
+            similar_generator=_build_similar_generator(config),
         )
         # The explicit verb is always a FULL pass (spec §3.9) — the operator
         # asked for a refresh; incremental repair is the serve path's job.
@@ -1034,6 +1040,15 @@ def _cmd_link(args: argparse.Namespace) -> int:
             f"workspace scores: {'computed' if report.workspace_scores_computed else 'skipped'}"
             f"{'' if report.pagerank_available else ' (pagerank unavailable — [graph] extra)'}"
         )
+        if report.per_pair_similar_seconds:
+            timings = ", ".join(
+                f"{pair} {seconds:.2f}s"
+                for pair, seconds in sorted(report.per_pair_similar_seconds.items())
+            )
+            print(
+                f"similar edges {report.similar_edges}, "
+                f"embedder mismatches {report.embedder_mismatches} ({timings})"
+            )
         return 0
 
     return asyncio.run(_run())

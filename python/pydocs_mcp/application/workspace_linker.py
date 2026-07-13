@@ -22,8 +22,9 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
+from pydocs_mcp.application.similar_linker import NullSimilarLinkGenerator
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
@@ -34,6 +35,9 @@ from pydocs_mcp.storage.cross_link_edge import (
 )
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import CrossLinkStore, UnitOfWork
+
+if TYPE_CHECKING:
+    from pydocs_mcp.application.protocols import SimilarGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +52,13 @@ class BundleHandle:
     indexed_at: float
     git_head: str | None
     uow_factory: Callable[[], UnitOfWork]
+    # Stamped embedder identity (index_metadata) — the SIMILAR gate's inputs
+    # (spec §A1.2). Empty defaults deliberately FAIL the strict fingerprint
+    # comparison, so a bundle without stamps never generates similar edges.
+    embedding_provider: str = ""
+    embedding_model: str = ""
+    embedding_dim: int = 0
+    pipeline_hash: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +111,10 @@ class WorkspaceLinker:
     # A1.1: recompute workspace scores after any edge-set change. in_degree
     # is always computed; pagerank only when the [graph] extra is present.
     workspace_scores: bool = True
+    # A1.2: query-driven SIMILAR generation — the Null default keeps the
+    # pass inert unless the composition root wired a real generator
+    # (``similar`` in cross_repo.kinds AND an embedder available).
+    similar_generator: SimilarGenerator = field(default_factory=NullSimilarLinkGenerator)
 
     async def link(self, stale_projects: frozenset[str] | None = None) -> LinkReport:
         """Run the pass; write edges/stamps only for ``stale_projects``.
@@ -138,6 +153,7 @@ class WorkspaceLinker:
                     touching[edge.from_project].add(edge)
                     touching[edge.to_project].add(edge)
 
+        similar_total, mismatches, per_pair = await self._generate_similar(stale, touching)
         linked_at = time.time()
         wrote_any = False
         for bundle in sorted(self.bundles, key=lambda b: b.project):
@@ -166,9 +182,48 @@ class WorkspaceLinker:
             collisions=dict(counters.collisions),
             alias_resolved=counters.alias["resolved"],
             alias_ambiguous=counters.alias["ambiguous"],
+            similar_edges=similar_total,
+            embedder_mismatches=mismatches,
             workspace_scores_computed=scores_computed,
             pagerank_available=pagerank_available,
+            per_pair_similar_seconds=per_pair,
         )
+
+    async def _generate_similar(
+        self,
+        stale: frozenset[str],
+        touching: dict[str, set[CrossLinkEdge]],
+    ) -> tuple[int, int, dict[str, float]]:
+        """§A1.2 SIMILAR pairs, scoped per §3.8 step (iii): only ordered pairs
+        touching a stale project regenerate — edges between two non-stale
+        projects survive untouched in the overlay (their batches aren't
+        written), so skipping them here is both correct and the cost bound.
+        """
+        if ReferenceKind.SIMILAR not in self.kinds:
+            return 0, 0, {}
+        total, mismatches = 0, 0
+        per_pair: dict[str, float] = {}
+        for source, target in self._stale_pairs(stale):
+            outcome = await self.similar_generator.generate_pair(source, target)
+            if not outcome.active:
+                return 0, 0, {}
+            mismatches += 1 if outcome.embedder_mismatch else 0
+            per_pair[f"{source.project}->{target.project}"] = outcome.seconds
+            total += len(outcome.edges)
+            for edge in outcome.edges:
+                touching[edge.from_project].add(edge)
+                touching[edge.to_project].add(edge)
+        return total, mismatches, per_pair
+
+    def _stale_pairs(self, stale: frozenset[str]) -> list[tuple[BundleHandle, BundleHandle]]:
+        """Ordered bundle pairs with at least one stale endpoint (§3.8 iii)."""
+        return [
+            (source, target)
+            for source in self.bundles
+            for target in self.bundles
+            if source.project != target.project
+            and (source.project in stale or target.project in stale)
+        ]
 
     async def _purge_departed(self) -> bool:
         """Drop edges + stamps of bundles no longer in the workspace (AC19)."""

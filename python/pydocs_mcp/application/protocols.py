@@ -34,6 +34,8 @@ if TYPE_CHECKING:
     # and avoids a runtime import cycle with the sibling service modules
     # that themselves import these Protocols' consumers.
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
+    from pydocs_mcp.application.similar_linker import SimilarPairOutcome
+    from pydocs_mcp.application.workspace_linker import BundleHandle
     from pydocs_mcp.extraction.decisions._types import RawDecision
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.node_reference import NodeReference
@@ -192,3 +194,18 @@ class ReferenceNavigator(Protocol):
     async def context(
         self, package: str, qname: str, /, *, max_depth: int, limit: int
     ) -> tuple[ContextNode, ...]: ...
+
+
+@runtime_checkable
+class SimilarGenerator(Protocol):
+    """One ordered bundle pair -> generated SIMILAR cross-edges (spec SA1.2).
+
+    Conformers: ``SimilarLinkGenerator`` (real, embedder-gated query-driven
+    search) and ``NullSimilarLinkGenerator`` (``similar`` not opted in / no
+    embedder -- returns an inactive outcome), so ``WorkspaceLinker`` never
+    holds ``Generator | None``.
+    """
+
+    async def generate_pair(
+        self, source: BundleHandle, target: BundleHandle
+    ) -> SimilarPairOutcome: ...

@@ -71,6 +71,8 @@ if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
+    from pydocs_mcp.application.protocols import CrossNavigator
+    from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.symbol_source import SymbolSourceService
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.storage.sqlite.cross_link_store import SqliteCrossLinkStore

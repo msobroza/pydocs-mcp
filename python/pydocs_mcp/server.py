@@ -167,8 +167,42 @@ def _bundle_handles(projects):
             indexed_at=p.metadata.indexed_at or 0.0,
             git_head=p.metadata.git_head,
             uow_factory=build_sqlite_uow_factory(p.db_path),
+            embedding_provider=p.metadata.embedding_provider,
+            embedding_model=p.metadata.embedding_model,
+            embedding_dim=p.metadata.embedding_dim,
+            pipeline_hash=p.metadata.pipeline_hash,
         )
         for p in projects
+    )
+
+
+def _build_similar_generator(config, embedder=None):
+    """The §A1.2 SIMILAR generator — Null unless ``similar`` is opted in.
+
+    ``embedder=None`` (the CLI ``link`` verb) builds the serving embedder
+    lazily so the model only loads when the operator actually opted in.
+    """
+    from pydocs_mcp.application.similar_linker import (
+        NullSimilarLinkGenerator,
+        SimilarLinkGenerator,
+    )
+
+    cross_cfg = config.reference_graph.cross_repo
+    if "similar" not in cross_cfg.kinds:
+        return NullSimilarLinkGenerator()
+    if embedder is None:
+        from pydocs_mcp.retrieval.factories import build_shared_retrieval_deps
+
+        embedder = build_shared_retrieval_deps(config)[0]
+    return SimilarLinkGenerator(
+        embedder=embedder,
+        serving_fingerprint=(
+            config.embedding.provider,
+            config.embedding.model_name,
+            config.embedding.dim,
+        ),
+        top_k=cross_cfg.similar.top_k,
+        min_score=cross_cfg.similar.min_score,
     )
 
 
@@ -211,7 +245,7 @@ def _open_overlay_store(config, workspace, db_paths):
     return InMemoryCrossLinkStore(), False
 
 
-def _prepare_cross_links(config, projects, *, workspace, db_paths, run_link):
+def _prepare_cross_links(config, projects, *, workspace, db_paths, run_link, embedder=None):
     """Compose the workspace cross-link layer (spec §3.5, §3.8, §A1.8).
 
     Returns ``(store, navigator, ref_services, status_line)``. Disabled or
@@ -243,6 +277,7 @@ def _prepare_cross_links(config, projects, *, workspace, db_paths, run_link):
         match_scope=cross_cfg.match_scope,
         alias_resolution=cross_cfg.alias_resolution,
         workspace_scores=cross_cfg.workspace_scores,
+        similar_generator=_build_similar_generator(config, embedder),
     )
 
     async def _startup():
@@ -258,6 +293,9 @@ def _prepare_cross_links(config, projects, *, workspace, db_paths, run_link):
                     "alias_resolved": report.alias_resolved,
                     "alias_ambiguous": report.alias_ambiguous,
                     "collisions": dict(report.collisions),
+                    "similar_edges": report.similar_edges,
+                    "embedder_mismatches": report.embedder_mismatches,
+                    "per_pair_similar_seconds": dict(report.per_pair_similar_seconds),
                     "pagerank_available": report.pagerank_available,
                 },
             )
@@ -368,7 +406,12 @@ def build_routers(
             )
         )
     _cross_links, navigator, ref_services, cross_status = _prepare_cross_links(
-        config, projects, workspace=workspace, db_paths=db_paths, run_link=run_link_pass
+        config,
+        projects,
+        workspace=workspace,
+        db_paths=db_paths,
+        run_link=run_link_pass,
+        embedder=embedder,
     )
     services = tuple(
         _build_project_services(
