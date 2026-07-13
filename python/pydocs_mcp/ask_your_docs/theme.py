@@ -84,7 +84,13 @@ def theme_css(p: dict[str, str]) -> str:
 
     /* ---- hide Streamlit chrome for an app-clean surface ---- */
     [data-testid="stHeader"] {{ background: transparent; }}
-    [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu, footer {{ display: none; }}
+    /* Hide the toolbar's chrome piecemeal, never the stToolbar container:
+       stExpandSidebarButton lives inside it, and the collapsed-sidebar state
+       persists across reloads — hiding the container makes a collapsed
+       sidebar unrecoverable from the UI. */
+    [data-testid="stToolbarActions"], [data-testid="stAppDeployButton"],
+    [data-testid="stStatusWidget"], [data-testid="stDecoration"],
+    #MainMenu, footer {{ display: none; }}
 
     /* ---- brand (two-tone: "docs" carries the accent) ---- */
     .brand {{ font-size: 1.9rem; font-weight: 650; letter-spacing: -.01em; color: {p["text"]}; }}
