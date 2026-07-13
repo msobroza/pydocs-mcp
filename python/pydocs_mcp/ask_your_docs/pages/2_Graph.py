@@ -44,7 +44,13 @@ _TYPE_STYLE = {
     "decision": ("star", "#EF9F27", "★"),
 }
 _TYPE_SIZE = {"package": 22, "module": 18, "class": 15, "function": 11, "doc": 15, "decision": 15}
+# Single source for which edge kinds the explorer exposes (and their colours):
+# the sidebar toggles and the legend both derive from this dict's keys.
+# Deliberately only the AST-precise kinds today — exposing further
+# ReferenceKind members (mentions/similar/governs) would add toggles and newly
+# display those edges, a product decision rather than a drift fix.
 _EDGE_COLOR = {"calls": "#60A5FA", "imports": "#8A97A6", "inherits": "#D4537E"}
+_EDGE_KINDS = tuple(_EDGE_COLOR)
 _CONTAINER_TYPES = {"package", "module", "class", "doc"}
 
 
@@ -93,9 +99,7 @@ with st.sidebar:
     picked_types = frozenset(
         t for t in ("module", "class", "function") if st.checkbox(t, value=True, key=f"nt_{t}")
     )
-    edge_kinds = frozenset(
-        k for k in ("calls", "imports", "inherits") if st.checkbox(k, value=True, key=f"ek_{k}")
-    )
+    edge_kinds = frozenset(k for k in _EDGE_KINDS if st.checkbox(k, value=True, key=f"ek_{k}"))
     hide_tests = st.checkbox("Hide test files", value=True, key="graph_hide_tests")
 
 st.markdown(
@@ -147,7 +151,7 @@ _node_legend = " ".join(
 )
 _edge_legend = " ".join(
     f'<span style="color:{_EDGE_COLOR[k]}">──</span><span style="color:{_pal["muted"]}"> {k}</span>'
-    for k in ("calls", "imports", "inherits")
+    for k in _EDGE_KINDS
     if k in edge_kinds
 )
 st.markdown(
