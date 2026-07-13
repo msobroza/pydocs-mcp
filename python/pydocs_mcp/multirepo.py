@@ -150,7 +150,10 @@ def discover_workspace(workspace: Path) -> list[LoadedProject]:
     """
     if not workspace.is_dir():
         raise FileNotFoundError(f"workspace directory not found: {workspace}")
-    dbs = sorted(workspace.glob("*.db"))
+    # Defense in depth (spec 2026-07-11 §3.1): the cross-link overlay sidecar
+    # must NEVER be loaded as a project bundle — its canonical name doesn't
+    # match *.db, but a decoy/rename (pydocs-links.db) must not regress this.
+    dbs = sorted(db for db in workspace.glob("*.db") if not db.name.startswith("pydocs-links."))
     if not dbs:
         raise ValueError(f"no .db bundles found in workspace: {workspace}")
     return [load_project(db) for db in dbs]

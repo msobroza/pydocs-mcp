@@ -13,6 +13,11 @@ if TYPE_CHECKING:
 
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.cross_link_edge import (
+        CrossLinkEdge,
+        LinkedBundleStamp,
+        WorkspaceNodeScore,
+    )
     from pydocs_mcp.storage.decision_record import DecisionRecord
     from pydocs_mcp.storage.node_reference import NodeReference
     from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
@@ -632,3 +637,53 @@ class MultiVectorStore(MultiVectorSearchable, Protocol):
     async def remove_vectors(self, ids: Sequence[int]) -> None: ...
 
     async def clear_all(self) -> None: ...
+
+
+@runtime_checkable
+class CrossLinkStore(Protocol):
+    """Read/write port for workspace-level cross-repo reference edges.
+
+    The overlay sidecar's contract (spec 2026-07-11 §3.2 + §A1.1): edges whose
+    endpoints live in DIFFERENT bundles, per-bundle link stamps (the staleness
+    currency), and workspace-level node scores. Impls: ``SqliteCrossLinkStore``
+    (persisted overlay), ``InMemoryCrossLinkStore`` (EROFS degradation + test
+    fake), ``NullCrossLinkStore`` (feature disabled / single bundle — silent
+    empty, the advisory-enrichment asymmetry of ``NullVectorStore``).
+    """
+
+    async def edges_into(
+        self,
+        to_project: str,
+        to_node_id: str,
+        *,
+        kinds: tuple[ReferenceKind, ...] | None = None,
+        limit: int = 200,
+    ) -> tuple[CrossLinkEdge, ...]: ...
+
+    async def edges_from(
+        self,
+        from_project: str,
+        from_node_id: str,
+        *,
+        kinds: tuple[ReferenceKind, ...] | None = None,
+        limit: int = 200,
+    ) -> tuple[CrossLinkEdge, ...]: ...
+
+    async def replace_edges_touching(self, project: str, edges: tuple[CrossLinkEdge, ...]) -> None:
+        """Atomically delete every edge where ``from_project == project`` OR
+        ``to_project == project``, then insert ``edges`` (idempotently — an
+        edge touching two projects is written by both batches, §3.3 step 5).
+        The staleness unit (spec §3.8)."""
+        ...
+
+    async def bundle_stamps(self) -> tuple[LinkedBundleStamp, ...]: ...
+
+    async def stamp_bundle(self, stamp: LinkedBundleStamp) -> None: ...
+
+    async def replace_workspace_scores(self, rows: tuple[WorkspaceNodeScore, ...]) -> None:
+        """Whole-table swap of the union-graph scores (spec §A1.1)."""
+        ...
+
+    async def workspace_scores_for(
+        self, pairs: tuple[tuple[str, str], ...]
+    ) -> Mapping[tuple[str, str], WorkspaceNodeScore]: ...

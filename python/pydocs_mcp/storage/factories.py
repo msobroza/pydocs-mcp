@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     from pydocs_mcp.application.project_indexer import ProjectIndexer
     from pydocs_mcp.application.symbol_source import SymbolSourceService
     from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.sqlite.cross_link_store import SqliteCrossLinkStore
 
 
 def build_connection_provider(cache_path: Path) -> PerCallConnectionProvider:
@@ -816,3 +817,37 @@ def build_freshness_probe(
         resolve_live_head=lambda: resolve_git_head(project_root),
         count_packages=_count,
     )
+
+
+# WHY the non-.db suffix: discover_workspace globs *.db; the overlay must
+# never be mis-loaded as a bundle (spec 2026-07-11 §3.1).
+_OVERLAY_FILENAME = "pydocs-links.sqlite3"
+
+
+def overlay_path_for(workspace: Path | None, db_paths: tuple[Path, ...]) -> Path:
+    """Resolve the cross-link overlay sidecar location (spec §3.1).
+
+    Workspace mode → workspace-local file. Explicit ``--db a.db --db b.db``
+    mode (no workspace dir) → a home-cache file keyed by the sorted tuple of
+    resolved bundle paths, so the same bundle set always maps to one overlay.
+
+    Example:
+        >>> overlay_path_for(Path("/bundles"), ()).name
+        'pydocs-links.sqlite3'
+    """
+    if workspace is not None:
+        return workspace / _OVERLAY_FILENAME
+    import hashlib
+
+    key = "\n".join(sorted(str(p.resolve()) for p in db_paths))
+    # md5 as a fast non-cryptographic fingerprint (the db.py cache-slug
+    # precedent); usedforsecurity=False signals intent to ruff/bandit.
+    digest = hashlib.md5(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
+    return Path("~/.pydocs-mcp/links").expanduser() / f"{digest}.sqlite3"
+
+
+def build_cross_link_store(path: Path) -> SqliteCrossLinkStore:
+    """Build the persisted overlay store bound to ``path`` (spec §3.2)."""
+    from pydocs_mcp.storage.sqlite.cross_link_store import SqliteCrossLinkStore
+
+    return SqliteCrossLinkStore(path=path)
