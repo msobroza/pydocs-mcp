@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from pydocs_mcp.application.formatting import (
@@ -11,6 +13,7 @@ from pydocs_mcp.application.formatting import (
     resolve_pointers,
     strip_pointers,
 )
+from pydocs_mcp.application.mcp_inputs import SymbolInput
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -48,6 +51,35 @@ def test_prose_chunk_gets_no_token() -> None:
         budget_tokens=500,
     )
     assert "[[next:" not in out
+
+
+def test_markdown_heading_chunk_pointer_targets_parent_doc() -> None:
+    # Heading chunks persist ``pkg.FILE.md#slug`` qnames (heading_markdown
+    # chunker); the ``#slug`` fragment fails SymbolInput's dotted-identifier
+    # rule, so a fragment pointer would be a follow-up call the server itself
+    # rejects. The emitted pointer must name the parent doc node instead.
+    out = format_chunks_markdown_within_budget(
+        (_chunk("Install", "body", qualified_name="pkg.README.md#install-steps"),),
+        budget_tokens=500,
+    )
+    assert "[[next:lookup:pkg.README.md]]" in out
+    assert "#install-steps" not in out
+
+
+def test_every_emitted_lookup_pointer_passes_symbol_input_validation() -> None:
+    # Response-contract pin: pointers are promised as ready-made calls, so
+    # every lookup target a search page emits must survive SymbolInput.
+    chunks = (
+        _chunk("code", "body", qualified_name="pkg.mod.X"),
+        _chunk("doc module", "body", qualified_name="pkg.README.md"),
+        _chunk("doc heading", "body", qualified_name="pkg.CLAUDE.md#source-of-truth-spec-md"),
+        _chunk("prose", "body"),
+    )
+    out = format_chunks_markdown_within_budget(chunks, budget_tokens=5000)
+    targets = re.findall(r"\[\[next:lookup:([^\]]*)\]\]", out)
+    assert len(targets) == 3, out
+    for target in targets:
+        SymbolInput(target=target)  # must not raise
 
 
 def test_member_gets_lookup_token_from_module_dot_name() -> None:
