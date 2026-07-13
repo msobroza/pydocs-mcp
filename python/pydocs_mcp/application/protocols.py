@@ -20,6 +20,7 @@ structural-conformance check; keyword-only names (``kind`` /
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -137,6 +138,31 @@ class DecisionNavigator(Protocol):
 
 
 @runtime_checkable
+class CrossNavigator(Protocol):
+    """Workspace impact federation + decision hydration (spec §3.4b, §A1.2).
+
+    Conformers: ``CrossRepoNavigator`` (real) and ``NullCrossRepoNavigator``
+    (single-project / disabled — returns the local walk unchanged and hydrates
+    nothing), so consumers never hold ``Navigator | None``.
+    """
+
+    async def impact(
+        self,
+        service: ReferenceNavigator,
+        package: str,
+        qname: str,
+        /,
+        *,
+        max_depth: int,
+        limit: int,
+    ) -> tuple[ImpactNode, ...]: ...
+
+    async def decision_titles(
+        self, wanted: tuple[tuple[str, str], ...]
+    ) -> Mapping[tuple[str, str], str]: ...
+
+
+@runtime_checkable
 class ReferenceNavigator(Protocol):
     """Read-side reference-graph navigation consumed by ``LookupService``.
 
@@ -154,6 +180,8 @@ class ReferenceNavigator(Protocol):
     async def find_by_name(
         self, name: str, /, *, kind: ReferenceKind | None = None
     ) -> tuple[NodeReference, ...]: ...
+
+    async def inherits(self, package: str, node_qname: str, /) -> tuple[NodeReference, ...]: ...
 
     async def governed_by(self, package: str, node_qname: str, /) -> tuple[NodeReference, ...]: ...
 

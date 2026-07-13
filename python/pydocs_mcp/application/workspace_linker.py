@@ -166,20 +166,7 @@ class WorkspaceLinker:
         is a no-op — the CLAUDE.md atomicity model for read paths).
         """
         async with bundle.uow_factory() as uow:
-            packages = await uow.packages.list()
-            universe: dict[str, _UniverseEntry] = {}
-            for package in packages:
-                is_root = package.name == PROJECT_PACKAGE_NAME
-                if self.match_scope == "project_only" and not is_root:
-                    continue
-                trees = await uow.trees.load_all_in_package(package.name)
-                qnames: set[str] = set()
-                for tree in trees.values():
-                    _collect_qnames(tree, qnames)
-                for qname in qnames:
-                    universe[qname] = _UniverseEntry(
-                        package=package.name, is_project_source=is_root
-                    )
+            universe = await self._universe_of(uow)
             resolved_imports: dict[str, list[str]] = {}
             for from_id, to_id in await uow.references.list_resolved((ReferenceKind.IMPORTS,)):
                 resolved_imports.setdefault(from_id, []).append(to_id)
@@ -188,6 +175,21 @@ class WorkspaceLinker:
             for row in await uow.references.list_unresolved((ReferenceKind.IMPORTS,)):
                 unresolved_imports.setdefault(row.from_node_id, []).append(row.to_name)
         return universe, resolved_imports, unresolved_imports, unresolved_rows
+
+    async def _universe_of(self, uow: UnitOfWork) -> dict[str, _UniverseEntry]:
+        """Exported qnames per ``match_scope`` from the bundle's trees."""
+        universe: dict[str, _UniverseEntry] = {}
+        for package in await uow.packages.list():
+            is_root = package.name == PROJECT_PACKAGE_NAME
+            if self.match_scope == "project_only" and not is_root:
+                continue
+            trees = await uow.trees.load_all_in_package(package.name)
+            qnames: set[str] = set()
+            for tree in trees.values():
+                _collect_qnames(tree, qnames)
+            for qname in qnames:
+                universe[qname] = _UniverseEntry(package=package.name, is_project_source=is_root)
+        return universe
 
     def _match(
         self,
@@ -240,20 +242,14 @@ class WorkspaceLinker:
             universe = universes[sibling.project]
             if module not in universe:
                 continue
-            for to_id in imports_resolved[sibling.project].get(module, ()):
-                if to_id.rsplit(".", 1)[-1] == leaf and to_id in universe:
-                    targets.add((sibling.project, to_id))
-            # Relative re-exports (`from .core import fn` persists "core.fn"
-            # with the level dropped): mini-resolve against the sibling's OWN
-            # universe under the module's parent prefix.
-            if "." in module:
-                parent = module.rsplit(".", 1)[0]
-                for to_name in imports_unresolved[sibling.project].get(module, ()):
-                    if to_name.rsplit(".", 1)[-1] != leaf:
-                        continue
-                    candidate = f"{parent}.{to_name}"
-                    if candidate in universe:
-                        targets.add((sibling.project, candidate))
+            targets |= _alias_targets(
+                module,
+                leaf,
+                universe,
+                imports_resolved[sibling.project],
+                imports_unresolved[sibling.project],
+                sibling.project,
+            )
         if len(targets) > 1:
             counters.alias["ambiguous"] += 1
             return None
@@ -293,3 +289,30 @@ def _collect_qnames(node: DocumentNode, out: set[str]) -> None:
 
 def _edge_sort_key(e: CrossLinkEdge) -> tuple[str, str, str, str, str]:
     return (e.from_project, e.from_node_id, e.to_project, e.to_node_id, str(e.kind))
+
+
+def _alias_targets(
+    module: str,
+    leaf: str,
+    universe: dict[str, _UniverseEntry],
+    resolved_imports: dict[str, list[str]],
+    unresolved_imports: dict[str, list[str]],
+    project: str,
+) -> set[tuple[str, str]]:
+    """Rule-C candidates for one sibling: absolute + relative re-exports."""
+    targets: set[tuple[str, str]] = set()
+    for to_id in resolved_imports.get(module, ()):
+        if to_id.rsplit(".", 1)[-1] == leaf and to_id in universe:
+            targets.add((project, to_id))
+    # Relative re-exports (`from .core import fn` persists "core.fn" with the
+    # level dropped): mini-resolve against the sibling's OWN universe under
+    # the module's parent prefix.
+    if "." in module:
+        parent = module.rsplit(".", 1)[0]
+        for to_name in unresolved_imports.get(module, ()):
+            if to_name.rsplit(".", 1)[-1] != leaf:
+                continue
+            candidate = f"{parent}.{to_name}"
+            if candidate in universe:
+                targets.add((project, candidate))
+    return targets

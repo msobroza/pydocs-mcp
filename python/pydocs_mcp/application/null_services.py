@@ -115,6 +115,9 @@ class NullReferenceService:
     async def find_by_name(self, *_args, **_kwargs):
         raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
 
+    async def inherits(self, *_args, **_kwargs):
+        raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
+
     async def governed_by(self, *_args, **_kwargs):
         raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
 

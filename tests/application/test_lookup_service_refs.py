@@ -146,7 +146,7 @@ async def test_lookup_callees_renders_via_ref_svc() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lookup_inherits_uses_find_by_name() -> None:
+async def test_lookup_inherits_routes_through_the_inherits_method() -> None:
     """``show='inherits'`` for a class with ref_svc wired routes through
     ``ref_svc.find_by_name(qname, kind=ReferenceKind.INHERITS)`` — the
     INHERITS reference graph is the source of truth once #5c wires the
@@ -165,7 +165,7 @@ async def test_lookup_inherits_uses_find_by_name() -> None:
         kind=ReferenceKind.INHERITS,
     )
     ref_svc = MagicMock()
-    ref_svc.find_by_name = AsyncMock(return_value=(base_ref,))
+    ref_svc.inherits = AsyncMock(return_value=(base_ref,))
 
     svc = LookupService(
         package_lookup=_pkg_lookup_mock(),
@@ -174,10 +174,9 @@ async def test_lookup_inherits_uses_find_by_name() -> None:
     )
     out = await svc.lookup(LookupInput(target="pkg.api.MyClass", show="inherits"))
 
-    ref_svc.find_by_name.assert_awaited_once_with(
-        "pkg.api.MyClass",
-        kind=ReferenceKind.INHERITS,
-    )
+    # Routed through the service's inherits method (spec 2026-07-11 §3.4a:
+    # name-keyed locally, unioned with overlay INHERITS edges inside it).
+    ref_svc.inherits.assert_awaited_once_with("pkg", "pkg.api.MyClass")
     assert out.startswith("# Bases of `pkg.api.MyClass`\n"), out
     assert "pkg.base.BaseModel" in out, out
 

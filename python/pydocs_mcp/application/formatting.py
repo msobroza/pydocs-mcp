@@ -34,6 +34,7 @@ from math import ceil
 from typing import TYPE_CHECKING, Literal
 
 from pydocs_mcp.application.mcp_inputs import _PACKAGE_RE  # single source: valid project selector
+from pydocs_mcp.application.reference_service import CrossReferenceRow
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
 from pydocs_mcp.constants import (
     LIST_PACKAGES_MAX,
@@ -416,11 +417,12 @@ _SHOW_VOCAB: dict[str, tuple[str, str]] = {
 
 
 def format_references(
-    rows: tuple[NodeReference, ...],
+    rows: tuple[NodeReference | CrossReferenceRow, ...],
     *,
     target: str,
     show: Literal["callers", "callees", "inherits", "governed_by"],
     limit: int,
+    decision_titles: Mapping[tuple[str, str], str] | None = None,
 ) -> str:
     """Render reference rows as markdown for the ``get_references`` MCP tool.
 
@@ -459,11 +461,16 @@ def format_references(
         # a consistent shape. The body sentence pluralizes the noun.
         return f"{h1}\nNo {noun}s found.\n"
 
-    resolved_count = sum(1 for r in rows if r.to_node_id is not None)
-    unresolved_count = len(rows) - resolved_count
+    local = [r for r in rows if not isinstance(r, CrossReferenceRow)]
+    cross_count = len(rows) - len(local)
+    resolved_count = sum(1 for r in local if r.to_node_id is not None)
+    unresolved_count = len(local) - resolved_count
+    # WHY the conditional suffix: with zero cross rows the lead stays
+    # byte-identical to the pre-feature string (the AC17 regression contract).
+    cross_note = f", {cross_count} cross-repo" if cross_count else ""
     lead = (
         f"{len(rows)} references found "
-        f"({resolved_count} resolved, {unresolved_count} unresolved).\n"
+        f"({resolved_count} resolved, {unresolved_count} unresolved{cross_note}).\n"
     )
 
     # A full page (``len(rows) == limit``) can't distinguish "exactly this many"
@@ -482,32 +489,74 @@ def format_references(
                 )
             )
 
-    # Group by from_package preserving FIRST-SEEN order — appendix §A.1's
-    # example renders packages in the order they appear in ``rows``.
-    groups: dict[str, list[NodeReference]] = {}
+    # Group preserving FIRST-SEEN order — appendix §A.1's example renders
+    # packages in the order they appear in ``rows``. Local rows group by
+    # from_package as always; cross rows (spec §3.6/§A1.8) group by their
+    # owning PROJECT — except in the callees direction, where the caller is
+    # local and the substituted row stays in its local from_package group.
+    groups: dict[str, list[NodeReference | CrossReferenceRow]] = {}
     for r in rows:
-        groups.setdefault(r.from_package, []).append(r)
+        key = (
+            r.from_project
+            if isinstance(r, CrossReferenceRow) and show != "callees"
+            else r.from_package
+        )
+        groups.setdefault(key, []).append(r)
 
     blocks: list[str] = [h1, lead]
     for pkg, refs in groups.items():
-        # Resolved-first within each group; stable on from_node_id for
-        # deterministic output across runs.
-        refs_sorted = sorted(
-            refs,
-            key=lambda r: (0 if r.to_node_id is not None else 1, r.from_node_id),
-        )
-        count = len(refs_sorted)
-        plural = "" if count == 1 else "s"
-        blocks.append(f"\n## from `{pkg}` ({count} {noun}{plural})\n\n")
-        for r in refs_sorted:
-            if r.to_node_id is not None:
-                blocks.append(f"- `{r.from_node_id}` → `{r.to_node_id}`\n")
-            else:
-                blocks.append(
-                    f"- ⚠ `{r.from_node_id}` → `{r.to_name}` "
-                    f"*(unresolved — to_name didn't match any indexed qname)*\n"
-                )
+        blocks.extend(_render_reference_group(pkg, refs, noun, show, decision_titles))
     return "".join(blocks)
+
+
+def _render_reference_group(
+    pkg: str,
+    refs: list[NodeReference | CrossReferenceRow],
+    noun: str,
+    show: str,
+    decision_titles: Mapping[tuple[str, str], str] | None,
+) -> list[str]:
+    """One ``## from`` group — resolved-first, stable on from_node_id."""
+    refs_sorted = sorted(
+        refs,
+        key=lambda r: (0 if r.to_node_id is not None else 1, r.from_node_id),
+    )
+    count = len(refs_sorted)
+    plural = "" if count == 1 else "s"
+    blocks = [f"\n## from `{pkg}` ({count} {noun}{plural})\n\n"]
+    for r in refs_sorted:
+        if isinstance(r, CrossReferenceRow):
+            blocks.append(_render_cross_row(r, show, decision_titles))
+        elif r.to_node_id is not None:
+            blocks.append(f"- `{r.from_node_id}` → `{r.to_node_id}`\n")
+        else:
+            blocks.append(
+                f"- ⚠ `{r.from_node_id}` → `{r.to_name}` "
+                f"*(unresolved — to_name didn't match any indexed qname)*\n"
+            )
+    return blocks
+
+
+def _render_cross_row(
+    row: CrossReferenceRow,
+    show: str,
+    decision_titles: Mapping[tuple[str, str], str] | None,
+) -> str:
+    """One project-qualified cross-repo row (spec §3.6, §A1.2 hydration).
+
+    The qualifier rides the FOREIGN side: the source for callers-like
+    directions, the target for callees (whose caller is bundle-local).
+    Hydrated governed_by rows append the decision's title; an unhydrated
+    one degrades to the key-only row — never an error.
+    """
+    if show == "callees":
+        return f"- `{row.from_node_id}` → `{row.to_node_id}` (project: {row.to_project})\n"
+    title = ""
+    if decision_titles and row.from_node_id.startswith("decision:"):
+        key = (row.from_project, row.from_node_id.removeprefix("decision:"))
+        if key in decision_titles:
+            title = f' — "{decision_titles[key]}"'
+    return f"- `{row.from_node_id}` (project: {row.from_project}) → `{row.to_node_id}`{title}\n"
 
 
 def format_impact(
@@ -558,14 +607,20 @@ def format_impact(
     for hop in sorted(rings):
         label = " (direct callers)" if hop == 1 else ""
         blocks.append(f"\n## hop {hop}{label}\n\n")
-        for n in rings[hop]:
-            if n.has_scores:
-                blocks.append(
-                    f"- `{n.qualified_name}` — PageRank {n.pagerank:.4f}, in-degree {n.in_degree}\n"
-                )
-            else:
-                blocks.append(f"- `{n.qualified_name}` — in-degree {n.in_degree}\n")
+        blocks.extend(_render_impact_row(n) for n in rings[hop])
     return "".join(blocks)
+
+
+def _render_impact_row(n: ImpactNode) -> str:
+    """One blast-radius row. Cross-repo rows carry their owning project
+    (spec §3.6); local rows render byte-identically to pre-feature (AC17)."""
+    qualifier = f" (project: {n.project})" if n.project else ""
+    if n.has_scores:
+        return (
+            f"- `{n.qualified_name}`{qualifier} — "
+            f"PageRank {n.pagerank:.4f}, in-degree {n.in_degree}\n"
+        )
+    return f"- `{n.qualified_name}`{qualifier} — in-degree {n.in_degree}\n"
 
 
 def _render_context_node(node: ContextNode) -> str:
