@@ -80,11 +80,11 @@ def test_reference_graph_yaml_overlay_parses_kinds_list(tmp_path):
 
 
 def test_reference_graph_kinds_rejects_unknown_kind():
-    """``Literal[...]`` typing rejects values outside the four known kinds.
+    """Enum-membership validation rejects values outside ``ReferenceKind``.
 
-    Pins the Open/Closed extension point: adding a new kind requires
-    extending the ``Literal`` (and the matching ``ReferenceKind`` enum),
-    not silently accepting arbitrary strings.
+    Pins the Open/Closed extension point: adding a new kind requires only a
+    new ``ReferenceKind`` member — the config validates against the enum
+    dynamically, never silently accepting arbitrary strings.
     """
     with pytest.raises(ValidationError):
         ReferenceCaptureConfig(kinds=["calls", "definitely_not_a_kind"])
@@ -182,3 +182,34 @@ def test_context_config_rejects_tiny_budget():
 def test_context_config_rejects_unknown_key():
     with pytest.raises(ValidationError):
         ContextConfig(max_dept=2)  # typo
+
+
+def test_capture_kinds_accepts_every_reference_kind():
+    """Every ``ReferenceKind`` member is a valid capture kind.
+
+    Open/Closed invariant: the config validates membership against the enum
+    dynamically (same rule as ``CrossRepoConfig.kinds``), so a new enum member
+    flows through YAML load with no per-kind config edit.
+    """
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+
+    cfg = ReferenceCaptureConfig(kinds=[str(k) for k in ReferenceKind])
+    assert list(cfg.kinds) == [str(k) for k in ReferenceKind]
+
+
+def test_capture_and_cross_repo_kind_validators_agree():
+    """The two kind-validated configs accept exactly the enum vocabulary.
+
+    Guards against drift: a kind accepted by one config but rejected by the
+    other would mean a hardcoded per-config kind list was reintroduced.
+    """
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.retrieval.config.models import CrossRepoConfig
+
+    for kind in ReferenceKind:
+        assert list(ReferenceCaptureConfig(kinds=[str(kind)]).kinds) == [str(kind)]
+        assert tuple(CrossRepoConfig(kinds=(str(kind),)).kinds) == (str(kind),)
+    with pytest.raises(ValidationError):
+        ReferenceCaptureConfig(kinds=["definitely_not_a_kind"])
+    with pytest.raises(ValidationError):
+        CrossRepoConfig(kinds=("definitely_not_a_kind",))

@@ -54,21 +54,50 @@ class HandlerConfig(BaseModel):
         return data
 
 
+# Single source of truth for the shipped capture-kind defaults. MENTIONS is
+# opt-in (regex-over-markdown, lower-precision than AST capture); SIMILAR and
+# GOVERNS are produced by their own index-time stages, not by capture.
+_DEFAULT_CAPTURE_KINDS = ("calls", "imports", "inherits")
+
+
+def _validated_reference_kinds(value: tuple[str, ...]) -> tuple[str, ...]:
+    """Shared membership rule for every ``kinds`` config field.
+
+    Validates dynamically against :class:`ReferenceKind` so a typo'd kind
+    fails at ``AppConfig.load`` while a new enum member is accepted with no
+    config edit (Open/Closed). Deferred import keeps this module
+    pydantic-only at import time (see module docstring).
+    """
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+
+    allowed = {str(k) for k in ReferenceKind}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(f"unknown reference kind(s) {unknown}; have {sorted(allowed)}")
+    return value
+
+
 class ReferenceCaptureConfig(BaseModel):
     """Reference-graph capture toggles (sub-PR #5c, §5.3).
 
-    ``kinds`` is typed as ``Literal`` so an unknown value fails at YAML load
-    rather than silently producing zero edges. MENTIONS is opt-in: the
-    shipped default omits it because regex-over-markdown is lower-precision
-    than AST capture and would noise up the graph by default.
+    ``kinds`` is validated against :class:`ReferenceKind` membership so an
+    unknown value fails at YAML load rather than silently producing zero
+    edges — and a new enum member is accepted with no config edit (same
+    rule as ``CrossRepoConfig.kinds``). MENTIONS is opt-in: the shipped
+    default omits it because regex-over-markdown is lower-precision than
+    AST capture and would noise up the graph by default.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    kinds: list[Literal["calls", "imports", "inherits", "mentions"]] = Field(
-        default_factory=lambda: ["calls", "imports", "inherits"],
-    )
+    kinds: tuple[str, ...] = _DEFAULT_CAPTURE_KINDS
+
+    @field_validator("kinds")
+    @classmethod
+    def _kinds_are_reference_kinds(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """A typo'd kind fails at AppConfig.load, never mid-capture."""
+        return _validated_reference_kinds(value)
 
 
 class ReferenceOutputConfig(BaseModel):
@@ -253,13 +282,7 @@ class CrossRepoConfig(BaseModel):
     @classmethod
     def _kinds_are_reference_kinds(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         """A typo'd kind fails at AppConfig.load, never mid-link."""
-        from pydocs_mcp.extraction.reference_kind import ReferenceKind
-
-        allowed = {str(k) for k in ReferenceKind}
-        unknown = sorted(set(value) - allowed)
-        if unknown:
-            raise ValueError(f"unknown reference kind(s) {unknown}; have {sorted(allowed)}")
-        return value
+        return _validated_reference_kinds(value)
 
 
 class ReferenceGraphConfig(BaseModel):
@@ -526,11 +549,12 @@ class DecisionCaptureConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    # WHY: closed source set, typed Literal so a misspelled overlay value (e.g.
-    # ``adr_file`` missing the trailing ``s``) fails at YAML load rather than
-    # silently mining nothing from that source — same silent-failure guard as
-    # ``ReferenceCaptureConfig.kinds``. ``extra="forbid"`` only validates keys,
-    # not list values, so the Literal is what closes the hazard here.
+    # WHY: closed source set — each source IS an implemented miner, so the
+    # Literal enumerating them is essential, not drift-prone. A misspelled
+    # overlay value (e.g. ``adr_file`` missing the trailing ``s``) fails at
+    # YAML load rather than silently mining nothing from that source.
+    # ``extra="forbid"`` only validates keys, not list values, so the
+    # Literal is what closes the hazard here.
     sources: list[
         Literal[
             "adr_files",
