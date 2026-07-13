@@ -127,6 +127,9 @@ def build_sqlite_indexing_service(db_path: Path) -> IndexingService:
 def build_sqlite_lookup_service(
     db_path: Path,
     config: AppConfig | None = None,
+    *,
+    ref_svc: ReferenceService | None = None,
+    cross_navigator: CrossNavigator | None = None,
 ) -> LookupService:
     """Compose a wired LookupService from a SQLite DB path.
 
@@ -146,13 +149,18 @@ def build_sqlite_lookup_service(
     uow_factory = build_sqlite_uow_factory(db_path)
     package_lookup = PackageLookup(uow_factory=uow_factory)
     tree_svc = TreeService(uow_factory=uow_factory)
-    ref_svc = ReferenceService(uow_factory=uow_factory)
+    # Workspace federation (spec 2026-07-11 §3.5): the multi-repo composition
+    # injects a cross-link-capable ReferenceService + the shared navigator;
+    # single-project callers keep the plain construction.
+    if ref_svc is None:
+        ref_svc = ReferenceService(uow_factory=uow_factory)
     # ``show="impact"`` / ``show="context"`` tunables are YAML settings, not MCP
     # params; thread them from config (falling back to the shipped sub-config
     # defaults for direct/test construction with no config).
     rg = config.reference_graph if config is not None else None
     impact_cfg = rg.impact if rg is not None else ImpactConfig()
     context_cfg = rg.context if rg is not None else ContextConfig()
+    extra_kwargs = {"cross_navigator": cross_navigator} if cross_navigator is not None else {}
     return LookupService(
         package_lookup=package_lookup,
         tree_svc=tree_svc,
@@ -162,6 +170,7 @@ def build_sqlite_lookup_service(
         context_token_budget=context_cfg.token_budget,
         context_render=context_cfg.render,
         context_body_ratio=context_cfg.skeleton_body_ratio,
+        **extra_kwargs,
     )
 
 

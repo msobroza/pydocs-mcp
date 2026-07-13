@@ -53,6 +53,9 @@ class NullCrossLinkStore:
     async def stamp_bundle(self, stamp: LinkedBundleStamp) -> None:
         return None
 
+    async def delete_stamp(self, bundle_stem: str) -> None:
+        return None
+
     async def replace_workspace_scores(self, rows: tuple[WorkspaceNodeScore, ...]) -> None:
         return None
 

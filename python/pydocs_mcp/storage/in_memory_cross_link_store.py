@@ -75,6 +75,9 @@ class InMemoryCrossLinkStore:
     async def stamp_bundle(self, stamp: LinkedBundleStamp) -> None:
         self._stamps[stamp.bundle_stem] = stamp
 
+    async def delete_stamp(self, bundle_stem: str) -> None:
+        self._stamps.pop(bundle_stem, None)
+
     async def replace_workspace_scores(self, rows: tuple[WorkspaceNodeScore, ...]) -> None:
         self._scores = {(r.project, r.qualified_name): r for r in rows}
 

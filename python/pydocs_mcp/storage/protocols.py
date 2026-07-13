@@ -706,6 +706,11 @@ class CrossLinkStore(Protocol):
 
     async def stamp_bundle(self, stamp: LinkedBundleStamp) -> None: ...
 
+    async def delete_stamp(self, bundle_stem: str) -> None:
+        """Drop a departed bundle's stamp (its edges go via
+        ``replace_edges_touching(project, ())`` — spec §3.8/AC19)."""
+        ...
+
     async def replace_workspace_scores(self, rows: tuple[WorkspaceNodeScore, ...]) -> None:
         """Whole-table swap of the union-graph scores (spec §A1.1)."""
         ...

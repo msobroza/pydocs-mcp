@@ -32,7 +32,14 @@ log = logging.getLogger("pydocs-mcp")
 
 
 def _build_project_services(
-    loaded, config, *, embedder=None, multi_vector_embedder=None, llm_client=None
+    loaded,
+    config,
+    *,
+    embedder=None,
+    multi_vector_embedder=None,
+    llm_client=None,
+    ref_svc=None,
+    cross_navigator=None,
 ):
     """Build one project's read-side service set (docs + api + lookup) from its db.
 
@@ -77,7 +84,9 @@ def _build_project_services(
         api=ApiSearch(member_pipeline=build_member_pipeline_from_config(config, context)),
         # ``build_sqlite_lookup_service`` owns LookupService composition so the CLI
         # and MCP server never drift on which stores back ``lookup``.
-        lookup=build_sqlite_lookup_service(loaded.db_path, config=config),
+        lookup=build_sqlite_lookup_service(
+            loaded.db_path, config=config, ref_svc=ref_svc, cross_navigator=cross_navigator
+        ),
         # get_symbol(depth="source") reads verbatim chunk text via its own uow;
         # ``build_sqlite_symbol_source_service`` threads the YAML line cap
         # (``symbol_source.max_lines``) so the CLI and server never drift.
@@ -125,7 +134,198 @@ def _resolve_projects(db_path, workspace, db_paths):
     return [load_project(db_path)], False
 
 
-def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surface="mcp"):
+def _run_blocking_async(coro):
+    """Run a coroutine to completion from sync OR async calling contexts.
+
+    ``build_routers`` is sync and shared by the CLI and the MCP server, but
+    tests (and future embedders) may call it from a running loop — in that
+    case the coroutine runs on a private loop in a worker thread. The
+    coroutine only touches its own SQLite stores (asyncio.to_thread inside),
+    so a private loop is safe.
+    """
+    import asyncio
+    import concurrent.futures
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+def _bundle_handles(projects):
+    """LoadedProjects → linker BundleHandles (read-only uow factories)."""
+    from pydocs_mcp.application.workspace_linker import BundleHandle
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
+    return tuple(
+        BundleHandle(
+            project=p.name,
+            bundle_stem=p.db_path.stem,
+            bundle_path=str(p.db_path),
+            indexed_at=p.metadata.indexed_at or 0.0,
+            git_head=p.metadata.git_head,
+            uow_factory=build_sqlite_uow_factory(p.db_path),
+        )
+        for p in projects
+    )
+
+
+def _open_overlay_store(config, workspace, db_paths):
+    """The overlay store with the §3.1/§3.8 fallback chain.
+
+    Workspace-local → home fallback → in-memory (EROFS degradation). Returns
+    ``(store, persisted)`` — ``persisted=False`` means links must be computed
+    fresh each serve and one-shot CLI queries skip linking entirely (AC20).
+    """
+    import sqlite3 as _sqlite3
+
+    from pydocs_mcp.storage.factories import build_cross_link_store, overlay_path_for
+    from pydocs_mcp.storage.in_memory_cross_link_store import InMemoryCrossLinkStore
+
+    cross_cfg = config.reference_graph.cross_repo
+    candidates = []
+    if cross_cfg.overlay_dir is not None:
+        candidates.append(cross_cfg.overlay_dir / "pydocs-links.sqlite3")
+    else:
+        candidates.append(overlay_path_for(workspace, tuple(db_paths or ())))
+        if workspace is not None:
+            # Home fallback keyed by the resolved workspace path (spec §3.1).
+            import hashlib as _hashlib
+
+            digest = _hashlib.md5(
+                str(workspace.resolve()).encode("utf-8"), usedforsecurity=False
+            ).hexdigest()[:10]
+            candidates.append(Path("~/.pydocs-mcp/links").expanduser() / f"{digest}.sqlite3")
+    for path in candidates:
+        store = build_cross_link_store(path)
+        try:
+            # Probe write access by ensuring the schema exists (creates the
+            # file); read-only filesystems raise OperationalError here.
+            _run_blocking_async(store.bundle_stamps())
+            return store, True
+        except (_sqlite3.OperationalError, OSError):
+            continue
+    log.warning("cross-link overlay unwritable in every location; using in-memory links")
+    return InMemoryCrossLinkStore(), False
+
+
+def _prepare_cross_links(config, projects, *, workspace, db_paths, run_link):
+    """Compose the workspace cross-link layer (spec §3.5, §3.8, §A1.8).
+
+    Returns ``(store, navigator, ref_services, status_line)``. Disabled or
+    single-bundle → Null objects and the feature is inert (N7). ``run_link``
+    is True only on the serve path; one-shot CLI queries read the persisted
+    overlay with the stale-exclusion rule and never pay a link pass (AC20).
+    """
+    from pydocs_mcp.application.cross_repo_navigator import (
+        CrossRepoNavigator,
+        NullCrossRepoNavigator,
+    )
+    from pydocs_mcp.application.reference_service import ReferenceService
+    from pydocs_mcp.application.workspace_linker import WorkspaceLinker, detect_stale
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+    from pydocs_mcp.storage.null_cross_link_store import NullCrossLinkStore
+
+    cross_cfg = config.reference_graph.cross_repo
+    if not cross_cfg.enabled or len(projects) < 2:
+        return NullCrossLinkStore(), NullCrossRepoNavigator(), {}, "disabled"
+
+    store, persisted = _open_overlay_store(config, workspace, db_paths)
+    bundles = _bundle_handles(projects)
+    kinds = tuple(ReferenceKind(k) for k in cross_cfg.kinds)
+    linker = WorkspaceLinker(
+        bundles=bundles,
+        cross_links=store,
+        kinds=kinds,
+        match_scope=cross_cfg.match_scope,
+        alias_resolution=cross_cfg.alias_resolution,
+        workspace_scores=cross_cfg.workspace_scores,
+    )
+
+    async def _startup():
+        stamps = await store.bundle_stamps()
+        stale = detect_stale(bundles, stamps)
+        departed = {s.project_name for s in stamps} - {b.project for b in bundles}
+        if run_link and (not persisted or stale or departed or not stamps):
+            report = await linker.link(None if not stamps else stale or None)
+            log.info(
+                "cross-repo link pass: %s",
+                {
+                    "edges_created": dict(report.edges_created),
+                    "alias_resolved": report.alias_resolved,
+                    "alias_ambiguous": report.alias_ambiguous,
+                    "collisions": dict(report.collisions),
+                    "pagerank_available": report.pagerank_available,
+                },
+            )
+            return frozenset(), "fresh"
+        if stale:
+            log.warning(
+                "cross-repo links stale for %s — run `pydocs-mcp link` to refresh; "
+                "their edges are excluded from reads",
+                sorted(stale),
+            )
+            return stale, "stale(" + ", ".join(sorted(stale)) + ")"
+        return frozenset(), "fresh" if stamps else "stale(unlinked)"
+
+    if run_link or persisted:
+        stale_now, status = _run_blocking_async(_startup())
+    else:
+        stale_now, status = frozenset(), "stale(unlinked)"
+    read_store = _StaleExcludingStore(store, stale_now) if stale_now else store
+
+    ref_services = {
+        p.name: ReferenceService(
+            uow_factory=build_sqlite_uow_factory(p.db_path),
+            project_name=p.name,
+            cross_links=read_store,
+        )
+        for p in projects
+    }
+    navigator = CrossRepoNavigator(
+        services=ref_services,
+        uow_factories={p.name: build_sqlite_uow_factory(p.db_path) for p in projects},
+        cross_links=read_store,
+        max_projects_per_walk=cross_cfg.max_projects_per_walk,
+        workspace_scores=cross_cfg.workspace_scores,
+    )
+    return read_store, navigator, ref_services, status
+
+
+class _StaleExcludingStore:
+    """Read-side wrapper excluding edges that touch stale-stamped projects.
+
+    Stale edges are never silently served (spec §3.8) — a dangling
+    ``to_node_id`` into a reindexed bundle could point at a node that no
+    longer exists. Writes pass through unchanged.
+    """
+
+    def __init__(self, inner, stale):
+        self._inner = inner
+        self._stale = frozenset(stale)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def edges_into(self, to_project, to_node_id, *, kinds=None, limit=200):
+        rows = await self._inner.edges_into(to_project, to_node_id, kinds=kinds, limit=limit)
+        return tuple(
+            e for e in rows if e.from_project not in self._stale and e.to_project not in self._stale
+        )
+
+    async def edges_from(self, from_project, from_node_id, *, kinds=None, limit=200):
+        rows = await self._inner.edges_from(from_project, from_node_id, kinds=kinds, limit=limit)
+        return tuple(
+            e for e in rows if e.from_project not in self._stale and e.to_project not in self._stale
+        )
+
+
+def build_routers(
+    config, *, db_path=None, workspace=None, db_paths=None, surface="mcp", run_link_pass=False
+):
     """Resolve + validate + build the per-project services and the ``ToolRouter``.
 
     Shared by ``run`` (MCP server) and the CLI subcommands so both select,
@@ -167,6 +367,9 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surfac
                 }
             )
         )
+    _cross_links, navigator, ref_services, cross_status = _prepare_cross_links(
+        config, projects, workspace=workspace, db_paths=db_paths, run_link=run_link_pass
+    )
     services = tuple(
         _build_project_services(
             p,
@@ -174,6 +377,8 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surfac
             embedder=embedder,
             multi_vector_embedder=multi_vector_embedder,
             llm_client=llm_client,
+            ref_svc=ref_services.get(p.name),
+            cross_navigator=navigator,
         )
         for p in projects
     )
@@ -201,6 +406,7 @@ def build_routers(config, *, db_path=None, workspace=None, db_paths=None, surfac
         envelope=envelope,
         search_router=MultiProjectSearch(services=services),
         lookup_router=MultiProjectLookup(services=services),
+        cross_link_status=cross_status if len(services) > 1 else "",
     )
     return tools, services
 
@@ -231,7 +437,9 @@ def run(
     # validators and ``ReferenceCaptureStage``.
     configure_from_app_config(config)
 
-    tools, services = build_routers(config, db_path=db_path, workspace=workspace, db_paths=db_paths)
+    tools, services = build_routers(
+        config, db_path=db_path, workspace=workspace, db_paths=db_paths, run_link_pass=True
+    )
     # One capability line per project so a misconfigured dense/LI wiring stays visible.
     for svc in services:
         caps = format_capabilities(build_search_backend(config, svc.project.db_path))

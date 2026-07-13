@@ -18,6 +18,7 @@ scanned, never linked, never duplicated in the overlay.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -26,9 +27,15 @@ from typing import Literal
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
-from pydocs_mcp.storage.cross_link_edge import CrossLinkEdge, LinkedBundleStamp
+from pydocs_mcp.storage.cross_link_edge import (
+    CrossLinkEdge,
+    LinkedBundleStamp,
+    WorkspaceNodeScore,
+)
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import CrossLinkStore, UnitOfWork
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +97,9 @@ class WorkspaceLinker:
     kinds: tuple[ReferenceKind, ...]
     match_scope: Literal["project_only", "all_packages"]
     alias_resolution: Literal["imports_graph", "off"]
+    # A1.1: recompute workspace scores after any edge-set change. in_degree
+    # is always computed; pagerank only when the [graph] extra is present.
+    workspace_scores: bool = True
 
     async def link(self, stale_projects: frozenset[str] | None = None) -> LinkReport:
         """Run the pass; write edges/stamps only for ``stale_projects``.
@@ -129,9 +139,11 @@ class WorkspaceLinker:
                     touching[edge.to_project].add(edge)
 
         linked_at = time.time()
+        wrote_any = False
         for bundle in sorted(self.bundles, key=lambda b: b.project):
             if bundle.project not in stale:
                 continue
+            wrote_any = True
             edges = tuple(sorted(touching[bundle.project], key=_edge_sort_key))
             await self.cross_links.replace_edges_touching(bundle.project, edges)
             await self.cross_links.stamp_bundle(
@@ -144,13 +156,91 @@ class WorkspaceLinker:
                     linked_at=linked_at,
                 )
             )
+        wrote_any |= await self._purge_departed()
+        scores_computed, pagerank_available = await self._recompute_scores(
+            universes, touching, changed=wrote_any
+        )
         return LinkReport(
             unresolved_scanned=dict(counters.unresolved_scanned),
             edges_created=dict(counters.edges_created),
             collisions=dict(counters.collisions),
             alias_resolved=counters.alias["resolved"],
             alias_ambiguous=counters.alias["ambiguous"],
+            workspace_scores_computed=scores_computed,
+            pagerank_available=pagerank_available,
         )
+
+    async def _purge_departed(self) -> bool:
+        """Drop edges + stamps of bundles no longer in the workspace (AC19)."""
+        loaded = {b.project for b in self.bundles}
+        purged = False
+        for stamp in await self.cross_links.bundle_stamps():
+            if stamp.project_name in loaded:
+                continue
+            await self.cross_links.replace_edges_touching(stamp.project_name, ())
+            await self.cross_links.delete_stamp(stamp.bundle_stem)
+            purged = True
+        return purged
+
+    async def _recompute_scores(
+        self,
+        universes: dict[str, dict[str, _UniverseEntry]],
+        touching: dict[str, set[CrossLinkEdge]],
+        *,
+        changed: bool,
+    ) -> tuple[bool, bool]:
+        """A1.1 workspace scores over the union graph (composite node ids).
+
+        ``in_degree`` is pure counting (always available); ``pagerank`` rides
+        the existing [graph]-extra computation — absent extra degrades to
+        NULL pagerank + a single warning, never a raise. Global recompute on
+        ANY edge-set change; ``workspace_scores: false`` drops the table.
+        """
+        if not self.workspace_scores:
+            await self.cross_links.replace_workspace_scores(())
+            return False, False
+        if not changed:
+            return False, False
+        edges = await self._union_edges(touching)
+        nodes = {
+            f"{project}:{qname}" for project, universe in universes.items() for qname in universe
+        }
+        in_degree: dict[str, int] = {}
+        for _src, dst in edges:
+            in_degree[dst] = in_degree.get(dst, 0) + 1
+        pagerank, pagerank_available = _try_pagerank(edges)
+        rows = tuple(
+            WorkspaceNodeScore(
+                project=node.split(":", 1)[0],
+                qualified_name=node.split(":", 1)[1],
+                pagerank=pagerank.get(node) if pagerank_available else None,
+                in_degree=in_degree.get(node, 0),
+            )
+            for node in sorted(nodes | set(in_degree))
+        )
+        await self.cross_links.replace_workspace_scores(rows)
+        return True, pagerank_available
+
+    async def _union_edges(self, touching: dict[str, set[CrossLinkEdge]]) -> list[tuple[str, str]]:
+        """Composite-qualified union: bundle-local resolved edges ∪ cross edges."""
+        edges: list[tuple[str, str]] = []
+        for bundle in self.bundles:
+            async with bundle.uow_factory() as uow:
+                pairs = await uow.references.list_resolved(self.kinds)
+            edges.extend(
+                (f"{bundle.project}:{src}", f"{bundle.project}:{dst}") for src, dst in pairs
+            )
+        seen: set[CrossLinkEdge] = set()
+        for edge_set in touching.values():
+            seen |= edge_set
+        edges.extend(
+            (
+                f"{e.from_project}:{e.from_node_id}",
+                f"{e.to_project}:{e.to_node_id}",
+            )
+            for e in seen
+        )
+        return edges
 
     async def _read_bundle(
         self, bundle: BundleHandle
@@ -316,3 +406,48 @@ def _alias_targets(
             if candidate in universe:
                 targets.add((project, candidate))
     return targets
+
+
+def detect_stale(
+    bundles: tuple[BundleHandle, ...],
+    stamps: tuple[LinkedBundleStamp, ...],
+) -> frozenset[str]:
+    """Projects whose overlay stamps no longer match their bundles (spec §3.8).
+
+    Missing stamp, ``indexed_at`` mismatch, or ``git_head`` mismatch (when
+    both sides carry one) ⇒ stale. Departed bundles are handled separately
+    by the linker's purge.
+    """
+    by_project = {stamp.project_name: stamp for stamp in stamps}
+    stale: set[str] = set()
+    for bundle in bundles:
+        stamp = by_project.get(bundle.project)
+        if stamp is None or stamp.indexed_at != bundle.indexed_at:
+            stale.add(bundle.project)
+            continue
+        if stamp.git_head and bundle.git_head and stamp.git_head != bundle.git_head:
+            stale.add(bundle.project)
+    return frozenset(stale)
+
+
+def _try_pagerank(edges: list[tuple[str, str]]) -> tuple[dict[str, float], bool]:
+    """PageRank over composite node ids; NULL-degrade when [graph] is absent.
+
+    Reuses the per-bundle computation (generic over node-id strings) but
+    NEVER lets its ImportError escape — the in_degree tier must always land
+    (spec §A1.1). One warning; ``False`` flips LinkReport.pagerank_available.
+    """
+    if not edges:
+        return {}, True
+    try:
+        from pydocs_mcp.application.node_score_compute import compute_scores
+
+        qname_projects = {node: node.split(":", 1)[0] for pair in edges for node in pair}
+        scores = compute_scores(edges, qname_projects)
+        return {score.qualified_name: score.pagerank for score in scores}, True
+    except ImportError:
+        logger.warning(
+            "workspace pagerank skipped: the [graph] extra is not installed "
+            "(pip install 'pydocs-mcp[graph]'); in_degree scores still computed"
+        )
+        return {}, False

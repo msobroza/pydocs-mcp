@@ -108,6 +108,9 @@ class SqliteCrossLinkStore:
     async def stamp_bundle(self, stamp: LinkedBundleStamp) -> None:
         await asyncio.to_thread(self._stamp_bundle, stamp)
 
+    async def delete_stamp(self, bundle_stem: str) -> None:
+        await asyncio.to_thread(self._delete_stamp, bundle_stem)
+
     async def replace_workspace_scores(self, rows: tuple[WorkspaceNodeScore, ...]) -> None:
         await asyncio.to_thread(self._replace_workspace_scores, rows)
 
@@ -221,6 +224,11 @@ class SqliteCrossLinkStore:
                     stamp.linked_at,
                 ),
             )
+            conn.commit()
+
+    def _delete_stamp(self, bundle_stem: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM linked_bundles WHERE bundle_stem = ?", (bundle_stem,))
             conn.commit()
 
     def _replace_workspace_scores(self, rows: tuple[WorkspaceNodeScore, ...]) -> None:
