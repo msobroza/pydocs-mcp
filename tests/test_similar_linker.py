@@ -32,6 +32,10 @@ _VOCAB = {
     "alpha": (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
     "beta": (0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
     "gamma": (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    # Partial-overlap vectors for the max-score dedup test; query "ab" scores
+    # ~1.0 vs "ab", ~0.72 vs "alpha", ~0.51 vs "half" (all stable under 4-bit).
+    "ab": (0.7071, 0.7071, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    "half": (0.7071, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
 }
 _FINGERPRINT = ("fastembed", "fake-model", _DIM)
 
@@ -141,6 +145,26 @@ class TestGeneratePair:
         assert edge.to_name == "repob.core.parse"  # audit analogue (§A1.2)
         assert outcome.seconds >= 0.0
 
+    async def test_same_qname_dedup_keeps_max_score(self, tmp_path: Path) -> None:
+        # AC27 'max score kept': qname t2 has TWO hits both above min_score —
+        # a strong one (~1.0) and a weak one (~0.51) — straddling a competing
+        # qname t1 (~0.72). With top_k=1 the winner reveals which was kept:
+        # max(t2)=1.0 beats t1, but min(t2)=0.51 would lose to t1. The edge
+        # must go to t2, proving the max (not the min) is retained.
+        source = _bundle(tmp_path, "repoa", (_chunk(1, "repoa.x", "ab"),))
+        target = _bundle(
+            tmp_path,
+            "repob",
+            (
+                _chunk(10, "repob.t2", "ab"),  # ~1.0
+                _chunk(11, "repob.t2", "half"),  # ~0.51 (same qname as 10)
+                _chunk(12, "repob.t1", "alpha"),  # ~0.72 (competing qname)
+            ),
+        )
+        await _write_tq(target, {10: _VOCAB["ab"], 11: _VOCAB["half"], 12: _VOCAB["alpha"]})
+        outcome = await _generator(top_k=1, min_score=0.4).generate_pair(source, target)
+        assert [(e.from_node_id, e.to_node_id) for e in outcome.edges] == [("repoa.x", "repob.t2")]
+
     async def test_top_k_caps_edges_per_source_qname(self, tmp_path: Path) -> None:
         source = _bundle(tmp_path, "repoa", (_chunk(1, "repoa.x", "alpha"),))
         target = _bundle(
@@ -213,6 +237,41 @@ class TestLinkerIntegration:
         assert set(report.per_pair_similar_seconds) == {"repoa->repob", "repob->repoa"}
         edges = await store.edges_from("repoa", "repoa.x", kinds=(ReferenceKind.SIMILAR,))
         assert [(e.to_project, e.to_node_id) for e in edges] == [("repob", "repob.y")]
+
+    async def test_incremental_relink_scores_include_surviving_sibling_edges(
+        self, tmp_path: Path
+    ) -> None:
+        # AC27 / §A1.1: a SIMILAR edge between two NON-stale siblings survives
+        # an incremental relink untouched in the overlay; the recomputed
+        # workspace scores must still count it (recompute reads the full
+        # overlay, not just the pass's regenerated edges), or c.z's in_degree
+        # would wrongly drop to 0 until the next full relink.
+        repoa = _bundle(tmp_path, "repoa", (_chunk(1, "repoa.x", "beta"),))  # orthogonal
+        repob = _bundle(tmp_path, "repob", (_chunk(10, "repob.y", "alpha"),))
+        repoc = _bundle(tmp_path, "repoc", (_chunk(20, "repoc.z", "alpha"),))  # ~ repob.y
+        for bundle, vectors in (
+            (repoa, {1: _VOCAB["beta"]}),
+            (repob, {10: _VOCAB["alpha"]}),
+            (repoc, {20: _VOCAB["alpha"]}),
+        ):
+            await _write_tq(bundle, vectors)
+        store = InMemoryCrossLinkStore()
+        linker = WorkspaceLinker(
+            bundles=(repoa, repob, repoc),
+            cross_links=store,
+            kinds=(ReferenceKind.CALLS, ReferenceKind.SIMILAR),
+            match_scope="project_only",
+            alias_resolution="imports_graph",
+            workspace_scores=True,
+            similar_generator=_generator(),
+        )
+        await linker.link()
+        full = await store.workspace_scores_for((("repoc", "repoc.z"),))
+        assert full[("repoc", "repoc.z")].in_degree == 1  # from repob.y -> repoc.z
+        # Reindex only repoa; the repob<->repoc SIMILAR edges are not regenerated.
+        await linker.link(stale_projects=frozenset({"repoa"}))
+        after = await store.workspace_scores_for((("repoc", "repoc.z"),))
+        assert after[("repoc", "repoc.z")].in_degree == 1  # unchanged, not dropped
 
     async def test_incremental_relink_regenerates_stale_pairs_only(self, tmp_path: Path) -> None:
         # §3.8 step (iii): relink(stale={repoa}) re-runs SIMILAR for every

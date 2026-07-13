@@ -987,8 +987,10 @@ def _cmd_link(args: argparse.Namespace) -> int:
         _build_similar_generator,
         _bundle_handles,
         _open_overlay_store,
+        _overlay_candidates,
         _resolve_projects,
     )
+    from pydocs_mcp.storage.factories import build_cross_link_store
 
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     workspace = Path(args.workspace).expanduser() if args.workspace else None
@@ -998,19 +1000,35 @@ def _cmd_link(args: argparse.Namespace) -> int:
         print("link: nothing to do — a workspace needs at least two bundles")
         return 0
     cross_cfg = config.reference_graph.cross_repo
-    store, persisted = _open_overlay_store(config, workspace, db_paths)
     bundles = _bundle_handles(projects)
 
-    async def _run() -> int:
-        stamps = await store.bundle_stamps()
-        stale = detect_stale(bundles, stamps)
-        departed = {s.project_name for s in stamps} - {b.project for b in bundles}
-        if args.check:
+    if args.check:
+        # AC21: --check tests existence only — it must NOT create the overlay.
+        # Resolve the candidate paths and open only an EXISTING one; a missing
+        # overlay reports unlinked without writing anything.
+        existing = next(
+            (p for p in _overlay_candidates(config, workspace, db_paths) if p.exists()), None
+        )
+        if existing is None:
+            print("cross-repo links: stale(unlinked) — no overlay yet; run `pydocs-mcp link`")
+            return 1
+        check_store = build_cross_link_store(existing)
+
+        async def _check() -> int:
+            stamps = await check_store.bundle_stamps()
+            stale = detect_stale(bundles, stamps)
+            departed = {s.project_name for s in stamps} - {b.project for b in bundles}
             if stale or departed:
                 print(f"stale: {sorted(stale) or '-'}; departed: {sorted(departed) or '-'}")
                 return 1
             print("cross-repo links: fresh")
             return 0
+
+        return asyncio.run(_check())
+
+    store, persisted = _open_overlay_store(config, workspace, db_paths)
+
+    async def _run() -> int:
         if not persisted:
             print(
                 "link: overlay location is not writable (read-only filesystem?) — "

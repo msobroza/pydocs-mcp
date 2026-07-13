@@ -60,6 +60,9 @@ class InMemoryCrossLinkStore:
         ]
         return _filtered(matches, kinds, limit)
 
+    async def all_edges(self) -> tuple[CrossLinkEdge, ...]:
+        return tuple(sorted(self._edges.values(), key=_sort_key))
+
     async def replace_edges_touching(self, project: str, edges: tuple[CrossLinkEdge, ...]) -> None:
         self._edges = {
             key: e

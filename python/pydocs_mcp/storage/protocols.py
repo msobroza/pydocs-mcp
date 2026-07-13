@@ -695,6 +695,14 @@ class CrossLinkStore(Protocol):
         limit: int = 200,
     ) -> tuple[CrossLinkEdge, ...]: ...
 
+    async def all_edges(self) -> tuple[CrossLinkEdge, ...]:
+        """Every persisted cross edge — the whole overlay graph (§A1.1).
+
+        Used by workspace-score recompute so scores reflect the FULL
+        persisted overlay, not just the linker's in-memory pass set (an
+        incremental relink leaves non-stale-to-non-stale edges untouched)."""
+        ...
+
     async def replace_edges_touching(self, project: str, edges: tuple[CrossLinkEdge, ...]) -> None:
         """Atomically delete every edge where ``from_project == project`` OR
         ``to_project == project``, then insert ``edges`` (idempotently — an

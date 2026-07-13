@@ -99,6 +99,15 @@ class SqliteCrossLinkStore:
             limit,
         )
 
+    async def all_edges(self) -> tuple[CrossLinkEdge, ...]:
+        """Every persisted cross edge — the whole overlay graph (spec §A1.1).
+
+        Workspace-score recompute reads this rather than the linker's
+        in-memory pass set, so scores reflect the FULL overlay (including
+        edges an incremental relink left untouched) not just this pass.
+        """
+        return await asyncio.to_thread(self._all_edges)
+
     async def replace_edges_touching(self, project: str, edges: tuple[CrossLinkEdge, ...]) -> None:
         await asyncio.to_thread(self._replace_edges_touching, project, edges)
 
@@ -162,6 +171,14 @@ class SqliteCrossLinkStore:
         bound.append(limit)
         with self._connect() as conn:
             rows = conn.execute(sql, bound).fetchall()
+        return tuple(_edge_from_row(row) for row in rows)
+
+    def _all_edges(self) -> tuple[CrossLinkEdge, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM cross_references"
+                " ORDER BY from_project, from_node_id, to_project, to_node_id, kind"
+            ).fetchall()
         return tuple(_edge_from_row(row) for row in rows)
 
     def _replace_edges_touching(self, project: str, edges: tuple[CrossLinkEdge, ...]) -> None:

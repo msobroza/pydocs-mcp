@@ -153,6 +153,13 @@ class CrossRepoNavigator:
             has_scores=False,
             project=source,
         )
+        # The entry node itself has boundary crossings to probe: a caller in a
+        # THIRD project reaches it through another cross edge (A→B→C chains,
+        # and cross cycles routed back through an entry node). Feeding it to
+        # the frontier is what lets the main loop query edges_into(source,
+        # from_node); without it the walk truncates at the first boundary
+        # (the depth guard in the main loop still bounds it).
+        walk.frontier.append((source, from_node, entry_hop))
         remaining = max_depth - entry_hop
         sub_service = self.services.get(source)
         if remaining <= 0 or sub_service is None:

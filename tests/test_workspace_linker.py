@@ -189,6 +189,41 @@ async def test_collision_precedence_project_source_beats_dependency() -> None:
     assert report.collisions["repoa"] == 1
 
 
+async def test_within_bundle_project_source_not_shadowed_by_own_dependency() -> None:
+    # AC6 (all_packages): a bundle exports the SAME qname from BOTH its
+    # __project__ AND one of its dependency copies. The project-source flag
+    # must survive regardless of package-iteration order — else a genuine
+    # project export loses collision precedence to another sibling's newer
+    # dependency copy.
+    repox = _bundle(
+        "repox",
+        packages={
+            "__project__": (_node("shared", _node("shared.thing")),),  # project source
+            "libdep": (_node("shared", _node("shared.thing")),),  # dep copy, iterated later
+        },
+        indexed_at=1000.0,  # OLDER than repoy below
+    )
+    repoy = _bundle(
+        "repoy",
+        packages={
+            "__project__": (_node("repoy"),),
+            "libdep2": (_node("shared", _node("shared.thing")),),  # pure dep copy
+        },
+        indexed_at=2000.0,  # newer
+    )
+    repoz = _bundle(
+        "repoz",
+        packages={"__project__": (_node("repoz"),)},
+        refs=(_ref("repoz.x", "shared.thing"),),
+    )
+    linker, store = _linker(repox, repoy, repoz, match_scope="all_packages")
+    await linker.link()
+    (edge,) = await store.edges_from("repoz", "repoz.x")
+    # repox is the project source (older); repoy only a newer dep copy. Project
+    # source wins despite repoy's recency — proving repox kept is_project_source.
+    assert edge.to_project == "repox"
+
+
 async def test_collision_ties_break_by_recency() -> None:
     repoa = _bundle(
         "repoa", packages={"__project__": (_node("repoa"),)}, refs=(_ref("repoa.x", "pkg.fn"),)

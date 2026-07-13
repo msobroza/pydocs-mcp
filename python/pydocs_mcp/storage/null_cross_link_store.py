@@ -44,6 +44,9 @@ class NullCrossLinkStore:
     ) -> tuple[CrossLinkEdge, ...]:
         return ()
 
+    async def all_edges(self) -> tuple[CrossLinkEdge, ...]:
+        return ()
+
     async def replace_edges_touching(self, project: str, edges: tuple[CrossLinkEdge, ...]) -> None:
         return None
 

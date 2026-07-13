@@ -181,6 +181,87 @@ def test_end_to_end_callers_cross_repo_through_build_routers(workspace: Path) ->
     assert "cross-repo" in out
 
 
+def test_link_check_writes_nothing_when_unlinked(workspace: Path, capsys, monkeypatch) -> None:
+    # AC21: --check on a never-linked workspace exits 1 and creates NO overlay.
+    code = _run_cli(["link", "--workspace", str(workspace), "--check"], monkeypatch)
+    assert code == 1
+    assert not (workspace / "pydocs-links.sqlite3").exists()  # nothing written
+    assert "unlinked" in capsys.readouterr().out
+
+
+def test_link_on_serve_false_is_detection_only(workspace: Path) -> None:
+    # AC18/AC31: link_on_serve: false → no repair pass at serve; a never-linked
+    # workspace serves NO cross rows and reports detection-only staleness.
+    from pydocs_mcp.application.mcp_inputs import OverviewInput, ReferencesInput
+
+    config = AppConfig.load()
+    object.__setattr__(config.reference_graph.cross_repo, "link_on_serve", False)
+    tools, _ = build_routers(config, workspace=workspace, run_link_pass=True)
+
+    async def _both() -> tuple[str, str]:
+        refs = await tools.get_references(
+            ReferencesInput(target="mylib.core.parse", direction="callers", project="mylib")
+        )
+        card = await tools.get_overview(OverviewInput())
+        return refs, card
+
+    refs, card = asyncio.run(_both())
+    assert "backend.api.handler" not in refs  # no link pass ran
+    assert "cross-repo links: fresh" not in card and "stale" in card
+
+
+def test_departed_bundle_edges_excluded_on_readonly_query(workspace: Path, monkeypatch) -> None:
+    # AC20: after a normal link, a bundle stamped in the overlay but no longer
+    # present is 'departed'; a one-shot read (no link pass) must exclude its
+    # edges while still serving the live cross caller.
+    from pydocs_mcp.application.mcp_inputs import ReferencesInput
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.cross_link_edge import CrossLinkEdge, LinkedBundleStamp
+    from pydocs_mcp.storage.factories import build_cross_link_store, overlay_path_for
+
+    _run_cli(["link", "--workspace", str(workspace)], monkeypatch)  # stamps backend+mylib fresh
+    overlay = build_cross_link_store(overlay_path_for(workspace, ()))
+
+    async def _plant_ghost() -> None:
+        await overlay.replace_edges_touching(
+            "gone",
+            (
+                CrossLinkEdge(
+                    from_project="gone",
+                    from_package="__project__",
+                    from_node_id="gone.caller",
+                    to_project="mylib",
+                    to_node_id="mylib.core.parse",
+                    to_name="mylib.core.parse",
+                    kind=ReferenceKind.CALLS,
+                ),
+            ),
+        )
+        await overlay.stamp_bundle(
+            LinkedBundleStamp(
+                bundle_stem="gone_zzzzzzzzzz",
+                project_name="gone",
+                bundle_path="/gone.db",
+                indexed_at=1.0,
+                git_head="h",
+                linked_at=1.0,
+            )
+        )
+
+    asyncio.run(_plant_ghost())
+    config = AppConfig.load()
+    tools, _ = build_routers(config, workspace=workspace, run_link_pass=False)  # one-shot read
+
+    async def _ask() -> str:
+        return await tools.get_references(
+            ReferencesInput(target="mylib.core.parse", direction="callers", project="mylib")
+        )
+
+    out = asyncio.run(_ask())
+    assert "backend.api.handler" in out  # live cross caller still served
+    assert "gone.caller" not in out  # departed bundle's edge excluded
+
+
 def test_single_bundle_is_inert_with_default_config(tmp_path: Path) -> None:
     # AC34/N7: one bundle + enabled:true → no overlay, byte-identical serve.
     solo = tmp_path / "solo"

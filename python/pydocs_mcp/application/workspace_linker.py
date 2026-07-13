@@ -174,7 +174,7 @@ class WorkspaceLinker:
             )
         wrote_any |= await self._purge_departed()
         scores_computed, pagerank_available = await self._recompute_scores(
-            universes, touching, changed=wrote_any
+            universes, changed=wrote_any
         )
         return LinkReport(
             unresolved_scanned=dict(counters.unresolved_scanned),
@@ -240,7 +240,6 @@ class WorkspaceLinker:
     async def _recompute_scores(
         self,
         universes: dict[str, dict[str, _UniverseEntry]],
-        touching: dict[str, set[CrossLinkEdge]],
         *,
         changed: bool,
     ) -> tuple[bool, bool]:
@@ -256,7 +255,7 @@ class WorkspaceLinker:
             return False, False
         if not changed:
             return False, False
-        edges = await self._union_edges(touching)
+        edges = await self._union_edges()
         nodes = {
             f"{project}:{qname}" for project, universe in universes.items() for qname in universe
         }
@@ -276,8 +275,17 @@ class WorkspaceLinker:
         await self.cross_links.replace_workspace_scores(rows)
         return True, pagerank_available
 
-    async def _union_edges(self, touching: dict[str, set[CrossLinkEdge]]) -> list[tuple[str, str]]:
-        """Composite-qualified union: bundle-local resolved edges ∪ cross edges."""
+    async def _union_edges(self) -> list[tuple[str, str]]:
+        """Composite-qualified union: bundle-local resolved edges ∪ ALL persisted
+        cross edges.
+
+        Cross edges come from ``cross_links.all_edges()`` — the persisted
+        overlay — NOT the in-memory pass set: an incremental relink only
+        regenerates stale-touching edges, so scoring off the pass set would
+        drop the SIMILAR (and any) edges between two non-stale siblings that
+        survive untouched in the overlay, and the recomputed scores would
+        diverge from the persisted graph until the next full relink (§A1.1).
+        """
         edges: list[tuple[str, str]] = []
         for bundle in self.bundles:
             async with bundle.uow_factory() as uow:
@@ -285,15 +293,12 @@ class WorkspaceLinker:
             edges.extend(
                 (f"{bundle.project}:{src}", f"{bundle.project}:{dst}") for src, dst in pairs
             )
-        seen: set[CrossLinkEdge] = set()
-        for edge_set in touching.values():
-            seen |= edge_set
         edges.extend(
             (
                 f"{e.from_project}:{e.from_node_id}",
                 f"{e.to_project}:{e.to_node_id}",
             )
-            for e in seen
+            for e in await self.cross_links.all_edges()
         )
         return edges
 
@@ -333,6 +338,14 @@ class WorkspaceLinker:
             for tree in trees.values():
                 _collect_qnames(tree, qnames)
             for qname in qnames:
+                # Under match_scope=all_packages a bundle can export the same
+                # qname from BOTH __project__ and a dependency copy; a
+                # project-source entry must never be shadowed by a later
+                # dependency one (package-list order is arbitrary), or the
+                # collision precedence in _match would flip (is_project_source).
+                existing = universe.get(qname)
+                if existing is not None and existing.is_project_source and not is_root:
+                    continue
                 universe[qname] = _UniverseEntry(package=package.name, is_project_source=is_root)
         return universe
 

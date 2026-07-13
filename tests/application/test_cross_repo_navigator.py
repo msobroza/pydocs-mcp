@@ -37,6 +37,17 @@ def _edge(from_project: str, from_node_id: str, to_project: str, to_node_id: str
     )
 
 
+async def _plant(store: InMemoryCrossLinkStore, *edges: CrossLinkEdge) -> None:
+    """Write cross edges the way WorkspaceLinker does: each project's batch
+    carries EVERY edge touching it (``replace_edges_touching`` OR-deletes, so a
+    per-project call with only one side of a two-way pair would drop the other).
+    """
+    projects = {e.from_project for e in edges} | {e.to_project for e in edges}
+    for project in projects:
+        touching = tuple(e for e in edges if project in (e.from_project, e.to_project))
+        await store.replace_edges_touching(project, touching)
+
+
 def _project_service(
     project: str, rows: tuple[NodeReference, ...], store: InMemoryCrossLinkStore
 ) -> ReferenceService:
@@ -93,19 +104,69 @@ async def test_impact_respects_max_depth() -> None:
     assert "a.transitive" not in names  # needs hop 2
 
 
-async def test_cross_repo_cycle_terminates() -> None:
-    # AC13: A→B→A cycles end via the (project, qname) visited set.
+async def _chain_navigator() -> tuple[CrossRepoNavigator, ReferenceService]:
+    """Pure cross-edge chain A→B→C, no local callers bridging the hops.
+
+    repoc owns c.target; repob's b.mid calls it (cross); repoa's a.top calls
+    b.mid (cross). Reaching a.top REQUIRES probing edges_into(repob, b.mid),
+    i.e. the boundary-entry node's own incoming cross edges.
+    """
     store = InMemoryCrossLinkStore()
-    navigator, svc_b, _ = await _workspace(store)
-    await store.replace_edges_touching(
-        "repob",
-        (
-            _edge("repoa", "a.caller", "repob", "b.target"),
-            _edge("repob", "b.local_caller", "repoa", "a.caller"),
-        ),
+    svc_c = _project_service("repoc", (), store)
+    svc_b = _project_service("repob", (), store)
+    svc_a = _project_service("repoa", (), store)
+    await _plant(
+        store,
+        _edge("repob", "b.mid", "repoc", "c.target"),
+        _edge("repoa", "a.top", "repob", "b.mid"),
     )
-    nodes = await navigator.impact(svc_b, "__project__", "b.target", max_depth=6, limit=50)
-    assert len(nodes) == len({(n.project, n.qualified_name) for n in nodes})
+    navigator = CrossRepoNavigator(
+        services={"repoa": svc_a, "repob": svc_b, "repoc": svc_c},
+        uow_factories={},
+        cross_links=store,
+    )
+    return navigator, svc_c
+
+
+async def test_impact_crosses_two_boundaries_via_cross_edges() -> None:
+    # AC13 (regression): a transitive caller reached ONLY through a second
+    # cross edge off a boundary-entry node must appear — the walk cannot
+    # truncate at the first boundary.
+    navigator, svc_c = await _chain_navigator()
+    nodes = await navigator.impact(svc_c, "__project__", "c.target", max_depth=5, limit=50)
+    by_key = {(n.project, n.qualified_name): n.hop for n in nodes}
+    assert by_key[("repob", "b.mid")] == 1
+    assert by_key[("repoa", "a.top")] == 2  # dropped before the frontier fix
+
+
+async def test_cross_boundary_chain_respects_max_depth() -> None:
+    # The second boundary hop is genuinely bounded by max_depth, not skipped.
+    navigator, svc_c = await _chain_navigator()
+    nodes = await navigator.impact(svc_c, "__project__", "c.target", max_depth=1, limit=50)
+    names = {n.qualified_name for n in nodes}
+    assert "b.mid" in names and "a.top" not in names  # a.top needs hop 2
+
+
+async def test_cross_repo_cycle_terminates() -> None:
+    # AC13: a cross cycle A.x ⇄ B.y is actually TRAVERSED (both incoming
+    # cross edges probed) and terminates via the (project, qname) visited set.
+    store = InMemoryCrossLinkStore()
+    svc_b = _project_service("repob", (), store)
+    svc_a = _project_service("repoa", (), store)
+    await _plant(
+        store,
+        _edge("repoa", "a.x", "repob", "b.y"),
+        _edge("repob", "b.y", "repoa", "a.x"),
+    )
+    navigator = CrossRepoNavigator(
+        services={"repoa": svc_a, "repob": svc_b}, uow_factories={}, cross_links=store
+    )
+    nodes = await navigator.impact(svc_b, "__project__", "b.y", max_depth=6, limit=50)
+    keys = {(n.project or "repob", n.qualified_name) for n in nodes}
+    # The cross edge into b.y WAS probed (a.x surfaced) and the return edge
+    # into a.x hit the visited target b.y, so the walk stopped — no dupes.
+    assert ("repoa", "a.x") in keys
+    assert len(nodes) == len(keys)
 
 
 async def test_fanout_stops_at_max_projects_per_walk() -> None:
@@ -130,6 +191,46 @@ async def test_ranking_uses_workspace_scores_within_hops() -> None:
     nodes = await navigator.impact(svc_b, "__project__", "b.target", max_depth=4, limit=50)
     hop1 = [n.qualified_name for n in nodes if n.hop == 1]
     assert hop1 == ["a.caller", "b.local_caller"]  # 0.9 outranks 0.1
+
+
+async def test_ranking_falls_back_to_in_degree_without_pagerank() -> None:
+    # AC25 configuration 2: [graph] absent → pagerank is None on every
+    # workspace row, so same-hop nodes order by workspace in_degree.
+    navigator, svc_b, store = await _workspace()
+    await store.replace_workspace_scores(
+        (
+            WorkspaceNodeScore(
+                project="repoa", qualified_name="a.caller", pagerank=None, in_degree=1
+            ),
+            WorkspaceNodeScore(
+                project="repob", qualified_name="b.local_caller", pagerank=None, in_degree=9
+            ),
+        )
+    )
+    nodes = await navigator.impact(svc_b, "__project__", "b.target", max_depth=4, limit=50)
+    hop1 = [n.qualified_name for n in nodes if n.hop == 1]
+    assert hop1 == ["b.local_caller", "a.caller"]  # in_degree 9 outranks 1
+
+
+async def test_local_path_wins_over_a_returning_cross_edge() -> None:
+    # AC33 impact clause: a home node reached locally is not re-attributed
+    # to a longer cross path — the visited set keeps the first (local) hop.
+    store = InMemoryCrossLinkStore()
+    # repob: b.shared is a local caller of b.target (home hop 1).
+    svc_b = _project_service("repob", (_ref("b.shared", "b.target"),), store)
+    svc_a = _project_service("repoa", (), store)
+    await _plant(
+        store,
+        _edge("repoa", "a.mid", "repob", "b.target"),
+        # A returning cross edge would re-enter b.shared from repoa deeper.
+        _edge("repob", "b.shared", "repoa", "a.mid"),
+    )
+    navigator = CrossRepoNavigator(
+        services={"repoa": svc_a, "repob": svc_b}, uow_factories={}, cross_links=store
+    )
+    nodes = await navigator.impact(svc_b, "__project__", "b.target", max_depth=6, limit=50)
+    shared = [n for n in nodes if (n.project or "repob", n.qualified_name) == ("repob", "b.shared")]
+    assert len(shared) == 1 and shared[0].hop == 1  # local hop kept, not overwritten
 
 
 async def test_ranking_without_workspace_scores_matches_legacy_order() -> None:

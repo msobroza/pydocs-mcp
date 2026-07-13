@@ -202,6 +202,23 @@ class TestWorkspaceScores:
         assert not report.workspace_scores_computed
         assert await store.workspace_scores_for((("repob", "repob.fn"),)) == {}
 
+    async def test_pagerank_finite_with_graph_extra(self) -> None:
+        # AC24 (positive clause): when the [graph] pagerank path is available
+        # (networkx + scipy), pagerank is a finite float on nodes with fan-in
+        # — not merely 'None-or-positive'. Skips where the extra is absent.
+        from pydocs_mcp.application.workspace_linker import _try_pagerank
+
+        if not _try_pagerank([("a", "b")])[1]:
+            pytest.skip("[graph] pagerank path unavailable (needs networkx + scipy)")
+        repoa = _bundle("repoa", refs=(("repoa.x", "repob.fn"),))
+        repob = _bundle("repob", exports=("repob.fn",), resolved=(("repob.a", "repob.fn"),))
+        linker, store = _linker(repoa, repob, workspace_scores=True)
+        report = await linker.link()
+        assert report.workspace_scores_computed and report.pagerank_available
+        scores = await store.workspace_scores_for((("repob", "repob.fn"),))
+        pagerank = scores[("repob", "repob.fn")].pagerank
+        assert isinstance(pagerank, float) and pagerank > 0.0
+
     async def test_pagerank_degrades_without_graph_extra(self, monkeypatch) -> None:
         # AC24: [graph] absent → in_degree rows still land, pagerank NULL,
         # pagerank_available False — never a raise.

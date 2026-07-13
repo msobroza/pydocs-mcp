@@ -206,6 +206,29 @@ def _build_similar_generator(config, embedder=None):
     )
 
 
+def _overlay_candidates(config, workspace, db_paths):
+    """Ordered overlay-path candidates (spec §3.1) — pure path resolution, no I/O.
+
+    Shared by ``_open_overlay_store`` (which probe-creates the first writable
+    one) and ``link --check`` (which only tests existence, never creating —
+    AC21 'writes nothing')."""
+    from pydocs_mcp.storage.factories import overlay_path_for
+
+    cross_cfg = config.reference_graph.cross_repo
+    if cross_cfg.overlay_dir is not None:
+        return [cross_cfg.overlay_dir / "pydocs-links.sqlite3"]
+    candidates = [overlay_path_for(workspace, tuple(db_paths or ()))]
+    if workspace is not None:
+        # Home fallback keyed by the resolved workspace path (spec §3.1).
+        import hashlib as _hashlib
+
+        digest = _hashlib.md5(
+            str(workspace.resolve()).encode("utf-8"), usedforsecurity=False
+        ).hexdigest()[:10]
+        candidates.append(Path("~/.pydocs-mcp/links").expanduser() / f"{digest}.sqlite3")
+    return candidates
+
+
 def _open_overlay_store(config, workspace, db_paths):
     """The overlay store with the §3.1/§3.8 fallback chain.
 
@@ -215,24 +238,10 @@ def _open_overlay_store(config, workspace, db_paths):
     """
     import sqlite3 as _sqlite3
 
-    from pydocs_mcp.storage.factories import build_cross_link_store, overlay_path_for
+    from pydocs_mcp.storage.factories import build_cross_link_store
     from pydocs_mcp.storage.in_memory_cross_link_store import InMemoryCrossLinkStore
 
-    cross_cfg = config.reference_graph.cross_repo
-    candidates = []
-    if cross_cfg.overlay_dir is not None:
-        candidates.append(cross_cfg.overlay_dir / "pydocs-links.sqlite3")
-    else:
-        candidates.append(overlay_path_for(workspace, tuple(db_paths or ())))
-        if workspace is not None:
-            # Home fallback keyed by the resolved workspace path (spec §3.1).
-            import hashlib as _hashlib
-
-            digest = _hashlib.md5(
-                str(workspace.resolve()).encode("utf-8"), usedforsecurity=False
-            ).hexdigest()[:10]
-            candidates.append(Path("~/.pydocs-mcp/links").expanduser() / f"{digest}.sqlite3")
-    for path in candidates:
+    for path in _overlay_candidates(config, workspace, db_paths):
         store = build_cross_link_store(path)
         try:
             # Probe write access by ensuring the schema exists (creates the
@@ -280,11 +289,17 @@ def _prepare_cross_links(config, projects, *, workspace, db_paths, run_link, emb
         similar_generator=_build_similar_generator(config, embedder),
     )
 
+    # link_on_serve: false makes serve DETECTION-ONLY (spec §3.8): no repair
+    # pass at startup, stale/departed edges excluded from reads, a warning
+    # points at `pydocs-mcp link`. Default true keeps the repair-on-serve
+    # behavior. One-shot CLI queries never link (run_link is False).
+    should_link = run_link and cross_cfg.link_on_serve
+
     async def _startup():
         stamps = await store.bundle_stamps()
         stale = detect_stale(bundles, stamps)
         departed = {s.project_name for s in stamps} - {b.project for b in bundles}
-        if run_link and (not persisted or stale or departed or not stamps):
+        if should_link and (not persisted or stale or departed or not stamps):
             report = await linker.link(None if not stamps else stale or None)
             log.info(
                 "cross-repo link pass: %s",
@@ -300,13 +315,17 @@ def _prepare_cross_links(config, projects, *, workspace, db_paths, run_link, emb
                 },
             )
             return frozenset(), "fresh"
-        if stale:
+        # Detection-only path (link_on_serve false, or a one-shot CLI read):
+        # exclude edges touching a stale OR departed bundle — never serve a
+        # dangling cross edge into a reindexed or removed project (AC20/§3.8).
+        exclude = stale | departed
+        if exclude:
             log.warning(
-                "cross-repo links stale for %s — run `pydocs-mcp link` to refresh; "
-                "their edges are excluded from reads",
-                sorted(stale),
+                "cross-repo links stale/departed for %s — run `pydocs-mcp link` to "
+                "refresh; their edges are excluded from reads",
+                sorted(exclude),
             )
-            return stale, "stale(" + ", ".join(sorted(stale)) + ")"
+            return frozenset(exclude), "stale(" + ", ".join(sorted(exclude)) + ")"
         return frozenset(), "fresh" if stamps else "stale(unlinked)"
 
     if run_link or persisted:
