@@ -240,6 +240,43 @@ class SqliteReferenceStore:
             )
         return [(r["from_node_id"], r["to_node_id"]) for r in rows]
 
+    async def list_unresolved(
+        self,
+        kinds: tuple[ReferenceKind, ...],
+        limit: int | None = None,
+    ) -> list[NodeReference]:
+        """UNRESOLVED rows of the given kinds — the linker's v14 read-only input."""
+        placeholders = ", ".join("?" for _ in kinds)
+        sql = (
+            "SELECT from_package, from_node_id, to_name, to_node_id, kind "
+            "FROM node_references WHERE to_node_id IS NULL "
+            f"AND kind IN ({placeholders})"
+        )
+        params: list[object] = [str(k) for k in kinds]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+        return [_row_to_node_reference(r) for r in rows]
+
+    async def list_resolved(
+        self,
+        kinds: tuple[ReferenceKind, ...],
+    ) -> list[tuple[str, str]]:
+        """RESOLVED (from, to) pairs of the given kinds (kind-aware sibling)."""
+        placeholders = ", ".join("?" for _ in kinds)
+        sql = (
+            "SELECT from_node_id, to_node_id FROM node_references "
+            "WHERE to_node_id IS NOT NULL "
+            f"AND kind IN ({placeholders})"
+        )
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(sql, [str(k) for k in kinds]).fetchall()
+            )
+        return [(r["from_node_id"], r["to_node_id"]) for r in rows]
+
     async def degree_by_package(self, package: str) -> dict[str, tuple[int, int]]:
         """(in_degree, out_degree) per resolved qname within one package (§D17 blocks 3-4).
 

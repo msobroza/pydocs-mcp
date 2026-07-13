@@ -185,6 +185,27 @@ Calling `get_overview` with no selector on a multi-repo server returns a
 count — so an agent that has just connected can see everything on offer before
 it narrows to a `project`.
 
+### Cross-repo references (multi-repo workspaces)
+
+When several bundles are served together, a **link pass** resolves each
+bundle's unresolved references against its siblings' symbols, so
+`get_references` answers cross repository boundaries: callers of a `mylib`
+symbol include its `backend` call sites (project-qualified rows), `impact`
+walks across repos, and previously-unresolved callees become navigable
+targets. References the local index already resolved always take precedence —
+cross-links only add what a single bundle could not see.
+
+Links live in a disposable sidecar next to the bundles
+(`pydocs-links.sqlite3`); the bundles themselves are never modified. Serve
+refreshes stale links automatically at startup; `pydocs-mcp link --workspace
+~/pydocs-index` pre-bakes them (CI images, read-only deployments) and
+`--check` gates on freshness. Tuning lives under `reference_graph.cross_repo`
+in YAML (`enabled: true` by default — inert for single-repo serving): linked
+edge kinds, alias resolution for re-exports, workspace-level ranking scores
+(PageRank needs the `[graph]` extra; degree ranking works everywhere), and an
+opt-in embedding-similarity kind. The workspace overview card reports link
+freshness (`cross-repo links: fresh | stale(...)`).
+
 ### Ask your docs — chat agent (optional)
 
 A LangGraph ReAct agent plus a Streamlit chat UI over the MCP server, for

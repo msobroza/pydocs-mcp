@@ -203,6 +203,30 @@ def _build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--workspace", **_workspace)
             sp.add_argument("--db", **_db)
 
+    # ``link`` is an OPERATOR action (spec 2026-07-11 §3.9): materialize or
+    # refresh the workspace cross-link overlay sidecar. It takes no tuning
+    # flags — all behavior (kinds, match_scope, alias resolution, scores)
+    # comes from YAML via AppConfig, per the MCP-surface/YAML rule.
+    sp_link = sub.add_parser(
+        "link",
+        help="Build/refresh cross-repo reference links for a workspace",
+        description=(
+            "Resolve references across the bundles of a multi-repo workspace and "
+            "persist them to the pydocs-links.sqlite3 overlay next to the bundles. "
+            "Serve runs this automatically at startup (reference_graph.cross_repo."
+            "link_on_serve); the verb exists to pre-bake overlays into CI images / "
+            "read-only deployments and for freshness gating."
+        ),
+    )
+    sp_link.add_argument("--workspace", **_workspace)
+    sp_link.add_argument("--db", **_db)
+    sp_link.add_argument(
+        "--check",
+        action="store_true",
+        help="Detection only: exit 1 if any bundle's links are stale; write nothing.",
+    )
+    sp_link.add_argument("-v", "--verbose", **_verbose)
+
     # ``search`` is the CLI face of the ``search_codebase`` MCP tool — one of
     # the six task-shaped tools (see the block below for the other five).
     sp_search = sub.add_parser(
@@ -952,6 +976,102 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_link(args: argparse.Namespace) -> int:
+    """The ``link`` verb (spec §3.9): full/incremental pass or ``--check``."""
+    import asyncio
+
+    from pydocs_mcp.application.workspace_linker import WorkspaceLinker, detect_stale
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.server import (
+        _build_similar_generator,
+        _bundle_handles,
+        _open_overlay_store,
+        _overlay_candidates,
+        _resolve_projects,
+    )
+    from pydocs_mcp.storage.factories import build_cross_link_store
+
+    config = AppConfig.load(explicit_path=getattr(args, "config", None))
+    workspace = Path(args.workspace).expanduser() if args.workspace else None
+    db_paths = [Path(p).expanduser() for p in (args.db_paths or [])]
+    projects, _read_only = _resolve_projects(None, workspace, db_paths)
+    if len(projects) < 2:
+        print("link: nothing to do — a workspace needs at least two bundles")
+        return 0
+    cross_cfg = config.reference_graph.cross_repo
+    bundles = _bundle_handles(projects)
+
+    if args.check:
+        # AC21: --check tests existence only — it must NOT create the overlay.
+        # Resolve the candidate paths and open only an EXISTING one; a missing
+        # overlay reports unlinked without writing anything.
+        existing = next(
+            (p for p in _overlay_candidates(config, workspace, db_paths) if p.exists()), None
+        )
+        if existing is None:
+            print("cross-repo links: stale(unlinked) — no overlay yet; run `pydocs-mcp link`")
+            return 1
+        check_store = build_cross_link_store(existing)
+
+        async def _check() -> int:
+            stamps = await check_store.bundle_stamps()
+            stale = detect_stale(bundles, stamps)
+            departed = {s.project_name for s in stamps} - {b.project for b in bundles}
+            if stale or departed:
+                print(f"stale: {sorted(stale) or '-'}; departed: {sorted(departed) or '-'}")
+                return 1
+            print("cross-repo links: fresh")
+            return 0
+
+        return asyncio.run(_check())
+
+    store, persisted = _open_overlay_store(config, workspace, db_paths)
+
+    async def _run() -> int:
+        if not persisted:
+            print(
+                "link: overlay location is not writable (read-only filesystem?) — "
+                "nothing persisted. Serve still links in memory at startup."
+            )
+            return 2
+        linker = WorkspaceLinker(
+            bundles=bundles,
+            cross_links=store,
+            kinds=tuple(ReferenceKind(k) for k in cross_cfg.kinds),
+            match_scope=cross_cfg.match_scope,
+            alias_resolution=cross_cfg.alias_resolution,
+            workspace_scores=cross_cfg.workspace_scores,
+            similar_generator=_build_similar_generator(config),
+        )
+        # The explicit verb is always a FULL pass (spec §3.9) — the operator
+        # asked for a refresh; incremental repair is the serve path's job.
+        report = await linker.link(None)
+        for project in sorted({b.project for b in bundles}):
+            print(
+                f"{project}: scanned {report.unresolved_scanned.get(project, 0)} unresolved, "
+                f"created {report.edges_created.get(project, 0)} edge(s), "
+                f"{report.collisions.get(project, 0)} collision(s)"
+            )
+        print(
+            f"alias resolved {report.alias_resolved}, ambiguous {report.alias_ambiguous}; "
+            f"workspace scores: {'computed' if report.workspace_scores_computed else 'skipped'}"
+            f"{'' if report.pagerank_available else ' (pagerank unavailable — [graph] extra)'}"
+        )
+        if report.per_pair_similar_seconds:
+            timings = ", ".join(
+                f"{pair} {seconds:.2f}s"
+                for pair, seconds in sorted(report.per_pair_similar_seconds.items())
+            )
+            print(
+                f"similar edges {report.similar_edges}, "
+                f"embedder mismatches {report.embedder_mismatches} ({timings})"
+            )
+        return 0
+
+    return asyncio.run(_run())
+
+
 def _cmd_search(args: argparse.Namespace) -> int:
     return _run_cmd(_run_search(args), verbose=args.verbose)
 
@@ -987,6 +1107,7 @@ _CMD_TABLE = {
     "serve": _cmd_serve,
     "index": _cmd_index,
     "watch": _cmd_watch,
+    "link": _cmd_link,
     "search": _cmd_search,
     "overview": _cmd_overview,
     "symbol": _cmd_symbol,

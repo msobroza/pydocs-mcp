@@ -390,6 +390,34 @@ class InMemoryReferenceStore:
             rows = [r for r in rows if r.kind == kind]
         return rows
 
+    async def list_unresolved(
+        self,
+        kinds,
+        limit=None,
+    ):
+        self.calls.append(_Call("list_unresolved", (kinds, limit)))
+        wanted = {str(k) for k in kinds}
+        rows = [
+            r
+            for rs in self.by_package.values()
+            for r in rs
+            if r.to_node_id is None and str(r.kind) in wanted
+        ]
+        return rows if limit is None else rows[:limit]
+
+    async def list_resolved(
+        self,
+        kinds,
+    ):
+        self.calls.append(_Call("list_resolved", (kinds,)))
+        wanted = {str(k) for k in kinds}
+        return [
+            (r.from_node_id, r.to_node_id)
+            for rs in self.by_package.values()
+            for r in rs
+            if r.to_node_id is not None and str(r.kind) in wanted
+        ]
+
     async def find_transitive_callers(
         self,
         target_node_id: str,

@@ -56,6 +56,9 @@ class ToolRouter:
     envelope: ResponseEnvelope
     search_router: MultiProjectSearch  # constructed WITHOUT envelope; bodies only
     lookup_router: MultiProjectLookup  # constructed WITHOUT envelope; bodies only
+    # Workspace cross-link freshness for the get_overview card (spec §3.8):
+    # "" (single project / not composed) renders nothing — byte-identical.
+    cross_link_status: str = ""
 
     def _svc(self, project: str) -> ProjectServices:
         if project:
@@ -164,7 +167,11 @@ class ToolRouter:
         # from this card's workspace-total census; that divergence is expected,
         # not a bug to "reconcile".
         if not payload.project and not payload.package and len(self.services) > 1:
-            return await self.envelope.wrap(lambda: _render_workspace_overview(self.services))
+            return await self.envelope.wrap(
+                lambda: _render_workspace_overview(
+                    self.services, cross_link_status=self.cross_link_status
+                )
+            )
         svc = self._svc(payload.project)
         return await self.envelope.wrap(lambda: _render_overview(svc.overview, payload.package))
 
@@ -175,19 +182,25 @@ async def _render_overview(service: OverviewService, package: str) -> str:
     return format_overview_card(await service.build(package))
 
 
-async def _render_workspace_overview(services: tuple[ProjectServices, ...]) -> str:
+async def _render_workspace_overview(
+    services: tuple[ProjectServices, ...], *, cross_link_status: str = ""
+) -> str:
     """Build + render the workspace orientation card (multi-repo, empty selector).
 
     Package counts are gathered concurrently — one light census read per loaded
     project — and rendered in loaded (workspace-glob) order so the card is
-    deterministic across calls.
+    deterministic across calls. ``cross_link_status`` appends the one-line
+    workspace cross-link freshness (spec §3.8); empty renders nothing.
     """
     counts = await asyncio.gather(*[svc.overview.package_count() for svc in services])
     entries = tuple(
         WorkspaceProjectEntry(name=svc.project.name, package_count=count)
         for svc, count in zip(services, counts, strict=True)
     )
-    return format_workspace_overview_card(entries)
+    card = format_workspace_overview_card(entries)
+    if cross_link_status:
+        card += f"\ncross-repo links: {cross_link_status}\n"
+    return card
 
 
 def _split_budget(total: int, sizes: list[int]) -> list[int]:

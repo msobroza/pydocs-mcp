@@ -359,7 +359,7 @@ async def test_show_inherits_on_class_routes_through_ref_svc(
     package_lookup_mock: MagicMock,
 ) -> None:
     """Post-#5c contract: ``show='inherits'`` for a class routes through
-    ``ref_svc.find_by_name(qname, kind=INHERITS)``. The pre-#5c degraded
+    ``ref_svc.inherits(package, qname)``. The pre-#5c degraded
     path that read ``node.extra_metadata['inherits_from']`` is gone — the
     reference graph is the single source of truth for INHERITS edges
     once ref_svc is wired. (When ref_svc=None, the dispatch raises
@@ -392,7 +392,7 @@ async def test_show_inherits_on_class_routes_through_ref_svc(
         ),
     )
     ref_svc = MagicMock()
-    ref_svc.find_by_name = AsyncMock(return_value=base_refs)
+    ref_svc.inherits = AsyncMock(return_value=base_refs)
 
     svc = LookupService(
         package_lookup=package_lookup_mock,
@@ -402,10 +402,8 @@ async def test_show_inherits_on_class_routes_through_ref_svc(
     out = await svc.lookup(LookupInput(target="fastapi.routing.X", show="inherits"))
     assert "BaseAuth" in out
     assert "Mixin" in out
-    ref_svc.find_by_name.assert_awaited_once_with(
-        "fastapi.routing.X",
-        kind=ReferenceKind.INHERITS,
-    )
+    # Routed through the service's inherits method (spec 2026-07-11 §3.4a).
+    ref_svc.inherits.assert_awaited_once_with("fastapi", "fastapi.routing.X")
 
 
 @pytest.mark.asyncio
@@ -424,7 +422,7 @@ async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
     ref_svc = MagicMock()
-    ref_svc.find_by_name = AsyncMock(return_value=())
+    ref_svc.inherits = AsyncMock(return_value=())
 
     svc = LookupService(
         package_lookup=package_lookup_mock,
@@ -433,10 +431,7 @@ async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
     )
     out = await svc.lookup(LookupInput(target="fastapi.routing.X", show="inherits"))
     assert "No bases found." in out
-    ref_svc.find_by_name.assert_awaited_once_with(
-        "fastapi.routing.X",
-        kind=ReferenceKind.INHERITS,
-    )
+    ref_svc.inherits.assert_awaited_once_with("fastapi", "fastapi.routing.X")
 
 
 @pytest.mark.asyncio

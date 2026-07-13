@@ -31,8 +31,10 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from dataclasses import field as dataclasses_field
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.application.cross_repo_navigator import NullCrossRepoNavigator
 from pydocs_mcp.application.formatting import (
     format_context,
     format_impact,
@@ -46,7 +48,7 @@ from pydocs_mcp.application.mcp_errors import (
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.package_lookup import PackageLookup
-from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.application.reference_service import CrossReferenceRow
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
     _DEFAULT_CONTEXT_RENDER,
@@ -60,7 +62,7 @@ if TYPE_CHECKING:
     # ``_REF_GETTERS`` dispatch table: TreeService / NullTreeService and
     # ReferenceService / NullReferenceService all conform to the
     # navigation Protocols in ``application.protocols``.
-    from pydocs_mcp.application.protocols import ReferenceNavigator, TreeNavigator
+    from pydocs_mcp.application.protocols import CrossNavigator, ReferenceNavigator, TreeNavigator
     from pydocs_mcp.application.reference_service import ContextNode
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -188,10 +190,9 @@ _REF_GETTERS: dict[
 ] = {
     "callers": lambda svc, p, n: svc.callers(p, n),
     "callees": lambda svc, p, n: svc.callees(p, n),
-    "inherits": lambda svc, _p, n: svc.find_by_name(
-        n,
-        kind=ReferenceKind.INHERITS,
-    ),
+    # Name-keyed locally, unioned with overlay INHERITS edges by the
+    # service (spec 2026-07-11 §3.4a) — hence a first-class method now.
+    "inherits": lambda svc, p, n: svc.inherits(p, n),
     # GOVERNS edges pointing AT the target (decisions-as-graph-nodes, spec §D18):
     # "which decisions govern this symbol?" rendered through format_references.
     "governed_by": lambda svc, p, n: svc.governed_by(p, n),
@@ -237,6 +238,10 @@ class LookupService:
     # Skeleton is the shipped default; ``format_context`` reads both.
     context_render: str = _DEFAULT_CONTEXT_RENDER
     context_body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO
+    # Workspace federation (spec 2026-07-11 §3.4b): the impact walk and
+    # governed_by decision hydration delegate here. The Null impl returns
+    # the local walk unchanged, so single-project behavior is byte-identical.
+    cross_navigator: CrossNavigator = dataclasses_field(default_factory=NullCrossRepoNavigator)
 
     async def lookup(self, payload: LookupInput) -> str:
         target_str = payload.target
@@ -318,7 +323,8 @@ class LookupService:
         # Applies to any node kind (unlike ``inherits``). ``limit`` slices the
         # rendered rows AFTER the service ranks the full discovered set.
         if show == "impact":
-            impacted = await self.ref_svc.impact(
+            impacted = await self.cross_navigator.impact(
+                self.ref_svc,
                 package,
                 node.node_id,
                 max_depth=self.impact_max_depth,
@@ -357,12 +363,31 @@ class LookupService:
         # surface to the user.
         if len(rows) > limit:
             rows = rows[:limit]
+        titles = await self._decision_titles(show, rows)
         return format_references(
             rows,
             target=target,
             show=show,
             limit=limit,
+            decision_titles=titles,
         )
+
+    async def _decision_titles(self, show: str, rows) -> dict[tuple[str, str], str]:
+        """Hydrate cross-repo governed_by rows' decision titles (spec §A1.2).
+
+        Only fires for cross rows on the governed_by direction; degraded
+        (missing record / project) rows simply stay key-only downstream.
+        """
+        if show != "governed_by":
+            return {}
+        wanted = tuple(
+            (r.from_project, r.from_node_id.removeprefix("decision:"))
+            for r in rows
+            if isinstance(r, CrossReferenceRow) and r.from_node_id.startswith("decision:")
+        )
+        if not wanted:
+            return {}
+        return dict(await self.cross_navigator.decision_titles(wanted))
 
     async def context_nodes(self, target: str) -> tuple[str, tuple[ContextNode, ...]]:
         """Resolve ``target`` to its forward dependency closure.

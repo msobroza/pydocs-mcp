@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class PipelineRouteEntry(BaseModel):
@@ -206,6 +206,62 @@ class ContextConfig(BaseModel):
     skeleton_body_ratio: float = Field(_DEFAULT_SKELETON_BODY_RATIO, gt=0.0, le=1.0)
 
 
+# Single source of truth for cross-repo linking defaults (spec 2026-07-11 +
+# Amendment A1). The shipped YAML restates them for user-facing clarity.
+_DEFAULT_CROSS_REPO_ENABLED = True  # A1.8: default-on (inert for single-bundle serving)
+_DEFAULT_CROSS_REPO_LINK_ON_SERVE = True
+_DEFAULT_CROSS_REPO_MATCH_SCOPE: Literal["project_only", "all_packages"] = "project_only"
+_DEFAULT_CROSS_REPO_KINDS = ("calls", "imports", "inherits", "governs")  # A1.2
+_DEFAULT_CROSS_REPO_MAX_PROJECTS_PER_WALK = 8
+_DEFAULT_CROSS_REPO_WORKSPACE_SCORES = True  # A1.1 (in_degree always; pagerank [graph]-gated)
+_DEFAULT_CROSS_REPO_ALIAS_RESOLUTION: Literal["imports_graph", "off"] = "imports_graph"  # A1.3
+_DEFAULT_CROSS_REPO_SIMILAR_TOP_K = 5
+_DEFAULT_CROSS_REPO_SIMILAR_MIN_SCORE = 0.6
+
+
+class CrossRepoSimilarConfig(BaseModel):
+    """Bounds for opt-in cross-repo SIMILAR linking (spec §A1.2)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    top_k: int = Field(_DEFAULT_CROSS_REPO_SIMILAR_TOP_K, ge=1, le=50)
+    min_score: float = Field(_DEFAULT_CROSS_REPO_SIMILAR_MIN_SCORE, ge=0.0, le=1.0)
+
+
+class CrossRepoConfig(BaseModel):
+    """Workspace-level cross-repo reference linking (spec 2026-07-11 + A1).
+
+    Server-side deployment tunables, NOT MCP parameters — ``get_references``
+    keeps its pinned six-tool-surface signature; enabling/tuning linking is a
+    YAML-only concern (CLAUDE.md §"MCP API surface vs YAML configuration").
+    Inert with a single loaded bundle regardless of ``enabled`` (N7).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = _DEFAULT_CROSS_REPO_ENABLED
+    link_on_serve: bool = _DEFAULT_CROSS_REPO_LINK_ON_SERVE
+    match_scope: Literal["project_only", "all_packages"] = _DEFAULT_CROSS_REPO_MATCH_SCOPE
+    kinds: tuple[str, ...] = _DEFAULT_CROSS_REPO_KINDS
+    max_projects_per_walk: int = Field(_DEFAULT_CROSS_REPO_MAX_PROJECTS_PER_WALK, ge=1, le=32)
+    overlay_dir: Path | None = None  # explicit overlay placement override (§3.1)
+    workspace_scores: bool = _DEFAULT_CROSS_REPO_WORKSPACE_SCORES
+    alias_resolution: Literal["imports_graph", "off"] = _DEFAULT_CROSS_REPO_ALIAS_RESOLUTION
+    similar: CrossRepoSimilarConfig = Field(default_factory=CrossRepoSimilarConfig)
+
+    @field_validator("kinds")
+    @classmethod
+    def _kinds_are_reference_kinds(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """A typo'd kind fails at AppConfig.load, never mid-link."""
+        from pydocs_mcp.extraction.reference_kind import ReferenceKind
+
+        allowed = {str(k) for k in ReferenceKind}
+        unknown = sorted(set(value) - allowed)
+        if unknown:
+            raise ValueError(f"unknown reference kind(s) {unknown}; have {sorted(allowed)}")
+        return value
+
+
 class ReferenceGraphConfig(BaseModel):
     """Composite — capture toggles + output bounds (sub-PR #5c, §5.3).
 
@@ -225,6 +281,7 @@ class ReferenceGraphConfig(BaseModel):
     similar_edges: SimilarEdgesConfig = Field(default_factory=SimilarEdgesConfig)
     impact: ImpactConfig = Field(default_factory=ImpactConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
+    cross_repo: CrossRepoConfig = Field(default_factory=CrossRepoConfig)
 
 
 class SearchOutputConfig(BaseModel):

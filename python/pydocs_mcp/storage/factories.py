@@ -71,8 +71,11 @@ if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
+    from pydocs_mcp.application.protocols import CrossNavigator
+    from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.symbol_source import SymbolSourceService
     from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.sqlite.cross_link_store import SqliteCrossLinkStore
 
 
 def build_connection_provider(cache_path: Path) -> PerCallConnectionProvider:
@@ -126,6 +129,9 @@ def build_sqlite_indexing_service(db_path: Path) -> IndexingService:
 def build_sqlite_lookup_service(
     db_path: Path,
     config: AppConfig | None = None,
+    *,
+    ref_svc: ReferenceService | None = None,
+    cross_navigator: CrossNavigator | None = None,
 ) -> LookupService:
     """Compose a wired LookupService from a SQLite DB path.
 
@@ -145,13 +151,18 @@ def build_sqlite_lookup_service(
     uow_factory = build_sqlite_uow_factory(db_path)
     package_lookup = PackageLookup(uow_factory=uow_factory)
     tree_svc = TreeService(uow_factory=uow_factory)
-    ref_svc = ReferenceService(uow_factory=uow_factory)
+    # Workspace federation (spec 2026-07-11 §3.5): the multi-repo composition
+    # injects a cross-link-capable ReferenceService + the shared navigator;
+    # single-project callers keep the plain construction.
+    if ref_svc is None:
+        ref_svc = ReferenceService(uow_factory=uow_factory)
     # ``show="impact"`` / ``show="context"`` tunables are YAML settings, not MCP
     # params; thread them from config (falling back to the shipped sub-config
     # defaults for direct/test construction with no config).
     rg = config.reference_graph if config is not None else None
     impact_cfg = rg.impact if rg is not None else ImpactConfig()
     context_cfg = rg.context if rg is not None else ContextConfig()
+    extra_kwargs = {"cross_navigator": cross_navigator} if cross_navigator is not None else {}
     return LookupService(
         package_lookup=package_lookup,
         tree_svc=tree_svc,
@@ -161,6 +172,7 @@ def build_sqlite_lookup_service(
         context_token_budget=context_cfg.token_budget,
         context_render=context_cfg.render,
         context_body_ratio=context_cfg.skeleton_body_ratio,
+        **extra_kwargs,
     )
 
 
@@ -816,3 +828,37 @@ def build_freshness_probe(
         resolve_live_head=lambda: resolve_git_head(project_root),
         count_packages=_count,
     )
+
+
+# WHY the non-.db suffix: discover_workspace globs *.db; the overlay must
+# never be mis-loaded as a bundle (spec 2026-07-11 §3.1).
+_OVERLAY_FILENAME = "pydocs-links.sqlite3"
+
+
+def overlay_path_for(workspace: Path | None, db_paths: tuple[Path, ...]) -> Path:
+    """Resolve the cross-link overlay sidecar location (spec §3.1).
+
+    Workspace mode → workspace-local file. Explicit ``--db a.db --db b.db``
+    mode (no workspace dir) → a home-cache file keyed by the sorted tuple of
+    resolved bundle paths, so the same bundle set always maps to one overlay.
+
+    Example:
+        >>> overlay_path_for(Path("/bundles"), ()).name
+        'pydocs-links.sqlite3'
+    """
+    if workspace is not None:
+        return workspace / _OVERLAY_FILENAME
+    import hashlib
+
+    key = "\n".join(sorted(str(p.resolve()) for p in db_paths))
+    # md5 as a fast non-cryptographic fingerprint (the db.py cache-slug
+    # precedent); usedforsecurity=False signals intent to ruff/bandit.
+    digest = hashlib.md5(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
+    return Path("~/.pydocs-mcp/links").expanduser() / f"{digest}.sqlite3"
+
+
+def build_cross_link_store(path: Path) -> SqliteCrossLinkStore:
+    """Build the persisted overlay store bound to ``path`` (spec §3.2)."""
+    from pydocs_mcp.storage.sqlite.cross_link_store import SqliteCrossLinkStore
+
+    return SqliteCrossLinkStore(path=path)

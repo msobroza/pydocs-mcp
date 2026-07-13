@@ -37,7 +37,7 @@ _CONTRACT = (
 TOOL_DOCS: dict[str, str] = {
     "get_overview": f"""Orient yourself: what is indexed and what shape this repo/package has.
 
-When to use: first call on an unfamiliar project; refreshing your map after a re-index; checking what packages/modules exist before searching. With several projects loaded, the no-argument call lists them all — scope with project= to go deeper.
+When to use: first call on an unfamiliar project; refreshing your map after a re-index; checking what packages/modules exist before searching. With several projects loaded, the no-argument call lists them all — scope with project= to go deeper; the workspace card also reports cross-repo link freshness.
 When NOT to use: you already know a dotted path (get_symbol) or a topic (search_codebase).
 {_WORKFLOW}
 {_CONTRACT}
@@ -83,6 +83,7 @@ Examples:
 
 When to use: direction="callers" for usage sites; "callees" for dependencies; "inherits" for base classes; "impact" for the ranked transitive blast radius before a risky change; "governed_by" for the mined decisions that govern this symbol.
 When NOT to use: you want source or docs (get_symbol / get_context).
+Multi-repo workspaces: answers cross bundle boundaries — rows from sibling projects carry a (project: name) qualifier.
 {_WORKFLOW}
 {_CONTRACT}
 Examples:

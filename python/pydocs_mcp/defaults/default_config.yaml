@@ -75,6 +75,18 @@ reference_graph:
   similar_edges:
     enabled: false                          # synthetic embedding-kNN 'similar' edges (densify the graph)
     top_m: 5                                # neighbours per node when enabled (1-25)
+  cross_repo:                               # workspace cross-repo linking (spec 2026-07-11 + A1)
+    enabled: true                           # A1.8: on by default; inert with a single bundle
+    link_on_serve: true                     # auto-refresh stale links at serve startup
+    match_scope: project_only               # project_only | all_packages
+    kinds: [calls, imports, inherits, governs]  # add mentions / similar to opt in
+    max_projects_per_walk: 8                # impact BFS cross-project fan-out cap
+    workspace_scores: true                  # A1.1: in_degree always; pagerank needs [graph]
+    alias_resolution: imports_graph         # A1.3: imports_graph | off
+    similar:                                # A1.2 bounds (kind must also be listed)
+      top_k: 5
+      min_score: 0.6
+    # overlay_dir: /path                    # optional sidecar placement override
   impact:
     max_depth: 3                            # reverse-traversal depth for get_references(direction="impact"), 1-6
   context:
