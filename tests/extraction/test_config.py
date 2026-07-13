@@ -1,13 +1,14 @@
-"""Tests for ExtractionConfig + _EXCLUDED_DIRS policy (spec §11.1, AC #5/#6/#6b).
+"""Tests for ExtractionConfig + the directory-exclusion floor (spec §11.1).
 
 Invariants:
 - All defaults load without a YAML file.
 - Extension allowlist is narrowable (``[".py"]`` works).
 - Extension allowlist cannot be widened (``[".rst"]`` raises).
-- ``_EXCLUDED_DIRS`` is a module-level ``frozenset`` (non-overridable at
-  runtime).
-- :class:`DiscoveryScopeConfig` does NOT expose an ``exclude_dirs`` field
-  (spec AC #6b).
+- ``_EXCLUDED_DIRS`` is a module-level ``frozenset`` — the hardcoded,
+  non-removable FLOOR (decision #6b as amended by the 2026-07-13
+  exclude-dirs design: user ``exclude_dirs`` entries are additive-only).
+- :class:`DiscoveryScopeConfig` declares ``exclude_dirs`` (AC-14) and
+  validates entries via the shared ``split_exclude_entries`` (AC-15).
 - All models use ``extra="forbid"`` — stray keys raise.
 - ``by_extension`` validator catches unsupported extensions.
 - ``ExtractionConfig`` round-trips via ``model_dump`` + re-construction.
@@ -60,24 +61,61 @@ def test_allowed_extensions_is_frozenset():
 
 
 def test_excluded_dirs_is_module_level_frozenset():
-    """Spec AC #6b: ``_EXCLUDED_DIRS`` is a frozenset at module scope;
-    users cannot override it at runtime (also not via YAML — see
-    ``test_discovery_scope_config_forbids_exclude_dirs``)."""
+    """``_EXCLUDED_DIRS`` is a frozenset at module scope — the FLOOR of
+    decision #6b as amended: user surfaces can only ADD exclusions on top
+    (see ``test_discovery_scope_config_declares_exclude_dirs``); nothing
+    can remove an entry from it at runtime or via YAML."""
     assert isinstance(_EXCLUDED_DIRS, frozenset)
     # Common noisy / secret-bearing directories.
     for d in (".git", ".venv", "site-packages", "node_modules", "__pycache__"):
         assert d in _EXCLUDED_DIRS, f"{d!r} must be blocklisted (security / index-bloat invariant)"
 
 
-def test_discovery_scope_config_forbids_exclude_dirs():
-    """Spec AC #6b guardrail: ``DiscoveryScopeConfig.model_fields`` must NOT
-    contain ``exclude_dirs``. Attempting to set it via YAML / init hits
-    Pydantic ``extra="forbid"`` and raises :class:`ValidationError`."""
-    assert "exclude_dirs" not in DiscoveryScopeConfig.model_fields, (
-        "exclude_dirs must not be a declared field — blocklist is hardcoded"
+def test_discovery_scope_config_declares_exclude_dirs():
+    """AC-14, inverting the old #6b rejection test: ``exclude_dirs`` IS a
+    declared field (decision D1 — the FLOOR stays hardcoded in
+    ``_EXCLUDED_DIRS``; user entries are additive-only), defaulting to []."""
+    assert "exclude_dirs" in DiscoveryScopeConfig.model_fields
+    assert DiscoveryScopeConfig().exclude_dirs == []
+    cfg = DiscoveryScopeConfig(exclude_dirs=["fixtures", "docs/generated"])
+    assert cfg.exclude_dirs == ["fixtures", "docs/generated"]
+
+
+def test_exclude_dirs_loads_through_app_config(tmp_path):
+    """AC-14 end of the wire: a YAML overlay setting
+    ``extraction.discovery.project.exclude_dirs`` loads through
+    ``AppConfig.load`` — no more ``extra="forbid"`` rejection for this key."""
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text(
+        'extraction:\n  discovery:\n    project:\n      exclude_dirs: ["fixtures"]\n'
+    )
+    config = AppConfig.load(explicit_path=overlay)
+    assert config.extraction.discovery.project.exclude_dirs == ["fixtures"]
+    assert config.extraction.discovery.dependency.exclude_dirs == []
+
+
+@pytest.mark.parametrize("bad_entry", ["/tmp/abs", "a/../b", ""])
+def test_exclude_dirs_invalid_entry_rejected_at_load(tmp_path, bad_entry):
+    """AC-15: escaping / empty entries fail at ``AppConfig.load`` with a
+    ``ValidationError`` naming the field — the shared
+    ``split_exclude_entries`` rules (D5), surfaced through pydantic."""
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text(
+        f'extraction:\n  discovery:\n    project:\n      exclude_dirs: ["{bad_entry}"]\n'
     )
     with pytest.raises(ValidationError, match="exclude_dirs"):
-        DiscoveryScopeConfig(exclude_dirs=["my_secret_dir"])
+        AppConfig.load(explicit_path=overlay)
+
+
+def test_exclude_dirs_floor_duplicate_is_allowed():
+    """Spec §8: listing a floor entry (".git") is a harmless no-op under
+    union semantics — allowed, never an error."""
+    cfg = DiscoveryScopeConfig(exclude_dirs=[".git"])
+    assert cfg.exclude_dirs == [".git"]
 
 
 def test_include_extensions_narrow_ok():

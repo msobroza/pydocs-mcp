@@ -7,15 +7,15 @@ no YAML knob to override the per-extension chunker. The earlier
 and got dropped (/ultrareview F11).
 
 
-Policy (decision #6b): the **extension allowlist** is narrowable via YAML
-(``include_extensions``); the **directory blocklist** is
-HARDCODED in :data:`_EXCLUDED_DIRS` (not YAML-overridable) because
-un-excluded ``.git`` / ``.venv`` / ``site-packages`` would leak secrets,
-balloon the FTS index, and break inspect-mode imports. Users can narrow the
-allowlist, never widen the blocklist. Pydantic ``extra="forbid"`` on
-:class:`DiscoveryScopeConfig` surfaces any attempt to add an
-``exclude_dirs`` field with a :class:`~pydantic.ValidationError` at startup
-(spec AC #6b).
+Policy (decision #6b, amended by the 2026-07-13 exclude-dirs design): the
+**extension allowlist** is narrowable via YAML (``include_extensions``);
+the **directory-exclusion FLOOR** is HARDCODED in :data:`_EXCLUDED_DIRS`
+and non-removable — un-excluded ``.git`` / ``.venv`` / ``site-packages``
+would leak secrets, balloon the FTS index, and break inspect-mode imports.
+User exclusions are additive-only: ``exclude_dirs`` on
+:class:`DiscoveryScopeConfig` (server YAML) and the indexed project's
+``[tool.pydocs-mcp] exclude_dirs`` (see :mod:`pydocs_mcp.project_toml`)
+union OVER the floor; no surface, and no syntax, can shrink it.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from pydocs_mcp.project_toml import ProjectExcludeConfigError, split_exclude_entries
 
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset({".py", ".md", ".ipynb"})
 """File extensions the extraction pipeline is built to handle. Narrowing is
@@ -56,10 +58,10 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset(
         "site-packages",
     }
 )
-"""Directory names excluded from file discovery — HARDCODED by design (spec
-decision #6b). NOT exposed as a YAML field; trying to set
-``extraction.discovery.project.exclude_dirs: [...]`` hits Pydantic
-``extra="forbid"`` at load time (spec AC #6b)."""
+"""The hardcoded, non-removable directory-exclusion FLOOR (spec decision
+#6b as amended): user surfaces — YAML ``exclude_dirs`` on
+:class:`DiscoveryScopeConfig` and the project's ``[tool.pydocs-mcp]
+exclude_dirs`` — can only ADD exclusions on top of this set."""
 
 
 def path_under_excluded(
@@ -126,10 +128,12 @@ class ChunkingConfig(BaseModel):
 class DiscoveryScopeConfig(BaseModel):
     """Per-context discovery scope — project vs dependency.
 
-    NOTE: there is deliberately NO ``exclude_dirs`` field — the blocklist
-    lives in :data:`_EXCLUDED_DIRS` (see policy note at module docstring).
-    Users can narrow ``include_extensions`` but cannot widen the dir
-    blocklist; ``extra="forbid"`` catches stray keys at load time.
+    ``exclude_dirs`` entries are ADDITIVE over the hardcoded
+    :data:`_EXCLUDED_DIRS` floor (decision #6b as amended): bare names
+    match any path component at any depth; entries containing ``/`` are
+    walk-root-anchored subtree paths. No entry can shrink the floor.
+    ``include_extensions`` remains narrow-only; ``extra="forbid"`` still
+    catches genuinely unknown keys at load time.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -139,6 +143,7 @@ class DiscoveryScopeConfig(BaseModel):
     # silently skipped under the old cap, imposing an unwinnable recall
     # ceiling on every retrieval method (PAGEINDEX_DIVS.md F3).
     max_file_size_bytes: int = 1_000_000
+    exclude_dirs: list[str] = Field(default_factory=list)
 
     @field_validator("include_extensions")
     @classmethod
@@ -150,6 +155,18 @@ class DiscoveryScopeConfig(BaseModel):
                 f"extensions {sorted(bad)}; must be subset of "
                 f"{sorted(ALLOWED_EXTENSIONS)}"
             )
+        return v
+
+    @field_validator("exclude_dirs")
+    @classmethod
+    def _validate_exclude_dirs(cls, v: list[str]) -> list[str]:
+        # Delegate to the shared normalizer (design D5) so the TOML and
+        # YAML surfaces can never drift; re-raise as ValueError so pydantic
+        # wraps it into the usual startup ValidationError.
+        try:
+            split_exclude_entries(v)
+        except ProjectExcludeConfigError as exc:
+            raise ValueError(f"extraction.discovery.*.exclude_dirs: {exc}") from exc
         return v
 
 
