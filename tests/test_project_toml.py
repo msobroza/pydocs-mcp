@@ -73,6 +73,7 @@ def test_split_backslash_separator_becomes_anchored_posix():
     [
         "/tmp/x",  # absolute — escapes the walk root
         "a/../b",  # .. segment — escapes the walk root
+        "a//b",  # empty segment — a dead entry that can never match
         "..",
         ".",
         "",
@@ -124,6 +125,17 @@ def test_load_table_without_key_is_silently_empty(tmp_path, caplog):
     assert caplog.records == []
 
 
+def test_empty_exclude_list_is_empty_and_silent(tmp_path, caplog):
+    """An explicit-but-empty list is a valid declaration of "no excludes" —
+    both surfaces treat it exactly like an absent key."""
+    assert split_exclude_entries([]) == (frozenset(), frozenset())
+    (tmp_path / "pyproject.toml").write_text("[tool.pydocs-mcp]\nexclude_dirs = []\n")
+    with caplog.at_level("WARNING", logger="pydocs_mcp.project_toml"):
+        result = load_project_excludes(tmp_path)
+    assert result == EMPTY_PROJECT_EXCLUDES
+    assert caplog.records == []
+
+
 # -- AC-4: unparseable TOML warns loudly; wrong-typed key raises ---------
 
 
@@ -135,6 +147,26 @@ def test_load_unparseable_toml_warns_and_returns_empty(tmp_path, caplog):
     assert result == EMPTY_PROJECT_EXCLUDES
     assert str(pyproject) in caplog.text
     assert "NOT applied" in caplog.text
+
+
+def test_load_truncated_utf8_warns_and_returns_empty(tmp_path, caplog):
+    """A half-saved file mid --watch can cut a multi-byte UTF-8 sequence:
+    tomllib decodes BEFORE parsing and lets UnicodeDecodeError escape, so
+    the loader must catch it alongside TOMLDecodeError (spec §8 row 2)."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_bytes(b'[tool.pydocs-mcp]\nexclude_dirs = ["caf\xc3')
+    with caplog.at_level("WARNING", logger="pydocs_mcp.project_toml"):
+        result = load_project_excludes(tmp_path)
+    assert result == EMPTY_PROJECT_EXCLUDES
+    assert str(pyproject) in caplog.text
+    assert "NOT applied" in caplog.text
+
+
+def test_load_non_table_tool_pydocs_mcp_raises(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[tool]\npydocs-mcp = 5\n")
+    with pytest.raises(ProjectExcludeConfigError) as excinfo:
+        load_project_excludes(tmp_path)
+    assert "must be a table" in str(excinfo.value)
 
 
 def test_load_string_valued_exclude_dirs_raises(tmp_path):

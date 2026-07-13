@@ -59,12 +59,14 @@ class ProjectExcludes:
     def matches(self, relpath: str) -> bool:
         """True iff ``relpath`` falls under any entry.
 
-        ``relpath`` is walk-root-relative with POSIX separators, and a
-        DIRECTORY path per the directories-only rule of spec §4 — callers
-        pass a file's parent directory, never the file path. Anchored
-        entries match the directory itself and anything beneath it; names
-        match any path component. Byte-wise case-sensitive on every
-        platform (spec §4) — no casefolding, ever.
+        ``relpath`` is walk-root-relative with POSIX separators. The
+        directories-only rule of spec §4 is the callers' contract — walkers
+        test a file's parent directory, not the file itself — but the
+        predicate is deliberately agnostic: any relpath that falls beneath
+        an excluded directory matches, including a file path under one.
+        Anchored entries match the directory itself and anything beneath
+        it; names match any path component. Byte-wise case-sensitive on
+        every platform (spec §4) — no casefolding, ever.
         """
         path = relpath.replace("\\", "/")
         if any(part in self.names for part in path.split("/")):
@@ -87,8 +89,9 @@ def split_exclude_entries(
     ``"fixtures/"`` and ``"fixtures\\"`` are bare names, never anchored.
 
     Raises :class:`ProjectExcludeConfigError` for non-string, absolute,
-    ``..``/``.``-segment, or empty entries — each escapes the walk root
-    or is meaningless, and the message carries the offending value.
+    or empty entries, and for entries with an empty / ``.`` / ``..``
+    segment — each either escapes the walk root or could never match a
+    real path, and the message carries the offending value.
 
     Example::
 
@@ -116,10 +119,11 @@ def split_exclude_entries(
                 f"exclude_dirs entry {raw!r} is empty after normalization; "
                 f"entries must name a directory"
             )
-        if any(segment in {".", ".."} for segment in entry.split("/")):
+        if any(segment in {"", ".", ".."} for segment in entry.split("/")):
             raise ProjectExcludeConfigError(
-                f"exclude_dirs entry {raw!r} contains a '.' or '..' segment; "
-                f"entries must stay inside the walk root"
+                f"exclude_dirs entry {raw!r} contains an empty, '.', or '..' "
+                f"path segment; '.'/'..' escape the walk root and an empty "
+                f"segment ('//') can never match a real path"
             )
         if "/" in entry:
             anchored.add(entry)
@@ -133,9 +137,11 @@ def load_project_excludes(project_root: Path) -> ProjectExcludes:
 
     Error posture (spec §8): missing file / missing table / missing key ->
     empty and SILENT (the normal case for virtually every project);
-    unparseable TOML -> loud warning, empty result (the floor still
-    protects the dangerous directories, and an index run must not die on
-    a half-saved TOML mid ``--watch``); declared-but-wrong-typed
+    unreadable, undecodable, or unparseable file (``OSError`` /
+    ``UnicodeDecodeError`` / ``TOMLDecodeError`` — a half-saved TOML mid
+    ``--watch`` can surface any of the three) -> loud warning, empty
+    result (the floor still protects the dangerous directories, and an
+    index run must not die on it); declared-but-wrong-typed
     ``exclude_dirs`` -> :class:`ProjectExcludeConfigError`.
 
     Example::
@@ -148,9 +154,13 @@ def load_project_excludes(project_root: Path) -> ProjectExcludes:
     try:
         with pyproject.open("rb") as fh:
             data = tomllib.load(fh)
-    except tomllib.TOMLDecodeError:
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+        # tomllib decodes the raw bytes as UTF-8 BEFORE parsing and does
+        # not wrap UnicodeDecodeError; OSError covers permissions and the
+        # is_file()/open() TOCTOU window. All three are the same half-saved
+        # or unreadable-file scenario, so they share one degradation path.
         logger.warning(
-            "unparseable TOML in %s: project excludes NOT applied "
+            "could not read/parse %s: project excludes NOT applied "
             "(hardcoded floor + YAML excludes remain in effect)",
             pyproject,
         )

@@ -19,7 +19,7 @@ Constraints that shape the code (do not deviate):
 - The module imports ONLY stdlib + `pydocs_mcp.exceptions` — never anything from `extraction/` — so `extraction/config.py` (Task 2) can import it without a cycle. The root exception it subclasses is `PydocsMCPError` (`python/pydocs_mcp/exceptions.py:15`); per that module's rule (`exceptions.py:7-9`, "concrete exception classes live in their respective modules"), `ProjectExcludeConfigError` is defined here, and per the multiple-inheritance precedent documented at `exceptions.py:17-24` it also inherits `ValueError`.
 - Normalization order (spec §4, load-bearing): backslash → `/` FIRST, strip trailing `/` SECOND, classify by remaining `/` LAST. Consequence pinned by AC-1: `"fixtures/"` and `"fixtures\"` are BARE names, never anchored.
 - Matching (spec §4): byte-wise case-sensitive; `relpath` is a walk-root-relative POSIX DIRECTORY path; anchored entries match the directory itself and anything beneath; names match any path component.
-- Error posture (spec §8): missing file / missing table / missing key → empty, silent. Unparseable TOML → `log.warning` naming the file + "NOT applied", return empty. Declared-but-wrong-typed `exclude_dirs` → raise `ProjectExcludeConfigError`.
+- Error posture (spec §8): missing file / missing table / missing key → empty, silent. Unreadable, undecodable, or unparseable file (`OSError` / `UnicodeDecodeError` / `TOMLDecodeError`) → `log.warning` naming the file + "NOT applied", return empty. Declared-but-wrong-typed `exclude_dirs` → raise `ProjectExcludeConfigError`.
 - `exclusion_fingerprint` returns `None` iff `excludes.names == floor and not excludes.anchored` (the conditional no-fold case, spec §9.2); otherwise `"\0".join` of kind-tagged sorted entries — all `"n:<name>"` sorted, then all `"a:<path>"` sorted.
 
 **Files:**
@@ -107,6 +107,7 @@ def test_split_backslash_separator_becomes_anchored_posix():
     [
         "/tmp/x",  # absolute — escapes the walk root
         "a/../b",  # .. segment — escapes the walk root
+        "a//b",  # empty segment — a dead entry that can never match
         "..",
         ".",
         "",
@@ -207,19 +208,19 @@ class ProjectExcludes:
     def matches(self, relpath: str) -> bool:
         """True iff ``relpath`` falls under any entry.
 
-        ``relpath`` is walk-root-relative with POSIX separators, and a
-        DIRECTORY path per the directories-only rule of spec §4 — callers
-        pass a file's parent directory, never the file path. Anchored
-        entries match the directory itself and anything beneath it; names
-        match any path component. Byte-wise case-sensitive on every
-        platform (spec §4) — no casefolding, ever.
+        ``relpath`` is walk-root-relative with POSIX separators. The
+        directories-only rule of spec §4 is the callers' contract — walkers
+        test a file's parent directory, not the file itself — but the
+        predicate is deliberately agnostic: any relpath that falls beneath
+        an excluded directory matches, including a file path under one.
+        Anchored entries match the directory itself and anything beneath
+        it; names match any path component. Byte-wise case-sensitive on
+        every platform (spec §4) — no casefolding, ever.
         """
         path = relpath.replace("\\", "/")
         if any(part in self.names for part in path.split("/")):
             return True
-        return any(
-            path == entry or path.startswith(entry + "/") for entry in self.anchored
-        )
+        return any(path == entry or path.startswith(entry + "/") for entry in self.anchored)
 
 
 EMPTY_PROJECT_EXCLUDES = ProjectExcludes(frozenset(), frozenset())
@@ -237,8 +238,9 @@ def split_exclude_entries(
     ``"fixtures/"`` and ``"fixtures\\"`` are bare names, never anchored.
 
     Raises :class:`ProjectExcludeConfigError` for non-string, absolute,
-    ``..``/``.``-segment, or empty entries — each escapes the walk root
-    or is meaningless, and the message carries the offending value.
+    or empty entries, and for entries with an empty / ``.`` / ``..``
+    segment — each either escapes the walk root or could never match a
+    real path, and the message carries the offending value.
 
     Example::
 
@@ -266,10 +268,11 @@ def split_exclude_entries(
                 f"exclude_dirs entry {raw!r} is empty after normalization; "
                 f"entries must name a directory"
             )
-        if any(segment in {".", ".."} for segment in entry.split("/")):
+        if any(segment in {"", ".", ".."} for segment in entry.split("/")):
             raise ProjectExcludeConfigError(
-                f"exclude_dirs entry {raw!r} contains a '.' or '..' segment; "
-                f"entries must stay inside the walk root"
+                f"exclude_dirs entry {raw!r} contains an empty, '.', or '..' "
+                f"path segment; '.'/'..' escape the walk root and an empty "
+                f"segment ('//') can never match a real path"
             )
         if "/" in entry:
             anchored.add(entry)
@@ -283,9 +286,11 @@ def load_project_excludes(project_root: Path) -> ProjectExcludes:
 
     Error posture (spec §8): missing file / missing table / missing key ->
     empty and SILENT (the normal case for virtually every project);
-    unparseable TOML -> loud warning, empty result (the floor still
-    protects the dangerous directories, and an index run must not die on
-    a half-saved TOML mid ``--watch``); declared-but-wrong-typed
+    unreadable, undecodable, or unparseable file (``OSError`` /
+    ``UnicodeDecodeError`` / ``TOMLDecodeError`` — a half-saved TOML mid
+    ``--watch`` can surface any of the three) -> loud warning, empty
+    result (the floor still protects the dangerous directories, and an
+    index run must not die on it); declared-but-wrong-typed
     ``exclude_dirs`` -> :class:`ProjectExcludeConfigError`.
 
     Example::
@@ -298,9 +303,13 @@ def load_project_excludes(project_root: Path) -> ProjectExcludes:
     try:
         with pyproject.open("rb") as fh:
             data = tomllib.load(fh)
-    except tomllib.TOMLDecodeError:
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+        # tomllib decodes the raw bytes as UTF-8 BEFORE parsing and does
+        # not wrap UnicodeDecodeError; OSError covers permissions and the
+        # is_file()/open() TOCTOU window. All three are the same half-saved
+        # or unreadable-file scenario, so they share one degradation path.
         logger.warning(
-            "unparseable TOML in %s: project excludes NOT applied "
+            "could not read/parse %s: project excludes NOT applied "
             "(hardcoded floor + YAML excludes remain in effect)",
             pyproject,
         )
@@ -348,9 +357,7 @@ def merge_excludes(
     )
 
 
-def exclusion_fingerprint(
-    excludes: ProjectExcludes, floor: frozenset[str]
-) -> str | None:
+def exclusion_fingerprint(excludes: ProjectExcludes, floor: frozenset[str]) -> str | None:
     """Normalized fingerprint of the effective set for the content-hash fold.
 
     ``None`` iff the effective set equals the bare floor (no user excludes,
@@ -377,7 +384,7 @@ def exclusion_fingerprint(
 pytest tests/test_project_toml.py -v
 ```
 
-Expected: all 13 tests pass (`test_split_bare_name_goes_to_names` ... `test_config_error_is_pydocs_mcp_error_and_value_error`).
+Expected: all 14 tests pass (`test_split_bare_name_goes_to_names` ... `test_config_error_is_pydocs_mcp_error_and_value_error`).
 
 - [ ] **Step 5: Append the AC-3/AC-4 loader tests (red)**
 
@@ -410,6 +417,17 @@ def test_load_table_without_key_is_silently_empty(tmp_path, caplog):
     assert caplog.records == []
 
 
+def test_empty_exclude_list_is_empty_and_silent(tmp_path, caplog):
+    """An explicit-but-empty list is a valid declaration of "no excludes" —
+    both surfaces treat it exactly like an absent key."""
+    assert split_exclude_entries([]) == (frozenset(), frozenset())
+    (tmp_path / "pyproject.toml").write_text("[tool.pydocs-mcp]\nexclude_dirs = []\n")
+    with caplog.at_level("WARNING", logger="pydocs_mcp.project_toml"):
+        result = load_project_excludes(tmp_path)
+    assert result == EMPTY_PROJECT_EXCLUDES
+    assert caplog.records == []
+
+
 # -- AC-4: unparseable TOML warns loudly; wrong-typed key raises ---------
 
 
@@ -423,19 +441,35 @@ def test_load_unparseable_toml_warns_and_returns_empty(tmp_path, caplog):
     assert "NOT applied" in caplog.text
 
 
+def test_load_truncated_utf8_warns_and_returns_empty(tmp_path, caplog):
+    """A half-saved file mid --watch can cut a multi-byte UTF-8 sequence:
+    tomllib decodes BEFORE parsing and lets UnicodeDecodeError escape, so
+    the loader must catch it alongside TOMLDecodeError (spec §8 row 2)."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_bytes(b'[tool.pydocs-mcp]\nexclude_dirs = ["caf\xc3')
+    with caplog.at_level("WARNING", logger="pydocs_mcp.project_toml"):
+        result = load_project_excludes(tmp_path)
+    assert result == EMPTY_PROJECT_EXCLUDES
+    assert str(pyproject) in caplog.text
+    assert "NOT applied" in caplog.text
+
+
+def test_load_non_table_tool_pydocs_mcp_raises(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[tool]\npydocs-mcp = 5\n")
+    with pytest.raises(ProjectExcludeConfigError) as excinfo:
+        load_project_excludes(tmp_path)
+    assert "must be a table" in str(excinfo.value)
+
+
 def test_load_string_valued_exclude_dirs_raises(tmp_path):
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.pydocs-mcp]\nexclude_dirs = "docs"\n'
-    )
+    (tmp_path / "pyproject.toml").write_text('[tool.pydocs-mcp]\nexclude_dirs = "docs"\n')
     with pytest.raises(ProjectExcludeConfigError) as excinfo:
         load_project_excludes(tmp_path)
     assert "list of strings" in str(excinfo.value)
 
 
 def test_load_int_element_raises_pydocs_mcp_error(tmp_path):
-    (tmp_path / "pyproject.toml").write_text(
-        "[tool.pydocs-mcp]\nexclude_dirs = [1]\n"
-    )
+    (tmp_path / "pyproject.toml").write_text("[tool.pydocs-mcp]\nexclude_dirs = [1]\n")
     # PydocsMCPError is the catch-any handle — the concrete class must sit
     # under it so index-run boundaries can catch by lineage.
     with pytest.raises(PydocsMCPError):
@@ -457,7 +491,7 @@ def test_load_happy_path_classifies_both_kinds(tmp_path):
 pytest tests/test_project_toml.py -v
 ```
 
-Expected: all 20 tests pass. If `test_load_unparseable_toml_warns_and_returns_empty` fails on the caplog assertion, the warning message drifted from Step 3 — fix the message, not the test.
+Expected: all 24 tests pass. If `test_load_unparseable_toml_warns_and_returns_empty` fails on the caplog assertion, the warning message drifted from Step 3 — fix the message, not the test.
 
 - [ ] **Step 7: Append the AC-5 matching tests plus merge/fingerprint contract tests (red-check, then green)**
 
@@ -523,10 +557,7 @@ def test_fingerprint_none_iff_bare_floor():
     assert exclusion_fingerprint(_excludes(names=floor), floor) is None
     # Any anchored entry, or any name beyond the floor, folds.
     assert exclusion_fingerprint(_excludes(names=floor | {"x"}), floor) is not None
-    assert (
-        exclusion_fingerprint(_excludes(names=floor, anchored=["a/b"]), floor)
-        is not None
-    )
+    assert exclusion_fingerprint(_excludes(names=floor, anchored=["a/b"]), floor) is not None
 
 
 def test_fingerprint_is_deterministic_and_kind_tagged():
@@ -554,7 +585,7 @@ Run:
 pytest tests/test_project_toml.py -v
 ```
 
-Expected: all 28 tests pass. (These pin behavior the Step 3 module already implements; a failure here means Step 3 drifted from the shared contract — fix the module.)
+Expected: all 32 tests pass. (These pin behavior the Step 3 module already implements; a failure here means Step 3 drifted from the shared contract — fix the module.)
 
 - [ ] **Step 8: Run the surrounding gates for the new files**
 
