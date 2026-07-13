@@ -465,6 +465,32 @@ class ReferenceStore(GraphSearchable, Protocol):
         """
         ...
 
+    async def list_unresolved(
+        self,
+        kinds: tuple[ReferenceKind, ...],
+        limit: int | None = None,
+    ) -> list[NodeReference]:
+        """UNRESOLVED rows (``to_node_id IS NULL``) of the given kinds.
+
+        The workspace linker's read (spec 2026-07-11 §3.3 step 2): a pure
+        v14 read — no bundle schema change, no writes. ``limit`` bounds a
+        pathological bundle; ``None`` reads all.
+        """
+        ...
+
+    async def list_resolved(
+        self,
+        kinds: tuple[ReferenceKind, ...],
+    ) -> list[tuple[str, str]]:
+        """RESOLVED ``(from_node_id, to_node_id)`` pairs of the given kinds.
+
+        Kind-aware sibling of :meth:`resolved_edges` (which is kind-blind and
+        hard-excludes ``similar``): Rule-C reads a module's resolved IMPORTS
+        edges (spec §A1.3) and the workspace score graph selects configured
+        kinds (spec §A1.1).
+        """
+        ...
+
     async def resolved_edges(self) -> list[tuple[str, str]]:
         """RESOLVED STRUCTURAL directed edges as ``(from_node_id, to_node_id)``.
 
