@@ -211,3 +211,65 @@ async def test_ac6_non_chunklist_and_empty_pass_through_as_identity() -> None:
             query=SearchQuery(terms="q"), candidates=candidates, result=None, scratch={}
         )
         assert await step.run(state) is state
+
+
+# ── AC7–AC9, AC24: core gates + happy path ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ac7_happy_path_collapses_siblings_into_class() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    items = [
+        _chunk(f"{_MOD}.C.m0", 0.9),
+        _chunk(f"{_MOD}.C.m2", 0.7),
+        _chunk("pkg.other.x", 0.6, module="pkg.other"),
+        _chunk(f"{_MOD}.C.m1", 0.5),
+    ]
+    out = await step.run(_state(items))
+    # 3/4 hits >= class threshold 0.3, floor met -> parent at the lowest
+    # group index (0), siblings gone, non-group candidate order preserved.
+    assert _qnames(out) == [f"{_MOD}.C", "pkg.other.x"]
+    assert out.candidates.items[0].relevance == 0.9
+    # Parent chunk fetched via the three-key filter.
+    fetch = next(c for c in cs.calls if c.method == "list")
+    assert fetch.payload["filter"] == {
+        "package": _PKG,
+        "module": _MOD,
+        "qualified_name": f"{_MOD}.C",
+    }
+
+
+@pytest.mark.asyncio
+async def test_ac8_below_coverage_returns_identity() -> None:
+    ts, cs = await _stores(trees=[_class_tree(8)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    state = _state([_chunk(f"{_MOD}.C.m0", 0.9), _chunk(f"{_MOD}.C.m1", 0.8)])
+    # 2/8 = 0.25 < 0.3 (class threshold); floor satisfied -> coverage is
+    # the failing gate; nothing else rolls up -> identity return.
+    assert await step.run(state) is state
+
+
+@pytest.mark.asyncio
+async def test_ac9_sibling_floor_blocks_single_hit_and_is_not_configurable() -> None:
+    ts, cs = await _stores(trees=[_class_tree(2)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    state = _state([_chunk(f"{_MOD}.C.m0", 0.9)])
+    # 1 hit of a 2-method class: coverage 0.5 >= 0.3 but floor fails.
+    assert await step.run(state) is state
+    # The floor is not configuration: unknown params keys are ignored by
+    # the codec, so behavior is unchanged.
+    step2 = ParentRollupStep.from_dict(
+        {"type": "parent_rollup", "min_children": 1, "min_siblings": 1}, _ctx()
+    )
+    assert step2.to_dict() == {"type": "parent_rollup"}
+
+
+@pytest.mark.asyncio
+async def test_ac24_coverage_boundary_equality_triggers() -> None:
+    ts, cs = await _stores(trees=[_class_tree(10)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    items = [_chunk(f"{_MOD}.C.m{i}", 0.5) for i in (0, 1, 2)]
+    out = await step.run(_state(items))
+    # 3/10 == 0.30 satisfies >= against the class threshold; `>` fails this.
+    assert _qnames(out) == [f"{_MOD}.C"]
