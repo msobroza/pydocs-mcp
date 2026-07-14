@@ -165,8 +165,8 @@ exclude_dirs = ["docs/generated", "fixtures"]
 Bare names (`"fixtures"`) match at any depth; paths (`"docs/generated"`)
 match only that directory. Entries are additive over the built-in floor
 (`.git`, `.venv`, …) — you can exclude more, never less. A server-side YAML
-equivalent covers both project and dependency walks
-(`extraction.discovery.*.exclude_dirs`); see
+equivalent (`extraction.discovery.project.exclude_dirs`, plus a `dependency`
+sibling) covers both project and dependency walks; see
 [DOCUMENTATION.md](DOCUMENTATION.md#excluding-directories-from-indexing).
 
 ### Multi-repo search (optional)
