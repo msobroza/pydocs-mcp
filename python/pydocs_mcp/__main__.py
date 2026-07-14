@@ -533,9 +533,9 @@ def _derive_watch_globs(
     Churn suppression only (spec decision D6) — discovery owns correctness,
     so a failed or partial derivation degrades to extra cheap cached reindex
     cycles, never to wrong index content. The `_EXCLUDED_DIRS` floor is
-    deliberately NOT folded in (empty-floor merge): floor directories are
-    already covered by the operator-owned configured `ignore_globs`
-    defaults, and re-deriving them would only duplicate patterns.
+    deliberately NOT folded in (empty-floor merge): the high-traffic floor
+    dirs are covered by the shipped watch defaults; remaining floor misses
+    are D6-sanctioned churn (a cheap cached reindex per event).
     """
     from pydocs_mcp.project_toml import (
         EMPTY_PROJECT_EXCLUDES,
@@ -590,7 +590,10 @@ def _build_watcher_and_callback(
     # derived suffix after each reindex (spec D6 shrink direction, AC-25)
     # while the watcher re-reads it through `derived_globs_provider` on
     # every event. The configured `ignore_globs` tuple stays operator-owned
-    # and static — only the derived suffix ever refreshes.
+    # and static — only the derived suffix ever refreshes. `_matches` reads
+    # this from watchdog's emitter thread; safety rests on the GIL-atomic
+    # item assignment of an immutable tuple — never mutate the inner tuple
+    # in place.
     derived_globs: list[tuple[str, ...]] = [
         _derive_watch_globs(project, project_exclude_dirs, loader)
     ]

@@ -421,6 +421,12 @@ async def test_on_change_catches_exclude_config_error_and_recovers(
     assert any("exclude config invalid" in r.getMessage() for r in caplog.records)
     assert watcher.derived_globs_provider() == ()
 
+    # Make the loader valid BEFORE the failing cycle: were the swap to run,
+    # it would now derive the fixtures glob — so the `== ()` assertion after
+    # the failed on_change genuinely pins success-only swapping (not the
+    # loader still raising into an empty derivation).
+    loader_valid[0] = True
+
     caplog.clear()
     with caplog.at_level(logging.ERROR, logger="pydocs-mcp"):
         await on_change()  # mid-edit save: must NOT raise
@@ -431,7 +437,6 @@ async def test_on_change_catches_exclude_config_error_and_recovers(
     assert watcher.derived_globs_provider() == ()  # failed cycle: no swap
 
     # The user finishes the edit: next manifest event reindexes + applies it.
-    loader_valid[0] = True
     reindex_raises[0] = False
     await on_change()
     assert len(calls) == 2, "callback must keep reindexing after a config error"

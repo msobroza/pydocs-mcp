@@ -140,3 +140,44 @@ async def test_resolver_default_construction_unchanged(tmp_path: Path) -> None:
     names = await StaticDependencyResolver().resolve(root)
     assert "leaky_dep" in names
     assert "requests" in names
+
+
+@pytest.mark.asyncio
+async def test_resolver_applies_anchored_scope_entry(tmp_path: Path) -> None:
+    """Anchored YAML entries prune exactly their own path in the manifest walk."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\ndependencies = ["requests"]\n'
+    )
+    nested = tmp_path / "services" / "fixtures"
+    nested.mkdir(parents=True)
+    (nested / "pyproject.toml").write_text('[project]\ndependencies = ["leaky_dep"]\n')
+    sibling = tmp_path / "other" / "fixtures"
+    sibling.mkdir(parents=True)
+    (sibling / "pyproject.toml").write_text('[project]\ndependencies = ["sibling_dep"]\n')
+
+    def empty_loader(_root: Path) -> ProjectExcludes:
+        return EMPTY_PROJECT_EXCLUDES
+
+    resolver = StaticDependencyResolver(
+        excludes_loader=empty_loader, scope_exclude_dirs=("services/fixtures",)
+    )
+    names = await resolver.resolve(tmp_path)
+    assert "leaky_dep" not in names
+    assert "sibling_dep" in names
+    assert "requests" in names
+
+
+@pytest.mark.asyncio
+async def test_resolver_floor_prunes_manifest_under_target_dir(tmp_path: Path) -> None:
+    """The resolver folds the _EXCLUDED_DIRS floor on top of deps._SKIP_DIRS:
+    a vendored manifest under target/ (a floor name absent from _SKIP_DIRS)
+    contributes no packages through the production resolver path."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\ndependencies = ["requests"]\n'
+    )
+    vendored = tmp_path / "target"
+    vendored.mkdir()
+    (vendored / "pyproject.toml").write_text('[project]\ndependencies = ["vendored_dep"]\n')
+    names = await StaticDependencyResolver().resolve(tmp_path)
+    assert "vendored_dep" not in names
+    assert "requests" in names

@@ -483,8 +483,8 @@ async def test_content_hash_distinct_nonempty_sets_yield_distinct_hashes(
     tmp_path: Path,
 ) -> None:
     """Transitions between two DISTINCT non-empty exclude sets always miss
-    (§9.2); the kind-tagged fingerprint keeps a bare name and an anchored
-    entry with the same text from colliding."""
+    (§9.2) (the kind-tag byte-level guarantee is pinned exactly in
+    tests/test_project_toml.py)."""
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     stage = ContentHashStage()
