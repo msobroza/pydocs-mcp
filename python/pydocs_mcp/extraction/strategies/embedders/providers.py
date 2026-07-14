@@ -66,7 +66,13 @@ def _build_openai(cfg: EmbeddingConfig) -> Embedder:
             "remote API. Use provider: fastembed or "
             "sentence_transformers for side-loaded/airgap models."
         )
-    return OpenAIEmbedder(model_name=cfg.model_name, dim=cfg.dim)
+    return OpenAIEmbedder(
+        model_name=cfg.model_name,
+        dim=cfg.dim,
+        base_url=cfg.base_url,
+        api_key_env=cfg.api_key_env,
+        send_dimensions=cfg.send_dimensions,
+    )
 
 
 @embedder_registry.register("sentence_transformers")
