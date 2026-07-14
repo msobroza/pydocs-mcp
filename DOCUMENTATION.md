@@ -91,6 +91,26 @@ Two further reference-graph signals are computed at index time when enabled
   prior — rerank-only, can't hurt recall) and `community_diversity` (greedy
   MMR-by-community so the top-k spans subsystems instead of near-duplicates from
   one module). Add either step to a chunk pipeline YAML.
+- **Parent rollup** (`parent_rollup` step in a chunk pipeline YAML) — when
+  several results are children of one symbol or document section (e.g. three
+  methods of the same class), the step replaces them with the parent's own
+  indexed chunk at the group's best rank. Collapse requires at least two
+  co-retrieved siblings AND a per-kind share of the parent's children, tuned
+  via `min_coverage_by_kind` (defaults: `class: 0.3`, `module: 0.6`,
+  `markdown_heading: 0.5`; a supplied mapping replaces the defaults wholesale)
+  with the `min_coverage` fallback (0.5) for other kinds. Place it after
+  `top_k_filter` and before `limit`:
+
+  ```yaml
+  - name: rollup
+    type: parent_rollup
+    params:
+      min_coverage: 0.5
+      min_coverage_by_kind:
+        class: 0.3
+        module: 0.6
+        markdown_heading: 0.5
+  ```
 - **Similar edges** (`reference_graph.similar_edges.enabled: true`, `top_m: N`) —
   the `synthesize_similar_edges` ingestion stage adds `kind='similar'`
   embedding-kNN edges between each symbol and its nearest neighbours, densifying

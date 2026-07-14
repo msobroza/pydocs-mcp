@@ -855,3 +855,42 @@ async def test_ac33b_different_content_same_qname_not_deduped() -> None:
     assert "DIFFERENT-TEXT-for-C" in texts
     assert "text-pkg.mod.C" in texts
     assert len(texts) == 2
+
+
+# ── AC34: blueprint loadability ──────────────────────────────────────────
+
+_BLUEPRINT_YAML = """
+name: chunk_search_rollup_tail
+steps:
+  - name: topk
+    type: top_k_filter
+    params:
+      k: 50
+  - name: rollup
+    type: parent_rollup
+    params:
+      min_coverage: 0.4
+      min_coverage_by_kind:
+        class: 0.25
+        module: 0.7
+        markdown_heading: 0.45
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+"""
+
+
+def test_ac34_blueprint_params_reach_the_built_step() -> None:
+    from pydocs_mcp.retrieval.pipeline.code_pipeline import CodeRetrieverPipeline
+
+    pipeline = CodeRetrieverPipeline.from_dict(yaml.safe_load(_BLUEPRINT_YAML), _ctx())
+    rollup = next(s for s in pipeline.stages if isinstance(s, ParentRollupStep))
+    # Non-default values pin that nested `params:` (including the mapping)
+    # reach the built step — the loader drops flat entry-level keys silently.
+    assert rollup.min_coverage == 0.4
+    assert dict(rollup.min_coverage_by_kind) == {
+        "class": 0.25,
+        "module": 0.7,
+        "markdown_heading": 0.45,
+    }
