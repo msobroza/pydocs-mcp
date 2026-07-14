@@ -2,7 +2,8 @@
 
 Pins:
 - ``ProjectFileDiscoverer`` walks an ``os.walk`` tree; returns sorted paths with
-  project-root. Prunes ``_EXCLUDED_DIRS`` (HARDCODED — never self.scope).
+  project-root. Prunes the effective exclusion set — the ``_EXCLUDED_DIRS``
+  floor plus additive ``scope.exclude_dirs`` / pyproject entries.
 - ``DependencyFileDiscoverer`` lists files shipped by an installed distribution;
   returns ``(paths, site-packages-root)``; applies the same blocklist + size +
   extension filters as projects.
@@ -17,9 +18,10 @@ both halves — the floor always prunes, and YAML/pyproject entries prune MORE.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import pytest
 
@@ -256,7 +258,8 @@ def test_project_yaml_and_pyproject_surfaces_merge(tmp_path: Path) -> None:
     """AC-10: YAML scope entries and pyproject entries UNION — each surface
     excludes a different directory and both are gone. The pyproject side
     arrives via the injected fake loader, proving the D3 injection seam
-    (called once per run, with the walk root)."""
+    (called once per run, with the walk root); the YAML side carries both
+    an anchored entry AND a bare name ("tools")."""
     _build_worked_example_tree(tmp_path)
     calls: list[Path] = []
 
@@ -265,7 +268,7 @@ def test_project_yaml_and_pyproject_surfaces_merge(tmp_path: Path) -> None:
         return ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
 
     disc = ProjectFileDiscoverer(
-        scope=DiscoveryScopeConfig(exclude_dirs=["docs/generated"]),
+        scope=DiscoveryScopeConfig(exclude_dirs=["docs/generated", "tools"]),
         excludes_loader=fake_loader,
     )
     paths, _ = disc.discover(tmp_path)
@@ -276,7 +279,7 @@ def test_project_yaml_and_pyproject_surfaces_merge(tmp_path: Path) -> None:
     assert "src/myproj/fixtures/sample.py" not in rels
     assert "docs/generated/api.md" not in rels  # YAML surface
     assert "docs/guide.md" in rels
-    assert "tools/generated/gen.py" in rels
+    assert "tools/generated/gen.py" not in rels  # YAML bare name
 
 
 # ── DependencyFileDiscoverer ──────────────────────────────────────────────
@@ -461,6 +464,86 @@ def test_dependency_empty_files_returns_default_root(
     paths, root = disc.discover("foo")
     assert paths == []
     assert root == Path()
+
+
+# ── YAML dependency.exclude_dirs (spec 2026-07-13 §7.4, AC-11) ────────────
+
+
+def test_dependency_yaml_excludes_bare_and_anchored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-11: user bare names prune at any depth via PARENT-directory
+    components (never a file's own basename — directories-only, §4);
+    anchored entries match with the FIRST path component stripped, so one
+    entry applies uniformly under every top-level component (§4). A flat
+    single-component relpath (six.py) survives every anchored entry; a
+    distribution with two top-level components has the anchored entry
+    applied under both; a bare entry colliding with a shipped FILE name
+    (conf.py) excludes nothing."""
+    dist = _make_fake_dist(
+        tmp_path,
+        (
+            "foo/mod.py",
+            "foo/tests/test_mod.py",  # bare "tests" — pruned
+            "foo/docs/examples/ex.md",  # anchored "docs/examples" — pruned
+            "foo/docs/examples/deep/d.md",  # beneath the anchor — pruned
+            "foo/docs/guide.md",  # docs itself NOT excluded — kept
+            "bar/docs/examples/ex2.md",  # second top-level component — pruned
+            "six.py",  # flat module — survives (§4 edge)
+            "foo/conf.py",  # bare "conf.py" is a FILE-name
+            # collision — kept (§4 no-op rule)
+        ),
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
+        lambda name: dist,
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.discovery.dependency.find_site_packages_root",
+        lambda p: str(tmp_path / "site-packages"),
+    )
+
+    scope = DiscoveryScopeConfig(exclude_dirs=["tests", "docs/examples", "conf.py"])
+    disc = DependencyFileDiscoverer(scope=scope)
+    paths, _ = disc.discover("foo")
+
+    sp = tmp_path / "site-packages"
+    rels = {Path(p).relative_to(sp).as_posix() for p in paths}
+    assert rels == {"foo/mod.py", "foo/docs/guide.md", "six.py", "foo/conf.py"}
+
+
+def test_dependency_never_reads_project_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-11 / D4: the dependency walk NEVER consults the pyproject loader
+    — a dependency's own TOML is an untrusted-input channel pointed at
+    index composition. Pinned two ways: the module-level loader raises if
+    called, and the dataclass structurally has no excludes_loader field."""
+
+    def _boom(root: Path) -> ProjectExcludes:
+        raise AssertionError("dependency walk must never call load_project_excludes")
+
+    monkeypatch.setattr("pydocs_mcp.project_toml.load_project_excludes", _boom)
+    dist = _make_fake_dist(tmp_path, ("foo/mod.py",))
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
+        lambda name: dist,
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.discovery.dependency.find_site_packages_root",
+        lambda p: str(tmp_path / "site-packages"),
+    )
+
+    disc = DependencyFileDiscoverer(
+        scope=DiscoveryScopeConfig(exclude_dirs=["tests"]),
+    )
+    paths, _ = disc.discover("foo")
+
+    assert [Path(p).name for p in paths] == ["mod.py"]
+    field_names = {f.name for f in dataclasses.fields(DependencyFileDiscoverer)}
+    assert "excludes_loader" not in field_names
 
 
 # ── Protocol conformance ──────────────────────────────────────────────────
