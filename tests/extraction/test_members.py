@@ -29,6 +29,7 @@ from pydocs_mcp.extraction.strategies.members import (
     InspectMemberExtractor,
 )
 from pydocs_mcp.models import ModuleMember, ModuleMemberFilterField
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 
 # ── AstMemberExtractor — project ──────────────────────────────────────────
@@ -584,3 +585,217 @@ def test_path_under_excluded_egg_info_as_component_not_substring() -> None:
         "'mypkg.egg-info' is a different component from 'egg-info' — "
         "substring match would over-exclude real PyPI dist metadata dirs"
     )
+
+
+# -- Effective-set post-filter (per-project exclude_dirs, spec §7.5) ----------
+
+
+def _empty_loader(root: Path) -> ProjectExcludes:
+    """Injected stand-in for load_project_excludes — no pyproject read."""
+    return EMPTY_PROJECT_EXCLUDES
+
+
+def _fixed_loader(excludes: ProjectExcludes):
+    """Loader returning a canned ProjectExcludes regardless of root — the
+    injection seam of spec D3, so no filesystem pyproject.toml is needed."""
+
+    def _load(root: Path) -> ProjectExcludes:
+        return excludes
+
+    return _load
+
+
+def _make_exclude_tree(tmp_path: Path) -> Path:
+    """Worked-example tree of spec §4: bare 'fixtures' occurs at two depths,
+    anchored 'docs/generated' has a leaf-name-colliding sibling under
+    tools/, and a floor dir (site-packages) is present so floor + user
+    excludes can be asserted in one walk."""
+    (tmp_path / "kept.py").write_text("def kept(): pass\n", encoding="utf-8")
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    (fixtures / "sample.py").write_text("def fixture_fn(): pass\n", encoding="utf-8")
+    nested = tmp_path / "src" / "pkg" / "fixtures"
+    nested.mkdir(parents=True)
+    (nested / "deep.py").write_text("def deep_fixture_fn(): pass\n", encoding="utf-8")
+    generated = tmp_path / "docs" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "gen.py").write_text("def generated_fn(): pass\n", encoding="utf-8")
+    sibling = tmp_path / "tools" / "generated"
+    sibling.mkdir(parents=True)
+    (sibling / "gen2.py").write_text("def sibling_fn(): pass\n", encoding="utf-8")
+    vendored = tmp_path / "site-packages" / "leaky"
+    vendored.mkdir(parents=True)
+    (vendored / "__init__.py").write_text("def floor_leaked(): pass\n", encoding="utf-8")
+    return tmp_path
+
+
+async def _member_names(extractor: AstMemberExtractor, root: Path) -> set[str]:
+    members = await extractor.extract_from_project(root)
+    return {m.metadata[ModuleMemberFilterField.NAME.value] for m in members}
+
+
+@pytest.mark.asyncio
+async def test_ast_project_bare_exclude_prunes_all_depths(tmp_path: Path) -> None:
+    """AC-12 (TOML surface, bare name): 'fixtures' from the injected loader
+    prunes BOTH occurrences (root-level and src/pkg/fixtures); the floor
+    still applies alongside user excludes."""
+    _make_exclude_tree(tmp_path)
+    extractor = AstMemberExtractor(
+        excludes_loader=_fixed_loader(
+            ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
+        ),
+    )
+    names = await _member_names(extractor, tmp_path)
+    assert "kept" in names
+    assert "fixture_fn" not in names, "root-level fixtures/ leaked into member index"
+    assert "deep_fixture_fn" not in names, (
+        "nested src/pkg/fixtures/ leaked — bare names match ANY depth"
+    )
+    assert "floor_leaked" not in names, (
+        "floor (_EXCLUDED_DIRS) must still apply with user excludes set"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ast_project_anchored_exclude_prunes_only_its_path(tmp_path: Path) -> None:
+    """AC-12 (TOML surface, anchored): 'docs/generated' prunes exactly that
+    subtree; the leaf-name-colliding sibling tools/generated survives."""
+    _make_exclude_tree(tmp_path)
+    extractor = AstMemberExtractor(
+        excludes_loader=_fixed_loader(
+            ProjectExcludes(names=frozenset(), anchored=frozenset({"docs/generated"}))
+        ),
+    )
+    names = await _member_names(extractor, tmp_path)
+    assert "generated_fn" not in names
+    assert "sibling_fn" in names, "anchored entry over-matched a same-leaf-name sibling (spec §4)"
+
+
+@pytest.mark.asyncio
+async def test_ast_project_scope_exclude_dirs_yaml_surface(tmp_path: Path) -> None:
+    """AC-12 (YAML surface): scope_exclude_dirs entries flow through
+    merge_excludes' split/classify path — bare and anchored both honored
+    with an empty pyproject loader."""
+    _make_exclude_tree(tmp_path)
+    extractor = AstMemberExtractor(
+        excludes_loader=_empty_loader,
+        scope_exclude_dirs=("fixtures", "docs/generated"),
+    )
+    names = await _member_names(extractor, tmp_path)
+    assert "kept" in names
+    assert "fixture_fn" not in names
+    assert "deep_fixture_fn" not in names
+    assert "generated_fn" not in names
+    assert "sibling_fn" in names
+
+
+@pytest.mark.asyncio
+async def test_ast_project_toml_and_yaml_surfaces_merge(tmp_path: Path) -> None:
+    """AC-12 (§3.3 union): each surface excludes a DIFFERENT directory —
+    both are gone after the merge."""
+    _make_exclude_tree(tmp_path)
+    extractor = AstMemberExtractor(
+        excludes_loader=_fixed_loader(
+            ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
+        ),
+        scope_exclude_dirs=("docs/generated",),
+    )
+    names = await _member_names(extractor, tmp_path)
+    assert "fixture_fn" not in names
+    assert "deep_fixture_fn" not in names
+    assert "generated_fn" not in names
+    assert "kept" in names
+    assert "sibling_fn" in names
+
+
+@pytest.mark.asyncio
+async def test_ast_project_filename_collision_entry_is_noop(tmp_path: Path) -> None:
+    """Directories-only rule (spec §4 / AC-19 groundwork): an entry that
+    collides with a FILE name — bare 'conf.py' or anchored 'docs/conf.py'
+    where docs/conf.py is a file — must be a no-op on the member walk,
+    because matching targets the file's PARENT DIRECTORY relpath."""
+    (tmp_path / "kept.py").write_text("def kept(): pass\n", encoding="utf-8")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "conf.py").write_text("def conf_fn(): pass\n", encoding="utf-8")
+    extractor = AstMemberExtractor(
+        excludes_loader=_fixed_loader(
+            ProjectExcludes(
+                names=frozenset({"conf.py"}),
+                anchored=frozenset({"docs/conf.py"}),
+            )
+        ),
+    )
+    names = await _member_names(extractor, tmp_path)
+    assert "kept" in names
+    assert "conf_fn" in names, (
+        "file-name-colliding exclude entry dropped the file's symbols — the "
+        "member post-filter matched the file path instead of its parent dir"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ast_project_default_construction_unchanged(tmp_path: Path) -> None:
+    """Regression: a default-constructed extractor on a tree with NO
+    pyproject.toml applies the floor only — every user-space directory
+    still indexes (spec §7.3 byte-compat posture, member side)."""
+    _make_exclude_tree(tmp_path)
+    names = await _member_names(AstMemberExtractor(), tmp_path)
+    assert {"kept", "fixture_fn", "deep_fixture_fn", "generated_fn", "sibling_fn"} <= names
+    assert "floor_leaked" not in names
+
+
+@pytest.mark.asyncio
+async def test_inspect_project_delegation_inherits_excludes(tmp_path: Path) -> None:
+    """AC-12 (inspect mode): extract_from_project ALWAYS delegates to the
+    composed AstMemberExtractor (inspect_extractor.py:42-47), so inspect-mode
+    project indexing inherits the effective-set filter verbatim."""
+    _make_exclude_tree(tmp_path)
+    ast_extractor = AstMemberExtractor(
+        excludes_loader=_fixed_loader(
+            ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
+        ),
+    )
+    inspect_extractor = InspectMemberExtractor(static_fallback=ast_extractor)
+
+    ast_members = await ast_extractor.extract_from_project(tmp_path)
+    inspect_members = await inspect_extractor.extract_from_project(tmp_path)
+
+    assert ast_members == inspect_members
+    names = {m.metadata[ModuleMemberFilterField.NAME.value] for m in inspect_members}
+    assert "fixture_fn" not in names
+
+
+@pytest.mark.asyncio
+async def test_ast_dependency_path_ignores_configured_excludes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-13: extract_from_dependency is byte-identical regardless of
+    configured excludes — even entries that WOULD match the dependency's own
+    package directory — and NEVER consults the pyproject loader."""
+    sp = tmp_path / "sp"
+    (sp / "foo").mkdir(parents=True)
+    # ``encoding="utf-8"`` — see ``simple_project`` fixture for rationale.
+    (sp / "foo" / "__init__.py").write_text(_SIMPLE_MODULE, encoding="utf-8")
+    dist = _FakeDist(site_packages=sp, rel_files=("foo/__init__.py",))
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.members.ast_extractor.find_installed_distribution",
+        lambda name: dist,
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.members.ast_extractor.find_site_packages_root",
+        lambda p: str(sp),
+    )
+
+    def _boom_loader(root: Path) -> ProjectExcludes:
+        raise AssertionError("dependency member path must never call the pyproject loader")
+
+    configured = AstMemberExtractor(excludes_loader=_boom_loader, scope_exclude_dirs=("foo",))
+    default = AstMemberExtractor()
+
+    configured_members = await configured.extract_from_dependency("foo")
+    default_members = await default.extract_from_dependency("foo")
+
+    assert configured_members == default_members
+    assert len(configured_members) > 0
