@@ -98,14 +98,21 @@ def test_to_dict_emits_non_default_mapping_as_plain_dict() -> None:
     yaml.safe_dump(out)
 
 
+def test_to_dict_omits_mappingproxy_equal_to_factory_default() -> None:
+    w = _MappedWidget(table=MappingProxyType(dict(_DEFAULT_TABLE)))
+    out = step_to_yaml_dict(w, type_name="mw", keys=_MappedWidget._YAML_KEYS)
+    assert out == {"type": "mw"}
+
+
 def test_yaml_kwargs_resolves_default_factory() -> None:
     kwargs = yaml_kwargs({}, _MappedWidget, _MappedWidget._YAML_KEYS)
     assert kwargs == {"table": {"class": 0.3}, "knob": _DEFAULT_KNOB}
 
 
 def test_yaml_kwargs_passes_yaml_mapping_through_untouched() -> None:
-    kwargs = yaml_kwargs({"table": {"module": 0.6}}, _MappedWidget, _MappedWidget._YAML_KEYS)
-    assert kwargs["table"] == {"module": 0.6}
+    table = {"module": 0.6}
+    kwargs = yaml_kwargs({"table": table}, _MappedWidget, _MappedWidget._YAML_KEYS)
+    assert kwargs["table"] is table
 
 
 def test_helpers_still_reject_keys_with_neither_default_nor_factory() -> None:

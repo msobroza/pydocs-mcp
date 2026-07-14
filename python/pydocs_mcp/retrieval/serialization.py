@@ -216,10 +216,12 @@ def step_to_yaml_dict(step: Any, *, type_name: str, keys: tuple[str, ...]) -> di
         def to_dict(self) -> dict:
             return step_to_yaml_dict(self, type_name="rrf_fusion", keys=self._YAML_KEYS)
     """
-    defaults = {f.name: _effective_default(f) for f in dataclasses.fields(step)}
+    # Resolve defaults per key, not for every field — factories on non-YAML
+    # fields (RouteStep / ConditionalStep precedents) must not fire needlessly.
+    fields_by_name = {f.name: f for f in dataclasses.fields(step)}
     out: dict[str, Any] = {"type": type_name}
     for key in keys:
-        default = defaults[key]
+        default = _effective_default(fields_by_name[key])
         if default is dataclasses.MISSING:
             raise ValueError(
                 f"{type(step).__name__}.{key} has no dataclass default; _YAML_KEYS "
