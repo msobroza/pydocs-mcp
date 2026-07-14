@@ -565,18 +565,28 @@ def _validate_yaml_block(block: FencedBlock, data: dict, valid: set[str], roots:
         )
 
 
-def _validate_blueprint(block: FencedBlock, data: dict) -> None:
+def _validate_step_entries(block: FencedBlock, entries: list) -> None:
+    """Validate each pipeline-step entry's ``type:`` against the registry.
+
+    Shared by ``steps:``-dict blueprints and bare top-level step lists.
+    Entries that are not dicts, or dicts without a ``type``/``step`` key, are
+    skipped (structural pipeline-loader forms / non-step list items), so a
+    plain-scalar YAML list is a safe no-op."""
     from pydocs_mcp.extraction.serialization import stage_registry
     from pydocs_mcp.retrieval.serialization import step_registry
 
     known = set(step_registry._types) | set(stage_registry._types)
-    for entry in data["steps"]:
+    for entry in entries:
         name = entry.get("type") if isinstance(entry, dict) else None
         if name is None and isinstance(entry, dict):
             name = entry.get("step")
         if name is None:
             continue  # structural forms without a type key are pipeline-loader domain
         assert name in known, f"{block.file}:{block.line}: unregistered step/stage {name!r}"
+
+
+def _validate_blueprint(block: FencedBlock, data: dict) -> None:
+    _validate_step_entries(block, data["steps"])
 
 
 def test_doc_yaml_blocks_validate_against_app_config() -> None:
@@ -596,6 +606,12 @@ def test_doc_yaml_blocks_validate_against_app_config() -> None:
             pytest.fail(f"{block.file}:{block.line}: yaml block does not parse: {exc}")
         if isinstance(data, dict):
             _validate_yaml_block(block, data, valid, roots)
+        elif isinstance(data, list):
+            # Bare top-level list (no `steps:` wrapper) — e.g. a single-step
+            # doc illustration. Validate its step `type:`s against the registry
+            # so a renamed/typo'd step name in such a snippet is caught. Plain
+            # non-step lists are a no-op (entries without a type are skipped).
+            _validate_step_entries(block, data)
     assert seen > 0, "no yaml blocks harvested — extractor broken?"
 
 
@@ -617,6 +633,23 @@ def test_yaml_validator_rejects_synthetic_drift() -> None:
     _validate_yaml_block(fake, {"mcpServers": {"pydocs": {}}}, valid, roots)  # allowlisted
     with pytest.raises(AssertionError, match="unregistered"):
         _validate_blueprint(fake, {"steps": [{"type": "not_a_real_step"}]})
+
+
+def test_yaml_validator_rejects_barelist_step_drift() -> None:
+    """A bare top-level YAML list (no ``steps:`` wrapper) whose items are
+    pipeline steps — e.g. a single-step doc illustration ``- name: rollup /
+    type: parent_rollup`` — must have each ``type:`` validated against the
+    registry, exactly like a ``steps:`` blueprint. Without this, a renamed or
+    typo'd step name in such a snippet goes undetected (the harness previously
+    only validated dict-shaped blocks). Non-step list items stay parse-only."""
+    fake = FencedBlock(Path("synthetic.md"), 1, "yaml", "")
+    with pytest.raises(AssertionError, match="unregistered"):
+        _validate_step_entries(fake, [{"name": "rollup", "type": "not_a_real_step"}])
+    # A registered step passes; entries without a type (or non-dict items) are
+    # skipped, so a plain-scalar list never raises.
+    _validate_step_entries(fake, [{"name": "topk", "type": "top_k_filter"}])
+    _validate_step_entries(fake, [{"note": "no type key here"}])
+    _validate_step_entries(fake, ["just", "strings"])
 
 
 def test_mapping_typed_fields_terminate_the_path_walk() -> None:
