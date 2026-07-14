@@ -512,6 +512,9 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 | Dense (Qwen3-0.6B, 1024-d) | `repoqa_dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
 | Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm330m.yaml` | 0.700 | 0.767 | 0.767 | 0.725 | 30 |
 | **Dense (F2LLM-v2-0.6B, 1024-d)** | `repoqa_dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
+| **Dense (codestral-embed, 1536-d, remote API)** | `repoqa_codestral.yaml` | 0.833 | **0.933** | **0.933** | 0.883 | 30 |
+| Dense (Qwen3-Embedding-4B, 2560-d, remote API) | `repoqa_qwen3_4b.yaml` | 0.667 | 0.833 | 0.900 | 0.740 | 30 |
+| Dense (Qwen3-Embedding-8B, 4096-d, remote API) | `repoqa_qwen3_8b.yaml` | 0.700 | 0.800 | 0.900 | 0.751 | 30 |
 | Late-interaction (ColBERT / MaxSim) | `repoqa_li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
 | LLM tree reasoning (gpt-4o-mini) | `repoqa_tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
 
@@ -523,6 +526,18 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 > **gte-modernbert-base**, **F2LLM-v2-330M**, and **F2LLM-v2-0.6B** are full-30 runs
 > served on GPU via sentence-transformers (2048-token cap, `batch_size: 4` for the
 > F2LLM models), each in a dedicated process so CUDA memory is freed between embedders.
+> **codestral-embed** (Mistral `codestral-embed`, 1536-d), **Qwen3-Embedding-4B**
+> (`qwen/qwen3-embedding-4b`, 2560-d), and **Qwen3-Embedding-8B**
+> (`qwen/qwen3-embedding-8b`, 4096-d) are full-30 runs served over **remote
+> OpenAI-compatible endpoints** rather than on-device — the configs omit the
+> OpenAI `dimensions` param so each model returns its native dimension. No GPU is
+> used, but every query embeds over the network, so their per-query search latency
+> (~1.2–5.5s) is one-to-two orders of magnitude above the on-device dense
+> embedders. **Qwen3-Embedding is asymmetric** — it expects an instruction
+> prepended to queries — but this raw API path sends the query text verbatim (no
+> instruction), so both Qwen3 rows are **instruction-free baselines**
+> (apples-to-apples with the on-device Qwen3-0.6B row, also instruction-free) and
+> understate the models' instruction-tuned ceiling.
 > **BM25 → tree rerank** is the lone two-stage method: the LLM (gpt-4o-mini or
 > gpt-5.5) re-ranks BM25's **top-200** candidate pool (`k=200`), which is why its
 > recall@10 can exceed BM25's own top-10; the rest are single-stage. Swapping the
@@ -532,8 +547,11 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 > [`scripts/plot_method_comparison.py`](scripts/plot_method_comparison.py).
 
 **Takeaways.** Vector methods clearly beat lexical BM25 (semantic vs. exact-term
-matching); the code-specialized **F2LLM-v2-0.6B** embedder leads by a wide margin
-(recall@1 **0.90**, recall@10 **0.93**), well ahead of the general-purpose
+matching); two code-specialized embedders share the top of the board — the
+on-device **F2LLM-v2-0.6B** (recall@1 **0.90**, recall@10 **0.93**, MRR **0.91**)
+and the remote **codestral-embed**, which posts the split's **best recall@5
+(0.93)** and **ties F2LLM-0.6B at recall@10 (0.93)** while trailing it slightly at
+recall@1 (0.83) and MRR (0.88). Both sit well ahead of the general-purpose
 **Qwen3-0.6B**, with **gte-modernbert-base** mid-pack (it ties bge-small at
 recall@10 but edges it at recall@1); **dense (bge-small)** and
 **late-interaction** are close (LI edges bge at recall@1, bge leads at
@@ -551,6 +569,33 @@ recall@1 **0.70** / recall@10 **0.77** (MRR 0.73) — clearly below its 0.6B sib
 **gte-modernbert-base** at recall@1, at a slightly lower search latency (0.23s p50).
 So the code-specialized family wins at both sizes, but ~half the parameters costs
 ~0.16 recall@10 here.
+
+**codestral-embed (remote API) trades latency for top-tier recall.** The hosted
+Mistral `codestral-embed` (1536-d, via an OpenAI-compatible endpoint) matches the
+best on-device embedder on ranking quality — highest recall@5 (0.93) on this split,
+tied for highest recall@10 (0.93) — with **zero losses in a paired per-needle
+comparison** against the default **bge-small** dense (30/30 needles: it matches or
+beats bge-small on every needle, +0.20 recall@5 / +0.32 MRR). The cost is at query
+time: each search embeds the query over the network, so p50 search latency is
+**~1.2s** — roughly 4–8× the on-device dense embedders (0.15–0.29s) — plus a small
+per-token API charge (~$1.15 for the full 30-needle indexing run). It needs no GPU
+and no local model download, which is its main draw over the F2LLM family.
+
+**The Qwen3-Embedding models land upper-mid-pack — behind codestral — and bigger
+is not better.** Both the 4B (2560-d) and 8B (4096-d) reach recall@10 **0.90** but
+only recall@1 **0.67–0.70** / recall@5 **0.80–0.83** / MRR **0.74–0.75**, and in a
+paired per-needle comparison **codestral wins or ties every one of the 30 needles**
+against each (neither Qwen3 size ever beats it). They edge the default bge-small
+(though not cleanly — a couple of dropped needles each). The modest recall@1 is the
+expected cost of the **instruction-free** setup: Qwen3-Embedding is asymmetric and
+this raw API path gives it no query instruction, which most blunts *rank-1*
+sharpness. Most striking, **doubling the model from 4B to 8B buys nothing here** —
+paired, the two are statistically indistinguishable (20–27 of 30 needles tie, wins
+≈ losses), yet the 8B is **~3× slower** (p50 search **5.5s** vs 1.7s) from the
+larger model and 4096-d payloads over the network. Net: on this instruction-free
+code-retrieval split the ordering is **codestral > {Qwen3-4B ≈ Qwen3-8B} >
+bge-small**, and among the Qwen sizes the 4B is the better pick (same quality, a
+third of the latency).
 
 #### Reranker model: gpt-4o-mini vs gpt-5.5
 
@@ -593,16 +638,27 @@ indexing), from each run's per-task `search_seconds`:
 | Dense (F2LLM-330M) | 0.767 | 0.23s |
 | Dense (F2LLM-0.6B) | 0.933 | 0.29s |
 | Dense (Qwen3-0.6B) | 0.810 | 0.51s |
+| Dense (codestral, remote API) | 0.933 | 1.19s |
+| Dense (Qwen3-4B, remote API) | 0.900 | 1.71s |
+| Dense (Qwen3-8B, remote API) | 0.900 | 5.48s |
 | BM25 → tree rerank (gpt-4o-mini) | 0.567 | 10.6s |
 | BM25 → tree rerank (gpt-5.5) | 0.667 | 8.8s |
 | LLM tree | 0.524 | 13.7s |
 
-Two tiers: **local index lookups** (BM25 / dense / late-interaction) answer in
-**0.03–0.51 s**, while the **LLM methods** (BM25 → tree rerank, LLM tree) spend
-**~10–14 s** on one `gpt-4o-mini` call per query — a 20–450× gap. **Dense
-(F2LLM-0.6B)** is now the dominant point (highest recall@10, 0.93, at **0.29 s**),
-beating Qwen3 on both quality *and* latency, so on quality-per-second the LLM
-approaches are the weakest here.
+Three tiers now: **local index lookups** (BM25 / on-device dense / late-interaction)
+answer in **0.03–0.51 s**; the **remote-API embedders** (codestral, Qwen3-4B,
+Qwen3-8B) span **~1.2–5.5 s** because each query is embedded over the network (a
+remote API call, not a local lookup nor an LLM reasoning call); and the **LLM
+methods** (BM25 → tree rerank, LLM tree) spend **~9–14 s** on one
+`gpt-4o-mini`/`gpt-5.5` call per query. **Dense (F2LLM-0.6B)** remains the
+Pareto-dominant point — it matches or beats every remote embedder on recall@10
+(0.93) at **0.29 s**, 4–19× faster — so the remote embedders' edge is not
+quality-per-second but that they need **no GPU and no local model download** (the
+weights stay hosted). The **Qwen3-8B** point makes the diminishing returns literal:
+it lands at the *same* recall@10 (0.90) as the Qwen3-4B but drifts far to the right
+(**5.5s**, nudging LLM-latency territory) for the extra parameters — strictly worse
+on the quality/latency plane. On quality-per-second the LLM approaches are still
+weakest.
 
 ### Hybrid fusion sweep (F2LLM-v2-330M)
 
