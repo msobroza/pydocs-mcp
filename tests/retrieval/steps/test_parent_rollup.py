@@ -213,6 +213,22 @@ async def test_ac6_non_chunklist_and_empty_pass_through_as_identity() -> None:
         assert await step.run(state) is state
 
 
+@pytest.mark.asyncio
+async def test_all_ungroupable_candidates_return_identity() -> None:
+    # Non-empty ChunkList where every chunk lacks a groupable key
+    # (no qualified_name) -> _group_candidates yields nothing -> identity
+    # return. Distinct from the AC6 empty/non-ChunkList guards and from
+    # AC18's mixed valid+invalid list.
+    step = _step()
+    state = _state(
+        [
+            Chunk(text="a", metadata={"package": _PKG, "module": _MOD}),
+            Chunk(text="b", metadata={"package": _PKG, "module": _MOD}),
+        ]
+    )
+    assert await step.run(state) is state
+
+
 # ── AC7–AC9, AC24: core gates + happy path ───────────────────────────────
 
 
