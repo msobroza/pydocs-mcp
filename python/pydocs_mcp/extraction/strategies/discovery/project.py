@@ -3,7 +3,9 @@
 Prunes directories in-place during ``os.walk`` so excluded subtrees are
 never descended into. Filters files by ``scope.include_extensions`` and
 skips anything larger than ``scope.max_file_size_bytes``. Output paths
-are sorted for deterministic downstream hashing.
+are sorted for deterministic downstream hashing; the effective exclusion
+set the walk pruned against is returned as the third element so
+downstream stages fold/consume the exact set used (spec D10).
 
 The pruning set is the EFFECTIVE exclusion set (spec decision #6b, as
 amended 2026-07-13): the hardcoded
@@ -68,7 +70,7 @@ class ProjectFileDiscoverer:
     # [tool.pydocs-mcp] exclude_dirs edits without a restart (spec D3).
     excludes_loader: Callable[[Path], ProjectExcludes] = load_project_excludes
 
-    def discover(self, target: Path) -> tuple[list[str], Path]:
+    def discover(self, target: Path) -> tuple[list[str], Path, ProjectExcludes]:
         root = Path(target)
         effective = merge_excludes(
             _EXCLUDED_DIRS,
@@ -88,7 +90,7 @@ class ProjectFileDiscoverer:
                     continue
                 paths.append(full)
         paths.sort()
-        return paths, root
+        return paths, root, effective
 
 
 __all__ = ("ProjectFileDiscoverer",)

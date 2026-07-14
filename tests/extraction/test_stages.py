@@ -35,6 +35,7 @@ from pydocs_mcp.extraction.pipeline.stages import (
     PackageBuildStage,
 )
 from pydocs_mcp.models import Package, PackageOrigin
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 
 # ── BuildContext stub ──────────────────────────────────────────────────────
@@ -66,16 +67,17 @@ def _ctx() -> _FakeBuildContext:
 
 @dataclass
 class _FakeProjectDiscoverer:
-    """Records which discover() call was invoked; returns a canned (paths, root)."""
+    """Records which discover() call was invoked; returns a canned
+    (paths, root, effective_excludes)."""
 
     calls: list = None
-    result: tuple = ((), Path())
+    result: tuple = ((), Path(), EMPTY_PROJECT_EXCLUDES)
 
     def __post_init__(self) -> None:
         if self.calls is None:
             object.__setattr__(self, "calls", [])
 
-    def discover(self, target: Path) -> tuple[list[str], Path]:
+    def discover(self, target: Path) -> tuple[list[str], Path, ProjectExcludes]:
         self.calls.append(("project", target))
         return self.result
 
@@ -83,13 +85,13 @@ class _FakeProjectDiscoverer:
 @dataclass
 class _FakeDepDiscoverer:
     calls: list = None
-    result: tuple = ((), Path())
+    result: tuple = ((), Path(), EMPTY_PROJECT_EXCLUDES)
 
     def __post_init__(self) -> None:
         if self.calls is None:
             object.__setattr__(self, "calls", [])
 
-    def discover(self, target: str) -> tuple[list[str], Path]:
+    def discover(self, target: str) -> tuple[list[str], Path, ProjectExcludes]:
         self.calls.append(("dep", target))
         return self.result
 
@@ -98,7 +100,7 @@ class _FakeDepDiscoverer:
 async def test_file_discovery_branches_on_project_target(tmp_path: Path) -> None:
     """PROJECT target_kind dispatches to project_discoverer, not dep_discoverer."""
     project_disc = _FakeProjectDiscoverer(
-        result=([str(tmp_path / "a.py")], tmp_path),
+        result=([str(tmp_path / "a.py")], tmp_path, EMPTY_PROJECT_EXCLUDES),
     )
     dep_disc = _FakeDepDiscoverer()
 
@@ -122,7 +124,9 @@ async def test_file_discovery_branches_on_project_target(tmp_path: Path) -> None
 async def test_file_discovery_branches_on_dependency_target() -> None:
     """DEPENDENCY target_kind dispatches to dep_discoverer, not project_discoverer."""
     project_disc = _FakeProjectDiscoverer()
-    dep_disc = _FakeDepDiscoverer(result=(["/pkgs/foo/mod.py"], Path("/pkgs")))
+    dep_disc = _FakeDepDiscoverer(
+        result=(["/pkgs/foo/mod.py"], Path("/pkgs"), EMPTY_PROJECT_EXCLUDES),
+    )
 
     stage = FileDiscoveryStage(
         project_discoverer=project_disc,

@@ -1,7 +1,7 @@
 """DependencyFileDiscoverer — lists files shipped by an installed dependency.
 
-Returns ``(paths, site_packages_root)``; a missing distribution
-(declared-but-not-installed) returns ``([], Path("."))`` — the
+Returns ``(paths, site_packages_root, effective_excludes)``; a missing distribution
+(declared-but-not-installed) returns ``([], Path("."), effective_excludes)`` — the
 :class:`~pydocs_mcp.application.ProjectIndexer` treats that as a
 non-fatal skip. Applies the same extension + size filters as
 :class:`ProjectFileDiscoverer`, plus the EFFECTIVE dependency-scope
@@ -71,6 +71,12 @@ def _anchored_dep_match(rel_str: str, effective: ProjectExcludes) -> bool:
     parent directory — not the full file relpath — is matched, per the
     directories-only rule (§4): an entry colliding with a file name is a
     uniform no-op on both walks.
+
+    Note: ``matches`` also consults bare names on the stripped parent;
+    that branch is provably dead here because the bare check runs first
+    in ``discover`` over a superset of these components — do not reuse
+    this helper for anchored-only attribution (telemetry, per-check
+    logging).
     """
     if not effective.anchored:
         return False
@@ -84,10 +90,12 @@ def _anchored_dep_match(rel_str: str, effective: ProjectExcludes) -> bool:
 class DependencyFileDiscoverer:
     scope: DiscoveryScopeConfig
 
-    def discover(self, target: str) -> tuple[list[str], Path]:
+    def discover(self, target: str) -> tuple[list[str], Path, ProjectExcludes]:
         # Floor ∪ YAML dependency.exclude_dirs only — no TOML loader
         # (spec D4); EMPTY_PROJECT_EXCLUDES stands in for the absent
-        # pyproject surface.
+        # pyproject surface. Returned even on the missing-dist path so
+        # the per-scope hash fold (spec §9.1) always sees the set this
+        # scope would have used.
         effective = merge_excludes(
             _EXCLUDED_DIRS,
             self.scope.exclude_dirs,
@@ -95,7 +103,7 @@ class DependencyFileDiscoverer:
         )
         dist = find_installed_distribution(target)
         if dist is None:
-            return [], Path()
+            return [], Path(), effective
         paths: list[str] = []
         for f in dist.files or []:
             rel_str = str(f)
@@ -119,7 +127,7 @@ class DependencyFileDiscoverer:
             paths.append(full)
         paths.sort()
         root = Path(find_site_packages_root(paths[0])) if paths else Path()
-        return paths, root
+        return paths, root, effective
 
 
 __all__ = ("DependencyFileDiscoverer",)

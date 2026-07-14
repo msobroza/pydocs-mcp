@@ -36,6 +36,7 @@ from pydocs_mcp.extraction.pipeline.stages import (
     PackageBuildStage,
     ReferenceCaptureStage,
 )
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 
 # ----------------------------------------------------------------------
@@ -63,8 +64,8 @@ class _FakeDepDiscoverer:
 async def test_file_discovery_writes_to_files_bundle(tmp_path: Path) -> None:
     """FileDiscoveryStage populates state.files.paths + state.files.root."""
     f1 = tmp_path / "a.py"
-    project_disc = _FakeProjectDiscoverer(result=([str(f1)], tmp_path))
-    dep_disc = _FakeDepDiscoverer(result=([], Path("/unused")))
+    project_disc = _FakeProjectDiscoverer(result=([str(f1)], tmp_path, EMPTY_PROJECT_EXCLUDES))
+    dep_disc = _FakeDepDiscoverer(result=([], Path("/unused"), EMPTY_PROJECT_EXCLUDES))
     stage = FileDiscoveryStage(
         project_discoverer=project_disc,  # type: ignore[arg-type]
         dep_discoverer=dep_disc,  # type: ignore[arg-type]
@@ -75,6 +76,44 @@ async def test_file_discovery_writes_to_files_bundle(tmp_path: Path) -> None:
     out = await stage.run(state)
     assert out.files.paths == (str(f1),)
     assert out.files.root == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_file_discovery_persists_effective_excludes(tmp_path: Path) -> None:
+    """FileDiscoveryStage stores the discoverer's third return element on
+    state.files.effective_excludes — the single per-run derivation point
+    (spec D10): ContentHashStage folds its fingerprint and
+    MineDecisionsStage fills CaptureContext.excluded from here, never
+    re-invoking the TOML loader mid-run."""
+    effective = ProjectExcludes(
+        names=frozenset({"fixtures"}),
+        anchored=frozenset({"docs/generated"}),
+    )
+    project_disc = _FakeProjectDiscoverer(result=([], tmp_path, effective))
+    dep_disc = _FakeDepDiscoverer(result=([], Path(), EMPTY_PROJECT_EXCLUDES))
+    stage = FileDiscoveryStage(
+        project_discoverer=project_disc,  # type: ignore[arg-type]
+        dep_discoverer=dep_disc,  # type: ignore[arg-type]
+    )
+
+    project_state = IngestionState(
+        files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT),
+    )
+    out = await stage.run(project_state)
+    assert out.files.effective_excludes == effective
+
+    dep_state = IngestionState(
+        files=FileBundle(target="foo", target_kind=TargetKind.DEPENDENCY),
+    )
+    dep_out = await stage.run(dep_state)
+    assert dep_out.files.effective_excludes == EMPTY_PROJECT_EXCLUDES
+
+
+def test_file_bundle_effective_excludes_defaults_empty() -> None:
+    """A directly-constructed FileBundle behaves exactly as today — the
+    field defaults to EMPTY_PROJECT_EXCLUDES (spec §7.7)."""
+    bundle = FileBundle()
+    assert bundle.effective_excludes == EMPTY_PROJECT_EXCLUDES
 
 
 # ----------------------------------------------------------------------
