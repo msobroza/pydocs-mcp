@@ -589,7 +589,14 @@ def build_project_indexer(
     )
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
-    ast_member = AstMemberExtractor()
+    # YAML project-scope excludes ride on the extractor so member extraction
+    # applies the same effective set as chunk discovery — forgetting this
+    # wiring is the silent chunk/member divergence spec §7.5 exists to
+    # prevent. The pyproject surface needs no wiring here: the extractor's
+    # excludes_loader default reads it per run (spec D3, --watch freshness).
+    ast_member = AstMemberExtractor(
+        scope_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
+    )
     members_cfg = config.extraction.members
     depth = inspect_depth if inspect_depth is not None else members_cfg.inspect_depth
     member_extractor = (
