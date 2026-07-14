@@ -151,6 +151,24 @@ Both modes share the same YAML tunables: debounce, file extensions, and
 ignored paths live under `serve.watch.*` in your `pydocs-mcp.yaml` (see
 [DOCUMENTATION.md](DOCUMENTATION.md#live-re-indexing)).
 
+### Exclude directories from indexing
+
+Keep generated docs, test fixtures, or vendored trees out of search results.
+Declare additional exclusions in your project's own `pyproject.toml` — they
+travel with the repo:
+
+```toml
+[tool.pydocs-mcp]
+exclude_dirs = ["docs/generated", "fixtures"]
+```
+
+Bare names (`"fixtures"`) match at any depth; paths (`"docs/generated"`)
+match only that directory. Entries are additive over the built-in floor
+(`.git`, `.venv`, …) — you can exclude more, never less. A server-side YAML
+equivalent covers both project and dependency walks
+(`extraction.discovery.*.exclude_dirs`); see
+[DOCUMENTATION.md](DOCUMENTATION.md#excluding-directories-from-indexing).
+
 ### Multi-repo search (optional)
 
 One MCP server can host several already-indexed repos. Index each once (every

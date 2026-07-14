@@ -29,9 +29,10 @@ pipelines:
       pipeline_path: pipelines/member_search.yaml
 
 extraction:
-  # Directory blocklist is hardcoded in extraction/config.py::_EXCLUDED_DIRS —
-  # not configurable via YAML by design (security: un-excluded .git/.venv/
-  # site-packages would leak secrets). Extension allowlist IS narrowable.
+  # Directory-exclusion FLOOR is hardcoded in extraction/config.py::
+  # _EXCLUDED_DIRS and non-removable (security: un-excluded .git/.venv/
+  # site-packages would leak secrets). User exclude_dirs (below, and the
+  # indexed project's own [tool.pydocs-mcp]) are ADDITIVE-ONLY over it.
   chunking:
     # Chunker selection is decorator-driven (see chunker_registry); the
     # by_extension YAML field was dead config and got removed
@@ -46,9 +47,17 @@ extraction:
     project:
       include_extensions: [".py", ".md", ".ipynb"]
       max_file_size_bytes: 1000000
+      # Additive over the built-in floor; bare names match at any depth,
+      # entries containing "/" anchor at the project root.
+      # e.g. exclude_dirs: ["docs/generated", "fixtures"]
+      exclude_dirs: []
     dependency:
       include_extensions: [".py", ".md", ".ipynb"]
       max_file_size_bytes: 1000000
+      # Additive over the built-in floor; applies to every dependency walk
+      # (a dependency's own pyproject.toml is never consulted).
+      # e.g. exclude_dirs: ["tests", "examples"]
+      exclude_dirs: []
   members:
     # Per-module symbol cap + per-field truncation. Increase if you
     # index huge dependencies (large ML libs); decrease to bound FTS
