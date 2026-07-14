@@ -50,6 +50,7 @@ from pydocs_mcp.retrieval.steps.llm_tree_reasoning import LlmTreeReasoningStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
 from pydocs_mcp.retrieval.steps.parallel import ParallelStep
+from pydocs_mcp.retrieval.steps.parent_rollup import ParentRollupStep
 from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult, PreFilterStep
 from pydocs_mcp.retrieval.steps.route import RouteCase, RouteStep
 from pydocs_mcp.retrieval.steps.rrf_fusion import RRFFusionStep, RRFResultFuser
@@ -78,6 +79,7 @@ __all__ = (
     "MemberFetcherStep",
     "MetadataPostFilterStep",
     "ParallelStep",
+    "ParentRollupStep",
     "PreFilterResult",
     "PreFilterStep",
     "RRFFusionStep",

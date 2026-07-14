@@ -15,6 +15,7 @@ from pydocs_mcp.retrieval.steps.centrality_prior import CentralityPriorStep
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
 from pydocs_mcp.retrieval.steps.graph_expand import GraphExpandStep
 from pydocs_mcp.retrieval.steps.llm_tree_reasoning import LlmTreeReasoningStep
+from pydocs_mcp.retrieval.steps.parent_rollup import ParentRollupStep
 from pydocs_mcp.retrieval.steps.rrf_fusion import RRFFusionStep
 from tests._fakes import FakeLlmClient, make_fake_uow_factory
 
@@ -189,3 +190,30 @@ def test_llm_tree_reasoning_emits_non_defaults_in_legacy_order() -> None:
         "doc_excerpt_max_chars",
         "rerank_candidates",
     ]
+
+
+def test_parent_rollup_declares_yaml_keys() -> None:
+    assert ParentRollupStep._YAML_KEYS == ("min_coverage", "min_coverage_by_kind", "name")
+
+
+def test_parent_rollup_default_emits_bare_type() -> None:
+    step = ParentRollupStep(uow_factory=make_fake_uow_factory())
+    assert step.to_dict() == {"type": "parent_rollup"}
+
+
+def test_parent_rollup_emits_non_defaults_in_key_order_mapping_as_dict() -> None:
+    step = ParentRollupStep(
+        uow_factory=make_fake_uow_factory(),
+        min_coverage=0.4,
+        min_coverage_by_kind={"class": 0.25},
+        name="pr",
+    )
+    out = step.to_dict()
+    assert out == {
+        "type": "parent_rollup",
+        "min_coverage": 0.4,
+        "min_coverage_by_kind": {"class": 0.25},
+        "name": "pr",
+    }
+    assert list(out) == ["type", "min_coverage", "min_coverage_by_kind", "name"]
+    assert type(out["min_coverage_by_kind"]) is dict
