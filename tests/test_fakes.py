@@ -306,3 +306,62 @@ async def test_fake_uow_structurally_satisfies_widened_unit_of_work_protocol():
 
     uow = FakeUnitOfWork()
     assert isinstance(uow, UnitOfWork)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_chunk_store_list_filters_module_and_qualified_name():
+    store = InMemoryChunkStore()
+    await store.upsert(
+        [
+            Chunk(text="a", metadata={"package": "p", "module": "p.m", "qualified_name": "p.m.A"}),
+            Chunk(text="b", metadata={"package": "p", "module": "p.m", "qualified_name": "p.m.B"}),
+            Chunk(text="c", metadata={"package": "p", "module": "p.n", "qualified_name": "p.m.A"}),
+        ]
+    )
+    # AND semantics across the CHUNK_COLUMNS-whitelisted keys the real
+    # translator supports (storage/sqlite/filter_adapter.py CHUNK_COLUMNS).
+    # No limit: a broken filter would return >1 row (c shares qualified_name
+    # p.m.A but lives in module p.n), so this discriminates real AND-matching.
+    rows = await store.list(filter={"package": "p", "module": "p.m", "qualified_name": "p.m.A"})
+    assert [c.text for c in rows] == ["a"]
+    # Module-only filter selects both p.m chunks (not the p.n one).
+    assert {c.text for c in await store.list(filter={"package": "p", "module": "p.m"})} == {
+        "a",
+        "b",
+    }
+    # package-only behavior unchanged.
+    assert len(await store.list(filter={"package": "p"})) == 3
+
+
+@pytest.mark.asyncio
+async def test_in_memory_document_tree_store_load_serves_by_module_and_records_call():
+    from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
+
+    store = InMemoryDocumentTreeStore()
+    tree = DocumentNode(
+        node_id="p.m",
+        qualified_name="p.m",
+        title="m",
+        kind=NodeKind.MODULE,
+        source_path="m.py",
+        start_line=1,
+        end_line=2,
+        text="doc",
+        content_hash="h",
+    )
+    await store.save_many([tree], package="p")
+    # Mirrors SqliteDocumentTreeStore.load: the module argument equals the
+    # tree root's qualified_name (the document_trees row key).
+    assert await store.load("p", "p.m") is tree
+    assert await store.load("p", "p.other") is None
+    assert await store.load("other", "p.m") is None
+    assert any(c.method == "load" and c.payload == ("p", "p.m") for c in store.calls)
+
+
+def test_chunk_metadata_filter_keys_track_real_whitelist():
+    # Guard: if CHUNK_COLUMNS gains a filterable metadata column, the fake
+    # must gain it too, or it silently stops matching on it.
+    from pydocs_mcp.storage.sqlite.filter_adapter import CHUNK_COLUMNS
+    from tests._fakes import _CHUNK_METADATA_FILTER_KEYS
+
+    assert set(_CHUNK_METADATA_FILTER_KEYS) == set(CHUNK_COLUMNS) - {"id", "package"}

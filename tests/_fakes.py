@@ -96,7 +96,14 @@ class InMemoryDocumentTreeStore:
         self.by_package.setdefault(package, []).extend(materialised)
 
     async def load(self, package, module):
-        return None  # not exercised in write-side tests
+        # Mirrors SqliteDocumentTreeStore.load: a point lookup keyed by the
+        # tree root's qualified_name (save_many writes t.qualified_name as
+        # the row key). Recorded so read-side tests can pin call counts.
+        self.calls.append(_Call("load", (package, module)))
+        for tree in self.by_package.get(package, ()):
+            if tree.qualified_name == module:
+                return tree
+        return None
 
     async def load_all_in_package(self, package):
         # Mirror the Protocol contract: dict keyed by module qualified_name.
@@ -178,6 +185,13 @@ class InMemoryPackageStore:
         self.items.clear()
 
 
+# Metadata keys InMemoryChunkStore.list AND-matches, mirroring the real
+# CHUNK_COLUMNS whitelist (storage/sqlite/filter_adapter.py) minus
+# "package" (which selects the bucket) and "id" (a dataclass field,
+# not metadata).
+_CHUNK_METADATA_FILTER_KEYS = ("module", "origin", "title", "qualified_name")
+
+
 @dataclass
 class InMemoryChunkStore:
     by_package: dict[str, list[Chunk]] = field(default_factory=dict)
@@ -205,6 +219,10 @@ class InMemoryChunkStore:
             rows = list(self.by_package.get(filter["package"], []))
         else:
             rows = [c for cs in self.by_package.values() for c in cs]
+        if isinstance(filter, dict):
+            for key in _CHUNK_METADATA_FILTER_KEYS:
+                if key in filter:
+                    rows = [c for c in rows if c.metadata.get(key) == filter[key]]
         if limit is not None:
             rows = rows[:limit]
         return rows
