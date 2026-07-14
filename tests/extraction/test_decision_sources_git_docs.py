@@ -23,6 +23,7 @@ from pydocs_mcp.extraction.decisions.sources import (
     CommitMessagesSource,
     DocsProseSource,
 )
+from pydocs_mcp.project_toml import ProjectExcludes
 from pydocs_mcp.retrieval.config.models import DecisionCaptureConfig
 
 # One qualifying commit ("migrate" → 1 keyword + a 2-line body ≥ threshold via a
@@ -241,3 +242,73 @@ def _path_env() -> str:
     import os
 
     return os.environ.get("PATH", "")
+
+
+# ── changelog / docs_prose × effective excludes (spec 7.8, AC-21) ────────────
+
+_QUALIFYING = "We migrate the vector store to a sidecar and replace blobs.\n"
+
+
+def _excluded_ctx(tmp_path: Path, excluded: ProjectExcludes) -> CaptureContext:
+    return CaptureContext(project_root=tmp_path, trees=(), config=_cfg(), excluded=excluded)
+
+
+async def test_changelog_skips_excluded_docs_dir(tmp_path) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n## 1.2.0\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "CHANGELOG.md").write_text(f"# Changelog\n\n## 9.9.9\n\n{_QUALIFYING}")
+    excluded = ProjectExcludes(names=frozenset({"docs"}), anchored=frozenset())
+    raws = await ChangelogSource().mine(_excluded_ctx(tmp_path, excluded))
+    # bare "docs" silences docs/CHANGELOG.md; the root changelog still mines.
+    assert [r.evidence[0].locator for r in raws] == ["CHANGELOG.md#1.2.0"]
+
+
+async def test_changelog_anchored_entry_leaves_candidates_intact(tmp_path) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n## 1.2.0\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "CHANGELOG.md").write_text(f"# Changelog\n\n## 9.9.9\n\n{_QUALIFYING}")
+    excluded = ProjectExcludes(names=frozenset(), anchored=frozenset({"docs/generated"}))
+    raws = await ChangelogSource().mine(_excluded_ctx(tmp_path, excluded))
+    assert len(raws) == 2  # neither candidate's parent dir matches the anchor
+
+
+async def test_changelog_default_excluded_is_identity(tmp_path) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n## 1.2.0\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "CHANGELOG.md").write_text(f"# Changelog\n\n## 9.9.9\n\n{_QUALIFYING}")
+    raws = await ChangelogSource().mine(_ctx(project_root=tmp_path))
+    assert len(raws) == 2  # no excluded kwarg → byte-identical to today
+
+
+async def test_docs_prose_skips_excluded_docs_glob(tmp_path) -> None:
+    (tmp_path / "README.md").write_text(f"# Project\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "design.md").write_text(f"# Design\n\n{_QUALIFYING}")
+    excluded = ProjectExcludes(names=frozenset({"docs"}), anchored=frozenset())
+    raws = await DocsProseSource().mine(_excluded_ctx(tmp_path, excluded))
+    # bare "docs" silences docs/*.md; the root README.md still mines.
+    assert len(raws) == 1
+    assert raws[0].evidence[0].locator.startswith("README.md#")
+
+
+async def test_docs_prose_anchored_entry_leaves_candidates_intact(tmp_path) -> None:
+    (tmp_path / "README.md").write_text(f"# Project\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "design.md").write_text(f"# Design\n\n{_QUALIFYING}")
+    excluded = ProjectExcludes(names=frozenset(), anchored=frozenset({"docs/generated"}))
+    raws = await DocsProseSource().mine(_excluded_ctx(tmp_path, excluded))
+    assert len(raws) == 2
+
+
+async def test_docs_prose_default_excluded_is_identity(tmp_path) -> None:
+    (tmp_path / "README.md").write_text(f"# Project\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "design.md").write_text(f"# Design\n\n{_QUALIFYING}")
+    raws = await DocsProseSource().mine(_ctx(project_root=tmp_path))
+    assert len(raws) == 2  # no excluded kwarg → byte-identical to today (AC-21)

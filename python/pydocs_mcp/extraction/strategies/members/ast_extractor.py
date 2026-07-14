@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.deps import normalize_package_name
+from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
 
 # Back-compat alias — the canonical implementation lives in
 # extraction/config.py next to _EXCLUDED_DIRS. Kept as a local name
@@ -32,6 +34,11 @@ from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     ModuleMember,
     ModuleMemberFilterField,
+)
+from pydocs_mcp.project_toml import (
+    ProjectExcludes,
+    load_project_excludes,
+    merge_excludes,
 )
 
 
@@ -54,8 +61,47 @@ def _module_from_rel_path(rel: str) -> str:
     return ".".join(parts)
 
 
+def _parent_dir_excluded(filepath: str, root: Path, effective: ProjectExcludes) -> bool:
+    """True iff ``filepath``'s PARENT DIRECTORY falls under ``effective``.
+
+    Directories-only rule (spec §4): the match target is the file's parent
+    directory relpath, never the file path itself. Matching the full file
+    relpath would let an entry that collides with a file NAME (bare
+    ``"conf.py"``, anchored ``"docs/conf.py"``) drop that file's symbols
+    here while chunk discovery — which prunes only ``os.walk`` dirnames —
+    kept its chunks: a silent chunk/member divergence. Relpath scoping also
+    keeps ancestor components ABOVE the walk root out of reach, mirroring
+    chunk discovery's in-walk pruning.
+    """
+    try:
+        rel_parent = os.path.relpath(Path(filepath).parent, str(root))
+    except ValueError:
+        # Different drive on Windows — same give-up posture as _parse_files.
+        return False
+    rel_parent = rel_parent.replace("\\", "/")
+    if rel_parent == ".":
+        # File directly at the walk root — there is no directory to match.
+        return False
+    # matches() also covers bare names by contract; the explicit
+    # _path_under_excluded call is kept for parity with spec §7.5's
+    # canonical matcher — the redundancy is intentional.
+    return _path_under_excluded(rel_parent, effective.names) or effective.matches(rel_parent)
+
+
 @dataclass(frozen=True, slots=True)
 class AstMemberExtractor:
+    # Per-run loader (spec D3): read the indexed project's own
+    # ``[tool.pydocs-mcp] exclude_dirs`` fresh on every project walk so
+    # --watch reindexes pick up TOML edits without a restart. Injected
+    # strategy so tests never touch the filesystem.
+    excludes_loader: Callable[[Path], ProjectExcludes] = load_project_excludes
+    # YAML ``extraction.discovery.project.exclude_dirs`` entries, wired at
+    # the write-side composition root (storage/factories.py). The dependency
+    # member path (_dep_sync) deliberately ignores BOTH fields — it lists
+    # ``dist.files`` directly and has never applied the directory blocklist
+    # (spec §2 non-goal).
+    scope_exclude_dirs: tuple[str, ...] = ()
+
     async def extract_from_project(
         self,
         project_dir: Path,
@@ -87,14 +133,19 @@ class AstMemberExtractor:
 
         # walk_py_files (both the Rust impl and the Python fallback) has its
         # own hardcoded SKIP_DIRS that doesn't track the canonical Python-side
-        # ``_EXCLUDED_DIRS`` policy. They diverge on .hg / .svn / target /
-        # site-packages / .coverage / .cache. Post-filter via the canonical
-        # helper so the member side sees the SAME exclusion set as the
-        # chunker side — without this, a checked-in ``vendor/site-packages``
-        # directory leaks into the symbol index even though chunker discovery
-        # skips it.
+        # exclusion policy. Post-filter against the EFFECTIVE project set —
+        # hardcoded floor ∪ YAML project entries ∪ the project's own
+        # pyproject excludes — so the member side sees the SAME exclusion
+        # set as chunk discovery. Without this, a checked-in
+        # ``vendor/site-packages`` (floor) or a user-excluded ``fixtures/``
+        # leaks into the symbol index even though chunk discovery skips it.
+        effective = merge_excludes(
+            _EXCLUDED_DIRS,
+            self.scope_exclude_dirs,
+            self.excludes_loader(root),
+        )
         candidates = walk_py_files(str(root))
-        py_files = [p for p in candidates if not _path_under_excluded(p)]
+        py_files = [p for p in candidates if not _parent_dir_excluded(p, root, effective)]
         return self._parse_files(package, py_files, root)
 
     def _parse_files(

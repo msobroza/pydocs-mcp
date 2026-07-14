@@ -533,6 +533,89 @@ Mechanics worth knowing:
 - A package whose tier yields no embeddable chunks keeps
   `packages.embedding_model` NULL and is never re-embedded on model changes.
 
+## Excluding directories from indexing
+
+Some directories are pure retrieval noise — generated docs, test fixtures,
+vendored examples, in-repo evaluation datasets. You can exclude *additional*
+directories from indexing via two additive surfaces. Both layer on top of the
+built-in, non-removable floor (`.git`, `.venv`, `__pycache__`, `node_modules`,
+`site-packages`, …): entries can only exclude MORE — there is no syntax, on
+any surface, that re-includes a floor directory, and listing a floor name
+(e.g. `".git"`) is a harmless no-op.
+
+**Surface 1 — the indexed project's own `pyproject.toml`** (travels with the
+repo; every developer indexing the project gets the same exclusions; applies
+to the project walk only, never to dependencies):
+
+```toml
+# pyproject.toml at the root of the project being indexed
+[tool.pydocs-mcp]
+exclude_dirs = ["docs/generated", "fixtures"]
+```
+
+**Surface 2 — server YAML** (per-deployment; the only way to shape
+dependency walks — a dependency's own `pyproject.toml` is never consulted):
+
+```yaml
+# pydocs-mcp.yaml (or any overlay loaded via --config)
+extraction:
+  discovery:
+    project:
+      exclude_dirs: ["fixtures"]          # additive over the floor + TOML
+    dependency:
+      exclude_dirs: ["tests", "examples"] # additive over the floor
+```
+
+### Matching rules
+
+Each entry is one of two kinds, classified by whether it contains a `/`
+(after normalization: backslashes become `/`, then a trailing `/` is
+stripped — so `"fixtures/"` is the bare name `"fixtures"`, never anchored):
+
+1. **Bare name** (no `/`) — matches that directory name as any path
+   component at any depth, exactly like the built-in floor entries.
+2. **Anchored path** (contains `/`) — a relative path anchored at the walk
+   root; excludes exactly that directory and its subtree, nothing else. For
+   dependency walks the first path component of each shipped-file path is
+   stripped before matching, so one entry applies uniformly across
+   dependencies.
+
+No globs — `*`, `?`, `[` are literal characters. Entries name directories,
+never files (an entry colliding with a file name is a no-op). Matching is
+byte-wise case-sensitive on every platform.
+
+With `exclude_dirs = ["docs/generated", "fixtures"]`:
+
+```
+myproj/                          (project root)
+├── docs/
+│   ├── generated/               ✗ excluded — anchored "docs/generated"
+│   │   └── api.md               ✗   (whole subtree gone)
+│   └── guide.md                 ✓ indexed
+├── src/
+│   └── myproj/
+│       ├── core.py              ✓ indexed
+│       └── fixtures/            ✗ excluded — bare name matches at any depth
+│           └── sample.py        ✗
+├── fixtures/                    ✗ excluded — bare name matches here too
+│   └── data.md                  ✗
+├── tools/
+│   └── generated/               ✓ indexed — anchored "docs/generated" does
+│       └── gen.py               ✓   NOT match a same-named sibling
+└── .venv/                       ✗ excluded — built-in floor, as always
+```
+
+### Reach and freshness
+
+An excluded directory contributes **no chunks, no symbols, no decision
+records (`get_why`), and no dependency manifests** — every write-side reader
+honors the same effective set. Under `--watch`, edits to
+`[tool.pydocs-mcp] exclude_dirs` are picked up on the next reindex without a
+server restart (`pyproject.toml` is always a reindex trigger), and widening
+the list removes the newly-excluded directories' chunks, symbols, and dense
+vectors from the index atomically. YAML `exclude_dirs`, like every other
+YAML tunable, resolves at startup and needs a restart to change.
+
 ## Two-level cache
 
 Each project gets a `.db` (SQLite — chunks + metadata + reference graph) plus a

@@ -19,6 +19,7 @@ from pydocs_mcp.extraction.decisions import (
 )
 from pydocs_mcp.extraction.decisions.sources import AdrFilesSource, InlineMarkersSource
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.project_toml import ProjectExcludes
 from pydocs_mcp.retrieval.config.models import DecisionCaptureConfig
 
 
@@ -131,3 +132,49 @@ async def test_adr_unknown_status_maps_to_proposed(tmp_path) -> None:
 
 async def test_source_registry_lists_both() -> None:
     assert {"inline_markers", "adr_files"} <= set(decision_source_registry.names())
+
+
+# ── adr_files × effective excludes (spec 7.8, AC-21) ─────────────────────────
+
+
+def _two_adr_dirs(tmp_path) -> None:
+    """One ADR under docs/adr/ and one under the root-level adr/ convention."""
+    docs_adr = tmp_path / "docs" / "adr"
+    docs_adr.mkdir(parents=True)
+    (docs_adr / "0001-docs-side.md").write_text(
+        "# 1. Docs-side decision\n\nStatus: Accepted\n\n## Decision\nSQLite.\n"
+    )
+    root_adr = tmp_path / "adr"
+    root_adr.mkdir()
+    (root_adr / "0001-root-side.md").write_text(
+        "# 1. Root-side decision\n\nStatus: Accepted\n\n## Decision\nFTS5.\n"
+    )
+
+
+async def test_adr_source_skips_excluded_parent_dirs(tmp_path) -> None:
+    _two_adr_dirs(tmp_path)
+    excluded = ProjectExcludes(names=frozenset({"docs"}), anchored=frozenset())
+    raws = await AdrFilesSource().mine(
+        CaptureContext(project_root=tmp_path, trees=(), config=_cfg(), excluded=excluded)
+    )
+    # bare "docs" silences docs/adr; the root-level adr/ fixture still mines.
+    assert [r.title for r in raws] == ["Root-side decision"]
+
+
+async def test_adr_source_anchored_entry_leaves_other_candidates(tmp_path) -> None:
+    _two_adr_dirs(tmp_path)
+    excluded = ProjectExcludes(names=frozenset(), anchored=frozenset({"docs/generated"}))
+    raws = await AdrFilesSource().mine(
+        CaptureContext(project_root=tmp_path, trees=(), config=_cfg(), excluded=excluded)
+    )
+    # anchored "docs/generated" matches neither docs/adr nor adr — all mine.
+    assert sorted(r.title for r in raws) == ["Docs-side decision", "Root-side decision"]
+
+
+async def test_adr_source_default_excluded_is_identity(tmp_path) -> None:
+    _two_adr_dirs(tmp_path)
+    raws = await AdrFilesSource().mine(
+        CaptureContext(project_root=tmp_path, trees=(), config=_cfg())
+    )
+    # A directly-constructed context (no excluded kwarg) behaves exactly as today.
+    assert sorted(r.title for r in raws) == ["Docs-side decision", "Root-side decision"]

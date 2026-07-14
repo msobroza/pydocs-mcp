@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.model import DocumentNode
+    from pydocs_mcp.project_toml import ProjectExcludes
 
 
 @runtime_checkable
@@ -59,13 +60,20 @@ class Chunker(Protocol):
 
 @runtime_checkable
 class ProjectFileDiscoverer(Protocol):
-    """Yields ``(paths, root)`` for a project directory target."""
+    """Yields ``(paths, root, effective_excludes)`` for a project directory
+    target. The third element is the exclusion set the walk pruned
+    against — floor ∪ YAML ``project.exclude_dirs`` ∪ the project's own
+    ``[tool.pydocs-mcp] exclude_dirs`` — carried on the state bundle so
+    downstream stages never re-derive it (spec D10)."""
 
-    def discover(self, target: Path) -> tuple[list[str], Path]: ...
+    def discover(self, target: Path) -> tuple[list[str], Path, ProjectExcludes]: ...
 
 
 @runtime_checkable
 class DependencyFileDiscoverer(Protocol):
-    """Yields ``(paths, root)`` for an installed dependency by name."""
+    """Yields ``(paths, root, effective_excludes)`` for an installed
+    dependency by name. The third element is floor ∪ YAML
+    ``dependency.exclude_dirs`` only — a dependency's own
+    ``pyproject.toml`` is never read (spec D4)."""
 
-    def discover(self, target: str) -> tuple[list[str], Path]: ...
+    def discover(self, target: str) -> tuple[list[str], Path, ProjectExcludes]: ...

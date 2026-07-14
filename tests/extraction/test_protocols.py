@@ -9,6 +9,7 @@ from pydocs_mcp.extraction.protocols import (
     DependencyFileDiscoverer,
     ProjectFileDiscoverer,
 )
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 
 class _FakeDocumentNode:
@@ -59,8 +60,8 @@ def test_chunker_conforming_instance_exposes_from_config_classmethod():
 
 def test_project_file_discoverer_runtime_checkable_accepts_discover():
     class _FakeProjectDiscoverer:
-        def discover(self, target: Path) -> tuple[list[str], Path]:
-            return [], target
+        def discover(self, target: Path) -> tuple[list[str], Path, ProjectExcludes]:
+            return [], target, EMPTY_PROJECT_EXCLUDES
 
     assert isinstance(_FakeProjectDiscoverer(), ProjectFileDiscoverer)
 
@@ -74,8 +75,8 @@ def test_project_file_discoverer_rejects_class_without_discover():
 
 def test_dependency_file_discoverer_runtime_checkable_accepts_discover():
     class _FakeDepDiscoverer:
-        def discover(self, target: str) -> tuple[list[str], Path]:
-            return [], Path()
+        def discover(self, target: str) -> tuple[list[str], Path, ProjectExcludes]:
+            return [], Path(), EMPTY_PROJECT_EXCLUDES
 
     assert isinstance(_FakeDepDiscoverer(), DependencyFileDiscoverer)
 

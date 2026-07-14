@@ -1,8 +1,11 @@
 """Tests for recursive dependency resolution in deps.py."""
 
 import os
+from pathlib import Path
+
 import pytest
 from pydocs_mcp.deps import discover_declared_dependencies, list_dependency_manifest_files
+from pydocs_mcp.project_toml import ProjectExcludes
 
 
 @pytest.fixture
@@ -96,3 +99,56 @@ class TestFindDepFiles:
         found = list_dependency_manifest_files(str(project_tree))
         # Check path components, not substring, to avoid matching the tmp dir name
         assert not any("node_modules" in p.split(os.sep) for p in found)
+
+
+@pytest.fixture
+def excluded_manifest_tree(tmp_path):
+    """Root manifest plus manifests inside candidate-excluded directories.
+
+    Layout exercises every AC-22 case: a root-level ``fixtures/`` (bare-name
+    target), a nested ``services/fixtures/`` (anchored target), and a sibling
+    ``other/fixtures/`` (must survive the anchored entry).
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["fastapi"]\n')
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    (fixtures / "pyproject.toml").write_text('[project]\ndependencies = ["leaky_dep"]\n')
+    nested = tmp_path / "services" / "fixtures"
+    nested.mkdir(parents=True)
+    (nested / "requirements.txt").write_text("nested_leak\n")
+    sibling = tmp_path / "other" / "fixtures"
+    sibling.mkdir(parents=True)
+    (sibling / "requirements.txt").write_text("sibling_dep\n")
+    return tmp_path
+
+
+class TestManifestWalkExcludes:
+    def test_empty_excludes_keeps_todays_output(self, excluded_manifest_tree):
+        default = list_dependency_manifest_files(str(excluded_manifest_tree))
+        explicit = list_dependency_manifest_files(
+            str(excluded_manifest_tree), ProjectExcludes(frozenset(), frozenset())
+        )
+        assert sorted(default) == sorted(explicit)
+        assert any("fixtures" in p.split(os.sep) for p in default)  # regression
+
+    def test_bare_name_prunes_matching_dirs_at_every_depth(self, excluded_manifest_tree):
+        excludes = ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
+        found = list_dependency_manifest_files(str(excluded_manifest_tree), excludes)
+        assert not any("fixtures" in p.split(os.sep) for p in found)
+        assert any(os.path.basename(p) == "pyproject.toml" for p in found)  # root kept
+
+    def test_anchored_entry_prunes_only_its_own_path(self, excluded_manifest_tree):
+        excludes = ProjectExcludes(names=frozenset(), anchored=frozenset({"services/fixtures"}))
+        found = list_dependency_manifest_files(str(excluded_manifest_tree), excludes)
+        rels = [os.path.relpath(p, str(excluded_manifest_tree)) for p in found]
+        assert str(Path("services") / "fixtures" / "requirements.txt") not in rels
+        assert str(Path("other") / "fixtures" / "requirements.txt") in rels  # sibling survives
+        assert str(Path("fixtures") / "pyproject.toml") in rels  # root-level fixtures survives
+
+    def test_discover_passthrough_drops_deps_from_excluded_manifests(self, excluded_manifest_tree):
+        excludes = ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
+        deps = discover_declared_dependencies(str(excluded_manifest_tree), excludes)
+        assert "leaky_dep" not in deps
+        assert "nested_leak" not in deps
+        assert "sibling_dep" not in deps
+        assert "fastapi" in deps  # the root manifest still contributes

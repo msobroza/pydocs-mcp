@@ -27,6 +27,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydocs_mcp.project_toml import ProjectExcludes
+
 log = logging.getLogger("pydocs-mcp.watch")
 
 
@@ -62,6 +64,38 @@ def _load_watchdog():
     return Observer
 
 
+def _no_derived_globs() -> tuple[str, ...]:
+    """Default ``derived_globs_provider`` — no user-exclude globs derived."""
+    return ()
+
+
+def derive_exclude_globs(excludes: ProjectExcludes, project_root: Path) -> tuple[str, ...]:
+    """Translate user exclusion entries into watchdog ignore globs (spec §7.6).
+
+    Bare names become ``<project_root>/**/<name>/**`` and anchored entries
+    become ``<project_root>/<path>/**``. Both are prefixed with the absolute
+    project root because ``FileWatcher._matches`` fnmatches the FULL absolute
+    path string: an unanchored ``**/<name>/**`` would match ancestor
+    components of the project root's own path (a project at
+    ``/home/user/docs/myproj`` excluding ``"docs"`` would silence every
+    event under the root, including the root ``pyproject.toml`` — no event,
+    no reindex, ever). Root-anchoring puts the wildcard segment strictly
+    below the root.
+
+    Best-effort churn suppression only (spec decision D6): fnmatch's ``*``
+    is not a globstar, so a bare-name glob misses a top-level occurrence
+    (``<root>/<name>/...`` has no ``/<name>/`` after a below-root segment).
+    That miss costs one cheap cached reindex per event — discovery owns
+    correctness, never this derivation.
+
+    Sorted for deterministic output (frozenset iteration order varies).
+    """
+    root = str(project_root)
+    bare = tuple(f"{root}/**/{name}/**" for name in sorted(excludes.names))
+    anchored = tuple(f"{root}/{path}/**" for path in sorted(excludes.anchored))
+    return bare + anchored
+
+
 @dataclass(frozen=True, slots=True)
 class FileWatcher:
     """File-system watcher value object (spec §4.1 deliverable 3).
@@ -80,6 +114,13 @@ class FileWatcher:
     # Production callers leave it None → constructor resolves the real
     # `watchdog.observers.Observer` lazily.
     observer_factory: Callable[[], object] | None = field(default=None)
+    # WHY a provider callable, not a second globs tuple: derived (user-
+    # exclude) globs must be swappable after a manifest-triggered reindex
+    # (spec D6 shrink direction, AC-25) while this dataclass is frozen.
+    # `_matches` re-reads the provider on every event; the composition
+    # root (`_build_watcher_and_callback`) swaps the backing value.
+    # Same injected-callable pattern as `observer_factory`.
+    derived_globs_provider: Callable[[], tuple[str, ...]] = field(default=_no_derived_globs)
 
     def __post_init__(self) -> None:
         # WHY: resolve the watchdog import at construction time rather
@@ -113,12 +154,14 @@ class FileWatcher:
         indexing and the new dependency gets picked up.
 
         Returns False for: non-watched extensions that aren't a manifest, paths
-        matching any `ignore_globs` pattern.
+        matching any `ignore_globs` pattern OR any glob currently returned by
+        `derived_globs_provider` (user-exclude suppression, spec §7.6).
         """
         if path.suffix.lower() not in self.extensions and not _is_dependency_manifest(path.name):
             return False
         path_str = str(path)
-        return not any(fnmatch.fnmatch(path_str, pattern) for pattern in self.ignore_globs)
+        patterns = self.ignore_globs + self.derived_globs_provider()
+        return not any(fnmatch.fnmatch(path_str, pattern) for pattern in patterns)
 
     async def run_until_cancelled(
         self,

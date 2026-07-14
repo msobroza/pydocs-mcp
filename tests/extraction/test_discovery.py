@@ -2,32 +2,36 @@
 
 Pins:
 - ``ProjectFileDiscoverer`` walks an ``os.walk`` tree; returns sorted paths with
-  project-root. Prunes ``_EXCLUDED_DIRS`` (HARDCODED — never self.scope).
+  project-root plus the effective exclusion set the walk pruned against — the
+  ``_EXCLUDED_DIRS`` floor plus additive ``scope.exclude_dirs`` / pyproject
+  entries.
 - ``DependencyFileDiscoverer`` lists files shipped by an installed distribution;
-  returns ``(paths, site-packages-root)``; applies the same blocklist + size +
-  extension filters as projects.
+  returns ``(paths, site-packages-root, effective_excludes)``; applies the same
+  blocklist + size + extension filters as projects.
 - Both respect ``scope.include_extensions`` (narrowable) and
   ``scope.max_file_size_bytes``.
-- Missing distribution → ``([], Path("."))``.
+- Missing distribution → ``([], Path("."), effective_excludes)``.
 
-Decision #6b: directory blocklist cannot be widened/narrowed — it's a module
-constant. These tests pin that invariant by asserting presence of common
-blocklist entries in output filtering.
+Decision #6b (amended 2026-07-13): the directory-blocklist FLOOR is a module
+constant and non-removable; user exclusions are additive-only. These tests pin
+both halves — the floor always prunes, and YAML/pyproject entries prune MORE.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.extraction.config import DiscoveryScopeConfig
+from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, DiscoveryScopeConfig
 from pydocs_mcp.extraction.strategies.discovery import (
     DependencyFileDiscoverer,
     ProjectFileDiscoverer,
 )
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 
 # ── ProjectFileDiscoverer ─────────────────────────────────────────────────
@@ -41,7 +45,7 @@ def test_project_discovers_py_md_ipynb(tmp_path: Path) -> None:
     (tmp_path / "d.txt").write_text("skipped\n")  # not in allowlist
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, root = disc.discover(tmp_path)
+    paths, root, _ = disc.discover(tmp_path)
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["a.py", "b.md", "c.ipynb"]
@@ -54,7 +58,7 @@ def test_project_returns_paths_sorted(tmp_path: Path) -> None:
         (tmp_path / name).write_text("\n")
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, _ = disc.discover(tmp_path)
+    paths, _, _ = disc.discover(tmp_path)
 
     assert paths == sorted(paths)
 
@@ -77,7 +81,7 @@ def test_project_prunes_excluded_dirs(tmp_path: Path) -> None:
         (tmp_path / excluded / "secret.py").write_text("\n")
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, _ = disc.discover(tmp_path)
+    paths, _, _ = disc.discover(tmp_path)
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["keep.py"]
@@ -89,7 +93,7 @@ def test_project_respects_max_file_size_bytes(tmp_path: Path) -> None:
     (tmp_path / "huge.py").write_text("x" * 1_100_000)  # > default 1_000_000
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, _ = disc.discover(tmp_path)
+    paths, _, _ = disc.discover(tmp_path)
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["small.py"]
@@ -101,7 +105,7 @@ def test_project_indexes_files_between_old_and_new_cap(tmp_path: Path) -> None:
     (tmp_path / "gold.py").write_text("x" * 561_026)
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, _ = disc.discover(tmp_path)
+    paths, _, _ = disc.discover(tmp_path)
 
     assert [Path(p).name for p in paths] == ["gold.py"]
 
@@ -109,7 +113,7 @@ def test_project_indexes_files_between_old_and_new_cap(tmp_path: Path) -> None:
 def test_project_root_equals_project_dir(tmp_path: Path) -> None:
     """Returned root is the project dir Path verbatim (caller computes relpath)."""
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
-    _, root = disc.discover(tmp_path)
+    _, root, _ = disc.discover(tmp_path)
     assert root == tmp_path
 
 
@@ -121,7 +125,7 @@ def test_project_extension_allowlist_narrowable(tmp_path: Path) -> None:
 
     scope = DiscoveryScopeConfig(include_extensions=[".py"])
     disc = ProjectFileDiscoverer(scope=scope)
-    paths, _ = disc.discover(tmp_path)
+    paths, _, _ = disc.discover(tmp_path)
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["keep.py"]
@@ -134,9 +138,164 @@ def test_project_nested_dirs_walked(tmp_path: Path) -> None:
     (nested / "mod.py").write_text("\n")
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, _ = disc.discover(tmp_path)
+    paths, _, _ = disc.discover(tmp_path)
 
     assert any(p.endswith("mod.py") for p in paths)
+
+
+# ── Per-project exclusion pruning (spec 2026-07-13 §7.3, AC-6..AC-10) ─────
+
+
+def _build_worked_example_tree(tmp_path: Path) -> None:
+    """The §4 worked-example tree from the exclude-dirs spec (no pyproject
+    on disk — each test supplies excludes via the injected loader/scope)."""
+    (tmp_path / "docs" / "generated").mkdir(parents=True)
+    (tmp_path / "docs" / "generated" / "api.md").write_text("# api\n")
+    (tmp_path / "docs" / "guide.md").write_text("# guide\n")
+    (tmp_path / "src" / "myproj" / "fixtures").mkdir(parents=True)
+    (tmp_path / "src" / "myproj" / "core.py").write_text("x = 1\n")
+    (tmp_path / "src" / "myproj" / "fixtures" / "sample.py").write_text("y = 2\n")
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "fixtures" / "data.md").write_text("# data\n")
+    (tmp_path / "tools" / "generated").mkdir(parents=True)
+    (tmp_path / "tools" / "generated" / "gen.py").write_text("z = 3\n")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "secret.py").write_text("s = 4\n")
+
+
+def _rel_paths(paths: list[str], root: Path) -> set[str]:
+    return {Path(p).relative_to(root).as_posix() for p in paths}
+
+
+def test_project_empty_excludes_output_identical_to_floor_only(tmp_path: Path) -> None:
+    """AC-6 regression: with exclude_dirs empty on both surfaces the output
+    is byte-identical to floor-only pruning — same sorted paths whether the
+    loader is the real default (no pyproject on disk → empty) or an
+    injected empty fake."""
+    _build_worked_example_tree(tmp_path)
+
+    default_disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
+    injected_disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(),
+        excludes_loader=lambda root: EMPTY_PROJECT_EXCLUDES,
+    )
+
+    default_out = default_disc.discover(tmp_path)
+    injected_out = injected_disc.discover(tmp_path)
+
+    assert default_out == injected_out
+    paths = default_out[0]
+    assert paths == sorted(paths)
+    assert _rel_paths(paths, tmp_path) == {
+        "docs/generated/api.md",
+        "docs/guide.md",
+        "src/myproj/core.py",
+        "src/myproj/fixtures/sample.py",
+        "fixtures/data.md",
+        "tools/generated/gen.py",
+    }
+
+
+def test_project_bare_name_entry_prunes_every_depth(tmp_path: Path) -> None:
+    """AC-7: bare "fixtures" prunes BOTH occurrences — root-level and the
+    nested src/myproj/fixtures — any path component, any depth (§4)."""
+    _build_worked_example_tree(tmp_path)
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(),
+        excludes_loader=lambda root: ProjectExcludes(
+            names=frozenset({"fixtures"}), anchored=frozenset()
+        ),
+    )
+    paths, _, _ = disc.discover(tmp_path)
+    rels = _rel_paths(paths, tmp_path)
+    assert "fixtures/data.md" not in rels
+    assert "src/myproj/fixtures/sample.py" not in rels
+    assert "src/myproj/core.py" in rels
+    assert "docs/guide.md" in rels
+
+
+def test_project_anchored_entry_prunes_only_its_own_path(tmp_path: Path) -> None:
+    """AC-8: anchored "docs/generated" removes docs/generated/** while the
+    leaf-name sibling tools/generated/** survives (§4 worked example)."""
+    _build_worked_example_tree(tmp_path)
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(),
+        excludes_loader=lambda root: ProjectExcludes(
+            names=frozenset(), anchored=frozenset({"docs/generated"})
+        ),
+    )
+    paths, _, _ = disc.discover(tmp_path)
+    rels = _rel_paths(paths, tmp_path)
+    assert "docs/generated/api.md" not in rels
+    assert "docs/guide.md" in rels
+    assert "tools/generated/gen.py" in rels
+
+
+def test_project_floor_survives_user_excludes_and_duplicates_are_noop(
+    tmp_path: Path,
+) -> None:
+    """AC-9: the floor still prunes with user excludes set (.venv contents
+    never discovered) and a user entry duplicating a floor name (".git")
+    is a harmless no-op, not an error."""
+    _build_worked_example_tree(tmp_path)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "hook.py").write_text("h = 1\n")
+
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(),
+        excludes_loader=lambda root: ProjectExcludes(
+            names=frozenset({".git", "fixtures"}), anchored=frozenset()
+        ),
+    )
+    paths, _, _ = disc.discover(tmp_path)
+    rels = _rel_paths(paths, tmp_path)
+    assert not any(r.startswith(".venv/") for r in rels)
+    assert not any(r.startswith(".git/") for r in rels)
+    assert not any("fixtures" in r.split("/") for r in rels)
+    assert "src/myproj/core.py" in rels
+
+
+def test_project_yaml_and_pyproject_surfaces_merge(tmp_path: Path) -> None:
+    """AC-10: YAML scope entries and pyproject entries UNION — each surface
+    excludes a different directory and both are gone. The pyproject side
+    arrives via the injected fake loader, proving the D3 injection seam
+    (called once per run, with the walk root); the YAML side carries both
+    an anchored entry AND a bare name ("tools")."""
+    _build_worked_example_tree(tmp_path)
+    calls: list[Path] = []
+
+    def fake_loader(root: Path) -> ProjectExcludes:
+        calls.append(root)
+        return ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
+
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(exclude_dirs=["docs/generated", "tools"]),
+        excludes_loader=fake_loader,
+    )
+    paths, _, _ = disc.discover(tmp_path)
+    rels = _rel_paths(paths, tmp_path)
+
+    assert calls == [tmp_path]
+    assert "fixtures/data.md" not in rels  # pyproject surface
+    assert "src/myproj/fixtures/sample.py" not in rels
+    assert "docs/generated/api.md" not in rels  # YAML surface
+    assert "docs/guide.md" in rels
+    assert "tools/generated/gen.py" not in rels  # YAML bare name
+
+
+def test_project_discover_returns_effective_excludes(tmp_path: Path) -> None:
+    """§7.3 last bullet: the third return element is the exact set the walk
+    pruned against — floor ∪ scope entries ∪ loader output."""
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(exclude_dirs=["docs/generated"]),
+        excludes_loader=lambda root: ProjectExcludes(
+            names=frozenset({"fixtures"}), anchored=frozenset()
+        ),
+    )
+    _, _, effective = disc.discover(tmp_path)
+    assert "fixtures" in effective.names
+    assert effective.names >= _EXCLUDED_DIRS
+    assert effective.anchored == frozenset({"docs/generated"})
 
 
 # ── DependencyFileDiscoverer ──────────────────────────────────────────────
@@ -184,7 +343,7 @@ def _make_fake_dist(tmp_path: Path, rel_files: tuple[str, ...]) -> _FakeDist:
 def test_dependency_missing_returns_empty_default_root(tmp_path: Path) -> None:
     """Declared-but-not-installed dep → empty list + ``Path('.')`` sentinel."""
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, root = disc.discover("definitely-not-a-real-pkg-2026-xyz")
+    paths, root, _ = disc.discover("definitely-not-a-real-pkg-2026-xyz")
     assert paths == []
     assert root == Path()
 
@@ -215,7 +374,7 @@ def test_dependency_lists_dist_files_filters_by_extension(
     )
 
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, root = disc.discover("foo")
+    paths, root, _ = disc.discover("foo")
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["README.md", "__init__.py", "mod.py", "notebook.ipynb"]
@@ -248,7 +407,7 @@ def test_dependency_excludes_files_under_blocklisted_dirs(
     )
 
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, _ = disc.discover("foo")
+    paths, _, _ = disc.discover("foo")
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["real.py"]
@@ -272,7 +431,7 @@ def test_dependency_respects_max_file_size_bytes(
     )
 
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, _ = disc.discover("foo")
+    paths, _, _ = disc.discover("foo")
 
     names = sorted(Path(p).name for p in paths)
     assert names == ["small.py"]
@@ -301,7 +460,7 @@ def test_dependency_paths_sorted(
     )
 
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, _ = disc.discover("foo")
+    paths, _, _ = disc.discover("foo")
 
     assert paths == sorted(paths)
 
@@ -318,9 +477,111 @@ def test_dependency_empty_files_returns_default_root(
         lambda name: dist,
     )
     disc = DependencyFileDiscoverer(scope=DiscoveryScopeConfig())
-    paths, root = disc.discover("foo")
+    paths, root, _ = disc.discover("foo")
     assert paths == []
     assert root == Path()
+
+
+# ── YAML dependency.exclude_dirs (spec 2026-07-13 §7.4, AC-11) ────────────
+
+
+def test_dependency_yaml_excludes_bare_and_anchored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-11: user bare names prune at any depth via PARENT-directory
+    components (never a file's own basename — directories-only, §4);
+    anchored entries match with the FIRST path component stripped, so one
+    entry applies uniformly under every top-level component (§4). A flat
+    single-component relpath (six.py) survives every anchored entry; a
+    distribution with two top-level components has the anchored entry
+    applied under both; a bare entry colliding with a shipped FILE name
+    (conf.py) excludes nothing."""
+    dist = _make_fake_dist(
+        tmp_path,
+        (
+            "foo/mod.py",
+            "foo/tests/test_mod.py",  # bare "tests" — pruned
+            "foo/docs/examples/ex.md",  # anchored "docs/examples" — pruned
+            "foo/docs/examples/deep/d.md",  # beneath the anchor — pruned
+            "foo/docs/guide.md",  # docs itself NOT excluded — kept
+            "bar/docs/examples/ex2.md",  # second top-level component — pruned
+            "six.py",  # flat module — survives (§4 edge)
+            "foo/conf.py",  # bare "conf.py" is a FILE-name
+            # collision — kept (§4 no-op rule)
+        ),
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
+        lambda name: dist,
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.discovery.dependency.find_site_packages_root",
+        lambda p: str(tmp_path / "site-packages"),
+    )
+
+    scope = DiscoveryScopeConfig(exclude_dirs=["tests", "docs/examples", "conf.py"])
+    disc = DependencyFileDiscoverer(scope=scope)
+    paths, _, _ = disc.discover("foo")
+
+    sp = tmp_path / "site-packages"
+    rels = {Path(p).relative_to(sp).as_posix() for p in paths}
+    assert rels == {"foo/mod.py", "foo/docs/guide.md", "six.py", "foo/conf.py"}
+
+
+def test_dependency_never_reads_project_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-11 / D4: the dependency walk NEVER consults the pyproject loader
+    — a dependency's own TOML is an untrusted-input channel pointed at
+    index composition. Pinned two ways: the module-level loader raises if
+    called, and the dataclass structurally has no excludes_loader field."""
+
+    def _boom(root: Path) -> ProjectExcludes:
+        raise AssertionError("dependency walk must never call load_project_excludes")
+
+    monkeypatch.setattr("pydocs_mcp.project_toml.load_project_excludes", _boom)
+    dist = _make_fake_dist(tmp_path, ("foo/mod.py",))
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.discovery.dependency.find_installed_distribution",
+        lambda name: dist,
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.discovery.dependency.find_site_packages_root",
+        lambda p: str(tmp_path / "site-packages"),
+    )
+
+    disc = DependencyFileDiscoverer(
+        scope=DiscoveryScopeConfig(exclude_dirs=["tests"]),
+    )
+    paths, _, _ = disc.discover("foo")
+
+    assert [Path(p).name for p in paths] == ["mod.py"]
+    field_names = {f.name for f in dataclasses.fields(DependencyFileDiscoverer)}
+    assert "excludes_loader" not in field_names
+    # The module namespace must not even BIND the loader — a from-import
+    # would evade the source-module monkeypatch above.
+    from pydocs_mcp.extraction.strategies.discovery import (
+        dependency as dependency_module,
+    )
+
+    assert not hasattr(dependency_module, "load_project_excludes")
+
+
+def test_dependency_discover_returns_effective_excludes_even_when_missing() -> None:
+    """§7.4 last bullet: the dependency scope returns floor ∪ YAML only —
+    even on the missing-distribution path, so the per-scope hash fold
+    (spec §9.1) always sees the set this scope would have used."""
+    disc = DependencyFileDiscoverer(
+        scope=DiscoveryScopeConfig(exclude_dirs=["tests"]),
+    )
+    paths, root, effective = disc.discover("definitely-not-a-real-pkg-2026-xyz")
+    assert paths == []
+    assert root == Path()
+    assert "tests" in effective.names
+    assert effective.names >= _EXCLUDED_DIRS
+    assert effective.anchored == frozenset()
 
 
 # ── Protocol conformance ──────────────────────────────────────────────────
@@ -372,7 +633,7 @@ def test_oversize_file_logs_warning_naming_it(
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
     with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
-        paths, _ = disc.discover(tmp_path)
+        paths, _, _ = disc.discover(tmp_path)
 
     assert sorted(Path(p).name for p in paths) == ["small.py"]
     skip_msgs = [r.getMessage() for r in caplog.records if "huge.py" in r.getMessage()]
@@ -389,7 +650,7 @@ def test_within_cap_file_indexes_without_warning(
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
     with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
-        paths, _ = disc.discover(tmp_path)
+        paths, _, _ = disc.discover(tmp_path)
 
     assert [Path(p).name for p in paths] == ["ok.py"]
     assert not [r for r in caplog.records if "max_file_size_bytes" in r.getMessage()]

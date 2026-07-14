@@ -122,3 +122,32 @@ async def test_maintenance_callables_run_against_the_db(db_path: Path) -> None:
         assert read_index_metadata(conn) == meta
     finally:
         conn.close()
+
+
+def test_member_extractor_wired_with_yaml_project_excludes(
+    db_path: Path,
+    tmp_path: Path,
+) -> None:
+    """Spec §7.7 wiring pin (AC-26 groundwork): YAML
+    ``extraction.discovery.project.exclude_dirs`` must reach
+    AstMemberExtractor.scope_exclude_dirs through the REAL composition
+    root — in both the static path and (via static_fallback) inspect mode.
+    An implementation that adds the field but forgets the factories.py
+    wiring passes the in-test-injection tests and silently never applies
+    YAML excludes to member extraction."""
+    from pydocs_mcp.storage.factories import build_project_indexer
+
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        'extraction:\n  discovery:\n    project:\n      exclude_dirs: ["fixtures"]\n',
+        encoding="utf-8",
+    )
+    config = AppConfig.load(explicit_path=overlay)
+
+    static_bundle = build_project_indexer(config, db_path, use_inspect=False, inspect_depth=None)
+    assert static_bundle.orchestrator.member_extractor.scope_exclude_dirs == ("fixtures",)
+
+    inspect_bundle = build_project_indexer(config, db_path, use_inspect=True, inspect_depth=None)
+    assert inspect_bundle.orchestrator.member_extractor.static_fallback.scope_exclude_dirs == (
+        "fixtures",
+    )
