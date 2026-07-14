@@ -613,7 +613,11 @@ def build_project_indexer(
 
     orchestrator = ProjectIndexer(
         indexing_service=indexing_service,
-        dependency_resolver=StaticDependencyResolver(),
+        dependency_resolver=StaticDependencyResolver(
+            # YAML project-scope entries reach the manifest walk (spec 7.9);
+            # the TOML loader default stands (per-resolve read, D3 posture).
+            scope_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs)
+        ),
         chunk_extractor=chunk_extractor,
         member_extractor=member_extractor,
         uow_factory=uow_factory,
