@@ -385,3 +385,108 @@ async def test_ac20_one_tree_load_per_fully_keyed_group() -> None:
     await step.run(_state(items))
     loads = [c.payload for c in ts.calls if c.method == "load"]
     assert sorted(loads) == [(_PKG, _MOD), (_PKG, "pkg.other")]
+
+
+# ── AC10, AC38, AC40: kind-resolved thresholds ───────────────────────────
+
+
+def _module_tree(n_functions: int, *, root_text: str = "module docstring") -> DocumentNode:
+    functions = tuple(_node(f"{_MOD}.f{i}", NodeKind.FUNCTION) for i in range(n_functions))
+    return _node(_MOD, NodeKind.MODULE, text=root_text, children=functions)
+
+
+@pytest.mark.asyncio
+async def test_ac10_class_and_module_diverge_at_identical_coverage() -> None:
+    # (a) class tree: 3 of 10 methods -> collapses (0.3 >= class 0.3).
+    ts, cs = await _stores(trees=[_class_tree(10)], chunks=[_chunk(f"{_MOD}.C")])
+    out = await _step(ts, cs).run(_state([_chunk(f"{_MOD}.C.m{i}", 0.5) for i in (0, 1, 2)]))
+    assert _qnames(out) == [f"{_MOD}.C"]
+
+    # (b) module tree: 3 of 10 functions -> NO rollup (0.3 < module 0.6).
+    ts2, cs2 = await _stores(trees=[_module_tree(10)], chunks=[_chunk(_MOD)])
+    state = _state([_chunk(f"{_MOD}.f{i}", 0.5) for i in (0, 1, 2)])
+    assert await _step(ts2, cs2).run(state) is state
+
+    # (c) module tree: 6 of 10 -> collapses into the module's own chunk,
+    # fetched via qualified_name == module (6/10 >= 0.6).
+    ts3, cs3 = await _stores(trees=[_module_tree(10)], chunks=[_chunk(_MOD)])
+    out3 = await _step(ts3, cs3).run(_state([_chunk(f"{_MOD}.f{i}", 0.5) for i in range(6)]))
+    assert _qnames(out3) == [_MOD]
+    fetch = next(c for c in cs3.calls if c.method == "list")
+    assert fetch.payload["filter"]["qualified_name"] == _MOD
+
+
+@pytest.mark.asyncio
+async def test_ac38_fallback_for_unmapped_kinds_and_replace_wholesale() -> None:
+    def _function_tree(n_examples: int) -> DocumentNode:
+        examples = tuple(_node(f"{_MOD}.f#ex{i}", NodeKind.CODE_EXAMPLE) for i in range(n_examples))
+        fn = _node(f"{_MOD}.f", NodeKind.FUNCTION, children=examples)
+        return _node(_MOD, NodeKind.MODULE, text="", children=(fn,))
+
+    # (a) "function" absent from the default mapping -> fallback 0.5:
+    # 2/4 = 0.5 >= 0.5 -> rollup.
+    ts, cs = await _stores(trees=[_function_tree(4)], chunks=[_chunk(f"{_MOD}.f")])
+    out = await _step(ts, cs).run(
+        _state([_chunk(f"{_MOD}.f#ex0", 0.9), _chunk(f"{_MOD}.f#ex1", 0.8)])
+    )
+    assert _qnames(out) == [f"{_MOD}.f"]
+
+    # (b) 2/5 = 0.4 < 0.5 -> no rollup.
+    ts2, cs2 = await _stores(trees=[_function_tree(5)], chunks=[_chunk(f"{_MOD}.f")])
+    state = _state([_chunk(f"{_MOD}.f#ex0", 0.9), _chunk(f"{_MOD}.f#ex1", 0.8)])
+    assert await _step(ts2, cs2).run(state) is state
+
+    # (c) an explicit {"function": 0.3} entry flips (b) to a rollup.
+    ts3, cs3 = await _stores(trees=[_function_tree(5)], chunks=[_chunk(f"{_MOD}.f")])
+    out3 = await _step(ts3, cs3, min_coverage_by_kind={"function": 0.3}).run(
+        _state([_chunk(f"{_MOD}.f#ex0", 0.9), _chunk(f"{_MOD}.f#ex1", 0.8)])
+    )
+    assert _qnames(out3) == [f"{_MOD}.f"]
+
+    # (d) replace-wholesale: under {"function": 0.3}, "module" is absent so
+    # the 0.5 fallback governs the root — 5/10 = 0.5 >= 0.5 rolls up (a
+    # per-key merge with the default module: 0.6 would block it).
+    ts4, cs4 = await _stores(trees=[_module_tree(10)], chunks=[_chunk(_MOD)])
+    out4 = await _step(ts4, cs4, min_coverage_by_kind={"function": 0.3}).run(
+        _state([_chunk(f"{_MOD}.f{i}", 0.5) for i in range(5)])
+    )
+    assert _qnames(out4) == [_MOD]
+
+
+@pytest.mark.asyncio
+async def test_ac40_markdown_heading_and_whole_doc_thresholds() -> None:
+    _DOC = "pkg.guide.md"
+
+    def _md_tree(n_examples: int, *, root_text: str = "") -> DocumentNode:
+        examples = tuple(
+            _node(f"{_DOC}#h1-ex{i}", NodeKind.CODE_EXAMPLE) for i in range(n_examples)
+        )
+        heading = _node(f"{_DOC}#h1", NodeKind.MARKDOWN_HEADING, children=examples)
+        return _node(_DOC, NodeKind.MODULE, text=root_text, children=(heading,))
+
+    def _md_chunk(qname: str, relevance: float | None = None) -> Chunk:
+        return _chunk(qname, relevance, module=_DOC)
+
+    # (a) heading rollup: 2/4 = 0.5 >= markdown_heading 0.5 (equality pin).
+    ts, cs = await _stores(trees=[_md_tree(4)], chunks=[_md_chunk(f"{_DOC}#h1")])
+    out = await _step(ts, cs).run(
+        _state([_md_chunk(f"{_DOC}#h1-ex0", 0.9), _md_chunk(f"{_DOC}#h1-ex1", 0.8)])
+    )
+    assert _qnames(out) == [f"{_DOC}#h1"]
+
+    # (b) 2/5 = 0.4 < 0.5 -> no rollup.
+    ts2, cs2 = await _stores(trees=[_md_tree(5)], chunks=[_md_chunk(f"{_DOC}#h1")])
+    state = _state([_md_chunk(f"{_DOC}#h1-ex0", 0.9), _md_chunk(f"{_DOC}#h1-ex1", 0.8)])
+    assert await _step(ts2, cs2).run(state) is state
+
+    # (c) whole-doc rollup gated by the MODULE entry: preamble-bearing root
+    # with 5 headings, 3 co-retrieved -> 3/5 = 0.6 >= module 0.6 (equality
+    # pin on the module entry); 2/5 = 0.4 -> no rollup.
+    headings = tuple(_node(f"{_DOC}#h{i}", NodeKind.MARKDOWN_HEADING) for i in range(5))
+    root = _node(_DOC, NodeKind.MODULE, text="preamble prose", children=headings)
+    ts3, cs3 = await _stores(trees=[root], chunks=[_md_chunk(_DOC)])
+    out3 = await _step(ts3, cs3).run(_state([_md_chunk(f"{_DOC}#h{i}", 0.5) for i in (0, 1, 2)]))
+    assert _qnames(out3) == [_DOC]
+    ts4, cs4 = await _stores(trees=[root], chunks=[_md_chunk(_DOC)])
+    state4 = _state([_md_chunk(f"{_DOC}#h0", 0.5), _md_chunk(f"{_DOC}#h1", 0.5)])
+    assert await _step(ts4, cs4).run(state4) is state4
