@@ -746,6 +746,20 @@ async def test_ast_project_default_construction_unchanged(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_ast_project_floor_named_ancestor_does_not_exclude(tmp_path: Path) -> None:
+    """Ancestor components ABOVE the walk root never match (spec §7.5):
+    a project physically located under a floor-named directory (a CI
+    checkout under build/, a venv-adjacent clone) indexes normally. The
+    old absolute-path post-filter silently dropped EVERY member of such
+    projects while chunk discovery kept their chunks."""
+    root = tmp_path / "build" / ".venv" / "myproj"
+    root.mkdir(parents=True)
+    (root / "kept.py").write_text("def kept(): pass\n", encoding="utf-8")
+    names = await _member_names(AstMemberExtractor(), root)
+    assert "kept" in names
+
+
+@pytest.mark.asyncio
 async def test_inspect_project_delegation_inherits_excludes(tmp_path: Path) -> None:
     """AC-12 (inspect mode): extract_from_project ALWAYS delegates to the
     composed AstMemberExtractor (inspect_extractor.py:42-47), so inspect-mode

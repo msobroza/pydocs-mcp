@@ -82,9 +82,9 @@ def _parent_dir_excluded(filepath: str, root: Path, effective: ProjectExcludes) 
     if rel_parent == ".":
         # File directly at the walk root — there is no directory to match.
         return False
-    # Bare names (floor folded into ``effective.names`` by merge_excludes)
-    # go through the canonical component matcher; anchored entries through
-    # ProjectExcludes.matches (spec §7.5).
+    # matches() also covers bare names by contract; the explicit
+    # _path_under_excluded call is kept for parity with spec §7.5's
+    # canonical matcher — the redundancy is intentional.
     return _path_under_excluded(rel_parent, effective.names) or effective.matches(rel_parent)
 
 
