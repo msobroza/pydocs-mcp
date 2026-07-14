@@ -490,3 +490,119 @@ async def test_ac40_markdown_heading_and_whole_doc_thresholds() -> None:
     ts4, cs4 = await _stores(trees=[root], chunks=[_md_chunk(_DOC)])
     state4 = _state([_md_chunk(f"{_DOC}#h0", 0.5), _md_chunk(f"{_DOC}#h1", 0.5)])
     assert await _step(ts4, cs4).run(state4) is state4
+
+
+# ── AC14, AC16, AC25–AC28, AC35: replacement semantics ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_ac14_parent_already_in_results_is_self_folded_and_reused() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    in_list_parent = _chunk(f"{_MOD}.C", 0.6)
+    out = await step.run(
+        _state([_chunk(f"{_MOD}.C.m0", 0.9), in_list_parent, _chunk(f"{_MOD}.C.m1", 0.8)])
+    )
+    assert _qnames(out) == [f"{_MOD}.C"]
+    # In-list object reused: relevance folded to max of the whole group.
+    assert out.candidates.items[0].relevance == 0.9
+    # No DB fetch for the parent (reuse path).
+    assert not [c for c in cs.calls if c.method == "list"]
+
+
+@pytest.mark.asyncio
+async def test_ac16_duplicate_sibling_qnames_count_once_and_all_collapse() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    state = _state(
+        [
+            _chunk(f"{_MOD}.C.m0", 0.9),
+            _chunk(f"{_MOD}.C.m0", 0.85),  # duplicate qname (AST redefinition)
+            _chunk(f"{_MOD}.C.m1", 0.8),
+        ]
+    )
+    out = await step.run(state)
+    # m0 counts ONCE for coverage (2 distinct hits of 4 = 0.5 >= 0.3);
+    # both m0 bearer indices collapse.
+    assert _qnames(out) == [f"{_MOD}.C"]
+
+
+@pytest.mark.asyncio
+async def test_ac25_mixed_none_relevance_folds_max_without_typeerror() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                _chunk(f"{_MOD}.C.m0", None),
+                _chunk(f"{_MOD}.C.m1", 0.4),
+                _chunk(f"{_MOD}.C.m2", None),
+            ]
+        )
+    )
+    assert out.candidates.items[0].relevance == 0.4
+
+
+@pytest.mark.asyncio
+async def test_ac26_all_none_relevance_rolls_up_with_none() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    out = await _step(ts, cs).run(
+        _state([_chunk(f"{_MOD}.C.m0", None), _chunk(f"{_MOD}.C.m1", None)])
+    )
+    assert _qnames(out) == [f"{_MOD}.C"]
+    assert out.candidates.items[0].relevance is None
+
+
+@pytest.mark.asyncio
+async def test_ac27_interleaved_groups_rebuild_by_index() -> None:
+    a_methods = tuple(_node(f"{_MOD}.A.m{i}", NodeKind.METHOD) for i in range(2))
+    b_methods = tuple(_node(f"{_MOD}.B.m{i}", NodeKind.METHOD) for i in range(2))
+    cls_a = _node(f"{_MOD}.A", NodeKind.CLASS, children=a_methods)
+    cls_b = _node(f"{_MOD}.B", NodeKind.CLASS, children=b_methods)
+    root = _node(_MOD, NodeKind.MODULE, text="", children=(cls_a, cls_b))
+    ts, cs = await _stores(trees=[root], chunks=[_chunk(f"{_MOD}.A"), _chunk(f"{_MOD}.B")])
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                _chunk(f"{_MOD}.A.m0", 0.9),  # group A at {0, 3}
+                _chunk(f"{_MOD}.B.m0", 0.8),  # group B at {1, 2}
+                _chunk(f"{_MOD}.B.m1", 0.7),
+                _chunk(f"{_MOD}.A.m1", 0.6),
+            ]
+        )
+    )
+    # Index-by-index rebuild: parentA at index 0, parentB at index 1.
+    assert _qnames(out) == [f"{_MOD}.A", f"{_MOD}.B"]
+
+
+@pytest.mark.asyncio
+async def test_ac28_parent_candidacy_never_counts_toward_gates() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    state = _state([_chunk(f"{_MOD}.C.m0", 0.9), _chunk(f"{_MOD}.C", 0.8)])
+    # hits = 1 (< _MIN_SIBLINGS): the parent's own candidacy is not a hit —
+    # a parent-inclusive count of 2 would wrongly trigger (2/4 = 0.5 >= 0.3).
+    assert await step.run(state) is state
+
+
+@pytest.mark.asyncio
+async def test_ac35_retriever_name_rule_on_both_paths() -> None:
+    # Fetch path: the DB row carries retriever_name=None (row_to_chunk
+    # never sets it); the emitted parent keeps None.
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    out = await _step(ts, cs).run(
+        _state([_chunk(f"{_MOD}.C.m0", 0.9), _chunk(f"{_MOD}.C.m1", 0.8)])
+    )
+    assert out.candidates.items[0].retriever_name is None
+
+    # Reuse path: the in-list candidate's retriever_name is kept untouched.
+    ts2, cs2 = await _stores(trees=[_class_tree(4)])
+    in_list_parent = Chunk(
+        text="parent",
+        relevance=0.5,
+        retriever_name="dense",
+        metadata={"package": _PKG, "module": _MOD, "qualified_name": f"{_MOD}.C"},
+    )
+    out2 = await _step(ts2, cs2).run(
+        _state([_chunk(f"{_MOD}.C.m0", 0.9), in_list_parent, _chunk(f"{_MOD}.C.m1", 0.8)])
+    )
+    assert out2.candidates.items[0].retriever_name == "dense"
