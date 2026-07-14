@@ -1,0 +1,31 @@
+# RepoQA experiment — dense (embedding) only, Qwen3-Embedding-4B served via
+# OpenRouter's OpenAI-compatible /v1/embeddings endpoint.
+#
+# Requires OPENROUTER_API_KEY in the environment (never commit the key):
+#   set -a; source .env; set +a        # with OPENROUTER_API_KEY=sk-or-...
+#
+# Qwen3-Embedding-4B's native output dimension is 2560 (multiple of 8, so
+# TurboQuant is happy). send_dimensions: false omits OpenAI's Matryoshka
+# `dimensions` request param so the endpoint returns its native 2560-d vector
+# — matching a plain qwen3-embedding-4b call.
+#
+# NOTE: Qwen3-Embedding is an ASYMMETRIC model (it expects an instruction
+# prepended to queries). This raw OpenAI-compatible path sends the query text
+# verbatim with no instruction — same as a plain API call — so the numbers are
+# an instruction-free baseline, apples-to-apples with the on-device Qwen3-0.6B
+# row (repoqa_dense_st.yaml), which is also instruction-free.
+# Same exp_dense pipeline as repoqa_codestral.yaml; only the embedder differs.
+# See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: openai
+  model_name: qwen/qwen3-embedding-4b
+  dim: 2560
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+  batch_size: 32
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

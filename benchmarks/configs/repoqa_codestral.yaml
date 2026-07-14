@@ -1,0 +1,26 @@
+# RepoQA experiment — dense (embedding) only, Mistral codestral-embed-2505
+# served via OpenRouter's OpenAI-compatible /v1/embeddings endpoint.
+#
+# Requires OPENROUTER_API_KEY in the environment (never commit the key):
+#   set -a; source .env; set +a        # with OPENROUTER_API_KEY=sk-or-...
+#
+# codestral-embed's default output dimension is 1536 (multiple of 8, so
+# TurboQuant is happy). send_dimensions: false omits OpenAI's Matryoshka
+# `dimensions` request param so the endpoint returns its own default vector
+# — matching a plain codestral-embed call. Same exp_dense pipeline as
+# repoqa_dense.yaml; only the embedder block differs, so a comparison
+# against repoqa_dense.yaml / repoqa_bm25.yaml isolates the embedder.
+# See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: openai
+  model_name: mistralai/codestral-embed-2505
+  dim: 1536
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+  batch_size: 32
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml
