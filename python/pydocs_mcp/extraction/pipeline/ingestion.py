@@ -12,7 +12,7 @@ bundles:
 
 * :class:`FileBundle` — discovery + file-read + content-hash outputs
   (``target`` / ``target_kind`` / ``package_name`` / ``root`` / ``paths``
-  / ``file_contents`` / ``content_hash``).
+  / ``file_contents`` / ``content_hash`` / ``effective_excludes``).
 * :class:`ChunkBundle` — chunking + flatten outputs (``trees`` and the
   flat ``chunks`` tuple).
 * :class:`ReferenceBundle` — reference-capture outputs
@@ -74,7 +74,7 @@ class FileBundle:
     # the single per-run derivation point (spec D10). ContentHashStage
     # folds its fingerprint and MineDecisionsStage fills
     # CaptureContext.excluded from here; neither re-invokes the TOML
-    # loader, so a mid---watch pyproject save between stages can never
+    # loader, so a mid-``--watch`` pyproject save between stages can never
     # fingerprint a set the walk did not use.
     effective_excludes: ProjectExcludes = EMPTY_PROJECT_EXCLUDES
 
@@ -129,7 +129,9 @@ class IngestionState:
       content-hash outputs (carries ``target`` / ``target_kind`` /
       ``package_name`` so target-kind branching inside stages reads
       ``state.files.target_kind``; ``target`` is either a ``Path`` for
-      project mode or a ``str`` distribution name for dependency mode).
+      project mode or a ``str`` distribution name for dependency mode;
+      ``effective_excludes`` is the pruning set the discovery walk
+      actually used — see the field comment on :class:`FileBundle`).
     * :attr:`chunks` — :class:`ChunkBundle` with the per-file trees and
       the flat chunk list.
     * :attr:`refs` — :class:`ReferenceBundle` with the captured

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.extraction.config import ChunkingConfig, ExtractionConfig
+from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, ChunkingConfig, ExtractionConfig
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.pipeline import IngestionState, TargetKind
 from pydocs_mcp.extraction.pipeline.ingestion import ChunkBundle, FileBundle
@@ -35,7 +35,7 @@ from pydocs_mcp.extraction.pipeline.stages import (
     PackageBuildStage,
 )
 from pydocs_mcp.models import Package, PackageOrigin
-from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes, merge_excludes
 
 
 # ── BuildContext stub ──────────────────────────────────────────────────────
@@ -386,6 +386,149 @@ async def test_content_hash_produces_stable_string(tmp_path: Path) -> None:
     assert isinstance(out1.files.content_hash, str)
     assert out1.files.content_hash != ""
     assert out1.files.content_hash == out2.files.content_hash
+
+
+# ── ContentHashStage — conditional exclusion-fingerprint fold (spec §9.2) ──
+
+
+_FLOOR_ONLY = ProjectExcludes(names=_EXCLUDED_DIRS, anchored=frozenset())
+
+
+def _raw_hash_files(paths: list[str]) -> str:
+    """Today's framing: hash_files output normalized exactly as the stage
+    normalizes it (str passthrough / bytes → hex) — the pre-upgrade value
+    every stored packages.content_hash was written with."""
+    from pydocs_mcp._fast import hash_files
+
+    result = hash_files(paths)
+    return result if isinstance(result, str) else result.hex()
+
+
+def _hash_state(tmp_path: Path, f: Path, excludes: ProjectExcludes) -> IngestionState:
+    return IngestionState(
+        files=FileBundle(
+            target=tmp_path,
+            target_kind=TargetKind.PROJECT,
+            paths=(str(f),),
+            effective_excludes=excludes,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_content_hash_floor_only_is_byte_identical_to_unfolded(tmp_path: Path) -> None:
+    """AC-24(a) groundwork: an effective set equal to the bare floor folds
+    NOTHING — the hash equals the pure hash_files framing, so an index
+    written before the fold existed skips as cached on the first
+    post-upgrade run."""
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+
+    out = await ContentHashStage().run(_hash_state(tmp_path, f, _FLOOR_ONLY))
+
+    assert out.files.content_hash == _raw_hash_files([str(f)])
+
+
+@pytest.mark.asyncio
+async def test_content_hash_empty_sentinel_is_unfolded(tmp_path: Path) -> None:
+    """A directly-constructed FileBundle (discovery never ran) carries
+    EMPTY_PROJECT_EXCLUDES — the 'no set supplied' sentinel must hash
+    exactly like the floor-only case, never fold an empty fingerprint
+    (pins tests/test_disable_rust_consumer_binding.py's verbatim-output
+    contract)."""
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    state = IngestionState(
+        files=FileBundle(target=tmp_path, target_kind=TargetKind.PROJECT, paths=(str(f),)),
+    )
+
+    out = await ContentHashStage().run(state)
+
+    assert out.files.content_hash == _raw_hash_files([str(f)])
+
+
+@pytest.mark.asyncio
+async def test_content_hash_misses_when_exclude_added_paths_unchanged(tmp_path: Path) -> None:
+    """AC-24(b) groundwork / §9's necessity argument: adding a user exclude
+    must move the hash even when the discovered path list is UNCHANGED
+    (member-only directories contribute zero chunk paths — a path-only
+    hash would skip as cached and strand their symbols). Both entry kinds
+    must move it."""
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    stage = ContentHashStage()
+
+    baseline = await stage.run(_hash_state(tmp_path, f, _FLOOR_ONLY))
+    with_name = await stage.run(
+        _hash_state(
+            tmp_path,
+            f,
+            ProjectExcludes(names=_EXCLUDED_DIRS | {"fixtures"}, anchored=frozenset()),
+        )
+    )
+    with_anchor = await stage.run(
+        _hash_state(
+            tmp_path,
+            f,
+            ProjectExcludes(names=_EXCLUDED_DIRS, anchored=frozenset({"docs/generated"})),
+        )
+    )
+
+    assert with_name.files.content_hash != baseline.files.content_hash
+    assert with_anchor.files.content_hash != baseline.files.content_hash
+
+
+@pytest.mark.asyncio
+async def test_content_hash_distinct_nonempty_sets_yield_distinct_hashes(
+    tmp_path: Path,
+) -> None:
+    """Transitions between two DISTINCT non-empty exclude sets always miss
+    (§9.2); the kind-tagged fingerprint keeps a bare name and an anchored
+    entry with the same text from colliding."""
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    stage = ContentHashStage()
+
+    fixtures_named = await stage.run(
+        _hash_state(
+            tmp_path,
+            f,
+            ProjectExcludes(names=_EXCLUDED_DIRS | {"fixtures"}, anchored=frozenset()),
+        )
+    )
+    docs_named = await stage.run(
+        _hash_state(
+            tmp_path,
+            f,
+            ProjectExcludes(names=_EXCLUDED_DIRS | {"docs"}, anchored=frozenset()),
+        )
+    )
+    docs_anchored = await stage.run(
+        _hash_state(
+            tmp_path,
+            f,
+            ProjectExcludes(names=_EXCLUDED_DIRS, anchored=frozenset({"docs"})),
+        )
+    )
+
+    assert fixtures_named.files.content_hash != docs_named.files.content_hash
+    assert docs_named.files.content_hash != docs_anchored.files.content_hash
+
+
+@pytest.mark.asyncio
+async def test_content_hash_floor_duplicate_entries_hash_like_floor_only(
+    tmp_path: Path,
+) -> None:
+    """AC-24(d) groundwork / §3.3 no-op rule: entries that only duplicate
+    floor names leave the effective set equal to the floor — no fold, no
+    spurious cache miss; still byte-identical to the unfolded framing."""
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    dup_only = merge_excludes(_EXCLUDED_DIRS, (".git", "venv"), EMPTY_PROJECT_EXCLUDES)
+
+    out = await ContentHashStage().run(_hash_state(tmp_path, f, dup_only))
+
+    assert out.files.content_hash == _raw_hash_files([str(f)])
 
 
 # ── PackageBuildStage ──────────────────────────────────────────────────────

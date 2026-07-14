@@ -90,7 +90,10 @@ async def test_file_discovery_persists_effective_excludes(tmp_path: Path) -> Non
         anchored=frozenset({"docs/generated"}),
     )
     project_disc = _FakeProjectDiscoverer(result=([], tmp_path, effective))
-    dep_disc = _FakeDepDiscoverer(result=([], Path(), EMPTY_PROJECT_EXCLUDES))
+    # Distinctive (non-default) set: EMPTY_PROJECT_EXCLUDES equals the field
+    # default, so it couldn't detect the stage dropping the third element.
+    dep_effective = ProjectExcludes(names=frozenset({"tests"}), anchored=frozenset())
+    dep_disc = _FakeDepDiscoverer(result=([], Path(), dep_effective))
     stage = FileDiscoveryStage(
         project_discoverer=project_disc,  # type: ignore[arg-type]
         dep_discoverer=dep_disc,  # type: ignore[arg-type]
@@ -106,7 +109,7 @@ async def test_file_discovery_persists_effective_excludes(tmp_path: Path) -> Non
         files=FileBundle(target="foo", target_kind=TargetKind.DEPENDENCY),
     )
     dep_out = await stage.run(dep_state)
-    assert dep_out.files.effective_excludes == EMPTY_PROJECT_EXCLUDES
+    assert dep_out.files.effective_excludes == dep_effective
 
 
 def test_file_bundle_effective_excludes_defaults_empty() -> None:
