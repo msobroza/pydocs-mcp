@@ -1,0 +1,45 @@
+# Dense + graph_expand + centrality_prior + parent_rollup — measures the
+# kind-aware sibling→parent rollup against its no-rollup twin
+# (exp_parent_rollup_baseline.yaml). Per-kind sweep: copy this file and
+# edit ONE mapping entry at a time; a supplied mapping replaces the default
+# table wholesale, so restate the untouched kinds in every sweep point.
+# Placement is normative: after top_k_filter, before limit.
+name: exp_parent_rollup
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: graph
+    type: graph_expand
+    params:
+      top_s: 10
+      max_depth: 1
+      decay: 0.9
+  - name: centrality
+    type: centrality_prior
+    params:
+      metric: pagerank
+      alpha: 0.5
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: rollup
+    type: parent_rollup
+    params:
+      min_coverage: 0.5
+      min_coverage_by_kind:
+        class: 0.3
+        module: 0.6
+        markdown_heading: 0.5
+  - name: limit
+    type: limit
+    params:
+      max_results: 10
