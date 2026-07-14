@@ -273,3 +273,115 @@ async def test_ac24_coverage_boundary_equality_triggers() -> None:
     out = await step.run(_state(items))
     # 3/10 == 0.30 satisfies >= against the class threshold; `>` fails this.
     assert _qnames(out) == [f"{_MOD}.C"]
+
+
+# ── AC11–AC13, AC15, AC18, AC20: eligibility + fallbacks ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_ac11_empty_text_parent_never_triggers() -> None:
+    methods = tuple(_node(f"{_MOD}.C.m{i}", NodeKind.METHOD) for i in range(2))
+    cls = _node(f"{_MOD}.C", NodeKind.CLASS, text="", children=methods)
+    root = _node(_MOD, NodeKind.MODULE, text="", children=(cls,))
+    # Seed the class chunk row so the ONLY thing blocking a rollup is the
+    # empty-text (parent-must-emit) gate — not missing-chunk-row abandonment.
+    # 2/2 coverage >= 0.3 and the floor is met, so removing `parent.text.strip()`
+    # from _gates_pass would produce a real rollup and fail the identity assert.
+    ts, cs = await _stores(trees=[root], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    state = _state([_chunk(f"{_MOD}.C.m0", 0.9), _chunk(f"{_MOD}.C.m1", 0.8)])
+    assert await step.run(state) is state
+
+
+@pytest.mark.asyncio
+async def test_ac12_missing_parent_chunk_row_abandons_rollup() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)])  # no chunk rows seeded
+    step = _step(ts, cs)
+    state = _state([_chunk(f"{_MOD}.C.m0", 0.9), _chunk(f"{_MOD}.C.m1", 0.8)])
+    assert await step.run(state) is state
+
+
+@pytest.mark.asyncio
+async def test_ac13_missing_tree_skips_group_while_other_group_rolls_up() -> None:
+    other_methods = tuple(_node(f"pkg.other.D.m{i}", NodeKind.METHOD) for i in range(2))
+    other_cls = _node("pkg.other.D", NodeKind.CLASS, children=other_methods)
+    other_root = _node("pkg.other", NodeKind.MODULE, text="", children=(other_cls,))
+    ts, cs = await _stores(trees=[other_root], chunks=[_chunk("pkg.other.D", module="pkg.other")])
+    step = _step(ts, cs)
+    items = [
+        # Group (pkg, pkg.mod): no tree persisted -> skipped, kept verbatim.
+        _chunk(f"{_MOD}.C.m0", 0.9),
+        _chunk(f"{_MOD}.C.m1", 0.8),
+        # Group (pkg, pkg.other): rolls up (2/2 = 1.0 >= 0.3).
+        _chunk("pkg.other.D.m0", 0.7, module="pkg.other"),
+        _chunk("pkg.other.D.m1", 0.6, module="pkg.other"),
+    ]
+    out = await step.run(_state(items))
+    assert _qnames(out) == [f"{_MOD}.C.m0", f"{_MOD}.C.m1", "pkg.other.D"]
+
+
+@pytest.mark.asyncio
+async def test_ac13b_drifted_qname_contributes_nothing() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    state = _state(
+        [
+            _chunk(f"{_MOD}.C.m0", 0.9),
+            _chunk(f"{_MOD}.stale_symbol", 0.8),  # matches no tree node
+        ]
+    )
+    # Only 1 real hit -> floor fails; the drifted chunk never counts.
+    assert await step.run(state) is state
+
+
+@pytest.mark.asyncio
+async def test_ac15_denominator_counts_emitting_children_only() -> None:
+    emitting = tuple(_node(f"{_MOD}.C.m{i}", NodeKind.METHOD) for i in range(6))
+    silent = tuple(_node(f"{_MOD}.C.s{i}", NodeKind.METHOD, text="") for i in range(2))
+    cls = _node(f"{_MOD}.C", NodeKind.CLASS, children=emitting + silent)
+    root = _node(_MOD, NodeKind.MODULE, text="", children=(cls,))
+    ts, cs = await _stores(trees=[root], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    out = await step.run(_state([_chunk(f"{_MOD}.C.m0", 0.9), _chunk(f"{_MOD}.C.m1", 0.8)]))
+    # 2/6 = 0.33 >= 0.3 triggers; counting the empty-text children
+    # (2/8 = 0.25) would not.
+    assert _qnames(out) == [f"{_MOD}.C"]
+
+
+@pytest.mark.asyncio
+async def test_ac18_missing_metadata_passes_through_verbatim() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    no_qname = Chunk(text="n1", metadata={"package": _PKG, "module": _MOD})
+    none_qname = Chunk(
+        text="n2", metadata={"package": _PKG, "module": _MOD, "qualified_name": None}
+    )
+    blank_module = Chunk(
+        text="n3", metadata={"package": _PKG, "module": "  ", "qualified_name": f"{_MOD}.C.m3"}
+    )
+    items = [
+        _chunk(f"{_MOD}.C.m0", 0.9),
+        no_qname,
+        none_qname,
+        blank_module,
+        _chunk(f"{_MOD}.C.m1", 0.5),
+    ]
+    out = await step.run(_state(items))
+    texts = [c.text for c in out.candidates.items]
+    assert texts == [f"text-{_MOD}.C", "n1", "n2", "n3"]
+
+
+@pytest.mark.asyncio
+async def test_ac20_one_tree_load_per_fully_keyed_group() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    items = [
+        _chunk(f"{_MOD}.C.m0", 0.9),
+        _chunk(f"{_MOD}.C.m1", 0.8),
+        _chunk("pkg.other.x", 0.7, module="pkg.other"),
+        # Package X's only chunk lacks qualified_name -> no group, no load.
+        Chunk(text="nx", metadata={"package": "x", "module": "x.m"}),
+    ]
+    await step.run(_state(items))
+    loads = [c.payload for c in ts.calls if c.method == "load"]
+    assert sorted(loads) == [(_PKG, _MOD), (_PKG, "pkg.other")]
