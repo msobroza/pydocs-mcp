@@ -2,9 +2,9 @@
 
 Both ``ProjectFileDiscoverer`` and ``DependencyFileDiscoverer`` filter
 out files larger than ``scope.max_file_size_bytes`` and skip files
-inside the hardcoded blocklist of directory names (.git, .venv, etc.).
-These helpers live here so the two implementations stay byte-identical
-on their pruning policy.
+inside the effective exclusion set (hardcoded floor + configured
+additions). These helpers live here so the two implementations stay
+byte-identical on their pruning policy.
 """
 
 from __future__ import annotations

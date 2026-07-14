@@ -9,11 +9,15 @@ Protocols:
 - :mod:`.dependency` — :class:`DependencyFileDiscoverer` (lists files
   shipped by an installed dependency distribution)
 
-Both consult the HARDCODED
-:data:`~pydocs_mcp.extraction.config._EXCLUDED_DIRS` module constant for
-directory pruning (spec decision #6b). The Protocol types share names
-with the concrete classes; consumers that need the structural Protocol
-import from :mod:`.base_discoverer`.
+Both prune against the EFFECTIVE exclusion set: the hardcoded
+:data:`~pydocs_mcp.extraction.config._EXCLUDED_DIRS` floor
+(non-removable) unioned with the additive user surfaces — YAML
+``extraction.discovery.*.exclude_dirs`` on both scopes; the project
+walk additionally honors the indexed project's own
+``[tool.pydocs-mcp] exclude_dirs`` (spec decision #6b as amended
+2026-07-13: additive-only, the floor never shrinks). The Protocol
+types share names with the concrete classes; consumers that need the
+structural Protocol import from :mod:`.base_discoverer`.
 """
 
 from __future__ import annotations

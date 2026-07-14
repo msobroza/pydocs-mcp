@@ -10,9 +10,9 @@ Pins:
   ``scope.max_file_size_bytes``.
 - Missing distribution → ``([], Path("."))``.
 
-Decision #6b: directory blocklist cannot be widened/narrowed — it's a module
-constant. These tests pin that invariant by asserting presence of common
-blocklist entries in output filtering.
+Decision #6b (amended 2026-07-13): the directory-blocklist FLOOR is a module
+constant and non-removable; user exclusions are additive-only. These tests pin
+both halves — the floor always prunes, and YAML/pyproject entries prune MORE.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from pydocs_mcp.extraction.strategies.discovery import (
     DependencyFileDiscoverer,
     ProjectFileDiscoverer,
 )
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 
 # ── ProjectFileDiscoverer ─────────────────────────────────────────────────
@@ -137,6 +138,145 @@ def test_project_nested_dirs_walked(tmp_path: Path) -> None:
     paths, _ = disc.discover(tmp_path)
 
     assert any(p.endswith("mod.py") for p in paths)
+
+
+# ── Per-project exclusion pruning (spec 2026-07-13 §7.3, AC-6..AC-10) ─────
+
+
+def _build_worked_example_tree(tmp_path: Path) -> None:
+    """The §4 worked-example tree from the exclude-dirs spec (no pyproject
+    on disk — each test supplies excludes via the injected loader/scope)."""
+    (tmp_path / "docs" / "generated").mkdir(parents=True)
+    (tmp_path / "docs" / "generated" / "api.md").write_text("# api\n")
+    (tmp_path / "docs" / "guide.md").write_text("# guide\n")
+    (tmp_path / "src" / "myproj" / "fixtures").mkdir(parents=True)
+    (tmp_path / "src" / "myproj" / "core.py").write_text("x = 1\n")
+    (tmp_path / "src" / "myproj" / "fixtures" / "sample.py").write_text("y = 2\n")
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "fixtures" / "data.md").write_text("# data\n")
+    (tmp_path / "tools" / "generated").mkdir(parents=True)
+    (tmp_path / "tools" / "generated" / "gen.py").write_text("z = 3\n")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "secret.py").write_text("s = 4\n")
+
+
+def _rel_paths(paths: list[str], root: Path) -> set[str]:
+    return {Path(p).relative_to(root).as_posix() for p in paths}
+
+
+def test_project_empty_excludes_output_identical_to_floor_only(tmp_path: Path) -> None:
+    """AC-6 regression: with exclude_dirs empty on both surfaces the output
+    is byte-identical to floor-only pruning — same sorted paths whether the
+    loader is the real default (no pyproject on disk → empty) or an
+    injected empty fake."""
+    _build_worked_example_tree(tmp_path)
+
+    default_disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
+    injected_disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(),
+        excludes_loader=lambda root: EMPTY_PROJECT_EXCLUDES,
+    )
+
+    default_out = default_disc.discover(tmp_path)
+    injected_out = injected_disc.discover(tmp_path)
+
+    assert default_out == injected_out
+    paths = default_out[0]
+    assert paths == sorted(paths)
+    assert _rel_paths(paths, tmp_path) == {
+        "docs/generated/api.md",
+        "docs/guide.md",
+        "src/myproj/core.py",
+        "src/myproj/fixtures/sample.py",
+        "fixtures/data.md",
+        "tools/generated/gen.py",
+    }
+
+
+def test_project_bare_name_entry_prunes_every_depth(tmp_path: Path) -> None:
+    """AC-7: bare "fixtures" prunes BOTH occurrences — root-level and the
+    nested src/myproj/fixtures — any path component, any depth (§4)."""
+    _build_worked_example_tree(tmp_path)
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(),
+        excludes_loader=lambda root: ProjectExcludes(
+            names=frozenset({"fixtures"}), anchored=frozenset()
+        ),
+    )
+    paths, _ = disc.discover(tmp_path)
+    rels = _rel_paths(paths, tmp_path)
+    assert "fixtures/data.md" not in rels
+    assert "src/myproj/fixtures/sample.py" not in rels
+    assert "src/myproj/core.py" in rels
+    assert "docs/guide.md" in rels
+
+
+def test_project_anchored_entry_prunes_only_its_own_path(tmp_path: Path) -> None:
+    """AC-8: anchored "docs/generated" removes docs/generated/** while the
+    leaf-name sibling tools/generated/** survives (§4 worked example)."""
+    _build_worked_example_tree(tmp_path)
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(),
+        excludes_loader=lambda root: ProjectExcludes(
+            names=frozenset(), anchored=frozenset({"docs/generated"})
+        ),
+    )
+    paths, _ = disc.discover(tmp_path)
+    rels = _rel_paths(paths, tmp_path)
+    assert "docs/generated/api.md" not in rels
+    assert "docs/guide.md" in rels
+    assert "tools/generated/gen.py" in rels
+
+
+def test_project_floor_survives_user_excludes_and_duplicates_are_noop(
+    tmp_path: Path,
+) -> None:
+    """AC-9: the floor still prunes with user excludes set (.venv contents
+    never discovered) and a user entry duplicating a floor name (".git")
+    is a harmless no-op, not an error."""
+    _build_worked_example_tree(tmp_path)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "hook.py").write_text("h = 1\n")
+
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(),
+        excludes_loader=lambda root: ProjectExcludes(
+            names=frozenset({".git", "fixtures"}), anchored=frozenset()
+        ),
+    )
+    paths, _ = disc.discover(tmp_path)
+    rels = _rel_paths(paths, tmp_path)
+    assert not any(r.startswith(".venv/") for r in rels)
+    assert not any(r.startswith(".git/") for r in rels)
+    assert not any("fixtures" in r.split("/") for r in rels)
+    assert "src/myproj/core.py" in rels
+
+
+def test_project_yaml_and_pyproject_surfaces_merge(tmp_path: Path) -> None:
+    """AC-10: YAML scope entries and pyproject entries UNION — each surface
+    excludes a different directory and both are gone. The pyproject side
+    arrives via the injected fake loader, proving the D3 injection seam
+    (called once per run, with the walk root)."""
+    _build_worked_example_tree(tmp_path)
+    calls: list[Path] = []
+
+    def fake_loader(root: Path) -> ProjectExcludes:
+        calls.append(root)
+        return ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
+
+    disc = ProjectFileDiscoverer(
+        scope=DiscoveryScopeConfig(exclude_dirs=["docs/generated"]),
+        excludes_loader=fake_loader,
+    )
+    paths, _ = disc.discover(tmp_path)
+    rels = _rel_paths(paths, tmp_path)
+
+    assert calls == [tmp_path]
+    assert "fixtures/data.md" not in rels  # pyproject surface
+    assert "src/myproj/fixtures/sample.py" not in rels
+    assert "docs/generated/api.md" not in rels  # YAML surface
+    assert "docs/guide.md" in rels
+    assert "tools/generated/gen.py" in rels
 
 
 # ── DependencyFileDiscoverer ──────────────────────────────────────────────
