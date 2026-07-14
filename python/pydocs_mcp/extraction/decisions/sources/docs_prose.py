@@ -25,6 +25,7 @@ from pydocs_mcp.extraction.decisions.sources.adr_files import (
     _scan_affected,
 )
 from pydocs_mcp.extraction.decisions.sources.commit_messages import qualifies
+from pydocs_mcp.project_toml import ProjectExcludes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class DocsProseSource:
     async def mine(self, ctx: CaptureContext) -> tuple[RawDecision, ...]:
         cfg = ctx.config.docs_prose
         tree_qnames = _collect_tree_qnames(ctx)
-        candidates = _candidate_files(ctx.project_root)
+        candidates = _candidate_files(ctx.project_root, ctx.excluded)
         selected, over_cap = candidates[: cfg.max_files], candidates[cfg.max_files :]
         raws: list[RawDecision] = []
         skipped_size = 0
@@ -64,11 +65,16 @@ class DocsProseSource:
         return tuple(raws)
 
 
-def _candidate_files(project_root: Path) -> list[Path]:
-    """Root prose files that exist, then ``docs/*.md`` sorted — deterministic order."""
+def _candidate_files(project_root: Path, excluded: ProjectExcludes) -> list[Path]:
+    """Root prose files that exist, then ``docs/*.md`` sorted — deterministic order.
+
+    Root files sit directly at the walk root (no excludable parent directory);
+    the ``docs/`` glob is non-recursive, so its files' parent directory IS
+    ``docs`` — one check drops the whole glob (directories-only rule, spec §4).
+    """
     files = [project_root / name for name in _ROOT_DOCS if (project_root / name).is_file()]
     docs_dir = project_root / _DOCS_GLOB_DIR
-    if docs_dir.is_dir():
+    if docs_dir.is_dir() and not excluded.matches(_DOCS_GLOB_DIR):
         files.extend(sorted(docs_dir.glob("*.md")))
     return files
 

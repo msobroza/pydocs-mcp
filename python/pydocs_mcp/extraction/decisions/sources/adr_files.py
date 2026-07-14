@@ -21,6 +21,7 @@ from pydocs_mcp.extraction.decisions._types import (
     RawDecision,
     decision_source_registry,
 )
+from pydocs_mcp.project_toml import ProjectExcludes
 
 # Author-curated → the highest-trust source. See ``inline_markers`` (0.95).
 _CONFIDENCE = 1.0
@@ -51,17 +52,24 @@ class AdrFilesSource:
     async def mine(self, ctx: CaptureContext) -> tuple[RawDecision, ...]:
         tree_qnames = _collect_tree_qnames(ctx)
         raws: list[RawDecision] = []
-        for path in _adr_paths(ctx.project_root):
+        for path in _adr_paths(ctx.project_root, ctx.excluded):
             raw = _parse_adr(path, ctx.project_root, tree_qnames)
             if raw is not None:
                 raws.append(raw)
         return tuple(raws)
 
 
-def _adr_paths(project_root: Path) -> list[Path]:
-    """Every ``*.md`` under a conventional ADR directory, sorted for determinism."""
+def _adr_paths(project_root: Path, excluded: ProjectExcludes) -> list[Path]:
+    """Every ``*.md`` under a conventional, non-excluded ADR directory, sorted.
+
+    The glob is non-recursive, so each candidate file's parent directory IS
+    ``rel`` — checking the directory once here is the directories-only rule
+    (spec §4) applied to this source's candidates.
+    """
     paths: list[Path] = []
     for rel in _ADR_DIRS:
+        if excluded.matches(rel):
+            continue
         base = project_root / rel
         if base.is_dir():
             paths.extend(sorted(base.glob("*.md")))
