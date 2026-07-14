@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from pydocs_mcp.project_toml import ProjectExcludes
     from pydocs_mcp.retrieval.config import AppConfig, WatchConfig
     from pydocs_mcp.serve.watcher import FileWatcher
 
@@ -522,9 +523,48 @@ async def _run_serve_indexing(args: argparse.Namespace) -> None:
     await _run_indexing(args)
 
 
+def _derive_watch_globs(
+    project: Path,
+    scope_entries: tuple[str, ...],
+    loader: Callable[[Path], ProjectExcludes],
+) -> tuple[str, ...]:
+    """Best-effort watchdog ignore globs from the user exclusion surfaces.
+
+    Churn suppression only (spec decision D6) — discovery owns correctness,
+    so a failed or partial derivation degrades to extra cheap cached reindex
+    cycles, never to wrong index content. The `_EXCLUDED_DIRS` floor is
+    deliberately NOT folded in (empty-floor merge): floor directories are
+    already covered by the operator-owned configured `ignore_globs`
+    defaults, and re-deriving them would only duplicate patterns.
+    """
+    from pydocs_mcp.project_toml import (
+        EMPTY_PROJECT_EXCLUDES,
+        ProjectExcludeConfigError,
+        merge_excludes,
+    )
+    from pydocs_mcp.serve.watcher import derive_exclude_globs
+
+    try:
+        loaded = loader(project)
+    except ProjectExcludeConfigError as exc:
+        # Spec §8 (watcher glob-derivation row): warn and derive from the
+        # YAML entries only — the reindex path fails loud on its own.
+        log.warning(
+            "watch: project exclude config invalid (%s); "
+            "ignore globs derived from YAML entries only",
+            exc,
+        )
+        loaded = EMPTY_PROJECT_EXCLUDES
+    effective = merge_excludes(frozenset(), scope_entries, loaded)
+    return derive_exclude_globs(effective, project)
+
+
 def _build_watcher_and_callback(
     args: argparse.Namespace,
     watch_cfg: WatchConfig,
+    *,
+    project_exclude_dirs: tuple[str, ...] = (),
+    excludes_loader: Callable[[Path], ProjectExcludes] | None = None,
 ) -> tuple[FileWatcher, Callable[[], Awaitable[None]]]:
     """Build the ``FileWatcher`` + ``on_change`` callback shared by
     ``serve --watch`` and the standalone ``watch`` subcommand.
@@ -533,15 +573,33 @@ def _build_watcher_and_callback(
     only differ in whether they ALSO run an MCP server. Lifted out of
     ``_run_watch_loop`` to keep the two consumers in sync — bug-fixes
     or YAML-knob additions land here and reach both modes automatically.
+
+    ``project_exclude_dirs`` carries the YAML project-scope entries
+    (``extraction.discovery.project.exclude_dirs``); ``excludes_loader``
+    is the pyproject-excludes loader seam (default: the real
+    ``load_project_excludes``) so tests inject fakes without touching the
+    filesystem.
     """
+    from pydocs_mcp.project_toml import ProjectExcludeConfigError, load_project_excludes
     from pydocs_mcp.serve.watcher import FileWatcher
 
+    loader = excludes_loader if excludes_loader is not None else load_project_excludes
     project, _db = _project_and_db(args)
+
+    # One-element list so the `_on_change` closure below can swap the
+    # derived suffix after each reindex (spec D6 shrink direction, AC-25)
+    # while the watcher re-reads it through `derived_globs_provider` on
+    # every event. The configured `ignore_globs` tuple stays operator-owned
+    # and static — only the derived suffix ever refreshes.
+    derived_globs: list[tuple[str, ...]] = [
+        _derive_watch_globs(project, project_exclude_dirs, loader)
+    ]
     watcher = FileWatcher(
         root=project,
         extensions=tuple(watch_cfg.extensions),
         ignore_globs=tuple(watch_cfg.ignore_globs),
         debounce_ms=watch_cfg.debounce_ms,
+        derived_globs_provider=lambda: derived_globs[0],
     )
 
     # File-change reindexes must NEVER inherit --force: force wipes the
@@ -558,12 +616,34 @@ def _build_watcher_and_callback(
         # makes the no-change case <100ms (spec §2).
         try:
             await _run_indexing(watch_args)
+        except ProjectExcludeConfigError as exc:
+            # WHY: a half-saved pyproject.toml can PARSE with a wrong-typed
+            # value (`exclude_dirs = "docs"` before the brackets land).
+            # Killing the serve process on a keystroke race would be worse
+            # than the misconfiguration — log, skip this cycle, and let the
+            # very next save retry (spec §8, watch row). Detection stays
+            # loud; only delivery is softened.
+            log.error(
+                "watch: project exclude config invalid; skipping this reindex cycle: %s",
+                exc,
+            )
+            return
         except Exception as exc:
             # WHY: a reindex failure during the watch loop should NOT
             # take down the consumer (MCP server in --watch mode; the
             # whole process in standalone watch mode). Log + keep
             # serving stale data instead.
             log.error("watch: reindex failed: %s", exc)
+            return
+        # WHY re-derive after EVERY successful reindex (not only manifest-
+        # triggered ones — this callback receives no trigger paths, and
+        # re-deriving an unchanged set is idempotent): startup-only
+        # derivation fails the shrink direction. Removing an exclude entry
+        # re-includes the directory on the manifest-triggered reindex, but
+        # a stale startup glob would then swallow every subsequent event
+        # inside it — no event, no reindex, a silently stale subtree until
+        # restart (spec D6, AC-25).
+        derived_globs[0] = _derive_watch_globs(project, project_exclude_dirs, loader)
 
     return watcher, _on_change
 
@@ -594,7 +674,11 @@ async def _run_watch_loop(
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     watch_cfg = config.serve.watch
 
-    watcher, on_change = _build_watcher_and_callback(args, watch_cfg)
+    watcher, on_change = _build_watcher_and_callback(
+        args,
+        watch_cfg,
+        project_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
+    )
 
     watcher_task = asyncio.create_task(watcher.run_until_cancelled(on_change))
     log.info("watch: started (debounce=%dms, root=%s)", watch_cfg.debounce_ms, project)
@@ -634,7 +718,11 @@ async def _run_watch_only(args: argparse.Namespace) -> None:
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     watch_cfg = config.serve.watch
 
-    watcher, on_change = _build_watcher_and_callback(args, watch_cfg)
+    watcher, on_change = _build_watcher_and_callback(
+        args,
+        watch_cfg,
+        project_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
+    )
     project, _db = _project_and_db(args)
     log.info(
         "watch (CLI-only): started (debounce=%dms, root=%s, MCP server: off)",
