@@ -606,3 +606,252 @@ async def test_ac35_retriever_name_rule_on_both_paths() -> None:
         _state([_chunk(f"{_MOD}.C.m0", 0.9), in_list_parent, _chunk(f"{_MOD}.C.m1", 0.8)])
     )
     assert out2.candidates.items[0].retriever_name == "dense"
+
+
+# ── AC17, AC19, AC29–AC33: claims, cascade, dedup ────────────────────────
+
+
+def _nested_tree(n_outer_siblings: int) -> DocumentNode:
+    """mod(text='') → outer → {inner, s0..s(n-1)}, inner → {leaf0, leaf1}."""
+    leaves = tuple(_node(f"{_MOD}.O.I.leaf{i}", NodeKind.METHOD) for i in range(2))
+    inner = _node(f"{_MOD}.O.I", NodeKind.CLASS, children=leaves)
+    siblings = tuple(_node(f"{_MOD}.O.s{i}", NodeKind.METHOD) for i in range(n_outer_siblings))
+    outer = _node(f"{_MOD}.O", NodeKind.CLASS, children=(inner, *siblings))
+    return _node(_MOD, NodeKind.MODULE, text="", children=(outer,))
+
+
+@pytest.mark.asyncio
+async def test_ac17_no_cascade_rolled_up_inner_is_not_an_outer_hit() -> None:
+    ts, cs = await _stores(
+        trees=[_nested_tree(7)], chunks=[_chunk(f"{_MOD}.O.I"), _chunk(f"{_MOD}.O")]
+    )
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                _chunk(f"{_MOD}.O.I.leaf0", 0.9),
+                _chunk(f"{_MOD}.O.I.leaf1", 0.8),
+                _chunk(f"{_MOD}.O.s0", 0.7),
+                _chunk(f"{_MOD}.O.s1", 0.6),
+            ]
+        )
+    )
+    # inner triggers (2/2). outer's legal hits are {s0, s1} = 2 of 8
+    # emitting children -> 0.25 < 0.3 -> no trigger. Counting the rolled-up
+    # inner chunk as a hit (3/8 = 0.375) would wrongly trigger.
+    assert _qnames(out) == [f"{_MOD}.O.I", f"{_MOD}.O.s0", f"{_MOD}.O.s1"]
+
+
+@pytest.mark.asyncio
+async def test_ac19_scratch_never_mutated_and_new_state_via_replace() -> None:
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    scratch: dict[str, object] = {"upstream.key": "v"}
+    state = RetrieverState(
+        query=SearchQuery(terms="q"),
+        candidates=ChunkList(items=(_chunk(f"{_MOD}.C.m0", 0.9), _chunk(f"{_MOD}.C.m1", 0.8))),
+        result=None,
+        scratch=scratch,
+    )
+    out = await step.run(state)
+    assert out is not state  # rollup happened -> new state via replace
+    assert state.scratch == {"upstream.key": "v"}
+    assert out.scratch is state.scratch  # replace() keeps the reference; no writes
+
+
+@pytest.mark.asyncio
+async def test_ac29_atomic_claims_with_candidate_parent_self_fold() -> None:
+    ts, cs = await _stores(
+        trees=[_nested_tree(2)], chunks=[_chunk(f"{_MOD}.O.I"), _chunk(f"{_MOD}.O")]
+    )
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                _chunk(f"{_MOD}.O.I", 0.9),  # inner itself is a candidate
+                _chunk(f"{_MOD}.O.I.leaf0", 0.8),
+                _chunk(f"{_MOD}.O.I.leaf1", 0.7),
+                _chunk(f"{_MOD}.O.s0", 0.6),
+                _chunk(f"{_MOD}.O.s1", 0.5),
+            ]
+        )
+    )
+    # inner triggers on its leaves and self-folds its own index; outer's
+    # re-check excludes inner (claimed) leaving {s0, s1} = 2/3 >= 0.3 ->
+    # outer triggers on its direct children. One chunk per original index.
+    assert _qnames(out) == [f"{_MOD}.O.I", f"{_MOD}.O"]
+    assert out.candidates.items[0].relevance == 0.9
+    assert out.candidates.items[1].relevance == 0.6
+
+
+@pytest.mark.asyncio
+async def test_ac30_abandonment_releases_claim_for_shallower_parent() -> None:
+    # inner's chunk row deliberately absent; outer's row present.
+    ts, cs = await _stores(trees=[_nested_tree(2)], chunks=[_chunk(f"{_MOD}.O")])
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                _chunk(f"{_MOD}.O.I.leaf0", 0.9),
+                _chunk(f"{_MOD}.O.I.leaf1", 0.8),
+                _chunk(f"{_MOD}.O.s0", 0.7),
+                _chunk(f"{_MOD}.O.s1", 0.6),
+            ]
+        )
+    )
+    # inner triggers first (post-order) but its fetch misses -> abandoned,
+    # leaves kept. outer triggers on {s0, s1} (2/3 >= 0.3) and collapses.
+    assert _qnames(out) == [f"{_MOD}.O.I.leaf0", f"{_MOD}.O.I.leaf1", f"{_MOD}.O"]
+    fetches = [c.payload["filter"]["qualified_name"] for c in cs.calls if c.method == "list"]
+    assert f"{_MOD}.O.I" in fetches  # the recorded miss
+
+
+@pytest.mark.asyncio
+async def test_ac31_duplicate_parent_qnames_merge_into_one_emission() -> None:
+    # Same class qname defined twice (TYPE_CHECKING redefinition), disjoint
+    # children.
+    first = _node(
+        f"{_MOD}.C",
+        NodeKind.CLASS,
+        children=(
+            _node(f"{_MOD}.C.a0", NodeKind.METHOD),
+            _node(f"{_MOD}.C.a1", NodeKind.METHOD),
+        ),
+    )
+    second = DocumentNode(
+        node_id=f"{_MOD}.C",
+        qualified_name=f"{_MOD}.C",
+        title="C",
+        kind=NodeKind.CLASS,
+        source_path="src.py",
+        start_line=10,
+        end_line=20,
+        text="body2",
+        content_hash="hash-C2",
+        children=(
+            _node(f"{_MOD}.C.b0", NodeKind.METHOD),
+            _node(f"{_MOD}.C.b1", NodeKind.METHOD),
+        ),
+    )
+    root = _node(_MOD, NodeKind.MODULE, text="", children=(first, second))
+    ts, cs = await _stores(trees=[root], chunks=[_chunk(f"{_MOD}.C")])
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                _chunk(f"{_MOD}.C.a0", 0.9),
+                _chunk(f"{_MOD}.C.b0", 0.8),
+                _chunk(f"{_MOD}.C.a1", 0.7),
+                _chunk(f"{_MOD}.C.b1", 0.6),
+            ]
+        )
+    )
+    # Both nodes trigger; merged: single emission at the lowest combined
+    # index, exactly one fetch for the shared qname.
+    assert _qnames(out) == [f"{_MOD}.C"]
+    fetches = [c for c in cs.calls if c.method == "list"]
+    assert len(fetches) == 1
+
+
+@pytest.mark.asyncio
+async def test_ac32_module_key_drift_is_a_pinned_noop() -> None:
+    # Tree persisted under module _MOD; candidates carry a divergent module
+    # override -> group (pkg, "pkg.mod.override") load misses -> kept.
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[_chunk(f"{_MOD}.C")])
+    step = _step(ts, cs)
+    state = _state(
+        [
+            _chunk(f"{_MOD}.C.m0", 0.9, module="pkg.mod.override"),
+            _chunk(f"{_MOD}.C.m1", 0.8, module="pkg.mod.override"),
+        ]
+    )
+    assert await step.run(state) is state
+
+
+@pytest.mark.asyncio
+async def test_ac33_cross_group_dedup_keeps_lowest_index_occurrence() -> None:
+    # The same class indexed under two (package, module) groups with an
+    # IDENTICAL (qualified_name, content_hash) pair: one group's methods
+    # roll up; the other group's identical class chunk survives as a
+    # candidate -> the text appears exactly once, at the lowest index.
+    dup_parent_candidate = Chunk(
+        text=f"text-{_MOD}.C",
+        relevance=0.95,
+        metadata={"package": _PKG, "module": "pkg.dual", "qualified_name": f"{_MOD}.C"},
+    )
+    # content_hash auto-computes over package+module+title+text (so the two
+    # copies would differ on module alone); force identity by constructing
+    # the row with the SAME content_hash — the dedup key is (qname, hash).
+    parent_row = Chunk(
+        text=f"text-{_MOD}.C",
+        metadata={"package": _PKG, "module": _MOD, "qualified_name": f"{_MOD}.C"},
+        content_hash=dup_parent_candidate.content_hash,
+    )
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[parent_row])
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                dup_parent_candidate,  # index 0 — survives (lowest occurrence)
+                _chunk(f"{_MOD}.C.m0", 0.9),
+                _chunk(f"{_MOD}.C.m1", 0.8),
+            ]
+        )
+    )
+    # The emitted parent (from the rollup at index 1) duplicates the
+    # surviving candidate at index 0 -> dropped; text appears once.
+    texts = [c.text for c in out.candidates.items]
+    assert texts == [f"text-{_MOD}.C"]
+    assert out.candidates.items[0].relevance == 0.95
+
+
+@pytest.mark.asyncio
+async def test_ac17b_claimed_inner_not_counted_as_outer_hit() -> None:
+    # inner (O.I) is itself a candidate AND a direct child of outer (O).
+    # After inner rolls up its leaves it self-folds its own index; the
+    # claimed-index gate in _hit_qnames must then EXCLUDE inner from
+    # outer's hit set. With the gate, outer sees only {s0} = 1 < floor 2
+    # -> no outer rollup. Without it, outer would see {inner, s0} = 2/4
+    # = 0.5 >= 0.3 and wrongly trigger. Pins the no-cascade claimed-index
+    # exclusion that AC17 alone does not (AC17's inner is not a candidate).
+    leaves = tuple(_node(f"{_MOD}.O.I.leaf{i}", NodeKind.METHOD) for i in range(2))
+    inner = _node(f"{_MOD}.O.I", NodeKind.CLASS, children=leaves)
+    siblings = tuple(_node(f"{_MOD}.O.s{i}", NodeKind.METHOD) for i in range(3))
+    outer = _node(f"{_MOD}.O", NodeKind.CLASS, children=(inner, *siblings))
+    root = _node(_MOD, NodeKind.MODULE, text="", children=(outer,))
+    ts, cs = await _stores(trees=[root], chunks=[_chunk(f"{_MOD}.O.I"), _chunk(f"{_MOD}.O")])
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                _chunk(f"{_MOD}.O.I", 0.9),
+                _chunk(f"{_MOD}.O.I.leaf0", 0.8),
+                _chunk(f"{_MOD}.O.I.leaf1", 0.7),
+                _chunk(f"{_MOD}.O.s0", 0.6),
+            ]
+        )
+    )
+    # inner collapses (self-folded), s0 kept, NO outer rollup.
+    assert _qnames(out) == [f"{_MOD}.O.I", f"{_MOD}.O.s0"]
+
+
+@pytest.mark.asyncio
+async def test_ac33b_different_content_same_qname_not_deduped() -> None:
+    # Two chunks share qualified_name pkg.mod.C but have DIFFERENT content
+    # (hence different content_hash). The dedup key is (qname, content_hash),
+    # so BOTH must survive. A qname-only dedup key would wrongly drop one.
+    other_content = Chunk(
+        text="DIFFERENT-TEXT-for-C",
+        relevance=0.95,
+        metadata={"package": _PKG, "module": "pkg.dual", "qualified_name": f"{_MOD}.C"},
+    )
+    parent_row = _chunk(f"{_MOD}.C")  # text "text-pkg.mod.C" -> a different hash
+    assert parent_row.content_hash != other_content.content_hash  # guard the premise
+    ts, cs = await _stores(trees=[_class_tree(4)], chunks=[parent_row])
+    out = await _step(ts, cs).run(
+        _state(
+            [
+                other_content,
+                _chunk(f"{_MOD}.C.m0", 0.9),
+                _chunk(f"{_MOD}.C.m1", 0.8),
+            ]
+        )
+    )
+    texts = [c.text for c in out.candidates.items]
+    assert "DIFFERENT-TEXT-for-C" in texts
+    assert "text-pkg.mod.C" in texts
+    assert len(texts) == 2
