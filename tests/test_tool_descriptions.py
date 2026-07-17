@@ -93,11 +93,15 @@ def _cli_help(subcommand: str) -> str:
 
 
 def test_cli_search_help_announces_capability() -> None:
-    """AC-7: pydocs-mcp search --help mentions hybrid, __project__, Examples."""
+    """AC-7 (amended by contract §6 note 4): search help is TOOL_DOCS-sourced.
+
+    The hand-written capability prose was replaced by the ``TOOL_DOCS``
+    single source — the help must carry that text's opening line and its
+    Examples section (content itself linted by test_tool_docs_lint)."""
+    from pydocs_mcp.application.tool_docs import TOOL_DOCS
+
     help_text = _cli_help("search")
-    low = help_text.lower()
-    assert "hybrid" in low
-    assert "__project__" in help_text  # case-sensitive sentinel
+    assert TOOL_DOCS["search_codebase"].splitlines()[0] in help_text
     assert "Examples" in help_text
 
 

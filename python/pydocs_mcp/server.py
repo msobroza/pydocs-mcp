@@ -29,6 +29,19 @@ from pydocs_mcp.application import (
     ServiceUnavailableError,
 )
 
+# Shared enum vocabularies (single source: mcp_inputs). Module-level for the
+# same reason as ``Annotated`` / ``Field`` above — FastMCP evals the
+# handlers' stringified signatures against THIS module's globals, so typing
+# the params with these aliases is what makes each tool's inputSchema
+# advertise the enum values (contract §6 note 3).
+from pydocs_mcp.application.mcp_inputs import (
+    DepthLiteral,
+    DirectionLiteral,
+    KindLiteral,
+    OutputModeLiteral,
+    ScopeLiteral,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -643,9 +656,9 @@ def _register_tools(mcp, tools) -> None:
 
     async def search_codebase(
         query: str,
-        kind: str = "any",
+        kind: KindLiteral = "any",
         package: str = "",
-        scope: str = "all",
+        scope: ScopeLiteral = "all",
         limit: int | None = None,
         project: str = "",
     ) -> CallToolResult:
@@ -670,7 +683,9 @@ def _register_tools(mcp, tools) -> None:
 
     _register(search_codebase, "search_codebase")
 
-    async def get_symbol(target: str, depth: str = "summary", project: str = "") -> CallToolResult:
+    async def get_symbol(
+        target: str, depth: DepthLiteral = "summary", project: str = ""
+    ) -> CallToolResult:
         payload = SymbolInput(target=target, depth=depth, project=project)
         return await _run_tool(
             "get_symbol", lambda: tools.get_symbol(payload), ENVELOPE_MODELS["get_symbol"]
@@ -688,7 +703,7 @@ def _register_tools(mcp, tools) -> None:
 
     async def get_references(
         target: str,
-        direction: str = "callers",
+        direction: DirectionLiteral = "callers",
         limit: int | None = None,
         project: str = "",
     ) -> CallToolResult:
@@ -739,7 +754,7 @@ def _register_filesystem_tools(register, tools) -> None:
         pattern: str,
         path: str = "",
         glob: str = "",
-        output_mode: str = "files_with_matches",
+        output_mode: OutputModeLiteral = "files_with_matches",
         case_insensitive: Annotated[bool, Field(validation_alias="-i")] = False,
         line_numbers: Annotated[bool, Field(validation_alias="-n")] = True,
         after_context: Annotated[int | None, Field(validation_alias="-A", ge=0)] = None,
@@ -747,7 +762,7 @@ def _register_filesystem_tools(register, tools) -> None:
         context: Annotated[int | None, Field(validation_alias="-C", ge=0)] = None,
         head_limit: int | None = None,
         multiline: bool = False,
-        scope: str = "project",
+        scope: ScopeLiteral = "project",
         project: str = "",
     ) -> CallToolResult:
         payload = GrepInput(

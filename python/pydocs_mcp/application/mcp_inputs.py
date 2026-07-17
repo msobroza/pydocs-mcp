@@ -33,6 +33,20 @@ if TYPE_CHECKING:
     )
     from pydocs_mcp.retrieval.config.models import SymbolSourceConfig
 
+# ── Shared enum vocabularies (contract §3) ────────────────────────────────
+#
+# Single source for every constrained-string parameter on the nine-tool
+# surface. Three consumers reference these aliases so the value sets can
+# never drift: the pydantic input models below, the MCP handler signatures
+# in ``server.py`` (typing the params with the aliases makes FastMCP
+# advertise the enums in each tool's inputSchema — contract §6 note 3),
+# and the argparse ``choices`` in ``__main__.py`` (via ``typing.get_args``).
+KindLiteral = Literal["docs", "api", "any", "decision"]
+ScopeLiteral = Literal["project", "deps", "all"]
+DepthLiteral = Literal["summary", "tree", "source"]
+DirectionLiteral = Literal["callers", "callees", "inherits", "impact", "governed_by"]
+OutputModeLiteral = Literal["content", "files_with_matches", "count"]
+
 # Format validators — reject malformed input at the boundary.
 _PACKAGE_RE = re.compile(
     r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?|__project__)$"
@@ -200,9 +214,9 @@ class SearchInput(BaseModel):
     """Input for the ``search_codebase`` MCP tool."""
 
     query: str = Field(min_length=1, max_length=30000)
-    kind: Literal["docs", "api", "any", "decision"] = "any"
+    kind: KindLiteral = "any"
     package: str = ""
-    scope: Literal["project", "deps", "all"] = "all"
+    scope: ScopeLiteral = "all"
     # Multi-repo corpus selector (sibling of ``package`` / ``scope``): restrict
     # the query to one loaded project by name. "" = union across all loaded
     # projects. No effect on a single-project server.
@@ -349,7 +363,7 @@ class SymbolInput(BaseModel):
     """get_symbol — known dotted path (spec §D1). depth='source' is the §D7 recovery contract."""
 
     target: str = Field(min_length=1)
-    depth: Literal["summary", "tree", "source"] = "summary"
+    depth: DepthLiteral = "summary"
     project: str = ""
 
     @field_validator("target")
@@ -399,7 +413,7 @@ class ReferencesInput(BaseModel):
     """get_references — graph traversal incl. ranked transitive impact (spec §D1)."""
 
     target: str = Field(min_length=1)
-    direction: Literal["callers", "callees", "inherits", "impact", "governed_by"] = "callers"
+    direction: DirectionLiteral = "callers"
     project: str = ""
     limit: int = Field(default_factory=lambda: _LIMIT_DEFAULT, ge=1)
 
@@ -483,7 +497,7 @@ class GrepInput(BaseModel):
     pattern: str = Field(min_length=1)
     path: str = ""
     glob: str = ""
-    output_mode: Literal["content", "files_with_matches", "count"] = "files_with_matches"
+    output_mode: OutputModeLiteral = "files_with_matches"
     case_insensitive: Annotated[bool, Field(validation_alias="-i")] = False
     line_numbers: Annotated[bool, Field(validation_alias="-n")] = True
     after_context: Annotated[int | None, Field(validation_alias="-A", ge=0)] = None
@@ -493,7 +507,7 @@ class GrepInput(BaseModel):
     # client-supplied values are ceilinged at files.max_head_limit below.
     head_limit: int | None = Field(None, ge=1)
     multiline: bool = False
-    scope: Literal["project", "deps", "all"] = "project"
+    scope: ScopeLiteral = "project"
     project: str = ""
 
     @field_validator("pattern")

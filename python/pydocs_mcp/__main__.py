@@ -1,15 +1,15 @@
-"""CLI: ``python -m pydocs_mcp
-{serve,index,watch,search,overview,symbol,context,refs,why,grep,glob,read_file,lookup}``.
+"""CLI: ``python -m pydocs_mcp {serve,index,watch,link,<the nine tools>,lookup}``.
 
 Each subcommand is a thin wrapper over the application-layer services:
 
 * ``serve`` / ``index`` / ``watch`` route through :class:`ProjectIndexer`.
-* ``search`` / ``overview`` / ``symbol`` / ``context`` / ``refs`` / ``why`` /
-  ``grep`` / ``glob`` / ``read_file`` mirror the nine task-shaped MCP tools
-  1:1 (``search_codebase``, ``get_overview``, ``get_symbol``, ``get_context``,
-  ``get_references``, ``get_why``, ``grep``, ``glob``, ``read_file``);
-  ``lookup`` is the deprecated alias that routes onto symbol/refs/context
-  (and overview for an empty target).
+* The nine task-shaped MCP tools have canonical, identically-named
+  subcommands (``search_codebase``, ``get_overview``, ``get_symbol``,
+  ``get_context``, ``get_references``, ``get_why``, ``grep``, ``glob``,
+  ``read_file``); the historical short verbs (``search``, ``overview``,
+  ``symbol``, ``context``, ``refs``, ``why``) remain as argparse aliases
+  (docs/tool-contracts.md §6 note 4). ``lookup`` is the deprecated alias
+  that routes onto symbol/refs/context (and overview for an empty target).
 
 Every subcommand routes its failures through :func:`_report_cli_failure`,
 the single owner of the diagnostic policy: on failure it prints
@@ -32,7 +32,7 @@ import sys
 import traceback
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args
 
 if TYPE_CHECKING:
     from pydocs_mcp.project_toml import ProjectExcludes
@@ -54,9 +54,16 @@ log = logging.getLogger("pydocs-mcp")
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse tree — kept as a named helper so tests can
     build the parser without triggering ``main``'s dispatch logic."""
+    # Function-local on purpose (R2): the benchmarks-side description overlay
+    # re-binds these module attributes before the parser is built; a
+    # module-level import would freeze the pre-overlay binding.
+    from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS, TOOL_DOCS
+
     p = argparse.ArgumentParser(
         prog="pydocs-mcp",
-        description="Local Python docs MCP server (optionally Rust-accelerated)",
+        # The MCP server-level orientation doubles as the CLI top-level
+        # description — one source, zero drift (contract §6 note 4).
+        description=SERVER_INSTRUCTIONS,
     )
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument(
@@ -229,33 +236,39 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_link.add_argument("-v", "--verbose", **_verbose)
 
-    # ``search`` is the CLI face of the ``search_codebase`` MCP tool — one of
-    # the nine task-shaped tools (see the blocks below for the others).
-    sp_search = sub.add_parser(
-        "search",
-        help="Semantic + keyword search over project + deps",
-        description=(
-            "Semantic + keyword search across your project's source AND every "
-            "installed dependency (docs + code); the default ranks by dense embeddings "
-            "with reference-graph expansion (BM25 and hybrid presets are opt-in). "
-            "Use --package __project__ or --scope project to restrict to YOUR code, "
-            "not a library."
-        ),
-        epilog=(
-            "Examples:\n"
-            "  pydocs-mcp search 'batch inference' --kind docs\n"
-            "  pydocs-mcp search HTTPBasicAuth --kind api\n"
-            "  pydocs-mcp search 'retry logic' --package requests\n"
-            "  pydocs-mcp search parser --scope project\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+    # ── Task-shaped subcommands mirror the nine MCP tools 1:1 (spec §D1) ──
+    # Canonical subcommand names equal the MCP tool names; the historical
+    # short verbs stay as argparse aliases (contract §6 note 4). Each parser
+    # takes its help= (first line) and description= (full text) from the
+    # ``TOOL_DOCS`` single source so the CLI and MCP prose never drift
+    # (spec §D13); enum choices= come from the shared ``mcp_inputs`` Literal
+    # aliases so the value sets match the models and the MCP inputSchema.
+    from pydocs_mcp.application.mcp_inputs import (
+        DepthLiteral,
+        DirectionLiteral,
+        KindLiteral,
+        OutputModeLiteral,
+        ScopeLiteral,
     )
+
+    def _task_parser(canonical: str, aliases: list[str]) -> argparse.ArgumentParser:
+        return sub.add_parser(
+            canonical,
+            aliases=aliases,
+            help=TOOL_DOCS[canonical].splitlines()[0],
+            description=TOOL_DOCS[canonical],
+            # Raw formatter: TOOL_DOCS is pre-formatted prose with its own
+            # line structure (sections + Examples) — don't re-wrap it.
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+
+    sp_search = _task_parser("search_codebase", ["search"])
     sp_search.add_argument(
         "query", help="Search terms (space-separated; prose AND identifiers work)"
     )
     sp_search.add_argument(
         "--kind",
-        choices=["docs", "api", "any", "decision"],
+        choices=list(get_args(KindLiteral)),
         default="any",
         help="Which index to search: 'docs' = prose / README, 'api' = functions / classes, 'decision' = mined architectural decisions, 'any' = both docs+api (default).",
     )
@@ -268,53 +281,48 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_search.add_argument(
         "--scope",
-        choices=["project", "deps", "all"],
+        choices=list(get_args(ScopeLiteral)),
         default="all",
         help='Restrict by scope: "project" = your code only, "deps" = installed deps only, "all" = both (default). Use "project" when the user asks about THEIR code.',
     )
+    # default=None so the YAML-wired model default (search.output.default_limit)
+    # wins when the flag is absent — an argparse literal here would silently
+    # shadow the deployment's configured value (contract §6 note 4).
     sp_search.add_argument(
         "--limit",
         type=int,
-        default=10,
+        default=None,
         help="Result cap for multi-repo union searches (--workspace/--db with "
-        "2+ projects; 1-1000, default: 10). Single-project result count is "
-        "set by the retrieval pipeline YAML, not this flag.",
+        "2+ projects; 1-1000; default: YAML search.output.default_limit). "
+        "Single-project result count is set by the retrieval pipeline YAML, "
+        "not this flag.",
     )
     _add_query_flags(sp_search)
 
-    # ── Task-shaped subcommands mirror the nine MCP tools 1:1 (spec §D1) ──
-    # Each carries the shared query flags via ``_add_query_flags``; only their
-    # positional/tool-specific args differ. ``search`` above is
-    # ``search_codebase`` — its flag set already IS the task-shaped interface;
-    # the filesystem trio (grep/glob/read_file) follows below the five here.
-    # Help text comes from the ``TOOL_DOCS`` single source so the CLI and MCP
-    # descriptions never drift (spec §D13).
-    from pydocs_mcp.application.tool_docs import TOOL_DOCS
-
-    p_overview = sub.add_parser("overview", help=TOOL_DOCS["get_overview"].splitlines()[0])
+    p_overview = _task_parser("get_overview", ["overview"])
     p_overview.add_argument("package", nargs="?", default="")
     _add_query_flags(p_overview)
 
-    p_symbol = sub.add_parser("symbol", help=TOOL_DOCS["get_symbol"].splitlines()[0])
+    p_symbol = _task_parser("get_symbol", ["symbol"])
     p_symbol.add_argument("target")
-    p_symbol.add_argument("--depth", choices=["summary", "tree", "source"], default="summary")
+    p_symbol.add_argument("--depth", choices=list(get_args(DepthLiteral)), default="summary")
     _add_query_flags(p_symbol)
 
-    p_context = sub.add_parser("context", help=TOOL_DOCS["get_context"].splitlines()[0])
+    p_context = _task_parser("get_context", ["context"])
     p_context.add_argument("targets", nargs="+")
     _add_query_flags(p_context)
 
-    p_refs = sub.add_parser("refs", help=TOOL_DOCS["get_references"].splitlines()[0])
+    p_refs = _task_parser("get_references", ["refs"])
     p_refs.add_argument("target")
     p_refs.add_argument(
         "--direction",
-        choices=["callers", "callees", "inherits", "impact", "governed_by"],
+        choices=list(get_args(DirectionLiteral)),
         default="callers",
     )
     p_refs.add_argument("--limit", type=int, default=None)
     _add_query_flags(p_refs)
 
-    p_why = sub.add_parser("why", help=TOOL_DOCS["get_why"].splitlines()[0])
+    p_why = _task_parser("get_why", ["why"])
     p_why.add_argument("query", nargs="?", default="")
     p_why.add_argument(
         "--target",
@@ -337,7 +345,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # tools 1:1 (contract §3.7-3.9). Flag spellings track the wire names
     # (-i/-n/-A/-B/-C are the literal MCP parameter names); defaults live in
     # the input models / YAML (files.*), so argparse defaults stay None.
-    p_grep = sub.add_parser("grep", help=TOOL_DOCS["grep"].splitlines()[0])
+    p_grep = _task_parser("grep", [])
     p_grep.add_argument("pattern", help="Regular expression (Python re flavor).")
     p_grep.add_argument(
         "--path",
@@ -352,7 +360,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_grep.add_argument(
         "--output-mode",
         dest="output_mode",
-        choices=["content", "files_with_matches", "count"],
+        choices=list(get_args(OutputModeLiteral)),
         default="files_with_matches",
         help="content = matching lines (file:line:text); files_with_matches = "
         "paths only (default); count = per-file match counts.",
@@ -415,14 +423,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_grep.add_argument(
         "--scope",
-        choices=["project", "deps", "all"],
+        choices=list(get_args(ScopeLiteral)),
         default="project",
         help='"project" = your source tree (default), "deps" = installed '
         'dependency roots, "all" = both.',
     )
     _add_query_flags(p_grep)
 
-    p_glob = sub.add_parser("glob", help=TOOL_DOCS["glob"].splitlines()[0])
+    p_glob = _task_parser("glob", [])
     p_glob.add_argument("pattern", help='Glob pattern; ** recurses (e.g. "**/*_test.py").')
     p_glob.add_argument(
         "--path",
@@ -438,7 +446,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_query_flags(p_glob)
 
-    p_read = sub.add_parser("read_file", help=TOOL_DOCS["read_file"].splitlines()[0])
+    p_read = _task_parser("read_file", [])
     p_read.add_argument(
         "file_path",
         help="Path to read — project-root-relative or absolute, inside the "
@@ -904,15 +912,20 @@ async def _run_search(args: argparse.Namespace) -> None:
     from pydocs_mcp.application import SearchInput
 
     tools = _build_cli_tools(args)
-    payload = SearchInput(
-        query=args.query,
-        kind=args.kind,
-        package=args.package,
-        scope=args.scope,
-        limit=args.limit,
-        project=args.project_scope,
-    )
-    print((await tools.search_codebase(payload)).text)
+    # ``limit`` is omitted when the user didn't pass ``--limit`` so the input
+    # model's YAML-wired default_factory supplies search.output.default_limit —
+    # no literal duplicated here (single-source-of-truth defaults; mirrors
+    # ``_run_refs`` and the MCP handler).
+    fields: dict[str, object] = {
+        "query": args.query,
+        "kind": args.kind,
+        "package": args.package,
+        "scope": args.scope,
+        "project": args.project_scope,
+    }
+    if args.limit is not None:
+        fields["limit"] = args.limit
+    print((await tools.search_codebase(SearchInput(**fields))).text)
 
 
 async def _run_overview(args: argparse.Namespace) -> None:
@@ -1388,16 +1401,26 @@ def _cmd_read_file(args: argparse.Namespace) -> int:
 # ── Entry point ───────────────────────────────────────────────────────────
 
 
+# argparse stores the TYPED subcommand string in ``args.cmd`` — an alias
+# invocation never rewrites itself to the canonical name — so the dispatch
+# table carries both spellings, pointing at one handler each (contract §6
+# note 4: canonical tool names + historical short-verb aliases).
 _CMD_TABLE = {
     "serve": _cmd_serve,
     "index": _cmd_index,
     "watch": _cmd_watch,
     "link": _cmd_link,
+    "search_codebase": _cmd_search,
     "search": _cmd_search,
+    "get_overview": _cmd_overview,
     "overview": _cmd_overview,
+    "get_symbol": _cmd_symbol,
     "symbol": _cmd_symbol,
+    "get_context": _cmd_context,
     "context": _cmd_context,
+    "get_references": _cmd_refs,
     "refs": _cmd_refs,
+    "get_why": _cmd_why,
     "why": _cmd_why,
     "grep": _cmd_grep,
     "glob": _cmd_glob,

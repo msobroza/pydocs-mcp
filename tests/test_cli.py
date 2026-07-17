@@ -315,6 +315,33 @@ class TestSearchCommand:
         assert "greet" in captured.out.lower() or "─" in captured.out
 
 
+class TestCanonicalToolNameSubcommands:
+    """Contract §6 note 4: canonical subcommands named exactly like the MCP
+    tools run end-to-end; the short verbs stay as aliases (covered by the
+    other classes here, which still invoke ``search``/``overview``/…)."""
+
+    def test_search_codebase_canonical_name_runs(self, seeded_project, capsys, monkeypatch):
+        monkeypatch.chdir(seeded_project)
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            main()
+        with patch("sys.argv", ["pydocs-mcp", "search_codebase", "hello", "--kind=docs"]):
+            rc = main()
+        assert rc == 0
+
+    def test_get_overview_canonical_name_runs(self, seeded_project, capsys, monkeypatch):
+        monkeypatch.chdir(seeded_project)
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            main()
+        with patch("sys.argv", ["pydocs-mcp", "get_overview"]):
+            rc = main()
+        assert rc == 0
+        assert "Overview" in capsys.readouterr().out
+
+
 class TestNoRustFlag:
     def test_no_rust_forces_python_fallback(self, seeded_project, monkeypatch):
         """--no-rust must disable Rust and use Python fallback for indexing."""
