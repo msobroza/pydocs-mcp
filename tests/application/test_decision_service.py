@@ -376,3 +376,75 @@ async def test_dashboard_ungoverned_is_governs_edge_anti_join() -> None:
     out = await svc.dashboard()
     assert "`pkg.cold`" in out
     assert "`pkg.hot`" not in out  # governed by an edge ⇒ excluded
+
+
+# ── why_* triples (get_why items[], contract §3.6, Task 8) ───────────────
+
+_WHY_SIDECAR_ROW = {
+    "decision_id": 1,
+    "title": "Use SQLite sidecar",
+    "status": "active",
+    "locators": ["pkg/mod.py:1-2"],
+    "affected_files": [],
+}
+
+
+async def test_why_search_triple_matches_text_facade() -> None:
+    svc = _service(
+        records=(REC_SIDECAR, REC_CACHE),
+        docs=_FakeDocs(hits=(_chunk_for(REC_SIDECAR),)),
+    )
+    body, items, extras = await svc.why_search("why sidecar")
+    assert body == await svc.search("why sidecar")
+    assert items == (_WHY_SIDECAR_ROW,)
+    assert extras == {}
+
+
+async def test_why_search_zero_hits_has_no_items() -> None:
+    svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
+    body, items, _extras = await svc.why_search("no such decision")
+    assert "No decisions found." in body
+    assert items == ()
+
+
+async def test_why_targets_triple_matches_text_facade_and_dedupes() -> None:
+    # The same record governs BOTH targets — the body renders it once per
+    # card, but items[] dedupe on decision_id (stable attribution rows).
+    rec = _record(id=1, title="Use SQLite sidecar")
+    references = InMemoryReferenceStore()
+    references.by_package[_PKG] = [
+        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
+        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.other"),
+    ]
+    svc = _service(records=(rec,), references=references)
+    body, items, extras = await svc.why_targets(["pkg.mod", "pkg.other"])
+    assert body == await svc.for_targets(["pkg.mod", "pkg.other"])
+    assert items == (_WHY_SIDECAR_ROW,)
+    assert extras == {}
+
+
+async def test_why_targets_query_filter_drops_filtered_items() -> None:
+    rec_hit = _record(id=1, title="Use SQLite sidecar")
+    rec_miss = _record(id=2, title="Unrelated decision")
+    references = InMemoryReferenceStore()
+    references.by_package[_PKG] = [
+        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
+        _governs_edge(key=decision_key("Unrelated decision"), qname="pkg.mod"),
+    ]
+    svc = _service(records=(rec_hit, rec_miss), references=references)
+    body, items, _extras = await svc.why_targets(["pkg.mod"], query="sidecar vectors")
+    assert body == await svc.for_targets(["pkg.mod"], query="sidecar vectors")
+    assert [row["decision_id"] for row in items] == [1]
+
+
+async def test_why_dashboard_triple_lists_surfaced_records() -> None:
+    # Dashboard items[] = the records the rollup surfaces (stalest active +
+    # awaiting review), deduped on decision_id, in surfaced order.
+    rec_active = _record(id=1, title="Use SQLite sidecar", staleness_score=0.6)
+    rec_proposed = _record(id=2, title="Use redis cache", status="proposed")
+    svc = _service(records=(rec_active, rec_proposed))
+    body, items, extras = await svc.why_dashboard()
+    assert body == await svc.dashboard()
+    assert [row["decision_id"] for row in items] == [1, 2]
+    assert items[0]["status"] == "active" and items[1]["status"] == "proposed"
+    assert extras == {}

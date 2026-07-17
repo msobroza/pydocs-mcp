@@ -14,6 +14,9 @@ def test_every_mode_raises_with_yaml_pointer() -> None:
         lambda: svc.search("why sqlite"),
         lambda: svc.for_targets(["a.py"]),
         lambda: svc.dashboard(),
+        lambda: svc.why_search("why sqlite"),
+        lambda: svc.why_targets(["a.py"]),
+        lambda: svc.why_dashboard(),
     ):
         with pytest.raises(ServiceUnavailableError, match="decision_capture"):
             asyncio.run(call())

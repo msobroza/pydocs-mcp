@@ -40,6 +40,7 @@ from pydocs_mcp.application.overview_service import (
     WorkspaceProjectEntry,
 )
 from pydocs_mcp.application.tool_response import ToolResponse
+from pydocs_mcp.extraction.strategies.analyzers import PYTHON_CAPABILITIES
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -136,10 +137,16 @@ class ToolRouter:
             project=payload.project,
             limit=payload.limit,
         )
+
+        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+            text, items, extras = await self.lookup_router._lookup_body(body)
+            # §2.2 meta extension: the declared capability level of the graph
+            # that answered. Single source = the Python analyzer's frozen flag
+            # (a semantic backend flips only this value — ADR 0004).
+            return text, items, {**extras, "resolution": PYTHON_CAPABILITIES["references"]}
+
         return await self.envelope.wrap(
-            "get_references",
-            self._meta_project(payload.project),
-            lambda: self.lookup_router._lookup_body(body),
+            "get_references", self._meta_project(payload.project), _body
         )
 
     async def get_context(self, payload: ContextInput) -> ToolResponse:
@@ -168,16 +175,16 @@ class ToolRouter:
     async def get_why(self, payload: WhyInput) -> ToolResponse:
         svc = self._svc(payload.project)
 
-        async def _body() -> str:
+        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
             if payload.query and payload.targets:
                 # §D11 both-set mode: targets filtered by query — the Null
                 # service raises either way; the real service implements the filter.
-                return await svc.decisions.for_targets(list(payload.targets), query=payload.query)
+                return await svc.decisions.why_targets(list(payload.targets), query=payload.query)
             if payload.query:
-                return await svc.decisions.search(payload.query)
+                return await svc.decisions.why_search(payload.query)
             if payload.targets:
-                return await svc.decisions.for_targets(list(payload.targets))
-            return await svc.decisions.dashboard()
+                return await svc.decisions.why_targets(list(payload.targets))
+            return await svc.decisions.why_dashboard()
 
         return await self.envelope.wrap("get_why", self._meta_project(payload.project), _body)
 

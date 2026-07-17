@@ -110,10 +110,10 @@ _META_FIELDS = {
     "truncated",
 }
 
-# Tools whose items[] land in later tasks — their arrays stay empty today.
-# search_codebase / get_overview emit rows since Task 5;
-# get_symbol / get_context since Task 6.
-_ITEMS_PENDING = {"get_references", "get_why"}
+# Every tool emits items[] now; the golden calls hit empty corpora for the
+# reference/decision layers, so these two arrays stay empty ON THIS FIXTURE
+# (zero rows ≠ pending — the shape tests below assert filled rows).
+_ITEMS_EMPTY_ON_GOLDEN_FIXTURE = {"get_references", "get_why"}
 
 
 def _arun(coro):
@@ -177,9 +177,7 @@ def test_structured_envelope_shape(handlers, tool: str) -> None:
     sc = _arun(handlers[tool](**_CALLS[tool])).structuredContent
     assert set(sc) == {"text", "items", "meta"}
     assert isinstance(sc["items"], list)
-    # items[] are filled per-tool task-by-task; tools whose task hasn't landed
-    # carry the (empty) array so the wire shape is already frozen.
-    if tool in _ITEMS_PENDING:
+    if tool in _ITEMS_EMPTY_ON_GOLDEN_FIXTURE:
         assert sc["items"] == []
 
 
@@ -200,11 +198,14 @@ def test_structured_meta_contract_fields(handlers, tool: str) -> None:
     assert meta["truncated"] is False
 
 
-def test_references_meta_reserves_resolution_slot(handlers) -> None:
-    # §2.2 — the field exists on get_references only; the reference layer
-    # stamps the declared capability value in a later task.
+def test_references_meta_carries_declared_resolution(handlers) -> None:
+    # §2.2 — get_references only; the value is the Python analyzer's declared
+    # capability flag (single source: PYTHON_CAPABILITIES["references"]).
+    from pydocs_mcp.extraction.strategies.analyzers import PYTHON_CAPABILITIES
+
     meta = _arun(handlers["get_references"](**_CALLS["get_references"])).structuredContent["meta"]
-    assert "resolution" in meta
+    assert meta["resolution"] == "syntactic"
+    assert meta["resolution"] == PYTHON_CAPABILITIES["references"]
 
 
 # ── registration: per-tool outputSchema advertising (contract §2) ──────────
@@ -307,8 +308,9 @@ def _seed_items_fixture(db_path: Path) -> None:
             "active",
             "adr_files",
             0.9,
-            "[]",
-            "[]",
+            '[{"source": "adr_files", "locator": "docs/adr/0001.md:1-40",'
+            ' "text": "We adopt sidecar vectors"}]',
+            '["python/pydocs_mcp/storage/turboquant.py"]',
             "[]",
             0.0,
             None,
@@ -318,6 +320,43 @@ def _seed_items_fixture(db_path: Path) -> None:
             0.0,
         ),
     )
+    # Reference edges for the §3.5 items tests: one resolved call INTO
+    # APIRouter (its caller's defining node lives in the seeded tree), one
+    # resolved + one unresolved callee OUT of include_router, and two GOVERNS
+    # projections (symbol-level for direction="governed_by"; module-level for
+    # the get_why targets mode).
+    from pydocs_mcp.extraction.decisions.engine import decision_key
+
+    decision_node = f"decision:{decision_key('Adopt sidecar vectors')}"
+    for row in (
+        (
+            "fastapi",
+            "fastapi.routing.APIRouter.include_router",
+            "APIRouter",
+            "fastapi.routing.APIRouter",
+            "calls",
+        ),
+        (
+            "fastapi",
+            "fastapi.routing.APIRouter.include_router",
+            "starlette.routing.Mount",
+            None,
+            "calls",
+        ),
+        (
+            "__project__",
+            decision_node,
+            "fastapi.routing.APIRouter.include_router",
+            "fastapi.routing.APIRouter.include_router",
+            "governs",
+        ),
+        ("__project__", decision_node, "mymod", "mymod", "governs"),
+    ):
+        conn.execute(
+            "INSERT INTO node_references(from_package,from_node_id,to_name,to_node_id,kind)"
+            " VALUES(?,?,?,?,?)",
+            row,
+        )
     conn.execute(
         "INSERT INTO chunks(package,module,title,text,origin,decision_id) VALUES(?,?,?,?,?,?)",
         (
@@ -502,3 +541,110 @@ def test_overview_items_carry_module_map_rows(items_handlers) -> None:
             "path": "fastapi/routing.py",
         }
     ]
+
+
+# ── items[]: get_references + get_why (contract §3.5/§3.6, Task 8) ──────────
+
+_REFERENCE_ITEM_FIELDS = {
+    "from_qualified_name",
+    "to_qualified_name",
+    "kind",
+    "direction",
+    "path",
+    "start_line",
+    "end_line",
+}
+
+_WHY_ITEM_FIELDS = {"decision_id", "title", "status", "locators", "affected_files"}
+
+_WHY_ROW = {
+    "decision_id": 1,
+    "title": "Adopt sidecar vectors",
+    "status": "active",
+    "locators": ["docs/adr/0001.md:1-40"],
+    "affected_files": ["python/pydocs_mcp/storage/turboquant.py"],
+}
+
+
+def test_reference_items_callers_span_from_from_node(items_handlers) -> None:
+    # callers ⇒ path/span of the FROM-node's defining tree node (§3.5).
+    sc = _arun(
+        items_handlers["get_references"](target="fastapi.routing.APIRouter", direction="callers")
+    ).structuredContent
+    assert sc["items"] == [
+        {
+            "from_qualified_name": "fastapi.routing.APIRouter.include_router",
+            "to_qualified_name": "fastapi.routing.APIRouter",
+            "kind": "calls",
+            "direction": "callers",
+            "path": "fastapi/routing.py",
+            "start_line": 20,
+            "end_line": 30,
+        }
+    ]
+
+
+def test_reference_items_callees_resolved_and_unresolved(items_handlers) -> None:
+    # callees ⇒ path/span of the TO-node's defining node; unresolved edges
+    # carry to_name and a null span (§3.5 "null on miss").
+    sc = _arun(
+        items_handlers["get_references"](
+            target="fastapi.routing.APIRouter.include_router", direction="callees"
+        )
+    ).structuredContent
+    rows = {row["to_qualified_name"]: row for row in sc["items"]}
+    assert set(rows) == {"fastapi.routing.APIRouter", "starlette.routing.Mount"}
+    resolved = rows["fastapi.routing.APIRouter"]
+    assert set(resolved) == _REFERENCE_ITEM_FIELDS
+    assert resolved["direction"] == "callees"
+    assert resolved["path"] == "fastapi/routing.py"
+    assert (resolved["start_line"], resolved["end_line"]) == (10, 40)
+    unresolved = rows["starlette.routing.Mount"]
+    assert unresolved["path"] is None
+    assert unresolved["start_line"] is None and unresolved["end_line"] is None
+
+
+def test_reference_items_governed_by_decision_node_has_null_span(items_handlers) -> None:
+    # governed_by rows originate from a synthetic decision:<key> node — no
+    # defining tree node, so the span degrades to null.
+    sc = _arun(
+        items_handlers["get_references"](
+            target="fastapi.routing.APIRouter.include_router", direction="governed_by"
+        )
+    ).structuredContent
+    assert len(sc["items"]) == 1
+    row = sc["items"][0]
+    assert row["from_qualified_name"].startswith("decision:")
+    assert row["to_qualified_name"] == "fastapi.routing.APIRouter.include_router"
+    assert row["kind"] == "governs"
+    assert row["direction"] == "governed_by"
+    assert row["path"] is None
+    assert row["start_line"] is None and row["end_line"] is None
+
+
+def test_reference_items_impact_direction_stays_empty(items_handlers) -> None:
+    # direction="impact" renders ranked blast-radius NODES, not graph edges —
+    # the §3.5 edge rows don't apply; the array stays empty by design.
+    sc = _arun(
+        items_handlers["get_references"](target="fastapi.routing.APIRouter", direction="impact")
+    ).structuredContent
+    assert sc["items"] == []
+
+
+def test_why_items_query_mode(items_handlers) -> None:
+    sc = _arun(items_handlers["get_why"](query="sidecar vectors")).structuredContent
+    assert sc["items"] == [_WHY_ROW]
+    assert set(sc["items"][0]) == _WHY_ITEM_FIELDS
+
+
+def test_why_items_targets_mode(items_handlers) -> None:
+    # GOVERNS-edge-backed target mode (§D18) emits the governing record's row.
+    sc = _arun(items_handlers["get_why"](targets=["mymod"])).structuredContent
+    assert sc["items"] == [_WHY_ROW]
+
+
+def test_why_items_dashboard_mode_lists_surfaced_records(items_handlers) -> None:
+    # Dashboard mode surfaces the stalest/awaiting records — its items[] carry
+    # the same §3.6 rows so a harness can attribute what the rollup showed.
+    sc = _arun(items_handlers["get_why"]()).structuredContent
+    assert sc["items"] == [_WHY_ROW]

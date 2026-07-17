@@ -153,6 +153,21 @@ class NullDecisionService:
     async def dashboard(self) -> str:
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
+    async def why_search(
+        self, query: str
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
+
+    async def why_targets(
+        self, targets: list[str], *, query: str = ""
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
+
+    async def why_dashboard(
+        self,
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
+
 
 __all__ = (
     "NullDecisionService",

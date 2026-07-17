@@ -142,6 +142,20 @@ class DecisionNavigator(Protocol):
 
     async def dashboard(self) -> str: ...
 
+    # ``get_why`` body-producer triples (contract §3.6 items[], Task 8) — the
+    # text methods above are façades over these three.
+    async def why_search(
+        self, query: str
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
+
+    async def why_targets(
+        self, targets: list[str], *, query: str = ""
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
+
+    async def why_dashboard(
+        self,
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
+
 
 @runtime_checkable
 class CrossNavigator(Protocol):

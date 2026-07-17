@@ -257,6 +257,34 @@ def _context_item(node: DocumentNode) -> dict[str, Any]:
     }
 
 
+# ── §3.5 reference items (get_references, Task 8) ────────────────────────
+
+# The degraded path/span triple — §3.5 "null on miss" (unresolved endpoint,
+# endpoint outside the indexed trees, synthetic decision:<key> nodes,
+# cross-repo rows whose trees live in another project).
+_NULL_SPAN: tuple[str | None, int | None, int | None] = (None, None, None)
+
+
+def _reference_item(
+    row: NodeReference | CrossReferenceRow,
+    show: str,
+    span: tuple[str | None, int | None, int | None],
+) -> dict[str, Any]:
+    """One §3.5 ``get_references`` row. ``to_qualified_name`` degrades to the
+    captured ``to_name`` for unresolved edges so the intent stays visible
+    (mirrors the ⚠ text rendering)."""
+    path, start_line, end_line = span
+    return {
+        "from_qualified_name": row.from_node_id,
+        "to_qualified_name": row.to_node_id if row.to_node_id is not None else row.to_name,
+        "kind": str(row.kind),
+        "direction": show,
+        "path": path,
+        "start_line": start_line,
+        "end_line": end_line,
+    }
+
+
 # ── LookupService ────────────────────────────────────────────────────────
 
 
@@ -309,9 +337,10 @@ class LookupService:
         """Dispatch + render one lookup, returning the envelope body triple.
 
         Tree-rendering branches (module target, ``show`` in ``_TREE_SHOWS``)
-        emit one contract-§3.3 row per rendered outline node; every other
-        branch carries an empty items[] today (reference rows land with the
-        ``get_references`` items task).
+        emit one contract-§3.3 row per rendered outline node; reference-graph
+        branches (callers/callees/inherits/governed_by) emit one §3.5 row per
+        rendered edge. ``impact``/``context`` carry empty items[] — they render
+        ranked NODES, not graph edges, so the §3.5 edge rows don't apply.
         """
         target_str = payload.target
         parsed = await LookupTarget.parse(
@@ -441,7 +470,7 @@ class LookupService:
             limit=limit,
             decision_titles=titles,
         )
-        return rendered, (), {}
+        return rendered, await self._reference_items(rows, show), {}
 
     async def _decision_titles(self, show: str, rows) -> dict[tuple[str, str], str]:
         """Hydrate cross-repo governed_by rows' decision titles (spec §A1.2).
@@ -459,6 +488,65 @@ class LookupService:
         if not wanted:
             return {}
         return dict(await self.cross_navigator.decision_titles(wanted))
+
+    async def _reference_items(
+        self,
+        rows: tuple[NodeReference | CrossReferenceRow, ...],
+        show: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """§3.5 rows mirroring the (already limit-sliced) reference rows 1:1.
+
+        Path/span come from the resolvable endpoint's DEFINING tree node —
+        callees attribute the to-node, every other direction the from-node
+        (per-call-site line numbers are not stored in the graph). Spans are
+        memoized per ``(package, qname)`` so fan-in from one caller costs one
+        tree probe.
+        """
+        cache: dict[tuple[str, str], tuple[str | None, int | None, int | None]] = {}
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            items.append(_reference_item(row, show, await self._row_span(row, show, cache)))
+        return tuple(items)
+
+    async def _row_span(
+        self,
+        row: NodeReference | CrossReferenceRow,
+        show: str,
+        cache: dict[tuple[str, str], tuple[str | None, int | None, int | None]],
+    ) -> tuple[str | None, int | None, int | None]:
+        """The one endpoint span for ``row`` (§3.5 direction rule), cached."""
+        if isinstance(row, CrossReferenceRow):
+            # The defining node lives in ANOTHER project's trees — probing this
+            # project's trees could hit a same-named module and lie.
+            return _NULL_SPAN
+        qname = row.to_node_id if show == "callees" else row.from_node_id
+        if qname is None:
+            return _NULL_SPAN
+        key = (row.from_package, qname)
+        if key not in cache:
+            cache[key] = await self._defining_span(row.from_package, qname)
+        return cache[key]
+
+    async def _defining_span(
+        self, package: str, qname: str
+    ) -> tuple[str | None, int | None, int | None]:
+        """Locate ``qname``'s defining tree node → ``(path, start, end)``.
+
+        Probes the row's owning package first, then the qname's leading segment
+        (a resolved callee may live in a different package than its caller —
+        dependency qnames carry their package as the first segment). Any miss
+        degrades to the null span, never an error.
+        """
+        parts = qname.split(".")
+        for pkg in dict.fromkeys((package, parts[0])):
+            found = await self._longest_indexed_module(pkg, parts)
+            if found is None:
+                continue
+            tree = await self.tree_svc.get_tree(pkg, found[0])
+            node = tree.find_node_by_qualified_name(qname) if tree is not None else None
+            if node is not None:
+                return node.source_path or None, node.start_line, node.end_line
+        return _NULL_SPAN
 
     async def context_nodes(
         self, target: str

@@ -43,18 +43,29 @@ def _tool_router() -> ToolRouter:
 
 class _FakeDecisions:
     """A DecisionNavigator whose modes echo which one ran — proving ToolRouter's
-    §D11 ``get_why`` dispatch (query→search, targets→for_targets, both→filtered
-    for_targets, neither→dashboard) reaches the real service path, not the Null
-    raise."""
+    §D11 ``get_why`` dispatch (query→why_search, targets→why_targets,
+    both→filtered why_targets, neither→why_dashboard) reaches the real service
+    path, not the Null raise. The triple methods carry a marker items row so
+    the §3.6 items[] propagation is assertable at the router seam."""
 
-    async def search(self, query: str) -> str:
-        return f"SEARCH: {query}"
+    _ITEMS = (
+        {
+            "decision_id": 7,
+            "title": "t",
+            "status": "active",
+            "locators": [],
+            "affected_files": [],
+        },
+    )
 
-    async def for_targets(self, targets: list[str], *, query: str = "") -> str:
-        return f"TARGETS: {list(targets)} query={query!r}"
+    async def why_search(self, query: str):
+        return f"SEARCH: {query}", self._ITEMS, {}
 
-    async def dashboard(self) -> str:
-        return "DASHBOARD"
+    async def why_targets(self, targets: list[str], *, query: str = ""):
+        return f"TARGETS: {list(targets)} query={query!r}", self._ITEMS, {}
+
+    async def why_dashboard(self):
+        return "DASHBOARD", self._ITEMS, {}
 
 
 def _tool_router_with_decisions(decisions: object) -> ToolRouter:
@@ -178,6 +189,14 @@ def test_why_neither_routes_to_dashboard() -> None:
     router = _tool_router_with_decisions(_FakeDecisions())
     out = asyncio.run(router.get_why(WhyInput())).text
     assert "DASHBOARD" in out
+
+
+def test_why_items_propagate_to_the_envelope() -> None:
+    # The §3.6 rows the DecisionNavigator triple methods return must ride the
+    # envelope unchanged (Task 8) — every dispatch mode shares the seam.
+    router = _tool_router_with_decisions(_FakeDecisions())
+    response = asyncio.run(router.get_why(WhyInput(query="why sqlite")))
+    assert response.items == _FakeDecisions._ITEMS
 
 
 def test_overview_renders_structural_card() -> None:
