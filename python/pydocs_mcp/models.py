@@ -150,6 +150,11 @@ class ChunkFilterField(StrEnum):
     # deduplicates identical chunks across re-indexes.
     SOURCE_PATH = "source_path"
     CONTENT_HASH = "content_hash"
+    # Schema v15: 1-indexed line span of the originating DocumentNode —
+    # persisted so the tool-contracts items[] fields (path/start_line/end_line)
+    # can hydrate from store-loaded chunks.
+    START_LINE = "start_line"
+    END_LINE = "end_line"
 
 
 class ModuleMemberFilterField(StrEnum):

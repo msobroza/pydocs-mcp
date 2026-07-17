@@ -85,6 +85,9 @@ from pydocs_mcp.storage.sqlite import (
         # lets them deduplicate tree-derived chunks across re-indexes.
         (ChunkFilterField, "source_path"),
         (ChunkFilterField, "content_hash"),
+        # Schema v15: persisted chunk source spans (tool-contracts items[]).
+        (ChunkFilterField, "start_line"),
+        (ChunkFilterField, "end_line"),
         (ModuleMemberFilterField, "package"),
         (ModuleMemberFilterField, "module"),
         (ModuleMemberFilterField, "name"),

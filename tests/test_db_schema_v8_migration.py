@@ -20,7 +20,7 @@ from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
 
 
 def test_schema_version_is_8() -> None:
-    assert SCHEMA_VERSION == 14
+    assert SCHEMA_VERSION == 15
 
 
 def test_v7_to_v8_clears_content_hash_but_preserves_rows(tmp_path: Path) -> None:

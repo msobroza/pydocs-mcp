@@ -339,7 +339,7 @@ class TestSchemaV3:
         # version stamp simply moved forward.
         conn = open_index_database(tmp_path / "v3.db")
         try:
-            assert SCHEMA_VERSION == 14
+            assert SCHEMA_VERSION == 15
             assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         finally:
             conn.close()
@@ -550,7 +550,7 @@ def test_schema_version_is_4_after_open(tmp_path):
     finally:
         conn.close()
     assert ver == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 14
+    assert SCHEMA_VERSION == 15
 
 
 def test_node_references_table_created_on_fresh_db(tmp_path):

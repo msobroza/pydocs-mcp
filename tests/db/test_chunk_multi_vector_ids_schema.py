@@ -8,7 +8,7 @@ from pydocs_mcp.db import SCHEMA_VERSION, _KNOWN_TABLES, open_index_database
 
 
 def test_schema_version_is_6() -> None:
-    assert SCHEMA_VERSION == 14
+    assert SCHEMA_VERSION == 15
 
 
 def test_known_tables_includes_chunk_multi_vector_ids() -> None:

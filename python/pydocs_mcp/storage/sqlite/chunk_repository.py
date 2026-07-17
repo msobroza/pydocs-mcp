@@ -35,9 +35,11 @@ _TABLE = "chunks"
 # from the row dict, never interpolated, so there's no injection surface.
 _INSERT_CHUNK_SQL = (
     "INSERT INTO chunks "
-    "(package, module, title, text, origin, content_hash, qualified_name, decision_id) "
+    "(package, module, title, text, origin, content_hash, qualified_name, decision_id, "
+    "source_path, start_line, end_line) "
     "VALUES "
-    "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name, :decision_id)"
+    "(:package, :module, :title, :text, :origin, :content_hash, :qualified_name, :decision_id, "
+    ":source_path, :start_line, :end_line)"
 )
 
 
