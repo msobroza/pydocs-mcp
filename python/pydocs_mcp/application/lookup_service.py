@@ -194,11 +194,11 @@ class LookupTarget:
 
 # Lambdas wrap each ``ref_svc`` method so the dispatch table has a
 # uniform ``(svc, package, node_id) → awaitable`` shape.  ``inherits``
-# routes through ``find_by_name`` (the INHERITS reference graph is the
-# source of truth post-#5c) with a kind filter; ``package`` is
-# informational for ``callers`` / ``callees`` (storage is
-# cross-package per spec §6.2) but is part of the 2-arg call signature
-# pinned by Decision C1.
+# answers BOTH senses (the target's bases via from-side edges, its
+# subclasses via edges into the target — see
+# ``ReferenceService.inherits``); ``package`` is informational for
+# ``callers`` / ``callees`` (storage is cross-package per spec §6.2)
+# but is part of the 2-arg call signature pinned by Decision C1.
 _REF_GETTERS: dict[
     str,
     Callable[

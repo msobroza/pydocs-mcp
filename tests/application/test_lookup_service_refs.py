@@ -142,18 +142,18 @@ async def test_lookup_callees_renders_via_ref_svc() -> None:
     assert "- `pkg.helpers.compute` → `pkg.helpers.normalize`" in out, out
 
 
-# ── Test 3: inherits — find_by_name(qname, kind=INHERITS) ──────────────────
+# ── Test 3: inherits — routed through ref_svc.inherits (both senses) ───────
 
 
 @pytest.mark.asyncio
 async def test_lookup_inherits_routes_through_the_inherits_method() -> None:
     """``show='inherits'`` for a class with ref_svc wired routes through
-    ``ref_svc.find_by_name(qname, kind=ReferenceKind.INHERITS)`` — the
-    INHERITS reference graph is the source of truth once #5c wires the
-    service in. The class-only node-kind check still applies (only
-    classes can inherit), but bases come from ref_svc, not from
-    ``node.extra_metadata`` (the degraded-mode path remains for
-    ref_svc=None — covered by existing test_lookup_service.py)."""
+    ``ref_svc.inherits(package, qname)`` — the INHERITS reference graph
+    is the source of truth once #5c wires the service in. The class-only
+    node-kind check still applies (only classes can inherit), but the
+    edges come from ref_svc, not from ``node.extra_metadata`` (the
+    degraded-mode path remains for ref_svc=None — covered by existing
+    test_lookup_service.py)."""
     tree = _real_node_tree("pkg.api.MyClass", kind="class")
     tree_svc = _tree_svc_for_module("pkg.api", tree)
 
@@ -177,7 +177,9 @@ async def test_lookup_inherits_routes_through_the_inherits_method() -> None:
     # Routed through the service's inherits method (spec 2026-07-11 §3.4a:
     # name-keyed locally, unioned with overlay INHERITS edges inside it).
     ref_svc.inherits.assert_awaited_once_with("pkg", "pkg.api.MyClass")
-    assert out.startswith("# Bases of `pkg.api.MyClass`\n"), out
+    assert out.startswith("# Inheritance of `pkg.api.MyClass`\n"), out
+    # The from-side edge (from == target) renders under the "Bases of" sense.
+    assert "## Bases of `pkg.api.MyClass`" in out, out
     assert "pkg.base.BaseModel" in out, out
 
 

@@ -81,7 +81,7 @@ Examples:
 """,
     "get_references": f"""Who calls X, what X calls, what X extends, what breaks if X changes, or which decisions govern X.
 
-When to use: direction="callers" for usage sites; "callees" for dependencies; "inherits" for base classes; "impact" for the ranked transitive blast radius before a risky change; "governed_by" for the mined decisions that govern this symbol.
+When to use: direction="callers" for usage sites; "callees" for dependencies; "inherits" for base classes and subclasses; "impact" for the ranked transitive blast radius before a risky change; "governed_by" for the mined decisions that govern this symbol.
 When NOT to use: you want source or docs (get_symbol / get_context).
 Multi-repo workspaces: answers cross bundle boundaries — rows from sibling projects carry a (project: name) qualifier.
 {_WORKFLOW}

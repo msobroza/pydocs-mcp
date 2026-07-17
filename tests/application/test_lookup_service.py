@@ -410,8 +410,9 @@ async def test_show_inherits_on_class_routes_through_ref_svc(
 async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
     package_lookup_mock: MagicMock,
 ) -> None:
-    """A class with zero INHERITS edges renders the canonical empty-rows
-    markdown via ``format_references`` — H1 + ``No bases found.``"""
+    """A class with zero INHERITS edges (either sense) renders the canonical
+    empty-rows markdown via ``format_references`` — H1 + the single
+    ``No inheritance edges found`` line."""
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
 
     fake_node = MagicMock()
@@ -430,7 +431,7 @@ async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
         ref_svc=ref_svc,
     )
     out = await svc.lookup(LookupInput(target="fastapi.routing.X", show="inherits"))
-    assert "No bases found." in out
+    assert "No inheritance edges found for `fastapi.routing.X`." in out
     ref_svc.inherits.assert_awaited_once_with("fastapi", "fastapi.routing.X")
 
 

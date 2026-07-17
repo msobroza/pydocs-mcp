@@ -151,9 +151,10 @@ def test_format_references_show_callees_header():
     assert "## from `pkg` (1 callee)" in out, out
 
 
-def test_format_references_show_inherits_header():
-    """``show="inherits"`` switches H1 to ``Bases of`` and the noun to
-    ``base``/``bases`` (§A.1 vocabulary table)."""
+def test_format_references_show_inherits_subclasses_section():
+    """``show="inherits"`` rows whose from-side is NOT the target are the
+    target's SUBCLASSES — rendered under "Subclasses of", never mislabeled
+    "Bases of" (the pre-fix defect)."""
     rows = (
         _ref(
             from_package="pkg",
@@ -171,5 +172,68 @@ def test_format_references_show_inherits_header():
         ),
     )
     out = format_references(rows, target="pkg.api.Base", show="inherits", limit=50)
-    assert out.startswith("# Bases of `pkg.api.Base`\n"), out
-    assert "## from `pkg` (2 bases)" in out, out
+    assert out.startswith("# Inheritance of `pkg.api.Base`\n"), out
+    assert "## Subclasses of `pkg.api.Base` (2 subclasses)" in out, out
+    # Empty sense → its section is omitted entirely.
+    assert "## Bases of" not in out, out
+
+
+def test_format_references_show_inherits_bases_section():
+    """Rows whose from-side IS the target are its BASES (from-side INHERITS
+    edges) — one "Bases of" section, unresolved bases keep the ⚠ marker."""
+    rows = (
+        _ref(
+            from_package="pkg",
+            from_node_id="pkg.api.Child",
+            to_name="pkg.core.Base",
+            to_node_id="pkg.core.Base",
+            kind=ReferenceKind.INHERITS,
+        ),
+        _ref(
+            from_package="pkg",
+            from_node_id="pkg.api.Child",
+            to_name="ExternalMixin",
+            to_node_id=None,
+            kind=ReferenceKind.INHERITS,
+        ),
+    )
+    out = format_references(rows, target="pkg.api.Child", show="inherits", limit=50)
+    assert out.startswith("# Inheritance of `pkg.api.Child`\n"), out
+    assert "## Bases of `pkg.api.Child` (2 bases)" in out, out
+    assert "## Subclasses of" not in out, out
+    assert "- `pkg.api.Child` → `pkg.core.Base`" in out, out
+    assert "⚠ `pkg.api.Child` → `ExternalMixin`" in out, out
+
+
+def test_format_references_show_inherits_both_sections_bases_first():
+    """Both senses present → "Bases of" renders before "Subclasses of"."""
+    rows = (
+        _ref(
+            from_package="pkg",
+            from_node_id="pkg.api.Mid",
+            to_name="pkg.core.Root",
+            to_node_id="pkg.core.Root",
+            kind=ReferenceKind.INHERITS,
+        ),
+        _ref(
+            from_package="pkg",
+            from_node_id="pkg.api.Leaf",
+            to_name="pkg.api.Mid",
+            to_node_id="pkg.api.Mid",
+            kind=ReferenceKind.INHERITS,
+        ),
+    )
+    out = format_references(rows, target="pkg.api.Mid", show="inherits", limit=50)
+    bases_at = out.index("## Bases of `pkg.api.Mid` (1 base)")
+    subs_at = out.index("## Subclasses of `pkg.api.Mid` (1 subclass)")
+    assert bases_at < subs_at, out
+    assert "2 references found (2 resolved, 0 unresolved)." in out, out
+
+
+def test_format_references_show_inherits_empty_message():
+    """Both senses empty → single "No inheritance edges found" line (the
+    pre-fix ``No bases found.`` message implied only one sense existed)."""
+    out = format_references((), target="pkg.api.Loner", show="inherits", limit=50)
+    assert out.startswith("# Inheritance of `pkg.api.Loner`\n"), out
+    assert "No inheritance edges found for `pkg.api.Loner`." in out, out
+    assert out.endswith("\n"), out
