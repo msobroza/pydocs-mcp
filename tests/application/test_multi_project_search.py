@@ -86,6 +86,10 @@ class _FakeLookup:
             raise NotFoundError(f"'{payload.target}' not indexed")
         return self._answer
 
+    async def lookup_with_items(self, payload):
+        # Routing tests care about text + routing only — empty rows.
+        return await self.lookup(payload), (), {}
+
 
 class _StubTreeNavigator:
     """TreeNavigator slice for member-span resolution: (package, module) → tree."""

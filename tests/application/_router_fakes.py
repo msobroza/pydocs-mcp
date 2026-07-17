@@ -89,10 +89,25 @@ class FakeLookup:
             return "## Packages\n- pkg"
         return f"## {payload.target}\n\nsummary body"
 
-    async def context_nodes(self, target: str) -> tuple[str, tuple[str, ...]]:
+    async def lookup_with_items(
+        self, payload: LookupInput
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        # Text-only fake bodies — the §3.3 rows are covered by the real
+        # LookupService tests; the router only threads the triple through.
+        return await self.lookup(payload), (), {}
+
+    async def context_nodes(self, target: str) -> tuple[str, tuple[str, ...], dict[str, object]]:
         # Trivial one-node closure keyed by target — enough for the router's
-        # proportional split (all sizes equal → even shares).
-        return target, (f"{target}.dep0",)
+        # proportional split (all sizes equal → even shares). The third element
+        # mirrors the real seam's §3.4 focus row.
+        focus_row: dict[str, object] = {
+            "qualified_name": target,
+            "kind": "class",
+            "path": None,
+            "start_line": None,
+            "end_line": None,
+        }
+        return target, (f"{target}.dep0",), focus_row
 
     def render_context_card(self, target: str, nodes: tuple[str, ...], *, token_budget: int) -> str:
         return f"# Context for {target}\n\nctx body ({len(nodes)} nodes)"
@@ -118,6 +133,21 @@ class FakeSymbolSource:
                 f"'{target}' has no indexed source. {pointer_token('search', target)}"
             )
         return f"# Source — `{target}`\n\n```python\ndef f():\n    return 1\n```\n"
+
+    async def source_with_items(
+        self, target: str
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        # Mirrors the real service's Task-6 shape: one §3.3 row for the span.
+        text = await self.source_for(target)
+        row: dict[str, object] = {
+            "node_id": target,
+            "kind": "",
+            "qualified_name": target,
+            "path": None,
+            "start_line": None,
+            "end_line": None,
+        }
+        return text, (row,), {}
 
 
 class FakeOverview:

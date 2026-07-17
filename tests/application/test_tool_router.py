@@ -125,6 +125,23 @@ def test_context_renders_one_card_per_target() -> None:
     assert out.count("# Context for") == 2
 
 
+def test_context_items_one_row_per_target_in_order() -> None:
+    # §3.4: one row per resolved target, in the client's targets order —
+    # the row is whatever the lookup seam resolved for the focus node.
+    resp = asyncio.run(_tool_router().get_context(ContextInput(targets=["pkg.mod.A", "pkg.mod.B"])))
+    assert [i["qualified_name"] for i in resp.items] == ["pkg.mod.A", "pkg.mod.B"]
+    assert all(
+        set(i) == {"qualified_name", "kind", "path", "start_line", "end_line"} for i in resp.items
+    )
+
+
+def test_symbol_source_emits_one_item_row() -> None:
+    # §3.3: depth="source" carries exactly one row for the rendered span.
+    resp = asyncio.run(_tool_router().get_symbol(SymbolInput(target="pkg.mod.X", depth="source")))
+    assert len(resp.items) == 1
+    assert resp.items[0]["qualified_name"] == "pkg.mod.X"
+
+
 def test_references_maps_direction_to_show() -> None:
     out = asyncio.run(
         _tool_router().get_references(ReferencesInput(target="pkg.mod.f", direction="impact"))

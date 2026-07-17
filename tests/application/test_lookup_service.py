@@ -525,6 +525,99 @@ async def test_show_tree_on_symbol_returns_node_json(
     assert "include_router" in out
 
 
+@pytest.mark.asyncio
+async def test_lookup_with_items_emits_contract_rows_for_outline(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """Task 6 (§3.3): the tree-rendering path emits one row per rendered
+    outline node, pre-order, under CONTRACT names — not the pageindex keys."""
+    from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+
+    method = DocumentNode(
+        node_id="fastapi.routing.APIRouter.include_router",
+        qualified_name="fastapi.routing.APIRouter.include_router",
+        title="def include_router",
+        kind=NodeKind.METHOD,
+        source_path="fastapi/routing.py",
+        start_line=20,
+        end_line=30,
+        text="def include_router(...): ...",
+        content_hash="h-m",
+    )
+    cls = DocumentNode(
+        node_id="fastapi.routing.APIRouter",
+        qualified_name="fastapi.routing.APIRouter",
+        title="class APIRouter",
+        kind=NodeKind.CLASS,
+        source_path="fastapi/routing.py",
+        start_line=10,
+        end_line=40,
+        text="class APIRouter: ...",
+        content_hash="h-c",
+        children=(method,),
+    )
+    tree = MagicMock()
+    tree.find_node_by_qualified_name = MagicMock(return_value=cls)
+    tree_svc = _tree_svc_for_module("fastapi.routing", tree)
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
+    body, items, extras = await svc.lookup_with_items(
+        LookupInput(target="fastapi.routing.APIRouter", show="tree")
+    )
+    assert "APIRouter" in body
+    assert extras == {}
+    assert items == (
+        {
+            "node_id": "fastapi.routing.APIRouter",
+            "kind": "class",
+            "qualified_name": "fastapi.routing.APIRouter",
+            "path": "fastapi/routing.py",
+            "start_line": 10,
+            "end_line": 40,
+        },
+        {
+            "node_id": "fastapi.routing.APIRouter.include_router",
+            "kind": "method",
+            "qualified_name": "fastapi.routing.APIRouter.include_router",
+            "path": "fastapi/routing.py",
+            "start_line": 20,
+            "end_line": 30,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_lookup_with_items_reference_shows_stay_empty(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """get_references rides the same dispatcher — its rows land in a later
+    task, so non-tree shows keep an empty items[] today."""
+    fake_node = MagicMock()
+    fake_node.node_id = "pkg.mod.f"
+    fake_node.kind = "function"
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("pkg.mod", fake_tree)
+    ref_svc = MagicMock()
+    ref_svc.callers = AsyncMock(return_value=())
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
+    )
+    body, items, extras = await svc.lookup_with_items(
+        LookupInput(target="pkg.mod.f", show="callers")
+    )
+    assert "No callers found." in body
+    assert items == ()
+    assert extras == {}
+
+
 # ── I8 dispatch table + I9 Null-services contract ────────────────────────
 
 

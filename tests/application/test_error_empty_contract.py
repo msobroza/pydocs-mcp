@@ -37,6 +37,9 @@ class _RaisingLookup:
     async def lookup(self, payload: LookupInput) -> str:
         raise NotFoundError(f"'{payload.target}' not indexed here")
 
+    async def lookup_with_items(self, payload: LookupInput) -> str:
+        return await self.lookup(payload)  # always raises before returning
+
 
 def _project(name: str, indexed_at: float) -> LoadedProject:
     meta = IndexMetadata(

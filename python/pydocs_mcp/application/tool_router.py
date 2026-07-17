@@ -75,17 +75,20 @@ class ToolRouter:
         selector, else the default (first-loaded) project's resolved name."""
         return project or self.services[0].project.name
 
-    async def _resolve_source(self, target: str, project: str) -> str:
+    async def _resolve_source(
+        self, target: str, project: str
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         """``depth='source'`` body — mirrors ``MultiProjectLookup._lookup_body``'s
         project-routing shape (explicit project → single service; single-project
         deployment → services[0]; otherwise resolve by recency) so a target
-        indexed only in a non-first project still resolves (spec §D7)."""
+        indexed only in a non-first project still resolves (spec §D7). Carries
+        the one §3.3 row for the rendered span (Task 6)."""
         if project:
-            return await self._svc(project).symbol_source.source_for(target)
+            return await self._svc(project).symbol_source.source_with_items(target)
         if len(self.services) == 1:
-            return await self.services[0].symbol_source.source_for(target)
+            return await self.services[0].symbol_source.source_with_items(target)
         return await self.lookup_router._resolve_by_recency(
-            lambda svc: svc.symbol_source.source_for(target),
+            lambda svc: svc.symbol_source.source_with_items(target),
             target=target,
         )
 
@@ -140,7 +143,7 @@ class ToolRouter:
         )
 
     async def get_context(self, payload: ContextInput) -> ToolResponse:
-        async def _cards() -> str:
+        async def _cards() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
             # Phase 1 — resolve every target's forward closure through the same
             # project-routing / recency resolution a single lookup uses.
             resolved = [
@@ -148,15 +151,17 @@ class ToolRouter:
                 for target in payload.targets
             ]
             # Phase 2 — split the ONE shared budget proportionally to closure
-            # size, then render each card at its own share.
+            # size, then render each card at its own share. items[] carry one
+            # §3.4 row per resolved target, in the client's targets order.
             svc = self._svc(payload.project)
             budget = svc.lookup.context_token_budget
-            shares = _split_budget(budget, [len(nodes) for _, nodes in resolved])
+            shares = _split_budget(budget, [len(nodes) for _, nodes, _ in resolved])
             cards = [
                 svc.lookup.render_context_card(target, nodes, token_budget=share)
-                for (target, nodes), share in zip(resolved, shares, strict=True)
+                for (target, nodes, _), share in zip(resolved, shares, strict=True)
             ]
-            return "\n\n".join(cards)
+            items = tuple(focus_row for _, _, focus_row in resolved)
+            return "\n\n".join(cards), items, {}
 
         return await self.envelope.wrap("get_context", self._meta_project(payload.project), _cards)
 

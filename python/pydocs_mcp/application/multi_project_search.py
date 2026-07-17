@@ -395,31 +395,38 @@ class MultiProjectLookup:
             )
             return wrapped.text
         # Legacy/no-envelope path: never leak raw pointer tokens.
-        return strip_pointers(await self._lookup_body(payload))
+        body, _items, _extras = await self._lookup_body(payload)
+        return strip_pointers(body)
 
-    async def _lookup_body(self, payload: LookupInput) -> str:
+    async def _lookup_body(
+        self, payload: LookupInput
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         if payload.project:
-            return await _select_service(self.services, payload.project).lookup.lookup(payload)
+            svc = _select_service(self.services, payload.project)
+            return await svc.lookup.lookup_with_items(payload)
         if len(self.services) == 1:
-            return await self.services[0].lookup.lookup(payload)
+            return await self.services[0].lookup.lookup_with_items(payload)
         # Empty target = "list packages" — union every project's listing.
+        # No §3.3 rows here: the listing is package metadata, not tree nodes.
         if not payload.target:
             listings = await asyncio.gather(*[s.lookup.lookup(payload) for s in self.services])
-            return "\n\n".join(
+            joined = "\n\n".join(
                 f"## Project: {s.project.name}\n\n{text}"
                 for s, text in zip(self.services, listings, strict=True)
             )
+            return joined, (), {}
         # A specific target lives in exactly one project — resolve by recency.
         return await self._resolve_by_recency(
-            lambda svc: svc.lookup.lookup(payload),
+            lambda svc: svc.lookup.lookup_with_items(payload),
             target=payload.target,
         )
 
     async def resolve_context(
         self, target: str, project: str
-    ) -> tuple[str, tuple[ContextNode, ...]]:
-        """Resolve ``target`` → ``(display_target, closure_nodes)`` via the right
-        project's ``LookupService.context_nodes`` — the same project-routing /
+    ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
+        """Resolve ``target`` → ``(display_target, closure_nodes, focus_row)``
+        via the right project's ``LookupService.context_nodes`` (``focus_row``
+        is the §3.4 items[] row) — the same project-routing /
         recency resolution ``_lookup_body`` uses, so a batched ``get_context``
         target lands in exactly the project a single lookup would.
 

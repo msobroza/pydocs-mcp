@@ -111,8 +111,9 @@ _META_FIELDS = {
 }
 
 # Tools whose items[] land in later tasks — their arrays stay empty today.
-# search_codebase / get_overview emit rows since Task 5.
-_ITEMS_PENDING = {"get_symbol", "get_context", "get_references", "get_why"}
+# search_codebase / get_overview emit rows since Task 5;
+# get_symbol / get_context since Task 6.
+_ITEMS_PENDING = {"get_references", "get_why"}
 
 
 def _arun(coro):
@@ -396,6 +397,99 @@ def test_search_items_decision_row_keeps_locators_in_get_why(items_handlers) -> 
     assert row["path"] is None
     assert row["start_line"] is None and row["end_line"] is None
     assert isinstance(row["score"], float)
+
+
+# ── items[]: get_symbol + get_context (contract §3.3/§3.4, Task 6) ──────────
+
+# The §3.3 rows for the seeded fastapi.routing.APIRouter node — CONTRACT
+# names (path/start_line/end_line), not the pageindex keys the text body
+# renders (source_path/start_index/end_index).
+_SYMBOL_OUTLINE_ITEMS = [
+    {
+        "node_id": "fastapi.routing.APIRouter",
+        "kind": "class",
+        "qualified_name": "fastapi.routing.APIRouter",
+        "path": "fastapi/routing.py",
+        "start_line": 10,
+        "end_line": 40,
+    },
+    {
+        "node_id": "fastapi.routing.APIRouter.include_router",
+        "kind": "method",
+        "qualified_name": "fastapi.routing.APIRouter.include_router",
+        "path": "fastapi/routing.py",
+        "start_line": 20,
+        "end_line": 30,
+    },
+]
+
+
+def test_symbol_items_mirror_rendered_outline(handlers) -> None:
+    sc = _arun(handlers["get_symbol"](target="fastapi.routing.APIRouter")).structuredContent
+    assert sc["items"] == _SYMBOL_OUTLINE_ITEMS
+
+
+def test_symbol_tree_depth_emits_same_outline_rows(handlers) -> None:
+    # summary and tree render the same pageindex payload today; the rows
+    # mirror whatever outline the text carries.
+    sc = _arun(
+        handlers["get_symbol"](target="fastapi.routing.APIRouter", depth="tree")
+    ).structuredContent
+    assert sc["items"] == _SYMBOL_OUTLINE_ITEMS
+
+
+def test_symbol_module_target_items_lead_with_module_row(handlers) -> None:
+    sc = _arun(handlers["get_symbol"](target="fastapi.routing")).structuredContent
+    assert sc["items"][0] == {
+        "node_id": "fastapi.routing",
+        "kind": "module",
+        "qualified_name": "fastapi.routing",
+        "path": "fastapi/routing.py",
+        "start_line": 1,
+        "end_line": 50,
+    }
+    # Descendants follow in the pageindex pre-order.
+    assert [i["node_id"] for i in sc["items"][1:]] == [
+        "fastapi.routing.APIRouter",
+        "fastapi.routing.APIRouter.include_router",
+    ]
+
+
+def test_symbol_package_target_emits_no_items(handlers) -> None:
+    # Package overview card — no document-tree nodes to attribute.
+    sc = _arun(handlers["get_symbol"](target="fastapi")).structuredContent
+    assert sc["items"] == []
+
+
+def test_symbol_source_depth_emits_one_span_item(items_handlers) -> None:
+    # The rendered verbatim span is the single §3.3 row; chunks don't persist
+    # a node kind, so ``kind`` degrades to "" on this path.
+    sc = _arun(
+        items_handlers["get_symbol"](target="fastapi.spanmod.SpanDoc", depth="source")
+    ).structuredContent
+    assert sc["items"] == [
+        {
+            "node_id": "fastapi.spanmod.SpanDoc",
+            "kind": "",
+            "qualified_name": "fastapi.spanmod.SpanDoc",
+            "path": "fastapi/spanmod.py",
+            "start_line": 5,
+            "end_line": 9,
+        }
+    ]
+
+
+def test_context_items_one_row_per_resolved_target(handlers) -> None:
+    sc = _arun(handlers["get_context"](targets=["fastapi.routing.APIRouter"])).structuredContent
+    assert sc["items"] == [
+        {
+            "qualified_name": "fastapi.routing.APIRouter",
+            "kind": "class",
+            "path": "fastapi/routing.py",
+            "start_line": 10,
+            "end_line": 40,
+        }
+    ]
 
 
 def test_overview_items_carry_module_map_rows(items_handlers) -> None:

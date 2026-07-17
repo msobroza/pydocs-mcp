@@ -64,3 +64,51 @@ def test_line_cap_truncates_with_recovery_note() -> None:
 def test_unknown_symbol_raises_not_found() -> None:
     with pytest.raises(NotFoundError):
         asyncio.run(_service(InMemoryChunkStore()).source_for("nope.missing"))
+
+
+def test_source_with_items_emits_one_span_row() -> None:
+    # contract §3.3 (Task 6): depth="source" emits ONE row for the rendered
+    # span, read from the schema-v15 chunk metadata keys.
+    store = _store(
+        Chunk(
+            text="def f():\n    return 1\n",
+            metadata={
+                "package": "pkg",
+                "qualified_name": "pkg.mod.f",
+                "source_path": "pkg/mod.py",
+                "start_line": 3,
+                "end_line": 4,
+                "kind": "function",
+            },
+        )
+    )
+    body, items, extras = asyncio.run(_service(store).source_with_items("pkg.mod.f"))
+    assert "```python" in body and "def f():" in body
+    assert extras == {}
+    assert items == (
+        {
+            "node_id": "pkg.mod.f",
+            "kind": "function",
+            "qualified_name": "pkg.mod.f",
+            "path": "pkg/mod.py",
+            "start_line": 3,
+            "end_line": 4,
+        },
+    )
+
+
+def test_source_with_items_degrades_missing_span_to_null() -> None:
+    # Legacy rows (pre-v15) carry no span keys and chunks never persist a node
+    # kind — the row degrades instead of failing the tool.
+    store = _store(_chunk(qualified_name="pkg.mod.f", source_path="", text="def f(): ...\n"))
+    _body, items, _extras = asyncio.run(_service(store).source_with_items("pkg.mod.f"))
+    assert items == (
+        {
+            "node_id": "pkg.mod.f",
+            "kind": "",
+            "qualified_name": "pkg.mod.f",
+            "path": None,
+            "start_line": None,
+            "end_line": None,
+        },
+    )
