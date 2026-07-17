@@ -139,6 +139,8 @@ def _router() -> ToolRouter:
 
 
 def test_search_codebase_kind_decision_renders_record_block() -> None:
-    out = asyncio.run(_router().search_codebase(SearchInput(query="why sqlite", kind="decision")))
+    out = asyncio.run(
+        _router().search_codebase(SearchInput(query="why sqlite", kind="decision"))
+    ).text
     assert "## Decision — Use SQLite" in out
     assert "RAW_CHUNK" not in out

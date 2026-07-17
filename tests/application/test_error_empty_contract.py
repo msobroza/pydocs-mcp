@@ -134,7 +134,9 @@ def test_unknown_target_message_carries_search_pointer() -> None:
 def test_zero_hit_search_points_at_overview() -> None:
     # Fake docs/api services returning empty; assert the enveloped output
     # contains the resolved get_overview() pointer (surface="mcp").
-    out = asyncio.run(_empty_search_router().search_codebase(SearchInput(query="nothing here")))
+    out = asyncio.run(
+        _empty_search_router().search_codebase(SearchInput(query="nothing here"))
+    ).text
     assert "→ get_overview()" in out
     # And the raw token must not leak through the envelope.
     assert "[[next:" not in out

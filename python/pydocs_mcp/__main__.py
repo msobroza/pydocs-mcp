@@ -785,7 +785,7 @@ async def _run_search(args: argparse.Namespace) -> None:
         limit=args.limit,
         project=args.project_scope,
     )
-    print(await tools.search_codebase(payload))
+    print((await tools.search_codebase(payload)).text)
 
 
 async def _run_overview(args: argparse.Namespace) -> None:
@@ -794,7 +794,7 @@ async def _run_overview(args: argparse.Namespace) -> None:
 
     tools = _build_cli_tools(args)
     payload = OverviewInput(package=args.package, project=args.project_scope)
-    print(await tools.get_overview(payload))
+    print((await tools.get_overview(payload)).text)
 
 
 async def _run_symbol(args: argparse.Namespace) -> None:
@@ -803,7 +803,7 @@ async def _run_symbol(args: argparse.Namespace) -> None:
 
     tools = _build_cli_tools(args)
     payload = SymbolInput(target=args.target, depth=args.depth, project=args.project_scope)
-    print(await tools.get_symbol(payload))
+    print((await tools.get_symbol(payload)).text)
 
 
 async def _run_context(args: argparse.Namespace) -> None:
@@ -812,7 +812,7 @@ async def _run_context(args: argparse.Namespace) -> None:
 
     tools = _build_cli_tools(args)
     payload = ContextInput(targets=args.targets, project=args.project_scope)
-    print(await tools.get_context(payload))
+    print((await tools.get_context(payload)).text)
 
 
 async def _run_refs(args: argparse.Namespace) -> None:
@@ -826,7 +826,7 @@ async def _run_refs(args: argparse.Namespace) -> None:
     fields = {"target": args.target, "direction": args.direction, "project": args.project_scope}
     if args.limit is not None:
         fields["limit"] = args.limit
-    print(await tools.get_references(ReferencesInput(**fields)))
+    print((await tools.get_references(ReferencesInput(**fields))).text)
 
 
 async def _run_why(args: argparse.Namespace) -> None:
@@ -843,7 +843,7 @@ async def _run_why(args: argparse.Namespace) -> None:
 
     tools = _build_cli_tools(args)
     payload = WhyInput(query=args.query, targets=args.targets, project=args.project_scope)
-    print(await tools.get_why(payload))
+    print((await tools.get_why(payload)).text)
 
 
 # ``lookup --show`` → new-router routing. ``default``/``tree`` are get_symbol
@@ -880,17 +880,19 @@ async def _run_lookup(args: argparse.Namespace) -> None:
     # Empty target = "list packages" — the old lookup behavior for every --show;
     # get_overview(package="") renders that listing.
     if not args.target:
-        print(await tools.get_overview(OverviewInput(package="", project=project)))
+        print((await tools.get_overview(OverviewInput(package="", project=project))).text)
         return
     if args.show == "context":
-        print(await tools.get_context(ContextInput(targets=[args.target], project=project)))
+        print((await tools.get_context(ContextInput(targets=[args.target], project=project))).text)
         return
     if args.show in _ALIAS_DIRECTION:
         payload = ReferencesInput(target=args.target, direction=args.show, project=project)
-        print(await tools.get_references(payload))
+        print((await tools.get_references(payload)).text)
         return
     depth = _ALIAS_DEPTH[args.show]
-    print(await tools.get_symbol(SymbolInput(target=args.target, depth=depth, project=project)))
+    print(
+        (await tools.get_symbol(SymbolInput(target=args.target, depth=depth, project=project))).text
+    )
 
 
 def _report_cli_failure(exc: Exception, *, verbose: bool) -> int:

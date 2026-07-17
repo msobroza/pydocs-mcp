@@ -83,30 +83,34 @@ def _tool_router_with_decisions(decisions: object) -> ToolRouter:
 
 
 def test_search_codebase_is_enveloped_search() -> None:
-    out = asyncio.run(_tool_router().search_codebase(SearchInput(query="x")))
+    out = asyncio.run(_tool_router().search_codebase(SearchInput(query="x"))).text
     assert out.startswith("[index:")
     assert "[[next:" not in out
 
 
 def test_symbol_summary_and_tree_route_to_lookup_body() -> None:
-    out = asyncio.run(_tool_router().get_symbol(SymbolInput(target="pkg.mod.X")))
+    out = asyncio.run(_tool_router().get_symbol(SymbolInput(target="pkg.mod.X"))).text
     assert out.startswith("[index:")
 
 
 def test_symbol_source_routes_to_symbol_source_service() -> None:
-    out = asyncio.run(_tool_router().get_symbol(SymbolInput(target="pkg.mod.X", depth="source")))
+    out = asyncio.run(
+        _tool_router().get_symbol(SymbolInput(target="pkg.mod.X", depth="source"))
+    ).text
     assert "```python" in out
 
 
 def test_context_renders_one_card_per_target() -> None:
-    out = asyncio.run(_tool_router().get_context(ContextInput(targets=["pkg.mod.A", "pkg.mod.B"])))
+    out = asyncio.run(
+        _tool_router().get_context(ContextInput(targets=["pkg.mod.A", "pkg.mod.B"]))
+    ).text
     assert out.count("# Context for") == 2
 
 
 def test_references_maps_direction_to_show() -> None:
     out = asyncio.run(
         _tool_router().get_references(ReferencesInput(target="pkg.mod.f", direction="impact"))
-    )
+    ).text
     assert "Impact of" in out
 
 
@@ -119,30 +123,30 @@ def test_why_raises_service_unavailable_when_capture_disabled() -> None:
 
 def test_why_query_routes_to_real_search() -> None:
     router = _tool_router_with_decisions(_FakeDecisions())
-    out = asyncio.run(router.get_why(WhyInput(query="why sqlite")))
+    out = asyncio.run(router.get_why(WhyInput(query="why sqlite"))).text
     assert "SEARCH: why sqlite" in out
 
 
 def test_why_targets_route_to_for_targets() -> None:
     router = _tool_router_with_decisions(_FakeDecisions())
-    out = asyncio.run(router.get_why(WhyInput(targets=["pkg.mod"])))
+    out = asyncio.run(router.get_why(WhyInput(targets=["pkg.mod"]))).text
     assert "TARGETS: ['pkg.mod'] query=''" in out
 
 
 def test_why_query_and_targets_filter_targets_by_query() -> None:
     router = _tool_router_with_decisions(_FakeDecisions())
-    out = asyncio.run(router.get_why(WhyInput(query="sidecar", targets=["pkg.mod"])))
+    out = asyncio.run(router.get_why(WhyInput(query="sidecar", targets=["pkg.mod"]))).text
     assert "TARGETS: ['pkg.mod'] query='sidecar'" in out
 
 
 def test_why_neither_routes_to_dashboard() -> None:
     router = _tool_router_with_decisions(_FakeDecisions())
-    out = asyncio.run(router.get_why(WhyInput()))
+    out = asyncio.run(router.get_why(WhyInput())).text
     assert "DASHBOARD" in out
 
 
 def test_overview_renders_structural_card() -> None:
-    out = asyncio.run(_tool_router().get_overview(OverviewInput()))
+    out = asyncio.run(_tool_router().get_overview(OverviewInput())).text
     # Enveloped (freshness header first), then the §D17 card: H1 + stats +
     # the four H2 blocks rendered from the fake service's OverviewCard.
     assert out.startswith("[index:")
@@ -166,7 +170,7 @@ def _workspace_router() -> ToolRouter:
 
 
 def test_overview_empty_selector_multi_project_renders_workspace_card() -> None:
-    out = asyncio.run(_workspace_router().get_overview(OverviewInput()))
+    out = asyncio.run(_workspace_router().get_overview(OverviewInput())).text
     assert out.startswith("[index:")
     assert "# Workspace overview" in out
     assert "**backend** — 3 packages" in out and "**frontend** — 1 packages" in out
@@ -178,7 +182,7 @@ def test_overview_empty_selector_multi_project_renders_workspace_card() -> None:
 
 
 def test_overview_project_selector_bypasses_workspace_card() -> None:
-    out = asyncio.run(_workspace_router().get_overview(OverviewInput(project="frontend")))
+    out = asyncio.run(_workspace_router().get_overview(OverviewInput(project="frontend"))).text
     assert "# Overview — __project__" in out
     assert "# Workspace overview" not in out
 
@@ -186,7 +190,7 @@ def test_overview_project_selector_bypasses_workspace_card() -> None:
 def test_overview_package_mode_bypasses_workspace_card() -> None:
     # An explicit package request keeps the §D17 per-project card — the
     # workspace card only replaces the fully-empty selector.
-    out = asyncio.run(_workspace_router().get_overview(OverviewInput(package="fastapi")))
+    out = asyncio.run(_workspace_router().get_overview(OverviewInput(package="fastapi"))).text
     assert "# Overview — fastapi" in out
     assert "# Workspace overview" not in out
 
@@ -224,11 +228,11 @@ def test_symbol_source_depth_resolves_via_recency_across_projects() -> None:
 
     # Sanity check: depth='summary' already resolves cross-project via the
     # recency loop (FakeLookup answers unconditionally regardless of project).
-    summary_out = asyncio.run(router.get_symbol(SymbolInput(target=target, depth="summary")))
+    summary_out = asyncio.run(router.get_symbol(SymbolInput(target=target, depth="summary"))).text
     assert target in summary_out
 
     # The actual gap: depth='source' must resolve the SAME target instead of
     # hard-querying services[0] ("backend", which doesn't know this symbol).
-    source_out = asyncio.run(router.get_symbol(SymbolInput(target=target, depth="source")))
+    source_out = asyncio.run(router.get_symbol(SymbolInput(target=target, depth="source"))).text
     assert "```python" in source_out
     assert f"`{target}`" in source_out

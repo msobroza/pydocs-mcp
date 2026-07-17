@@ -19,11 +19,20 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.application import (
     MCPToolError,
     ServiceUnavailableError,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from mcp.types import CallToolResult
+    from pydantic import BaseModel
+
+    from pydocs_mcp.application.tool_response import ToolResponse
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -519,21 +528,40 @@ def run(
     mcp.run(transport="stdio")
 
 
-async def _run_tool(name: str, produce):
-    """Shared handler error boundary (§5.2).
+async def _run_tool(
+    name: str, produce: Callable[[], Awaitable[ToolResponse]], envelope_model: type[BaseModel]
+) -> CallToolResult:
+    """Shared handler error boundary (§5.2) + dual-form result assembly (§2).
 
     Awaits ``produce()`` (the ``ToolRouter`` call), re-raising typed
     :class:`MCPToolError`s unchanged and wrapping anything else in
-    :class:`ServiceUnavailableError` after logging. Factored out so every one of
-    the six handlers is a one-line delegation — no per-tool try/except copy.
+    :class:`ServiceUnavailableError` after logging. The successful
+    :class:`ToolResponse` is converted to a ``CallToolResult`` carrying the
+    markdown text block plus ``structuredContent`` validated against the
+    tool's envelope model. Factored out so every one of the handlers is a
+    one-line delegation — no per-tool try/except or conversion copy.
     """
     try:
-        return await produce()
+        response = await produce()
     except MCPToolError:
         raise
     except Exception as e:
         log.exception("%s failed unexpectedly", name)
         raise ServiceUnavailableError(f"{name} failed: {e}") from e
+    return _to_call_tool_result(response, envelope_model)
+
+
+def _to_call_tool_result(response: ToolResponse, envelope_model: type[BaseModel]) -> CallToolResult:
+    """Both wire forms of one response — FastMCP passes a ``CallToolResult``
+    through unchanged after re-validating ``structuredContent`` against the
+    advertised output model (mcp 1.27.1 ``func_metadata.convert_result``)."""
+    from mcp.types import CallToolResult, TextContent
+
+    structured = envelope_model.model_validate(response.structured()).model_dump(mode="json")
+    return CallToolResult(
+        content=[TextContent(type="text", text=response.text)],
+        structuredContent=structured,
+    )
 
 
 def _register_tools(mcp, tools) -> None:
@@ -544,7 +572,9 @@ def _register_tools(mcp, tools) -> None:
     boundary). Split out of :func:`run` so the composition root stays flat and
     each handler reads as one unit.
     """
-    from mcp.types import ToolAnnotations
+    from typing import Annotated
+
+    from mcp.types import CallToolResult, ToolAnnotations
 
     from pydocs_mcp.application.mcp_inputs import (
         ContextInput,
@@ -555,6 +585,7 @@ def _register_tools(mcp, tools) -> None:
         WhyInput,
     )
     from pydocs_mcp.application.tool_docs import TOOL_DOCS
+    from pydocs_mcp.application.tool_response import ENVELOPE_MODELS
 
     def _register(fn, name: str):
         """Register a thin handler under ``name`` with ``TOOL_DOCS[name]`` as its
@@ -563,7 +594,16 @@ def _register_tools(mcp, tools) -> None:
         ``description=`` is passed explicitly rather than relying on ``fn.__doc__``
         so the tool text is the ``TOOL_DOCS`` single source regardless of how
         FastMCP resolves docstrings across versions (§D13).
+
+        The return annotation is stamped as a real ``Annotated[CallToolResult,
+        <EnvelopeModel>]`` object post-def: FastMCP advertises the model as the
+        tool's ``outputSchema`` and passes the handler's ``CallToolResult``
+        through after validating ``structuredContent`` against it. It must be
+        attached dynamically because ``from __future__ import annotations``
+        stringifies source annotations and FastMCP's ``eval_str`` resolution
+        cannot see this function's local names.
         """
+        fn.__annotations__["return"] = Annotated[CallToolResult, ENVELOPE_MODELS[name]]
         return mcp.tool(
             name=name,
             description=TOOL_DOCS[name],
@@ -574,9 +614,11 @@ def _register_tools(mcp, tools) -> None:
             ),
         )(fn)
 
-    async def get_overview(package: str = "", project: str = "") -> str:
+    async def get_overview(package: str = "", project: str = "") -> CallToolResult:
         payload = OverviewInput(package=package, project=project)
-        return await _run_tool("get_overview", lambda: tools.get_overview(payload))
+        return await _run_tool(
+            "get_overview", lambda: tools.get_overview(payload), ENVELOPE_MODELS["get_overview"]
+        )
 
     _register(get_overview, "get_overview")
 
@@ -587,7 +629,7 @@ def _register_tools(mcp, tools) -> None:
         scope: str = "all",
         limit: int | None = None,
         project: str = "",
-    ) -> str:
+    ) -> CallToolResult:
         # ``limit`` is omitted from ``SearchInput`` when the client didn't send
         # one so the model's YAML-wired ``default_factory`` supplies the default —
         # no literal duplicated here (single-source-of-truth defaults).
@@ -601,19 +643,27 @@ def _register_tools(mcp, tools) -> None:
         if limit is not None:
             fields["limit"] = limit
         payload = SearchInput(**fields)
-        return await _run_tool("search_codebase", lambda: tools.search_codebase(payload))
+        return await _run_tool(
+            "search_codebase",
+            lambda: tools.search_codebase(payload),
+            ENVELOPE_MODELS["search_codebase"],
+        )
 
     _register(search_codebase, "search_codebase")
 
-    async def get_symbol(target: str, depth: str = "summary", project: str = "") -> str:
+    async def get_symbol(target: str, depth: str = "summary", project: str = "") -> CallToolResult:
         payload = SymbolInput(target=target, depth=depth, project=project)
-        return await _run_tool("get_symbol", lambda: tools.get_symbol(payload))
+        return await _run_tool(
+            "get_symbol", lambda: tools.get_symbol(payload), ENVELOPE_MODELS["get_symbol"]
+        )
 
     _register(get_symbol, "get_symbol")
 
-    async def get_context(targets: list[str], project: str = "") -> str:
+    async def get_context(targets: list[str], project: str = "") -> CallToolResult:
         payload = ContextInput(targets=targets, project=project)
-        return await _run_tool("get_context", lambda: tools.get_context(payload))
+        return await _run_tool(
+            "get_context", lambda: tools.get_context(payload), ENVELOPE_MODELS["get_context"]
+        )
 
     _register(get_context, "get_context")
 
@@ -622,14 +672,18 @@ def _register_tools(mcp, tools) -> None:
         direction: str = "callers",
         limit: int | None = None,
         project: str = "",
-    ) -> str:
+    ) -> CallToolResult:
         # Same limit-omission rule as search_codebase: absent arg lets the input
         # model apply the YAML-wired reference-graph default.
         fields = {"target": target, "direction": direction, "project": project}
         if limit is not None:
             fields["limit"] = limit
         payload = ReferencesInput(**fields)
-        return await _run_tool("get_references", lambda: tools.get_references(payload))
+        return await _run_tool(
+            "get_references",
+            lambda: tools.get_references(payload),
+            ENVELOPE_MODELS["get_references"],
+        )
 
     _register(get_references, "get_references")
 
@@ -637,8 +691,10 @@ def _register_tools(mcp, tools) -> None:
         query: str = "",
         targets: list[str] | None = None,
         project: str = "",
-    ) -> str:
+    ) -> CallToolResult:
         payload = WhyInput(query=query, targets=targets, project=project)
-        return await _run_tool("get_why", lambda: tools.get_why(payload))
+        return await _run_tool(
+            "get_why", lambda: tools.get_why(payload), ENVELOPE_MODELS["get_why"]
+        )
 
     _register(get_why, "get_why")

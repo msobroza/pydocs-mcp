@@ -27,6 +27,11 @@ def _arun(coro):
         loop.close()
 
 
+def _text(result) -> str:
+    """The markdown text block of a handler's ``CallToolResult``."""
+    return result.content[0].text
+
+
 class FakeMCP:
     """Captures tool registrations from FastMCP without starting a server.
 
@@ -257,7 +262,7 @@ class TestOverviewStructuralCard:
 
     def test_empty_package_scopes_to_project_card(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["get_overview"](package=""))
+        out = _text(_arun(tools["get_overview"](package="")))
         # H1 scopes to the project package; the four §D17 H2 blocks are present.
         assert "# Overview — __project__" in out
         assert "## Module map" in out and "## Entry points" in out
@@ -268,14 +273,14 @@ class TestOverviewStructuralCard:
 
     def test_named_package_scopes_the_card(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["get_overview"](package="fastapi"))
+        out = _text(_arun(tools["get_overview"](package="fastapi")))
         assert "# Overview — fastapi" in out
 
     def test_communities_hint_without_node_scores(self, server_tools) -> None:
         # The basic fixture seeds no node_scores → the communities block
         # renders the enablement hint anchored on the YAML knob.
         tools, _ = server_tools
-        out = _arun(tools["get_overview"](package=""))
+        out = _text(_arun(tools["get_overview"](package="")))
         assert "enable reference_graph.node_scores" in out
 
     def test_unknown_package_returns_empty_card_not_error(self, server_tools) -> None:
@@ -283,7 +288,7 @@ class TestOverviewStructuralCard:
         # a missing package — it builds an empty-ish card (all blocks present,
         # no rows). The census still counts the loaded corpus.
         tools, _ = server_tools
-        out = _arun(tools["get_overview"](package="nonexistent_pkg"))
+        out = _text(_arun(tools["get_overview"](package="nonexistent_pkg")))
         assert "# Overview — nonexistent_pkg" in out
 
 
@@ -297,7 +302,7 @@ class TestSymbolWithTreeService:
         import json
 
         tools, _ = server_tools_with_tree
-        out = _arun(tools["get_symbol"](target="fastapi.routing"))
+        out = _text(_arun(tools["get_symbol"](target="fastapi.routing")))
         payload = json.loads(out)
         assert payload["node_id"] == "fastapi.routing"
         assert payload["kind"] == "module"
@@ -327,7 +332,7 @@ class TestSymbolWithTreeService:
         import json
 
         tools, _ = server_tools_with_tree
-        out = _arun(tools["get_symbol"](target="fastapi.routing.APIRouter"))
+        out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter")))
         payload = json.loads(out)
         assert payload["node_id"] == "fastapi.routing.APIRouter"
         assert payload["kind"] == "class"
@@ -341,34 +346,36 @@ class TestSymbolWithTreeService:
 class TestSearchDocs:
     def test_returns_matching_chunks(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search_codebase"](query="framework", kind="docs"))
+        out = _text(_arun(tools["search_codebase"](query="framework", kind="docs")))
         assert "fastapi" in out.lower()
 
     def test_no_matches_returns_message(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="docs"))
+        out = _text(_arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="docs")))
         assert "No matches" in out
 
     def test_package_filter(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search_codebase"](query="framework", kind="docs", package="fastapi"))
+        out = _text(
+            _arun(tools["search_codebase"](query="framework", kind="docs", package="fastapi"))
+        )
         assert "fastapi" in out.lower()
 
     def test_scope_project(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search_codebase"](query="overview", kind="docs", scope="project"))
+        out = _text(_arun(tools["search_codebase"](query="overview", kind="docs", scope="project")))
         assert "overview" in out.lower() or "No matches" in out
 
 
 class TestSearchApi:
     def test_returns_matching_symbols(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search_codebase"](query="compute", kind="api"))
+        out = _text(_arun(tools["search_codebase"](query="compute", kind="api")))
         assert "compute" in out
 
     def test_no_matches_returns_symbol_msg(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="api"))
+        out = _text(_arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="api")))
         assert "No symbols" in out
 
 
@@ -376,13 +383,13 @@ class TestSearchAny:
     def test_merges_docs_and_api(self, server_tools) -> None:
         """kind='any' runs both pipelines in parallel and concatenates."""
         tools, _ = server_tools
-        out = _arun(tools["search_codebase"](query="compute", kind="any"))
+        out = _text(_arun(tools["search_codebase"](query="compute", kind="any")))
         # compute appears as a member; members pipeline should surface it
         assert "compute" in out
 
     def test_no_matches_returns_message(self, server_tools) -> None:
         tools, _ = server_tools
-        out = _arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="any"))
+        out = _text(_arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="any")))
         assert "No matches" in out
 
 
@@ -450,8 +457,8 @@ def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
 
         run(db_path)
 
-    out = _arun(
-        fake_mcp.tools["search_codebase"](query="login", kind="docs", package="Flask-Login")
+    out = _text(
+        _arun(fake_mcp.tools["search_codebase"](query="login", kind="docs", package="Flask-Login"))
     )
     # The normalisation happens inside the handler; the search itself may
     # return "No matches" (no chunks seeded) but MUST NOT fail validation.

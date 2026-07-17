@@ -157,7 +157,7 @@ async def test_routers_search_over_empty_workspace_returns_no_matches(tmp_path: 
     # Empty (schema-only) dbs -> union across both -> nothing to return. The
     # envelope wraps the body with a freshness header (probe reads the FIRST
     # project); the body itself is still the empty-state message.
-    out = await tools.search_codebase(SearchInput(query="anything"))
+    out = (await tools.search_codebase(SearchInput(query="anything"))).text
     assert out.startswith("[index: ")
     assert "No matches found." in out
 
@@ -187,7 +187,7 @@ async def test_get_overview_empty_selector_renders_workspace_card(tmp_path: Path
     )
     tools, _services = build_routers(cfg, workspace=tmp_path)  # surface="mcp" default
 
-    out = await tools.get_overview(OverviewInput())
+    out = (await tools.get_overview(OverviewInput())).text
     assert out.startswith("[index: ")
     assert "# Workspace overview" in out
     # Both projects listed with their (schema-only -> 0) package counts.
@@ -221,7 +221,7 @@ async def test_get_overview_project_scope_renders_that_projects_card(tmp_path: P
     )
     tools, _services = build_routers(cfg, workspace=tmp_path)
 
-    out = await tools.get_overview(OverviewInput(project="backend"))
+    out = (await tools.get_overview(OverviewInput(project="backend"))).text
     assert "# Overview — __project__" in out
     assert "# Workspace overview" not in out
 

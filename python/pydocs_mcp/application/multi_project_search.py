@@ -173,7 +173,14 @@ class MultiProjectSearch:
 
     async def search(self, payload: SearchInput) -> str:
         if self.envelope is not None:
-            return await self.envelope.wrap(lambda: self._search_body(payload))
+            # Legacy str surface: the ToolRouter owns the structured envelope;
+            # this path keeps its pre-ToolResponse text-only contract.
+            wrapped = await self.envelope.wrap(
+                "search_codebase",
+                payload.project or self.services[0].project.name,
+                lambda: self._search_body(payload),
+            )
+            return wrapped.text
         # Legacy/no-envelope path: never leak raw pointer tokens.
         return strip_pointers(await self._search_body(payload))
 
@@ -227,7 +234,13 @@ class MultiProjectLookup:
 
     async def lookup(self, payload: LookupInput) -> str:
         if self.envelope is not None:
-            return await self.envelope.wrap(lambda: self._lookup_body(payload))
+            # Legacy str surface (deprecated `lookup` alias) — text only.
+            wrapped = await self.envelope.wrap(
+                "lookup",
+                payload.project or self.services[0].project.name,
+                lambda: self._lookup_body(payload),
+            )
+            return wrapped.text
         # Legacy/no-envelope path: never leak raw pointer tokens.
         return strip_pointers(await self._lookup_body(payload))
 
