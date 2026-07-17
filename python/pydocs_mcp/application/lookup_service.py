@@ -49,6 +49,7 @@ from pydocs_mcp.application.mcp_errors import (
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.reference_service import CrossReferenceRow
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
     _DEFAULT_CONTEXT_RENDER,
@@ -156,7 +157,18 @@ class LookupTarget:
                 consumed=1,
                 symbol_path=(),
             )
+        match_pkg = package
         match = await longest_module(package, parts)
+        if match is None:
+            # Contract §3 project-code addressing (ADR 0004 fix i):
+            # project source is stored under the reserved ``__project__``
+            # package with PREFIXLESS module ids, so a bare
+            # project-qualified target ("mypkg.mod.thing") never matches
+            # when parts[0] is treated as the package. Re-probe the full
+            # dotted string under ``__project__`` before giving up — an
+            # indexed dependency of the same name wins (probed first).
+            match_pkg = PROJECT_PACKAGE_NAME
+            match = await longest_module(PROJECT_PACKAGE_NAME, parts)
         if match is None:
             # Multi-segment target with no module match — the dispatcher
             # raises ``NotFoundError`` using the original target string.
@@ -171,7 +183,7 @@ class LookupTarget:
             )
         module, consumed = match
         return cls(
-            package=package,
+            package=match_pkg,
             module=module,
             consumed=consumed,
             symbol_path=parts[consumed:],
@@ -360,10 +372,7 @@ class LookupService:
         original_parts = target_str.split(".")
         if parsed.module is None:
             if len(original_parts) == 1:
-                doc = await self.package_lookup.get_package_doc(parsed.package)
-                if doc is None:
-                    raise NotFoundError(f"package '{parsed.package}' not indexed")
-                return format_package_doc(doc), (), {}
+                return await self._package_overview(parsed.package)
             # Multi-segment target but no module match → NotFoundError
             # using the user's original string (preserves the pre-refactor
             # message shape).
@@ -383,6 +392,23 @@ class LookupService:
             payload.show,
             payload.limit,
         )
+
+    async def _package_overview(self, package: str) -> LookupBody:
+        """Package overview, with the single-segment project-code fallback.
+
+        Contract §3 addressing: a single-segment target can name a project
+        top-level module / package dir (stored under ``__project__`` with a
+        prefixless module id) rather than an indexed dependency. The indexed
+        dependency wins when both exist; the pre-fix NotFoundError message
+        is preserved for genuine misses.
+        """
+        doc = await self.package_lookup.get_package_doc(package)
+        if doc is not None:
+            return format_package_doc(doc), (), {}
+        fallback = await self._longest_indexed_module(PROJECT_PACKAGE_NAME, [package])
+        if fallback is not None:
+            return await self._module_lookup(PROJECT_PACKAGE_NAME, fallback[0])
+        raise NotFoundError(f"package '{package}' not indexed")
 
     async def _module_lookup(self, package: str, module: str) -> LookupBody:
         tree = await self.tree_svc.get_tree(package, module)

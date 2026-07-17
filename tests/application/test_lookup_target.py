@@ -138,6 +138,46 @@ async def test_parse_no_module_match_keeps_package_and_clears_module() -> None:
     assert t.symbol_path == ()
 
 
+# ── Project-code addressing fallback (contract §3, ADR 0004 fix i) ──────
+
+
+@pytest.mark.asyncio
+async def test_parse_falls_back_to_project_package_on_module_miss() -> None:
+    """Project source is stored under ``__project__`` with prefixless
+    module ids, so ``probepkg.mod.thing`` never matches when ``parts[0]``
+    is treated as the package.  On a miss, parse re-probes the FULL
+    dotted string under ``__project__`` (probe P0)."""
+    probed: list[str] = []
+
+    async def longest_module(pkg, parts):
+        probed.append(pkg)
+        if pkg == "__project__":
+            assert parts == ("probepkg", "mod", "thing")
+            return ("probepkg.mod", 2)
+        return None
+
+    t = await LookupTarget.parse("probepkg.mod.thing", longest_module=longest_module)
+    assert probed == ["probepkg", "__project__"]
+    assert t.package == "__project__"
+    assert t.module == "probepkg.mod"
+    assert t.consumed == 2
+    assert t.symbol_path == ("thing",)
+
+
+@pytest.mark.asyncio
+async def test_parse_indexed_package_wins_over_project_fallback() -> None:
+    """An indexed dependency of the same name shadows the project
+    fallback — ``__project__`` is only probed after the normal miss."""
+
+    async def longest_module(pkg, parts):
+        assert pkg == "fastapi"  # __project__ must never be probed
+        return ("fastapi.routing", 2)
+
+    t = await LookupTarget.parse("fastapi.routing.X", longest_module=longest_module)
+    assert t.package == "fastapi"
+    assert t.module == "fastapi.routing"
+
+
 # ── Suffix-probe case (markdown / notebook trees) ────────────────────────
 
 

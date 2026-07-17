@@ -562,14 +562,14 @@ def _seed_resolvable_symbol_db(db_path: Path) -> None:
     """Seed a cache DB with a symbol the CLI target parser can resolve.
 
     WHY a hand-seeded package (``mypkg``) instead of the ``seeded_project``
-    fixture: project source is indexed under ``__project__`` with module ids
-    that DON'T carry the package prefix (module ``app`` lives under package
-    ``__project__``). ``LookupTarget.parse`` uses ``target.split('.')[0]`` as
-    the package and re-joins the full dotted prefix as the module-id probe, so
-    a ``__project__`` symbol is unreachable through the target string. A
-    dependency-style package whose NAME equals its module prefix
-    (``mypkg`` / ``mypkg.core``) is the addressable shape — the same shape the
-    service-level ref tests use (``pkg.helpers.compute``). Seeding the tree +
+    fixture: this family of tests exercises the DEPENDENCY-addressed shape —
+    a package whose NAME equals its module prefix (``mypkg`` / ``mypkg.core``),
+    the same shape the service-level ref tests use (``pkg.helpers.compute``).
+    Project source (indexed under ``__project__`` with prefixless module ids)
+    is now equally reachable through target strings via the ``__project__``
+    parse fallback (contract §3 project-code addressing; positive coverage in
+    ``test_symbol_subcommand_resolves_project_source_target`` and
+    ``tests/test_reference_probe_regressions.py``). Seeding the tree +
     a resolved CALLS edge gives ``refs``/``context`` a symbol that resolves
     end-to-end through the real router.
     """
@@ -671,6 +671,25 @@ class TestTaskShapedSubcommands:
             main()
         out = capsys.readouterr().out
         assert out.startswith("[index:")
+
+    def test_symbol_subcommand_resolves_project_source_target(
+        self, seeded_project, capsys, monkeypatch
+    ):
+        """Contract §3 project-code addressing (ADR 0004 fix i): the bare
+        project-qualified name ``app.hello`` — stored under ``__project__``
+        with the prefixless module id ``app`` — resolves through the target
+        string. This was the admitted 0.5.x regression (a ``__project__``
+        symbol was unreachable; see ``_seed_resolvable_symbol_db``)."""
+        monkeypatch.chdir(seeded_project)
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            main()
+        with patch("sys.argv", ["pydocs-mcp", "symbol", "app.hello", "--project-dir", "."]):
+            rc = main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert '"node_id": "app.hello"' in out
 
     def test_refs_subcommand_direction_flag(self, symbol_project, capsys):
         from pydocs_mcp.__main__ import main
