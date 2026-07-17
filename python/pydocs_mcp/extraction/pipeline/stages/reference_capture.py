@@ -1,11 +1,12 @@
-"""ReferenceCaptureStage — captures cross-node references from ``.py`` files.
+"""ReferenceCaptureStage — captures cross-node references via LanguageAnalyzers.
 
-Re-parses each ``.py`` file in ``state.files.file_contents`` (cheap —
-``ast.parse`` is ~ms per file) and runs ``capture_imports`` /
-``capture_calls`` / ``capture_inherits`` from
-:mod:`pydocs_mcp.extraction.strategies.references`. Stores the
-unresolved tuple on ``state.refs.references``, the per-module alias
-table on ``state.refs.reference_aliases``, and the per-class ``self.X``
+Dispatches each file in ``state.files.file_contents`` to the
+extension-keyed :data:`~pydocs_mcp.extraction.strategies.analyzers.analyzer_registry`
+(ADR 0004 seam — ``.py`` runs the CPython-ast emitters, ``.md`` the
+regex MENTIONS capture; unknown extensions are skipped, mirroring
+``ChunkingStage``'s chunker_registry policy). Stores the unresolved
+tuple on ``state.refs.references``, the per-module alias table on
+``state.refs.reference_aliases``, and the per-class ``self.X``
 attribute-type table on ``state.refs.class_attribute_types``. The
 resolver pass runs later inside
 ``IndexingService.reindex_package`` (where it has access to the
@@ -14,10 +15,11 @@ cross-package qname universe via ``uow.trees``).
 Per-file isolation: a ``SyntaxError`` or other ``Exception`` on one
 file logs and continues — same contract as
 :class:`~pydocs_mcp.extraction.pipeline.stages.chunking.ChunkingStage`
-(AC #27). The dedicated stage (rather than rewiring ``ChunkingStage`` to
-thread ``ref_collector`` everywhere) keeps capture single-purpose and
-the cost is one extra ``ast.parse`` per file — bounded and only over
-``.py`` files.
+(AC #27). Analyzers raise freely; containment lives here. The dedicated
+stage (rather than rewiring ``ChunkingStage`` to thread
+``ref_collector`` everywhere) keeps capture single-purpose and the cost
+is one extra ``ast.parse`` per file — bounded and only over ``.py``
+files.
 
 The capture configuration (``enabled`` + ``kinds`` filter) lives as a
 module-level singleton updated by ``configure_from_app_config`` at
@@ -28,10 +30,10 @@ process-global, not per-pipeline-invocation.
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import logging
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.extraction.pipeline.ingestion import (
@@ -76,7 +78,7 @@ class ReferenceCaptureStage:
             # ReferenceBundle so a re-run from a state with prior captures
             # doesn't keep stale values.
             return replace(state, refs=ReferenceBundle())
-        allowed = set(cfg.kinds)
+        allowed = frozenset(cfg.kinds)
         refs, aliases, attr_types = await asyncio.to_thread(
             self._capture_all,
             state,
@@ -89,134 +91,35 @@ class ReferenceCaptureStage:
         )
         return replace(state, refs=new_refs_bundle)
 
-    def _capture_all(  # noqa: C901 — multi-kind reference capture (CALLS/IMPORTS/INHERITS/MENTIONS/ASSIGNS/ATTR-RESOLVE) is inherently branchy; splitting into per-kind helpers would just move the dispatch
+    def _capture_all(
         self,
         state: IngestionState,
-        allowed: set[str],
+        allowed: frozenset[str],
     ) -> tuple[list[Any], dict[str, dict[str, str]], dict[str, dict[str, str]]]:
-        # Deferred imports — strategies pull in ast + reference value objects
-        # which are otherwise irrelevant at stage-registry construction time.
-        from pydocs_mcp.extraction.strategies.chunkers import _module_from_path
-        from pydocs_mcp.extraction.strategies.chunkers._shared import (
-            _module_from_doc_path,
-        )
-        from pydocs_mcp.extraction.strategies.references import (
-            ReferenceCollector,
-            capture_calls,
-            capture_imports,
-            capture_inherits,
-            capture_mentions,
-            capture_self_attribute_types,
-        )
+        # Deferred imports — analyzer registration pulls in ast + reference
+        # value objects, irrelevant at stage-registry construction time.
+        from pydocs_mcp.extraction.strategies.analyzers import analyzer_registry
+        from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 
         collector = ReferenceCollector()
-        file_contents = state.files.file_contents
-        package_name = state.files.package_name
-        root = state.files.root
-        for path, source in file_contents:
+        for path, source in state.files.file_contents:
             if not source:
                 continue
-            # Python branch — AST capture for calls/imports/inherits.
-            if path.endswith(".py"):
-                try:
-                    tree = ast.parse(source)
-                except SyntaxError as exc:
-                    # Per-file containment — same contract as ChunkingStage (AC #27).
-                    log.warning(
-                        "reference_capture: ast.parse failed on %s: %s",
-                        path,
-                        exc,
-                    )
-                    continue
-                try:
-                    module_qname = _module_from_path(path, root)
-                    # capture_imports always runs — it populates collector.aliases,
-                    # which the resolver consumes regardless of whether IMPORTS
-                    # rows survive the kinds filter below. We drop the IMPORTS
-                    # *rows* after capture if "imports" isn't in allowed, but
-                    # the alias table is the source of truth for the resolver
-                    # and must be preserved (spec §5.3 / Task 3 of sub-PR #5c).
-                    capture_imports(
-                        tree.body,
-                        from_package=package_name,
-                        module_qname=module_qname,
-                        collector=collector,
-                    )
-                    if "calls" in allowed or "inherits" in allowed:
-                        for stmt in tree.body:
-                            if (
-                                isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
-                                and "calls" in allowed
-                            ):
-                                capture_calls(
-                                    stmt.body,
-                                    from_package=package_name,
-                                    from_node_id=f"{module_qname}.{stmt.name}",
-                                    collector=collector,
-                                )
-                            elif isinstance(stmt, ast.ClassDef):
-                                class_qname = f"{module_qname}.{stmt.name}"
-                                if "inherits" in allowed:
-                                    capture_inherits(
-                                        list(stmt.bases),
-                                        from_package=package_name,
-                                        class_qname=class_qname,
-                                        collector=collector,
-                                    )
-                                if "calls" in allowed:
-                                    # self.X.Y inference: learn attribute types
-                                    # from this class FIRST, then walk every
-                                    # method body for calls. The capture helper
-                                    # re-iterates ``cls.body`` and ``init.body``
-                                    # internally, but that's a few extra dozen
-                                    # iterations per class — negligible
-                                    # alongside the per-method ast.walk that
-                                    # capture_calls runs.
-                                    collector.record_class_attrs(
-                                        class_qname,
-                                        capture_self_attribute_types(stmt),
-                                    )
-                                    for m in stmt.body:
-                                        if isinstance(
-                                            m,
-                                            (ast.FunctionDef, ast.AsyncFunctionDef),
-                                        ):
-                                            capture_calls(
-                                                m.body,
-                                                from_package=package_name,
-                                                from_node_id=f"{class_qname}.{m.name}",
-                                                collector=collector,
-                                            )
-                except Exception as exc:
-                    log.warning("reference_capture failed on %s: %s", path, exc)
-                continue
-            # Markdown branch — regex-fuzzy MENTIONS for backtick-quoted
-            # dotted names. Gated on "mentions" in allowed because the
-            # shipped default omits MENTIONS (lower-precision than AST
-            # capture, opt-in per spec §5.3).
-            if path.endswith(".md") and "mentions" in allowed:
-                try:
-                    # WORKAROUND: markdown identity uses the suffix-preserving
-                    # doc-path rule (HeadingMarkdownChunker._module_from_doc_path
-                    # -> "pkg.README.md"), NOT the .py qname rule
-                    # (_module_from_path -> "pkg.README"). Using the wrong rule
-                    # here produces MENTIONS rows whose from_node_id matches no
-                    # persisted tree node / chunk, so the edges can never be
-                    # joined back to their source.
-                    from_node_id = _module_from_doc_path(path, root)
-                    capture_mentions(
-                        source,
-                        from_package=package_name,
-                        from_node_id=from_node_id,
-                        collector=collector,
-                    )
-                except Exception as exc:
-                    log.warning(
-                        "reference_capture (markdown) failed on %s: %s",
-                        path,
-                        exc,
-                    )
-                continue
+            analyzer = analyzer_registry.get(Path(path).suffix.lower())
+            if analyzer is None:
+                continue  # unknown extension — skip silently (policy, not error)
+            try:
+                analyzer.capture(
+                    source,
+                    path=path,
+                    root=state.files.root,
+                    from_package=state.files.package_name,
+                    allowed=allowed,
+                    collector=collector,
+                )
+            except Exception as exc:
+                # Per-file containment — same contract as ChunkingStage (AC #27).
+                log.warning("reference_capture failed on %s: %s", path, exc)
         # Filter IMPORTS rows out of collector.refs if "imports" isn't allowed.
         # The alias table (collector.aliases) is untouched — the resolver
         # consumes it independently of whether IMPORTS edges land in the DB.
