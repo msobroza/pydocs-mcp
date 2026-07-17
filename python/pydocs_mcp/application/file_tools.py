@@ -16,7 +16,7 @@ absolute for dependency files (they live outside the root).
 
 from __future__ import annotations
 
-import fnmatch
+import posixpath
 import re
 from asyncio import to_thread
 from collections.abc import Awaitable, Callable
@@ -158,8 +158,21 @@ def _multiline_spans(text: str, regex: re.Pattern[str]) -> tuple[_MatchSpan, ...
     spans = []
     for match in regex.finditer(text):
         start = text.count("\n", 0, match.start()) + 1
-        spans.append(_MatchSpan(start, start + match.group(0).count("\n"), match.group(0)))
+        matched = match.group(0)
+        spans.append(_MatchSpan(start, _multiline_end_line(start, matched), matched))
     return tuple(spans)
+
+
+def _multiline_end_line(start: int, matched: str) -> int:
+    """Last line a multiline match touches.
+
+    A trailing ``'\\n'`` TERMINATES the last matched line — it must not mint
+    a phantom next line (a match of exactly ``'\\n'`` spans just its own line).
+    """
+    newlines = matched.count("\n")
+    if newlines and matched.endswith("\n"):
+        return start + newlines - 1
+    return start + newlines
 
 
 def _scan_candidates(
@@ -188,7 +201,10 @@ def _filter_candidates(
         prefix = path.strip("/") + "/"
         kept = [c for c in kept if c.rel.startswith(prefix)]
     if glob:
-        kept = [c for c in kept if fnmatch.fnmatch(c.rel, glob)]
+        # Same dialect as the glob tool (one pattern language for both):
+        # '*' never crosses '/', '**' does — NOT fnmatch, where '*' crosses.
+        glob_regex = _glob_to_regex(glob)
+        kept = [c for c in kept if glob_regex.match(c.rel)]
     return tuple(kept)
 
 
@@ -437,6 +453,9 @@ class FileToolsService:
         root = self._resolved_root()
         if not raw.is_absolute() and root is None:
             self._require_project_root()  # raises the read-only-bundle error
+        lexical = _lexical_project_path(raw, root)
+        if lexical is not None:
+            return lexical
         resolved = (raw if raw.is_absolute() else Path(root or ".", raw)).resolve()
         if root is not None and resolved.is_relative_to(root):
             return resolved, resolved.relative_to(root).as_posix()
@@ -488,6 +507,25 @@ def read_only_bundle_file_tools() -> FileToolsService:
         list_dependency_packages=_no_dependency_packages,
         files_config=FilesConfig(),
     )
+
+
+def _lexical_project_path(raw: Path, root: Path | None) -> tuple[Path, str] | None:
+    """Project containment by LEXICAL normalization — ``(path, display)`` or ``None``.
+
+    WHY: grep/glob serve an in-root symlink whose resolved target escapes the
+    boundary (the indexer itself follows symlinked files); resolve-then-check
+    would reject that exact emitted path. A posix-normalized containment check
+    (no ``..`` escape) admits it, while ``../evil``-style paths and anything
+    outside the root fall through to resolve-based containment (still the rule
+    for dependency roots and out-of-root absolute paths).
+    """
+    if root is None:
+        return None
+    joined = raw if raw.is_absolute() else root / raw
+    normalized = Path(posixpath.normpath(joined.as_posix()))
+    if ".." in normalized.parts or not normalized.is_relative_to(root):
+        return None
+    return normalized, normalized.relative_to(root).as_posix()
 
 
 def _dep_rel(path: str, dep_root: Path) -> str:

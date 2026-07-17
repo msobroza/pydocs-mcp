@@ -207,8 +207,18 @@ def build_sqlite_symbol_source_service(
 
 
 # One census read caps the dependency-package listing the filesystem tools
-# walk under scope="deps"/"all" — same bound PackageLookup.list_packages uses.
-_FILE_TOOLS_PACKAGE_LIST_LIMIT = 200
+# walk under scope="deps"/"all". Sized so no realistic environment hits it;
+# hitting it logs a WARNING instead of silently dropping dependency roots.
+_FILE_TOOLS_PACKAGE_LIST_LIMIT = 10000
+
+
+def _warn_dependency_census_capped() -> None:
+    logging.getLogger("pydocs-mcp").warning(
+        '{"event": "file_tools_dependency_census_capped", "limit": %d, '
+        '"detail": "dependency-package listing hit the cap; packages beyond '
+        'it are invisible to grep/glob/read_file under scope=deps/all"}',
+        _FILE_TOOLS_PACKAGE_LIST_LIMIT,
+    )
 
 
 def build_sqlite_file_tools_service(
@@ -235,6 +245,8 @@ def build_sqlite_file_tools_service(
     async def _list_dependency_packages() -> tuple[str, ...]:
         async with uow_factory() as uow:
             packages = await uow.packages.list(limit=_FILE_TOOLS_PACKAGE_LIST_LIMIT)
+        if len(packages) >= _FILE_TOOLS_PACKAGE_LIST_LIMIT:
+            _warn_dependency_census_capped()
         return tuple(p.name for p in packages if p.name != PROJECT_PACKAGE_NAME)
 
     return FileToolsService(

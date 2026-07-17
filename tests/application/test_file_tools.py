@@ -249,6 +249,49 @@ async def test_grep_multiline_span_covers_multiple_lines(
     assert body == 'main.py:3:def main():\nmain.py:4:    print("Alpha_Token run")'
 
 
+async def test_grep_multiline_trailing_newline_at_eof_stays_on_last_line(
+    service: FileToolsService,
+) -> None:
+    # The trailing '\n' terminates line 5 — it must not mint a phantom line 6.
+    body, items, _ = await service.grep(
+        GrepPayload(
+            pattern=r"return alpha_token\n",
+            output_mode="content",
+            multiline=True,
+        )
+    )
+    assert items == (
+        {
+            "path": "main.py",
+            "start_line": 5,
+            "end_line": 5,
+            "text": "return alpha_token\n",
+        },
+    )
+    assert body == "main.py:5:    return alpha_token"
+
+
+async def test_grep_multiline_trailing_newline_mid_file_spans_one_line(
+    service: FileToolsService,
+) -> None:
+    body, items, _ = await service.grep(
+        GrepPayload(
+            pattern=r"def main\(\):\n",
+            output_mode="content",
+            multiline=True,
+        )
+    )
+    assert items == (
+        {
+            "path": "main.py",
+            "start_line": 3,
+            "end_line": 3,
+            "text": "def main():\n",
+        },
+    )
+    assert body == "main.py:3:def main():"
+
+
 async def test_grep_invalid_regex_carries_pattern(service: FileToolsService) -> None:
     with pytest.raises(InvalidArgumentError, match=r"\(\["):
         await service.grep(GrepPayload(pattern="(["))
@@ -263,8 +306,26 @@ async def test_grep_path_param_scopes_to_directory(service: FileToolsService) ->
 
 
 async def test_grep_glob_param_filters_candidates(service: FileToolsService) -> None:
-    body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="*.md"))
+    body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="**/*.md"))
     assert body.splitlines() == ["src/notes.md"]
+
+
+async def test_grep_glob_star_stays_at_root_level(service: FileToolsService) -> None:
+    # Same dialect as the glob tool: '*' never crosses '/' (no fnmatch drift).
+    body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="*.md"))
+    assert body == "No matches."
+
+
+async def test_grep_glob_filter_star_does_not_cross_directories(
+    project_root: Path,
+) -> None:
+    (project_root / "src" / "a").mkdir()
+    (project_root / "src" / "a" / "b.py").write_text("alpha_token = 3\n")
+    svc = _make_service(project_root)
+    body, _, _ = await svc.grep(GrepPayload(pattern="alpha_token", glob="src/*.py"))
+    assert body.splitlines() == ["src/core.py"]
+    body_rec, _, _ = await svc.grep(GrepPayload(pattern="alpha_token", glob="src/**/*.py"))
+    assert body_rec.splitlines() == ["src/a/b.py", "src/core.py"]
 
 
 async def test_grep_head_limit_truncates_and_reports(
@@ -428,6 +489,26 @@ async def test_read_file_outside_boundary_is_invalid(
         await service.read_file(ReadFilePayload(file_path=str(outside)))
     with pytest.raises(InvalidArgumentError, match="outside"):
         await service.read_file(ReadFilePayload(file_path="../outside.py"))
+
+
+async def test_read_file_serves_in_root_symlink_grep_emitted(
+    project_root: Path, tmp_path: Path
+) -> None:
+    # grep/glob serve the symlink's in-root path (the indexer follows
+    # symlinked files); read_file must accept that exact emitted path even
+    # though its resolved target escapes the boundary (lexical containment).
+    target = tmp_path / "elsewhere.py"
+    target.write_text("linked_token = 1\n")
+    (project_root / "link.py").symlink_to(target)
+    svc = _make_service(project_root)
+    grep_body, _, _ = await svc.grep(GrepPayload(pattern="linked_token"))
+    assert "link.py" in grep_body.splitlines()
+    body, items, _ = await svc.read_file(ReadFilePayload(file_path="link.py"))
+    assert "linked_token" in body
+    assert items[0]["path"] == "link.py"
+    # The resolved target itself (absolute, outside root ∪ dep roots) still errors.
+    with pytest.raises(InvalidArgumentError, match="outside"):
+        await svc.read_file(ReadFilePayload(file_path=str(target)))
 
 
 async def test_read_file_missing_file_is_invalid(service: FileToolsService) -> None:
