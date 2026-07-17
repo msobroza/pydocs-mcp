@@ -72,7 +72,7 @@ class ToolDocsArtifact:
         """Return §D2a + §D13 constraint violations; empty tuple == valid.
 
         Runs the firewall the orchestrator checks before spending any fitness:
-        the document must round-trip, carry exactly the six live tools in order,
+        the document must round-trip, carry exactly the nine live tools in order,
         keep every required §D13 marker, and stay under the token budgets — all
         against the same constants the product lint imports (zero drift).
         """

@@ -25,12 +25,22 @@ _DEFAULT_USED_TOOLS = 1
 _DEFAULT_MAX_TURNS = 12
 _DEFAULT_MAX_WALL_SECONDS = 300.0
 
-# The six task-shaped MCP tools an "indexed" call counts against. Hard-coded
+# The nine task-shaped MCP tools an "indexed" call counts against. Hard-coded
 # HERE (not derived from product TOOL_DOCS) so the rubric core stays free of
 # the [retrieval] extra; the ask_prompt artifact's TOOL_DOCS-derived check is
 # the drift alarm — a surface change breaks it loudly, and this tuple follows.
 _INDEXED_TOOL_NAMES = frozenset(
-    {"get_overview", "search_codebase", "get_symbol", "get_context", "get_references", "get_why"}
+    {
+        "get_overview",
+        "search_codebase",
+        "get_symbol",
+        "get_context",
+        "get_references",
+        "get_why",
+        "grep",
+        "glob",
+        "read_file",
+    }
 )
 
 
@@ -125,7 +135,7 @@ class GoldSubstring:
 @gate_registry.register("used_indexed_tools")
 @dataclass(frozen=True, slots=True)
 class UsedIndexedTools:
-    """≥ ``n`` calls to the six task-shaped tools — deterministic groundedness."""
+    """≥ ``n`` calls to the nine task-shaped tools — deterministic groundedness."""
 
     def __call__(
         self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]

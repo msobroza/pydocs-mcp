@@ -261,7 +261,7 @@ class CrossRepoConfig(BaseModel):
     """Workspace-level cross-repo reference linking (spec 2026-07-11 + A1).
 
     Server-side deployment tunables, NOT MCP parameters — ``get_references``
-    keeps its pinned six-tool-surface signature; enabling/tuning linking is a
+    keeps its pinned nine-tool-surface signature; enabling/tuning linking is a
     YAML-only concern (CLAUDE.md §"MCP API surface vs YAML configuration").
     Inert with a single loaded bundle regardless of ``enabled`` (N7).
     """
@@ -575,7 +575,7 @@ class DecisionCaptureConfig(BaseModel):
     sources run, the merge/dedupe Jaccard threshold, per-source bounds, and the
     default-off LLM structuring gate. Per CLAUDE.md §"MCP API surface vs YAML
     configuration": all deployment-time knobs, NOT MCP tool params — the
-    six task-shaped tools stay fixed.
+    nine task-shaped tools stay fixed.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -616,7 +616,7 @@ class WatchConfig(BaseModel):
 
     Per CLAUDE.md §"MCP API surface vs YAML configuration": these are
     deployment-time knobs, NOT MCP tool params. The MCP surface stays
-    fixed at the six task-shaped tools; watching is enabled by either
+    fixed at the nine task-shaped tools; watching is enabled by either
     switch — the CLI ``--watch`` flag or ``enabled: true`` here.
 
     ``debounce_ms`` is bounded: zero/negative would fire on every byte

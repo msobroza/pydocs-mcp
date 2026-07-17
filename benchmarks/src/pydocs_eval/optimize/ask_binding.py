@@ -42,7 +42,7 @@ _DEFAULT_ASK_ARCHITECTURE = "text_react"
 _PRODUCT_BRIDGES: Mapping[str, str] = {
     "auto": "capability-routed product default (text_react or vision_subagent)",
     "inline": "single ReAct graph with images inline in the conversation",
-    "text_react": "plain text ReAct agent over the six task-shaped tools",
+    "text_react": "plain text ReAct agent over the nine task-shaped tools",
     "vision_subagent": "text ReAct plus a one-shot vision extraction subagent",
 }
 

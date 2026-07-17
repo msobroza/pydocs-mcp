@@ -1,6 +1,6 @@
 """``reinspect_images`` — re-contextualize earlier attachments to a NEW question.
 
-An agent-LOCAL LangChain tool (NOT an MCP tool — the six-tool surface is
+An agent-LOCAL LangChain tool (NOT an MCP tool — the nine-tool surface is
 untouched): image bytes from recent turns live in a per-session store
 (``attachments.update_image_store``), outside conversation history, and the
 ReAct agent calls this tool when a new question refers back to one of them —

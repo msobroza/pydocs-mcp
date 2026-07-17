@@ -32,7 +32,7 @@ _CLI_FLAGS = {
 }
 
 # Bare arm: file/search tools only — no MCP surface. The indexed arm appends the
-# pydocs-mcp wildcard so its runs may call the six task-shaped MCP tools. The
+# pydocs-mcp wildcard so its runs may call the nine task-shaped MCP tools. The
 # tool-less arm (blind judge) grants NOTHING — the empty string passed to
 # ``--allowedTools`` so the judge scores on answers + gold alone and cannot
 # inspect the filesystem. Single source of truth for each profile's grant.

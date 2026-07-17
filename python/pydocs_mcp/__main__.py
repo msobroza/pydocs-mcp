@@ -81,7 +81,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ``--cache-dir`` overrides the directory the SQLite cache (and ``.tq``
     # sidecar) live in. CLI-only knob — never plumbed through to the MCP
     # tool surface. Common to every subcommand so the four wirings stay in
-    # sync. (Per-deployment knob; no impact on the fixed six-tool MCP API.)
+    # sync. (Per-deployment knob; no impact on the fixed nine-tool MCP API.)
     _cache_dir = dict(
         type=Path,
         default=None,
