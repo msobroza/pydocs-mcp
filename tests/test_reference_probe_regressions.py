@@ -175,6 +175,44 @@ def test_init_relative_reexport_qualifies_and_resolves(probe_db):
     assert ("probepkg", "probepkg.mod.thing", "probepkg.mod.thing", "imports") in reexports
 
 
+# ── 9c — Rule C alive for project code ───────────────────────────────────
+
+
+def test_unique_bare_name_same_module_call_resolves(probe_db):
+    """``entry()`` calls ``one_of_a_kind()`` bare — no import, so only
+    Rule C can resolve it (probe: structurally dead for ``__project__``
+    because project qnames never carry the ``__project__.`` prefix)."""
+    rows = _reference_rows(probe_db)
+    calls = [r for r in rows if r[0] == "probepkg.mod.entry" and r[1] == "one_of_a_kind"]
+    assert calls, "expected the bare CALLS candidate to be captured"
+    assert calls[0][2] == "probepkg.mod.one_of_a_kind"
+
+
+def test_ambiguous_annotated_local_method_stays_unresolved(probe_db):
+    """OUT of scope (ADR 0004, declared syntactic): ``x: Alpha = a`` then
+    ``x.dup()`` — two same-named methods exist, no local-variable typing.
+    Rule D conservatism must survive the 9c fix: to_node_id stays None."""
+    rows = _reference_rows(probe_db)
+    dup_calls = [r for r in rows if r[0] == "probepkg.caller.annotated" and r[1] == "x.dup"]
+    assert dup_calls, "expected the x.dup CALLS candidate to be captured"
+    assert dup_calls[0][2] is None
+
+
+def test_shadowed_import_resolves_syntactically(probe_db):
+    """OUT of scope (ADR 0004): ``shadowed()`` rebinds ``thing`` locally
+    before calling it. The declared-syntactic resolver still alias-maps
+    the call to the imported ``probepkg.mod.thing`` — the known miss
+    class ``meta.resolution: syntactic`` hedges, pinned here on purpose."""
+    rows = _reference_rows(probe_db)
+    shadowed = [
+        r
+        for r in rows
+        if r[0] == "probepkg.caller.shadowed" and r[3] == "calls" and r[1] == "thing"
+    ]
+    assert shadowed, "expected the shadowed CALLS candidate to be captured"
+    assert shadowed[0][2] == "probepkg.mod.thing"
+
+
 # ── 9a — project-code addressing (P0, contract §3) ───────────────────────
 
 

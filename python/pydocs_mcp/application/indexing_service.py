@@ -49,6 +49,7 @@ from pydocs_mcp.extraction.decisions.engine import (
     staleness_score,
 )
 from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
     Chunk,
     ChunkFilterField,
     Embedding,
@@ -484,12 +485,18 @@ class IndexingService:
         # trees per-package via uow.trees.load_all_in_package — one call
         # per package. For #5b this is acceptable; a future PR can add a
         # ``qnames_only`` fast path on DocumentTreeStore.
+        # ``project_qnames`` is the ``__project__`` subset — Rule C's scope
+        # for project code, whose prefixless qnames the from_package prefix
+        # filter can never match (ADR 0004 fix iii).
         universe: set[str] = set()
+        project_qnames: set[str] = set()
         all_pkgs = await uow.packages.list(limit=10_000)
         for pkg in all_pkgs:
             pkg_trees = await uow.trees.load_all_in_package(pkg.name)
             for tree in pkg_trees.values():
                 _add_qnames(tree, universe)
+                if pkg.name == PROJECT_PACKAGE_NAME:
+                    _add_qnames(tree, project_qnames)
 
         # AC #15 stdlib-idx: merge bundled stdlib qnames if enabled in YAML.
         # The toggle is read at call time so YAML reloads / test overrides
@@ -503,6 +510,7 @@ class IndexingService:
             aliases=aliases,
             class_attribute_types=class_attribute_types,
             strict_suffix=cfg.strict_suffix,
+            project_qnames=frozenset(project_qnames),
         )
         return resolver.resolve(refs)
 

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.storage.node_reference import NodeReference
 
 if TYPE_CHECKING:
@@ -59,6 +60,13 @@ class ReferenceResolver:
     qname_universe: frozenset[str]
     aliases: dict[str, dict[str, str]] = field(default_factory=dict)
     class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Rule C scope for project code (ADR 0004 fix iii): project qnames are
+    # PREFIXLESS, so the from_package prefix filter never matches
+    # '__project__' — Rule C was structurally dead for project code. The
+    # caller passes the project's own qname subset here; empty (the
+    # default) preserves the dead-rule behavior for constructions that
+    # never index project code.
+    project_qnames: frozenset[str] = frozenset()
     # WHY: ablation knob — when False, Rule C (strict-suffix-within-package)
     # and Rule D (ambiguous-suffix) are skipped entirely; only Rules 0, A,
     # B, F20 and Rule 5 short-circuit run. Lets the benchmark harness
@@ -172,14 +180,23 @@ class ReferenceResolver:
         bucket fix). Returns the sole match (Rule C), or None for zero
         candidates (Rule E) or more than one (Rule D — ambiguous, deterministic
         None).
+
+        "Within from_package" is a prefix filter for dependency packages;
+        project qnames carry no ``__project__.`` prefix, so refs FROM the
+        project scope to ``project_qnames`` membership instead (ADR 0004
+        fix iii — Rule C was structurally dead for project code).
         """
         suffix_dot = "." + to_name
         tail = to_name.rsplit(".", 1)[-1]
+        in_scope = (
+            self.project_qnames.__contains__
+            if ref.from_package == PROJECT_PACKAGE_NAME
+            else lambda q: q == ref.from_package or q.startswith(ref.from_package + ".")
+        )
         candidates = [
             q
             for q in tail_index.get(tail, ())
-            if (q == ref.from_package or q.startswith(ref.from_package + "."))
-            and (q == to_name or q.endswith(suffix_dot))
+            if in_scope(q) and (q == to_name or q.endswith(suffix_dot))
         ]
         return candidates[0] if len(candidates) == 1 else None
 

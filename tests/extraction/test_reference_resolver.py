@@ -218,3 +218,78 @@ def test_strict_suffix_off_skips_rule_c() -> None:
     # Rule C resolves under strict; only Rule B runs under loose.
     assert out_strict[0].to_node_id == "pkg.helpers.compute"
     assert out_loose[0].to_node_id is None
+
+
+# ── Rule C for project code (ADR 0004 fix iii) ───────────────────────────
+#
+# Probe finding: the Rule C candidate filter requires qnames prefixed by
+# from_package, which is never true for '__project__' (project qnames are
+# prefixless) — Rule C was structurally dead for project code. The fix
+# filters against the project's own qname universe instead; Rule D
+# conservatism (ambiguity → None) is preserved.
+
+
+def test_rule_c_project_package_unique_suffix_resolves():
+    resolver = ReferenceResolver(
+        qname_universe={"probepkg.mod.one_of_a_kind", "stdlib.thing"},
+        project_qnames=frozenset({"probepkg.mod.one_of_a_kind"}),
+    )
+    out = resolver.resolve(
+        [
+            _ref(
+                from_package="__project__",
+                from_node_id="probepkg.mod.entry",
+                to_name="one_of_a_kind",
+            )
+        ]
+    )
+    assert out[0].to_node_id == "probepkg.mod.one_of_a_kind"
+
+
+def test_rule_c_project_package_ambiguous_suffix_stays_none():
+    """Rule D conservatism — two project qnames share the suffix → None."""
+    qnames = {"probepkg.mod.Alpha.dup", "probepkg.mod.Beta.dup"}
+    resolver = ReferenceResolver(
+        qname_universe=qnames,
+        project_qnames=frozenset(qnames),
+    )
+    out = resolver.resolve(
+        [
+            _ref(
+                from_package="__project__",
+                from_node_id="probepkg.mod.entry",
+                to_name="dup",
+            )
+        ]
+    )
+    assert out[0].to_node_id is None
+
+
+def test_rule_c_project_package_ignores_non_project_universe():
+    """A dependency qname with the same suffix must not leak into the
+    __project__ scope — the filter is project-tree membership, not the
+    whole universe."""
+    resolver = ReferenceResolver(
+        qname_universe={"somedep.util.compute"},
+        project_qnames=frozenset(),
+    )
+    out = resolver.resolve(
+        [
+            _ref(
+                from_package="__project__",
+                from_node_id="probepkg.mod.entry",
+                to_name="compute",
+            )
+        ]
+    )
+    assert out[0].to_node_id is None
+
+
+def test_rule_c_dependency_prefix_filter_unchanged_by_project_qnames():
+    """The project scope must not widen DEPENDENCY-package Rule C."""
+    resolver = ReferenceResolver(
+        qname_universe={"pkg.helpers.compute", "probepkg.local.compute"},
+        project_qnames=frozenset({"probepkg.local.compute"}),
+    )
+    out = resolver.resolve([_ref(from_package="pkg", to_name="compute")])
+    assert out[0].to_node_id == "pkg.helpers.compute"
