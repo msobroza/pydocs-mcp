@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.6.0
+## [0.6.0] — Unreleased
 
 Headline: the MCP surface grows from six to **nine task-shaped tools** — three
 filesystem tools (`grep`, `glob`, `read_file`) join the six indexed tools — and
@@ -35,7 +35,9 @@ removals — existing six-tool clients keep working unmodified.
 - **Chunk source spans persisted (schema v15)** — chunks now carry
   `source_path` / `start_line` / `end_line` through SQLite, so structured
   items cite exact file spans. Additive in-place migration; rows indexed
-  before v15 carry empty spans until their package next reindexes.
+  before v15 carry empty spans until the next reindex re-extracts their
+  package, which backfills spans even onto unchanged (hash-matched) rows
+  without re-embedding them.
 
 ### Changed
 
@@ -80,6 +82,12 @@ removals — existing six-tool clients keep working unmodified.
 - **`get_symbol(depth="source")` source header** — the `# Source — <target> ·
   <path>` header renders a real file path again: source paths now round-trip
   through the chunk store (schema v15) instead of being dropped on persist.
+- **`get_references(direction="inherits")` answers both senses** — the tool
+  now returns the target's base classes (from-side edges, kept even when the
+  base name is unresolved) AND its subclasses (edges into the target), each
+  under its own labelled section; previously dotted targets returned "No
+  bases found" and any rows that did match were subclasses mislabeled as
+  bases.
 
 ## v0.5.1
 
