@@ -163,6 +163,18 @@ def _reference_rows(db_path: Path) -> list[tuple[str, str, str | None, str]]:
     return rows
 
 
+# ── 9b — relative imports honor ast.ImportFrom.level ────────────────────
+
+
+def test_init_relative_reexport_qualifies_and_resolves(probe_db):
+    """``from .mod import thing`` in ``probepkg/__init__.py`` (probe: emitted
+    to_name='mod.thing' UNRESOLVED) now emits the qualified name and the
+    resolver exact-matches it (Rule B)."""
+    rows = _reference_rows(probe_db)
+    reexports = [r for r in rows if r[0] == "probepkg" and r[3] == "imports"]
+    assert ("probepkg", "probepkg.mod.thing", "probepkg.mod.thing", "imports") in reexports
+
+
 # ── 9a — project-code addressing (P0, contract §3) ───────────────────────
 
 

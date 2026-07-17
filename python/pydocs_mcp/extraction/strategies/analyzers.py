@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Callable
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -33,8 +34,6 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 
 
@@ -157,6 +156,9 @@ class PythonAstAnalyzer:
             from_package=from_package,
             module_qname=module_qname,
             collector=collector,
+            # __init__ modules resolve relative level 1 to THEMSELVES
+            # (their qname IS the package) — see _qualify_from_import.
+            is_package=Path(path).name == "__init__.py",
         )
         if "calls" in allowed or "inherits" in allowed:
             self._capture_definitions(
