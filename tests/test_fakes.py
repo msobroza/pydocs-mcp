@@ -365,3 +365,40 @@ def test_chunk_metadata_filter_keys_track_real_whitelist():
     from tests._fakes import _CHUNK_METADATA_FILTER_KEYS
 
     assert set(_CHUNK_METADATA_FILTER_KEYS) == set(CHUNK_COLUMNS) - {"id", "package"}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_chunk_store_refresh_span_metadata_matches_sqlite_semantics():
+    """v15 span backfill parity: refresh_span_metadata updates ONLY the span
+    metadata on (package, module, content_hash)-matched rows — id and the
+    embedded flag survive, mirroring SqliteChunkRepository's UPDATE."""
+    store = InMemoryChunkStore()
+    stale = Chunk(
+        text="def f(): ...",
+        metadata={"package": "p", "module": "p.m", "title": "f"},
+    )
+    await store.insert((stale,))
+    ((stored_id, _),) = await store.list_id_hash_pairs(filter={"package": "p"})
+    await store.mark_embedded([stored_id])
+
+    fresh = Chunk(
+        text="def f(): ...",
+        metadata={
+            "package": "p",
+            "module": "p.m",
+            "title": "f",
+            "source_path": "p/m.py",
+            "start_line": 3,
+            "end_line": 4,
+        },
+    )
+    assert fresh.content_hash == stale.content_hash  # precondition: hash-matched
+    await store.refresh_span_metadata("p", (fresh,))
+
+    (row,) = await store.list(filter={"package": "p"})
+    assert row.id == stored_id
+    assert row.metadata.get("source_path") == "p/m.py"
+    assert row.metadata.get("start_line") == 3
+    assert row.metadata.get("end_line") == 4
+    assert store.embedded_ids == {stored_id}
+    assert any(c.method == "refresh_span_metadata" for c in store.calls)

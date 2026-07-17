@@ -428,11 +428,14 @@ def _apply_v15_additions(conn: sqlite3.Connection) -> None:
     Adds ``chunks.source_path`` / ``start_line`` / ``end_line`` — the
     originating file and 1-indexed line span the extraction layer already
     computes on every ``DocumentNode`` but previously dropped at the SQLite
-    boundary. Nullable: legacy rows read back NULL until the next index
-    re-extracts them. NOT part of ``compute_chunk_content_hash``, so the
-    migration forces NO re-embed. ``_try_add_column`` swallows duplicate-
-    column errors so the sweep is safe to re-run as a v15-on-open
-    drift-recovery pass.
+    boundary. Nullable: legacy rows read back NULL until the next reindex
+    of their package, where the diff-merge backfills spans even on
+    hash-matched kept rows (``ChunkStore.refresh_span_metadata`` — spans
+    are outside the content hash, so the diff alone would never touch
+    them). NOT part of ``compute_chunk_content_hash``, so the migration
+    forces NO re-embed. ``_try_add_column`` swallows duplicate-column
+    errors so the sweep is safe to re-run as a v15-on-open drift-recovery
+    pass.
     """
     _try_add_column(conn, "chunks", "source_path TEXT")
     _try_add_column(conn, "chunks", "start_line INTEGER")

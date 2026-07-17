@@ -237,6 +237,12 @@ class IndexingService:
         directions: for each hash, keep min(existing, incoming) rows,
         delete the existing excess, and insert the incoming excess.
 
+        Kept (hash-matched) rows additionally get their v15 span columns
+        refreshed from the freshly-extracted metadata via
+        :meth:`ChunkStore.refresh_span_metadata` — spans are outside the
+        content hash, so without this a pre-v15 row (or one written before
+        a chunker emitted spans) would never acquire them.
+
         Returns ``(removed_ids, added_chunks)``. The caller is responsible
         for inserting ``added_chunks`` and forwarding their embeddings —
         keeping the insert here would couple the diff to the vector path
@@ -262,6 +268,7 @@ class IndexingService:
 
         removed_ids: list[int] = [cid for cid, h in existing_pairs if not h]
         added_chunks: list[Chunk] = []
+        kept_chunks: list[Chunk] = []
         for h, existing_ids in existing_ids_by_hash.items():
             incoming_for_hash = incoming_by_hash.get(h, [])
             keep_count = min(len(existing_ids), len(incoming_for_hash))
@@ -271,6 +278,7 @@ class IndexingService:
             # Any incoming chunks beyond `keep_count` are genuinely new
             # (multiplicity grew) and get added.
             added_chunks.extend(incoming_for_hash[keep_count:])
+            kept_chunks.extend(incoming_for_hash[:keep_count])
         # Hashes with no existing rows at all are entirely new.
         for h, incoming_for_hash in incoming_by_hash.items():
             if h not in existing_ids_by_hash:
@@ -279,6 +287,14 @@ class IndexingService:
         if removed_ids:
             await uow.chunks.delete_by_ids(removed_ids)
             await uow.vectors.remove_vectors(removed_ids)
+
+        if kept_chunks:
+            # v15 span backfill: spans are deliberately OUTSIDE content_hash,
+            # so a hash-matched kept row written pre-v15 (or before a chunker
+            # change) would otherwise never acquire source_path / start_line /
+            # end_line. Cheap unconditional UPDATE per kept row — touches only
+            # the three span columns (no embedded flag, no FTS, no re-embed).
+            await uow.chunks.refresh_span_metadata(package_name, tuple(kept_chunks))
 
         return removed_ids, tuple(added_chunks)
 

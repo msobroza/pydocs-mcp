@@ -567,17 +567,20 @@ async def _run_tool(
     :class:`ServiceUnavailableError` after logging. The successful
     :class:`ToolResponse` is converted to a ``CallToolResult`` carrying the
     markdown text block plus ``structuredContent`` validated against the
-    tool's envelope model. Factored out so every one of the handlers is a
-    one-line delegation — no per-tool try/except or conversion copy.
+    tool's envelope model — the conversion runs INSIDE the boundary, so a
+    malformed items row surfaces as a logged ``ServiceUnavailableError``
+    rather than an unlogged raw ``ValidationError``. Factored out so every
+    one of the handlers is a one-line delegation — no per-tool try/except
+    or conversion copy.
     """
     try:
         response = await produce()
+        return _to_call_tool_result(response, envelope_model)
     except MCPToolError:
         raise
     except Exception as e:
         log.exception("%s failed unexpectedly", name)
         raise ServiceUnavailableError(f"{name} failed: {e}") from e
-    return _to_call_tool_result(response, envelope_model)
 
 
 def _to_call_tool_result(response: ToolResponse, envelope_model: type[BaseModel]) -> CallToolResult:

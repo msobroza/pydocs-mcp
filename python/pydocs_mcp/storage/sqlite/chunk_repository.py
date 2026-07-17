@@ -42,6 +42,40 @@ _INSERT_CHUNK_SQL = (
     ":source_path, :start_line, :end_line)"
 )
 
+# v15 span backfill (ChunkStore.refresh_span_metadata): the SET list touches
+# ONLY the three span columns — id / embedded / decision_id survive, and no
+# FTS content changes (chunks_fts indexes title/text/package, none of which
+# appear here). Spans are outside content_hash, so this never re-triggers a
+# re-embed either. All values are named params, never interpolated.
+_REFRESH_SPAN_SQL = (
+    "UPDATE chunks SET source_path = :source_path, "
+    "start_line = :start_line, end_line = :end_line "
+    "WHERE package = :package AND module = :module AND content_hash = :content_hash"
+)
+
+
+def _span_refresh_params(package: str, chunks: Sequence[Chunk]) -> list[dict[str, object]]:
+    """Named-param rows for ``_REFRESH_SPAN_SQL`` — one per kept chunk.
+
+    Reuses ``_chunk_to_row`` so span normalization (empty-string
+    ``source_path`` → NULL) can't drift from the insert path. ``package``
+    comes from the caller (the reindex target), not chunk metadata.
+    """
+    params: list[dict[str, object]] = []
+    for chunk in chunks:
+        row = _chunk_to_row(chunk)
+        params.append(
+            {
+                "source_path": row["source_path"],
+                "start_line": row["start_line"],
+                "end_line": row["end_line"],
+                "package": package,
+                "module": row["module"],
+                "content_hash": row["content_hash"],
+            }
+        )
+    return params
+
 
 @dataclass(frozen=True, slots=True)
 class SqliteChunkRepository:
@@ -147,6 +181,19 @@ class SqliteChunkRepository:
             return
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(conn.executemany, _INSERT_CHUNK_SQL, rows)
+
+    async def refresh_span_metadata(self, package: str, chunks: Sequence[Chunk]) -> None:
+        """Refresh the v15 span columns on hash-matched kept rows.
+
+        See :class:`~pydocs_mcp.storage.protocols.ChunkStore` for the
+        contract; ``_REFRESH_SPAN_SQL`` above documents the invariants
+        (span columns only, no FTS impact, no re-embed).
+        """
+        params = _span_refresh_params(package, chunks)
+        if not params:
+            return
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(conn.executemany, _REFRESH_SPAN_SQL, params)
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""
