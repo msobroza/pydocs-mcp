@@ -110,6 +110,10 @@ _META_FIELDS = {
     "truncated",
 }
 
+# Tools whose items[] land in later tasks — their arrays stay empty today.
+# search_codebase / get_overview emit rows since Task 5.
+_ITEMS_PENDING = {"get_symbol", "get_context", "get_references", "get_why"}
+
 
 def _arun(coro):
     loop = asyncio.new_event_loop()
@@ -171,9 +175,11 @@ def test_structured_text_equals_content_block(handlers, tool: str) -> None:
 def test_structured_envelope_shape(handlers, tool: str) -> None:
     sc = _arun(handlers[tool](**_CALLS[tool])).structuredContent
     assert set(sc) == {"text", "items", "meta"}
-    # items[] are filled per-tool in later tasks; the envelope carries the
-    # (empty) array today so the wire shape is already frozen.
-    assert sc["items"] == []
+    assert isinstance(sc["items"], list)
+    # items[] are filled per-tool task-by-task; tools whose task hasn't landed
+    # carry the (empty) array so the wire shape is already frozen.
+    if tool in _ITEMS_PENDING:
+        assert sc["items"] == []
 
 
 @pytest.mark.parametrize("tool", sorted(_CALLS))
@@ -255,3 +261,150 @@ def test_tool_response_structured_is_json_ready() -> None:
         "items": [{"path": "a.py"}],
         "meta": {"tool": "grep"},
     }
+
+
+# ── items[]: search_codebase + get_overview (contract §3.1/§3.2, Task 5) ────
+
+
+def _seed_items_fixture(db_path: Path) -> None:
+    """Rows the items[] tests need beyond the basic seed: a chunk WITH the
+    schema-v15 source span, a member whose (package, module) tree resolves its
+    span, and one mined decision (record + decision-record chunk backlink)."""
+    from pydocs_mcp.db import open_index_database, rebuild_fulltext_index
+
+    conn = open_index_database(db_path)
+    conn.execute(
+        "INSERT INTO chunks("
+        "package,module,title,text,origin,qualified_name,source_path,start_line,end_line"
+        ") VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            "fastapi",
+            "fastapi.spanmod",
+            "Span Doc",
+            "searchable spanprobe text",
+            "dependency_doc_file",
+            "fastapi.spanmod.SpanDoc",
+            "fastapi/spanmod.py",
+            5,
+            9,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO module_members("
+        "package,module,name,kind,signature,return_annotation,parameters,docstring"
+        ") VALUES(?,?,?,?,?,?,?,?)",
+        ("fastapi", "fastapi.routing", "APIRouter", "class", "()", "", "[]", "Router class"),
+    )
+    conn.execute(
+        "INSERT INTO decision_records("
+        "package,title,status,source,confidence,evidence,affected_files,affected_qnames,"
+        "staleness_score,superseded_by,verification,structured,created_at,updated_at"
+        ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "__project__",
+            "Adopt sidecar vectors",
+            "active",
+            "adr_files",
+            0.9,
+            "[]",
+            "[]",
+            "[]",
+            0.0,
+            None,
+            "verbatim",
+            None,
+            0.0,
+            0.0,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO chunks(package,module,title,text,origin,decision_id) VALUES(?,?,?,?,?,?)",
+        (
+            "__project__",
+            "",
+            "Adopt sidecar vectors",
+            "decision sidecar vectors rationale",
+            "decision_record",
+            1,
+        ),
+    )
+    conn.commit()
+    rebuild_fulltext_index(conn)
+    conn.close()
+
+
+@pytest.fixture(scope="module")
+def items_handlers(tmp_path_factory):
+    db_path: Path = tmp_path_factory.mktemp("items") / "items.db"
+    _seed_basic_fixture(db_path)
+    _seed_tree_for_fastapi(db_path)
+    _seed_items_fixture(db_path)
+    return _run_server_capture_tools(db_path)
+
+
+_SEARCH_ITEM_FIELDS = {
+    "kind",
+    "id",
+    "qualified_name",
+    "package",
+    "path",
+    "start_line",
+    "end_line",
+    "score",
+}
+
+
+def test_search_items_chunk_row_carries_source_span(items_handlers) -> None:
+    sc = _arun(items_handlers["search_codebase"](query="spanprobe", kind="docs")).structuredContent
+    rows = [i for i in sc["items"] if i["qualified_name"] == "fastapi.spanmod.SpanDoc"]
+    assert rows, sc["items"]
+    row = rows[0]
+    assert set(row) == _SEARCH_ITEM_FIELDS
+    assert row["kind"] == "chunk"
+    assert row["package"] == "fastapi"
+    assert row["path"] == "fastapi/spanmod.py"
+    assert (row["start_line"], row["end_line"]) == (5, 9)
+    assert isinstance(row["score"], float)
+    assert row["id"].isdigit()
+
+
+def test_search_items_member_row_resolves_span_from_tree(items_handlers) -> None:
+    sc = _arun(items_handlers["search_codebase"](query="APIRouter", kind="api")).structuredContent
+    row = next(i for i in sc["items"] if i["qualified_name"] == "fastapi.routing.APIRouter")
+    assert set(row) == _SEARCH_ITEM_FIELDS
+    assert row["kind"] == "member"
+    assert row["package"] == "fastapi"
+    assert row["path"] == "fastapi/routing.py"
+    assert (row["start_line"], row["end_line"]) == (10, 40)
+
+
+def test_search_items_member_row_without_tree_has_null_span(items_handlers) -> None:
+    sc = _arun(items_handlers["search_codebase"](query="compute", kind="api")).structuredContent
+    row = next(i for i in sc["items"] if i["qualified_name"] == "mymod.compute")
+    assert row["path"] is None
+    assert row["start_line"] is None and row["end_line"] is None
+
+
+def test_search_items_decision_row_keeps_locators_in_get_why(items_handlers) -> None:
+    sc = _arun(
+        items_handlers["search_codebase"](query="sidecar", kind="decision")
+    ).structuredContent
+    row = next(i for i in sc["items"] if i["kind"] == "decision")
+    assert set(row) == _SEARCH_ITEM_FIELDS
+    assert row["id"] == "1"
+    assert row["package"] == "__project__"
+    assert row["path"] is None
+    assert row["start_line"] is None and row["end_line"] is None
+    assert isinstance(row["score"], float)
+
+
+def test_overview_items_carry_module_map_rows(items_handlers) -> None:
+    sc = _arun(items_handlers["get_overview"](package="fastapi")).structuredContent
+    assert sc["items"] == [
+        {
+            "kind": "module",
+            "id": "fastapi.routing",
+            "qualified_name": "fastapi.routing",
+            "path": "fastapi/routing.py",
+        }
+    ]

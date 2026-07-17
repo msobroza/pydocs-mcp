@@ -88,6 +88,24 @@ def test_search_codebase_is_enveloped_search() -> None:
     assert "[[next:" not in out
 
 
+def test_search_codebase_items_carry_chunk_rows() -> None:
+    # FakeDocs answers with one non-composite chunk; the §3.2 row mirrors its
+    # metadata (no source span seeded -> null path/lines, relevance None -> 0.0).
+    resp = asyncio.run(_tool_router().search_codebase(SearchInput(query="x", kind="docs")))
+    assert resp.items == (
+        {
+            "kind": "chunk",
+            "id": "",
+            "qualified_name": "pkg.mod.X",
+            "package": "",
+            "path": None,
+            "start_line": None,
+            "end_line": None,
+            "score": 0.0,
+        },
+    )
+
+
 def test_symbol_summary_and_tree_route_to_lookup_body() -> None:
     out = asyncio.run(_tool_router().get_symbol(SymbolInput(target="pkg.mod.X"))).text
     assert out.startswith("[index:")
@@ -155,6 +173,16 @@ def test_overview_renders_structural_card() -> None:
     assert "## Structure communities" in out and "## Dependency profile" in out
 
 
+def test_overview_items_mirror_module_map_rows() -> None:
+    # FakeOverview's card has one ModuleEntry("pkg.mod", ...) with no node
+    # provenance (defaulted node_id/source_path) -> id falls back to the
+    # qualified name and path degrades to null (contract §3.1).
+    resp = asyncio.run(_tool_router().get_overview(OverviewInput()))
+    assert resp.items == (
+        {"kind": "module", "id": "pkg.mod", "qualified_name": "pkg.mod", "path": None},
+    )
+
+
 def _workspace_router() -> ToolRouter:
     """A ToolRouter over TWO loaded projects — the multi-repo workspace shape."""
     services = (
@@ -179,6 +207,13 @@ def test_overview_empty_selector_multi_project_renders_workspace_card() -> None:
     assert '→ get_overview(project="frontend")' in out
     # The first project's card must NOT masquerade as the whole workspace.
     assert "# Overview — __project__" not in out
+
+
+def test_workspace_overview_emits_no_items() -> None:
+    # The multi-repo workspace orientation card has no module-map rows —
+    # items[] cover §3.1 module rows only (per-project deepening carries them).
+    resp = asyncio.run(_workspace_router().get_overview(OverviewInput()))
+    assert resp.items == ()
 
 
 def test_overview_project_selector_bypasses_workspace_card() -> None:

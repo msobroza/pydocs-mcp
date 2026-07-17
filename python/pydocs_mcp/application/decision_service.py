@@ -165,10 +165,25 @@ class DecisionService:
     async def search(self, query: str) -> str:
         """Semantic search over decision chunks → rank-ordered record cards.
 
+        Delegates to :meth:`search_with_items` and drops the structured rows —
+        one retrieval/hydration/render authority for both the get_why text
+        surface and the ``search_codebase(kind="decision")`` items[] surface.
+        """
+        body, _items, _extras = await self.search_with_items(query)
+        return body
+
+    async def search_with_items(
+        self, query: str
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        """Decision search in envelope body-producer shape (contract §3.2).
+
         Runs the chunk pipeline scoped to ``origin="decision_record"``, collects
         the ``decision_id`` backlinks in rank order, hydrates each to its
-        structured record, and renders. Zero hits ⇒ an empty-state line plus the
-        overview recovery pointer (spec §D1 empty contract).
+        structured record, and renders — returning one §3.2 ``kind="decision"``
+        row per rendered record alongside the markdown body. Zero hits ⇒ an
+        empty-state line plus the overview recovery pointer (spec §D1 empty
+        contract) and no rows. Decision rows carry the record id with null
+        path/span — locators stay in ``get_why`` (contract §3.6).
         """
         chunk_query = SearchQuery(
             terms=query,
@@ -176,15 +191,18 @@ class DecisionService:
         )
         ranked = await self.docs.ranked(chunk_query)
         ordered_ids = _decision_ids_in_rank_order(ranked.items)
+        empty_body = f"No decisions found.\n{pointer_token('overview', '')}"
         if not ordered_ids:
-            return f"No decisions found.\n{pointer_token('overview', '')}"
+            return empty_body, (), {}
         async with self.uow_factory() as uow:
             records = await uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)
         by_id = {r.id: r for r in records if r.id is not None}
         hydrated = tuple(by_id[i] for i in ordered_ids[: self.default_limit] if i in by_id)
         if not hydrated:
-            return f"No decisions found.\n{pointer_token('overview', '')}"
-        return format_decision_records(hydrated, heading=f"Decisions matching {query!r}")
+            return empty_body, (), {}
+        scores = _decision_scores(ranked.items)
+        items = tuple(_decision_item(r, scores.get(r.id or -1, 0.0)) for r in hydrated)
+        return format_decision_records(hydrated, heading=f"Decisions matching {query!r}"), items, {}
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:
         """Render one decision card per target (§D11 target mode, edge-backed §D18).
@@ -250,6 +268,39 @@ class DecisionService:
             governed = await uow.references.governed_qnames()
         summary = _build_dashboard(records, scores, degrees, governed)
         return format_decision_dashboard(summary)
+
+
+def _decision_scores(chunks: Sequence[Chunk]) -> dict[int, float]:
+    """Best (first-seen, rank order) chunk relevance per ``decision_id``.
+
+    Mirrors :func:`_decision_ids_in_rank_order`'s first-occurrence-wins rule so
+    a record's item score is the relevance of the chunk that ranked it.
+    """
+    scores: dict[int, float] = {}
+    for chunk in chunks:
+        raw = chunk.metadata.get("decision_id")
+        if isinstance(raw, int) and raw not in scores:
+            scores[raw] = float(chunk.relevance or 0.0)
+    return scores
+
+
+def _decision_item(record: DecisionRecord, score: float) -> dict[str, object]:
+    """One ``search_codebase`` §3.2 row for a decision record.
+
+    ``qualified_name`` is the record's :func:`decision_key` — the stable
+    normalized-title identity the GOVERNS graph keys on. Path/span are null by
+    contract: decision locators live in ``get_why`` items (§3.6).
+    """
+    return {
+        "kind": "decision",
+        "id": str(record.id) if record.id is not None else "",
+        "qualified_name": decision_key(record.title),
+        "package": PROJECT_PACKAGE_NAME,
+        "path": None,
+        "start_line": None,
+        "end_line": None,
+        "score": score,
+    }
 
 
 def _decision_ids_in_rank_order(chunks: Sequence[Chunk]) -> tuple[int, ...]:

@@ -421,11 +421,18 @@ class SearchQuery:
 @dataclass(frozen=True, slots=True)
 class SearchResponse:
     """Pipeline-runner output: the typed result plus its originating query and
-    the measured duration. Used as the return type of use-case services."""
+    the measured duration. Used as the return type of use-case services.
+
+    ``candidates`` carries the RANKED per-item rows alongside the (possibly
+    composite-collapsed) ``result`` — one pipeline run feeds both the rendered
+    markdown body and the structured items[] rows (contract §3.2) without a
+    second retrieval pass. ``None`` when the producer predates the field or
+    the pipeline never populated ``state.candidates``."""
 
     result: PipelineResultItem
     query: SearchQuery
     duration_ms: float = 0.0
+    candidates: PipelineResultItem | None = None
 
 
 @dataclass(frozen=True, slots=True)

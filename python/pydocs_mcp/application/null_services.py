@@ -140,6 +140,11 @@ class NullDecisionService:
     async def search(self, query: str) -> str:
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
+    async def search_with_items(
+        self, query: str
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
+
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:
         # ``query`` matches the DecisionNavigator Protocol (§D11 both-set mode);
         # ignored here — this impl raises regardless of the args.

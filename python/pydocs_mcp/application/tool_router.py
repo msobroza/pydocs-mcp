@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.formatting import (
@@ -34,7 +34,11 @@ from pydocs_mcp.application.multi_project_search import (
     ProjectServices,
     _select_service,
 )
-from pydocs_mcp.application.overview_service import OverviewService, WorkspaceProjectEntry
+from pydocs_mcp.application.overview_service import (
+    OverviewCard,
+    OverviewService,
+    WorkspaceProjectEntry,
+)
 from pydocs_mcp.application.tool_response import ToolResponse
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
@@ -86,14 +90,14 @@ class ToolRouter:
         )
 
     async def search_codebase(self, payload: SearchInput) -> ToolResponse:
-        async def _body() -> str:
-            body = await self.search_router._search_body(payload)
+        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+            body, items, extras = await self.search_router._search_body(payload)
             # Zero hits still return success (search never raises); steer the
             # agent to an orientation card via the overview pointer (spec §D1
             # empty contract). The envelope resolves the token per surface.
             if body in EMPTY_SEARCH_MESSAGES:
-                return f"{body}\n{pointer_token('overview', '')}"
-            return body
+                return f"{body}\n{pointer_token('overview', '')}", items, extras
+            return body, items, extras
 
         return await self.envelope.wrap(
             "search_codebase", self._meta_project(payload.project), _body
@@ -200,10 +204,30 @@ class ToolRouter:
         )
 
 
-async def _render_overview(service: OverviewService, package: str) -> str:
-    """Build + render the §D17 structural card. Module-level so ``get_overview``
-    stays a one-liner and the service/render seam is directly testable."""
-    return format_overview_card(await service.build(package))
+async def _render_overview(
+    service: OverviewService, package: str
+) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+    """Build + render the §D17 structural card plus its §3.1 items[] rows.
+    Module-level so ``get_overview`` stays a one-liner and the service/render
+    seam is directly testable."""
+    card = await service.build(package)
+    return format_overview_card(card), _overview_items(card), {}
+
+
+def _overview_items(card: OverviewCard) -> tuple[dict[str, Any], ...]:
+    """One §3.1 row per module-map entry (contract: ``{kind, id,
+    qualified_name, path}``; module rows carry ``path`` where resolvable).
+    Entries without persisted node provenance fall back to the qualified name
+    as ``id`` and a null ``path``."""
+    return tuple(
+        {
+            "kind": entry.kind,
+            "id": entry.node_id or entry.qualified_name,
+            "qualified_name": entry.qualified_name,
+            "path": entry.source_path or None,
+        }
+        for entry in card.modules
+    )
 
 
 async def _render_workspace_overview(

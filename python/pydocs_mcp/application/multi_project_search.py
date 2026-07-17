@@ -14,7 +14,7 @@ comparable across dbs because the embedder-match guard forces one embedder.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -29,17 +29,30 @@ from pydocs_mcp.application.formatting import (
     strip_pointers,
 )
 from pydocs_mcp.application.lookup_service import LookupService
-from pydocs_mcp.application.mcp_errors import InvalidArgumentError, NotFoundError
+from pydocs_mcp.application.mcp_errors import (
+    InvalidArgumentError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
 from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.protocols import DecisionNavigator
 from pydocs_mcp.application.search_query import build_search_query
 from pydocs_mcp.application.symbol_source import SymbolSourceService
-from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ModuleMember
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    Chunk,
+    ChunkFilterField,
+    ChunkOrigin,
+    ModuleMember,
+    ModuleMemberFilterField,
+    SearchResponse,
+)
 from pydocs_mcp.multirepo import LoadedProject, select_project
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.reference_service import ContextNode
+    from pydocs_mcp.extraction.model import DocumentNode
 
 # Composite token budget for the unioned output — matches the shipped
 # chunk_search_graph.yaml / member_search.yaml ``budget: 2000``.
@@ -120,29 +133,154 @@ def _merge_ranked(tagged: list[tuple[LoadedProject, _R]], limit: int) -> tuple[_
 
 async def render_single_search(
     payload: SearchInput,
-    docs: DocsSearch,
-    api: ApiSearch,
-    decisions: DecisionNavigator,
-) -> str:
-    """Single-database search render — dispatch by ``kind`` (the ``server._do_search``
-    behavior, shared so a 1-project router is byte-identical to a single-db server)."""
+    svc: ProjectServices,
+) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+    """Single-database search — dispatch by ``kind`` (the ``server._do_search``
+    behavior, shared so a 1-project router is byte-identical to a single-db
+    server). Returns the envelope body-producer triple: the rendered markdown
+    (byte-identical to the pre-items pipeline) plus one contract-§3.2 row per
+    ranked result the SAME pipeline run produced."""
     query = build_search_query(payload)
     if payload.kind == "decision":
         # Delegate to the DecisionNavigator so decision rendering has ONE
         # authority (get_why and search_codebase(kind="decision") share it) —
         # no second decision-record render path in the search layer.
-        return await decisions.search(payload.query)
+        return await svc.decisions.search_with_items(payload.query)
     if payload.kind == "docs":
-        return render_top_composite(await docs.search(query), empty_msg=_EMPTY_DOCS_MSG)
+        response = await svc.docs.search(query)
+        body = render_top_composite(response, empty_msg=_EMPTY_DOCS_MSG)
+        items = tuple(_chunk_item(c) for c in _ranked_chunks(response, payload.limit))
+        return body, items, {}
     if payload.kind == "api":
-        return render_top_composite(await api.search(query), empty_msg=_EMPTY_API_MSG)
-    chunk_resp, member_resp = await asyncio.gather(docs.search(query), api.search(query))
+        response = await svc.api.search(query)
+        body = render_top_composite(response, empty_msg=_EMPTY_API_MSG)
+        owned = [(svc, m) for m in _ranked_members(response, payload.limit)]
+        return body, await _member_search_items(owned), {}
+    chunk_resp, member_resp = await asyncio.gather(svc.docs.search(query), svc.api.search(query))
     parts = [
         render_top_composite(chunk_resp, empty_msg=""),
         render_top_composite(member_resp, empty_msg=""),
     ]
     parts = [p for p in parts if p]
-    return "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
+    body = "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
+    chunk_items = tuple(_chunk_item(c) for c in _ranked_chunks(chunk_resp, payload.limit))
+    member_items = await _member_search_items(
+        [(svc, m) for m in _ranked_members(member_resp, payload.limit)]
+    )
+    return body, chunk_items + member_items, {}
+
+
+def _ranked_chunks(response: SearchResponse, limit: int) -> tuple[Chunk, ...]:
+    """The per-item chunk rows behind a rendered response, capped at ``limit``.
+
+    Prefers ``response.candidates`` (the ranked rows the token-budget formatter
+    collapsed into the composite body); falls back to ``result`` for producers
+    that never populate candidates. Composite formatter output is excluded —
+    it is the rendered BODY, not a retrievable row.
+    """
+    source = response.candidates if response.candidates is not None else response.result
+    rows = [
+        item
+        for item in source.items
+        if isinstance(item, Chunk)
+        and item.metadata.get(ChunkFilterField.ORIGIN.value) != ChunkOrigin.COMPOSITE_OUTPUT.value
+    ]
+    return tuple(rows[:limit])
+
+
+def _ranked_members(response: SearchResponse, limit: int) -> tuple[ModuleMember, ...]:
+    """The per-item member rows behind a rendered response, capped at ``limit``.
+
+    Same candidates-first rule as :func:`_ranked_chunks`; the isinstance filter
+    also drops the composite CHUNK the member formatter leaves in ``result``.
+    """
+    source = response.candidates if response.candidates is not None else response.result
+    rows = [item for item in source.items if isinstance(item, ModuleMember)]
+    return tuple(rows[:limit])
+
+
+def _chunk_item(chunk: Chunk) -> dict[str, Any]:
+    """One ``search_codebase`` §3.2 ``kind="chunk"`` row (schema-v15 span keys)."""
+    md = chunk.metadata
+    start = md.get(ChunkFilterField.START_LINE.value)
+    end = md.get(ChunkFilterField.END_LINE.value)
+    return {
+        "kind": "chunk",
+        "id": str(chunk.id) if chunk.id is not None else "",
+        "qualified_name": str(md.get("qualified_name") or ""),
+        "package": str(md.get(ChunkFilterField.PACKAGE.value) or ""),
+        "path": str(md.get(ChunkFilterField.SOURCE_PATH.value) or "") or None,
+        "start_line": start if isinstance(start, int) else None,
+        "end_line": end if isinstance(end, int) else None,
+        "score": float(chunk.relevance or 0.0),
+    }
+
+
+def _member_item(member: ModuleMember, node: DocumentNode | None) -> dict[str, Any]:
+    """One ``search_codebase`` §3.2 ``kind="member"`` row; span from ``node``."""
+    md = member.metadata
+    module = str(md.get(ModuleMemberFilterField.MODULE.value) or "")
+    name = str(md.get(ModuleMemberFilterField.NAME.value) or "")
+    qname = f"{module}.{name}" if module and name else (name or module)
+    return {
+        "kind": "member",
+        "id": str(member.id) if member.id is not None else "",
+        "qualified_name": qname,
+        "package": str(md.get(ModuleMemberFilterField.PACKAGE.value) or ""),
+        "path": (node.source_path or None) if node is not None else None,
+        "start_line": node.start_line if node is not None else None,
+        "end_line": node.end_line if node is not None else None,
+        "score": float(member.relevance or 0.0),
+    }
+
+
+async def _member_search_items(
+    owned: Sequence[tuple[ProjectServices, ModuleMember]],
+) -> tuple[dict[str, Any], ...]:
+    """§3.2 member rows with best-effort spans via each owner's document tree.
+
+    Trees are fetched once per ``(service, package, module)`` and the member's
+    node is looked up by its ``module.name`` qualified name; any miss —
+    no tree navigator, no persisted tree, no matching node — degrades that row
+    to null path/span (the contract's best-effort rule, plan Task 5).
+    """
+    cache: dict[tuple[int, str, str], DocumentNode | None] = {}
+    items: list[dict[str, Any]] = []
+    for svc, member in owned:
+        node = await _resolve_member_node(svc, member, cache)
+        items.append(_member_item(member, node))
+    return tuple(items)
+
+
+async def _resolve_member_node(
+    svc: ProjectServices,
+    member: ModuleMember,
+    cache: dict[tuple[int, str, str], DocumentNode | None],
+) -> DocumentNode | None:
+    """Find the member's defining tree node through its project's navigator.
+
+    ``getattr`` guard: ``svc.lookup`` is typed :class:`LookupService` (which
+    always carries ``tree_svc``), but test doubles duck-type the lookup seam —
+    span resolution is advisory, so a navigator-less lookup degrades to None
+    instead of demanding the full LookupService surface.
+    """
+    navigator = getattr(svc.lookup, "tree_svc", None)
+    md = member.metadata
+    package = str(md.get(ModuleMemberFilterField.PACKAGE.value) or "")
+    module = str(md.get(ModuleMemberFilterField.MODULE.value) or "")
+    name = str(md.get(ModuleMemberFilterField.NAME.value) or "")
+    if navigator is None or not (module and name):
+        return None
+    key = (id(svc), package, module)
+    if key not in cache:
+        try:
+            cache[key] = await navigator.get_tree(package, module)
+        except ServiceUnavailableError:
+            # NullTreeService deployment (no tree index): spans are advisory
+            # on search rows — degrade to null rather than failing the search.
+            cache[key] = None
+    tree = cache[key]
+    return tree.find_node_by_qualified_name(f"{module}.{name}") if tree is not None else None
 
 
 def _select_service(services: tuple[ProjectServices, ...], project_name: str) -> ProjectServices:
@@ -182,47 +320,62 @@ class MultiProjectSearch:
             )
             return wrapped.text
         # Legacy/no-envelope path: never leak raw pointer tokens.
-        return strip_pointers(await self._search_body(payload))
+        body, _items, _extras = await self._search_body(payload)
+        return strip_pointers(body)
 
-    async def _search_body(self, payload: SearchInput) -> str:
+    async def _search_body(
+        self, payload: SearchInput
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         if payload.project:
             svc = _select_service(self.services, payload.project)
-            return await render_single_search(payload, svc.docs, svc.api, svc.decisions)
+            return await render_single_search(payload, svc)
         if len(self.services) == 1:
-            svc = self.services[0]
-            return await render_single_search(payload, svc.docs, svc.api, svc.decisions)
+            return await render_single_search(payload, self.services[0])
         # kind="decision" has no cross-project union path (decisions are
         # project-local rationale, not a shared corpus): resolve to the
         # most-recently-indexed project's DecisionNavigator, mirroring the
         # recency preference the ranked-union dedup applies elsewhere.
         if payload.kind == "decision":
             newest = max(self.services, key=lambda s: s.project.indexed_at)
-            return await newest.decisions.search(payload.query)
+            return await newest.decisions.search_with_items(payload.query)
 
         query = build_search_query(payload)
         parts: list[str] = []
+        items: list[dict[str, Any]] = []
         if payload.kind in ("docs", "any"):
-            parts.append(await self._union_docs(query, payload.limit))
+            text, merged_chunks = await self._union_docs(query, payload.limit)
+            parts.append(text)
+            items.extend(_chunk_item(c) for c in merged_chunks)
         if payload.kind in ("api", "any"):
-            parts.append(await self._union_api(query, payload.limit))
+            text, owned_members = await self._union_api(query, payload.limit)
+            parts.append(text)
+            items.extend(await _member_search_items(owned_members))
         parts = [p for p in parts if p]
-        return "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
+        return ("\n\n".join(parts) if parts else _EMPTY_DOCS_MSG), tuple(items), {}
 
-    async def _union_docs(self, query, limit: int) -> str:
+    async def _union_docs(self, query, limit: int) -> tuple[str, tuple[Chunk, ...]]:
         lists = await asyncio.gather(*[s.docs.ranked(query) for s in self.services])
         tagged = [
             (s.project, c) for s, cl in zip(self.services, lists, strict=True) for c in cl.items
         ]
         merged = _merge_ranked(tagged, limit)
-        return format_chunks_markdown_within_budget(merged, self.budget_tokens) if merged else ""
+        text = format_chunks_markdown_within_budget(merged, self.budget_tokens) if merged else ""
+        return text, merged
 
-    async def _union_api(self, query, limit: int) -> str:
+    async def _union_api(
+        self, query, limit: int
+    ) -> tuple[str, tuple[tuple[ProjectServices, ModuleMember], ...]]:
         lists = await asyncio.gather(*[s.api.ranked(query) for s in self.services])
         tagged = [
             (s.project, m) for s, ml in zip(self.services, lists, strict=True) for m in ml.items
         ]
+        # Object-identity owner map: ``_merge_ranked`` drops the project tag,
+        # but each surviving member's span must resolve through its OWN
+        # project's tree navigator (contract §3.2 best-effort spans).
+        owners = {id(m): s for s, ml in zip(self.services, lists, strict=True) for m in ml.items}
         merged = _merge_ranked(tagged, limit)
-        return format_members_markdown_within_budget(merged, self.budget_tokens) if merged else ""
+        text = format_members_markdown_within_budget(merged, self.budget_tokens) if merged else ""
+        return text, tuple((owners[id(m)], m) for m in merged)
 
 
 @dataclass(frozen=True, slots=True)

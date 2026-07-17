@@ -133,6 +133,60 @@ async def test_search_no_hits_renders_empty_state_with_pointer() -> None:
     assert "Use SQLite sidecar" not in out
 
 
+# ── search_with_items (search_codebase kind="decision", contract §3.2) ─────
+
+
+async def test_search_with_items_emits_decision_rows() -> None:
+    hit = Chunk(
+        text=f"## {REC_SIDECAR.title}\nbody\n",
+        relevance=0.7,
+        metadata={"origin": "decision_record", "decision_id": REC_SIDECAR.id},
+    )
+    svc = _service(records=(REC_SIDECAR, REC_CACHE), docs=_FakeDocs(hits=(hit,)))
+    body, items, extras = await svc.search_with_items("why sidecar")
+    assert "Use SQLite sidecar" in body
+    assert extras == {}
+    assert items == (
+        {
+            "kind": "decision",
+            "id": "1",
+            "qualified_name": decision_key("Use SQLite sidecar"),
+            "package": _PKG,
+            "path": None,
+            "start_line": None,
+            "end_line": None,
+            "score": 0.7,
+        },
+    )
+
+
+async def test_search_with_items_body_matches_search_render() -> None:
+    docs_a = _FakeDocs(hits=(_chunk_for(REC_SIDECAR),))
+    docs_b = _FakeDocs(hits=(_chunk_for(REC_SIDECAR),))
+    svc_a = _service(records=(REC_SIDECAR,), docs=docs_a)
+    svc_b = _service(records=(REC_SIDECAR,), docs=docs_b)
+    body, _items, _extras = await svc_a.search_with_items("why sidecar")
+    assert body == await svc_b.search("why sidecar")
+
+
+async def test_search_with_items_no_hits_returns_empty_items() -> None:
+    svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
+    body, items, extras = await svc.search_with_items("no such decision")
+    assert "[[next:overview:]]" in body
+    assert items == ()
+    assert extras == {}
+
+
+async def test_null_decision_service_search_with_items_raises() -> None:
+    import pytest
+
+    from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
+    from pydocs_mcp.application.null_services import NullDecisionService
+
+    with pytest.raises(ServiceUnavailableError, match="decision_capture"):
+        await NullDecisionService().search_with_items("why")
+
+
 # ── for_targets ──────────────────────────────────────────────────────────
 
 

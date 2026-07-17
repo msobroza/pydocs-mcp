@@ -17,10 +17,12 @@ from pydocs_mcp.application.multi_project_search import (
 from pydocs_mcp.application.null_services import NullDecisionService
 from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.symbol_source import SymbolSourceService
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
     ChunkList,
+    ModuleMember,
     ModuleMemberList,
     SearchResponse,
 )
@@ -65,14 +67,14 @@ class _FakeDocs:
 
 
 class _FakeApi:
-    def __init__(self) -> None:
-        self._ranked = ModuleMemberList(items=())
+    def __init__(self, ranked: tuple[ModuleMember, ...] = ()) -> None:
+        self._ranked = ModuleMemberList(items=ranked)
 
     async def ranked(self, query):
         return self._ranked
 
     async def search(self, query):
-        return SearchResponse(result=ModuleMemberList(items=()), query=query, duration_ms=0.0)
+        return SearchResponse(result=self._ranked, query=query, duration_ms=0.0)
 
 
 class _FakeLookup:
@@ -85,15 +87,37 @@ class _FakeLookup:
         return self._answer
 
 
-def _svc(project: LoadedProject, ranked=(), composite="SINGLE", lookup="") -> ProjectServices:
+class _StubTreeNavigator:
+    """TreeNavigator slice for member-span resolution: (package, module) → tree."""
+
+    def __init__(self, trees: dict[tuple[str, str], DocumentNode]) -> None:
+        self._trees = trees
+
+    async def get_tree(self, package: str, module: str) -> DocumentNode | None:
+        return self._trees.get((package, module))
+
+
+def _svc(
+    project: LoadedProject,
+    ranked=(),
+    composite="SINGLE",
+    lookup="",
+    members=(),
+    tree_navigator=None,
+) -> ProjectServices:
     # symbol_source / decisions are unused by these routing/dedup tests, but the
     # ProjectServices contract now requires them (spec §D1) — wire the real
     # stateless SymbolSourceService (empty in-memory uow) + NullDecisionService.
+    lookup_svc = _FakeLookup(lookup)
+    if tree_navigator is not None:
+        # Duck-typed LookupService slice: only ``tree_svc`` is read by the
+        # member-span resolution (contract §3.2 best-effort spans).
+        lookup_svc.tree_svc = tree_navigator
     return ProjectServices(
         project=project,
         docs=_FakeDocs(ranked, composite),
-        api=_FakeApi(),
-        lookup=_FakeLookup(lookup),
+        api=_FakeApi(members),
+        lookup=lookup_svc,
         symbol_source=SymbolSourceService(uow_factory=make_fake_uow_factory()),
         overview=OverviewService(uow_factory=make_fake_uow_factory(), scripts={}),
         decisions=NullDecisionService(),
@@ -200,6 +224,92 @@ async def test_union_dedups_and_ranks_across_projects() -> None:
     router = MultiProjectSearch(services=(a, b))
     out = await router.search(SearchInput(query="x", kind="docs"))
     assert "BHIGH" in out and "B" in out and "A" not in out.split("BHIGH")[0]
+
+
+# ── _search_body items[] (contract §3.2, Task 5) ──
+
+
+def _member(id_: int, package: str, module: str, name: str, relevance: float) -> ModuleMember:
+    return ModuleMember(
+        id=id_,
+        relevance=relevance,
+        metadata={"package": package, "module": module, "name": name, "kind": "class"},
+    )
+
+
+def _routing_tree() -> DocumentNode:
+    cls = DocumentNode(
+        node_id="fastapi.routing.APIRouter",
+        qualified_name="fastapi.routing.APIRouter",
+        title="class APIRouter",
+        kind=NodeKind.CLASS,
+        source_path="fastapi/routing.py",
+        start_line=10,
+        end_line=40,
+        text="class APIRouter: ...",
+        content_hash="h-class",
+    )
+    return DocumentNode(
+        node_id="fastapi.routing",
+        qualified_name="fastapi.routing",
+        title="fastapi.routing",
+        kind=NodeKind.MODULE,
+        source_path="fastapi/routing.py",
+        start_line=1,
+        end_line=50,
+        text="",
+        content_hash="h-mod",
+        children=(cls,),
+    )
+
+
+@pytest.mark.asyncio
+async def test_union_search_body_emits_chunk_items_from_merged_rows() -> None:
+    a = _svc(_project("a", 1.0), ranked=(_chunk("apkg", "apkg.f", 0.2),))
+    b = _svc(_project("b", 2.0), ranked=(_chunk("bpkg", "bpkg.g", 0.9),))
+    router = MultiProjectSearch(services=(a, b))
+    _body, items, extras = await router._search_body(SearchInput(query="x", kind="docs"))
+    assert extras == {}
+    assert [(i["kind"], i["qualified_name"], i["score"]) for i in items] == [
+        ("chunk", "bpkg.g", 0.9),
+        ("chunk", "apkg.f", 0.2),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_union_search_body_resolves_member_spans_per_owning_project() -> None:
+    # Project a can resolve its member's span through its OWN tree navigator;
+    # project b has no trees -> its row degrades to null path/span (§3.2).
+    a = _svc(
+        _project("a", 1.0),
+        members=(_member(7, "fastapi", "fastapi.routing", "APIRouter", 0.9),),
+        tree_navigator=_StubTreeNavigator({("fastapi", "fastapi.routing"): _routing_tree()}),
+    )
+    b = _svc(_project("b", 2.0), members=(_member(8, "bpkg", "bpkg.mod", "G", 0.3),))
+    router = MultiProjectSearch(services=(a, b))
+    _body, items, _extras = await router._search_body(SearchInput(query="x", kind="api"))
+    assert items == (
+        {
+            "kind": "member",
+            "id": "7",
+            "qualified_name": "fastapi.routing.APIRouter",
+            "package": "fastapi",
+            "path": "fastapi/routing.py",
+            "start_line": 10,
+            "end_line": 40,
+            "score": 0.9,
+        },
+        {
+            "kind": "member",
+            "id": "8",
+            "qualified_name": "bpkg.mod.G",
+            "package": "bpkg",
+            "path": None,
+            "start_line": None,
+            "end_line": None,
+            "score": 0.3,
+        },
+    )
 
 
 # ── MultiProjectLookup routing ──
