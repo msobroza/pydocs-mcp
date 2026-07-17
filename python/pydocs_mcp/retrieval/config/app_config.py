@@ -33,6 +33,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
 from pydocs_mcp.retrieval.config.models import (
     DecisionCaptureConfig,
     DecisionsConfig,
+    FilesConfig,
     HandlerConfig,
     OutputConfig,
     OverviewConfig,
@@ -172,6 +173,12 @@ class AppConfig(BaseSettings):
     # which agent architecture answers a question is A/B-testable behavior.
     # Light pydantic; the extra's heavy deps never load through this field.
     ask_your_docs: AskYourDocsConfig = Field(default_factory=AskYourDocsConfig)
+    # Filesystem-tool bounds (tool-contracts.md §3.7-3.9): YAML-wired
+    # defaults + ceiling for grep/glob/read_file entry caps. Per CLAUDE.md
+    # §"MCP API surface vs YAML configuration": deployment-time output
+    # bounds, NOT new MCP params — clients pass head_limit/limit per
+    # request and YAML bounds them.
+    files: FilesConfig = Field(default_factory=FilesConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside

@@ -343,6 +343,38 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+class FilesConfig(BaseModel):
+    """Per-deployment bounds for the filesystem tools (``grep``/``glob``/``read_file``).
+
+    Field defaults are the single source of truth; ``default_config.yaml``
+    restates them for user-facing clarity (tool-contracts.md §3.7-3.9:
+    ``head_limit``/``limit`` are "YAML-wired" — omitted by the client means
+    these defaults). ``max_head_limit`` is the ceiling applied to
+    client-supplied caps so one request can't demand an unbounded response.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    grep_head_limit: int = Field(100, ge=1)
+    glob_head_limit: int = Field(100, ge=1)
+    read_limit: int = Field(2000, ge=1)
+    max_head_limit: int = Field(10000, ge=1)
+
+    @model_validator(mode="after")
+    def _defaults_le_max(self) -> FilesConfig:
+        # Same guard as SearchOutputConfig._default_le_max: a YAML default
+        # above the ceiling would make every defaulted call exceed the cap.
+        for name in ("grep_head_limit", "glob_head_limit", "read_limit"):
+            value: int = getattr(self, name)
+            if value > self.max_head_limit:
+                raise ValueError(
+                    f"files.{name}={value} > max_head_limit="
+                    f"{self.max_head_limit}; the YAML default would always "
+                    f"exceed the client-cap ceiling. Adjust YAML.",
+                )
+        return self
+
+
 # Single source of truth for the get_symbol(depth="source") line cap — the
 # YAML-canonical default lives here; ``SymbolSourceService`` carries its own
 # construction-time fallback constant (wired config→service in a later task).
