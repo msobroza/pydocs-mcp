@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.docs_search import DocsSearch
 from pydocs_mcp.application.envelope import ResponseEnvelope
+from pydocs_mcp.application.file_tools import (
+    FileToolsService,
+    read_only_bundle_file_tools,
+)
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
@@ -87,6 +91,11 @@ class ProjectServices:
     symbol_source: SymbolSourceService
     overview: OverviewService
     decisions: DecisionNavigator
+    # Filesystem grep/glob/read_file over THIS project's source tree
+    # (contract §3.7-3.9). Defaults to the root-less read-only-bundle
+    # service (Null-object rule) so bundle-only loads stay constructible;
+    # composition roots with a stamped project_root wire the real one.
+    files: FileToolsService = field(default_factory=read_only_bundle_file_tools)
 
 
 def _dedup_identity(project_name: str, metadata: Mapping[str, Any]) -> tuple[tuple[str, str], bool]:

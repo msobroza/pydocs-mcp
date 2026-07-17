@@ -355,10 +355,10 @@ class FilesConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    grep_head_limit: int = Field(100, ge=1)
-    glob_head_limit: int = Field(100, ge=1)
-    read_limit: int = Field(2000, ge=1)
-    max_head_limit: int = Field(10000, ge=1)
+    grep_head_limit: int = Field(default=100, ge=1)
+    glob_head_limit: int = Field(default=100, ge=1)
+    read_limit: int = Field(default=2000, ge=1)
+    max_head_limit: int = Field(default=10000, ge=1)
 
     @model_validator(mode="after")
     def _defaults_le_max(self) -> FilesConfig:

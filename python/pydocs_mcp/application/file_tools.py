@@ -467,6 +467,29 @@ class FileToolsService:
         return min(limit, self.files_config.max_head_limit)
 
 
+async def _no_dependency_packages() -> tuple[str, ...]:
+    """The read-only-bundle dependency lister — nothing on disk to walk."""
+    return ()
+
+
+def read_only_bundle_file_tools() -> FileToolsService:
+    """The default ``ProjectServices.files`` wiring (Null-object rule).
+
+    A root-less service: project-scope calls raise the actionable
+    read-only-bundle :class:`ServiceUnavailableError` instead of a
+    composition site ever holding ``files=None``. Composition roots that
+    HAVE a source tree replace it via
+    ``storage.factories.build_sqlite_file_tools_service``.
+    """
+    return FileToolsService(
+        project_root=None,
+        project_scope=DiscoveryScopeConfig(),
+        dependency_scope=DiscoveryScopeConfig(),
+        list_dependency_packages=_no_dependency_packages,
+        files_config=FilesConfig(),
+    )
+
+
 def _dep_rel(path: str, dep_root: Path) -> str:
     try:
         return Path(path).relative_to(dep_root).as_posix()
@@ -489,4 +512,5 @@ __all__ = (
     "GlobRequest",
     "GrepRequest",
     "ReadFileRequest",
+    "read_only_bundle_file_tools",
 )

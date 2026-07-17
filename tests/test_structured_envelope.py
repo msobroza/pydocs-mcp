@@ -215,12 +215,28 @@ def test_registration_advertises_envelope_output_schema() -> None:
     from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
     tools = _registered_with_real_mcp()
-    assert set(tools) == set(_CALLS)
+    assert set(tools) == set(_CALLS) | {"grep", "glob", "read_file"}
     for name, fn in tools.items():
         meta = func_metadata(fn)
         assert meta.output_schema is not None, f"{name} advertises no outputSchema"
         props = meta.output_schema.get("properties", {})
         assert {"text", "items", "meta"} <= set(props), f"{name} outputSchema drifted"
+
+
+def test_grep_input_schema_advertises_dash_wire_names() -> None:
+    """Contract §3.7: the grep flag parameter names are the literal strings
+    ``-i``/``-n``/``-A``/``-B``/``-C`` on the wire — the advertised inputSchema
+    must carry the dash names, never the Python field names."""
+    from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+
+    fn = _registered_with_real_mcp()["grep"]
+    # Same call FastMCP's Tool.from_function uses to build the inputSchema.
+    props = set(func_metadata(fn).arg_model.model_json_schema(by_alias=True)["properties"])
+    assert {"-i", "-n", "-A", "-B", "-C"} <= props
+    assert props.isdisjoint(
+        {"case_insensitive", "line_numbers", "after_context", "before_context", "context"}
+    )
+    assert {"pattern", "path", "glob", "output_mode", "head_limit", "multiline", "scope"} <= props
 
 
 def test_convert_result_passes_call_tool_result_through(handlers) -> None:

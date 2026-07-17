@@ -826,6 +826,93 @@ class TestTaskShapedSubcommands:
         assert captured.out.startswith("[index:")
 
 
+class TestFilesystemSubcommands:
+    """Task 10: ``grep`` / ``glob`` / ``read_file`` CLI verbs mirror the three
+    filesystem MCP tools 1:1 (contract §3.7-3.9) — same ToolRouter, same
+    envelope, over the indexed project's stamped source root."""
+
+    @pytest.fixture
+    def indexed_project(self, seeded_project, monkeypatch):
+        monkeypatch.chdir(seeded_project)
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            main()
+        return seeded_project
+
+    def test_grep_subcommand_files_with_matches(self, indexed_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "grep", "hello", "--project-dir", "."]):
+            rc = main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert out.startswith("[index:")
+        assert "app.py" in out
+
+    def test_grep_subcommand_content_mode_with_flags(self, indexed_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        argv = [
+            "pydocs-mcp",
+            "grep",
+            "HELLO",
+            "-i",
+            "-C",
+            "1",
+            "--output-mode",
+            "content",
+            "--project-dir",
+            ".",
+        ]
+        with patch("sys.argv", argv):
+            rc = main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        # -i matched case-insensitively; -n (default on) renders file:line:text.
+        assert "app.py:1:def hello():" in out
+
+    def test_glob_subcommand_lists_matched_paths(self, indexed_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "glob", "*.py", "--project-dir", "."]):
+            rc = main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert out.startswith("[index:")
+        assert "app.py" in out
+
+    def test_read_file_subcommand_cat_n_output(self, indexed_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "read_file", "app.py", "--project-dir", "."]):
+            rc = main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "     1\tdef hello():" in out
+
+    def test_read_file_window_flags(self, indexed_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        argv = [
+            "pydocs-mcp",
+            "read_file",
+            "app.py",
+            "--offset",
+            "2",
+            "--limit",
+            "1",
+            "--project-dir",
+            ".",
+        ]
+        with patch("sys.argv", argv):
+            rc = main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert '     2\t    """Say hello."""' in out
+        assert "def hello" not in out
+
+
 class TestServeCommand:
     def test_serve_indexes_then_starts_server(self, seeded_project):
         """Test that serve indexes and calls run() — we mock run() to avoid blocking.

@@ -1,9 +1,11 @@
-"""ToolRouter — the six task-shaped tools over the multi-project layer (spec §D1).
+"""ToolRouter — the nine task-shaped tools over the multi-project layer (spec §D1).
 
 One method per tool; every response is produced inside the shared
 ResponseEnvelope (freshness header, pointer resolution, truncation footer).
-Bodies delegate to the slice-1 router internals (_search_body/_lookup_body)
-so ranking/dedup/project-routing stay in exactly one place.
+Index-backed bodies delegate to the slice-1 router internals
+(_search_body/_lookup_body) so ranking/dedup/project-routing stay in exactly
+one place; the filesystem tools (grep/glob/read_file, contract §3.7-3.9)
+delegate to the selected project's FileToolsService.
 """
 
 from __future__ import annotations
@@ -20,8 +22,11 @@ from pydocs_mcp.application.formatting import (
 )
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
+    GlobInput,
+    GrepInput,
     LookupInput,
     OverviewInput,
+    ReadFileInput,
     ReferencesInput,
     SearchInput,
     SymbolInput,
@@ -187,6 +192,28 @@ class ToolRouter:
             return await svc.decisions.why_dashboard()
 
         return await self.envelope.wrap("get_why", self._meta_project(payload.project), _body)
+
+    async def grep(self, payload: GrepInput) -> ToolResponse:
+        # The filesystem tools are strictly per-project (they serve ONE source
+        # tree, contract §4.1): empty selector = the default (first-loaded)
+        # project — no cross-project recency fallback, which would silently
+        # answer from a different checkout.
+        svc = self._svc(payload.project)
+        return await self.envelope.wrap(
+            "grep", self._meta_project(payload.project), lambda: svc.files.grep(payload)
+        )
+
+    async def glob(self, payload: GlobInput) -> ToolResponse:
+        svc = self._svc(payload.project)
+        return await self.envelope.wrap(
+            "glob", self._meta_project(payload.project), lambda: svc.files.glob(payload)
+        )
+
+    async def read_file(self, payload: ReadFileInput) -> ToolResponse:
+        svc = self._svc(payload.project)
+        return await self.envelope.wrap(
+            "read_file", self._meta_project(payload.project), lambda: svc.files.read_file(payload)
+        )
 
     async def get_overview(self, payload: OverviewInput) -> ToolResponse:
         # Fully-empty selector on a multi-repo server: routing to services[0]

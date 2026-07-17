@@ -7,7 +7,10 @@ import pytest
 from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
+    GlobInput,
+    GrepInput,
     OverviewInput,
+    ReadFileInput,
     ReferencesInput,
     SearchInput,
     SymbolInput,
@@ -20,6 +23,7 @@ from pydocs_mcp.application.multi_project_search import (
 from pydocs_mcp.application.tool_router import ToolRouter
 
 from ._router_fakes import (
+    FakeFileTools,
     FakeSymbolSource,
     make_envelope,
     make_project,
@@ -307,3 +311,79 @@ def test_symbol_source_depth_resolves_via_recency_across_projects() -> None:
     source_out = asyncio.run(router.get_symbol(SymbolInput(target=target, depth="source"))).text
     assert "```python" in source_out
     assert f"`{target}`" in source_out
+
+
+# ── grep / glob / read_file (contract §3.7-3.9) ────────────────────────────
+
+
+def _files_router(files: FakeFileTools) -> ToolRouter:
+    services = (make_service(files=files),)
+    return ToolRouter(
+        services=services,
+        envelope=make_envelope(),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+
+
+def test_grep_routes_to_files_service_and_is_enveloped() -> None:
+    files = FakeFileTools()
+    payload = GrepInput(pattern="x")
+    resp = asyncio.run(_files_router(files).grep(payload))
+    assert resp.text.startswith("[index:")
+    assert "GREP-BODY solo" in resp.text
+    assert files.calls == [("grep", payload)]
+    assert resp.items == ({"path": "a.py", "start_line": 1, "end_line": 1, "text": "x"},)
+    assert resp.meta["tool"] == "grep"
+
+
+def test_glob_routes_to_files_service_and_is_enveloped() -> None:
+    files = FakeFileTools()
+    payload = GlobInput(pattern="*.py")
+    resp = asyncio.run(_files_router(files).glob(payload))
+    assert resp.text.startswith("[index:")
+    assert "GLOB-BODY solo" in resp.text
+    assert files.calls == [("glob", payload)]
+    assert resp.items == ({"path": "a.py", "mtime": 1.0},)
+    assert resp.meta["tool"] == "glob"
+
+
+def test_read_file_routes_to_files_service_and_is_enveloped() -> None:
+    files = FakeFileTools()
+    payload = ReadFileInput(file_path="a.py")
+    resp = asyncio.run(_files_router(files).read_file(payload))
+    assert resp.text.startswith("[index:")
+    assert "READ-BODY solo" in resp.text
+    assert files.calls == [("read_file", payload)]
+    assert resp.items == ({"path": "a.py", "start_line": 1, "end_line": 2},)
+    assert resp.meta["tool"] == "read_file"
+
+
+def test_files_project_selector_routes_to_that_projects_service() -> None:
+    """project= must select THAT project's FileToolsService — the filesystem
+    tools serve per-project source trees, so cross-project fallback would
+    answer from the wrong checkout."""
+    backend_files, frontend_files = FakeFileTools("backend"), FakeFileTools("frontend")
+    services = (
+        make_service("backend", indexed_at=2.0, files=backend_files),
+        make_service("frontend", indexed_at=1.0, files=frontend_files),
+    )
+    router = ToolRouter(
+        services=services,
+        envelope=make_envelope(),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+    resp = asyncio.run(router.grep(GrepInput(pattern="x", project="frontend")))
+    assert "GREP-BODY frontend" in resp.text
+    assert resp.meta["project"] == "frontend"
+    assert backend_files.calls == []
+
+
+def test_files_default_is_read_only_bundle_service() -> None:
+    """``ProjectServices`` without explicit ``files`` wiring defaults to the
+    root-less service: project-scope filesystem calls raise the typed
+    read-only-bundle error instead of AttributeError-ing."""
+    router = _tool_router()
+    with pytest.raises(ServiceUnavailableError, match="read-only"):
+        asyncio.run(router.grep(GrepInput(pattern="x")))

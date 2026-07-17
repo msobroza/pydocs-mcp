@@ -1,8 +1,9 @@
 """MCP surface freeze — mechanical guard for G5 (AC23).
 
-Cross-repo linking must change NOTHING about the six task-shaped tools:
-same tool list, same ``ReferencesInput`` shape. A failure here means a
-constitution-level versioning event snuck into a feature PR.
+Feature PRs must change NOTHING about the nine task-shaped tools
+(docs/tool-contracts.md §1): same tool list, same input-model shapes. A
+failure here means a constitution-level versioning event snuck into a
+feature PR.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from pydocs_mcp.application.mcp_inputs import ReferencesInput
 from pydocs_mcp.application.tool_docs import TOOL_DOCS
 
 
-def test_the_six_task_shaped_tools_are_unchanged() -> None:
+def test_the_nine_task_shaped_tools_are_unchanged() -> None:
     assert tuple(TOOL_DOCS) == (
         "get_overview",
         "search_codebase",
@@ -21,6 +22,9 @@ def test_the_six_task_shaped_tools_are_unchanged() -> None:
         "get_context",
         "get_references",
         "get_why",
+        "grep",
+        "glob",
+        "read_file",
     )
 
 

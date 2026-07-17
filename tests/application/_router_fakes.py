@@ -150,6 +150,37 @@ class FakeSymbolSource:
         return text, (row,), {}
 
 
+class FakeFileTools:
+    """A ``FileToolsService`` stand-in whose bodies echo which filesystem tool
+    ran (and, via ``marker``, WHICH project's service answered) so ToolRouter's
+    grep/glob/read_file routing + §3.7-3.9 items[] threading is observable
+    without a real source tree."""
+
+    def __init__(self, marker: str = "solo") -> None:
+        self.marker = marker
+        self.calls: list[tuple[str, object]] = []
+
+    async def grep(
+        self, payload: object
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        self.calls.append(("grep", payload))
+        row: dict[str, object] = {"path": "a.py", "start_line": 1, "end_line": 1, "text": "x"}
+        return f"GREP-BODY {self.marker}", (row,), {}
+
+    async def glob(
+        self, payload: object
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        self.calls.append(("glob", payload))
+        return f"GLOB-BODY {self.marker}", ({"path": "a.py", "mtime": 1.0},), {}
+
+    async def read_file(
+        self, payload: object
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        self.calls.append(("read_file", payload))
+        row: dict[str, object] = {"path": "a.py", "start_line": 1, "end_line": 2}
+        return f"READ-BODY {self.marker}", (row,), {}
+
+
 class FakeOverview:
     """A build() that returns a fixed OverviewCard so ToolRouter's get_overview
     routing (svc.overview.build → format_overview_card) is observable without
@@ -196,14 +227,19 @@ def make_service(
     package_count: int = 1,
     indexed_at: float = 0.0,
     symbol_source: object | None = None,
+    files: object | None = None,
 ) -> ProjectServices:
     """One fake project's service set — parametrized so multi-repo router tests
     can load several distinguishable projects (workspace-card scenarios).
 
     ``symbol_source`` lets a caller inject a project-scoped ``FakeSymbolSource``
     (e.g. ``FakeSymbolSource(known_targets=frozenset({...}))``) to model a
-    target that is indexed in only ONE of several loaded projects.
+    target that is indexed in only ONE of several loaded projects. ``files``
+    injects a per-project filesystem-tools stand-in (``FakeFileTools`` or a
+    real ``FileToolsService``); omitted, ``ProjectServices``' read-only-bundle
+    default applies.
     """
+    extra = {} if files is None else {"files": files}
     return ProjectServices(
         project=make_project(name, indexed_at),
         docs=FakeDocs(),
@@ -212,6 +248,7 @@ def make_service(
         symbol_source=symbol_source if symbol_source is not None else FakeSymbolSource(),
         overview=FakeOverview(package_count),
         decisions=NullDecisionService(),
+        **extra,
     )
 
 

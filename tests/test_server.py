@@ -225,7 +225,7 @@ def server_tools_with_tree(tmp_path: Path):
 
 
 class TestToolSurface:
-    def test_exactly_six_tools_registered(self, server_tools) -> None:
+    def test_exactly_nine_tools_registered(self, server_tools) -> None:
         tools, _ = server_tools
         assert set(tools) == {
             "get_overview",
@@ -234,6 +234,9 @@ class TestToolSurface:
             "get_context",
             "get_references",
             "get_why",
+            "grep",
+            "glob",
+            "read_file",
         }
 
     def test_old_tool_names_are_gone(self, server_tools) -> None:
@@ -463,3 +466,107 @@ def test_lookup_normalizes_pypi_style_name(tmp_path: Path) -> None:
     # The normalisation happens inside the handler; the search itself may
     # return "No matches" (no chunks seeded) but MUST NOT fail validation.
     assert "validation" not in out.lower()
+
+
+# ── grep / glob / read_file (contract §3.7-3.9, ADR 0003) ─────────────────
+
+
+def _stamp_project_root(db_path: Path, project_root: Path) -> None:
+    """Stamp ``index_metadata.project_root`` so the filesystem tools resolve
+    a real source tree (the seeded test dbs otherwise carry no root)."""
+    from pydocs_mcp.storage.index_metadata import IndexMetadata, write_index_metadata
+
+    conn = open_index_database(db_path)
+    write_index_metadata(
+        conn,
+        IndexMetadata(
+            project_name="fsproj",
+            project_root=str(project_root),
+            embedding_provider="fastembed",
+            embedding_model="BAAI/bge-small-en-v1.5",
+            embedding_dim=384,
+            pipeline_hash="h",
+            indexed_at=1.0,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture
+def fs_server_tools(tmp_path: Path):
+    """Server over a db whose stamped project_root is a real source tree —
+    the filesystem tools' end-to-end fixture. The tree carries a floor-excluded
+    ``.venv`` dir and a non-allowlisted extension to pin discovery-scope parity."""
+    source = tmp_path / "src_tree"
+    source.mkdir()
+    (source / "app.py").write_text('def hello():\n    return "hi"\n')
+    (source / "notes.md").write_text("# Notes\n\nhello there\n")
+    (source / "data.json").write_text('{"hello": 1}\n')  # extension not allowlisted
+    hidden = source / ".venv"
+    hidden.mkdir()
+    (hidden / "skip.py").write_text("hello = 1\n")  # floor-excluded dir
+    db_path = tmp_path / "fsproj.db"
+    _seed_basic_fixture(db_path)
+    _stamp_project_root(db_path, source)
+    return _run_server_capture_tools(db_path), source
+
+
+class TestFilesystemTools:
+    def test_grep_walks_the_discovery_scope(self, fs_server_tools) -> None:
+        tools, _ = fs_server_tools
+        result = _arun(tools["grep"](pattern="hello"))
+        text = _text(result)
+        assert "app.py" in text and "notes.md" in text
+        # Discovery-scope parity (§4.1): floor-excluded dirs and
+        # non-allowlisted extensions are NOT in the corpus.
+        assert ".venv" not in text and "data.json" not in text
+        items = result.structuredContent["items"]
+        assert items and set(items[0]) == {"path", "start_line", "end_line", "text"}
+        assert result.structuredContent["meta"]["tool"] == "grep"
+
+    def test_grep_content_mode_via_dash_keyed_wire_call(self, fs_server_tools) -> None:
+        """Wire-level §3.7 flags: a client sends ``-i`` (the literal parameter
+        name); FastMCP's arg model validates the dash key and dispatches the
+        handler by Python field name."""
+        from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+
+        tools, _ = fs_server_tools
+        fn = tools["grep"]
+        parsed = func_metadata(fn).arg_model.model_validate(
+            {"pattern": "HELLO", "-i": True, "output_mode": "content"}
+        )
+        result = _arun(fn(**parsed.model_dump_one_level()))
+        assert "app.py:1:def hello():" in _text(result)
+
+    def test_glob_orders_mtime_descending(self, fs_server_tools) -> None:
+        import os
+
+        tools, source = fs_server_tools
+        os.utime(source / "app.py", (1_000, 1_000))
+        os.utime(source / "notes.md", (2_000, 2_000))
+        result = _arun(tools["glob"](pattern="*"))
+        body_lines = _text(result).splitlines()
+        assert body_lines.index("notes.md") < body_lines.index("app.py")
+        items = result.structuredContent["items"]
+        assert [i["path"] for i in items] == ["notes.md", "app.py"]
+        assert set(items[0]) == {"path", "mtime"}
+
+    def test_read_file_renders_cat_n_window(self, fs_server_tools) -> None:
+        tools, _ = fs_server_tools
+        result = _arun(tools["read_file"](file_path="app.py", offset=2, limit=1))
+        text = _text(result)
+        assert '     2\t    return "hi"' in text
+        assert "def hello" not in text
+        assert result.structuredContent["items"] == [
+            {"path": "app.py", "start_line": 2, "end_line": 2}
+        ]
+
+    def test_read_file_outside_boundary_is_client_error(self, fs_server_tools, tmp_path) -> None:
+        from pydocs_mcp.application import InvalidArgumentError
+
+        tools, _ = fs_server_tools
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret\n")
+        with pytest.raises(InvalidArgumentError, match="outside"):
+            _arun(tools["read_file"](file_path=str(outside)))

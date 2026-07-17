@@ -328,7 +328,7 @@ task-shaped commands directly.
 
 ### MCP tool reference
 
-The surface is **intentionally fixed at six task-shaped tools** — they cover
+The surface is **intentionally fixed at nine task-shaped tools** — they cover
 every workflow, and pinning them keeps MCP clients stable across server retunes
 (see [Configuration](#configuration)).
 
@@ -340,6 +340,9 @@ every workflow, and pinning them keeps MCP clients stable across server retunes
 | `get_context` | `get_context(targets, project)` | Everything needed to understand one or more symbols, packed in a single call. |
 | `get_references` | `get_references(target, direction, limit, project)` | Traverse the reference graph. `direction` ∈ `{callers, callees, inherits, impact, governed_by}`. |
 | `get_why` | `get_why(query, targets, project)` | Recorded architectural decisions and rationale for a topic or target. |
+| `grep` | `grep(pattern, path, glob, output_mode, case_insensitive, line_numbers, after_context, before_context, context, head_limit, multiline, scope, project)` | Exact-string / regex search (Python `re` flavor) over the live source files the indexer sees. On the MCP wire the flag parameters are the literal names `-i`, `-n`, `-A`, `-B`, `-C`. `output_mode` ∈ `{content, files_with_matches, count}`; `scope` defaults to `project`. |
+| `glob` | `glob(pattern, path, head_limit, project)` | Find files by name pattern (`**` recurses) under the project's discovery scope; results ordered by modification time, newest first. |
+| `read_file` | `read_file(file_path, offset, limit, project)` | Read file content with line numbers (`cat -n` style). Paths must resolve inside the project root or an indexed dependency root. |
 
 ## Multi-repo serving
 

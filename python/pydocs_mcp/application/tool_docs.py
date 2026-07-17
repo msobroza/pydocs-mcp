@@ -20,7 +20,7 @@ REQUIRED_MARKERS = (
 )
 CHARS_PER_TOKEN = 4
 PER_TOOL_TOKEN_BUDGET = 500
-TOTAL_TOKEN_BUDGET = 2400
+TOTAL_TOKEN_BUDGET = 3600
 
 _WORKFLOW = (
     "Workflow: get_overview → search_codebase → get_context → "
@@ -100,6 +100,40 @@ Examples:
   get_why(query="why are vectors in a sidecar file")
   get_why(targets=["pydocs_mcp.db"], project="backend")
 """,
+    "grep": f"""Exact-string / regex search over source files (Python `re` flavor).
+
+When to use: exact strings, regexes, TODO markers, config keys, error-message hunting. The boundary: conceptual/topic question — search_codebase; exact string or regex — grep; known dotted identifier — get_symbol.
+When NOT to use: ranked "how does X work" retrieval (search_codebase); reading a whole file (read_file).
+Corpus: the same file set the indexer sees (its discovery scope: exclusion floor + configured excludes + extension allowlist), served from live disk; .gitignore is NOT honored. scope="project" (default) | "deps" | "all".
+output_mode: "files_with_matches" (default, paths only) | "content" (file:line:text — flags -i, -n, -A/-B/-C context, multiline=true for cross-line patterns) | "count" (per-file match counts).
+{_WORKFLOW}
+{_CONTRACT}
+Examples:
+  grep(pattern="def include_router", output_mode="content")
+  grep(pattern="retry", glob="*.py", scope="deps", project="backend")
+""",
+    "glob": f"""Find files by name pattern; results newest-first (mtime descending).
+
+When to use: locating files by name or layout ("where are the *_test.py files"), listing a package's files on disk, feeding paths into read_file. `**` recurses: "src/**/*.md".
+When NOT to use: content search (grep / search_codebase); you already have the path (read_file).
+Corpus: the selected project's source tree under the indexer's discovery scope, served from live disk.
+{_WORKFLOW}
+{_CONTRACT}
+Examples:
+  glob(pattern="**/*_test.py")
+  glob(pattern="*.md", path="docs", project="backend")
+""",
+    "read_file": f"""Read file content with line numbers (cat -n style).
+
+When to use: reading exact current source after grep/glob/search_codebase handed you a path; window large files with offset/limit — a truncated read tells you the offset to continue from.
+When NOT to use: you only know a symbol or topic (get_symbol / search_codebase); listing files (glob).
+Paths must resolve inside the project root or an indexed dependency root; project-relative paths come straight from grep/glob items.
+{_WORKFLOW}
+{_CONTRACT}
+Examples:
+  read_file(file_path="src/app.py")
+  read_file(file_path="src/big_module.py", offset=200, limit=100, project="backend")
+""",
 }
 
 SERVER_INSTRUCTIONS = (
@@ -107,9 +141,10 @@ SERVER_INSTRUCTIONS = (
     "into a local hybrid index (dense embeddings + BM25 + a reference graph). "
     "Use it before web search for: installed-library APIs, symbols in the "
     'user\'s own code (package "__project__"), call-graph navigation, and '
-    "design rationale. Six task-shaped tools: "
+    "design rationale. Nine task-shaped tools: "
     + _WORKFLOW
-    + " "
+    + " grep/glob/read_file cover exact-string search, file listing, and "
+    "line-numbered reads over the same file set the indexer sees. "
     + _CONTRACT
     + " Do NOT use for libraries that aren't installed here (use web search)."
 )
