@@ -33,9 +33,11 @@ GOLDEN: dict[str, str] = {
         "## Module map\n"
         "\n"
         "## Entry points\n"
-        '- `pydocs-mcp` (script) → get_symbol(target="pydocs-mcp")\n'
-        '- `ask-your-docs` (script) → get_symbol(target="ask-your-docs")\n'
-        "\n"
+        # Console-script names carry dashes, which SymbolInput's dotted-target
+        # grammar rejects — resolve_pointers suppresses those get_symbol
+        # follow-ups (strip_pointers byte-parity: token + line ending removed,
+        # so the bullets merge exactly as the pointers_enabled=False path).
+        "- `pydocs-mcp` (script) - `ask-your-docs` (script) \n"
         "## Structure communities\n"
         "Community structure is unavailable — enable reference_graph.node_scores to see it.\n"
         "\n"

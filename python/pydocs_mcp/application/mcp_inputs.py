@@ -61,6 +61,23 @@ _WHY_TARGET_RE = re.compile(
 # symbol/context tools. ':' and ']' stay forbidden: they are the only characters
 # that corrupt the [[next:…]] pointer-token grammar (application/formatting.py).
 
+
+def is_symbol_target(text: str) -> bool:
+    """True iff ``text`` is a target the symbol-shaped tools would accept.
+
+    Single source of the dotted-target grammar (``_TARGET_RE``), exported for
+    pointer-render gating: ``application/formatting.py`` suppresses a
+    ``get_symbol`` / ``get_context`` / ``get_references`` follow-up pointer
+    whose target this predicate rejects, so a response never advertises a
+    call the tools' own input validators refuse (e.g. markdown/decision
+    document paths like ``docs.adr.0001-greeting-format.md``).
+
+    Example: ``is_symbol_target("pkg.mod.X")`` is ``True``;
+    ``is_symbol_target("docs.adr.0001-x.md")`` is ``False``.
+    """
+    return bool(text) and _TARGET_RE.match(text) is not None
+
+
 # Module-level slots — installed by ``configure_from_app_config`` at
 # server / CLI startup. The initial values match the shipped
 # ``default_config.yaml`` (``reference_graph.output.default_limit=50``,

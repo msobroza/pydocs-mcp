@@ -33,7 +33,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
 from typing import TYPE_CHECKING, Literal
 
-from pydocs_mcp.application.mcp_inputs import _PACKAGE_RE  # single source: valid project selector
+from pydocs_mcp.application.mcp_inputs import (  # single sources: selector/target grammars
+    _PACKAGE_RE,
+    is_symbol_target,
+)
 from pydocs_mcp.application.reference_service import CrossReferenceRow
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
 from pydocs_mcp.constants import (
@@ -89,6 +92,12 @@ _TRUNCATION_MIN_REMAINDER = 100
 _POINTER_RE = re.compile(
     r"\[\[next:(lookup|lookup-show|search|overview|why):([^:\]]*)(?::([^:\]]+))?\]\]"
 )
+
+# Token + its line ending — the exact span ``strip_pointers`` removes, reused
+# by ``resolve_pointers``'s suppression pre-pass so a suppressed token
+# disappears byte-identically to the ``pointers_enabled=False`` strip path
+# (no leftover blank line where the token's line used to be).
+_POINTER_WITH_EOL_RE = re.compile(_POINTER_RE.pattern + r"\n?")
 
 # show-mode → (mcp renderer, cli renderer). context maps to a one-element
 # get_context batch; tree/default stay on get_symbol via depth.
@@ -172,8 +181,36 @@ def _render_pointer(match: re.Match[str], surface: str) -> str:
     return f'→ get_symbol(target="{target}")'
 
 
+def _is_invalid_symbol_pointer(match: re.Match[str]) -> bool:
+    """Live lookup / lookup-show token whose target the symbol tools reject.
+
+    Only these two actions render dotted-target follow-ups (``get_symbol`` /
+    ``get_context`` / ``get_references``); search/why/overview targets are
+    queries/selectors with their own grammars. Literal-content precedence
+    stays first: a lookup-show token with a missing or unknown show word is
+    indexed chunk content (see ``_render_pointer``), never suppressed.
+    """
+    action, target, show = match.group(1), match.group(2), match.group(3)
+    if action == "lookup":
+        return not is_symbol_target(target)
+    if action == "lookup-show":
+        if show is None or show not in _SHOW_TO_TOOL:
+            return False
+        return not is_symbol_target(target)
+    return False
+
+
 def resolve_pointers(text: str, surface: str) -> str:
-    """Rewrite every pointer token to ``surface`` syntax ("mcp" | "cli")."""
+    """Rewrite every pointer token to ``surface`` syntax ("mcp" | "cli").
+
+    Symbol-tool pointers whose target fails ``is_symbol_target`` are
+    suppressed instead of rendered — a response must never advertise a
+    follow-up call the tool's own input validator rejects (markdown /
+    decision document paths like ``docs.adr.0001-x.md``).
+    """
+    text = _POINTER_WITH_EOL_RE.sub(
+        lambda m: "" if _is_invalid_symbol_pointer(m) else m.group(0), text
+    )
     return _POINTER_RE.sub(lambda m: _render_pointer(m, surface), text)
 
 

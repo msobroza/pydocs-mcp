@@ -88,6 +88,10 @@ removals — existing six-tool clients keep working unmodified.
   under its own labelled section; previously dotted targets returned "No
   bases found" and any rows that did match were subclasses mislabeled as
   bases.
+- Search responses no longer advertise follow-up `get_symbol` calls whose
+  target the tool's own validator rejects (markdown/decision document paths
+  like `docs.adr.0001-greeting-format.md`) — such pointers are suppressed at
+  render time instead of promising a call that always fails input validation.
 
 ## v0.5.1
 
