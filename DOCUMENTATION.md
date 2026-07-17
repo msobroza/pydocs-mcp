@@ -435,7 +435,7 @@ keep resolving — it installs nothing beyond the default set.
 ### YAML knobs (`serve.watch.*`)
 
 All tunables live in YAML — no MCP tool params change (the MCP
-surface stays fixed at the six task-shaped tools). Either switch
+surface stays fixed at the nine task-shaped tools). Either switch
 enables watching: the CLI `--watch` flag or `serve.watch.enabled:
 true` in YAML (the flag cannot force watching off when the key is
 `true`).
@@ -713,7 +713,8 @@ safe.
 
 ## Configuration
 
-The MCP tool surface is pinned at the six task-shaped tools. Every other knob — ranking
+The MCP tool surface is pinned at the nine task-shaped tools
+(frozen contract: `docs/tool-contracts.md`). Every other knob — ranking
 weights, fusion algorithm, embedder identity, reference-graph capture toggles,
 chunking strategies, output limits, formatter choice — lives in `AppConfig`
 (pydantic-settings) with **layered defaults**:
@@ -814,7 +815,7 @@ read it as the canonical reference.
 
 ## Database schema (simplified)
 
-The SQLite file holds ten tables (schema v14): the six core tables diagrammed
+The SQLite file holds ten tables (schema v15): the six core tables diagrammed
 below plus `chunk_multi_vector_ids`, `node_scores`, `decision_records`, and
 `index_metadata` (covered in the read-path table underneath). The schema is
 versioned via `PRAGMA user_version`; known older versions are migrated in
@@ -838,6 +839,9 @@ erDiagram
         TEXT title
         TEXT text "indexed by chunks_fts (FTS5)"
         TEXT content_hash
+        TEXT source_path "v15: span provenance"
+        INTEGER start_line
+        INTEGER end_line
     }
     chunks_fts {
         FTS5 virtual "porter + unicode61 tokenizer"
@@ -929,7 +933,7 @@ pydocs-mcp/
     ├── ask_your_docs/          # Optional [ask-your-docs] extra: LangGraph agent + Streamlit UI
     ├── defaults/               # Shipped default_config.yaml
     ├── pipelines/              # Built-in pipeline YAML blueprints
-    └── server.py               # MCP server (six task-shaped tools)
+    └── server.py               # MCP server (nine task-shaped tools)
 ```
 
 Every layer boundary is a Protocol and every swappable component has a registry,
@@ -1078,7 +1082,7 @@ get_references("requests.auth.HTTPBasicAuth", direction="inherits")
 pydocs-mcp is a local-first retriever. It indexes the exact package versions
 installed in your environment (plus your own project source under
 `__project__`) into an on-disk hybrid index (BM25 + dense embeddings, fused
-via RRF), serves a fixed set of six task-shaped MCP tools over stdio, and runs
+via RRF), serves a fixed set of nine task-shaped MCP tools over stdio, and runs
 fully offline with the default embedder — no accounts, API keys, or rate
 limits. Your data stays in two sidecar files (SQLite `.db` + TurboQuant `.tq`)
 you can read, move, or delete.

@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.0
+
+Headline: the MCP surface grows from six to **nine task-shaped tools** — three
+filesystem tools (`grep`, `glob`, `read_file`) join the six indexed tools — and
+the whole surface is **frozen by contract**: `docs/tool-contracts.md` is the
+normative inventory (rationale in `docs/adr/0001`–`0004`). No renames, no
+removals — existing six-tool clients keep working unmodified.
+
+### Added
+
+- **Three filesystem tools: `grep`, `glob`, `read_file`** — exact-string /
+  regex search (Python `re` flavor; `content` / `files_with_matches` / `count`
+  output modes; the flag parameters are the literal names `-i`, `-n`, `-A`,
+  `-B`, `-C` on the MCP wire), file-name matching (`**` recursion, results
+  ordered by modification time, newest first), and line-numbered file reads
+  (`cat -n` style, so line references round-trip with `grep` output). All
+  three operate on the **indexer's discovery scope** — the same excluded-dirs
+  floor, extension allowlist, and size cap the semantic index sees, not
+  `.gitignore` — and every response is freshness-stamped against the index
+  snapshot. Additive: MCP clients discover the tools at connect time. Each is
+  mirrored by an identically-named CLI subcommand; output caps are YAML-wired
+  under `files.*`.
+- **Frozen tool contract** — `docs/tool-contracts.md` pins the nine tool
+  names, every parameter schema, the response envelope (structured `items[]`
+  field sets + `meta` fields), and the frozen vocabularies; changing any of it
+  is a design-doc-level versioning event. Tool *descriptions* stay deliberately
+  mutable (they are the substrate the description optimizer rewrites).
+- **Chunk source spans persisted (schema v15)** — chunks now carry
+  `source_path` / `start_line` / `end_line` through SQLite, so structured
+  items cite exact file spans. Additive in-place migration; rows indexed
+  before v15 carry empty spans until their package next reindexes.
+
+### Changed
+
+- **`structuredContent` is now the typed envelope `{text, items, meta}`**,
+  with a matching `outputSchema` advertised per tool at registration.
+  Previously the SDK auto-wrapped the markdown string as
+  `{"result": "<markdown>"}`. The **text content block is byte-identical** for
+  the six pre-existing tools, so text-reading clients see no difference;
+  clients that parsed `structuredContent.result` must read
+  `structuredContent.text` instead. `meta` carries `tool`, `project`,
+  `indexed_git_head`, `live_git_head`, `index_stale`, and `truncated` on every
+  tool.
+- **`inputSchema` advertises enum values** — handler parameters are typed as
+  `Literal`s, so the advertised JSON schema carries the same enums the CLI
+  always did. Values unchanged; no call-shape change for existing clients.
+- **CLI canonical subcommands named exactly like the tools** —
+  `pydocs-mcp get_overview`, `pydocs-mcp search_codebase`, … The short verbs
+  (`overview`, `search`, `symbol`, `context`, `refs`, `why`) remain as
+  aliases, and `lookup` stays a deprecated alias. All nine subcommands source
+  their help text from `TOOL_DOCS` (single source with the MCP descriptions),
+  and the CLI-local `--limit` default literal is removed in favor of the
+  YAML-wired default. Existing invocations keep working; scripts may migrate
+  to canonical names at leisure.
+- **`get_references` declares syntactic resolution** — the tool description
+  is re-hedged (edges are name/alias-matched with import awareness, not
+  scope-resolved) and responses carry one additive meta field,
+  `meta.resolution: "syntactic" | "semantic"`, the declared capability level
+  of the reference graph that produced the answer. A future semantic backend
+  flips only this declared value; the tool contract is invariant under the
+  swap.
+
+### Fixed
+
+- **Project-code addressing** — dotted targets now resolve bare
+  project-qualified names for project source (stored under the reserved
+  `__project__` package) in `get_symbol` / `get_context` / `get_references`.
+  Previously project-source symbols were unreachable through target strings;
+  now previously-erroring targets resolve and no working call changes
+  behavior. Companion reference-graph fixes: relative imports honor
+  `ast.ImportFrom.level`, and suffix matching is scoped to project qualified
+  names so dependency symbols can't shadow project code.
+- **`get_symbol(depth="source")` source header** — the `# Source — <target> ·
+  <path>` header renders a real file path again: source paths now round-trip
+  through the chunk store (schema v15) instead of being dropped on persist.
+
 ## v0.5.1
 
 ### Changed

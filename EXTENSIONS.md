@@ -1,6 +1,6 @@
 # Extension Points
 
-**Context:** this document describes the extensibility surface of pydocs-mcp. The MCP surface (six task-shaped tools), the storage Protocol layer, the sklearn-style retrieval pipeline, the reference graph, and the hybrid BM25 + dense retrieval stack have all shipped — every extension hook listed below is live in the current codebase.
+**Context:** this document describes the extensibility surface of pydocs-mcp. The MCP surface (nine task-shaped tools, frozen in `docs/tool-contracts.md`), the storage Protocol layer, the sklearn-style retrieval pipeline, the reference graph, and the hybrid BM25 + dense retrieval stack have all shipped — every extension hook listed below is live in the current codebase.
 
 **Purpose:** a reference menu for picking "test-the-architecture" work. Use it to propose small follow-up PRs that exercise one extension point end-to-end and validate that the abstractions hold up in practice.
 
