@@ -1,4 +1,4 @@
-"""Tests for pydocs_eval.plotting.
+"""Tests for pydocs_eval.reporting.plotting.
 
 Headless matplotlib — backend forced to ``Agg`` before pyplot imports so the
 tests don't spin up a GUI toolkit on developer machines or in CI.
@@ -27,9 +27,9 @@ def _bar_containers(ax) -> list[BarContainer]:
     return [c for c in ax.containers if isinstance(c, BarContainer)]
 
 
-from pydocs_eval.plotting import (
+from pydocs_eval.reporting.plot_timings import _format_seconds
+from pydocs_eval.reporting.plotting import (
     BaselineRecord,
-    _format_seconds,
     plot_baselines,
     plot_metric_vs_latency,
     plot_timings,
@@ -272,7 +272,7 @@ def test_plot_baselines_accepts_two_baselines_on_same_dataset(
 
 
 def test_cli_main_writes_output(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-    from pydocs_eval.plotting import _cli_main
+    from pydocs_eval.reporting.plotting import _cli_main
 
     path = _write_baseline(tmp_path, "cli")
     output = tmp_path / "cli.png"
@@ -383,7 +383,7 @@ def test_cli_main_timings_mode_writes_output(
     tmp_path: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
-    from pydocs_eval.plotting import _cli_main
+    from pydocs_eval.reporting.plotting import _cli_main
 
     path = _write_baseline(tmp_path, "cli_t")
     output = tmp_path / "cli_t.png"
@@ -494,7 +494,7 @@ def test_cli_main_scatter_mode_writes_output(
     tmp_path: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
-    from pydocs_eval.plotting import _cli_main
+    from pydocs_eval.reporting.plotting import _cli_main
 
     path = _write_baseline(tmp_path, "cli_s")
     output = tmp_path / "cli_s.png"
@@ -514,7 +514,7 @@ def test_cli_main_scatter_mode_writes_output(
 
 
 def test_cli_main_timings_and_scatter_mutually_exclusive(tmp_path: Path) -> None:
-    from pydocs_eval.plotting import _cli_main
+    from pydocs_eval.reporting.plotting import _cli_main
 
     path = _write_baseline(tmp_path, "cli_excl")
     with pytest.raises(SystemExit):

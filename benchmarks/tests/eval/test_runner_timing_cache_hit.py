@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.runner import run_sweep
-from pydocs_eval.serialization import (
+from pydocs_eval.registries import (
     dataset_registry,
     system_registry,
     tracker_registry,

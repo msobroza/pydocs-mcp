@@ -1,9 +1,10 @@
 """Graph-ranked default A/B — RepoQA recall@10 on both splits.
 
-Motivates the shipped default flip (BM25 → dense + graph_expand). Single source
-of truth = the ``DATA`` table below, which mirrors the README "Graph-ranked
-default" table (F2LLM-v2-330M embedder, `--bench-cache off`). To refresh, edit
-``DATA`` here AND the README table, then re-run:
+Motivates the shipped default flip (BM25 → dense + graph_expand). Single
+source of truth = ``benchmarks/baselines/graph_default_ab.json``; the README
+"Graph-ranked default" table cites it (F2LLM-v2-330M embedder,
+`--bench-cache off`). To refresh, edit that JSON (and the README prose),
+then re-run:
 
     .venv/bin/python benchmarks/scripts/plot_graph_default_ab.py
 
@@ -14,6 +15,7 @@ Emits:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import matplotlib
@@ -22,15 +24,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# (label, recall@10 small_test, recall@10 structural) — mirrors the README
-# table. F2LLM-v2-330M, `--bench-cache off`; small_test n=30, structural n=20.
+# (label, recall@10 small_test, recall@10 structural) — loaded from the
+# committed campaign JSON (the single source the README table cites).
+# F2LLM-v2-330M, `--bench-cache off`; small_test n=30, structural n=20.
+_DATA_PATH = Path(__file__).resolve().parents[1] / "baselines" / "graph_default_ab.json"
 DATA: list[tuple[str, float, float]] = [
-    ("BM25\n(old default)", 0.40, 0.30),
-    ("Dense", 0.767, 0.30),
-    ("Hybrid\n(RRF)", 0.633, 0.25),
-    ("Graph-hybrid\n(RRF+graph)", 0.633, 0.90),
-    ("Dense+graph\n(new default)", 0.767, 1.00),
-    ("Dense+graph\n+centrality", 0.767, 0.95),
+    (row["label"], row["recall@10 small_test"], row["recall@10 structural"])
+    for row in json.loads(_DATA_PATH.read_text(encoding="utf-8"))["rows"]
 ]
 SPLITS = ("small_test (standard)", "repoqa-structural (graph)")
 COLORS = ("#4C72B0", "#55A868")  # seaborn "deep" blue / green

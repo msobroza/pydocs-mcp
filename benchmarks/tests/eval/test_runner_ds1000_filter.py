@@ -28,7 +28,7 @@ import pytest
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.datasets.ds1000 import Ds1000Dataset
 from pydocs_eval.runner import _build_arg_parser, run_sweep
-from pydocs_eval.serialization import dataset_registry, system_registry
+from pydocs_eval.registries import dataset_registry, system_registry
 from pydocs_eval.systems.base_system import RetrievedItem
 
 if TYPE_CHECKING:

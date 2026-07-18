@@ -1,0 +1,9 @@
+{
+  "campaign": "reranker_model_comparison",
+  "dataset": "RepoQA small_test",
+  "description": "BM25 top-200 -> LLM tree-reasoning rerank; pipeline fixed, only the reranker LLM varies (30 needles). Numbers transcribed from the generated benchmark report markdowns the campaign produced (since removed from the repo) and mirrored by the README 'Reranker model' table. Single source for scripts/plot_reranker_model_comparison.py. Published results — do not edit without a new sweep.",
+  "rows": [
+    {"label": "gpt-4o-mini", "recall@1": 0.333, "recall@5": 0.567, "recall@10": 0.567, "mrr": 0.424, "n_tasks": 30},
+    {"label": "gpt-5.5", "recall@1": 0.667, "recall@5": 0.667, "recall@10": 0.667, "mrr": 0.667, "n_tasks": 30}
+  ]
+}

@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from pydocs_eval.serialization import system_registry
+from pydocs_eval.registries import system_registry
 from pydocs_eval.systems import NeuledgeSystem
 from pydocs_eval.systems.neuledge import (
     NeuledgeClient,

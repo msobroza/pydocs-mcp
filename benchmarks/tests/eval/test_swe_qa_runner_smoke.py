@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.report import format_report
+from pydocs_eval.reporting.report import format_report
 from pydocs_eval.runner import _task_rows_from_legs, run_sweep, run_sweep_detailed
 
 _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"

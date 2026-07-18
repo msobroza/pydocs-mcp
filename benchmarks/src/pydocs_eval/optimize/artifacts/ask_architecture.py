@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from pydocs_eval.optimize._agent_track_binding import _DEFAULT_MAX_TURNS
+from pydocs_eval.optimize._agent_track_binding import DEFAULT_MAX_TURNS
 from pydocs_eval.optimize.ask_binding import (
     _DEFAULT_ASK_ARCHITECTURE,
     ask_architecture_registry,
@@ -31,7 +31,7 @@ from pydocs_eval.optimize.rubric.gates import (
 # WHY: only behaviors the product can already express may be searched; the
 # turn ceiling mirrors the agent-track default and the cell default mirrors
 # the max_turns gate default (single sources, one bump site each).
-_MAX_ASK_TURNS = _DEFAULT_MAX_TURNS
+_MAX_ASK_TURNS = DEFAULT_MAX_TURNS
 _DEFAULT_MAX_AGENT_TURNS = _GATE_DEFAULT_MAX_TURNS
 
 # WHY a repo-relative default: the shipped run configs name pipeline STEMS

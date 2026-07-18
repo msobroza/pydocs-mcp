@@ -23,8 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from pydocs_eval.optimize._agent_track_binding import _DEFAULT_TASK_TIMEOUT_SECONDS
-from pydocs_eval.serialization import (
+from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
+from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as the optimize axes; a second copy would drift
 )
 
@@ -186,7 +186,7 @@ class LangGraphAskRunner:
 
     request: AskBuildRequest
     architecture: str = _DEFAULT_ASK_ARCHITECTURE
-    task_timeout_seconds: float = _DEFAULT_TASK_TIMEOUT_SECONDS
+    task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
     _graph: object | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:

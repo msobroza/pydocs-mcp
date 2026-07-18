@@ -42,7 +42,7 @@ from pydocs_eval.agent_track._types import (
 )
 from pydocs_eval.agent_track.orchestrator import run_agent_track
 from pydocs_eval.agent_track.report import format_agent_track_report
-from pydocs_eval.serialization import dataset_registry
+from pydocs_eval.registries import dataset_registry
 
 # The paid preflight probe is capped hard: a one-token ``claude -p "ok"`` must
 # cost well under a cent. Anything above this is a contract violation (wrong

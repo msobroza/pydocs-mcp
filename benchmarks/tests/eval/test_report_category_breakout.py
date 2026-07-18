@@ -10,7 +10,7 @@ and the same metric columns as the main table. Datasets without the key
 
 from __future__ import annotations
 
-from pydocs_eval.report import format_report
+from pydocs_eval.reporting.report import format_report
 
 
 def _sample_results() -> dict[tuple[str, str], dict[str, tuple[float, float, float]]]:
@@ -143,7 +143,7 @@ def test_single_category_renders_no_breakout() -> None:
 def test_top_table_byte_identical_when_task_rows_absent() -> None:
     # WHY: pin the existing top-table contract — adding the optional
     # ``task_rows`` argument must not perturb the default render path.
-    from pydocs_eval.report import format_report as fr
+    from pydocs_eval.reporting.report import format_report as fr
 
     baseline = fr(
         sweep_results=_sample_results(),

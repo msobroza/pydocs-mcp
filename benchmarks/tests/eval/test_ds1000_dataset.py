@@ -17,7 +17,7 @@ from pydocs_eval.datasets.ds1000_schema import (
     PINNED_DS1000_REVISION,
     PINNED_LIBDOCS_REVISION,
 )
-from pydocs_eval.serialization import dataset_registry
+from pydocs_eval.registries import dataset_registry
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_mini.json"
 # Mirrors the real ``code-rag-bench/ds1000`` HF row shape: NO top-level

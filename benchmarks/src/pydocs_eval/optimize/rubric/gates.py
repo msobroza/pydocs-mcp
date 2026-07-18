@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable
 
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize.rubric.model import GateCheck
-from pydocs_eval.serialization import (
+from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as the optimize axes; a second copy would drift
 )
 

@@ -528,7 +528,9 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 > recall@10 can exceed BM25's own top-10; the rest are single-stage. Swapping the
 > reranker LLM to **gpt-5.5** doubles recall@1 (0.33 → 0.67) — see
 > [§Reranker model: gpt-4o-mini vs gpt-5.5](#reranker-model-gpt-4o-mini-vs-gpt-55).
-> (LLM tree also uses gpt-4o-mini.) The chart is rendered from this table by
+> (LLM tree also uses gpt-4o-mini.) Numbers are single-sourced in
+> [`baselines/method_comparison.json`](baselines/method_comparison.json); this
+> table cites it, and the chart is rendered from the same JSON by
 > [`scripts/plot_method_comparison.py`](scripts/plot_method_comparison.py).
 
 **Takeaways.** Vector methods clearly beat lexical BM25 (semantic vs. exact-term
@@ -572,7 +574,9 @@ recall@1 = recall@5 = recall@10 = MRR: when it surfaces the gold it ranks it
 (gpt-5.5 slightly faster), but gpt-5.5 has a heavier tail (p99 ~43s vs ~17s) from
 occasional long reasoning bursts. gpt-5.5 is a reasoning model, so its temperature
 is forced to the model default (the client omits the unsupported `temperature=0`),
-making its rerank mildly non-deterministic. Rendered by
+making its rerank mildly non-deterministic. Numbers are single-sourced in
+[`baselines/reranker_model_comparison.json`](baselines/reranker_model_comparison.json);
+this table cites it, and the chart is rendered from the same JSON by
 [`scripts/plot_reranker_model_comparison.py`](scripts/plot_reranker_model_comparison.py).
 n=30 with a wide CI (`[0.50, 0.83]`) — the recall@1 / MRR gaps are large; the
 recall@10 gap (+0.10) is smaller relative to that noise.
@@ -624,8 +628,9 @@ pure dense.**
 | RRF k=100 | `repoqa_hybrid_rrf_k100_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
 
 All seven are full-30-needle GPU runs; p50 search latency is ~0.23 s across the
-board (fusion is cheap — the cost is the dense embed, shared by all). The chart is
-rendered from this table by
+board (fusion is cheap — the cost is the dense embed, shared by all). Numbers are
+single-sourced in [`baselines/hybrid_fusion_330m.json`](baselines/hybrid_fusion_330m.json);
+this table cites it, and the chart is rendered from the same JSON by
 [`scripts/plot_hybrid_fusion_330m.py`](scripts/plot_hybrid_fusion_330m.py).
 
 **Takeaways.** **Pure dense wins.** BM25 is far weaker than the code-specialized
@@ -659,8 +664,10 @@ both columns — the only difference is the graph step. Higher is better.
 > the needle itself holds dense rank 1, so the neighbour lands at rank ≥ 2; the
 > meaningful metrics are recall@5/10 and MRR. The graph branch is
 > **embedding-centric**: it seeds from the dense top-S and merges each discovered
-> neighbour by `max(dense_sim, seed_sim·decay)` — **no RRF, no BM25**. Chart
-> rendered from this table by
+> neighbour by `max(dense_sim, seed_sim·decay)` — **no RRF, no BM25**. Numbers are
+> single-sourced in [`baselines/structural_recall.json`](baselines/structural_recall.json)
+> (distinct from the `fixtures/` dataset file of the same name); this table cites
+> it, and the chart is rendered from the same JSON by
 > [`scripts/plot_structural_recall.py`](scripts/plot_structural_recall.py).
 
 **Takeaways.** On the queries dense ranks poorly, a 1-hop graph expansion from the
@@ -691,7 +698,9 @@ Each cell is recall@1 / recall@10 / MRR:
 | **Dense + graph (new default)** | `repoqa_dense_graph_f2llm330m.yaml` | **0.70 / 0.77 / 0.73** | **0.00 / 1.00 / 0.39** |
 | Dense + graph + centrality | `repoqa_dense_graph_centrality_f2llm330m.yaml` | 0.57 / 0.77 / 0.65 | 0.35 / 0.95 / 0.62 |
 
-> Chart rendered from this table by
+> The recall@10 columns are single-sourced in
+> [`baselines/graph_default_ab.json`](baselines/graph_default_ab.json); this table
+> cites it, and the chart is rendered from the same JSON by
 > [`scripts/plot_graph_default_ab.py`](scripts/plot_graph_default_ab.py).
 
 **Takeaways.** **`dense + graph_expand` is the new shipped default**
@@ -736,7 +745,7 @@ adopting as the default.
 
 ### Visualizing baselines
 
-`pydocs_eval.plotting` turns baseline JSON files into figures. All commands
+`pydocs_eval.reporting.plotting` turns baseline JSON files into figures. All commands
 below assume the package is installed (see [Install](#install)); from a source
 checkout without installing, prefix them with `PYTHONPATH=benchmarks/src`.
 
@@ -763,7 +772,7 @@ compliant).
 
 ```bash
 # Single baseline on the real 100 needles. Method is in the legend, not the title.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_real.png \
     --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle \
@@ -772,7 +781,7 @@ python -m pydocs_eval.plotting \
 # Side-by-side compare on the SAME dataset: pass a second baseline JSON
 # produced by another config's run — the plot picks up the second bar group
 # automatically, no code change.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     benchmarks/results/your_second_baseline.json \
     --output benchmarks/results/plots/repoqa_real_compare.png \
@@ -789,7 +798,7 @@ Programmatic API — same behavior, handy in a notebook:
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_baselines
+from pydocs_eval.reporting.plotting import plot_baselines
 
 fig = plot_baselines(
     baselines=[
@@ -815,7 +824,7 @@ The bar marks p50, a whisker extends to p95, and the right edge is annotated wit
 the full p50 / p95 / p99 triple (µs / ms / s by magnitude).
 
 ```bash
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_timings.png \
     --timings \
@@ -826,7 +835,7 @@ python -m pydocs_eval.plotting \
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_timings
+from pydocs_eval.reporting.plotting import plot_timings
 
 fig = plot_timings(
     baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
@@ -847,7 +856,7 @@ trade-off line where dense / hybrid retrievers buy recall at higher latency.
 
 ```bash
 # Today: a single dot (BM25 only). A recorded dense baseline adds a second dot.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_quality_vs_latency.png \
     --scatter \
@@ -855,7 +864,7 @@ python -m pydocs_eval.plotting \
     --title "RepoQA-2024-06-23 (Python, n=100) — recall@10 vs latency"
 
 # Swap the X-axis to indexing cost for a quality-vs-indexing-cost view.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_quality_vs_indexing.png \
     --scatter \
@@ -868,7 +877,7 @@ python -m pydocs_eval.plotting \
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_metric_vs_latency
+from pydocs_eval.reporting.plotting import plot_metric_vs_latency
 
 fig = plot_metric_vs_latency(
     baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
@@ -924,6 +933,19 @@ uv pip install -e "benchmarks[all]"         # everything
 src-layout (`benchmarks/src/`). Commands below assume it is installed; from a
 bare source checkout, prefix any `python -m pydocs_eval.…` command with
 `PYTHONPATH=benchmarks/src`.
+
+**Console commands.** An installed environment also gets one console command
+per module entry point — pure aliases, so every `python -m pydocs_eval.…`
+invocation documented in this README keeps working unchanged:
+
+| Command | Same as |
+|---|---|
+| `pydocs-eval` | `python -m pydocs_eval.runner` |
+| `pydocs-eval-optimize` | `python -m pydocs_eval.optimize` |
+| `pydocs-eval-agent-track` | `python -m pydocs_eval.agent_track` |
+| `pydocs-eval-ci-compare` | `python -m pydocs_eval.reporting.ci_compare` |
+| `pydocs-eval-plot` | `python -m pydocs_eval.reporting.plotting` |
+| `pydocs-eval-bench-cache` | `python -m pydocs_eval.bench_cache_cli` |
 
 ### Running a sweep
 

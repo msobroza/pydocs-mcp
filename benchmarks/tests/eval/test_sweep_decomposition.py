@@ -21,7 +21,7 @@ from typing import Literal
 import pytest
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.metrics.base_metric import Scorer
-from pydocs_eval.serialization import system_registry
+from pydocs_eval.registries import system_registry
 from pydocs_eval.sweep import (
     ScorerFailure,
     SweepOutcome,

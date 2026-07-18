@@ -55,7 +55,7 @@ from pydocs_eval.optimize.run_config import (
     load_run_config,
 )
 from pydocs_eval.optimize.trials_ledger import TrialsLedger
-from pydocs_eval.serialization import dataset_registry
+from pydocs_eval.registries import dataset_registry
 
 # The runbook a landed proposal + a paid run are documented in (spec §D7). Named
 # in the CLI output so an operator knows where the preflight-first rule + spend

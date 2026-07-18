@@ -1,0 +1,10 @@
+{
+  "campaign": "structural_recall",
+  "dataset": "repoqa-structural",
+  "description": "Dense vs dense+graph on the repoqa-structural split (20 tasks, F2LLM-v2-330M). recall@1 is 0 by construction: the gold is a 1-hop neighbour of the needle, which itself holds dense rank 1. Single source for the README 'Structural recall (graph expansion)' table and scripts/plot_structural_recall.py. Published results — do not edit without a new sweep.",
+  "rows": [
+    {"label": "Dense\n(F2LLM-330M)", "recall@1": 0.00, "recall@5": 0.20, "recall@10": 0.30},
+    {"label": "Dense + graph\n(decay 0.5,\nshipped default)", "recall@1": 0.00, "recall@5": 0.25, "recall@10": 0.40},
+    {"label": "Dense + graph\n(decay 0.9)", "recall@1": 0.00, "recall@5": 0.80, "recall@10": 1.00}
+  ]
+}

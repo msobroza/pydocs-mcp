@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from pydocs_eval import _bench_cache
-from pydocs_eval.serialization import system_registry
+from pydocs_eval.registries import system_registry
 from pydocs_eval.systems import PydocsMcpSystem
 from pydocs_mcp.retrieval.config import AppConfig
 

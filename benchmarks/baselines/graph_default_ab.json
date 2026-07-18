@@ -1,0 +1,13 @@
+{
+  "campaign": "graph_default_ab",
+  "dataset": "RepoQA small_test + repoqa-structural",
+  "description": "Graph-ranked default A/B — recall@10 per chunk-search method on both splits (F2LLM-v2-330M, --bench-cache off; small_test n=30, structural n=20). Single source for the README 'Graph-ranked default' table's recall@10 column and scripts/plot_graph_default_ab.py. Published results — do not edit without a new sweep.",
+  "rows": [
+    {"label": "BM25\n(old default)", "recall@10 small_test": 0.40, "recall@10 structural": 0.30},
+    {"label": "Dense", "recall@10 small_test": 0.767, "recall@10 structural": 0.30},
+    {"label": "Hybrid\n(RRF)", "recall@10 small_test": 0.633, "recall@10 structural": 0.25},
+    {"label": "Graph-hybrid\n(RRF+graph)", "recall@10 small_test": 0.633, "recall@10 structural": 0.90},
+    {"label": "Dense+graph\n(new default)", "recall@10 small_test": 0.767, "recall@10 structural": 1.00},
+    {"label": "Dense+graph\n+centrality", "recall@10 small_test": 0.767, "recall@10 structural": 0.95}
+  ]
+}

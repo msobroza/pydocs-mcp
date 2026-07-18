@@ -1,8 +1,9 @@
 """Render the RepoQA `small_test` method-comparison figures.
 
-Single source of truth = the `DATA` table below, which mirrors the
-"Method comparison" table in `benchmarks/README.md`. When you add a method or
-refresh numbers, edit `DATA` here AND the README table, then re-run:
+Single source of truth = `benchmarks/baselines/method_comparison.json`;
+the "Method comparison" table in `benchmarks/README.md` cites it. When you
+add a method or refresh numbers, edit that JSON (and the README prose),
+then re-run:
 
     python benchmarks/scripts/plot_method_comparison.py
 
@@ -17,6 +18,7 @@ Pure matplotlib — no project imports — so it runs from any env with matplotl
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -30,20 +32,21 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 # (label, recall@1, recall@5, recall@10, partial_run, search_p50_seconds)
-#   — mirrors the README table. `partial_run` rows ran on 21/30 needles and get
-#   a "*" + footnote caveat. search_p50 is the per-needle p50 search latency
-#   (from each run's per-task `search_seconds` in the JSONL tracker).
+#   — loaded from the committed campaign JSON (the single source the README
+#   table cites). `partial_run` rows ran on 21/30 needles and get a "*" +
+#   footnote caveat. search_p50 is the per-needle p50 search latency (from
+#   each run's per-task `search_seconds` in the JSONL tracker).
+_DATA_PATH = Path(__file__).resolve().parents[1] / "baselines" / "method_comparison.json"
 DATA: list[tuple[str, float, float, float, bool, float]] = [
-    ("BM25", 0.167, 0.333, 0.400, False, 0.029),
-    ("BM25→tree rerank\n(gpt-4o-mini)", 0.333, 0.567, 0.567, False, 10.639),
-    ("BM25→tree rerank\n(gpt-5.5)", 0.667, 0.667, 0.667, False, 8.76),
-    ("Dense\n(bge-small)", 0.467, 0.733, 0.733, False, 0.145),
-    ("Dense\n(ModernBERT)", 0.533, 0.733, 0.733, False, 0.191),
-    ("Dense\n(Qwen3-0.6B)*", 0.667, 0.810, 0.810, True, 0.508),
-    ("Dense\n(F2LLM-330M)", 0.700, 0.767, 0.767, False, 0.227),
-    ("Dense\n(F2LLM-0.6B)", 0.900, 0.900, 0.933, False, 0.293),
-    ("Late-\ninteraction", 0.500, 0.633, 0.667, False, 0.133),
-    ("LLM tree*", 0.333, 0.524, 0.524, True, 13.717),
+    (
+        row["label"],
+        row["recall@1"],
+        row["recall@5"],
+        row["recall@10"],
+        row["partial_run"],
+        row["search_p50_seconds"],
+    )
+    for row in json.loads(_DATA_PATH.read_text(encoding="utf-8"))["rows"]
 ]
 METRICS = ("recall@1", "recall@5", "recall@10")
 COLORS = ("#4C72B0", "#55A868", "#C44E52")  # seaborn "deep" blue / green / red

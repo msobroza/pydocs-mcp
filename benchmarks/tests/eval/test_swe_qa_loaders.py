@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydocs_eval.datasets.base_dataset import Dataset
-from pydocs_eval.serialization import dataset_registry
+from pydocs_eval.registries import dataset_registry
 from pydocs_eval.datasets.swe_qa import SweQaDataset
 from pydocs_eval.datasets.swe_qa_pro import SweQaProDataset
 

@@ -36,9 +36,9 @@ import pydocs_eval.optimize.artifacts
 import pydocs_eval.optimize.fitness
 import pydocs_eval.optimize.optimizers  # noqa: F401  (registration side effect only)
 from pydocs_eval.optimize._agent_track_binding import (
-    _DEFAULT_MODEL,
-    _DEFAULT_RNG_SEED,
-    _DEFAULT_TASK_TIMEOUT_SECONDS,
+    DEFAULT_MODEL,
+    DEFAULT_RNG_SEED,
+    DEFAULT_TASK_TIMEOUT_SECONDS,
 )
 from pydocs_eval.optimize._types import OptimizationBudget
 from pydocs_eval.optimize.ask_binding import _DEFAULT_ASK_ARCHITECTURE
@@ -119,11 +119,11 @@ class AskRunnerSettings(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    model: str = _DEFAULT_MODEL
+    model: str = DEFAULT_MODEL
     architecture: str = _DEFAULT_ASK_ARCHITECTURE
     base_url: str | None = None
     workspace: Path = _DEFAULT_ASK_WORKSPACE
-    task_timeout_seconds: float = _DEFAULT_TASK_TIMEOUT_SECONDS
+    task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
 
 
 class AskRubricSettings(BaseModel):
@@ -238,7 +238,7 @@ class OptimizeRunConfig(BaseModel):
     # WHY: seeds config_search's RNG and task ordering; recorded in
     # provenance so two runs with identical config + ledger are identical
     # modulo LLM nondeterminism (spec §3.6).
-    rng_seed: int = _DEFAULT_RNG_SEED
+    rng_seed: int = DEFAULT_RNG_SEED
 
     @field_validator("ladder", mode="before")
     @classmethod

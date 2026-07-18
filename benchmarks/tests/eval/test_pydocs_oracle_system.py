@@ -11,7 +11,7 @@ tmp-SQLite -> upsert -> rebuild_index -> pipeline round-trip the parent
 Identity coherence under test: each oracle chunk is a real store row, so
 ``search()`` stamps ``chunk_id = chunk.id`` and the exact-match resolver
 returns ``chunk:{id}`` (NOT the doc_id) — keyed exactly like Task 3's
-``_item_key`` so the metric's membership check lines up.
+``item_key`` so the metric's membership check lines up.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
-from pydocs_eval.gold_resolver import PydocsOracleGoldResolver, _item_key
-from pydocs_eval.serialization import system_registry
+from pydocs_eval.gold_resolver import PydocsOracleGoldResolver, item_key
+from pydocs_eval.registries import system_registry
 from pydocs_eval.systems import PydocsOracleSystem
 from pydocs_mcp.retrieval.config import AppConfig
 
@@ -238,11 +238,11 @@ async def test_oracle_resolver_exact_match_returns_chunk_ids() -> None:
         # concat was NOT in the gold doc_ids -> excluded.
         assert f"chunk:{by_doc['pandas#concat']}" not in resolved
 
-        # Coherence with Task 3's _item_key: a retrieved matched item's key
+        # Coherence with Task 3's item_key: a retrieved matched item's key
         # is a member of the resolved set.
         items = await system.search("pandas merge shared key zorptoken", limit=10)
         merge_item = next(it for it in items if it.qualified_name == "pandas#merge")
-        assert _item_key(merge_item) in resolved
+        assert item_key(merge_item) in resolved
     finally:
         await system.teardown()
 

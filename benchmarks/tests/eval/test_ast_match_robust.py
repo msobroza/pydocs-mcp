@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from pydocs_eval.ast_match import _canonical_dump, ast_equivalent, find_first_match_rank
+from pydocs_eval.metrics.ast_match import _canonical_dump, ast_equivalent, find_first_match_rank
 from pydocs_eval.systems.base_system import RetrievedItem
 
 
@@ -99,7 +99,7 @@ def test_ast_equivalent_syntax_error_still_false() -> None:
 def test_comparable_node_strips_decorators() -> None:
     import ast
 
-    from pydocs_eval.ast_match import _comparable_node
+    from pydocs_eval.metrics.ast_match import _comparable_node
 
     node = _comparable_node("@curry\n@cache\ndef f(): return 1\n")
     assert isinstance(node, ast.FunctionDef)
@@ -110,7 +110,7 @@ def test_comparable_node_strips_decorators() -> None:
 def test_comparable_node_extracts_first_def_ignoring_siblings() -> None:
     import ast
 
-    from pydocs_eval.ast_match import _comparable_node
+    from pydocs_eval.metrics.ast_match import _comparable_node
 
     node = _comparable_node("def f(): return 1\n\nx = 2\ndef g(): return 3\n")
     assert isinstance(node, ast.FunctionDef)

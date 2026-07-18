@@ -13,7 +13,7 @@ from pydocs_eval.optimize.protocols import (
     HarnessOptimizer,
     OptimizableArtifact,
 )
-from pydocs_eval.serialization import (
+from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as datasets/systems; a second copy would drift
 )
 

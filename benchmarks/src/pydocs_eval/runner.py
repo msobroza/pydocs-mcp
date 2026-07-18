@@ -14,18 +14,19 @@ from pathlib import Path
 
 from . import _bench_cache
 from .datasets._split import VALID_SPLITS
-from .serialization import (
+from .registries import (
     dataset_registry,
     system_registry,
     tracker_registry,
 )
+from .reporting.report import format_report
 
 # WHY redundant-alias re-exports: ``run_sweep`` + the metric/latency
-# row-order constants predate the ``sweep.py`` extraction; ``report.py``
-# and the test suites import them from this module. Importing ``sweep``
-# here also fires the registry side effects BEFORE argparse renders
-# ``--help`` (AC3: help text lists registered names). New code should
-# import from ``pydocs_eval.sweep`` directly.
+# row-order constants predate the ``sweep.py`` extraction; the test
+# suites (and, until 0.2.0, ``report.py``) import them from this module.
+# Importing ``sweep`` here also fires the registry side effects BEFORE
+# argparse renders ``--help`` (AC3: help text lists registered names).
+# New code should import from ``pydocs_eval.sweep`` directly.
 from .sweep import (
     DEFAULT_METRIC_SPECS as DEFAULT_METRIC_SPECS,
 )
@@ -64,7 +65,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         # WHY: ``pydocs_eval.runner`` (short path) matches how the
         # shell script (``scripts/run_repoqa.sh``) and the
-        # ``from pydocs_eval.X`` imports in ``serialization.py``
+        # ``from pydocs_eval.X`` imports in ``registries.py``
         # actually invoke the module — i.e. with ``PYTHONPATH=benchmarks/src``
         # under the PyPA src-layout (the package lives at
         # ``benchmarks/src/pydocs_eval/``).
@@ -330,8 +331,6 @@ def main() -> None:
         # leaking a half-written markdown file. ``tasks_ran`` is the actual
         # per-leg task count returned by the sweep — accurate on both
         # ``--limit N`` and full-dataset runs.
-        from .report import format_report
-
         report = format_report(
             sweep_results=outcome.results,
             dataset_name=args.dataset,

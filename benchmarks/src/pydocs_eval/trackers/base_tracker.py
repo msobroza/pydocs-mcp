@@ -3,7 +3,7 @@
 Owns ``RunHandle`` and the ``ExperimentTracker`` ``@runtime_checkable``
 Protocol. Concrete trackers in ``benchmarks/eval/trackers/`` implement
 the Protocol and are reachable through ``tracker_registry`` in
-``serialization.py`` — the runner never imports the concretes directly.
+``registries.py`` — the runner never imports the concretes directly.
 """
 
 from __future__ import annotations

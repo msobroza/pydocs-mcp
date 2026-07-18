@@ -1,7 +1,7 @@
 """Pin ``is_relevant`` — the single relevance predicate metrics consume.
 
 Hermetic: no ``pydocs_mcp`` import. ``is_relevant(item, task)`` is pure
-set membership of ``_item_key(item)`` in
+set membership of ``item_key(item)`` in
 ``task.gold.extra["resolved_chunk_ids"]`` (a ``frozenset[str]`` the runner
 injects between ``search()`` and scoring). Task 4 extends this with an
 ``ast_body`` fallback for RepoQA — NOT exercised here.

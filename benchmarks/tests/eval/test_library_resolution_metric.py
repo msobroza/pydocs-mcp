@@ -16,7 +16,7 @@ from pathlib import Path
 
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.metrics import LibraryResolution1
-from pydocs_eval.serialization import metric_registry
+from pydocs_eval.registries import metric_registry
 
 
 def _task(resolved: object, library: str) -> EvalTask:

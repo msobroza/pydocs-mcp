@@ -2,7 +2,7 @@
 
 Owns ``RetrievedItem`` and the ``System`` ``@runtime_checkable`` Protocol.
 Concrete systems in ``benchmarks/eval/systems/`` implement the Protocol
-and are reachable through ``system_registry`` in ``serialization.py`` —
+and are reachable through ``system_registry`` in ``registries.py`` —
 the runner never imports the concretes directly.
 """
 
@@ -38,7 +38,7 @@ class RetrievedItem:
     # from ``chunk.id``) so an eager resolver's ``chunk:{store_id}`` keys
     # line up with the ranked items here. ``None`` for composite/blob
     # systems (Context7/Neuledge, pydocs composite mode), where
-    # ``_item_key`` falls back to the rank. Additive + last so existing
+    # ``item_key`` falls back to the rank. Additive + last so existing
     # positional ``RetrievedItem(...)`` call sites stay valid.
     chunk_id: int | None = None
 

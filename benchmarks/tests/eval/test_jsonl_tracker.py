@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydocs_eval.serialization import tracker_registry
+from pydocs_eval.registries import tracker_registry
 from pydocs_eval.trackers import JsonlExperimentTracker
 
 

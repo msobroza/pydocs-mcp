@@ -26,6 +26,17 @@ dependencies = [
     "matplotlib>=3.7",
     "seaborn>=0.13",
 ]
+
+# ADDITIVE console commands — every documented `python -m pydocs_eval.…`
+# invocation keeps working; these are ergonomic aliases for an installed
+# environment (no PYTHONPATH juggling). One command per module entry point.
+[project.scripts]
+pydocs-eval = "pydocs_eval.runner:main"
+pydocs-eval-optimize = "pydocs_eval.optimize.__main__:main"
+pydocs-eval-agent-track = "pydocs_eval.agent_track.__main__:main"
+pydocs-eval-ci-compare = "pydocs_eval.reporting.ci_compare:main"
+pydocs-eval-plot = "pydocs_eval.reporting.plotting:main"
+pydocs-eval-bench-cache = "pydocs_eval.bench_cache_cli:main"
 # Extras are split BY COUPLING, not by feature. The base install
 # (dependencies above) serves the black-box agent-efficiency track, which
 # needs only the pydocs-mcp CLI on PATH — NOT the pydocs_mcp Python library.
