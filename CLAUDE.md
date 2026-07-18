@@ -215,6 +215,69 @@ Quick map of the patterns this codebase uses; deeper rules live in the sections 
 - **YAGNI** — pipeline / feature settings go to YAML, never new MCP params (§"MCP API surface vs YAML configuration"). The MCP surface is fixed at nine task-shaped tools by design.
 - **TDD** — failing test first, smallest change to green, then refactor; every PR ships with new tests mapped to discrete acceptance criteria.
 
+## Coding Rules for AI Agents
+
+Dense, imperative rules for code that AI agents read, edit, and extend. Only rules
+NOT already covered by the sections above/below appear here — SRP, DRY, type hints,
+WHY-comments, TDD, DI-via-`uow_factory`, and single-source defaults live in their
+own sections.
+
+**Code shape**
+
+- Functions 4–20 lines; split anything longer. Files under 500 lines (ideal
+  200–300) — a unit must fit one tool-call read without truncation.
+- Max 2 indentation levels: early returns and guard clauses over nested
+  `if`/`for`/`try`.
+- Names are specific, unique, and greppable — never `data`, `process`, `handler`,
+  `Manager`, `Service`, `utils`. Aim for <5 grep hits repo-wide (grep is the
+  agent's navigation API). Name behavior, not mechanism: prefer
+  `build_session_start_context_for_agent_prompt` over a vague "gate"/"helper" name.
+- Error messages carry the offending value and the expected shape:
+  `f"invalid target: got {target!r}, expected dotted identifier"`, never a bare
+  `"invalid input"`. Exception text is a debugging signal.
+
+**Comments & provenance**
+
+- Preserve intent/provenance comments through refactors — they were kept
+  deliberately; deleting them destroys context no one can regenerate.
+- When a line exists because of a specific bug or external constraint, cite the
+  issue number or commit SHA next to it.
+- Update docstrings together with the code whenever behavior changes.
+
+**Tests**
+
+- F.I.R.S.T: Fast, Independent, Repeatable, Self-Validating, Timely. Headless via
+  the single documented commands in §"Tests & Lint" — no manual setup ever.
+- Mock external I/O behind named fake classes (`FakeEmbedder`,
+  `make_fake_uow_factory`), never ad-hoc inline monkey-patches.
+- A change without a passing full-suite run is not finished. Keep test output
+  parseable.
+
+**Logging & defensive code**
+
+- Structured JSON logs with named fields; plain text only for user-facing CLI
+  output.
+- Required defensive patterns for THIS repo: validate inputs at the MCP/CLI
+  boundaries (`mcp_inputs.py` is the pattern); timeouts and bounded retries on
+  every external call (LLM APIs, embedding-model downloads); fail loudly with
+  context in internal code; degrade gracefully only at sanctioned user-facing
+  boundaries (the Null-object services of §"Null Object pattern" are the degrade
+  path — do not invent silent fallbacks).
+
+**Formatting & setup**
+
+- The formatter decides style: `ruff format` (Python), `cargo fmt` (Rust). Never
+  hand-debate layout; run formatters before committing.
+- Setup stays idempotent and documented: `pip install -e .` (or
+  `maturin develop`) plus INSTALL.md must take a clean machine to a working state
+  with no tribal knowledge.
+
+**Why these rules (short):** agents read in bounded chunks and lose attention as
+context fills — small units get full-attention reasoning; agents navigate by grep —
+unique names are the API; every tool call costs tokens — lean files, lean logs,
+lean output keep the loop cheap; duplicated logic is dangerous because an
+automated refactor updates one copy and misses the distant others.
+
 ## SOLID Principles
 
 **Single Responsibility:** Each module has one concern — `db.py` owns the schema, `storage/` owns persistence (repositories, filter adapter, UoW, VectorStore), `application/` owns both write-side (`IndexingService`, `ProjectIndexer`) AND read-side (`PackageLookup`, `DocsSearch`, `ApiSearch`, `ModuleInspector`) use-case services, `retrieval/` owns the pipeline machinery (`RetrieverStep` ABC + `RetrieverPipeline` + concrete steps under `steps/`), `extraction/` owns the write-side ingestion pipeline, chunkers, member extractors, and DocumentNode trees. `application/formatting.py` is the single source of truth for rendering — stages, MCP handlers, and CLI all delegate to it. New features should follow this pattern. If a module gains a second reason to change, split it.

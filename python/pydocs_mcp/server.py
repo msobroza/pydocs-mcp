@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from pydocs_mcp.application.tool_response import ToolResponse
+    from pydocs_mcp.retrieval.config import AppConfig
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -507,8 +508,42 @@ def build_routers(
         search_router=MultiProjectSearch(services=services),
         lookup_router=MultiProjectLookup(services=services),
         cross_link_status=cross_status if len(services) > 1 else "",
+        suggestions=config.output.suggestions,
     )
     return tools, services
+
+
+def _apply_descriptions_source(cli_path: Path | None, config: AppConfig) -> None:
+    """Bind the winning description source and log the pinned artifact line.
+
+    ADR 0006 §2-§4: precedence is ``--descriptions`` flag > env > user YAML
+    > packaged, and an explicitly named source that is missing or invalid is
+    a hard startup error (universal strictness). Called from ``run()``
+    BEFORE the indexing pass (fail fast on a bad candidate — don't index for
+    minutes and then die) and therefore before ``FastMCP(...)`` /
+    ``_register_tools`` capture the ``tool_docs`` attributes — a
+    post-registration rebind could never reach the wire, which is what keeps
+    the hash equal to what is actually served. The log format is pinned by
+    test: Phase 2 attribution parses it from the startup log, not the wire.
+    """
+    from pydocs_mcp.application.description_override import (
+        PACKAGED_SOURCE,
+        PRE_APPLIED_SOURCE,
+        apply_descriptions_override,
+    )
+    from pydocs_mcp.application.description_source import packaged_artifact_hash
+
+    artifact_hash, source = apply_descriptions_override(
+        cli_path=cli_path, configured_path=config.serve.descriptions_path
+    )
+    if source == PACKAGED_SOURCE and artifact_hash != packaged_artifact_hash():
+        # No override won, but the live surface is NOT the packaged document:
+        # an earlier caller (the benchmarks overlay wrapper) pre-applied a
+        # source before ``run()``. Claiming ``packaged`` next to the overlay's
+        # hash would mislead Phase 2 attribution — report the fixed
+        # ``pre-applied`` token instead (the hash stays the live one).
+        source = PRE_APPLIED_SOURCE
+    log.info("descriptions artifact %s source=%s", artifact_hash[:12], source)
 
 
 def run(
@@ -518,13 +553,15 @@ def run(
     gpu: bool = False,
     workspace: Path | None = None,
     db_paths: list[Path] | None = None,
+    descriptions_path: Path | None = None,
 ) -> None:
     """Start the MCP server over one project (``db_path``) or several — a
-    ``workspace`` dir or explicit ``db_paths`` (read-only multi-repo)."""
+    ``workspace`` dir or explicit ``db_paths`` (read-only multi-repo).
+    ``descriptions_path`` is the ``--descriptions`` override document
+    (highest-precedence description source, ADR 0006)."""
     from mcp.server.fastmcp import FastMCP
 
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
-    from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.storage.search_backend import build_search_backend, format_capabilities
 
@@ -537,6 +574,8 @@ def run(
     # validators and ``ReferenceCaptureStage``.
     configure_from_app_config(config)
 
+    _apply_descriptions_source(descriptions_path, config)
+
     tools, services = build_routers(
         config, db_path=db_path, workspace=workspace, db_paths=db_paths, run_link_pass=True
     )
@@ -547,7 +586,12 @@ def run(
 
     # Session-level scope frame surfaced to MCP clients — the single source is
     # ``SERVER_INSTRUCTIONS`` in ``application.tool_docs`` so the MCP orientation
-    # and the CLI top-level help never drift.
+    # and the CLI top-level help never drift. Imported HERE (not at the top of
+    # ``run``) because the import statement snapshots the attribute value — it
+    # must run after ``_apply_descriptions_source`` or an override document's
+    # instructions would never reach the wire.
+    from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS
+
     mcp = FastMCP("pydocs-mcp", instructions=SERVER_INSTRUCTIONS)
     _register_tools(mcp, tools)
 

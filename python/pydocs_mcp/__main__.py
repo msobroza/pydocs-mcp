@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import traceback
 from collections.abc import Awaitable, Callable
@@ -206,6 +207,21 @@ def _build_parser() -> argparse.ArgumentParser:
                 "--watch",
                 action="store_true",
                 help="Watch the project for changes and reindex on edits.",
+            )
+            # Description-source override (ADR 0006). A knob about WHICH
+            # document is served, not how retrieval behaves — so it lives on
+            # the CLI (and env/YAML), never on the MCP tool surface.
+            sp.add_argument(
+                "--descriptions",
+                type=Path,
+                default=None,
+                metavar="PATH",
+                help="Serve the LLM-visible tool descriptions from PATH (a "
+                "delimited descriptions document) instead of the packaged "
+                "default. A missing or invalid PATH is a hard startup error "
+                "— never a silent fallback. Precedence: this flag > "
+                "PYDOCS_SERVE__DESCRIPTIONS_PATH env var > YAML "
+                "serve.descriptions_path > packaged.",
             )
             # Multi-repo serve: load pre-built db bundles read-only (skips
             # indexing + watch) so one MCP server hosts several indexed repos.
@@ -465,6 +481,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum lines to return (default: YAML files.read_limit).",
     )
     _add_query_flags(p_read)
+
+    # ``session-start-context`` is PRODUCT CLI, not an MCP tool — the
+    # nine-tool surface stays frozen (ADR 0008 §Decision 5.ii): external
+    # harnesses compose the printed pack into their own prompts. Corpus
+    # selectors only; the budget and the injection flag are YAML
+    # (``serve.session_start_context.*``), never CLI flags.
+    p_session_start = sub.add_parser(
+        "session-start-context",
+        help="Print the session-start context pack (marker + preamble + "
+        "overview card + version inventory)",
+        description=(
+            "Build and print the deterministic session-start context pack a "
+            "harness injects at agent-session start: a fixed harness-injected "
+            "marker line, the SESSION_START_PREAMBLE framing prose, the same "
+            "overview card get_overview serves, and the installed-package "
+            "version inventory (name + version per line). The token budget "
+            "and trim order come from YAML "
+            "(serve.session_start_context.budget_tokens); the card is "
+            "trimmed before the inventory and truncation is noted."
+        ),
+    )
+    p_session_start.add_argument("package", nargs="?", default="")
+    _add_query_flags(p_session_start)
 
     sp_lookup = sub.add_parser(
         "lookup",
@@ -830,6 +869,9 @@ async def _run_watch_loop(
             db_path,
             config_path=getattr(args, "config", None),
             gpu=getattr(args, "gpu", False),
+            # Mirror ``_serve_run`` — otherwise `serve --watch --descriptions X`
+            # would silently serve the packaged prose.
+            descriptions_path=getattr(args, "descriptions", None),
         )
     finally:
         watcher_task.cancel()
@@ -877,15 +919,18 @@ def _query_db_path(args: argparse.Namespace) -> Path | None:
     return _project_and_db(args)[1]
 
 
-def _build_cli_tools(args: argparse.Namespace):
-    """Build the ``ToolRouter`` for a query subcommand (the CLI composition root).
+def _build_cli_services(args: argparse.Namespace):
+    """Build ``(ToolRouter, per-project services, loaded AppConfig)`` for a
+    query subcommand (the CLI composition root).
 
     Every task-shaped subcommand loads config + configures the input-model slots
     + builds routers identically — ``surface="cli"`` picks the CLI pointer syntax
     the shared envelope resolves to. Collapsed into one helper so each ``_run_*``
     runner stays a small adapter (build tools → construct its input model → print)
     and they can't drift on how they select / load databases (``--project-dir``
-    single db vs ``--workspace`` / ``--db`` read-only multi-repo).
+    single db vs ``--workspace`` / ``--db`` read-only multi-repo). The richer
+    return exists for ``_run_session_start_context``, which needs a project's service
+    set + the YAML budget, not a router method.
     """
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import AppConfig
@@ -893,13 +938,19 @@ def _build_cli_tools(args: argparse.Namespace):
 
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     configure_from_app_config(config)
-    tools, _svcs = build_routers(
+    tools, services = build_routers(
         config,
         db_path=_query_db_path(args),
         workspace=args.workspace,
         db_paths=args.db_paths,
         surface="cli",
     )
+    return tools, services, config
+
+
+def _build_cli_tools(args: argparse.Namespace):
+    """The ``ToolRouter`` for a query subcommand (see ``_build_cli_services``)."""
+    tools, _services, _config = _build_cli_services(args)
     return tools
 
 
@@ -935,6 +986,36 @@ async def _run_overview(args: argparse.Namespace) -> None:
     tools = _build_cli_tools(args)
     payload = OverviewInput(package=args.package, project=args.project_scope)
     print((await tools.get_overview(payload)).text)
+
+
+async def _run_session_start_context(args: argparse.Namespace) -> None:
+    """Print the ADR 0008 session-start context pack (product CLI, not an MCP tool).
+
+    Reuses the SAME per-project ``OverviewService`` + ``uow_factory`` the
+    router's ``get_overview`` uses, so the printed pack cannot disagree with
+    what the tools would return one call later. Printed regardless of
+    ``serve.session_start_context.enabled`` — invoking the subcommand IS the
+    harness's explicit opt-in; the flag gates only the ask-your-docs
+    auto-injection channel.
+    """
+    from pydocs_mcp.application.description_override import apply_descriptions_override
+    from pydocs_mcp.application.multi_project_search import _select_service
+    from pydocs_mcp.application.session_start_context import build_session_start_context
+
+    _tools, services, config = _build_cli_services(args)
+    # The pack embeds the LIVE ``SESSION_START_PREAMBLE``. ``main()`` already applied
+    # the env-var leg before the parser was built; this applies the YAML
+    # ``serve.descriptions_path`` leg (ADR 0006) so the printed pack matches
+    # what the MCP channel would serve. Idempotent when env already won.
+    apply_descriptions_override(cli_path=None, configured_path=config.serve.descriptions_path)
+    svc = _select_service(services, args.project_scope) if args.project_scope else services[0]
+    pack = await build_session_start_context(
+        uow_factory=svc.overview.uow_factory,
+        overview=svc.overview,
+        budget_tokens=config.serve.session_start_context.budget_tokens,
+        package=args.package,
+    )
+    print(pack)
 
 
 async def _run_symbol(args: argparse.Namespace) -> None:
@@ -1173,6 +1254,7 @@ def _serve_run(
             gpu=getattr(args, "gpu", False),
             workspace=workspace,
             db_paths=db_paths,
+            descriptions_path=getattr(args, "descriptions", None),
         ),
         verbose=getattr(args, "verbose", False),
     )
@@ -1398,6 +1480,10 @@ def _cmd_read_file(args: argparse.Namespace) -> int:
     return _run_cmd(_run_read_file(args), verbose=args.verbose)
 
 
+def _cmd_session_start_context(args: argparse.Namespace) -> int:
+    return _run_cmd(_run_session_start_context(args), verbose=args.verbose)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────
 
 
@@ -1425,11 +1511,53 @@ _CMD_TABLE = {
     "grep": _cmd_grep,
     "glob": _cmd_glob,
     "read_file": _cmd_read_file,
+    "session-start-context": _cmd_session_start_context,
     "lookup": _cmd_lookup,
 }
 
 
+def _apply_descriptions_env_override() -> int | None:
+    """Apply an exported ``PYDOCS_SERVE__DESCRIPTIONS_PATH`` override, if any.
+
+    Must run BEFORE ``_build_parser()``: the argparse tree snapshots the
+    ``tool_docs`` prose, so applying afterwards would leave ``--help``
+    rendering the packaged bundle while the MCP server serves the override
+    (breaking CLI/MCP parity, R2 / ADR 0006 §2). A set-but-missing/invalid
+    env source is a hard error (universal strictness) — returns the exit
+    code; ``None`` means continue. A SET-but-EMPTY env var is a hard error
+    too (it would silently clobber a YAML-configured path in the
+    pydantic-settings merge); only a genuinely unset var falls through.
+    """
+    from pydocs_mcp.application import description_override
+
+    env_value = os.environ.get(description_override.DESCRIPTIONS_PATH_ENV_VAR)
+    if env_value is None:
+        return None
+    try:
+        description_override.apply_descriptions_override(cli_path=None, configured_path=env_value)
+    except Exception as exc:
+        # ``--verbose`` is parsed later than this can run, so the default
+        # (non-verbose) failure policy applies.
+        return _report_cli_failure(exc, verbose=False)
+    return None
+
+
+def _argv_names_descriptions_flag(argv: list[str]) -> bool:
+    """True when a ``--descriptions`` flag is present in raw argv."""
+    return any(arg == "--descriptions" or arg.startswith("--descriptions=") for arg in argv)
+
+
 def main() -> int:
+    # WHY the argv scan: documented precedence is flag > env, and that must
+    # hold on the FAILURE path too — a set-but-invalid env var must not kill
+    # a serve run whose ``--descriptions`` flag names a valid source before
+    # argparse even runs. A flag-carrying invocation is a serve run (never a
+    # bare ``--help`` render), so skipping the pre-apply here cannot break
+    # CLI-help parity; ``server.run`` applies the flag as the winning source.
+    if not _argv_names_descriptions_flag(sys.argv[1:]):
+        code = _apply_descriptions_env_override()
+        if code is not None:
+            return code
     parser = _build_parser()
     args = parser.parse_args()
     _configure_logging(args.verbose)

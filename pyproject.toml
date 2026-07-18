@@ -182,6 +182,7 @@ include = [
   "python/pydocs_mcp/py.typed",
   "python/pydocs_mcp/defaults/*.yaml",
   "python/pydocs_mcp/defaults/*.json",
+  "python/pydocs_mcp/defaults/*.md",
   "python/pydocs_mcp/pipelines/*.yaml",
   "python/pydocs_mcp/retrieval/prompts/*.j2",
   "python/pydocs_mcp/ask_your_docs/prompts/*.j2",

@@ -225,6 +225,15 @@ def test_tool_docs_artifact_module_raises_without_extra(
     _reload_expecting_guard(monkeypatch, "pydocs_eval.optimize.artifacts.tool_docs")
 
 
+def test_delimited_grammar_module_raises_without_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The shared delimited grammar delegates to the product's
+    # description_source module (ADR 0005), so it is library-coupled like the
+    # artifacts that consume it and must surface the same actionable hint.
+    _reload_expecting_guard(monkeypatch, "pydocs_eval.optimize.artifacts._delimited")
+
+
 def test_usage_skill_artifact_module_raises_without_extra(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

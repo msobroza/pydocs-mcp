@@ -100,9 +100,22 @@ dead end. Three conventions travel with every result:
   `[truncated: N sections — recovery pointers inline]` footer lists exactly what
   was cut and the pointer that fetches each dropped piece in full — nothing goes
   missing silently.
+- **Routing suggestions.** Dead ends carry a fixed `[suggestion: …]` line with
+  the escape hatch: a zero-hit `grep` points conceptual queries at
+  `search_codebase`, a truncated `grep` shows how to narrow (`path=` / `glob=` /
+  `head_limit=`), and zero-hit searches point back to `get_overview`. The prefix
+  is deterministic, so transcripts always distinguish a server nudge from the
+  agent's own routing.
 
-The three are on by default and tunable under `output.envelope` and
-`output.next_pointers` in your `pydocs-mcp.yaml`.
+All four are on by default and tunable under `output.envelope`,
+`output.next_pointers`, and `output.suggestions.*` in your `pydocs-mcp.yaml`.
+
+The tool descriptions themselves — the prose your agent reads when it picks a
+tool — ship in one editable document and can be swapped per deployment
+(`pydocs-mcp serve . --descriptions my-descriptions.md`); every run logs a hash
+of the description surface it actually served. See
+[docs/description-authoring.md](docs/description-authoring.md) for the format,
+validation rules, and override precedence.
 
 ## Quick start
 

@@ -54,6 +54,19 @@ class ReferencesMetaModel(MetaModel):
     resolution: str | None = None
 
 
+class SuggestionMetaModel(MetaModel):
+    """§2.3 — deterministic routing suggestion (ADR 0007) on the three
+    suggestion-emitting tools (``search_codebase``, ``get_why``, ``grep``).
+
+    The declared field is mandatory: ``MetaModel`` has no ``model_config``,
+    so pydantic's default ``extra="ignore"`` silently DROPS any undeclared
+    extras key at the server-side envelope validation — an extras-only
+    producer change would never reach the wire. Null when no rule fired.
+    """
+
+    suggestion: str | None = None
+
+
 class OverviewItem(BaseModel):
     """§3.1 — module-map rows."""
 
@@ -152,7 +165,7 @@ class OverviewEnvelope(BaseModel):
 class SearchEnvelope(BaseModel):
     text: str
     items: list[SearchItem]
-    meta: MetaModel
+    meta: SuggestionMetaModel
 
 
 class SymbolEnvelope(BaseModel):
@@ -176,13 +189,13 @@ class ReferencesEnvelope(BaseModel):
 class WhyEnvelope(BaseModel):
     text: str
     items: list[WhyItem]
-    meta: MetaModel
+    meta: SuggestionMetaModel
 
 
 class GrepEnvelope(BaseModel):
     text: str
     items: list[GrepItem]
-    meta: MetaModel
+    meta: SuggestionMetaModel
 
 
 class GlobEnvelope(BaseModel):

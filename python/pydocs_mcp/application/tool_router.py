@@ -11,7 +11,7 @@ delegate to the selected project's FileToolsService.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
@@ -44,8 +44,13 @@ from pydocs_mcp.application.overview_service import (
     OverviewService,
     WorkspaceProjectEntry,
 )
+from pydocs_mcp.application.suggestions import (
+    SEARCH_ZERO_HIT_SUGGESTION,
+    log_suggestion_fired,
+)
 from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.extraction.strategies.analyzers import PYTHON_CAPABILITIES
+from pydocs_mcp.retrieval.config import SuggestionsConfig
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -70,6 +75,10 @@ class ToolRouter:
     # Workspace cross-link freshness for the get_overview card (spec §3.8):
     # "" (single project / not composed) renders nothing — byte-identical.
     cross_link_status: str = ""
+    # ADR 0007 per-rule flags; the router owns only the search_codebase
+    # zero-hit rule (grep rules live in FileToolsService, the get_why one in
+    # DecisionService — one flag, both zero-hit producer sites).
+    suggestions: SuggestionsConfig = field(default_factory=SuggestionsConfig)
 
     def _svc(self, project: str) -> ProjectServices:
         if project:
@@ -104,8 +113,16 @@ class ToolRouter:
             # Zero hits still return success (search never raises); steer the
             # agent to an orientation card via the overview pointer (spec §D1
             # empty contract). The envelope resolves the token per surface.
-            if body in EMPTY_SEARCH_MESSAGES:
-                return f"{body}\n{pointer_token('overview', '')}", items, extras
+            # Flag-gated per ADR 0007 (independent ablation of the shipped
+            # hint); the fired text is mirrored machine-readably in
+            # meta.suggestion (§2.3).
+            if body in EMPTY_SEARCH_MESSAGES and self.suggestions.search_zero_hit:
+                log_suggestion_fired("search_codebase", "search_zero_hit")
+                return (
+                    f"{body}\n{pointer_token('overview', '')}",
+                    items,
+                    {**extras, "suggestion": SEARCH_ZERO_HIT_SUGGESTION},
+                )
             return body, items, extras
 
         return await self.envelope.wrap(

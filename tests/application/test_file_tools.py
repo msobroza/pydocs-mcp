@@ -7,6 +7,7 @@ task and satisfy the same structural shape.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,9 +19,18 @@ from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     ServiceUnavailableError,
 )
+from pydocs_mcp.application.suggestions import (
+    GREP_TRUNCATED_SUGGESTION,
+    GREP_ZERO_HIT_SUGGESTION,
+)
 from pydocs_mcp.extraction.config import DiscoveryScopeConfig
 from pydocs_mcp.extraction.strategies.discovery import ProjectFileDiscoverer
-from pydocs_mcp.retrieval.config import FilesConfig
+from pydocs_mcp.retrieval.config import FilesConfig, SuggestionsConfig
+
+# Pre-ADR-0007 zero-hit grep body — kept as a literal so the flag-off tests
+# prove byte-identity against the historical output, not against a constant
+# the implementation could drift together with.
+_BARE_NO_MATCHES = "No matches."
 
 # ── payload stand-ins (structural twins of the future input models) ──────
 
@@ -86,6 +96,7 @@ def _make_service(
     *,
     deps: tuple[str, ...] = (),
     files_config: FilesConfig | None = None,
+    suggestions: SuggestionsConfig | None = None,
 ) -> FileToolsService:
     scope = DiscoveryScopeConfig()
 
@@ -98,6 +109,7 @@ def _make_service(
         dependency_scope=scope,
         list_dependency_packages=_list_deps,
         files_config=files_config or FilesConfig(),
+        suggestions=suggestions or SuggestionsConfig(),
     )
 
 
@@ -188,7 +200,7 @@ async def test_grep_content_mode_without_line_numbers(
 
 async def test_grep_case_insensitive_flag(service: FileToolsService) -> None:
     body_cs, _, _ = await service.grep(GrepPayload(pattern="ALPHA_TOKEN"))
-    assert body_cs == "No matches."
+    assert body_cs == f"{_BARE_NO_MATCHES}\n{GREP_ZERO_HIT_SUGGESTION}"
     body_ci, _, _ = await service.grep(GrepPayload(pattern="ALPHA_TOKEN", case_insensitive=True))
     assert "main.py" in body_ci.splitlines()
 
@@ -313,7 +325,7 @@ async def test_grep_glob_param_filters_candidates(service: FileToolsService) -> 
 async def test_grep_glob_star_stays_at_root_level(service: FileToolsService) -> None:
     # Same dialect as the glob tool: '*' never crosses '/' (no fnmatch drift).
     body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="*.md"))
-    assert body == "No matches."
+    assert body == f"{_BARE_NO_MATCHES}\n{GREP_ZERO_HIT_SUGGESTION}"
 
 
 async def test_grep_glob_filter_star_does_not_cross_directories(
@@ -333,14 +345,14 @@ async def test_grep_head_limit_truncates_and_reports(
 ) -> None:
     _, items, meta = await service.grep(GrepPayload(pattern="alpha_token", head_limit=2))
     assert len(items) == 2
-    assert meta == {"truncated": True}
+    assert meta == {"truncated": True, "suggestion": GREP_TRUNCATED_SUGGESTION}
 
 
 async def test_grep_yaml_default_head_limit_applies(project_root: Path) -> None:
     svc = _make_service(project_root, files_config=FilesConfig(grep_head_limit=1))
     _, items, meta = await svc.grep(GrepPayload(pattern="alpha_token"))
     assert len(items) == 1
-    assert meta == {"truncated": True}
+    assert meta == {"truncated": True, "suggestion": GREP_TRUNCATED_SUGGESTION}
 
 
 async def test_grep_head_limit_capped_at_ceiling(project_root: Path) -> None:
@@ -353,7 +365,7 @@ async def test_grep_head_limit_capped_at_ceiling(project_root: Path) -> None:
     )
     _, items, meta = await svc.grep(GrepPayload(pattern="alpha_token", head_limit=50))
     assert len(items) == 2
-    assert meta == {"truncated": True}
+    assert meta == {"truncated": True, "suggestion": GREP_TRUNCATED_SUGGESTION}
 
 
 async def test_grep_content_head_limit_caps_match_entries(
@@ -363,7 +375,62 @@ async def test_grep_content_head_limit_caps_match_entries(
         GrepPayload(pattern="alpha_token", output_mode="content", head_limit=3)
     )
     assert len(items) == 3
-    assert meta == {"truncated": True}
+    assert meta == {"truncated": True, "suggestion": GREP_TRUNCATED_SUGGESTION}
+
+
+# ── grep: deterministic suggestions (ADR 0007) ────────────────────────────
+
+
+async def test_grep_zero_hit_appends_suggestion_and_meta(
+    service: FileToolsService,
+) -> None:
+    body, items, meta = await service.grep(GrepPayload(pattern="zzz_absent_token"))
+    assert body == f"{_BARE_NO_MATCHES}\n{GREP_ZERO_HIT_SUGGESTION}"
+    assert items == ()
+    assert meta == {"suggestion": GREP_ZERO_HIT_SUGGESTION}
+
+
+async def test_grep_truncated_appends_narrowing_hint_to_body(
+    service: FileToolsService,
+) -> None:
+    body, _, meta = await service.grep(GrepPayload(pattern="alpha_token", head_limit=2))
+    assert body.endswith(f"\n{GREP_TRUNCATED_SUGGESTION}")
+    assert meta == {"truncated": True, "suggestion": GREP_TRUNCATED_SUGGESTION}
+
+
+async def test_grep_flags_off_restore_pre_suggestion_bytes(project_root: Path) -> None:
+    # Both grep rules off ⇒ byte-identical to the pre-ADR-0007 output; the
+    # default-on service differs from it ONLY by the suggestion line/key.
+    off = _make_service(
+        project_root,
+        suggestions=SuggestionsConfig(grep_zero_hit=False, grep_truncated=False),
+    )
+    on = _make_service(project_root)
+
+    off_zero = await off.grep(GrepPayload(pattern="zzz_absent_token"))
+    assert off_zero == (_BARE_NO_MATCHES, (), {})
+    on_body, on_items, on_meta = await on.grep(GrepPayload(pattern="zzz_absent_token"))
+    assert on_body == f"{off_zero[0]}\n{GREP_ZERO_HIT_SUGGESTION}"
+    assert on_items == off_zero[1]
+
+    off_body, off_items, off_meta = await off.grep(GrepPayload(pattern="alpha_token", head_limit=2))
+    assert off_meta == {"truncated": True}
+    assert "[suggestion:" not in off_body
+    cut_body, cut_items, _ = await on.grep(GrepPayload(pattern="alpha_token", head_limit=2))
+    assert cut_body == f"{off_body}\n{GREP_TRUNCATED_SUGGESTION}"
+    assert cut_items == off_items
+
+
+async def test_grep_fired_rules_emit_structured_log(
+    service: FileToolsService, caplog: pytest.LogCaptureFixture
+) -> None:
+    # One structured line per fired rule (tool, rule) — Phase 2 attribution.
+    with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
+        await service.grep(GrepPayload(pattern="zzz_absent_token"))
+        await service.grep(GrepPayload(pattern="alpha_token", head_limit=2))
+    events = [json.loads(r.message) for r in caplog.records]
+    assert {"event": "suggestion_fired", "tool": "grep", "rule": "grep_zero_hit"} in events
+    assert {"event": "suggestion_fired", "tool": "grep", "rule": "grep_truncated"} in events
 
 
 # ── grep: dependency scope ────────────────────────────────────────────────

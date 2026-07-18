@@ -128,6 +128,18 @@ output:
     head_check_ttl_seconds: 5
   next_pointers:
     enabled: true
+  suggestions:                # Deterministic routing suggestions — one ablation flag per rule (ADR 0007)
+    # Hypothesis: models with strong grep priors thrash on exact-string
+    # misses; a deterministic redirect to search_codebase removes a
+    # learned-routing burden.
+    grep_zero_hit: true
+    # Hypothesis: silently truncated grep loses evidence and causes wasted
+    # re-reads; a narrowing hint (path= / glob= / head_limit=) prevents both.
+    grep_truncated: true
+    # Hypothesis: behavior-preserving default — the already-shipped zero-hit
+    # overview pointer (search_codebase + get_why) gains an independent
+    # off-switch for ablation, decoupled from next_pointers.enabled.
+    search_zero_hit: true
 
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20
@@ -178,6 +190,22 @@ decisions:
 # → 1 reindex). Ignore globs default-skip the high-churn paths that
 # would otherwise produce false-positive reindexes.
 serve:
+  # Override document for the LLM-visible description surface (per-tool
+  # descriptions + server instructions + session-start preamble; ADR 0006).
+  # null = the packaged defaults/descriptions.md. Explicitly naming a path
+  # that is missing or invalid hard-fails startup — never a silent
+  # fallback. Precedence: --descriptions flag >
+  # PYDOCS_SERVE__DESCRIPTIONS_PATH env var > this key > packaged.
+  descriptions_path: null
+  # Session-start context pack (ADR 0008): opt-in injection of the overview
+  # card + installed-package version inventory at agent-session start.
+  # `enabled` gates the ask-your-docs prompt-assembly channel (default off —
+  # flipping it is the ablation phase's decision); external harnesses call
+  # `pydocs-mcp session-start-context` explicitly. `budget_tokens` is a hard
+  # cap in REAL tokens (tiktoken); the card trims before the inventory.
+  session_start_context:
+    enabled: false
+    budget_tokens: 2000
   watch:
     enabled: false
     debounce_ms: 500

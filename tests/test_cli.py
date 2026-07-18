@@ -342,6 +342,27 @@ class TestCanonicalToolNameSubcommands:
         assert "Overview" in capsys.readouterr().out
 
 
+class TestSessionStartContextCommand:
+    """ADR 0008: the ``session-start-context`` product-CLI subcommand (not an MCP tool)."""
+
+    def test_session_start_context_prints_the_pack(self, seeded_project, capsys, monkeypatch):
+        monkeypatch.chdir(seeded_project)
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            main()
+        capsys.readouterr()  # drop any index-run stdout
+        with patch("sys.argv", ["pydocs-mcp", "session-start-context"]):
+            rc = main()
+        assert rc == 0
+        out = capsys.readouterr().out
+        from pydocs_mcp.application.session_start_context import INJECTED_CONTEXT_MARKER
+
+        assert out.splitlines()[0] == INJECTED_CONTEXT_MARKER
+        assert "# Overview" in out
+        assert "## Installed packages" in out
+
+
 class TestNoRustFlag:
     def test_no_rust_forces_python_fallback(self, seeded_project, monkeypatch):
         """--no-rust must disable Rust and use Python fallback for indexing."""
