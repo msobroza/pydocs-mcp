@@ -3,23 +3,26 @@
 A turnkey suite for comparing pydocs-mcp's retrieval strategies on a small,
 representative slice of **RepoQA-SNF** (Apache-2.0, EvalPlus, arXiv:2406.06025).
 
-Twelve conditions are compared on the same `small_test` split so the only thing
-that varies between runs is the retrieval pipeline:
+Twelve conditions are compared on the same run target — `--dataset repoqa
+--split small_test` — so the only thing that varies between runs is the
+retrieval pipeline. Overlay filenames never encode a dataset (see §"Renamed
+configs"): each condition is the *pair* of the `--dataset` flag stated in its
+run command and the `--configs` overlay listed below:
 
 | # | Condition | Config overlay | Pipeline | Extra dep |
 |---|-----------|----------------|----------|:---:|
-| 1 | BM25 only | `configs/repoqa_bm25.yaml` | `exp_bm25` | — |
-| 2 | Dense only (bge-small) | `configs/repoqa_dense.yaml` | `exp_dense` | — |
-| 3 | Hybrid, RRF `k=30` | `configs/repoqa_hybrid_rrf_k30.yaml` | `exp_hybrid_rrf_k30` | — |
-| 4 | Hybrid, RRF `k=60` (default) | `configs/repoqa_hybrid_rrf_k60.yaml` | `exp_hybrid_rrf_k60` | — |
-| 5 | Hybrid, RRF `k=100` | `configs/repoqa_hybrid_rrf_k100.yaml` | `exp_hybrid_rrf_k100` | — |
-| 6 | Hybrid, weighted 0.7/0.3 (BM25-heavy) | `configs/repoqa_hybrid_wsi_bm25.yaml` | `exp_hybrid_wsi_bm25` | — |
-| 7 | Hybrid, weighted 0.5/0.5 (balanced) | `configs/repoqa_hybrid_wsi_balanced.yaml` | `exp_hybrid_wsi_balanced` | — |
-| 8 | Hybrid, weighted 0.3/0.7 (dense-heavy) | `configs/repoqa_hybrid_wsi_dense.yaml` | `exp_hybrid_wsi_dense` | — |
-| 9 | Hybrid + late-interaction (ColBERT/MaxSim), RRF | `configs/repoqa_hybrid_li_rrf.yaml` | `exp_hybrid_li_rrf` | `[late-interaction]` |
-| 10 | Hybrid + late-interaction, weighted 0.5/0.5 | `configs/repoqa_hybrid_li_wsi.yaml` | `exp_hybrid_li_wsi` | `[late-interaction]` |
-| 11 | LLM tree reasoning (vectorless) | `configs/repoqa_tree.yaml` | `exp_tree` | `OPENAI_API_KEY` |
-| 12 | Hybrid + LLM tree rerank (top-10) | `configs/repoqa_hybrid_tree.yaml` | `exp_hybrid_tree` | `OPENAI_API_KEY` |
+| 1 | BM25 only | `configs/bm25.yaml` | `exp_bm25` | — |
+| 2 | Dense only (bge-small) | `configs/dense.yaml` | `exp_dense` | — |
+| 3 | Hybrid, RRF `k=30` | `configs/hybrid_rrf_k30.yaml` | `exp_hybrid_rrf_k30` | — |
+| 4 | Hybrid, RRF `k=60` (default) | `configs/hybrid_rrf_k60.yaml` | `exp_hybrid_rrf_k60` | — |
+| 5 | Hybrid, RRF `k=100` | `configs/hybrid_rrf_k100.yaml` | `exp_hybrid_rrf_k100` | — |
+| 6 | Hybrid, weighted 0.7/0.3 (BM25-heavy) | `configs/hybrid_wsi_bm25.yaml` | `exp_hybrid_wsi_bm25` | — |
+| 7 | Hybrid, weighted 0.5/0.5 (balanced) | `configs/hybrid_wsi_balanced.yaml` | `exp_hybrid_wsi_balanced` | — |
+| 8 | Hybrid, weighted 0.3/0.7 (dense-heavy) | `configs/hybrid_wsi_dense.yaml` | `exp_hybrid_wsi_dense` | — |
+| 9 | Hybrid + late-interaction (ColBERT/MaxSim), RRF | `configs/hybrid_li_rrf.yaml` | `exp_hybrid_li_rrf` | `[late-interaction]` |
+| 10 | Hybrid + late-interaction, weighted 0.5/0.5 | `configs/hybrid_li_wsi.yaml` | `exp_hybrid_li_wsi` | `[late-interaction]` |
+| 11 | LLM tree reasoning (vectorless) | `configs/tree.yaml` | `exp_tree` | `OPENAI_API_KEY` |
+| 12 | Hybrid + LLM tree rerank (top-10) | `configs/hybrid_tree.yaml` | `exp_hybrid_tree` | `OPENAI_API_KEY` |
 
 Conditions 3–5 vary the RRF rank-bias constant `k`; conditions 6–8 vary the
 BM25/dense weight split of the linear (weighted-score-interpolation) blend.
@@ -34,7 +37,7 @@ delta isolates the re-ranker alone.
 
 | # | Condition | Config overlay | Pipeline | Extra dep |
 |---|-----------|----------------|----------|:---:|
-| 13 | Hybrid RRF `k=60`, **no** dense re-rank (A/B baseline) | `configs/repoqa_hybrid_rrf_k60_norerank.yaml` | `exp_hybrid_rrf_k60_norerank` | — |
+| 13 | Hybrid RRF `k=60`, **no** dense re-rank (A/B baseline) | `configs/hybrid_rrf_k60_norerank.yaml` | `exp_hybrid_rrf_k60_norerank` | — |
 
 **Run the verdict** (needs a GPU — CPU dense indexing is 60–215 s/needle):
 
@@ -143,7 +146,7 @@ minutes. Run any sweep through the wrapper to get it:
 ```bash
 benchmarks/scripts/run_eval_gpu.sh \
   --systems pydocs-mcp --dataset repoqa --split small_test --bench-cache on \
-  --configs benchmarks/configs/repoqa_dense_st.yaml \
+  --configs benchmarks/configs/dense_st.yaml \
   --report benchmarks/results/out.md
 ```
 
@@ -179,14 +182,14 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --dataset repoqa \
   --split small_test \
   --configs \
-benchmarks/configs/repoqa_bm25.yaml,\
-benchmarks/configs/repoqa_dense.yaml,\
-benchmarks/configs/repoqa_hybrid_rrf_k30.yaml,\
-benchmarks/configs/repoqa_hybrid_rrf_k60.yaml,\
-benchmarks/configs/repoqa_hybrid_rrf_k100.yaml,\
-benchmarks/configs/repoqa_hybrid_wsi_bm25.yaml,\
-benchmarks/configs/repoqa_hybrid_wsi_balanced.yaml,\
-benchmarks/configs/repoqa_hybrid_wsi_dense.yaml \
+benchmarks/configs/bm25.yaml,\
+benchmarks/configs/dense.yaml,\
+benchmarks/configs/hybrid_rrf_k30.yaml,\
+benchmarks/configs/hybrid_rrf_k60.yaml,\
+benchmarks/configs/hybrid_rrf_k100.yaml,\
+benchmarks/configs/hybrid_wsi_bm25.yaml,\
+benchmarks/configs/hybrid_wsi_balanced.yaml,\
+benchmarks/configs/hybrid_wsi_dense.yaml \
   --report benchmarks/results/repoqa_smalltest_core.md
 ```
 
@@ -195,13 +198,14 @@ benchmarks/configs/repoqa_hybrid_wsi_dense.yaml \
 > **⚠️ LI results recorded before 2026-07-10 are not comparable.** Two fixes
 > landed that day:
 >
-> 1. The hybrid-LI overlays (conditions 9–10 and `ds1000_hybrid_li_rrf.yaml`)
+> 1. The hybrid-LI overlays (conditions 9–10, including the since-deduped
+>    DS-1000 twin of `hybrid_li_rrf.yaml`)
 >    declared their ingestion pipeline under a `pipelines.ingestion` key,
 >    which `config.pipelines` silently ignores (it only handles
 >    chunk/member). They therefore ingested with the default single-vector
 >    pipeline: fast-plaid stayed empty, the late-interaction branch scored
 >    nothing, and the recorded "hybrid LI" numbers are effectively BM25-only.
->    They now set `extraction.ingestion.pipeline_path` like `repoqa_li.yaml`
+>    They now set `extraction.ingestion.pipeline_path` like `li.yaml`
 >    (which was unaffected) always did.
 > 2. The config-local copy of `ingestion_late_interaction.yaml` was deleted;
 >    all LI overlays now fall back to the shipped preset, which includes the
@@ -221,8 +225,8 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --dataset repoqa \
   --split small_test \
   --configs \
-benchmarks/configs/repoqa_hybrid_li_rrf.yaml,\
-benchmarks/configs/repoqa_hybrid_li_wsi.yaml \
+benchmarks/configs/hybrid_li_rrf.yaml,\
+benchmarks/configs/hybrid_li_wsi.yaml \
   --report benchmarks/results/repoqa_smalltest_li.md
 ```
 
@@ -244,8 +248,8 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --dataset repoqa \
   --split small_test \
   --configs \
-benchmarks/configs/repoqa_tree.yaml,\
-benchmarks/configs/repoqa_hybrid_tree.yaml \
+benchmarks/configs/tree.yaml,\
+benchmarks/configs/hybrid_tree.yaml \
   --report benchmarks/results/repoqa_smalltest_tree.md
 ```
 
@@ -321,7 +325,7 @@ Generate the fixture once (offline; indexes each repo + walks the graph):
 
 ```bash
 PYTHONPATH=benchmarks/src python benchmarks/scripts/build_structural_recall.py \
-    --config benchmarks/configs/repoqa_dense_f2llm330m.yaml \
+    --config benchmarks/configs/dense_f2llm330m.yaml \
     --out benchmarks/fixtures/structural_recall.json --gpu
 ```
 
@@ -330,7 +334,7 @@ Then compare DENSE-ONLY vs DENSE+GRAPH (embedding-centric — no BM25, no RRF):
 ```bash
 PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
     --systems pydocs-mcp --dataset repoqa-structural \
-    --configs benchmarks/configs/repoqa_dense_f2llm330m.yaml,benchmarks/configs/repoqa_dense_graph_f2llm330m.yaml \
+    --configs benchmarks/configs/dense_f2llm330m.yaml,benchmarks/configs/dense_graph_f2llm330m.yaml \
     --metrics recall@1,recall@5,recall@10,mrr --gpu \
     --report benchmarks/results/structural_recall.md
 ```
@@ -347,29 +351,30 @@ must both stay ~1.0 (the merge is additive and cannot drop a dense hit).
 Separate from the twelve bge-small conditions above: the sweep that motivated the
 shipped default flip (BM25 → dense + `graph_expand`, `chunk_search_graph.yaml`).
 Six chunk-search methods on the **same F2LLM-v2-330M** GPU embedder, each run on
-**both** the standard `small_test` split and the `repoqa-structural` graph split.
+**both** run targets — `--dataset repoqa --split small_test` and
+`--dataset repoqa-structural`.
 Results + takeaways live in the README "Graph-ranked default" section.
 
 | Method | Config | Pipeline | Extra dep |
 |---|---|---|:---:|
-| BM25 | `configs/repoqa_bm25.yaml` | `exp_bm25` | — |
-| Dense | `configs/repoqa_dense_f2llm330m.yaml` | `exp_dense` | — |
-| Hybrid (RRF k=60) | `configs/repoqa_hybrid_rrf_k60_f2llm330m.yaml` | `exp_hybrid_rrf_k60` | — |
-| Graph-hybrid (RRF + graph_expand + centrality) | `configs/repoqa_graph_hybrid_f2llm330m.yaml` | `exp_hybrid_graph` | `[graph]` |
-| Dense + graph_expand (**new default**) | `configs/repoqa_dense_graph_f2llm330m.yaml` | `exp_dense_graph` | — |
-| Dense + graph_expand + centrality | `configs/repoqa_dense_graph_centrality_f2llm330m.yaml` | `exp_dense_graph_centrality` | `[graph]` |
+| BM25 | `configs/bm25.yaml` | `exp_bm25` | — |
+| Dense | `configs/dense_f2llm330m.yaml` | `exp_dense` | — |
+| Hybrid (RRF k=60) | `configs/hybrid_rrf_k60_f2llm330m.yaml` | `exp_hybrid_rrf_k60` | — |
+| Graph-hybrid (RRF + graph_expand + centrality) | `configs/graph_hybrid_f2llm330m.yaml` | `exp_hybrid_graph` | `[graph]` |
+| Dense + graph_expand (**new default**) | `configs/dense_graph_f2llm330m.yaml` | `exp_dense_graph` | — |
+| Dense + graph_expand + centrality | `configs/dense_graph_centrality_f2llm330m.yaml` | `exp_dense_graph_centrality` | `[graph]` |
 
 The two graph-hybrid / centrality conditions enable `reference_graph.node_scores`
 (PageRank), so they need the `[graph]` extra; `graph_expand` alone is pure SQL.
 Run both splits (GPU wrapper; `--bench-cache off` avoids the cache-reindex bug):
 
 ```bash
-CFGS=benchmarks/configs/repoqa_bm25.yaml,\
-benchmarks/configs/repoqa_dense_f2llm330m.yaml,\
-benchmarks/configs/repoqa_hybrid_rrf_k60_f2llm330m.yaml,\
-benchmarks/configs/repoqa_graph_hybrid_f2llm330m.yaml,\
-benchmarks/configs/repoqa_dense_graph_f2llm330m.yaml,\
-benchmarks/configs/repoqa_dense_graph_centrality_f2llm330m.yaml
+CFGS=benchmarks/configs/bm25.yaml,\
+benchmarks/configs/dense_f2llm330m.yaml,\
+benchmarks/configs/hybrid_rrf_k60_f2llm330m.yaml,\
+benchmarks/configs/graph_hybrid_f2llm330m.yaml,\
+benchmarks/configs/dense_graph_f2llm330m.yaml,\
+benchmarks/configs/dense_graph_centrality_f2llm330m.yaml
 for SPLIT in "repoqa --split small_test" "repoqa-structural"; do
   benchmarks/scripts/run_eval_gpu.sh --systems pydocs-mcp --dataset $SPLIT \
     --configs "$CFGS" --metrics recall@1,recall@5,recall@10,mrr \
@@ -384,25 +389,27 @@ Regenerate the chart after editing the README table:
 
 Does traversing doc→code MENTIONS edges recover answers the calls/inherits
 graph cannot reach? Two conditions on top of the shipped dense+graph default,
-same F2LLM-v2-330M embedder — the only variables are MENTIONS capture
+same F2LLM-v2-330M embedder, each run on both `--dataset repoqa
+--split small_test` and `--dataset repoqa-structural` — the only variables are
+MENTIONS capture
 (index-time, `reference_graph.capture.kinds`) and traversal trust
 (search-time, `graph_expand.kind_weights`):
 
 | Method | Config | Pipeline |
 |---|---|---|
-| Dense + graph + mentions (unweighted) | `configs/repoqa_dense_graph_mentions_f2llm330m.yaml` | `exp_dense_graph_mentions` |
-| Dense + graph + mentions (weight 0.6) | `configs/repoqa_dense_graph_mentions_weighted_f2llm330m.yaml` | `exp_dense_graph_mentions_weighted` |
+| Dense + graph + mentions (unweighted) | `configs/dense_graph_mentions_f2llm330m.yaml` | `exp_dense_graph_mentions` |
+| Dense + graph + mentions (weight 0.6) | `configs/dense_graph_mentions_weighted_f2llm330m.yaml` | `exp_dense_graph_mentions_weighted` |
 
-Compare against `repoqa_dense_graph_f2llm330m.yaml` (no mentions) on both
+Compare against `dense_graph_f2llm330m.yaml` (no mentions) on both
 splits. Watch standard `small_test` recall@1 for the centrality failure mode
 (structural win, standard precision loss) — the weighted condition exists to
 measure whether down-weighting regex-fuzzy doc edges keeps any docs win
 without that noise:
 
 ```bash
-CFGS=benchmarks/configs/repoqa_dense_graph_f2llm330m.yaml,\
-benchmarks/configs/repoqa_dense_graph_mentions_f2llm330m.yaml,\
-benchmarks/configs/repoqa_dense_graph_mentions_weighted_f2llm330m.yaml
+CFGS=benchmarks/configs/dense_graph_f2llm330m.yaml,\
+benchmarks/configs/dense_graph_mentions_f2llm330m.yaml,\
+benchmarks/configs/dense_graph_mentions_weighted_f2llm330m.yaml
 for SPLIT in "repoqa --split small_test" "repoqa-structural"; do
   benchmarks/scripts/run_eval_gpu.sh --systems pydocs-mcp --dataset $SPLIT \
     --configs "$CFGS" --metrics recall@1,recall@5,recall@10,mrr \
@@ -429,8 +436,8 @@ restate the untouched kinds in every sweep point).
 
 | Method | Config | Pipeline | Extra dep |
 |---|---|---|:---:|
-| Dense + graph + centrality + parent_rollup | `configs/repoqa_parent_rollup.yaml` | `exp_parent_rollup` | `[graph]` |
-| Same, **no** rollup (A/B baseline) | `configs/repoqa_parent_rollup_baseline.yaml` | `exp_parent_rollup_baseline` | `[graph]` |
+| Dense + graph + centrality + parent_rollup | `configs/parent_rollup.yaml` | `exp_parent_rollup` | `[graph]` |
+| Same, **no** rollup (A/B baseline) | `configs/parent_rollup_baseline.yaml` | `exp_parent_rollup_baseline` | `[graph]` |
 
 Both overlays enable `reference_graph.node_scores` (PageRank) for the
 `centrality_prior` step, hence the `[graph]` extra; `graph_expand` and
@@ -442,25 +449,113 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --dataset repoqa \
   --split small_test \
   --configs \
-benchmarks/configs/repoqa_parent_rollup_baseline.yaml,\
-benchmarks/configs/repoqa_parent_rollup.yaml \
+benchmarks/configs/parent_rollup_baseline.yaml,\
+benchmarks/configs/parent_rollup.yaml \
   --metrics recall@1,recall@5,recall@10,mrr \
   --report benchmarks/results/repoqa_parent_rollup_ab.md
 ```
 
-## Renamed configs (2026-07-18)
+## Dataset × overlay pairings (other campaigns)
+
+The overlays in `configs/` are dataset-free; the campaigns below (documented
+in detail in `benchmarks/README.md`) pair them with their datasets purely via
+the runner's `--dataset` flag:
+
+| Campaign | `--dataset` | `--configs` overlays |
+|---|---|---|
+| SWE-QA-Pro config zoo | `swe-qa-pro` | `bm25.yaml`, `dense.yaml`, `hybrid_rrf_k60.yaml`, `dense_graph.yaml` |
+| SWE-QA per-repo | `swe-qa` | `bm25.yaml` |
+| DS-1000 cross-system comparison | `ds1000` | `composite.yaml` |
+| DS-1000 pydocs-only ranked + oracle | `ds1000` | `ranked.yaml` |
+| DS-1000 hybrid late-interaction | `ds1000` | `hybrid_li_rrf.yaml` |
+
+## Renamed configs
+
+Result JSONL files embed the config **stem** current at the time of the run
+(`pydocs-mcp_<config>_<dataset>_at_<rev>_<ts>.jsonl`). The tables below map
+every historical stem to the current file so old results stay interpretable.
+
+**Naming rule (2026-07-18 onward):** overlay names never encode a dataset —
+they are `configs/<method>[_<variant>][_<embedder>].yaml`. The dataset is
+chosen per run by the runner's `--dataset` (and `--split`) flags; each
+condition table in this file states that dataset×overlay pairing next to its
+run command.
+
+### Renamed configs (2026-07-18) — hybrid F2LLM model-size rename
 
 The six hybrid F2LLM overlays were renamed to state the model size in the
 filename — they run **F2LLM-v2-330M** (896-dim), not the 0.6B/1024-dim
 variant that the dense family's plain `_f2llm` suffix
-(`repoqa_dense_f2llm.yaml`) denotes. Result JSONL files recorded before this
-date embed the old config stems:
+(`dense_f2llm.yaml`) denotes. Result JSONL files recorded before this
+date embed the old config stems (new names shown post-prefix-removal; JSONLs
+recorded between the two renames carry the intermediate `repoqa_`-prefixed
+stems, covered by the table in the next subsection):
 
 | Old name | New name |
 |---|---|
-| `repoqa_hybrid_rrf_k30_f2llm.yaml` | `repoqa_hybrid_rrf_k30_f2llm330m.yaml` |
-| `repoqa_hybrid_rrf_k60_f2llm.yaml` | `repoqa_hybrid_rrf_k60_f2llm330m.yaml` |
-| `repoqa_hybrid_rrf_k100_f2llm.yaml` | `repoqa_hybrid_rrf_k100_f2llm330m.yaml` |
-| `repoqa_hybrid_wsi_balanced_f2llm.yaml` | `repoqa_hybrid_wsi_balanced_f2llm330m.yaml` |
-| `repoqa_hybrid_wsi_bm25_f2llm.yaml` | `repoqa_hybrid_wsi_bm25_f2llm330m.yaml` |
-| `repoqa_hybrid_wsi_dense_f2llm.yaml` | `repoqa_hybrid_wsi_dense_f2llm330m.yaml` |
+| `repoqa_hybrid_rrf_k30_f2llm.yaml` | `hybrid_rrf_k30_f2llm330m.yaml` |
+| `repoqa_hybrid_rrf_k60_f2llm.yaml` | `hybrid_rrf_k60_f2llm330m.yaml` |
+| `repoqa_hybrid_rrf_k100_f2llm.yaml` | `hybrid_rrf_k100_f2llm330m.yaml` |
+| `repoqa_hybrid_wsi_balanced_f2llm.yaml` | `hybrid_wsi_balanced_f2llm330m.yaml` |
+| `repoqa_hybrid_wsi_bm25_f2llm.yaml` | `hybrid_wsi_bm25_f2llm330m.yaml` |
+| `repoqa_hybrid_wsi_dense_f2llm.yaml` | `hybrid_wsi_dense_f2llm330m.yaml` |
+
+### Renamed configs (2026-07-18) — Tier 4 dataset-prefix removal
+
+The `repoqa_` / `swe_qa_pro_` / `ds1000_` filename prefixes encoded a false
+axis: no overlay mentions a dataset (the runner's `--dataset` flag selects
+it), and the cross-dataset copies were byte-identical modulo comments
+(verified with `diff <(grep -v '^#' a) <(grep -v '^#' b)`). Every prefixed
+overlay was renamed to its dataset-free stem; the four byte-identical
+duplicates were deleted in favour of the single surviving file.
+
+| Old name | New name |
+|---|---|
+| `repoqa_bm25.yaml` | `bm25.yaml` |
+| `repoqa_bm25_tree_rerank.yaml` | `bm25_tree_rerank.yaml` |
+| `repoqa_bm25_tree_rerank_gpt55.yaml` | `bm25_tree_rerank_gpt55.yaml` |
+| `repoqa_dense.yaml` | `dense.yaml` |
+| `repoqa_dense_f2llm.yaml` | `dense_f2llm.yaml` |
+| `repoqa_dense_f2llm330m.yaml` | `dense_f2llm330m.yaml` |
+| `repoqa_dense_graph_centrality_f2llm330m.yaml` | `dense_graph_centrality_f2llm330m.yaml` |
+| `repoqa_dense_graph_f2llm330m.yaml` | `dense_graph_f2llm330m.yaml` |
+| `repoqa_dense_graph_mentions_f2llm330m.yaml` | `dense_graph_mentions_f2llm330m.yaml` |
+| `repoqa_dense_graph_mentions_weighted_f2llm330m.yaml` | `dense_graph_mentions_weighted_f2llm330m.yaml` |
+| `repoqa_dense_modernbert.yaml` | `dense_modernbert.yaml` |
+| `repoqa_dense_st.yaml` | `dense_st.yaml` |
+| `repoqa_dense_tree_rerank_gpt55.yaml` | `dense_tree_rerank_gpt55.yaml` |
+| `repoqa_graph_hybrid_f2llm330m.yaml` | `graph_hybrid_f2llm330m.yaml` |
+| `repoqa_hybrid_li_rrf.yaml` | `hybrid_li_rrf.yaml` |
+| `repoqa_hybrid_li_wsi.yaml` | `hybrid_li_wsi.yaml` |
+| `repoqa_hybrid_rrf_k100.yaml` | `hybrid_rrf_k100.yaml` |
+| `repoqa_hybrid_rrf_k100_f2llm330m.yaml` | `hybrid_rrf_k100_f2llm330m.yaml` |
+| `repoqa_hybrid_rrf_k30.yaml` | `hybrid_rrf_k30.yaml` |
+| `repoqa_hybrid_rrf_k30_f2llm330m.yaml` | `hybrid_rrf_k30_f2llm330m.yaml` |
+| `repoqa_hybrid_rrf_k60.yaml` | `hybrid_rrf_k60.yaml` |
+| `repoqa_hybrid_rrf_k60_f2llm330m.yaml` | `hybrid_rrf_k60_f2llm330m.yaml` |
+| `repoqa_hybrid_rrf_k60_norerank.yaml` | `hybrid_rrf_k60_norerank.yaml` |
+| `repoqa_hybrid_tree.yaml` | `hybrid_tree.yaml` |
+| `repoqa_hybrid_wsi_balanced.yaml` | `hybrid_wsi_balanced.yaml` |
+| `repoqa_hybrid_wsi_balanced_f2llm330m.yaml` | `hybrid_wsi_balanced_f2llm330m.yaml` |
+| `repoqa_hybrid_wsi_bm25.yaml` | `hybrid_wsi_bm25.yaml` |
+| `repoqa_hybrid_wsi_bm25_f2llm330m.yaml` | `hybrid_wsi_bm25_f2llm330m.yaml` |
+| `repoqa_hybrid_wsi_dense.yaml` | `hybrid_wsi_dense.yaml` |
+| `repoqa_hybrid_wsi_dense_f2llm330m.yaml` | `hybrid_wsi_dense_f2llm330m.yaml` |
+| `repoqa_li.yaml` | `li.yaml` |
+| `repoqa_li_edge.yaml` | `li_edge.yaml` |
+| `repoqa_parent_rollup.yaml` | `parent_rollup.yaml` |
+| `repoqa_parent_rollup_baseline.yaml` | `parent_rollup_baseline.yaml` |
+| `repoqa_tree.yaml` | `tree.yaml` |
+| `swe_qa_pro_graph.yaml` | `dense_graph.yaml` |
+| `ds1000_composite.yaml` | `composite.yaml` |
+| `ds1000_ranked.yaml` | `ranked.yaml` |
+| `swe_qa_pro_bm25.yaml` | `bm25.yaml` (duplicate deleted — identical modulo comments) |
+| `swe_qa_pro_dense.yaml` | `dense.yaml` (duplicate deleted — identical modulo comments) |
+| `swe_qa_pro_hybrid_rrf_k60.yaml` | `hybrid_rrf_k60.yaml` (duplicate deleted — identical modulo comments) |
+| `ds1000_hybrid_li_rrf.yaml` | `hybrid_li_rrf.yaml` (duplicate deleted — identical modulo comments) |
+
+`swe_qa_pro_graph.yaml` was **not** a duplicate of any other overlay: it is
+the dense + graph-expansion method (blueprint `exp_dense_graph.yaml`) on the
+default bge-small embedder, so it survives as `dense_graph.yaml` — the
+`dense_graph_f2llm330m.yaml` sibling is the same method on the F2LLM-v2-330M
+embedder.
