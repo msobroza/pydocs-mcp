@@ -150,6 +150,26 @@ def test_resolve_configured_without_env_names_the_yaml_key() -> None:
     assert "serve.descriptions_path" in origin
 
 
+def test_empty_env_var_is_hard_error_not_silent_yaml_suppression(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A SET-but-EMPTY env var merges ``''`` over the YAML key (pydantic
+    source order), which would silently suppress a YAML-configured override
+    into a packaged fallback — hard error instead."""
+    doc = _write_overlay(tmp_path / "yaml.md", marker="Yaml-marker-sentence.")
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text(f"serve:\n  descriptions_path: {doc}\n")
+    monkeypatch.setenv(_ENV_VAR, "")
+    cfg = AppConfig.load(explicit_path=overlay)
+    # The merge premise: the empty env value really did clobber the YAML path.
+    assert cfg.serve.descriptions_path == ""
+    with pytest.raises(do.EmptyDescriptionsEnvError, match="set but empty") as excinfo:
+        do.apply_descriptions_override(cli_path=None, configured_path=cfg.serve.descriptions_path)
+    assert _ENV_VAR in str(excinfo.value)
+    # No silent fallback: the YAML override never leaked in either.
+    assert "Yaml-marker-sentence." not in tool_docs.TOOL_DOCS["grep"]
+
+
 # ── apply_descriptions_override ────────────────────────────────────────────
 
 
@@ -243,6 +263,28 @@ def test_yaml_configured_source_applies_at_startup(
     assert any(f"source={doc}" in r.getMessage() for r in caplog.records)
 
 
+def test_startup_log_reports_pre_applied_when_attributes_rebound(
+    caplog, tmp_path: Path, restore_tool_docs
+) -> None:
+    """An overlay run (benchmarks ``_overlay_server``) rebinds the live
+    attributes via ``apply_source`` BEFORE ``server.run``; the no-override
+    branch must not label that surface ``source=packaged`` — it reports the
+    fixed ``pre-applied`` token with the LIVE hash."""
+    from pydocs_mcp.server import _apply_descriptions_source
+
+    doc = _write_overlay(tmp_path / "overlay.md", marker="Pre-applied-marker-sentence.")
+    ds.apply_source(doc)  # simulate the wrapper's pre-apply
+
+    config = AppConfig.load(explicit_path=None)
+    with caplog.at_level(logging.INFO, logger="pydocs-mcp"):
+        _apply_descriptions_source(None, config)
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("descriptions"))
+    assert re.fullmatch(r"descriptions artifact [0-9a-f]{12} source=pre-applied", line)
+    assert line.split()[2] == ds.current_artifact_hash()[:12]
+    # The overlay surface itself stayed bound — relabeling never rebinds.
+    assert "Pre-applied-marker-sentence." in tool_docs.TOOL_DOCS["grep"]
+
+
 # ── CLI surface ────────────────────────────────────────────────────────────
 
 
@@ -302,6 +344,62 @@ def test_main_hard_errors_on_missing_env_source(monkeypatch, tmp_path: Path, cap
     err = capsys.readouterr().err
     assert "Error:" in err
     assert "gone.md" in err
+
+
+def test_flag_beats_invalid_env_on_the_failure_path(monkeypatch, tmp_path: Path) -> None:
+    """Documented precedence is flag > env; that must hold on the FAILURE
+    path too — a set-but-invalid env var must not kill a serve invocation
+    whose ``--descriptions`` flag names a valid source before argparse even
+    runs. ``main()`` skips the env pre-apply when the flag is present and
+    ``run()`` applies the flag as the winning source."""
+    monkeypatch.setenv(_ENV_VAR, str(tmp_path / "missing.md"))
+    bundle = tmp_path / "a.db"
+    bundle.touch()
+    doc = _write_overlay(tmp_path / "flag.md", marker="Flag-wins-marker-sentence.")
+
+    with patch("pydocs_mcp.server.run") as mock_run:
+        argv = ["pydocs-mcp", "serve", "--db", str(bundle), "--descriptions", str(doc)]
+        with patch("sys.argv", argv):
+            from pydocs_mcp.__main__ import main
+
+            rc = main()
+
+    assert rc == 0
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["descriptions_path"] == doc
+
+
+def test_turn0_context_cli_applies_yaml_descriptions_source(
+    monkeypatch, tmp_path: Path, restore_tool_docs, capsys
+) -> None:
+    """The ``turn0-context`` subcommand builds a pack embedding the LIVE
+    ``TURN0_PREAMBLE`` — it must apply the YAML ``serve.descriptions_path``
+    leg (``main()`` covers only the env leg) before building."""
+    import argparse
+    import asyncio
+    from types import SimpleNamespace
+
+    from pydocs_mcp import __main__ as cli
+
+    sections = ds.load_packaged()
+    sections[ds.TURN0_PREAMBLE_HEADER] = "Cli-turn0-preamble-sentinel."
+    doc = tmp_path / "override.md"
+    doc.write_text(ds.render_sections(sections), encoding="utf-8")
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text(f"serve:\n  descriptions_path: {doc}\n")
+    config = AppConfig.load(explicit_path=overlay)
+
+    svc = SimpleNamespace(overview=SimpleNamespace(uow_factory=object()))
+    monkeypatch.setattr(cli, "_build_cli_services", lambda args: (None, [svc], config))
+
+    async def _fake_build(*, uow_factory, overview, budget_tokens, package=""):
+        return tool_docs.TURN0_PREAMBLE
+
+    monkeypatch.setattr("pydocs_mcp.application.turn0_context.build_turn0_context", _fake_build)
+
+    args = argparse.Namespace(project_scope=None, package="")
+    asyncio.run(cli._run_turn0_context(args))
+    assert "Cli-turn0-preamble-sentinel." in capsys.readouterr().out
 
 
 # ── MCP/CLI parity from the same applied source ────────────────────────────

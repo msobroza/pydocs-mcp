@@ -108,6 +108,42 @@ def test_leading_preamble_is_dropped() -> None:
     assert ds.parse_sections(text) == {"SERVER_INSTRUCTIONS": "body"}
 
 
+def test_permissive_mode_keeps_collect_dont_raise_semantics() -> None:
+    # Without an ``allowed`` set (the benchmarks ``parse_delimited`` delegation
+    # mode) parsing stays lenient: the optimizer firewall feeds arbitrary LLM
+    # output through ``with_content().validate()`` and needs a violations
+    # tuple back, never a raise — junk prefix drops, duplicates last-copy-win.
+    text = "junk\n=== TOOL: grep ===\na\n=== TOOL: grep ===\nb\n"
+    assert ds.parse_sections(text) == {"TOOL: grep": "b"}
+
+
+# --- Strict-mode data-loss guards ----------------------------------------
+
+
+def test_strict_mode_rejects_content_before_first_header() -> None:
+    # A git-conflict marker block ahead of the document would be silently
+    # dropped by the lenient parse — strict mode names the offending line.
+    text = "<<<<<<< HEAD\n=== SERVER_INSTRUCTIONS ===\nours\n"
+    with pytest.raises(ds.StrayContentError) as excinfo:
+        ds.parse_sections(text, allowed=ds.CANONICAL_HEADERS)
+    assert "<<<<<<< HEAD" in str(excinfo.value)
+
+
+def test_strict_mode_tolerates_blank_lines_before_first_header() -> None:
+    text = "\n\n=== SERVER_INSTRUCTIONS ===\nbody\n"
+    sections = ds.parse_sections(text, allowed=ds.CANONICAL_HEADERS)
+    assert sections == {"SERVER_INSTRUCTIONS": "body"}
+
+
+def test_strict_mode_rejects_duplicate_section_header() -> None:
+    # Last-copy-wins would silently drop the first body; strict mode names
+    # the duplicated key instead of validating clean.
+    text = "=== TOOL: grep ===\nfirst copy\n=== TOOL: grep ===\nsecond copy\n"
+    with pytest.raises(ds.DuplicateSectionError) as excinfo:
+        ds.parse_sections(text, allowed=ds.CANONICAL_HEADERS)
+    assert "TOOL: grep" in str(excinfo.value)
+
+
 def test_non_header_shaped_lines_stay_content() -> None:
     # Uppercase-outside-the-closed-set and arbitrary === lines are content.
     body = "=== not a header ===\n=== TOOL: Grep ==="
@@ -214,6 +250,8 @@ def test_exceptions_inherit_root_and_valueerror() -> None:
         ds.MissingSectionError,
         ds.MissingMarkerError,
         ds.TokenBudgetExceededError,
+        ds.StrayContentError,
+        ds.DuplicateSectionError,
     ):
         assert issubclass(exc_type, PydocsMCPError)
         assert issubclass(exc_type, ValueError)

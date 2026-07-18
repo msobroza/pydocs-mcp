@@ -38,7 +38,29 @@ from pydocs_mcp.application.description_source import (
 # actually routes this exact name.
 DESCRIPTIONS_PATH_ENV_VAR = "PYDOCS_SERVE__DESCRIPTIONS_PATH"
 
+# Startup-log source labels (single source of truth — ``server.py`` compares
+# against these when deciding what the pinned log line reports).
+PACKAGED_SOURCE = "packaged"
+PRE_APPLIED_SOURCE = "pre-applied"
+
 _PRECEDENCE = "precedence: CLI flag > env > user YAML > packaged"
+
+
+class EmptyDescriptionsEnvError(DescriptionSourceError):
+    """The descriptions env var is SET but EMPTY — refuse to guess intent.
+
+    Because the env layer outranks the user YAML in pydantic-settings source
+    order, an empty value would silently merge ``''`` over a YAML-configured
+    ``serve.descriptions_path`` and degrade the run to the packaged fallback
+    — exactly the silent downgrade universal strictness forbids.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"{DESCRIPTIONS_PATH_ENV_VAR} is set but empty — it would silently "
+            "suppress any YAML-configured serve.descriptions_path (the env "
+            "layer outranks user YAML); unset it or provide a path"
+        )
 
 
 def resolve_descriptions_override(
@@ -50,7 +72,11 @@ def resolve_descriptions_override(
     which the env var already outranks the user YAML (pydantic-settings
     source order) — the env probe here only recovers WHICH of the two
     supplied the value, so hard errors can name the winning source. An empty
-    string counts as unset, not as an explicit empty source.
+    YAML string counts as unset; a SET-but-EMPTY env var raises
+    :class:`EmptyDescriptionsEnvError` (it silently clobbers the YAML key in
+    the merge, so treating it as unset would swallow a configured override).
+    The CLI flag outranks the env var, failure path included — a flag-named
+    source wins before the env value is even inspected.
 
     Example:
         >>> resolve_descriptions_override(cli_path=None, configured_path=None) is None
@@ -58,9 +84,12 @@ def resolve_descriptions_override(
     """
     if cli_path is not None:
         return cli_path.expanduser(), "--descriptions flag"
+    env_value = os.environ.get(DESCRIPTIONS_PATH_ENV_VAR)
+    if env_value == "":
+        raise EmptyDescriptionsEnvError()
     if not configured_path:
         return None
-    if os.environ.get(DESCRIPTIONS_PATH_ENV_VAR):
+    if env_value:
         return Path(configured_path).expanduser(), f"env {DESCRIPTIONS_PATH_ENV_VAR}"
     return Path(configured_path).expanduser(), "user YAML serve.descriptions_path"
 
@@ -83,7 +112,7 @@ def apply_descriptions_override(
     """
     override = resolve_descriptions_override(cli_path=cli_path, configured_path=configured_path)
     if override is None:
-        return current_artifact_hash(), "packaged"
+        return current_artifact_hash(), PACKAGED_SOURCE
     path, origin = override
     try:
         artifact_hash = apply_source(path)

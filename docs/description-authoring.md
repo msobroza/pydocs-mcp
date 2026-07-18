@@ -181,7 +181,15 @@ Notes:
 - The env var outranking the YAML key is standard pydantic-settings source
   order; error messages name which channel supplied the winning path so a
   failure is diagnosable without knowing that ordering.
-- An empty-string value counts as unset, not as an explicit empty source.
+- An empty-string YAML value counts as unset, not as an explicit empty
+  source. A **set-but-empty** `PYDOCS_SERVE__DESCRIPTIONS_PATH` is a hard
+  error (`EmptyDescriptionsEnvError`): because the env layer outranks the
+  YAML key, an empty env value would otherwise silently suppress a
+  YAML-configured override into the packaged fallback — unset the variable
+  or give it a path.
+- The flag outranks the env var on the failure path too: a serve invocation
+  carrying `--descriptions` never dies on a set-but-invalid env value — the
+  flag-named source is the one that must load.
 - The flag also applies to `pydocs-mcp serve . --watch`.
 - **CLI-help parity:** an exported `PYDOCS_SERVE__DESCRIPTIONS_PATH` is
   applied before the argument parser is built, so `pydocs-mcp <tool> --help`
@@ -205,8 +213,10 @@ half-apply) and raises a typed error carrying the offending values:
 | `MissingSectionError` | One or more of the eleven required sections is absent. |
 | `MissingMarkerError` | A `TOOL:` section lacks one or more of the five required markers. |
 | `TokenBudgetExceededError` | A `TOOL:` section (or the nine-section total) exceeds its budget. |
+| `StrayContentError` | Non-blank content before the first section header (e.g. a git-conflict marker block) — it would otherwise be silently dropped. |
+| `DuplicateSectionError` | The same section header appears more than once — last-copy-wins would silently discard the earlier body. |
 
-All four subclass `DescriptionSourceError` (importable from
+All six subclass `DescriptionSourceError` (importable from
 `pydocs_mcp.application.description_source`), which is also a `ValueError`.
 The same validation guards the packaged document at import time — a corrupted
 shipped file breaks every entry point loudly rather than serving a partial

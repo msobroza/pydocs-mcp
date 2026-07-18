@@ -526,11 +526,23 @@ def _apply_descriptions_source(cli_path: Path | None, config: AppConfig) -> None
     the hash equal to what is actually served. The log format is pinned by
     test: Phase 2 attribution parses it from the startup log, not the wire.
     """
-    from pydocs_mcp.application.description_override import apply_descriptions_override
+    from pydocs_mcp.application.description_override import (
+        PACKAGED_SOURCE,
+        PRE_APPLIED_SOURCE,
+        apply_descriptions_override,
+    )
+    from pydocs_mcp.application.description_source import packaged_artifact_hash
 
     artifact_hash, source = apply_descriptions_override(
         cli_path=cli_path, configured_path=config.serve.descriptions_path
     )
+    if source == PACKAGED_SOURCE and artifact_hash != packaged_artifact_hash():
+        # No override won, but the live surface is NOT the packaged document:
+        # an earlier caller (the benchmarks overlay wrapper) pre-applied a
+        # source before ``run()``. Claiming ``packaged`` next to the overlay's
+        # hash would mislead Phase 2 attribution — report the fixed
+        # ``pre-applied`` token instead (the hash stays the live one).
+        source = PRE_APPLIED_SOURCE
     log.info("descriptions artifact %s source=%s", artifact_hash[:12], source)
 
 

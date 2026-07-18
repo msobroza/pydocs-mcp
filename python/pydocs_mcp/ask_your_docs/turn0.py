@@ -31,6 +31,14 @@ async def turn0_context_for_workspace(workspace: str, config_path: str | None) -
     if not settings.enabled:
         return None
 
+    from pydocs_mcp.application.description_override import apply_descriptions_override
+
+    # The pack embeds the LIVE ``TURN0_PREAMBLE``; without applying the
+    # configured description source (ADR 0006) the injected context would
+    # carry the packaged preamble while the serve subprocess serves the
+    # override — the two channels must describe the same surface.
+    apply_descriptions_override(cli_path=None, configured_path=config.serve.descriptions_path)
+
     from pydocs_mcp.application.turn0_context import build_turn0_context
     from pydocs_mcp.multirepo import discover_workspace
     from pydocs_mcp.storage.factories import (

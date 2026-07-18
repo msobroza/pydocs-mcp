@@ -997,10 +997,16 @@ async def _run_turn0_context(args: argparse.Namespace) -> None:
     harness's explicit opt-in; the flag gates only the ask-your-docs
     auto-injection channel.
     """
+    from pydocs_mcp.application.description_override import apply_descriptions_override
     from pydocs_mcp.application.multi_project_search import _select_service
     from pydocs_mcp.application.turn0_context import build_turn0_context
 
     _tools, services, config = _build_cli_services(args)
+    # The pack embeds the LIVE ``TURN0_PREAMBLE``. ``main()`` already applied
+    # the env-var leg before the parser was built; this applies the YAML
+    # ``serve.descriptions_path`` leg (ADR 0006) so the printed pack matches
+    # what the MCP channel would serve. Idempotent when env already won.
+    apply_descriptions_override(cli_path=None, configured_path=config.serve.descriptions_path)
     svc = _select_service(services, args.project_scope) if args.project_scope else services[0]
     pack = await build_turn0_context(
         uow_factory=svc.overview.uow_factory,
@@ -1517,17 +1523,17 @@ def _apply_descriptions_env_override() -> int | None:
     rendering the packaged bundle while the MCP server serves the override
     (breaking CLI/MCP parity, R2 / ADR 0006 §2). A set-but-missing/invalid
     env source is a hard error (universal strictness) — returns the exit
-    code; ``None`` means continue.
+    code; ``None`` means continue. A SET-but-EMPTY env var is a hard error
+    too (it would silently clobber a YAML-configured path in the
+    pydantic-settings merge); only a genuinely unset var falls through.
     """
     from pydocs_mcp.application import description_override
 
-    if not os.environ.get(description_override.DESCRIPTIONS_PATH_ENV_VAR):
+    env_value = os.environ.get(description_override.DESCRIPTIONS_PATH_ENV_VAR)
+    if env_value is None:
         return None
     try:
-        description_override.apply_descriptions_override(
-            cli_path=None,
-            configured_path=os.environ[description_override.DESCRIPTIONS_PATH_ENV_VAR],
-        )
+        description_override.apply_descriptions_override(cli_path=None, configured_path=env_value)
     except Exception as exc:
         # ``--verbose`` is parsed later than this can run, so the default
         # (non-verbose) failure policy applies.
@@ -1535,10 +1541,22 @@ def _apply_descriptions_env_override() -> int | None:
     return None
 
 
+def _argv_names_descriptions_flag(argv: list[str]) -> bool:
+    """True when a ``--descriptions`` flag is present in raw argv."""
+    return any(arg == "--descriptions" or arg.startswith("--descriptions=") for arg in argv)
+
+
 def main() -> int:
-    code = _apply_descriptions_env_override()
-    if code is not None:
-        return code
+    # WHY the argv scan: documented precedence is flag > env, and that must
+    # hold on the FAILURE path too — a set-but-invalid env var must not kill
+    # a serve run whose ``--descriptions`` flag names a valid source before
+    # argparse even runs. A flag-carrying invocation is a serve run (never a
+    # bare ``--help`` render), so skipping the pre-apply here cannot break
+    # CLI-help parity; ``server.run`` applies the flag as the winning source.
+    if not _argv_names_descriptions_flag(sys.argv[1:]):
+        code = _apply_descriptions_env_override()
+        if code is not None:
+            return code
     parser = _build_parser()
     args = parser.parse_args()
     _configure_logging(args.verbose)

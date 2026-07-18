@@ -170,6 +170,36 @@ class TokenBudgetExceededError(DescriptionSourceError):
         )
 
 
+class StrayContentError(DescriptionSourceError):
+    """Strict mode: non-blank content precedes the first section header.
+
+    The lenient parse silently drops such a preamble (e.g. a git-conflict
+    marker block) — data loss an explicitly named source must never absorb.
+    """
+
+    def __init__(self, *, line: str) -> None:
+        self.line = line
+        super().__init__(
+            f"content before the first section header would be dropped: {line!r} "
+            "— the document must start with an '=== <SECTION> ===' header line"
+        )
+
+
+class DuplicateSectionError(DescriptionSourceError):
+    """Strict mode: the same section header appears more than once.
+
+    The lenient parse keeps only the last copy (silent data loss); strict
+    mode rejects the document naming the duplicated key.
+    """
+
+    def __init__(self, *, key: str) -> None:
+        self.key = key
+        super().__init__(
+            f"duplicate section header {key!r} — the later copy would silently "
+            "overwrite the earlier one (each section may appear exactly once)"
+        )
+
+
 def render_sections(sections: Mapping[str, str]) -> str:
     """Render ``{key: content}`` to the delimited document, in insertion order.
 
@@ -190,36 +220,57 @@ def parse_sections(text: str, *, allowed: Iterable[str] | None = None) -> dict[s
     """Parse a delimited document back to ``{key: content}`` in document order.
 
     Content is every line until the next header or EOF with a single trailing
-    newline trimmed. A leading non-header preamble is dropped (there is none
-    in a well-formed document — ``validate_sections`` catches malformed input
-    upstream). With ``allowed`` given, any parsed header outside that set
-    raises :class:`HeaderCollisionError` — the strict mode loaders use;
-    without it, parsing is permissive (the normalization / delegation mode).
+    newline trimmed. With ``allowed`` given (STRICT mode — the product
+    loaders), anything the lenient parse would silently lose is a typed
+    error: non-blank content before the first header raises
+    :class:`StrayContentError`, a repeated header raises
+    :class:`DuplicateSectionError`, and a parsed header outside the set
+    raises :class:`HeaderCollisionError`. Without ``allowed`` (the
+    normalization / benchmarks-delegation mode), parsing stays permissive —
+    a leading preamble is dropped and duplicates last-copy-win, because the
+    optimizer firewall feeds arbitrary LLM output through it and needs a
+    violations tuple back, never a raise.
 
     Example:
         >>> parse_sections("=== SERVER_INSTRUCTIONS ===\\nhi\\n")
         {'SERVER_INSTRUCTIONS': 'hi'}
     """
-    sections: dict[str, str] = {}
-    key: str | None = None
-    lines: list[str] = []
-    for line in text.split("\n"):
-        match = _HEADER_RE.match(line)
-        if match is not None:
-            if key is not None:
-                sections[key] = _join(lines)
-            key, lines = match.group(1), []
-            continue
-        if key is not None:
-            lines.append(line)
-    if key is not None:
-        sections[key] = _join(lines)
+    sections = _parse_lines(text, strict=allowed is not None)
     if allowed is not None:
         permitted = tuple(allowed)
         violations = find_header_collisions(sections, allowed=permitted)
         if violations:
             raise HeaderCollisionError(violations, allowed=permitted)
     return sections
+
+
+def _parse_lines(text: str, *, strict: bool) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    key: str | None = None
+    lines: list[str] = []
+    for line in text.split("\n"):
+        match = _HEADER_RE.match(line)
+        if match is None:
+            _consume_body_line(line, key=key, lines=lines, strict=strict)
+            continue
+        if key is not None:
+            sections[key] = _join(lines)
+        key, lines = match.group(1), []
+        # The earlier same-key section was flushed above (by an intermediate
+        # header or by this very match), so membership IS the duplicate probe.
+        if strict and key in sections:
+            raise DuplicateSectionError(key=key)
+    if key is not None:
+        sections[key] = _join(lines)
+    return sections
+
+
+def _consume_body_line(line: str, *, key: str | None, lines: list[str], strict: bool) -> None:
+    if key is not None:
+        lines.append(line)
+        return
+    if strict and line.strip():
+        raise StrayContentError(line=line)
 
 
 def find_header_collisions(
@@ -411,10 +462,36 @@ def current_artifact_hash() -> str:
     """
     from pydocs_mcp.application import tool_docs
 
+    return _artifact_hash(
+        instructions=tool_docs.SERVER_INSTRUCTIONS,
+        tool_view=tool_docs.TOOL_DOCS,
+        preamble=tool_docs.TURN0_PREAMBLE,
+    )
+
+
+def packaged_artifact_hash() -> str:
+    """Fingerprint the PACKAGED document would serve — live attributes untouched.
+
+    Computes over the same attribute projection ``current_artifact_hash``
+    uses, so the two are equal exactly when the live surface IS the packaged
+    document. ``server.py`` compares them on the no-override startup branch
+    to distinguish a genuine packaged serve from a surface some earlier
+    caller pre-applied (e.g. the benchmarks overlay wrapper rebinding through
+    ``apply_source`` before ``server.run``).
+
+    Example:
+        >>> packaged_artifact_hash() == current_artifact_hash()  # doctest: +SKIP
+        True
+    """
+    instructions, tool_view, preamble = attribute_views(load_packaged())
+    return _artifact_hash(instructions=instructions, tool_view=tool_view, preamble=preamble)
+
+
+def _artifact_hash(*, instructions: str, tool_view: Mapping[str, str], preamble: str) -> str:
     sections = {
-        SERVER_INSTRUCTIONS_HEADER: tool_docs.SERVER_INSTRUCTIONS,
-        **{tool_section_header(name): tool_docs.TOOL_DOCS[name] for name in FROZEN_TOOL_NAMES},
-        TURN0_PREAMBLE_HEADER: tool_docs.TURN0_PREAMBLE,
+        SERVER_INSTRUCTIONS_HEADER: instructions,
+        **{tool_section_header(name): tool_view[name] for name in FROZEN_TOOL_NAMES},
+        TURN0_PREAMBLE_HEADER: preamble,
     }
     surface = normalize(render_sections(sections))
     payload = f"renderer:v{RENDERER_VERSION}\n{surface}"
