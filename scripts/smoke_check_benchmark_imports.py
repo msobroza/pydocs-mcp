@@ -51,6 +51,7 @@ def collect_pydocs_imports(py: pathlib.Path) -> list[tuple[str, str | None]]:
 def main() -> int:
     failed: list[str] = []
     checked = 0
+    skipped = 0
     files = sorted({py for d in BENCH_DIRS for py in d.rglob("*.py")})
     for py in files:
         rel = py.relative_to(_REPO_ROOT)
@@ -58,6 +59,16 @@ def main() -> int:
             checked += 1
             try:
                 mod = importlib.import_module(module)
+            except ModuleNotFoundError as exc:
+                # A missing THIRD-PARTY module is an environment fact (optional
+                # extras like [ask-your-docs] are absent in the CI test job by
+                # design), not import staleness. A missing pydocs_mcp.* module
+                # is exactly the drift this gate exists to catch.
+                if exc.name and not exc.name.startswith("pydocs_mcp"):
+                    skipped += 1
+                    continue
+                failed.append(f"{rel}: import {module!r}: {exc}")
+                continue
             except Exception as exc:  # broad on purpose — surfacing to operator
                 failed.append(f"{rel}: import {module!r}: {exc}")
                 continue
@@ -77,7 +88,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"verified {checked} pydocs_mcp imports across {len(files)} benchmark files")
+    note = f" ({skipped} skipped: optional third-party deps absent)" if skipped else ""
+    verified = checked - skipped
+    print(f"verified {verified} pydocs_mcp imports across {len(files)} benchmark files{note}")
     return 0
 
 
