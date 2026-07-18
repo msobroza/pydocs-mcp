@@ -9,18 +9,23 @@ edits here fail fast instead of drifting.
 
 from __future__ import annotations
 
-# --- §D13 contract constants (importable: the offline optimizer's validate()
-# shares them; drift here is drift in the lint) ---
-REQUIRED_MARKERS = (
-    "When to use",
-    "When NOT to use",
-    "Workflow",
-    "Response contract",
-    "Examples",
+# --- §D13 contract constants — canonical home is now
+# application/description_source.py (ADR 0005). Re-exported here (redundant
+# aliases = explicit re-export) because the benchmarks optimizer's validate()
+# and the §D13 lint import them from this module; drift here is drift in the
+# lint.
+from pydocs_mcp.application.description_source import (
+    CHARS_PER_TOKEN as CHARS_PER_TOKEN,
 )
-CHARS_PER_TOKEN = 4
-PER_TOOL_TOKEN_BUDGET = 500
-TOTAL_TOKEN_BUDGET = 3600
+from pydocs_mcp.application.description_source import (
+    PER_TOOL_TOKEN_BUDGET as PER_TOOL_TOKEN_BUDGET,
+)
+from pydocs_mcp.application.description_source import (
+    REQUIRED_MARKERS as REQUIRED_MARKERS,
+)
+from pydocs_mcp.application.description_source import (
+    TOTAL_TOKEN_BUDGET as TOTAL_TOKEN_BUDGET,
+)
 
 _WORKFLOW = (
     "Workflow: get_overview → search_codebase → get_context → "
