@@ -1,9 +1,9 @@
-"""Turn-0 context gate for the ask-your-docs channel (ADR 0008 §Decision 5.i).
+"""Builds the turn-0 pack injected into the ask-your-docs agent prompt (ADR 0008 §Decision 5.i).
 
-Core-only imports (no langgraph / streamlit): the flag gate and the pack
-build are testable without the ``[ask-your-docs]`` extra, keeping the lazy-
-import contract of this subpackage. ``agent.build_agent`` calls this once at
-its single prompt-assembly site.
+Core-only imports (no langgraph / streamlit): the enabled-flag check and the
+pack build are testable without the ``[ask-your-docs]`` extra, keeping the
+lazy-import contract of this subpackage. ``agent.build_agent`` calls this once
+at its single prompt-assembly site.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-async def turn0_context_for_workspace(workspace: str, config_path: str | None) -> str | None:
+async def build_turn0_pack_for_agent_prompt(workspace: str, config_path: str | None) -> str | None:
     """The turn-0 pack for ``workspace``'s default bundle, or ``None`` when off.
 
     ``None`` (the shipped default — ``serve.turn0_context.enabled: false``)

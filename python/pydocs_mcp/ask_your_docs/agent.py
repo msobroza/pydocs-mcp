@@ -39,7 +39,7 @@ from pydocs_mcp.ask_your_docs.prompts import (
     prompts_for,
     rewrite_prompt,
 )
-from pydocs_mcp.ask_your_docs.turn0 import turn0_context_for_workspace
+from pydocs_mcp.ask_your_docs.turn0_prompt_injection import build_turn0_pack_for_agent_prompt
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 logger = logging.getLogger(__name__)
@@ -245,7 +245,7 @@ async def build_agent(
     # Turn-0 context pack (ADR 0008): appended at this single assembly site
     # ONLY when serve.turn0_context.enabled — the gate returns None when off,
     # keeping the prompt byte-identical (the ablation phase's control arm).
-    turn0 = await turn0_context_for_workspace(workspace, pydocs_config)
+    turn0 = await build_turn0_pack_for_agent_prompt(workspace, pydocs_config)
     prompt = _assemble_prompt(name, catalog, prompts, turn0)
     caps = capabilities
     if caps is None:

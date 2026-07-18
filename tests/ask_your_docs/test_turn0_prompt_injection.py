@@ -1,4 +1,4 @@
-"""ADR 0008 channel gate: ``turn0_context_for_workspace`` (core-only imports).
+"""ADR 0008 agent-prompt injection: ``build_turn0_pack_for_agent_prompt`` (core-only imports).
 
 The helper is deliberately langgraph-free so the flag gate + pack build are
 testable without the ``[ask-your-docs]`` extra; ``agent.build_agent`` calls it
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pydocs_mcp.ask_your_docs.turn0 import turn0_context_for_workspace
+from pydocs_mcp.ask_your_docs.turn0_prompt_injection import build_turn0_pack_for_agent_prompt
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +55,7 @@ def test_flag_off_returns_none_without_touching_the_workspace(tmp_path: Path) ->
     nonexistent workspace must not raise, proving byte-identical assembly
     costs nothing when off."""
     missing = tmp_path / "no-such-workspace"
-    assert asyncio.run(turn0_context_for_workspace(str(missing), None)) is None
+    assert asyncio.run(build_turn0_pack_for_agent_prompt(str(missing), None)) is None
 
 
 def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatch) -> None:
@@ -97,7 +97,9 @@ def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatc
     monkeypatch.setattr("pydocs_mcp.storage.factories.build_sqlite_uow_factory", _fake_uow_factory)
     monkeypatch.setattr("pydocs_mcp.application.turn0_context.build_turn0_context", _fake_build)
 
-    result = asyncio.run(turn0_context_for_workspace("/any/workspace", _enabled_config(tmp_path)))
+    result = asyncio.run(
+        build_turn0_pack_for_agent_prompt("/any/workspace", _enabled_config(tmp_path))
+    )
     assert result == "PACK"
     assert captured["overview_db"] == first.db_path
     assert captured["uow_db"] == first.db_path
@@ -145,7 +147,7 @@ def test_yaml_descriptions_override_reaches_the_injected_pack(
 
     monkeypatch.setattr("pydocs_mcp.application.turn0_context.build_turn0_context", _fake_build)
 
-    result = asyncio.run(turn0_context_for_workspace("/any/workspace", str(overlay)))
+    result = asyncio.run(build_turn0_pack_for_agent_prompt("/any/workspace", str(overlay)))
     assert result == "Overridden-turn0-preamble-sentinel."
 
 
@@ -155,4 +157,4 @@ def test_flag_on_with_missing_workspace_fails_loudly(tmp_path: Path) -> None:
     contaminate the ablation arms with an unmarked control."""
     missing = tmp_path / "no-such-workspace"
     with pytest.raises(FileNotFoundError):
-        asyncio.run(turn0_context_for_workspace(str(missing), _enabled_config(tmp_path)))
+        asyncio.run(build_turn0_pack_for_agent_prompt(str(missing), _enabled_config(tmp_path)))

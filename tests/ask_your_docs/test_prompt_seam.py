@@ -118,7 +118,7 @@ class TestTurn0Injection:
         assert _assemble_prompt("text_react", _CATALOG, None, "TURN0-PACK") == f"{base}\nTURN0-PACK"
 
     def test_build_agent_threads_the_gated_pack(self, monkeypatch) -> None:
-        """build_agent asks ``turn0_context_for_workspace`` once; ``None``
+        """build_agent asks ``build_turn0_pack_for_agent_prompt`` once; ``None``
         (flag off) leaves the assembled prompt byte-identical, a pack string
         is appended verbatim — asserted at the graph-builder boundary."""
         from pydocs_mcp.ask_your_docs import agent as agent_mod
@@ -157,9 +157,9 @@ class TestTurn0Injection:
         async def _pack_off(workspace, config_path):
             return None
 
-        monkeypatch.setattr(agent_mod, "turn0_context_for_workspace", _pack_on)
+        monkeypatch.setattr(agent_mod, "build_turn0_pack_for_agent_prompt", _pack_on)
         asyncio.run(_build())
-        monkeypatch.setattr(agent_mod, "turn0_context_for_workspace", _pack_off)
+        monkeypatch.setattr(agent_mod, "build_turn0_pack_for_agent_prompt", _pack_off)
         asyncio.run(_build())
         base = _assemble_prompt("text_react", _CATALOG, None)
         assert captured[0] == f"{base}\nTURN0-PACK"
