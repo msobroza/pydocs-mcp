@@ -1,15 +1,15 @@
 """Grouped bar plots of one or more baseline JSON files.
 
-Each baseline (the JSON shape produced by Task 6 of cleanups-and-pr-a, e.g.
+Each baseline (the aggregate JSON shape the eval runner emits, e.g.
 ``benchmarks/baselines/repoqa_snf.json``) becomes a colored bar group; each
 metric (``recall@1`` / ``recall@5`` / ``recall@10`` / ``mrr`` / ``pass@1-needle``)
 becomes an X-axis category. 95% CI error bars are rendered from the
 ``ci_low`` / ``ci_high`` fields the aggregator emits.
 
 Designed for side-by-side comparison of different retrieval configurations
-on the same dataset — today that's just one ``pydocs-mcp / baseline`` bar
-group (BM25 over FTS5), but as PR-B3.1 lands dense embeddings + RRF the
-same call site picks up additional bar groups automatically.
+on the same dataset — pass one baseline JSON per configuration (BM25, dense,
+hybrid, ...) and the same call site picks up additional bar groups
+automatically.
 
 Color palette defaults to seaborn's ``colorblind`` — colorblind-safe AND
 recommended by Nature for figure submissions, so plots produced here are
@@ -23,7 +23,7 @@ Usage::
     fig = plot_baselines(
         baselines=[
             Path("benchmarks/baselines/repoqa_snf.json"),
-            # Path("benchmarks/baselines/repoqa_snf_dense.json"),  # future
+            # add further baseline JSONs here for side-by-side bar groups
         ],
         metrics=("recall@1", "recall@5", "recall@10", "mrr"),
         output=Path("benchmarks/results/plots/repoqa_real.png"),

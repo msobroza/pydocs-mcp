@@ -1,0 +1,13 @@
+# RepoQA experiment — no-rollup twin of repoqa_parent_rollup.yaml: identical
+# dense + graph_expand + centrality_prior pipeline WITHOUT the parent_rollup
+# step, so any metric delta isolates the rollup itself. Same default embedder
+# (FastEmbed bge-small); node_scores enabled so centrality_prior has PageRank
+# to rank by (needs the `[graph]` extra). See benchmarks/EXPERIMENTS.md.
+reference_graph:
+  node_scores:
+    enabled: true
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_parent_rollup_baseline.yaml
