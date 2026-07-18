@@ -5,7 +5,7 @@
 # pair for the unweighted variant — if unweighted mentions hurts standard
 # recall@1 (the centrality failure mode) but helps docs recall, this measures
 # whether down-weighting keeps the win without the noise.
-# Referenced by ../repoqa_dense_graph_mentions_weighted_f2llm330m.yaml.
+# Referenced by ../dense_graph_mentions_weighted_f2llm330m.yaml.
 name: exp_dense_graph_mentions_weighted
 steps:
   - name: pre_filter

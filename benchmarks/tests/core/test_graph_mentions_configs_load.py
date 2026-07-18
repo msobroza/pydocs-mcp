@@ -17,8 +17,8 @@ from pydocs_mcp.retrieval.config import AppConfig
 
 _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
 _OVERLAYS = {
-    "repoqa_dense_graph_mentions_f2llm330m.yaml": Path("pipelines/exp_dense_graph_mentions.yaml"),
-    "repoqa_dense_graph_mentions_weighted_f2llm330m.yaml": Path(
+    "dense_graph_mentions_f2llm330m.yaml": Path("pipelines/exp_dense_graph_mentions.yaml"),
+    "dense_graph_mentions_weighted_f2llm330m.yaml": Path(
         "pipelines/exp_dense_graph_mentions_weighted.yaml"
     ),
 }

@@ -1,6 +1,6 @@
 # Hybrid BM25 + dense, weighted-score interpolation, equal weights
 # (0.5 BM25 / 0.5 dense) — RepoQA experiment suite. The literature-standard
-# balanced blend. Referenced by ../repoqa_hybrid_wsi_balanced.yaml.
+# balanced blend. Referenced by ../hybrid_wsi_balanced.yaml.
 name: exp_hybrid_wsi_balanced
 steps:
   - name: pre_filter

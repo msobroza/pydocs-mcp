@@ -9,7 +9,7 @@
 # function-description queries, and the token_budget_formatter is dropped so
 # the output is a ranked candidate list. The "reasonable k" the tree reasons
 # over is the top-10 set published by hybrid_publish.
-# Referenced by ../repoqa_hybrid_tree.yaml.
+# Referenced by ../hybrid_tree.yaml.
 name: exp_hybrid_tree
 steps:
   - name: pre_filter

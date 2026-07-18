@@ -10,11 +10,11 @@ real retrieval quality (that's covered by the resolver / metric unit tests).
 
 The three modes map onto the two shipped AppConfig overlays:
 
-  1. ``test_comparison_config_smoke``    — ``ds1000_composite.yaml``,
+  1. ``test_comparison_config_smoke``    — ``composite.yaml``,
      systems ``pydocs-mcp-composite`` / ``context7`` / ``neuledge``.
-  2. ``test_pydocs_only_config_smoke``   — ``ds1000_ranked.yaml``,
+  2. ``test_pydocs_only_config_smoke``   — ``ranked.yaml``,
      system ``pydocs-mcp``.
-  3. ``test_oracle_indexing_config_smoke`` — ``ds1000_ranked.yaml``,
+  3. ``test_oracle_indexing_config_smoke`` — ``ranked.yaml``,
      system ``pydocs-oracle``.
 
 Hermetic: the dataset is built from the fixture via
@@ -51,8 +51,8 @@ _FIXTURE_TASK_COUNT = 50
 # row by ``cfg_path.stem``, so these stems are the config half of the
 # SweepResults key.
 _CONFIG_DIR = Path(__file__).resolve().parents[3] / "benchmarks" / "configs"
-_COMPOSITE_CONFIG = _CONFIG_DIR / "ds1000_composite.yaml"
-_RANKED_CONFIG = _CONFIG_DIR / "ds1000_ranked.yaml"
+_COMPOSITE_CONFIG = _CONFIG_DIR / "composite.yaml"
+_RANKED_CONFIG = _CONFIG_DIR / "ranked.yaml"
 
 
 # ── fake systems ─────────────────────────────────────────────────────────
@@ -338,7 +338,7 @@ async def test_comparison_config_smoke(tmp_path: Path) -> None:
     assert isinstance(results, dict)
     assert tasks_ran == _FIXTURE_TASK_COUNT
 
-    config_name = _COMPOSITE_CONFIG.stem  # "ds1000_composite"
+    config_name = _COMPOSITE_CONFIG.stem  # "composite"
     for system_name in systems:
         key = (system_name, config_name)
         assert key in results, f"missing leg {key!r} in {sorted(results)}"

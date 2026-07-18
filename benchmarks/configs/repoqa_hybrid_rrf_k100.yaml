@@ -1,6 +1,0 @@
-# RepoQA experiment — hybrid BM25+dense, RRF fusion k=100.
-# See benchmarks/EXPERIMENTS.md.
-pipelines:
-  chunk:
-    - default: true
-      pipeline_path: pipelines/exp_hybrid_rrf_k100.yaml

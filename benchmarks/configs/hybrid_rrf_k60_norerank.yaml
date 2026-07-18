@@ -1,0 +1,7 @@
+# A/B baseline: hybrid BM25+dense RRF k=60 WITHOUT the post-fusion dense re-rank.
+# Pairs with hybrid_rrf_k60.yaml (which adds dense_rerank) to measure
+# whether the post-fusion turbovec re-rank lifts recall/MRR.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_hybrid_rrf_k60_norerank.yaml

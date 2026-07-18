@@ -12,7 +12,7 @@
 # the only variable between the two runs is the candidate
 # generator. Requires an embedder (the `embedding:` config) at index + search
 # time AND an LLM client (the `llm:` config + OPENAI_API_KEY) at search time.
-# Referenced by ../repoqa_dense_tree_rerank_gpt55.yaml.
+# Referenced by ../dense_tree_rerank_gpt55.yaml.
 name: exp_dense_tree_rerank
 steps:
   - name: pre_filter

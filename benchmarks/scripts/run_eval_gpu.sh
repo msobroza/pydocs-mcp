@@ -13,7 +13,7 @@
 # Usage (args pass through verbatim):
 #   benchmarks/scripts/run_eval_gpu.sh \
 #     --systems pydocs-mcp --dataset repoqa --split small_test --bench-cache on \
-#     --configs benchmarks/configs/repoqa_dense_st.yaml \
+#     --configs benchmarks/configs/dense_st.yaml \
 #     --report benchmarks/results/out.md
 #
 # Override the venv with PYDOCS_VENV=/path/to/venv (default: .venv-li).

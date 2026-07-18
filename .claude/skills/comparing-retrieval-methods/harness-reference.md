@@ -21,7 +21,7 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
   --fixture benchmarks/tests/fixtures/repoqa_mini.json \
-  --configs benchmarks/configs/repoqa_bm25.yaml,benchmarks/configs/repoqa_dense.yaml \
+  --configs benchmarks/configs/bm25.yaml,benchmarks/configs/dense.yaml \
   --trackers jsonl --limit 5 \
   --report benchmarks/results/fixture_run.md
 ```
@@ -33,7 +33,7 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --dataset repoqa \
   --split small_test \
   --bench-cache on \
-  --configs benchmarks/configs/repoqa_bm25.yaml,benchmarks/configs/repoqa_hybrid_rrf_k60.yaml,benchmarks/configs/repoqa_hybrid_wsi_balanced.yaml \
+  --configs benchmarks/configs/bm25.yaml,benchmarks/configs/hybrid_rrf_k60.yaml,benchmarks/configs/hybrid_wsi_balanced.yaml \
   --trackers jsonl \
   --report benchmarks/results/repoqa_smalltest.md
 ```
@@ -44,7 +44,7 @@ Note: `--fixture` and `--split small_test` are different things — the fixture 
 PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
-  --configs benchmarks/configs/baseline.yaml,benchmarks/configs/repoqa_dense.yaml \
+  --configs benchmarks/configs/baseline.yaml,benchmarks/configs/dense.yaml \
   --trackers jsonl \
   --report benchmarks/results/repoqa_full.md
 ```
@@ -66,14 +66,14 @@ Three canonical runs (different output shapes):
 # Run 1 — cross-system, single-blob (rank-1 metrics only):
 PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --dataset ds1000 \
   --systems pydocs-mcp-composite,context7,neuledge \
-  --configs benchmarks/configs/ds1000_composite.yaml \
+  --configs benchmarks/configs/composite.yaml \
   --metrics recall@1,mrr,precision@1,coverage,library_resolution@1 \
   --trackers jsonl
 
 # Run 2 — pydocs-only ranked top-K (needs the reference project):
 PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --dataset ds1000 \
   --systems pydocs-mcp \
-  --configs benchmarks/configs/ds1000_ranked.yaml \
+  --configs benchmarks/configs/ranked.yaml \
   --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
   --trackers jsonl \
   --corpus-dir benchmarks/fixtures/ds1000_reference_project
@@ -82,7 +82,7 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --dataset ds1000 \
 PYTHONPATH=benchmarks/src python -m pydocs_eval.runner --dataset ds1000 \
   --systems pydocs-oracle \
   --dataset-full-prompt \
-  --configs benchmarks/configs/ds1000_ranked.yaml \
+  --configs benchmarks/configs/ranked.yaml \
   --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
   --trackers jsonl
 ```
@@ -148,9 +148,9 @@ Relevance backing all of them: `metrics/_relevance.py:is_relevant` — AST-equiv
 
 - **`run_repoqa.sh` lives at the repo root** (`scripts/run_repoqa.sh`), NOT in `benchmarks/scripts/` (which holds only `run_eval_gpu.sh` and the plot/build scripts). It is a thin forwarder that sets `PYTHONPATH` and execs `python -m pydocs_eval.runner`.
 - **PYTHONPATH:** `PYTHONPATH=benchmarks/src` is required unless `benchmarks` is pip-installed (CI and all docs use the prefix).
-- **Ranked vs composite configs:** the MCP default pipeline collapses to ONE composite chunk, which structurally caps `recall@k>1` at 0. Sweeps measuring top-K must use a ranked-preset config (e.g. `baseline.yaml` / `ds1000_ranked.yaml` → `chunk_search_ranked.yaml`); composite configs pair with rank-1 metrics only.
+- **Ranked vs composite configs:** the MCP default pipeline collapses to ONE composite chunk, which structurally caps `recall@k>1` at 0. Sweeps measuring top-K must use a ranked-preset config (e.g. `baseline.yaml` / `ranked.yaml` → `chunk_search_ranked.yaml`); composite configs pair with rank-1 metrics only.
 - **GPU:** `--gpu` alone is not enough for FastEmbed — onnxruntime silently falls back to CPU without torch's bundled NVIDIA libs on `LD_LIBRARY_PATH`. Use `benchmarks/scripts/run_eval_gpu.sh` (forces `--gpu`, sets `LD_LIBRARY_PATH` + `PYTHONPATH`; venv override `PYDOCS_VENV=`, default `.venv-li`). CPU dense-indexing RepoQA is 60–215 s/needle (days for a full sweep).
-- **Env vars:** `OPENAI_API_KEY` required for tree/LLM-reranker configs (`repoqa_tree.yaml`, `repoqa_hybrid_tree.yaml`, `repoqa_bm25_tree_rerank*.yaml`) — `set -a; source .env; set +a`. Linux: `export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libopenblas.so.0` if `import turbovec` fails on `cblas_sgemm` (CI sets this).
+- **Env vars:** `OPENAI_API_KEY` required for tree/LLM-reranker configs (`tree.yaml`, `hybrid_tree.yaml`, `*_tree_rerank*.yaml`) — `set -a; source .env; set +a`. Linux: `export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libopenblas.so.0` if `import turbovec` fails on `cblas_sgemm` (CI sets this).
 - **Offline fixtures:** `benchmarks/tests/fixtures/{repoqa_mini.json, ds1000_mini.json, ds1000_50.json}`; `--fixture` is repoqa-only. Late-interaction configs need `pip install -e ".[late-interaction]"` (~1–5 GB).
 - **`--corpus-dir` typo protection:** runner fast-fails if not a directory (otherwise an empty index would silently score ~0). Only the two native DS-1000 runs need it; oracle/context7/neuledge ignore it.
 - **`--metrics` names are exact strings** including `@k` (e.g. `ndcg@10`, `pass@1-needle`); the JSONL aggregate names append `_mean`/`_ci_low`/`_ci_high`.

@@ -1,0 +1,20 @@
+# Experiment overlay — dense + graph expansion with MENTIONS at reduced trust
+# (kind_weights {mentions: 0.6}), codefuse-ai/F2LLM-v2-330M. Ablation pair of
+# dense_graph_mentions_f2llm330m.yaml: identical capture and traversal,
+# the only difference is the per-kind down-weight on mentions-discovered
+# neighbours. See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: sentence_transformers
+  model_name: codefuse-ai/F2LLM-v2-330M
+  dim: 896
+  batch_size: 8
+  max_seq_length: 2048
+
+reference_graph:
+  capture:
+    kinds: [calls, imports, inherits, mentions]
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense_graph_mentions_weighted.yaml

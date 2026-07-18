@@ -2,7 +2,7 @@
 # exp_hybrid_graph.yaml (same two graph steps, but seeded from pure dense
 # instead of RRF(BM25,dense)). Isolates the base: does dropping the RRF-BM25
 # leg keep dense's standard-query recall while retaining the graph structural
-# lift? Referenced by ../repoqa_dense_graph_centrality_f2llm330m.yaml.
+# lift? Referenced by ../dense_graph_centrality_f2llm330m.yaml.
 name: exp_dense_graph_centrality
 steps:
   - name: pre_filter

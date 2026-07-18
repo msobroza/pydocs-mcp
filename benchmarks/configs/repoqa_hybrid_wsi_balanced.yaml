@@ -1,6 +1,0 @@
-# RepoQA experiment — hybrid BM25+dense, weighted-score interpolation
-# 0.5 BM25 / 0.5 dense. See benchmarks/EXPERIMENTS.md.
-pipelines:
-  chunk:
-    - default: true
-      pipeline_path: pipelines/exp_hybrid_wsi_balanced.yaml

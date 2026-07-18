@@ -1,0 +1,7 @@
+# Experiment overlay — dense (embedding) only. See benchmarks/EXPERIMENTS.md.
+# Uses the default single-vector embedder (`embedding:` -> FastEmbed
+# bge-small). No LLM is used at search time.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

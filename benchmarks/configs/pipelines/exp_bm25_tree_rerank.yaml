@@ -5,7 +5,7 @@
 #          and writes its ranked picks straight to state.candidates. "Tree picks
 #          only": no rrf_fusion / promotion step. Requires an LLM client (the
 #          `llm:` config + OPENAI_API_KEY) at search time.
-# Referenced by ../repoqa_bm25_tree_rerank.yaml.
+# Referenced by ../bm25_tree_rerank.yaml.
 name: exp_bm25_tree_rerank
 steps:
   - name: pre_filter

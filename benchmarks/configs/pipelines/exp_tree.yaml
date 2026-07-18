@@ -3,7 +3,7 @@
 # client (the `llm:` config + OPENAI_API_KEY) at search time. Mirrors the
 # shipped tree_only.yaml but drops the token_budget_formatter so the output
 # is a ranked candidate list (state.candidates) the recall@k / mrr metrics
-# can score. Referenced by ../repoqa_tree.yaml.
+# can score. Referenced by ../tree.yaml.
 name: exp_tree
 steps:
   - name: tree_reasoning
