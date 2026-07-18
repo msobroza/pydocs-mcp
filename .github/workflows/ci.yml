@@ -252,11 +252,14 @@ jobs:
       - name: Rust format check
         run: cargo fmt --check
 
+      # WHY: --locked makes this job the Cargo.lock freshness gate (the Rust
+      # counterpart of the python job's `uv lock --check`): a Cargo.toml edit
+      # without a lock refresh fails here instead of silently re-resolving.
       - name: Rust lint
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked -- -D warnings
 
       - name: Rust tests
-        run: cargo test
+        run: cargo test --locked
 
       # WHY: LD_PRELOAD forces libopenblas.so.0 (CBLAS-enabled pthread variant)
       # to load before turbovec/_turbovec.abi3.so so cblas_sgemm resolves at
@@ -266,7 +269,7 @@ jobs:
           LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
         run: |
           source .venv/bin/activate
-          maturin develop --release
+          maturin develop --release --locked
           python -m pytest tests/test_parity.py -v
 
   security:
