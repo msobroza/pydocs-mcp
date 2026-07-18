@@ -925,6 +925,19 @@ src-layout (`benchmarks/src/`). Commands below assume it is installed; from a
 bare source checkout, prefix any `python -m pydocs_eval.…` command with
 `PYTHONPATH=benchmarks/src`.
 
+**Console commands.** An installed environment also gets one console command
+per module entry point — pure aliases, so every `python -m pydocs_eval.…`
+invocation documented in this README keeps working unchanged:
+
+| Command | Same as |
+|---|---|
+| `pydocs-eval` | `python -m pydocs_eval.runner` |
+| `pydocs-eval-optimize` | `python -m pydocs_eval.optimize` |
+| `pydocs-eval-agent-track` | `python -m pydocs_eval.agent_track` |
+| `pydocs-eval-ci-compare` | `python -m pydocs_eval.reporting.ci_compare` |
+| `pydocs-eval-plot` | `python -m pydocs_eval.reporting.plotting` |
+| `pydocs-eval-bench-cache` | `python -m pydocs_eval.bench_cache_cli` |
+
 ### Running a sweep
 
 The runner is a module entry-point. Each comma-separated config is one
