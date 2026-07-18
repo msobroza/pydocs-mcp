@@ -27,13 +27,17 @@ under ``TYPE_CHECKING``.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.formatting import (
     format_decision_dashboard,
     format_decision_records,
     pointer_token,
+)
+from pydocs_mcp.application.suggestions import (
+    SEARCH_ZERO_HIT_SUGGESTION,
+    log_suggestion_fired,
 )
 from pydocs_mcp.extraction.decisions.engine import decision_key
 from pydocs_mcp.models import (
@@ -42,6 +46,7 @@ from pydocs_mcp.models import (
     ChunkOrigin,
     SearchQuery,
 )
+from pydocs_mcp.retrieval.config import SuggestionsConfig
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -168,6 +173,9 @@ class DecisionService:
     uow_factory: Callable[[], UnitOfWork]
     docs: DocsSearch  # semantic search over decision chunks
     default_limit: int = _DEFAULT_LIMIT  # wired from decisions.output
+    # ADR 0007: ``search_zero_hit`` gates the zero-hit overview pointer here
+    # exactly as it does in ToolRouter.search_codebase (one flag, both sites).
+    suggestions: SuggestionsConfig = field(default_factory=SuggestionsConfig)
 
     async def search(self, query: str) -> str:
         """Semantic search over decision chunks → rank-ordered record cards.
@@ -194,7 +202,7 @@ class DecisionService:
         """
         body, hydrated, scores = await self._search_hydrated(query)
         items = tuple(_decision_item(r, scores.get(r.id or -1, 0.0)) for r in hydrated)
-        return body, items, {}
+        return body, items, self._zero_hit_extras(hydrated, tool="search_codebase")
 
     async def why_search(self, query: str) -> WhyBody:
         """``get_why`` query mode with §3.6 items — same retrieval/render run
@@ -202,7 +210,21 @@ class DecisionService:
         ``get_why`` rows carry the decision identity + evidence locators, not
         the §3.2 search-ranking fields."""
         body, hydrated, _scores = await self._search_hydrated(query)
-        return body, _why_items(hydrated), {}
+        return body, _why_items(hydrated), self._zero_hit_extras(hydrated, tool="get_why")
+
+    def _zero_hit_extras(
+        self, hydrated: tuple[DecisionRecord, ...], *, tool: str
+    ) -> dict[str, object]:
+        """meta.suggestion mirror of the zero-hit pointer (§2.3, ADR 0007).
+
+        ``tool`` names the surface consuming this run (``get_why`` vs
+        ``search_codebase(kind="decision")``) so the fired-rule log line
+        attributes the nudge to the tool the client actually called.
+        """
+        if hydrated or not self.suggestions.search_zero_hit:
+            return {}
+        log_suggestion_fired(tool, "search_zero_hit")
+        return {"suggestion": SEARCH_ZERO_HIT_SUGGESTION}
 
     async def _search_hydrated(
         self, query: str
@@ -216,7 +238,11 @@ class DecisionService:
         )
         ranked = await self.docs.ranked(chunk_query)
         ordered_ids = _decision_ids_in_rank_order(ranked.items)
-        empty_body = f"No decisions found.\n{pointer_token('overview', '')}"
+        # ADR 0007: the zero-hit overview pointer is flag-gated (search_zero_hit
+        # off restores the bare pre-pointer body byte-for-byte).
+        empty_body = "No decisions found."
+        if self.suggestions.search_zero_hit:
+            empty_body += f"\n{pointer_token('overview', '')}"
         if not ordered_ids:
             return empty_body, (), {}
         async with self.uow_factory() as uow:

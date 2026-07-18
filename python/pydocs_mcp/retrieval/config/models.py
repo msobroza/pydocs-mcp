@@ -417,6 +417,23 @@ class NextPointersConfig(BaseModel):
     enabled: bool = True
 
 
+class SuggestionsConfig(BaseModel):
+    """Deterministic routing suggestions — one ablation flag per rule (ADR 0007).
+
+    Each rule appends a fixed ``[suggestion: …]`` hint (grep rules) or gates
+    the zero-hit overview pointer (search/why rule) and mirrors the fired text
+    as ``meta.suggestion``. Per-rule flags exist so the ablation phase can
+    measure each hint's contribution independently; fired rules log one
+    structured line each for machinery-vs-model attribution (R7).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    grep_zero_hit: bool = True
+    grep_truncated: bool = True
+    search_zero_hit: bool = True
+
+
 class OutputConfig(BaseModel):
     """Response-convention toggles shared by every tool output."""
 
@@ -424,6 +441,7 @@ class OutputConfig(BaseModel):
 
     envelope: EnvelopeConfig = Field(default_factory=EnvelopeConfig)
     next_pointers: NextPointersConfig = Field(default_factory=NextPointersConfig)
+    suggestions: SuggestionsConfig = Field(default_factory=SuggestionsConfig)
 
 
 class GitActivityConfig(BaseModel):

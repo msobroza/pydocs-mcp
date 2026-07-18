@@ -20,7 +20,7 @@ import posixpath
 import re
 from asyncio import to_thread
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -28,12 +28,17 @@ from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     ServiceUnavailableError,
 )
+from pydocs_mcp.application.suggestions import (
+    GREP_TRUNCATED_SUGGESTION,
+    GREP_ZERO_HIT_SUGGESTION,
+    log_suggestion_fired,
+)
 from pydocs_mcp.extraction.config import DiscoveryScopeConfig
 from pydocs_mcp.extraction.strategies.discovery import (
     DependencyFileDiscoverer,
     ProjectFileDiscoverer,
 )
-from pydocs_mcp.retrieval.config import FilesConfig
+from pydocs_mcp.retrieval.config import FilesConfig, SuggestionsConfig
 
 # NUL-byte sniff window for binary detection (grep skips, read_file errors).
 _BINARY_SNIFF_BYTES = 8192
@@ -363,6 +368,7 @@ class FileToolsService:
     dependency_scope: DiscoveryScopeConfig  # extraction.discovery.dependency
     list_dependency_packages: Callable[[], Awaitable[tuple[str, ...]]]
     files_config: FilesConfig
+    suggestions: SuggestionsConfig = field(default_factory=SuggestionsConfig)
 
     async def grep(self, payload: GrepRequest) -> FileToolResult:
         """Regex search (Python ``re`` flavor) over the discovery-scope corpus."""
@@ -377,8 +383,29 @@ class FileToolsService:
         limit = self._effective_limit(payload.head_limit, self.files_config.grep_head_limit)
         hits = await to_thread(_scan_candidates, candidates, regex, payload.multiline)
         if payload.output_mode == "content":
-            return _render_grep_content(hits, payload, limit)
-        return _render_grep_per_file(hits, payload.output_mode, limit)
+            rendered = _render_grep_content(hits, payload, limit)
+        else:
+            rendered = _render_grep_per_file(hits, payload.output_mode, limit)
+        return self._with_grep_suggestion(rendered, zero_hit=not hits)
+
+    def _with_grep_suggestion(self, rendered: FileToolResult, *, zero_hit: bool) -> FileToolResult:
+        """ADR 0007 grep rules: append the fixed hint + mirror it in extras.
+
+        Zero-hit and truncation are mutually exclusive (no matches ⇒ nothing
+        to cut), so at most one rule fires per response. Each rule is
+        individually flaggable (``output.suggestions.*``); with a rule off
+        the response is byte-identical to the pre-suggestion output.
+        """
+        body, items, extras = rendered
+        if zero_hit and self.suggestions.grep_zero_hit:
+            log_suggestion_fired("grep", "grep_zero_hit")
+            suffix = GREP_ZERO_HIT_SUGGESTION
+        elif extras.get("truncated") and self.suggestions.grep_truncated:
+            log_suggestion_fired("grep", "grep_truncated")
+            suffix = GREP_TRUNCATED_SUGGESTION
+        else:
+            return rendered
+        return f"{body}\n{suffix}", items, {**extras, "suggestion": suffix}
 
     async def glob(self, payload: GlobRequest) -> FileToolResult:
         """Find project files by glob pattern, newest (mtime) first."""

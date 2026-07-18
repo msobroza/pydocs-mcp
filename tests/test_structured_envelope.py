@@ -112,6 +112,10 @@ _META_FIELDS = {
     "truncated",
 }
 
+# §2.3 — the three suggestion-emitting tools declare ``meta.suggestion``
+# (ADR 0007); the field is always present on the wire, null when no rule fired.
+_SUGGESTION_TOOLS = {"search_codebase", "get_why", "grep"}
+
 # Every tool emits items[] now; the golden calls hit empty corpora for the
 # reference/decision layers, so these two arrays stay empty ON THIS FIXTURE
 # (zero rows ≠ pending — the shape tests below assert filled rows).
@@ -187,6 +191,11 @@ def test_structured_envelope_shape(handlers, tool: str) -> None:
 def test_structured_meta_contract_fields(handlers, tool: str) -> None:
     meta = _arun(handlers[tool](**_CALLS[tool])).structuredContent["meta"]
     expected = _META_FIELDS | ({"resolution"} if tool == "get_references" else set())
+    if tool in _SUGGESTION_TOOLS:
+        expected |= {"suggestion"}
+        # The golden calls all hit (search) or render a dashboard (why) —
+        # no suggestion rule fires, so the declared field stays null.
+        assert meta["suggestion"] is None
     assert set(meta) == expected
     assert meta["tool"] == tool
     # No project= selector sent -> the default (first-loaded) project's name,
@@ -198,6 +207,18 @@ def test_structured_meta_contract_fields(handlers, tool: str) -> None:
     assert meta["live_git_head"] is None
     assert meta["index_stale"] is False
     assert meta["truncated"] is False
+
+
+def test_search_zero_hit_meta_carries_declared_suggestion(handlers) -> None:
+    # §2.3 — the fired-rule text must survive the server-side envelope-model
+    # validation (an extras-only change would be silently dropped: MetaModel
+    # defaults to extra="ignore", so the declared-field subclass is mandatory).
+    from pydocs_mcp.application.suggestions import SEARCH_ZERO_HIT_SUGGESTION
+
+    result = _arun(handlers["search_codebase"](query="zzz9qx_no_such_term", kind="docs"))
+    meta = result.structuredContent["meta"]
+    assert meta["suggestion"] == SEARCH_ZERO_HIT_SUGGESTION
+    assert "→ get_overview()" in result.content[0].text
 
 
 def test_references_meta_carries_declared_resolution(handlers) -> None:

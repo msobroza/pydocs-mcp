@@ -26,6 +26,37 @@ def test_output_overridable_via_overlay(tmp_path) -> None:
     assert config.output.next_pointers.enabled is False
 
 
+def test_output_suggestions_defaults_present() -> None:
+    # ADR 0007: all three deterministic-suggestion rules default ON.
+    config = AppConfig.load()
+    assert config.output.suggestions.grep_zero_hit is True
+    assert config.output.suggestions.grep_truncated is True
+    assert config.output.suggestions.search_zero_hit is True
+
+
+def test_output_suggestions_overridable_via_overlay(tmp_path) -> None:
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text(
+        "output:\n"
+        "  suggestions:\n"
+        "    grep_zero_hit: false\n"
+        "    grep_truncated: false\n"
+        "    search_zero_hit: false\n"
+    )
+    config = AppConfig.load(explicit_path=overlay)
+    assert config.output.suggestions.grep_zero_hit is False
+    assert config.output.suggestions.grep_truncated is False
+    assert config.output.suggestions.search_zero_hit is False
+
+
+def test_output_suggestions_typo_key_rejected(tmp_path) -> None:
+    """Per-rule ablation flags must fail loud on a misspelled key."""
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text("output:\n  suggestions: { grep_zero_hits: false }\n")
+    with pytest.raises(ValidationError):
+        AppConfig.load(explicit_path=overlay)
+
+
 def test_output_envelope_typo_key_rejected(tmp_path) -> None:
     """A typo'd envelope key (``enabld`` for ``enabled``) must fail loud.
 

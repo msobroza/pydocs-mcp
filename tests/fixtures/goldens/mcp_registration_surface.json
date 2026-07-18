@@ -701,8 +701,8 @@
     },
     "outputSchema": {
       "$defs": {
-        "MetaModel": {
-          "description": "Shared ``meta`` block (contract \u00a72.1).",
+        "SuggestionMetaModel": {
+          "description": "\u00a72.3 \u2014 deterministic routing suggestion (ADR 0007) on the three\nsuggestion-emitting tools (``search_codebase``, ``get_why``, ``grep``).\n\nThe declared field is mandatory: ``MetaModel`` has no ``model_config``,\nso pydantic's default ``extra=\"ignore\"`` silently DROPS any undeclared\nextras key at the server-side envelope validation \u2014 an extras-only\nproducer change would never reach the wire. Null when no rule fired.",
           "properties": {
             "index_stale": {
               "title": "Index Stale",
@@ -734,6 +734,18 @@
               "title": "Project",
               "type": "string"
             },
+            "suggestion": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Suggestion"
+            },
             "tool": {
               "title": "Tool",
               "type": "string"
@@ -751,7 +763,7 @@
             "index_stale",
             "truncated"
           ],
-          "title": "MetaModel",
+          "title": "SuggestionMetaModel",
           "type": "object"
         },
         "WhyItem": {
@@ -804,7 +816,7 @@
           "type": "array"
         },
         "meta": {
-          "$ref": "#/$defs/MetaModel"
+          "$ref": "#/$defs/SuggestionMetaModel"
         },
         "text": {
           "title": "Text",
@@ -1104,8 +1116,8 @@
           "title": "GrepItem",
           "type": "object"
         },
-        "MetaModel": {
-          "description": "Shared ``meta`` block (contract \u00a72.1).",
+        "SuggestionMetaModel": {
+          "description": "\u00a72.3 \u2014 deterministic routing suggestion (ADR 0007) on the three\nsuggestion-emitting tools (``search_codebase``, ``get_why``, ``grep``).\n\nThe declared field is mandatory: ``MetaModel`` has no ``model_config``,\nso pydantic's default ``extra=\"ignore\"`` silently DROPS any undeclared\nextras key at the server-side envelope validation \u2014 an extras-only\nproducer change would never reach the wire. Null when no rule fired.",
           "properties": {
             "index_stale": {
               "title": "Index Stale",
@@ -1137,6 +1149,18 @@
               "title": "Project",
               "type": "string"
             },
+            "suggestion": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Suggestion"
+            },
             "tool": {
               "title": "Tool",
               "type": "string"
@@ -1154,7 +1178,7 @@
             "index_stale",
             "truncated"
           ],
-          "title": "MetaModel",
+          "title": "SuggestionMetaModel",
           "type": "object"
         }
       },
@@ -1167,7 +1191,7 @@
           "type": "array"
         },
         "meta": {
-          "$ref": "#/$defs/MetaModel"
+          "$ref": "#/$defs/SuggestionMetaModel"
         },
         "text": {
           "title": "Text",
@@ -1392,59 +1416,6 @@
     },
     "outputSchema": {
       "$defs": {
-        "MetaModel": {
-          "description": "Shared ``meta`` block (contract \u00a72.1).",
-          "properties": {
-            "index_stale": {
-              "title": "Index Stale",
-              "type": "boolean"
-            },
-            "indexed_git_head": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Indexed Git Head"
-            },
-            "live_git_head": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Live Git Head"
-            },
-            "project": {
-              "title": "Project",
-              "type": "string"
-            },
-            "tool": {
-              "title": "Tool",
-              "type": "string"
-            },
-            "truncated": {
-              "title": "Truncated",
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "tool",
-            "project",
-            "indexed_git_head",
-            "live_git_head",
-            "index_stale",
-            "truncated"
-          ],
-          "title": "MetaModel",
-          "type": "object"
-        },
         "SearchItem": {
           "description": "\u00a73.2 \u2014 ranked chunk / member / decision rows.",
           "properties": {
@@ -1514,6 +1485,71 @@
           ],
           "title": "SearchItem",
           "type": "object"
+        },
+        "SuggestionMetaModel": {
+          "description": "\u00a72.3 \u2014 deterministic routing suggestion (ADR 0007) on the three\nsuggestion-emitting tools (``search_codebase``, ``get_why``, ``grep``).\n\nThe declared field is mandatory: ``MetaModel`` has no ``model_config``,\nso pydantic's default ``extra=\"ignore\"`` silently DROPS any undeclared\nextras key at the server-side envelope validation \u2014 an extras-only\nproducer change would never reach the wire. Null when no rule fired.",
+          "properties": {
+            "index_stale": {
+              "title": "Index Stale",
+              "type": "boolean"
+            },
+            "indexed_git_head": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Indexed Git Head"
+            },
+            "live_git_head": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Live Git Head"
+            },
+            "project": {
+              "title": "Project",
+              "type": "string"
+            },
+            "suggestion": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Suggestion"
+            },
+            "tool": {
+              "title": "Tool",
+              "type": "string"
+            },
+            "truncated": {
+              "title": "Truncated",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "tool",
+            "project",
+            "indexed_git_head",
+            "live_git_head",
+            "index_stale",
+            "truncated"
+          ],
+          "title": "SuggestionMetaModel",
+          "type": "object"
         }
       },
       "properties": {
@@ -1525,7 +1561,7 @@
           "type": "array"
         },
         "meta": {
-          "$ref": "#/$defs/MetaModel"
+          "$ref": "#/$defs/SuggestionMetaModel"
         },
         "text": {
           "title": "Text",

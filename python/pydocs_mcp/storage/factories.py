@@ -255,6 +255,7 @@ def build_sqlite_file_tools_service(
         dependency_scope=config.extraction.discovery.dependency,
         list_dependency_packages=_list_dependency_packages,
         files_config=config.files,
+        suggestions=config.output.suggestions,
     )
 
 
@@ -343,13 +344,16 @@ def build_sqlite_decision_service(
     default for direct/test construction.
     """
     from pydocs_mcp.application.decision_service import DecisionService
-    from pydocs_mcp.retrieval.config import DecisionsConfig
+    from pydocs_mcp.retrieval.config import DecisionsConfig, SuggestionsConfig
 
     decisions_cfg = config.decisions if config is not None else DecisionsConfig()
     return DecisionService(
         uow_factory=build_sqlite_uow_factory(db_path),
         docs=docs,
         default_limit=decisions_cfg.output.default_limit,
+        # ADR 0007: one flag (output.suggestions.search_zero_hit) gates both
+        # zero-hit pointer sites — this service and ToolRouter.search_codebase.
+        suggestions=(config.output.suggestions if config is not None else SuggestionsConfig()),
     )
 
 

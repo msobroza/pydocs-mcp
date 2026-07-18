@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,9 @@ from pydocs_mcp.application.multi_project_search import (
     ProjectServices,
 )
 from pydocs_mcp.application.null_services import NullDecisionService
+from pydocs_mcp.application.suggestions import SEARCH_ZERO_HIT_SUGGESTION
 from pydocs_mcp.application.tool_router import ToolRouter
+from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
@@ -95,7 +98,7 @@ class _EmptyApi:
         return ModuleMemberList(items=())
 
 
-def _empty_search_router() -> ToolRouter:
+def _empty_search_router(suggestions: SuggestionsConfig | None = None) -> ToolRouter:
     """A single-project ToolRouter whose docs/api services return no hits, so
     ``search_codebase`` renders the empty-result body."""
     base = make_services()[0]
@@ -115,6 +118,7 @@ def _empty_search_router() -> ToolRouter:
         envelope=make_envelope(),
         search_router=MultiProjectSearch(services=services),
         lookup_router=MultiProjectLookup(services=services),
+        suggestions=suggestions or SuggestionsConfig(),
     )
 
 
@@ -143,3 +147,39 @@ def test_zero_hit_search_points_at_overview() -> None:
     assert "→ get_overview()" in out
     # And the raw token must not leak through the envelope.
     assert "[[next:" not in out
+
+
+def test_zero_hit_search_meta_carries_suggestion() -> None:
+    # ADR 0007: the fired rule is machine-readable as meta.suggestion so
+    # transcript analysis can attribute the nudge to machinery (R7).
+    resp = asyncio.run(_empty_search_router().search_codebase(SearchInput(query="nothing here")))
+    assert resp.meta["suggestion"] == SEARCH_ZERO_HIT_SUGGESTION
+
+
+def test_zero_hit_search_flag_off_strips_pointer_and_suggestion() -> None:
+    # search_zero_hit off ⇒ the bare empty-result body (the pre-pointer
+    # bytes) and no suggestion key anywhere in meta.
+    on = asyncio.run(_empty_search_router().search_codebase(SearchInput(query="nothing here")))
+    off = asyncio.run(
+        _empty_search_router(SuggestionsConfig(search_zero_hit=False)).search_codebase(
+            SearchInput(query="nothing here")
+        )
+    )
+    assert "get_overview" not in off.text
+    assert "suggestion" not in off.meta
+    # The default-on response differs from flag-off ONLY by the pointer line
+    # (search_zero_hit is behavior-preserving by construction, ADR 0007).
+    assert on.text.replace("\n→ get_overview()", "") == off.text
+
+
+def test_zero_hit_search_fired_rule_emits_structured_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
+        asyncio.run(_empty_search_router().search_codebase(SearchInput(query="nothing here")))
+    events = [json.loads(r.message) for r in caplog.records]
+    assert {
+        "event": "suggestion_fired",
+        "tool": "search_codebase",
+        "rule": "search_zero_hit",
+    } in events

@@ -113,6 +113,27 @@ Field semantics:
   configuration in a future release, only this declared value flips — names, parameters,
   and the rest of the envelope are invariant under that swap (ADR 0004).
 
+### 2.3 The `meta.suggestion` extension *(pending owner ratification)*
+
+The three suggestion-emitting tools — `search_codebase`, `get_why`, and `grep` — carry
+one additional meta field, following the §2.2 additive-extension precedent (ADR 0007):
+
+```json
+"meta": { "...": "...", "suggestion": "[suggestion: …]" }
+```
+
+- `meta.suggestion: str | null` — the deterministic routing suggestion that fired for
+  this response, or `null` when none did. The value is fixed server rendering under the
+  deterministic `[suggestion:` prefix (grep rules also append it to the text body; the
+  search/why zero-hit rule mirrors the existing overview pointer) — it is
+  machinery-initiated output, never optimizable description text, so transcript analysis
+  can attribute it to the harness rather than the model. Each rule is individually
+  flaggable by deployment configuration
+  (`output.suggestions.{grep_zero_hit,grep_truncated,search_zero_hit}`, all default on);
+  with every flag off the field is always `null` and bodies carry no suggestion line.
+  Purely additive: names, parameters, items rows, and the rest of the envelope are
+  invariant under any flag combination.
+
 ---
 
 ## 3. Tool inventory
@@ -427,6 +448,7 @@ No renames. No removals. Existing six-tool clients keep working unmodified.
 | 4 | CLI: canonical subcommands named exactly like the tools (`pydocs-mcp get_overview`, `pydocs-mcp search_codebase`, …); the short verbs (`overview`, `search`, `symbol`, `context`, `refs`, `why`) remain as aliases; `lookup` stays a deprecated alias. All nine subcommands source help text from `TOOL_DOCS`. The CLI-local `--limit` default literal is removed in favor of the YAML-wired default | Changed | Existing CLI invocations keep working; scripts may migrate to canonical names at leisure. |
 | 5 | Project-code addressing: dotted targets now resolve bare project-qualified names for project source (stored under `__project__`) in `get_symbol` / `get_context` / `get_references` (§3, dotted-target grammar) | Fixed | Previously-erroring targets now resolve; no working call changes behavior. |
 | 6 | `get_references` description re-hedged to declare syntactic resolution; `meta.resolution` added (§2.2) | Changed | Description text only (descriptions are mutable by design, §1); one additive meta field. |
+| 7 | `meta.suggestion` added to `search_codebase`, `get_why`, and `grep` (§2.3, ADR 0007); grep zero-hit / truncated responses gain a fixed `[suggestion: …]` body line, each rule flaggable via `output.suggestions.*` | Added *(pending owner ratification)* | Additive optional meta field (`null` when no rule fired). Text-reading clients see one extra deterministic line on grep misses/cuts; `search_codebase` / `get_why` zero-hit bytes are unchanged at the default flags. |
 
 Version note: the product version bumps to 0.6.0 with Keep-a-Changelog entries. Release
 tagging and publication are separate, owner-gated events and are not implied by this

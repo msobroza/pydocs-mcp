@@ -128,6 +128,18 @@ output:
     head_check_ttl_seconds: 5
   next_pointers:
     enabled: true
+  suggestions:                # Deterministic routing suggestions — one ablation flag per rule (ADR 0007)
+    # Hypothesis: models with strong grep priors thrash on exact-string
+    # misses; a deterministic redirect to search_codebase removes a
+    # learned-routing burden.
+    grep_zero_hit: true
+    # Hypothesis: silently truncated grep loses evidence and causes wasted
+    # re-reads; a narrowing hint (path= / glob= / head_limit=) prevents both.
+    grep_truncated: true
+    # Hypothesis: behavior-preserving default — the already-shipped zero-hit
+    # overview pointer (search_codebase + get_why) gains an independent
+    # off-switch for ablation, decoupled from next_pointers.enabled.
+    search_zero_hit: true
 
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20

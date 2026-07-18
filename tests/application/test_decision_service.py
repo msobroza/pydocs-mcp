@@ -15,10 +15,16 @@ fake ``DocsSearch`` that returns ranked ``decision_record`` chunks carrying the
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from pydocs_mcp.application.decision_service import DecisionService, _classify_target
+from pydocs_mcp.application.suggestions import SEARCH_ZERO_HIT_SUGGESTION
 from pydocs_mcp.extraction.decisions.engine import decision_key
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ChunkList
+from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.node_score import NodeScore
@@ -92,6 +98,7 @@ def _service(
     docs: _FakeDocs | None = None,
     node_scores: InMemoryNodeScoreStore | None = None,
     references: InMemoryReferenceStore | None = None,
+    suggestions: SuggestionsConfig | None = None,
 ) -> DecisionService:
     store = InMemoryDecisionStore()
     for rec in records:
@@ -101,7 +108,11 @@ def _service(
         node_scores=node_scores,
         references=references,
     )
-    return DecisionService(uow_factory=uow_factory, docs=docs or _FakeDocs(hits=()))
+    return DecisionService(
+        uow_factory=uow_factory,
+        docs=docs or _FakeDocs(hits=()),
+        suggestions=suggestions or SuggestionsConfig(),
+    )
 
 
 # ── search ───────────────────────────────────────────────────────────────
@@ -173,6 +184,19 @@ async def test_search_with_items_no_hits_returns_empty_items() -> None:
     svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
     body, items, extras = await svc.search_with_items("no such decision")
     assert "[[next:overview:]]" in body
+    assert items == ()
+    # ADR 0007: the zero-hit pointer is machine-readable as meta.suggestion.
+    assert extras == {"suggestion": SEARCH_ZERO_HIT_SUGGESTION}
+
+
+async def test_search_with_items_zero_hit_flag_off_restores_bare_body() -> None:
+    svc = _service(
+        records=(REC_SIDECAR,),
+        docs=_FakeDocs(hits=()),
+        suggestions=SuggestionsConfig(search_zero_hit=False),
+    )
+    body, items, extras = await svc.search_with_items("no such decision")
+    assert body == "No decisions found."
     assert items == ()
     assert extras == {}
 
@@ -402,9 +426,39 @@ async def test_why_search_triple_matches_text_facade() -> None:
 
 async def test_why_search_zero_hits_has_no_items() -> None:
     svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
-    body, items, _extras = await svc.why_search("no such decision")
+    body, items, extras = await svc.why_search("no such decision")
     assert "No decisions found." in body
+    assert "[[next:overview:]]" in body
     assert items == ()
+    assert extras == {"suggestion": SEARCH_ZERO_HIT_SUGGESTION}
+
+
+async def test_why_search_zero_hit_flag_off_restores_bare_body() -> None:
+    # search_zero_hit gates BOTH producer sites (tool_router + here) under
+    # one flag (ADR 0007) — off ⇒ no pointer, no suggestion key.
+    svc = _service(
+        records=(REC_SIDECAR,),
+        docs=_FakeDocs(hits=()),
+        suggestions=SuggestionsConfig(search_zero_hit=False),
+    )
+    body, items, extras = await svc.why_search("no such decision")
+    assert body == "No decisions found."
+    assert items == ()
+    assert extras == {}
+
+
+async def test_why_search_zero_hit_fired_rule_emits_structured_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
+    with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
+        await svc.why_search("no such decision")
+    events = [json.loads(r.message) for r in caplog.records]
+    assert {
+        "event": "suggestion_fired",
+        "tool": "get_why",
+        "rule": "search_zero_hit",
+    } in events
 
 
 async def test_why_targets_triple_matches_text_facade_and_dedupes() -> None:
