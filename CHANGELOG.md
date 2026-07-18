@@ -38,6 +38,38 @@ removals — existing six-tool clients keep working unmodified.
   field sets + `meta` fields), and the frozen vocabularies; changing any of it
   is a design-doc-level versioning event. Tool *descriptions* stay deliberately
   mutable (they are the substrate the description optimizer rewrites).
+- **Externalized description source** — every LLM-visible description string
+  (nine tool descriptions, server instructions, turn-0 preamble) now lives in
+  one packaged delimited document, `defaults/descriptions.md`, validated at
+  load (closed section set, required markers, token budgets) and swappable per
+  deployment: `pydocs-mcp serve . --descriptions PATH` >
+  `PYDOCS_SERVE__DESCRIPTIONS_PATH` env var > YAML `serve.descriptions_path` >
+  packaged default. An explicitly named source that is missing or invalid is a
+  hard startup error — never a silent fallback. Every run logs the fingerprint
+  of the surface it serves (`descriptions artifact <hash12> source=…`), and
+  CLI `--help` renders the same bundle the MCP server serves. Default behavior
+  is byte-identical to the previous hardcoded text; authoring guide in
+  `docs/description-authoring.md` (rationale: `docs/adr/0005`–`0006`).
+- **Deterministic routing suggestions** — dead-end responses now carry a fixed
+  `[suggestion: …]` line with the escape hatch: zero-hit `grep` redirects
+  conceptual queries to `search_codebase`, truncated `grep` shows how to
+  narrow (`path=` / `glob=` / `head_limit=`), and the existing zero-hit
+  `search_codebase` / `get_why` overview pointer gains its own switch. One
+  YAML flag per rule (`output.suggestions.{grep_zero_hit,grep_truncated,
+  search_zero_hit}`, all default on); the fired suggestion also travels as the
+  additive envelope field `meta.suggestion` on those three tools
+  (`docs/tool-contracts.md` §2.3; rationale: `docs/adr/0007`). With a flag
+  off, that rule's output is byte-identical to before.
+- **Turn-0 context pack** — an opt-in, deterministic context block for
+  conversation start: a fixed harness-injected marker line, the turn-0
+  preamble from the description source, the same overview card `get_overview`
+  serves, and an installed-package version inventory. Off by default
+  (`serve.turn0_context.enabled`); budget-capped in real tokens
+  (`serve.turn0_context.budget_tokens`, card trimmed before inventory,
+  truncation always noted). When enabled, the ask-your-docs agent injects it
+  into its prompt; the new `pydocs-mcp turn0-context` subcommand prints the
+  pack for external harnesses regardless of the flag (rationale:
+  `docs/adr/0008`).
 - **Chunk source spans persisted (schema v15)** — chunks now carry
   `source_path` / `start_line` / `end_line` through SQLite, so structured
   items cite exact file spans. Additive in-place migration; rows indexed

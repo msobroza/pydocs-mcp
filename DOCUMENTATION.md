@@ -808,6 +808,28 @@ pydocs-mcp --config ./my-pydocs.yaml serve .    # --config is global — it prec
 # or: PYDOCS_CONFIG_PATH=./my-pydocs.yaml pydocs-mcp serve .
 ```
 
+### Description surface, suggestions, and turn-0 context
+
+The LLM-facing text and the deterministic nudges around it have their own
+knobs (decision records: `docs/adr/0005`–`0008`; authoring guide:
+[docs/description-authoring.md](docs/description-authoring.md)):
+
+| Key | Default | Effect |
+|---|---|---|
+| `serve.descriptions_path` | `null` | Serve the tool descriptions / server instructions / turn-0 preamble from an override document instead of the packaged `defaults/descriptions.md`. Precedence: `serve --descriptions PATH` flag > `PYDOCS_SERVE__DESCRIPTIONS_PATH` env var > this key > packaged. An explicitly named source that is missing or invalid is a **hard startup error** — never a silent fallback. |
+| `serve.turn0_context.enabled` | `false` | Inject the turn-0 context pack (marker line + preamble + overview card + installed-package version inventory) into the ask-your-docs agent prompt at conversation start. `pydocs-mcp turn0-context` prints the same pack on demand regardless of the flag. |
+| `serve.turn0_context.budget_tokens` | `2000` | Hard cap on the pack in real (tiktoken) tokens; the overview card is trimmed before the version inventory, and truncation is always noted in the pack. |
+| `output.suggestions.grep_zero_hit` | `true` | Zero-hit `grep` responses append a fixed `[suggestion: …]` line redirecting conceptual queries to `search_codebase`. |
+| `output.suggestions.grep_truncated` | `true` | Truncated `grep` responses append a fixed narrowing hint (`path=` / `glob=` / `head_limit=`). |
+| `output.suggestions.search_zero_hit` | `true` | Zero-hit `search_codebase` / `get_why` responses append the `get_overview` pointer. |
+
+The suggestion lines are deterministic machinery with a fixed `[suggestion:`
+prefix — server-initiated nudges, distinguishable in any transcript from
+model-chosen routing. Each flag ablates one rule independently; with a flag
+off, that rule's responses are byte-identical to output with no suggestion
+machinery at all. The startup log pins which description document a run
+served: `descriptions artifact <hash12> source=packaged|<path>`.
+
 Every tunable is listed in `python/pydocs_mcp/defaults/default_config.yaml` —
 read it as the canonical reference.
 
