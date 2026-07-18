@@ -134,8 +134,9 @@ the field to get_why closes the machine-readability asymmetry the zero-hit rule
 would otherwise create: search_codebase would carry its overview hint in meta while
 get_why carried the identical hint only as body text. The tool-contracts amendment is the
 sanctioned additive-extension shape (§2.2 is the precedent) and is pre-authorized by
-the spec's option-(a) wording; it will nonetheless be explicitly flagged for owner
-review at PR time, since §1 declares meta field names frozen.
+the spec's option-(a) wording; because §1 declares meta field names frozen it was
+nonetheless flagged explicitly for owner review, and the owner ratified the
+amendment on 2026-07-18 — contract §2.3 and migration row 7 are now unconditional.
 
 **Suggestion wording is fixed rendering, not optimizable text.** It joins the
 description-source exception list alongside envelope rendering strings (freshness
@@ -162,11 +163,13 @@ Costs and risks:
 
 - **Contract edit.** Adding `meta.suggestion` to three envelopes touches the frozen
   §2 meta field set. It is additive and precedented, but it is still a contract
-  amendment external schema-validating clients can observe; owner sign-off at PR
-  time is a hard gate, not a formality.
+  amendment external schema-validating clients can observe; owner sign-off was
+  treated as a hard gate and was granted on 2026-07-18.
 - **Default-on byte changes.** `grep_zero_hit` and `grep_truncated` alter default
   grep output bytes for existing deployments (golden tests over grep bodies must be
   updated deliberately). `search_zero_hit` is behavior-preserving by construction.
+  The owner ratified the default-on choice on 2026-07-18; the ablation phase remains
+  the final arbiter of these defaults before any public release.
 - **Search-space removal.** Fixing the suggestion wording removes those strings from
   the optimizer's reach. If a hint's phrasing turns out to matter, changing it is a
   code change, not an optimizer step — accepted to keep R7's boundary clean.
