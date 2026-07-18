@@ -11,7 +11,7 @@ from pydocs_eval import _bench_cache
 from pydocs_eval.runner import build_dataset_kwargs
 from pydocs_eval.sweep import run_sweep, run_sweep_detailed
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 
 # ── build_dataset_kwargs: the RepoQA-crashes-on-unknown-kwargs contract ──

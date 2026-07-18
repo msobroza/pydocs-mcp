@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from pydocs_eval.datasets.ds1000 import Ds1000Dataset
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_mini.json"
+FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "ds1000_mini.json"
 
 # The split default — referenced so the backward-compat assertion can't
 # silently drift if the default changes.

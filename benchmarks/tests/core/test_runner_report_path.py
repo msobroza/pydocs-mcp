@@ -22,7 +22,7 @@ from pathlib import Path
 
 from pydocs_eval.runner import main
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 
 def _empty_overlay(tmp_path: Path) -> Path:

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from pydocs_eval.datasets.repoqa import RepoQADataset
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 # The split default — referenced so the backward-compat assertion can't
 # silently drift if the default changes.

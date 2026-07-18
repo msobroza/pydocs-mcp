@@ -34,7 +34,7 @@ from pydocs_eval.systems.base_system import RetrievedItem
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "ds1000_mini.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "ds1000_mini.json"
 
 
 # ── --dataset-library-filter -> Ds1000Dataset.library_filter ────────────────

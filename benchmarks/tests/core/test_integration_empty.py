@@ -20,7 +20,7 @@ from pydocs_eval.systems.base_system import RetrievedItem
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 
 @system_registry.register("empty-integration-test")

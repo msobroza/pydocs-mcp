@@ -1,4 +1,4 @@
-# benchmarks/tests/eval/test_runner_bench_cache_flag.py
+# benchmarks/tests/core/test_runner_bench_cache_flag.py
 from __future__ import annotations
 
 from pydocs_eval import _bench_cache

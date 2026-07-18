@@ -1,4 +1,4 @@
-# benchmarks/tests/eval/test_bench_cache_cli.py
+# benchmarks/tests/core/test_bench_cache_cli.py
 from __future__ import annotations
 
 from pydocs_eval import _bench_cache

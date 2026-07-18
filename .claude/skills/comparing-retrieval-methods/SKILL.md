@@ -49,7 +49,7 @@ For **quality** comparisons a warm bench cache is expected and correct — leave
 
 | You want | Use | Cost |
 |---|---|---|
-| Smoke-test the sweep wiring, fully offline | `--fixture benchmarks/tests/eval/fixtures/repoqa_mini.json --limit 5` | seconds |
+| Smoke-test the sweep wiring, fully offline | `--fixture benchmarks/tests/fixtures/repoqa_mini.json --limit 5` | seconds |
 | Fast iteration on real data | `--dataset repoqa --split small_test` (~30 needles) | minutes warm-cache |
 | Confirm a winner before adopting it | full `--split test`, plus `--dataset repoqa-structural` as the do-no-harm gate | GPU recommended |
 | External calibration vs published numbers | DS-1000 oracle run (see reference, Run 3) | HF downloads + setup |

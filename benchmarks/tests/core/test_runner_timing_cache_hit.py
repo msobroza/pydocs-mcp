@@ -1,4 +1,4 @@
-# benchmarks/tests/eval/test_runner_timing_cache_hit.py
+# benchmarks/tests/core/test_runner_timing_cache_hit.py
 from __future__ import annotations
 
 import tempfile
