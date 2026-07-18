@@ -149,9 +149,11 @@ jobs:
         # benchmarks/ is not under tests/, so a rename to an internal
         # pydocs_mcp module (e.g. storage/wiring.py -> storage/factories.py)
         # silently breaks it. AST-level scan resolves every `pydocs_mcp.*`
-        # import declared by the three benchmark entry files, *without*
-        # executing their top-level code (pandas/httpx/rich aren't installed
-        # in this job). Catches stale module paths + missing attributes.
+        # import declared under benchmarks/scripts/ and
+        # benchmarks/src/pydocs_eval/, *without* executing their top-level
+        # code (pandas/httpx/rich aren't installed in this job). Catches
+        # stale module paths + missing attributes; fails if the scan ever
+        # collects zero imports (the gate was once vacuous for months).
         run: uv run python scripts/smoke_check_benchmark_imports.py
 
       # WHY: LD_PRELOAD forces the dynamic linker to load libopenblas.so.0

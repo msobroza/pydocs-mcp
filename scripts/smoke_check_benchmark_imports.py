@@ -3,9 +3,14 @@
 CI runs only ``tests/``; benchmarks/ never gets exercised. A rename of an
 internal module (``storage/wiring.py`` → ``storage/factories.py`` was the
 real case) silently breaks the benchmark scripts. This script catches
-that class of drift by AST-scanning each benchmark entry file, collecting
+that class of drift by AST-scanning every ``.py`` file under
+``benchmarks/scripts/`` and ``benchmarks/src/pydocs_eval/``, collecting
 the ``import pydocs_mcp.X`` / ``from pydocs_mcp.X import Y`` statements,
-and verifying each one resolves.
+and verifying each one resolves. Two hard rules keep the gate honest:
+a scan that collects ZERO imports fails (a dead scan dir once made this
+gate vacuously green for months), and a missing ``pydocs_mcp.*`` module
+always fails — only missing THIRD-PARTY modules (optional extras absent
+from the CI job) are tolerated as counted skips.
 
 We do NOT exec the benchmark files — they import ``pandas``/``httpx``/
 ``rich`` which aren't installed in the test job. AST-level resolution is
