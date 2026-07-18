@@ -19,12 +19,12 @@ from pydocs_eval.datasets.ds1000_schema import (
 )
 from pydocs_eval.registries import dataset_registry
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_mini.json"
+FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "ds1000_mini.json"
 # Mirrors the real ``code-rag-bench/ds1000`` HF row shape: NO top-level
 # ``library`` / ``perturbation_*`` (they're nested inside a ``metadata``
 # struct — a dict, the shape the live ``datasets`` loader produces), plus one
 # doc-less (empty-gold) pure-codegen row.
-NESTED_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_metadata_nested.json"
+NESTED_FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "ds1000_metadata_nested.json"
 
 
 async def test_dataset_yields_eight_rows_from_mini_fixture() -> None:

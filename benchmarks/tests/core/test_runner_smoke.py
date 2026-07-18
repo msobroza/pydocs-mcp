@@ -22,7 +22,7 @@ from pydocs_eval.registries import system_registry
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 
 def _empty_overlay(tmp_path: Path) -> Path:

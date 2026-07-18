@@ -21,7 +21,7 @@ from pydocs_eval.systems.base_system import RetrievedItem
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 # WHY: the runner calls ``system_registry.build(system_name)`` with no
 # kwargs, so the oracle's per-task gold cannot be passed via constructor.

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import tomllib
 
-# parents[0] = tests/eval, parents[1] = tests, parents[2] = benchmarks
+# parents[0] = tests/datasets, parents[1] = tests, parents[2] = benchmarks
 _PYPROJECT_PATH = (
     Path(__file__).parents[2] / "fixtures" / "ds1000_reference_project" / "pyproject.toml"
 )

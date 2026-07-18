@@ -151,7 +151,7 @@ the top-K. This is the dominant query shape for `search_codebase(query, kind, ..
 on the MCP surface.
 
 **Example task** (from
-`benchmarks/tests/eval/fixtures/repoqa_mini.json`, the 5-needle fixture shipped
+`benchmarks/tests/fixtures/repoqa_mini.json`, the 5-needle fixture shipped
 for hermetic CI):
 
 ```text
@@ -232,7 +232,7 @@ pandas, SciPy, Matplotlib, scikit-learn, TensorFlow, PyTorch), from Lai et al.,
 documentation datastore — comes from Wang et al., *CodeRAG-Bench: Can Retrieval
 Augment Code Generation?* (arXiv:2406.14497, 2024). The loader pins a Hugging
 Face revision for reproducibility; a small hand-crafted fixture
-(`benchmarks/tests/eval/fixtures/ds1000_mini.json`) lets hermetic tests run
+(`benchmarks/tests/fixtures/ds1000_mini.json`) lets hermetic tests run
 without network access.
 
 **Proxies well:** NL intent → library-docs retrieval (the loop RepoQA does not
@@ -294,7 +294,7 @@ whole real-world codebases (not single needles).
   answer cites no resolvable file are dropped **with a logged count** (no silent
   caps). Registered as `swe-qa-pro`
   ([`datasets/swe_qa_pro.py`](src/pydocs_eval/datasets/swe_qa_pro.py)); the
-  committed mini fixture (`tests/eval/fixtures/swe_qa_pro_mini.jsonl`) drives hermetic CI
+  committed mini fixture (`tests/fixtures/swe_qa_pro_mini.jsonl`) drives hermetic CI
   without network access.
 - **Per-category reporting.** Because every row is tagged with a `qa_type`, the
   report grows a `## By qa_type` breakout (What / Where / How / Why) whenever ≥2
@@ -345,7 +345,7 @@ taxonomy.
   noisier (~8% bare filenames resolved by unique basename), citation-free rows
   drop with a logged count. Registered as `swe-qa`
   ([`datasets/swe_qa.py`](src/pydocs_eval/datasets/swe_qa.py)); the committed
-  mini fixture (`tests/eval/fixtures/swe_qa_mini.jsonl`) drives hermetic CI. There is **no
+  mini fixture (`tests/fixtures/swe_qa_mini.jsonl`) drives hermetic CI. There is **no
   per-question taxonomy** in the release, so per-category breakouts come from
   SWE-QA-Pro; SWE-QA gets per-repo breakouts only.
 - **Run it.**
@@ -379,7 +379,7 @@ efficiency numbers are honest only where the two arms scored at quality parity.
 **This is manual and expensive by design — it never runs in CI.** A full run
 spawns a real headless agent per arm and spends real money (~$5–10 per arm per
 repo). Everything pure and Protocol-seamed is unit-tested offline
-([`tests/eval/agent_track/`](tests/eval/agent_track/)); only an operator runs the
+([`tests/agent_track/`](tests/agent_track/)); only an operator runs the
 paid path, and only after the preflight passes.
 
 - **Preflight first.** Before any paid run, verify the environment contract —
@@ -976,7 +976,7 @@ mlflow ui --backend-store-uri file://./benchmarks/mlruns/
 ```
 
 For offline development, pass a `--fixture` JSON to bypass the RepoQA download
-(see `benchmarks/tests/eval/fixtures/repoqa_mini.json`).
+(see `benchmarks/tests/fixtures/repoqa_mini.json`).
 
 ### DS-1000: prerequisites and the three runs
 
@@ -1169,10 +1169,10 @@ pytest benchmarks/ -q
 ```
 
 The whole suite is hermetic — the bundled fixtures
-(`benchmarks/tests/eval/fixtures/`: `repoqa_mini.json`, `ds1000_mini.json`,
+(`benchmarks/tests/fixtures/`: `repoqa_mini.json`, `ds1000_mini.json`,
 `ds1000_50.json`) let it run with no network, Hugging Face download, or
 reference-project venv. DS-1000 coverage lives under
-`benchmarks/tests/eval/`, including: the dataset loader and NL-strip
+`benchmarks/tests/`, including: the dataset loader and NL-strip
 (`test_ds1000_dataset.py`); the stratified dev/test split
 (`test_ds1000_split.py`, `test_split_helper.py`, `test_ds1000_stratified_fixture.py`);
 the metrics (`test_recall_at_k.py`, `test_ndcg_at_k.py`, `test_precision_at_1.py`,

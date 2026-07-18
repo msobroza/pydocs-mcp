@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
 # 50-task stratified fixture (Task 10). Offline; no network/HF download.
-_FIXTURE = Path(__file__).parent / "fixtures" / "ds1000_50.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "ds1000_50.json"
 _FIXTURE_TASK_COUNT = 50
 
 # The two shipped DS-1000 AppConfig overlays. ``run_sweep`` keys each result

@@ -13,7 +13,7 @@ from pydocs_eval.registries import dataset_registry
 from pydocs_eval.datasets.swe_qa import SweQaDataset
 from pydocs_eval.datasets.swe_qa_pro import SweQaProDataset
 
-_FIXTURES = Path(__file__).parent / "fixtures"
+_FIXTURES = Path(__file__).parents[1] / "fixtures"
 _PRO_FIXTURE = _FIXTURES / "swe_qa_pro_mini.jsonl"
 _SWEQA_FIXTURE = _FIXTURES / "swe_qa_mini.jsonl"
 _CORPUS_DIR = _FIXTURES / "swe_qa_corpus"

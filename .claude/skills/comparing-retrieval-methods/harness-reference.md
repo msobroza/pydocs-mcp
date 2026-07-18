@@ -21,7 +21,7 @@ The runner is `python -m pydocs_eval.runner` (`benchmarks/src/pydocs_eval/runner
 PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
   --systems pydocs-mcp \
   --dataset repoqa \
-  --fixture benchmarks/tests/eval/fixtures/repoqa_mini.json \
+  --fixture benchmarks/tests/fixtures/repoqa_mini.json \
   --configs benchmarks/configs/repoqa_bm25.yaml,benchmarks/configs/repoqa_dense.yaml \
   --trackers jsonl --limit 5 \
   --report benchmarks/results/fixture_run.md
@@ -152,7 +152,7 @@ Relevance backing all of them: `metrics/_relevance.py:is_relevant` — AST-equiv
 - **Ranked vs composite configs:** the MCP default pipeline collapses to ONE composite chunk, which structurally caps `recall@k>1` at 0. Sweeps measuring top-K must use a ranked-preset config (e.g. `baseline.yaml` / `ds1000_ranked.yaml` → `chunk_search_ranked.yaml`); composite configs pair with rank-1 metrics only.
 - **GPU:** `--gpu` alone is not enough for FastEmbed — onnxruntime silently falls back to CPU without torch's bundled NVIDIA libs on `LD_LIBRARY_PATH`. Use `benchmarks/scripts/run_eval_gpu.sh` (forces `--gpu`, sets `LD_LIBRARY_PATH` + `PYTHONPATH`; venv override `PYDOCS_VENV=`, default `.venv-li`). CPU dense-indexing RepoQA is 60–215 s/needle (days for a full sweep).
 - **Env vars:** `OPENAI_API_KEY` required for tree/LLM-reranker configs (`repoqa_tree.yaml`, `repoqa_hybrid_tree.yaml`, `repoqa_bm25_tree_rerank*.yaml`) — `set -a; source .env; set +a`. Linux: `export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libopenblas.so.0` if `import turbovec` fails on `cblas_sgemm` (CI sets this).
-- **Offline fixtures:** `benchmarks/tests/eval/fixtures/{repoqa_mini.json, ds1000_mini.json, ds1000_50.json}`; `--fixture` is repoqa-only. Late-interaction configs need `pip install -e ".[late-interaction]"` (~1–5 GB).
+- **Offline fixtures:** `benchmarks/tests/fixtures/{repoqa_mini.json, ds1000_mini.json, ds1000_50.json}`; `--fixture` is repoqa-only. Late-interaction configs need `pip install -e ".[late-interaction]"` (~1–5 GB).
 - **`--corpus-dir` typo protection:** runner fast-fails if not a directory (otherwise an empty index would silently score ~0). Only the two native DS-1000 runs need it; oracle/context7/neuledge ignore it.
 - **`--metrics` names are exact strings** including `@k` (e.g. `ndcg@10`, `pass@1-needle`); the JSONL aggregate names append `_mean`/`_ci_low`/`_ci_high`.
 - Sweep is sequential (one task at a time) — cold-run timings are uncontended; don't parallelize sweeps sharing the bench cache with `--bench-cache-cleanup`.

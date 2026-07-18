@@ -24,7 +24,7 @@ from pydocs_eval.reporting.report import format_report
 from pydocs_eval.runner import _task_rows_from_legs, run_sweep, run_sweep_detailed
 
 _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
-_FIXTURES = Path(__file__).parent / "fixtures"
+_FIXTURES = Path(__file__).parents[1] / "fixtures"
 _PRO_FIXTURE = _FIXTURES / "swe_qa_pro_mini.jsonl"
 _CORPUS_DIR = _FIXTURES / "swe_qa_corpus"
 

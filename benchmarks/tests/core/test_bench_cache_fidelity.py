@@ -1,4 +1,4 @@
-# benchmarks/tests/eval/test_bench_cache_fidelity.py
+# benchmarks/tests/core/test_bench_cache_fidelity.py
 from __future__ import annotations
 
 from pathlib import Path

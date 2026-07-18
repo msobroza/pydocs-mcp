@@ -36,7 +36,7 @@ from pydocs_eval.systems.base_system import RetrievedItem
 from pydocs_eval.trackers.base_tracker import RunHandle
 from pydocs_eval.trackers.jsonl_tracker import JsonlExperimentTracker
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 # WHY a bare sentinel: the fake system never reads the config, so the unit
 # tests stay hermetic (no AppConfig load) and fast.

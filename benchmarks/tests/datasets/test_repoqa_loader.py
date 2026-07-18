@@ -15,7 +15,7 @@ from pydocs_eval.datasets.repoqa import (
     _extract_body,
 )
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 
 async def test_fixture_yields_five_tasks() -> None:

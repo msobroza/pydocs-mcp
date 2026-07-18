@@ -101,7 +101,7 @@ jobs:
             --systems pydocs-mcp \
             --configs benchmarks/configs/baseline.yaml \
             --dataset repoqa \
-            --fixture benchmarks/tests/eval/fixtures/repoqa_mini.json \
+            --fixture benchmarks/tests/fixtures/repoqa_mini.json \
             --trackers jsonl \
             --limit 5 \
           > benchmarks/results/ci/run.log

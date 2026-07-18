@@ -18,7 +18,7 @@ from pydocs_eval.metrics import MRR, PassAt1Needle, RecallAtK
 from pydocs_eval.metrics.base_metric import Scorer
 from pydocs_eval.systems.base_system import RetrievedItem
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "repoqa_mini.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 
 
 def _load_fixture_tasks() -> list[EvalTask]:

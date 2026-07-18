@@ -27,9 +27,9 @@ from pathlib import Path
 from pydocs_eval.datasets.ds1000 import Ds1000Dataset
 
 # Mirror ``test_ds1000_dataset.py``'s fixture-finding: this test lives in
-# ``benchmarks/tests/eval/`` so ``Path(__file__).parent`` is that dir and
-# ``/ "fixtures"`` reaches the sibling fixtures package.
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ds1000_50.json"
+# ``benchmarks/tests/datasets/`` so ``Path(__file__).parents[1]`` is
+# ``benchmarks/tests/`` and ``/ "fixtures"`` reaches the shared fixtures dir.
+FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "ds1000_50.json"
 
 # The post-normalization (PyPI-canonical) per-library task counts the
 # loader must produce — note Sklearn -> scikit-learn and Pytorch -> torch

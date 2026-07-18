@@ -1,4 +1,4 @@
-# benchmarks/tests/eval/test_bench_cache_integration.py
+# benchmarks/tests/core/test_bench_cache_integration.py
 from __future__ import annotations
 
 from pathlib import Path
