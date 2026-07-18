@@ -19,7 +19,14 @@ import importlib
 import pathlib
 import sys
 
-BENCH_DIR = pathlib.Path(__file__).resolve().parent.parent / "benchmarks" / "benchmarks"
+# The eval code lives in two places since the pydocs-mcp-eval repackaging:
+# operator scripts and the installable package. The old benchmarks/benchmarks/
+# location is long gone — scanning it made this gate vacuous (0 files).
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+BENCH_DIRS = (
+    _REPO_ROOT / "benchmarks" / "scripts",
+    _REPO_ROOT / "benchmarks" / "src" / "pydocs_eval",
+)
 
 
 def collect_pydocs_imports(py: pathlib.Path) -> list[tuple[str, str | None]]:
@@ -43,23 +50,34 @@ def collect_pydocs_imports(py: pathlib.Path) -> list[tuple[str, str | None]]:
 
 def main() -> int:
     failed: list[str] = []
-    files = sorted(BENCH_DIR.glob("*.py"))
+    checked = 0
+    files = sorted({py for d in BENCH_DIRS for py in d.rglob("*.py")})
     for py in files:
+        rel = py.relative_to(_REPO_ROOT)
         for module, attr in collect_pydocs_imports(py):
+            checked += 1
             try:
                 mod = importlib.import_module(module)
             except Exception as exc:  # broad on purpose — surfacing to operator
-                failed.append(f"{py.name}: import {module!r}: {exc}")
+                failed.append(f"{rel}: import {module!r}: {exc}")
                 continue
             if attr is not None and not hasattr(mod, attr):
-                failed.append(f"{py.name}: {module}.{attr} missing")
+                failed.append(f"{rel}: {module}.{attr} missing")
 
     if failed:
         print("Stale benchmark imports detected:", file=sys.stderr)
         for line in failed:
             print(f"  - {line}", file=sys.stderr)
         return 1
-    print(f"verified pydocs_mcp imports in {len(files)} benchmark files")
+    if checked == 0:
+        # The gate scanned nothing — that is a failure of the gate itself, not
+        # a pass. This exact hole existed once (dead benchmarks/benchmarks dir).
+        print(
+            f"vacuous gate: 0 pydocs_mcp imports found under {len(files)} files — check BENCH_DIRS",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"verified {checked} pydocs_mcp imports across {len(files)} benchmark files")
     return 0
 
 
