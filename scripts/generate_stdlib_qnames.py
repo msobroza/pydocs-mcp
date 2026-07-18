@@ -9,7 +9,7 @@ builtins symbol (e.g., `os.path.join`, `asyncio.to_thread`, `len`,
 `isinstance`).
 
 Run:
-    python tools/generate_stdlib_qnames.py --output python/pydocs_mcp/defaults/stdlib_qnames.json
+    python scripts/generate_stdlib_qnames.py --output python/pydocs_mcp/defaults/stdlib_qnames.json
 
 Sub-PR follow-up to #5c. Honors CLAUDE.md §"MCP API surface vs YAML
 configuration" — the resulting JSON is shipped as a default; behavior is

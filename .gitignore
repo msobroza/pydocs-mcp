@@ -10,10 +10,10 @@ build/
 *.so
 .coverage
 coverage.xml
+.pytest_cache/
 
 # Rust
 target/
-Cargo.lock
 
 # Virtual environments
 .venv/
