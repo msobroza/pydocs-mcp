@@ -22,12 +22,14 @@ from pydocs_mcp.retrieval.config import AppConfig
 
 _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
 
+# All four LI overlays shipped under configs/. The former DS-1000-prefixed
+# duplicate was consolidated into hybrid_li_rrf.yaml (2026-07-18 dataset-prefix
+# removal), so one entry now covers what used to be two byte-identical files.
 _LI_OVERLAYS = (
-    "repoqa_li.yaml",
-    "repoqa_li_edge.yaml",
-    "repoqa_hybrid_li_rrf.yaml",
-    "repoqa_hybrid_li_wsi.yaml",
-    "ds1000_hybrid_li_rrf.yaml",
+    "li.yaml",
+    "li_edge.yaml",
+    "hybrid_li_rrf.yaml",
+    "hybrid_li_wsi.yaml",
 )
 
 

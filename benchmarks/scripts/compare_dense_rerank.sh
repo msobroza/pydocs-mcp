@@ -11,8 +11,8 @@
 #
 # The A/B pair differs in EXACTLY one pipeline step, so any metric delta is
 # attributable to the re-ranker:
-#   A (baseline): configs/repoqa_hybrid_rrf_k60_norerank.yaml  (RRF only)
-#   B (treatment): configs/repoqa_hybrid_rrf_k60.yaml          (RRF + dense_rerank)
+#   A (baseline): configs/hybrid_rrf_k60_norerank.yaml  (RRF only)
+#   B (treatment): configs/hybrid_rrf_k60.yaml          (RRF + dense_rerank)
 #
 # Reads the verdict off three numbers (see the comparing-retrieval-methods
 # skill): recall@5 (headline) - MRR (tiebreaker) - repoqa-structural recall@10
@@ -34,7 +34,7 @@ SPLIT="${SPLIT:-test}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GPU="$HERE/run_eval_gpu.sh"
 OUT="benchmarks/results"
-AB="benchmarks/configs/repoqa_hybrid_rrf_k60_norerank.yaml,benchmarks/configs/repoqa_hybrid_rrf_k60.yaml"
+AB="benchmarks/configs/hybrid_rrf_k60_norerank.yaml,benchmarks/configs/hybrid_rrf_k60.yaml"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 
 mkdir -p "$OUT"

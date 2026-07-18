@@ -7,7 +7,8 @@ driven from the checked-in fixture JSONL + a fake ``RepoCache`` pointing every
 checkout at the shared fixture corpus dir (no git, no network); the embedder /
 LLM are mocked by the autouse fixtures in ``benchmarks/tests/conftest.py``.
 
-Pins two things the four SWE-QA configs must satisfy end-to-end:
+Pins two things the four overlays of the SWE-QA-Pro campaign (paired via
+``--dataset swe-qa-pro``, not by filename) must satisfy end-to-end:
   1. the 5-row fixture yields exactly 4 scorable tasks (1 citation-free row is
      excluded), so ``tasks_ran == 4``; and
   2. each returned result row carries the three requested metric keys.
@@ -34,13 +35,14 @@ _CORPUS_TREE = (
     "src/pkg/mod.py",
 )
 
-# The four SWE-QA-Pro overlays under test, one per retrieval config. Each is a
-# two-line file selecting one of the RepoQA experiment blueprints.
+# The four overlays the SWE-QA-Pro campaign runs, one per retrieval config.
+# Each is a two-line file selecting one experiment blueprint. Overlay names are
+# dataset-free — the dataset is the runner's --dataset flag, not the config.
 _CONFIG_STEMS = (
-    "swe_qa_pro_bm25",
-    "swe_qa_pro_dense",
-    "swe_qa_pro_hybrid_rrf_k60",
-    "swe_qa_pro_graph",
+    "bm25",
+    "dense",
+    "hybrid_rrf_k60",
+    "dense_graph",
 )
 
 _METRIC_SPECS = ("recall@5", "ndcg@10", "mrr")
@@ -99,7 +101,7 @@ async def test_swe_qa_pro_runner_emits_qa_type_breakout(tmp_path: Path) -> None:
     # (How / Where / What / Why), so the ``## By qa_type`` breakout the README
     # documents must actually appear in the CLI's report (previously the
     # feature was exercised only by report.py unit tests — dead in the runner).
-    overlay = _CONFIGS_DIR / "swe_qa_pro_bm25.yaml"
+    overlay = _CONFIGS_DIR / "bm25.yaml"
     jsonl_dir = tmp_path / "jsonl"
 
     outcome = await run_sweep_detailed(

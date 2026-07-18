@@ -4,7 +4,7 @@ The BM25-seeded rerank pool structurally misses golds with near-zero lexical
 overlap (full-corpus BM25 ranks 480/246 for two benchmark needles that dense
 F2LLM-330M ranks at 1 — PAGEINDEX_DIVS.md F4). This overlay seeds the same
 gpt-5.5 tree rerank from the dense fetcher instead, so the only variable vs
-repoqa_bm25_tree_rerank_gpt55.yaml is the stage-1 candidate generator.
+bm25_tree_rerank_gpt55.yaml is the stage-1 candidate generator.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 from pydocs_mcp.retrieval.config import AppConfig
 
 _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
-_CFG = _CONFIGS_DIR / "repoqa_dense_tree_rerank_gpt55.yaml"
+_CFG = _CONFIGS_DIR / "dense_tree_rerank_gpt55.yaml"
 
 
 def test_overlay_file_exists() -> None:

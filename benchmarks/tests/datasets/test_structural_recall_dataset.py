@@ -93,7 +93,7 @@ def test_exp_dense_graph_pipeline_inserts_graph_expand_before_topk() -> None:
     assert types.index("dense_fetcher") < types.index("graph_expand") < types.index("top_k_filter")
 
 
-@pytest.mark.parametrize("cfg_name", ["repoqa_dense_graph_f2llm330m", "repoqa_dense_f2llm330m"])
+@pytest.mark.parametrize("cfg_name", ["dense_graph_f2llm330m", "dense_f2llm330m"])
 def test_sweep_configs_point_at_pipelines(cfg_name: str) -> None:
     cfg = yaml.safe_load((_CONFIGS / f"{cfg_name}.yaml").read_text())
     entry = cfg["pipelines"]["chunk"][0]

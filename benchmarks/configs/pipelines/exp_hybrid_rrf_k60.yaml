@@ -1,6 +1,6 @@
 # Hybrid BM25 + dense, RRF fusion with k=60 (literature default) — RepoQA
 # experiment suite. The reference hybrid setting. Referenced by
-# ../repoqa_hybrid_rrf_k60.yaml.
+# ../hybrid_rrf_k60.yaml.
 name: exp_hybrid_rrf_k60
 steps:
   - name: pre_filter

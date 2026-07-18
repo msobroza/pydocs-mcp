@@ -1,0 +1,22 @@
+# Experiment overlay — GRAPH-RANKED HYBRID (the A3 candidate): BM25 + F2LLM dense
+# (RRF k=60) + graph_expand + centrality_prior. Same F2LLM-v2-330M embedder
+# block as hybrid_rrf_k60_f2llm330m.yaml / dense_f2llm330m.yaml, so the
+# ONLY difference vs the plain hybrid is the two graph steps — isolating the
+# graph contribution on top of hybrid. node_scores is enabled so centrality_prior
+# has PageRank to rank by (needs the [graph] extra / networkx at index time).
+# See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: sentence_transformers
+  model_name: codefuse-ai/F2LLM-v2-330M
+  dim: 896
+  batch_size: 4
+  max_seq_length: 2048
+
+reference_graph:
+  node_scores:
+    enabled: true
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_hybrid_graph.yaml

@@ -1,6 +1,6 @@
 # Hybrid BM25 + dense, weighted-score interpolation favouring dense
 # (0.3 BM25 / 0.7 dense) — RepoQA experiment suite. Linear blend of
-# normalized branch scores. Referenced by ../repoqa_hybrid_wsi_dense.yaml.
+# normalized branch scores. Referenced by ../hybrid_wsi_dense.yaml.
 name: exp_hybrid_wsi_dense
 steps:
   - name: pre_filter

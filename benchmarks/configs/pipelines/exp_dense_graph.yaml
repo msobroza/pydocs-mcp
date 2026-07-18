@@ -3,7 +3,8 @@
 # candidates; `graph_expand` seeds from the top dense hits and pulls in their
 # 1-hop caller/callee neighbours (the structurally-adjacent answers an
 # embedding misses), merged by max(dense_sim, graph_score). Referenced by
-# ../repoqa_dense_graph.yaml. See benchmarks/EXPERIMENTS.md.
+# ../dense_graph.yaml AND ../dense_graph_f2llm330m.yaml. See
+# benchmarks/EXPERIMENTS.md.
 name: exp_dense_graph
 steps:
   - name: pre_filter

@@ -1,15 +1,15 @@
-"""Pin the two DS-1000 AppConfig overlays to the pipeline blueprint each
-selects.
+"""Pin the two overlays the DS-1000 runs pair with (via ``--dataset ds1000``)
+to the pipeline blueprint each selects.
 
 The runner loads every ``--configs`` path via
 ``AppConfig.load(explicit_path=cfg)`` and reads the resolved chunk handler
 to build the search pipeline. These overlays are one-key files that flip
 the ``chunk`` handler's default route to a specific blueprint:
 
-  - ``ds1000_ranked.yaml``    -> ``pipelines/chunk_search_ranked.yaml``
+  - ``ranked.yaml``    -> ``pipelines/chunk_search_ranked.yaml``
     (top-K separate ranked chunks; used by the pydocs-only + oracle runs
     whose recall@k / ndcg@k / mrr metrics need K distinct items).
-  - ``ds1000_composite.yaml`` -> ``pipelines/chunk_search.yaml``
+  - ``composite.yaml`` -> ``pipelines/chunk_search.yaml``
     (token-budgeted 1-item composite; used by the cross-system comparison
     run so pydocs emits one blob like Context7/Neuledge).
 
@@ -26,8 +26,8 @@ from pathlib import Path
 from pydocs_mcp.retrieval.config import AppConfig
 
 _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
-_RANKED = _CONFIGS_DIR / "ds1000_ranked.yaml"
-_COMPOSITE = _CONFIGS_DIR / "ds1000_composite.yaml"
+_RANKED = _CONFIGS_DIR / "ranked.yaml"
+_COMPOSITE = _CONFIGS_DIR / "composite.yaml"
 
 
 def _chunk_default_pipeline_path(config: AppConfig) -> Path:

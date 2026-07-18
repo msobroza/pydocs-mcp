@@ -1,0 +1,14 @@
+# Experiment overlay — single-stage dense with Alibaba-NLP/gte-modernbert-base
+# (768-dim ModernBERT, general-purpose, 8192-ctx, SYMMETRIC) served via
+# sentence-transformers (torch). Same exp_dense pipeline as dense.yaml;
+# only the embedder differs. See benchmarks/EXPERIMENTS.md.
+embedding:
+  provider: sentence_transformers
+  model_name: Alibaba-NLP/gte-modernbert-base
+  dim: 768
+  batch_size: 16
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

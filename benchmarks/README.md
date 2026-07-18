@@ -304,10 +304,11 @@ whole real-world codebases (not single needles).
 - **Run it.**
 
   ```bash
-  # Config zoo: benchmarks/configs/swe_qa_pro_{bm25,dense,hybrid_rrf_k60,graph}.yaml
+  # Config zoo (dataset-free overlays; --dataset picks the campaign):
+  # benchmarks/configs/{bm25,dense,hybrid_rrf_k60,dense_graph}.yaml
   python -m pydocs_eval.runner \
       --dataset swe-qa-pro \
-      --configs benchmarks/configs/swe_qa_pro_bm25.yaml,benchmarks/configs/swe_qa_pro_hybrid_rrf_k60.yaml
+      --configs benchmarks/configs/bm25.yaml,benchmarks/configs/hybrid_rrf_k60.yaml
   ```
 
   The loader fetches the pinned `data/test.jsonl` into
@@ -354,7 +355,7 @@ taxonomy.
   # --split selects one repo (e.g. matplotlib) or "default" for all 15.
   python -m pydocs_eval.runner \
       --dataset swe-qa \
-      --configs benchmarks/configs/swe_qa_pro_bm25.yaml \
+      --configs benchmarks/configs/bm25.yaml \
       --split matplotlib
   ```
 
@@ -504,16 +505,16 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 
 | Method | Config | recall@1 | recall@5 | recall@10 | MRR | needles |
 |---|---|---:|---:|---:|---:|---:|
-| BM25 (keyword / FTS5) | `repoqa_bm25.yaml` | 0.167 | 0.333 | 0.400 | 0.238 | 30 |
-| BM25 top-200 → tree rerank (2-stage, gpt-4o-mini) | `repoqa_bm25_tree_rerank.yaml` | 0.333 | 0.567 | 0.567 | 0.424 | 30 |
-| BM25 top-200 → tree rerank (2-stage, gpt-5.5) | `repoqa_bm25_tree_rerank_gpt55.yaml` | 0.667 | 0.667 | 0.667 | 0.667 | 30 |
-| Dense (bge-small, 384-d) | `repoqa_dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
-| Dense (gte-modernbert-base, 768-d) | `repoqa_dense_modernbert.yaml` | 0.533 | 0.733 | 0.733 | 0.601 | 30 |
-| Dense (Qwen3-0.6B, 1024-d) | `repoqa_dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
-| Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm330m.yaml` | 0.700 | 0.767 | 0.767 | 0.725 | 30 |
-| **Dense (F2LLM-v2-0.6B, 1024-d)** | `repoqa_dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
-| Late-interaction (ColBERT / MaxSim) | `repoqa_li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
-| LLM tree reasoning (gpt-4o-mini) | `repoqa_tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
+| BM25 (keyword / FTS5) | `bm25.yaml` | 0.167 | 0.333 | 0.400 | 0.238 | 30 |
+| BM25 top-200 → tree rerank (2-stage, gpt-4o-mini) | `bm25_tree_rerank.yaml` | 0.333 | 0.567 | 0.567 | 0.424 | 30 |
+| BM25 top-200 → tree rerank (2-stage, gpt-5.5) | `bm25_tree_rerank_gpt55.yaml` | 0.667 | 0.667 | 0.667 | 0.667 | 30 |
+| Dense (bge-small, 384-d) | `dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
+| Dense (gte-modernbert-base, 768-d) | `dense_modernbert.yaml` | 0.533 | 0.733 | 0.733 | 0.601 | 30 |
+| Dense (Qwen3-0.6B, 1024-d) | `dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
+| Dense (F2LLM-v2-330M, 896-d) | `dense_f2llm330m.yaml` | 0.700 | 0.767 | 0.767 | 0.725 | 30 |
+| **Dense (F2LLM-v2-0.6B, 1024-d)** | `dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
+| Late-interaction (ColBERT / MaxSim) | `li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
+| LLM tree reasoning (gpt-4o-mini) | `tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
 
 > \* **Partial runs** (21 of 30 needles) — *indicative, not strictly comparable*
 > to the full-30 rows. These numbers come from ad-hoc runs across one session,
@@ -619,13 +620,13 @@ pure dense.**
 
 | Fusion | Config | recall@1 | recall@5 | recall@10 | MRR |
 |---|---|---:|---:|---:|---:|
-| **Pure dense (no fusion)** | `repoqa_dense_f2llm330m.yaml` | **0.700** | **0.767** | **0.767** | **0.725** |
-| WSI dense-heavy (0.3 BM25 / 0.7 dense) | `repoqa_hybrid_wsi_dense_f2llm330m.yaml` | 0.633 | 0.767 | 0.767 | 0.674 |
-| WSI balanced (0.5 / 0.5) | `repoqa_hybrid_wsi_balanced_f2llm330m.yaml` | 0.433 | 0.733 | 0.767 | 0.573 |
-| WSI BM25-heavy (0.7 BM25 / 0.3 dense) | `repoqa_hybrid_wsi_bm25_f2llm330m.yaml` | 0.333 | 0.500 | 0.600 | 0.401 |
-| RRF k=30 | `repoqa_hybrid_rrf_k30_f2llm330m.yaml` | 0.367 | 0.600 | 0.733 | 0.481 |
-| RRF k=60 | `repoqa_hybrid_rrf_k60_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
-| RRF k=100 | `repoqa_hybrid_rrf_k100_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
+| **Pure dense (no fusion)** | `dense_f2llm330m.yaml` | **0.700** | **0.767** | **0.767** | **0.725** |
+| WSI dense-heavy (0.3 BM25 / 0.7 dense) | `hybrid_wsi_dense_f2llm330m.yaml` | 0.633 | 0.767 | 0.767 | 0.674 |
+| WSI balanced (0.5 / 0.5) | `hybrid_wsi_balanced_f2llm330m.yaml` | 0.433 | 0.733 | 0.767 | 0.573 |
+| WSI BM25-heavy (0.7 BM25 / 0.3 dense) | `hybrid_wsi_bm25_f2llm330m.yaml` | 0.333 | 0.500 | 0.600 | 0.401 |
+| RRF k=30 | `hybrid_rrf_k30_f2llm330m.yaml` | 0.367 | 0.600 | 0.733 | 0.481 |
+| RRF k=60 | `hybrid_rrf_k60_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
+| RRF k=100 | `hybrid_rrf_k100_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
 
 All seven are full-30-needle GPU runs; p50 search latency is ~0.23 s across the
 board (fusion is cheap — the cost is the dense embed, shared by all). Numbers are
@@ -656,9 +657,9 @@ both columns — the only difference is the graph step. Higher is better.
 
 | Method | Config | recall@1 | recall@5 | recall@10 | MRR | tasks |
 |---|---|---:|---:|---:|---:|---:|
-| Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm330m.yaml` | 0.00 | 0.20 | 0.30 | 0.113 | 20 |
+| Dense (F2LLM-v2-330M, 896-d) | `dense_f2llm330m.yaml` | 0.00 | 0.20 | 0.30 | 0.113 | 20 |
 | Dense + graph (decay 0.5, old default) | `graph_expand`, decay 0.5 | 0.00 | 0.25 | 0.40 | 0.128 | 20 |
-| **Dense + graph (decay 0.9)** | `repoqa_dense_graph_f2llm330m.yaml` | 0.00 | **0.80** | **1.00** | **0.386** | 20 |
+| **Dense + graph (decay 0.9)** | `dense_graph_f2llm330m.yaml` | 0.00 | **0.80** | **1.00** | **0.386** | 20 |
 
 > **recall@1 is 0 by construction** — the gold is a *neighbour* of the needle, and
 > the needle itself holds dense rank 1, so the neighbour lands at rank ≥ 2; the
@@ -691,12 +692,12 @@ Each cell is recall@1 / recall@10 / MRR:
 
 | Method | Config | small_test (standard, n=30) | structural (graph, n=20) |
 |---|---|---|---|
-| BM25 (old default) | `repoqa_bm25.yaml` | 0.17 / 0.40 / 0.24 | 0.05 / 0.30 / 0.11 |
-| Dense | `repoqa_dense_f2llm330m.yaml` | 0.70 / 0.77 / 0.73 | 0.00 / 0.30 / 0.11 |
-| Hybrid (RRF k=60) | `repoqa_hybrid_rrf_k60_f2llm330m.yaml` | 0.37 / 0.63 / 0.46 | 0.05 / 0.25 / 0.10 |
-| Graph-hybrid (RRF + graph) | `repoqa_graph_hybrid_f2llm330m.yaml` | 0.27 / 0.63 / 0.37 | 0.25 / 0.90 / 0.47 |
-| **Dense + graph (new default)** | `repoqa_dense_graph_f2llm330m.yaml` | **0.70 / 0.77 / 0.73** | **0.00 / 1.00 / 0.39** |
-| Dense + graph + centrality | `repoqa_dense_graph_centrality_f2llm330m.yaml` | 0.57 / 0.77 / 0.65 | 0.35 / 0.95 / 0.62 |
+| BM25 (old default) | `bm25.yaml` | 0.17 / 0.40 / 0.24 | 0.05 / 0.30 / 0.11 |
+| Dense | `dense_f2llm330m.yaml` | 0.70 / 0.77 / 0.73 | 0.00 / 0.30 / 0.11 |
+| Hybrid (RRF k=60) | `hybrid_rrf_k60_f2llm330m.yaml` | 0.37 / 0.63 / 0.46 | 0.05 / 0.25 / 0.10 |
+| Graph-hybrid (RRF + graph) | `graph_hybrid_f2llm330m.yaml` | 0.27 / 0.63 / 0.37 | 0.25 / 0.90 / 0.47 |
+| **Dense + graph (new default)** | `dense_graph_f2llm330m.yaml` | **0.70 / 0.77 / 0.73** | **0.00 / 1.00 / 0.39** |
+| Dense + graph + centrality | `dense_graph_centrality_f2llm330m.yaml` | 0.57 / 0.77 / 0.65 | 0.35 / 0.95 / 0.62 |
 
 > The recall@10 columns are single-sourced in
 > [`baselines/graph_default_ab.json`](baselines/graph_default_ab.json); this table
@@ -1020,7 +1021,7 @@ systems:
 ```bash
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-mcp-composite,context7,neuledge \
-    --configs benchmarks/configs/ds1000_composite.yaml \
+    --configs benchmarks/configs/composite.yaml \
     --metrics recall@1,mrr,precision@1,coverage,library_resolution@1 \
     --trackers jsonl
 ```
@@ -1035,13 +1036,13 @@ scores Context7's library-router accuracy and is `0.0` for the other rows.
 ```bash
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-mcp \
-    --configs benchmarks/configs/ds1000_ranked.yaml \
+    --configs benchmarks/configs/ranked.yaml \
     --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
     --trackers jsonl \
     --corpus-dir benchmarks/fixtures/ds1000_reference_project
 ```
 
-The full ranked suite that needs `k > 1` separate items. `ds1000_ranked.yaml`
+The full ranked suite that needs `k > 1` separate items. `ranked.yaml`
 selects `chunk_search_ranked.yaml` (top-K separate chunks, no composite
 collapse); `--corpus-dir` points the indexer at the reference project. For
 calibration, CodeRAG-Bench reports DS-1000 NDCG@10 reference points of roughly
@@ -1057,7 +1058,7 @@ their published reference points.
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-oracle \
     --dataset-full-prompt \
-    --configs benchmarks/configs/ds1000_ranked.yaml \
+    --configs benchmarks/configs/ranked.yaml \
     --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
     --trackers jsonl
 ```
@@ -1081,7 +1082,7 @@ Three pieces make it canonical, matching the upstream builder:
 
 Add `--dataset-library-filter numpy` for a fast single-library smoke. For
 calibration, CodeRAG-Bench reports DS-1000 NDCG@10 reference points of roughly
-BM25 ≈ 5.2, GIST-large ≈ 13.6, Voyage-code ≈ 33.1; the `ds1000_ranked.yaml`
+BM25 ≈ 5.2, GIST-large ≈ 13.6, Voyage-code ≈ 33.1; the `ranked.yaml`
 (BM25/FTS5) preset lands in the BM25 range. Secondarily, the gap between this run
 and run 2 quantifies how much retrieval quality the AST-based source chunker
 costs — run 3 is the ceiling with chunking removed.

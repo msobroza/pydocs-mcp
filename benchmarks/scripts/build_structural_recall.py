@@ -23,7 +23,7 @@ an embedder) — not part of the eval hot path.
 Usage::
 
     PYTHONPATH=benchmarks/src python benchmarks/scripts/build_structural_recall.py \\
-        --config benchmarks/configs/repoqa_dense_f2llm330m.yaml \\
+        --config benchmarks/configs/dense_f2llm330m.yaml \\
         --out benchmarks/fixtures/structural_recall.json \\
         [--gpu] [--limit-repos N] [--seed-top-k 10]
 """

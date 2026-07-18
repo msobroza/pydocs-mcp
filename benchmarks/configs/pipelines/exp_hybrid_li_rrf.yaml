@@ -3,7 +3,7 @@
 # (BM25 + dense via RRF) but swaps the dense branch for late-interaction
 # MaxSim re-ranking. max_results=10 so recall@10 sees a full top-10
 # (the shipped *_ranked presets cap at 8).
-# Referenced by ../repoqa_hybrid_li_rrf.yaml AND ../ds1000_hybrid_li_rrf.yaml.
+# Referenced by ../hybrid_li_rrf.yaml.
 #
 # Requires the [late-interaction] extra and `late_interaction.enabled: true`
 # in the surrounding sweep config (the embedder + FastPlaidUnitOfWork are
