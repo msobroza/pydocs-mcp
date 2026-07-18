@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import traceback
 from collections.abc import Awaitable, Callable
@@ -206,6 +207,21 @@ def _build_parser() -> argparse.ArgumentParser:
                 "--watch",
                 action="store_true",
                 help="Watch the project for changes and reindex on edits.",
+            )
+            # Description-source override (ADR 0006). A knob about WHICH
+            # document is served, not how retrieval behaves — so it lives on
+            # the CLI (and env/YAML), never on the MCP tool surface.
+            sp.add_argument(
+                "--descriptions",
+                type=Path,
+                default=None,
+                metavar="PATH",
+                help="Serve the LLM-visible tool descriptions from PATH (a "
+                "delimited descriptions document) instead of the packaged "
+                "default. A missing or invalid PATH is a hard startup error "
+                "— never a silent fallback. Precedence: this flag > "
+                "PYDOCS_SERVE__DESCRIPTIONS_PATH env var > YAML "
+                "serve.descriptions_path > packaged.",
             )
             # Multi-repo serve: load pre-built db bundles read-only (skips
             # indexing + watch) so one MCP server hosts several indexed repos.
@@ -830,6 +846,9 @@ async def _run_watch_loop(
             db_path,
             config_path=getattr(args, "config", None),
             gpu=getattr(args, "gpu", False),
+            # Mirror ``_serve_run`` — otherwise `serve --watch --descriptions X`
+            # would silently serve the packaged prose.
+            descriptions_path=getattr(args, "descriptions", None),
         )
     finally:
         watcher_task.cancel()
@@ -1173,6 +1192,7 @@ def _serve_run(
             gpu=getattr(args, "gpu", False),
             workspace=workspace,
             db_paths=db_paths,
+            descriptions_path=getattr(args, "descriptions", None),
         ),
         verbose=getattr(args, "verbose", False),
     )
@@ -1429,7 +1449,36 @@ _CMD_TABLE = {
 }
 
 
+def _apply_descriptions_env_override() -> int | None:
+    """Apply an exported ``PYDOCS_SERVE__DESCRIPTIONS_PATH`` override, if any.
+
+    Must run BEFORE ``_build_parser()``: the argparse tree snapshots the
+    ``tool_docs`` prose, so applying afterwards would leave ``--help``
+    rendering the packaged bundle while the MCP server serves the override
+    (breaking CLI/MCP parity, R2 / ADR 0006 §2). A set-but-missing/invalid
+    env source is a hard error (universal strictness) — returns the exit
+    code; ``None`` means continue.
+    """
+    from pydocs_mcp.application import description_override
+
+    if not os.environ.get(description_override.DESCRIPTIONS_PATH_ENV_VAR):
+        return None
+    try:
+        description_override.apply_descriptions_override(
+            cli_path=None,
+            configured_path=os.environ[description_override.DESCRIPTIONS_PATH_ENV_VAR],
+        )
+    except Exception as exc:
+        # ``--verbose`` is parsed later than this can run, so the default
+        # (non-verbose) failure policy applies.
+        return _report_cli_failure(exc, verbose=False)
+    return None
+
+
 def main() -> int:
+    code = _apply_descriptions_env_override()
+    if code is not None:
+        return code
     parser = _build_parser()
     args = parser.parse_args()
     _configure_logging(args.verbose)

@@ -178,6 +178,13 @@ decisions:
 # → 1 reindex). Ignore globs default-skip the high-churn paths that
 # would otherwise produce false-positive reindexes.
 serve:
+  # Override document for the LLM-visible description surface (per-tool
+  # descriptions + server instructions + turn-0 preamble; ADR 0006).
+  # null = the packaged defaults/descriptions.md. Explicitly naming a path
+  # that is missing or invalid hard-fails startup — never a silent
+  # fallback. Precedence: --descriptions flag >
+  # PYDOCS_SERVE__DESCRIPTIONS_PATH env var > this key > packaged.
+  descriptions_path: null
   watch:
     enabled: false
     debounce_ms: 500

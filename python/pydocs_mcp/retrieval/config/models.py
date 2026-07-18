@@ -655,12 +655,25 @@ class WatchConfig(BaseModel):
 
 class ServeConfig(BaseModel):
     """Namespace for ``serve``-command tunables (parity with ``search`` /
-    ``reference_graph``). Only ``watch`` lives here today; future serve-
-    side knobs (HTTP transport options, etc.) get an obvious home."""
+    ``reference_graph``); future serve-side knobs (HTTP transport options,
+    etc.) get an obvious home.
+
+    ``descriptions_path`` points the process at an override descriptions
+    document (ADR 0006) — the LLM-visible tool/server prose — instead of
+    the packaged ``defaults/descriptions.md``. ``None`` = packaged. An
+    explicitly named path that is missing or invalid hard-fails startup
+    (universal strictness, never a silent fallback). Env
+    ``PYDOCS_SERVE__DESCRIPTIONS_PATH`` outranks this YAML key; the
+    ``--descriptions`` CLI flag outranks both.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     watch: WatchConfig = Field(default_factory=WatchConfig)
+    # str (not Path) so the YAML/env round-trip stays plain text; Path
+    # resolution (+ ~ expansion) and origin naming happen in
+    # ``application.description_override``.
+    descriptions_path: str | None = None
 
 
 class SearchBackendConfig(BaseModel):
