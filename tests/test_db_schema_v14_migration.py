@@ -22,7 +22,7 @@ def _tables(conn: sqlite3.Connection) -> set[str]:
 
 
 def test_schema_version_is_14() -> None:
-    assert SCHEMA_VERSION == 14
+    assert SCHEMA_VERSION == 15
 
 
 def test_fresh_db_has_decision_tables_and_columns(tmp_path) -> None:
@@ -31,7 +31,7 @@ def test_fresh_db_has_decision_tables_and_columns(tmp_path) -> None:
         assert "decision_records" in _tables(conn)
         assert "decision_id" in _columns(conn, "chunks")
         assert {"activity_summary", "overview_summary"} <= _columns(conn, "index_metadata")
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
     finally:
         conn.close()
 
@@ -72,7 +72,7 @@ def test_v13_db_upgrades_in_place_preserving_rows(tmp_path) -> None:
 
     conn = open_index_database(db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert "decision_records" in _tables(conn)
         assert "decision_id" in _columns(conn, "chunks")
         assert {"activity_summary", "overview_summary"} <= _columns(conn, "index_metadata")
@@ -120,7 +120,7 @@ def test_v12_db_walks_forward_with_embedded_backfill(tmp_path) -> None:
 
     conn = open_index_database(db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert "decision_records" in _tables(conn)
         assert "git_head" in _columns(conn, "index_metadata")
         assert {"activity_summary", "overview_summary"} <= _columns(conn, "index_metadata")

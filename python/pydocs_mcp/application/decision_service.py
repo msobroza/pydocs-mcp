@@ -5,15 +5,18 @@ Protocol). It composes the per-project :class:`DocsSearch` for semantic search
 over ``origin="decision_record"`` chunks, then hydrates each hit back to its
 structured :class:`DecisionRecord` via the ``metadata["decision_id"]`` backlink.
 Three modes mirror the ``NullDecisionService`` shape so the composition-root swap
-is one wiring branch:
+is one wiring branch; each ships as a ``why_*`` body-producer triple (markdown +
+§3.6 items[] + extras) with a text-only façade for direct callers:
 
-- ``search(query)`` — semantic search → rank-ordered record hydration → render.
-- ``for_targets(targets, *, query="")`` — §D11 path/qname target classification;
-  governing decisions resolved through the GOVERNS reference graph
-  (``find_governing``, resolver-backed §D18) with a parent-module fallback and an
-  optional query-token filter; one card per target.
-- ``dashboard()`` — governance rollup: counts, stalest active, awaiting review,
-  ungoverned high-centrality modules (GOVERNS-edge anti-join, §D18).
+- ``why_search(query)`` / ``search(query)`` — semantic search → rank-ordered
+  record hydration → render.
+- ``why_targets(targets, *, query="")`` / ``for_targets(...)`` — §D11 path/qname
+  target classification; governing decisions resolved through the GOVERNS
+  reference graph (``find_governing``, resolver-backed §D18) with a
+  parent-module fallback and an optional query-token filter; one card per target.
+- ``why_dashboard()`` / ``dashboard()`` — governance rollup: counts, stalest
+  active, awaiting review, ungoverned high-centrality modules (GOVERNS-edge
+  anti-join, §D18).
 
 ``DecisionDashboard`` is the frozen view-model the ``dashboard()`` mode renders.
 It lives next to the service (the renderer's consumer) so
@@ -69,6 +72,10 @@ _SOURCE_FILE_EXTENSIONS = (".py", ".pyi", ".md", ".rst", ".txt", ".toml", ".yaml
 # Lifecycle state that marks a decision as awaiting human review (spec §D9).
 _PROPOSED_STATUS = "proposed"
 _ACTIVE_STATUS = "active"
+
+# One rendered get_why body: ``(markdown, items, meta_extras)`` — the envelope
+# body-producer triple (contract §2.1; ``application.envelope.BodyResult``).
+WhyBody = tuple[str, tuple[dict[str, object], ...], dict[str, object]]
 
 
 def _classify_target(target: str) -> str:
@@ -165,28 +172,69 @@ class DecisionService:
     async def search(self, query: str) -> str:
         """Semantic search over decision chunks → rank-ordered record cards.
 
+        Delegates to :meth:`search_with_items` and drops the structured rows —
+        one retrieval/hydration/render authority for both the get_why text
+        surface and the ``search_codebase(kind="decision")`` items[] surface.
+        """
+        body, _items, _extras = await self.search_with_items(query)
+        return body
+
+    async def search_with_items(
+        self, query: str
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        """Decision search in envelope body-producer shape (contract §3.2).
+
         Runs the chunk pipeline scoped to ``origin="decision_record"``, collects
         the ``decision_id`` backlinks in rank order, hydrates each to its
-        structured record, and renders. Zero hits ⇒ an empty-state line plus the
-        overview recovery pointer (spec §D1 empty contract).
+        structured record, and renders — returning one §3.2 ``kind="decision"``
+        row per rendered record alongside the markdown body. Zero hits ⇒ an
+        empty-state line plus the overview recovery pointer (spec §D1 empty
+        contract) and no rows. Decision rows carry the record id with null
+        path/span — locators stay in ``get_why`` (contract §3.6).
         """
+        body, hydrated, scores = await self._search_hydrated(query)
+        items = tuple(_decision_item(r, scores.get(r.id or -1, 0.0)) for r in hydrated)
+        return body, items, {}
+
+    async def why_search(self, query: str) -> WhyBody:
+        """``get_why`` query mode with §3.6 items — same retrieval/render run
+        as :meth:`search_with_items` (one authority), different row shape:
+        ``get_why`` rows carry the decision identity + evidence locators, not
+        the §3.2 search-ranking fields."""
+        body, hydrated, _scores = await self._search_hydrated(query)
+        return body, _why_items(hydrated), {}
+
+    async def _search_hydrated(
+        self, query: str
+    ) -> tuple[str, tuple[DecisionRecord, ...], dict[int, float]]:
+        """Shared retrieval/hydration/render for the two search surfaces —
+        returns ``(body, rendered_records, chunk_scores)``; zero hits ⇒ the
+        empty-state body with no records."""
         chunk_query = SearchQuery(
             terms=query,
             pre_filter={ChunkFilterField.ORIGIN.value: ChunkOrigin.DECISION_RECORD.value},
         )
         ranked = await self.docs.ranked(chunk_query)
         ordered_ids = _decision_ids_in_rank_order(ranked.items)
+        empty_body = f"No decisions found.\n{pointer_token('overview', '')}"
         if not ordered_ids:
-            return f"No decisions found.\n{pointer_token('overview', '')}"
+            return empty_body, (), {}
         async with self.uow_factory() as uow:
             records = await uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)
         by_id = {r.id: r for r in records if r.id is not None}
         hydrated = tuple(by_id[i] for i in ordered_ids[: self.default_limit] if i in by_id)
         if not hydrated:
-            return f"No decisions found.\n{pointer_token('overview', '')}"
-        return format_decision_records(hydrated, heading=f"Decisions matching {query!r}")
+            return empty_body, (), {}
+        body = format_decision_records(hydrated, heading=f"Decisions matching {query!r}")
+        return body, hydrated, _decision_scores(ranked.items)
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:
+        """Text-only façade over :meth:`why_targets` — one dispatch run, first
+        element (same pattern as :meth:`search`)."""
+        body, _items, _extras = await self.why_targets(targets, query=query)
+        return body
+
+    async def why_targets(self, targets: list[str], *, query: str = "") -> WhyBody:
         """Render one decision card per target (§D11 target mode, edge-backed §D18).
 
         Each target is classified (path / qname / both) and reduced to a qname;
@@ -195,7 +243,9 @@ class DecisionService:
         substring scan. When a target has no inbound GOVERNS edge, the
         parent-module fallback walks up the qname. When ``query`` is non-empty,
         matched records are filtered to those sharing ≥1 normalized content token
-        with it (§D11 both-set mode).
+        with it (§D11 both-set mode). items[] carry one §3.6 row per rendered
+        record, deduped on ``decision_id`` (a record governing several targets
+        renders per card but attributes once).
         """
         async with self.uow_factory() as uow:
             records = await uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)
@@ -204,11 +254,15 @@ class DecisionService:
             # edges INSIDE the same UoW (one read scope), then map keys → records.
             matches = [await self._governing_records(uow, t, by_key) for t in targets]
         query_tokens = _title_tokens(query) if query else frozenset()
-        cards = [
-            _render_target_card(target, matched, query_tokens, self.default_limit)
-            for target, matched in zip(targets, matches, strict=True)
+        visible = [
+            _visible_records(matched, query_tokens, self.default_limit) for matched in matches
         ]
-        return "\n\n".join(cards)
+        cards = [
+            _render_target_card(target, shown)
+            for target, shown in zip(targets, visible, strict=True)
+        ]
+        surfaced = [record for shown in visible for record in shown]
+        return "\n\n".join(cards), _why_items(surfaced), {}
 
     async def _governing_records(
         self,
@@ -234,6 +288,11 @@ class DecisionService:
         return []
 
     async def dashboard(self) -> str:
+        """Text-only façade over :meth:`why_dashboard` — one run, first element."""
+        body, _items, _extras = await self.why_dashboard()
+        return body
+
+    async def why_dashboard(self) -> WhyBody:
         """Governance rollup over all decisions (§D11 dashboard mode).
 
         One UoW read gathers records + centrality signals; counts by status and
@@ -241,7 +300,9 @@ class DecisionService:
         awaiting review, and the top-centrality module qnames with no inbound
         GOVERNS edge (the graph anti-join, §D18 — not an ``affected_qnames``
         scan). Centrality mirrors :class:`OverviewService`: pagerank, in-degree
-        fallback — the shared §D6/§D11 degradation rule.
+        fallback — the shared §D6/§D11 degradation rule. items[] carry one §3.6
+        row per record the rollup SURFACES (stalest, then awaiting review;
+        deduped on ``decision_id``) so a harness can attribute the rollup.
         """
         async with self.uow_factory() as uow:
             records = await uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)
@@ -249,7 +310,87 @@ class DecisionService:
             degrees = await uow.references.degree_by_package(PROJECT_PACKAGE_NAME)
             governed = await uow.references.governed_qnames()
         summary = _build_dashboard(records, scores, degrees, governed)
-        return format_decision_dashboard(summary)
+        surfaced = (*summary.stalest, *summary.awaiting_review)
+        return format_decision_dashboard(summary), _why_items(surfaced), {}
+
+
+def _decision_scores(chunks: Sequence[Chunk]) -> dict[int, float]:
+    """Best (first-seen, rank order) chunk relevance per ``decision_id``.
+
+    Mirrors :func:`_decision_ids_in_rank_order`'s first-occurrence-wins rule so
+    a record's item score is the relevance of the chunk that ranked it.
+    """
+    scores: dict[int, float] = {}
+    for chunk in chunks:
+        raw = chunk.metadata.get("decision_id")
+        if isinstance(raw, int) and raw not in scores:
+            scores[raw] = float(chunk.relevance or 0.0)
+    return scores
+
+
+def _decision_item(record: DecisionRecord, score: float) -> dict[str, object]:
+    """One ``search_codebase`` §3.2 row for a decision record.
+
+    ``qualified_name`` is the record's :func:`decision_key` — the stable
+    normalized-title identity the GOVERNS graph keys on. Path/span are null by
+    contract: decision locators live in ``get_why`` items (§3.6).
+    """
+    return {
+        "kind": "decision",
+        "id": str(record.id) if record.id is not None else "",
+        "qualified_name": decision_key(record.title),
+        "package": PROJECT_PACKAGE_NAME,
+        "path": None,
+        "start_line": None,
+        "end_line": None,
+        "score": score,
+    }
+
+
+def _why_item(record: DecisionRecord) -> dict[str, object]:
+    """One ``get_why`` §3.6 row: decision identity + evidence locators.
+
+    ``locators`` cite the record's verbatim evidence spans (``path:start-end``
+    or a commit sha) — the fields ``search_codebase`` decision rows deliberately
+    omit (contract §3.2 vs §3.6).
+    """
+    return {
+        "decision_id": record.id,
+        "title": record.title,
+        "status": record.status,
+        "locators": [evidence.locator for evidence in record.evidence],
+        "affected_files": list(record.affected_files),
+    }
+
+
+def _why_items(records: Sequence[DecisionRecord]) -> tuple[dict[str, object], ...]:
+    """§3.6 rows for ``records``, first-seen-deduped on ``decision_id``.
+
+    Unpersisted records (``id is None``) are skipped — the contract types
+    ``decision_id`` as ``int`` and every read path hydrates from SQLite, so a
+    None id here would be a fixture artifact, not attributable evidence.
+    """
+    seen: set[int] = set()
+    rows: list[dict[str, object]] = []
+    for record in records:
+        if record.id is None or record.id in seen:
+            continue
+        seen.add(record.id)
+        rows.append(_why_item(record))
+    return tuple(rows)
+
+
+def _visible_records(
+    matched: Sequence[DecisionRecord],
+    query_tokens: frozenset[str],
+    limit: int,
+) -> tuple[DecisionRecord, ...]:
+    """The records one target card actually renders: query-token filter (§D11
+    both-set mode) then the default-limit slice. Split from the renderer so
+    ``why_targets`` can attribute exactly the rendered set in items[]."""
+    if query_tokens:
+        matched = [r for r in matched if _matches_query(r, query_tokens)]
+    return tuple(matched[:limit])
 
 
 def _decision_ids_in_rank_order(chunks: Sequence[Chunk]) -> tuple[int, ...]:
@@ -269,24 +410,18 @@ def _decision_ids_in_rank_order(chunks: Sequence[Chunk]) -> tuple[int, ...]:
     return tuple(ordered)
 
 
-def _render_target_card(
-    target: str,
-    matched: Sequence[DecisionRecord],
-    query_tokens: frozenset[str],
-    limit: int,
-) -> str:
-    """Render the ``## Target `` card for one target (helper for ``for_targets``).
+def _render_target_card(target: str, visible: Sequence[DecisionRecord]) -> str:
+    """Render the ``## Target `` card for one target (helper for ``why_targets``).
 
-    ``matched`` is the already-resolved governing-record list (edge-backed, §D18).
-    ``format_decision_records`` is the single render authority — it emits an H1
-    (``# {heading}``) doc, so the target card promotes that to the ``## Target ``
-    H2 the §D11 target mode wants by prefixing one ``#``. Record blocks never
-    start a line with ``#`` (they use bold titles + ``-`` bullets), so promoting
-    the leading heading is safe and touches only the first line.
+    ``visible`` is the already-filtered/sliced record set (``_visible_records``
+    — the same set items[] attribute). ``format_decision_records`` is the single
+    render authority — it emits an H1 (``# {heading}``) doc, so the target card
+    promotes that to the ``## Target `` H2 the §D11 target mode wants by
+    prefixing one ``#``. Record blocks never start a line with ``#`` (they use
+    bold titles + ``-`` bullets), so promoting the leading heading is safe and
+    touches only the first line.
     """
-    if query_tokens:
-        matched = [r for r in matched if _matches_query(r, query_tokens)]
-    body = format_decision_records(tuple(matched[:limit]), heading=f"Target {target}")
+    body = format_decision_records(tuple(visible), heading=f"Target {target}")
     return "#" + body if body.startswith("# ") else body
 
 

@@ -12,13 +12,18 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydocs_mcp.application.formatting import resolve_pointers, strip_pointers
 from pydocs_mcp.application.freshness import EnvelopeInfo
+from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.application.truncation import TruncationLedger, ledger_scope
 
 _SHORT_SHA = 7
+
+# What a body producer may return: a bare markdown string (no structured
+# rows) or ``(markdown, items, meta_extras)`` once a tool emits items[].
+BodyResult = str | tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]
 
 
 class FreshnessProbe(Protocol):
@@ -74,15 +79,56 @@ class ResponseEnvelope:
     surface: Literal["mcp", "cli"]
     pointers_enabled: bool
 
-    async def wrap(self, produce: Callable[[], Awaitable[str]]) -> str:
+    async def wrap(
+        self, tool: str, project: str, produce: Callable[[], Awaitable[BodyResult]]
+    ) -> ToolResponse:
         with ledger_scope() as ledger:
-            body = await produce()
+            body, items, extras = _coerce_body(await produce())
         body = (
             resolve_pointers(body, self.surface) if self.pointers_enabled else strip_pointers(body)
         )
-        header = render_envelope_header(await self.probe.envelope_info())
+        info = await self.probe.envelope_info()
+        header = render_envelope_header(info)
         footer = render_envelope_footer(
             ledger, self.surface, pointers_enabled=self.pointers_enabled
         )
         parts = [p for p in (header, body.rstrip("\n"), footer) if p]
-        return "\n\n".join(parts) + "\n"
+        meta = _assemble_meta(
+            tool=tool,
+            project=project,
+            info=info,
+            truncated=bool(ledger.entries),
+            extras=extras,
+        )
+        return ToolResponse(text="\n\n".join(parts) + "\n", items=items, meta=meta)
+
+
+def _coerce_body(result: BodyResult) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+    """A bare string body means "no structured rows" (contract §2.1)."""
+    if isinstance(result, str):
+        return result, (), {}
+    return result
+
+
+def _assemble_meta(
+    *,
+    tool: str,
+    project: str,
+    info: EnvelopeInfo | None,
+    truncated: bool,
+    extras: dict[str, Any],
+) -> dict[str, Any]:
+    """The §2.1 ``meta`` block. Empty commit strings degrade to null (the wire
+    contract's "head cannot be resolved" value); ``truncated`` ORs the ledger
+    with any body-level truncation the producer reported in ``extras``."""
+    meta: dict[str, Any] = {
+        "tool": tool,
+        "project": project,
+        "indexed_git_head": (info.indexed_commit or None) if info else None,
+        "live_git_head": (info.live_commit or None) if info else None,
+        "index_stale": info.stale if info else False,
+        "truncated": truncated,
+    }
+    for key, value in extras.items():
+        meta[key] = bool(meta["truncated"] or value) if key == "truncated" else value
+    return meta

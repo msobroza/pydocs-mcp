@@ -410,8 +410,9 @@ async def test_show_inherits_on_class_routes_through_ref_svc(
 async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
     package_lookup_mock: MagicMock,
 ) -> None:
-    """A class with zero INHERITS edges renders the canonical empty-rows
-    markdown via ``format_references`` — H1 + ``No bases found.``"""
+    """A class with zero INHERITS edges (either sense) renders the canonical
+    empty-rows markdown via ``format_references`` — H1 + the single
+    ``No inheritance edges found`` line."""
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
 
     fake_node = MagicMock()
@@ -430,7 +431,7 @@ async def test_show_inherits_on_class_with_no_bases_returns_friendly_message(
         ref_svc=ref_svc,
     )
     out = await svc.lookup(LookupInput(target="fastapi.routing.X", show="inherits"))
-    assert "No bases found." in out
+    assert "No inheritance edges found for `fastapi.routing.X`." in out
     ref_svc.inherits.assert_awaited_once_with("fastapi", "fastapi.routing.X")
 
 
@@ -523,6 +524,99 @@ async def test_show_tree_on_symbol_returns_node_json(
     out = await svc.lookup(LookupInput(target="fastapi.routing.APIRouter", show="tree"))
     assert "APIRouter" in out
     assert "include_router" in out
+
+
+@pytest.mark.asyncio
+async def test_lookup_with_items_emits_contract_rows_for_outline(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """Task 6 (§3.3): the tree-rendering path emits one row per rendered
+    outline node, pre-order, under CONTRACT names — not the pageindex keys."""
+    from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+
+    method = DocumentNode(
+        node_id="fastapi.routing.APIRouter.include_router",
+        qualified_name="fastapi.routing.APIRouter.include_router",
+        title="def include_router",
+        kind=NodeKind.METHOD,
+        source_path="fastapi/routing.py",
+        start_line=20,
+        end_line=30,
+        text="def include_router(...): ...",
+        content_hash="h-m",
+    )
+    cls = DocumentNode(
+        node_id="fastapi.routing.APIRouter",
+        qualified_name="fastapi.routing.APIRouter",
+        title="class APIRouter",
+        kind=NodeKind.CLASS,
+        source_path="fastapi/routing.py",
+        start_line=10,
+        end_line=40,
+        text="class APIRouter: ...",
+        content_hash="h-c",
+        children=(method,),
+    )
+    tree = MagicMock()
+    tree.find_node_by_qualified_name = MagicMock(return_value=cls)
+    tree_svc = _tree_svc_for_module("fastapi.routing", tree)
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=_null_ref(),
+    )
+    body, items, extras = await svc.lookup_with_items(
+        LookupInput(target="fastapi.routing.APIRouter", show="tree")
+    )
+    assert "APIRouter" in body
+    assert extras == {}
+    assert items == (
+        {
+            "node_id": "fastapi.routing.APIRouter",
+            "kind": "class",
+            "qualified_name": "fastapi.routing.APIRouter",
+            "path": "fastapi/routing.py",
+            "start_line": 10,
+            "end_line": 40,
+        },
+        {
+            "node_id": "fastapi.routing.APIRouter.include_router",
+            "kind": "method",
+            "qualified_name": "fastapi.routing.APIRouter.include_router",
+            "path": "fastapi/routing.py",
+            "start_line": 20,
+            "end_line": 30,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_lookup_with_items_reference_shows_stay_empty(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """get_references rides the same dispatcher — its rows land in a later
+    task, so non-tree shows keep an empty items[] today."""
+    fake_node = MagicMock()
+    fake_node.node_id = "pkg.mod.f"
+    fake_node.kind = "function"
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("pkg.mod", fake_tree)
+    ref_svc = MagicMock()
+    ref_svc.callers = AsyncMock(return_value=())
+
+    svc = LookupService(
+        package_lookup=package_lookup_mock,
+        tree_svc=tree_svc,
+        ref_svc=ref_svc,
+    )
+    body, items, extras = await svc.lookup_with_items(
+        LookupInput(target="pkg.mod.f", show="callers")
+    )
+    assert "No callers found." in body
+    assert items == ()
+    assert extras == {}
 
 
 # ── I8 dispatch table + I9 Null-services contract ────────────────────────
@@ -650,3 +744,176 @@ async def test_ref_getters_table_has_expected_keys() -> None:
     from pydocs_mcp.application.lookup_service import _REF_GETTERS
 
     assert set(_REF_GETTERS) == {"callers", "callees", "inherits", "governed_by"}
+
+
+# ── §3.5 reference items (get_references items[], Task 8) ────────────────
+
+
+def _span_node(qname: str, *, start: int, end: int, kind: str = "function") -> MagicMock:
+    node = MagicMock()
+    node.node_id = qname
+    node.kind = kind
+    node.source_path = "fastapi/routing.py"
+    node.start_line = start
+    node.end_line = end
+    return node
+
+
+def _routing_tree(nodes: dict[str, Any]) -> MagicMock:
+    tree = MagicMock()
+    tree.find_node_by_qualified_name = MagicMock(side_effect=nodes.get)
+    return tree
+
+
+@pytest.mark.asyncio
+async def test_show_callers_items_span_from_from_node(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """callers ⇒ each row's path/span is the FROM-node's defining tree node;
+    a from-node outside the indexed trees degrades to a null span."""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+
+    target = _span_node("fastapi.routing.X", start=1, end=4, kind="class")
+    caller = _span_node("fastapi.routing.Y", start=5, end=8)
+    tree_svc = _tree_svc_for_module(
+        "fastapi.routing",
+        _routing_tree({"fastapi.routing.X": target, "fastapi.routing.Y": caller}),
+    )
+    ref_svc = MagicMock()
+    ref_svc.callers = AsyncMock(
+        return_value=(
+            NodeReference(
+                from_package="fastapi",
+                from_node_id="fastapi.routing.Y",
+                to_name="X",
+                to_node_id="fastapi.routing.X",
+                kind=ReferenceKind.CALLS,
+            ),
+            NodeReference(
+                from_package="otherpkg",
+                from_node_id="otherpkg.mod.f",
+                to_name="X",
+                to_node_id="fastapi.routing.X",
+                kind=ReferenceKind.CALLS,
+            ),
+        )
+    )
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc)
+    _body, items, extras = await svc.lookup_with_items(
+        LookupInput(target="fastapi.routing.X", show="callers")
+    )
+    assert items == (
+        {
+            "from_qualified_name": "fastapi.routing.Y",
+            "to_qualified_name": "fastapi.routing.X",
+            "kind": "calls",
+            "direction": "callers",
+            "path": "fastapi/routing.py",
+            "start_line": 5,
+            "end_line": 8,
+        },
+        {
+            "from_qualified_name": "otherpkg.mod.f",
+            "to_qualified_name": "fastapi.routing.X",
+            "kind": "calls",
+            "direction": "callers",
+            "path": None,
+            "start_line": None,
+            "end_line": None,
+        },
+    )
+    assert extras == {}
+
+
+@pytest.mark.asyncio
+async def test_show_callees_items_span_from_to_node(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """callees ⇒ the TO-node's defining node; unresolved edges carry to_name
+    and a null span (§3.5 "null on miss")."""
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.node_reference import NodeReference
+
+    source = _span_node("fastapi.routing.X", start=1, end=4)
+    callee = _span_node("fastapi.routing.Y", start=5, end=8)
+    tree_svc = _tree_svc_for_module(
+        "fastapi.routing",
+        _routing_tree({"fastapi.routing.X": source, "fastapi.routing.Y": callee}),
+    )
+    ref_svc = MagicMock()
+    ref_svc.callees = AsyncMock(
+        return_value=(
+            NodeReference(
+                from_package="fastapi",
+                from_node_id="fastapi.routing.X",
+                to_name="Y",
+                to_node_id="fastapi.routing.Y",
+                kind=ReferenceKind.CALLS,
+            ),
+            NodeReference(
+                from_package="fastapi",
+                from_node_id="fastapi.routing.X",
+                to_name="ext.thing",
+                to_node_id=None,
+                kind=ReferenceKind.CALLS,
+            ),
+        )
+    )
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc)
+    _body, items, _extras = await svc.lookup_with_items(
+        LookupInput(target="fastapi.routing.X", show="callees")
+    )
+    assert items == (
+        {
+            "from_qualified_name": "fastapi.routing.X",
+            "to_qualified_name": "fastapi.routing.Y",
+            "kind": "calls",
+            "direction": "callees",
+            "path": "fastapi/routing.py",
+            "start_line": 5,
+            "end_line": 8,
+        },
+        {
+            "from_qualified_name": "fastapi.routing.X",
+            "to_qualified_name": "ext.thing",
+            "kind": "calls",
+            "direction": "callees",
+            "path": None,
+            "start_line": None,
+            "end_line": None,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_repo_reference_rows_have_null_span(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """A CrossReferenceRow's defining node lives in ANOTHER project's trees —
+    this project must not probe its own trees for it (null span by design)."""
+    from pydocs_mcp.application.reference_service import CrossReferenceRow
+    from pydocs_mcp.extraction.reference_kind import ReferenceKind
+
+    target = _span_node("fastapi.routing.X", start=1, end=4)
+    tree_svc = _tree_svc_for_module("fastapi.routing", _routing_tree({"fastapi.routing.X": target}))
+    ref_svc = MagicMock()
+    ref_svc.callers = AsyncMock(
+        return_value=(
+            CrossReferenceRow(
+                from_project="sibling",
+                from_package="fastapi",
+                from_node_id="fastapi.routing.X",  # same-named module in the sibling
+                to_project="here",
+                to_node_id="fastapi.routing.X",
+                to_name="X",
+                kind=ReferenceKind.CALLS,
+            ),
+        )
+    )
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc)
+    _body, items, _extras = await svc.lookup_with_items(
+        LookupInput(target="fastapi.routing.X", show="callers")
+    )
+    assert items[0]["path"] is None
+    assert items[0]["start_line"] is None and items[0]["end_line"] is None

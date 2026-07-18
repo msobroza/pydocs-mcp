@@ -65,12 +65,18 @@ Three steps, all on your machine (see the diagram above):
      differ from the docs', via a small model that runs locally.
    - **Reasoning** — for broad or structural questions, an LLM walks your code's
      map (titles + summaries, no embeddings) to pick the best spots.
-3. **Answer** — results flow back to your agent through six task-shaped tools:
+3. **Answer** — results flow back to your agent through nine task-shaped tools:
    `search_codebase` (find by relevance), `get_symbol` / `get_context` (jump to
    known names), `get_references` (trace callers, callees, inheritance, impact),
-   `get_overview` (map what's indexed), and `get_why` (recorded design rationale).
+   `get_overview` (map what's indexed), `get_why` (recorded design rationale),
+   plus three filesystem tools — `grep` (exact-string / regex), `glob` (find
+   files by name), and `read_file` (line-numbered reads) — that search the live
+   source files the indexer sees, so exact-text lookups need no extra server.
    Every response is wrapped in a consistent envelope so the agent always knows
-   where it stands — see [Response conventions](#response-conventions).
+   where it stands — see [Response conventions](#response-conventions). The
+   tool surface is frozen by contract
+   ([docs/tool-contracts.md](docs/tool-contracts.md)), so MCP clients stay
+   stable across server retunes.
 
 Nothing ever leaves your machine unless you opt into a remote provider — the
 reasoning mode or `embedding.provider: openai` — with your own key.

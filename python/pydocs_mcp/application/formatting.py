@@ -33,7 +33,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
 from typing import TYPE_CHECKING, Literal
 
-from pydocs_mcp.application.mcp_inputs import _PACKAGE_RE  # single source: valid project selector
+from pydocs_mcp.application.mcp_inputs import (  # single sources: selector/target grammars
+    _PACKAGE_RE,
+    is_symbol_target,
+)
 from pydocs_mcp.application.reference_service import CrossReferenceRow
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
 from pydocs_mcp.constants import (
@@ -89,6 +92,12 @@ _TRUNCATION_MIN_REMAINDER = 100
 _POINTER_RE = re.compile(
     r"\[\[next:(lookup|lookup-show|search|overview|why):([^:\]]*)(?::([^:\]]+))?\]\]"
 )
+
+# Token + its line ending — the exact span ``strip_pointers`` removes, reused
+# by ``resolve_pointers``'s suppression pre-pass so a suppressed token
+# disappears byte-identically to the ``pointers_enabled=False`` strip path
+# (no leftover blank line where the token's line used to be).
+_POINTER_WITH_EOL_RE = re.compile(_POINTER_RE.pattern + r"\n?")
 
 # show-mode → (mcp renderer, cli renderer). context maps to a one-element
 # get_context batch; tree/default stay on get_symbol via depth.
@@ -172,8 +181,36 @@ def _render_pointer(match: re.Match[str], surface: str) -> str:
     return f'→ get_symbol(target="{target}")'
 
 
+def _is_invalid_symbol_pointer(match: re.Match[str]) -> bool:
+    """Live lookup / lookup-show token whose target the symbol tools reject.
+
+    Only these two actions render dotted-target follow-ups (``get_symbol`` /
+    ``get_context`` / ``get_references``); search/why/overview targets are
+    queries/selectors with their own grammars. Literal-content precedence
+    stays first: a lookup-show token with a missing or unknown show word is
+    indexed chunk content (see ``_render_pointer``), never suppressed.
+    """
+    action, target, show = match.group(1), match.group(2), match.group(3)
+    if action == "lookup":
+        return not is_symbol_target(target)
+    if action == "lookup-show":
+        if show is None or show not in _SHOW_TO_TOOL:
+            return False
+        return not is_symbol_target(target)
+    return False
+
+
 def resolve_pointers(text: str, surface: str) -> str:
-    """Rewrite every pointer token to ``surface`` syntax ("mcp" | "cli")."""
+    """Rewrite every pointer token to ``surface`` syntax ("mcp" | "cli").
+
+    Symbol-tool pointers whose target fails ``is_symbol_target`` are
+    suppressed instead of rendered — a response must never advertise a
+    follow-up call the tool's own input validator rejects (markdown /
+    decision document paths like ``docs.adr.0001-x.md``).
+    """
+    text = _POINTER_WITH_EOL_RE.sub(
+        lambda m: "" if _is_invalid_symbol_pointer(m) else m.group(0), text
+    )
     return _POINTER_RE.sub(lambda m: _render_pointer(m, surface), text)
 
 
@@ -416,15 +453,17 @@ def format_members_markdown_within_budget(
 
 
 # Per-``show`` rendering vocabulary (spec §5.7, appendix §A.1):
-#   - H1 phrasing differs per question ("Callers/Callees of X" / "Bases of X").
+#   - H1 phrasing differs per question ("Callers of X" / "Callees of X").
 #   - Group-header noun gets singular/plural ("caller" vs "callers").
 # Keeping these as a single table avoids ad-hoc conditionals at three
 # call sites and makes the §A.1 shape one edit away if the vocabulary
-# changes (e.g., MENTIONS → "Mentions of X").
+# changes (e.g., MENTIONS → "Mentions of X"). ``inherits`` is NOT in the
+# table — it renders two sense-labelled sections ("Bases of" /
+# "Subclasses of") through :func:`_format_inherits` instead of the
+# single-sense group shape.
 _SHOW_VOCAB: dict[str, tuple[str, str]] = {
     "callers": ("Callers of", "caller"),
     "callees": ("Callees of", "callee"),
-    "inherits": ("Bases of", "base"),
     # GOVERNS edges rendered as references (spec §D18): the from-side is a
     # ``decision:<key>`` node, so the noun is "governing decision".
     "governed_by": ("Governing decisions of", "governing decision"),
@@ -445,14 +484,19 @@ def format_references(
     inherits rendering; the MCP handler and CLI both delegate here.
 
     Shape:
-      - H1 = ``# {Callers|Callees|Bases} of `target` ``
+      - H1 = ``# {Callers|Callees} of `target` ``
       - Lead summary: ``N references found (R resolved, U unresolved).``
       - H2 groups by ``from_package`` in first-seen order
       - Within each group: resolved rows first (``to_node_id is not None``)
       - Row format: ``- `from_node_id` → `to_node_id` `` for resolved,
         ``- ⚠ `from_node_id` → `to_name` *(unresolved — to_name didn't
         match any indexed qname)*`` for unresolved
-      - Empty rows → header + ``No {caller|callee|base}s found.``
+      - Empty rows → header + ``No {caller|callee}s found.``
+      - ``show="inherits"`` diverges (:func:`_format_inherits`): H1
+        ``# Inheritance of `target` `` with up to two sense sections —
+        ``## Bases of `target` `` (from-side edges) then ``## Subclasses
+        of `target` `` (edges into the target); empty senses are omitted,
+        both empty → ``No inheritance edges found for `target`.``
 
     Args:
         rows: Reference rows for the target (already filtered to this
@@ -468,6 +512,9 @@ def format_references(
     Returns:
         UTF-8 markdown string. Always ends with a single trailing ``\\n``.
     """
+    if show == "inherits":
+        return _format_inherits(rows, target=target, limit=limit, decision_titles=decision_titles)
+
     title_verb, noun = _SHOW_VOCAB[show]
     h1 = f"# {title_verb} `{target}`\n"
 
@@ -476,33 +523,8 @@ def format_references(
         # a consistent shape. The body sentence pluralizes the noun.
         return f"{h1}\nNo {noun}s found.\n"
 
-    local = [r for r in rows if not isinstance(r, CrossReferenceRow)]
-    cross_count = len(rows) - len(local)
-    resolved_count = sum(1 for r in local if r.to_node_id is not None)
-    unresolved_count = len(local) - resolved_count
-    # WHY the conditional suffix: with zero cross rows the lead stays
-    # byte-identical to the pre-feature string (the AC17 regression contract).
-    cross_note = f", {cross_count} cross-repo" if cross_count else ""
-    lead = (
-        f"{len(rows)} references found "
-        f"({resolved_count} resolved, {unresolved_count} unresolved{cross_note}).\n"
-    )
-
-    # A full page (``len(rows) == limit``) can't distinguish "exactly this many"
-    # from "the limit clipped more" — record the elision so the envelope surfaces
-    # the recovery pointer (spec §D7).
-    if len(rows) == limit:
-        ledger = get_active_ledger()
-        if ledger is not None:
-            ledger.record(
-                TruncationEntry(
-                    description=(
-                        f"exactly {limit} rows returned — possibly more exist; "
-                        "raise reference_graph.output.default_limit to see them"
-                    ),
-                    recovery=pointer_token("lookup-show", target, show),
-                )
-            )
+    lead = _references_lead(rows)
+    _record_full_reference_page(target, show, limit, len(rows))
 
     # Group preserving FIRST-SEEN order — appendix §A.1's example renders
     # packages in the order they appear in ``rows``. Local rows group by
@@ -524,6 +546,87 @@ def format_references(
     return "".join(blocks)
 
 
+def _references_lead(rows: tuple[NodeReference | CrossReferenceRow, ...]) -> str:
+    """``N references found (R resolved, U unresolved[, C cross-repo]).`` lead."""
+    local = [r for r in rows if not isinstance(r, CrossReferenceRow)]
+    cross_count = len(rows) - len(local)
+    resolved_count = sum(1 for r in local if r.to_node_id is not None)
+    unresolved_count = len(local) - resolved_count
+    # WHY the conditional suffix: with zero cross rows the lead stays
+    # byte-identical to the pre-feature string (the AC17 regression contract).
+    cross_note = f", {cross_count} cross-repo" if cross_count else ""
+    return (
+        f"{len(rows)} references found "
+        f"({resolved_count} resolved, {unresolved_count} unresolved{cross_note}).\n"
+    )
+
+
+def _record_full_reference_page(target: str, show: str, limit: int, row_count: int) -> None:
+    """Record the possible-elision of a full reference page (spec §D7).
+
+    A full page (``row_count == limit``) can't distinguish "exactly this many"
+    from "the limit clipped more" — record the elision so the envelope surfaces
+    the recovery pointer.
+    """
+    if row_count != limit:
+        return
+    ledger = get_active_ledger()
+    if ledger is None:
+        return
+    ledger.record(
+        TruncationEntry(
+            description=(
+                f"exactly {limit} rows returned — possibly more exist; "
+                "raise reference_graph.output.default_limit to see them"
+            ),
+            recovery=pointer_token("lookup-show", target, show),
+        )
+    )
+
+
+def _format_inherits(
+    rows: tuple[NodeReference | CrossReferenceRow, ...],
+    *,
+    target: str,
+    limit: int,
+    decision_titles: Mapping[tuple[str, str], str] | None,
+) -> str:
+    """``show="inherits"`` — two sense-labelled sections, precision-biased.
+
+    Partition invariant: a bundle-local row whose ``from_node_id`` equals
+    ``target`` is a BASES-sense edge (its to-side names one of the target's
+    bases); every other row points INTO the target, so its from-side is a
+    subclass. ``target`` is safe as the partition key because ``inherits``
+    only applies to CLASS nodes, whose ``qualified_name`` (the lookup
+    target) equals ``node_id`` (the edge endpoint) by the DocumentNode
+    code-node contract. Cross-repo rows are always subclass-sense —
+    ``edges_into`` is the only overlay probe.
+    """
+    h1 = f"# Inheritance of `{target}`\n"
+    if not rows:
+        return f"{h1}\nNo inheritance edges found for `{target}`.\n"
+
+    bases: list[NodeReference | CrossReferenceRow] = []
+    subclasses: list[NodeReference | CrossReferenceRow] = []
+    for r in rows:
+        is_base = not isinstance(r, CrossReferenceRow) and r.from_node_id == target
+        (bases if is_base else subclasses).append(r)
+
+    _record_full_reference_page(target, "inherits", limit, len(rows))
+    blocks = [h1, _references_lead(rows)]
+    for label, singular, plural, sense_rows in (
+        ("Bases of", "base", "bases", bases),
+        ("Subclasses of", "subclass", "subclasses", subclasses),
+    ):
+        if not sense_rows:
+            continue  # Empty sense → omit its section entirely.
+        count = len(sense_rows)
+        noun = singular if count == 1 else plural
+        blocks.append(f"\n## {label} `{target}` ({count} {noun})\n\n")
+        blocks.extend(_render_reference_rows(sense_rows, "inherits", decision_titles))
+    return "".join(blocks)
+
+
 def _render_reference_group(
     pkg: str,
     refs: list[NodeReference | CrossReferenceRow],
@@ -532,13 +635,24 @@ def _render_reference_group(
     decision_titles: Mapping[tuple[str, str], str] | None,
 ) -> list[str]:
     """One ``## from`` group — resolved-first, stable on from_node_id."""
+    count = len(refs)
+    plural = "" if count == 1 else "s"
+    blocks = [f"\n## from `{pkg}` ({count} {noun}{plural})\n\n"]
+    blocks.extend(_render_reference_rows(refs, show, decision_titles))
+    return blocks
+
+
+def _render_reference_rows(
+    refs: list[NodeReference | CrossReferenceRow],
+    show: str,
+    decision_titles: Mapping[tuple[str, str], str] | None,
+) -> list[str]:
+    """Row bullets — resolved-first, stable on from_node_id (§A.1)."""
     refs_sorted = sorted(
         refs,
         key=lambda r: (0 if r.to_node_id is not None else 1, r.from_node_id),
     )
-    count = len(refs_sorted)
-    plural = "" if count == 1 else "s"
-    blocks = [f"\n## from `{pkg}` ({count} {noun}{plural})\n\n"]
+    blocks: list[str] = []
     for r in refs_sorted:
         if isinstance(r, CrossReferenceRow):
             blocks.append(_render_cross_row(r, show, decision_titles))

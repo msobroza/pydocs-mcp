@@ -171,9 +171,11 @@ def test_end_to_end_callers_cross_repo_through_build_routers(workspace: Path) ->
     tools, services = build_routers(config, workspace=workspace, run_link_pass=True)
 
     async def _ask() -> str:
-        return await tools.get_references(
-            ReferencesInput(target="mylib.core.parse", direction="callers", project="mylib")
-        )
+        return (
+            await tools.get_references(
+                ReferencesInput(target="mylib.core.parse", direction="callers", project="mylib")
+            )
+        ).text
 
     out = asyncio.run(_ask())
     assert "backend.api.handler" in out
@@ -203,7 +205,7 @@ def test_link_on_serve_false_is_detection_only(workspace: Path) -> None:
             ReferencesInput(target="mylib.core.parse", direction="callers", project="mylib")
         )
         card = await tools.get_overview(OverviewInput())
-        return refs, card
+        return refs.text, card.text
 
     refs, card = asyncio.run(_both())
     assert "backend.api.handler" not in refs  # no link pass ran
@@ -253,9 +255,11 @@ def test_departed_bundle_edges_excluded_on_readonly_query(workspace: Path, monke
     tools, _ = build_routers(config, workspace=workspace, run_link_pass=False)  # one-shot read
 
     async def _ask() -> str:
-        return await tools.get_references(
-            ReferencesInput(target="mylib.core.parse", direction="callers", project="mylib")
-        )
+        return (
+            await tools.get_references(
+                ReferencesInput(target="mylib.core.parse", direction="callers", project="mylib")
+            )
+        ).text
 
     out = asyncio.run(_ask())
     assert "backend.api.handler" in out  # live cross caller still served
@@ -284,7 +288,7 @@ def test_workspace_overview_reports_link_freshness(workspace: Path) -> None:
     tools, _ = build_routers(config, workspace=workspace, run_link_pass=True)
 
     async def _card() -> str:
-        return await tools.get_overview(OverviewInput())
+        return (await tools.get_overview(OverviewInput())).text
 
     out = asyncio.run(_card())
     assert "cross-repo links: fresh" in out

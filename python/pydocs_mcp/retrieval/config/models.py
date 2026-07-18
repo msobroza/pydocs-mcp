@@ -261,7 +261,7 @@ class CrossRepoConfig(BaseModel):
     """Workspace-level cross-repo reference linking (spec 2026-07-11 + A1).
 
     Server-side deployment tunables, NOT MCP parameters — ``get_references``
-    keeps its pinned six-tool-surface signature; enabling/tuning linking is a
+    keeps its pinned nine-tool-surface signature; enabling/tuning linking is a
     YAML-only concern (CLAUDE.md §"MCP API surface vs YAML configuration").
     Inert with a single loaded bundle regardless of ``enabled`` (N7).
     """
@@ -341,6 +341,38 @@ class SearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
+
+
+class FilesConfig(BaseModel):
+    """Per-deployment bounds for the filesystem tools (``grep``/``glob``/``read_file``).
+
+    Field defaults are the single source of truth; ``default_config.yaml``
+    restates them for user-facing clarity (tool-contracts.md §3.7-3.9:
+    ``head_limit``/``limit`` are "YAML-wired" — omitted by the client means
+    these defaults). ``max_head_limit`` is the ceiling applied to
+    client-supplied caps so one request can't demand an unbounded response.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    grep_head_limit: int = Field(default=100, ge=1)
+    glob_head_limit: int = Field(default=100, ge=1)
+    read_limit: int = Field(default=2000, ge=1)
+    max_head_limit: int = Field(default=10000, ge=1)
+
+    @model_validator(mode="after")
+    def _defaults_le_max(self) -> FilesConfig:
+        # Same guard as SearchOutputConfig._default_le_max: a YAML default
+        # above the ceiling would make every defaulted call exceed the cap.
+        for name in ("grep_head_limit", "glob_head_limit", "read_limit"):
+            value: int = getattr(self, name)
+            if value > self.max_head_limit:
+                raise ValueError(
+                    f"files.{name}={value} > max_head_limit="
+                    f"{self.max_head_limit}; the YAML default would always "
+                    f"exceed the client-cap ceiling. Adjust YAML.",
+                )
+        return self
 
 
 # Single source of truth for the get_symbol(depth="source") line cap — the
@@ -543,7 +575,7 @@ class DecisionCaptureConfig(BaseModel):
     sources run, the merge/dedupe Jaccard threshold, per-source bounds, and the
     default-off LLM structuring gate. Per CLAUDE.md §"MCP API surface vs YAML
     configuration": all deployment-time knobs, NOT MCP tool params — the
-    six task-shaped tools stay fixed.
+    nine task-shaped tools stay fixed.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -584,7 +616,7 @@ class WatchConfig(BaseModel):
 
     Per CLAUDE.md §"MCP API surface vs YAML configuration": these are
     deployment-time knobs, NOT MCP tool params. The MCP surface stays
-    fixed at the six task-shaped tools; watching is enabled by either
+    fixed at the nine task-shaped tools; watching is enabled by either
     switch — the CLI ``--watch`` flag or ``enabled: true`` here.
 
     ``debounce_ms`` is bounded: zero/negative would fire on every byte

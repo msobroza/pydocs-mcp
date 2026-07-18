@@ -29,10 +29,10 @@ Internal structure:
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclasses_field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.application.cross_repo_navigator import NullCrossRepoNavigator
 from pydocs_mcp.application.formatting import (
@@ -49,6 +49,7 @@ from pydocs_mcp.application.mcp_errors import (
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.reference_service import CrossReferenceRow
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
     _DEFAULT_CONTEXT_RENDER,
@@ -64,7 +65,13 @@ if TYPE_CHECKING:
     # navigation Protocols in ``application.protocols``.
     from pydocs_mcp.application.protocols import CrossNavigator, ReferenceNavigator, TreeNavigator
     from pydocs_mcp.application.reference_service import ContextNode
+    from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.storage.node_reference import NodeReference
+
+
+# One rendered lookup body: ``(markdown, items, meta_extras)`` — the envelope
+# body-producer triple (contract §2.1; ``application.envelope.BodyResult``).
+LookupBody = tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]
 
 
 # ── Module-level constants (S4, S20 — single source of truth) ────────────
@@ -150,7 +157,18 @@ class LookupTarget:
                 consumed=1,
                 symbol_path=(),
             )
+        match_pkg = package
         match = await longest_module(package, parts)
+        if match is None:
+            # Contract §3 project-code addressing (ADR 0004 fix i):
+            # project source is stored under the reserved ``__project__``
+            # package with PREFIXLESS module ids, so a bare
+            # project-qualified target ("mypkg.mod.thing") never matches
+            # when parts[0] is treated as the package. Re-probe the full
+            # dotted string under ``__project__`` before giving up — an
+            # indexed dependency of the same name wins (probed first).
+            match_pkg = PROJECT_PACKAGE_NAME
+            match = await longest_module(PROJECT_PACKAGE_NAME, parts)
         if match is None:
             # Multi-segment target with no module match — the dispatcher
             # raises ``NotFoundError`` using the original target string.
@@ -165,7 +183,7 @@ class LookupTarget:
             )
         module, consumed = match
         return cls(
-            package=package,
+            package=match_pkg,
             module=module,
             consumed=consumed,
             symbol_path=parts[consumed:],
@@ -176,11 +194,11 @@ class LookupTarget:
 
 # Lambdas wrap each ``ref_svc`` method so the dispatch table has a
 # uniform ``(svc, package, node_id) → awaitable`` shape.  ``inherits``
-# routes through ``find_by_name`` (the INHERITS reference graph is the
-# source of truth post-#5c) with a kind filter; ``package`` is
-# informational for ``callers`` / ``callees`` (storage is
-# cross-package per spec §6.2) but is part of the 2-arg call signature
-# pinned by Decision C1.
+# answers BOTH senses (the target's bases via from-side edges, its
+# subclasses via edges into the target — see
+# ``ReferenceService.inherits``); ``package`` is informational for
+# ``callers`` / ``callees`` (storage is cross-package per spec §6.2)
+# but is part of the 2-arg call signature pinned by Decision C1.
 _REF_GETTERS: dict[
     str,
     Callable[
@@ -200,6 +218,83 @@ _REF_GETTERS: dict[
 
 # Show modes that render the page-index JSON for a tree/node.
 _TREE_SHOWS: frozenset[str] = frozenset({"default", "tree"})
+
+
+# ── items[] builders (contract §3.3/§3.4, Task 6) ────────────────────────
+
+
+def _walk_outline(root: DocumentNode) -> Iterator[DocumentNode]:
+    """Pre-order walk matching ``to_pageindex_json``'s recursive ``nodes``
+    order, so items[] mirror exactly the outline the text body renders.
+
+    Iterative (explicit stack) for the same reason as
+    ``DocumentNode.find_node_by_qualified_name`` — no recursion-limit
+    exposure on deep trees.
+    """
+    stack: list[DocumentNode] = [root]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(reversed(node.children))
+
+
+def _outline_item(node: DocumentNode) -> dict[str, Any]:
+    """One §3.3 ``get_symbol`` row — CONTRACT names (``path``/``start_line``/
+    ``end_line``), not the pageindex keys (``source_path``/``start_index``/
+    ``end_index``) the text body carries."""
+    # str(NodeKind.X) == the wire value (StrEnum) — no ``.value`` reach so
+    # duck-typed tree doubles carrying plain-str kinds keep working.
+    return {
+        "node_id": node.node_id,
+        "kind": str(node.kind),
+        "qualified_name": node.qualified_name,
+        "path": node.source_path or None,
+        "start_line": node.start_line,
+        "end_line": node.end_line,
+    }
+
+
+def _outline_items(root: DocumentNode) -> tuple[dict[str, Any], ...]:
+    return tuple(_outline_item(node) for node in _walk_outline(root))
+
+
+def _context_item(node: DocumentNode) -> dict[str, Any]:
+    """One §3.4 ``get_context`` row for a target's resolved focus node."""
+    return {
+        "qualified_name": node.qualified_name,
+        "kind": str(node.kind),
+        "path": node.source_path or None,
+        "start_line": node.start_line,
+        "end_line": node.end_line,
+    }
+
+
+# ── §3.5 reference items (get_references, Task 8) ────────────────────────
+
+# The degraded path/span triple — §3.5 "null on miss" (unresolved endpoint,
+# endpoint outside the indexed trees, synthetic decision:<key> nodes,
+# cross-repo rows whose trees live in another project).
+_NULL_SPAN: tuple[str | None, int | None, int | None] = (None, None, None)
+
+
+def _reference_item(
+    row: NodeReference | CrossReferenceRow,
+    show: str,
+    span: tuple[str | None, int | None, int | None],
+) -> dict[str, Any]:
+    """One §3.5 ``get_references`` row. ``to_qualified_name`` degrades to the
+    captured ``to_name`` for unresolved edges so the intent stays visible
+    (mirrors the ⚠ text rendering)."""
+    path, start_line, end_line = span
+    return {
+        "from_qualified_name": row.from_node_id,
+        "to_qualified_name": row.to_node_id if row.to_node_id is not None else row.to_name,
+        "kind": str(row.kind),
+        "direction": show,
+        "path": path,
+        "start_line": start_line,
+        "end_line": end_line,
+    }
 
 
 # ── LookupService ────────────────────────────────────────────────────────
@@ -244,6 +339,21 @@ class LookupService:
     cross_navigator: CrossNavigator = dataclasses_field(default_factory=NullCrossRepoNavigator)
 
     async def lookup(self, payload: LookupInput) -> str:
+        """Text-only façade over :meth:`lookup_with_items` — one dispatch run,
+        first element. Kept for the deprecated ``lookup`` alias and direct
+        callers that never consume structured rows."""
+        body, _items, _extras = await self.lookup_with_items(payload)
+        return body
+
+    async def lookup_with_items(self, payload: LookupInput) -> LookupBody:
+        """Dispatch + render one lookup, returning the envelope body triple.
+
+        Tree-rendering branches (module target, ``show`` in ``_TREE_SHOWS``)
+        emit one contract-§3.3 row per rendered outline node; reference-graph
+        branches (callers/callees/inherits/governed_by) emit one §3.5 row per
+        rendered edge. ``impact``/``context`` carry empty items[] — they render
+        ranked NODES, not graph edges, so the §3.5 edge rows don't apply.
+        """
         target_str = payload.target
         parsed = await LookupTarget.parse(
             target_str,
@@ -253,7 +363,7 @@ class LookupService:
         # 1. Empty target → list all indexed packages.
         if parsed.package is None:
             packages = await self.package_lookup.list_packages()
-            return format_packages_list(packages)
+            return format_packages_list(packages), (), {}
 
         # 2. Single-segment target → package overview.  Distinguish via
         # the original input: if the user typed a multi-segment target
@@ -262,10 +372,7 @@ class LookupService:
         original_parts = target_str.split(".")
         if parsed.module is None:
             if len(original_parts) == 1:
-                doc = await self.package_lookup.get_package_doc(parsed.package)
-                if doc is None:
-                    raise NotFoundError(f"package '{parsed.package}' not indexed")
-                return format_package_doc(doc)
+                return await self._package_overview(parsed.package)
             # Multi-segment target but no module match → NotFoundError
             # using the user's original string (preserves the pre-refactor
             # message shape).
@@ -286,11 +393,28 @@ class LookupService:
             payload.limit,
         )
 
-    async def _module_lookup(self, package: str, module: str) -> str:
+    async def _package_overview(self, package: str) -> LookupBody:
+        """Package overview, with the single-segment project-code fallback.
+
+        Contract §3 addressing: a single-segment target can name a project
+        top-level module / package dir (stored under ``__project__`` with a
+        prefixless module id) rather than an indexed dependency. The indexed
+        dependency wins when both exist; the pre-fix NotFoundError message
+        is preserved for genuine misses.
+        """
+        doc = await self.package_lookup.get_package_doc(package)
+        if doc is not None:
+            return format_package_doc(doc), (), {}
+        fallback = await self._longest_indexed_module(PROJECT_PACKAGE_NAME, [package])
+        if fallback is not None:
+            return await self._module_lookup(PROJECT_PACKAGE_NAME, fallback[0])
+        raise NotFoundError(f"package '{package}' not indexed")
+
+    async def _module_lookup(self, package: str, module: str) -> LookupBody:
         tree = await self.tree_svc.get_tree(package, module)
         if tree is None:
             raise NotFoundError(f"no tree stored for '{package}.{module}'")
-        return json.dumps(tree.to_pageindex_json(), indent=2)
+        return json.dumps(tree.to_pageindex_json(), indent=2), _outline_items(tree), {}
 
     async def _symbol_lookup(
         self,
@@ -299,7 +423,7 @@ class LookupService:
         target: str,
         show: str,
         limit: int,
-    ) -> str:
+    ) -> LookupBody:
         """Resolve a symbol within a known module and render per ``show``.
 
         Replaces the pre-refactor 6-level nested if/elif with
@@ -314,9 +438,9 @@ class LookupService:
         if node is None:
             raise NotFoundError(f"'{target}' not found in {module}")
 
-        # Tree / default → render node's page-index JSON.
+        # Tree / default → render node's page-index JSON (+ §3.3 outline rows).
         if show in _TREE_SHOWS:
-            return json.dumps(node.to_pageindex_json(), indent=2)
+            return json.dumps(node.to_pageindex_json(), indent=2), _outline_items(node), {}
 
         # Ranked blast-radius — multi-hop REVERSE traversal, its own return
         # shape (ranked ImpactNodes) + formatter, so it can't ride _REF_GETTERS.
@@ -330,7 +454,7 @@ class LookupService:
                 max_depth=self.impact_max_depth,
                 limit=limit,
             )
-            return format_impact(impacted, target=target, limit=limit)
+            return format_impact(impacted, target=target, limit=limit), (), {}
 
         # Smart-context — forward dependency-closure packed at graded fidelity
         # under a token budget. Own return shape (ContextNodes) + formatter.
@@ -340,7 +464,8 @@ class LookupService:
         # unchanged (full ``context_token_budget`` for the single-target path).
         if show == "context":
             ctx = await self._context_closure(package, node.node_id, limit=limit)
-            return self.render_context_card(target, ctx, token_budget=self.context_token_budget)
+            card = self.render_context_card(target, ctx, token_budget=self.context_token_budget)
+            return card, (), {}
 
         # Reference-graph dispatch (callers / callees / inherits).
         getter = _REF_GETTERS.get(show)
@@ -364,13 +489,14 @@ class LookupService:
         if len(rows) > limit:
             rows = rows[:limit]
         titles = await self._decision_titles(show, rows)
-        return format_references(
+        rendered = format_references(
             rows,
             target=target,
             show=show,
             limit=limit,
             decision_titles=titles,
         )
+        return rendered, await self._reference_items(rows, show), {}
 
     async def _decision_titles(self, show: str, rows) -> dict[tuple[str, str], str]:
         """Hydrate cross-repo governed_by rows' decision titles (spec §A1.2).
@@ -389,26 +515,89 @@ class LookupService:
             return {}
         return dict(await self.cross_navigator.decision_titles(wanted))
 
-    async def context_nodes(self, target: str) -> tuple[str, tuple[ContextNode, ...]]:
+    async def _reference_items(
+        self,
+        rows: tuple[NodeReference | CrossReferenceRow, ...],
+        show: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """§3.5 rows mirroring the (already limit-sliced) reference rows 1:1.
+
+        Path/span come from the resolvable endpoint's DEFINING tree node —
+        callees attribute the to-node, every other direction the from-node
+        (per-call-site line numbers are not stored in the graph). Spans are
+        memoized per ``(package, qname)`` so fan-in from one caller costs one
+        tree probe.
+        """
+        cache: dict[tuple[str, str], tuple[str | None, int | None, int | None]] = {}
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            items.append(_reference_item(row, show, await self._row_span(row, show, cache)))
+        return tuple(items)
+
+    async def _row_span(
+        self,
+        row: NodeReference | CrossReferenceRow,
+        show: str,
+        cache: dict[tuple[str, str], tuple[str | None, int | None, int | None]],
+    ) -> tuple[str | None, int | None, int | None]:
+        """The one endpoint span for ``row`` (§3.5 direction rule), cached."""
+        if isinstance(row, CrossReferenceRow):
+            # The defining node lives in ANOTHER project's trees — probing this
+            # project's trees could hit a same-named module and lie.
+            return _NULL_SPAN
+        qname = row.to_node_id if show == "callees" else row.from_node_id
+        if qname is None:
+            return _NULL_SPAN
+        key = (row.from_package, qname)
+        if key not in cache:
+            cache[key] = await self._defining_span(row.from_package, qname)
+        return cache[key]
+
+    async def _defining_span(
+        self, package: str, qname: str
+    ) -> tuple[str | None, int | None, int | None]:
+        """Locate ``qname``'s defining tree node → ``(path, start, end)``.
+
+        Probes the row's owning package first, then the qname's leading segment
+        (a resolved callee may live in a different package than its caller —
+        dependency qnames carry their package as the first segment). Any miss
+        degrades to the null span, never an error.
+        """
+        parts = qname.split(".")
+        for pkg in dict.fromkeys((package, parts[0])):
+            found = await self._longest_indexed_module(pkg, parts)
+            if found is None:
+                continue
+            tree = await self.tree_svc.get_tree(pkg, found[0])
+            node = tree.find_node_by_qualified_name(qname) if tree is not None else None
+            if node is not None:
+                return node.source_path or None, node.start_line, node.end_line
+        return _NULL_SPAN
+
+    async def context_nodes(
+        self, target: str
+    ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
         """Resolve ``target`` to its forward dependency closure.
 
         Runs the same parse + node-resolution path as ``lookup(show="context")``
-        but stops BEFORE rendering, returning ``(display_target, nodes)`` so the
-        caller can render one card per target under a per-card token budget
-        (``ToolRouter.get_context``'s proportional multi-target split). ``target``
-        is echoed back verbatim as the card heading target — matching the
-        single-target ``show="context"`` path.
+        but stops BEFORE rendering, returning ``(display_target, nodes,
+        focus_row)`` so the caller can render one card per target under a
+        per-card token budget (``ToolRouter.get_context``'s proportional
+        multi-target split). ``target`` is echoed back verbatim as the card
+        heading target — matching the single-target ``show="context"`` path;
+        ``focus_row`` is the contract-§3.4 items[] row for the resolved focus
+        node (Task 6).
 
         ``NotFoundError`` propagates unchanged (bad package / module / symbol),
         as does ``ServiceUnavailableError`` from a ``NullReferenceService``.
         """
-        package, node_id = await self._resolve_context_target(target)
+        package, node = await self._resolve_context_target(target)
         # ``limit`` mirrors the single-target ``lookup(show="context")`` path,
         # which flows the ``LookupInput.limit`` default (single source of truth:
         # ``reference_graph.output.default_limit`` via the YAML-backed slot).
         limit = LookupInput(target=target).limit
-        nodes = await self._context_closure(package, node_id, limit=limit)
-        return target, nodes
+        nodes = await self._context_closure(package, node.node_id, limit=limit)
+        return target, nodes, _context_item(node)
 
     def render_context_card(
         self,
@@ -443,10 +632,10 @@ class LookupService:
             limit=limit,
         )
 
-    async def _resolve_context_target(self, target: str) -> tuple[str, str]:
-        """Parse ``target`` → ``(package, node_id)`` for a symbol-level context
-        request. Raises ``NotFoundError`` with the same messages the ``lookup``
-        dispatcher surfaces (unresolved package / module / symbol)."""
+    async def _resolve_context_target(self, target: str) -> tuple[str, DocumentNode]:
+        """Parse ``target`` → ``(package, focus_node)`` for a symbol-level
+        context request. Raises ``NotFoundError`` with the same messages the
+        ``lookup`` dispatcher surfaces (unresolved package / module / symbol)."""
         parsed = await LookupTarget.parse(target, longest_module=self._longest_module)
         if parsed.module is None or not parsed.symbol_path:
             raise NotFoundError(f"no symbol matching '{target}' found for context closure")
@@ -456,7 +645,7 @@ class LookupService:
         node = tree.find_node_by_qualified_name(target)
         if node is None:
             raise NotFoundError(f"'{target}' not found in {parsed.module}")
-        return parsed.package, node.node_id
+        return parsed.package, node
 
     async def _longest_module(
         self,

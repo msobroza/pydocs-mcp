@@ -68,6 +68,7 @@ _SummaryInputs = tuple[tuple[str, ...], tuple[str, ...], OverviewSummary | None]
 if TYPE_CHECKING:
     from pydocs_mcp.application.decision_service import DecisionService
     from pydocs_mcp.application.docs_search import DocsSearch
+    from pydocs_mcp.application.file_tools import FileToolsService
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
@@ -202,6 +203,58 @@ def build_sqlite_symbol_source_service(
     return SymbolSourceService(
         uow_factory=build_sqlite_uow_factory(db_path),
         max_lines=max_lines,
+    )
+
+
+# One census read caps the dependency-package listing the filesystem tools
+# walk under scope="deps"/"all". Sized so no realistic environment hits it;
+# hitting it logs a WARNING instead of silently dropping dependency roots.
+_FILE_TOOLS_PACKAGE_LIST_LIMIT = 10000
+
+
+def _warn_dependency_census_capped() -> None:
+    logging.getLogger("pydocs-mcp").warning(
+        '{"event": "file_tools_dependency_census_capped", "limit": %d, '
+        '"detail": "dependency-package listing hit the cap; packages beyond '
+        'it are invisible to grep/glob/read_file under scope=deps/all"}',
+        _FILE_TOOLS_PACKAGE_LIST_LIMIT,
+    )
+
+
+def build_sqlite_file_tools_service(
+    db_path: Path,
+    *,
+    project_root: Path | None,
+    config: AppConfig,
+) -> FileToolsService:
+    """Compose a wired ``FileToolsService`` from a SQLite DB path.
+
+    Sibling of ``build_sqlite_lookup_service`` / ``build_sqlite_overview_service``:
+    the CLI and the MCP server both build grep/glob/read_file's backing service
+    here so they never drift on the discovery scopes (the §4.1 corpus contract:
+    ``extraction.discovery.*`` — the SAME file set the indexer sees) or the
+    YAML-wired output caps (``files.*``). ``project_root=None`` marks a
+    read-only bundle (no source checkout on disk). The dependency lister reads
+    the indexed package census through this db's UoW per call, so a reindex
+    that adds/removes dependencies is visible without a server restart.
+    """
+    from pydocs_mcp.application.file_tools import FileToolsService
+
+    uow_factory = build_sqlite_uow_factory(db_path)
+
+    async def _list_dependency_packages() -> tuple[str, ...]:
+        async with uow_factory() as uow:
+            packages = await uow.packages.list(limit=_FILE_TOOLS_PACKAGE_LIST_LIMIT)
+        if len(packages) >= _FILE_TOOLS_PACKAGE_LIST_LIMIT:
+            _warn_dependency_census_capped()
+        return tuple(p.name for p in packages if p.name != PROJECT_PACKAGE_NAME)
+
+    return FileToolsService(
+        project_root=project_root,
+        project_scope=config.extraction.discovery.project,
+        dependency_scope=config.extraction.discovery.dependency,
+        list_dependency_packages=_list_dependency_packages,
+        files_config=config.files,
     )
 
 

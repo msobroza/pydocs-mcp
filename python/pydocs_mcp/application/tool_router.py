@@ -1,16 +1,18 @@
-"""ToolRouter — the six task-shaped tools over the multi-project layer (spec §D1).
+"""ToolRouter — the nine task-shaped tools over the multi-project layer (spec §D1).
 
 One method per tool; every response is produced inside the shared
 ResponseEnvelope (freshness header, pointer resolution, truncation footer).
-Bodies delegate to the slice-1 router internals (_search_body/_lookup_body)
-so ranking/dedup/project-routing stay in exactly one place.
+Index-backed bodies delegate to the slice-1 router internals
+(_search_body/_lookup_body) so ranking/dedup/project-routing stay in exactly
+one place; the filesystem tools (grep/glob/read_file, contract §3.7-3.9)
+delegate to the selected project's FileToolsService.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.formatting import (
@@ -20,8 +22,11 @@ from pydocs_mcp.application.formatting import (
 )
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
+    GlobInput,
+    GrepInput,
     LookupInput,
     OverviewInput,
+    ReadFileInput,
     ReferencesInput,
     SearchInput,
     SymbolInput,
@@ -34,7 +39,13 @@ from pydocs_mcp.application.multi_project_search import (
     ProjectServices,
     _select_service,
 )
-from pydocs_mcp.application.overview_service import OverviewService, WorkspaceProjectEntry
+from pydocs_mcp.application.overview_service import (
+    OverviewCard,
+    OverviewService,
+    WorkspaceProjectEntry,
+)
+from pydocs_mcp.application.tool_response import ToolResponse
+from pydocs_mcp.extraction.strategies.analyzers import PYTHON_CAPABILITIES
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -65,33 +76,43 @@ class ToolRouter:
             return _select_service(self.services, project)
         return self.services[0]
 
-    async def _resolve_source(self, target: str, project: str) -> str:
+    def _meta_project(self, project: str) -> str:
+        """``meta.project`` attribution (contract §2.1): the client's explicit
+        selector, else the default (first-loaded) project's resolved name."""
+        return project or self.services[0].project.name
+
+    async def _resolve_source(
+        self, target: str, project: str
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         """``depth='source'`` body — mirrors ``MultiProjectLookup._lookup_body``'s
         project-routing shape (explicit project → single service; single-project
         deployment → services[0]; otherwise resolve by recency) so a target
-        indexed only in a non-first project still resolves (spec §D7)."""
+        indexed only in a non-first project still resolves (spec §D7). Carries
+        the one §3.3 row for the rendered span (Task 6)."""
         if project:
-            return await self._svc(project).symbol_source.source_for(target)
+            return await self._svc(project).symbol_source.source_with_items(target)
         if len(self.services) == 1:
-            return await self.services[0].symbol_source.source_for(target)
+            return await self.services[0].symbol_source.source_with_items(target)
         return await self.lookup_router._resolve_by_recency(
-            lambda svc: svc.symbol_source.source_for(target),
+            lambda svc: svc.symbol_source.source_with_items(target),
             target=target,
         )
 
-    async def search_codebase(self, payload: SearchInput) -> str:
-        async def _body() -> str:
-            body = await self.search_router._search_body(payload)
+    async def search_codebase(self, payload: SearchInput) -> ToolResponse:
+        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+            body, items, extras = await self.search_router._search_body(payload)
             # Zero hits still return success (search never raises); steer the
             # agent to an orientation card via the overview pointer (spec §D1
             # empty contract). The envelope resolves the token per surface.
             if body in EMPTY_SEARCH_MESSAGES:
-                return f"{body}\n{pointer_token('overview', '')}"
-            return body
+                return f"{body}\n{pointer_token('overview', '')}", items, extras
+            return body, items, extras
 
-        return await self.envelope.wrap(_body)
+        return await self.envelope.wrap(
+            "search_codebase", self._meta_project(payload.project), _body
+        )
 
-    async def get_symbol(self, payload: SymbolInput) -> str:
+    async def get_symbol(self, payload: SymbolInput) -> ToolResponse:
         if payload.depth == "source":
             # Route through the SAME project-routing / recency resolution
             # depth="summary"/"tree" use (MultiProjectLookup._resolve_by_recency)
@@ -99,26 +120,42 @@ class ToolRouter:
             # only in a NON-first project resolves for summary/tree but 404s for
             # source, breaking the §D7 truncation-card recovery pointer.
             return await self.envelope.wrap(
-                lambda: self._resolve_source(payload.target, payload.project)
+                "get_symbol",
+                self._meta_project(payload.project),
+                lambda: self._resolve_source(payload.target, payload.project),
             )
         body = LookupInput(
             target=payload.target,
             show=_DEPTH_TO_SHOW[payload.depth],
             project=payload.project,
         )
-        return await self.envelope.wrap(lambda: self.lookup_router._lookup_body(body))
+        return await self.envelope.wrap(
+            "get_symbol",
+            self._meta_project(payload.project),
+            lambda: self.lookup_router._lookup_body(body),
+        )
 
-    async def get_references(self, payload: ReferencesInput) -> str:
+    async def get_references(self, payload: ReferencesInput) -> ToolResponse:
         body = LookupInput(
             target=payload.target,
             show=payload.direction,
             project=payload.project,
             limit=payload.limit,
         )
-        return await self.envelope.wrap(lambda: self.lookup_router._lookup_body(body))
 
-    async def get_context(self, payload: ContextInput) -> str:
-        async def _cards() -> str:
+        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+            text, items, extras = await self.lookup_router._lookup_body(body)
+            # §2.2 meta extension: the declared capability level of the graph
+            # that answered. Single source = the Python analyzer's frozen flag
+            # (a semantic backend flips only this value — ADR 0004).
+            return text, items, {**extras, "resolution": PYTHON_CAPABILITIES["references"]}
+
+        return await self.envelope.wrap(
+            "get_references", self._meta_project(payload.project), _body
+        )
+
+    async def get_context(self, payload: ContextInput) -> ToolResponse:
+        async def _cards() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
             # Phase 1 — resolve every target's forward closure through the same
             # project-routing / recency resolution a single lookup uses.
             resolved = [
@@ -126,35 +163,59 @@ class ToolRouter:
                 for target in payload.targets
             ]
             # Phase 2 — split the ONE shared budget proportionally to closure
-            # size, then render each card at its own share.
+            # size, then render each card at its own share. items[] carry one
+            # §3.4 row per resolved target, in the client's targets order.
             svc = self._svc(payload.project)
             budget = svc.lookup.context_token_budget
-            shares = _split_budget(budget, [len(nodes) for _, nodes in resolved])
+            shares = _split_budget(budget, [len(nodes) for _, nodes, _ in resolved])
             cards = [
                 svc.lookup.render_context_card(target, nodes, token_budget=share)
-                for (target, nodes), share in zip(resolved, shares, strict=True)
+                for (target, nodes, _), share in zip(resolved, shares, strict=True)
             ]
-            return "\n\n".join(cards)
+            items = tuple(focus_row for _, _, focus_row in resolved)
+            return "\n\n".join(cards), items, {}
 
-        return await self.envelope.wrap(_cards)
+        return await self.envelope.wrap("get_context", self._meta_project(payload.project), _cards)
 
-    async def get_why(self, payload: WhyInput) -> str:
+    async def get_why(self, payload: WhyInput) -> ToolResponse:
         svc = self._svc(payload.project)
 
-        async def _body() -> str:
+        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
             if payload.query and payload.targets:
                 # §D11 both-set mode: targets filtered by query — the Null
                 # service raises either way; the real service implements the filter.
-                return await svc.decisions.for_targets(list(payload.targets), query=payload.query)
+                return await svc.decisions.why_targets(list(payload.targets), query=payload.query)
             if payload.query:
-                return await svc.decisions.search(payload.query)
+                return await svc.decisions.why_search(payload.query)
             if payload.targets:
-                return await svc.decisions.for_targets(list(payload.targets))
-            return await svc.decisions.dashboard()
+                return await svc.decisions.why_targets(list(payload.targets))
+            return await svc.decisions.why_dashboard()
 
-        return await self.envelope.wrap(_body)
+        return await self.envelope.wrap("get_why", self._meta_project(payload.project), _body)
 
-    async def get_overview(self, payload: OverviewInput) -> str:
+    async def grep(self, payload: GrepInput) -> ToolResponse:
+        # The filesystem tools are strictly per-project (they serve ONE source
+        # tree, contract §4.1): empty selector = the default (first-loaded)
+        # project — no cross-project recency fallback, which would silently
+        # answer from a different checkout.
+        svc = self._svc(payload.project)
+        return await self.envelope.wrap(
+            "grep", self._meta_project(payload.project), lambda: svc.files.grep(payload)
+        )
+
+    async def glob(self, payload: GlobInput) -> ToolResponse:
+        svc = self._svc(payload.project)
+        return await self.envelope.wrap(
+            "glob", self._meta_project(payload.project), lambda: svc.files.glob(payload)
+        )
+
+    async def read_file(self, payload: ReadFileInput) -> ToolResponse:
+        svc = self._svc(payload.project)
+        return await self.envelope.wrap(
+            "read_file", self._meta_project(payload.project), lambda: svc.files.read_file(payload)
+        )
+
+    async def get_overview(self, payload: OverviewInput) -> ToolResponse:
         # Fully-empty selector on a multi-repo server: routing to services[0]
         # would silently describe ONE project as if it were the whole workspace
         # — render the workspace orientation card instead (one line per loaded
@@ -168,18 +229,44 @@ class ToolRouter:
         # not a bug to "reconcile".
         if not payload.project and not payload.package and len(self.services) > 1:
             return await self.envelope.wrap(
+                "get_overview",
+                self._meta_project(payload.project),
                 lambda: _render_workspace_overview(
                     self.services, cross_link_status=self.cross_link_status
-                )
+                ),
             )
         svc = self._svc(payload.project)
-        return await self.envelope.wrap(lambda: _render_overview(svc.overview, payload.package))
+        return await self.envelope.wrap(
+            "get_overview",
+            self._meta_project(payload.project),
+            lambda: _render_overview(svc.overview, payload.package),
+        )
 
 
-async def _render_overview(service: OverviewService, package: str) -> str:
-    """Build + render the §D17 structural card. Module-level so ``get_overview``
-    stays a one-liner and the service/render seam is directly testable."""
-    return format_overview_card(await service.build(package))
+async def _render_overview(
+    service: OverviewService, package: str
+) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+    """Build + render the §D17 structural card plus its §3.1 items[] rows.
+    Module-level so ``get_overview`` stays a one-liner and the service/render
+    seam is directly testable."""
+    card = await service.build(package)
+    return format_overview_card(card), _overview_items(card), {}
+
+
+def _overview_items(card: OverviewCard) -> tuple[dict[str, Any], ...]:
+    """One §3.1 row per module-map entry (contract: ``{kind, id,
+    qualified_name, path}``; module rows carry ``path`` where resolvable).
+    Entries without persisted node provenance fall back to the qualified name
+    as ``id`` and a null ``path``."""
+    return tuple(
+        {
+            "kind": entry.kind,
+            "id": entry.node_id or entry.qualified_name,
+            "qualified_name": entry.qualified_name,
+            "path": entry.source_path or None,
+        }
+        for entry in card.modules
+    )
 
 
 async def _render_workspace_overview(

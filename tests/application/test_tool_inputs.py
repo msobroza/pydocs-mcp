@@ -6,7 +6,10 @@ from pydantic import ValidationError
 from pydocs_mcp.application import mcp_inputs
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
+    GlobInput,
+    GrepInput,
     OverviewInput,
+    ReadFileInput,
     ReferencesInput,
     SymbolInput,
     WhyInput,
@@ -130,3 +133,181 @@ def test_symbol_source_factory_reads_max_lines_from_config(
     cfg = AppConfig(symbol_source=SymbolSourceConfig(max_lines=77))
     svc = build_sqlite_symbol_source_service(Path("/nonexistent.db"), config=cfg)
     assert svc.max_lines == 77
+
+
+# ─── grep / glob / read_file inputs (tool-contracts.md §3.7-3.9) ─────────
+#
+# The dash-named grep flags (-i/-n/-A/-B/-C) are validation_alias'd: the
+# MCP inputSchema advertises the contract's literal wire names, incoming
+# calls key by dash, and model_dump() emits the Python field names the
+# FileToolsService Protocols read (file_tools.py:GrepRequest).
+
+# The contract's exact grep wire-name set — byte-for-byte from §3.7.
+_GREP_WIRE_NAMES = {
+    "pattern",
+    "path",
+    "glob",
+    "output_mode",
+    "-i",
+    "-n",
+    "-A",
+    "-B",
+    "-C",
+    "head_limit",
+    "multiline",
+    "scope",
+    "project",
+}
+
+
+@pytest.fixture
+def _restore_files_head_limit_slot():
+    """Restore the module-level files ceiling slot after cap tests."""
+    saved = mcp_inputs._FILES_HEAD_LIMIT_MAX
+    try:
+        yield
+    finally:
+        mcp_inputs._FILES_HEAD_LIMIT_MAX = saved
+
+
+def test_grep_input_schema_pins_contract_wire_names() -> None:
+    """The advertised inputSchema properties are EXACTLY the contract's
+    wire names — `-i`/`-n`/`-A`/`-B`/`-C` literal, not the Python field
+    names (tool-contracts.md §3.7)."""
+    properties = GrepInput.model_json_schema()["properties"]
+    assert set(properties) == _GREP_WIRE_NAMES
+
+
+def test_grep_input_defaults_match_contract() -> None:
+    payload = GrepInput(pattern="foo")
+    assert payload.output_mode == "files_with_matches"
+    assert payload.case_insensitive is False
+    assert payload.line_numbers is True
+    assert payload.after_context is None
+    assert payload.before_context is None
+    assert payload.context is None
+    assert payload.head_limit is None  # None ⇒ YAML default at the service
+    assert payload.multiline is False
+    assert payload.scope == "project"  # differs from search_codebase's "all"
+    assert (payload.path, payload.glob, payload.project) == ("", "", "")
+
+
+def test_grep_input_accepts_dash_keyed_payload() -> None:
+    """FastMCP hands the client's raw dict to model_validate — the dash
+    wire names must populate the Python-named fields."""
+    payload = GrepInput.model_validate(
+        {"pattern": "def .*", "-i": True, "-n": False, "-A": 2, "-B": 1, "-C": 3}
+    )
+    assert payload.case_insensitive is True
+    assert payload.line_numbers is False
+    assert (payload.after_context, payload.before_context, payload.context) == (2, 1, 3)
+
+
+def test_grep_input_accepts_field_name_construction() -> None:
+    """populate_by_name: server-internal callers (CLI verbs) construct by
+    Python field name without spelling dash-keyed dicts."""
+    payload = GrepInput(pattern="x", case_insensitive=True, context=1)
+    assert payload.case_insensitive is True and payload.context == 1
+
+
+def test_grep_input_dumps_by_field_name() -> None:
+    """model_dump() must emit field names (what FastMCP's
+    model_dump_one_level forwards as kwargs / what GrepRequest reads)."""
+    dumped = GrepInput.model_validate({"pattern": "x", "-i": True}).model_dump()
+    assert dumped["case_insensitive"] is True
+    assert "-i" not in dumped
+
+
+def test_grep_input_rejects_bad_regex_with_pattern_in_message() -> None:
+    """The error must carry the offending pattern (CLAUDE.md error rule:
+    offending value + expected shape, not a vague 'invalid input')."""
+    with pytest.raises(ValidationError, match=r"\[unclosed"):
+        GrepInput(pattern="[unclosed")
+
+
+def test_grep_input_enums_and_bounds() -> None:
+    with pytest.raises(ValidationError):
+        GrepInput(pattern="x", output_mode="lines")
+    with pytest.raises(ValidationError):
+        GrepInput(pattern="x", scope="everything")
+    with pytest.raises(ValidationError):
+        GrepInput(pattern="")  # min_length=1
+    with pytest.raises(ValidationError):
+        GrepInput.model_validate({"pattern": "x", "-C": -1})  # ge=0
+    with pytest.raises(ValidationError):
+        GrepInput(pattern="x", head_limit=0)  # ge=1
+    with pytest.raises(ValidationError):
+        GrepInput(pattern="x", project="bad name")
+
+
+def test_grep_and_glob_head_limit_capped_by_yaml_ceiling(
+    _restore_files_head_limit_slot,
+) -> None:
+    """``configure_from_app_config`` installs ``files.max_head_limit`` as
+    the ceiling for client-supplied caps — mirrors the SearchInput /
+    LookupInput limit wiring in test_mcp_inputs_limit.py."""
+    from pydocs_mcp.retrieval.config import AppConfig, FilesConfig
+
+    cfg = AppConfig(
+        files=FilesConfig(grep_head_limit=10, glob_head_limit=10, read_limit=10, max_head_limit=50)
+    )
+    configure_from_app_config(cfg)
+    assert GrepInput(pattern="x", head_limit=50).head_limit == 50
+    assert GlobInput(pattern="*.py", head_limit=50).head_limit == 50
+    with pytest.raises(ValidationError, match="files.max_head_limit"):
+        GrepInput(pattern="x", head_limit=51)
+    with pytest.raises(ValidationError, match="files.max_head_limit"):
+        GlobInput(pattern="*.py", head_limit=51)
+
+
+def test_glob_input_shapes() -> None:
+    payload = GlobInput(pattern="**/*_test.py")
+    assert (payload.path, payload.head_limit, payload.project) == ("", None, "")
+    with pytest.raises(ValidationError):
+        GlobInput(pattern="")  # required, non-empty
+    with pytest.raises(ValidationError):
+        GlobInput(pattern="*.py", head_limit=0)  # ge=1
+    with pytest.raises(ValidationError):
+        GlobInput(pattern="*.py", project="bad name")
+
+
+def test_read_file_input_shapes() -> None:
+    payload = ReadFileInput(file_path="src/app.py")
+    assert (payload.offset, payload.limit, payload.project) == (None, None, "")
+    assert ReadFileInput(file_path="a", offset=1, limit=1).offset == 1
+    with pytest.raises(ValidationError):
+        ReadFileInput(file_path="")  # min_length=1
+    with pytest.raises(ValidationError):
+        ReadFileInput(file_path="a", offset=0)  # 1-indexed, ge=1
+    with pytest.raises(ValidationError):
+        ReadFileInput(file_path="a", limit=0)  # ge=1
+    with pytest.raises(ValidationError):
+        ReadFileInput(file_path="a", project="bad name")
+
+
+def test_file_tool_inputs_satisfy_file_tools_protocols() -> None:
+    """The pydantic models must satisfy the structural Protocols the
+    FileToolsService consumes (application/file_tools.py) — field-name
+    access, not wire-name access."""
+    grep = GrepInput(pattern="x")
+    for attr in (
+        "pattern",
+        "path",
+        "glob",
+        "output_mode",
+        "case_insensitive",
+        "line_numbers",
+        "after_context",
+        "before_context",
+        "context",
+        "head_limit",
+        "multiline",
+        "scope",
+    ):
+        assert hasattr(grep, attr)
+    glob_payload = GlobInput(pattern="*.py")
+    for attr in ("pattern", "path", "head_limit"):
+        assert hasattr(glob_payload, attr)
+    read_payload = ReadFileInput(file_path="a")
+    for attr in ("file_path", "offset", "limit"):
+        assert hasattr(read_payload, attr)

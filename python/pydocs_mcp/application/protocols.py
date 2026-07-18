@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import Chunk, ModuleMember, Package
@@ -134,9 +134,27 @@ class DecisionNavigator(Protocol):
 
     async def search(self, query: str) -> str: ...
 
+    async def search_with_items(
+        self, query: str
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
+
     async def for_targets(self, targets: list[str], *, query: str = "") -> str: ...
 
     async def dashboard(self) -> str: ...
+
+    # ``get_why`` body-producer triples (contract §3.6 items[], Task 8) — the
+    # text methods above are façades over these three.
+    async def why_search(
+        self, query: str
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
+
+    async def why_targets(
+        self, targets: list[str], *, query: str = ""
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
+
+    async def why_dashboard(
+        self,
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
 
 
 @runtime_checkable

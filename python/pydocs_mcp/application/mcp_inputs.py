@@ -16,9 +16,9 @@ slots those validators read at runtime.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
     # Type-only import — keeps the runtime ``application -> retrieval`` edge
@@ -26,8 +26,26 @@ if TYPE_CHECKING:
     # reads in ``configure_from_app_config`` happen on whatever the caller
     # passes, validated structurally via ``_ConfigShape``). Avoids the
     # circular-import risk called out in the pre-refactor docstring.
-    from pydocs_mcp.retrieval.config import ReferenceGraphConfig, SearchConfig
+    from pydocs_mcp.retrieval.config import (
+        FilesConfig,
+        ReferenceGraphConfig,
+        SearchConfig,
+    )
     from pydocs_mcp.retrieval.config.models import SymbolSourceConfig
+
+# ── Shared enum vocabularies (contract §3) ────────────────────────────────
+#
+# Single source for every constrained-string parameter on the nine-tool
+# surface. Three consumers reference these aliases so the value sets can
+# never drift: the pydantic input models below, the MCP handler signatures
+# in ``server.py`` (typing the params with the aliases makes FastMCP
+# advertise the enums in each tool's inputSchema — contract §6 note 3),
+# and the argparse ``choices`` in ``__main__.py`` (via ``typing.get_args``).
+KindLiteral = Literal["docs", "api", "any", "decision"]
+ScopeLiteral = Literal["project", "deps", "all"]
+DepthLiteral = Literal["summary", "tree", "source"]
+DirectionLiteral = Literal["callers", "callees", "inherits", "impact", "governed_by"]
+OutputModeLiteral = Literal["content", "files_with_matches", "count"]
 
 # Format validators — reject malformed input at the boundary.
 _PACKAGE_RE = re.compile(
@@ -42,6 +60,23 @@ _WHY_TARGET_RE = re.compile(
 # branches on '/'), so '/' is admitted here — unlike _TARGET_RE, which guards the
 # symbol/context tools. ':' and ']' stay forbidden: they are the only characters
 # that corrupt the [[next:…]] pointer-token grammar (application/formatting.py).
+
+
+def is_symbol_target(text: str) -> bool:
+    """True iff ``text`` is a target the symbol-shaped tools would accept.
+
+    Single source of the dotted-target grammar (``_TARGET_RE``), exported for
+    pointer-render gating: ``application/formatting.py`` suppresses a
+    ``get_symbol`` / ``get_context`` / ``get_references`` follow-up pointer
+    whose target this predicate rejects, so a response never advertises a
+    call the tools' own input validators refuse (e.g. markdown/decision
+    document paths like ``docs.adr.0001-greeting-format.md``).
+
+    Example: ``is_symbol_target("pkg.mod.X")`` is ``True``;
+    ``is_symbol_target("docs.adr.0001-x.md")`` is ``False``.
+    """
+    return bool(text) and _TARGET_RE.match(text) is not None
+
 
 # Module-level slots — installed by ``configure_from_app_config`` at
 # server / CLI startup. The initial values match the shipped
@@ -77,6 +112,16 @@ _SEARCH_LIMIT_MAX: int = 1000
 # layering). The per-project ``build_sqlite_symbol_source_service`` factory
 # reads this slot for its fallback when no ``config`` is passed.
 _SYMBOL_SOURCE_MAX_LINES: int = 400
+# Ceiling for client-supplied ``head_limit`` / ``limit`` caps on the
+# filesystem tools (grep/glob/read_file) — installed from
+# ``cfg.files.max_head_limit`` by ``configure_from_app_config``. Initial
+# literal matches the shipped ``default_config.yaml``
+# (``files.max_head_limit: 10000``). The per-tool YAML *defaults*
+# (``files.grep_head_limit`` etc.) intentionally have NO slot here: the
+# models keep ``head_limit=None`` and ``FileToolsService._effective_limit``
+# resolves ``None`` against its ``files_config`` — only the ceiling is an
+# input-shape concern.
+_FILES_HEAD_LIMIT_MAX: int = 10000
 
 
 @runtime_checkable
@@ -87,8 +132,9 @@ class _ConfigShape(Protocol):
     Replaces the previous ``cfg: Any`` parameter with a typed Protocol
     that documents exactly which cfg sub-trees the function consumes —
     ``reference_graph`` (for ``capture`` / ``resolver`` / ``output``
-    sub-models), ``search`` (for the ``search.output`` bounds), and
-    ``symbol_source`` (for the get_symbol(depth="source") line cap).
+    sub-models), ``search`` (for the ``search.output`` bounds),
+    ``symbol_source`` (for the get_symbol(depth="source") line cap), and
+    ``files`` (for the grep/glob/read_file ``max_head_limit`` ceiling).
 
     The Protocol is ``@runtime_checkable`` so unit tests can structurally
     verify any duck-typed config carrier satisfies the shape via
@@ -107,6 +153,7 @@ class _ConfigShape(Protocol):
     reference_graph: ReferenceGraphConfig
     search: SearchConfig
     symbol_source: SymbolSourceConfig
+    files: FilesConfig
 
 
 def configure_from_app_config(cfg: _ConfigShape) -> None:
@@ -120,7 +167,7 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     Stamp coupling is gone: callers no longer pass an untyped ``Any``;
     static type-checkers can verify the contract.
 
-    Four slots are updated:
+    Five slots are updated:
 
     1. ``_LIMIT_DEFAULT`` / ``_LIMIT_MAX`` here in ``mcp_inputs`` — read
        by ``LookupInput.limit`` (default + ceiling).
@@ -132,7 +179,10 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
        get_symbol(depth="source") verbatim line cap, read by the
        per-project ``build_sqlite_symbol_source_service`` factory as its
        no-config fallback.
-    4. ``_CAPTURE_CONFIG`` in ``extraction.pipeline.stages`` — read by
+    4. ``_FILES_HEAD_LIMIT_MAX`` here in ``mcp_inputs`` — the ceiling on
+       client-supplied ``head_limit`` caps for ``GrepInput`` /
+       ``GlobInput`` (tool-contracts.md §3.7-3.8).
+    5. ``_CAPTURE_CONFIG`` in ``extraction.pipeline.stages`` — read by
        ``ReferenceCaptureStage`` to gate capture on/off and pick which
        reference kinds to emit. Pushed via ``_set_capture_config`` so the
        stage module owns its own slot (no cross-package mutation).
@@ -140,6 +190,7 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     global _LIMIT_DEFAULT, _LIMIT_MAX
     global _SEARCH_LIMIT_DEFAULT, _SEARCH_LIMIT_MAX
     global _SYMBOL_SOURCE_MAX_LINES
+    global _FILES_HEAD_LIMIT_MAX
 
     output = cfg.reference_graph.output
     _LIMIT_DEFAULT = output.default_limit
@@ -150,6 +201,8 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     _SEARCH_LIMIT_MAX = search_output.max_limit
 
     _SYMBOL_SOURCE_MAX_LINES = cfg.symbol_source.max_lines
+
+    _FILES_HEAD_LIMIT_MAX = cfg.files.max_head_limit
 
     # Local import — keeps the application -> extraction edge lazy so
     # importing ``mcp_inputs`` at app startup doesn't drag in the whole
@@ -178,9 +231,9 @@ class SearchInput(BaseModel):
     """Input for the ``search_codebase`` MCP tool."""
 
     query: str = Field(min_length=1, max_length=30000)
-    kind: Literal["docs", "api", "any", "decision"] = "any"
+    kind: KindLiteral = "any"
     package: str = ""
-    scope: Literal["project", "deps", "all"] = "all"
+    scope: ScopeLiteral = "all"
     # Multi-repo corpus selector (sibling of ``package`` / ``scope``): restrict
     # the query to one loaded project by name. "" = union across all loaded
     # projects. No effect on a single-project server.
@@ -281,7 +334,7 @@ class LookupInput(BaseModel):
 
 # ── Task-shaped tool inputs (spec §D1) ──────────────────────────────────
 #
-# The six task-shaped tools reuse the same YAML-wired limit slots and the
+# The task-shaped tools reuse the same YAML-wired limit slots and the
 # same ``_PACKAGE_RE`` / ``_TARGET_RE`` boundary validators as
 # ``SearchInput`` / ``LookupInput`` above. ``project`` carries the
 # identical multi-repo corpus-selector semantics on every model that has it.
@@ -308,11 +361,26 @@ class OverviewInput(BaseModel):
         return v
 
 
+def _check_files_head_limit(v: int | None) -> int | None:
+    """Shared ceiling check for GrepInput.head_limit / GlobInput.head_limit.
+
+    Reads ``_FILES_HEAD_LIMIT_MAX`` at call time (not class-definition
+    time) so a single ``configure_from_app_config`` call at startup makes
+    every subsequent instantiation validate against the YAML ceiling —
+    same pattern as the SearchInput/LookupInput limit validators.
+    """
+    if v is not None and v > _FILES_HEAD_LIMIT_MAX:
+        raise ValueError(
+            f"head_limit must be <= {_FILES_HEAD_LIMIT_MAX} (configured via files.max_head_limit)"
+        )
+    return v
+
+
 class SymbolInput(BaseModel):
     """get_symbol — known dotted path (spec §D1). depth='source' is the §D7 recovery contract."""
 
     target: str = Field(min_length=1)
-    depth: Literal["summary", "tree", "source"] = "summary"
+    depth: DepthLiteral = "summary"
     project: str = ""
 
     @field_validator("target")
@@ -362,7 +430,7 @@ class ReferencesInput(BaseModel):
     """get_references — graph traversal incl. ranked transitive impact (spec §D1)."""
 
     target: str = Field(min_length=1)
-    direction: Literal["callers", "callees", "inherits", "impact", "governed_by"] = "callers"
+    direction: DirectionLiteral = "callers"
     project: str = ""
     limit: int = Field(default_factory=lambda: _LIMIT_DEFAULT, ge=1)
 
@@ -415,6 +483,105 @@ class WhyInput(BaseModel):
                     "each target must be a dotted name like 'pkg.mod.Class' or a path like 'a/b.py'"
                 )
         return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+# ── Filesystem tool inputs (tool-contracts.md §3.7-3.9) ──────────────────
+#
+# The grep flags -i/-n/-A/-B/-C are the contract's literal wire names.
+# ``validation_alias`` (NOT ``alias``) is load-bearing: FastMCP's
+# ``model_dump_one_level`` prefers ``alias`` for the handler kwarg name
+# (mcp/server/fastmcp/utilities/func_metadata.py), which would break
+# invocation — ``validation_alias`` was spike-verified to (a) advertise
+# the dash names in the inputSchema, (b) accept dash-keyed calls, and
+# (c) dump by Python field name (what ``FileToolsService``'s structural
+# ``GrepRequest`` Protocol reads). ``populate_by_name=True`` lets
+# server-internal callers (CLI verbs, tests) construct by field name
+# without dash-keyed dicts.
+
+
+class GrepInput(BaseModel):
+    """grep — exact-string / regex text search over source files (§3.7)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pattern: str = Field(min_length=1)
+    path: str = ""
+    glob: str = ""
+    output_mode: OutputModeLiteral = "files_with_matches"
+    case_insensitive: Annotated[bool, Field(validation_alias="-i")] = False
+    line_numbers: Annotated[bool, Field(validation_alias="-n")] = True
+    after_context: Annotated[int | None, Field(validation_alias="-A", ge=0)] = None
+    before_context: Annotated[int | None, Field(validation_alias="-B", ge=0)] = None
+    context: Annotated[int | None, Field(validation_alias="-C", ge=0)] = None
+    # None ⇒ YAML default (files.grep_head_limit) resolved by the service;
+    # client-supplied values are ceilinged at files.max_head_limit below.
+    head_limit: int | None = Field(None, ge=1)
+    multiline: bool = False
+    scope: ScopeLiteral = "project"
+    project: str = ""
+
+    @field_validator("pattern")
+    @classmethod
+    def _check_pattern_compiles(cls, v: str) -> str:
+        # Reject uncompilable regexes at the boundary, carrying the
+        # offending pattern (not a vague "invalid input") — the service
+        # would otherwise raise deep inside the filesystem walk.
+        try:
+            re.compile(v)
+        except re.error as exc:
+            raise ValueError(f"pattern is not a valid Python regex: {v!r} ({exc})") from exc
+        return v
+
+    @field_validator("head_limit")
+    @classmethod
+    def _check_head_limit_max(cls, v: int | None) -> int | None:
+        return _check_files_head_limit(v)
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+class GlobInput(BaseModel):
+    """glob — find files by name pattern, mtime-descending (§3.8)."""
+
+    pattern: str = Field(min_length=1)
+    path: str = ""
+    # None ⇒ YAML default (files.glob_head_limit) resolved by the service.
+    head_limit: int | None = Field(None, ge=1)
+    project: str = ""
+
+    @field_validator("head_limit")
+    @classmethod
+    def _check_head_limit_max(cls, v: int | None) -> int | None:
+        return _check_files_head_limit(v)
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str) -> str:
+        if v and not _PACKAGE_RE.match(v):
+            raise ValueError("project must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+        return v
+
+
+class ReadFileInput(BaseModel):
+    """read_file — line-numbered file content within the corpus boundary (§3.9)."""
+
+    file_path: str = Field(min_length=1)
+    offset: int | None = Field(None, ge=1)  # 1-indexed start line
+    # None ⇒ YAML default (files.read_limit) resolved by the service.
+    limit: int | None = Field(None, ge=1)
+    project: str = ""
 
     @field_validator("project")
     @classmethod

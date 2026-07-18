@@ -79,7 +79,8 @@ if TYPE_CHECKING:
 # BY of ``-m.rank`` (descending) since the data is the same magnitudes.
 _FETCH_SQL_TEMPLATE = (
     "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
-    "c.qualified_name, c.decision_id, m.rank AS rank "
+    "c.qualified_name, c.decision_id, "
+    "c.source_path, c.start_line, c.end_line, m.rank AS rank "
     "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
     "WHERE {where} "
     "ORDER BY m.rank LIMIT ?"
@@ -258,6 +259,17 @@ def _row_to_candidate(row: sqlite3.Row, retriever_name: str) -> Chunk:
     decision_id = row["decision_id"]
     if decision_id is not None:
         metadata["decision_id"] = decision_id
+    # Source span (schema v15): the items[] rows of search_codebase cite
+    # ``path:start-end`` from these keys (contract §3.2). Surface only when
+    # set — mirrors storage.sqlite.row_to_chunk so span-less rows stay
+    # key-free on both fetch paths.
+    source_path = row["source_path"]
+    if source_path:
+        metadata[ChunkFilterField.SOURCE_PATH.value] = source_path
+    for span_key in (ChunkFilterField.START_LINE.value, ChunkFilterField.END_LINE.value):
+        span_value = row[span_key]
+        if span_value is not None:
+            metadata[span_key] = span_value
     return Chunk(
         text=row["text"] or "",
         id=row["id"],

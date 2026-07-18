@@ -1,4 +1,4 @@
-"""§D13 docstring contract: six sections, size budgets, cross-references."""
+"""§D13 docstring contract: required sections, size budgets, cross-references."""
 
 from pydocs_mcp.application.tool_docs import (
     CHARS_PER_TOKEN as _CHARS_PER_TOKEN,
@@ -24,10 +24,13 @@ _TOOLS = (
     "get_context",
     "get_references",
     "get_why",
+    "grep",
+    "glob",
+    "read_file",
 )
 
 
-def test_all_six_tools_documented() -> None:
+def test_all_nine_tools_documented() -> None:
     assert set(TOOL_DOCS) == set(_TOOLS)
 
 
@@ -48,7 +51,7 @@ def test_size_budgets() -> None:
         tokens = len(doc) // _CHARS_PER_TOKEN
         assert tokens <= _PER_TOOL_TOKEN_BUDGET, f"{name}: {tokens} tokens > 500"
         total += tokens
-    assert total <= _TOTAL_TOKEN_BUDGET, f"surface total {total} tokens > 2400"
+    assert total <= _TOTAL_TOKEN_BUDGET, f"surface total {total} tokens > 3600"
 
 
 def test_docs_reference_sibling_tools_not_old_surface() -> None:
@@ -69,5 +72,5 @@ def test_contract_constants_are_importable_and_pinned() -> None:
         TOTAL_TOKEN_BUDGET,
     )
 
-    assert (CHARS_PER_TOKEN, PER_TOOL_TOKEN_BUDGET, TOTAL_TOKEN_BUDGET) == (4, 500, 2400)
+    assert (CHARS_PER_TOKEN, PER_TOOL_TOKEN_BUDGET, TOTAL_TOKEN_BUDGET) == (4, 500, 3600)
     assert len(REQUIRED_MARKERS) == 5

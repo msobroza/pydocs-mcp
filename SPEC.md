@@ -12,7 +12,7 @@ AI coding assistants hallucinate outdated APIs because their training data is mo
 
 ## Solution
 
-Point pydocs-mcp at your project directory. It scans the tree for dependency manifests (`pyproject.toml`, `requirements*.txt`), finds every installed dependency, and indexes everything into a per-project hybrid index: a SQLite file with FTS5 full-text search plus a reference-graph table, and a TurboQuant `.tq` sidecar holding the dense embedding vectors. Your project code, dependency docs, and the cross-cutting call graph become queryable through one unified MCP interface — six task-shaped tools, fixed surface.
+Point pydocs-mcp at your project directory. It scans the tree for dependency manifests (`pyproject.toml`, `requirements*.txt`), finds every installed dependency, and indexes everything into a per-project hybrid index: a SQLite file with FTS5 full-text search plus a reference-graph table, and a TurboQuant `.tq` sidecar holding the dense embedding vectors. Your project code, dependency docs, and the cross-cutting call graph become queryable through one unified MCP interface — nine task-shaped tools, fixed surface.
 
 ## Key differentiators
 
@@ -24,7 +24,7 @@ Point pydocs-mcp at your project directory. It scans the tree for dependency man
 6. **Dual indexing mode** — `inspect` (richer, default) or `--no-inspect` / static (faster, no side effects).
 7. **Rust-accelerated** — optional native extension for ~4× I/O speedup.
 8. **Portable** — copy the `.db` + `.tq` pair to another machine, it just works (the `.tq` sidecar carries the dense vectors).
-9. **Stable MCP surface** — six task-shaped tools (`get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why`); all tuning happens via YAML config so clients don't version-bump on server-side changes.
+9. **Stable MCP surface** — nine task-shaped tools (`get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why`, `grep`, `glob`, `read_file`), frozen by contract in `docs/tool-contracts.md`; all tuning happens via YAML config so clients don't version-bump on server-side changes.
 10. **sklearn-style pipeline composition** — every retrieval step is a `RetrieverStep` subclass; pipelines are named, addressable, swappable.
 
 ## Architecture
@@ -63,7 +63,7 @@ pydocs-mcp/
         │   └── steps/          #   One file per step (chunk_fetcher, bm25_scorer, top_k_filter, …)
         ├── defaults/           # Shipped default_config.yaml (lowest-priority AppConfig layer)
         ├── pipelines/          # Built-in pipeline YAML blueprints (chunk_search, member_search, ingestion)
-        └── server.py           # MCP server (six task-shaped tools)
+        └── server.py           # MCP server (nine task-shaped tools)
 ```
 
 For the detailed architecture rules (SOLID, async patterns, MCP API surface vs YAML configuration, single-source-of-truth defaults), see [CLAUDE.md](CLAUDE.md). For the extensibility surface (how to add new storage backends, filter formats, retrieval steps, formatters), see [EXTENSIONS.md](EXTENSIONS.md).
@@ -314,7 +314,7 @@ maturin develop --release    # Development
 maturin build --release      # Wheel for distribution
 ```
 
-## MCP surface — six task-shaped tools
+## MCP surface — nine task-shaped tools
 
 The MCP surface is intentionally minimal. Every behavioral knob lives in YAML, not in tool parameters (see CLAUDE.md §"MCP API surface vs YAML configuration").
 
@@ -350,6 +350,16 @@ Everything needed to understand one or more symbols, packed in a single token-bu
 ### `get_why(query, targets, project)`
 
 Recorded architectural decisions and rationale for a topic or target.
+
+### `grep`, `glob`, `read_file` — filesystem tools
+
+Exact-string / regex search (Python `re` flavor), file-name matching (`**`
+recursion, results newest-first by mtime), and line-numbered file reads. They
+operate on the **indexer's discovery scope** — the same excluded-dirs floor,
+extension allowlist, and size cap the semantic index sees (not `.gitignore`) —
+over live disk, with every response freshness-stamped against the index
+snapshot. Full parameter schemas live in the normative contract,
+`docs/tool-contracts.md`.
 
 ## CLI
 

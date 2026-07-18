@@ -191,6 +191,32 @@ class InMemoryPackageStore:
 # not metadata).
 _CHUNK_METADATA_FILTER_KEYS = ("module", "origin", "title", "qualified_name")
 
+# v15 span metadata keys refresh_span_metadata rewrites (and nothing else).
+_CHUNK_SPAN_KEYS = ("source_path", "start_line", "end_line")
+
+
+def _matches_span_refresh_key(stored: Chunk, incoming: Chunk) -> bool:
+    """The (module, content_hash) half of _REFRESH_SPAN_SQL's WHERE clause
+    (the package half is the ``by_package`` bucket the caller iterates)."""
+    return stored.content_hash == incoming.content_hash and stored.metadata.get(
+        "module", ""
+    ) == incoming.metadata.get("module", "")
+
+
+def _with_refreshed_spans(stored: Chunk, incoming: Chunk) -> Chunk:
+    """``stored`` with its span metadata replaced by ``incoming``'s spans."""
+    new_md = {k: v for k, v in stored.metadata.items() if k not in _CHUNK_SPAN_KEYS}
+    # Mirror the SQLite round-trip: empty source_path normalizes to NULL on
+    # write (_chunk_to_row), and NULL columns drop the key on read
+    # (row_to_chunk) — line spans only drop on None, not on 0.
+    if incoming.metadata.get("source_path"):
+        new_md["source_path"] = incoming.metadata["source_path"]
+    for key in ("start_line", "end_line"):
+        value = incoming.metadata.get(key)
+        if value is not None:
+            new_md[key] = value
+    return replace(stored, metadata=new_md)
+
 
 @dataclass
 class InMemoryChunkStore:
@@ -277,6 +303,20 @@ class InMemoryChunkStore:
         # ids the vector-write path flagged so tests can assert the policy.
         self.calls.append(_Call("mark_embedded", list(ids)))
         self.embedded_ids.update(ids)
+
+    async def refresh_span_metadata(self, package: str, chunks) -> None:
+        # Mirrors SqliteChunkRepository.refresh_span_metadata: unconditional
+        # span refresh on (package, module, content_hash)-matched rows.
+        # ONLY the span metadata keys change — id and embedded_ids survive,
+        # and absent/empty incoming spans surface as missing keys (matching
+        # row_to_chunk's NULL-drops-the-key read semantics).
+        materialised = tuple(chunks)
+        self.calls.append(_Call("refresh_span_metadata", (package, materialised)))
+        stored_rows = self.by_package.get(package, [])
+        for incoming in materialised:
+            for i, stored in enumerate(stored_rows):
+                if _matches_span_refresh_key(stored, incoming):
+                    stored_rows[i] = _with_refreshed_spans(stored, incoming)
 
     async def insert(self, chunks) -> None:
         # Mimic SQLite autoincrement so list_id_hash_pairs returns real ints.

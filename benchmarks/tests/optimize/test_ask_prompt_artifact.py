@@ -86,7 +86,7 @@ class TestValidate:
         assert any("tokens" in v and _REWRITE_KEY in v for v in violations)
 
     def test_system_must_name_every_live_tool(self) -> None:
-        # Iterated from TOOL_DOCS keys — never a hard-coded six-name list.
+        # Iterated from TOOL_DOCS keys — never a hard-coded name list.
         partial = ", ".join(list(TOOL_DOCS)[:-1])
         violations = AskPromptArtifact().with_content(_doc(system=partial)).validate()
         missing_tool = list(TOOL_DOCS)[-1]

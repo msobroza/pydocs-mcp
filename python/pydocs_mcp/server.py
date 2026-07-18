@@ -1,7 +1,8 @@
-"""MCP server exposing the six task-shaped tools (spec §D1/§D2).
+"""MCP server exposing the nine task-shaped tools (spec §D1/§D2, contract §1).
 
 The surface is ``get_overview`` / ``search_codebase`` / ``get_symbol`` /
-``get_context`` / ``get_references`` / ``get_why``. Handlers are thin adapters
+``get_context`` / ``get_references`` / ``get_why`` plus the three filesystem
+tools ``grep`` / ``glob`` / ``read_file``. Handlers are thin adapters
 that validate their pydantic input model and delegate to :class:`ToolRouter`
 (which wraps every response in the shared :class:`ResponseEnvelope`). All
 LLM-visible prose — per-tool descriptions and the server-level orientation —
@@ -19,11 +20,35 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING, Annotated
+
+from pydantic import Field
 
 from pydocs_mcp.application import (
     MCPToolError,
     ServiceUnavailableError,
 )
+
+# Shared enum vocabularies (single source: mcp_inputs). Module-level for the
+# same reason as ``Annotated`` / ``Field`` above — FastMCP evals the
+# handlers' stringified signatures against THIS module's globals, so typing
+# the params with these aliases is what makes each tool's inputSchema
+# advertise the enum values (contract §6 note 3).
+from pydocs_mcp.application.mcp_inputs import (
+    DepthLiteral,
+    DirectionLiteral,
+    KindLiteral,
+    OutputModeLiteral,
+    ScopeLiteral,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from mcp.types import CallToolResult
+    from pydantic import BaseModel
+
+    from pydocs_mcp.application.tool_response import ToolResponse
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -59,6 +84,7 @@ def _build_project_services(
     from pydocs_mcp.retrieval.factories import build_retrieval_context
     from pydocs_mcp.storage.factories import (
         build_sqlite_decision_service,
+        build_sqlite_file_tools_service,
         build_sqlite_lookup_service,
         build_sqlite_overview_service,
         build_sqlite_symbol_source_service,
@@ -103,6 +129,18 @@ def _build_project_services(
             build_sqlite_decision_service(loaded.db_path, docs=docs, config=config)
             if config.decision_capture.enabled
             else NullDecisionService()
+        ),
+        # grep/glob/read_file serve THIS project's live source tree under the
+        # indexer's discovery scope (contract §4.1). Unlike the overview's
+        # "." fallback above, an unstamped root stays None: the filesystem
+        # tools must raise the read-only-bundle error, not walk the server's
+        # own cwd.
+        files=build_sqlite_file_tools_service(
+            loaded.db_path,
+            project_root=Path(loaded.metadata.project_root)
+            if loaded.metadata.project_root
+            else None,
+            config=config,
         ),
     )
 
@@ -388,7 +426,7 @@ def build_routers(
     Shared by ``run`` (MCP server) and the CLI subcommands so both select,
     validate, and load databases identically. ``surface`` ("mcp" | "cli") picks
     the pointer syntax the shared envelope resolves to. Returns
-    ``(ToolRouter, services)`` — the router fronts the six task-shaped tools over
+    ``(ToolRouter, services)`` — the router fronts the nine task-shaped tools over
     the multi-project ``MultiProjectSearch`` / ``MultiProjectLookup`` bodies.
     """
     import json
@@ -519,16 +557,25 @@ def run(
     mcp.run(transport="stdio")
 
 
-async def _run_tool(name: str, produce):
-    """Shared handler error boundary (§5.2).
+async def _run_tool(
+    name: str, produce: Callable[[], Awaitable[ToolResponse]], envelope_model: type[BaseModel]
+) -> CallToolResult:
+    """Shared handler error boundary (§5.2) + dual-form result assembly (§2).
 
     Awaits ``produce()`` (the ``ToolRouter`` call), re-raising typed
     :class:`MCPToolError`s unchanged and wrapping anything else in
-    :class:`ServiceUnavailableError` after logging. Factored out so every one of
-    the six handlers is a one-line delegation — no per-tool try/except copy.
+    :class:`ServiceUnavailableError` after logging. The successful
+    :class:`ToolResponse` is converted to a ``CallToolResult`` carrying the
+    markdown text block plus ``structuredContent`` validated against the
+    tool's envelope model — the conversion runs INSIDE the boundary, so a
+    malformed items row surfaces as a logged ``ServiceUnavailableError``
+    rather than an unlogged raw ``ValidationError``. Factored out so every
+    one of the handlers is a one-line delegation — no per-tool try/except
+    or conversion copy.
     """
     try:
-        return await produce()
+        response = await produce()
+        return _to_call_tool_result(response, envelope_model)
     except MCPToolError:
         raise
     except Exception as e:
@@ -536,15 +583,33 @@ async def _run_tool(name: str, produce):
         raise ServiceUnavailableError(f"{name} failed: {e}") from e
 
 
+def _to_call_tool_result(response: ToolResponse, envelope_model: type[BaseModel]) -> CallToolResult:
+    """Both wire forms of one response — FastMCP passes a ``CallToolResult``
+    through unchanged after re-validating ``structuredContent`` against the
+    advertised output model (mcp 1.27.1 ``func_metadata.convert_result``)."""
+    from mcp.types import CallToolResult, TextContent
+
+    structured = envelope_model.model_validate(response.structured()).model_dump(mode="json")
+    return CallToolResult(
+        content=[TextContent(type="text", text=response.text)],
+        structuredContent=structured,
+    )
+
+
 def _register_tools(mcp, tools) -> None:
-    """Register the six task-shaped MCP tools on ``mcp``, delegating to ``tools``.
+    """Register the nine task-shaped MCP tools on ``mcp``, delegating to ``tools``.
 
     Each handler is a thin adapter: validate its pydantic input model and hand
     the matching :class:`ToolRouter` call to :func:`_run_tool` (the shared error
     boundary). Split out of :func:`run` so the composition root stays flat and
     each handler reads as one unit.
+
+    The grep flag annotations (``Annotated[..., Field(validation_alias="-i")]``)
+    resolve from server.py's MODULE globals when FastMCP evals the stringified
+    signatures — which is why ``Annotated`` / ``Field`` are module-level imports
+    while everything else here stays function-local.
     """
-    from mcp.types import ToolAnnotations
+    from mcp.types import CallToolResult, ToolAnnotations
 
     from pydocs_mcp.application.mcp_inputs import (
         ContextInput,
@@ -555,6 +620,7 @@ def _register_tools(mcp, tools) -> None:
         WhyInput,
     )
     from pydocs_mcp.application.tool_docs import TOOL_DOCS
+    from pydocs_mcp.application.tool_response import ENVELOPE_MODELS
 
     def _register(fn, name: str):
         """Register a thin handler under ``name`` with ``TOOL_DOCS[name]`` as its
@@ -563,7 +629,16 @@ def _register_tools(mcp, tools) -> None:
         ``description=`` is passed explicitly rather than relying on ``fn.__doc__``
         so the tool text is the ``TOOL_DOCS`` single source regardless of how
         FastMCP resolves docstrings across versions (§D13).
+
+        The return annotation is stamped as a real ``Annotated[CallToolResult,
+        <EnvelopeModel>]`` object post-def: FastMCP advertises the model as the
+        tool's ``outputSchema`` and passes the handler's ``CallToolResult``
+        through after validating ``structuredContent`` against it. It must be
+        attached dynamically because ``from __future__ import annotations``
+        stringifies source annotations and FastMCP's ``eval_str`` resolution
+        cannot see this function's local names.
         """
+        fn.__annotations__["return"] = Annotated[CallToolResult, ENVELOPE_MODELS[name]]
         return mcp.tool(
             name=name,
             description=TOOL_DOCS[name],
@@ -574,20 +649,22 @@ def _register_tools(mcp, tools) -> None:
             ),
         )(fn)
 
-    async def get_overview(package: str = "", project: str = "") -> str:
+    async def get_overview(package: str = "", project: str = "") -> CallToolResult:
         payload = OverviewInput(package=package, project=project)
-        return await _run_tool("get_overview", lambda: tools.get_overview(payload))
+        return await _run_tool(
+            "get_overview", lambda: tools.get_overview(payload), ENVELOPE_MODELS["get_overview"]
+        )
 
     _register(get_overview, "get_overview")
 
     async def search_codebase(
         query: str,
-        kind: str = "any",
+        kind: KindLiteral = "any",
         package: str = "",
-        scope: str = "all",
+        scope: ScopeLiteral = "all",
         limit: int | None = None,
         project: str = "",
-    ) -> str:
+    ) -> CallToolResult:
         # ``limit`` is omitted from ``SearchInput`` when the client didn't send
         # one so the model's YAML-wired ``default_factory`` supplies the default —
         # no literal duplicated here (single-source-of-truth defaults).
@@ -601,35 +678,49 @@ def _register_tools(mcp, tools) -> None:
         if limit is not None:
             fields["limit"] = limit
         payload = SearchInput(**fields)
-        return await _run_tool("search_codebase", lambda: tools.search_codebase(payload))
+        return await _run_tool(
+            "search_codebase",
+            lambda: tools.search_codebase(payload),
+            ENVELOPE_MODELS["search_codebase"],
+        )
 
     _register(search_codebase, "search_codebase")
 
-    async def get_symbol(target: str, depth: str = "summary", project: str = "") -> str:
+    async def get_symbol(
+        target: str, depth: DepthLiteral = "summary", project: str = ""
+    ) -> CallToolResult:
         payload = SymbolInput(target=target, depth=depth, project=project)
-        return await _run_tool("get_symbol", lambda: tools.get_symbol(payload))
+        return await _run_tool(
+            "get_symbol", lambda: tools.get_symbol(payload), ENVELOPE_MODELS["get_symbol"]
+        )
 
     _register(get_symbol, "get_symbol")
 
-    async def get_context(targets: list[str], project: str = "") -> str:
+    async def get_context(targets: list[str], project: str = "") -> CallToolResult:
         payload = ContextInput(targets=targets, project=project)
-        return await _run_tool("get_context", lambda: tools.get_context(payload))
+        return await _run_tool(
+            "get_context", lambda: tools.get_context(payload), ENVELOPE_MODELS["get_context"]
+        )
 
     _register(get_context, "get_context")
 
     async def get_references(
         target: str,
-        direction: str = "callers",
+        direction: DirectionLiteral = "callers",
         limit: int | None = None,
         project: str = "",
-    ) -> str:
+    ) -> CallToolResult:
         # Same limit-omission rule as search_codebase: absent arg lets the input
         # model apply the YAML-wired reference-graph default.
         fields = {"target": target, "direction": direction, "project": project}
         if limit is not None:
             fields["limit"] = limit
         payload = ReferencesInput(**fields)
-        return await _run_tool("get_references", lambda: tools.get_references(payload))
+        return await _run_tool(
+            "get_references",
+            lambda: tools.get_references(payload),
+            ENVELOPE_MODELS["get_references"],
+        )
 
     _register(get_references, "get_references")
 
@@ -637,8 +728,85 @@ def _register_tools(mcp, tools) -> None:
         query: str = "",
         targets: list[str] | None = None,
         project: str = "",
-    ) -> str:
+    ) -> CallToolResult:
         payload = WhyInput(query=query, targets=targets, project=project)
-        return await _run_tool("get_why", lambda: tools.get_why(payload))
+        return await _run_tool(
+            "get_why", lambda: tools.get_why(payload), ENVELOPE_MODELS["get_why"]
+        )
 
     _register(get_why, "get_why")
+
+    _register_filesystem_tools(_register, tools)
+
+
+def _register_filesystem_tools(register, tools) -> None:
+    """Register the three filesystem tools (contract §3.7-3.9) via ``register``.
+
+    Split from :func:`_register_tools` purely to keep each registration
+    function within the complexity budget. The dash-named grep flags ride
+    ``validation_alias``: the inputSchema advertises the literal wire names
+    (-i/-n/-A/-B/-C) while dispatch binds the Python field names.
+    ``head_limit`` / ``limit`` need no omission dance (unlike search/refs):
+    None IS the model default, and the YAML-wired deployment default
+    (files.*) resolves inside FileToolsService.
+    """
+    from pydocs_mcp.application.mcp_inputs import GlobInput, GrepInput, ReadFileInput
+    from pydocs_mcp.application.tool_response import ENVELOPE_MODELS
+
+    async def grep(
+        pattern: str,
+        path: str = "",
+        glob: str = "",
+        output_mode: OutputModeLiteral = "files_with_matches",
+        case_insensitive: Annotated[bool, Field(validation_alias="-i")] = False,
+        line_numbers: Annotated[bool, Field(validation_alias="-n")] = True,
+        after_context: Annotated[int | None, Field(validation_alias="-A", ge=0)] = None,
+        before_context: Annotated[int | None, Field(validation_alias="-B", ge=0)] = None,
+        context: Annotated[int | None, Field(validation_alias="-C", ge=0)] = None,
+        head_limit: int | None = None,
+        multiline: bool = False,
+        scope: ScopeLiteral = "project",
+        project: str = "",
+    ) -> CallToolResult:
+        payload = GrepInput(
+            pattern=pattern,
+            path=path,
+            glob=glob,
+            output_mode=output_mode,
+            case_insensitive=case_insensitive,
+            line_numbers=line_numbers,
+            after_context=after_context,
+            before_context=before_context,
+            context=context,
+            head_limit=head_limit,
+            multiline=multiline,
+            scope=scope,
+            project=project,
+        )
+        return await _run_tool("grep", lambda: tools.grep(payload), ENVELOPE_MODELS["grep"])
+
+    register(grep, "grep")
+
+    async def glob(
+        pattern: str,
+        path: str = "",
+        head_limit: int | None = None,
+        project: str = "",
+    ) -> CallToolResult:
+        payload = GlobInput(pattern=pattern, path=path, head_limit=head_limit, project=project)
+        return await _run_tool("glob", lambda: tools.glob(payload), ENVELOPE_MODELS["glob"])
+
+    register(glob, "glob")
+
+    async def read_file(
+        file_path: str,
+        offset: int | None = None,
+        limit: int | None = None,
+        project: str = "",
+    ) -> CallToolResult:
+        payload = ReadFileInput(file_path=file_path, offset=offset, limit=limit, project=project)
+        return await _run_tool(
+            "read_file", lambda: tools.read_file(payload), ENVELOPE_MODELS["read_file"]
+        )
+
+    register(read_file, "read_file")

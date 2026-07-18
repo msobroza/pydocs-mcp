@@ -109,6 +109,12 @@ search:
     default_limit: 10
     max_limit: 1000
 
+files:                        # filesystem tools grep/glob/read_file (tool-contracts.md §3.7-3.9)
+  grep_head_limit: 100        # default cap on grep entries when head_limit is omitted
+  glob_head_limit: 100        # default cap on glob paths when head_limit is omitted
+  read_limit: 2000            # default max lines per read_file when limit is omitted
+  max_head_limit: 10000       # ceiling for client-supplied caps
+
 symbol_source:
   max_lines: 400            # get_symbol(depth="source") bound (spec §D7)
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 
 from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
 
-# Module-level ``pydocs_mcp`` boundary: the six-tool-name check iterates the
+# Module-level ``pydocs_mcp`` boundary: the tool-name check iterates the
 # product TOOL_DOCS keys and the seed IS the product prompt templates — there
 # is no library-free way to define this artifact. A base install without the
 # [retrieval] extra gets the actionable install hint.

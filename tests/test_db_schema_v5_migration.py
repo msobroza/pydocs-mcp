@@ -7,7 +7,7 @@ from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
 
 
 def test_schema_version_is_5() -> None:
-    assert SCHEMA_VERSION == 14
+    assert SCHEMA_VERSION == 15
 
 
 def test_fresh_db_v5_has_packages_embedding_model_column(tmp_path: Path) -> None:

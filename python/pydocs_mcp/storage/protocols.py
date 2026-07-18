@@ -117,6 +117,21 @@ class ChunkStore(Protocol):
         """
         ...
 
+    async def refresh_span_metadata(self, package: str, chunks: Sequence[Chunk]) -> None:
+        """Refresh source_path/start_line/end_line on hash-matched kept rows.
+
+        The v15 span columns are deliberately OUTSIDE ``content_hash``, so a
+        row that hash-matches a freshly-extracted chunk (and is therefore
+        kept in place by the diff-merge) would otherwise never acquire spans
+        — pre-v15 rows, or rows written before a chunker started emitting
+        spans, would stay NULL forever. Called by the diff-merge for every
+        kept chunk; keyed on ``(package, module, content_hash)``. MUST touch
+        nothing else: ``id`` / ``embedded`` / ``decision_id`` stay intact,
+        no FTS content changes (spans are not FTS columns), and no re-embed
+        is triggered. Empty ``chunks`` → no-op.
+        """
+        ...
+
 
 @runtime_checkable
 class ModuleMemberStore(Protocol):

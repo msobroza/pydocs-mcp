@@ -142,6 +142,7 @@ def capture_imports(
     from_package: str,
     module_qname: str,
     collector: ReferenceCollector,
+    is_package: bool = False,
 ) -> None:
     """Walk module-level imports, emit IMPORTS candidates AND populate the
     per-module alias table (spec §7.2 — alias awareness Rule A).
@@ -150,6 +151,12 @@ def capture_imports(
     ``import X as Z`` records ``aliases[module][Z] = "X"``.
     Function-scoped imports are ignored — only module-top-level imports
     feed the alias table.
+
+    Relative imports (``ast.ImportFrom.level > 0``) are qualified against
+    ``module_qname`` so ``from .mod import thing`` in ``pkg/__init__.py``
+    emits ``pkg.mod.thing`` — resolvable by Rule B (ADR 0004 fix ii).
+    ``is_package`` marks an ``__init__``-backed module: its qname IS the
+    package, so level 1 drops zero trailing segments instead of one.
     """
     aliases = collector.aliases.setdefault(module_qname, {})
     for stmt in body:
@@ -168,7 +175,7 @@ def capture_imports(
                 if alias.asname:
                     aliases[alias.asname] = to_name
         elif isinstance(stmt, ast.ImportFrom):
-            module = stmt.module or ""
+            module = _qualify_from_import(stmt, module_qname, is_package=is_package)
             for alias in stmt.names:
                 to_name = f"{module}.{alias.name}" if module else alias.name
                 collector.add(
@@ -182,6 +189,30 @@ def capture_imports(
                 )
                 alias_key = alias.asname or alias.name
                 aliases[alias_key] = to_name
+
+
+def _qualify_from_import(stmt: ast.ImportFrom, module_qname: str, *, is_package: bool) -> str:
+    """Absolute dotted base for a ``from`` import.
+
+    Level 0 (absolute) passes ``stmt.module`` through. For relative
+    imports, the base is ``module_qname`` with trailing segments dropped
+    per Python's import machinery: a package (``__init__``) resolves
+    level 1 to ITSELF, a plain module to its parent — i.e. drop
+    ``level - 1`` vs ``level`` segments. A level that climbs past the
+    qname root can't be qualified; keep the unqualified name (the
+    pre-fix emission) rather than inventing a wrong prefix.
+    """
+    module = stmt.module or ""
+    if stmt.level == 0:
+        return module
+    parts = module_qname.split(".") if module_qname else []
+    drop = stmt.level - 1 if is_package else stmt.level
+    if drop > len(parts):
+        return module
+    base = ".".join(parts[: len(parts) - drop])
+    if base and module:
+        return f"{base}.{module}"
+    return base or module
 
 
 def capture_inherits(

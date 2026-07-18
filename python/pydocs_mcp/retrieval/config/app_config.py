@@ -33,6 +33,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
 from pydocs_mcp.retrieval.config.models import (
     DecisionCaptureConfig,
     DecisionsConfig,
+    FilesConfig,
     HandlerConfig,
     OutputConfig,
     OverviewConfig,
@@ -97,7 +98,7 @@ class AppConfig(BaseSettings):
     # ``ReferenceCaptureStage`` (enabled/kinds) and ``configure_from_app_config``
     # (default_limit/max_limit → LookupInput.limit). Per CLAUDE.md §"MCP API
     # surface vs YAML configuration": these are pipeline-tuning knobs, NOT
-    # MCP tool params. The MCP surface stays fixed at the six task-shaped tools.
+    # MCP tool params. The MCP surface stays fixed at the nine task-shaped tools.
     reference_graph: ReferenceGraphConfig = Field(default_factory=ReferenceGraphConfig)
     # Parallel YAML knobs for the ``search_codebase`` MCP tool.
     # Same wiring pattern as ``reference_graph.output`` — pushed into
@@ -124,7 +125,7 @@ class AppConfig(BaseSettings):
     # capture_decisions ingestion stage runs, merge/dedupe threshold, per-source
     # bounds, and the default-off LLM structuring gate. Per CLAUDE.md §"MCP API
     # surface vs YAML configuration": deployment-time tuning knobs, NOT MCP tool
-    # params — the six task-shaped tools stay fixed.
+    # params — the nine task-shaped tools stay fixed.
     decision_capture: DecisionCaptureConfig = Field(default_factory=DecisionCaptureConfig)
     # get_why decision-read output bounds (spec §D9/§D11) — the read-side
     # sibling of ``decision_capture`` (index-time mining). Same wiring pattern
@@ -136,7 +137,7 @@ class AppConfig(BaseSettings):
     # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
     # configuration": either the CLI ``--watch`` flag or
     # ``serve.watch.enabled: true`` enables watching; no MCP tool param.
-    # The MCP surface stays fixed at the six task-shaped tools.
+    # The MCP surface stays fixed at the nine task-shaped tools.
     serve: ServeConfig = Field(default_factory=ServeConfig)
     # Hybrid-search foundation (spec §5.10): embedding provider /
     # model / dim / batch / TurboQuant bit-width. Consumed by
@@ -172,6 +173,12 @@ class AppConfig(BaseSettings):
     # which agent architecture answers a question is A/B-testable behavior.
     # Light pydantic; the extra's heavy deps never load through this field.
     ask_your_docs: AskYourDocsConfig = Field(default_factory=AskYourDocsConfig)
+    # Filesystem-tool bounds (tool-contracts.md §3.7-3.9): YAML-wired
+    # defaults + ceiling for grep/glob/read_file entry caps. Per CLAUDE.md
+    # §"MCP API surface vs YAML configuration": deployment-time output
+    # bounds, NOT new MCP params — clients pass head_limit/limit per
+    # request and YAML bounds them.
+    files: FilesConfig = Field(default_factory=FilesConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside

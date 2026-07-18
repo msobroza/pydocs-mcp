@@ -51,6 +51,9 @@ _TOOL_NAMES = (
     "get_context",
     "get_references",
     "get_why",
+    "grep",
+    "glob",
+    "read_file",
 )
 
 # The six documentation/ pages whose MyST include uses the fragile
@@ -319,7 +322,10 @@ def test_extras_install_lines_are_shell_quoted() -> None:
 def _tool_input_models() -> dict[str, type[pydantic.BaseModel]]:
     from pydocs_mcp.application.mcp_inputs import (
         ContextInput,
+        GlobInput,
+        GrepInput,
         OverviewInput,
+        ReadFileInput,
         ReferencesInput,
         SearchInput,
         SymbolInput,
@@ -333,6 +339,9 @@ def _tool_input_models() -> dict[str, type[pydantic.BaseModel]]:
         "get_context": ContextInput,
         "get_references": ReferencesInput,
         "get_why": WhyInput,
+        "grep": GrepInput,
+        "glob": GlobInput,
+        "read_file": ReadFileInput,
     }
 
 
@@ -360,7 +369,7 @@ def _registered_handlers() -> dict[str, object]:
 
 
 def test_tool_key_parity_three_ways() -> None:
-    """AC8: TOOL_DOCS == input-model map == registered handlers == the six."""
+    """AC8: TOOL_DOCS == input-model map == registered handlers == the nine."""
     from pydocs_mcp.application.tool_docs import TOOL_DOCS
 
     assert set(TOOL_DOCS) == set(_TOOL_NAMES)

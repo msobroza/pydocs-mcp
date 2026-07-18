@@ -108,6 +108,13 @@ class TestUsedIndexedTools:
         transcript = _Transcript(tool_calls=(_Call("Bash"), _Call("WebSearch")))
         assert not evaluate_gate(_check("used_indexed_tools"), _task(), transcript)
 
+    def test_filesystem_tools_count_as_indexed(self) -> None:
+        # Contract §1: grep/glob/read_file joined the task-shaped surface in
+        # 0.6.0 — a run that greps the indexed corpus IS grounded tool use.
+        for name in ("grep", "glob", "read_file"):
+            transcript = _Transcript(tool_calls=(_Call(name),))
+            assert evaluate_gate(_check("used_indexed_tools"), _task(), transcript), name
+
     def test_threshold_override(self) -> None:
         transcript = _Transcript(tool_calls=(_Call("get_symbol"),))
         assert not evaluate_gate(_check("used_indexed_tools", {"n": 2}), _task(), transcript)

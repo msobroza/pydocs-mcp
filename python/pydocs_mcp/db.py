@@ -15,7 +15,12 @@ log = logging.getLogger("pydocs-mcp")
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 14  # v14: additive — decision_records table (mined
+SCHEMA_VERSION = 15  # v15: additive — chunks.{source_path,start_line,end_line}
+# (the originating file + 1-indexed line span the DocumentNode already
+# computes; persisted so tool responses can cite path:start-end). NULL until
+# the next index re-extracts; NOT part of the chunk content_hash, so NO
+# re-embed is forced.
+# v14: additive — decision_records table (mined
 # architectural decisions, spec §D8-§D10) + chunks.decision_id
 # (searchable-projection backlink) + index_metadata.{activity_summary,
 # overview_summary} (JSON aggregates for the overview card, §D17). NULL/empty
@@ -56,7 +61,10 @@ _DDL = """
         content_hash TEXT,
         qualified_name TEXT,
         embedded INTEGER NOT NULL DEFAULT 0,
-        decision_id INTEGER
+        decision_id INTEGER,
+        source_path TEXT,
+        start_line INTEGER,
+        end_line INTEGER
     );
     CREATE VIRTUAL TABLE chunks_fts USING fts5(
         title, text, package,
@@ -414,6 +422,26 @@ def _apply_v14_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "index_metadata", "overview_summary TEXT")
 
 
+def _apply_v15_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v15 shape — chunk source spans.
+
+    Adds ``chunks.source_path`` / ``start_line`` / ``end_line`` — the
+    originating file and 1-indexed line span the extraction layer already
+    computes on every ``DocumentNode`` but previously dropped at the SQLite
+    boundary. Nullable: legacy rows read back NULL until the next reindex
+    of their package, where the diff-merge backfills spans even on
+    hash-matched kept rows (``ChunkStore.refresh_span_metadata`` — spans
+    are outside the content hash, so the diff alone would never touch
+    them). NOT part of ``compute_chunk_content_hash``, so the migration
+    forces NO re-embed. ``_try_add_column`` swallows duplicate-column
+    errors so the sweep is safe to re-run as a v15-on-open drift-recovery
+    pass.
+    """
+    _try_add_column(conn, "chunks", "source_path TEXT")
+    _try_add_column(conn, "chunks", "start_line INTEGER")
+    _try_add_column(conn, "chunks", "end_line INTEGER")
+
+
 def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
     """Run the version-appropriate additive sweeps and stamp ``user_version``.
 
@@ -423,7 +451,7 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
     back to a full rebuild so the open NEVER crash-loops.
     """
     if current == SCHEMA_VERSION:
-        # v14 — re-run additive sweeps for drift recovery; data preserved.
+        # v15 — re-run additive sweeps for drift recovery; data preserved.
         # (No embedded-flag backfill here: flags written under a selective
         # embed policy must survive reopen.)
         _apply_v3_additions(conn)
@@ -436,15 +464,17 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
         _apply_v12_additions(conn)
         _apply_v13_additions(conn)
         _apply_v14_additions(conn)
-    elif current in (12, 13):
-        # v12/v13 → v14 — additive git_head (v13, no-op on v13 DBs) + the
-        # decision layer (v14). The FULL sweep chain runs (not just the tail):
-        # each sweep is idempotent, and the early ones heal structural drift
-        # in place — a v13-stamped DB missing ``index_metadata`` gets the
-        # table recreated by the v11 sweep instead of crash-looping on the
-        # v13/v14 ALTERs ("no such table" raised before the version stamp,
-        # so every subsequent open died identically). NO embedded backfill:
-        # v12/v13 flags may have been written under a selective embed policy.
+        _apply_v15_additions(conn)
+    elif current in (12, 13, 14):
+        # v12/v13/v14 → v15 — additive git_head (v13), decision layer (v14),
+        # chunk source spans (v15); each a no-op on DBs that already carry it.
+        # The FULL sweep chain runs (not just the tail): each sweep is
+        # idempotent, and the early ones heal structural drift in place — a
+        # v13-stamped DB missing ``index_metadata`` gets the table recreated
+        # by the v11 sweep instead of crash-looping on the later ALTERs
+        # ("no such table" raised before the version stamp, so every
+        # subsequent open died identically). NO embedded backfill:
+        # v12+ flags may have been written under a selective embed policy.
         _apply_v3_additions(conn)
         _apply_v4_additions(conn)
         _apply_v5_additions(conn)
@@ -455,6 +485,7 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
         _apply_v12_additions(conn)
         _apply_v13_additions(conn)
         _apply_v14_additions(conn)
+        _apply_v15_additions(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (9, 10, 11):
         # v9/v10/v11 → v12 — purely additive: create node_scores (v10) +
@@ -468,6 +499,7 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
         _apply_v12_additions(conn)
         _apply_v13_additions(conn)
         _apply_v14_additions(conn)
+        _apply_v15_additions(conn)
         conn.execute("UPDATE chunks SET embedded = 1")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (2, 3, 4, 6, 7, 8):
@@ -486,6 +518,7 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
         _apply_v12_additions(conn)
         _apply_v13_additions(conn)
         _apply_v14_additions(conn)
+        _apply_v15_additions(conn)
         conn.execute("UPDATE chunks SET embedded = 1")
         # v9 carries no structural change. The extraction enrichment added the
         # FULL multi-line extra_metadata["signature"] header + decorator call
@@ -547,7 +580,7 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     - v9 already: re-run v3..v7 sweeps (additive, idempotent; drift recovery),
       data preserved.
-    - v12 / v13 → v14: the full additive sweep chain (idempotent), so
+    - v12 / v13 / v14 → v15: the full additive sweep chain (idempotent), so
       structural drift in older tables is healed in place; data preserved,
       NO ``embedded`` backfill (selective-policy flags survive).
     - v2 / v3 / v4 / v6 / v7 / v8 → v9: walk all forward (additive, idempotent)
