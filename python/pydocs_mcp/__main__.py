@@ -482,6 +482,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_query_flags(p_read)
 
+    # ``turn0-context`` is PRODUCT CLI, not an MCP tool — the nine-tool
+    # surface stays frozen (ADR 0008 §Decision 5.ii): external harnesses
+    # compose the printed pack into their own prompts. Corpus selectors only;
+    # the budget and the injection flag are YAML (``serve.turn0_context.*``),
+    # never CLI flags.
+    p_turn0 = sub.add_parser(
+        "turn0-context",
+        help="Print the turn-0 context pack (marker + preamble + overview card "
+        "+ version inventory)",
+        description=(
+            "Build and print the deterministic turn-0 context pack a harness "
+            "injects at conversation start: a fixed harness-injected marker "
+            "line, the TURN0_PREAMBLE framing prose, the same overview card "
+            "get_overview serves, and the installed-package version inventory "
+            "(name + version per line). The token budget and trim order come "
+            "from YAML (serve.turn0_context.budget_tokens); the card is "
+            "trimmed before the inventory and truncation is noted."
+        ),
+    )
+    p_turn0.add_argument("package", nargs="?", default="")
+    _add_query_flags(p_turn0)
+
     sp_lookup = sub.add_parser(
         "lookup",
         help="[deprecated] Alias for symbol/refs/context — use those directly",
@@ -896,15 +918,18 @@ def _query_db_path(args: argparse.Namespace) -> Path | None:
     return _project_and_db(args)[1]
 
 
-def _build_cli_tools(args: argparse.Namespace):
-    """Build the ``ToolRouter`` for a query subcommand (the CLI composition root).
+def _build_cli_services(args: argparse.Namespace):
+    """Build ``(ToolRouter, per-project services, loaded AppConfig)`` for a
+    query subcommand (the CLI composition root).
 
     Every task-shaped subcommand loads config + configures the input-model slots
     + builds routers identically — ``surface="cli"`` picks the CLI pointer syntax
     the shared envelope resolves to. Collapsed into one helper so each ``_run_*``
     runner stays a small adapter (build tools → construct its input model → print)
     and they can't drift on how they select / load databases (``--project-dir``
-    single db vs ``--workspace`` / ``--db`` read-only multi-repo).
+    single db vs ``--workspace`` / ``--db`` read-only multi-repo). The richer
+    return exists for ``_run_turn0_context``, which needs a project's service
+    set + the YAML budget, not a router method.
     """
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import AppConfig
@@ -912,13 +937,19 @@ def _build_cli_tools(args: argparse.Namespace):
 
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     configure_from_app_config(config)
-    tools, _svcs = build_routers(
+    tools, services = build_routers(
         config,
         db_path=_query_db_path(args),
         workspace=args.workspace,
         db_paths=args.db_paths,
         surface="cli",
     )
+    return tools, services, config
+
+
+def _build_cli_tools(args: argparse.Namespace):
+    """The ``ToolRouter`` for a query subcommand (see ``_build_cli_services``)."""
+    tools, _services, _config = _build_cli_services(args)
     return tools
 
 
@@ -954,6 +985,30 @@ async def _run_overview(args: argparse.Namespace) -> None:
     tools = _build_cli_tools(args)
     payload = OverviewInput(package=args.package, project=args.project_scope)
     print((await tools.get_overview(payload)).text)
+
+
+async def _run_turn0_context(args: argparse.Namespace) -> None:
+    """Print the ADR 0008 turn-0 context pack (product CLI, not an MCP tool).
+
+    Reuses the SAME per-project ``OverviewService`` + ``uow_factory`` the
+    router's ``get_overview`` uses, so the printed pack cannot disagree with
+    what the tools would return one call later. Printed regardless of
+    ``serve.turn0_context.enabled`` — invoking the subcommand IS the
+    harness's explicit opt-in; the flag gates only the ask-your-docs
+    auto-injection channel.
+    """
+    from pydocs_mcp.application.multi_project_search import _select_service
+    from pydocs_mcp.application.turn0_context import build_turn0_context
+
+    _tools, services, config = _build_cli_services(args)
+    svc = _select_service(services, args.project_scope) if args.project_scope else services[0]
+    pack = await build_turn0_context(
+        uow_factory=svc.overview.uow_factory,
+        overview=svc.overview,
+        budget_tokens=config.serve.turn0_context.budget_tokens,
+        package=args.package,
+    )
+    print(pack)
 
 
 async def _run_symbol(args: argparse.Namespace) -> None:
@@ -1418,6 +1473,10 @@ def _cmd_read_file(args: argparse.Namespace) -> int:
     return _run_cmd(_run_read_file(args), verbose=args.verbose)
 
 
+def _cmd_turn0_context(args: argparse.Namespace) -> int:
+    return _run_cmd(_run_turn0_context(args), verbose=args.verbose)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────
 
 
@@ -1445,6 +1504,7 @@ _CMD_TABLE = {
     "grep": _cmd_grep,
     "glob": _cmd_glob,
     "read_file": _cmd_read_file,
+    "turn0-context": _cmd_turn0_context,
     "lookup": _cmd_lookup,
 }
 

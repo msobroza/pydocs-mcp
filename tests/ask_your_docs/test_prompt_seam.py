@@ -106,6 +106,66 @@ class TestSystemPromptSeam:
         assert captured[1] == _assemble_prompt("text_react", _CATALOG, None)
 
 
+class TestTurn0Injection:
+    """ADR 0008: the pack rides the ONE assembly site, gated on the serve flag."""
+
+    def test_none_keeps_assembly_byte_identical(self) -> None:
+        expected = f"{SYSTEM_PROMPT}\nIndexed projects and packages:\n{render_catalog(_CATALOG)}"
+        assert _assemble_prompt("text_react", _CATALOG, None, None) == expected
+
+    def test_pack_is_appended_after_the_catalog(self) -> None:
+        base = _assemble_prompt("text_react", _CATALOG, None)
+        assert _assemble_prompt("text_react", _CATALOG, None, "TURN0-PACK") == f"{base}\nTURN0-PACK"
+
+    def test_build_agent_threads_the_gated_pack(self, monkeypatch) -> None:
+        """build_agent asks ``turn0_context_for_workspace`` once; ``None``
+        (flag off) leaves the assembled prompt byte-identical, a pack string
+        is appended verbatim — asserted at the graph-builder boundary."""
+        from pydocs_mcp.ask_your_docs import agent as agent_mod
+        from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+
+        class _FakeMcpClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def get_tools(self):
+                return []
+
+        captured: list[str] = []
+
+        def _capture_build(name, *, llm, tools, prompt, capabilities, config, model):
+            captured.append(prompt)
+            return "GRAPH"
+
+        monkeypatch.setattr(agent_mod, "MultiServerMCPClient", _FakeMcpClient)
+        monkeypatch.setattr(agent_mod, "_build_architecture", _capture_build)
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        capabilities = ModelCapabilities(multimodal=False, source="override")
+
+        async def _build() -> None:
+            await build_agent(
+                "/tmp/ws",
+                "m",
+                catalog=_CATALOG,
+                architecture="text_react",
+                capabilities=capabilities,
+            )
+
+        async def _pack_on(workspace, config_path):
+            return "TURN0-PACK"
+
+        async def _pack_off(workspace, config_path):
+            return None
+
+        monkeypatch.setattr(agent_mod, "turn0_context_for_workspace", _pack_on)
+        asyncio.run(_build())
+        monkeypatch.setattr(agent_mod, "turn0_context_for_workspace", _pack_off)
+        asyncio.run(_build())
+        base = _assemble_prompt("text_react", _CATALOG, None)
+        assert captured[0] == f"{base}\nTURN0-PACK"
+        assert captured[1] == base
+
+
 class TestRewriteSeam:
     def _received(self, fake: FakeLlm) -> str:
         (call,) = fake.calls

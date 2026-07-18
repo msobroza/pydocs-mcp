@@ -671,6 +671,25 @@ class WatchConfig(BaseModel):
         return self
 
 
+class Turn0ContextConfig(BaseModel):
+    """Turn-0 context pack (ADR 0008): the harness-injected orientation block.
+
+    Deployment knobs, NOT MCP params (CLAUDE.md §"MCP API surface vs YAML
+    configuration"). ``enabled`` gates the ask-your-docs prompt-assembly
+    injection — default OFF, so prompt assembly stays byte-identical until
+    the ablation phase flips it. ``budget_tokens`` caps the pack in REAL
+    tokens (``model_budget.count_tokens``): a harness-facing hard cap must
+    not repeat the documented ~2x chars/4 under-count failure
+    (``model_budget.py`` module docstring). Under pressure the overview card
+    is trimmed before the version inventory.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    budget_tokens: int = Field(default=2000, ge=1)
+
+
 class ServeConfig(BaseModel):
     """Namespace for ``serve``-command tunables (parity with ``search`` /
     ``reference_graph``); future serve-side knobs (HTTP transport options,
@@ -688,6 +707,7 @@ class ServeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     watch: WatchConfig = Field(default_factory=WatchConfig)
+    turn0_context: Turn0ContextConfig = Field(default_factory=Turn0ContextConfig)
     # str (not Path) so the YAML/env round-trip stays plain text; Path
     # resolution (+ ~ expansion) and origin naming happen in
     # ``application.description_override``.

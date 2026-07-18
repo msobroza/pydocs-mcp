@@ -197,6 +197,15 @@ serve:
   # fallback. Precedence: --descriptions flag >
   # PYDOCS_SERVE__DESCRIPTIONS_PATH env var > this key > packaged.
   descriptions_path: null
+  # Turn-0 context pack (ADR 0008): opt-in injection of the overview card +
+  # installed-package version inventory at conversation start. `enabled`
+  # gates the ask-your-docs prompt-assembly channel (default off — flipping
+  # it is the ablation phase's decision); external harnesses call
+  # `pydocs-mcp turn0-context` explicitly. `budget_tokens` is a hard cap in
+  # REAL tokens (tiktoken); the card trims before the inventory.
+  turn0_context:
+    enabled: false
+    budget_tokens: 2000
   watch:
     enabled: false
     debounce_ms: 500
