@@ -11,6 +11,7 @@ We do NOT exec the benchmark files — they import ``pandas``/``httpx``/
 ``rich`` which aren't installed in the test job. AST-level resolution is
 surgical: it catches stale paths + missing attributes, nothing else.
 """
+
 from __future__ import annotations
 
 import ast
@@ -18,7 +19,14 @@ import importlib
 import pathlib
 import sys
 
-BENCH_DIR = pathlib.Path(__file__).resolve().parent.parent / "benchmarks" / "benchmarks"
+# The eval code lives in two places since the pydocs-mcp-eval repackaging:
+# operator scripts and the installable package. The old benchmarks/benchmarks/
+# location is long gone — scanning it made this gate vacuous (0 files).
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+BENCH_DIRS = (
+    _REPO_ROOT / "benchmarks" / "scripts",
+    _REPO_ROOT / "benchmarks" / "src" / "pydocs_eval",
+)
 
 
 def collect_pydocs_imports(py: pathlib.Path) -> list[tuple[str, str | None]]:
@@ -26,7 +34,11 @@ def collect_pydocs_imports(py: pathlib.Path) -> list[tuple[str, str | None]]:
     out: list[tuple[str, str | None]] = []
     tree = ast.parse(py.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("pydocs_mcp"):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module.startswith("pydocs_mcp")
+        ):
             for alias in node.names:
                 out.append((node.module, alias.name))
         elif isinstance(node, ast.Import):
@@ -38,23 +50,47 @@ def collect_pydocs_imports(py: pathlib.Path) -> list[tuple[str, str | None]]:
 
 def main() -> int:
     failed: list[str] = []
-    files = sorted(BENCH_DIR.glob("*.py"))
+    checked = 0
+    skipped = 0
+    files = sorted({py for d in BENCH_DIRS for py in d.rglob("*.py")})
     for py in files:
+        rel = py.relative_to(_REPO_ROOT)
         for module, attr in collect_pydocs_imports(py):
+            checked += 1
             try:
                 mod = importlib.import_module(module)
-            except Exception as exc:  # noqa: BLE001 — surfacing to operator
-                failed.append(f"{py.name}: import {module!r}: {exc}")
+            except ModuleNotFoundError as exc:
+                # A missing THIRD-PARTY module is an environment fact (optional
+                # extras like [ask-your-docs] are absent in the CI test job by
+                # design), not import staleness. A missing pydocs_mcp.* module
+                # is exactly the drift this gate exists to catch.
+                if exc.name and not exc.name.startswith("pydocs_mcp"):
+                    skipped += 1
+                    continue
+                failed.append(f"{rel}: import {module!r}: {exc}")
+                continue
+            except Exception as exc:  # broad on purpose — surfacing to operator
+                failed.append(f"{rel}: import {module!r}: {exc}")
                 continue
             if attr is not None and not hasattr(mod, attr):
-                failed.append(f"{py.name}: {module}.{attr} missing")
+                failed.append(f"{rel}: {module}.{attr} missing")
 
     if failed:
         print("Stale benchmark imports detected:", file=sys.stderr)
         for line in failed:
             print(f"  - {line}", file=sys.stderr)
         return 1
-    print(f"verified pydocs_mcp imports in {len(files)} benchmark files")
+    if checked == 0:
+        # The gate scanned nothing — that is a failure of the gate itself, not
+        # a pass. This exact hole existed once (dead benchmarks/benchmarks dir).
+        print(
+            f"vacuous gate: 0 pydocs_mcp imports found under {len(files)} files — check BENCH_DIRS",
+            file=sys.stderr,
+        )
+        return 1
+    note = f" ({skipped} skipped: optional third-party deps absent)" if skipped else ""
+    verified = checked - skipped
+    print(f"verified {verified} pydocs_mcp imports across {len(files)} benchmark files{note}")
     return 0
 
 
