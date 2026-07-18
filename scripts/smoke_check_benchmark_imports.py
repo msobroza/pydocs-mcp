@@ -11,6 +11,7 @@ We do NOT exec the benchmark files — they import ``pandas``/``httpx``/
 ``rich`` which aren't installed in the test job. AST-level resolution is
 surgical: it catches stale paths + missing attributes, nothing else.
 """
+
 from __future__ import annotations
 
 import ast
@@ -26,7 +27,11 @@ def collect_pydocs_imports(py: pathlib.Path) -> list[tuple[str, str | None]]:
     out: list[tuple[str, str | None]] = []
     tree = ast.parse(py.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("pydocs_mcp"):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module.startswith("pydocs_mcp")
+        ):
             for alias in node.names:
                 out.append((node.module, alias.name))
         elif isinstance(node, ast.Import):
@@ -43,7 +48,7 @@ def main() -> int:
         for module, attr in collect_pydocs_imports(py):
             try:
                 mod = importlib.import_module(module)
-            except Exception as exc:  # noqa: BLE001 — surfacing to operator
+            except Exception as exc:  # broad on purpose — surfacing to operator
                 failed.append(f"{py.name}: import {module!r}: {exc}")
                 continue
             if attr is not None and not hasattr(mod, attr):

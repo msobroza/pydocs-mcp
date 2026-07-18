@@ -108,10 +108,10 @@ jobs:
         run: uv sync --frozen --group dev
 
       - name: Lint
-        run: uv run ruff check python/ tests/ benchmarks/
+        run: uv run ruff check python/ tests/ benchmarks/ scripts/
 
       - name: Format check
-        run: uv run ruff format --check python/ tests/ benchmarks/
+        run: uv run ruff format --check python/ tests/ benchmarks/ scripts/
 
       # WHY: 74% of files in python/pydocs_mcp/ carry type hints. With py.typed
       # shipped, mypy must verify the annotations are coherent for downstream

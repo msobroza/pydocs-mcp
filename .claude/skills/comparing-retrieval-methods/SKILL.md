@@ -36,7 +36,7 @@ For **quality** comparisons a warm bench cache is expected and correct — leave
 |---|---|---|
 | BM25 only | `repoqa_bm25.yaml` | |
 | Dense (default embedder) | `repoqa_dense.yaml` | FastEmbed bge-small |
-| Dense, best recorded | `repoqa_dense_f2llm330m.yaml` | `repoqa_dense_f2llm_330m.yaml` (underscore) is a near-duplicate differing only in `batch_size` — do not treat them as different methods |
+| Dense, best recorded | `repoqa_dense_f2llm330m.yaml` | The old `repoqa_dense_f2llm_330m.yaml` (underscore) near-duplicate was consolidated into this config — treat recorded results under either name as the same method |
 | Hybrid RRF | `repoqa_hybrid_rrf_k60.yaml` | k=60 is the default; k=30/100 recorded as equivalent |
 | Hybrid weighted (WSI) | `repoqa_hybrid_wsi_balanced.yaml` | `_bm25` / `_dense` variants shift the weights |
 | Late interaction | `repoqa_li.yaml` | needs `pip install -e ".[late-interaction]"` (~1–5 GB) |
@@ -61,11 +61,11 @@ For **quality** comparisons a warm bench cache is expected and correct — leave
 ## Reading the result
 
 - The GFM table prints to stdout and to `--report PATH`. One column per (system, config), one row per metric with 95% bootstrap CI.
-- Programmatic: parse `benchmarks/results/jsonl/{system}_{config-stem}_{dataset}_{ts}.jsonl` — take `_event=="metric"` lines with names ending `_mean` / `_ci_low` / `_ci_high`. Filenames are timestamped: pick the newest matching glob, the same way `ci_compare.py` does.
+- Programmatic: parse `benchmarks/results/jsonl/{system}_{config-stem}_{dataset}_{ts}.jsonl` — take `_event=="metric"` lines with names ending `_mean` / `_ci_low` / `_ci_high`. Filenames are timestamped: pick the newest matching glob, the same way `reporting/ci_compare.py` does.
 - Regression gate against a recorded baseline:
 
 ```bash
-PYTHONPATH=benchmarks/src python -m pydocs_eval.ci_compare \
+PYTHONPATH=benchmarks/src python -m pydocs_eval.reporting.ci_compare \
   --baseline benchmarks/baselines/repoqa_fixture_baseline.json \
   --current 'benchmarks/results/jsonl/*.jsonl' \
   --metric recall@10 --threshold 0.02
@@ -79,7 +79,7 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.ci_compare \
 | Reading `indexing_seconds` from a warm-cache run | Cache HITs record no indexing time. Take indexing timings only from a cold run (`--bench-cache off` or after `bench_cache_cli evict`). |
 | Calling a <2-needle delta a win on `small_test` | n=30 → one needle = 3.3 points; recall CIs are ±0.15 wide. Require non-overlapping CIs or a paired per-needle comparison from the per-task JSONL events; confirm on full `test`. |
 | Running dense sweeps on CPU with bare `--gpu` | onnxruntime silently falls back to CPU without torch's NVIDIA libs on `LD_LIBRARY_PATH`. Use `benchmarks/scripts/run_eval_gpu.sh`. CPU dense-indexing is 60–215 s/needle. |
-| Following the README's `scripts/run_repoqa.sh` | It does not exist. Invoke `python -m pydocs_eval.runner` directly. |
+| Looking for `run_repoqa.sh` under `benchmarks/scripts/` | It lives at the repo root — `scripts/run_repoqa.sh` — and is a thin forwarder that sets `PYTHONPATH` and execs `python -m pydocs_eval.runner`. |
 | Editing a corpus in place between cached runs | The bench cache does not detect in-place corpus edits — `evict` or `--bench-cache off` after editing. |
 | Trusting hybrid-LI results recorded before 2026-07-10 | Their overlays set ingestion under a dead `pipelines.ingestion` key, so fast-plaid was never populated — the LI branch scored nothing and those "hybrid LI" numbers are effectively BM25-only. Re-run; see benchmarks/EXPERIMENTS.md §Late-interaction conditions. |
 | Tree/LLM configs failing silently | They need `OPENAI_API_KEY` in the environment before the sweep starts. |

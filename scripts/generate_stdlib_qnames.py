@@ -15,9 +15,11 @@ Sub-PR follow-up to #5c. Honors CLAUDE.md §"MCP API surface vs YAML
 configuration" — the resulting JSON is shipped as a default; behavior is
 toggled by the YAML key `reference_graph.resolver.include_stdlib`.
 """
+
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import inspect
 import json
@@ -31,27 +33,91 @@ from pathlib import Path
 # `_`, `__build_class__`, exceptions, etc. that the resolver wouldn't help with.
 _BUILTINS_ALLOWLIST: tuple[str, ...] = (
     # Type constructors / casts
-    "bool", "int", "float", "str", "bytes", "bytearray", "complex",
-    "list", "tuple", "set", "frozenset", "dict",
-    "range", "slice", "type", "object", "memoryview",
+    "bool",
+    "int",
+    "float",
+    "str",
+    "bytes",
+    "bytearray",
+    "complex",
+    "list",
+    "tuple",
+    "set",
+    "frozenset",
+    "dict",
+    "range",
+    "slice",
+    "type",
+    "object",
+    "memoryview",
     # I/O
-    "print", "input", "open", "repr",
+    "print",
+    "input",
+    "open",
+    "repr",
     # Iteration
-    "iter", "next", "enumerate", "zip", "map", "filter", "sorted",
-    "reversed", "any", "all", "sum", "min", "max", "len",
+    "iter",
+    "next",
+    "enumerate",
+    "zip",
+    "map",
+    "filter",
+    "sorted",
+    "reversed",
+    "any",
+    "all",
+    "sum",
+    "min",
+    "max",
+    "len",
     # Reflection
-    "isinstance", "issubclass", "callable", "hasattr", "getattr",
-    "setattr", "delattr", "vars", "dir", "id", "hash",
+    "isinstance",
+    "issubclass",
+    "callable",
+    "hasattr",
+    "getattr",
+    "setattr",
+    "delattr",
+    "vars",
+    "dir",
+    "id",
+    "hash",
     # Numbers
-    "abs", "round", "divmod", "pow", "bin", "oct", "hex",
-    "ascii", "chr", "ord", "format",
+    "abs",
+    "round",
+    "divmod",
+    "pow",
+    "bin",
+    "oct",
+    "hex",
+    "ascii",
+    "chr",
+    "ord",
+    "format",
     # Misc
-    "globals", "locals", "exec", "eval", "compile", "help",
-    "staticmethod", "classmethod", "property", "super",
-    "Exception", "BaseException", "TypeError", "ValueError",
-    "KeyError", "IndexError", "AttributeError", "RuntimeError",
-    "NotImplementedError", "FileNotFoundError", "PermissionError",
-    "OSError", "IOError",
+    "globals",
+    "locals",
+    "exec",
+    "eval",
+    "compile",
+    "help",
+    "staticmethod",
+    "classmethod",
+    "property",
+    "super",
+    "Exception",
+    "BaseException",
+    "TypeError",
+    "ValueError",
+    "KeyError",
+    "IndexError",
+    "AttributeError",
+    "RuntimeError",
+    "NotImplementedError",
+    "FileNotFoundError",
+    "PermissionError",
+    "OSError",
+    "IOError",
 )
 
 
@@ -71,15 +137,49 @@ def _is_implementation_module(name: str) -> bool:
 # event loop, etc.) — we still want to add them as qnames so the resolver
 # can flag references to them, but we don't import them and don't walk
 # their members.
-_SIDE_EFFECT_MODULES: frozenset[str] = frozenset({
-    "this",          # prints the Zen of Python
-    "antigravity",   # opens a browser to xkcd
-    "__hello__",     # prints "Hello world!"
-    "__phello__",    # prints "Hello world!"
-    "idlelib",       # starts IDLE-related globals
-    "turtledemo",    # demo package with side-effecty imports
-    "tkinter",       # opens a display connection on some platforms
-})
+_SIDE_EFFECT_MODULES: frozenset[str] = frozenset(
+    {
+        "this",  # prints the Zen of Python
+        "antigravity",  # opens a browser to xkcd
+        "__hello__",  # prints "Hello world!"
+        "__phello__",  # prints "Hello world!"
+        "idlelib",  # starts IDLE-related globals
+        "turtledemo",  # demo package with side-effecty imports
+        "tkinter",  # opens a display connection on some platforms
+    }
+)
+
+
+def _is_callable_member(obj: object) -> bool:
+    """A member worth indexing as a qname: function, class, or method."""
+    return inspect.isfunction(obj) or inspect.isclass(obj) or inspect.ismethod(obj)
+
+
+def _is_defined_in(obj: object, owner_module: str) -> bool:
+    """``__module__`` filter: True when ``obj`` is defined in (or under)
+    ``owner_module`` — drops re-exports pulled in from other modules."""
+    obj_module = getattr(obj, "__module__", None) or ""
+    return obj_module == owner_module or obj_module.startswith(owner_module + ".")
+
+
+def _submodule_qnames(sub_public: str, sub_real: str, submodule: object) -> set[str]:
+    """Public members of an attached submodule, keyed under its *public* path.
+
+    ``sub_real`` is the submodule's ``__name__``; matching ``__module__``
+    against it (not the public path) keeps aliased submodules resolvable
+    (e.g., ``os.path`` aliases ``posixpath``, but its members carry
+    ``__module__ == "posixpath"`` — we still want them under ``os.path.*``).
+    """
+    qnames: set[str] = {sub_public}
+    # Some exotic modules raise from getmembers (lazy loaders, C extensions);
+    # keep whatever was collected before the failure.
+    with contextlib.suppress(Exception):
+        for sub_name, sub_obj in inspect.getmembers(submodule):
+            if not _public(sub_name):
+                continue
+            if _is_callable_member(sub_obj) and _is_defined_in(sub_obj, sub_real):
+                qnames.add(f"{sub_public}.{sub_name}")
+    return qnames
 
 
 def _module_qnames(module_name: str, *, visited: set[str] | None = None) -> set[str]:
@@ -104,45 +204,16 @@ def _module_qnames(module_name: str, *, visited: set[str] | None = None) -> set[
     qnames: set[str] = {module_name}
     try:
         mod = importlib.import_module(module_name)
-    except (ImportError, Exception):
+    except Exception:  # some stdlib modules fail to import on some platforms
         return qnames
 
     for name, obj in inspect.getmembers(mod):
         if not _public(name):
             continue
-
-        # Recurse into attached submodules (one level). The check
-        # `obj.__name__ == f"{module_name}.{name}"` filters out aliases
-        # (e.g., `os.path` aliases `posixpath`, but its __name__ is
-        # `posixpath` — we still want it under `os.path`).
         if inspect.ismodule(obj):
             sub_real = getattr(obj, "__name__", "") or ""
-            sub_public = f"{module_name}.{name}"
-            qnames.add(sub_public)
-            # Pull the submodule's public members in under the *public*
-            # path. Re-key __module__ matches against the real name.
-            try:
-                for sub_name, sub_obj in inspect.getmembers(obj):
-                    if not _public(sub_name):
-                        continue
-                    if not (
-                        inspect.isfunction(sub_obj)
-                        or inspect.isclass(sub_obj)
-                        or inspect.ismethod(sub_obj)
-                    ):
-                        continue
-                    obj_mod = getattr(sub_obj, "__module__", None) or ""
-                    if obj_mod == sub_real or obj_mod.startswith(sub_real + "."):
-                        qnames.add(f"{sub_public}.{sub_name}")
-            except Exception:
-                pass
-            continue
-
-        if not (inspect.isfunction(obj) or inspect.isclass(obj) or inspect.ismethod(obj)):
-            continue
-        # __module__ filter: skip re-exports.
-        obj_module = getattr(obj, "__module__", None) or ""
-        if obj_module == module_name or obj_module.startswith(module_name + "."):
+            qnames.update(_submodule_qnames(f"{module_name}.{name}", sub_real, obj))
+        elif _is_callable_member(obj) and _is_defined_in(obj, module_name):
             qnames.add(f"{module_name}.{name}")
     return qnames
 
@@ -157,6 +228,7 @@ def _builtins_qnames() -> set[str]:
     """
     out: set[str] = set()
     import builtins
+
     for name in _BUILTINS_ALLOWLIST:
         if hasattr(builtins, name):
             out.add(name)
