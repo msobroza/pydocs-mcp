@@ -218,6 +218,19 @@ serve:
       - "**/.pytest_cache/**"
       - "**/*.pyc"
 
+# Phase 2 trace capture (ADR 0009/0010) — the server-side tool-call trace
+# recorder consumed by the eval harness. Default OFF: with `enabled: false`
+# the serve path is byte-identical to an untraced server. When enabled, one
+# JSONL file per trajectory lands under `<dir>/<trajectory_id>/` plus a
+# shared content-addressed `<dir>/blobs/` store. The per-rollout correlation
+# id is env-only by design — set PYDOCS_TRACE__TRAJECTORY_ID (never a YAML
+# key: a static id would make every rollout collide; the trace-open id-reuse
+# guard hard-errors on collision). Enabling without a trajectory id or dir
+# is a hard startup error — correlation failures never degrade silently.
+trace:
+  enabled: false
+  dir: null
+
 # Embedding + vector-quantization (spec §5.10).
 embedding:
   provider:    fastembed

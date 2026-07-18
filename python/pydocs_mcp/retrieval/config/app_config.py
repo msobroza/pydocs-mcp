@@ -42,6 +42,7 @@ from pydocs_mcp.retrieval.config.models import (
     SearchConfig,
     ServeConfig,
     SymbolSourceConfig,
+    TraceConfig,
 )
 
 # ── Tunable user-config path override ───────────────────────────────────
@@ -173,6 +174,12 @@ class AppConfig(BaseSettings):
     # which agent architecture answers a question is A/B-testable behavior.
     # Light pydantic; the extra's heavy deps never load through this field.
     ask_your_docs: AskYourDocsConfig = Field(default_factory=AskYourDocsConfig)
+    # Phase 2 trace capture (ADR 0009): the server-side trace recorder's
+    # enabled/dir knobs; trajectory_id is env-only by documentation
+    # (PYDOCS_TRACE__TRAJECTORY_ID). Per CLAUDE.md §"MCP API surface vs YAML
+    # configuration": capture is a deployment-time toggle, NOT an MCP tool
+    # param — the nine task-shaped tools stay fixed.
+    trace: TraceConfig = Field(default_factory=TraceConfig)
     # Filesystem-tool bounds (tool-contracts.md §3.7-3.9): YAML-wired
     # defaults + ceiling for grep/glob/read_file entry caps. Per CLAUDE.md
     # §"MCP API surface vs YAML configuration": deployment-time output
