@@ -1,4 +1,4 @@
-"""ADR 0008 agent-prompt injection: ``build_turn0_pack_for_agent_prompt`` (core-only imports).
+"""ADR 0008 agent-prompt injection: ``build_session_start_context_for_agent_prompt`` (core-only imports).
 
 The helper is deliberately langgraph-free so the flag gate + pack build are
 testable without the ``[ask-your-docs]`` extra; ``agent.build_agent`` calls it
@@ -14,7 +14,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from pydocs_mcp.ask_your_docs.turn0_prompt_injection import build_turn0_pack_for_agent_prompt
+from pydocs_mcp.ask_your_docs.session_start_injection import (
+    build_session_start_context_for_agent_prompt,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -34,18 +36,18 @@ def restore_tool_docs():
 
     saved_docs = dict(tool_docs.TOOL_DOCS)
     saved_instructions = tool_docs.SERVER_INSTRUCTIONS
-    saved_preamble = tool_docs.TURN0_PREAMBLE
+    saved_preamble = tool_docs.SESSION_START_PREAMBLE
     yield
     tool_docs.TOOL_DOCS.clear()
     tool_docs.TOOL_DOCS.update(saved_docs)
     tool_docs.SERVER_INSTRUCTIONS = saved_instructions
-    tool_docs.TURN0_PREAMBLE = saved_preamble
+    tool_docs.SESSION_START_PREAMBLE = saved_preamble
 
 
 def _enabled_config(tmp_path: Path, budget_tokens: int = 777) -> str:
     overlay = tmp_path / "pydocs-mcp.yaml"
     overlay.write_text(
-        f"serve:\n  turn0_context:\n    enabled: true\n    budget_tokens: {budget_tokens}\n"
+        f"serve:\n  session_start_context:\n    enabled: true\n    budget_tokens: {budget_tokens}\n"
     )
     return str(overlay)
 
@@ -55,7 +57,7 @@ def test_flag_off_returns_none_without_touching_the_workspace(tmp_path: Path) ->
     nonexistent workspace must not raise, proving byte-identical assembly
     costs nothing when off."""
     missing = tmp_path / "no-such-workspace"
-    assert asyncio.run(build_turn0_pack_for_agent_prompt(str(missing), None)) is None
+    assert asyncio.run(build_session_start_context_for_agent_prompt(str(missing), None)) is None
 
 
 def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatch) -> None:
@@ -95,10 +97,12 @@ def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatc
         "pydocs_mcp.storage.factories.build_sqlite_overview_service", _fake_overview
     )
     monkeypatch.setattr("pydocs_mcp.storage.factories.build_sqlite_uow_factory", _fake_uow_factory)
-    monkeypatch.setattr("pydocs_mcp.application.turn0_context.build_turn0_context", _fake_build)
+    monkeypatch.setattr(
+        "pydocs_mcp.application.session_start_context.build_session_start_context", _fake_build
+    )
 
     result = asyncio.run(
-        build_turn0_pack_for_agent_prompt("/any/workspace", _enabled_config(tmp_path))
+        build_session_start_context_for_agent_prompt("/any/workspace", _enabled_config(tmp_path))
     )
     assert result == "PACK"
     assert captured["overview_db"] == first.db_path
@@ -112,19 +116,21 @@ def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatc
 def test_yaml_descriptions_override_reaches_the_injected_pack(
     tmp_path: Path, monkeypatch, restore_tool_docs
 ) -> None:
-    """ADR 0006: the turn-0 consumer must apply the configured description
+    """ADR 0006: the session-start consumer must apply the configured description
     source (``serve.descriptions_path``) BEFORE building the pack, so an
-    overridden ``TURN0_PREAMBLE`` reaches the injected context — not the
+    overridden ``SESSION_START_PREAMBLE`` reaches the injected context — not the
     packaged one while the MCP server serves the override."""
     from pydocs_mcp.application import description_source as ds
     from pydocs_mcp.application import tool_docs
 
     sections = ds.load_packaged()
-    sections[ds.TURN0_PREAMBLE_HEADER] = "Overridden-turn0-preamble-sentinel."
+    sections[ds.SESSION_START_PREAMBLE_HEADER] = "Overridden-session-start-preamble-sentinel."
     doc = tmp_path / "override.md"
     doc.write_text(ds.render_sections(sections), encoding="utf-8")
     overlay = tmp_path / "pydocs-mcp.yaml"
-    overlay.write_text(f"serve:\n  turn0_context:\n    enabled: true\n  descriptions_path: {doc}\n")
+    overlay.write_text(
+        f"serve:\n  session_start_context:\n    enabled: true\n  descriptions_path: {doc}\n"
+    )
 
     first = SimpleNamespace(
         db_path=Path("/bundles/alpha.db"),
@@ -140,15 +146,19 @@ def test_yaml_descriptions_override_reaches_the_injected_pack(
     )
 
     async def _fake_build(*, uow_factory, overview, budget_tokens, package=""):
-        # The real pack embeds the LIVE preamble (turn0_context reads
-        # ``tool_docs.TURN0_PREAMBLE`` at call time) — return it so the
+        # The real pack embeds the LIVE preamble (session_start_context reads
+        # ``tool_docs.SESSION_START_PREAMBLE`` at call time) — return it so the
         # assertion sees exactly what injection would serve.
-        return tool_docs.TURN0_PREAMBLE
+        return tool_docs.SESSION_START_PREAMBLE
 
-    monkeypatch.setattr("pydocs_mcp.application.turn0_context.build_turn0_context", _fake_build)
+    monkeypatch.setattr(
+        "pydocs_mcp.application.session_start_context.build_session_start_context", _fake_build
+    )
 
-    result = asyncio.run(build_turn0_pack_for_agent_prompt("/any/workspace", str(overlay)))
-    assert result == "Overridden-turn0-preamble-sentinel."
+    result = asyncio.run(
+        build_session_start_context_for_agent_prompt("/any/workspace", str(overlay))
+    )
+    assert result == "Overridden-session-start-preamble-sentinel."
 
 
 def test_flag_on_with_missing_workspace_fails_loudly(tmp_path: Path) -> None:
@@ -157,4 +167,6 @@ def test_flag_on_with_missing_workspace_fails_loudly(tmp_path: Path) -> None:
     contaminate the ablation arms with an unmarked control."""
     missing = tmp_path / "no-such-workspace"
     with pytest.raises(FileNotFoundError):
-        asyncio.run(build_turn0_pack_for_agent_prompt(str(missing), _enabled_config(tmp_path)))
+        asyncio.run(
+            build_session_start_context_for_agent_prompt(str(missing), _enabled_config(tmp_path))
+        )

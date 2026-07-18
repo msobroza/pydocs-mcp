@@ -2,8 +2,8 @@
 
 ``TOOL_DOCS[name]`` becomes the MCP tool description AND (first line only) the
 CLI subcommand help text; ``SERVER_INSTRUCTIONS`` is the FastMCP server-level
-orientation; ``TURN0_PREAMBLE`` frames the injected turn-0 context pack when
-that feature is enabled (ADR 0008).
+orientation; ``SESSION_START_PREAMBLE`` frames the injected session-start context pack
+when that feature is enabled (ADR 0008).
 
 The text itself lives in the packaged ``defaults/descriptions.md`` (the
 externalized optimizable surface, ADR 0005); this module's attributes are
@@ -38,4 +38,4 @@ from pydocs_mcp.application.description_source import (
 )
 from pydocs_mcp.application.description_source import attribute_views, load_packaged
 
-SERVER_INSTRUCTIONS, TOOL_DOCS, TURN0_PREAMBLE = attribute_views(load_packaged())
+SERVER_INSTRUCTIONS, TOOL_DOCS, SESSION_START_PREAMBLE = attribute_views(load_packaged())

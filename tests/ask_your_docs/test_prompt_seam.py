@@ -106,7 +106,7 @@ class TestSystemPromptSeam:
         assert captured[1] == _assemble_prompt("text_react", _CATALOG, None)
 
 
-class TestTurn0Injection:
+class TestSessionStartInjection:
     """ADR 0008: the pack rides the ONE assembly site, gated on the serve flag."""
 
     def test_none_keeps_assembly_byte_identical(self) -> None:
@@ -115,10 +115,14 @@ class TestTurn0Injection:
 
     def test_pack_is_appended_after_the_catalog(self) -> None:
         base = _assemble_prompt("text_react", _CATALOG, None)
-        assert _assemble_prompt("text_react", _CATALOG, None, "TURN0-PACK") == f"{base}\nTURN0-PACK"
+        assert (
+            _assemble_prompt("text_react", _CATALOG, None, "SESSION-START-PACK")
+            == f"{base}\nSESSION-START-PACK"
+        )
 
     def test_build_agent_threads_the_gated_pack(self, monkeypatch) -> None:
-        """build_agent asks ``build_turn0_pack_for_agent_prompt`` once; ``None``
+        """build_agent asks ``build_session_start_context_for_agent_prompt`` once;
+        ``None``
         (flag off) leaves the assembled prompt byte-identical, a pack string
         is appended verbatim — asserted at the graph-builder boundary."""
         from pydocs_mcp.ask_your_docs import agent as agent_mod
@@ -152,17 +156,17 @@ class TestTurn0Injection:
             )
 
         async def _pack_on(workspace, config_path):
-            return "TURN0-PACK"
+            return "SESSION-START-PACK"
 
         async def _pack_off(workspace, config_path):
             return None
 
-        monkeypatch.setattr(agent_mod, "build_turn0_pack_for_agent_prompt", _pack_on)
+        monkeypatch.setattr(agent_mod, "build_session_start_context_for_agent_prompt", _pack_on)
         asyncio.run(_build())
-        monkeypatch.setattr(agent_mod, "build_turn0_pack_for_agent_prompt", _pack_off)
+        monkeypatch.setattr(agent_mod, "build_session_start_context_for_agent_prompt", _pack_off)
         asyncio.run(_build())
         base = _assemble_prompt("text_react", _CATALOG, None)
-        assert captured[0] == f"{base}\nTURN0-PACK"
+        assert captured[0] == f"{base}\nSESSION-START-PACK"
         assert captured[1] == base
 
 

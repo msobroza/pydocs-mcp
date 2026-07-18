@@ -1,4 +1,4 @@
-"""Turn-0 context pack builder (ADR 0008): marker + preamble + card + inventory.
+"""Session-start context pack builder (ADR 0008): marker + preamble + card + inventory.
 
 Pins the ADR's composition order, the wire-format marker constant, the
 card-before-inventory trim order under budget pressure, determinism under
@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import asyncio
 
-from pydocs_mcp.application import tool_docs, turn0_context
+from pydocs_mcp.application import session_start_context, tool_docs
 from pydocs_mcp.application.overview_service import OverviewService
-from pydocs_mcp.application.turn0_context import (
+from pydocs_mcp.application.session_start_context import (
     CARD_TRUNCATED_NOTE,
     INJECTED_CONTEXT_MARKER,
     INVENTORY_TRUNCATED_NOTE,
-    build_turn0_context,
+    build_session_start_context,
 )
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import Package, PackageOrigin
@@ -86,7 +86,7 @@ def _build_fixture(
 def _build_pack(budget_tokens: int, **fixture_kwargs) -> str:
     factory, overview = _build_fixture(**fixture_kwargs)
     return asyncio.run(
-        build_turn0_context(
+        build_session_start_context(
             uow_factory=factory,
             overview=overview,
             budget_tokens=budget_tokens,
@@ -105,7 +105,7 @@ class TestMarker:
         """ADR 0008: the Phase 2 attribution matcher does an EXACT match on
         this constant — rewording it is a cross-phase breaking change."""
         assert INJECTED_CONTEXT_MARKER == (
-            "[pydocs-mcp turn0-context: harness-injected at conversation start; "
+            "[pydocs-mcp session-start-context: harness-injected at session start; "
             "not model-retrieved]"
         )
 
@@ -121,7 +121,7 @@ class TestMarker:
 class TestComposition:
     def test_sections_present_and_ordered(self) -> None:
         pack = _build_pack(budget_tokens=10_000)
-        preamble_at = pack.index(tool_docs.TURN0_PREAMBLE)
+        preamble_at = pack.index(tool_docs.SESSION_START_PREAMBLE)
         card_at = pack.index(f"# Overview — {_PKG}")
         inventory_at = pack.index(_INVENTORY_HEADING)
         assert pack.index(INJECTED_CONTEXT_MARKER) == 0
@@ -138,10 +138,10 @@ class TestComposition:
         assert INVENTORY_TRUNCATED_NOTE not in pack
 
     def test_preamble_reads_the_live_tool_docs_attribute(self, monkeypatch) -> None:
-        """An apply_source override rebinding TURN0_PREAMBLE (ADR 0006) must
+        """An apply_source override rebinding SESSION_START_PREAMBLE (ADR 0006) must
         reach every later pack build — the builder reads the module attribute,
         never a from-import snapshot."""
-        monkeypatch.setattr(tool_docs, "TURN0_PREAMBLE", "OVERRIDDEN PREAMBLE.")
+        monkeypatch.setattr(tool_docs, "SESSION_START_PREAMBLE", "OVERRIDDEN PREAMBLE.")
         pack = _build_pack(budget_tokens=10_000)
         assert pack.splitlines()[1] == "OVERRIDDEN PREAMBLE."
 
@@ -149,10 +149,10 @@ class TestComposition:
         factory, overview = _build_fixture()
 
         async def _twice() -> tuple[str, str]:
-            first = await build_turn0_context(
+            first = await build_session_start_context(
                 uow_factory=factory, overview=overview, budget_tokens=500
             )
-            second = await build_turn0_context(
+            second = await build_session_start_context(
                 uow_factory=factory, overview=overview, budget_tokens=500
             )
             return first, second
@@ -192,7 +192,7 @@ class TestBudget:
         pack = _build_pack(budget_tokens=1)
         lines = pack.splitlines()
         assert lines[0] == INJECTED_CONTEXT_MARKER
-        assert tool_docs.TURN0_PREAMBLE in pack
+        assert tool_docs.SESSION_START_PREAMBLE in pack
         assert CARD_TRUNCATED_NOTE in pack
         assert INVENTORY_TRUNCATED_NOTE in pack
 
@@ -205,4 +205,4 @@ class TestBudget:
 
 
 def test_module_reexports_public_surface() -> None:
-    assert turn0_context.INJECTED_CONTEXT_MARKER is INJECTED_CONTEXT_MARKER
+    assert session_start_context.INJECTED_CONTEXT_MARKER is INJECTED_CONTEXT_MARKER

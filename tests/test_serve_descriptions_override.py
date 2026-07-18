@@ -51,12 +51,12 @@ def restore_tool_docs():
     in ``tests/application/test_description_loading.py``)."""
     saved_docs = dict(tool_docs.TOOL_DOCS)
     saved_instructions = tool_docs.SERVER_INSTRUCTIONS
-    saved_preamble = tool_docs.TURN0_PREAMBLE
+    saved_preamble = tool_docs.SESSION_START_PREAMBLE
     yield
     tool_docs.TOOL_DOCS.clear()
     tool_docs.TOOL_DOCS.update(saved_docs)
     tool_docs.SERVER_INSTRUCTIONS = saved_instructions
-    tool_docs.TURN0_PREAMBLE = saved_preamble
+    tool_docs.SESSION_START_PREAMBLE = saved_preamble
 
 
 def _write_overlay(path: Path, *, marker: str) -> Path:
@@ -369,11 +369,11 @@ def test_flag_beats_invalid_env_on_the_failure_path(monkeypatch, tmp_path: Path)
     assert mock_run.call_args.kwargs["descriptions_path"] == doc
 
 
-def test_turn0_context_cli_applies_yaml_descriptions_source(
+def test_session_start_context_cli_applies_yaml_descriptions_source(
     monkeypatch, tmp_path: Path, restore_tool_docs, capsys
 ) -> None:
-    """The ``turn0-context`` subcommand builds a pack embedding the LIVE
-    ``TURN0_PREAMBLE`` — it must apply the YAML ``serve.descriptions_path``
+    """The ``session-start-context`` subcommand builds a pack embedding the LIVE
+    ``SESSION_START_PREAMBLE`` — it must apply the YAML ``serve.descriptions_path``
     leg (``main()`` covers only the env leg) before building."""
     import argparse
     import asyncio
@@ -382,7 +382,7 @@ def test_turn0_context_cli_applies_yaml_descriptions_source(
     from pydocs_mcp import __main__ as cli
 
     sections = ds.load_packaged()
-    sections[ds.TURN0_PREAMBLE_HEADER] = "Cli-turn0-preamble-sentinel."
+    sections[ds.SESSION_START_PREAMBLE_HEADER] = "Cli-session-start-preamble-sentinel."
     doc = tmp_path / "override.md"
     doc.write_text(ds.render_sections(sections), encoding="utf-8")
     overlay = tmp_path / "pydocs-mcp.yaml"
@@ -393,13 +393,15 @@ def test_turn0_context_cli_applies_yaml_descriptions_source(
     monkeypatch.setattr(cli, "_build_cli_services", lambda args: (None, [svc], config))
 
     async def _fake_build(*, uow_factory, overview, budget_tokens, package=""):
-        return tool_docs.TURN0_PREAMBLE
+        return tool_docs.SESSION_START_PREAMBLE
 
-    monkeypatch.setattr("pydocs_mcp.application.turn0_context.build_turn0_context", _fake_build)
+    monkeypatch.setattr(
+        "pydocs_mcp.application.session_start_context.build_session_start_context", _fake_build
+    )
 
     args = argparse.Namespace(project_scope=None, package="")
-    asyncio.run(cli._run_turn0_context(args))
-    assert "Cli-turn0-preamble-sentinel." in capsys.readouterr().out
+    asyncio.run(cli._run_session_start_context(args))
+    assert "Cli-session-start-preamble-sentinel." in capsys.readouterr().out
 
 
 # ── MCP/CLI parity from the same applied source ────────────────────────────

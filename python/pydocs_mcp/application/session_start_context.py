@@ -1,11 +1,12 @@
-"""Turn-0 context pack builder (ADR 0008).
+"""Session-start context pack builder (ADR 0008; the phase spec calls this
+'turn-0 context injection').
 
-Composes the deterministic block a harness may inject at conversation start:
-a fixed harness-injected marker line, the optimizable ``TURN0_PREAMBLE``
+Composes the deterministic block a harness may inject at agent-session start:
+a fixed harness-injected marker line, the optimizable ``SESSION_START_PREAMBLE``
 prose from the description source (ADR 0005), the same §D17 overview card
 ``get_overview`` serves (same snapshot, same renderer), and the
 installed-package version inventory (``name version`` per row). Injection is
-default-off (``serve.turn0_context.enabled``); the budget is enforced in
+default-off (``serve.session_start_context.enabled``); the budget is enforced in
 REAL tokens via :func:`~pydocs_mcp.retrieval.llm_clients.model_budget.count_tokens`
 and, under pressure, the card is trimmed before the inventory — the
 inventory is the distinctive cheap part (the wrong-library-version failure
@@ -13,7 +14,7 @@ mode this project exists for).
 
 Usage::
 
-    pack = await build_turn0_context(
+    pack = await build_session_start_context(
         uow_factory=uow_factory, overview=overview_service, budget_tokens=2000
     )
 """
@@ -33,13 +34,15 @@ from pydocs_mcp.storage.protocols import UnitOfWork
 # rewording it is a cross-phase breaking change. Machinery, not optimizable
 # text; pinned byte-for-byte by test.
 INJECTED_CONTEXT_MARKER = (
-    "[pydocs-mcp turn0-context: harness-injected at conversation start; not model-retrieved]"
+    "[pydocs-mcp session-start-context: harness-injected at session start; not model-retrieved]"
 )
 
 # Truncation is NOTED, never silent (ADR 0008 §Decision 2) — the reader must
 # know the map/inventory it sees is a prefix, not the whole corpus.
-CARD_TRUNCATED_NOTE = "[turn0-context: overview card truncated to fit the token budget]"
-INVENTORY_TRUNCATED_NOTE = "[turn0-context: version inventory truncated to fit the token budget]"
+CARD_TRUNCATED_NOTE = "[session-start-context: overview card truncated to fit the token budget]"
+INVENTORY_TRUNCATED_NOTE = (
+    "[session-start-context: version inventory truncated to fit the token budget]"
+)
 
 _INVENTORY_HEADING = "## Installed packages"
 # count_tokens falls back to the o200k_base encoding for a model name
@@ -48,18 +51,18 @@ _INVENTORY_HEADING = "## Installed packages"
 _BUDGET_MODEL_NAME = ""
 
 
-async def build_turn0_context(
+async def build_session_start_context(
     *,
     uow_factory: Callable[[], UnitOfWork],
     overview: OverviewService,
     budget_tokens: int,
     package: str = "",
 ) -> str:
-    """Build the turn-0 pack: marker + preamble + overview card + inventory.
+    """Build the session-start pack: marker + preamble + overview card + inventory.
 
     Example::
 
-        pack = await build_turn0_context(
+        pack = await build_session_start_context(
             uow_factory=factory, overview=service, budget_tokens=2000
         )
         assert pack.splitlines()[0] == INJECTED_CONTEXT_MARKER
@@ -74,7 +77,7 @@ async def build_turn0_context(
     # Module-attribute read (never a from-import snapshot) so an
     # ``apply_source`` override rebinding the preamble (ADR 0006) reaches
     # every later pack build.
-    head = f"{INJECTED_CONTEXT_MARKER}\n{tool_docs.TURN0_PREAMBLE}"
+    head = f"{INJECTED_CONTEXT_MARKER}\n{tool_docs.SESSION_START_PREAMBLE}"
     return _fit_to_budget(head, card, rows, budget_tokens)
 
 

@@ -191,19 +191,19 @@ decisions:
 # would otherwise produce false-positive reindexes.
 serve:
   # Override document for the LLM-visible description surface (per-tool
-  # descriptions + server instructions + turn-0 preamble; ADR 0006).
+  # descriptions + server instructions + session-start preamble; ADR 0006).
   # null = the packaged defaults/descriptions.md. Explicitly naming a path
   # that is missing or invalid hard-fails startup — never a silent
   # fallback. Precedence: --descriptions flag >
   # PYDOCS_SERVE__DESCRIPTIONS_PATH env var > this key > packaged.
   descriptions_path: null
-  # Turn-0 context pack (ADR 0008): opt-in injection of the overview card +
-  # installed-package version inventory at conversation start. `enabled`
-  # gates the ask-your-docs prompt-assembly channel (default off — flipping
-  # it is the ablation phase's decision); external harnesses call
-  # `pydocs-mcp turn0-context` explicitly. `budget_tokens` is a hard cap in
-  # REAL tokens (tiktoken); the card trims before the inventory.
-  turn0_context:
+  # Session-start context pack (ADR 0008): opt-in injection of the overview
+  # card + installed-package version inventory at agent-session start.
+  # `enabled` gates the ask-your-docs prompt-assembly channel (default off —
+  # flipping it is the ablation phase's decision); external harnesses call
+  # `pydocs-mcp session-start-context` explicitly. `budget_tokens` is a hard
+  # cap in REAL tokens (tiktoken); the card trims before the inventory.
+  session_start_context:
     enabled: false
     budget_tokens: 2000
   watch:

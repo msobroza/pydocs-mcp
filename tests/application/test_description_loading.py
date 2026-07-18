@@ -37,17 +37,17 @@ def restore_tool_docs():
     """Snapshot + restore the module attributes around rebinding tests.
 
     ``apply_source`` mutates process-global state (``TOOL_DOCS`` in place,
-    ``SERVER_INSTRUCTIONS`` / ``TURN0_PREAMBLE`` by rebinding); without this
+    ``SERVER_INSTRUCTIONS`` / ``SESSION_START_PREAMBLE`` by rebinding); without this
     fixture one test's overlay would leak into every later test in the run.
     """
     saved_docs = dict(tool_docs.TOOL_DOCS)
     saved_instructions = tool_docs.SERVER_INSTRUCTIONS
-    saved_preamble = tool_docs.TURN0_PREAMBLE
+    saved_preamble = tool_docs.SESSION_START_PREAMBLE
     yield
     tool_docs.TOOL_DOCS.clear()
     tool_docs.TOOL_DOCS.update(saved_docs)
     tool_docs.SERVER_INSTRUCTIONS = saved_instructions
-    tool_docs.TURN0_PREAMBLE = saved_preamble
+    tool_docs.SESSION_START_PREAMBLE = saved_preamble
 
 
 def _packaged_sections() -> dict[str, str]:
@@ -88,18 +88,18 @@ def test_module_attributes_are_populated_from_packaged_document() -> None:
     # Phase 0 literal bytes), which the canonical document form cannot hold.
     instructions, tool_view, preamble = ds.attribute_views(_packaged_sections())
     assert instructions == tool_docs.SERVER_INSTRUCTIONS
-    assert preamble == tool_docs.TURN0_PREAMBLE
+    assert preamble == tool_docs.SESSION_START_PREAMBLE
     assert dict(tool_docs.TOOL_DOCS) == tool_view
     for name in ds.FROZEN_TOOL_NAMES:
         assert tool_docs.TOOL_DOCS[name].endswith("\n")
 
 
-def test_turn0_preamble_is_honest_framing_prose() -> None:
+def test_session_start_preamble_is_honest_framing_prose() -> None:
     # ADR 0008: the preamble frames an injected orientation block; it must be
     # substantive prose (not a stub) and must not claim tool-call provenance.
-    assert isinstance(tool_docs.TURN0_PREAMBLE, str)
-    assert len(tool_docs.TURN0_PREAMBLE) > 100
-    assert "pydocs-mcp" in tool_docs.TURN0_PREAMBLE
+    assert isinstance(tool_docs.SESSION_START_PREAMBLE, str)
+    assert len(tool_docs.SESSION_START_PREAMBLE) > 100
+    assert "pydocs-mcp" in tool_docs.SESSION_START_PREAMBLE
 
 
 def test_packaged_document_is_normalized() -> None:
@@ -116,7 +116,7 @@ def test_apply_source_rebinds_all_attributes(tmp_path: Path, restore_tool_docs) 
     sections = _packaged_sections()
     sections[ds.tool_section_header("grep")] += "\nOverlay marker sentence."
     sections[ds.SERVER_INSTRUCTIONS_HEADER] = "Overlaid instructions."
-    sections[ds.TURN0_PREAMBLE_HEADER] = "Overlaid preamble."
+    sections[ds.SESSION_START_PREAMBLE_HEADER] = "Overlaid preamble."
     path = _write_document(tmp_path / "overlay.md", sections)
 
     returned_hash = ds.apply_source(path)
@@ -125,7 +125,7 @@ def test_apply_source_rebinds_all_attributes(tmp_path: Path, restore_tool_docs) 
     # attribute_views); the overlay sentence sits right before it.
     assert tool_docs.TOOL_DOCS["grep"].endswith("Overlay marker sentence.\n")
     assert tool_docs.SERVER_INSTRUCTIONS == "Overlaid instructions."
-    assert tool_docs.TURN0_PREAMBLE == "Overlaid preamble."
+    assert tool_docs.SESSION_START_PREAMBLE == "Overlaid preamble."
     assert returned_hash == ds.current_artifact_hash()
 
 

@@ -671,8 +671,8 @@ class WatchConfig(BaseModel):
         return self
 
 
-class Turn0ContextConfig(BaseModel):
-    """Turn-0 context pack (ADR 0008): the harness-injected orientation block.
+class SessionStartContextConfig(BaseModel):
+    """Session-start context pack (ADR 0008): the harness-injected orientation block.
 
     Deployment knobs, NOT MCP params (CLAUDE.md §"MCP API surface vs YAML
     configuration"). ``enabled`` gates the ask-your-docs prompt-assembly
@@ -707,7 +707,9 @@ class ServeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     watch: WatchConfig = Field(default_factory=WatchConfig)
-    turn0_context: Turn0ContextConfig = Field(default_factory=Turn0ContextConfig)
+    session_start_context: SessionStartContextConfig = Field(
+        default_factory=SessionStartContextConfig
+    )
     # str (not Path) so the YAML/env round-trip stays plain text; Path
     # resolution (+ ~ expansion) and origin naming happen in
     # ``application.description_override``.

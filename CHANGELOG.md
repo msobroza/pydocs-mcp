@@ -39,7 +39,7 @@ removals — existing six-tool clients keep working unmodified.
   is a design-doc-level versioning event. Tool *descriptions* stay deliberately
   mutable (they are the substrate the description optimizer rewrites).
 - **Externalized description source** — every LLM-visible description string
-  (nine tool descriptions, server instructions, turn-0 preamble) now lives in
+  (nine tool descriptions, server instructions, session-start preamble) now lives in
   one packaged delimited document, `defaults/descriptions.md`, validated at
   load (closed section set, required markers, token budgets) and swappable per
   deployment: `pydocs-mcp serve . --descriptions PATH` >
@@ -60,16 +60,16 @@ removals — existing six-tool clients keep working unmodified.
   additive envelope field `meta.suggestion` on those three tools
   (`docs/tool-contracts.md` §2.3; rationale: `docs/adr/0007`). With a flag
   off, that rule's output is byte-identical to before.
-- **Turn-0 context pack** — an opt-in, deterministic context block for
-  conversation start: a fixed harness-injected marker line, the turn-0
-  preamble from the description source, the same overview card `get_overview`
-  serves, and an installed-package version inventory. Off by default
-  (`serve.turn0_context.enabled`); budget-capped in real tokens
-  (`serve.turn0_context.budget_tokens`, card trimmed before inventory,
-  truncation always noted). When enabled, the ask-your-docs agent injects it
-  into its prompt; the new `pydocs-mcp turn0-context` subcommand prints the
-  pack for external harnesses regardless of the flag (rationale:
-  `docs/adr/0008`).
+- **Session-start context pack** — an opt-in, deterministic context block for
+  agent-session start: a fixed harness-injected marker line, the
+  session-start preamble from the description source, the same overview card
+  `get_overview` serves, and an installed-package version inventory. Off by
+  default (`serve.session_start_context.enabled`); budget-capped in real
+  tokens (`serve.session_start_context.budget_tokens`, card trimmed before
+  inventory, truncation always noted). When enabled, the ask-your-docs agent
+  injects it into its prompt; the new `pydocs-mcp session-start-context`
+  subcommand prints the pack for external harnesses regardless of the flag
+  (rationale: `docs/adr/0008`).
 - **Chunk source spans persisted (schema v15)** — chunks now carry
   `source_path` / `start_line` / `end_line` through SQLite, so structured
   items cite exact file spans. Additive in-place migration; rows indexed

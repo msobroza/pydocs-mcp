@@ -4,7 +4,7 @@
 ``pydocs_mcp.application.description_source`` so the optimizer artifacts and
 the product description document can never drift grammars. Delegation is
 pinned via observable behavior, not identity checks: the UNION header regex
-(which knows the product-only ``TURN0_PREAMBLE`` key) and byte-identical
+(which knows the product-only ``SESSION_START_PREAMBLE`` key) and byte-identical
 round-trips between the shim and the product functions.
 """
 
@@ -19,14 +19,14 @@ from pydocs_eval.optimize.artifacts._delimited import (
 )
 
 
-def test_parse_promotes_product_only_turn0_header() -> None:
+def test_parse_promotes_product_only_session_start_header() -> None:
     # The union grammar lives in the product: a smuggled product-only header
-    # (TURN0_PREAMBLE) is promoted to a section — never silently kept as
+    # (SESSION_START_PREAMBLE) is promoted to a section — never silently kept as
     # content — so each artifact's closed allowed-set rejects it as a
     # collision instead of letting it ride along inside a description.
-    text = "=== SERVER_INSTRUCTIONS ===\nhi\n=== TURN0_PREAMBLE ===\nsmuggled\n"
+    text = "=== SERVER_INSTRUCTIONS ===\nhi\n=== SESSION_START_PREAMBLE ===\nsmuggled\n"
     sections = parse_delimited(text)
-    assert "TURN0_PREAMBLE" in sections
+    assert "SESSION_START_PREAMBLE" in sections
     assert find_header_collisions(sections, allowed=("SERVER_INSTRUCTIONS",)) != ()
 
 

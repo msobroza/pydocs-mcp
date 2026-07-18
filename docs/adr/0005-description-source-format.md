@@ -125,9 +125,9 @@ conventions reference only.**
    loaded via `importlib.resources`.
 2. **Sections (eleven, all required):** `=== SERVER_INSTRUCTIONS ===`; `=== TOOL: <name> ===`
    × 9, where `<name>` must be one of the nine frozen names from docs/tool-contracts.md §1;
-   and `=== TURN0_PREAMBLE ===` — the optimizable framing text for the turn-0 context feature
-   (sibling D4 ADR). TURN0_PREAMBLE is always required in the document but rendered only when
-   the turn-0 flag is on. Unknown section, missing section, or unknown tool name is a **hard
+   and `=== SESSION_START_PREAMBLE ===` — the optimizable framing text for the session-start
+   context feature (sibling D4 ADR). SESSION_START_PREAMBLE is always required in the
+   document but rendered only when the session-start-context flag is on. Unknown section, missing section, or unknown tool name is a **hard
    `ValidationError`** — section IDs derive from the frozen names, so a tool rename can never
    silently orphan a section.
 3. **Grammar moves into the product:** the render/parse/collision implementation relocates
@@ -199,7 +199,7 @@ drift structurally impossible.
 - **Normalization is a load-bearing invariant.** Render→parse is not byte-stable on first
   pass; every fingerprint consumer must hash the normalized surface — easy to break silently
   and therefore pinned by test.
-- **TURN0_PREAMBLE is mandatory for an off-by-default feature.** Every override document
+- **SESSION_START_PREAMBLE is mandatory for an off-by-default feature.** Every override document
   carries a section whose rendering is disabled by default — an authoring tax accepted so the
   section set stays fixed and validation unconditional.
 - **Transition-window dual source.** Until the sibling injection ADR (D2) populates the
@@ -217,11 +217,11 @@ All in this phase unless noted.
    the benchmarks module as a delegating import.
 2. Create `python/pydocs_mcp/defaults/descriptions.md`: seed v0 = current live
    `TOOL_DOCS` + `SERVER_INSTRUCTIONS` verbatim (fragments expanded once) + the new
-   `TURN0_PREAMBLE`; register as packaged data alongside
+   `SESSION_START_PREAMBLE`; register as packaged data alongside
    `python/pydocs_mcp/defaults/default_config.yaml`.
 3. Implement the validator in `description_source.py`: section-set equality against the nine
    frozen names of docs/tool-contracts.md §1 plus `SERVER_INSTRUCTIONS` and
-   `TURN0_PREAMBLE`; per-TOOL-section `REQUIRED_MARKERS` and token budgets via the constants
+   `SESSION_START_PREAMBLE`; per-TOOL-section `REQUIRED_MARKERS` and token budgets via the constants
    in application/tool_docs.py:14-23; hard `ValidationError` on any violation.
 4. CI golden tests: (i) packaged `descriptions.md` parses and validates; (ii)
    parse(render(x)) idempotence after one normalization pass, and fingerprints hash the

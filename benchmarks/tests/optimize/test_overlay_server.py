@@ -31,15 +31,15 @@ def _restore_tool_docs():
 
     ``serve_with_overlay`` re-binds ``td.TOOL_DOCS`` entries,
     ``td.SERVER_INSTRUCTIONS``, and (through the product ``apply_source``
-    loader) ``td.TURN0_PREAMBLE`` in place; without this, a valid-overlay
+    loader) ``td.SESSION_START_PREAMBLE`` in place; without this, a valid-overlay
     test would leak its injected text into the byte-identical-noop test.
     """
-    before = (dict(td.TOOL_DOCS), td.SERVER_INSTRUCTIONS, td.TURN0_PREAMBLE)
+    before = (dict(td.TOOL_DOCS), td.SERVER_INSTRUCTIONS, td.SESSION_START_PREAMBLE)
     yield
     td.TOOL_DOCS.clear()
     td.TOOL_DOCS.update(before[0])
     td.SERVER_INSTRUCTIONS = before[1]
-    td.TURN0_PREAMBLE = before[2]
+    td.SESSION_START_PREAMBLE = before[2]
 
 
 def _valid_overlay_with(*, get_why: str) -> str:
@@ -114,17 +114,17 @@ def test_delegates_through_shared_db_resolution(monkeypatch, tmp_path) -> None:
     assert captured["db_path"] == expected
 
 
-def test_overlay_preserves_live_turn0_preamble(monkeypatch, tmp_path) -> None:
+def test_overlay_preserves_live_session_start_preamble(monkeypatch, tmp_path) -> None:
     # The overlay optimizes only the tool_docs surface, but the product
     # loader (apply_source) validates the FULL canonical document — the
-    # wrapper must carry the live TURN0_PREAMBLE through unchanged rather
+    # wrapper must carry the live SESSION_START_PREAMBLE through unchanged rather
     # than fail on the missing section or blank it.
     monkeypatch.setattr("pydocs_mcp.server.run", lambda **kw: None)
-    before = td.TURN0_PREAMBLE
+    before = td.SESSION_START_PREAMBLE
     overlay = tmp_path / "overlay.txt"
     overlay.write_text(_valid_overlay_with(get_why="Explains rationale. USE WHEN ..."))
     serve_with_overlay(project=tmp_path, overlay=overlay)
-    assert before == td.TURN0_PREAMBLE
+    assert before == td.SESSION_START_PREAMBLE
 
 
 def test_overlay_tool_docs_end_with_exactly_one_newline(monkeypatch, tmp_path) -> None:

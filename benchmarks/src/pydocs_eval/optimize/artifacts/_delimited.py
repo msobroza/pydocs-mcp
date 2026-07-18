@@ -13,7 +13,7 @@ supported because closed-ness is an *allowed-set* concern, not a grammar
 concern: the union regex parses every legal key across every artifact, and
 each artifact passes its own ``allowed`` set to ``find_header_collisions``.
 A key legal for one artifact (or only for the product document, e.g.
-``TURN0_PREAMBLE``) is a header collision for the others — the loud-failure
+``SESSION_START_PREAMBLE``) is a header collision for the others — the loud-failure
 rule that keeps the format escaping-free.
 
 Round-trip semantics are the product's one-normalization-pass rule: parse

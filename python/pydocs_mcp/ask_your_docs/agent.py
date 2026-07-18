@@ -39,7 +39,9 @@ from pydocs_mcp.ask_your_docs.prompts import (
     prompts_for,
     rewrite_prompt,
 )
-from pydocs_mcp.ask_your_docs.turn0_prompt_injection import build_turn0_pack_for_agent_prompt
+from pydocs_mcp.ask_your_docs.session_start_injection import (
+    build_session_start_context_for_agent_prompt,
+)
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 logger = logging.getLogger(__name__)
@@ -162,7 +164,7 @@ def _assemble_prompt(
     name: str,
     catalog: dict[str, list[str]],
     prompts: AskPrompts | None,
-    turn0_context: str | None = None,
+    session_start_context: str | None = None,
 ) -> str:
     """The ONE prompt-assembly site: candidate-or-shipped system + catalog.
 
@@ -171,10 +173,10 @@ def _assemble_prompt(
     override must apply whenever that architecture is selected. A second
     assembly site is the one forbidden shape (single source of truth).
 
-    ``turn0_context`` (ADR 0008) appends the harness-injected turn-0 pack
-    after the catalog; ``None`` — the shipped default,
-    ``serve.turn0_context.enabled: false`` — keeps the assembled prompt
-    byte-identical to the pre-injection shape.
+    ``session_start_context`` (ADR 0008) appends the harness-injected
+    session-start pack after the catalog; ``None`` — the shipped default,
+    ``serve.session_start_context.enabled: false`` — keeps the assembled
+    prompt byte-identical to the pre-injection shape.
     """
     resolved_system = (
         prompts.system_prompt
@@ -182,9 +184,9 @@ def _assemble_prompt(
         else prompts_for(name).render("system_v1")
     )
     assembled = f"{resolved_system}\nIndexed projects and packages:\n{render_catalog(catalog)}"
-    if turn0_context is None:
+    if session_start_context is None:
         return assembled
-    return f"{assembled}\n{turn0_context}"
+    return f"{assembled}\n{session_start_context}"
 
 
 async def build_agent(
@@ -242,11 +244,14 @@ async def build_agent(
     # delegates the graph — a per-arch system override applies when that
     # architecture is selected directly.
     #
-    # Turn-0 context pack (ADR 0008): appended at this single assembly site
-    # ONLY when serve.turn0_context.enabled — the gate returns None when off,
-    # keeping the prompt byte-identical (the ablation phase's control arm).
-    turn0 = await build_turn0_pack_for_agent_prompt(workspace, pydocs_config)
-    prompt = _assemble_prompt(name, catalog, prompts, turn0)
+    # Session-start context pack (ADR 0008): appended at this single assembly
+    # site ONLY when serve.session_start_context.enabled — the gate returns
+    # None when off, keeping the prompt byte-identical (the ablation phase's
+    # control arm).
+    session_start_pack = await build_session_start_context_for_agent_prompt(
+        workspace, pydocs_config
+    )
+    prompt = _assemble_prompt(name, catalog, prompts, session_start_pack)
     caps = capabilities
     if caps is None:
         caps = await detect_capabilities(model, base_url, cfg.multimodal.detection)

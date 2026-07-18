@@ -6,6 +6,11 @@
   deterministic harness behavior")
 - **Siblings:** ADR 0005 (description source format), ADR 0006 (description injection and
   override), ADR 0007 (deterministic routing suggestions)
+- **Naming note:** the feature ships under the explicit name `session_start_context`
+  (config `serve.session_start_context.*`, builder `build_session_start_context`, CLI
+  `session-start-context`, section header `SESSION_START_PREAMBLE`) per the repo naming
+  rule in CLAUDE.md §Coding Rules for AI Agents; "turn-0" was the phase-spec working
+  name for this decision area, preserved in this ADR's title as the historical record.
 
 ## Context
 
@@ -22,7 +27,7 @@ Spec constraints, all binding:
   harness-injected** so the attribution phase never counts it as model-retrieved
   evidence.
 - The framing/preamble text is optimizable and lives in the externalized source document
-  (ADR 0005's `=== TURN0_PREAMBLE ===` section); the map **content** is generated data,
+  (ADR 0005's `=== SESSION_START_PREAMBLE ===` section); the map **content** is generated data,
   not an optimizable dimension.
 
 Hard boundary: the MCP tool surface is frozen at nine tools
@@ -145,18 +150,18 @@ external harnesses: accepted (below).
 **Option (b+): inject the existing capped overview card plus the version inventory,
 behind a default-off flag — (a) in spirit at (b)'s cost.** Specifically:
 
-1. **Builder in the product:** `build_turn0_context(project, budget)` composes, in order:
-   the `TURN0_PREAMBLE` section text from the externalized description source (ADR 0005 —
+1. **Builder in the product:** `build_session_start_context(project, budget)` composes, in order:
+   the `SESSION_START_PREAMBLE` section text from the externalized description source (ADR 0005 —
    the framing prose is the optimizable part), the per-project overview card (same
    snapshot/tables the tools query, same `OverviewService`/`format_overview_card`
    rendering — `application/formatting.py:1068-1097`), and the installed-package version
    inventory (`SELECT name, version FROM packages`, one line per row).
-2. **Budget:** `serve.turn0_context.budget_tokens` (default **2000**), enforced with the
+2. **Budget:** `serve.session_start_context.budget_tokens` (default **2000**), enforced with the
    canonical `model_budget.count_tokens` tiktoken helper — real tokens, not chars/4: a
    hard harness-facing cap must not repeat the documented ~2× under-count failure
    (`model_budget.py:13-18`). Under budget pressure the map content is trimmed **before**
    the inventory (the inventory is the distinctive cheap part); truncation is noted.
-3. **Flag:** `serve.turn0_context.enabled`, default **false**. Product behavior is
+3. **Flag:** `serve.session_start_context.enabled`, default **false**. Product behavior is
    unchanged by this phase; the ablation phase decides whether injection pays.
 4. **Symbol trees stay on-demand** via `get_symbol` (`depth` literal at
    `application/mcp_inputs.py:46`; rendering at
@@ -165,7 +170,7 @@ behind a default-off flag — (a) in spirit at (b)'s cost.** Specifically:
 5. **Channels:** (i) the ask-your-docs loop injects at its verified single
    prompt-assembly site (`agent.py:160-173`, where the workspace catalog already
    injects); (ii) external-client rollouts get the builder as product API plus a
-   `pydocs-mcp turn0-context` CLI subcommand — the CLI surface is not frozen; the MCP
+   `pydocs-mcp session-start-context` CLI subcommand — the CLI surface is not frozen; the MCP
    surface is untouched (no tenth tool, no MCP resource).
 6. **Marker:** the injected block's first line is a fixed constant declaring the content
    harness-injected / not-model-retrieved; the next phase's attribution excludes it by
@@ -208,7 +213,7 @@ Costs and risks:
   auto-load behavior), not proof of absence. If a client class demonstrably auto-loads
   resources deterministically, that channel is worth revisiting — the builder API keeps
   the payload reusable if so.
-- `TURN0_PREAMBLE` is a required section of the description source document (ADR 0005)
+- `SESSION_START_PREAMBLE` is a required section of the description source document (ADR 0005)
   even though it renders only when the flag is on: optimizers will mutate text that
   deployments never emit until the ablation phase flips the flag.
 - tiktoken enforcement adds an encoding load on the first call; negligible against serve
@@ -218,10 +223,10 @@ Costs and risks:
 
 All items land in this phase unless marked otherwise.
 
-1. Implement `build_turn0_context(project, budget)` in `python/pydocs_mcp/application/`
+1. Implement `build_session_start_context(project, budget)` in `python/pydocs_mcp/application/`
    composing preamble + overview card + version inventory with the trim order above;
    tests pin composition order, trim order, and the truncation note.
-2. Add `serve.turn0_context.enabled: false` and `serve.turn0_context.budget_tokens: 2000`
+2. Add `serve.session_start_context.enabled: false` and `serve.session_start_context.budget_tokens: 2000`
    to the `ServeConfig` sub-model and `python/pydocs_mcp/defaults/default_config.yaml`
    (pydantic `Field(default=…)` as single source of truth).
 3. Define the marker constant next to the builder; test that the rendered block's first
@@ -229,9 +234,9 @@ All items land in this phase unless marked otherwise.
    (instrumentation) phase.
 4. Wire the ask-your-docs channel at `ask_your_docs/agent.py` `_assemble_prompt`
    (`agent.py:160-173`), gated on the flag; test both flag states.
-5. Add the `pydocs-mcp turn0-context` CLI subcommand in `python/pydocs_mcp/__main__.py`,
+5. Add the `pydocs-mcp session-start-context` CLI subcommand in `python/pydocs_mcp/__main__.py`,
    delegating to the builder; budget enforced via `model_budget.count_tokens`.
-6. Require `=== TURN0_PREAMBLE ===` in the description source document and its validator
+6. Require `=== SESSION_START_PREAMBLE ===` in the description source document and its validator
    (coordinated with ADR 0005's grammar in `application/description_source.py`).
 7. Deferred to the ablation phase: flipping the default, tuning the budget, and capping
    per-dependency inventory rows — using measurements from a deps-populated index once

@@ -1,7 +1,7 @@
 # Authoring the description source
 
 Every LLM-visible description string the MCP server serves — the nine per-tool
-descriptions, the server-level instructions, and the turn-0 context preamble —
+descriptions, the server-level instructions, and the session-start context preamble —
 lives in **one delimited text document**: the packaged
 `python/pydocs_mcp/defaults/descriptions.md`, replaceable at startup by an
 override document. This guide is for anyone editing that document or authoring
@@ -26,7 +26,7 @@ line followed by free-prose content running to the next header or end of file:
 === TOOL: get_overview ===
 <prose>
 …
-=== TURN0_PREAMBLE ===
+=== SESSION_START_PREAMBLE ===
 <prose>
 ```
 
@@ -68,12 +68,12 @@ document follows):
 | `TOOL: grep` | 〃 |
 | `TOOL: glob` | 〃 |
 | `TOOL: read_file` | 〃 |
-| `TURN0_PREAMBLE` | Framing prose for the turn-0 context pack (`serve.turn0_context`). |
+| `SESSION_START_PREAMBLE` | Framing prose for the session-start context pack (`serve.session_start_context`). |
 
 The nine `TOOL:` keys derive from the frozen tool names of
 `docs/tool-contracts.md` §1 — so a tool rename can never silently orphan a
-section; it surfaces as an unknown-header failure instead. `TURN0_PREAMBLE`
-is **always required**, even though the turn-0 feature is off by default: the
+section; it surfaces as an unknown-header failure instead. `SESSION_START_PREAMBLE`
+is **always required**, even though the session-start-context feature is off by default: the
 section set stays fixed so validation is unconditional and every override
 document is complete.
 
@@ -108,12 +108,12 @@ Conventions the packaged seed follows (recommended, not enforced):
   verbatim — the document stores fully expanded text per section (no
   templating), so keeping them identical is the author's job.
 
-`SERVER_INSTRUCTIONS` and `TURN0_PREAMBLE` have no marker requirements.
+`SERVER_INSTRUCTIONS` and `SESSION_START_PREAMBLE` have no marker requirements.
 
 ## 4. Token budgets
 
 Budgets are enforced on the **nine `TOOL:` sections only** (server
-instructions and the turn-0 preamble are outside the budget lint):
+instructions and the session-start preamble are outside the budget lint):
 
 | Budget | Value | Constant |
 |---|---|---|
@@ -262,8 +262,8 @@ LLM-facing surface (all in YAML — the canonical reference is
 | Key | Default | Effect |
 |---|---|---|
 | `serve.descriptions_path` | `null` | Override document path (see [precedence](#6-overrides-flags-and-precedence)). |
-| `serve.turn0_context.enabled` | `false` | Inject the turn-0 context pack (marker line + `TURN0_PREAMBLE` + overview card + version inventory) into the ask-your-docs agent prompt. `pydocs-mcp turn0-context` prints the pack regardless of the flag. |
-| `serve.turn0_context.budget_tokens` | `2000` | Hard cap on the pack, in real (tiktoken) tokens; the overview card is trimmed before the version inventory, and truncation is noted in the pack. |
+| `serve.session_start_context.enabled` | `false` | Inject the session-start context pack (marker line + `SESSION_START_PREAMBLE` + overview card + version inventory) into the ask-your-docs agent prompt. `pydocs-mcp session-start-context` prints the pack regardless of the flag. |
+| `serve.session_start_context.budget_tokens` | `2000` | Hard cap on the pack, in real (tiktoken) tokens; the overview card is trimmed before the version inventory, and truncation is noted in the pack. |
 | `output.suggestions.grep_zero_hit` | `true` | On a zero-hit `grep`, append a fixed `[suggestion: …]` line redirecting to `search_codebase`. |
 | `output.suggestions.grep_truncated` | `true` | On a truncated `grep`, append a fixed narrowing hint (`path=` / `glob=` / `head_limit=`). |
 | `output.suggestions.search_zero_hit` | `true` | On zero-hit `search_codebase` / `get_why`, append the `get_overview` pointer. |
@@ -273,5 +273,5 @@ constants in `application/suggestions.py` with the `[suggestion:` prefix,
 **not** part of the optimizable description document. A transcript line
 starting with that prefix is always server-initiated, never model-earned
 routing (`docs/adr/0007-deterministic-routing-suggestions.md`); likewise the
-turn-0 marker line is fixed machinery
+session-start marker line is fixed machinery
 (`docs/adr/0008-turn0-context-injection.md`).

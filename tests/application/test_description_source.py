@@ -28,7 +28,7 @@ def _valid_sections() -> dict[str, str]:
     sections = {ds.SERVER_INSTRUCTIONS_HEADER: "server orientation text"}
     for name in ds.FROZEN_TOOL_NAMES:
         sections[ds.tool_section_header(name)] = _marker_body()
-    sections[ds.TURN0_PREAMBLE_HEADER] = "turn-0 framing text"
+    sections[ds.SESSION_START_PREAMBLE_HEADER] = "session-start framing text"
     return sections
 
 
@@ -39,7 +39,7 @@ def test_canonical_headers_are_eleven_in_document_order() -> None:
     expected = (
         "SERVER_INSTRUCTIONS",
         *(f"TOOL: {name}" for name in ds.FROZEN_TOOL_NAMES),
-        "TURN0_PREAMBLE",
+        "SESSION_START_PREAMBLE",
     )
     assert expected == ds.CANONICAL_HEADERS
     assert len(ds.CANONICAL_HEADERS) == 11
@@ -67,7 +67,7 @@ def test_parse_render_parse_identity() -> None:
 
 
 def test_multiline_bodies_survive_round_trip() -> None:
-    sections = {"SERVER_INSTRUCTIONS": "line one\n\nline three", "TURN0_PREAMBLE": "x"}
+    sections = {"SERVER_INSTRUCTIONS": "line one\n\nline three", "SESSION_START_PREAMBLE": "x"}
     assert ds.parse_sections(ds.render_sections(sections)) == sections
 
 
@@ -82,7 +82,9 @@ def test_render_is_deterministic() -> None:
 def test_normalize_is_idempotent() -> None:
     # First pass may trim a trailing newline per section; after that the
     # surface is byte-stable (the one-normalization-pass rule).
-    raw = "=== SERVER_INSTRUCTIONS ===\nbody ends with newline\n\n=== TURN0_PREAMBLE ===\nx\n"
+    raw = (
+        "=== SERVER_INSTRUCTIONS ===\nbody ends with newline\n\n=== SESSION_START_PREAMBLE ===\nx\n"
+    )
     once = ds.normalize(raw)
     assert ds.normalize(once) == once
 
@@ -91,8 +93,11 @@ def test_normalize_trims_one_trailing_newline_on_first_pass() -> None:
     # A non-final section whose body ends in a newline loses that newline on
     # the first pass (the render-appended newline doubles as the separator
     # before the next header) — the documented first-pass non-stability.
-    raw = "=== SERVER_INSTRUCTIONS ===\nbody\n\n=== TURN0_PREAMBLE ===\nx\n"
-    assert ds.normalize(raw) == "=== SERVER_INSTRUCTIONS ===\nbody\n=== TURN0_PREAMBLE ===\nx\n"
+    raw = "=== SERVER_INSTRUCTIONS ===\nbody\n\n=== SESSION_START_PREAMBLE ===\nx\n"
+    assert (
+        ds.normalize(raw)
+        == "=== SERVER_INSTRUCTIONS ===\nbody\n=== SESSION_START_PREAMBLE ===\nx\n"
+    )
 
 
 def test_normalize_two_passes_byte_identical() -> None:
@@ -190,11 +195,11 @@ def test_validate_rejects_unknown_header() -> None:
 
 def test_validate_rejects_missing_section() -> None:
     sections = _valid_sections()
-    del sections[ds.TURN0_PREAMBLE_HEADER]
+    del sections[ds.SESSION_START_PREAMBLE_HEADER]
     with pytest.raises(ds.MissingSectionError) as excinfo:
         ds.validate_sections(sections)
-    assert excinfo.value.missing == ("TURN0_PREAMBLE",)
-    assert "TURN0_PREAMBLE" in str(excinfo.value)
+    assert excinfo.value.missing == ("SESSION_START_PREAMBLE",)
+    assert "SESSION_START_PREAMBLE" in str(excinfo.value)
 
 
 def test_validate_rejects_renamed_tool() -> None:

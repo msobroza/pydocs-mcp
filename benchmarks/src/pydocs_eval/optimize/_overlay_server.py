@@ -55,7 +55,7 @@ from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
 try:
     import pydocs_mcp.application.tool_docs as td
     from pydocs_mcp.application.description_source import (
-        TURN0_PREAMBLE_HEADER,
+        SESSION_START_PREAMBLE_HEADER,
         DescriptionSourceError,
         apply_source,
     )
@@ -150,7 +150,7 @@ def _as_product_document(overlay_text: str) -> str:
 
     The overlay optimizes only the ``SERVER_INSTRUCTIONS`` + per-tool
     sections; the product loader validates the FULL canonical document, so
-    the live ``TURN0_PREAMBLE`` is carried through unchanged. Tool sections
+    the live ``SESSION_START_PREAMBLE`` is carried through unchanged. Tool sections
     drop their single trailing newline because ``apply_source`` re-attaches
     the terminator when projecting sections onto ``TOOL_DOCS`` — leaving it
     in would double-terminate every description (and a candidate that omitted
@@ -161,7 +161,7 @@ def _as_product_document(overlay_text: str) -> str:
         key: content.removesuffix("\n") if key.startswith(_TOOL_PREFIX) else content
         for key, content in sections.items()
     }
-    document[TURN0_PREAMBLE_HEADER] = td.TURN0_PREAMBLE
+    document[SESSION_START_PREAMBLE_HEADER] = td.SESSION_START_PREAMBLE
     return render_delimited(document)
 
 

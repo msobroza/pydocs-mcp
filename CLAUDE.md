@@ -231,7 +231,7 @@ own sections.
 - Names are specific, unique, and greppable — never `data`, `process`, `handler`,
   `Manager`, `Service`, `utils`. Aim for <5 grep hits repo-wide (grep is the
   agent's navigation API). Name behavior, not mechanism: prefer
-  `build_turn0_pack_for_agent_prompt` over a vague "gate"/"helper" name.
+  `build_session_start_context_for_agent_prompt` over a vague "gate"/"helper" name.
 - Error messages carry the offending value and the expected shape:
   `f"invalid target: got {target!r}, expected dotted identifier"`, never a bare
   `"invalid input"`. Exception text is a debugging signal.

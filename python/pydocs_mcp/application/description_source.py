@@ -78,7 +78,7 @@ FROZEN_TOOL_NAMES = (
 )
 
 SERVER_INSTRUCTIONS_HEADER = "SERVER_INSTRUCTIONS"
-TURN0_PREAMBLE_HEADER = "TURN0_PREAMBLE"
+SESSION_START_PREAMBLE_HEADER = "SESSION_START_PREAMBLE"
 
 _TOOL_HEADER_TEMPLATE = "TOOL: {name}"
 
@@ -89,13 +89,13 @@ def tool_section_header(tool_name: str) -> str:
 
 
 # The eleven required product-document sections, in canonical document order
-# (ADR 0005 §Decision 2). TURN0_PREAMBLE is always required even though the
-# turn-0 feature is off by default — the section set stays fixed so
+# (ADR 0005 §Decision 2). SESSION_START_PREAMBLE is always required even though the
+# session-start-context feature is off by default — the section set stays fixed so
 # validation is unconditional.
 CANONICAL_HEADERS: tuple[str, ...] = (
     SERVER_INSTRUCTIONS_HEADER,
     *(tool_section_header(name) for name in FROZEN_TOOL_NAMES),
-    TURN0_PREAMBLE_HEADER,
+    SESSION_START_PREAMBLE_HEADER,
 )
 
 # WHY: single source of truth for the format — render, parse, and the
@@ -106,7 +106,7 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # to a section and rejected as a collision. Widening it is a deliberate
 # event — see the header-widening protocol in the module docstring.
 _HEADER_RE = re.compile(
-    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|TURN0_PREAMBLE|TOOL: [a-z_]+) ===$"
+    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|TOOL: [a-z_]+) ===$"
 )
 
 
@@ -338,7 +338,7 @@ def _check_required_markers(sections: Mapping[str, str]) -> None:
 
 def _check_token_budgets(sections: Mapping[str, str]) -> None:
     # Budgets cover the TOOL sections only — SERVER_INSTRUCTIONS and
-    # TURN0_PREAMBLE are outside the §D13 per-tool/total lint (the product
+    # SESSION_START_PREAMBLE are outside the §D13 per-tool/total lint (the product
     # lint in tests/application/test_tool_docs_lint.py sums TOOL_DOCS alone,
     # and this check must never disagree with it).
     total = 0
@@ -377,7 +377,7 @@ _TOOL_DOC_TERMINATOR = "\n"
 def attribute_views(sections: Mapping[str, str]) -> tuple[str, dict[str, str], str]:
     """Project a validated section mapping onto the ``tool_docs`` attribute shapes.
 
-    Returns ``(SERVER_INSTRUCTIONS, TOOL_DOCS, TURN0_PREAMBLE)``. Both binding
+    Returns ``(SERVER_INSTRUCTIONS, TOOL_DOCS, SESSION_START_PREAMBLE)``. Both binding
     paths (import-time packaged load and ``apply_source``) go through this one
     projection so the terminator rule above cannot drift between them.
 
@@ -391,7 +391,7 @@ def attribute_views(sections: Mapping[str, str]) -> tuple[str, dict[str, str], s
     return (
         sections[SERVER_INSTRUCTIONS_HEADER],
         tool_view,
-        sections[TURN0_PREAMBLE_HEADER],
+        sections[SESSION_START_PREAMBLE_HEADER],
     )
 
 
@@ -438,7 +438,7 @@ def apply_source(path: Path) -> str:
 
     instructions, tool_view, preamble = attribute_views(sections)
     tool_docs.SERVER_INSTRUCTIONS = instructions
-    tool_docs.TURN0_PREAMBLE = preamble
+    tool_docs.SESSION_START_PREAMBLE = preamble
     # In-place per-key update: consumers hold references to the TOOL_DOCS dict
     # object (registration reads TOOL_DOCS[name]); rebinding a fresh dict would
     # strand them on the pre-override mapping.
@@ -465,7 +465,7 @@ def current_artifact_hash() -> str:
     return _artifact_hash(
         instructions=tool_docs.SERVER_INSTRUCTIONS,
         tool_view=tool_docs.TOOL_DOCS,
-        preamble=tool_docs.TURN0_PREAMBLE,
+        preamble=tool_docs.SESSION_START_PREAMBLE,
     )
 
 
@@ -491,7 +491,7 @@ def _artifact_hash(*, instructions: str, tool_view: Mapping[str, str], preamble:
     sections = {
         SERVER_INSTRUCTIONS_HEADER: instructions,
         **{tool_section_header(name): tool_view[name] for name in FROZEN_TOOL_NAMES},
-        TURN0_PREAMBLE_HEADER: preamble,
+        SESSION_START_PREAMBLE_HEADER: preamble,
     }
     surface = normalize(render_sections(sections))
     payload = f"renderer:v{RENDERER_VERSION}\n{surface}"
