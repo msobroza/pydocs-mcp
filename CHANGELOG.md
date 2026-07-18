@@ -13,6 +13,12 @@ the whole surface is **frozen by contract**: `docs/tool-contracts.md` is the
 normative inventory (rationale in `docs/adr/0001`–`0004`). No renames, no
 removals — existing six-tool clients keep working unmodified.
 
+### Security
+
+- `mcp` dependency floor raised `>=1.0` → `>=1.28.1` (lock updated 1.27.1 →
+  1.28.1) — resolves CVE-2026-52869, CVE-2026-52870, and CVE-2026-59950
+  reported against mcp 1.27.1.
+
 ### Added
 
 - **Three filesystem tools: `grep`, `glob`, `read_file`** — exact-string /
