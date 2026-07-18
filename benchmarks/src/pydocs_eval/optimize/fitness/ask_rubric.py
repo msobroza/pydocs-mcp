@@ -21,7 +21,7 @@ from statistics import fmean
 from typing import Literal
 
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
-from pydocs_eval.optimize._agent_track_binding import _DEFAULT_RNG_SEED
+from pydocs_eval.optimize._agent_track_binding import DEFAULT_RNG_SEED
 from pydocs_eval.optimize._split import partition_task_ids
 from pydocs_eval.optimize._types import _DEFAULT_MAX_JUDGE_CALLS, FitnessReport
 from pydocs_eval.optimize.ask_binding import AskRunner, AskTranscript
@@ -64,7 +64,7 @@ class AskRubricFitness:
     # WHY per-run counter: the ceiling bounds ONE process's fresh judge
     # calls; resumed samples are free, so a rerun only counts new spend.
     max_judge_calls: int = _DEFAULT_MAX_JUDGE_CALLS
-    rng_seed: int = _DEFAULT_RNG_SEED
+    rng_seed: int = DEFAULT_RNG_SEED
     name: str = "ask_rubric"
     cost_tier: Literal["free", "paid"] = "paid"
     _judge_calls: int = field(default=0, init=False)

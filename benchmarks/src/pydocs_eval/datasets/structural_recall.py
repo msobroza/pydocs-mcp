@@ -45,7 +45,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..serialization import dataset_registry
+from ..registries import dataset_registry
 from .base_dataset import EvalTask, GoldAnswer
 from .corpus import materialize_corpus
 

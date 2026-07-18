@@ -3,7 +3,7 @@
 Owns ``CorpusSource``, ``GoldAnswer``, ``EvalTask`` and the ``Dataset``
 ``@runtime_checkable`` Protocol. Concrete datasets in
 ``benchmarks/eval/datasets/`` implement the Protocol and are reachable
-through ``dataset_registry`` in ``serialization.py`` — the runner never
+through ``dataset_registry`` in ``registries.py`` — the runner never
 imports the concretes directly.
 """
 

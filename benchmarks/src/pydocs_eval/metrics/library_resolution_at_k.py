@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..datasets.base_dataset import EvalTask
-from ..serialization import metric_registry
+from ..registries import metric_registry
 from ..systems.base_system import RetrievedItem
 
 # WHY: single source of truth for the DS-1000 cross-naming aliases.

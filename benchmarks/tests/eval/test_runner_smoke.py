@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from pydocs_eval.runner import run_sweep
-from pydocs_eval.serialization import system_registry
+from pydocs_eval.registries import system_registry
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig

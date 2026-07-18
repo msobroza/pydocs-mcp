@@ -26,6 +26,11 @@ _SHIMS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("pydocs_eval.report", "pydocs_eval.reporting.report", ("format_report",)),
     ("pydocs_eval.baseline_record", "pydocs_eval.reporting.baseline_record", ("BaselineRecord",)),
     ("pydocs_eval.ci_compare", "pydocs_eval.reporting.ci_compare", ("main",)),
+    (
+        "pydocs_eval.serialization",
+        "pydocs_eval.registries",
+        ("dataset_registry", "metric_registry", "system_registry", "tracker_registry"),
+    ),
 )
 
 

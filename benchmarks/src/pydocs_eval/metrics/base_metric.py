@@ -3,7 +3,7 @@
 Owns the ``Metric`` ``@runtime_checkable`` Protocol and the ``Scorer``
 composition dataclass. Concrete metrics in ``benchmarks/eval/metrics/``
 implement the Protocol and are reachable through ``metric_registry`` in
-``serialization.py`` — the runner never imports the concretes directly.
+``registries.py`` — the runner never imports the concretes directly.
 
 Cross-axis types ``EvalTask`` and ``RetrievedItem`` are imported from
 their owner modules (``..datasets.base_dataset`` /

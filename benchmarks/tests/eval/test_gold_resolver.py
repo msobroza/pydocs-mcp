@@ -8,7 +8,7 @@ exercises the store-scan path without a real SQLite. The
 ``pydocs_mcp`` touch and is patched out via a stub module so this test
 collects and runs with pydocs_mcp absent.
 
-Identity scheme under test (``_item_key``): ``chunk:{id}`` when the
+Identity scheme under test (``item_key``): ``chunk:{id}`` when the
 store/retrieved item carries a chunk id, else ``rank:{rank}`` — namespaced
 so an int chunk-id can never collide with an int rank.
 """
@@ -23,11 +23,11 @@ from pathlib import Path
 import pytest
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.gold_resolver import (
-    _DEFAULT_FUZZ_THRESHOLD,
+    DEFAULT_FUZZ_THRESHOLD,
     GoldResolver,
     LazyFuzzyGoldResolver,
     PydocsFuzzyGoldResolver,
-    _item_key,
+    item_key,
 )
 from pydocs_eval.systems.base_system import RetrievedItem
 
@@ -110,17 +110,17 @@ def _task(doc_contents: tuple[str, ...], *, library: str = "pandas") -> EvalTask
     )
 
 
-# ── _item_key ──────────────────────────────────────────────────────────────
+# ── item_key ──────────────────────────────────────────────────────────────
 
 
 def test_item_key_uses_chunk_id_when_present() -> None:
     item = RetrievedItem(rank=3, text="x", source_path="p", chunk_id=42)
-    assert _item_key(item) == "chunk:42"
+    assert item_key(item) == "chunk:42"
 
 
 def test_item_key_falls_back_to_rank_when_chunk_id_none() -> None:
     item = RetrievedItem(rank=7, text="x", source_path="p", chunk_id=None)
-    assert _item_key(item) == "rank:7"
+    assert item_key(item) == "rank:7"
 
 
 # ── PydocsFuzzyGoldResolver (eager) ─────────────────────────────────────────
@@ -129,7 +129,7 @@ def test_item_key_falls_back_to_rank_when_chunk_id_none() -> None:
 def test_resolver_is_runtime_checkable_protocol() -> None:
     # WHY: the runner gates on ``isinstance(system, HasGoldResolver)`` and the
     # resolvers must satisfy the GoldResolver Protocol structurally.
-    assert isinstance(LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD), GoldResolver)
+    assert isinstance(LazyFuzzyGoldResolver(DEFAULT_FUZZ_THRESHOLD), GoldResolver)
     factory, _chunks, _uow = _fake_uow_factory([])
     assert isinstance(PydocsFuzzyGoldResolver(factory), GoldResolver)
 
@@ -158,7 +158,7 @@ async def test_eager_includes_above_threshold_excludes_below() -> None:
         _FakeStoreChunk(id=11, text="completely different unrelated content zzz"),
     ]
     factory, chunks_obj, _uow = _fake_uow_factory(chunks)
-    resolver = PydocsFuzzyGoldResolver(factory, _DEFAULT_FUZZ_THRESHOLD)
+    resolver = PydocsFuzzyGoldResolver(factory, DEFAULT_FUZZ_THRESHOLD)
 
     result = await resolver.resolve(_task((gold,)), ())
 
@@ -174,7 +174,7 @@ async def test_eager_excludes_chunk_with_none_id() -> None:
         _FakeStoreChunk(id=20, text=gold),  # perfect match, real id
     ]
     factory, _chunks, _uow = _fake_uow_factory(chunks)
-    resolver = PydocsFuzzyGoldResolver(factory, _DEFAULT_FUZZ_THRESHOLD)
+    resolver = PydocsFuzzyGoldResolver(factory, DEFAULT_FUZZ_THRESHOLD)
 
     result = await resolver.resolve(_task((gold,)), ())
 
@@ -189,7 +189,7 @@ async def test_eager_normalizes_package_name_in_filter() -> None:
     gold = "fit predict transform estimator pipeline"
     chunks = [_FakeStoreChunk(id=30, text=gold)]
     factory, chunks_obj, _uow = _fake_uow_factory(chunks)
-    resolver = PydocsFuzzyGoldResolver(factory, _DEFAULT_FUZZ_THRESHOLD)
+    resolver = PydocsFuzzyGoldResolver(factory, DEFAULT_FUZZ_THRESHOLD)
     task = _task((gold,), library="scikit-learn")
 
     result = await resolver.resolve(task, ())
@@ -202,7 +202,7 @@ async def test_eager_filter_is_none_when_no_library() -> None:
     gold = "some matching documentation body text here"
     chunks = [_FakeStoreChunk(id=40, text=gold)]
     factory, chunks_obj, _uow = _fake_uow_factory(chunks)
-    resolver = PydocsFuzzyGoldResolver(factory, _DEFAULT_FUZZ_THRESHOLD)
+    resolver = PydocsFuzzyGoldResolver(factory, DEFAULT_FUZZ_THRESHOLD)
     task = _task((gold,), library="")  # no library -> filter None
 
     result = await resolver.resolve(task, ())
@@ -215,7 +215,7 @@ async def test_eager_filter_is_none_when_no_library() -> None:
 
 
 async def test_lazy_empty_doc_contents_returns_frozenset() -> None:
-    resolver = LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
+    resolver = LazyFuzzyGoldResolver(DEFAULT_FUZZ_THRESHOLD)
     retrieved = (RetrievedItem(rank=1, text="anything", source_path="p"),)
     assert await resolver.resolve(_task(()), retrieved) == frozenset()
 
@@ -227,7 +227,7 @@ async def test_lazy_matches_retrieved_items_by_content() -> None:
         RetrievedItem(rank=2, text="intro " + gold + " trailer", source_path="p", chunk_id=99),
         RetrievedItem(rank=3, text="another irrelevant blob of words yyy", source_path="p"),
     )
-    resolver = LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
+    resolver = LazyFuzzyGoldResolver(DEFAULT_FUZZ_THRESHOLD)
 
     result = await resolver.resolve(_task((gold,)), retrieved)
 
@@ -240,7 +240,7 @@ async def test_lazy_uses_rank_key_when_chunk_id_absent() -> None:
     retrieved = (
         RetrievedItem(rank=1, text="prefix " + gold, source_path="p"),  # chunk_id None
     )
-    resolver = LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
+    resolver = LazyFuzzyGoldResolver(DEFAULT_FUZZ_THRESHOLD)
 
     result = await resolver.resolve(_task((gold,)), retrieved)
 
@@ -269,8 +269,8 @@ async def test_threshold_boundary_at_and_below() -> None:
     above_ratio = _ratio(gold, at_or_above_text)
     below_ratio = _ratio(gold, below_text)
     # Guard the fixture: these must straddle the threshold or the test is moot.
-    assert above_ratio >= _DEFAULT_FUZZ_THRESHOLD
-    assert below_ratio < _DEFAULT_FUZZ_THRESHOLD
+    assert above_ratio >= DEFAULT_FUZZ_THRESHOLD
+    assert below_ratio < DEFAULT_FUZZ_THRESHOLD
 
     factory, _chunks, _uow = _fake_uow_factory(
         [
@@ -278,7 +278,7 @@ async def test_threshold_boundary_at_and_below() -> None:
             _FakeStoreChunk(id=2, text=below_text),
         ]
     )
-    resolver = PydocsFuzzyGoldResolver(factory, _DEFAULT_FUZZ_THRESHOLD)
+    resolver = PydocsFuzzyGoldResolver(factory, DEFAULT_FUZZ_THRESHOLD)
     result = await resolver.resolve(_task((gold,)), ())
     assert result == frozenset({"chunk:1"})
 
@@ -294,4 +294,4 @@ async def test_threshold_custom_value_respected() -> None:
 
 def test_default_threshold_is_85() -> None:
     # WHY: single source of truth — pin the shipped default.
-    assert _DEFAULT_FUZZ_THRESHOLD == 85
+    assert DEFAULT_FUZZ_THRESHOLD == 85

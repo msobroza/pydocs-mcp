@@ -6,7 +6,7 @@ disjoint (so a system name can't shadow a tracker etc.).
 
 from __future__ import annotations
 
-from pydocs_eval.serialization import (
+from pydocs_eval.registries import (
     dataset_registry,
     metric_registry,
     system_registry,

@@ -7,7 +7,7 @@ Relevance has ONE definition, routed by a single discriminator:
   exact behavior ``recall@k``/``mrr``/``pass@1-needle`` shipped with.
 - **DS-1000** gold NEVER carries an ``ast_body`` (it has
   ``doc_contents``/``doc_ids`` instead), so relevance is set membership of
-  an item's ``_item_key`` in ``task.gold.extra["resolved_chunk_ids"]`` —
+  an item's ``item_key`` in ``task.gold.extra["resolved_chunk_ids"]`` —
   the ``frozenset[str]`` the runner injects from the per-system
   ``GoldResolver`` between ``search()`` and scoring.
 - **SWE-QA** gold carries neither an ``ast_body`` nor a resolved chunk-id
@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..gold_resolver import _item_key
+from ..gold_resolver import item_key
 from .ast_match import find_first_match_rank
 
 if TYPE_CHECKING:
@@ -60,7 +60,7 @@ def is_relevant(item: RetrievedItem, task: EvalTask) -> bool:
     """True iff ``item`` is relevant to ``task`` under the unified predicate.
 
     RepoQA (``ast_body`` present) -> AST-equivalence match; DS-1000
-    (``resolved_chunk_ids`` injected) -> membership of ``_item_key(item)``
+    (``resolved_chunk_ids`` injected) -> membership of ``item_key(item)``
     in the resolved set; SWE-QA (``file_set`` only) -> suffix match on
     ``source_path``. Total: falls through to ``False`` when no signal
     applies, so it never raises.
@@ -73,7 +73,7 @@ def is_relevant(item: RetrievedItem, task: EvalTask) -> bool:
     # last-resort SWE-QA branch.
     if "resolved_chunk_ids" in task.gold.extra:
         resolved = task.gold.extra["resolved_chunk_ids"]
-        return _item_key(item) in resolved
+        return item_key(item) in resolved
     if task.gold.file_set:
         return _matches_file_set(item, task.gold.file_set)
     return False
@@ -84,7 +84,7 @@ def first_relevant_rank(retrieved: Sequence[RetrievedItem], task: EvalTask) -> i
 
     Same discriminator as ``is_relevant``: RepoQA delegates to
     ``find_first_match_rank`` (so ``recall@k``/``mrr`` stay byte-identical
-    on RepoQA); DS-1000 scans for the first item whose ``_item_key`` is in
+    on RepoQA); DS-1000 scans for the first item whose ``item_key`` is in
     the resolved set; SWE-QA scans for the first ``source_path`` suffix
     match against the gold ``file_set``.
     """
@@ -93,7 +93,7 @@ def first_relevant_rank(retrieved: Sequence[RetrievedItem], task: EvalTask) -> i
     if "resolved_chunk_ids" in task.gold.extra:
         resolved = task.gold.extra["resolved_chunk_ids"]
         for rank, item in enumerate(retrieved, start=1):
-            if _item_key(item) in resolved:
+            if item_key(item) in resolved:
                 return rank
         return None
     file_set = task.gold.file_set

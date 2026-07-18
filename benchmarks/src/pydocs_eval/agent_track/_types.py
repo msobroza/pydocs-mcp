@@ -18,13 +18,13 @@ from pathlib import Path
 
 # Single source of truth for every guardrail / default (§"Default values").
 # Bumping a default touches one line here, not scattered literals.
-_DEFAULT_MODEL = "claude-sonnet-5"
-_DEFAULT_MAX_TURNS = 40
-_DEFAULT_JUDGE_MODEL = _DEFAULT_MODEL  # same pinned family as the arms by default
+DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_MAX_TURNS = 40
+_DEFAULT_JUDGE_MODEL = DEFAULT_MODEL  # same pinned family as the arms by default
 _DEFAULT_MAX_TASKS = 48
 _DEFAULT_MAX_USD = 25.0
-_DEFAULT_TASK_TIMEOUT_SECONDS = 900.0
-_DEFAULT_RNG_SEED = 0  # slice-6 contract: one fixed seed for deterministic comparisons
+DEFAULT_TASK_TIMEOUT_SECONDS = 900.0
+DEFAULT_RNG_SEED = 0  # slice-6 contract: one fixed seed for deterministic comparisons
 _DEFAULT_OUTPUT_DIR = Path("~/.cache/pydocs-mcp/agent-track").expanduser()
 
 
@@ -90,8 +90,8 @@ class ArmConfig:
     takes precedence over ``mcp`` (a tool-less arm has no MCP either)."""
 
     name: str
-    model: str = _DEFAULT_MODEL
-    max_turns: int = _DEFAULT_MAX_TURNS
+    model: str = DEFAULT_MODEL
+    max_turns: int = DEFAULT_MAX_TURNS
     mcp: bool = False
     no_tools: bool = False
 
@@ -126,8 +126,8 @@ class AgentTrackConfig:
     judge_model: str = _DEFAULT_JUDGE_MODEL
     max_tasks: int = _DEFAULT_MAX_TASKS
     max_usd: float = _DEFAULT_MAX_USD
-    task_timeout_seconds: float = _DEFAULT_TASK_TIMEOUT_SECONDS
-    rng_seed: int = _DEFAULT_RNG_SEED
+    task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
+    rng_seed: int = DEFAULT_RNG_SEED
     output_dir: Path = _DEFAULT_OUTPUT_DIR
 
 

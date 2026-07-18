@@ -41,7 +41,7 @@ from . import systems as _systems  # noqa: F401 -- registry side-effects
 from . import trackers as _trackers  # noqa: F401 -- registry side-effects
 from .metrics.aggregate import mean_with_bootstrap_ci, percentile
 from .metrics.base_metric import Metric, Scorer
-from .serialization import dataset_registry, system_registry, tracker_registry
+from .registries import dataset_registry, system_registry, tracker_registry
 from .sweep_support import (
     _build_metric,
     _capture_library_resolution,

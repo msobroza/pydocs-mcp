@@ -15,7 +15,7 @@ import pytest
 import yaml
 from pydocs_eval.datasets.base_dataset import Dataset
 from pydocs_eval.datasets.structural_recall import StructuralRecallDataset
-from pydocs_eval.serialization import dataset_registry
+from pydocs_eval.registries import dataset_registry
 
 _FIXTURE = {
     "python": [

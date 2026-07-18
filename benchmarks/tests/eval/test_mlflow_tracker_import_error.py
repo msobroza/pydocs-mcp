@@ -7,7 +7,7 @@ from __future__ import annotations
 import sys
 
 import pytest
-from pydocs_eval.serialization import tracker_registry
+from pydocs_eval.registries import tracker_registry
 from pydocs_eval.trackers import MlflowExperimentTracker
 
 _EXPECTED_INSTALL_CMD = "uv pip install -e benchmarks[mlflow]"

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from .metrics import MRR, NDCGAtK, PassAt1Needle, RecallAtK
 from .metrics.base_metric import Metric
-from .serialization import metric_registry
+from .registries import metric_registry
 from .systems.base_system import (
     HasGoldResolver,
     HasLibrary,

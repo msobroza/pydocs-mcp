@@ -28,8 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..gold_resolver import _DEFAULT_FUZZ_THRESHOLD, LazyFuzzyGoldResolver
-from ..serialization import system_registry
+from ..gold_resolver import DEFAULT_FUZZ_THRESHOLD, LazyFuzzyGoldResolver
+from ..registries import system_registry
 from ._mcp_http import _DEFAULT_TIMEOUT, McpHttpClient
 from .base_system import RetrievedItem, single_blob_items
 
@@ -215,7 +215,7 @@ class Context7System:
         # non-enumerable remote store — there's no chunk-id store to scan,
         # so ground-truth is decided by fuzzy-matching the retrieved blob
         # against gold ``doc_contents`` (lazy), same as Neuledge.
-        return LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
+        return LazyFuzzyGoldResolver(DEFAULT_FUZZ_THRESHOLD)
 
     @property
     def last_resolved_library_id(self) -> str | None:

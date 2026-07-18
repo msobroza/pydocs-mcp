@@ -13,7 +13,7 @@ from __future__ import annotations
 # WHY: importing the package fires the ``@system_registry.register``
 # decorators so the variant is present in ``names()``.
 import pydocs_eval.systems
-from pydocs_eval.serialization import system_registry
+from pydocs_eval.registries import system_registry
 from pydocs_eval.systems.pydocs import (
     PydocsMcpCompositeSystem,
     PydocsMcpSystem,

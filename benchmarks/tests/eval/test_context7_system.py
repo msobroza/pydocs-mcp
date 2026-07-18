@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydocs_eval.serialization import system_registry
+from pydocs_eval.registries import system_registry
 from pydocs_eval.systems import Context7System
 from pydocs_mcp.retrieval.config import AppConfig
 

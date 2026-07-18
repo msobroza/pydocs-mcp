@@ -14,12 +14,12 @@ from pathlib import Path
 
 from . import _bench_cache
 from .datasets._split import VALID_SPLITS
-from .reporting.report import format_report
-from .serialization import (
+from .registries import (
     dataset_registry,
     system_registry,
     tracker_registry,
 )
+from .reporting.report import format_report
 
 # WHY redundant-alias re-exports: ``run_sweep`` + the metric/latency
 # row-order constants predate the ``sweep.py`` extraction; the test
@@ -65,7 +65,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         # WHY: ``pydocs_eval.runner`` (short path) matches how the
         # shell script (``scripts/run_repoqa.sh``) and the
-        # ``from pydocs_eval.X`` imports in ``serialization.py``
+        # ``from pydocs_eval.X`` imports in ``registries.py``
         # actually invoke the module — i.e. with ``PYTHONPATH=benchmarks/src``
         # under the PyPA src-layout (the package lives at
         # ``benchmarks/src/pydocs_eval/``).

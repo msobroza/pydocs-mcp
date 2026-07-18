@@ -34,8 +34,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from ..gold_resolver import _DEFAULT_FUZZ_THRESHOLD, LazyFuzzyGoldResolver
-from ..serialization import system_registry
+from ..gold_resolver import DEFAULT_FUZZ_THRESHOLD, LazyFuzzyGoldResolver
+from ..registries import system_registry
 from ._mcp_http import _DEFAULT_TIMEOUT, McpHttpClient
 from .base_system import RetrievedItem, single_blob_items
 
@@ -207,7 +207,7 @@ class NeuledgeSystem:
         # non-enumerable local MCP store — no chunk-id store to scan, so
         # ground-truth is fuzzy-matched against the retrieved blob (lazy),
         # same as Context7.
-        return LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
+        return LazyFuzzyGoldResolver(DEFAULT_FUZZ_THRESHOLD)
 
     async def teardown(self) -> None:
         client = self._client

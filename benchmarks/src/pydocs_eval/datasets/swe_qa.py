@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..serialization import dataset_registry
+from ..registries import dataset_registry
 from ._citations import extract_path_citations, resolve_bare_filenames
 from ._download import check_content_length
 from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
