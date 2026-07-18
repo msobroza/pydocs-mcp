@@ -117,7 +117,7 @@ reproduces a byte-identical report.
 To restate the guardrail this whole track is built around: **do not wire the
 agent track into CI.** It spawns real agents and spends real money. It is an
 operator-run, preflight-gated, ledgered, manual evaluation. The offline test
-suite covers every pure and Protocol-seamed part of it (`benchmarks/tests/eval/
+suite covers every pure and Protocol-seamed part of it (`benchmarks/tests/
 agent_track/`); the paid path is exercised only by an operator who ran the
 preflight first.
 

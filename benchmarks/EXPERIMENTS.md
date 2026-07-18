@@ -207,7 +207,7 @@ benchmarks/configs/repoqa_hybrid_wsi_dense.yaml \
 >    all LI overlays now fall back to the shipped preset, which includes the
 >    `capture_decisions` + `dependency_doc_pages` stages — so LI columns
 >    index the same corpus as every non-LI column again
->    (`benchmarks/tests/eval/test_li_ingestion_configs_resolve_shipped.py`
+>    (`benchmarks/tests/core/test_li_ingestion_configs_resolve_shipped.py`
 >    guards this).
 >
 > Both change the ingestion pipeline hash, so the bench cache re-indexes
