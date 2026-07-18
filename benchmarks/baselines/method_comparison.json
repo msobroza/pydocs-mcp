@@ -1,0 +1,17 @@
+{
+  "campaign": "method_comparison",
+  "dataset": "RepoQA small_test",
+  "description": "Retrieval-method comparison on RepoQA small_test (30 needles; partial_run rows ran 21/30). Single source for the README 'Method comparison' table and scripts/plot_method_comparison.py. Published results — do not edit without a new sweep.",
+  "rows": [
+    {"label": "BM25", "recall@1": 0.167, "recall@5": 0.333, "recall@10": 0.400, "partial_run": false, "search_p50_seconds": 0.029},
+    {"label": "BM25→tree rerank\n(gpt-4o-mini)", "recall@1": 0.333, "recall@5": 0.567, "recall@10": 0.567, "partial_run": false, "search_p50_seconds": 10.639},
+    {"label": "BM25→tree rerank\n(gpt-5.5)", "recall@1": 0.667, "recall@5": 0.667, "recall@10": 0.667, "partial_run": false, "search_p50_seconds": 8.76},
+    {"label": "Dense\n(bge-small)", "recall@1": 0.467, "recall@5": 0.733, "recall@10": 0.733, "partial_run": false, "search_p50_seconds": 0.145},
+    {"label": "Dense\n(ModernBERT)", "recall@1": 0.533, "recall@5": 0.733, "recall@10": 0.733, "partial_run": false, "search_p50_seconds": 0.191},
+    {"label": "Dense\n(Qwen3-0.6B)*", "recall@1": 0.667, "recall@5": 0.810, "recall@10": 0.810, "partial_run": true, "search_p50_seconds": 0.508},
+    {"label": "Dense\n(F2LLM-330M)", "recall@1": 0.700, "recall@5": 0.767, "recall@10": 0.767, "partial_run": false, "search_p50_seconds": 0.227},
+    {"label": "Dense\n(F2LLM-0.6B)", "recall@1": 0.900, "recall@5": 0.900, "recall@10": 0.933, "partial_run": false, "search_p50_seconds": 0.293},
+    {"label": "Late-\ninteraction", "recall@1": 0.500, "recall@5": 0.633, "recall@10": 0.667, "partial_run": false, "search_p50_seconds": 0.133},
+    {"label": "LLM tree*", "recall@1": 0.333, "recall@5": 0.524, "recall@10": 0.524, "partial_run": true, "search_p50_seconds": 13.717}
+  ]
+}

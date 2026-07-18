@@ -1,8 +1,8 @@
 """Render the structural-recall benchmark figure.
 
-Single source of truth = the ``DATA`` table below, which mirrors the
-"Structural recall" table in ``benchmarks/README.md``. When you refresh numbers,
-edit ``DATA`` here AND the README table, then re-run::
+Single source of truth = ``benchmarks/baselines/structural_recall.json``;
+the "Structural recall" table in ``benchmarks/README.md`` cites it. When you
+refresh numbers, edit that JSON (and the README prose), then re-run::
 
     python benchmarks/scripts/plot_structural_recall.py
 
@@ -17,6 +17,7 @@ Pure matplotlib — no project imports — so it runs from any env with matplotl
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -28,14 +29,15 @@ if "MPLBACKEND" not in os.environ:
 import matplotlib.pyplot as plt
 import numpy as np
 
-# (label, recall@1, recall@5, recall@10) — mirrors the README table.
-# repoqa-structural, F2LLM-v2-330M, 20 tasks. recall@1 is 0 by construction:
-# the gold is a NEIGHBOUR of the needle, which itself holds dense rank 1, so the
-# neighbour lands at rank >= 2.
+# (label, recall@1, recall@5, recall@10) — loaded from the committed campaign
+# JSON (the single source the README table cites). repoqa-structural,
+# F2LLM-v2-330M, 20 tasks. recall@1 is 0 by construction: the gold is a
+# NEIGHBOUR of the needle, which itself holds dense rank 1, so the neighbour
+# lands at rank >= 2.
+_DATA_PATH = Path(__file__).resolve().parents[1] / "baselines" / "structural_recall.json"
 DATA: list[tuple[str, float, float, float]] = [
-    ("Dense\n(F2LLM-330M)", 0.00, 0.20, 0.30),
-    ("Dense + graph\n(decay 0.5,\nshipped default)", 0.00, 0.25, 0.40),
-    ("Dense + graph\n(decay 0.9)", 0.00, 0.80, 1.00),
+    (row["label"], row["recall@1"], row["recall@5"], row["recall@10"])
+    for row in json.loads(_DATA_PATH.read_text(encoding="utf-8"))["rows"]
 ]
 METRICS = ("recall@1", "recall@5", "recall@10")
 COLORS = ("#4C72B0", "#55A868", "#C44E52")  # seaborn "deep" blue / green / red

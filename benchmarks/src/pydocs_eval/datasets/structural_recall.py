@@ -51,6 +51,11 @@ from .corpus import materialize_corpus
 
 # benchmarks/src/pydocs_eval/datasets/structural_recall.py -> benchmarks/
 # parents: [0]=datasets [1]=pydocs_eval [2]=src [3]=benchmarks
+# WORKAROUND: correct only from a SOURCE CHECKOUT — in an installed wheel
+# parents[3] lands in site-packages and fixtures/ is not package data, so
+# ``tasks()`` guards the default with an existence check instead of failing
+# with an opaque wrong-path error. Shipping the fixture as package data
+# (importlib.resources) is explicitly deferred.
 _BENCHMARKS_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_FIXTURE = _BENCHMARKS_ROOT / "fixtures" / "structural_recall.json"
 
@@ -89,6 +94,15 @@ class StructuralRecallDataset:
 
     async def tasks(self) -> AsyncIterator[EvalTask]:
         path = self.fixture_path or _DEFAULT_FIXTURE
+        # WHY guard only the DEFAULT: the checkout-relative resolution is
+        # silently wrong in an installed wheel (see _BENCHMARKS_ROOT above);
+        # an explicit fixture_path already fails with the caller's own path
+        # in the FileNotFoundError from read_text below.
+        if self.fixture_path is None and not _DEFAULT_FIXTURE.is_file():
+            raise FileNotFoundError(
+                f"structural_recall fixture not found at {_DEFAULT_FIXTURE}; "
+                "run from a source checkout or pass fixture_path=..."
+            )
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         for row in data.get(self.language, []):
             commit = str(row.get("commit", ""))

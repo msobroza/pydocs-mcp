@@ -99,3 +99,29 @@ def test_sweep_configs_point_at_pipelines(cfg_name: str) -> None:
     entry = cfg["pipelines"]["chunk"][0]
     assert entry["pipeline_path"].startswith("pipelines/")
     assert cfg["embedding"]["model_name"]  # an explicit embedder is pinned
+
+
+async def test_default_fixture_missing_raises_actionable_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression: from an installed wheel the checkout-relative DEFAULT
+    fixture path does not exist — the dataset must fail with the resolved
+    path + the fixture_path=... remedy, not an opaque wrong-path error."""
+    from pydocs_eval.datasets import structural_recall as sr
+
+    missing = tmp_path / "nowhere" / "structural_recall.json"
+    monkeypatch.setattr(sr, "_DEFAULT_FIXTURE", missing)
+    ds = StructuralRecallDataset()
+    with pytest.raises(FileNotFoundError, match="run from a source checkout or pass fixture_path"):
+        async for _ in ds.tasks():
+            pass
+
+
+async def test_explicit_fixture_path_missing_keeps_plain_file_error(tmp_path: Path) -> None:
+    """An operator-supplied fixture_path fails with the operator's own path
+    (stock FileNotFoundError from read_text), not the source-checkout hint."""
+    missing = tmp_path / "typo.json"
+    ds = StructuralRecallDataset(fixture_path=missing)
+    with pytest.raises(FileNotFoundError, match="typo.json"):
+        async for _ in ds.tasks():
+            pass
