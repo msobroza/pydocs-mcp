@@ -616,12 +616,12 @@ pure dense.**
 | Fusion | Config | recall@1 | recall@5 | recall@10 | MRR |
 |---|---|---:|---:|---:|---:|
 | **Pure dense (no fusion)** | `repoqa_dense_f2llm330m.yaml` | **0.700** | **0.767** | **0.767** | **0.725** |
-| WSI dense-heavy (0.3 BM25 / 0.7 dense) | `repoqa_hybrid_wsi_dense_f2llm.yaml` | 0.633 | 0.767 | 0.767 | 0.674 |
-| WSI balanced (0.5 / 0.5) | `repoqa_hybrid_wsi_balanced_f2llm.yaml` | 0.433 | 0.733 | 0.767 | 0.573 |
-| WSI BM25-heavy (0.7 BM25 / 0.3 dense) | `repoqa_hybrid_wsi_bm25_f2llm.yaml` | 0.333 | 0.500 | 0.600 | 0.401 |
-| RRF k=30 | `repoqa_hybrid_rrf_k30_f2llm.yaml` | 0.367 | 0.600 | 0.733 | 0.481 |
-| RRF k=60 | `repoqa_hybrid_rrf_k60_f2llm.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
-| RRF k=100 | `repoqa_hybrid_rrf_k100_f2llm.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
+| WSI dense-heavy (0.3 BM25 / 0.7 dense) | `repoqa_hybrid_wsi_dense_f2llm330m.yaml` | 0.633 | 0.767 | 0.767 | 0.674 |
+| WSI balanced (0.5 / 0.5) | `repoqa_hybrid_wsi_balanced_f2llm330m.yaml` | 0.433 | 0.733 | 0.767 | 0.573 |
+| WSI BM25-heavy (0.7 BM25 / 0.3 dense) | `repoqa_hybrid_wsi_bm25_f2llm330m.yaml` | 0.333 | 0.500 | 0.600 | 0.401 |
+| RRF k=30 | `repoqa_hybrid_rrf_k30_f2llm330m.yaml` | 0.367 | 0.600 | 0.733 | 0.481 |
+| RRF k=60 | `repoqa_hybrid_rrf_k60_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
+| RRF k=100 | `repoqa_hybrid_rrf_k100_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
 
 All seven are full-30-needle GPU runs; p50 search latency is ~0.23 s across the
 board (fusion is cheap — the cost is the dense embed, shared by all). The chart is
@@ -686,7 +686,7 @@ Each cell is recall@1 / recall@10 / MRR:
 |---|---|---|---|
 | BM25 (old default) | `repoqa_bm25.yaml` | 0.17 / 0.40 / 0.24 | 0.05 / 0.30 / 0.11 |
 | Dense | `repoqa_dense_f2llm330m.yaml` | 0.70 / 0.77 / 0.73 | 0.00 / 0.30 / 0.11 |
-| Hybrid (RRF k=60) | `repoqa_hybrid_rrf_k60_f2llm.yaml` | 0.37 / 0.63 / 0.46 | 0.05 / 0.25 / 0.10 |
+| Hybrid (RRF k=60) | `repoqa_hybrid_rrf_k60_f2llm330m.yaml` | 0.37 / 0.63 / 0.46 | 0.05 / 0.25 / 0.10 |
 | Graph-hybrid (RRF + graph) | `repoqa_graph_hybrid_f2llm330m.yaml` | 0.27 / 0.63 / 0.37 | 0.25 / 0.90 / 0.47 |
 | **Dense + graph (new default)** | `repoqa_dense_graph_f2llm330m.yaml` | **0.70 / 0.77 / 0.73** | **0.00 / 1.00 / 0.39** |
 | Dense + graph + centrality | `repoqa_dense_graph_centrality_f2llm330m.yaml` | 0.57 / 0.77 / 0.65 | 0.35 / 0.95 / 0.62 |
@@ -769,12 +769,13 @@ python -m pydocs_eval.plotting \
     --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle \
     --title "RepoQA-2024-06-23 (Python, n=100)"
 
-# Side-by-side compare on the SAME dataset (e.g. a dense baseline vs current BM25).
-# The plot picks up the second bar group automatically — no code change.
+# Side-by-side compare on the SAME dataset: pass a second baseline JSON
+# produced by another config's run — the plot picks up the second bar group
+# automatically, no code change.
 python -m pydocs_eval.plotting \
     benchmarks/baselines/repoqa_snf.json \
-    benchmarks/baselines/repoqa_snf_dense.json \
-    --output benchmarks/results/plots/repoqa_real_with_dense.png \
+    benchmarks/results/your_second_baseline.json \
+    --output benchmarks/results/plots/repoqa_real_compare.png \
     --title "RepoQA-2024-06-23 (Python, n=100)"
 ```
 
@@ -782,7 +783,7 @@ The legend identifies each system as
 `<system> / <config> (<label>) [<git_sha>, n=<tasks>]`, so a figure stays
 self-describing when pasted into a PR description.
 
-![RepoQA-2024-06-23 (Python) baseline plot](docs/repoqa_baselines.png)
+![RepoQA-2024-06-23 (Python) baseline plot](assets/repoqa_baselines.png)
 
 Programmatic API — same behavior, handy in a notebook:
 
@@ -793,7 +794,7 @@ from pydocs_eval.plotting import plot_baselines
 fig = plot_baselines(
     baselines=[
         Path("benchmarks/baselines/repoqa_snf.json"),
-        # Path("benchmarks/baselines/repoqa_snf_dense.json"),  # dense baseline
+        # add further baseline JSONs here for side-by-side bar groups
     ],
     metrics=("recall@1", "recall@5", "recall@10", "mrr"),
     output=Path("benchmarks/results/plots/repoqa_real.png"),
@@ -821,7 +822,7 @@ python -m pydocs_eval.plotting \
     --title "RepoQA-2024-06-23 (Python, n=100) — latency"
 ```
 
-![RepoQA-2024-06-23 (Python) latency plot](docs/repoqa_timings.png)
+![RepoQA-2024-06-23 (Python) latency plot](assets/repoqa_timings.png)
 
 ```python
 from pathlib import Path
@@ -863,7 +864,7 @@ python -m pydocs_eval.plotting \
     --scatter-percentile p50
 ```
 
-![RepoQA-2024-06-23 (Python) quality vs latency](docs/repoqa_quality_vs_latency.png)
+![RepoQA-2024-06-23 (Python) quality vs latency](assets/repoqa_quality_vs_latency.png)
 
 ```python
 from pathlib import Path

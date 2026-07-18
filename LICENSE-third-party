@@ -10,7 +10,7 @@ Citation:
   arXiv:2406.06025, June 2024.
 
 Used as the reference benchmark for retrieval-quality evaluation in
-benchmarks/benchmarks/eval/datasets/repoqa.py. No source code from
+benchmarks/src/pydocs_eval/datasets/repoqa.py. No source code from
 RepoQA is vendored; only its dataset is consumed via huggingface
 datasets at runtime.
 
@@ -22,3 +22,17 @@ License: Apache License 2.0
 
 Optional dependency (uv pip install -e benchmarks[mlflow]). Used as
 the default experiment tracking backend.
+
+----------------------------------------------------------------------
+marshmallow — object serialization / deserialization library
+----------------------------------------------------------------------
+Source: https://github.com/marshmallow-code/marshmallow
+License: MIT License
+Copyright Steven Loria and contributors
+
+A subset of the marshmallow source tree is vendored at
+notebooks/sample_repo/src/marshmallow/ as a realistic sample codebase
+for indexing demos and notebooks. It is not imported by pydocs-mcp at
+runtime and is not part of any distributed wheel. The vendored files
+remain under the upstream MIT license; see the upstream repository for
+the full license text.

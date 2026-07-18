@@ -1,53 +1,15 @@
-# Late-interaction vs BM25 vs LLM tree-reasoning evaluation
+# Late-interaction evaluation reports
 
-**Status: PLACEHOLDER — full small_test sweep in flight.**
+Generated per-run reports for the late-interaction (ColBERT/MaxSim) retrieval
+conditions land in this directory.
 
-This directory will hold the side-by-side comparison of the three opt-in
-retrieval methods that pydocs-mcp ships, all measured on the
-`--split small_test` stratified subsample (30 tasks per dataset):
+For current numbers and analysis, see `benchmarks/README.md` §Results (the
+"Method comparison" table carries the LI rows). The LI conditions themselves —
+overlays, pipelines, and the required `[late-interaction]` extra — are
+documented as conditions 9–10 in `benchmarks/EXPERIMENTS.md`.
 
-| Method | Config | Cost per query |
-|---|---|---|
-| BM25 baseline | `benchmarks/configs/repoqa_bm25.yaml` / `benchmarks/configs/ds1000_ranked.yaml` | free, FTS5 lookup |
-| BM25 + Late-Interaction (ColBERT/MaxSim, LateOn-Code via PyLate + fast-plaid), RRF-fused | `benchmarks/configs/repoqa_hybrid_li_rrf.yaml` / `benchmarks/configs/ds1000_hybrid_li_rrf.yaml` | local CPU encode + MaxSim |
-| Vectorless LLM tree-reasoning (gpt-4o-mini, OpenAI) | `benchmarks/configs/repoqa_tree.yaml` | ~$0.001 / query |
-
-Reproduce locally:
-
-```bash
-set -a; source python/pydocs_mcp/.env; set +a   # OPENAI_API_KEY for the tree config
-
-PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
-  --dataset repoqa --split small_test --systems pydocs-mcp \
-  --configs benchmarks/configs/repoqa_bm25.yaml,\
-benchmarks/configs/repoqa_hybrid_li_rrf.yaml,\
-benchmarks/configs/repoqa_tree.yaml \
-  --report benchmarks/reports/late_interaction_eval/repoqa.md
-
-PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
-  --dataset ds1000 --split small_test --systems pydocs-mcp \
-  --configs benchmarks/configs/ds1000_ranked.yaml,\
-benchmarks/configs/ds1000_hybrid_li_rrf.yaml \
-  --report benchmarks/reports/late_interaction_eval/ds1000.md
-```
-
-No tree-reasoning overlay ships for DS-1000 yet (only
-`benchmarks/configs/repoqa_tree.yaml` exists), so the DS-1000 command
-compares the first two methods.
-
-The late-interaction extra is required:
-
-```bash
-pip install 'pydocs-mcp[late-interaction]'   # pulls pylate + fast-plaid + sentence-transformers + torch
-```
-
-## Placeholder figure
-
-![BM25 baseline placeholder](repoqa_placeholder.png)
-
-The shipped `benchmarks/baselines/repoqa_snf.json` is the only real
-baseline data this directory holds today — measured on the full 100-task
-RepoQA split, BM25 only. Recall@10 = 0.18 (95% CI 0.11-0.26),
-MRR = 0.15. This figure will be replaced by the three-method
-`repoqa.png` / `ds1000.png` comparison plots as soon as the sweep
-completes.
+**Caveat:** hybrid-LI results recorded before 2026-07-10 are BM25-only (the
+overlays' ingestion pipeline key was silently ignored, so fast-plaid stayed
+empty and the late-interaction branch scored nothing) and must not be cited
+as late-interaction evidence. See the LI warning block in
+`benchmarks/EXPERIMENTS.md` for the full explanation.

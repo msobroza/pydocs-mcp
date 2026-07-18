@@ -354,7 +354,7 @@ Results + takeaways live in the README "Graph-ranked default" section.
 |---|---|---|:---:|
 | BM25 | `configs/repoqa_bm25.yaml` | `exp_bm25` | — |
 | Dense | `configs/repoqa_dense_f2llm330m.yaml` | `exp_dense` | — |
-| Hybrid (RRF k=60) | `configs/repoqa_hybrid_rrf_k60_f2llm.yaml` | `exp_hybrid_rrf_k60` | — |
+| Hybrid (RRF k=60) | `configs/repoqa_hybrid_rrf_k60_f2llm330m.yaml` | `exp_hybrid_rrf_k60` | — |
 | Graph-hybrid (RRF + graph_expand + centrality) | `configs/repoqa_graph_hybrid_f2llm330m.yaml` | `exp_hybrid_graph` | `[graph]` |
 | Dense + graph_expand (**new default**) | `configs/repoqa_dense_graph_f2llm330m.yaml` | `exp_dense_graph` | — |
 | Dense + graph_expand + centrality | `configs/repoqa_dense_graph_centrality_f2llm330m.yaml` | `exp_dense_graph_centrality` | `[graph]` |
@@ -366,7 +366,7 @@ Run both splits (GPU wrapper; `--bench-cache off` avoids the cache-reindex bug):
 ```bash
 CFGS=benchmarks/configs/repoqa_bm25.yaml,\
 benchmarks/configs/repoqa_dense_f2llm330m.yaml,\
-benchmarks/configs/repoqa_hybrid_rrf_k60_f2llm.yaml,\
+benchmarks/configs/repoqa_hybrid_rrf_k60_f2llm330m.yaml,\
 benchmarks/configs/repoqa_graph_hybrid_f2llm330m.yaml,\
 benchmarks/configs/repoqa_dense_graph_f2llm330m.yaml,\
 benchmarks/configs/repoqa_dense_graph_centrality_f2llm330m.yaml
@@ -414,3 +414,53 @@ Interpretation caveat: `repoqa-structural` golds are minted from
 caller/callee/override neighbours only, so this sweep can register *harm* on
 the structural gate but not mentions-specific *wins* — those show up (diluted)
 on the standard split until the fixture builder grows a mentions gold slice.
+
+
+## Parent-rollup A/B (kind-aware sibling→parent rollup)
+
+Does rolling sibling hits up to their shared parent (class / module /
+markdown-heading, each with its own coverage threshold) improve ranking over
+returning the raw children? Two conditions on top of the dense + graph +
+centrality stack — the ONLY difference between them is the `parent_rollup`
+step, so the A/B delta isolates the rollup itself. Per-kind threshold sweeps:
+copy `pipelines/exp_parent_rollup.yaml` and edit one `min_coverage_by_kind`
+entry at a time (a supplied mapping replaces the default table wholesale, so
+restate the untouched kinds in every sweep point).
+
+| Method | Config | Pipeline | Extra dep |
+|---|---|---|:---:|
+| Dense + graph + centrality + parent_rollup | `configs/repoqa_parent_rollup.yaml` | `exp_parent_rollup` | `[graph]` |
+| Same, **no** rollup (A/B baseline) | `configs/repoqa_parent_rollup_baseline.yaml` | `exp_parent_rollup_baseline` | `[graph]` |
+
+Both overlays enable `reference_graph.node_scores` (PageRank) for the
+`centrality_prior` step, hence the `[graph]` extra; `graph_expand` and
+`parent_rollup` themselves are pure SQL:
+
+```bash
+PYTHONPATH=benchmarks/src python -m pydocs_eval.runner \
+  --systems pydocs-mcp \
+  --dataset repoqa \
+  --split small_test \
+  --configs \
+benchmarks/configs/repoqa_parent_rollup_baseline.yaml,\
+benchmarks/configs/repoqa_parent_rollup.yaml \
+  --metrics recall@1,recall@5,recall@10,mrr \
+  --report benchmarks/results/repoqa_parent_rollup_ab.md
+```
+
+## Renamed configs (2026-07-18)
+
+The six hybrid F2LLM overlays were renamed to state the model size in the
+filename — they run **F2LLM-v2-330M** (896-dim), not the 0.6B/1024-dim
+variant that the dense family's plain `_f2llm` suffix
+(`repoqa_dense_f2llm.yaml`) denotes. Result JSONL files recorded before this
+date embed the old config stems:
+
+| Old name | New name |
+|---|---|
+| `repoqa_hybrid_rrf_k30_f2llm.yaml` | `repoqa_hybrid_rrf_k30_f2llm330m.yaml` |
+| `repoqa_hybrid_rrf_k60_f2llm.yaml` | `repoqa_hybrid_rrf_k60_f2llm330m.yaml` |
+| `repoqa_hybrid_rrf_k100_f2llm.yaml` | `repoqa_hybrid_rrf_k100_f2llm330m.yaml` |
+| `repoqa_hybrid_wsi_balanced_f2llm.yaml` | `repoqa_hybrid_wsi_balanced_f2llm330m.yaml` |
+| `repoqa_hybrid_wsi_bm25_f2llm.yaml` | `repoqa_hybrid_wsi_bm25_f2llm330m.yaml` |
+| `repoqa_hybrid_wsi_dense_f2llm.yaml` | `repoqa_hybrid_wsi_dense_f2llm330m.yaml` |
