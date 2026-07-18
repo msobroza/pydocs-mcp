@@ -32,10 +32,21 @@ product document firewalls the benchmarks-only ``SYSTEM_PROMPT`` /
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable, Mapping
+from importlib import resources
+from pathlib import Path
 
 from pydocs_mcp.exceptions import PydocsMCPError
+
+# Version stamp folded into the artifact hash (ADR 0006 §6): bump on any
+# change to how the document is rendered/normalized so equal source bytes
+# under a different renderer never collide with an old fingerprint.
+RENDERER_VERSION = 1
+
+_PACKAGED_PACKAGE = "pydocs_mcp.defaults"
+_PACKAGED_FILENAME = "descriptions.md"
 
 # --- Contract constants (canonical home; application/tool_docs.py re-exports
 # them because the benchmarks optimizer's validate() and the §D13 lint import
@@ -299,3 +310,122 @@ def _join(lines: list[str]) -> str:
     if lines and lines[-1] == "":
         lines = lines[:-1]
     return "\n".join(lines)
+
+
+# --- Packaged document loading, override, and artifact hash (ADR 0006) ---
+
+# WHY: the Phase 0 TOOL_DOCS literals were triple-quoted blocks whose bytes
+# end in a newline, and the R6 byte-parity guarantee pins the attribute view
+# to those exact bytes — but the grammar's canonical form cannot carry a bare
+# trailing newline mid-document (normalize strips it). The terminator is
+# re-attached in exactly one place (attribute_views) when a document is
+# projected onto the tool_docs module attributes.
+_TOOL_DOC_TERMINATOR = "\n"
+
+
+def attribute_views(sections: Mapping[str, str]) -> tuple[str, dict[str, str], str]:
+    """Project a validated section mapping onto the ``tool_docs`` attribute shapes.
+
+    Returns ``(SERVER_INSTRUCTIONS, TOOL_DOCS, TURN0_PREAMBLE)``. Both binding
+    paths (import-time packaged load and ``apply_source``) go through this one
+    projection so the terminator rule above cannot drift between them.
+
+    Example:
+        >>> instructions, docs, preamble = attribute_views(load_packaged())  # doctest: +SKIP
+    """
+    tool_view = {
+        name: sections[tool_section_header(name)] + _TOOL_DOC_TERMINATOR
+        for name in FROZEN_TOOL_NAMES
+    }
+    return (
+        sections[SERVER_INSTRUCTIONS_HEADER],
+        tool_view,
+        sections[TURN0_PREAMBLE_HEADER],
+    )
+
+
+def load_packaged() -> dict[str, str]:
+    """Parse + validate the packaged ``defaults/descriptions.md``.
+
+    The single source ``application/tool_docs.py`` populates its module
+    attributes from at import. A failure here is a packaging bug: it raises
+    at import of ``tool_docs`` (loud, pre-release, CI-pinned) rather than
+    serving a partial surface.
+
+    Example:
+        >>> sections = load_packaged()  # doctest: +SKIP
+        >>> sections["TOOL: grep"]  # doctest: +SKIP
+    """
+    text = resources.files(_PACKAGED_PACKAGE).joinpath(_PACKAGED_FILENAME).read_text("utf-8")
+    return _parse_and_validate(text, origin=f"packaged {_PACKAGED_FILENAME}")
+
+
+def apply_source(path: Path) -> str:
+    """Load an override document and rebind the live ``tool_docs`` attributes.
+
+    Read → parse → validate → rebind, in that order: validation is a hard
+    error (ADR 0006 §4 universal strictness — an explicitly named source must
+    never silently degrade to the packaged default) and it happens BEFORE any
+    rebinding so a bad document can never half-apply. Returns the new
+    :func:`current_artifact_hash`.
+
+    Example:
+        >>> apply_source(Path("candidate_descriptions.md"))  # doctest: +SKIP
+        'e3b0c44298fc...'
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise DescriptionSourceError(
+            f"description source {str(path)!r} could not be read: {exc}"
+        ) from exc
+    sections = _parse_and_validate(text, origin=str(path))
+
+    # WHY function-local: tool_docs imports this module at its own import
+    # time (for load_packaged); importing it back at module level would cycle.
+    from pydocs_mcp.application import tool_docs
+
+    instructions, tool_view, preamble = attribute_views(sections)
+    tool_docs.SERVER_INSTRUCTIONS = instructions
+    tool_docs.TURN0_PREAMBLE = preamble
+    # In-place per-key update: consumers hold references to the TOOL_DOCS dict
+    # object (registration reads TOOL_DOCS[name]); rebinding a fresh dict would
+    # strand them on the pre-override mapping.
+    for name, doc in tool_view.items():
+        tool_docs.TOOL_DOCS[name] = doc
+    return current_artifact_hash()
+
+
+def current_artifact_hash() -> str:
+    """SHA-256 fingerprint of the description surface actually being served.
+
+    Hashes ``normalize(render_sections(live module attributes))`` plus
+    :data:`RENDERER_VERSION` — computed on demand from whatever is bound, so
+    it stays truthful under BOTH writers (``apply_source`` and the legacy
+    benchmarks wrapper that rebinds the attributes directly). Per the
+    one-normalization-pass rule, only the normalized surface is hashed.
+
+    Example:
+        >>> current_artifact_hash()  # doctest: +SKIP
+        '4f9a1c0d8be2...'
+    """
+    from pydocs_mcp.application import tool_docs
+
+    sections = {
+        SERVER_INSTRUCTIONS_HEADER: tool_docs.SERVER_INSTRUCTIONS,
+        **{tool_section_header(name): tool_docs.TOOL_DOCS[name] for name in FROZEN_TOOL_NAMES},
+        TURN0_PREAMBLE_HEADER: tool_docs.TURN0_PREAMBLE,
+    }
+    surface = normalize(render_sections(sections))
+    payload = f"renderer:v{RENDERER_VERSION}\n{surface}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _parse_and_validate(text: str, *, origin: str) -> dict[str, str]:
+    try:
+        sections = parse_sections(text, allowed=CANONICAL_HEADERS)
+        validate_sections(sections)
+    except DescriptionSourceError as exc:
+        exc.add_note(f"description source: {origin}")
+        raise
+    return sections
