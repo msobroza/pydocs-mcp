@@ -736,7 +736,7 @@ adopting as the default.
 
 ### Visualizing baselines
 
-`pydocs_eval.plotting` turns baseline JSON files into figures. All commands
+`pydocs_eval.reporting.plotting` turns baseline JSON files into figures. All commands
 below assume the package is installed (see [Install](#install)); from a source
 checkout without installing, prefix them with `PYTHONPATH=benchmarks/src`.
 
@@ -763,7 +763,7 @@ compliant).
 
 ```bash
 # Single baseline on the real 100 needles. Method is in the legend, not the title.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_real.png \
     --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle \
@@ -772,7 +772,7 @@ python -m pydocs_eval.plotting \
 # Side-by-side compare on the SAME dataset: pass a second baseline JSON
 # produced by another config's run — the plot picks up the second bar group
 # automatically, no code change.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     benchmarks/results/your_second_baseline.json \
     --output benchmarks/results/plots/repoqa_real_compare.png \
@@ -789,7 +789,7 @@ Programmatic API — same behavior, handy in a notebook:
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_baselines
+from pydocs_eval.reporting.plotting import plot_baselines
 
 fig = plot_baselines(
     baselines=[
@@ -815,7 +815,7 @@ The bar marks p50, a whisker extends to p95, and the right edge is annotated wit
 the full p50 / p95 / p99 triple (µs / ms / s by magnitude).
 
 ```bash
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_timings.png \
     --timings \
@@ -826,7 +826,7 @@ python -m pydocs_eval.plotting \
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_timings
+from pydocs_eval.reporting.plotting import plot_timings
 
 fig = plot_timings(
     baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
@@ -847,7 +847,7 @@ trade-off line where dense / hybrid retrievers buy recall at higher latency.
 
 ```bash
 # Today: a single dot (BM25 only). A recorded dense baseline adds a second dot.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_quality_vs_latency.png \
     --scatter \
@@ -855,7 +855,7 @@ python -m pydocs_eval.plotting \
     --title "RepoQA-2024-06-23 (Python, n=100) — recall@10 vs latency"
 
 # Swap the X-axis to indexing cost for a quality-vs-indexing-cost view.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_quality_vs_indexing.png \
     --scatter \
@@ -868,7 +868,7 @@ python -m pydocs_eval.plotting \
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_metric_vs_latency
+from pydocs_eval.reporting.plotting import plot_metric_vs_latency
 
 fig = plot_metric_vs_latency(
     baselines=[Path("benchmarks/baselines/repoqa_snf.json")],

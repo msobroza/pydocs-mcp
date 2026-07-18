@@ -9,7 +9,7 @@ a downstream regression-diff script (Task 8) can parse it reliably.
 
 from __future__ import annotations
 
-from pydocs_eval.report import format_report
+from pydocs_eval.reporting.report import format_report
 
 
 def _sample_results() -> dict[tuple[str, str], dict[str, tuple[float, float, float]]]:

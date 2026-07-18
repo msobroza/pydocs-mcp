@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydocs_eval.corpus import materialize_corpus
+from pydocs_eval.datasets.corpus import materialize_corpus
 
 
 def test_materialize_writes_files(tmp_path: Path) -> None:

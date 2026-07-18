@@ -19,7 +19,7 @@ def test_baseline_record_import_pulls_no_plotting_stack() -> None:
     # this process; a fresh interpreter is the only honest measurement of
     # what importing the data model costs.
     code = (
-        "import sys; import pydocs_eval.baseline_record; "
+        "import sys; import pydocs_eval.reporting.baseline_record; "
         "banned = {'matplotlib', 'seaborn', 'pandas'}; "
         "loaded = banned & set(sys.modules); "
         "assert not loaded, f'plotting deps leaked: {loaded}'"
@@ -29,7 +29,7 @@ def test_baseline_record_import_pulls_no_plotting_stack() -> None:
 
 
 def test_from_path_round_trip(tmp_path: Path) -> None:
-    from pydocs_eval.baseline_record import BaselineRecord
+    from pydocs_eval.reporting.baseline_record import BaselineRecord
 
     payload = {
         "dataset": "repoqa-2024-06-23-python",
@@ -51,7 +51,7 @@ def test_from_path_round_trip(tmp_path: Path) -> None:
 
 
 def test_plotting_reexports_the_same_class() -> None:
-    from pydocs_eval import baseline_record, plotting
+    from pydocs_eval.reporting import baseline_record, plotting
 
     assert plotting.BaselineRecord is baseline_record.BaselineRecord
 
@@ -60,7 +60,7 @@ def test_ci_compare_reads_baseline_through_record(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pydocs_eval.ci_compare import main
+    from pydocs_eval.reporting.ci_compare import main
 
     baseline = tmp_path / "b.json"
     baseline.write_text(

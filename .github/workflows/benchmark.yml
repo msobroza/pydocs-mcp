@@ -121,7 +121,7 @@ jobs:
         env:
           LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
         run: |
-          PYTHONPATH=benchmarks/src python -m pydocs_eval.ci_compare \
+          PYTHONPATH=benchmarks/src python -m pydocs_eval.reporting.ci_compare \
             --baseline benchmarks/baselines/repoqa_fixture_baseline.json \
             --current 'benchmarks/results/jsonl/*.jsonl' \
             --metric recall@10 \

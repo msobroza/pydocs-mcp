@@ -45,9 +45,9 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..corpus import materialize_corpus
 from ..serialization import dataset_registry
 from .base_dataset import EvalTask, GoldAnswer
+from .corpus import materialize_corpus
 
 # benchmarks/src/pydocs_eval/datasets/structural_recall.py -> benchmarks/
 # parents: [0]=datasets [1]=pydocs_eval [2]=src [3]=benchmarks

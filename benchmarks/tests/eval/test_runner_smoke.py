@@ -360,7 +360,7 @@ async def test_runner_smoke_returns_full_dataset_task_count(tmp_path: Path) -> N
     fixture pins this to 5 (matching ``repoqa_mini.json``). The report's
     title carries the same count.
     """
-    from pydocs_eval.report import format_report
+    from pydocs_eval.reporting.report import format_report
 
     overlay = _empty_overlay(tmp_path)
     jsonl_dir = tmp_path / "jsonl"

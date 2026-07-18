@@ -16,10 +16,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..corpus import materialize_corpus
 from ..serialization import dataset_registry
 from ._split import _DEFAULT_SMALL_TEST_SIZE, stratified_split, validate_split
 from .base_dataset import EvalTask, GoldAnswer
+from .corpus import materialize_corpus
 
 # WHY: the date-tagged GitHub release. To bump: download the new gz,
 # run _flatten_needles + _row_to_task on it, verify _extract_body produces

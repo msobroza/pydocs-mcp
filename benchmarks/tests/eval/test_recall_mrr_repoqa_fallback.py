@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydocs_eval.ast_match import find_first_match_rank
+from pydocs_eval.metrics.ast_match import find_first_match_rank
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.metrics import MRR, RecallAtK
 from pydocs_eval.metrics._relevance import first_relevant_rank
