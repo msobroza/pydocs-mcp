@@ -12,6 +12,23 @@ recomputable (R1).
 from __future__ import annotations
 
 from pydocs_eval.trajectory.blob_store import canonical_json, write_result_blob
+from pydocs_eval.trajectory.eval_report import (
+    APPLY_PATCH_FAIL,
+    GroundTruthOutcome,
+    classify_infra_marker,
+    infra_outcome,
+    normalize_test_name,
+    outcome_from_report,
+    patch_apply_failed_outcome,
+)
+from pydocs_eval.trajectory.gold_diff import (
+    GoldPatch,
+    GoldPatchError,
+    coerce_test_names,
+    dedupe_instances,
+    modified_files,
+    parse_gold_patch,
+)
 from pydocs_eval.trajectory.merge import (
     CorrelationError,
     CorruptServerTraceError,
@@ -27,6 +44,7 @@ from pydocs_eval.trajectory.merge import (
     render_events_jsonl,
     write_events_jsonl,
 )
+from pydocs_eval.trajectory.path_normalizer import NormalizedPath, normalize_path
 from pydocs_eval.trajectory.rollout import (
     RolloutError,
     RolloutRequest,
@@ -61,14 +79,19 @@ from pydocs_eval.trajectory.stream_reader import (
 )
 
 __all__ = [
+    "APPLY_PATCH_FAIL",
     "SCHEMA_VERSION",
     "CorrelationError",
     "CorruptServerTraceError",
     "DistilledLoopRecord",
     "FiredRule",
+    "GoldPatch",
+    "GoldPatchError",
+    "GroundTruthOutcome",
     "LoopEvent",
     "MergedTrajectory",
     "MissingServerTraceError",
+    "NormalizedPath",
     "RolloutError",
     "RolloutRequest",
     "RolloutResult",
@@ -89,11 +112,21 @@ __all__ = [
     "build_run_config",
     "canonical_json",
     "capture_git_diff",
+    "classify_infra_marker",
+    "coerce_test_names",
+    "dedupe_instances",
     "distill_stream",
+    "infra_outcome",
     "live_predictions_dict",
     "mainline_prediction",
     "merge_trajectory",
+    "modified_files",
+    "normalize_path",
+    "normalize_test_name",
+    "outcome_from_report",
     "parse_event_line",
+    "parse_gold_patch",
+    "patch_apply_failed_outcome",
     "render_events_jsonl",
     "render_predictions_jsonl",
     "run_config_hash",

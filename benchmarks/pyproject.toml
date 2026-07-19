@@ -13,6 +13,12 @@ dependencies = [
     "httpx>=0.27",
     "rich>=13.0",
     "rapidfuzz>=3.0",
+    # Gold-patch parsing (trajectory/gold_diff.py). unidiff is the same
+    # PatchSet library the swebench harness uses for patch→files extraction;
+    # it survives every measured gold-diff edge case (unquoted space paths,
+    # hunkless renames, the binary one-liner, the symlink) without naive
+    # header splitting. MIT-licensed, zero transitive deps.
+    "unidiff>=0.7,<1.0",
     # The optimize layer's run config (OptimizeRunConfig) is a pydantic model
     # loaded from YAML (spec §D7); pyyaml parses the shipped configs + the
     # skillopt env-plugin. Both are transitively present via pydocs-mcp but the
