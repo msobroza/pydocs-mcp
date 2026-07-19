@@ -58,12 +58,21 @@ outcome is re-derived from the per-test lists, not read from a `resolved` flag.
 
 | Metric              | Rule                                                              |
 | ------------------- | ---------------------------------------------------------------- |
-| `tokens`            | input/output/… token totals, **deduped by `message.id`** (never re-sum raw usage). |
+| `tokens`            | **computed** input/output/… totals, **deduped by `message.id`** (never re-sum raw usage), **excluding** the result envelope. |
+| `reported_tokens`   | **client-reported** run total from the stream-json `result` envelope's usage. |
 | `calls_by_tool`     | count of `tool_call` events per tool name.                       |
 | `tool_calls`        | total `tool_call` events.                                        |
 | `turns`             | distinct turn count across tool + loop events.                   |
-| `wall_clock_seconds`| span from first to last tool-call timestamp.                    |
+| `wall_clock_seconds`| span from first to last tool-call `ts`, which the server records via `time.time()` (wall clock — only `latency_ms` is `perf_counter`). |
 | `cost_usd`          | run cost, taken from the run record (not re-derived from tokens).|
+
+**Computed vs reported tokens.** `tokens` is the per-message dedup summed over
+assistant/tool records; `reported_tokens` is the CLI's own run total, carried once
+on the `result` envelope. That envelope's usage is a **run total, not a per-message
+increment**, so it is excluded from the computed sum (adding it would double-count)
+and surfaced separately. The two are cross-checkable: `computed == reported` on a
+clean capture, and a **divergence is a diagnostic signal** (capture drift), not an
+error.
 
 ## Shaped score
 

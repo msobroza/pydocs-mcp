@@ -37,20 +37,29 @@ def test_usage_attached_once_per_message_id() -> None:
 def test_new_message_id_bumps_turn() -> None:
     line1 = _assistant("m1", [_text_block("a")], {"input_tokens": 1})
     line2 = _assistant("m2", [_text_block("b")], {"input_tokens": 1})
-    turns = [r.turn for r in distill_stream(f"{line1}\n{line2}").records]
-    assert turns == [1, 2]
+    records = distill_stream(f"{line1}\n{line2}").records
+    # Each new message.id bumps the turn; the usage-carrier record pins the turn.
+    carrier_turns = [r.turn for r in records if r.usage is not None]
+    assert carrier_turns == [1, 2]
 
 
-def test_usage_survives_tool_only_message() -> None:
-    # An assistant message with only tool_use blocks must still carry its usage.
+def test_usage_rides_dedicated_carrier_not_content_block() -> None:
+    # An assistant message with only MCP tool_use blocks still carries its usage —
+    # now on a dedicated assistant-kind carrier record, with the tool_use content
+    # block carrying no usage. The carrier survives the merge that drops MCP
+    # tool_use records, so per-message usage is never lost.
     line = _assistant(
         "m1",
         [_tool_use("mcp__pydocs__search_codebase", "tu1", {"query": "x"})],
         {"input_tokens": 7},
     )
-    record = distill_stream(line).records[0]
-    assert record.usage == {"input_tokens": 7}
-    assert record.is_mcp is True
+    records = distill_stream(line).records
+    carrier = next(r for r in records if r.usage is not None)
+    assert carrier.kind == "assistant"
+    assert carrier.usage == {"input_tokens": 7}
+    tool_use = next(r for r in records if r.kind == "tool_use")
+    assert tool_use.is_mcp is True
+    assert tool_use.usage is None
 
 
 def test_bare_tool_use_is_not_mcp() -> None:
@@ -72,9 +81,11 @@ def test_result_carries_session_id_and_answer() -> None:
 
 def test_malformed_lines_are_skipped() -> None:
     line = _assistant("m1", [_text_block("ok")], {"input_tokens": 1})
-    distilled = distill_stream(f"not json\n\n{line}\n{{truncated")
-    assert len(distilled.records) == 1
-    assert distilled.records[0].text == "ok"
+    records = distill_stream(f"not json\n\n{line}\n{{truncated").records
+    # Malformed lines contribute nothing; only m1's usage carrier + text distill.
+    texts = [r.text for r in records if r.text is not None]
+    assert texts == ["ok"]
+    assert [r.usage for r in records if r.usage is not None] == [{"input_tokens": 1}]
 
 
 def test_sidecar_wins_over_inline_tool_result(tmp_path) -> None:

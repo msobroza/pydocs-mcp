@@ -22,6 +22,7 @@ from pydocs_eval.trajectory.metrics import (
     hunk_overlap_report,
     p2p_regression_count,
     per_tool_yield,
+    reported_token_totals,
     tool_calls_to_first_gold,
     total_cost_usd,
     turn_count,
@@ -164,6 +165,28 @@ def test_deduped_token_totals_sums_anonymous_usage() -> None:
     a = _loop(None, {"input_tokens": 4})
     b = _loop(None, {"input_tokens": 6})
     assert deduped_token_totals([a, b]).input_tokens == 10
+
+
+def _result_event(usage: dict) -> LoopEvent:
+    """A stream-json result envelope loop event carrying client run-total usage."""
+    return LoopEvent(
+        event_id="r", trajectory_id="t", kind="result", turn=1, message_id=None, usage=usage
+    )
+
+
+def test_result_envelope_usage_not_double_counted() -> None:
+    """FIX C probe: one message (100/20) + result run total (100/20).
+
+    The result envelope carries the CLIENT run total, not an increment. Computed
+    per-message dedup is 100/20; the reported run total is 100/20 — the two are
+    exposed separately and cross-checkable, never summed (which would give 200/40).
+    """
+    message = _loop("m", {"input_tokens": 100, "output_tokens": 20})
+    result = _result_event({"input_tokens": 100, "output_tokens": 20})
+    computed = deduped_token_totals([message, result])
+    reported = reported_token_totals([message, result])
+    assert (computed.input_tokens, computed.output_tokens) == (100, 20)
+    assert (reported.input_tokens, reported.output_tokens) == (100, 20)
 
 
 def test_calls_by_tool_counts() -> None:

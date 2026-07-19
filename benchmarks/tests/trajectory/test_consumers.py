@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydocs_eval.trajectory.attribution import attribute_trajectory, load_events
+from pydocs_eval.trajectory.attribution import attribute_trajectory, load_events, load_header
 from pydocs_eval.trajectory.blob_store import canonical_json
 from pydocs_eval.trajectory.consumers import (
     DerivedRecord,
@@ -25,24 +25,35 @@ from pydocs_eval.trajectory.eval_report import (
     outcome_from_report,
 )
 from pydocs_eval.trajectory.metrics import HunkOverlapReport, TokenTotals, TrajectoryMetrics
+from pydocs_eval.trajectory.rollout import run_config_hash
 from pydocs_eval.trajectory.schema import LoopEvent, ToolEvent
 
 _ATTR = Path(__file__).parent / "fixtures" / "trajectories" / "attribution" / "search_surfaces_gold"
 _TID = "10000000-0000-4000-8000-000000000001"
 _INSTANCE = "widgetlib__pricing-discount"
 _GOLD_F2P = frozenset({"tests/test_pricing.py::test_apply_discount"})
+# Placeholder R2 identity stamps for the non-fixture-backed helper records below.
+_ZERO_HASH = "0" * 64
 
 # Golden byte-identical derived record over the fixed T6 fixture trace (R6). Any
-# change to the score weights, feedback templates, or component math re-pins this.
+# change to the score weights, feedback templates, component math, OR the R2
+# identity stamps (schema/artifact/run-config) re-pins this — and this constant is
+# the SINGLE place the CLI golden (test_compute_metrics_cli) imports, so a re-pin
+# lands in one spot. run_config_ref = run_config_hash of the fixture header's
+# run_config; artifact_hash is the fixture header's (all-zero) artifact hash.
 _GOLDEN_RECORD_JSON = (
-    '{"components":{"budget_headroom":0.8666666666666667,"evidence_yield":1.0,'
+    '{"artifact_hash":'
+    '"0000000000000000000000000000000000000000000000000000000000000000",'
+    '"components":{"budget_headroom":0.8666666666666667,"evidence_yield":1.0,'
     '"f2p_fraction":1.0,"localization_recall":1.0,"p2p_clean":1.0,'
     '"patch_applies":1.0},"cost_usd":0.42,"excluded_from_aggregates":false,'
     '"fail_reason":"","feedback":"Outcome: resolved.\\nGold files: '
     "widgetlib/pricing.py (first surfaced by search_codebase).\\nWasted reads: "
     "none.\\nFailing target tests: none.\\nBudget: turns 2/15; tokens in/out "
     '0/0; tool calls 1.","hard":1,"instance_id":"widgetlib__pricing-discount",'
-    '"label":"resolved","score_version":1,"soft":0.9866666666666667,'
+    '"label":"resolved","run_config_ref":'
+    '"89b3604eb9184a7a186681ee93ee72c2385fb3ecaa5ade538f8e3f194ba2060c",'
+    '"schema_version":1,"score_version":1,"soft":0.9866666666666667,'
     '"taxonomy_version":1,"trajectory_id":"10000000-0000-4000-8000-000000000001"}'
 )
 
@@ -68,6 +79,7 @@ def _build_record(*, cost_usd: float = 0.42) -> DerivedRecord:
     gold_files = frozenset(meta["gold_files"])
     gold_line_map = {k: frozenset(v) for k, v in meta["gold_line_map"].items()}
     final = frozenset(meta["final_patch_files"])
+    header = load_header(_ATTR / "events.jsonl")
     events = load_events(_ATTR / "events.jsonl")
     tools = tuple(e for e in events if isinstance(e, ToolEvent))
     loops = tuple(e for e in events if isinstance(e, LoopEvent))
@@ -100,6 +112,9 @@ def _build_record(*, cost_usd: float = 0.42) -> DerivedRecord:
         patch_bytes=256,
         turn_cap=15,
         cost_usd=cost_usd,
+        schema_version=header.schema_version,
+        artifact_hash=header.artifact_hash,
+        run_config_ref=run_config_hash(header.run_config),
     )
 
 
@@ -170,6 +185,9 @@ def _failed_record() -> DerivedRecord:
         patch_bytes=0,
         turn_cap=15,
         cost_usd=0.0,
+        schema_version=1,
+        artifact_hash=_ZERO_HASH,
+        run_config_ref="failed-ref",
     )
 
 
@@ -238,6 +256,9 @@ def _infra_record(*, cost_usd: float) -> DerivedRecord:
         patch_bytes=100,
         turn_cap=15,
         cost_usd=cost_usd,
+        schema_version=1,
+        artifact_hash=_ZERO_HASH,
+        run_config_ref="infra-ref",
     )
 
 

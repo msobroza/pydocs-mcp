@@ -21,6 +21,8 @@ from pydocs_eval.trajectory.eval_report import (
 from pydocs_eval.trajectory.gate import GateDecision, run_gate
 
 _GATE_SOURCE = Path(gate_mod.__file__)
+_PKG_PREFIX = "pydocs_eval.trajectory."
+_PKG_DIR = _GATE_SOURCE.parent
 # The score/metric modules whose import into the gate would be a leak (lock 3).
 _FORBIDDEN_IMPORTS = {
     "pydocs_eval.trajectory.shaped_score",
@@ -31,8 +33,8 @@ _FORBIDDEN_IMPORTS = {
 }
 
 
-def _imported_modules(source: Path) -> set[str]:
-    """Every module named by an ``import`` / ``from … import`` in the gate module."""
+def _trajectory_imports_in(source: Path) -> set[str]:
+    """The ``pydocs_eval.trajectory.*`` modules directly imported by one source file."""
     tree = ast.parse(source.read_text(encoding="utf-8"))
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -40,13 +42,38 @@ def _imported_modules(source: Path) -> set[str]:
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module)
-    return names
+    return {name for name in names if name.startswith(_PKG_PREFIX)}
 
 
-def test_gate_does_not_import_shaped_score_or_metrics() -> None:
-    """Lock 3: the import-graph pin — the leak edge fails the suite if it appears."""
-    imported = _imported_modules(_GATE_SOURCE)
-    assert imported.isdisjoint(_FORBIDDEN_IMPORTS), imported & _FORBIDDEN_IMPORTS
+def _reachable_trajectory_modules(root: Path) -> set[str]:
+    """Transitive closure of ``pydocs_eval.trajectory.*`` modules reachable from ``root``.
+
+    Walks the intra-package import graph (``gate.py → eval_report → schema → …``) so
+    a leak that hides one hop away — a clean gate that imports a module that itself
+    pulls in the shaped score — is caught, not just a direct gate import.
+    """
+    seen: set[str] = set()
+    frontier = _trajectory_imports_in(root)
+    while frontier:
+        module = frontier.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        source = _PKG_DIR / f"{module.removeprefix(_PKG_PREFIX)}.py"
+        if source.exists():
+            frontier |= _trajectory_imports_in(source) - seen
+    return seen
+
+
+def test_gate_transitive_imports_exclude_score_and_metrics() -> None:
+    """Lock 3: the TRANSITIVE import-graph pin — no forbidden module is reachable
+    from the gate through the whole ``pydocs_eval.trajectory`` package graph."""
+    reachable = _reachable_trajectory_modules(_GATE_SOURCE)
+    assert reachable.isdisjoint(_FORBIDDEN_IMPORTS), reachable & _FORBIDDEN_IMPORTS
+    # The walker is not vacuous: it genuinely follows edges more than one hop deep
+    # (gate → eval_report → schema), so a real leak would be traversed and caught.
+    assert "pydocs_eval.trajectory.eval_report" in reachable
+    assert "pydocs_eval.trajectory.schema" in reachable
 
 
 def test_gate_signature_accepts_only_outcomes_and_cost() -> None:

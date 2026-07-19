@@ -6,13 +6,17 @@ turns into canonical ``LoopEvent``s and joins to the server tool events.
 
 Two load-bearing behaviors this module exists to get right:
 
-1. **Usage dedupe by ``message.id``.** A real transcript emits one record per
-   assistant *content block* (up to 5 per API message) and ``message.usage`` is
-   byte-identical across every record of one ``message.id``. Summing usage per
-   record over-counts input/cache tokens several-fold — the exact defect the
-   Q&A-track ``_parse.py`` still carries. Here usage attaches to at most ONE
-   record per ``message.id``; every later block of the same message carries
-   ``usage=None``, so a downstream sum dedupes for free.
+1. **Usage on a dedicated per-message carrier record.** A real transcript emits
+   one record per assistant *content block* (up to 5 per API message) and
+   ``message.usage`` is byte-identical across every record of one ``message.id``.
+   Summing usage per record over-counts input/cache tokens several-fold — the
+   exact defect the Q&A-track ``_parse.py`` still carries. Here the message's
+   usage rides a single dedicated assistant-kind carrier record (``message_id`` +
+   ``usage``); every content-block record carries ``usage=None``. This does two
+   jobs: a downstream sum dedupes for free, AND the usage survives ``merge.py``
+   replacing MCP ``tool_use`` blocks with server ``ToolEvent``s (which carry no
+   usage) — a message of only MCP tool uses would otherwise lose its usage
+   entirely (ADR 0010).
 2. **Tool-results sidecar awareness.** Oversized tool results spill to a
    ``<sessionId>/tool-results/<tool_use_id>.txt`` sidecar and the inline text is
    elided. When a ``sidecar_dir`` is supplied, a tool-result's text is read from
@@ -41,8 +45,8 @@ class DistilledLoopRecord:
     """One ordered loop record before merge assigns it a trajectory_id/event_id.
 
     ``is_mcp`` distinguishes MCP tool uses (replaced by the server tool event at
-    merge) from bare tool uses (emitted as loop events). ``usage`` is populated
-    only on the first record of each ``message_id`` (the dedupe rule)."""
+    merge) from bare tool uses (emitted as loop events). ``usage`` rides only the
+    per-message assistant carrier record; content-block records carry ``usage=None``."""
 
     kind: str
     turn: int
@@ -114,11 +118,12 @@ def _distill_assistant(
     turn: int,
     out: list[DistilledLoopRecord],
 ) -> int:
-    """Append this assistant message's block records; return the updated turn.
+    """Append this assistant message's carrier + block records; return the turn.
 
-    A new ``message.id`` bumps the turn and carries usage exactly once; the
-    usage lands on the first block record emitted for the message (whether text
-    or tool_use) so a message of only tool_use blocks does not lose its usage.
+    A new ``message.id`` bumps the turn and emits its usage exactly once — on a
+    dedicated assistant-kind carrier record, never on a content block — so a
+    message of only MCP tool_use blocks does not lose its usage when merge drops
+    those blocks for the (usage-less) server tool event.
     """
     message = event.get("message")
     if not isinstance(message, dict):
@@ -129,10 +134,20 @@ def _distill_assistant(
         seen_message_ids.add(message_id)  # type: ignore[arg-type]
         turn += 1
     usage = message.get("usage") if is_new else None
-    blocks = [_block_record(b, turn, message_id) for b in _content_blocks(message)]
-    _attach_usage(blocks, usage if isinstance(usage, dict) else None)
-    out.extend(blocks)
+    out.extend(_usage_carrier(turn, message_id, usage))
+    out.extend(_block_record(b, turn, message_id) for b in _content_blocks(message))
     return turn
+
+
+def _usage_carrier(turn: int, message_id: str | None, usage: object) -> list[DistilledLoopRecord]:
+    """The message's single usage-bearing assistant record, when usage is present.
+
+    Emitting usage on its own assistant-kind record (not a content block) keeps it
+    off the MCP ``tool_use`` records that merge discards, so per-message usage
+    always reaches ``deduped_token_totals`` (ADR 0010)."""
+    if not isinstance(usage, dict):
+        return []
+    return [DistilledLoopRecord(kind="assistant", turn=turn, message_id=message_id, usage=usage)]
 
 
 def _content_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
@@ -154,28 +169,6 @@ def _block_record(block: dict[str, Any], turn: int, message_id: str | None) -> D
         )
     return DistilledLoopRecord(
         kind="assistant", turn=turn, message_id=message_id, text=_string_or_none(block.get("text"))
-    )
-
-
-def _attach_usage(blocks: list[DistilledLoopRecord], usage: dict[str, Any] | None) -> None:
-    if usage is not None and blocks:
-        blocks[0] = _replace_usage(blocks[0], usage)
-
-
-def _replace_usage(rec: DistilledLoopRecord, usage: dict[str, Any]) -> DistilledLoopRecord:
-    # dataclasses.replace would work but importing it for one call site is noise;
-    # the record is small and this keeps the frozen contract explicit.
-    return DistilledLoopRecord(
-        kind=rec.kind,
-        turn=rec.turn,
-        message_id=rec.message_id,
-        usage=usage,
-        tool=rec.tool,
-        tool_input=rec.tool_input,
-        tool_use_id=rec.tool_use_id,
-        text=rec.text,
-        is_error=rec.is_error,
-        is_mcp=rec.is_mcp,
     )
 
 

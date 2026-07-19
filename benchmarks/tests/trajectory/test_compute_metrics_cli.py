@@ -27,22 +27,32 @@ from pydocs_eval.trajectory.compute_metrics_cli import (
     main,
 )
 
+from tests.trajectory.test_consumers import _GOLDEN_RECORD_JSON
+
 _RUN_DIR = Path(__file__).parent / "fixtures" / "run_dir"
 _RESOLVED_TID = "10000000-0000-4000-8000-000000000001"
 _INFRA_TID = "00000000-0000-4000-8000-000000000004"
 
-# Byte-identical with test_consumers._GOLDEN_RECORD_JSON — the resolved fixture
-# reproduces that record's exact inputs, so this pins the whole CLI pipeline.
-_GOLDEN_RESOLVED = (
-    '{"components":{"budget_headroom":0.8666666666666667,"evidence_yield":1.0,'
-    '"f2p_fraction":1.0,"localization_recall":1.0,"p2p_clean":1.0,'
-    '"patch_applies":1.0},"cost_usd":0.42,"excluded_from_aggregates":false,'
-    '"fail_reason":"","feedback":"Outcome: resolved.\\nGold files: '
-    "widgetlib/pricing.py (first surfaced by search_codebase).\\nWasted reads: "
-    "none.\\nFailing target tests: none.\\nBudget: turns 2/15; tokens in/out "
-    '0/0; tool calls 1.","hard":1,"instance_id":"widgetlib__pricing-discount",'
-    '"label":"resolved","score_version":1,"soft":0.9866666666666667,'
-    '"taxonomy_version":1,"trajectory_id":"10000000-0000-4000-8000-000000000001"}'
+# The resolved fixture reproduces the consumers golden's exact inputs, so the CLI's
+# per-trajectory JSON is byte-identical to it. Reusing the constant (not a copy)
+# keeps the golden a SINGLE place to re-pin (score/feedback/component/identity math).
+_GOLDEN_RESOLVED = _GOLDEN_RECORD_JSON
+
+# The five R2 identity stamps every derived output must carry (§5.6). In the
+# aggregate the artifact-hash / run-config stamps are the DISTINCT-set forms.
+_TRAJ_STAMPS = (
+    "schema_version",
+    "score_version",
+    "taxonomy_version",
+    "artifact_hash",
+    "run_config_ref",
+)
+_AGG_STAMPS = (
+    "schema_version",
+    "score_version",
+    "taxonomy_version",
+    "artifact_hashes",
+    "run_config_refs",
 )
 
 
@@ -75,6 +85,30 @@ def test_rerun_is_byte_identical(tmp_path: Path) -> None:
     _run(second)
     for rel in ("aggregate.json", "report.txt", f"trajectories/{_INFRA_TID}.json"):
         assert (first / rel).read_bytes() == (second / rel).read_bytes(), rel
+
+
+def test_all_five_identity_stamps_on_every_output(tmp_path: Path) -> None:
+    """FIX A: every per-trajectory JSON and aggregate.json carries all five R2 stamps.
+
+    Per-trajectory: schema/score/taxonomy versions + artifact_hash + run_config_ref.
+    Aggregate: the same, with artifact_hash / run_config lifted to distinct-set form
+    (artifact_hashes / run_config_refs). The fixture header's stamps must appear.
+    """
+    out = tmp_path / "derived"
+    _run(out)
+    for tid in (_RESOLVED_TID, _INFRA_TID):
+        record = json.loads((out / "trajectories" / f"{tid}.json").read_text(encoding="utf-8"))
+        assert all(stamp in record for stamp in _TRAJ_STAMPS), record.keys()
+        assert record["schema_version"] == 1
+        assert record["artifact_hash"] == "0" * 64
+        assert len(record["run_config_ref"]) == 64
+    doc = json.loads((out / "aggregate.json").read_text(encoding="utf-8"))
+    assert all(stamp in doc for stamp in _AGG_STAMPS), doc.keys()
+    assert doc["schema_version"] == 1
+    # The run mixes two run_configs (resolved vs infra) but one artifact hash: the
+    # aggregate lists the distinct hashes/refs rather than silently picking one.
+    assert doc["artifact_hashes"] == ["0" * 64]
+    assert len(doc["run_config_refs"]) == 2
 
 
 def test_aggregate_excludes_infra_from_score(tmp_path: Path) -> None:

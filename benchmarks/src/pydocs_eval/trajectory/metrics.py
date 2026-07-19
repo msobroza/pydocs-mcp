@@ -12,7 +12,8 @@ layers, per the plan:
 - **edit layer** — patch-applies, F2P fraction, P2P regression count (from the
   ``eval_report.GroundTruthOutcome``);
 - **cost layer** — tokens deduped by ``message_id`` (the ``_parse.py`` over-count
-  trap), calls by tool, turns, wall-clock, ``cost_usd``.
+  trap) with the result-envelope run total excluded and exposed separately, calls
+  by tool, turns, wall-clock, ``cost_usd``.
 
 Fidelity honesty (ADR 0011): the hunk-overlap report separates files with
 hunk-level evidence from file-level-only files, so a hunk number is never
@@ -23,7 +24,7 @@ overview).
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from pydocs_eval.trajectory.attribution import Attribution, Fidelity
@@ -255,14 +256,27 @@ _USAGE_KEYS = (
     "cache_creation_input_tokens",
 )
 
+# The ``result`` LoopEvent is the stream-json result envelope. Its usage is the
+# client's own RUN TOTAL, not a per-message increment (see
+# ``docs/superpowers/research/2026-07-18-phase2-evidence-claude-code-artifacts.md``),
+# so it is excluded from the computed per-message sum and surfaced separately.
+_RESULT_KIND = "result"
+
 
 def deduped_token_totals(loop_events: Iterable[LoopEvent]) -> TokenTotals:
-    """Sum usage across loop events, counting each ``message_id`` ONCE.
+    """The COMPUTED per-message usage sum, counting each ``message_id`` ONCE.
 
     ``message.usage`` is byte-identical across every content-block record of one
     message id, so summing per-record over-counts several-fold — the verified
     ``_parse.py`` failure mode. We dedupe by ``message_id`` (records without one
     are summed individually, as they cannot alias another).
+
+    The ``result`` envelope is EXCLUDED here: its usage is the client-reported
+    RUN TOTAL (see :func:`reported_token_totals`), not a per-message increment, so
+    adding it on top of the per-message usage would double-count. The two totals
+    are cross-checkable — ``computed = per-message dedup``, ``reported = client run
+    total`` — and a divergence between them is a diagnostic capture signal, NOT an
+    error.
 
     Example:
         >>> e = LoopEvent(event_id="x", trajectory_id="t", kind="assistant",
@@ -270,12 +284,35 @@ def deduped_token_totals(loop_events: Iterable[LoopEvent]) -> TokenTotals:
         >>> deduped_token_totals([e, e]).input_tokens
         5
     """
-    seen: dict[str, dict[str, object]] = {}
-    anonymous: list[dict[str, object]] = []
+    seen: dict[str, Mapping[str, object]] = {}
+    anonymous: list[Mapping[str, object]] = []
     for event in loop_events:
+        if event.kind == _RESULT_KIND:
+            continue  # run total, not an increment — counted by reported_token_totals
         _bucket_usage(event, seen, anonymous)
-    totals = Counter()
-    for usage in list(seen.values()) + anonymous:
+    return _sum_usages([*seen.values(), *anonymous])
+
+
+def reported_token_totals(loop_events: Iterable[LoopEvent]) -> TokenTotals:
+    """The client-REPORTED run total from the ``result`` envelope's usage.
+
+    The stream-json result line carries the CLI's own run-total usage. It is
+    surfaced alongside the computed :func:`deduped_token_totals` so the two are
+    cross-checkable; a divergence is diagnostic (capture drift), not an error.
+    Zero totals when no result envelope carried usage.
+    """
+    envelopes = [
+        event.usage
+        for event in loop_events
+        if event.kind == _RESULT_KIND and isinstance(event.usage, Mapping)
+    ]
+    return _sum_usages(envelopes)
+
+
+def _sum_usages(usages: Iterable[Mapping[str, object]]) -> TokenTotals:
+    """Sum the four ``_USAGE_KEYS`` across a collection of usage mappings."""
+    totals: Counter[str] = Counter()
+    for usage in usages:
         for key in _USAGE_KEYS:
             value = usage.get(key)
             if isinstance(value, int):
@@ -284,7 +321,7 @@ def deduped_token_totals(loop_events: Iterable[LoopEvent]) -> TokenTotals:
 
 
 def _bucket_usage(
-    event: LoopEvent, seen: dict[str, dict[str, object]], anonymous: list[dict[str, object]]
+    event: LoopEvent, seen: dict[str, Mapping[str, object]], anonymous: list[Mapping[str, object]]
 ) -> None:
     """Route one event's usage into the dedupe map or the anonymous list."""
     if event.usage is None:
@@ -314,10 +351,12 @@ def turn_count(events: Iterable[ToolEvent | LoopEvent]) -> int:
 
 
 def wall_clock_seconds(tool_events: Iterable[ToolEvent]) -> float:
-    """Span of server ``ts`` (perf_counter seconds) across tool calls.
+    """Span of server ``ts`` (wall-clock ``time.time`` seconds) across tool calls.
 
-    ``max(ts) - min(ts)``; fewer than two tool events → ``0.0``. The server
-    ``ts`` is authoritative for duration; loop wall clock is not recorded here.
+    ``max(ts) - min(ts)``; fewer than two tool events → ``0.0``. The server records
+    ``ts`` via ``time.time()`` (``trace_recorder.py``); only ``latency_ms`` is a
+    ``perf_counter`` measurement. This span is authoritative for duration; loop
+    wall clock is not recorded here.
     """
     times = sorted(event.ts for event in tool_events)
     if len(times) < 2:
@@ -363,6 +402,10 @@ class TrajectoryMetrics:
     wall_clock_seconds: float
     cost_usd: float
     tool_calls: int = field(default=0)
+    # Dataclass field ordering forces the defaulted ``reported_tokens`` to the end,
+    # away from the ``tokens`` field it cross-checks; ``tokens`` is the computed
+    # per-message dedup, ``reported_tokens`` the client run total (see the cost layer).
+    reported_tokens: TokenTotals = field(default_factory=lambda: TokenTotals(0, 0, 0, 0))
 
 
 def compute_metrics(
@@ -395,6 +438,7 @@ def compute_metrics(
         f2p_fraction=f2p_fraction(outcome, gold_f2p),
         p2p_regression_count=p2p_regression_count(outcome, gold_p2p),
         tokens=deduped_token_totals(loops),
+        reported_tokens=reported_token_totals(loops),
         calls_by_tool=calls_by_tool(tools),
         turns=turn_count((*tools, *loops)),
         wall_clock_seconds=wall_clock_seconds(tools),

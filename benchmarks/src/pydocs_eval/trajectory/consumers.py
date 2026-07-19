@@ -43,6 +43,12 @@ class DerivedRecord:
     ``soft`` is the shaped score. ``fail_reason`` is the taxonomy label on a
     failure (``hard=0``) and empty on a resolve. ``excluded_from_aggregates`` is
     the ``infra_error`` carve-out.
+
+    ``schema_version`` / ``artifact_hash`` / ``run_config_ref`` are the R2 identity
+    stamps read from the trajectory header (§5.6): every derived output carries the
+    schema, the indexed-artifact hash, and the run-config reference alongside the
+    ``score_version`` / ``taxonomy_version`` it was produced under, so a stored
+    record is fully traceable to the run and code that made it.
     """
 
     trajectory_id: str
@@ -56,6 +62,9 @@ class DerivedRecord:
     cost_usd: float
     score_version: int
     taxonomy_version: int
+    schema_version: int
+    artifact_hash: str
+    run_config_ref: str
     excluded_from_aggregates: bool
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,6 +81,9 @@ class DerivedRecord:
             "cost_usd": self.cost_usd,
             "score_version": self.score_version,
             "taxonomy_version": self.taxonomy_version,
+            "schema_version": self.schema_version,
+            "artifact_hash": self.artifact_hash,
+            "run_config_ref": self.run_config_ref,
             "excluded_from_aggregates": self.excluded_from_aggregates,
         }
 
@@ -119,6 +131,9 @@ def compute_derived_record(
     patch_bytes: int,
     turn_cap: int | None,
     cost_usd: float,
+    schema_version: int,
+    artifact_hash: str,
+    run_config_ref: str,
     weights: ScoreWeights | None = None,
     config: TaxonomyConfig | None = None,
 ) -> DerivedRecord:
@@ -126,8 +141,10 @@ def compute_derived_record(
 
     ``events`` is the ordered tool+loop stream (needed for the empty/crash/
     never-ran-tests trace detectors); everything else is the parsed metric +
-    attribution + eval facts. The three consumer emitters below project the
-    returned record.
+    attribution + eval facts. ``schema_version`` / ``artifact_hash`` /
+    ``run_config_ref`` are the R2 identity stamps read from the trajectory header
+    and threaded onto every output (§5.6). The three consumer emitters below
+    project the returned record.
     """
     inputs = _taxonomy_inputs(
         metrics=metrics,
@@ -162,6 +179,9 @@ def compute_derived_record(
         cost_usd=cost_usd,
         score_version=scored.score_version,
         taxonomy_version=label.taxonomy_version,
+        schema_version=schema_version,
+        artifact_hash=artifact_hash,
+        run_config_ref=run_config_ref,
         excluded_from_aggregates=label.excluded_from_aggregates,
     )
 

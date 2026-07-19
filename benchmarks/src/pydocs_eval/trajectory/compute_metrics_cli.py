@@ -8,9 +8,10 @@ orchestrates the read-only pipeline — attribution → metrics → ground-truth
 outcome → single derived record (R3) — and writes, under ``--out``:
 
 - ``trajectories/<trajectory_id>.json`` — the per-trajectory :class:`DerivedRecord`
-  as canonical JSON (machine-readable, byte-stable on rerun).
-- ``aggregate.json`` — the run aggregate (FitnessReport-compatible) plus a
-  per-trajectory index (machine-readable).
+  as canonical JSON (machine-readable, byte-stable on rerun), stamped with the R2
+  identity (schema/score/taxonomy versions + artifact hash + run-config ref).
+- ``aggregate.json`` — the run aggregate (FitnessReport-compatible) plus the
+  run-level identity stamps and a per-trajectory index (machine-readable).
 - ``report.txt`` — the same numbers as a human-scannable table.
 
 Every output is a pure function of the immutable trace inputs, so a delete +
@@ -46,8 +47,9 @@ from pydocs_eval.trajectory import (
     outcome_from_report,
     patch_apply_failed_outcome,
     run_aggregate,
+    run_config_hash,
 )
-from pydocs_eval.trajectory.attribution import attribute_trajectory, load_events
+from pydocs_eval.trajectory.attribution import attribute_trajectory, load_events, load_header
 from pydocs_eval.trajectory.metrics import compute_metrics
 from pydocs_eval.trajectory.schema import LoopEvent, ToolEvent, TrajectoryError
 
@@ -155,7 +157,9 @@ def compute_trajectory(traj_dir: Path) -> DerivedRecord:
 
 def _derive(traj_dir: Path, facts: TrajectoryFacts) -> DerivedRecord:
     """Run the read-only attribution → metrics → derived-record pipeline (R3)."""
-    events = load_events(traj_dir / _EVENTS_FILENAME)
+    events_path = traj_dir / _EVENTS_FILENAME
+    header = load_header(events_path)
+    events = load_events(events_path)
     tools = tuple(e for e in events if isinstance(e, ToolEvent))
     loops = tuple(e for e in events if isinstance(e, LoopEvent))
     attribution = attribute_trajectory(
@@ -187,6 +191,9 @@ def _derive(traj_dir: Path, facts: TrajectoryFacts) -> DerivedRecord:
         patch_bytes=facts.patch_bytes,
         turn_cap=facts.turn_cap,
         cost_usd=facts.cost_usd,
+        schema_version=header.schema_version,
+        artifact_hash=header.artifact_hash,
+        run_config_ref=run_config_hash(header.run_config),
     )
 
 
@@ -209,13 +216,23 @@ def compute_run(trace_dir: Path) -> list[DerivedRecord]:
 
 
 def _aggregate_doc(aggregate: RunAggregate, records: list[DerivedRecord]) -> dict[str, object]:
-    """Machine-readable aggregate: the run rollup + a per-trajectory index."""
+    """Machine-readable aggregate: the run rollup + identity stamps + a per-traj index.
+
+    The R2 identity stamps are lifted to run level (§5.6): ``schema_version`` /
+    ``score_version`` / ``taxonomy_version`` are the run's producing versions, and
+    ``artifact_hashes`` / ``run_config_refs`` are the sorted DISTINCT sets across the
+    run's trajectories — a heterogeneous run lists every hash/ref rather than
+    silently picking one, so cross-artifact contamination is visible, not hidden.
+    """
     return {
         "run": aggregate.to_fitness_report_dict(),
         "infra_excluded": aggregate.infra_excluded,
         "n_trajectories": len(records),
         "score_version": records[0].score_version,
         "taxonomy_version": records[0].taxonomy_version,
+        "schema_version": records[0].schema_version,
+        "artifact_hashes": sorted({r.artifact_hash for r in records}),
+        "run_config_refs": sorted({r.run_config_ref for r in records}),
         "trajectories": [_index_row(r) for r in records],
     }
 

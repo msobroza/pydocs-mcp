@@ -37,6 +37,8 @@ from pydocs_eval.trajectory.path_normalizer import normalize_path
 from pydocs_eval.trajectory.schema import (
     LoopEvent,
     ToolEvent,
+    TrajectoryHeader,
+    TrajectorySchemaError,
     parse_event_line,
 )
 
@@ -482,3 +484,25 @@ def load_events(events_jsonl: Path) -> tuple[ToolEvent | LoopEvent, ...]:
         if isinstance(parsed, (ToolEvent, LoopEvent)):
             events.append(parsed)
     return tuple(events)
+
+
+def load_header(events_jsonl: Path) -> TrajectoryHeader:
+    """Parse the R2 identity header (first record) of a canonical ``events.jsonl``.
+
+    The header carries ``schema_version`` / ``artifact_hash`` / ``run_config`` —
+    the identity every derived output must be stamped with (§5.6/R2). A stream whose
+    first record is not a trajectory header is not analyzable, so this raises rather
+    than silently returning a default.
+    """
+    for line in events_jsonl.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parsed = parse_event_line(json.loads(stripped))
+        if isinstance(parsed, TrajectoryHeader):
+            return parsed
+        break
+    raise TrajectorySchemaError(
+        f"{events_jsonl}: first record is not a trajectory_header; the identity"
+        " stamps (schema_version/artifact_hash/run_config) cannot be read"
+    )

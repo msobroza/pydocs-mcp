@@ -20,6 +20,8 @@ from pydocs_eval.trajectory.merge import (
     merge_trajectory,
     render_events_jsonl,
 )
+from pydocs_eval.trajectory.metrics import deduped_token_totals
+from pydocs_eval.trajectory.schema import LoopEvent
 
 TID = "traj-uuid-1"
 
@@ -144,6 +146,33 @@ def test_merge_produces_one_ordered_stream(tmp_path) -> None:
     # the bare Read is a loop event, not a tool event.
     kinds = [getattr(e, "kind", None) for e in merged.events]
     assert "tool_use" in kinds and "result" in kinds
+
+
+def test_mcp_only_message_usage_survives_merge(tmp_path) -> None:
+    """FIX B probe: a lone MCP tool_use message's usage reaches the token totals.
+
+    The message's only content block is an MCP tool_use, which merge replaces with
+    the (usage-less) server ToolEvent. The usage rides a dedicated assistant carrier
+    loop event, so ``deduped_token_totals`` over the merged loop events sees 500/80
+    (before the fix it was silently dropped → 0/0).
+    """
+    server = _write_server(tmp_path, [_header(), _tool(1, "search_codebase")])
+    stream = "\n".join(
+        [
+            _assistant(
+                "m1",
+                [_mcp_use("mcp__pydocs__search_codebase", "u1")],
+                {"input_tokens": 500, "output_tokens": 80},
+            ),
+            json.dumps({"type": "result", "session_id": TID, "result": "done", "is_error": False}),
+        ]
+    )
+    merged = merge_trajectory(
+        server_events_path=server, stream_text=stream, run_record=_run_record()
+    )
+    loops = [e for e in merged.events if isinstance(e, LoopEvent)]
+    totals = deduped_token_totals(loops)
+    assert (totals.input_tokens, totals.output_tokens) == (500, 80)
 
 
 def test_merge_is_deterministic(tmp_path) -> None:
