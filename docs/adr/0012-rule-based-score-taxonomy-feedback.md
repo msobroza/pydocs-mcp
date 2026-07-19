@@ -185,11 +185,22 @@ side reports apply failure — `patch_successfully_applied: false` or the
 with `hard=0` and a zeroed patch-applies component — the owner spec lists
 "patch that fails to apply" and "eval-harness infrastructure error" as
 *separate* degenerate cases, and only the latter is excluded) →
-`budget_exhausted` (turn/token/wall cap hit, no patch) → `never_ran_tests`
-(no test execution observed in trace) → `localization_miss` (no gold file
-surfaced) → `found_but_misdiagnosed` (gold surfaced/inspected, patch touches no
-gold file) → `right_idea_broken_edit` (patch touches gold, F2P not all passing)
-→ `regression_introduced` (F2P pass, P2P regress).
+`budget_exhausted` (turn/token/wall cap hit, no patch) → `resolved` (success
+terminal — see below) → `never_ran_tests` (no test execution observed in
+trace) → `localization_miss` (no gold file surfaced) →
+`found_but_misdiagnosed` (gold surfaced/inspected, patch touches no gold file)
+→ `right_idea_broken_edit` (patch touches gold, F2P not all passing) →
+`regression_introduced` (F2P pass, P2P regress) → `unclassified_failure`
+(exhaustive terminal).
+
+Two terminals were added at implementation time to make the tree **total**
+(accepted by the reconciler; the spec's tree enumerated only failure labels):
+`resolved` is the success terminal, checked after `budget_exhausted` so a
+solved run that never self-tested is not mislabeled `never_ran_tests` — every
+label after it presupposes a non-resolved outcome, so no failure semantics
+change; and `unclassified_failure` guarantees exhaustiveness explicitly
+rather than by implicit fall-through (a non-resolved trajectory matching no
+earlier rule gets a named label, never a silent default).
 
 First-match ordering is the mutual-exclusivity mechanism: a trajectory matching
 two conditions gets exactly the earlier label, deterministically.
