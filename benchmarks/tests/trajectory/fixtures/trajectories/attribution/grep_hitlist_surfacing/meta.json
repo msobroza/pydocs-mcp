@@ -1,0 +1,32 @@
+{
+  "case": "grep_hitlist_surfacing",
+  "description": "grep files_with_matches surfaces the gold file but is a hit list (items leak one line \u2014 NOT inspected); a later read_file inspects it. First-touch credit goes to grep (earliest surfacer), not read_file.",
+  "expected": {
+    "first_touch": {
+      "widgetlib/inventory.py": "grep"
+    },
+    "inspected": [
+      "widgetlib/inventory.py"
+    ],
+    "surfaced": [
+      "widgetlib/inventory.py"
+    ],
+    "used": [
+      "widgetlib/inventory.py"
+    ],
+    "wasted": []
+  },
+  "final_patch_files": [
+    "widgetlib/inventory.py"
+  ],
+  "gold_files": [
+    "widgetlib/inventory.py"
+  ],
+  "gold_line_map": {
+    "widgetlib/inventory.py": [
+      12,
+      13
+    ]
+  },
+  "workspace_root": "/ws"
+}

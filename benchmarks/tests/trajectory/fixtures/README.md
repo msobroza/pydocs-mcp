@@ -18,6 +18,13 @@ fixtures/
     │   ├── crash_before_first_tool/
     │   ├── patch_apply_failed/
     │   └── infra_error/
+    ├── attribution/            # 6 synthetic attribution fixtures (Task 6)
+    │   ├── search_surfaces_gold/
+    │   ├── grep_hitlist_surfacing/
+    │   ├── wasted_read/
+    │   ├── injected_context_excluded/
+    │   ├── fired_rules_not_evidence/
+    │   └── budget_elided_items/
     └── real/                    # captured rollouts + hand labels — see BLOCKER
 ```
 
@@ -72,6 +79,31 @@ so every line is schema-v1 conformant by construction. The two marker-driven
 cases (`patch_apply_failed`, `infra_error`) carry a `run_log.txt` whose marker
 `eval_report.classify_infra_marker` routes to the declared label.
 
+## Attribution fixtures (Task 6)
+
+Six synthetic-but-realistic merged trajectories, each authored through the real
+`schema.py` classes (header first, tool events by seq, loop events interleaved)
+and committed as immutable raw fixtures. Each folder carries `events.jsonl`,
+`meta.json` (`workspace_root`, `gold_files`, `gold_line_map`,
+`final_patch_files`, and an `expected` block the tests assert), and a
+`labels.json` (model-visible hand label: `used_files` + `first_surface`). They
+exercise every ADR 0011 attribution path — CONTENT vs hit-list classification,
+first-touch credit, the grep items-leak, the `INJECTED_CONTEXT_MARKER` /
+`initiator=injected` exclusion, `fired_rules` never counting as evidence, the
+dependency-absolute exclusion, fidelity-stamp honesty, and the search
+items-beyond-text budget-elided over-count. Regenerate with:
+
+```bash
+PYTHONPATH=benchmarks/src python \
+    benchmarks/tests/trajectory/fixtures/trajectories/attribution/_generate.py
+```
+
+Consumed by `test_attribution.py`, `test_metrics.py`, and
+`test_compare_labels.py`. They stand in for hand-labeled real trajectories
+(BLOCKED below) so the attributor, the metric library, and the agreement
+tooling are validated end-to-end now; they are NOT a substitute for the ADR 0011
+Validation-results numbers, which still wait on real labels.
+
 ## Real trajectories (Task 5.2–5.4) — BLOCKED
 
 **Status: not captured. Hard blocker — headless `claude` usage limit.**
@@ -110,7 +142,25 @@ dated 2026-07-19 in
   way the transcript does? Record the answer in the evidence file.
 - **Hand labels:** per captured trajectory, from the model-visible
   (blob-dereferenced) text — genuinely-used files, wasted reads, first-surface
-  credit per gold file — checked in under `real/labels/`.
+  credit per gold file — checked in under `real/labels/`. Each label folder
+  holds `events.jsonl`, `labels.json` (`used_files` + `first_surface`), and a
+  `meta.json` with `workspace_root` + `final_patch_files`, mirroring the
+  `attribution/` fixtures.
+
+Once those exist, the ADR 0011 ≥0.90 validation gate runs as ONE command
+(`compare_labels.validate_directory` computes used-file + first-surface macro
+agreement plus the budget-elided tally):
+
+```bash
+PYTHONPATH=benchmarks/src python -c \
+  "from pathlib import Path; from pydocs_eval.trajectory.compare_labels \
+   import validate_directory, format_report; \
+   print(chr(10).join(format_report(validate_directory(Path( \
+   'benchmarks/tests/trajectory/fixtures/trajectories/real')))))"
+```
+
+The result fills ADR 0011's Validation-results section; that section and its
+status qualifier stay untouched until this runs on real labels.
 
 ### Per-run cost log
 

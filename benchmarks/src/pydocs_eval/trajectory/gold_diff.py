@@ -135,6 +135,32 @@ def _require_instance_id(instance: Mapping[str, object]) -> str:
     return value
 
 
+def target_line_map(patch: str) -> dict[str, frozenset[int]]:
+    """Map each modified file to the 1-indexed TARGET lines its hunks touch.
+
+    A hunk header ``@@ -a,b +c,d @@`` covers target lines ``c .. c+d-1``; the
+    union per file is the region an edit lands on. Used for hunk-level overlap
+    (ADR 0011): does inspected span coverage reach the edited lines. Deletions
+    (``target_length == 0``) contribute no target lines. Paths are
+    ``a/``/``b/``-stripped to the workspace-relative form.
+
+    Example:
+        >>> p = ("diff --git a/x.py b/x.py\\n--- a/x.py\\n+++ b/x.py\\n"
+        ...      "@@ -1,2 +1,2 @@\\n line\\n-old\\n+new\\n")
+        >>> target_line_map(p)["x.py"] == frozenset({1, 2})
+        True
+    """
+    out: dict[str, set[int]] = {}
+    for section in PatchSet(patch or ""):
+        target = getattr(section, "target_file", _DEV_NULL)
+        if target == _DEV_NULL:
+            continue
+        lines = out.setdefault(_strip_ab(target), set())
+        for hunk in section:
+            lines.update(range(hunk.target_start, hunk.target_start + hunk.target_length))
+    return {path: frozenset(lines) for path, lines in out.items()}
+
+
 def coerce_test_names(value: object) -> tuple[str, ...]:
     """Coerce a dataset F2P/P2P field to a tuple of names.
 
