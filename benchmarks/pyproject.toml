@@ -43,6 +43,7 @@ pydocs-eval-agent-track = "pydocs_eval.agent_track.__main__:main"
 pydocs-eval-ci-compare = "pydocs_eval.reporting.ci_compare:main"
 pydocs-eval-plot = "pydocs_eval.reporting.plotting:main"
 pydocs-eval-bench-cache = "pydocs_eval.bench_cache_cli:main"
+pydocs-eval-compute-metrics = "pydocs_eval.trajectory.compute_metrics_cli:main"
 # Extras are split BY COUPLING, not by feature. The base install
 # (dependencies above) serves the black-box agent-efficiency track, which
 # needs only the pydocs-mcp CLI on PATH — NOT the pydocs_mcp Python library.
