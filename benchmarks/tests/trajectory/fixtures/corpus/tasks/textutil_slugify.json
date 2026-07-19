@@ -1,0 +1,17 @@
+{
+  "instance_id": "widgetlib__textutil-slugify",
+  "module": "widgetlib/textutil.py",
+  "problem_statement": "slugify does not lowercase its output. slugify(\"Hello World\") returns \"Hello-World\" but should return \"hello-world\". Symbol collapsing and hyphen stripping already work; only the case is wrong. Make slugify return a lowercase slug.",
+  "gold_patch_path": "gold/textutil_slugify.patch",
+  "modified_files": ["widgetlib/textutil.py"],
+  "FAIL_TO_PASS": [
+    "tests/test_textutil.py::test_slugify_mixed_case"
+  ],
+  "PASS_TO_PASS": [
+    "tests/test_textutil.py::test_slugify_already_lowercase",
+    "tests/test_textutil.py::test_slugify_strips_symbols",
+    "tests/test_textutil.py::test_truncate_short",
+    "tests/test_textutil.py::test_truncate_long",
+    "tests/test_textutil.py::test_truncate_negative_raises"
+  ]
+}

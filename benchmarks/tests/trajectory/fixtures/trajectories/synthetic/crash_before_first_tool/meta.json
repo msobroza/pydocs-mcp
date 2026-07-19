@@ -1,0 +1,11 @@
+{
+  "case": "crash_before_first_tool",
+  "description": "Header + one assistant turn, then an is_error result before any tool_call event. Pre-crash activity exists, so it is NOT empty; the crash lands before the first tool, so it is not budget_exhausted.",
+  "expected_taxonomy": "crash_before_first_tool",
+  "instance_id": "widgetlib__inventory-value",
+  "patch_bytes": 0,
+  "taxonomy_inputs": [
+    "events.jsonl"
+  ],
+  "taxonomy_version_note": "ADR 0012 first-match order, label #3"
+}

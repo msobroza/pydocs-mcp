@@ -1,0 +1,15 @@
+{
+  "instance_id": "widgetlib__inventory-value",
+  "module": "widgetlib/inventory.py",
+  "problem_statement": "Inventory.total_value reports the wrong number. After adding 10 bolts at 0.25 and 4 nuts at 1.50 the total should be 8.5, but total_value returns 14.0 — it is counting units, not money. It should sum quantity times unit price per SKU.",
+  "gold_patch_path": "gold/inventory_value.patch",
+  "modified_files": ["widgetlib/inventory.py"],
+  "FAIL_TO_PASS": [
+    "tests/test_inventory.py::test_total_value_mixed"
+  ],
+  "PASS_TO_PASS": [
+    "tests/test_inventory.py::test_add_item_accumulates",
+    "tests/test_inventory.py::test_quantity_of_unknown",
+    "tests/test_inventory.py::test_add_negative_raises"
+  ]
+}

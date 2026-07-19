@@ -222,3 +222,52 @@ Python Agent SDK docs (fetched this session, https://code.claude.com/docs/en/age
 - `ps -axww -o pid,ppid,command` + `ps eww 8137` (live MCP server env, §3.3, redacted).
 - WebFetch: `https://code.claude.com/docs/en/headless` (full page), `https://code.claude.com/docs/en/mcp` (persisted to `…/tool-results/toolu_01ASJPG4SzEK6iBEf75RTedg.txt`), `https://code.claude.com/docs/en/agent-sdk/python`.
 - Repo cites: `docs/adr/0007-deterministic-routing-suggestions.md:36-43`; `benchmarks/src/pydocs_eval/agent_track/_command.py:23-49,83-135`; `_parse.py:15-32,64-135`; `_runner.py:51-53,153-169`; fixtures `benchmarks/tests/agent_track/fixtures/claude_result.json` + `claude_stream.jsonl` (hand-written).
+
+---
+
+## 6. Phase 2 Task 5 rollout attempt (2026-07-19) — BLOCKED; open questions still open
+
+The Task 5 fixture exercise tried to capture 12–16 capped headless rollouts
+through the Task 3 driver (`pydocs_eval.trajectory.rollout.run_rollout`) against
+the `widgetlib` fixture corpus with trace capture on, in order to (a) answer the
+open stream-shape question below and (b) runtime-verify the `.mcp.json` `env`
+correlation channel end-to-end (ADR 0009 action item 4).
+
+**Result: no rollout ran — the headless `claude` account is over its usage
+limit.** Every `claude -p … --model claude-haiku-4-5-20251001 --max-turns 1`
+invocation on 2026-07-19 returned, verbatim:
+
+```json
+{"type":"result","subtype":"success","is_error":true,"num_turns":1,
+ "result":"You've hit your limit · resets Jul 21 at 2am (Europe/Paris)",
+ "total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0, ...}}
+```
+
+Reproduced twice; `is_error:true`, zero tokens, zero cost — no completion
+occurred. Per the Task 5 cost-discipline rule, no rollouts were run and no
+"real" trajectories were fabricated.
+
+### Still-open (both require a real rollout, blocked until the 2026-07-21 reset)
+
+- **Stream-shape question (per-block usage duplication).** UNANSWERED. §1.6
+  measured the *on-disk transcript* duplication (51 records → 20 distinct
+  `message.id`s, dedupe by `message.id`). Whether the `-p --output-format
+  stream-json` **stdout** the loop parses reproduces the same per-block `usage`
+  duplication was to be settled by inspecting the first captured `stream.jsonl`.
+  The Task 2 `stream_reader.py` already dedupes usage by `message.id`
+  defensively, so the design is correct either way; this measurement only
+  confirms whether the dedupe is load-bearing on the stdout channel. Re-run the
+  first fixture rollout after the reset and record the raw finding here.
+- **`.mcp.json` `env` channel end-to-end (ADR 0009 action item 4).** UNVERIFIED
+  beyond docs. The check — server trace file exists and its header carries the
+  injected `PYDOCS_TRACE__TRAJECTORY_ID` — needs a live rollout; the driver and
+  the product recorder are wired for it, but the closed-source Claude Code
+  spawner's actual `env` pass-through cannot be confirmed offline.
+
+### Regeneration command (run on/after 2026-07-21)
+
+Materialize a corpus workspace, index it once, then drive one rollout with the
+real `ClaudeAgentRunner` as the spawn seam; inspect
+`<trace-dir>/<trajectory_id>/stream.jsonl` for the usage shape and the
+server-side trace header for the injected id. Full recipe + cost log:
+`benchmarks/tests/trajectory/fixtures/README.md` ("Real trajectories — BLOCKED").

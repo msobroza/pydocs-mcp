@@ -1,0 +1,16 @@
+{
+  "instance_id": "widgetlib__calculator-average",
+  "module": "widgetlib/calculator.py",
+  "problem_statement": "widgetlib.calculator.average returns the wrong mean. average([1, 2, 3]) gives 1.5 instead of 2.0, and average([5]) gives 2.5 instead of 5.0. The empty-sequence guard is fine; the arithmetic is off. Fix average so it returns the true arithmetic mean.",
+  "gold_patch_path": "gold/calculator_average.patch",
+  "modified_files": ["widgetlib/calculator.py"],
+  "FAIL_TO_PASS": [
+    "tests/test_calculator.py::test_average_of_three",
+    "tests/test_calculator.py::test_average_single"
+  ],
+  "PASS_TO_PASS": [
+    "tests/test_calculator.py::test_add",
+    "tests/test_calculator.py::test_multiply",
+    "tests/test_calculator.py::test_average_empty_raises"
+  ]
+}
