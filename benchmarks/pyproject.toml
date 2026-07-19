@@ -99,6 +99,7 @@ include = ["pydocs_eval*"]
 [tool.setuptools.package-data]
 "pydocs_eval.optimize.artifacts" = ["*.md"]
 "pydocs_eval.optimize.configs" = ["*.yaml"]
+"pydocs_eval.trajectory.configs" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

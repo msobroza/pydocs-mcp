@@ -271,6 +271,54 @@ qualifier. It must report:*
 - The verdict on option (b): remains shelved, or a concrete ambiguous boundary
   justifies proposing the flag-gated assist in Phase 3.
 
+### Synthetic-only findings (Phase 2, PARTIAL — real-trajectory findings pending)
+
+**Status qualifier stands.** The findings below are from SYNTHETIC fixtures
+only (`benchmarks/tests/trajectory/fixtures/trajectories/`); real hand-labeled
+trajectories do not exist yet — headless `claude` is usage-limited until the
+**2026-07-21 claude-CLI reset**. These partial findings do NOT drop the
+"pending" qualifier; they record what the rules provably do on constructed
+data, so the real-trajectory pass has a baseline to confirm or break.
+
+- **T5 degenerate synthetics — every declared label reproduced.** The four
+  committed degenerate fixtures (`empty_trajectory`, `crash_before_first_tool`,
+  `patch_apply_failed`, `infra_error`) each carry a `meta.json`
+  `expected_taxonomy`, and the decision tree reproduces all four
+  (`test_taxonomy.py::test_t5_synthetic_declared_label_reproduced`). The
+  marker-based `patch_apply_failed` vs `infra_error` split held: the
+  `>>>>> Patch Apply Failed` marker routes to `patch_apply_failed` (model fault,
+  IN aggregates, `hard=0`) and `>>>>> Tests Errored` to `infra_error` (EXCLUDED
+  from aggregates) — verified both via `classify_infra_marker` and via
+  `TaxonomyLabel.excluded_from_aggregates`. *Real-trajectory caveat:* whether
+  observed apply failures are truly model-authored vs infra-shaped (the Costs
+  residual) is not answerable on synthetic data and remains pending.
+- **Versioned test-runner detector held on synthetic Bash events.** The shipped
+  `test_runner_patterns` set (`configs/taxonomy.yaml`, `taxonomy_version: 1`)
+  matched `pytest`, `python -m pytest`, `python -m unittest`, `tox`, and
+  `unittest` on synthetic loop-side Bash `tool_use` events, and rejected
+  non-test commands including a path containing `pytest` (`pytest_helper.py`)
+  via word-boundary anchoring. Run over a T6 merged stream
+  (`search_surfaces_gold`), appending a `pytest` Bash event flips the label off
+  `never_ran_tests` (`test_detector_over_t6_merged_stream_flips_never_ran_tests`).
+  No unlisted runner has been observed yet (no real traces), so no pattern-set
+  addition is warranted; a real invocation outside the set will force one + a
+  `taxonomy_version` bump before the qualifier drops.
+- **Budget predicate: turn cap live, token/wall clauses inert.** With the R2
+  lockfile recording only `max_turns` (token/wall caps `null` +
+  `unrecorded_by_client`), the predicate fired only on the recorded turn cap and
+  the `null`-cap clauses never fired even at 10⁹ synthetic token/wall usage
+  (`test_budget_null_caps_never_fire_even_at_huge_usage`); the predicate stayed
+  total on every input regardless of which caps were present.
+- **Boundary ambiguity — not yet assessable.** On the constructed synthetics the
+  ambiguous pairs (`found_but_misdiagnosed` vs `right_idea_broken_edit`;
+  `budget_exhausted` vs `never_ran_tests`) each resolve to a distinct first-match
+  branch by construction, so no synthetic case blurred. This is a property of
+  hand-built inputs, NOT evidence about real trajectories — the real-trajectory
+  ambiguity verdict is pending the reset.
+- **Option (b) verdict — remains shelved (pending real evidence).** No synthetic
+  boundary blurred, so nothing yet justifies the flag-gated LLM assist. The
+  binding verdict awaits real hand-labeled trajectories.
+
 ## Consequences
 
 Benefits:

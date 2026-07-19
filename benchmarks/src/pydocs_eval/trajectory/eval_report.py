@@ -189,6 +189,14 @@ def patch_apply_failed_outcome(instance_id: str) -> GroundTruthOutcome:
     return _degenerate(instance_id, infra_error=False, patch_apply_failed=True)
 
 
+def no_report_outcome(instance_id: str) -> GroundTruthOutcome:
+    """Factory for a trajectory with no gradeable eval report (empty trajectory or
+    pre-tool crash — no patch reached the harness). Neither infra nor apply
+    failure: unresolved, un-applied, with empty test sets. Kept in this module so
+    ``GroundTruthOutcome`` stays constructible only here (gate-isolation lock 1)."""
+    return _degenerate(instance_id, infra_error=False, patch_apply_failed=False)
+
+
 def _degenerate(
     instance_id: str, *, infra_error: bool, patch_apply_failed: bool
 ) -> GroundTruthOutcome:
