@@ -87,13 +87,20 @@ class ArmConfig:
     attaches the pydocs-mcp MCP server. ``no_tools`` is a THIRD profile the blind
     judge uses — an empty tool surface (``--allowedTools ""``) so it scores on the
     two answers + gold alone and cannot go exploring the filesystem. ``no_tools``
-    takes precedence over ``mcp`` (a tool-less arm has no MCP either)."""
+    takes precedence over ``mcp`` (a tool-less arm has no MCP either).
+
+    ``tools`` (ADR 0016 stage-2 enabler) grants EXACTLY that tuple, joined by
+    spaces, INSTEAD of the profile-derived grant — so a drop-one arm can grant
+    eight individual ``mcp__pydocs-mcp__<tool>`` strings while ``mcp=True`` still
+    attaches the MCP config. Unset (``None``) leaves the profile grant intact, so
+    default arms are byte-identical."""
 
     name: str
     model: str = DEFAULT_MODEL
     max_turns: int = DEFAULT_MAX_TURNS
     mcp: bool = False
     no_tools: bool = False
+    tools: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         # A tool-less arm attaching an MCP server is contradictory — the empty
@@ -103,6 +110,21 @@ class ArmConfig:
             raise ValueError(
                 f"arm {self.name!r} sets both no_tools and mcp: a tool-less arm "
                 "cannot attach an MCP server (no_tools takes precedence)"
+            )
+        # A tool-less arm granting explicit tools is the same contradiction — the
+        # empty surface is definitional, so an explicit grant cannot coexist.
+        if self.no_tools and self.tools is not None:
+            raise ValueError(
+                f"arm {self.name!r} sets both no_tools and tools={self.tools!r}: a "
+                "tool-less arm cannot grant explicit tools (use one or the other)"
+            )
+        # An empty tuple is ambiguous with the tool-less profile; reject it and
+        # point at ``no_tools`` rather than silently emit an empty grant.
+        if self.tools == ():
+            raise ValueError(
+                f"arm {self.name!r} sets tools=(): an empty grant is ambiguous with "
+                "the tool-less profile — use no_tools=True for an empty surface, or "
+                "a non-empty tuple for an explicit grant"
             )
 
 

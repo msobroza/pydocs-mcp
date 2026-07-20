@@ -73,6 +73,37 @@ def test_no_tools_arm_ignores_mcp_config(tmp_path: Path) -> None:
     assert "--mcp-config" not in joined and "--strict-mcp-config" not in joined
 
 
+def test_explicit_tools_tuple_replaces_profile_grant(tmp_path: Path) -> None:
+    # A stage-2 drop-one arm grants exactly its tuple (space-joined), INSTEAD of
+    # the profile-derived "Read Grep Glob Bash mcp__pydocs-mcp__*"; the MCP config
+    # still attaches because mcp=True.
+    arm = ArmConfig(
+        name="drop-get_why",
+        mcp=True,
+        tools=("mcp__pydocs-mcp__search_codebase", "mcp__pydocs-mcp__get_symbol"),
+    )
+    cfg = tmp_path / "mcp.json"
+    cmd = build_claude_command(arm, prompt="q?", cwd=tmp_path, mcp_config=cfg)
+    assert (
+        _allowed_tools_value(cmd) == "mcp__pydocs-mcp__search_codebase mcp__pydocs-mcp__get_symbol"
+    )
+    joined = " ".join(cmd)
+    assert f"--mcp-config {cfg}" in joined and "--strict-mcp-config" in joined
+    # The profile wildcard and file tools are absent — the tuple is exhaustive.
+    assert "mcp__pydocs-mcp__*" not in joined and "Read Grep Glob Bash" not in joined
+
+
+def test_default_arms_grant_unchanged_by_tools_field(tmp_path: Path) -> None:
+    # Regression pin: arms that leave tools=None render byte-identical grants to
+    # the pre-enabler behavior (the Q&A track must not shift).
+    bare = build_claude_command(_arm(mcp=False), prompt="q?", cwd=tmp_path, mcp_config=None)
+    indexed = build_claude_command(
+        _arm(mcp=True), prompt="q?", cwd=tmp_path, mcp_config=tmp_path / "mcp.json"
+    )
+    assert _allowed_tools_value(bare) == "Read Grep Glob Bash"
+    assert _allowed_tools_value(indexed) == "Read Grep Glob Bash mcp__pydocs-mcp__*"
+
+
 def test_mcp_json_launches_pydocs_serve(tmp_path: Path) -> None:
     payload = render_mcp_config(corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"))
     server = json.loads(payload)["mcpServers"]["pydocs-mcp"]

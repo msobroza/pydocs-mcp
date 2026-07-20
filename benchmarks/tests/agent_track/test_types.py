@@ -62,6 +62,32 @@ def test_arm_config_rejects_tool_less_with_mcp() -> None:
         ArmConfig(name="judge", no_tools=True, mcp=True)
 
 
+def test_arm_config_tools_defaults_none() -> None:
+    # Default arms leave ``tools`` unset so the profile-derived grant stands
+    # (stage-2 drop-one arms opt in explicitly).
+    assert ArmConfig(name="bare").tools is None
+
+
+def test_arm_config_explicit_tools_tuple() -> None:
+    # A stage-2 drop-one arm grants exactly eight of the nine task-shaped tools.
+    arm = ArmConfig(name="drop-get_why", mcp=True, tools=("mcp__pydocs-mcp__search_codebase",))
+    assert arm.tools == ("mcp__pydocs-mcp__search_codebase",)
+
+
+def test_arm_config_rejects_tool_less_with_explicit_tools() -> None:
+    # A tool-less arm granting explicit tools is contradictory — the empty
+    # surface is the whole point; fail loud at construction.
+    with pytest.raises(ValueError):
+        ArmConfig(name="judge", no_tools=True, tools=("mcp__pydocs-mcp__grep",))
+
+
+def test_arm_config_rejects_empty_tools_tuple() -> None:
+    # An empty tuple is ambiguous with the tool-less profile — reject it and
+    # point the caller at ``no_tools`` instead.
+    with pytest.raises(ValueError):
+        ArmConfig(name="drop-all", tools=())
+
+
 def test_track_config_defaults_and_guardrails() -> None:
     cfg = AgentTrackConfig()
     assert cfg.max_tasks == 48 and cfg.max_usd == pytest.approx(25.0)
