@@ -64,9 +64,14 @@ def test_composition_tables_exist():
     _require(_SPLITS / "composition-val.md")
 
 
-def test_touch_log_has_exactly_one_read_only_entry_and_no_rollout():
+def test_committed_touch_log_is_phase3_read_only_and_has_no_unauthorized_rollout():
+    # The committed log is the Phase 3 artifact: exactly one read-only manifest entry.
+    # The blanket "no ROLLOUT" assertion is superseded by the Phase 4 pin (ADR 0020
+    # §R4): NO unauthorized rollout entry — with an empty authorized set, that
+    # reproduces the Phase-3-window rule (any rollout would fail) while admitting the
+    # authorized seed+one sweeps the paid arc will later append.
     entries = touch_log.read_entries(_require(_DATA / "pro-touch-log.jsonl"))
     assert len(entries) == 1
     assert entries[0].access_type == touch_log.READ_ONLY_MANIFEST
     assert entries[0].instances_touched == 0
-    assert all(e.access_type != touch_log.ROLLOUT for e in entries)
+    assert touch_log.unauthorized_rollouts(entries, frozenset()) == ()
