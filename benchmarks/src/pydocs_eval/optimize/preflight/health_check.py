@@ -14,8 +14,14 @@ The loop — each leg a real production seam, none faked:
    (offline: the committed widgetlib resolved fixture; the paid arc swaps in a
    live capture — the ONLY leg that ever needs a real model)
 5. :func:`compute_derived_record` over the rollout          → :class:`DerivedRecord`
-6. simulated :func:`run_gate` (ground-truth resolve + cost) → :class:`GateDecision`
-7. candidate super-ledger lineage entry                     → :class:`CandidateRecord`
+6. :func:`minibatch_filter` (canned shaped scores + margin) → :class:`FilterDecision`
+7. simulated :func:`run_gate` (ground-truth resolve + cost) → :class:`GateDecision`
+8. candidate super-ledger lineage entry                     → :class:`CandidateRecord`
+
+Leg 6 exercises the gate-cadence seam with CANNED shaped scores (the campaign's
+real ``m_mb`` is a ``[TO BE MEASURED]`` slot); it is a distinct authority from the
+gate — a filter SKIP would still be HEALTHY machinery, but the dry-run drives the
+PROCEED path so the whole loop reaches the ledger.
 
 Every output is a deterministic function of committed inputs, so a delete+rerun
 regenerates byte-identical results (pinned by a byte-stability test).
@@ -36,6 +42,7 @@ from pydocs_eval.optimize.candidates.ledger import (
     GateOutcome,
     MutationRecord,
 )
+from pydocs_eval.optimize.minibatch_filter import FilterDecision, minibatch_filter
 from pydocs_eval.trajectory import (
     GroundTruthOutcome,
     infra_outcome,
@@ -64,6 +71,13 @@ _MUTATION_MARKER = "Dry-run synthetic mutation marker."
 _FACTS_FILENAME = "facts.json"
 _LEDGER_DIRNAME = "candidate-ledger"
 
+# Canned gate-cadence inputs (leg 6). The real campaign sizes m_mb from the Phase
+# 3 noise probe; the dry-run only proves the seam wires up, so it feeds a zero
+# best-score + zero margin — the candidate's own shaped score (>= 0) then clears
+# the margin and the loop PROCEEDs to the gate.
+_CANNED_BEST_MINIBATCH_SCORE = 0.0
+_CANNED_MINIBATCH_MARGIN = 0.0
+
 
 @dataclass(frozen=True, slots=True)
 class PreflightResult:
@@ -81,6 +95,7 @@ class PreflightResult:
     validity: ValidityVerdict
     rendered_bytes: int
     derived: DerivedRecord
+    filter_decision: FilterDecision
     gate: GateDecision
     record: CandidateRecord
     ledger_path: Path
@@ -89,6 +104,7 @@ class PreflightResult:
     def ok(self) -> bool:
         return (
             self.validity.valid
+            and self.filter_decision is FilterDecision.PROCEED
             and self.gate.within_budget
             and self.record.valid
             and self.record.n_rollouts == 1
@@ -120,6 +136,9 @@ def run_preflight(*, rollout_fn: CannedRollout, workspace: Path) -> PreflightRes
     rendered = mutated.render()
     rollout_dir = rollout_fn()
     derived = compute_trajectory(rollout_dir)
+    filter_decision = minibatch_filter(
+        derived.soft, _CANNED_BEST_MINIBATCH_SCORE, _CANNED_MINIBATCH_MARGIN
+    )
     gate = _simulated_gate(rollout_dir)
     record = _record_candidate(workspace, seed, mutated, rendered, validity, derived, gate)
     return PreflightResult(
@@ -129,6 +148,7 @@ def run_preflight(*, rollout_fn: CannedRollout, workspace: Path) -> PreflightRes
         validity=validity,
         rendered_bytes=len(rendered.encode("utf-8")),
         derived=derived,
+        filter_decision=filter_decision,
         gate=gate,
         record=record,
         ledger_path=_ledger_path(workspace),

@@ -21,6 +21,7 @@ from pydocs_eval.optimize.prereg.config import (
 _PACKAGED = (
     Path(__file__).parents[3] / "src/pydocs_eval/optimize/configs/campaign_preregistration.yaml"
 )
+_VAL_TXT = Path(__file__).parents[3] / "data/swe/splits/val.txt"
 
 
 def _packaged() -> PreRegistration:
@@ -39,6 +40,15 @@ def _filled() -> PreRegistration:
         g_gate_evals=10,
         minibatch_panel_instance_ids=("widgetlib__panel-1",),
     )
+
+
+def test_n_val_equals_live_val_txt_distinct_line_count() -> None:
+    """The pre-registered ``n_val`` is not a stale literal: it equals the CURRENT
+    distinct-line count of the committed val gate list (ADR 0018 §Evidence — the
+    559-instance gate). A split re-derivation that changes val.txt fails here
+    until the registration is re-frozen against it."""
+    distinct = {line.strip() for line in _VAL_TXT.read_text().splitlines() if line.strip()}
+    assert _packaged().n_val == len(distinct)
 
 
 def test_packaged_loads_with_fixed_slots_set() -> None:

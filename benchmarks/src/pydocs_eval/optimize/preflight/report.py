@@ -33,8 +33,10 @@ def _leg_lines(result: PreflightResult) -> list[str]:
         "4. rollout       canned (offline widgetlib fixture; paid arc = live capture)",
         f"5. derived       hard={result.derived.hard} soft={result.derived.soft:.4f} "
         f"label={result.derived.label} cost=${result.derived.cost_usd:.4f}",
-        f"6. gate          resolve_rate={result.gate.resolve_rate:.4f} "
+        f"6. minibatch     filter={result.filter_decision.value} "
+        "(canned shaped scores; campaign m_mb is [TO BE MEASURED])",
+        f"7. gate          resolve_rate={result.gate.resolve_rate:.4f} "
         f"n_graded={result.gate.n_graded} within_budget={result.gate.within_budget}",
-        f"7. ledger        {result.ledger_path.name}  entry={result.record.candidate_hash[:12]} "
+        f"8. ledger        {result.ledger_path.name}  entry={result.record.candidate_hash[:12]} "
         f"n_rollouts={result.record.n_rollouts}",
     ]

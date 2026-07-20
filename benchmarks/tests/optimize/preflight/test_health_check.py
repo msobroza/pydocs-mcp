@@ -8,6 +8,7 @@ import pytest
 
 from pydocs_eval.optimize.candidates.candidate import Candidate
 from pydocs_eval.optimize.candidates.firewall import screen_candidate
+from pydocs_eval.optimize.minibatch_filter import FilterDecision
 from pydocs_eval.optimize.preflight.health_check import (
     default_rollout_dir,
     run_preflight,
@@ -52,8 +53,14 @@ def test_preflight_derives_resolved_record(tmp_path: Path) -> None:
     assert result.derived.instance_id == "widgetlib__pricing-discount"
 
 
+def test_preflight_minibatch_filter_proceeds(tmp_path: Path) -> None:
+    """Leg 6: the canned minibatch filter clears its margin and PROCEEDs to the gate."""
+    result = run_preflight(rollout_fn=_rollout, workspace=tmp_path)
+    assert result.filter_decision is FilterDecision.PROCEED
+
+
 def test_preflight_gate_consumes_ground_truth(tmp_path: Path) -> None:
-    """Leg 6: the simulated gate reports a within-budget full resolve."""
+    """Leg 7: the simulated gate reports a within-budget full resolve."""
     result = run_preflight(rollout_fn=_rollout, workspace=tmp_path)
     assert result.gate.resolve_rate == 1.0
     assert result.gate.n_graded == 1
@@ -61,7 +68,7 @@ def test_preflight_gate_consumes_ground_truth(tmp_path: Path) -> None:
 
 
 def test_preflight_writes_ledger_lineage_entry(tmp_path: Path) -> None:
-    """Leg 7: the mutated candidate lands in the super-ledger with seed lineage."""
+    """Leg 8: the mutated candidate lands in the super-ledger with seed lineage."""
     result = run_preflight(rollout_fn=_rollout, workspace=tmp_path)
     assert result.ledger_path.is_file()
     assert result.record.lineage_parent == Candidate.seed().candidate_hash

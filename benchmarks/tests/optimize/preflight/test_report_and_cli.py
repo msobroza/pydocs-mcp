@@ -16,7 +16,7 @@ def _rollout() -> Path:
 
 
 def test_report_says_healthy_and_lists_all_legs(tmp_path: Path) -> None:
-    """The report headlines HEALTHY and names all seven loop legs."""
+    """The report headlines HEALTHY and names all eight loop legs."""
     result = run_preflight(rollout_fn=_rollout, workspace=tmp_path)
     text = render_preflight_report(result)
     assert "verdict: HEALTHY" in text
@@ -26,8 +26,9 @@ def test_report_says_healthy_and_lists_all_legs(tmp_path: Path) -> None:
         "3. render+hash",
         "4. rollout",
         "5. derived",
-        "6. gate",
-        "7. ledger",
+        "6. minibatch",
+        "7. gate",
+        "8. ledger",
     ):
         assert leg in text
 
