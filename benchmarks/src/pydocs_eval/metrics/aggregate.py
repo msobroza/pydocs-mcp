@@ -195,6 +195,36 @@ def mcnemar_exact_p(b: int, c: int) -> float:
     return min(1.0, 2.0 * tail / (2**n))
 
 
+def mcnemar_exact_p_one_sided(b: int, c: int) -> float:
+    """One-sided exact-binomial McNemar p-value for H1: arm A resolves MORE than arm B.
+
+    ``b`` = pairs where A resolves and B does not; ``c`` = the reverse (same 2×2
+    convention as :func:`mcnemar_exact_p`). Under H0 the number of A-wins is
+    ``Binomial(n, 0.5)`` with ``n = b + c``, so the one-sided p in the A-better
+    direction is the upper tail ``P(X >= b) = Σ_{i=0}^{c} C(n, i)·0.5ⁿ`` (equal by
+    the binomial symmetry ``C(n, i) = C(n, n−i)``).
+
+    This is NOT ``mcnemar_exact_p / 2``: halving the two-sided p is only correct
+    when ``b >= c`` and would falsely report a small p when ``b < c`` (arm A did
+    WORSE). Here ``b < c`` correctly yields ``p > 0.5`` — no evidence of
+    improvement — because the tail then covers more than half the mass. ``b = c``
+    gives ``p >= 0.5`` (a tie is not improvement); ``b = c = 0`` returns ``1.0``.
+
+    Used by the ADR 0018 paired-exact acceptance gate (accept iff ``p <= alpha``),
+    where A = candidate, B = incumbent.
+
+    Raises:
+        ValueError: if ``b`` or ``c`` is negative — counts, not signed deltas.
+    """
+    if b < 0 or c < 0:
+        raise ValueError(f"discordant counts must be >= 0, got b={b!r}, c={c!r}")
+    n = b + c
+    if n == 0:
+        return 1.0
+    tail = sum(math.comb(n, i) for i in range(c + 1))
+    return min(1.0, tail / (2**n))
+
+
 # --- Δ_min-pinned McNemar sample size (ADR 0016 §Evidence power curve) ----
 
 # WHY hardcoded z-quantiles are NOT used: alpha/power are parameters, so we

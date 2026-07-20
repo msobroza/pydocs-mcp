@@ -50,6 +50,14 @@ from pydocs_eval.trajectory.merge import RunRecord
 _SESSION_ID_FLAG = "--session-id"
 _TRACE_ENV_TRAJECTORY_ID = "PYDOCS_TRACE__TRAJECTORY_ID"
 _TRACE_ENV_DIR = "PYDOCS_TRACE__DIR"
+# Route A candidate injection (ADR 0017 §Decision 5): the product's descriptions
+# override env var. Re-declared here (not imported) so this core rollout module
+# stays importable in a base install WITHOUT the [retrieval] extra — the same
+# public-re-declaration + parity-test idiom candidate.py uses for the artifact
+# hash. Pinned byte-for-byte against
+# ``pydocs_mcp.application.description_override.DESCRIPTIONS_PATH_ENV_VAR`` by a
+# parity test so a product rename fails loudly rather than silently mis-injecting.
+_SERVE_DESCRIPTIONS_PATH_ENV = "PYDOCS_SERVE__DESCRIPTIONS_PATH"
 
 # Per-trajectory + run-level artifact layout under the run's ``trace_dir``.
 _STREAM_FILENAME = "stream.jsonl"
@@ -108,6 +116,9 @@ class RolloutRequest:
     dataset_revision: str | None = None
     versions: Mapping[str, str] = field(default_factory=dict)
     model_name_or_path: str | None = None
+    # Route A candidate injection (ADR 0017): the rendered candidate description
+    # document this rollout serves. ``None`` = the packaged product surface.
+    descriptions_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,14 +168,27 @@ def _validate_trajectory_id(trajectory_id: str) -> str:
     return trajectory_id
 
 
-def trace_env_map(*, trajectory_id: str, trace_dir: Path) -> dict[str, str]:
+def trace_env_map(
+    *, trajectory_id: str, trace_dir: Path, descriptions_path: Path | None = None
+) -> dict[str, str]:
     """Build the ``.mcp.json`` ``env`` block that correlates the server recorder.
+
+    ``descriptions_path`` (optional, ADR 0017 Route A) additively injects the
+    product's ``PYDOCS_SERVE__DESCRIPTIONS_PATH`` override so the served
+    ``pydocs_mcp`` binds this rollout's candidate description surface through
+    ``apply_source`` — reaching the product before tool registration and making
+    the trace header's ``artifact_hash`` self-identify the candidate. Omitting it
+    is byte-identical to the pre-Route-A env, so non-candidate rollouts are
+    untouched.
 
     Example:
         >>> trace_env_map(trajectory_id="t", trace_dir=Path("/d"))
         {'PYDOCS_TRACE__TRAJECTORY_ID': 't', 'PYDOCS_TRACE__DIR': '/d'}
     """
-    return {_TRACE_ENV_TRAJECTORY_ID: trajectory_id, _TRACE_ENV_DIR: str(trace_dir)}
+    env = {_TRACE_ENV_TRAJECTORY_ID: trajectory_id, _TRACE_ENV_DIR: str(trace_dir)}
+    if descriptions_path is not None:
+        env[_SERVE_DESCRIPTIONS_PATH_ENV] = str(descriptions_path)
+    return env
 
 
 def build_rollout_command(
@@ -205,7 +229,11 @@ def write_trace_mcp_config(request: RolloutRequest) -> Path | None:
     rendered = render_mcp_config(
         corpus_dir=request.corpus_dir,
         python=request.python,
-        env=trace_env_map(trajectory_id=request.trajectory_id, trace_dir=request.trace_dir),
+        env=trace_env_map(
+            trajectory_id=request.trajectory_id,
+            trace_dir=request.trace_dir,
+            descriptions_path=request.descriptions_path,
+        ),
     )
     path = _trajectory_dir(request) / _MCP_CONFIG_FILENAME
     path.write_text(rendered, encoding="utf-8")

@@ -43,3 +43,35 @@ def test_config_hash_is_stable_and_order_independent():
 
 def test_read_missing_log_is_empty(tmp_path):
     assert touch_log.read_entries(tmp_path / "absent.jsonl") == []
+
+
+# --- Phase 4 pin: authorized rollouts admitted, unauthorized ones fail (ADR 0020) ---
+
+
+def _authorized_rollout(config, justification="owner-authorized seed+one sweep"):
+    return touch_log.rollout_entry(config, justification=justification, instances_touched=266)
+
+
+def test_authorized_rollout_is_admitted():
+    cfg = {"campaign_id": "frozen-seed"}
+    entry = _authorized_rollout(cfg)
+    authorized = frozenset({touch_log.config_hash(cfg)})
+    assert touch_log.unauthorized_rollouts([entry], authorized) == ()
+
+
+def test_rollout_under_unknown_config_is_flagged():
+    entry = _authorized_rollout({"campaign_id": "rogue"})
+    known = frozenset({touch_log.config_hash({"campaign_id": "frozen-seed"})})
+    assert touch_log.unauthorized_rollouts([entry], known) == (entry,)
+
+
+def test_rollout_without_justification_is_flagged():
+    cfg = {"campaign_id": "frozen-seed"}
+    entry = _authorized_rollout(cfg, justification="   ")
+    authorized = frozenset({touch_log.config_hash(cfg)})
+    assert touch_log.unauthorized_rollouts([entry], authorized) == (entry,)
+
+
+def test_read_only_entries_are_never_flagged():
+    entry = touch_log.read_only_entry({"a": 1}, justification="manifest")
+    assert touch_log.unauthorized_rollouts([entry], frozenset()) == ()

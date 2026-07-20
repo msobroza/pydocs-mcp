@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 from pydocs_eval.metrics.aggregate import (
     mcnemar_exact_p,
+    mcnemar_exact_p_one_sided,
     mcnemar_from_pairs,
     mcnemar_sample_size,
     mean_with_bootstrap_ci,
@@ -175,6 +176,34 @@ def test_mcnemar_exact_p_symmetric_in_arguments() -> None:
 def test_mcnemar_exact_p_negative_count_raises() -> None:
     with pytest.raises(ValueError, match="-1"):
         mcnemar_exact_p(-1, 4)
+
+
+def test_mcnemar_one_sided_is_lower_tail_up_to_c() -> None:
+    # b=10, c=0, n=10: upper tail P(X>=10) = C(10,0)/2^10 = 1/1024.
+    assert mcnemar_exact_p_one_sided(10, 0) == pytest.approx(1 / 1024)
+
+
+def test_mcnemar_one_sided_is_not_half_two_sided_when_worse() -> None:
+    # b=2, c=8 (candidate WORSE): halving the two-sided p would wrongly report a
+    # small p. The correct one-sided p is the lower tail up to c=8 → > 0.5.
+    assert mcnemar_exact_p_one_sided(2, 8) > 0.5
+    # Directional agreement: when b >= c the one-sided p is exactly half the
+    # two-sided (b=8, c=2, two-sided 0.109375).
+    assert mcnemar_exact_p_one_sided(8, 2) == pytest.approx(0.109375 / 2)
+
+
+def test_mcnemar_one_sided_tie_is_not_significant() -> None:
+    # b=c=5: a tie is not improvement — p >= 0.5.
+    assert mcnemar_exact_p_one_sided(5, 5) >= 0.5
+
+
+def test_mcnemar_one_sided_no_discordance_is_one() -> None:
+    assert mcnemar_exact_p_one_sided(0, 0) == 1.0
+
+
+def test_mcnemar_one_sided_negative_count_raises() -> None:
+    with pytest.raises(ValueError, match="-1"):
+        mcnemar_exact_p_one_sided(3, -1)
 
 
 # --- power-curve sizing (ADR 0016 Δ_min-pinned table) --------------------

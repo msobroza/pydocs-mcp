@@ -236,3 +236,174 @@ reconciliation gap has a first place to look.
    exploratory (R4). State the frozen-test-set narrowness caveat (3 repos) in any
    report that eventually cites it; this phase runs **zero** frozen-test rollouts
    (R3).
+
+---
+
+# Optimizer-loop runbook (Phase 4)
+
+Operating procedure for the Phase 4 optimizer: run the GEPA candidate loop on top
+of the Phase 3 baseline machinery, resume it from the candidate super-ledger, and
+close it out into a freeze decision. The optimizer layer
+(`benchmarks/src/pydocs_eval/optimize/`) is a thin adapter over the same campaign
+runner the baseline uses — every rollout goes through the Phase 3 `rollout_fn`
+seam, every score through the Phase 2 metric module, and every acceptance through
+the Phase 2 gate. The design authority is `docs/adr/0017`–`0020`.
+
+**Standing phase split.** The optimizer's *code* is the no-spend deliverable; the
+*campaign* is paid. Every measured input the loop reads (π_d, cost/rollout, the
+minibatch margin `m_mb`, the confirmed target, the calibrated weights, the
+discriminative subset) is a `[TO BE MEASURED]` slot the Phase 3 paid arc fills.
+The pre-registration launch gate (`optimize/prereg/`) **refuses to authorize a
+launch while any measured slot is null** — the no-spend stage ends at the dry-run
+and the frozen pre-registration.
+
+## The dry-run is the standing health check (run this first, always)
+
+Before any paid candidate evaluation is authorized, the whole loop must be green
+end to end with **zero** model spend. The dry-run walks every production seam —
+synthetic mutation → validity firewall → render + serve-truthful hash → **one
+canned rollout** (the committed widgetlib fixture; the paid arc swaps in the only
+leg that ever needs a real model) → derived record → simulated gate → candidate
+super-ledger entry:
+
+```bash
+python -m pydocs_eval.optimize.preflight            # the standing precondition gate
+```
+
+Exit 0 means the loop renders `HEALTHY` (mutation valid, derived record computed,
+gate within budget, ledger recorded the candidate). Any non-zero exit names the
+broken seam and **blocks** every paid evaluation (ADR 0018 §2). Every output is a
+deterministic function of committed inputs, so a delete-and-rerun regenerates
+byte-identical results (pinned by a byte-stability test) — treat a byte drift as a
+broken seam, not noise. The dry-run also exercises a validity-REJECTED proposal,
+demonstrating from the ledger alone that a rejected candidate costs **zero**
+rollouts (ADR 0019).
+
+## Freeze the pre-registration (no-spend, one-time)
+
+The acceptance rule and every fixed decision slot are pre-registered **before any
+data arrives**. Inspect the shipped registration and enforce the launch gate:
+
+```bash
+python -m pydocs_eval.optimize.prereg                # print the frozen registration
+python -m pydocs_eval.optimize.prereg --authorize    # exit 3 while any measured slot is null
+```
+
+The fixed slots (α = 0.05 one-sided, Δ_min = 0.05, K = 5 plateau, N_val = 559,
+the paired-exact-McNemar gate rule, the ~60/40 explore/verify split, and the
+`c_sel` selection-cost threshold) are set now and **must not change after data
+arrives** — `registration_hash()` over the frozen text is what every candidate
+super-ledger entry references, so any edit to a fixed slot is detectable as a hash
+change. The measured slots stay null until the paid arc (ADR 0018 action item 7).
+
+## Operate — one lockfile per candidate
+
+Each candidate evaluation **is its own campaign**: a distinct rendered artifact
+means a distinct `artifact_hash`, which folds into a distinct `campaign_id` (R5
+verbatim — `CellConfig` is never widened with a per-cell artifact field). The
+candidate is injected through **Route A**: the runner writes the rendered
+candidate document to disk and threads `PYDOCS_SERVE__DESCRIPTIONS_PATH` through
+the existing `.mcp.json` env slot; it terminates at the product `apply_source`,
+and the trace header self-identifies the candidate via `artifact_hash`
+(`current_artifact_hash()` over the live attributes). Route B (the
+`_overlay_server` command swap) is the fallback only if a real run surfaces an
+env-channel fault — both routes bind through `apply_source`, so the stamped hash
+is truthful either way.
+
+Per candidate the loop runs, in order:
+
+- **Propose** — GEPA mutates one of the 11 candidate sections (or merges) via the
+  round-robin selector; reflection reads the Phase 2 feedback records
+  (facts-only, projected by `consumers.gepa_pair`).
+- **Validate** — the zero-cost firewall (`optimize/candidates/firewall.py`)
+  screens the proposal against the full 11-header grammar and both token-budget
+  dimensions. An invalid candidate is ledgered and **dies here at ~96 µs**, never
+  reaching a rollout.
+- **Screen (minibatch)** — a valid candidate is scored on the fixed, val-disjoint
+  minibatch panel; it reaches the gate only if it beats the current best by the
+  pre-registered margin `m_mb` (the minibatch filter never accepts — only the val
+  gate accepts).
+- **Gate (val)** — a paired exact McNemar test over the full 559-instance val
+  split. Acceptance consumes **only** `GateDecision` from `run_gate` (the adapter
+  acceptance-path lock, ADR 0017 §Decision 8). The val gate is **screening-only**;
+  the single confirmatory contrast is the ADR 0020 frozen test.
+- **Ledger** — every candidate (accepted, gate-rejected, or validity-rejected)
+  appends one line to the candidate super-ledger with its source document, hash,
+  validity verdict, minibatch scores, gate decision, lineage
+  (`lineage_parent` / `mutation_record` / `reflector_input_refs`), and the
+  `campaign_ids` of its evaluations.
+
+Spend and stopping are the campaign's, not GEPA's: `evaluate()` returns
+`num_metric_calls=0`, a `LedgerBudgetStopper` drives stopping off the campaign
+`BudgetGuard`, and `reflection_lm` is a ledger-debiting callable — so the Phase 3
+ledger is the sole spend/stop authority. Stopping is pre-registered: budget
+ceiling, OR K = 5 consecutive gate rejections (plateau), OR the confirmed
+dev-side target reached.
+
+## Resume — the candidate super-ledger is the run's memory
+
+The optimization run has two ledger layers, and resume reads both:
+
+- **Per-candidate campaign ledgers** (`queue.jsonl`, one per candidate campaign) —
+  each resumes exactly as the baseline does: same campaign root, skip terminal
+  work-items, re-hash the lockfile and assert the `campaign_id` matches (see
+  §Resume above). A crashed candidate campaign never re-runs completed rollouts.
+- **The candidate super-ledger** (`candidates.jsonl`, one per optimization run) —
+  append-only JSONL in the campaign-ledger idiom: sha256 `candidate_hash`
+  identity, last-write-wins index, idempotent accrual (an exact-duplicate line
+  never double-counts rollouts or cost). On restart, load-on-init rebuilds the
+  index from the existing file and a corrupt trailing line (killed mid-write) is
+  skipped with a warning so every entry before it survives. Resume continues from
+  the first unproposed lineage frontier; already-evaluated candidates are read
+  back from their entries (including their `campaign_ids`) rather than re-run.
+
+Because a candidate's `campaign_ids` are recorded in its super-ledger entry, a
+resume reconciles the two layers by identity: the super-ledger names which
+candidate campaigns exist, and each named campaign resumes itself from its own
+`queue.jsonl`. The seed candidate is anchored first (fixed-panel minibatch scores
++ one full val-gate sweep, R8) so every later candidate pairs against it.
+
+## Close-out — selection, freeze, ship
+
+1. **Select** — compute the single-best candidate by val `resolve_rate` within the
+   `c_sel` cost threshold, and assemble the small Pareto set (gate fields only)
+   for the owner. Selection inputs are `GateDecision` fields read from the
+   candidate super-ledger — the adapter acceptance-path lock extends to selection
+   (ADR 0020).
+2. **Present the freeze decision** — the artifact diff (per-section markdown diff
+   of seed vs. best), the winning val case, and the cost accounting go to the
+   owner. Nothing is frozen without the recorded authorization.
+3. **Frozen test** — after authorization, the seed **and one** optimized config
+   run the two 266-instance Pro-Python sweeps (the paired claim needs exactly
+   that). This is the **sole confirmatory contrast** and the only place the frozen
+   test set is touched; touch-log `rollout` entries are permitted only under the
+   authorized config hashes.
+4. **Immutable + report** — the shipped artifact is frozen immutable; the closing
+   report answers the pre-registered questions, includes the qualitative diff
+   analysis (the optimizer's actual sentences are the transferable insight), the
+   family-wise disclosure (the val gate was screening-only; report
+   1 − (1 − α)^G at the realized G — the one-sided gate's per-gate FA is ≈ α),
+   and — if it lands there — the pre-registered
+   honest headline "no detectable difference at this power." The shipped-default
+   recommendation is the owner's decision, presented with the Phase 1
+   default-UX smoke result.
+
+## Owner checkpoints (spend gates — do not pass without an explicit owner "go")
+
+The Phase 4 spend gates extend the Phase 3 three-checkpoint chain (host + billing,
+target model, campaign budget above). In order:
+
+- **Budget checkpoint** — the owner confirms the optimization campaign ceiling on
+  the Phase 3 probe numbers and the pre-registration slot table (the launch gate
+  above refuses until the measured slots are filled). Unblocks the GEPA campaign.
+- **Freeze + test authorization** — the owner authorizes the freeze on the
+  artifact diff + winning val case + cost accounting, then the two 266-instance
+  frozen-test sweeps. Unblocks the confirmatory contrast.
+- **Shipped-default recommendation** — the owner decides whether the optimized
+  artifact becomes the shipped default, on the closing report + the Phase 1
+  default-UX smoke result.
+
+The critique_refine A/B arm and any SkillOpt comparison are **separate**
+owner-approved campaigns — each is its own budget consent, never generalized from
+the GEPA campaign's. SkillOpt, if ever run, is labeled **gate-fair-only** (it
+cannot share the inner search substrate; ADR 0017).
