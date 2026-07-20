@@ -1,0 +1,33 @@
+{
+  "case": "search_surfaces_gold",
+  "description": "A docs chunk row (real span) surfaces AND inspects the gold file; the model edits it. Exercises CONTENT classification, hunk overlap (seen 8-14 covers gold 10-11), and first-touch credit to search_codebase.",
+  "expected": {
+    "first_touch": {
+      "widgetlib/pricing.py": "search_codebase"
+    },
+    "inspected": [
+      "widgetlib/pricing.py"
+    ],
+    "mean_hunk_overlap": 1.0,
+    "surfaced": [
+      "widgetlib/pricing.py"
+    ],
+    "used": [
+      "widgetlib/pricing.py"
+    ],
+    "wasted": []
+  },
+  "final_patch_files": [
+    "widgetlib/pricing.py"
+  ],
+  "gold_files": [
+    "widgetlib/pricing.py"
+  ],
+  "gold_line_map": {
+    "widgetlib/pricing.py": [
+      10,
+      11
+    ]
+  },
+  "workspace_root": "/ws"
+}

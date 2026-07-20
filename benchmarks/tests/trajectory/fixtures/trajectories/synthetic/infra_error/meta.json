@@ -1,0 +1,13 @@
+{
+  "case": "infra_error",
+  "description": "The rollout ran fine but the eval harness crashed: run_log.txt carries the '>>>>> Tests Errored' infra marker. eval_report routes this to infra_error, which is excluded from score aggregates.",
+  "expected_taxonomy": "infra_error",
+  "instance_id": "widgetlib__textutil-slugify",
+  "marker": ">>>>> Tests Errored",
+  "patch_bytes": 380,
+  "taxonomy_inputs": [
+    "events.jsonl",
+    "run_log.txt"
+  ],
+  "taxonomy_version_note": "ADR 0012 first-match order, label #1 (excluded from aggregates)"
+}

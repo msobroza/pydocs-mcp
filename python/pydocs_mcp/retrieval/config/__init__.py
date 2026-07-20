@@ -57,6 +57,7 @@ from pydocs_mcp.retrieval.config.models import (
     SessionStartContextConfig,
     SimilarEdgesConfig,
     SuggestionsConfig,
+    TraceConfig,
     WatchConfig,
 )
 from pydocs_mcp.retrieval.config.pipeline_assembly import (
@@ -106,6 +107,7 @@ __all__ = [
     "SessionStartContextConfig",
     "SimilarEdgesConfig",
     "SuggestionsConfig",
+    "TraceConfig",
     "WatchConfig",
     "_resolve_pipeline_path",
     "_shipped_pipelines_dir",

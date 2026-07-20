@@ -1,0 +1,37 @@
+{
+  "case": "wasted_read",
+  "description": "Two reads: textutil.py is never edited (wasted-read), calculator.py is edited (used). A third read of a site-packages absolute path is a dependency (gold_matchable=False) and is excluded from surfaced.",
+  "expected": {
+    "first_touch": {
+      "widgetlib/calculator.py": "read_file",
+      "widgetlib/textutil.py": "read_file"
+    },
+    "inspected": [
+      "widgetlib/calculator.py",
+      "widgetlib/textutil.py"
+    ],
+    "surfaced": [
+      "widgetlib/calculator.py",
+      "widgetlib/textutil.py"
+    ],
+    "used": [
+      "widgetlib/calculator.py"
+    ],
+    "wasted": [
+      "widgetlib/textutil.py"
+    ],
+    "wasted_read_ratio": 0.5
+  },
+  "final_patch_files": [
+    "widgetlib/calculator.py"
+  ],
+  "gold_files": [
+    "widgetlib/calculator.py"
+  ],
+  "gold_line_map": {
+    "widgetlib/calculator.py": [
+      25
+    ]
+  },
+  "workspace_root": "/ws"
+}

@@ -1,0 +1,22 @@
+# Failure-taxonomy detector config (ADR 0012 — versioned rules, not judgment).
+#
+# The two labels that need detection beyond fields the trace/eval report carries
+# directly ship their rules HERE as data, pinned under ``taxonomy_version`` so
+# implementations cannot diverge silently. Extending the pattern set is a
+# ``taxonomy_version`` bump, NEVER an in-place edit — relabeling old traces stays
+# byte-reproducible (ADR 0012).
+#
+# Any reordering of the decision tree or new label ALSO bumps ``taxonomy_version``.
+taxonomy_version: 1
+
+# ``never_ran_tests`` detector: "test execution observed" ⇔ at least one loop-side
+# Bash ``tool_use`` whose ``command`` string matches one of these regexes. Bash
+# commands are recoverable loop-side as raw ``tool_use`` inputs (ADR 0009), so the
+# detector runs over captured facts only. Anchored with word boundaries so
+# ``pytest_helper`` in a path does not count as a pytest run.
+test_runner_patterns:
+  - "\\bpytest\\b"
+  - "\\bpython\\b.*\\b-m\\b\\s+pytest\\b"
+  - "\\bpython\\b.*\\b-m\\b\\s+unittest\\b"
+  - "\\btox\\b"
+  - "\\bunittest\\b"

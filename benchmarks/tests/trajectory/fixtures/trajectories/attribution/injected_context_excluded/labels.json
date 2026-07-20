@@ -1,0 +1,9 @@
+{
+  "first_surface": {
+    "widgetlib/calculator.py": "read_file"
+  },
+  "trajectory_id": "10000000-0000-4000-8000-000000000004",
+  "used_files": [
+    "widgetlib/calculator.py"
+  ]
+}

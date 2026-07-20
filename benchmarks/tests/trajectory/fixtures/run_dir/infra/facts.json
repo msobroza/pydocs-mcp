@@ -1,0 +1,14 @@
+{
+  "trajectory_id": "00000000-0000-4000-8000-000000000004",
+  "instance_id": "widgetlib__textutil-slugify",
+  "workspace_root": "/ws",
+  "gold_files": ["widgetlib/textutil.py"],
+  "gold_line_map": {"widgetlib/textutil.py": [10]},
+  "final_patch_files": ["widgetlib/textutil.py"],
+  "gold_f2p": ["tests/test_textutil.py::test_slugify"],
+  "gold_p2p": [],
+  "turn_cap": 15,
+  "patch_bytes": 300,
+  "cost_usd": 0.1,
+  "outcome_kind": "infra"
+}

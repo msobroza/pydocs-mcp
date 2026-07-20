@@ -559,8 +559,6 @@ def run(
     ``workspace`` dir or explicit ``db_paths`` (read-only multi-repo).
     ``descriptions_path`` is the ``--descriptions`` override document
     (highest-precedence description source, ADR 0006)."""
-    from mcp.server.fastmcp import FastMCP
-
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.storage.search_backend import build_search_backend, format_capabilities
@@ -592,7 +590,11 @@ def run(
     # instructions would never reach the wire.
     from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS
 
-    mcp = FastMCP("pydocs-mcp", instructions=SERVER_INSTRUCTIONS)
+    # The one FastMCP construction site (ADR 0009): trace.enabled=False (the
+    # default) returns a plain FastMCP — byte-neutral with an untraced server.
+    from pydocs_mcp.observability import build_traced_fastmcp
+
+    mcp = build_traced_fastmcp(config.trace, name="pydocs-mcp", instructions=SERVER_INSTRUCTIONS)
     _register_tools(mcp, tools)
 
     log.info(

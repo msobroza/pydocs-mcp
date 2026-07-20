@@ -14,6 +14,7 @@ Task-7 ``--preflight`` (the CLI evolves; tests must not assume flag spellings).
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 from pydocs_eval.agent_track._types import ArmConfig
@@ -114,7 +115,9 @@ def _allowed_tools(arm: ArmConfig) -> str:
     return f"{_BARE_TOOLS} {_MCP_WILDCARD}" if arm.mcp else _BARE_TOOLS
 
 
-def render_mcp_config(*, corpus_dir: Path, python: Path) -> str:
+def render_mcp_config(
+    *, corpus_dir: Path, python: Path, env: Mapping[str, str] | None = None
+) -> str:
     """Render the one-server ``.mcp.json`` that boots ``pydocs_mcp serve``.
 
     Launches the server as ``<python> -m pydocs_mcp serve <corpus_dir>`` so the
@@ -122,16 +125,23 @@ def render_mcp_config(*, corpus_dir: Path, python: Path) -> str:
     harness. ``--strict-mcp-config`` (see ``build_claude_command``) guarantees
     this is the only MCP server the arm sees.
 
+    ``env`` (optional, ADR 0009) adds an ``"env"`` block to the server entry —
+    the documented ``.mcp.json`` pass-through the trajectory driver uses to inject
+    ``PYDOCS_TRACE__*`` correlation vars. Omitting it (or passing an empty map) is
+    byte-identical to the pre-trace config, so non-trace callers are untouched.
+
     Example:
         >>> render_mcp_config(  # doctest: +SKIP
         ...     corpus_dir=Path("/corpus"), python=Path("/venv/bin/python")
         ... )
         '{"mcpServers": {"pydocs-mcp": {"command": "/venv/bin/python", ...}}}'
     """
-    server = {
+    server: dict[str, object] = {
         "command": str(python),
         "args": [*_SERVE_ARGS_PREFIX, str(corpus_dir)],
     }
+    if env:
+        server["env"] = dict(env)
     return json.dumps({"mcpServers": {_MCP_SERVER_NAME: server}})
 
 

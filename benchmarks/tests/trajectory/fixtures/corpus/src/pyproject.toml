@@ -1,0 +1,10 @@
+[project]
+name = "widgetlib"
+version = "0.1.0"
+description = "Tiny fixture package for Phase 2 trajectory-attribution testing."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+# Put the workspace root on sys.path so `import widgetlib` works without an
+# install step — the rollout indexes and tests this dir in place.
+pythonpath = ["."]

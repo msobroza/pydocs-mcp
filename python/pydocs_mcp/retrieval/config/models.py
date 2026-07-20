@@ -716,6 +716,28 @@ class ServeConfig(BaseModel):
     descriptions_path: str | None = None
 
 
+class TraceConfig(BaseModel):
+    """Phase 2 trace capture (ADR 0009) — the server-side recorder's knobs.
+
+    ``enabled``/``dir`` are YAML tunables (default off — non-eval deployments
+    stay byte-identical to an untraced server). ``trajectory_id`` is **env-only
+    by documentation** (``PYDOCS_TRACE__TRAJECTORY_ID``, injected per rollout
+    via the ``.mcp.json`` server ``env`` map): the typed field must exist
+    because ``AppConfig``'s ``extra="ignore"`` silently drops unbacked env
+    vars, but a static YAML value would make every rollout collide — the
+    trace-open id-reuse hard error is the enforcement (ADR 0009).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    # str (not Path) so the YAML/env round-trip stays plain text — the
+    # ``serve.descriptions_path`` precedent; resolution happens in
+    # ``pydocs_mcp.observability``.
+    dir: str | None = None
+    trajectory_id: str | None = None
+
+
 class SearchBackendConfig(BaseModel):
     """Which storage backend serves retrieval capabilities (spec §8.1).
 
