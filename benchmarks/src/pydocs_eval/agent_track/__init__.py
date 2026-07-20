@@ -18,6 +18,10 @@ constants are the single-source run defaults other layers mirror.
 from __future__ import annotations
 
 from pydocs_eval.agent_track._command import task_prompt
+from pydocs_eval.agent_track._injection import (
+    INJECTED_CONTEXT_MARKER,
+    assemble_prompt,
+)
 from pydocs_eval.agent_track._judge import FakeJudge, Judge
 from pydocs_eval.agent_track._runner import AgentRunner, FakeAgentRunner
 from pydocs_eval.agent_track._types import (
@@ -38,6 +42,7 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_RNG_SEED",
     "DEFAULT_TASK_TIMEOUT_SECONDS",
+    "INJECTED_CONTEXT_MARKER",
     "AgentRunner",
     "AgentTrackConfig",
     "ArmConfig",
@@ -47,6 +52,7 @@ __all__ = [
     "JudgeScore",
     "PairResult",
     "RunMetrics",
+    "assemble_prompt",
     "run_agent_track",
     "task_prompt",
 ]
