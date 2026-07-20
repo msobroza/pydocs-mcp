@@ -8,21 +8,28 @@ from pydocs_eval.campaign.budget import BudgetGuard, HaltReason
 
 
 def test_is_exhausted_at_ceiling() -> None:
-    guard = BudgetGuard(cost_ceiling_usd=10.0)
+    guard = BudgetGuard(cost_ceiling_usd=10.0, assumed_cost_on_raise=0.5)
     assert not guard.is_exhausted(9.99)
     assert guard.is_exhausted(10.0)  # exactly at ceiling ⇒ spent
     assert guard.is_exhausted(10.01)
 
 
 def test_remaining_clamps_at_zero() -> None:
-    guard = BudgetGuard(cost_ceiling_usd=10.0)
+    guard = BudgetGuard(cost_ceiling_usd=10.0, assumed_cost_on_raise=0.5)
     assert guard.remaining(3.0) == 7.0
     assert guard.remaining(12.0) == 0.0
 
 
 def test_non_positive_ceiling_rejected() -> None:
     with pytest.raises(ValueError, match="must be positive"):
-        BudgetGuard(cost_ceiling_usd=0.0)
+        BudgetGuard(cost_ceiling_usd=0.0, assumed_cost_on_raise=0.5)
+
+
+def test_negative_assumed_cost_on_raise_rejected() -> None:
+    # Finding 1: assumed_cost_on_raise is a required, conservative backstop; a
+    # negative would credit spend on failure and re-open the ceiling bypass.
+    with pytest.raises(ValueError, match="assumed_cost_on_raise must be >= 0"):
+        BudgetGuard(cost_ceiling_usd=10.0, assumed_cost_on_raise=-1.0)
 
 
 def test_halt_reasons_distinct() -> None:

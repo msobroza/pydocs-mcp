@@ -116,3 +116,46 @@ def test_campaign_report_golden_skeleton(tmp_path) -> None:
 def test_difficulty_stratum_boundary() -> None:
     assert difficulty_stratum(1) == "single_file"
     assert difficulty_stratum(2) == "multi_file"
+
+
+def _write_with_infra(path, rows, *, infra_excluded):
+    """rows: list of (instance_id, hard, label) → an aggregate.json fixture."""
+    doc = {
+        "infra_excluded": infra_excluded,
+        "artifact_hashes": ["h1"],
+        "trajectories": [
+            {
+                "trajectory_id": f"t-{iid}",
+                "instance_id": iid,
+                "hard": hard,
+                "soft": float(hard),
+                "label": label,
+                "cost_usd": 1.0,
+            }
+            for iid, hard, label in rows
+        ],
+    }
+    path.write_text(json.dumps(doc))
+    return path
+
+
+def test_per_stratum_infra_count_surfaced(tmp_path) -> None:
+    # Money-review finding 3: an infra row (i2) lives in the multi_file stratum;
+    # the per-stratum contrast must report its infra count, not the dead 0 the
+    # label-scan recompute produced (infra rows are dropped from label at load).
+    rows_a = [("i0", 1, "resolved"), ("i1", 0, "localization_miss"), ("i2", 0, "infra_error")]
+    rows_b = [
+        ("i0", 0, "localization_miss"),
+        ("i1", 0, "localization_miss"),
+        ("i2", 0, "infra_error"),
+    ]
+    a = load_cell_aggregate("A", _write_with_infra(tmp_path / "a.json", rows_a, infra_excluded=1))
+    b = load_cell_aggregate("B", _write_with_infra(tmp_path / "b.json", rows_b, infra_excluded=1))
+    stratum_of = {"i0": "single_file", "i1": "multi_file", "i2": "multi_file"}
+
+    strata = strata_contrasts("c", a, b, stratum_of)
+
+    assert strata["multi_file"].infra_a == 1  # i2, not the dead 0
+    assert strata["multi_file"].infra_b == 1
+    assert strata["multi_file"].n == 1  # only i1 is a paired (non-infra) unit
+    assert strata["single_file"].infra_a == 0  # i0 stratum has no infra rows

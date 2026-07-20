@@ -40,7 +40,12 @@ from pydocs_eval.campaign.lockfile import (
     write_lockfile,
 )
 from pydocs_eval.campaign.prebuild import InstanceSpec, load_instance_manifest, prebuild_index
-from pydocs_eval.campaign.runner import CampaignRunResult, RolloutOutcome, run_campaign
+from pydocs_eval.campaign.runner import (
+    CampaignRunResult,
+    RolloutOutcome,
+    RolloutRaisedCost,
+    run_campaign,
+)
 from pydocs_eval.campaign.smoke import (
     HostProbe,
     SmokePreconditionError,
@@ -66,6 +71,7 @@ __all__ = (
     "ProviderPin",
     "RolloutCaps",
     "RolloutOutcome",
+    "RolloutRaisedCost",
     "SmokePreconditionError",
     "WorkItem",
     "WorkState",

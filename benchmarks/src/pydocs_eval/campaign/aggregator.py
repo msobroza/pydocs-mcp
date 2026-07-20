@@ -30,7 +30,14 @@ from pydocs_eval.metrics.aggregate import mcnemar_from_pairs
 
 @dataclass(frozen=True, slots=True)
 class CellAggregate:
-    """One cell's per-instance view, loaded from its ``aggregate.json`` index."""
+    """One cell's per-instance view, loaded from its ``aggregate.json`` index.
+
+    ``infra_ids`` are the instance_ids whose row was infra-labeled and therefore
+    dropped from the paired arrays (``hard``/``soft``/…) at load. They are kept
+    separately so a per-stratum breakdown can attribute each infra row to its
+    stratum — the paired ``label`` map can NEVER contain ``infra_error`` (finding
+    3: the old per-stratum recompute scanned ``label`` and always yielded 0).
+    """
 
     name: str
     hard: Mapping[str, int]
@@ -39,6 +46,7 @@ class CellAggregate:
     label: Mapping[str, str]
     infra_excluded: int
     artifact_hashes: tuple[str, ...]
+    infra_ids: frozenset[str] = frozenset()
 
     @property
     def total_cost(self) -> float:
@@ -76,17 +84,20 @@ def _build_cell(name: str, doc: dict, hashes: tuple[str, ...]) -> CellAggregate:
     soft: dict[str, float] = {}
     cost: dict[str, float] = {}
     label: dict[str, str] = {}
+    infra_ids: set[str] = set()
     for row in doc.get("trajectories", ()):
         iid = str(row["instance_id"])
-        if iid in hard:
+        if iid in hard or iid in infra_ids:
             raise ValueError(
                 f"cell {name!r} has duplicate instance_id {iid!r} — one rollout/instance"
             )
         # Infra-labeled rows are excluded from the paired resolve arrays (R8) —
-        # they are the separately-counted ``infra_excluded``, not a comparison
-        # unit; keeping them would corrupt the paired 2×2 and the instance-list
-        # identity the McNemar test presupposes.
+        # they are the separately-counted infra rows, not a comparison unit;
+        # keeping them would corrupt the paired 2×2 and the instance-list identity
+        # the McNemar test presupposes. Their ids are retained in ``infra_ids`` so
+        # a per-stratum breakdown can still attribute them (finding 3).
         if str(row["label"]) == _INFRA_LABEL:
+            infra_ids.add(iid)
             continue
         hard[iid] = int(row["hard"])
         soft[iid] = float(row["soft"])
@@ -100,6 +111,7 @@ def _build_cell(name: str, doc: dict, hashes: tuple[str, ...]) -> CellAggregate:
         label=label,
         infra_excluded=int(doc.get("infra_excluded", 0)),
         artifact_hashes=hashes,
+        infra_ids=frozenset(infra_ids),
     )
 
 
@@ -166,16 +178,26 @@ def paired_contrast(
 
 
 def _restrict(cell: CellAggregate, ids: Sequence[str]) -> CellAggregate:
-    """A view of ``cell`` limited to ``ids`` (for a per-stratum sub-contrast)."""
+    """A view of ``cell`` limited to a stratum's ``ids`` (paired + infra).
+
+    ``ids`` may mix paired (in ``cell.hard``) and infra (in ``cell.infra_ids``)
+    instance_ids — the stratum owns both. The paired arrays keep only the paired
+    subset (the McNemar comparison units); the infra count is derived from
+    ``cell.infra_ids ∩ ids`` so a stratum's real infra rows are reported (finding
+    3), not the always-0 the dropped-at-load label scan produced.
+    """
     keep = set(ids)
+    paired = [i for i in ids if i in cell.hard]
+    stratum_infra = frozenset(i for i in cell.infra_ids if i in keep)
     return CellAggregate(
         name=cell.name,
-        hard={i: cell.hard[i] for i in ids},
-        soft={i: cell.soft[i] for i in ids},
-        cost={i: cell.cost[i] for i in ids},
-        label={i: cell.label[i] for i in ids},
-        infra_excluded=sum(1 for i in cell.label if i in keep and cell.label[i] == "infra_error"),
+        hard={i: cell.hard[i] for i in paired},
+        soft={i: cell.soft[i] for i in paired},
+        cost={i: cell.cost[i] for i in paired},
+        label={i: cell.label[i] for i in paired},
+        infra_excluded=len(stratum_infra),
         artifact_hashes=cell.artifact_hashes,
+        infra_ids=stratum_infra,
     )
 
 
@@ -192,10 +214,12 @@ def strata_contrasts(
     ``stratum_of`` maps ``instance_id → stratum key`` (e.g. repo, or
     ``difficulty.files`` single/multi via :func:`difficulty_stratum`); the
     shared instance list is grouped and a sub-contrast computed per stratum.
-    Deterministic key order (sorted).
+    Infra ids are grouped alongside paired ids so a stratum's infra rows are
+    counted per stratum (finding 3), even though they never enter the paired
+    2×2. Deterministic key order (sorted).
     """
     groups: dict[str, list[str]] = {}
-    for iid in sorted(a.hard):
+    for iid in sorted(set(a.hard) | a.infra_ids):
         groups.setdefault(stratum_of.get(iid, "unknown"), []).append(iid)
     return {
         stratum: paired_contrast(

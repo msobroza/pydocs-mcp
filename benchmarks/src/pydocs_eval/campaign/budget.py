@@ -35,9 +35,18 @@ class HaltReason(StrEnum):
 @dataclass(frozen=True, slots=True)
 class BudgetGuard:
     """The campaign cost ceiling check (R6). Stateless — spend is read from the
-    ledger and compared here, so there is exactly one spend source of truth."""
+    ledger and compared here, so there is exactly one spend source of truth.
+
+    ``assumed_cost_on_raise`` is the conservative dollar figure the runner books
+    when a rollout RAISES with an unknowable cost (a spawn crash or an un-parsed
+    timeout) — booking $0 there let a raising rollout bypass the ceiling entirely
+    (money-review finding 1). It is the runtime mirror of the lockfile's hashed
+    ``assumed_cost_on_raise`` (same relationship as ``cost_ceiling_usd``), and the
+    runbook pins it to the per-rollout worst-case from the cost model.
+    """
 
     cost_ceiling_usd: float
+    assumed_cost_on_raise: float
 
     def __post_init__(self) -> None:
         if self.cost_ceiling_usd <= 0:
@@ -45,12 +54,18 @@ class BudgetGuard:
                 f"cost_ceiling_usd must be positive, got {self.cost_ceiling_usd!r}; "
                 "a non-positive ceiling would halt the campaign before the first rollout"
             )
+        if self.assumed_cost_on_raise < 0:
+            raise ValueError(
+                f"assumed_cost_on_raise must be >= 0, got {self.assumed_cost_on_raise!r}; "
+                "it is the conservative spend booked when a rollout raises with an "
+                "unknowable cost — a negative would credit spend on failure"
+            )
 
     def is_exhausted(self, spent_usd: float) -> bool:
         """True once accumulated spend has reached the ceiling (``>=``).
 
         Example:
-            >>> BudgetGuard(cost_ceiling_usd=10.0).is_exhausted(10.0)
+            >>> BudgetGuard(cost_ceiling_usd=10.0, assumed_cost_on_raise=0.5).is_exhausted(10.0)
             True
         """
         return spent_usd >= self.cost_ceiling_usd

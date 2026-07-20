@@ -77,6 +77,17 @@ class LedgerRecord:
     def key(self) -> tuple[str, str]:
         return (self.cell, self.instance_id)
 
+    @property
+    def spend_key(self) -> tuple[str, str, int, str]:
+        """Attempt-scoped spend identity: ``(cell, instance, attempt, state)``.
+
+        Spend is accrued once per distinct identity: a re-appended EXACT-duplicate
+        line (same identity, same cost) must not double-count against the R6
+        ceiling, while a genuine retry is a distinct ``attempt``/``state``, keeps
+        its own identity, and counts additionally (money-review finding 4).
+        """
+        return (self.cell, self.instance_id, self.attempt, self.state.value)
+
     def to_record(self) -> dict[str, object]:
         return {
             "cell": self.cell,
@@ -100,10 +111,12 @@ class CampaignLedger:
 
     path: Path
     _index: dict[tuple[str, str], LedgerRecord] = field(default_factory=dict, init=False)
-    # Running spend accumulated over EVERY appended line, not just the latest per
-    # item: a retried infra rollout's cost still counts against the ceiling (R8),
-    # so both the INFRA_RETRY line and the final EXCLUDED/DONE line contribute.
+    # Running spend accumulated once per distinct ``spend_key`` — a retried infra
+    # rollout's cost still counts (R8: both the INFRA_RETRY line and the final
+    # EXCLUDED/DONE line are distinct attempt/state identities), but a re-appended
+    # EXACT-duplicate line is idempotent and does not double-count (finding 4).
     _spend: float = field(default=0.0, init=False)
+    _spend_keys: set[tuple[str, str, int, str]] = field(default_factory=set, init=False)
 
     def __post_init__(self) -> None:
         self._load()
@@ -118,7 +131,7 @@ class CampaignLedger:
             record = self._parse_line(stripped)
             if record is not None:
                 self._index[record.key] = record
-                self._spend += record.cost_usd
+                self._accrue(record)
 
     def _parse_line(self, line: str) -> LedgerRecord | None:
         try:
@@ -142,8 +155,15 @@ class CampaignLedger:
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record.to_record()) + "\n")
         self._index[record.key] = record
-        self._spend += record.cost_usd
+        self._accrue(record)
         return record
+
+    def _accrue(self, record: LedgerRecord) -> None:
+        """Fold a record's cost into spend once per distinct ``spend_key`` (finding 4)."""
+        if record.spend_key in self._spend_keys:
+            return  # exact-duplicate identity — already counted, do not double-book
+        self._spend_keys.add(record.spend_key)
+        self._spend += record.cost_usd
 
     def latest(self, item: WorkItem) -> LedgerRecord | None:
         """The most recent transition for ``item``, or ``None`` if never seen."""
@@ -164,12 +184,14 @@ class CampaignLedger:
         return [item for item in work if not self.is_completed(item)]
 
     def total_spend(self) -> float:
-        """Accumulated ``cost_usd`` over EVERY appended line — the spend to date (R6/R8).
+        """Accumulated ``cost_usd`` over distinct ``spend_key``s — spend to date (R6/R8).
 
         Summed across all attempts, not just the latest per item, so a retried
-        infra rollout's cost counts against the ceiling (ADR 0016 R8). Each
-        rollout attempt records its cost exactly once (on its DONE / EXCLUDED /
-        INFRA_RETRY line; QUEUED / RUNNING lines carry 0), so no double-count.
+        infra rollout's cost counts against the ceiling (ADR 0016 R8). Accrual is
+        keyed by ``(cell, instance, attempt, state)``, so a re-appended
+        exact-duplicate line is idempotent and cannot double-count spend
+        (money-review finding 4); genuine retries have distinct attempt/state
+        identities and still count.
         """
         return self._spend
 
