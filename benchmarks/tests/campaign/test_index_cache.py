@@ -94,6 +94,56 @@ def test_preseed_missing_db_raises(tmp_path, monkeypatch) -> None:
         preseed_workspace(tmp_path / "nope.db", tmp_path / "nope.tq", tmp_path / "ws")
 
 
+def test_preseed_db_is_copy_not_hardlink(tmp_path, monkeypatch) -> None:
+    # Money-review finding 2: the product opens the .db RW under journal_mode=WAL
+    # (in-place writes at the inode), so a hardlinked slot would let one rollout's
+    # WAL write-back mutate the shared canonical bytes. The pre-seed MUST copy.
+    import pydocs_mcp.db as db_mod
+
+    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    canonical_db = tmp_path / "canon.db"
+    canonical_db.write_bytes(b"DBDATA")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    dst_db, _ = preseed_workspace(canonical_db, tmp_path / "absent.tq", workspace)
+    assert dst_db.stat().st_ino != canonical_db.stat().st_ino  # distinct inodes
+    assert canonical_db.stat().st_nlink == 1  # canonical not hardlinked anywhere
+
+
+def test_preseed_db_mutation_isolation(tmp_path, monkeypatch) -> None:
+    # A rollout's serve opens the slot .db RW; a WAL checkpoint appends/rewrites in
+    # place. Simulate that in-place write on the slot and assert the canonical
+    # bytes are untouched — the copy severs the inode-sharing hazard (finding 2).
+    import pydocs_mcp.db as db_mod
+
+    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    canonical_db = tmp_path / "canon.db"
+    canonical_db.write_bytes(b"CANON")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    dst_db, _ = preseed_workspace(canonical_db, tmp_path / "absent.tq", workspace)
+    with dst_db.open("ab") as fh:  # an in-place RW append, as a serve reindex would do
+        fh.write(b"-MUTATED-BY-ROLLOUT")
+    assert canonical_db.read_bytes() == b"CANON"  # canonical index NOT poisoned
+
+
+def test_preseed_tq_is_copy_not_hardlink(tmp_path, monkeypatch) -> None:
+    # The .tq is copied too: turbovec's load mmap mode is not provably read-only
+    # across the pinned range, so the same conservative copy applies (finding 2).
+    import pydocs_mcp.db as db_mod
+
+    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    canonical_db = tmp_path / "canon.db"
+    canonical_tq = tmp_path / "canon.tq"
+    canonical_db.write_bytes(b"DBDATA")
+    canonical_tq.write_bytes(b"TQDATA")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _, dst_tq = preseed_workspace(canonical_db, canonical_tq, workspace)
+    assert dst_tq.read_bytes() == b"TQDATA"
+    assert dst_tq.stat().st_ino != canonical_tq.stat().st_ino
+
+
 def test_preseed_reseed_is_idempotent(tmp_path, monkeypatch) -> None:
     import pydocs_mcp.db as db_mod
 

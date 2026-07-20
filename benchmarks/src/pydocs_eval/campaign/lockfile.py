@@ -182,9 +182,11 @@ class CampaignLockfile:
     ``dataset_pins`` is :func:`pydocs_eval.datasets_swe.pin_metadata`;
     ``split_hashes`` the per-split-file sha256s; ``cells`` the grid;
     ``host`` the launch fingerprint; ``provider`` / ``billing_mode`` the model
-    plumbing; ``caps`` / ``cost_ceiling_usd`` the R6 guards; the ``*_version``
-    fields + ``artifact_hash`` the metric identity. :attr:`campaign_id` is the
-    canonical-JSON sha256 over :meth:`to_dict` — the R5 identity.
+    plumbing; ``caps`` / ``cost_ceiling_usd`` / ``assumed_cost_on_raise`` the R6
+    guards (the last being the conservative spend booked per raised rollout, so
+    changing it changes the campaign identity — money-review finding 1); the
+    ``*_version`` fields + ``artifact_hash`` the metric identity. :attr:`campaign_id`
+    is the canonical-JSON sha256 over :meth:`to_dict` — the R5 identity.
     """
 
     dataset_pins: Mapping[str, object]
@@ -196,6 +198,7 @@ class CampaignLockfile:
     provider_pin: ProviderPin
     caps: RolloutCaps
     cost_ceiling_usd: float
+    assumed_cost_on_raise: float
     schema_version: int
     score_version: int
     taxonomy_version: int
@@ -224,6 +227,7 @@ class CampaignLockfile:
             "provider_pin": self.provider_pin.to_dict(),
             "caps": self.caps.to_dict(),
             "cost_ceiling_usd": self.cost_ceiling_usd,
+            "assumed_cost_on_raise": self.assumed_cost_on_raise,
             "versions": {
                 "schema": self.schema_version,
                 "score": self.score_version,

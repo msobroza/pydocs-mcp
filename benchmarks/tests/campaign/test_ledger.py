@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from pydocs_eval.campaign.ledger import (
     CampaignLedger,
     LedgerRecord,
@@ -82,3 +84,26 @@ def test_attempt_count_reads_latest(tmp_path) -> None:
     assert ledger.attempt_count(WorkItem("a", "i1")) == 0
     ledger.record(LedgerRecord("a", "i1", WorkState.INFRA_RETRY, attempt=1))
     assert ledger.attempt_count(WorkItem("a", "i1")) == 1
+
+
+def _append_raw(path, record: LedgerRecord) -> None:
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record.to_record()) + "\n")
+
+
+def test_duplicate_line_counts_once_but_retry_counts_additionally(tmp_path) -> None:
+    # Money-review finding 4: a re-appended EXACT-duplicate line (same
+    # cell/instance/attempt/state identity) must not double-count spend, while a
+    # genuine retry (a DISTINCT attempt) must still accrue against the ceiling.
+    path = tmp_path / "q.jsonl"
+    done = LedgerRecord("a", "i1", WorkState.DONE, attempt=0, cost_usd=4.0)
+    _append_raw(path, done)
+    _append_raw(path, done)  # exact duplicate (e.g. a torn/re-appended line)
+    ledger = CampaignLedger(path)
+    assert ledger.total_spend() == 4.0  # counted once, not 8.0
+    # A retry is attempt 1 — a distinct identity, so it counts on top.
+    ledger.record(LedgerRecord("a", "i1", WorkState.INFRA_RETRY, attempt=1, cost_usd=1.5))
+    assert ledger.total_spend() == 5.5
+    # Re-recording that same retry identity is idempotent for spend.
+    ledger.record(LedgerRecord("a", "i1", WorkState.INFRA_RETRY, attempt=1, cost_usd=1.5))
+    assert ledger.total_spend() == 5.5

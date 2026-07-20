@@ -28,6 +28,23 @@ with no new accounting: `Σ aggregate.json["run"]["cost_usd"]` across cells
 (`consumers.py` sums `total_cost_usd`, including infra rollouts, which still
 count against the ceiling per R8).
 
+## `assumed_cost_on_raise` — the worst-case backstop
+
+A rollout that RAISES with an unknowable cost (a spawn crash, an un-parsed
+timeout) still burned provider tokens, but no `total_cost_usd` was parsed for it.
+The runner books `assumed_cost_on_raise` for that rollout so the R6 ceiling still
+sees a charge — a required lockfile budget field (`campaign/budget.py`
+`BudgetGuard`, `campaign/lockfile.py`), so changing it is a new campaign ID.
+
+Set it to the **per-rollout worst-case** the formula above produces at the caps
+in the lockfile: evaluate `cost_rollout` with the token profile bounded by
+`caps.max_turns` and `caps.wall_seconds` (the most a single rollout can spend
+before it is force-stopped). That way a raising rollout is charged no less than a
+completed one at the cap, and a storm of raises halts the campaign rather than
+running past the budget. The wired `rollout_fn` SHOULD instead return/raise the
+**real** parsed cost whenever it can (see [`runbook.md`](runbook.md)); this
+backstop covers only the truly-unknowable tail.
+
 ## Cache multipliers (docs-verified — fixed inputs)
 
 The `1.25` and `0.10` coefficients are the Anthropic prompt-cache multipliers,

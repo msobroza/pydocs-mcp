@@ -114,8 +114,15 @@ sha256 IS the campaign ID (`campaign/lockfile.py`, `CampaignLockfile.campaign_id
 Any field change yields a new ID — a changed campaign is a new campaign (R5). It
 records the dataset snapshot pins + split-file hashes (ADR 0013), the cell grid
 (ADR 0016), the host fingerprint (ADR 0014), provider + billing mode + the
-Claude-direct provider pin (ADR 0015), the per-rollout caps + cost ceiling (R6),
-and the metric/score/taxonomy versions.
+Claude-direct provider pin (ADR 0015), the per-rollout caps + cost ceiling +
+`assumed_cost_on_raise` (R6), and the metric/score/taxonomy versions.
+
+`assumed_cost_on_raise` is a **required** budget field: it is the conservative
+spend the runner books when a rollout RAISES with an unknowable cost (a spawn
+crash or an un-parsed timeout). Set it to the **per-rollout worst-case from the
+cost model** ([`cost-model.md`](cost-model.md)) — a raising rollout still burned
+provider tokens, and booking $0 there would let it bypass the R6 ceiling entirely.
+Because it hashes into the lockfile, changing it is a new campaign ID (R5).
 
 The **provider pin** (`ProviderPin`, built via `claude_direct_pin`) records the
 static verified facts R7 holds by: `auth=api_key`, `base_url=default`,
@@ -150,6 +157,21 @@ Watch two guards:
   `infra_error`, or a spawn failure) is retried **once**, then excluded from
   resolve aggregates and reported as a separate per-cell count. Infra failures
   are never task failures.
+
+**Raised-rollout cost accounting (R6).** A rollout that fails partway still burned
+provider tokens, so the wired `rollout_fn` must never lose that spend:
+
+- On a **timeout where the stream's `result` line was already parsed**, it SHOULD
+  RETURN a costed `RolloutOutcome` (the real `total_cost_usd`) rather than raise —
+  the runner books the exact dollars.
+- When the cost is **parseable but the rollout still failed** (a partial turn),
+  it raises `RolloutRaisedCost(cost_usd=…)` carrying that partial; the runner
+  books exactly that partial.
+- When the cost is **unknowable** (a spawn crash, an un-parsed timeout), it raises
+  a plain exception and the runner books `assumed_cost_on_raise` as the backstop.
+
+All three paths accrue against the R6 ceiling, so a storm of raising rollouts
+halts the campaign instead of silently running past the budget.
 
 ## Resume
 

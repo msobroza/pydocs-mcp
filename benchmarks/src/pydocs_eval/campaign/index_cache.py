@@ -7,10 +7,14 @@ change the product, the runner makes the *path* canonical: one pristine checkout
 per ``(repo, base_commit)`` at ``<cache_root>/<repo_slug>@<commit>/``, indexed
 ONCE with ``--skip-deps --no-inspect``. The path-derived key is then stable, and
 before a rollout's serve starts the runner pre-seeds that rollout workspace's own
-cache slot by hardlinking (copy fallback across filesystems) the ``.db``/``.tq``
-pair to the workspace-path-derived key — computed by calling the product's
-``cache_path_for_project``, never by re-deriving the hash (ADR 0014 §Consequences
-"rides an implementation detail" — the pin test guards it).
+cache slot by COPYING the ``.db``/``.tq`` pair to the workspace-path-derived key —
+computed by calling the product's ``cache_path_for_project``, never by re-deriving
+the hash (ADR 0014 §Consequences "rides an implementation detail" — the pin test
+guards it). The pre-seed COPIES rather than hardlinks: the product opens the
+``.db`` read-write under ``journal_mode=WAL`` (``db.py`` ``_connect_or_recreate``),
+so a hardlinked slot shared across rollouts would let one rollout's in-place WAL
+write-back mutate the shared canonical bytes and poison every sibling — a
+structural hazard, not a corner case (money-review finding 2).
 
 ``pydocs_mcp`` is imported function-locally (like the agent-track adapter) so the
 eval base-install floor stays intact. The subprocess index path is the shipped
@@ -21,7 +25,6 @@ model download when the caller mocks ``build_embedder``.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -164,12 +167,21 @@ def preseed_workspace(
     canonical_tq: Path,
     workspace: Path,
 ) -> tuple[Path, Path]:
-    """Hardlink (copy fallback) the canonical ``.db``/``.tq`` into ``workspace``'s slot.
+    """Copy the canonical ``.db``/``.tq`` into ``workspace``'s cache slot.
 
     Computes the destination via :func:`workspace_cache_paths` (product's
     ``cache_path_for_project``), so a plain ``serve <workspace>`` hits the
     pre-built index instead of re-embedding. The ``.tq`` is optional (a
     lexical-only or empty corpus may produce none); its absence is not an error.
+
+    Copies rather than hardlinks BOTH sidecars: the ``.db`` is opened read-write
+    under ``journal_mode=WAL`` at serve time, so a shared inode is a structural
+    poisoning hazard (finding 2); the ``.tq`` is copied too because turbovec's
+    load-time mmap mode is not provably read-only across the pinned
+    ``turbovec>=0.5,<1.0`` range, so the same conservative copy applies. Future
+    product option: open the slot ``.db`` with ``?mode=ro&immutable=1`` at serve
+    time, which would make a read-only hardlink safe — a product change, not one
+    for the eval layer to make.
 
     Raises:
         FileNotFoundError: if ``canonical_db`` is missing — pre-seeding a slot
@@ -180,26 +192,24 @@ def preseed_workspace(
             f"canonical index db is missing: {canonical_db} (index the checkout first)"
         )
     dst_db, dst_tq = workspace_cache_paths(workspace)
-    _link_or_copy(canonical_db, dst_db)
+    _copy_index_file(canonical_db, dst_db)
     if canonical_tq.exists():
-        _link_or_copy(canonical_tq, dst_tq)
+        _copy_index_file(canonical_tq, dst_tq)
     return dst_db, dst_tq
 
 
-def _link_or_copy(src: Path, dst: Path) -> None:
-    """Hardlink ``src`` → ``dst`` (fast, no extra bytes); copy across filesystems.
+def _copy_index_file(src: Path, dst: Path) -> None:
+    """Copy ``src`` → ``dst`` with a fresh inode (never a hardlink; finding 2).
 
-    Idempotent: an existing ``dst`` is removed first so a re-seed always reflects
-    the current canonical index. ``os.link`` fails with ``OSError`` across
-    devices (EXDEV) — the copy fallback covers that (ADR 0014 item 2).
+    ``copy2`` gives the slot its own inode so an in-place serve-time WAL write to
+    the slot cannot mutate the shared canonical bytes. Cross-device by nature, so
+    there is no EXDEV path to fall back from. Idempotent: an existing ``dst`` is
+    removed first so a re-seed always reflects the current canonical index.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():
         dst.unlink()
-    try:
-        os.link(src, dst)
-    except OSError:
-        shutil.copy2(src, dst)
+    shutil.copy2(src, dst)
 
 
 def index_project_in_process(checkout_dir: Path, cache_root: Path) -> tuple[Path, Path]:

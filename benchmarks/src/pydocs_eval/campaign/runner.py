@@ -56,6 +56,30 @@ class RolloutOutcome:
     completed: bool = True
 
 
+class RolloutRaisedCost(Exception):
+    """A rollout that failed AFTER burning billable tokens, carrying the partial cost.
+
+    The wired ``rollout_fn`` raises this (instead of a bare exception) when it could
+    parse a ``total_cost_usd`` off the stream's result line before the failure —
+    e.g. a wall-timeout after the result line was read. :func:`_attempt` books
+    exactly ``cost_usd`` so the R6 ceiling sees the real dollars burned, not $0.
+    When even the partial cost is unknowable (a spawn crash, an un-parsed timeout),
+    the rollout_fn raises a plain exception and the runner books the conservative
+    ``BudgetGuard.assumed_cost_on_raise`` backstop instead (money-review finding 1:
+    a $0 booking let a raising rollout bypass the ceiling entirely).
+    """
+
+    def __init__(self, cost_usd: float, *, trajectory_id: str | None = None) -> None:
+        if cost_usd < 0:
+            raise ValueError(
+                f"RolloutRaisedCost.cost_usd must be >= 0, got {cost_usd!r}; "
+                "a raised partial cost cannot be negative"
+            )
+        super().__init__(f"rollout failed after burning ${cost_usd:.4f} (partial, booked)")
+        self.cost_usd = cost_usd
+        self.trajectory_id = trajectory_id
+
+
 RolloutFn = Callable[[WorkItem], Awaitable[RolloutOutcome]]
 
 
@@ -76,7 +100,7 @@ class _LoopState:
     signature so the helpers stay 4–20 lines)."""
 
     pending: deque[WorkItem]
-    inflight: set[asyncio.Task[tuple[WorkItem, RolloutOutcome | None]]]
+    inflight: set[asyncio.Task[tuple[WorkItem, RolloutOutcome]]]
     done: int = 0
     excluded: int = 0
     infra_retries: int = 0
@@ -123,7 +147,9 @@ def _fill_pool(
             return  # stop launching; in-flight rollouts finish, then we halt
         item = state.pending.popleft()
         _record_running(ledger, item)
-        state.inflight.add(asyncio.create_task(_attempt(item, rollout_fn)))
+        state.inflight.add(
+            asyncio.create_task(_attempt(item, rollout_fn, guard.assumed_cost_on_raise))
+        )
 
 
 async def _drain_one(state: _LoopState, ledger: CampaignLedger, retry_limit: int) -> None:
@@ -139,11 +165,11 @@ def _apply_outcome(
     state: _LoopState,
     ledger: CampaignLedger,
     item: WorkItem,
-    outcome: RolloutOutcome | None,
+    outcome: RolloutOutcome,
     retry_limit: int,
 ) -> None:
     """Record DONE / EXCLUDED / re-queue for one finished rollout (R8 policy)."""
-    if outcome is not None and outcome.completed and not outcome.is_infra:
+    if outcome.completed and not outcome.is_infra:
         attempt = ledger.attempt_count(item)
         ledger.record(
             _transition(item, WorkState.DONE, attempt, outcome.trajectory_id, outcome.cost_usd, "")
@@ -157,13 +183,20 @@ def _apply_retry_or_exclude(
     state: _LoopState,
     ledger: CampaignLedger,
     item: WorkItem,
-    outcome: RolloutOutcome | None,
+    outcome: RolloutOutcome,
     retry_limit: int,
 ) -> None:
-    """Infra / transient path: retry up to ``retry_limit``, then exclude (R8)."""
+    """Infra / transient path: retry up to ``retry_limit``, then exclude (R8).
+
+    ``outcome.cost_usd`` carries the rollout's real (or, on a raise, its parsed
+    partial / assumed-backstop) cost — booked on BOTH the retry and the final
+    excluded line so every dollar burned counts against the ceiling (R8 + finding
+    1). :func:`_attempt` guarantees a costed outcome even on a raise, so this path
+    never books $0.
+    """
     attempt = ledger.attempt_count(item)
-    cost = outcome.cost_usd if outcome is not None else 0.0
-    traj = outcome.trajectory_id if outcome is not None else None
+    cost = outcome.cost_usd
+    traj = outcome.trajectory_id
     if attempt < retry_limit:
         ledger.record(
             _transition(item, WorkState.INFRA_RETRY, attempt + 1, traj, cost, "infra retry")
@@ -175,14 +208,35 @@ def _apply_retry_or_exclude(
     state.excluded += 1
 
 
-async def _attempt(item: WorkItem, rollout_fn: RolloutFn) -> tuple[WorkItem, RolloutOutcome | None]:
-    """Run one rollout; a raised failure becomes an infra outcome (``None``)."""
+async def _attempt(
+    item: WorkItem, rollout_fn: RolloutFn, assumed_cost_on_raise: float
+) -> tuple[WorkItem, RolloutOutcome]:
+    """Run one rollout; a raise becomes a COSTED infra outcome — never a $0 loss.
+
+    A :class:`RolloutRaisedCost` carries the partial cost the rollout_fn parsed
+    off the stream before failing (book it exactly). Any other exception means
+    the cost is unknowable (spawn crash, un-parsed timeout), so book the
+    conservative ``assumed_cost_on_raise`` backstop. Booking $0 here (the old
+    behavior) let a raising rollout accrue nothing and bypass the R6 ceiling
+    entirely (money-review finding 1). Either way it is an infra failure the R8
+    retry-then-exclude path handles — never a campaign abort.
+    """
     try:
         return item, await rollout_fn(item)
+    except RolloutRaisedCost as exc:
+        return item, _raised_outcome(exc.cost_usd, exc.trajectory_id)
     except Exception:
-        # Any rollout crash (spawn failure, timeout, adapter bug) is an infra
-        # failure the R8 retry-then-exclude path handles — never a campaign abort.
-        return item, None
+        return item, _raised_outcome(assumed_cost_on_raise, None)
+
+
+def _raised_outcome(cost_usd: float, trajectory_id: str | None) -> RolloutOutcome:
+    """A failed-rollout outcome that still carries its (partial or assumed) cost."""
+    return RolloutOutcome(
+        trajectory_id=trajectory_id or "",
+        cost_usd=cost_usd,
+        is_infra=True,
+        completed=False,
+    )
 
 
 def _record_running(ledger: CampaignLedger, item: WorkItem) -> None:

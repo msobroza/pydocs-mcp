@@ -35,6 +35,7 @@ def _lockfile(**overrides) -> CampaignLockfile:
         ),
         caps=RolloutCaps(max_turns=40, wall_seconds=900.0),
         cost_ceiling_usd=100.0,
+        assumed_cost_on_raise=0.5,
         schema_version=1,
         score_version=2,
         taxonomy_version=3,
@@ -60,6 +61,17 @@ def test_cell_change_yields_new_campaign_id() -> None:
     base = _lockfile()
     fewer = _lockfile(cells=screening_cells()[:3])
     assert fewer.campaign_id != base.campaign_id
+
+
+def test_assumed_cost_on_raise_is_part_of_campaign_id(tmp_path) -> None:
+    # Finding 1(b): assumed_cost_on_raise is a required budget field that hashes
+    # into the campaign identity — changing the raise-backstop is a new campaign,
+    # and it must appear in the written lockfile document.
+    base = _lockfile()
+    bumped = _lockfile(assumed_cost_on_raise=1.5)
+    assert bumped.campaign_id != base.campaign_id
+    doc = json.loads(write_lockfile(tmp_path, base).read_text())
+    assert doc["assumed_cost_on_raise"] == 0.5
 
 
 def test_subscription_billing_rejected() -> None:
