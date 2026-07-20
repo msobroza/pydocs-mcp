@@ -105,6 +105,10 @@ class ChunkOrigin(StrEnum):
     MARKDOWN_SECTION = "markdown_section"
     NOTEBOOK_MARKDOWN_CELL = "notebook_markdown_cell"
     NOTEBOOK_CODE_CELL = "notebook_code_cell"
+    # ADR 0021 T2: origin for NodeKind.TEXT_SECTION chunks — the honest
+    # provenance of a .rst/.txt/.toml/.yaml/.cfg/.ini/.json section (distinct
+    # from python_def / markdown_section so retrieval filters can route on it).
+    TEXT_SECTION = "text_section"
     # Searchable projection of a mined `decision_records` row (spec §D9). The
     # capture_decisions ingestion stage emits one chunk per merged decision so
     # architectural rationale flows through the same hashing → embedding →

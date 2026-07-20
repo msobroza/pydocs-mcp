@@ -36,6 +36,9 @@ _KIND_TO_ORIGIN: dict[NodeKind, ChunkOrigin] = {
     NodeKind.MARKDOWN_HEADING: ChunkOrigin.MARKDOWN_SECTION,
     NodeKind.NOTEBOOK_MARKDOWN_CELL: ChunkOrigin.NOTEBOOK_MARKDOWN_CELL,
     NodeKind.NOTEBOOK_CODE_CELL: ChunkOrigin.NOTEBOOK_CODE_CELL,
+    # ADR 0021 T2: TEXT_SECTION nodes flatten to searchable chunks tagged with
+    # the text_section origin.
+    NodeKind.TEXT_SECTION: ChunkOrigin.TEXT_SECTION,
 }
 
 

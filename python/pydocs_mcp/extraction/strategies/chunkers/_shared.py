@@ -216,6 +216,34 @@ def _fallback_module_node(
     )
 
 
+def _slugify(text: str) -> str:
+    """Lowercase + collapse non-alphanumerics to single hyphens. Empty slug
+    falls back to ``"untitled"`` so every section has a stable id.
+
+    Shared by the markdown heading chunker and the T2 text/config chunker —
+    both derive a ``module#slug`` qualified_name from a human title."""
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return s or "untitled"
+
+
+def _dedup_slug(slug: str, seen: dict[str, int]) -> str:
+    """Disambiguate a repeated slug with a ``-N`` suffix (mirrors the
+    ``__imports__N`` scheme in ``ast_python.py``).
+
+    Two titles that slugify identically — repeated headings ('### Fixed' in
+    every CHANGELOG release section), repeated config sections, or non-ASCII
+    titles that both collapse to the ``"untitled"`` fallback — would otherwise
+    share one ``node_id``/``qualified_name``. ``find_node_by_qualified_name``
+    only ever returns the first match, so the collision silently hides every
+    subsequent same-slug section. ``seen`` is mutated in place; it is a fresh
+    local dict per ``build_tree`` call (single-threaded, one dict per
+    document), never shared across parallel branches.
+    """
+    count = seen.get(slug, 0)
+    seen[slug] = count + 1
+    return slug if count == 0 else f"{slug}-{count + 1}"
+
+
 def _code_example_node(
     code: str,
     lang: str,
@@ -259,6 +287,7 @@ __all__ = (
     "_code_example_node",
     "_collapse_ws",
     "_content_hash",
+    "_dedup_slug",
     "_docstring_summary",
     "_fallback_module_node",
     "_header_from_text",
@@ -266,5 +295,6 @@ __all__ = (
     "_relative_module_parts",
     "_relpath",
     "_slice_lines",
+    "_slugify",
     "_unclosed_fence_start",
 )

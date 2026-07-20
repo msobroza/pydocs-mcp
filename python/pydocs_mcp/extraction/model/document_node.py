@@ -38,6 +38,11 @@ class NodeKind(StrEnum):
     NOTEBOOK_MARKDOWN_CELL = "notebook_markdown_cell"
     NOTEBOOK_CODE_CELL = "notebook_code_cell"
     CODE_EXAMPLE = "code_example"
+    # ADR 0021 T2: language-neutral section emitted by TextSectionChunker for
+    # the text/config extension set (.rst/.txt/.toml/.yaml/.cfg/.ini/.json).
+    # Carries text and flattens to a chunk, so it is deliberately NOT added to
+    # STRUCTURAL_ONLY_KINDS below (that would suppress its searchable chunk).
+    TEXT_SECTION = "text_section"
 
 
 # Pure path scaffolding — never persisted in document_trees, never flattened

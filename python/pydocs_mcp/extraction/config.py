@@ -124,6 +124,29 @@ class NotebookConfig(BaseModel):
     include_outputs: bool = False
 
 
+# ADR 0021 T2: TextSectionChunker tunables. Single source of truth for the
+# defaults — the dataclass fields in ``chunkers/text_section.py`` import these
+# constants so the Field default and the chunker default can never drift.
+_DEFAULT_TEXT_WINDOW_LINES = 80
+_DEFAULT_JSON_MAX_CHUNKS = 50
+
+
+class TextSectionConfig(BaseModel):
+    """Tunables for :class:`TextSectionChunker` (ADR 0021 T2).
+
+    ``window_lines`` sizes the fixed-line fallback windows used for
+    ``.rst``/``.txt`` files that carry no reStructuredText section titles.
+    ``json_max_chunks`` caps how many top-level ``.json`` keys become section
+    nodes — the fixture-flooding guard: a file exceeding the cap (or an
+    unkeyed/minified blob) collapses to one truncated summary node instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    window_lines: int = Field(default=_DEFAULT_TEXT_WINDOW_LINES, ge=1)
+    json_max_chunks: int = Field(default=_DEFAULT_JSON_MAX_CHUNKS, ge=1)
+
+
 class ChunkingConfig(BaseModel):
     """Per-chunker tunables (markdown heading bounds, notebook outputs).
 
@@ -143,6 +166,7 @@ class ChunkingConfig(BaseModel):
 
     markdown: MarkdownConfig = Field(default_factory=MarkdownConfig)
     notebook: NotebookConfig = Field(default_factory=NotebookConfig)
+    text_section: TextSectionConfig = Field(default_factory=TextSectionConfig)
 
 
 class DiscoveryScopeConfig(BaseModel):
