@@ -15,8 +15,11 @@ candidate outside our Phase 2/3 authorities:
 - ``LedgerDebitingReflectionLM`` routes the one place GEPA spends money itself —
   the reflection LM — through a debited spend ledger;
 - ``acceptance.decide_acceptance`` is the adapter's ONLY acceptance path and
-  consumes nothing but a ``trajectory.gate.GateDecision`` + the pre-registration
-  config (the ADR 0017 §Decision 8 gate blind-spot lock).
+  consumes nothing but the sanctioned ground-truth gate inputs — the paired
+  per-instance ``GroundTruthOutcome`` sequences + the two
+  ``trajectory.gate.GateDecision`` aggregates + the pre-registration config — over
+  which it runs ADR 0018's paired one-sided exact McNemar test (the ADR 0017
+  §Decision 8 gate blind-spot lock, amended).
 """
 
 from __future__ import annotations
