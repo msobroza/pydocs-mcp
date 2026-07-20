@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval import ci_compare
+from pydocs_eval.reporting import ci_compare
 
 _METRIC = "recall@10"
 
