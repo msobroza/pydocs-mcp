@@ -46,8 +46,13 @@ _NO_TOOLS = ""
 _OUTPUT_FORMAT = "stream-json"
 
 # The pydocs-mcp MCP server is launched as a module so the arm uses the SAME
-# interpreter (and thus the same installed pydocs_mcp) as the harness.
-_SERVE_ARGS_PREFIX = ("-m", "pydocs_mcp", "serve")
+# interpreter (and thus the same installed pydocs_mcp) as the harness. A serve
+# overlay rides on the product's TOP-LEVEL ``--config`` flag, which must precede
+# the ``serve`` subcommand (``pydocs-mcp --config x.yaml serve .``, verified in
+# python/pydocs_mcp/__main__.py:70-75) — hence the module/subcommand split.
+_MODULE_ARGS = ("-m", "pydocs_mcp")
+_SERVE_SUBCOMMAND = "serve"
+_CONFIG_FLAG = "--config"
 _MCP_SERVER_NAME = "pydocs-mcp"
 
 
@@ -120,7 +125,11 @@ def _allowed_tools(arm: ArmConfig) -> str:
 
 
 def render_mcp_config(
-    *, corpus_dir: Path, python: Path, env: Mapping[str, str] | None = None
+    *,
+    corpus_dir: Path,
+    python: Path,
+    env: Mapping[str, str] | None = None,
+    overlay: Path | None = None,
 ) -> str:
     """Render the one-server ``.mcp.json`` that boots ``pydocs_mcp serve``.
 
@@ -134,6 +143,13 @@ def render_mcp_config(
     ``PYDOCS_TRACE__*`` correlation vars. Omitting it (or passing an empty map) is
     byte-identical to the pre-trace config, so non-trace callers are untouched.
 
+    ``overlay`` (optional, ADR 0021) threads a serve-YAML overlay via the
+    product's top-level ``--config`` flag (``-m pydocs_mcp --config <overlay>
+    serve <corpus>``) so a campaign cell can flip the suggestion factor (or a
+    future multilang scope) without a new MCP param. Resolve the cell's overlay
+    NAME to this path with ``campaign.overlay_resolver.resolve_overlay``. Omitting
+    it is byte-identical to the no-overlay config (regression-pinned).
+
     Example:
         >>> render_mcp_config(  # doctest: +SKIP
         ...     corpus_dir=Path("/corpus"), python=Path("/venv/bin/python")
@@ -142,11 +158,22 @@ def render_mcp_config(
     """
     server: dict[str, object] = {
         "command": str(python),
-        "args": [*_SERVE_ARGS_PREFIX, str(corpus_dir)],
+        "args": _serve_args(corpus_dir, overlay),
     }
     if env:
         server["env"] = dict(env)
     return json.dumps({"mcpServers": {_MCP_SERVER_NAME: server}})
+
+
+def _serve_args(corpus_dir: Path, overlay: Path | None) -> list[str]:
+    """Build the serve argv, inserting ``--config <overlay>`` before ``serve``.
+
+    ``--config`` is a top-level flag that MUST precede the subcommand, so the
+    overlay lands between the module args and ``serve``. No overlay yields the
+    exact pre-overlay argv (``-m pydocs_mcp serve <corpus>``) — the regression pin.
+    """
+    config_args = [_CONFIG_FLAG, str(overlay)] if overlay is not None else []
+    return [*_MODULE_ARGS, *config_args, _SERVE_SUBCOMMAND, str(corpus_dir)]
 
 
 # ONE scaffold both arms run (spec §D15: same prompt). Keeping the bare scaffold
