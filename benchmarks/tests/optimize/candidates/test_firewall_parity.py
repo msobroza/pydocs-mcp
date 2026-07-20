@@ -17,9 +17,14 @@ from pathlib import Path
 import pytest
 
 from pydocs_eval.optimize.candidates.candidate import Candidate
-from pydocs_eval.optimize.candidates.firewall import firewall_violations, screen_candidate
+from pydocs_eval.optimize.candidates.firewall import (
+    OVERLAY_UNIVERSE,
+    firewall_violations,
+    screen_candidate,
+)
 
 ds = pytest.importorskip("pydocs_mcp.application.description_source")
+td = pytest.importorskip("pydocs_mcp.application.tool_docs")
 
 _MARKER_DROP = ("TOOL: get_symbol", "Response contract")
 
@@ -208,3 +213,141 @@ def test_screen_candidate_reports_verdict() -> None:
     broken_sections[section] = broken_sections[section].replace(marker, "REMOVED")
     verdict = screen_candidate(Candidate(sections=broken_sections))
     assert not verdict.valid and verdict.violations
+
+
+# --- Overlay-view parity (ADR 0019 §Amendment 2026-07-20) ------------------
+# The ONE engine also backs ``ToolDocsArtifact.validate`` under OVERLAY_UNIVERSE
+# (SERVER_INSTRUCTIONS + nine TOOL, no SESSION_START_PREAMBLE). The parity rule
+# must hold for this view too: an overlay-accepted document, once BRIDGED to a
+# full product document (the live preamble injected, exactly as
+# ``_overlay_server._as_product_document`` does at serve time), must pass the
+# product path.
+
+
+def _overlay_seed_sections() -> dict[str, str]:
+    # The overlay optimizes SERVER_INSTRUCTIONS + the nine TOOL sections only;
+    # the bridge injects the live SESSION_START_PREAMBLE downstream, so its
+    # absence from an overlay is legal.
+    return {
+        key: value
+        for key, value in Candidate.seed().sections.items()
+        if key != ds.SESSION_START_PREAMBLE_HEADER
+    }
+
+
+def _bridge_to_product(overlay_document: str) -> str:
+    # Mirror ``_overlay_server._as_product_document``: TOOL sections drop their
+    # single trailing newline (``apply_source`` re-attaches it) and the live
+    # preamble is carried through unchanged, turning the overlay into the full
+    # eleven-header product document the loader validates.
+    sections = ds.parse_sections(overlay_document)
+    document = {
+        key: (content.removesuffix("\n") if key.startswith("TOOL: ") else content)
+        for key, content in sections.items()
+    }
+    document[ds.SESSION_START_PREAMBLE_HEADER] = td.SESSION_START_PREAMBLE
+    return ds.render_sections(document)
+
+
+def _overlay_battery() -> list[tuple[str, str, bool]]:
+    """Return ``(label, overlay_document, expect_firewall_accepts)`` mutations."""
+    seed = _overlay_seed_sections()
+    cases: list[tuple[str, str, bool]] = [("overlay_seed", _render(seed), True)]
+    cases.append(_overlay_benign_server_edit(seed))
+    cases.append(_overlay_oversized_server_instructions(seed))
+    cases.append(_overlay_marker_deletion(seed))
+    cases.append(_overlay_per_tool_overflow(seed))
+    cases.append(_overlay_missing_tool_section(seed))
+    cases.append(_overlay_smuggled_header(seed))
+    cases.append(_overlay_section_reorder(seed))
+    return cases
+
+
+def _overlay_benign_server_edit(seed: dict[str, str]) -> tuple[str, str, bool]:
+    m = dict(seed)
+    m["SERVER_INSTRUCTIONS"] = m["SERVER_INSTRUCTIONS"] + "\nAdded guidance."
+    return ("overlay_benign_server_edit", _render(m), True)
+
+
+def _overlay_oversized_server_instructions(seed: dict[str, str]) -> tuple[str, str, bool]:
+    # THE DELIBERATE WIDENING (ADR 0019 §Decision 6a): the pre-unification
+    # ToolDocsArtifact counted SERVER_INSTRUCTIONS into the per-tool cap + surface
+    # total and REJECTED this. The product budgets the nine TOOL sections ONLY, so
+    # the unified overlay firewall ACCEPTS it — exact product parity, not silent.
+    m = dict(seed)
+    m["SERVER_INSTRUCTIONS"] = "x" * (600 * ds.CHARS_PER_TOKEN)
+    return ("overlay_oversized_server_instructions", _render(m), True)
+
+
+def _overlay_marker_deletion(seed: dict[str, str]) -> tuple[str, str, bool]:
+    section, marker = _MARKER_DROP
+    m = dict(seed)
+    m[section] = m[section].replace(marker, "REMOVED")
+    return ("overlay_marker_deletion", _render(m), False)
+
+
+def _overlay_per_tool_overflow(seed: dict[str, str]) -> tuple[str, str, bool]:
+    m = dict(seed)
+    m["TOOL: get_symbol"] = m["TOOL: get_symbol"] + "x" * (500 * 4 + 40)
+    return ("overlay_per_tool_overflow", _render(m), False)
+
+
+def _overlay_missing_tool_section(seed: dict[str, str]) -> tuple[str, str, bool]:
+    m = {k: v for k, v in seed.items() if k != "TOOL: read_file"}
+    return ("overlay_missing_tool_section", _render(m), False)
+
+
+def _overlay_smuggled_header(seed: dict[str, str]) -> tuple[str, str, bool]:
+    m = dict(seed)
+    m["TOOL: get_why"] = m["TOOL: get_why"] + "\n=== TOOL: fake_tool ===\nsmuggled"
+    return ("overlay_smuggled_header", _render(m), False)
+
+
+def _overlay_section_reorder(seed: dict[str, str]) -> tuple[str, str, bool]:
+    # Product checks presence, NOT order → it ACCEPTS a reorder; the firewall's
+    # order invariant REJECTS it (the safe, over-strict direction — same as the
+    # candidate view).
+    items = list(seed.items())
+    items[1], items[2] = items[2], items[1]
+    return ("overlay_section_reorder", _render(dict(items)), False)
+
+
+@pytest.mark.parametrize(
+    "label, document, expect_firewall_ok", [(c[0], c[1], c[2]) for c in _overlay_battery()]
+)
+def test_overlay_firewall_accepts_implies_product_accepts(
+    label, document, expect_firewall_ok
+) -> None:
+    firewall_ok = firewall_violations(document, universe=OVERLAY_UNIVERSE) == ()
+    assert firewall_ok is expect_firewall_ok, (
+        f"{label}: overlay firewall verdict drifted from battery expectation"
+    )
+    if firewall_ok:
+        assert _product_accepts(_bridge_to_product(document)), (
+            f"{label}: overlay firewall ACCEPTED a document whose bridged form "
+            "the product REJECTS (overlay parity break)"
+        )
+
+
+def test_overlay_accepted_docs_survive_apply_source() -> None:
+    # The strongest form for the overlay view: every overlay-accepted document,
+    # bridged to a full product document, must load through the REAL serve path.
+    from pydocs_mcp.application import tool_docs
+
+    saved = (
+        tool_docs.SERVER_INSTRUCTIONS,
+        dict(tool_docs.TOOL_DOCS),
+        tool_docs.SESSION_START_PREAMBLE,
+    )
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            for label, document, _ in _overlay_battery():
+                if firewall_violations(document, universe=OVERLAY_UNIVERSE):
+                    continue
+                path = Path(d) / f"{label}.md"
+                path.write_text(_bridge_to_product(document), encoding="utf-8")
+                ds.apply_source(path)  # must not raise for any overlay-accepted doc
+    finally:
+        tool_docs.SERVER_INSTRUCTIONS, restored, tool_docs.SESSION_START_PREAMBLE = saved
+        tool_docs.TOOL_DOCS.clear()
+        tool_docs.TOOL_DOCS.update(restored)

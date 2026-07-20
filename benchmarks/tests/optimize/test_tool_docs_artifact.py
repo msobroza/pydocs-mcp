@@ -41,6 +41,19 @@ def test_missing_tool_section_is_a_violation() -> None:
     assert any("get_why" in v for v in art.with_content(render_delimited(sections)).validate())
 
 
+def test_oversized_server_instructions_is_accepted_widening() -> None:
+    # DELIBERATE WIDENING (ADR 0019 §Amendment 2026-07-20): validate() now
+    # delegates to the ONE view-parameterized firewall, whose budgets are the
+    # product's — the nine TOOL sections ONLY. SERVER_INSTRUCTIONS is
+    # budget-exempt, so a huge SERVER block is ACCEPTED (a real serve accepts it).
+    # The pre-unification firewall counted SERVER into the per-tool cap + total
+    # and REJECTED this; the widening is the intended exact-parity correction.
+    art = ToolDocsArtifact()
+    sections = parse_delimited(art.render())
+    sections["SERVER_INSTRUCTIONS"] = "x" * (600 * 4)  # 600 tokens' worth
+    assert art.with_content(render_delimited(sections)).validate() == ()
+
+
 def test_seed_validates_clean_and_fingerprint_is_stable() -> None:
     a, b = ToolDocsArtifact(), ToolDocsArtifact()
     assert a.validate() == () and a.fingerprint == b.fingerprint and len(a.fingerprint) == 64

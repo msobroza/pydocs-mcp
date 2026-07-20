@@ -2,9 +2,14 @@
 
 Renders the product's live ``TOOL_DOCS`` + ``SERVER_INSTRUCTIONS`` as the
 shared delimited document, parses a candidate back with ``with_content``, and
-runs the §D13 rules in ``validate()`` against the SAME importable constants the
-product lint uses (``pydocs_mcp.application.tool_docs``) so the firewall and the
-lint can never disagree. ``landing_note()`` points a human at the product file.
+screens it through the ONE view-parameterized validity firewall
+(``candidates/firewall.py``) under :data:`~pydocs_eval.optimize.candidates.
+firewall.OVERLAY_UNIVERSE` — the ten-header subset this overlay optimizes
+(``SERVER_INSTRUCTIONS`` + nine ``TOOL: <name>``; ``SESSION_START_PREAMBLE`` is
+injected by the overlay bridge downstream, ADR 0019 §Amendment 2026-07-20). The
+firewall runs the SAME product ``validate_sections`` the §D13 lint imports, so
+the firewall and the lint can never disagree. ``landing_note()`` points a human
+at the product file.
 """
 
 from __future__ import annotations
@@ -14,27 +19,17 @@ from dataclasses import dataclass, replace
 
 from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
 
-# Module-level ``pydocs_mcp`` boundary (the §D13 lint constants ARE the
-# validation contract — there is no library-free way to define this artifact).
-# A base install without the [retrieval] extra gets the actionable install hint
-# instead of a bare ModuleNotFoundError.
+# Module-level ``pydocs_mcp`` boundary: ``render()`` seeds from the live product
+# surface, so this artifact is inherently library-coupled. A base install without
+# the [retrieval] extra gets the actionable install hint instead of a bare
+# ModuleNotFoundError.
 try:
-    from pydocs_mcp.application.tool_docs import (
-        CHARS_PER_TOKEN,
-        PER_TOOL_TOKEN_BUDGET,
-        REQUIRED_MARKERS,
-        SERVER_INSTRUCTIONS,
-        TOOL_DOCS,
-        TOTAL_TOKEN_BUDGET,
-    )
+    from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS, TOOL_DOCS
 except ImportError as exc:
     raise_missing_retrieval_extra(exc)
 
-from pydocs_eval.optimize.artifacts._delimited import (
-    find_header_collisions,
-    parse_delimited,
-    render_delimited,
-)
+from pydocs_eval.optimize.artifacts._delimited import render_delimited
+from pydocs_eval.optimize.candidates.firewall import OVERLAY_UNIVERSE, firewall_violations
 from pydocs_eval.optimize.registries import artifact_registry
 
 # WHY: the section key for a tool is its delimited-format header group
@@ -71,20 +66,15 @@ class ToolDocsArtifact:
     def validate(self) -> tuple[str, ...]:
         """Return §D2a + §D13 constraint violations; empty tuple == valid.
 
-        Runs the firewall the orchestrator checks before spending any fitness:
-        the document must round-trip, carry exactly the nine live tools in order,
-        keep every required §D13 marker, and stay under the token budgets — all
-        against the same constants the product lint imports (zero drift).
+        Delegates to the ONE view-parameterized firewall under the overlay
+        universe (``OVERLAY_UNIVERSE``): the document must round-trip, carry
+        exactly the nine live tools in canonical order, keep every required §D13
+        marker, and stay under the product token budgets (the nine TOOL sections
+        only — ``SERVER_INSTRUCTIONS`` is budget-exempt, EXACT product parity).
+        Never raises; the firewall catches the product's strict-parse errors into
+        the violations tuple.
         """
-        sections = parse_delimited(self.render())
-        expected = [_TOOL_KEY.format(name=n) for n in TOOL_DOCS]
-        allowed = (_SERVER_KEY, *expected)
-        return (
-            *find_header_collisions(sections, allowed=allowed),
-            *_structure_violations(sections, expected),
-            *_marker_violations(sections, expected),
-            *_budget_violations(sections),
-        )
+        return firewall_violations(self.render(), universe=OVERLAY_UNIVERSE)
 
     def landing_note(self) -> str:
         """Explain how a human lands a proposal from this artifact."""
@@ -98,37 +88,3 @@ class ToolDocsArtifact:
     def fingerprint(self) -> str:
         """SHA-256 hex digest of the rendered surface (64 chars)."""
         return hashlib.sha256(self.render().encode()).hexdigest()
-
-
-def _structure_violations(sections: dict[str, str], expected: list[str]) -> tuple[str, ...]:
-    # Unexpected/phantom headers are reported by ``find_header_collisions``; here
-    # we only flag missing sections and out-of-order tools among the ones present.
-    violations = [] if _SERVER_KEY in sections else [f"missing section {_SERVER_KEY}"]
-    violations += [f"missing tool section {key!r}" for key in expected if key not in sections]
-    present = [key for key in sections if key in expected]
-    if not violations and present != expected:
-        violations.append(f"tool order {present} != expected {expected}")
-    return tuple(violations)
-
-
-def _marker_violations(sections: dict[str, str], expected: list[str]) -> tuple[str, ...]:
-    return tuple(
-        f"{key!r} missing §D13 marker {marker!r}"
-        for key in expected
-        if key in sections
-        for marker in REQUIRED_MARKERS
-        if marker not in sections[key]
-    )
-
-
-def _budget_violations(sections: dict[str, str]) -> tuple[str, ...]:
-    violations: list[str] = []
-    total = 0
-    for key, content in sections.items():
-        tokens = len(content) // CHARS_PER_TOKEN
-        total += tokens
-        if tokens > PER_TOOL_TOKEN_BUDGET:
-            violations.append(f"{key!r}: {tokens} tokens > {PER_TOOL_TOKEN_BUDGET}")
-    if total > TOTAL_TOKEN_BUDGET:
-        violations.append(f"surface total {total} tokens > {TOTAL_TOKEN_BUDGET}")
-    return tuple(violations)

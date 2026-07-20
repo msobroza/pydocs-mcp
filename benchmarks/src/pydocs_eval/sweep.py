@@ -29,16 +29,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-# WHY: importing the umbrella subpackages here fires every
-# ``@*_registry.register`` decorator on import, so the four registries are
-# populated before any sweep runs — and, transitively, before ``runner.py``
-# renders ``--help`` (it imports this module at its top). AC3 (help text
-# lists registered names) depends on this side effect.
+# WHY no explicit registry side-effect imports here: the four registries
+# self-populate on first read (``_Registry`` lazy bootstrap, ``registries.py``).
+# The sweep's ``*_registry.build(...)`` calls — and ``runner.py``'s ``--help``,
+# which reads ``names()`` (AC3: help text lists registered names) — trigger
+# population on demand, so no umbrella-subpackage import is needed to avoid the
+# empty-registry trap.
 from . import _bench_cache
-from . import datasets as _datasets  # noqa: F401 -- registry side-effects
-from . import metrics as _metrics_pkg  # noqa: F401 -- registry side-effects
-from . import systems as _systems  # noqa: F401 -- registry side-effects
-from . import trackers as _trackers  # noqa: F401 -- registry side-effects
 from .metrics.aggregate import mean_with_bootstrap_ci, percentile
 from .metrics.base_metric import Metric, Scorer
 from .registries import dataset_registry, system_registry, tracker_registry
