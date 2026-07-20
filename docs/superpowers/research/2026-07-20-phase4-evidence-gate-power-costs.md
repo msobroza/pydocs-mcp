@@ -50,6 +50,22 @@ though documents + exemplars can push the reflection prompt past 200K).
 
 ## 1. GATE POWER ANALYSIS (D2) — the ADR 0018 pre-registration scaffold
 
+> **Amendment (2026-07-20, power-vs-gate reconciliation).** The "exact α" rule
+> tabulated in §1c/§1d as `mcnemar_exact_p(b,c) < α` AND `b > c` (two-sided,
+> realized FA ≈ α/2) is an operationalization that **drifted** from the rule the
+> live gate and frozen pre-registration actually use: the **one-sided**
+> `mcnemar_exact_p_one_sided(b, c) <= α` (`gate_rule: paired_exact_mcnemar_one_sided`;
+> `optimize/gepa_harness/acceptance.py`). Recomputed to the registered one-sided
+> rule, the "exact" rows below change (roughly: FA ≈ α not α/2, power up a few
+> points): at **N=559, α=0.05, Δ_min=0.05** the exact rule gives FA
+> **0.038/0.041/0.043** and power **0.98/0.82/0.67** for π_d = 0.10/0.20/0.30
+> (was 0.019/0.020/0.021 and 0.96/0.73/0.55). The §1b `mcnemar_sample_size` sizing
+> table (289/616/934 → 300/624/936) is a **different function and is unchanged**.
+> The canonical recompute now lives in code — `optimize/prereg/power.py` with a
+> cross-pin test binding it to `acceptance.decide_acceptance` — so these §1c/§1d
+> "exact" cells are superseded by that module's output. The qualitative conclusion
+> (only the exact test controls false-accept; strict/margin swamp it) is unchanged.
+
 ### 1a. Machinery reused (not reinvented)
 
 The paired-binary framework is already pinned in the repo. Read and reused verbatim:

@@ -2,14 +2,18 @@
 
 Given a FILLED registration, emit the owner-budget-checkpoint's power table from
 CODE — false-accept, power at Δ_min, and the ``mcnemar_sample_size`` powered N per
-π_d — plus the family-wise disclosure ``1 − (1 − α/2)^G`` at the realized G. The
+π_d — plus the family-wise disclosure ``1 − (1 − α)^G`` at the realized G. The
 point is that the budget checkpoint reads these numbers off a re-runnable computer,
 not off hand math.
 
-The chosen rule is the paired exact McNemar test; the report reflects the
-pre-registered α, Δ_min, and N_val verbatim. It refuses to render a power table
-while ``pi_d`` (the row selector) is unfilled — the honest headline is "measure
-π_d first", not a fabricated row.
+The chosen rule is the paired **one-sided** exact McNemar test (accept iff
+``mcnemar_exact_p_one_sided(b, c) <= α``, per the registered
+``gate_rule=paired_exact_mcnemar_one_sided``); the report reflects the
+pre-registered α, Δ_min, and N_val verbatim. Its per-gate false-accept is ≈ α, so
+the family-wise disclosure compounds the nominal α (not α/2 — the ADR 0018 body's
+superseded two-sided operationalization; see the 2026-07-20 amendment). It refuses
+to render a power table while ``pi_d`` (the row selector) is unfilled — the honest
+headline is "measure π_d first", not a fabricated row.
 """
 
 from __future__ import annotations
@@ -21,18 +25,21 @@ __all__ = ["family_wise_false_accept", "render_power_report"]
 
 
 def family_wise_false_accept(alpha: float, g_gate_evals: int) -> float:
-    """``1 − (1 − α/2)^G`` — the chance ≥1 null candidate is accepted over G gates.
+    """``1 − (1 − α)^G`` — the chance ≥1 null candidate is accepted over G gates.
 
-    The per-gate control is ≈ α/2; over G sequential screening gates the family-wise
-    false-accept compounds, which is WHY the val gate is screening-only and the
-    frozen test is the sole confirmatory contrast (ADR 0018 §Decision).
+    The per-gate control is ≈ α under the registered one-sided rule (2026-07-20
+    amendment; the ADR 0018 body's ≈ α/2 was the superseded two-sided
+    operationalization); over G sequential screening gates the family-wise
+    false-accept compounds the nominal α, which is WHY the val gate is
+    screening-only and the frozen test is the sole confirmatory contrast (ADR 0018
+    §Decision).
 
     Raises:
         ValueError: if ``g_gate_evals`` < 0 — a gate count, not a signed delta.
     """
     if g_gate_evals < 0:
         raise ValueError(f"g_gate_evals must be >= 0, got {g_gate_evals!r}")
-    return 1.0 - (1.0 - alpha / 2) ** g_gate_evals
+    return 1.0 - (1.0 - alpha) ** g_gate_evals
 
 
 def render_power_report(prereg: PreRegistration, pi_ds: tuple[float, ...]) -> str:
@@ -78,6 +85,6 @@ def _family_wise(prereg: PreRegistration) -> list[str]:
     fw = family_wise_false_accept(prereg.alpha, g)
     return [
         "",
-        f"family-wise false-accept 1-(1-alpha/2)^G at G={g}: {fw:.4f} "
+        f"family-wise false-accept 1-(1-alpha)^G at G={g}: {fw:.4f} "
         "(val gate is screening-only; frozen test is the sole confirmatory contrast)",
     ]

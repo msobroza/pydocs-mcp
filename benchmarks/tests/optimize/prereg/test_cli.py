@@ -17,7 +17,7 @@ def test_default_run_prints_hash_verdict_and_table(capsys) -> None:
     out = capsys.readouterr().out
     assert "registration_hash:" in out
     assert "launch: BLOCKED" in out
-    assert "0.9628" in out  # the power table is rendered
+    assert "0.9822" in out  # the power table is rendered
 
 
 def test_authorize_blocks_while_unfilled(capsys) -> None:

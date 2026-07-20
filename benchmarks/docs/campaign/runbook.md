@@ -382,7 +382,8 @@ candidate campaigns exist, and each named campaign resumes itself from its own
    report answers the pre-registered questions, includes the qualitative diff
    analysis (the optimizer's actual sentences are the transferable insight), the
    family-wise disclosure (the val gate was screening-only; report
-   1 − (1 − α/2)^G at the realized G), and — if it lands there — the pre-registered
+   1 − (1 − α)^G at the realized G — the one-sided gate's per-gate FA is ≈ α),
+   and — if it lands there — the pre-registered
    honest headline "no detectable difference at this power." The shipped-default
    recommendation is the owner's decision, presented with the Phase 1
    default-UX smoke result.

@@ -4,6 +4,48 @@
 slots marked; launch forbidden until filled and owner budget confirmed) ·
 **Date:** 2026-07-20 · **Phase:** 4
 
+> **Amendment (2026-07-20, power-vs-gate reconciliation).** The **registered**
+> acceptance rule is the paired **one-sided** exact McNemar test — accept iff
+> `mcnemar_exact_p_one_sided(b, c) <= α` (`aggregate.py:198-225`), which is what
+> the live gate applies (`optimize/gepa_harness/acceptance.py:decide_acceptance`)
+> and what the frozen pre-registration pins
+> (`gate_rule: paired_exact_mcnemar_one_sided`,
+> `configs/campaign_preregistration.yaml`). The §Evidence / §Decision / §Consequences
+> prose below describes an earlier **two-sided operationalization** — "accept iff
+> `mcnemar_exact_p(b, c) < α` AND `b > c`", realized type-I ≈ α/2 — which had
+> **drifted** in the pre-reg power module (`optimize/prereg/power.py`) from the
+> registered one-sided rule. That module has been aligned to the one-sided rule and
+> the power tables recomputed; the numbers below are **superseded** by the
+> recomputed values here (registration_hash is unchanged — the frozen YAML always
+> said one-sided; only the drifted power arithmetic and its documentary numbers
+> moved). A cross-pin test (`test_power.py`) now asserts `power.gate_accepts`
+> equals `decide_acceptance`'s predicate on `(b, c) ∈ [0..30]² × α ∈ {0.01, 0.05,
+> 0.10}`, so this class of drift cannot recur silently.
+>
+> **Recomputed power table (one-sided rule, α = 0.05, Δ_min = 0.05, N_val = 559):**
+>
+> | π_d | false-accept (was ≈ α/2) | power @ Δ_min (was) | powered N (unchanged) |
+> |---|---|---|---|
+> | 0.10 | **0.0383** (was 0.0186) | **0.9822** (was 0.9628) | 300 |
+> | 0.20 | **0.0410** (was 0.0199) | **0.8224** (was 0.7279) | 624 |
+> | 0.30 | **0.0427** (was 0.0208) | **0.6717** (was 0.5504) | 936 |
+>
+> - **Headline power** at N=559 is now **0.98 / 0.82 / 0.67** (π_d = 0.10/0.20/0.30),
+>   was 0.96/0.73/0.55. Across every probed N and π_d, false-accept is **0.023–0.043**
+>   (≈ α, conservative by the exact test's discreteness), replacing the body's
+>   0.011–0.021 (≈ α/2). Power at N=100 is 0.18–0.35, at N=200 is 0.32–0.67.
+> - **Family-wise disclosure** is now `1 − (1 − α)^G` (per-gate FA ≈ α), **≈ 0.40 at
+>   G = 10** (was `1 − (1 − α/2)^G` ≈ 0.18). Every "α/2" / "1 − (1 − α/2)^G" in the
+>   prose and slot table below reads with α substituted for α/2.
+> - **The powered-N sizing rows are UNCHANGED:** 289/616/934 raw → 300/624/936
+>   mult-of-12 come from `mcnemar_sample_size`'s z-form (`aggregate.py:298-341`), a
+>   different function untouched by this reconciliation — verified re-run.
+> - **The qualitative conclusions stand:** strict-improvement (0.436–0.485) and raw
+>   margin (6.2–18.7%) still swamp the one-sided test's ≈ α false-accept; power is
+>   still honest-weak at the high-π_d tail (0.67 at π_d = 0.30, powered N 936 > 559);
+>   the val gate is still screening-only with the ADR 0020 frozen test as the sole
+>   confirmatory contrast.
+
 - **Decision area:** D2 of the Phase 4 owner spec (campaign design: acceptance
   rule, gate cadence, budget split, stopping, ledger structure).
 - **Siblings:** ADR 0017 (D1 optimizer integration: GEPA thin adapter, injection
@@ -163,6 +205,9 @@ honest-weak at N=559 (0.55 at π_d=0.30) and collapses at N=100–200
   accept iff `mcnemar_exact_p(b, c) < α` AND `b > c` (`aggregate.py:176-195`,
   `mcnemar_from_pairs`). **α = 0.05, one-sided in the improvement direction**
   (realized type-I ≈ α/2 under this operationalization, per the tables).
+  *(Superseded — see the 2026-07-20 amendment at the top: the registered and
+  implemented rule is the one-sided `mcnemar_exact_p_one_sided(b, c) <= α`,
+  realized type-I ≈ α; power 0.98/0.82/0.67 at N=559.)*
 - **Registered minimum effect:** Δ_min = 0.05. Floor justified by arithmetic:
   2-pt detection needs 1,944–5,880 instances/cell — unaffordable.
 - **Gate contrast:** candidate vs the current accepted incumbent (the seed

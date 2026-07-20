@@ -20,11 +20,11 @@ def _prereg() -> PreRegistration:
 
 
 def test_report_contains_adr_headline_power_numbers() -> None:
-    """The rendered table carries the 0.96/0.73/0.55 headline power at N=559."""
+    """The rendered table carries the 0.98/0.82/0.67 headline power at N=559."""
     text = render_power_report(_prereg(), (0.10, 0.20, 0.30))
-    assert "0.9628" in text
-    assert "0.7279" in text
-    assert "0.5504" in text
+    assert "0.9822" in text
+    assert "0.8224" in text
+    assert "0.6717" in text
     assert "300" in text and "624" in text and "936" in text
 
 
@@ -43,7 +43,7 @@ def test_report_notes_unmeasured_g() -> None:
 
 
 def test_report_renders_family_wise_when_g_filled() -> None:
-    """A filled G yields 1-(1-alpha/2)^G in the disclosure line."""
+    """A filled G yields 1-(1-alpha)^G in the disclosure line."""
     prereg = dataclasses.replace(_prereg(), g_gate_evals=10)
     text = render_power_report(prereg, (0.20,))
     assert "G=10" in text
@@ -51,9 +51,9 @@ def test_report_renders_family_wise_when_g_filled() -> None:
 
 
 def test_family_wise_formula() -> None:
-    """1-(1-alpha/2)^G exactly (0 gates -> 0; monotone up in G)."""
+    """1-(1-alpha)^G exactly (0 gates -> 0; monotone up in G) — per-gate FA ≈ alpha."""
     assert family_wise_false_accept(0.05, 0) == 0.0
-    assert family_wise_false_accept(0.05, 10) == pytest.approx(1 - 0.975**10)
+    assert family_wise_false_accept(0.05, 10) == pytest.approx(1 - 0.95**10)
     assert family_wise_false_accept(0.05, 10) > family_wise_false_accept(0.05, 5)
 
 
