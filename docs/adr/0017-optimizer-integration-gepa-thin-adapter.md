@@ -216,10 +216,22 @@ is ahead of 0.1.4 (irrelevant to a pinned install).
 8. **Gate blind-spot lock (completes R2 operatively):** the import-graph
    isolation test guards leaks routed through `gate.py`'s closure, but
    nothing stops an adapter module from computing acceptance itself.
-   Adapter contract: acceptance decisions in the adapter layer call
-   `run_gate` and nothing else — pinned by a test asserting the adapter's
-   acceptance path consumes only `GateDecision`. Review note: any adapter
-   change that touches acceptance must re-run that pin.
+   Adapter contract (amended post-implementation 2026-07-20, reconciler):
+   acceptance decisions in the adapter layer consume **ground-truth gate
+   inputs only** — the paired per-instance `GroundTruthOutcome` sequences
+   (incumbent and candidate; the same eval-report-parser outputs `run_gate`
+   itself consumes) plus the `GateDecision` aggregates and the frozen
+   pre-registration config — because ADR 0018's acceptance statistic is the
+   paired exact McNemar test over per-instance resolve, which an
+   aggregate-only `GateDecision` cannot carry. The original
+   "`GateDecision` and nothing else" phrasing was too narrow and, as
+   implemented, degenerated to strict improvement — the anti-pattern ADR
+   0018's power tables buried. The R2 boundary is unchanged: every
+   acceptance input is constructible only from parsed eval reports; no
+   shaped score, no LLM output, no trace metric. Pinned by the transitive
+   import test (closure disjoint from shaped_score / trajectory-metrics /
+   consumers / feedback / attribution) and a signature test. Review note:
+   any adapter change that touches acceptance must re-run those pins.
 
 ## Consequences
 
@@ -286,7 +298,10 @@ No-spend stage (this phase, before any paid rollout):
 5. Implement the candidate super-ledger (per-candidate campaign IDs,
    lineage fields per ADR 0019) with schema + golden-byte tests.
 6. Add the gate blind-spot pin: the adapter acceptance path consumes only
-   `GateDecision` from `trajectory/gate.py`.
+   ground-truth gate inputs — paired `GroundTruthOutcome` sequences +
+   `GateDecision` from `trajectory/gate.py` + the pre-registration config
+   (amended; see Decision §8 — the acceptance statistic is ADR 0018's
+   paired exact McNemar over per-instance resolve).
 7. Pin gepa 0.1.4 in `benchmarks/pyproject.toml` and the campaign-lockfile
    fields; run the §Dry-run loop (proposal → validity → render → canned
    rollout → score → simulated gate → ledger entry) as the standing health
