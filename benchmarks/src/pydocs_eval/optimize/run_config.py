@@ -121,6 +121,14 @@ class AskRunnerSettings(BaseModel):
 
     model: str = DEFAULT_MODEL
     architecture: str = _DEFAULT_ASK_ARCHITECTURE
+    # OpenRouter cache-token field-name trap (ADR 0015 §Decision, item 6): this
+    # ``base_url`` is the unused reflector-wiring seam (Phase 4). If a future arm
+    # points it at OpenRouter's OpenAI-compatible surface, cache activity is named
+    # ``prompt_tokens_details.cached_tokens`` / ``cache_write_tokens`` there — NOT
+    # the Anthropic-native ``cache_read_input_tokens`` / ``cache_creation_input_tokens``
+    # the Phase 2 stream parser (``agent_track/_parse.py:176-177``) keys on. A zero
+    # cache reading from an OpenRouter-routed arm is a field-name mismatch, not
+    # absent caching — this phase leaves the seam unused so no reading is affected.
     base_url: str | None = None
     workspace: Path = _DEFAULT_ASK_WORKSPACE
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS

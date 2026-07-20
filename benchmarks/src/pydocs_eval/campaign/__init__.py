@@ -33,8 +33,10 @@ from pydocs_eval.campaign.ledger import (
 from pydocs_eval.campaign.lockfile import (
     CampaignLockfile,
     HostFingerprint,
+    ProviderPin,
     RolloutCaps,
     capture_host_fingerprint,
+    claude_direct_pin,
     write_lockfile,
 )
 from pydocs_eval.campaign.prebuild import InstanceSpec, load_instance_manifest, prebuild_index
@@ -61,6 +63,7 @@ __all__ = (
     "InstanceSpec",
     "LedgerRecord",
     "NamedContrast",
+    "ProviderPin",
     "RolloutCaps",
     "RolloutOutcome",
     "SmokePreconditionError",
@@ -70,6 +73,7 @@ __all__ = (
     "campaign_report",
     "capture_host_fingerprint",
     "check_preconditions",
+    "claude_direct_pin",
     "ensure_preconditions",
     "load_cell_aggregate",
     "load_instance_manifest",
