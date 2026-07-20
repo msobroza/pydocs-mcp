@@ -324,3 +324,25 @@ Paid arc (after Phase 3 outputs and the owner budget checkpoint):
    remains *no proxy*; if built, reject-only, with its own ADR note.
 9. If facts-only records demonstrably under-inform mutations, enable the
    excerpt flag as a recorded lockfile change (new campaign ID, R5).
+
+## Amendment (2026-07-20) — the two firewalls are now one engine
+
+The two validity firewalls this ADR described as coexisting — the v2 candidate
+firewall (`optimize/candidates/firewall.py`, full 11-header universe) and the
+older hand-rolled `ToolDocsArtifact.validate` (`optimize/artifacts/tool_docs.py`,
+10-header universe with SERVER-inclusive budgets) — have been unified into ONE
+view-parameterized engine in `candidates/firewall.py`. `firewall_violations(document,
+*, universe=…)` now serves both views: `CANDIDATE_UNIVERSE` (all 11 canonical
+headers) and `OVERLAY_UNIVERSE` (the 10-header subset, SESSION_START_PREAMBLE
+absent-and-legal because the overlay bridge injects the live preamble
+downstream). `ToolDocsArtifact.validate` is now a thin delegation to that engine
+under `OVERLAY_UNIVERSE` (its public contract is unchanged: a violations tuple,
+never raises, order check included). The budget-direction question §Decision 6a
+raised is resolved to **exact product parity**: both views reach the product's own
+`validate_sections` (the overlay view completes its parsed sections with an inert
+placeholder preamble first), so budgets cover the nine TOOL sections only and
+SERVER_INSTRUCTIONS is budget-exempt — the pre-unification over-rejection of a big
+SERVER block is corrected (a deliberate widening, re-pinned in the tests). The
+firewall-parity battery now asserts firewall-accepts ⇒ product-accepts for BOTH
+views, and the extra section-order invariant remains the sole (safe) over-strict
+direction on each.
