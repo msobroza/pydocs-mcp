@@ -7,7 +7,8 @@ Extends the Phase 2 run-config lockfile (``trajectory/rollout.py``
 - dataset snapshot pins + split-file sha256s (ADR 0013),
 - cell definitions (ADR 0016 §Stage 1),
 - host fingerprint captured at launch (ADR 0014 item 6),
-- provider + billing mode (ADR 0015),
+- provider + billing mode + the Claude-direct provider pin (auth / base_url /
+  router / fallbacks / quantization / anthropic-version / pricing snapshot) (ADR 0015),
 - per-rollout caps (turns, wall) + campaign cost ceiling (R6),
 - metric / score / taxonomy versions + artifact hash (ADR 0009–0012).
 
@@ -83,6 +84,79 @@ class RolloutCaps:
         return {"max_turns": self.max_turns, "wall_seconds": self.wall_seconds}
 
 
+# The Claude-direct plumbing R5/R7 pin to. These are VERIFIED FACTS, not knobs
+# (ADR 0015 §Evidence, §Decision): the headless loop drives only Claude, exposes
+# no router/fallback/quantization/base-url lever for the target arm, so any other
+# value would be a fiction — rejected at construction so R7 holds structurally,
+# not by config discipline.
+_PINNED_PROVIDER_FACTS = {
+    "auth": "api_key",
+    "base_url": "default",
+    "router": "none",
+    "fallbacks": "structurally_absent",
+    "quantization": "n/a",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderPin:
+    """The Claude-direct provider pinning block (ADR 0015 §Decision).
+
+    Records the model-plumbing facts R5/R7 fold into the campaign identity. Every
+    field except ``pricing_snapshot`` is a static verified fact (no router, no
+    fallback path — so a provider change is impossible without a new lockfile,
+    i.e. a new campaign ID). ``pricing_snapshot`` is the one measured slot: the
+    probe-confirmed price table (standard vs the Sonnet intro window) the budget
+    was computed against. ``anthropic_version`` pins the API version header.
+
+    Raises:
+        ValueError: if any static fact is set to a value other than the single
+            pinned option (e.g. ``router="openrouter"``) — that would reopen R7
+            as config discipline instead of structure.
+    """
+
+    anthropic_version: str
+    pricing_snapshot: Mapping[str, object]
+    auth: str = _PINNED_PROVIDER_FACTS["auth"]
+    base_url: str = _PINNED_PROVIDER_FACTS["base_url"]
+    router: str = _PINNED_PROVIDER_FACTS["router"]
+    fallbacks: str = _PINNED_PROVIDER_FACTS["fallbacks"]
+    quantization: str = _PINNED_PROVIDER_FACTS["quantization"]
+
+    def __post_init__(self) -> None:
+        for name, pinned in _PINNED_PROVIDER_FACTS.items():
+            got = getattr(self, name)
+            if got != pinned:
+                raise ValueError(
+                    f"ProviderPin.{name}={got!r} is not the pinned Claude-direct value "
+                    f"{pinned!r}; R7 is satisfied structurally (no router/fallback) — "
+                    "a non-Claude-direct value is a Phase 4 reopener, not a lockfile field"
+                )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "auth": self.auth,
+            "base_url": self.base_url,
+            "router": self.router,
+            "fallbacks": self.fallbacks,
+            "quantization": self.quantization,
+            "anthropic_version": self.anthropic_version,
+            "pricing_snapshot": dict(self.pricing_snapshot),
+        }
+
+
+def claude_direct_pin(
+    *, anthropic_version: str, pricing_snapshot: Mapping[str, object]
+) -> ProviderPin:
+    """Build the canonical Anthropic-direct pin — static facts + the two slots.
+
+    Example:
+        >>> claude_direct_pin(anthropic_version="2023-06-01", pricing_snapshot={}).router
+        'none'
+    """
+    return ProviderPin(anthropic_version=anthropic_version, pricing_snapshot=pricing_snapshot)
+
+
 def sha256_of_file(path: Path) -> str:
     """Return the hex sha256 of ``path`` (split-file pin, ADR 0013).
 
@@ -119,6 +193,7 @@ class CampaignLockfile:
     host: HostFingerprint
     provider: str
     billing_mode: str
+    provider_pin: ProviderPin
     caps: RolloutCaps
     cost_ceiling_usd: float
     schema_version: int
@@ -146,6 +221,7 @@ class CampaignLockfile:
             "host": self.host.to_dict(),
             "provider": self.provider,
             "billing_mode": self.billing_mode,
+            "provider_pin": self.provider_pin.to_dict(),
             "caps": self.caps.to_dict(),
             "cost_ceiling_usd": self.cost_ceiling_usd,
             "versions": {

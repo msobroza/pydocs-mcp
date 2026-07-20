@@ -12,8 +12,10 @@ from pydocs_eval.campaign.lockfile import (
     LOCKFILE_FILENAME,
     CampaignLockfile,
     HostFingerprint,
+    ProviderPin,
     RolloutCaps,
     capture_host_fingerprint,
+    claude_direct_pin,
     split_file_hashes,
     write_lockfile,
 )
@@ -27,6 +29,10 @@ def _lockfile(**overrides) -> CampaignLockfile:
         host=HostFingerprint(hostname="h", arch="x86_64", os="Linux 6"),
         provider="anthropic",
         billing_mode="api_key_metered",
+        provider_pin=claude_direct_pin(
+            anthropic_version="2023-06-01",
+            pricing_snapshot={"claude-haiku-4-5": {"input": 1.0, "output": 5.0}},
+        ),
         caps=RolloutCaps(max_turns=40, wall_seconds=900.0),
         cost_ceiling_usd=100.0,
         schema_version=1,
@@ -94,3 +100,40 @@ def test_host_change_yields_new_campaign_id() -> None:
     base = _lockfile()
     other = _lockfile(host=dataclasses.replace(base.host, arch="aarch64"))
     assert other.campaign_id != base.campaign_id
+
+
+def test_claude_direct_pin_records_static_verified_facts() -> None:
+    # ADR 0015 §Decision: with no router and no fallback path, provider change is
+    # impossible without a new lockfile — these are facts, not tunable knobs.
+    pin = claude_direct_pin(anthropic_version="2023-06-01", pricing_snapshot={})
+    d = pin.to_dict()
+    assert d["router"] == "none"
+    assert d["fallbacks"] == "structurally_absent"
+    assert d["quantization"] == "n/a"  # verified undisclosed on every Claude endpoint
+    assert d["auth"] == "api_key"
+    assert d["base_url"] == "default"
+    assert d["anthropic_version"] == "2023-06-01"
+
+
+def test_provider_pin_is_part_of_campaign_id() -> None:
+    base = _lockfile()
+    repinned = _lockfile(
+        provider_pin=claude_direct_pin(
+            anthropic_version="2023-06-01",
+            pricing_snapshot={"claude-sonnet-5": {"input": 3.0, "output": 15.0}},
+        )
+    )
+    assert repinned.campaign_id != base.campaign_id  # a repricing is a new campaign
+
+
+def test_provider_pin_appears_in_written_lockfile(tmp_path) -> None:
+    lf = _lockfile()
+    doc = json.loads(write_lockfile(tmp_path, lf).read_text())
+    assert doc["provider_pin"]["router"] == "none"
+    assert "pricing_snapshot" in doc["provider_pin"]
+
+
+def test_non_default_pin_facts_are_rejected() -> None:
+    # A router or fallback path would make R7 a config discipline, not structural.
+    with pytest.raises(ValueError, match="router"):
+        ProviderPin(anthropic_version="2023-06-01", pricing_snapshot={}, router="openrouter")
