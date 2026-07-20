@@ -10,6 +10,9 @@ for :class:`~pydocs_mcp.extraction.pipeline.stages.ChunkingStage` (spec §7.5):
 - :mod:`.notebook` — :class:`NotebookChunker` (``.ipynb``)
 - :mod:`.text_section` — :class:`TextSectionChunker` (ADR 0021 T2: the
   text/config set ``.rst .txt .toml .yaml .yml .cfg .ini .json``)
+- :mod:`.multilang_treesitter` — :class:`MultilangChunker` (ADR 0021 T3: the
+  code set ``.js .ts .tsx .c .h .rs`` behind the ``[multilang]`` extra, with an
+  internal text-window fallback when the extra is absent)
 
 Direct-text rule (spec §4.1.1): each node's ``.text`` contains ONLY
 prose between this node's start and its first child's start. MODULE
@@ -33,6 +36,9 @@ from pydocs_mcp.extraction.strategies.chunkers.base_chunker import Chunker
 from pydocs_mcp.extraction.strategies.chunkers.heading_markdown import (
     HeadingMarkdownChunker,
 )
+from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+    MultilangChunker,
+)
 from pydocs_mcp.extraction.strategies.chunkers.notebook import NotebookChunker
 from pydocs_mcp.extraction.strategies.chunkers.text_section import TextSectionChunker
 
@@ -40,6 +46,7 @@ __all__ = (
     "AstPythonChunker",
     "Chunker",
     "HeadingMarkdownChunker",
+    "MultilangChunker",
     "NotebookChunker",
     "TextSectionChunker",
     "_module_from_path",

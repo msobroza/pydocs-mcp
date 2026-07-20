@@ -111,6 +111,26 @@ openvino = ["sentence-transformers[openvino]>=5.0,<6.0", "transformers>=4.48,<6.
 # PageRank run then dies with `ModuleNotFoundError: No module named 'scipy'`.
 # Opt-in.
 graph = ["networkx>=3.0,<4.0", "scipy>=1.10,<2.0"]
+# ADR 0021 T3: tree-sitter grammar chunkers for the code extension set
+# (.js .ts .tsx .c .h .rs). Opt-in; MultilangChunker degrades to text windows
+# when this is absent, so the default install never pays for it (~2 MB of
+# grammar wheels + the per-CPython core wheel).
+# WHY tree-sitter<0.26: 0.26.0 has a memory-safety regression (use-after-free
+# in QueryCursor.matches() -> SIGBUS/SIGSEGV at teardown, or garbage spans).
+# A probe reproduced it 5/5 on 0.26.0 vs 5/5 clean on 0.25.2
+# (docs/superpowers/research/2026-07-21-multilang-evidence-treesitter.md);
+# revisit the ceiling only once upstream fixes it. The floor is 0.25 because
+# the current grammar wheels ship ABI 15, which core <0.25 rejects at parse
+# time. Grammar wheels are abi3 (decoupled from the per-CPython core wheel),
+# individually MIT, and typed; each minor is capped below the next so pip
+# can't pull a future ABI-16 grammar that would demand core >=0.26.
+multilang = [
+    "tree-sitter>=0.25,<0.26",
+    "tree-sitter-javascript>=0.25,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+    "tree-sitter-c>=0.24,<0.25",
+    "tree-sitter-rust>=0.24,<0.25",
+]
 # "Ask your docs" — a LangGraph ReAct agent + Streamlit chat UI over the MCP
 # server (see pydocs_mcp/ask_your_docs/). Ships the `ask-your-docs` command.
 # Uses the default fastembed embedder out of the box; add [sentence-transformers]
@@ -291,7 +311,23 @@ ignore_errors = true
 # tests / benchmarks / 3rd-party-only-from-ignored-modules (mcp, watchdog,
 # openai) are NOT listed — adding them triggers `unused section` warnings.
 [[tool.mypy.overrides]]
-module = ["fast_plaid.*", "fastembed.*", "turbovec.*", "yaml.*", "numpy", "numpy.*"]
+module = [
+    "fast_plaid.*",
+    "fastembed.*",
+    "turbovec.*",
+    "yaml.*",
+    "numpy",
+    "numpy.*",
+    # ADR 0021 T3: the [multilang] extra (tree-sitter + grammar wheels) is not
+    # installed in the typecheck job; MultilangChunker imports it lazily inside
+    # methods, so treat it as Any here (mirrors the fast_plaid seam).
+    "tree_sitter",
+    "tree_sitter.*",
+    "tree_sitter_javascript",
+    "tree_sitter_typescript",
+    "tree_sitter_c",
+    "tree_sitter_rust",
+]
 follow_imports = "skip"
 ignore_missing_imports = true
 
