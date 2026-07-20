@@ -107,11 +107,15 @@ def build_claude_command(
 
 
 def _allowed_tools(arm: ArmConfig) -> str:
-    # Select the arm's tool grant. ``no_tools`` wins over ``mcp`` (a tool-less arm
-    # has no MCP either); ``ArmConfig.__post_init__`` already rejects the
-    # contradictory ``no_tools and mcp`` combination, so the order here is safe.
+    # Select the arm's tool grant. ``no_tools`` wins over everything (a tool-less
+    # arm has no MCP either); an explicit ``tools`` tuple (ADR 0016 stage-2
+    # drop-one arms) replaces the profile grant; otherwise the profile grant
+    # stands. ``ArmConfig.__post_init__`` rejects the contradictory combinations
+    # (no_tools+mcp, no_tools+tools, empty tuple), so the order here is safe.
     if arm.no_tools:
         return _NO_TOOLS
+    if arm.tools is not None:
+        return " ".join(arm.tools)
     return f"{_BARE_TOOLS} {_MCP_WILDCARD}" if arm.mcp else _BARE_TOOLS
 
 

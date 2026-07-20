@@ -70,6 +70,13 @@ mlflow = ["mlflow>=2.0"]
 # _CONSUMED_SKILLOPT_SURFACE constant and its canary test
 # (benchmarks/tests/optimize/test_skillopt_adapter.py).
 optimizers-skillopt = ["skillopt>=0.2,<0.3"]
+# The Phase 3 SWE-bench snapshot build tools (pydocs_eval.datasets_swe). ONLY the
+# artifact-build path (download + parquet read) needs these — the pure overlap/split/
+# subset functions and the whole offline test suite are stdlib-only, so this extra stays
+# out of the base floor. huggingface_hub (Apache-2.0) fetches parquet at the PINNED HF
+# revision; pyarrow (Apache-2.0) reads it. Installed only to (re)build the committed
+# benchmarks/data/swe artifacts, never to run tests.
+datasets-swe = ["huggingface_hub>=0.20", "pyarrow>=15.0"]
 # Drives the product ask agent in-process (LangGraphAskRunner + the
 # architecture bridges in optimize/ask_binding.py). Floor = the first product
 # release shipping the build_agent(prompts=...) seam — the same version-floor

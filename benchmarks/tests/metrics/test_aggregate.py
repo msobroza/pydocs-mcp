@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import pytest
 from pydocs_eval.metrics.aggregate import (
+    mcnemar_exact_p,
+    mcnemar_from_pairs,
+    mcnemar_sample_size,
     mean_with_bootstrap_ci,
     paired_bootstrap_ci,
 )
@@ -135,3 +138,103 @@ def test_mean_bootstrap_zero_resamples_raises_value_error() -> None:
 def test_paired_bootstrap_zero_resamples_raises_value_error() -> None:
     with pytest.raises(ValueError, match="n_resamples"):
         paired_bootstrap_ci([1.0, 0.0], [0.0, 1.0], n_resamples=0)
+
+
+# --- exact McNemar (ADR 0016 §Statistics) --------------------------------
+
+
+def test_mcnemar_exact_p_extreme_discordance() -> None:
+    # Hand-checked: b=10, c=0, n=10 discordant, k=min=0.
+    # two-sided p = 2 * C(10,0) * 0.5^10 = 2/1024 = 0.001953125.
+    assert mcnemar_exact_p(10, 0) == pytest.approx(0.001953125)
+
+
+def test_mcnemar_exact_p_moderate_table() -> None:
+    # Hand-checked: b=8, c=2, n=10, k=2.
+    # tail = C(10,0)+C(10,1)+C(10,2) = 1+10+45 = 56.
+    # two-sided p = 2 * 56 / 1024 = 112/1024 = 0.109375.
+    assert mcnemar_exact_p(8, 2) == pytest.approx(0.109375)
+
+
+def test_mcnemar_exact_p_even_split_caps_at_one() -> None:
+    # Hand-checked: b=5, c=5, n=10, k=5.
+    # tail = sum_{i=0}^{5} C(10,i) = 638; 2*638/1024 = 1.246 → capped at 1.0.
+    assert mcnemar_exact_p(5, 5) == 1.0
+
+
+def test_mcnemar_exact_p_no_discordant_pairs_is_one() -> None:
+    # No signal at all (b=c=0) → no evidence against H0 → p = 1.0.
+    assert mcnemar_exact_p(0, 0) == 1.0
+
+
+def test_mcnemar_exact_p_symmetric_in_arguments() -> None:
+    # WHY: two-sided test depends only on {b, c} as a set (min drives the tail).
+    assert mcnemar_exact_p(3, 12) == mcnemar_exact_p(12, 3)
+
+
+def test_mcnemar_exact_p_negative_count_raises() -> None:
+    with pytest.raises(ValueError, match="-1"):
+        mcnemar_exact_p(-1, 4)
+
+
+# --- power-curve sizing (ADR 0016 Δ_min-pinned table) --------------------
+
+
+def test_mcnemar_sample_size_reproduces_adr_table() -> None:
+    # Pin ADR 0016 §Evidence table exactly (Δ_min=0.05, α=0.05, power=0.80):
+    #   π_d | p_bc  | N_disc | N_total | ↑mult-12
+    #  0.10 | 0.750 |   29   |   289   |   300
+    #  0.20 | 0.625 |  123   |   616   |   624
+    #  0.30 | 0.583 |  280   |   934   |   936
+    assert mcnemar_sample_size(0.05, 0.10) == (pytest.approx(0.750), 29, 289, 300)
+    assert mcnemar_sample_size(0.05, 0.20) == (pytest.approx(0.625), 123, 616, 624)
+    assert mcnemar_sample_size(0.05, 0.30) == (pytest.approx(0.5833333333), 280, 934, 936)
+
+
+def test_mcnemar_sample_size_pins_z_constants() -> None:
+    # p_bc = 0.5 + Δ_min/(2π_d); at π_d = Δ_min*2 = 0.10, Δ_min=0.05 → p_bc=0.75.
+    p_bc, _, _, _ = mcnemar_sample_size(0.05, 0.10)
+    assert p_bc == pytest.approx(0.75)
+
+
+def test_mcnemar_sample_size_mult12_is_multiple_of_12() -> None:
+    for pi_d in (0.10, 0.20, 0.30):
+        _, _, _, n12 = mcnemar_sample_size(0.05, pi_d)
+        assert n12 % 12 == 0
+
+
+def test_mcnemar_sample_size_forbids_pi_d_le_delta_min() -> None:
+    # p_bc = 0.5 + Δ_min/(2π_d) ≤ 1 requires Δ_min ≤ π_d; at π_d == Δ_min the
+    # winning arm takes ALL discordant pairs (degenerate) — raise with values.
+    with pytest.raises(ValueError, match="0.05"):
+        mcnemar_sample_size(0.05, 0.05)
+    with pytest.raises(ValueError, match="0.04"):
+        mcnemar_sample_size(0.05, 0.04)
+
+
+# --- paired-cell convenience ---------------------------------------------
+
+
+def test_mcnemar_from_pairs_counts_and_delta() -> None:
+    # arm A resolves i1,i2,i3; arm B resolves i1 only.
+    #   i1: 1/1 concordant; i2: 1/0 → b; i3: 1/0 → b; i4: 0/0 concordant.
+    # b=2 (A-only), c=0 (B-only), n=4, delta = mean_a - mean_b = 3/4 - 1/4 = 0.5.
+    a = {"i1": 1, "i2": 1, "i3": 1, "i4": 0}
+    b = {"i1": 1, "i2": 0, "i3": 0, "i4": 0}
+    b_cnt, c_cnt, n, delta, p, ci = mcnemar_from_pairs(a, b)
+    assert (b_cnt, c_cnt, n) == (2, 0, 4)
+    assert delta == pytest.approx(0.5)
+    assert p == mcnemar_exact_p(2, 0)
+    assert ci == paired_bootstrap_ci([1, 1, 1, 0], [1, 0, 0, 0])
+
+
+def test_mcnemar_from_pairs_key_mismatch_raises() -> None:
+    # WHY: the campaign guarantees identical instance lists; a mismatch is a
+    # bug, not data — abort loudly naming the offending key.
+    with pytest.raises(ValueError, match="i9"):
+        mcnemar_from_pairs({"i1": 1, "i9": 0}, {"i1": 1, "i2": 0})
+
+
+def test_mcnemar_from_pairs_non_binary_value_raises() -> None:
+    with pytest.raises(ValueError, match="2"):
+        mcnemar_from_pairs({"i1": 2}, {"i1": 1})
