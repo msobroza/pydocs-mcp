@@ -181,9 +181,17 @@ cache key is path-based, the runner makes the *path* canonical: one pristine
 checkout per `(repo, base_commit)` at `<cache_root>/<repo_slug>@<commit>/`,
 indexed **once** with `--skip-deps --no-inspect`. The path-derived key is then
 stable, and before serve starts the runner pre-seeds each rollout workspace's
-own cache slot by hardlinking (copy fallback across filesystems) the `.db`/`.tq`
-pair to the workspace-path-derived key — computed by calling the product's
-`cache_path_for_project`, never by re-implementing the hash. The workspace is
+own cache slot by **copying** the `.db`/`.tq` pair to the
+workspace-path-derived key — computed by calling the product's
+`cache_path_for_project`, never by re-implementing the hash. Copy, never
+hardlink (amended post-review 2026-07-20): the product opens the `.db`
+read-write with `journal_mode=WAL` and ships no read-only open path, so
+hardlinked slots would share one mutable inode across rollouts — a review
+probe demonstrated a rollout-slot write mutating the canonical index bytes.
+The `.tq` is copied too (turbovec's mmap read-only-ness is not provable
+across the pinned wheel range, and the file is KB-scale). A future
+product-side `mode=ro&immutable=1` open could restore sharing; not this
+phase. The workspace is
 checked out at the same commit, so the `index_metadata.git_head` freshness check
 stays quiet. The cache is candidate- and config-independent — Phase 4's
 optimizer loop inherits the same amortized cost lever. Pre-build runs as a
@@ -261,7 +269,8 @@ All Phase 3 unless noted:
    (`benchmarks/src/pydocs_eval/`): create `<cache_root>/<repo_slug>@<commit>/`
    pristine checkouts, run `pydocs_mcp index <dir> --skip-deps --no-inspect
    --cache-dir <cache_root>`, and pre-seed each rollout workspace's slot via
-   hardlink-with-copy-fallback using the product's `cache_path_for_project`
+   copy (never hardlink — the WAL inode-sharing hazard, see Decision) using
+   the product's `cache_path_for_project`
    (`python/pydocs_mcp/db.py:171-180`) for slot naming. Pin test: assert the
    key derivation the runner depends on, so a product-side cache-key change
    fails loudly instead of silently missing the cache.
