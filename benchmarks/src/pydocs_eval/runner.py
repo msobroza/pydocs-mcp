@@ -24,8 +24,9 @@ from .reporting.report import format_report
 # WHY redundant-alias re-exports: ``run_sweep`` + the metric/latency
 # row-order constants predate the ``sweep.py`` extraction; the test
 # suites (and, until 0.2.0, ``report.py``) import them from this module.
-# Importing ``sweep`` here also fires the registry side effects BEFORE
-# argparse renders ``--help`` (AC3: help text lists registered names).
+# The registries self-populate on first read (``_Registry`` lazy bootstrap),
+# so argparse ``--help`` (AC3: help text lists registered names) triggers
+# population when it reads ``names()`` — no import-order side effect needed.
 # New code should import from ``pydocs_eval.sweep`` directly.
 from .sweep import (
     DEFAULT_METRIC_SPECS as DEFAULT_METRIC_SPECS,
