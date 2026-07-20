@@ -32,6 +32,7 @@ import json
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclasses_field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.application.cross_repo_navigator import NullCrossRepoNavigator
@@ -218,6 +219,24 @@ _REF_GETTERS: dict[
 
 # Show modes that render the page-index JSON for a tree/node.
 _TREE_SHOWS: frozenset[str] = frozenset({"default", "tree"})
+
+# Extras key carrying a resolved get_references target's file extension (e.g.
+# ".py", ".toml") up to ToolRouter, which maps it through the analyzer registry
+# into the honest meta.resolution (ADR 0021 Decision 6). ToolRouter STRIPS it
+# before the wire meta: get_symbol shares ``_lookup_body`` and must not surface
+# it. Only the get_references-only branches (impact + reference-graph) set it.
+TARGET_EXTENSION_EXTRA: str = "target_extension"
+
+
+def _target_extension(source_path: str | None) -> str | None:
+    """Lowercase file suffix of a resolved node's ``source_path``, or None.
+
+    Analyzer-registry keys are lowercase dotted suffixes (``".py"``); a node with
+    no ``source_path`` (or a suffixless path) yields None → "unavailable".
+    """
+    if not source_path:
+        return None
+    return Path(source_path).suffix.lower() or None
 
 
 # ── items[] builders (contract §3.3/§3.4, Task 6) ────────────────────────
@@ -438,6 +457,12 @@ class LookupService:
         if node is None:
             raise NotFoundError(f"'{target}' not found in {module}")
 
+        # get_references honest-resolution channel (ADR 0021 Decision 6): the
+        # target's own file extension, threaded to ToolRouter through the
+        # reference-only branches below. Only get_references reaches impact /
+        # reference-graph shows, so the tree/context branches stay extras-free.
+        ref_extras: dict[str, Any] = {TARGET_EXTENSION_EXTRA: _target_extension(node.source_path)}
+
         # Tree / default → render node's page-index JSON (+ §3.3 outline rows).
         if show in _TREE_SHOWS:
             return json.dumps(node.to_pageindex_json(), indent=2), _outline_items(node), {}
@@ -454,7 +479,7 @@ class LookupService:
                 max_depth=self.impact_max_depth,
                 limit=limit,
             )
-            return format_impact(impacted, target=target, limit=limit), (), {}
+            return format_impact(impacted, target=target, limit=limit), (), ref_extras
 
         # Smart-context — forward dependency-closure packed at graded fidelity
         # under a token budget. Own return shape (ContextNodes) + formatter.
@@ -496,7 +521,7 @@ class LookupService:
             limit=limit,
             decision_titles=titles,
         )
-        return rendered, await self._reference_items(rows, show), {}
+        return rendered, await self._reference_items(rows, show), ref_extras
 
     async def _decision_titles(self, show: str, rows) -> dict[tuple[str, str], str]:
         """Hydrate cross-repo governed_by rows' decision titles (spec §A1.2).

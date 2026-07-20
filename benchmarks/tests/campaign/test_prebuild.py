@@ -68,10 +68,16 @@ def test_prebuild_builds_one_slot_per_distinct_checkout(tmp_path) -> None:
         return db, db.with_suffix(".tq")
 
     built = prebuild_index(
-        specs, cache_root=tmp_path, python=Path("/py"), git=_fake_git, index_fn=_fake_index
+        specs,
+        cache_root=tmp_path,
+        python=Path("/py"),
+        scope_id="s",  # explicit scope so the slug is deterministic (ADR 0021 6)
+        git=_fake_git,
+        index_fn=_fake_index,
     )
     assert set(built) == {("o/r", "abc"), ("o/r", "def")}
-    assert sorted(indexed) == ["o__r@abc", "o__r@def"]  # one index per distinct checkout
+    # One index per distinct checkout; the scope_id rides every slug.
+    assert sorted(indexed) == ["o__r@abc@s", "o__r@def@s"]
 
 
 def test_prebuild_empty_manifest_builds_nothing(tmp_path) -> None:

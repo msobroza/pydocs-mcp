@@ -20,7 +20,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_eval.campaign.index_cache import create_checkout, index_checkout
+from pydocs_eval.campaign.index_cache import (
+    create_checkout,
+    index_checkout,
+    resolve_scope_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,16 +95,20 @@ def prebuild_index(
     cache_root: Path,
     python: Path,
     shallow: bool = False,
+    scope_id: str | None = None,
     git: Callable[[list[str]], None] | None = None,
     index_fn: Callable[[Path, Path], tuple[Path, Path]] | None = None,
 ) -> dict[tuple[str, str], tuple[Path, Path]]:
     """Create + index one canonical checkout per distinct ``(repo, base_commit)``.
 
     Returns ``{(repo, commit): (db_path, tq_path)}``. Idempotent over built slots.
-    ``git`` / ``index_fn`` are the injectable seams (default: real git subprocess
-    + shipped index CLI); offline tests pass a fake git and
-    :func:`index_project_in_process`.
+    ``scope_id`` selects the index-scope slot (ADR 0021 6): it is resolved ONCE
+    here (default: the active product pipeline identity) and threaded to every
+    checkout so a whole pre-build shares one scope. ``git`` / ``index_fn`` are the
+    injectable seams (default: real git subprocess + shipped index CLI); offline
+    tests pass a fake git and :func:`index_project_in_process`.
     """
+    resolved_scope = resolve_scope_id(scope_id)
     built: dict[tuple[str, str], tuple[Path, Path]] = {}
     for spec in distinct_checkouts(specs):
         checkout = create_checkout(
@@ -109,6 +117,7 @@ def prebuild_index(
             commit=spec.base_commit,
             clone_url=spec.clone_url,
             shallow=shallow,
+            scope_id=resolved_scope,
             git=git,
         )
         built[spec.checkout_key] = index_checkout(

@@ -597,9 +597,12 @@ async def test_lookup_with_items_reference_shows_stay_empty(
 ) -> None:
     """get_references rides the same dispatcher — its rows land in a later
     task, so non-tree shows keep an empty items[] today."""
+    from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
+
     fake_node = MagicMock()
     fake_node.node_id = "pkg.mod.f"
     fake_node.kind = "function"
+    fake_node.source_path = "pkg/mod.py"
     fake_tree = MagicMock()
     fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
     tree_svc = _tree_svc_for_module("pkg.mod", fake_tree)
@@ -616,7 +619,36 @@ async def test_lookup_with_items_reference_shows_stay_empty(
     )
     assert "No callers found." in body
     assert items == ()
-    assert extras == {}
+    # The reference branch now carries the honest-resolution channel: the
+    # target's own file extension, mapped to meta.resolution by ToolRouter
+    # (ADR 0021 Decision 6).
+    assert extras == {TARGET_EXTENSION_EXTRA: ".py"}
+
+
+@pytest.mark.asyncio
+async def test_reference_branch_carries_non_python_target_extension(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """A target defined in a non-Python file surfaces its own extension, so
+    ToolRouter degrades meta.resolution to 'unavailable' (ADR 0021 Decision 6)
+    rather than claiming Python's graph."""
+    from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
+
+    fake_node = MagicMock()
+    fake_node.node_id = "conf.section"
+    fake_node.kind = "text_section"
+    fake_node.source_path = "pyproject.toml"
+    fake_tree = MagicMock()
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    tree_svc = _tree_svc_for_module("conf", fake_tree)
+    ref_svc = MagicMock()
+    ref_svc.callers = AsyncMock(return_value=())
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=ref_svc)
+    _body, _items, extras = await svc.lookup_with_items(
+        LookupInput(target="conf.section", show="callers")
+    )
+    assert extras == {TARGET_EXTENSION_EXTRA: ".toml"}
 
 
 # ── I8 dispatch table + I9 Null-services contract ────────────────────────
@@ -823,7 +855,10 @@ async def test_show_callers_items_span_from_from_node(
             "end_line": None,
         },
     )
-    assert extras == {}
+    # Honest-resolution channel: the target node's ".py" extension (ADR 0021 6).
+    from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
+
+    assert extras == {TARGET_EXTENSION_EXTRA: ".py"}
 
 
 @pytest.mark.asyncio

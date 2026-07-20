@@ -9,6 +9,7 @@ import pytest
 
 from pydocs_eval.campaign.index_cache import (
     _INDEX_FLAGS,
+    _SCOPE_ID_LEN,
     build_index_command,
     canonical_checkout_dir,
     canonical_index_paths,
@@ -17,6 +18,7 @@ from pydocs_eval.campaign.index_cache import (
     index_project_in_process,
     preseed_workspace,
     repo_slug,
+    resolve_scope_id,
     workspace_cache_paths,
 )
 
@@ -31,8 +33,51 @@ def test_repo_slug_rejects_unslashed() -> None:
 
 
 def test_canonical_checkout_dir_shape(tmp_path) -> None:
+    # ADR 0021 6: the scope_id rides the slug after the commit.
+    d = canonical_checkout_dir(tmp_path, "o/r", "abc123", scope_id="sc0pe")
+    assert d == tmp_path / "o__r@abc123@sc0pe"
+
+
+def test_canonical_checkout_dir_default_scope_from_product(tmp_path) -> None:
+    # Default scope_id derives from the active product pipeline identity — a
+    # non-empty fixed-length hex slug appended after the commit.
+    expected = resolve_scope_id(None)
     d = canonical_checkout_dir(tmp_path, "o/r", "abc123")
-    assert d == tmp_path / "o__r@abc123"
+    assert d.name == f"o__r@abc123@{expected}"
+    assert len(expected) == _SCOPE_ID_LEN
+
+
+def test_resolve_scope_id_passthrough() -> None:
+    # An explicit scope_id is used verbatim (no product read).
+    assert resolve_scope_id("explicit") == "explicit"
+
+
+def test_different_scope_ids_get_distinct_buildable_slots(tmp_path) -> None:
+    # CRITICAL (ADR 0021 6): same repo@commit under two scopes → two checkout
+    # dirs → two db slots, so index_checkout's db.exists() short-circuit can
+    # never reuse one scope's index for the other. Both build side by side.
+    on = canonical_checkout_dir(tmp_path, "o/r", "abc", scope_id="on")
+    off = canonical_checkout_dir(tmp_path, "o/r", "abc", scope_id="off")
+    assert on != off
+
+    built: list[Path] = []
+
+    def _fake_index(checkout: Path, root: Path) -> tuple[Path, Path]:
+        db, tq = canonical_index_paths(checkout, root)
+        db.parent.mkdir(parents=True, exist_ok=True)
+        db.write_bytes(b"idx")
+        built.append(db)
+        return db, tq
+
+    for d in (on, off):
+        d.mkdir(parents=True)
+        index_checkout(d, python=Path("/py"), cache_root=tmp_path, index_fn=_fake_index)
+
+    db_on, _ = canonical_index_paths(on, tmp_path)
+    db_off, _ = canonical_index_paths(off, tmp_path)
+    assert db_on != db_off  # distinct slots
+    assert db_on.exists() and db_off.exists()  # both built side by side
+    assert built == [db_on, db_off]  # neither short-circuited the other's build
 
 
 def test_build_index_command_pins_exact_flags(tmp_path) -> None:
