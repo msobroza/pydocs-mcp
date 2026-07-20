@@ -70,6 +70,16 @@ mlflow = ["mlflow>=2.0"]
 # _CONSUMED_SKILLOPT_SURFACE constant and its canary test
 # (benchmarks/tests/optimize/test_skillopt_adapter.py).
 optimizers-skillopt = ["skillopt>=0.2,<0.3"]
+# The GEPA optimizer harness (pydocs_eval.optimize.gepa_harness) drives the
+# released PyPI `gepa` 0.1.4 through a thin GEPAAdapter (ADR 0017). gepa is MIT
+# with ZERO required transitive deps (its litellm/wandb/mlflow integrations are
+# extras-only and unused by our callable wiring — reflection_lm is our own
+# ledger-debiting callable, not gepa's LM stack). WHY the exact pin and not a
+# range: gepa 0.1.4 is a young library and the adapter binds to its verified
+# `gepa.core.adapter.GEPAAdapter` shape + `gepa.optimize` signature; a bump is a
+# deliberate edit gated by the adapter's offline loop tests
+# (benchmarks/tests/optimize/gepa_harness/test_gepa_optimizer.py).
+optimizers-gepa = ["gepa==0.1.4"]
 # The Phase 3 SWE-bench snapshot build tools (pydocs_eval.datasets_swe). ONLY the
 # artifact-build path (download + parquet read) needs these — the pure overlap/split/
 # subset functions and the whole offline test suite are stdlib-only, so this extra stays
@@ -95,6 +105,7 @@ all = [
     "pydocs-mcp>=0.5.1",
     "mlflow>=2.0",
     "skillopt>=0.2,<0.3",
+    "gepa==0.1.4",
 ]
 
 [tool.setuptools.packages.find]
