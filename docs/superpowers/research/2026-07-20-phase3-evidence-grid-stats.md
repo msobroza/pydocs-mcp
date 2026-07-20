@@ -537,6 +537,11 @@ McNemar `N_total` (§4) for the per-cell floor.
   harness code change, not config.
 - The exact `--split` / subset selection for the baseline campaign (SWE-bench-Live
   1888 rows; McNemar says 110-329 depending on D3's π_d) — overlaps the
-  dataset-researcher's scope.
+  dataset-researcher's scope. [CORRECTION 2026-07-20: the 110-329 range here is
+  a stale draft figure inconsistent with this file's own §4 computation
+  (155-466 at fixed p_bc=0.7), and BOTH readings were superseded during ADR
+  review — ADR 0016 pins sizing to the registered minimum effect
+  (p_bc = 0.5 + Δ_min/(2π_d), Δ_min=0.05), giving N_total ≈ 289-934 per cell
+  over π_d ∈ [0.10, 0.30]. Use ADR 0016's table.]
 - The non-Claude reference target's price/driveability — owned by the
   model-plumbing researcher; intentionally not duplicated here.
