@@ -502,7 +502,9 @@ def fs_server_tools(tmp_path: Path):
     source.mkdir()
     (source / "app.py").write_text('def hello():\n    return "hi"\n')
     (source / "notes.md").write_text("# Notes\n\nhello there\n")
-    (source / "data.json").write_text('{"hello": 1}\n')  # extension not allowlisted
+    # ADR 0021 T1 made .json default-in, so pin scope parity with a binary
+    # extension that is never allowlisted (asset files carry no retrieval value).
+    (source / "data.png").write_bytes(b"\x89PNG\r\nhello\n")  # binary — never allowlisted
     hidden = source / ".venv"
     hidden.mkdir()
     (hidden / "skip.py").write_text("hello = 1\n")  # floor-excluded dir
@@ -520,7 +522,7 @@ class TestFilesystemTools:
         assert "app.py" in text and "notes.md" in text
         # Discovery-scope parity (§4.1): floor-excluded dirs and
         # non-allowlisted extensions are NOT in the corpus.
-        assert ".venv" not in text and "data.json" not in text
+        assert ".venv" not in text and "data.png" not in text
         items = result.structuredContent["items"]
         assert items and set(items[0]) == {"path", "start_line", "end_line", "text"}
         assert result.structuredContent["meta"]["tool"] == "grep"

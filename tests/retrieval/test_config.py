@@ -278,10 +278,19 @@ def test_appconfig_includes_extraction_defaults():
     assert not hasattr(config.extraction.chunking, "by_extension")
     assert config.extraction.chunking.markdown.max_heading_level == 3
     assert config.extraction.chunking.notebook.include_outputs is False
+    # ADR 0021 T1: default widened to existing + text/config extensions.
     assert config.extraction.discovery.project.include_extensions == [
         ".py",
         ".md",
         ".ipynb",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".cfg",
+        ".ini",
+        ".rst",
+        ".txt",
+        ".json",
     ]
     assert config.extraction.discovery.project.max_file_size_bytes == 1_000_000
     assert config.extraction.discovery.dependency.max_file_size_bytes == 1_000_000
@@ -309,10 +318,19 @@ def test_appconfig_extraction_yaml_round_trips(tmp_path):
     assert config.extraction.members.inspect_depth == 3
     # Untouched — still at shipped defaults.
     assert config.extraction.chunking.markdown.min_heading_level == 1
+    # ADR 0021 T1: default widened to existing + text/config extensions.
     assert config.extraction.discovery.project.include_extensions == [
         ".py",
         ".md",
         ".ipynb",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".cfg",
+        ".ini",
+        ".rst",
+        ".txt",
+        ".json",
     ]
     assert config.extraction.members.members_per_module_cap == 120
 

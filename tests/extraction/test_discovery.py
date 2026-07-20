@@ -38,11 +38,13 @@ from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 
 def test_project_discovers_py_md_ipynb(tmp_path: Path) -> None:
-    """Default allowlist picks up all three supported extensions."""
+    """Default allowlist picks up the code/doc extensions; a binary asset
+    (``.png``, never allowlisted) is skipped. ADR 0021 T1 widened the
+    default to text/config too — see ``test_project_default_scope_picks_up_text_config``."""
     (tmp_path / "a.py").write_text("x = 1\n")
     (tmp_path / "b.md").write_text("# Doc\n")
     (tmp_path / "c.ipynb").write_text("{}\n")
-    (tmp_path / "d.txt").write_text("skipped\n")  # not in allowlist
+    (tmp_path / "d.png").write_bytes(b"\x89PNG\r\n")  # binary — never in allowlist
 
     disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
     paths, root, _ = disc.discover(tmp_path)
@@ -50,6 +52,25 @@ def test_project_discovers_py_md_ipynb(tmp_path: Path) -> None:
     names = sorted(Path(p).name for p in paths)
     assert names == ["a.py", "b.md", "c.ipynb"]
     assert root == tmp_path
+
+
+def test_project_default_scope_picks_up_text_config(tmp_path: Path) -> None:
+    """ADR 0021 T1: the widened DEFAULT scope discovers text/config files
+    (.toml/.rst/.yaml/.json), skips vendored trees (node_modules) and
+    binary assets (.png) — no YAML override needed."""
+    (tmp_path / "pyproject.toml").write_text("[tool.x]\n")
+    (tmp_path / "guide.rst").write_text("Title\n=====\n")
+    (tmp_path / "conf.yaml").write_text("k: v\n")
+    (tmp_path / "data.json").write_text("{}\n")
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n")  # binary — skipped
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "dep.toml").write_text("[x]\n")  # vendored — pruned
+
+    disc = ProjectFileDiscoverer(scope=DiscoveryScopeConfig())
+    paths, _, _ = disc.discover(tmp_path)
+
+    names = sorted(Path(p).name for p in paths)
+    assert names == ["conf.yaml", "data.json", "guide.rst", "pyproject.toml"]
 
 
 def test_project_returns_paths_sorted(tmp_path: Path) -> None:

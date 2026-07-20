@@ -26,11 +26,22 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from pydocs_mcp.project_toml import ProjectExcludeConfigError, split_exclude_entries
 
-ALLOWED_EXTENSIONS: frozenset[str] = frozenset({".py", ".md", ".ipynb"})
+# ADR 0021 (multilanguage indexing, T1): the allowlist CEILING grows to the
+# full census-scoped set. Text/config extensions are also the widened DEFAULT
+# (see DiscoveryScopeConfig.include_extensions); code extensions stay
+# ceiling-only opt-in — YAML must name them explicitly. Binary/asset
+# extensions are never listed, so they can never be widened in.
+_TEXT_CONFIG_EXTENSIONS: frozenset[str] = frozenset(
+    {".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"}
+)
+_CODE_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".tsx", ".c", ".h", ".rs"})
+ALLOWED_EXTENSIONS: frozenset[str] = (
+    frozenset({".py", ".md", ".ipynb"}) | _TEXT_CONFIG_EXTENSIONS | _CODE_EXTENSIONS
+)
 """File extensions the extraction pipeline is built to handle. Narrowing is
 allowed via YAML; adding a new extension requires registering a matching
 :class:`~pydocs_mcp.extraction.protocols.Chunker` AND amending
-this allowlist — can't be done via YAML alone."""
+this allowlist — can't be done via YAML alone (ADR 0021 T1)."""
 
 
 _EXCLUDED_DIRS: frozenset[str] = frozenset(
@@ -48,7 +59,16 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset(
         ".nox",
         ".eggs",
         "egg-info",
+        # Vendored second-language source trees — ADR 0021 (multilanguage
+        # indexing) grows the floor: the census found 127 of matplotlib's
+        # 222 C/C++ files under extern/, i.e. read-side noise with zero
+        # retrieval value. node_modules/.yarn/bower_components are the
+        # JS-ecosystem vendored dirs; extern/third_party the C/Rust ones.
         "node_modules",
+        ".yarn",
+        "bower_components",
+        "extern",
+        "third_party",
         "build",
         "dist",
         "target",
@@ -138,7 +158,26 @@ class DiscoveryScopeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    include_extensions: list[str] = Field(default_factory=lambda: [".py", ".md", ".ipynb"])
+    # ADR 0021 T1: the DEFAULT widens to existing (.py .md .ipynb) + the
+    # text/config set only. The census measured docs+config at 22% of gold
+    # patch files; second-language *code* is a read-side minority (0.2% of
+    # gold edits, skewed to vendored trees), so code extensions stay
+    # ceiling-only opt-in — present in ALLOWED_EXTENSIONS, absent here.
+    include_extensions: list[str] = Field(
+        default_factory=lambda: [
+            ".py",
+            ".md",
+            ".ipynb",
+            ".toml",
+            ".yaml",
+            ".yml",
+            ".cfg",
+            ".ini",
+            ".rst",
+            ".txt",
+            ".json",
+        ]
+    )
     # 1MB, not 500KB: a real 561KB module (mlc_llm dispatch table) was
     # silently skipped under the old cap, imposing an unwinnable recall
     # ceiling on every retrieval method (PAGEINDEX_DIVS.md F3).
