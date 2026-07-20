@@ -216,6 +216,39 @@ decisions in the adapter layer call `run_gate` and nothing else — pinned by
 a test asserting the adapter's acceptance path consumes only `GateDecision`
 (and by review note in the ADR), completing R2 operatively.
 
+## Post-review amendments (2026-07-20, adversarial critique — accepted by the reconciler)
+
+Five findings, all applied; the ADRs are authoritative where they refine this
+brief:
+
+1. **`c_sel` (selection cost threshold) is pre-registered in ADR 0018** —
+   this brief's D4 "cost within threshold" referenced a threshold no ADR
+   registered; it now sits in the slot table and the frozen registration
+   text alongside α, Δ_min, K (closes the forking-paths channel).
+2. **The val gate is screening-only; the frozen test is the sole
+   confirmatory contrast.** Per-gate false-accept ~α/2 compounds over G
+   sequential gate evaluations (1−(1−α/2)^G ≈ 18% at G=10); rather than an
+   alpha-spending scheme, the pre-registration designates gate acceptances
+   as screening decisions and reserves the confirmatory claim for the
+   single pre-registered frozen-test contrast (the ADR 0016 precedent).
+3. Firewall discrepancy direction corrected in 0017's risks: the
+   SERVER_INSTRUCTIONS budget difference makes the firewall STRICTER
+   (over-rejects — shrinks search space, the cheap direction), not
+   rollout-wasting; the parity rule guards the general implication.
+4. **10-vs-11 section-universe mismatch found and fixed in 0019's scope:**
+   `ToolDocsArtifact`'s allowed headers omit SESSION_START_PREAMBLE, so a
+   full 11-section Route A candidate would trip a phantom header collision —
+   the adapter firewall must validate the full 11-header grammar.
+5. seed+two arithmetic corrected in 0020 (3×266, +50% — not a doubling).
+
+Also resolved by the 0018 writer: **N_val = 559 VERIFIED** as the committed
+val.txt line count (559 distinct). Disclosed for the budget checkpoint: at
+π_d=0.30 the Δ_min-powered N (936) exceeds the whole val split — realized
+gate power 0.55 there, a conservative false-reject risk with no rule change
+available. Gate comparator recorded as candidate-vs-incumbent (seed until
+first acceptance) with R8's vs-seed as the reporting convention — confirm at
+the pre-registration freeze.
+
 ## ADR mapping
 
 - **ADR 0017** — D1 optimizer integration (GEPA thin adapter;
