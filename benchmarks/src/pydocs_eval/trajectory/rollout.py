@@ -48,6 +48,14 @@ from pydocs_eval.trajectory.merge import RunRecord
 # driver (NOT in ``_command._CLI_FLAGS``) because they are trajectory-capture
 # concerns, not part of the base two-arm command contract.
 _SESSION_ID_FLAG = "--session-id"
+# The recorder's master switch. TraceConfig.enabled defaults False (a non-eval
+# deployment stays byte-identical to an untraced server), so the driver MUST set
+# it — without it the served pydocs_mcp writes no server_events.jsonl and the
+# merge hard-errors (MissingServerTraceError). Value is the string "true" because
+# it crosses the .mcp.json env boundary as text before pydantic-settings coerces
+# it to bool.
+_TRACE_ENV_ENABLED = "PYDOCS_TRACE__ENABLED"
+_TRACE_ENABLED_VALUE = "true"
 _TRACE_ENV_TRAJECTORY_ID = "PYDOCS_TRACE__TRAJECTORY_ID"
 _TRACE_ENV_DIR = "PYDOCS_TRACE__DIR"
 # Route A candidate injection (ADR 0017 §Decision 5): the product's descriptions
@@ -183,9 +191,13 @@ def trace_env_map(
 
     Example:
         >>> trace_env_map(trajectory_id="t", trace_dir=Path("/d"))
-        {'PYDOCS_TRACE__TRAJECTORY_ID': 't', 'PYDOCS_TRACE__DIR': '/d'}
+        {'PYDOCS_TRACE__ENABLED': 'true', 'PYDOCS_TRACE__TRAJECTORY_ID': 't', 'PYDOCS_TRACE__DIR': '/d'}
     """
-    env = {_TRACE_ENV_TRAJECTORY_ID: trajectory_id, _TRACE_ENV_DIR: str(trace_dir)}
+    env = {
+        _TRACE_ENV_ENABLED: _TRACE_ENABLED_VALUE,
+        _TRACE_ENV_TRAJECTORY_ID: trajectory_id,
+        _TRACE_ENV_DIR: str(trace_dir),
+    }
     if descriptions_path is not None:
         env[_SERVE_DESCRIPTIONS_PATH_ENV] = str(descriptions_path)
     return env
@@ -253,17 +265,42 @@ def persist_raw_stream(*, trace_dir: Path, trajectory_id: str, stdout: str) -> P
     return path
 
 
+# Python bytecode caches an agent's own ``pytest`` / ``python`` runs leave in the
+# workspace. They MUST NOT enter the model patch: as binary new-file diffs they
+# make ``git apply`` reject the whole patch on a fresh checkout ("cannot apply
+# binary patch … without full index line"), which would mis-score a correct
+# source fix as a model ``patch_apply_failed``. Excluded from BOTH the intent-to-add
+# and the diff so no ``.pyc`` reaches the captured patch. ``glob`` magic makes the
+# leading ``**`` match at any depth (git pathspec).
+_DIFF_EXCLUDE_PATHSPECS = (
+    ":(exclude,glob)**/__pycache__/**",
+    ":(exclude,glob)**/*.pyc",
+    ":(exclude,glob)**/*.pyo",
+)
+
+
 def capture_git_diff(workspace: Path) -> str:
     """Return the post-rollout unified diff of ``workspace`` (edits + new files).
 
     ``git add -N .`` records intent-to-add for untracked files so ``git diff``
     includes newly-created files' content (SWE-bench gold patches routinely add
-    files — 21.1% of instances). A non-git workspace is out of scope (ADR 0009);
-    a git failure surfaces as ``CalledProcessError`` carrying the workspace.
+    files — 21.1% of instances). Python bytecode caches are excluded via
+    ``_DIFF_EXCLUDE_PATHSPECS`` so an agent's own test runs cannot poison the
+    patch (see the constant). A non-git workspace is out of scope (ADR 0009); a
+    git failure surfaces as ``CalledProcessError`` carrying the workspace.
     """
-    subprocess.run(["git", "add", "-N", "."], cwd=str(workspace), check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "-N", "--", ".", *_DIFF_EXCLUDE_PATHSPECS],
+        cwd=str(workspace),
+        check=True,
+        capture_output=True,
+    )
     completed = subprocess.run(
-        ["git", "diff"], cwd=str(workspace), check=True, capture_output=True, text=True
+        ["git", "diff", "--", ".", *_DIFF_EXCLUDE_PATHSPECS],
+        cwd=str(workspace),
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return completed.stdout
 

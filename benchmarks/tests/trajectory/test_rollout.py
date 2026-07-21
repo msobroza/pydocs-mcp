@@ -97,10 +97,29 @@ def test_render_mcp_config_env_adds_block(tmp_path) -> None:
 
 
 def test_trace_env_map_keys() -> None:
+    # The env map MUST turn capture ON: without PYDOCS_TRACE__ENABLED the served
+    # pydocs_mcp keeps TraceConfig.enabled=False (its default) and writes no
+    # server_events.jsonl, so merge_trajectory hard-errors on every rollout. The
+    # two id/dir vars alone are insufficient — the recorder never opens.
     assert trace_env_map(trajectory_id=_TRAJ_ID, trace_dir=Path("/d")) == {
+        "PYDOCS_TRACE__ENABLED": "true",
         "PYDOCS_TRACE__TRAJECTORY_ID": _TRAJ_ID,
         "PYDOCS_TRACE__DIR": "/d",
     }
+
+
+def test_trace_env_map_enables_capture_through_app_config(monkeypatch) -> None:
+    # Regression for the first-live-run gap: feeding the env map to the SAME
+    # AppConfig the served pydocs_mcp loads must flip trace.enabled True. Guards
+    # against a future edit dropping the enable key and silently disabling every
+    # server-side capture.
+    from pydocs_mcp.retrieval.config.app_config import AppConfig
+
+    for key, value in trace_env_map(trajectory_id=_TRAJ_ID, trace_dir=Path("/d")).items():
+        monkeypatch.setenv(key, value)
+    config = AppConfig.load()
+    assert config.trace.enabled is True
+    assert config.trace.trajectory_id == _TRAJ_ID
 
 
 def test_build_rollout_command_appends_session_id(tmp_path) -> None:
@@ -164,6 +183,25 @@ def test_capture_git_diff_includes_edit_and_new_file(tmp_path) -> None:
     diff = capture_git_diff(repo)
     assert "tracked.py" in diff and "-x = 1" in diff and "+x = 2" in diff
     assert "added.py" in diff and "+y = 3" in diff
+
+
+def test_capture_git_diff_excludes_python_bytecode(tmp_path) -> None:
+    # An agent that runs pytest/python during a rollout leaves __pycache__/*.pyc
+    # behind; git add -N . would sweep those binaries into the model patch,
+    # producing a diff that git apply rejects ("cannot apply binary patch …
+    # without full index line") on a fresh checkout — a harness artifact that
+    # would be mis-scored as a model patch_apply_failed. The capture must yield a
+    # source-only patch.
+    repo = _git_repo(tmp_path / "repo")
+    (repo / "tracked.py").write_text("x = 2\n", encoding="utf-8")
+    pycache = repo / "widgetlib" / "__pycache__"
+    pycache.mkdir(parents=True)
+    (pycache / "mod.cpython-311.pyc").write_bytes(b"\x00\x01\x02bytecode")
+    (repo / "stray.pyc").write_bytes(b"\x00compiled")
+    diff = capture_git_diff(repo)
+    assert "tracked.py" in diff and "+x = 2" in diff
+    assert "__pycache__" not in diff
+    assert ".pyc" not in diff
 
 
 # --- prediction formats (golden-pinned) -------------------------------------

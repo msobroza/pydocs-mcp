@@ -1,0 +1,44 @@
+{
+  "cost_usd": 0.046851,
+  "final_patch_files": [
+    "widgetlib/inventory.py"
+  ],
+  "gold_f2p": [
+    "tests/test_inventory.py::test_total_value_mixed"
+  ],
+  "gold_files": [
+    "widgetlib/inventory.py"
+  ],
+  "gold_p2p": [
+    "tests/test_inventory.py::test_add_item_accumulates",
+    "tests/test_inventory.py::test_quantity_of_unknown",
+    "tests/test_inventory.py::test_add_negative_raises"
+  ],
+  "instance_id": "widgetlib__inventory-value",
+  "patch_bytes": 464,
+  "report": {
+    "widgetlib__inventory-value": {
+      "patch_successfully_applied": true,
+      "resolved": true,
+      "tests_status": {
+        "FAIL_TO_PASS": {
+          "failure": [],
+          "success": [
+            "tests/test_inventory.py::test_total_value_mixed"
+          ]
+        },
+        "PASS_TO_PASS": {
+          "failure": [],
+          "success": [
+            "tests/test_inventory.py::test_add_item_accumulates",
+            "tests/test_inventory.py::test_add_negative_raises",
+            "tests/test_inventory.py::test_quantity_of_unknown"
+          ]
+        }
+      }
+    }
+  },
+  "trajectory_id": "9d891bd2-ab6b-4c2b-89a6-5a3a53a8ded2",
+  "turn_cap": 15,
+  "workspace_root": "/var/folders/k4/j07ld9p97c95csgxwlj_bldw0000gn/T/tmp.cKWWKQrgsk"
+}

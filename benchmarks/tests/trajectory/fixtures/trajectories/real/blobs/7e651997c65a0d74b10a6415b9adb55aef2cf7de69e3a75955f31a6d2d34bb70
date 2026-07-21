@@ -1,0 +1,13 @@
+diff --git a/widgetlib/pricing.py b/widgetlib/pricing.py
+index 1bf4ae3..631f8ae 100644
+--- a/widgetlib/pricing.py
++++ b/widgetlib/pricing.py
+@@ -10,7 +10,7 @@ def apply_discount(price: float, pct: float) -> float:
+     """
+     if not 0.0 <= pct <= 1.0:
+         raise ValueError(f"pct must be in [0, 1], got {pct!r}")
+-    return price * pct
++    return price * (1 - pct)
+ 
+ 
+ def with_tax(price: float, rate: float) -> float:

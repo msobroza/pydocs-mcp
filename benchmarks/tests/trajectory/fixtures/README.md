@@ -25,7 +25,7 @@ fixtures/
     │   ├── injected_context_excluded/
     │   ├── fired_rules_not_evidence/
     │   └── budget_elided_items/
-    └── real/                    # captured rollouts + hand labels — see BLOCKER
+    └── real/                    # 12 captured rollouts (2026-07-21) + shared blobs/
 ```
 
 Everything here is validated offline by
@@ -104,52 +104,82 @@ Consumed by `test_attribution.py`, `test_metrics.py`, and
 tooling are validated end-to-end now; they are NOT a substitute for the ADR 0011
 Validation-results numbers, which still wait on real labels.
 
-## Real trajectories (Task 5.2–5.4) — BLOCKED
+## Real trajectories (Task 5.2–5.4) — CAPTURED 2026-07-21
 
-**Status: not captured. Hard blocker — headless `claude` usage limit.**
+**Status: 12 rollouts captured.** The 2026-07-19 headless `claude` usage limit
+reset as scheduled; a probe returned `is_error:false`, and the owner authorized
+the run. Each `real/<trajectory_id>/` holds the immutable raw captures
+(`server_events.jsonl`, `stream.jsonl`, `run_record.json`, `trailer.json`) plus
+the derived `events.jsonl` (merged) and `facts.json`; `real/blobs/` is the
+shared content-addressed result-blob store. **Raw traces are immutable** — never
+edit a committed `server_events.jsonl` / `stream.jsonl` / blob.
 
-The real trajectories require capped headless rollouts through the Task 3
-driver (`pydocs_eval.trajectory.rollout.run_rollout`) against the corpus with
-trace capture on. On 2026-07-19 every headless invocation returned:
-
-```
-{"is_error": true, "result": "You've hit your limit · resets Jul 21 at 2am (Europe/Paris)", "total_cost_usd": 0}
-```
-
-Per the Task 5 cost-discipline rule — *"if the claude CLI cannot run headless
-here (auth/other), STOP and return the blocker — do NOT fabricate 'real'
-trajectories"* — no rollouts were run and no traces were fabricated. The
-`real/` directory is intentionally absent until the limit resets.
-
-### Intended regeneration (run on/after 2026-07-21, when the limit resets)
+Each trajectory was driven through `pydocs_eval.trajectory.rollout.run_rollout`
+with the real `ClaudeAgentRunner` spawn seam against a fresh `init_corpus.sh`
+workspace (indexed once via `pydocs_mcp index`), an **edit-task** prompt (fix the
+bug), and the edit tool grant `ArmConfig(tools=("Edit","Write","Read","Grep",
+"Glob","Bash","mcp__pydocs-mcp__*"), mcp=True)` — the explicit-`tools` seam
+grants the edit surface while `mcp=True` still attaches the trace-aware
+`.mcp.json`. Capture is on through that config's `env` map.
 
 - **Model:** `claude-haiku-4-5-20251001`
-- **CLI version:** claude 2.1.76 (Claude Code) — stamp the live value per trace
-- **Caps:** `--max-turns 15`; 12–16 rollouts (3–4 tasks × 3–4 samples)
-- **Cost gate:** parse `total_cost_usd` from each result envelope; STOP
-  launching once cumulative cost exceeds **$5.00**; log per-run cost below.
-- **Index once first:** `.venv/bin/python -m pydocs_mcp index "$ws"` per workspace.
-- **Per rollout:** one `init_corpus.sh` workspace + one edit-task prompt; drive
-  via `run_rollout` (capture on through the `.mcp.json` `env` map).
+- **CLI version:** claude 2.1.76 (Claude Code)
+- **Caps:** `--max-turns 15`; 12 rollouts (4 tasks × 3 samples)
+- **Cost gate:** `total_cost_usd` parsed per result envelope; cumulative stop at
+  **$5.00** (never approached).
 
-Then, still pending (all require a real run — see the evidence file section
-dated 2026-07-19 in
+### Two driver fixes this first live run surfaced
+
+1. **Capture was silently off.** `trace_env_map` emitted only
+   `PYDOCS_TRACE__TRAJECTORY_ID` + `PYDOCS_TRACE__DIR`, but `TraceConfig.enabled`
+   defaults `False`, so the served `pydocs_mcp` never opened a recorder and the
+   merge would hard-error (`MissingServerTraceError`). The map now also sets
+   `PYDOCS_TRACE__ENABLED=true` (regression:
+   `test_trace_env_map_enables_capture_through_app_config`).
+2. **Bytecode poisoned the patch.** An agent that runs `pytest` leaves
+   `__pycache__/*.pyc`; `capture_git_diff`'s `git add -N .` swept those binaries
+   into the model patch, so `git apply` rejected it on a fresh checkout and a
+   correct source fix was mis-scored `patch_apply_failed`. `capture_git_diff` now
+   excludes Python bytecode (regression:
+   `test_capture_git_diff_excludes_python_bytecode`). The one rollout that hit
+   this pre-fix ($0.0742) was discarded and its task re-run under the fix.
+
+Both fixes are in `rollout.py` (agent_track untouched). The env-channel + merge
+were then verified end-to-end on real data (see the 2026-07-21 section of
 `docs/superpowers/research/2026-07-18-phase2-evidence-claude-code-artifacts.md`):
+the server header carries the injected `trajectory_id`, and the merge's 1:1
+server↔loop MCP-tool join holds despite the stdout `usage`-block duplication.
 
-- **Env-channel end-to-end verification** (ADR 0009 action item 4): confirm the
-  server trace file exists and its header carries the injected `trajectory_id`.
-- **Stream-shape answer:** does stdout stream-json duplicate per-block usage the
-  way the transcript does? Record the answer in the evidence file.
-- **Hand labels:** per captured trajectory, from the model-visible
-  (blob-dereferenced) text — genuinely-used files, wasted reads, first-surface
-  credit per gold file — checked in under `real/labels/`. Each label folder
-  holds `events.jsonl`, `labels.json` (`used_files` + `first_surface`), and a
-  `meta.json` with `workspace_root` + `final_patch_files`, mirroring the
-  `attribution/` fixtures.
+### Per-run cost log
 
-Once those exist, the ADR 0011 ≥0.90 validation gate runs as ONE command
-(`compare_labels.validate_directory` computes used-file + first-surface macro
-agreement plus the budget-elided tally):
+| task | sample | trajectory_id | MCP tools | outcome | cost |
+| ---- | ------ | ------------- | --------- | ------- | ---- |
+| calculator_average | 1 | 3c63ee67-3555-4505-85c6-88f6443f04d9 | 0 | resolved | $0.0507 |
+| calculator_average | 2 | a45b66e3-18eb-4d7b-aa1a-833796477ad8 | 2 | resolved | $0.0492 |
+| calculator_average | 3 | dbbe8968-8f8d-411d-a96d-8619401f24d5 | 2 | resolved | $0.0488 |
+| inventory_value | 1 | 9d891bd2-ab6b-4c2b-89a6-5a3a53a8ded2 | 2 | resolved | $0.0469 |
+| inventory_value | 2 | a01d289d-c1fb-4813-9598-44b784519bd0 | 2 | resolved | $0.0601 |
+| inventory_value | 3 | 4ba8285e-699c-4144-ac58-619d6d6e64ee | 2 | resolved | $0.0522 |
+| textutil_slugify | 1 | fb179086-d0f4-4890-a201-732084a6930f | 2 | resolved | $0.0479 |
+| textutil_slugify | 2 | f31c7d75-ab04-4153-a04e-dc6854aa640a | 2 | resolved | $0.0528 |
+| textutil_slugify | 3 | 2ccc132b-b05a-4e2f-a0bf-f81a6d787918 | 2 | resolved | $0.0454 |
+| pricing_discount | 1 | 45b1747f-7376-4285-ba76-1a9d5b68d93a | 2 | resolved | $0.0507 |
+| pricing_discount | 2 | 3d1d81b1-a4b7-4e3a-96e5-d65cffab0aad | 2 | resolved | $0.0516 |
+| pricing_discount | 3 | 2f8a0295-cac2-4900-ad9c-d9f90746dfef | 2 | resolved | $0.0582 |
+
+- **Kept-rollout spend:** $0.6142 over 12 runs.
+- **Total spend (honest):** $0.7308 = $0.0425 probe + $0.6142 (12 kept) +
+  $0.0742 (1 discarded bytecode-poisoned run). Well under the $5.00 gate.
+- All 12 recompute through `pydocs-eval-compute-metrics`: 12 graded, 0
+  infra-excluded, aggregate soft score 0.856, `f2p_fraction` 1.0,
+  `patch_applies` 1.0. (`derived/` output is regenerable and not committed.)
+
+### Still pending (NOT part of this capture pass)
+
+The ADR 0011 ≥0.90 validation gate needs **hand labels** per trajectory
+(genuinely-used files, wasted reads, first-surface credit per gold file, from
+the model-visible blob-dereferenced text) under `real/labels/`, mirroring the
+`attribution/` fixtures. Once those exist the gate runs as ONE command:
 
 ```bash
 PYTHONPATH=benchmarks/src python -c \
@@ -159,9 +189,5 @@ PYTHONPATH=benchmarks/src python -c \
    'benchmarks/tests/trajectory/fixtures/trajectories/real')))))"
 ```
 
-The result fills ADR 0011's Validation-results section; that section and its
+That result fills ADR 0011's Validation-results section; that section and its
 status qualifier stay untouched until this runs on real labels.
-
-### Per-run cost log
-
-_None — no rollouts were run (usage-limit blocker above)._
