@@ -1,6 +1,7 @@
 # ADR 0021 — Multilanguage indexing: census-scoped tiers, availability-aware grammar chunkers, and index-scope identity
 
-**Status:** Accepted — contract-line amendment pending owner ratification ·
+**Status:** Accepted — contract-line amendments owner-ratified 2026-07-21
+(applied to `docs/tool-contracts.md` §2.2 and §4.1 in the same PR) ·
 **Date:** 2026-07-21 · **Phase:** feature (post-Phase-4, pre-paid-arc)
 
 - **Decision area:** the owner-approved multilanguage tiers T1 (extension
