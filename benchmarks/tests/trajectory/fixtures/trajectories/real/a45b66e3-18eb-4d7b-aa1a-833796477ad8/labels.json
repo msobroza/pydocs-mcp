@@ -1,0 +1,11 @@
+{
+  "trajectory_id": "a45b66e3-18eb-4d7b-aa1a-833796477ad8",
+  "used_files": [
+    "widgetlib/calculator.py"
+  ],
+  "wasted_reads": [],
+  "first_surface": {
+    "widgetlib/calculator.py": "search_codebase"
+  },
+  "notes": "search_codebase rendered the average() body including the buggy `/(len(values)+1)` line; the model announced the fix from that MCP output before redundantly Read-ing the same gold file. First surface is search_codebase; the later bare Read is of the used gold file, not a wasted read. Resolved."
+}

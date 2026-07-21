@@ -1,0 +1,11 @@
+{
+  "trajectory_id": "2f8a0295-cac2-4900-ad9c-d9f90746dfef",
+  "used_files": [
+    "widgetlib/pricing.py"
+  ],
+  "wasted_reads": [],
+  "first_surface": {
+    "widgetlib/pricing.py": "search_codebase"
+  },
+  "notes": "search_codebase rendered apply_discount() with the buggy `price * pct` (first surface). The model Read the gold file and edited to `price * (1 - pct)`, then verified with a final Read. No wasted reads; resolved."
+}

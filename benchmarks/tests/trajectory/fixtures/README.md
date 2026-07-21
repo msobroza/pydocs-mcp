@@ -174,12 +174,53 @@ server↔loop MCP-tool join holds despite the stdout `usage`-block duplication.
   infra-excluded, aggregate soft score 0.856, `f2p_fraction` 1.0,
   `patch_applies` 1.0. (`derived/` output is regenerable and not committed.)
 
-### Still pending (NOT part of this capture pass)
+### Hand labels — DONE (2026-07-21)
 
-The ADR 0011 ≥0.90 validation gate needs **hand labels** per trajectory
-(genuinely-used files, wasted reads, first-surface credit per gold file, from
-the model-visible blob-dereferenced text) under `real/labels/`, mirroring the
-`attribution/` fixtures. Once those exist the gate runs as ONE command:
+Each `real/<trajectory_id>/` now carries an independent **hand label**
+(`labels.json`) plus a minimal factual `meta.json` (`workspace_root`,
+`final_patch_files`, `gold_files`, `instance_id` — the fields
+`validate_trajectory_dir` reads; **no attributor-derived `expected` block**). The
+labels mirror the `attribution/` fixtures' `labels.json` shape (`trajectory_id`,
+`used_files`, `first_surface`) plus two additive fields this pass records:
+`wasted_reads` (a list) and `notes` (a per-trajectory sentence).
+
+**Labeling protocol (independence).** Labels were authored from the
+MODEL-VISIBLE evidence only — the merged `events.jsonl` with every `result_blob`
+dereferenced to the exact rendered TEXT the model read, the loop-side `Read`
+results, and the final patch. The attributor (`attribution.py` / `metrics.py`)
+and the agreement tooling (`compare_labels.py`) were NOT run, imported, or read
+while labeling, so the later agreement measurement is meaningful. The three
+judgments:
+
+- **`used_files`** — files whose content visibly fed the final patch. In every
+  rollout that is exactly the one gold module the model edited; no test file or
+  sibling module content fed a patch.
+- **`wasted_reads`** — files whose content was inspected via a targeted read but
+  went unused. Empty in all 12: the only targeted `Read`/`get_symbol` actions hit
+  the gold file itself. (Sibling chunks that `search_codebase` rendered alongside
+  the gold chunk are search recall, not reads, and are not counted as wasted.)
+- **`first_surface`** — the FIRST tool whose rendered text put the gold file's
+  *content* in front of the model. The **content-surfacing rule** (matching the
+  `search_surfaces_gold` fixture's hunk-overlap standard): a file is surfaced when
+  its source — a chunk body, a `get_symbol` span, a matched grep line, or a
+  `Read` — renders in the visible text. A bare path in a `find`/`ls`/glob
+  enumeration is NOT a content surface. The injected session-start prompt (which
+  names the module) never counts.
+
+**Key finding (feeds ADR 0012).** The bias the comparison probes — a gold file
+present only in an MCP result's `items[]` but never in the rendered text — did
+NOT bite the gold file here: in all 11 MCP rollouts `search_codebase` (seq 1)
+rendered the buggy function body (the gold line was visible text), so
+`first_surface = search_codebase`. The slash-path (`widgetlib/<mod>.py`) appears
+only in `items[]`; a path-string labeler would have wrongly scored the gold file
+un-surfaced. The lone 0-MCP rollout (`3c63ee67…`) surfaced content via the bare
+`Read` (`find` only listed the path). A recurring behavior worth noting: after
+`search_codebase` already rendered the fix site, the model still Read the same
+gold file before editing — redundant, but a read of the *used* file, so not
+wasted.
+
+Once the labels exist (now), the gate runs as ONE command — it maps
+`validate_trajectory_dir` over each `real/<id>/` holding a `labels.json`:
 
 ```bash
 PYTHONPATH=benchmarks/src python -c \
