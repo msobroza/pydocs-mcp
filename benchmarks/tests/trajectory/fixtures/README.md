@@ -171,8 +171,12 @@ server↔loop MCP-tool join holds despite the stdout `usage`-block duplication.
 - **Total spend (honest):** $0.7308 = $0.0425 probe + $0.6142 (12 kept) +
   $0.0742 (1 discarded bytecode-poisoned run). Well under the $5.00 gate.
 - All 12 recompute through `pydocs-eval-compute-metrics`: 12 graded, 0
-  infra-excluded, aggregate soft score 0.856, `f2p_fraction` 1.0,
-  `patch_applies` 1.0. (`derived/` output is regenerable and not committed.)
+  infra-excluded, aggregate soft score 0.873, `f2p_fraction` 1.0,
+  `patch_applies` 1.0, `localization_recall` 1.0. (`derived/` output is
+  regenerable and not committed.) The aggregate rose from the pre-fix 0.856
+  after the R3 path-normalizer fix (macOS `/private/var` firmlink folding) let
+  the lone 0-MCP rollout's loop-side `Read` surface its gold file — see ADR
+  0011 Validation results.
 
 ### Hand labels — DONE (2026-07-21)
 

@@ -27,6 +27,17 @@ from __future__ import annotations
 import posixpath
 from dataclasses import dataclass
 
+# macOS firmlinks: the top-level dirs /var, /tmp, /etc are symlinks into
+# /private, so /private/var/X and /var/X denote the SAME location. The loop's
+# client-side Read tool canonicalizes temp workspaces to the /private form while
+# the rollout driver records workspace_root under the bare firmlink alias (real
+# bug: 3c63ee67's successful file_path Read was /private/var/... against a
+# /var/... workspace_root and got mis-excluded as a dependency). Folded purely
+# lexically — no filesystem access — so normalization stays byte-identical on
+# every platform (R6): a non-macOS trace never carries a /private/{var,tmp,etc}
+# absolute path, so the collapse is a no-op there.
+_MACOS_FIRMLINK_PREFIXES = ("/private/var/", "/private/tmp/", "/private/etc/")
+
 
 @dataclass(frozen=True, slots=True)
 class NormalizedPath:
@@ -61,7 +72,23 @@ def normalize_path(raw: str, *, workspace_root: str) -> NormalizedPath:
         raise ValueError(f"workspace_root must be absolute POSIX: got {workspace_root!r}")
     if not posixpath.isabs(raw):
         return NormalizedPath(posixpath.normpath(raw), gold_matchable=True)
-    return _normalize_absolute(posixpath.normpath(raw), posixpath.normpath(workspace_root))
+    return _normalize_absolute(
+        _fold_firmlink(posixpath.normpath(raw)),
+        _fold_firmlink(posixpath.normpath(workspace_root)),
+    )
+
+
+def _fold_firmlink(norm: str) -> str:
+    """Collapse a leading macOS firmlink prefix (/private/var → /var, …).
+
+    Applied to both the raw path and workspace_root so the prefix comparison in
+    :func:`_normalize_absolute` is symmetric regardless of which side recorded
+    the /private form. A path outside the firmlink set is returned unchanged.
+    """
+    for prefix in _MACOS_FIRMLINK_PREFIXES:
+        if norm.startswith(prefix):
+            return norm[len("/private") :]
+    return norm
 
 
 def _normalize_absolute(norm: str, root: str) -> NormalizedPath:

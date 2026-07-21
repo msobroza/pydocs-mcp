@@ -48,6 +48,35 @@ def test_workspace_prefix_sibling_dir_not_a_false_match():
     assert got.value == f"{WS}-other/x.py"
 
 
+def test_macos_private_var_firmlink_relativizes_against_var_workspace():
+    # Real-trajectory bug (3c63ee67): the loop Read tool canonicalizes the temp
+    # workspace to /private/var/... while the rollout driver recorded the
+    # workspace_root under the /var/... firmlink alias. macOS firmlinks
+    # (/var -> /private/var) denote the same location; the normalizer must fold
+    # them so a genuinely in-workspace Read is not mis-excluded as a dependency.
+    root = "/var/folders/k4/j07/T/tmp.M4PW6PHfYE"
+    raw = "/private/var/folders/k4/j07/T/tmp.M4PW6PHfYE/widgetlib/calculator.py"
+    got = normalize_path(raw, workspace_root=root)
+    assert got.value == "widgetlib/calculator.py"
+    assert got.gold_matchable is True
+
+
+def test_macos_firmlink_symmetric_private_workspace_var_raw():
+    # Symmetric direction: workspace recorded as /private/..., raw under /var/....
+    root = "/private/tmp/ws"
+    got = normalize_path("/tmp/ws/pkg/x.py", workspace_root=root)
+    assert got.value == "pkg/x.py"
+    assert got.gold_matchable is True
+
+
+def test_private_non_firmlink_prefix_not_collapsed():
+    # Only the known firmlink roots (/var, /tmp, /etc) collapse; an unrelated
+    # /private/... dependency path stays absolute and non-matchable.
+    got = normalize_path("/private/custom/dep/x.py", workspace_root="/var/ws")
+    assert got.gold_matchable is False
+    assert got.value == "/private/custom/dep/x.py"
+
+
 def test_empty_path_raises():
     with pytest.raises(ValueError, match="empty path"):
         normalize_path("", workspace_root=WS)
