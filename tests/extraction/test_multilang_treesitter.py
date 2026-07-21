@@ -24,11 +24,13 @@ from pathlib import Path
 
 import pytest
 
+from pydocs_mcp.application.mcp_inputs import ReferencesInput, SymbolInput
 from pydocs_mcp.extraction.config import ChunkingConfig
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind, flatten_to_chunks
 from pydocs_mcp.extraction.serialization import chunker_registry
 from pydocs_mcp.extraction.strategies.chunkers import MultilangChunker
 from pydocs_mcp.extraction.strategies.chunkers import multilang_treesitter as mlt
+from pydocs_mcp.extraction.strategies.chunkers._shared import _identifier_slug
 from pydocs_mcp.models import ChunkOrigin
 
 _CODE_EXTENSIONS = (".js", ".ts", ".tsx", ".c", ".h", ".rs")
@@ -141,7 +143,87 @@ def test_symbol_nodes_dedup_colled_names() -> None:
         rel="x.rs",
     )
     qnames = [n.qualified_name for n in nodes]
-    assert qnames == ["m.rs.f", "m.rs.f-2"]  # second collision disambiguated
+    # verification finding #2: dedup suffix is identifier-SAFE (``_2``, not
+    # ``-2``) so the disambiguated id stays a valid dotted identifier and
+    # remains addressable via get_symbol / get_references.
+    assert qnames == ["m.rs.f", "m.rs.f_2"]
+
+
+# -- verification finding #2: verbatim, addressable code-symbol node ids ------
+
+
+def test_identifier_slug_keeps_valid_identifiers_verbatim() -> None:
+    seen: dict[str, int] = {}
+    # snake_case and PascalCase are valid identifiers -> case/underscore kept.
+    assert _identifier_slug("safe_truncate", seen) == "safe_truncate"
+    assert _identifier_slug("ParsedMember", seen) == "ParsedMember"
+    assert _identifier_slug("topLevelInference", seen) == "topLevelInference"
+
+
+def test_identifier_slug_dedup_uses_underscore_suffix() -> None:
+    seen: dict[str, int] = {}
+    # a struct and an impl block sharing a name collide -> ``_2`` (never ``-2``,
+    # which a hyphen-based dedup would emit and break the dotted-identifier grammar).
+    assert _identifier_slug("ParsedMember", seen) == "ParsedMember"
+    assert _identifier_slug("ParsedMember", seen) == "ParsedMember_2"
+    assert _identifier_slug("ParsedMember", seen) == "ParsedMember_3"
+
+
+def test_identifier_slug_falls_back_to_hyphen_slug_for_non_identifiers() -> None:
+    seen: dict[str, int] = {}
+    # A name that is NOT a valid Python identifier (operator overload / spaces)
+    # routes through _slugify unchanged — the hyphen slug is fine here because
+    # such a name is not a get_symbol target anyway.
+    assert _identifier_slug("operator+", seen) == "operator"
+    assert _identifier_slug("has space", seen) == "has-space"
+
+
+def test_symbol_nodes_keep_camelcase_and_snake_case_verbatim() -> None:
+    # JS/TS camelCase + PascalCase and Rust snake_case names keep their exact
+    # spelling in the node id (old _slugify lowercased -> UNADDRESSABLE).
+    nodes = mlt._symbol_nodes(
+        [
+            (NodeKind.FUNCTION, "topLevelInference", 1, 1),
+            (NodeKind.CLASS, "JsEngine", 2, 2),
+            (NodeKind.FUNCTION, "safe_truncate", 3, 3),
+        ],
+        ["a", "b", "c"],
+        module="app.js",
+        rel="app.js",
+    )
+    assert [n.qualified_name for n in nodes] == [
+        "app.js.topLevelInference",
+        "app.js.JsEngine",
+        "app.js.safe_truncate",
+    ]
+
+
+def test_snake_case_and_pascal_targets_pass_the_frozen_input_validators() -> None:
+    # THE addressability regression finding #2 demands: verbatim ids clear the
+    # contract-frozen dotted-identifier validators on the MCP input models.
+    assert SymbolInput(target="pkg.accel.rs.safe_truncate").target == "pkg.accel.rs.safe_truncate"
+    assert ReferencesInput(target="pkg.accel.rs.ParsedMember").target == "pkg.accel.rs.ParsedMember"
+    assert SymbolInput(target="pkg.accel.rs.ParsedMember_2").target == "pkg.accel.rs.ParsedMember_2"
+
+
+def test_snake_case_symbol_is_addressable_after_build() -> None:
+    # Round-trip: build a symbol tree, then resolve a snake_case target back to
+    # its node by exact-match qualified_name (find_node_by_qualified_name), and
+    # confirm both ids also clear the input validators. Old hyphen slug
+    # (``safe-truncate``) would neither match the tree id nor pass the validator.
+    content = "fn safe_truncate() {}\nstruct ParsedMember {}\n"
+    symbols = [
+        (NodeKind.FUNCTION, "safe_truncate", 1, 1),
+        (NodeKind.CLASS, "ParsedMember", 2, 2),
+    ]
+    tree = mlt._build_symbol_tree(str(Path("/r/pkg/accel.rs")), content, Path("/r"), symbols)
+    assert tree is not None
+    fn = tree.find_node_by_qualified_name("pkg.accel.rs.safe_truncate")
+    assert fn is not None and fn.kind is NodeKind.FUNCTION
+    struct = tree.find_node_by_qualified_name("pkg.accel.rs.ParsedMember")
+    assert struct is not None and struct.kind is NodeKind.CLASS
+    assert SymbolInput(target=fn.qualified_name).target == fn.qualified_name
+    assert ReferencesInput(target=struct.qualified_name).target == struct.qualified_name
 
 
 # -- absence path (forced everywhere via a sys.modules block) ------------------
@@ -212,6 +294,15 @@ _TS_SRC = (
     "class Widget { run(): void {} }\n"
 )
 _C_SRC = "int add(int a, int b) { return a + b; }\nstruct Point { int x; };\nvoid proto(void);\n"
+# One symbol per line so the pinned spans are obvious. ``impl ParsedMember``
+# collides with ``struct ParsedMember`` -> identifier-safe ``_2`` dedup.
+_RUST_SRC = (
+    "fn safe_truncate(s: &str) -> &str { s }\n"
+    "struct ParsedMember { name: String }\n"
+    "enum MemberKind { Function, Class }\n"
+    "trait TokenizerBehaviour { fn run(&self); }\n"
+    "impl ParsedMember { fn new() {} }\n"
+)
 
 
 def _titles_and_kinds(tree: DocumentNode) -> set[tuple[str, str]]:
@@ -250,6 +341,27 @@ def test_c_extracts_functions_structs_and_prototypes(tmp_path: Path) -> None:
 def test_header_extension_uses_c_grammar(tmp_path: Path) -> None:
     tree = _build("struct Node { int v; };\n", rel_path="n.h", root=tmp_path)
     assert ("Node", "class") in _titles_and_kinds(tree)
+
+
+def test_rust_symbol_ids_are_verbatim_with_identifier_safe_dedup(tmp_path: Path) -> None:
+    # End-to-end via the real Rust grammar: node ids preserve exact spelling
+    # (snake_case fn, PascalCase struct/enum/trait) and the impl-block name
+    # collision dedups to ``ParsedMember_2`` — a valid dotted identifier, so
+    # every id is addressable through the frozen get_symbol input validator.
+    # (Pre-fix _slugify gave ``pkg.accel.rs.safe-truncate`` / ``parsedmember``,
+    # which the dotted-identifier validator rejects — verification finding #2.)
+    tree = _build(_RUST_SRC, rel_path="pkg/accel.rs", root=tmp_path)
+    module = "pkg.accel.rs"
+    qnames = {c.qualified_name for c in tree.children}
+    assert qnames == {
+        f"{module}.safe_truncate",  # snake_case fn — was ``safe-truncate``
+        f"{module}.ParsedMember",  # struct — PascalCase preserved
+        f"{module}.MemberKind",  # enum
+        f"{module}.TokenizerBehaviour",  # trait
+        f"{module}.ParsedMember_2",  # impl ParsedMember collides -> ``_2`` (not ``-2``)
+    }
+    for q in qnames:
+        assert SymbolInput(target=q).target == q  # all ids clear the frozen validator
 
 
 def test_spans_are_monotonic_and_in_range(tmp_path: Path) -> None:

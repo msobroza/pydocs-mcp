@@ -244,6 +244,40 @@ def _dedup_slug(slug: str, seen: dict[str, int]) -> str:
     return slug if count == 0 else f"{slug}-{count + 1}"
 
 
+def _identifier_slug(name: str, seen: dict[str, int]) -> str:
+    """Node-id slug for a CODE symbol — verbatim identifier where possible.
+
+    Unlike ``_slugify`` (human headings), a code symbol's ``node_id`` /
+    ``qualified_name`` is the exact string ``get_symbol`` / ``get_references``
+    receive as their ``target``, and those MCP inputs (``mcp_inputs._TARGET_RE``)
+    accept ONLY a dotted *identifier* chain — case-sensitive, no hyphens.
+    ``_slugify`` maps ``safe_truncate`` -> ``safe-truncate`` and ``ParsedMember``
+    -> ``parsedmember``, so a T3 tree-sitter symbol slugged that way is both
+    UNADDRESSABLE (the validator rejects the hyphen) and inconsistent with the
+    Python chunker, which keeps identifiers verbatim (``APIRouter``). So: a name
+    that is a valid Python-style identifier (``name.isidentifier()``) is kept
+    VERBATIM (case preserved); only non-identifier names (operator overloads,
+    punctuation) fall back to ``_slugify``. Collisions dedup with an
+    identifier-SAFE ``_N`` suffix (``ParsedMember_2``) — never the ``-N`` of
+    ``_dedup_slug`` (a hyphen would re-break addressability).
+
+    WHY not the rejected alternatives: (a) widening ``_TARGET_RE`` to admit
+    hyphens is frozen-surface-adjacent — the dotted-identifier grammar is
+    contract-documented (``docs/tool-contracts.md``); (b) a lookup-time
+    normalization shim (``safe-truncate`` -> ``safe_truncate``) is fragile
+    aliasing that gives one node two names. Fixing the id at emit time keeps a
+    single stable identity.
+
+    ``seen`` is mutated in place: a fresh local dict per ``build_tree`` call
+    (one document, single-threaded), never shared across parallel branches —
+    mirrors ``_dedup_slug``.
+    """
+    base = name if name.isidentifier() else _slugify(name)
+    count = seen.get(base, 0)
+    seen[base] = count + 1
+    return base if count == 0 else f"{base}_{count + 1}"
+
+
 def _code_example_node(
     code: str,
     lang: str,
@@ -291,6 +325,7 @@ __all__ = (
     "_docstring_summary",
     "_fallback_module_node",
     "_header_from_text",
+    "_identifier_slug",
     "_module_from_doc_path",
     "_relative_module_parts",
     "_relpath",

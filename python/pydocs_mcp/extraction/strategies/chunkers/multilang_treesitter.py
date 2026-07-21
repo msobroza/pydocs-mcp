@@ -39,12 +39,11 @@ from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import _register_chunker
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _content_hash,
-    _dedup_slug,
     _docstring_summary,
+    _identifier_slug,
     _module_from_doc_path,
     _relpath,
     _slice_lines,
-    _slugify,
 )
 from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import (
     LANGUAGE_SPECS,
@@ -256,7 +255,9 @@ def _symbol_nodes(
     seen: dict[str, int] = {}
     for kind, name, start, end in symbols:
         text = _slice_lines(lines, start, end)
-        qname = f"{module}.{_dedup_slug(_slugify(name), seen)}"
+        # Verbatim identifier ids (finding #2) — get_symbol/get_references target
+        # the dotted qname, and their validators accept only identifier chains.
+        qname = f"{module}.{_identifier_slug(name, seen)}"
         nodes.append(_symbol_node(qname, name, kind, rel, start, end, text, module))
     return tuple(nodes)
 
