@@ -26,11 +26,22 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from pydocs_mcp.project_toml import ProjectExcludeConfigError, split_exclude_entries
 
-ALLOWED_EXTENSIONS: frozenset[str] = frozenset({".py", ".md", ".ipynb"})
+# ADR 0021 (multilanguage indexing, T1): the allowlist CEILING grows to the
+# full census-scoped set. Text/config extensions are also the widened DEFAULT
+# (see DiscoveryScopeConfig.include_extensions); code extensions stay
+# ceiling-only opt-in — YAML must name them explicitly. Binary/asset
+# extensions are never listed, so they can never be widened in.
+_TEXT_CONFIG_EXTENSIONS: frozenset[str] = frozenset(
+    {".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"}
+)
+_CODE_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".tsx", ".c", ".h", ".rs"})
+ALLOWED_EXTENSIONS: frozenset[str] = (
+    frozenset({".py", ".md", ".ipynb"}) | _TEXT_CONFIG_EXTENSIONS | _CODE_EXTENSIONS
+)
 """File extensions the extraction pipeline is built to handle. Narrowing is
 allowed via YAML; adding a new extension requires registering a matching
 :class:`~pydocs_mcp.extraction.protocols.Chunker` AND amending
-this allowlist — can't be done via YAML alone."""
+this allowlist — can't be done via YAML alone (ADR 0021 T1)."""
 
 
 _EXCLUDED_DIRS: frozenset[str] = frozenset(
@@ -48,7 +59,16 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset(
         ".nox",
         ".eggs",
         "egg-info",
+        # Vendored second-language source trees — ADR 0021 (multilanguage
+        # indexing) grows the floor: the census found 127 of matplotlib's
+        # 222 C/C++ files under extern/, i.e. read-side noise with zero
+        # retrieval value. node_modules/.yarn/bower_components are the
+        # JS-ecosystem vendored dirs; extern/third_party the C/Rust ones.
         "node_modules",
+        ".yarn",
+        "bower_components",
+        "extern",
+        "third_party",
         "build",
         "dist",
         "target",
@@ -104,6 +124,29 @@ class NotebookConfig(BaseModel):
     include_outputs: bool = False
 
 
+# ADR 0021 T2: TextSectionChunker tunables. Single source of truth for the
+# defaults — the dataclass fields in ``chunkers/text_section.py`` import these
+# constants so the Field default and the chunker default can never drift.
+_DEFAULT_TEXT_WINDOW_LINES = 80
+_DEFAULT_JSON_MAX_CHUNKS = 50
+
+
+class TextSectionConfig(BaseModel):
+    """Tunables for :class:`TextSectionChunker` (ADR 0021 T2).
+
+    ``window_lines`` sizes the fixed-line fallback windows used for
+    ``.rst``/``.txt`` files that carry no reStructuredText section titles.
+    ``json_max_chunks`` caps how many top-level ``.json`` keys become section
+    nodes — the fixture-flooding guard: a file exceeding the cap (or an
+    unkeyed/minified blob) collapses to one truncated summary node instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    window_lines: int = Field(default=_DEFAULT_TEXT_WINDOW_LINES, ge=1)
+    json_max_chunks: int = Field(default=_DEFAULT_JSON_MAX_CHUNKS, ge=1)
+
+
 class ChunkingConfig(BaseModel):
     """Per-chunker tunables (markdown heading bounds, notebook outputs).
 
@@ -123,6 +166,7 @@ class ChunkingConfig(BaseModel):
 
     markdown: MarkdownConfig = Field(default_factory=MarkdownConfig)
     notebook: NotebookConfig = Field(default_factory=NotebookConfig)
+    text_section: TextSectionConfig = Field(default_factory=TextSectionConfig)
 
 
 class DiscoveryScopeConfig(BaseModel):
@@ -138,7 +182,26 @@ class DiscoveryScopeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    include_extensions: list[str] = Field(default_factory=lambda: [".py", ".md", ".ipynb"])
+    # ADR 0021 T1: the DEFAULT widens to existing (.py .md .ipynb) + the
+    # text/config set only. The census measured docs+config at 22% of gold
+    # patch files; second-language *code* is a read-side minority (0.2% of
+    # gold edits, skewed to vendored trees), so code extensions stay
+    # ceiling-only opt-in — present in ALLOWED_EXTENSIONS, absent here.
+    include_extensions: list[str] = Field(
+        default_factory=lambda: [
+            ".py",
+            ".md",
+            ".ipynb",
+            ".toml",
+            ".yaml",
+            ".yml",
+            ".cfg",
+            ".ini",
+            ".rst",
+            ".txt",
+            ".json",
+        ]
+    )
     # 1MB, not 500KB: a real 561KB module (mlc_llm dispatch table) was
     # silently skipped under the old cap, imposing an unwinnable recall
     # ceiling on every retrieval method (PAGEINDEX_DIVS.md F3).

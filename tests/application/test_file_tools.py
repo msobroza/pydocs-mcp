@@ -134,9 +134,19 @@ async def test_grep_walks_exactly_the_indexer_discovery_scope(
     discovered, _, _ = ProjectFileDiscoverer(scope=DiscoveryScopeConfig()).discover(project_root)
     expected = {Path(p).relative_to(project_root).as_posix() for p in discovered}
     assert got == expected
-    assert got == {"main.py", "src/core.py", "src/notes.md", "src/util_test.py"}
-    # floor (.venv), pyproject exclude (private_docs), allowlist (.txt/.toml)
-    assert not any("private_docs" in p or ".venv" in p or p.endswith(".txt") for p in got)
+    # ADR 0021 T1: the default now covers text/config, so data.txt and
+    # pyproject.toml are in scope alongside the code/doc files.
+    assert got == {
+        "data.txt",
+        "main.py",
+        "pyproject.toml",
+        "src/core.py",
+        "src/notes.md",
+        "src/util_test.py",
+    }
+    # floor (.venv) + pyproject exclude (private_docs) still pruned; the
+    # allowlist no longer blocks .txt/.toml (they became default-in).
+    assert not any("private_docs" in p or ".venv" in p for p in got)
     assert body.splitlines() == sorted(got)
 
 
@@ -155,12 +165,14 @@ async def test_grep_files_with_matches_lists_paths_only(
     service: FileToolsService,
 ) -> None:
     body, items, meta = await service.grep(GrepPayload(pattern="alpha_token"))
-    assert body.splitlines() == ["main.py", "src/core.py", "src/notes.md"]
-    assert [i["path"] for i in items] == ["main.py", "src/core.py", "src/notes.md"]
+    # ADR 0021 T1: data.txt is now in scope and contains the token, sorting
+    # ahead of main.py (path-sorted output).
+    assert body.splitlines() == ["data.txt", "main.py", "src/core.py", "src/notes.md"]
+    assert [i["path"] for i in items] == ["data.txt", "main.py", "src/core.py", "src/notes.md"]
     # items carry the first-match span so the client can jump straight in
     first = items[0]
     assert first["start_line"] == 1 and first["end_line"] == 1
-    assert first["text"] == "alpha_token = 1"
+    assert first["text"] == "alpha_token in txt"
     assert meta == {}
 
 
@@ -168,7 +180,8 @@ async def test_grep_count_mode_reports_per_file_counts(
     service: FileToolsService,
 ) -> None:
     body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", output_mode="count"))
-    assert body.splitlines() == ["main.py: 2", "src/core.py: 1", "src/notes.md: 1"]
+    # ADR 0021 T1: data.txt (now in-scope) matches once, sorts first.
+    assert body.splitlines() == ["data.txt: 1", "main.py: 2", "src/core.py: 1", "src/notes.md: 1"]
 
 
 async def test_grep_content_mode_emits_file_line_content(

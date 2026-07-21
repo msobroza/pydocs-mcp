@@ -20,6 +20,7 @@ from pydocs_mcp.application.formatting import (
     format_workspace_overview_card,
     pointer_token,
 )
+from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
     GlobInput,
@@ -49,7 +50,7 @@ from pydocs_mcp.application.suggestions import (
     log_suggestion_fired,
 )
 from pydocs_mcp.application.tool_response import ToolResponse
-from pydocs_mcp.extraction.strategies.analyzers import PYTHON_CAPABILITIES
+from pydocs_mcp.extraction.strategies.analyzers import language_capabilities
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
@@ -64,6 +65,25 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
 # so a tiny closure batched beside a huge one still renders its focus block
 # (spec §D1 batched-context contract). Single source of truth for the split.
 _MIN_SHARE_RATIO = 0.10
+
+# get_references meta.resolution value for a target whose extension carries no
+# registered analyzer. The §5.1 LanguageCapabilities vocabulary
+# (analyzers.LanguageCapabilities) admits it; ADR 0021 Decision 6 emits it so a
+# non-Python target never overstates the Python reference graph's capability.
+_UNAVAILABLE_RESOLUTION = "unavailable"
+
+
+def _resolution_for_ext(ext: str | None) -> str:
+    """Declared reference-resolution level for a target with extension ``ext``.
+
+    Routes through the analyzer registry (ADR 0021 Decision 6): ``.py``/``.md``
+    carry a registered analyzer → its ``references`` flag ("syntactic"); every
+    other extension — all T2 text/config + T3 code targets, and a target with no
+    resolvable extension — is unregistered → ``language_capabilities`` returns
+    None → "unavailable".
+    """
+    caps = language_capabilities(ext) if ext else None
+    return caps["references"] if caps is not None else _UNAVAILABLE_RESOLUTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,10 +166,19 @@ class ToolRouter:
             show=_DEPTH_TO_SHOW[payload.depth],
             project=payload.project,
         )
+
+        async def _symbol_body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+            # The lookup tree branch now threads TARGET_EXTENSION_EXTRA on every
+            # return (ADR 0021 Decision 6 — get_references needs it for module
+            # targets). That channel is get_references-only; strip it here so
+            # get_symbol's meta stays exactly its pinned field set.
+            text, items, extras = await self.lookup_router._lookup_body(body)
+            return text, items, {k: v for k, v in extras.items() if k != TARGET_EXTENSION_EXTRA}
+
         return await self.envelope.wrap(
             "get_symbol",
             self._meta_project(payload.project),
-            lambda: self.lookup_router._lookup_body(body),
+            _symbol_body,
         )
 
     async def get_references(self, payload: ReferencesInput) -> ToolResponse:
@@ -162,10 +191,15 @@ class ToolRouter:
 
         async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
             text, items, extras = await self.lookup_router._lookup_body(body)
-            # §2.2 meta extension: the declared capability level of the graph
-            # that answered. Single source = the Python analyzer's frozen flag
-            # (a semantic backend flips only this value — ADR 0004).
-            return text, items, {**extras, "resolution": PYTHON_CAPABILITIES["references"]}
+            # §2.2 meta extension: the HONEST declared capability level for the
+            # target's language (ADR 0021 Decision 6). The lookup body threads
+            # the target's file extension via TARGET_EXTENSION_EXTRA; route it
+            # through the analyzer registry so a non-Python target degrades to
+            # "unavailable" instead of overstating Python's graph. Strip the
+            # channel key so only the declared `resolution` reaches the wire meta.
+            ext = extras.get(TARGET_EXTENSION_EXTRA)
+            forwarded = {k: v for k, v in extras.items() if k != TARGET_EXTENSION_EXTRA}
+            return text, items, {**forwarded, "resolution": _resolution_for_ext(ext)}
 
         return await self.envelope.wrap(
             "get_references", self._meta_project(payload.project), _body

@@ -107,11 +107,15 @@ Field semantics:
 "meta": { "...": "...", "resolution": "syntactic" }
 ```
 
-- `meta.resolution: str` — one of `"syntactic" | "semantic"`, the declared capability
-  level of the reference graph that produced the answer (§5.1). The Python backend ships
-  declaring `"syntactic"`. If a semantic resolution backend is enabled by deployment
-  configuration in a future release, only this declared value flips — names, parameters,
-  and the rest of the envelope are invariant under that swap (ADR 0004).
+- `meta.resolution: str` — one of `"syntactic" | "semantic" | "unavailable"`, the
+  declared capability level of the reference graph that produced the answer (§5.1).
+  The Python backend ships declaring `"syntactic"` for analyzed targets;
+  `"unavailable"` is declared when the target's language carries no registered
+  reference analyzer (ADR 0021 — the honest value for non-Python targets; amendment
+  owner-ratified 2026-07-21). If a semantic resolution backend is enabled by
+  deployment configuration in a future release, only this declared value flips —
+  names, parameters, and the rest of the envelope are invariant under that swap
+  (ADR 0004).
 
 ### 2.3 The `meta.suggestion` extension
 
@@ -349,8 +353,14 @@ scope is defined by, in union:
    (`DiscoveryScopeConfig` in `python/pydocs_mcp/extraction/config.py`).
 3. The indexed project's `[tool.pydocs-mcp] exclude_dirs` in its `pyproject.toml`,
    re-read per run (`load_project_excludes` in `python/pydocs_mcp/project_toml.py`).
-4. An **extension allowlist**, default `['.py', '.md', '.ipynb']` (narrow-only), and
-   `max_file_size_bytes = 1_000_000` (`DiscoveryScopeConfig`, `extraction/config.py`).
+4. An **extension allowlist** enforced against the `ALLOWED_EXTENSIONS` ceiling
+   (still an allowlist — extensions outside the ceiling are rejected at config
+   load); the default set is `['.py', '.md', '.ipynb']` plus the text/config
+   group (`.toml .yaml .yml .cfg .ini .rst .txt .json`), with code extensions
+   (`.js .ts .tsx .c .h .rs`) ceiling-admitted but opt-in via YAML (ADR 0021;
+   amendment owner-ratified 2026-07-21 — supersedes the former "(narrow-only)"
+   three-extension wording). Plus `max_file_size_bytes = 1_000_000`
+   (`DiscoveryScopeConfig`, `extraction/config.py`).
 
 Exclude entries are bare directory names (matched at any depth) or root-anchored subtree
 paths — **no wildcards, no negation, no file-level patterns**.

@@ -237,6 +237,55 @@ reconciliation gap has a first place to look.
    report that eventually cites it; this phase runs **zero** frozen-test rollouts
    (R3).
 
+## Reporting strata (breaking a contrast into slices)
+
+A **stratum** slices a contrast into subgroups so you can see *where* a delta
+comes from — e.g. single- vs multi-file instances, per-repo, or whether the gold
+patch touches a non-Python file. Strata are **reporting-only**: they read the
+already-frozen corpus and never change the campaign id (there is no strata slot
+in the pre-registration), so you can add one after the fact without a new
+campaign.
+
+Pass a map of `instance_id -> stratum_key` to `aggregate`:
+
+```bash
+python -m pydocs_eval.campaign aggregate --campaign-id <ID> \
+    --cell a=<a.json> --cell b=<b.json> --contrast t=a/b \
+    --stratum-map <map.json> --out report.json
+```
+
+Every contrast in the report then carries a `strata` block with one paired
+delta + CI per stratum key. The map file is either a JSON object
+(`{"inst-1": "repo_x", ...}`) or a JSONL file of
+`{"instance_id": ..., "stratum": ...}` rows — so the same flag expresses a repo
+stratum, a difficulty (single/multi-file) stratum, or the multi-language slice
+below. Author the map by hand, or generate it.
+
+For the multi-language slice, generate the map from a run's facts:
+
+```bash
+python -m pydocs_eval.campaign build-strata --run-dir <run> --out gold_lang.json
+python -m pydocs_eval.campaign aggregate ... --stratum-map gold_lang.json
+```
+
+`build-strata` reads each trajectory's `facts.json` gold files and labels the
+instance `gold_touches_non_python` (its gold patch edits at least one non-`.py`
+file) or `gold_python_only`. On a Python-only corpus this slice is small; it
+becomes informative once multi-language instances enter a corpus.
+
+## Serve overlays (per-cell serve config)
+
+A **serve overlay** is a small YAML file that a cell layers on top of the shipped
+serve defaults — the way a cell flips the routing-suggestion factor off, or (in
+future) turns multi-language indexing on. A cell references an overlay by NAME;
+the harness resolves the name to a shipped YAML under
+`campaign/overlays/` and threads it into the rollout's `.mcp.json` via the
+server's top-level `--config` flag, so no MCP tool parameter is involved. A cell
+with no overlay serves the stock defaults, byte-for-byte. Adding a new overlay is
+a two-step edit: drop a `campaign/overlays/<name>.yaml`, then register `<name>`
+in `campaign/overlay_resolver.py`; an unknown overlay name fails loudly rather
+than silently serving defaults.
+
 ---
 
 # Optimizer-loop runbook (Phase 4)

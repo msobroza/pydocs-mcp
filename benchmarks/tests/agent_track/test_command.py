@@ -112,6 +112,42 @@ def test_mcp_json_launches_pydocs_serve(tmp_path: Path) -> None:
     assert str(tmp_path / "corpus") in server["args"]
 
 
+def test_mcp_json_threads_overlay_config(tmp_path: Path) -> None:
+    # An overlay rides on the product's top-level --config, which MUST precede the
+    # serve subcommand: -m pydocs_mcp --config <overlay> serve <corpus>.
+    overlay = tmp_path / "suggestions_off.yaml"
+    payload = render_mcp_config(
+        corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"), overlay=overlay
+    )
+    args = json.loads(payload)["mcpServers"]["pydocs-mcp"]["args"]
+    assert args == ["-m", "pydocs_mcp", "--config", str(overlay), "serve", str(tmp_path / "corpus")]
+
+
+def test_mcp_json_resolved_overlay_threads_end_to_end(tmp_path: Path) -> None:
+    # The resolver → render_mcp_config seam: a cell's overlay NAME resolves to the
+    # shipped serve-YAML, which appears verbatim after --config.
+    from pydocs_eval.campaign.overlay_resolver import resolve_overlay
+
+    overlay = resolve_overlay("suggestions_off")
+    payload = render_mcp_config(
+        corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"), overlay=overlay
+    )
+    args = json.loads(payload)["mcpServers"]["pydocs-mcp"]["args"]
+    assert "--config" in args and str(overlay) in args
+    assert args.index("--config") < args.index("serve")
+
+
+def test_mcp_json_no_overlay_is_byte_identical(tmp_path: Path) -> None:
+    # Regression pin: omitting overlay is byte-identical to the pre-overlay config
+    # (both the default None and an explicit overlay=None).
+    base = render_mcp_config(corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"))
+    explicit_none = render_mcp_config(
+        corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"), overlay=None
+    )
+    assert base == explicit_none
+    assert "--config" not in base
+
+
 def test_prompt_scaffold_identical_across_arms() -> None:
     assert task_prompt("What does X do?") == task_prompt("What does X do?")
     assert "answer the question about the repository" in task_prompt("q").lower()

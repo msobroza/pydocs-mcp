@@ -158,8 +158,9 @@ re-index, identical results. Needs the matching GPU runtime — see
 
 The file watcher is part of the default install — no extra step. If you
 edit code while you want the index to stay fresh, pick one of two modes —
-both debounce edits to `.py`, `.md`, and `.ipynb` files into a single
-reindex.
+both debounce edits to every indexed file type (Python, docs, and the
+text/config formats indexed by default — see [Beyond Python](#beyond-python--multilanguage-indexing))
+into a single reindex.
 
 ```bash
 pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients)
@@ -187,6 +188,50 @@ match only that directory. Entries are additive over the built-in floor
 equivalent (`extraction.discovery.project.exclude_dirs`, plus a `dependency`
 sibling) covers both project and dependency walks; see
 [DOCUMENTATION.md](DOCUMENTATION.md#excluding-directories-from-indexing).
+
+### Beyond Python — multilanguage indexing
+
+Most Python projects carry more than `.py`: docs, config, and sometimes a
+second-language source tree. pydocs-mcp indexes the ones that carry real
+search value.
+
+- **Indexed by default:** Python (`.py`), notebooks (`.ipynb`), and the
+  text/config formats — Markdown, reStructuredText, plain text, TOML, YAML,
+  INI/CFG, and JSON. Docs and config are the bulk of what real pull requests
+  touch beyond code, so they are on out of the box. Files are split into
+  searchable sections (headings for prose, top-level keys/tables for config)
+  with real line numbers.
+- **Code languages, opt-in:** JavaScript, TypeScript/TSX, C headers/sources,
+  and Rust. These stay off by default so a vendored `node_modules` or C
+  extension tree doesn't flood your results. Turn them on per project by
+  naming the extensions you want:
+
+  ```yaml
+  # pydocs-mcp.yaml
+  extraction:
+    discovery:
+      project:
+        include_extensions: [".py", ".md", ".ipynb", ".rs", ".ts"]
+  ```
+
+  For structural symbols (functions, classes, structs) from these languages,
+  install the grammar extra:
+
+  ```bash
+  pip install 'pydocs-mcp[multilang]'
+  ```
+
+  Without it, code files still index as searchable text — you lose the
+  symbol outline, not the file. A one-line log tells you when that fallback
+  kicks in and how to enable full parsing.
+
+**What works per language (today):** full-text search, symbol outlines, and
+surrounding-context expansion work for every indexed language. The call/
+import/reference graph and per-symbol member listings remain Python-only —
+for a non-Python target, `get_references` returns nothing and reports its
+reference resolution as unavailable rather than pretending. Vendored trees
+(`node_modules`, `extern`, `third_party`, and the like) and binary assets are
+never indexed.
 
 ### Multi-repo search (optional)
 

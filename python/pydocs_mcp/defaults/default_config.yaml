@@ -45,14 +45,19 @@ extraction:
       include_outputs: false
   discovery:
     project:
-      include_extensions: [".py", ".md", ".ipynb"]
+      # ADR 0021 T1: default = existing + text/config only. Census: docs +
+      # config are 22% of gold-patch files; second-language code is a
+      # read-side minority, so code extensions (.js .ts .tsx .c .h .rs) stay
+      # ceiling-only opt-in — add them here to index them.
+      include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
       max_file_size_bytes: 1000000
       # Additive over the built-in floor; bare names match at any depth,
       # entries containing "/" anchor at the project root.
       # e.g. exclude_dirs: ["docs/generated", "fixtures"]
       exclude_dirs: []
     dependency:
-      include_extensions: [".py", ".md", ".ipynb"]
+      # ADR 0021 T1: same widened default as project scope (see above).
+      include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
       max_file_size_bytes: 1000000
       # Additive over the built-in floor; applies to every dependency walk
       # (a dependency's own pyproject.toml is never consulted).

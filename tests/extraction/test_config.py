@@ -3,7 +3,8 @@
 Invariants:
 - All defaults load without a YAML file.
 - Extension allowlist is narrowable (``[".py"]`` works).
-- Extension allowlist cannot be widened (``[".rst"]`` raises).
+- Extension allowlist enforces the ADR 0021 T1 ceiling: text/config + code
+  extensions are accepted; binary/asset junk (``[".png"]``) still raises.
 - ``_EXCLUDED_DIRS`` is a module-level ``frozenset`` — the hardcoded,
   non-removable FLOOR (decision #6b as amended by the 2026-07-13
   exclude-dirs design: user ``exclude_dirs`` entries are additive-only).
@@ -32,6 +33,23 @@ from pydocs_mcp.extraction.config import (
     _EXCLUDED_DIRS,
 )
 
+# ADR 0021 T1: the widened DEFAULT include_extensions = existing + text/config.
+# Code extensions (.js .ts .tsx .c .h .rs) are in ALLOWED_EXTENSIONS but NOT
+# the default — they are ceiling-only opt-in.
+_EXPECTED_DEFAULT_EXTENSIONS = [
+    ".py",
+    ".md",
+    ".ipynb",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".cfg",
+    ".ini",
+    ".rst",
+    ".txt",
+    ".json",
+]
+
 
 def test_extraction_config_defaults_load():
     """Bare :class:`ExtractionConfig` builds with shipped defaults."""
@@ -43,11 +61,12 @@ def test_extraction_config_defaults_load():
     assert cfg.chunking.markdown.min_heading_level == 1
     assert cfg.chunking.markdown.max_heading_level == 3
     assert cfg.chunking.notebook.include_outputs is False
-    assert cfg.discovery.project.include_extensions == [".py", ".md", ".ipynb"]
+    # ADR 0021 T1: default widened to existing + text/config.
+    assert cfg.discovery.project.include_extensions == _EXPECTED_DEFAULT_EXTENSIONS
     # 1MB: a 561KB real-world module was silently skipped under 500KB and
     # capped retrieval recall for every method (PAGEINDEX_DIVS.md F3).
     assert cfg.discovery.project.max_file_size_bytes == 1_000_000
-    assert cfg.discovery.dependency.include_extensions == [".py", ".md", ".ipynb"]
+    assert cfg.discovery.dependency.include_extensions == _EXPECTED_DEFAULT_EXTENSIONS
     assert cfg.members.inspect_depth == 1
     assert cfg.members.members_per_module_cap == 120
     assert cfg.ingestion.pipeline_path is None
@@ -57,7 +76,32 @@ def test_allowed_extensions_is_frozenset():
     """``ALLOWED_EXTENSIONS`` must be a frozenset — so nobody's test can
     mutate it and silently widen the allowlist for other tests."""
     assert isinstance(ALLOWED_EXTENSIONS, frozenset)
-    assert frozenset({".py", ".md", ".ipynb"}) == ALLOWED_EXTENSIONS
+    # ADR 0021 T1: the ceiling is the full census-scoped set — existing +
+    # text/config (also the default) + code (ceiling-only opt-in).
+    assert (
+        frozenset(
+            {
+                ".py",
+                ".md",
+                ".ipynb",
+                ".toml",
+                ".yaml",
+                ".yml",
+                ".cfg",
+                ".ini",
+                ".rst",
+                ".txt",
+                ".json",
+                ".js",
+                ".ts",
+                ".tsx",
+                ".c",
+                ".h",
+                ".rs",
+            }
+        )
+        == ALLOWED_EXTENSIONS
+    )
 
 
 def test_excluded_dirs_is_module_level_frozenset():
@@ -66,8 +110,20 @@ def test_excluded_dirs_is_module_level_frozenset():
     (see ``test_discovery_scope_config_declares_exclude_dirs``); nothing
     can remove an entry from it at runtime or via YAML."""
     assert isinstance(_EXCLUDED_DIRS, frozenset)
-    # Common noisy / secret-bearing directories.
-    for d in (".git", ".venv", "site-packages", "node_modules", "__pycache__"):
+    # Common noisy / secret-bearing directories + ADR 0021 vendored
+    # second-language trees (extern/third_party = C/Rust, node_modules/
+    # .yarn/bower_components = JS) — census: read-side noise, zero value.
+    for d in (
+        ".git",
+        ".venv",
+        "site-packages",
+        "node_modules",
+        "__pycache__",
+        ".yarn",
+        "bower_components",
+        "extern",
+        "third_party",
+    ):
         assert d in _EXCLUDED_DIRS, f"{d!r} must be blocklisted (security / index-bloat invariant)"
 
 
@@ -124,11 +180,20 @@ def test_include_extensions_narrow_ok():
     assert cfg.include_extensions == [".py"]
 
 
+def test_include_extensions_accepts_widened_allowlist():
+    """ADR 0021 T1: the ceiling now admits text/config + code extensions.
+    ``.rst`` (once rejected) and ``.rs`` (ceiling-only opt-in) are both
+    accepted — a YAML overlay can name any ALLOWED_EXTENSIONS member."""
+    cfg = DiscoveryScopeConfig(include_extensions=[".py", ".rst", ".toml", ".rs"])
+    assert cfg.include_extensions == [".py", ".rst", ".toml", ".rs"]
+
+
 def test_include_extensions_widen_rejected():
-    """Widening the extension allowlist is rejected — the chunker registry
-    can only dispatch on ``ALLOWED_EXTENSIONS``."""
+    """Widening beyond ALLOWED_EXTENSIONS is still rejected — binary/asset
+    extensions are never allowlisted, so junk like ``.png``/``.exe`` can
+    never be widened in (ADR 0021 T1 keeps the allowlist enforcement)."""
     with pytest.raises(ValidationError, match="unsupported extensions"):
-        DiscoveryScopeConfig(include_extensions=[".py", ".rst"])
+        DiscoveryScopeConfig(include_extensions=[".py", ".png", ".exe"])
 
 
 def test_chunking_config_rejects_legacy_by_extension_key():

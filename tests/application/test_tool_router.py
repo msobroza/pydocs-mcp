@@ -164,6 +164,82 @@ def test_references_maps_direction_to_show() -> None:
     assert "Impact of" in out
 
 
+class _FakeLookupWithExt:
+    """A lookup body that echoes a chosen target file extension in the
+    reference-branch extras (``TARGET_EXTENSION_EXTRA``) — enough to drive
+    ToolRouter's honest ``meta.resolution`` mapping (ADR 0021 Decision 6)
+    without the real reference graph or a persisted tree."""
+
+    context_token_budget = 2048
+
+    def __init__(self, ext: str | None) -> None:
+        self._ext = ext
+
+    async def lookup_with_items(self, payload):
+        from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
+
+        return f"refs for {payload.target}", (), {TARGET_EXTENSION_EXTRA: self._ext}
+
+
+def _router_with_lookup(lookup: object) -> ToolRouter:
+    from pydocs_mcp.application.multi_project_search import ProjectServices
+
+    base = make_services()[0]
+    services = (
+        ProjectServices(
+            project=make_project(),
+            docs=base.docs,
+            api=base.api,
+            lookup=lookup,
+            symbol_source=base.symbol_source,
+            overview=base.overview,
+            decisions=base.decisions,
+        ),
+    )
+    return ToolRouter(
+        services=services,
+        envelope=make_envelope(),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+
+
+def _resolution_for(ext: str | None) -> str:
+    router = _router_with_lookup(_FakeLookupWithExt(ext))
+    resp = asyncio.run(router.get_references(ReferencesInput(target="pkg.mod.f")))
+    return resp.meta["resolution"]
+
+
+@pytest.mark.parametrize("ext", [".py", ".md"])
+def test_references_resolution_analyzed_target_is_syntactic(ext: str) -> None:
+    # .py / .md carry a registered analyzer → its declared references flag.
+    assert _resolution_for(ext) == "syntactic"
+
+
+@pytest.mark.parametrize("ext", [".toml", ".js", ".ts", ".c", ".rs", ".yaml", ".json"])
+def test_references_resolution_non_python_target_is_unavailable(ext: str) -> None:
+    # Every T2 text/config + T3 code extension is unregistered → the honest
+    # value never overstates Python's graph (ADR 0021 Decision 6).
+    assert _resolution_for(ext) == "unavailable"
+
+
+def test_references_resolution_unresolvable_extension_is_unavailable() -> None:
+    # A node with no resolvable source extension degrades honestly, not to
+    # a Python default.
+    assert _resolution_for(None) == "unavailable"
+
+
+def test_references_resolution_channel_key_stripped_from_meta() -> None:
+    # The extension channel is internal: only the declared `resolution` field
+    # may reach the wire meta (§2.2), never the TARGET_EXTENSION_EXTRA key.
+    from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
+
+    router = _router_with_lookup(_FakeLookupWithExt(".toml"))
+    meta = asyncio.run(router.get_references(ReferencesInput(target="pkg.mod.f"))).meta
+    assert TARGET_EXTENSION_EXTRA not in meta
+    assert meta["resolution"] == "unavailable"
+
+
 def test_why_raises_service_unavailable_when_capture_disabled() -> None:
     # The shared fakes wire NullDecisionService (capture-disabled deployment);
     # ``get_why`` raises the YAML-anchored error.

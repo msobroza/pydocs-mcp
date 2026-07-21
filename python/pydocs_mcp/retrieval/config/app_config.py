@@ -350,9 +350,26 @@ class AppConfig(BaseSettings):
         """Return the user-config path captured at ``load`` time, if any."""
         return getattr(self, "_effective_user_config_path", None)
 
+    def _effective_extension_scope(self) -> str:
+        """Sorted, deduped union of every discovery scope's ``include_extensions``.
+
+        The digest folded UNCONDITIONALLY into
+        :attr:`ingestion_pipeline_hash` (ADR 0021 7a): multilang-on vs -off
+        deployments index different corpora, so they MUST carry distinct
+        chunk-cache identities. Sorted so the digest is order-independent;
+        unioned across the project + dependency scopes so widening EITHER
+        re-embeds. Comma-joined — the extensions carry their own leading dot,
+        so no separator collision is possible.
+        """
+        discovery = self.extraction.discovery
+        scope = set(discovery.project.include_extensions)
+        scope |= set(discovery.dependency.include_extensions)
+        return ",".join(sorted(scope))
+
     @cached_property
     def ingestion_pipeline_hash(self) -> str:
-        """SHA-256 of embedder identity + ingestion YAML bytes.
+        """SHA-256 of embedder + backend identity + effective extension scope
+        + ingestion YAML bytes.
 
         Used as the ``pipeline_hash`` slot in
         :func:`~pydocs_mcp.models.compute_chunk_content_hash`. Any edit
@@ -408,6 +425,14 @@ class AppConfig(BaseSettings):
         # by one backend kind is meaningless to another (e.g. a future Qdrant).
         # Folding it unconditionally rebuilds the index once on backend switch.
         identity += b"|" + self.search_backend.compute_identity().encode("utf-8")
+        # Extension-scope fold (ADR 0021 7a): mix the effective include-extension
+        # set in UNCONDITIONALLY — like the backend fold above, NOT gated on the
+        # YAML bytes the way the multi-vector fold below is. Gating it would keep
+        # the default-install hash stable and thereby DEFEAT the multilang-on/off
+        # identity separation this fold exists to create: opting extra extensions
+        # in (or the widened default itself) MUST re-embed by design. Stock
+        # deployments take a deliberate one-time re-embed on upgrade.
+        identity += b"|" + self._effective_extension_scope().encode("utf-8")
         # Late-interaction fold (Task 13 / Decision G): only mix the
         # LateInteractionConfig identity in when the active YAML actually
         # references the ``embed_chunks_multi_vector`` stage. Gating on the

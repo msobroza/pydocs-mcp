@@ -121,6 +121,7 @@ include = ["pydocs_eval*"]
 "pydocs_eval.optimize.artifacts" = ["*.md"]
 "pydocs_eval.optimize.configs" = ["*.yaml"]
 "pydocs_eval.trajectory.configs" = ["*.yaml"]
+"pydocs_eval.campaign.overlays" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

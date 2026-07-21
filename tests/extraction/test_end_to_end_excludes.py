@@ -15,6 +15,7 @@ surface through the real composition root (AC-26).
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -61,13 +62,27 @@ def _write_pyproject(
     exclude_dirs: list[str] | None = None,
     dependencies: tuple[str, ...] = (),
 ) -> None:
-    """(Re)write the project's own pyproject.toml — the TOML surface."""
+    """(Re)write the project's own pyproject.toml — the TOML surface.
+
+    ADR 0021 T1 widened the default include_extensions to cover ``.toml``,
+    so pyproject.toml is now an indexed file whose mtime feeds the
+    ``(path, mtime)`` package fingerprint. These tests isolate the
+    exclude-dirs *fold*, not pyproject-as-content, so we pin the file's
+    mtime across rewrites — the exclude info enters the hash via the fold
+    digest, never via mtime noise from re-emitting the TOML.
+    """
+    pyproject = root / "pyproject.toml"
+    # hash_files keys on st_mtime_ns — preserve nanosecond precision so the
+    # rewrite is invisible to the (path, mtime) fingerprint.
+    preserved_ns = pyproject.stat().st_mtime_ns if pyproject.exists() else None
     deps = ", ".join(f'"{d}"' for d in dependencies)
     text = f'[project]\nname = "e2e-excl"\nversion = "0.1.0"\ndependencies = [{deps}]\n'
     if exclude_dirs is not None:
         entries = ", ".join(f'"{e}"' for e in exclude_dirs)
         text += f"\n[tool.pydocs-mcp]\nexclude_dirs = [{entries}]\n"
-    (root / "pyproject.toml").write_text(text, encoding="utf-8")
+    pyproject.write_text(text, encoding="utf-8")
+    if preserved_ns is not None:
+        os.utime(pyproject, ns=(preserved_ns, preserved_ns))
 
 
 def _make_worked_example_tree(root: Path) -> None:
@@ -240,9 +255,10 @@ async def test_ac18_widen_and_reindex_removes_previously_indexed_rows(
     assert _has_component(_chunk_modules(db_path), "fixtures")
     assert _has_component(_member_modules(db_path), "fixtures")
 
-    # Widen: exclude fixtures. Only pyproject.toml changes — it is not a
-    # discovered file (.toml is outside include_extensions), so the path
-    # set moves ONLY because discovery now prunes fixtures/.
+    # Widen: exclude fixtures. pyproject.toml's content changes but its
+    # mtime is pinned by _write_pyproject (ADR 0021 T1 made .toml an indexed
+    # file), so the (path, mtime) fingerprint moves ONLY because discovery
+    # now prunes fixtures/.
     _write_pyproject(tmp_path, exclude_dirs=["fixtures"])
     stats2 = await _index_run(tmp_path, db_path)
     assert stats2.project_indexed is True, "cached-skip path must NOT be taken"

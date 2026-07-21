@@ -4,8 +4,14 @@ The PROJECT index is a pure function of ``(repo files at base_commit, embedder +
 ingestion config)`` but the product cache key is path-based
 (``dirname + md5(abs_path)[:10]``, ``db.cache_path_for_project``). So rather than
 change the product, the runner makes the *path* canonical: one pristine checkout
-per ``(repo, base_commit)`` at ``<cache_root>/<repo_slug>@<commit>/``, indexed
-ONCE with ``--skip-deps --no-inspect``. The path-derived key is then stable, and
+per ``(repo, base_commit, scope_id)`` at
+``<cache_root>/<repo_slug>@<commit>@<scope_id>/``, indexed ONCE with
+``--skip-deps --no-inspect``. The ``scope_id`` component (ADR 0021 6) rides the
+checkout PATH because the product derives the db name purely from that path
+(``cache_path_for_project``), so multilang-on vs -off need distinct paths to get
+distinct ``.db`` slots — otherwise ``index_checkout``'s ``db.exists()``
+short-circuit would silently reuse a Python-only index for a multilang cell. The
+path-derived key is then stable, and
 before a rollout's serve starts the runner pre-seeds that rollout workspace's own
 cache slot by COPYING the ``.db``/``.tq`` pair to the workspace-path-derived key —
 computed by calling the product's ``cache_path_for_project``, never by re-deriving
@@ -36,6 +42,11 @@ from pathlib import Path
 _INDEX_FLAGS = ("--skip-deps", "--no-inspect")
 _SERVE_MODULE = ("-m", "pydocs_mcp", "index")
 
+# Hex chars of the product pipeline hash used as the default scope-identity slug
+# component (ADR 0021 6). Long enough that on/off scopes never collide; short
+# enough to keep the checkout dir name readable.
+_SCOPE_ID_LEN = 16
+
 
 def repo_slug(repo: str) -> str:
     """``owner/name`` → ``owner__name`` (SWE-bench dir convention, no slashes).
@@ -51,11 +62,42 @@ def repo_slug(repo: str) -> str:
     return repo.replace("/", "__")
 
 
-def canonical_checkout_dir(cache_root: Path, repo: str, commit: str) -> Path:
-    """The pristine-checkout path for ``(repo, commit)``: ``<root>/<slug>@<commit>/``."""
+def resolve_scope_id(scope_id: str | None) -> str:
+    """Return ``scope_id`` verbatim, or derive it from the active product config.
+
+    The canonical index slot MUST differ whenever the built index would differ —
+    above all across the multilang extension-scope fold (ADR 0021 7a), so
+    ``index_checkout``'s ``db.exists()`` short-circuit can never reuse a
+    Python-only index for a multilang cell. The default reads the SAME
+    ``AppConfig.load()`` surface the index subprocess resolves (env-driven), so
+    the runner's slug matches what the build produces; a truncated pipeline hash
+    is the cheapest honest identity that already folds embedder + backend + scope
+    (ADR 0021 6). ``pydocs_mcp`` stays a function-local import (eval floor).
+    """
+    if scope_id is not None:
+        return scope_id
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    return AppConfig.load().ingestion_pipeline_hash[:_SCOPE_ID_LEN]
+
+
+def canonical_checkout_dir(
+    cache_root: Path, repo: str, commit: str, *, scope_id: str | None = None
+) -> Path:
+    """The pristine-checkout path for ``(repo, commit)`` at one index scope:
+    ``<root>/<slug>@<commit>@<scope_id>/``.
+
+    The ``scope_id`` component (ADR 0021 6/7b) separates multilang-on and -off
+    index slots. It MUST ride the checkout PATH — not the ``.db`` name — because
+    the product derives the db name purely from the checkout path
+    (``cache_path_for_project``), so two scopes need two distinct checkout paths
+    to get two distinct db slots (both buildable side by side). The cost is a
+    per-scope re-clone of the same source; correctness over disk. ``scope_id``
+    defaults to the active product pipeline identity.
+    """
     if not commit:
         raise ValueError(f"commit must be a non-empty sha, got {commit!r}")
-    return cache_root / f"{repo_slug(repo)}@{commit}"
+    return cache_root / f"{repo_slug(repo)}@{commit}@{resolve_scope_id(scope_id)}"
 
 
 def build_index_command(checkout_dir: Path, python: Path, cache_root: Path) -> list[str]:
@@ -110,6 +152,7 @@ def create_checkout(
     commit: str,
     clone_url: str,
     shallow: bool = False,
+    scope_id: str | None = None,
     git: Callable[[list[str]], None] | None = None,
 ) -> Path:
     """Clone ``clone_url`` to the canonical dir and check out ``commit`` (idempotent).
@@ -117,13 +160,14 @@ def create_checkout(
     A dir that already carries a ``.git`` is treated as built and returned as-is,
     so a re-run (or a resumed pre-build) never re-clones. ``shallow`` adds a
     blobless filter (``--filter=blob:none``) — capable of large repos without a
-    full history download while still reaching an arbitrary ``commit``. The
-    ``git`` seam is injected so unit tests can script it (``None`` ⇒ the real
-    subprocess runner); the integration test passes the real runner against a
-    tiny local fixture repo.
+    full history download while still reaching an arbitrary ``commit``.
+    ``scope_id`` selects the index-scope slot (ADR 0021 6): distinct scopes clone
+    into distinct dirs so both are buildable side by side. The ``git`` seam is
+    injected so unit tests can script it (``None`` ⇒ the real subprocess runner);
+    the integration test passes the real runner against a tiny local fixture repo.
     """
     run_git = git if git is not None else _run
-    dest = canonical_checkout_dir(cache_root, repo, commit)
+    dest = canonical_checkout_dir(cache_root, repo, commit, scope_id=scope_id)
     if (dest / ".git").is_dir():
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)

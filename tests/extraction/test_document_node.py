@@ -42,7 +42,11 @@ def _make_node(**overrides) -> DocumentNode:
 
 
 def test_node_kind_values_complete():
-    """All 11 NodeKind values present with lowercase ``.value`` strings."""
+    """All 12 NodeKind values present with lowercase ``.value`` strings.
+
+    ``text_section`` joined the enum with ADR 0021 T2 (the language-neutral
+    TextSectionChunker for the text/config extension set).
+    """
     expected = {
         "package",
         "subpackage",
@@ -55,10 +59,11 @@ def test_node_kind_values_complete():
         "notebook_markdown_cell",
         "notebook_code_cell",
         "code_example",
+        "text_section",
     }
     actual = {k.value for k in NodeKind}
     assert actual == expected
-    assert len(NodeKind) == 11
+    assert len(NodeKind) == 12
     # StrEnum: values must equal their string form (lowercase)
     for k in NodeKind:
         assert k.value == k.value.lower()
