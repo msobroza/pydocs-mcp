@@ -433,7 +433,12 @@ class LookupService:
         tree = await self.tree_svc.get_tree(package, module)
         if tree is None:
             raise NotFoundError(f"no tree stored for '{package}.{module}'")
-        return json.dumps(tree.to_pageindex_json(), indent=2), _outline_items(tree), {}
+        # Honest-resolution channel (ADR 0021 Decision 6): module targets reach
+        # get_references through THIS path, so an extras-free return would map
+        # a .py module to "unavailable" (wire-verified regression). Thread the
+        # module file's own extension; non-reference consumers strip the key.
+        extras = {TARGET_EXTENSION_EXTRA: _target_extension(tree.source_path)}
+        return json.dumps(tree.to_pageindex_json(), indent=2), _outline_items(tree), extras
 
     async def _symbol_lookup(
         self,
@@ -458,14 +463,15 @@ class LookupService:
             raise NotFoundError(f"'{target}' not found in {module}")
 
         # get_references honest-resolution channel (ADR 0021 Decision 6): the
-        # target's own file extension, threaded to ToolRouter through the
-        # reference-only branches below. Only get_references reaches impact /
-        # reference-graph shows, so the tree/context branches stay extras-free.
+        # target's own file extension, threaded to ToolRouter on EVERY branch —
+        # get_references reaches the tree branch too (a module target renders
+        # the outline; wire-verified), so an extras-free tree return would map
+        # a .py module to "unavailable". Non-reference consumers strip the key.
         ref_extras: dict[str, Any] = {TARGET_EXTENSION_EXTRA: _target_extension(node.source_path)}
 
         # Tree / default → render node's page-index JSON (+ §3.3 outline rows).
         if show in _TREE_SHOWS:
-            return json.dumps(node.to_pageindex_json(), indent=2), _outline_items(node), {}
+            return json.dumps(node.to_pageindex_json(), indent=2), _outline_items(node), ref_extras
 
         # Ranked blast-radius — multi-hop REVERSE traversal, its own return
         # shape (ranked ImpactNodes) + formatter, so it can't ride _REF_GETTERS.

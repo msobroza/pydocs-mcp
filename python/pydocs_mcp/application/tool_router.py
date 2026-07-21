@@ -166,10 +166,19 @@ class ToolRouter:
             show=_DEPTH_TO_SHOW[payload.depth],
             project=payload.project,
         )
+
+        async def _symbol_body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+            # The lookup tree branch now threads TARGET_EXTENSION_EXTRA on every
+            # return (ADR 0021 Decision 6 — get_references needs it for module
+            # targets). That channel is get_references-only; strip it here so
+            # get_symbol's meta stays exactly its pinned field set.
+            text, items, extras = await self.lookup_router._lookup_body(body)
+            return text, items, {k: v for k, v in extras.items() if k != TARGET_EXTENSION_EXTRA}
+
         return await self.envelope.wrap(
             "get_symbol",
             self._meta_project(payload.project),
-            lambda: self.lookup_router._lookup_body(body),
+            _symbol_body,
         )
 
     async def get_references(self, payload: ReferencesInput) -> ToolResponse:

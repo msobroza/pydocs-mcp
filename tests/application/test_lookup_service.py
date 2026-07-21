@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pydocs_mcp.application.lookup_service import LookupService
+from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA, LookupService
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     NotFoundError,
@@ -570,7 +570,10 @@ async def test_lookup_with_items_emits_contract_rows_for_outline(
         LookupInput(target="fastapi.routing.APIRouter", show="tree")
     )
     assert "APIRouter" in body
-    assert extras == {}
+    # Re-pinned (multilang verification finding #1): the tree branch now
+    # threads the honest-resolution channel on every return; ToolRouter strips
+    # it for get_symbol, so the wire meta is unchanged (pinned separately).
+    assert extras == {TARGET_EXTENSION_EXTRA: ".py"}
     assert items == (
         {
             "node_id": "fastapi.routing.APIRouter",
@@ -649,6 +652,48 @@ async def test_reference_branch_carries_non_python_target_extension(
         LookupInput(target="conf.section", show="callers")
     )
     assert extras == {TARGET_EXTENSION_EXTRA: ".toml"}
+
+
+@pytest.mark.asyncio
+async def test_tree_branch_carries_target_extension(
+    package_lookup_mock: MagicMock,
+) -> None:
+    """Regression (multilang verification finding #1): get_references reaches
+    the TREE branch for module targets — an extras-free tree return made a
+    ``.py`` module map to resolution 'unavailable' instead of 'syntactic'.
+    Every ``_symbol_lookup`` branch must thread TARGET_EXTENSION_EXTRA; the
+    non-reference consumers strip it router-side."""
+    from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
+
+    fake_tree = MagicMock()
+    fake_tree.source_path = "pkg/mod.py"
+    fake_tree.qualified_name = "pkg.mod"
+    fake_tree.kind = "module"
+    fake_tree.start_line = 1
+    fake_tree.end_line = 10
+    fake_tree.children = []
+    fake_tree.to_pageindex_json = MagicMock(return_value={})
+    tree_svc = _tree_svc_for_module("pkg.mod", fake_tree)
+
+    svc = LookupService(package_lookup=package_lookup_mock, tree_svc=tree_svc, ref_svc=_null_ref())
+    _body, _items, extras = await svc.lookup_with_items(LookupInput(target="pkg.mod", show="tree"))
+    assert extras == {TARGET_EXTENSION_EXTRA: ".py"}
+
+    # The symbol-level tree branch threads the channel too (finding #1 covered
+    # both extras-free returns: _module_lookup above, _symbol_lookup here).
+    fake_node = MagicMock()
+    fake_node.kind = "class"
+    fake_node.source_path = "pkg/mod.py"
+    fake_node.qualified_name = "pkg.mod.Klass"
+    fake_node.start_line = 2
+    fake_node.end_line = 8
+    fake_node.children = []
+    fake_node.to_pageindex_json = MagicMock(return_value={})
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    _body, _items, extras = await svc.lookup_with_items(
+        LookupInput(target="pkg.mod.Klass", show="tree")
+    )
+    assert extras == {TARGET_EXTENSION_EXTRA: ".py"}
 
 
 # ── I8 dispatch table + I9 Null-services contract ────────────────────────
