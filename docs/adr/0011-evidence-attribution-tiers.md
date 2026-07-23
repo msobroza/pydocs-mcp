@@ -1,6 +1,6 @@
 # ADR 0011 — Evidence attribution: surfaced → inspected → used tiers with first-touch credit
 
-**Status:** Accepted — fixture-validation results pending · **Date:** 2026-07-18 · **Phase:** 2
+**Status:** Accepted · **Date:** 2026-07-18 (validated 2026-07-21) · **Phase:** 2
 
 - **Decision area:** D3 of the Phase 2 owner spec ("evidence attribution and
   gold-diff parsing")
@@ -234,19 +234,59 @@ tier-classification errors the fixtures exist to catch. Below 0.90 the
 algorithm is revised (or option (c) reconsidered, if the failures are
 first-touch misassignments) before any metric ships.
 
-## Validation results (to be completed)
+## Validation results
 
-Committed before labeling; results land here after the fixture exercise.
+Run 2026-07-21 over the 12 captured real rollouts
+(`benchmarks/tests/trajectory/fixtures/trajectories/real/`, ADR 0009 capture,
+`claude-haiku-4-5-20251001`, `--max-turns 15`) against the independent
+model-visible hand labels, via the one documented command
+(`compare_labels.validate_directory`).
 
 - **Threshold:** ≥ 0.90 exact agreement (used-file set AND first-surface
   credit, per-trajectory macro-average).
-- Trajectories labeled: _pending_
-- Used-file-set agreement: _pending_
-- First-surface credit agreement: _pending_
-- First-touch misassignments observed (option-(c) trigger): _pending_
-- Budget-elided surfaced credit observed (search items-beyond-text
-  over-count; text-side re-scope trigger): _pending_
-- Disposition (ship / revise / reconsider weighting): _pending_
+- **Trajectories labeled:** 12 (4 edit tasks × 3 samples; all `resolved`).
+- **Used-file-set agreement (macro):** **1.000** (12/12 exact).
+- **First-surface credit agreement (macro):** **1.000** (12/12 exact).
+- **First-touch misassignments observed (option-(c) trigger):** 0. No gold
+  file was first surfaced by a hit-list tool and only later re-surfaced by a
+  content tool, so first-touch never misassigned credit. Option (c) stays
+  deferred — no real-trajectory evidence justifies weighted multi-tool credit.
+- **Budget-elided surfaced credit (search items-beyond-text over-count;
+  text-side re-scope trigger):** 0. In all 11 MCP rollouts `search_codebase`
+  (seq 1) rendered the buggy function body in the *visible text* (the gold
+  line was on-screen), so first-touch credit to search matched the text-side
+  label; no credit went to a row the token budget elided. The over-count bias
+  is real by construction but did not bite this corpus — the surfaced tier is
+  **not** re-scoped to the text side.
+- **Disposition: SHIP.** Both agreements meet the bar; the qualifier is
+  dropped and the attributor ships as specified.
+
+**One algorithm revision made to reach these numbers (documented per the
+gate's revision rule).** The first gate run scored 0.917/0.917 (11/12) — the
+lone 0-MCP rollout (`3c63ee67…`) disagreed at 0.000/0.000. Root cause was a
+**systematic path-normalization error**, exactly the failure class the gate
+exists to catch, not a wrong label: that rollout's one content-surfacing event
+was a loop-side `Read` whose `file_path` the CLI canonicalized to
+`/private/var/folders/…/tmp.X/widgetlib/calculator.py`, while the rollout
+driver recorded `workspace_root` under the macOS firmlink alias
+`/var/folders/…/tmp.X`. `/var` is a symlink into `/private/var`, so the two
+denote the same location, but the normalizer's lexical prefix check judged the
+in-workspace file a dependency and excluded it from gold matching — leaving the
+rollout with an empty surfacing set. The label was verified factually correct
+against the trace (content first rendered at that `Read`; the patch edits that
+file) before any code change. Fix: `path_normalizer` now folds the macOS
+firmlink prefixes (`/private/var`→`/var`, `/private/tmp`→`/tmp`,
+`/private/etc`→`/etc`) purely lexically on both sides of the comparison —
+byte-identical on every platform (R6), a no-op off macOS — regression-tested by
+`test_macos_private_var_firmlink_relativizes_against_var_workspace` and its
+symmetric partner. A **counter-finding surfaced during the diagnosis and was
+deliberately NOT "fixed":** every non-`file_path`-keyed `Read` in the corpus
+(11 total: 10 `path`-keyed, 1 `file`-keyed) was rejected by the CLI with
+`InputValidationError` (`is_error: true`) and rendered no content — Haiku
+emitting the wrong parameter name. Teaching the attributor those key aliases
+would have fabricated surfacings for Reads that never put content in front of
+the model; only `file_path` is the valid Read parameter, so the attributor
+correctly ignores them. Re-measured after the one fix: 1.000/1.000.
 
 ## Consequences
 

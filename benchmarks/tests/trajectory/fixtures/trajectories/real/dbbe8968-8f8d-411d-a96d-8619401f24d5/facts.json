@@ -1,0 +1,46 @@
+{
+  "cost_usd": 0.04876,
+  "final_patch_files": [
+    "widgetlib/calculator.py"
+  ],
+  "gold_f2p": [
+    "tests/test_calculator.py::test_average_of_three",
+    "tests/test_calculator.py::test_average_single"
+  ],
+  "gold_files": [
+    "widgetlib/calculator.py"
+  ],
+  "gold_p2p": [
+    "tests/test_calculator.py::test_add",
+    "tests/test_calculator.py::test_multiply",
+    "tests/test_calculator.py::test_average_empty_raises"
+  ],
+  "instance_id": "widgetlib__calculator-average",
+  "patch_bytes": 410,
+  "report": {
+    "widgetlib__calculator-average": {
+      "patch_successfully_applied": true,
+      "resolved": true,
+      "tests_status": {
+        "FAIL_TO_PASS": {
+          "failure": [],
+          "success": [
+            "tests/test_calculator.py::test_average_of_three",
+            "tests/test_calculator.py::test_average_single"
+          ]
+        },
+        "PASS_TO_PASS": {
+          "failure": [],
+          "success": [
+            "tests/test_calculator.py::test_add",
+            "tests/test_calculator.py::test_average_empty_raises",
+            "tests/test_calculator.py::test_multiply"
+          ]
+        }
+      }
+    }
+  },
+  "trajectory_id": "dbbe8968-8f8d-411d-a96d-8619401f24d5",
+  "turn_cap": 15,
+  "workspace_root": "/var/folders/k4/j07ld9p97c95csgxwlj_bldw0000gn/T/tmp.8iT7AhuZzy"
+}

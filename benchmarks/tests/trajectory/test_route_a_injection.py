@@ -17,9 +17,14 @@ from pydocs_eval.trajectory.rollout import (
 
 
 def test_trace_env_map_omits_descriptions_by_default() -> None:
-    """No descriptions_path ⇒ byte-identical to the pre-Route-A env (correlation only)."""
+    """No descriptions_path ⇒ only the capture-enable + correlation vars (no Route-A key)."""
     env = trace_env_map(trajectory_id="t", trace_dir=Path("/d"))
-    assert env == {"PYDOCS_TRACE__TRAJECTORY_ID": "t", "PYDOCS_TRACE__DIR": "/d"}
+    assert env == {
+        "PYDOCS_TRACE__ENABLED": "true",
+        "PYDOCS_TRACE__TRAJECTORY_ID": "t",
+        "PYDOCS_TRACE__DIR": "/d",
+    }
+    assert "PYDOCS_SERVE__DESCRIPTIONS_PATH" not in env
 
 
 def test_trace_env_map_injects_descriptions_path() -> None:

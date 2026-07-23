@@ -271,3 +271,46 @@ real `ClaudeAgentRunner` as the spawn seam; inspect
 `<trace-dir>/<trajectory_id>/stream.jsonl` for the usage shape and the
 server-side trace header for the injected id. Full recipe + cost log:
 `benchmarks/tests/trajectory/fixtures/README.md` ("Real trajectories — BLOCKED").
+
+## 2026-07-21 — first real fixture rollout (usage limit lifted)
+
+The 2026-07-19 headless `claude` usage limit reset as scheduled. A probe
+(`claude -p "ok" --model claude-haiku-4-5-20251001 --max-turns 1
+--output-format json`) returned `is_error:false` at `total_cost_usd`
+$0.0424925, so capped fixture rollouts ran. CLI version stamped live: **claude
+2.1.76 (Claude Code)**. Both previously-blocked measurements are now settled
+against a real capture (trajectory `3c63ee67-3555-4505-85c6-88f6443f04d9`,
+task `calculator_average`).
+
+### `.mcp.json` `env` channel end-to-end — VERIFIED (ADR 0009 action item 4)
+
+The server-side trace file
+`<trace-dir>/3c63ee67-3555-4505-85c6-88f6443f04d9/server_events.jsonl` exists,
+and its first line is the `trace_header` carrying the injected id verbatim:
+
+```json
+{"_event":"trace_header","artifact_hash":"eeb66ef5…","mcp_version":"1.28.1",
+ "pydocs_mcp_version":"0.5.1","schema_version":1,
+ "trajectory_id":"3c63ee67-3555-4505-85c6-88f6443f04d9","ts":1784603447.40}
+```
+
+The `trajectory_id` matches the runner-minted UUID passed as `--session-id` and
+injected via the `.mcp.json` server `env` map — proving the closed-source Claude
+Code spawner passes `PYDOCS_TRACE__*` through to the served `pydocs_mcp`, which
+opened the trace and wrote the header. **Gap found + fixed the same run:** the
+driver's `trace_env_map` emitted only `PYDOCS_TRACE__TRAJECTORY_ID` +
+`PYDOCS_TRACE__DIR`, but `TraceConfig.enabled` defaults `False`, so the recorder
+never opened; the env map now also sets `PYDOCS_TRACE__ENABLED=true` (regression
+test `test_trace_env_map_enables_capture_through_app_config`).
+
+### Stream-shape (per-block usage duplication) — ANSWERED: YES, it duplicates
+
+The `-p --output-format stream-json` **stdout** reproduces the same per-block
+`usage` duplication as the on-disk transcript. In this capture, 21 `assistant`
+records collapse to **8 distinct `message.id`s**; every id recurs 2–3×, and each
+duplicate carries **byte-identical** usage (e.g. `msg_011CdET6xkEpVcEewe8HZoUV`
+appears 3× with the same `{input:10, output:3, cache_read:0, cache_creation:13000}`).
+Summing usage across raw `assistant` records would double/triple-count.
+Therefore the Task 2 `stream_reader.py` dedupe by `message.id` **is
+load-bearing on the stdout channel**, not merely defensive — confirmed on real
+data, not inferred from the transcript.

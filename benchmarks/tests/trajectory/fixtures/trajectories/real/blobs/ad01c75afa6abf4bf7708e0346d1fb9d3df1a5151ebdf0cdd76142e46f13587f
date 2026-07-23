@@ -1,0 +1,10 @@
+diff --git a/widgetlib/inventory.py b/widgetlib/inventory.py
+index 2a527d1..fa391c8 100644
+--- a/widgetlib/inventory.py
++++ b/widgetlib/inventory.py
+@@ -25,4 +25,4 @@ class Inventory:
+ 
+     def total_value(self) -> float:
+         """Return the total monetary value of all stock (Σ quantity × unit_price)."""
+-        return float(sum(self._quantities.values()))
++        return float(sum(self._quantities[sku] * self._prices[sku] for sku in self._quantities))

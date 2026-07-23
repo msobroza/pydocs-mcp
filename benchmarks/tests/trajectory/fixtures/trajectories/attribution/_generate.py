@@ -6,11 +6,11 @@ schema-v1 conformant by construction. Committed as IMMUTABLE raw fixtures; this
 script is regeneration provenance only and is NOT run by the test suite (the
 tests read + validate the committed files).
 
-Real hand-labeled trajectories do not exist yet — headless ``claude`` is
-usage-limited (see ``../../README.md`` §"Real trajectories — BLOCKED"). These
-six synthetic-but-realistic merged trajectories exercise every attribution path
-so the attributor, every metric, and the ``compare_labels`` agreement tooling
-are validated end-to-end in the meantime:
+Twelve real hand-labeled trajectories now live in ``../real/`` (captured
+2026-07-21; see ``../../README.md`` §"Real trajectories"). These six
+synthetic-but-realistic merged trajectories remain the deterministic per-path
+coverage: they exercise every attribution path so the attributor, every metric,
+and the ``compare_labels`` agreement tooling stay validated end-to-end:
 
 1. ``search_surfaces_gold``      — chunk rows (spans) surface + inspect gold → used, hunk overlap.
 2. ``grep_hitlist_surfacing``    — grep files_with_matches surfaces (not inspected); read_file inspects; first-touch → grep.

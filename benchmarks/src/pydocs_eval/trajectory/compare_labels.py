@@ -6,13 +6,12 @@ labeled from the model-visible (blob-dereferenced) transcript, and the algorithm
 is compared against them on (i) the used-file set and (ii) first-surface credit,
 per-trajectory macro-averaged, at a committed **≥ 0.90 exact-agreement** bar.
 
-This module implements the measurement now so the real validation runs as ONE
-documented command the moment ``fixtures/real/labels`` exists (see the module
-``validate_trajectory_dir`` / ``validate_directory`` orchestrators). Real labels
-do not exist yet — headless ``claude`` is usage-limited (see
-``benchmarks/tests/trajectory/fixtures/README.md`` §"Real trajectories —
-BLOCKED"); the synthetic attribution fixtures exercise the tooling in the
-meantime.
+This module implements the measurement (see the ``validate_trajectory_dir`` /
+``validate_directory`` orchestrators). The real validation ran 2026-07-21 over
+the 12 captured rollouts under
+``benchmarks/tests/trajectory/fixtures/trajectories/real/`` and passed at
+1.000/1.000 (used-file and first-surface macro agreement) — the numbers that
+filled ADR 0011's Validation results and dropped its status qualifier.
 
 Two agreement scores plus one directional tally:
 
@@ -204,7 +203,9 @@ def _require_str(meta: dict[str, Any], key: str) -> str:
 def validate_directory(root: Path) -> AggregateAgreement:
     """Run the whole validation gate over every trajectory folder under ``root``.
 
-    The ONE documented command (once ``fixtures/real/labels`` exists):
+    The ONE documented command (pinned over the committed real corpus by
+    ``test_compare_labels.test_real_corpus_gate_is_suite_enforced`` — the
+    benchmarks suite is the documented local gate, not a CI workflow):
 
         PYTHONPATH=benchmarks/src python -c \\
           "from pathlib import Path; from pydocs_eval.trajectory.compare_labels \\

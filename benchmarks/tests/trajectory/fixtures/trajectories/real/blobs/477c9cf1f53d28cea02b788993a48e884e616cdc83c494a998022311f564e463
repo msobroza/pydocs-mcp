@@ -1,0 +1,41 @@
+diff --git a/__pycache__/conftest.cpython-38-pytest-8.3.5.pyc b/__pycache__/conftest.cpython-38-pytest-8.3.5.pyc
+new file mode 100644
+index 0000000..b723c60
+Binary files /dev/null and b/__pycache__/conftest.cpython-38-pytest-8.3.5.pyc differ
+diff --git a/tests/__pycache__/test_textutil.cpython-38-pytest-8.3.5.pyc b/tests/__pycache__/test_textutil.cpython-38-pytest-8.3.5.pyc
+new file mode 100644
+index 0000000..56ac972
+Binary files /dev/null and b/tests/__pycache__/test_textutil.cpython-38-pytest-8.3.5.pyc differ
+diff --git a/widgetlib/__pycache__/__init__.cpython-38.pyc b/widgetlib/__pycache__/__init__.cpython-38.pyc
+new file mode 100644
+index 0000000..5004e4a
+Binary files /dev/null and b/widgetlib/__pycache__/__init__.cpython-38.pyc differ
+diff --git a/widgetlib/__pycache__/calculator.cpython-38.pyc b/widgetlib/__pycache__/calculator.cpython-38.pyc
+new file mode 100644
+index 0000000..affe995
+Binary files /dev/null and b/widgetlib/__pycache__/calculator.cpython-38.pyc differ
+diff --git a/widgetlib/__pycache__/inventory.cpython-38.pyc b/widgetlib/__pycache__/inventory.cpython-38.pyc
+new file mode 100644
+index 0000000..ca5a0e4
+Binary files /dev/null and b/widgetlib/__pycache__/inventory.cpython-38.pyc differ
+diff --git a/widgetlib/__pycache__/pricing.cpython-38.pyc b/widgetlib/__pycache__/pricing.cpython-38.pyc
+new file mode 100644
+index 0000000..877766e
+Binary files /dev/null and b/widgetlib/__pycache__/pricing.cpython-38.pyc differ
+diff --git a/widgetlib/__pycache__/textutil.cpython-38.pyc b/widgetlib/__pycache__/textutil.cpython-38.pyc
+new file mode 100644
+index 0000000..13be7ce
+Binary files /dev/null and b/widgetlib/__pycache__/textutil.cpython-38.pyc differ
+diff --git a/widgetlib/textutil.py b/widgetlib/textutil.py
+index 09e3f8e..432ff35 100644
+--- a/widgetlib/textutil.py
++++ b/widgetlib/textutil.py
+@@ -13,7 +13,7 @@ def slugify(title: str) -> str:
+     Non-alphanumeric runs collapse to a single hyphen; leading and trailing
+     hyphens are stripped.
+     """
+-    slug = _NON_ALNUM.sub("-", title).strip("-")
++    slug = _NON_ALNUM.sub("-", title).strip("-").lower()
+     return slug
+ 
+ 
