@@ -204,6 +204,29 @@ def test_capture_git_diff_excludes_python_bytecode(tmp_path) -> None:
     assert ".pyc" not in diff
 
 
+def test_capture_git_diff_neutralizes_workspace_fsmonitor(tmp_path) -> None:
+    # The workspace repo is agent-written, so its repo-local config is
+    # untrusted: core.fsmonitor names an executable git runs on every index
+    # refresh (add/diff). Capture must neutralize repo-local config so a
+    # workspace-controlled program never executes during patch capture
+    # (defense-in-depth for untrusted-workspace topologies).
+    repo = _git_repo(tmp_path / "repo")
+    sentinel = tmp_path / "fsmonitor-ran"
+    hook = tmp_path / "evil-fsmonitor.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(
+        ["git", "config", "core.fsmonitor", str(hook)],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+    )
+    (repo / "tracked.py").write_text("x = 2\n", encoding="utf-8")
+    diff = capture_git_diff(repo)
+    assert "tracked.py" in diff and "+x = 2" in diff
+    assert not sentinel.exists()
+
+
 # --- prediction formats (golden-pinned) -------------------------------------
 
 

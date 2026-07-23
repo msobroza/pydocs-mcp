@@ -203,7 +203,9 @@ def _require_str(meta: dict[str, Any], key: str) -> str:
 def validate_directory(root: Path) -> AggregateAgreement:
     """Run the whole validation gate over every trajectory folder under ``root``.
 
-    The ONE documented command (once ``fixtures/real/labels`` exists):
+    The ONE documented command (pinned over the committed real corpus by
+    ``test_compare_labels.test_real_corpus_gate_is_suite_enforced`` — the
+    benchmarks suite is the documented local gate, not a CI workflow):
 
         PYTHONPATH=benchmarks/src python -c \\
           "from pathlib import Path; from pydocs_eval.trajectory.compare_labels \\

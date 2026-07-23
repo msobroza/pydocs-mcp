@@ -281,7 +281,7 @@ byte-identical on every platform (R6), a no-op off macOS — regression-tested b
 `test_macos_private_var_firmlink_relativizes_against_var_workspace` and its
 symmetric partner. A **counter-finding surfaced during the diagnosis and was
 deliberately NOT "fixed":** every non-`file_path`-keyed `Read` in the corpus
-(11 `path`-keyed, 1 `file`-keyed) was rejected by the CLI with
+(11 total: 10 `path`-keyed, 1 `file`-keyed) was rejected by the CLI with
 `InputValidationError` (`is_error: true`) and rendered no content — Haiku
 emitting the wrong parameter name. Teaching the attributor those key aliases
 would have fabricated surfacings for Reads that never put content in front of

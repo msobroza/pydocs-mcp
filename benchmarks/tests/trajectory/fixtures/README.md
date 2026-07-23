@@ -99,10 +99,11 @@ PYTHONPATH=benchmarks/src python \
 ```
 
 Consumed by `test_attribution.py`, `test_metrics.py`, and
-`test_compare_labels.py`. They stand in for hand-labeled real trajectories
-(BLOCKED below) so the attributor, the metric library, and the agreement
-tooling are validated end-to-end now; they are NOT a substitute for the ADR 0011
-Validation-results numbers, which still wait on real labels.
+`test_compare_labels.py`. They complement the hand-labeled real trajectories
+(captured 2026-07-21, next section): the synthetic set gives deterministic
+per-path coverage of every attribution rule, while the `real/` corpus supplied
+the ADR 0011 Validation-results numbers (1.000/1.000, pinned by
+`test_compare_labels.py::test_real_corpus_gate_is_suite_enforced`).
 
 ## Real trajectories (Task 5.2–5.4) — CAPTURED 2026-07-21
 
@@ -127,6 +128,15 @@ grants the edit surface while `mcp=True` still attaches the trace-aware
 - **Caps:** `--max-turns 15`; 12 rollouts (4 tasks × 3 samples)
 - **Cost gate:** `total_cost_usd` parsed per result envelope; cumulative stop at
   **$5.00** (never approached).
+- **Version stamps (authoritative reading):** every `events.jsonl` header
+  carries two product-version stamps that disagree: the recorder's
+  self-reported `pydocs_mcp_version: "0.5.1"` (installed package metadata —
+  `pyproject.toml` was 0.5.1 at capture; corroborated by every
+  `server_events.jsonl` trace header) and the caller-declared
+  `run_config.versions.pydocs_mcp: "0.6.0"` (the capture config's label for the
+  nine-tool surface the run exercised, which is on `main` but unreleased). The
+  recorder self-report is the authoritative R2 identity stamp; raw captures are
+  immutable, so the discrepancy is documented here rather than rewritten.
 
 ### Two driver fixes this first live run surfaced
 
@@ -234,5 +244,10 @@ PYTHONPATH=benchmarks/src python -c \
    'benchmarks/tests/trajectory/fixtures/trajectories/real')))))"
 ```
 
-That result fills ADR 0011's Validation-results section; that section and its
-status qualifier stay untouched until this runs on real labels.
+That command ran 2026-07-21 — 1.000/1.000 macro agreement, 0 budget-elided
+credit — and the result filled ADR 0011's Validation-results section and
+dropped its status qualifier. The same gate is now pinned by
+`test_compare_labels.py::test_real_corpus_gate_is_suite_enforced` (exact-pinned,
+not just the ≥ 0.90 bar), so an attributor or normalizer change that regresses
+real-corpus agreement fails the benchmarks suite — the documented local gate —
+instead of rotting silently.

@@ -77,6 +77,15 @@ def test_private_non_firmlink_prefix_not_collapsed():
     assert got.value == "/private/custom/dep/x.py"
 
 
+def test_private_stem_boundary_not_collapsed():
+    # '/private/vardata' shares the '/private/var' stem but is NOT the /var
+    # firmlink; the trailing slash in _MACOS_FIRMLINK_PREFIXES is load-bearing —
+    # without it this would over-fold to '/vardata/...' and mis-relativize.
+    got = normalize_path("/private/vardata/dep/x.py", workspace_root="/var/ws")
+    assert got.gold_matchable is False
+    assert got.value == "/private/vardata/dep/x.py"
+
+
 def test_empty_path_raises():
     with pytest.raises(ValueError, match="empty path"):
         normalize_path("", workspace_root=WS)

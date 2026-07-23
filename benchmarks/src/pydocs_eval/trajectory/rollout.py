@@ -278,6 +278,14 @@ _DIFF_EXCLUDE_PATHSPECS = (
     ":(exclude,glob)**/*.pyo",
 )
 
+# The workspace repo is agent-written, so its repo-local git config is untrusted:
+# a ``core.fsmonitor`` value is an executable git runs on every index refresh
+# (add/diff), and ``core.hooksPath`` redirects hook lookup. ``-c`` overrides beat
+# repo config, so capture never executes a workspace-controlled program; the
+# diff additionally passes ``--no-ext-diff --no-textconv`` to keep
+# ``.gitattributes``-selected external drivers out of the same invocation.
+_GIT_UNTRUSTED_CONFIG_NEUTRALIZERS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=")
+
 
 def capture_git_diff(workspace: Path) -> str:
     """Return the post-rollout unified diff of ``workspace`` (edits + new files).
@@ -286,17 +294,37 @@ def capture_git_diff(workspace: Path) -> str:
     includes newly-created files' content (SWE-bench gold patches routinely add
     files — 21.1% of instances). Python bytecode caches are excluded via
     ``_DIFF_EXCLUDE_PATHSPECS`` so an agent's own test runs cannot poison the
-    patch (see the constant). A non-git workspace is out of scope (ADR 0009); a
-    git failure surfaces as ``CalledProcessError`` carrying the workspace.
+    patch (see the constant), and repo-local config is neutralized via
+    ``_GIT_UNTRUSTED_CONFIG_NEUTRALIZERS`` so the agent-written workspace cannot
+    execute programs during capture. A non-git workspace is out of scope
+    (ADR 0009); a git failure surfaces as ``CalledProcessError`` carrying the
+    workspace.
     """
     subprocess.run(
-        ["git", "add", "-N", "--", ".", *_DIFF_EXCLUDE_PATHSPECS],
+        [
+            "git",
+            *_GIT_UNTRUSTED_CONFIG_NEUTRALIZERS,
+            "add",
+            "-N",
+            "--",
+            ".",
+            *_DIFF_EXCLUDE_PATHSPECS,
+        ],
         cwd=str(workspace),
         check=True,
         capture_output=True,
     )
     completed = subprocess.run(
-        ["git", "diff", "--", ".", *_DIFF_EXCLUDE_PATHSPECS],
+        [
+            "git",
+            *_GIT_UNTRUSTED_CONFIG_NEUTRALIZERS,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--",
+            ".",
+            *_DIFF_EXCLUDE_PATHSPECS,
+        ],
         cwd=str(workspace),
         check=True,
         capture_output=True,
