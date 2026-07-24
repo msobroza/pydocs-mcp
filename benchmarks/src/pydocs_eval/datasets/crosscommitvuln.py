@@ -24,13 +24,30 @@ from typing import Any
 
 from ..registries import dataset_registry
 from ._crosscommitvuln_build import gold_from_record
-from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
+from ._repo_cache import (
+    RepoCache,
+    RepoCacheLike,
+    read_checkout_files,
+    resolve_bundle_dir,
+)
 from .base_dataset import EvalTask
 from .corpus import materialize_corpus
 
 log = logging.getLogger(__name__)
 
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _default_repo_cache() -> RepoCache:
+    """Bundle-aware ``RepoCache`` when the airgap bundle dir exists, else network.
+
+    Resolves ``$PYDOCS_CCV_BUNDLE_DIR`` (or the default cache path). If a
+    prewarmed dir exists the checkout runs OFFLINE from local bundles; otherwise
+    ``bundle_dir`` stays None and behavior is exactly today's lazy network clone.
+    Tests still inject a fake via ``repo_cache=`` — this only supplies the default.
+    """
+    bundle_dir = resolve_bundle_dir()
+    return RepoCache(bundle_dir=bundle_dir) if bundle_dir.exists() else RepoCache()
 
 
 @dataset_registry.register("crosscommitvuln")
@@ -42,8 +59,9 @@ class CrossCommitVulnDataset:
     revision: str = "1.0"
     fixture_path: Path | None = None
     # WHY: injected so tests pass a no-git/no-network fake; production wiring
-    # gets the real ``RepoCache`` by default (one clone per repo across rounds).
-    repo_cache: RepoCacheLike = field(default_factory=RepoCache)
+    # gets a bundle-aware ``RepoCache`` (offline from prewarmed bundles when the
+    # airgap dir exists, else the original lazy network clone) by default.
+    repo_cache: RepoCacheLike = field(default_factory=_default_repo_cache)
     cache_dir: Path = field(
         default_factory=lambda: Path("~/.cache/pydocs-eval").expanduser(),
     )

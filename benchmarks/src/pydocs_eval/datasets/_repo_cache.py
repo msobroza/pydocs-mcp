@@ -12,10 +12,18 @@ existing dataset-adapter convention), so there is no async here. Every subproces
 runs with ``check=True``, ``capture_output=True`` and a bounded ``timeout``;
 failures re-raise as ``RuntimeError`` carrying the offending SHA plus the git
 stderr tail, so a bad pin is diagnosable from the exception alone.
+
+Airgap (crosscommitvuln): an OPTIONAL ``bundle_dir`` makes the base clone come
+from a prewarmed local ``<repo>.bundle`` instead of the network URL, so the
+corpus materializes with NO network at eval time. ``bundle_dir is None`` (the
+default that swe-qa / swe-qa-pro use) keeps the original network path byte-for-
+byte, so those datasets are unaffected. Bundles live only in the user cache dir —
+nothing third-party ships in the wheel. See ``tools/prewarm_crosscommitvuln_corpus.py``.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -49,6 +57,11 @@ _SHA_DIR_LEN = 12
 # Cache root default: shared across benchmark runs so pins clone at most once.
 _DEFAULT_ROOT = Path("~/.cache/pydocs-mcp/swe-qa-repos").expanduser()
 
+# Airgap bundle store (crosscommitvuln): prewarmed ``<repo>.bundle`` files live
+# here, separate from the base-clone cache, and never ship in the wheel.
+_ENV_BUNDLE_DIR = "PYDOCS_CCV_BUNDLE_DIR"
+_DEFAULT_BUNDLE_DIR = Path("~/.cache/pydocs-mcp/crosscommitvuln-bundles").expanduser()
+
 # A URL like "file:///tmp/.../origin" or "https://github.com/org/name(.git)" →
 # a filesystem-safe base-clone dir name; strip scheme, ".git", and slashes.
 _NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -62,6 +75,27 @@ def _repo_name(url: str) -> str:
     if not name:
         raise ValueError(f"cannot derive a repo name from url: {url!r}")
     return name
+
+
+def bundle_path(bundle_dir: Path, url: str) -> Path:
+    """Deterministic bundle file for ``url`` under ``bundle_dir``.
+
+    The ``<repo>.bundle`` name mirrors :func:`_repo_name`, so the prewarm tool
+    (writer) and :class:`RepoCache` (reader) agree on where a repo's bundle
+    lives for a given URL — the single source of truth for that mapping.
+    """
+    return bundle_dir / f"{_repo_name(url)}.bundle"
+
+
+def resolve_bundle_dir() -> Path:
+    """The crosscommitvuln bundle dir: ``$PYDOCS_CCV_BUNDLE_DIR`` or the default.
+
+    Note this only RESOLVES the path (env override vs default); it does not
+    check existence. Callers decide whether an absent dir means "network
+    fallback" (the loader) or "create it" (the prewarm tool).
+    """
+    env = os.environ.get(_ENV_BUNDLE_DIR)
+    return Path(env).expanduser() if env else _DEFAULT_BUNDLE_DIR
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
@@ -85,9 +119,16 @@ class RepoCache:
         cache = RepoCache()
         path = cache.checkout("https://github.com/org/name", "abc1234")
         # path/ now holds the repo tree exactly as of commit abc1234.
+
+    Airgap: pass ``bundle_dir`` to clone the base from a prewarmed local
+    ``<repo>.bundle`` (offline) instead of the network URL. Leaving it ``None``
+    (the default) is the unchanged network path used by swe-qa / swe-qa-pro.
     """
 
     root: Path = field(default_factory=lambda: _DEFAULT_ROOT)
+    # WHY optional: only crosscommitvuln's loader sets this (airgap). Every other
+    # caller constructs ``RepoCache()`` and gets None -> the original behavior.
+    bundle_dir: Path | None = None
 
     def _base_clone(self, url: str) -> Path:
         """Return the base clone for ``url``, cloning it once if absent."""
@@ -97,12 +138,33 @@ class RepoCache:
             self._clone(url, base)
         return base
 
+    def _clone_source(self, url: str) -> str:
+        """The base-clone source: a local bundle file when one exists, else ``url``.
+
+        Bundle-aware ONLY when ``bundle_dir`` is set AND the bundle is present;
+        any miss (default ``None``, or a not-yet-prewarmed repo) falls back to
+        the network URL, so no caller is worse off than before.
+        """
+        if self.bundle_dir is None:
+            return url
+        bundle = bundle_path(self.bundle_dir, url)
+        return str(bundle) if bundle.exists() else url
+
     def _clone(self, url: str, base: Path) -> None:
-        """Full-clone ``url`` into ``base``; re-raise clone failures with the url."""
+        """Clone the base from a local bundle (offline) or the network URL.
+
+        A prewarmed ``<repo>.bundle`` carries the pinned commit(s), so cloning
+        from it needs no network and ``checkout`` finds the sha already present
+        (no fetch). The error carries the offending source path/URL for triage;
+        the ``_git`` timeout bounds a hung clone (repo CLAUDE.md robustness rule).
+        """
+        source = self._clone_source(url)
         try:
-            _git("clone", url, str(base))
+            _git("clone", source, str(base))
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"git clone failed for {url!r}: {_stderr_tail(exc)}") from exc
+            raise RuntimeError(
+                f"git clone failed from {source!r} (url {url!r}): {_stderr_tail(exc)}"
+            ) from exc
 
     def checkout(self, url: str, sha: str) -> Path:
         """Materialize ``url`` at ``sha`` as a cached worktree; return its path.
