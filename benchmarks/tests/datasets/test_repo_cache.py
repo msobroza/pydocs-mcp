@@ -80,6 +80,56 @@ def test_bundle_clone_leaves_origin_pointing_at_the_real_url(tmp_path: Path) -> 
     assert _run(base, "remote", "get-url", "origin") == url
 
 
+def test_an_already_poisoned_base_clone_is_repaired_on_reuse(tmp_path: Path) -> None:
+    """Rebinding must be retroactive, not only applied to fresh clones.
+
+    A cache root populated by an EARLIER release still has ``origin`` bound to the
+    bundle file, and ``_base_clone`` short-circuits on an existing dir — so
+    without repairing on reuse those caches stay broken forever, and the root is
+    shared with swe-qa / swe-qa-pro. Recovery would need a manual ``rm -rf``.
+    """
+    origin, first, second = _make_origin(tmp_path)
+    url = "file://" + str(origin)
+    bundles = _make_bundle(tmp_path, origin, first)
+    root = tmp_path / "eval-cache"
+
+    cache = RepoCache(root=root, bundle_dir=bundles)
+    cache.checkout(url, first)
+
+    # Simulate the pre-fix on-disk state: origin bound to the bundle file.
+    base = root / "origin"
+    _run(base, "remote", "set-url", "origin", str(bundles / "origin.bundle"))
+
+    # Reusing the cache must repair it, so the missing sha is fetchable again.
+    assert (cache.checkout(url, second) / "b.py").exists()
+    assert _run(base, "remote", "get-url", "origin") == url
+
+
+def test_fetch_that_does_not_deliver_the_sha_names_the_sha_and_the_url(
+    tmp_path: Path,
+) -> None:
+    """A successful-but-useless fetch must not surface as ``invalid reference``.
+
+    ``git fetch --all`` exits 0 when the origin is reachable but its refspec does
+    not carry the pinned commit (a force-pushed, PR-only or fork-only commit —
+    all plausible for a CVE pin). The old flow then reported the bare worktree
+    error, hiding the fact that a fetch was even attempted.
+    """
+    origin, first, second = _make_origin(tmp_path)
+    # Drop `second` from every ref, so it is unreachable via the default refspec.
+    _run(origin, "reset", "-q", "--hard", first)
+    url = "file://" + str(origin)
+
+    cache = RepoCache(root=tmp_path / "eval-cache")
+    with pytest.raises(RuntimeError) as excinfo:
+        cache.checkout(url, second)
+
+    message = str(excinfo.value)
+    assert second in message
+    assert url in message
+    assert "fetch" in message.lower()
+
+
 def test_sha_missing_from_the_bundle_is_recovered_by_fetching_the_real_origin(
     tmp_path: Path,
 ) -> None:

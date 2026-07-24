@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.resources as ir
 import json
 import logging
+import os
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -47,7 +48,22 @@ def _default_repo_cache() -> RepoCache:
     Tests still inject a fake via ``repo_cache=`` — this only supplies the default.
     """
     bundle_dir = resolve_bundle_dir()
-    return RepoCache(bundle_dir=bundle_dir) if bundle_dir.exists() else RepoCache()
+    if bundle_dir.exists():
+        return RepoCache(bundle_dir=bundle_dir)
+    if os.environ.get("PYDOCS_CCV_BUNDLE_DIR"):
+        # Setting the env var is an explicit request to run offline. Falling back
+        # silently would defeat the prewarm without a trace on a networked box
+        # (and only surface as a clone failure in a real airgap). A relative value
+        # resolved against a different cwd than the prewarm tool used is the most
+        # likely cause.
+        log.warning(
+            "PYDOCS_CCV_BUNDLE_DIR is set but %s does not exist; falling back to "
+            "NETWORK clones (the airgap is NOT in effect). Run "
+            "tools/prewarm_crosscommitvuln_corpus.py, or point the variable at "
+            "the prewarmed dir using an absolute path.",
+            bundle_dir,
+        )
+    return RepoCache()
 
 
 @dataset_registry.register("crosscommitvuln")

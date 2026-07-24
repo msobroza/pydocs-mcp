@@ -298,6 +298,26 @@ def test_relative_bundle_dir_is_resolved_against_the_process_cwd(
     assert (workdir / "bundles" / "origin.bundle").exists()
 
 
+def test_airgap_ready_banner_is_withheld_when_a_repo_failed(tmp_path: Path, caplog) -> None:
+    """The AIRGAP READY banner must not appear over a run that failed a repo.
+
+    That banner is precisely what made the original stale-bundle bug misleading:
+    a reassuring "you are ready to go offline" printed over an incomplete corpus.
+    The non-zero exit code was always right; the message contradicted it.
+    """
+    tool = _load_tool()
+    records = _write_records(
+        tmp_path,
+        [{"task_id": "cve-x", "repo_url": "file:///nonexistent/repo", "prefix_sha": "0" * 40}],
+    )
+    with caplog.at_level("INFO"):
+        rc = _prewarm(tool, tmp_path / "bundles", records, tmp_path / "cache")
+
+    assert rc == 1
+    assert "AIRGAP READY" not in caplog.text
+    assert "FAILED" in caplog.text
+
+
 def test_no_usable_records_returns_nonzero(tmp_path: Path) -> None:
     tool = _load_tool()
     records = _write_records(tmp_path, [{"task_id": "bad", "repo_url": "", "prefix_sha": ""}])

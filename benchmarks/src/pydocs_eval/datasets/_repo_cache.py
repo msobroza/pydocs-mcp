@@ -142,11 +142,21 @@ class RepoCache:
     bundle_dir: Path | None = None
 
     def _base_clone(self, url: str) -> Path:
-        """Return the base clone for ``url``, cloning it once if absent."""
+        """Return the base clone for ``url``, cloning it once if absent.
+
+        An EXISTING clone still gets its ``origin`` rebound (see
+        :meth:`_rebind_origin`): a cache root populated by an earlier release has
+        ``origin`` bound to the bundle file, and this short-circuit would
+        otherwise leave it that way forever — the repair has to be retroactive,
+        not just applied to fresh clones. ``git remote set-url`` is idempotent,
+        so re-running it on an already-correct remote costs one cheap call.
+        """
         base = self.root / _repo_name(url)
         if not base.exists():
             self.root.mkdir(parents=True, exist_ok=True)
             self._clone(url, base)
+        elif self.bundle_dir is not None:
+            self._rebind_origin(base, url)
         return base
 
     def _clone_source(self, url: str) -> str:
@@ -229,6 +239,19 @@ class RepoCache:
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
                 f"git fetch failed for {url!r} resolving sha {sha!r}: {_stderr_tail(exc)}"
+            ) from exc
+        # A fetch can succeed and still not deliver the sha: the default refspec
+        # (+refs/heads/*) misses a commit that was force-pushed away, lives only
+        # on a PR ref, or sits in a fork — all plausible for a pinned CVE commit.
+        # Without this the caller saw only "worktree add ... invalid reference",
+        # which hides that a fetch was attempted at all.
+        try:
+            _git("cat-file", "-e", f"{sha}^{{commit}}", cwd=base)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"git fetch from {url!r} succeeded but sha {sha!r} is still absent "
+                f"(not reachable from the default refspec — force-pushed, "
+                f"PR-only, or fork-only commit?)"
             ) from exc
 
     def _add_worktree(self, base: Path, target: Path, sha: str) -> None:

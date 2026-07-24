@@ -100,8 +100,14 @@ def bundle_carries(target: Path, shas: set[str]) -> bool:
     it would surface much later at eval time as ``git worktree add ... invalid
     reference``, long after this tool printed AIRGAP READY and exited 0.
 
-    Reading the bundle's own ref list also rejects a truncated or corrupt file,
-    which ``exists()`` would happily trust as complete.
+    Reading the bundle's own ref list also rejects a file whose HEADER is
+    unreadable (not a bundle at all, or truncated within the header). It does
+    NOT prove the pack is intact: ``list-heads`` — and ``git bundle verify`` —
+    read only the header, so a bundle truncated *after* it still passes here and
+    fails later at clone time with ``early EOF``. Catching that would cost a full
+    object-level unpack per repo per run; the failure is at least loud, and the
+    writer is atomic (temp+rename), so the realistic trigger is out-of-band
+    damage such as an interrupted copy of the bundle dir to the airgapped host.
     """
     try:
         listing = _git("bundle", "list-heads", str(target))
@@ -209,8 +215,15 @@ def run(bundle_dir: Path, by_repo: dict[str, set[str]], cache_root: Path | None)
         len(failures),
         ", ".join(failures) or "-",
     )
+    if failures:
+        # The banner promises the corpus is ready to go offline; printing it over
+        # a run that dropped a repo is exactly the reassuring-but-wrong signal
+        # that made the stale-bundle bug so hard to notice. The exit code was
+        # always right — the message contradicted it.
+        log.error("NOT airgap-ready: %d repo(s) failed; fix and re-run.", len(failures))
+        return 1
     _print_usage(bundle_dir)
-    return 1 if failures else 0
+    return 0
 
 
 def _print_usage(bundle_dir: Path) -> None:

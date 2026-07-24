@@ -151,6 +151,35 @@ def test_default_repo_cache_no_bundle_dir_when_absent(
     assert ds.repo_cache.bundle_dir is None
 
 
+def test_absent_bundle_dir_warns_that_the_airgap_is_not_in_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Asking for the airgap and silently not getting it must be loud.
+
+    Setting $PYDOCS_CCV_BUNDLE_DIR is an explicit request to run offline. If the
+    dir is missing (never prewarmed, or a relative path resolved against a
+    different cwd) the loader falls back to NETWORK mode — on a networked box
+    that silently defeats the whole prewarm, and nothing said so.
+    """
+    monkeypatch.setenv("PYDOCS_CCV_BUNDLE_DIR", str(tmp_path / "does-not-exist"))
+    with caplog.at_level("WARNING"):
+        ds = CrossCommitVulnDataset(fixture_path=_MINI)
+
+    assert ds.repo_cache.bundle_dir is None
+    assert "does-not-exist" in caplog.text
+    assert "network" in caplog.text.lower()
+
+
+def test_no_warning_when_the_bundle_dir_was_never_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The warning is for an unmet *request*, so an unset env var stays quiet."""
+    monkeypatch.delenv("PYDOCS_CCV_BUNDLE_DIR", raising=False)
+    with caplog.at_level("WARNING"):
+        CrossCommitVulnDataset(fixture_path=_MINI)
+    assert caplog.text == ""
+
+
 def test_injected_repo_cache_overrides_bundle_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
