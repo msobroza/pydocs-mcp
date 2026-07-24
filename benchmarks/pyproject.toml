@@ -122,6 +122,12 @@ include = ["pydocs_eval*"]
 "pydocs_eval.optimize.configs" = ["*.yaml"]
 "pydocs_eval.trajectory.configs" = ["*.yaml"]
 "pydocs_eval.campaign.overlays" = ["*.yaml"]
+# The vendored CrossCommitVuln QA corpus (records.jsonl / banned_tokens.jsonl)
+# + its CC BY 4.0 NOTICE. importlib.resources.files() must resolve these in a
+# built wheel, not only from the PYTHONPATH source tree. sdist coverage is
+# additionally pinned by MANIFEST.in (setuptools does not reliably fold
+# package-data into sdists on its own — the sdist is a release gate).
+"pydocs_eval.datasets.data.crosscommitvuln" = ["*.jsonl", "NOTICE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
