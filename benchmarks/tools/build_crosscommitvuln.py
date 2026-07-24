@@ -157,6 +157,56 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
 
 
+class _DropRecord(Exception):
+    """A single record fails a construction gate (design §5.2) — drop it, keep going.
+
+    ``category`` routes the drop to the right tally: ``"ancestry"`` (a co-resident
+    CVE is assembled at this snapshot) or ``"broken"`` (its own chain is absent).
+    """
+
+    def __init__(self, category: str, reason: str) -> None:
+        super().__init__(reason)
+        self.category = category
+
+
+# Any of these from a single record's resolution/ancestry git calls drops THAT
+# record (loud + counted) instead of aborting the whole one-time build. A query
+# leak (ValueError from build_record) is deliberately NOT here — it stays
+# build-failing so a leaked query can never be silently vendored (design §5.2).
+_GIT_FAILURES = (RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired)
+
+
+def _resolve_and_build(
+    cache: RepoCache, annotation: dict, siblings: list[dict]
+) -> tuple[dict, dict]:
+    """Resolve prefix_sha, run both ancestry gates, and build one vendored record.
+
+    Raises :class:`_DropRecord` on a gate rejection; lets ``_GIT_FAILURES`` from any
+    git call propagate so the caller drops only this record. The whole
+    resolve → ancestry → finalize phase is ONE guarded unit — a git timeout/error
+    in the later ancestry calls must not abort the build (design §5.2).
+    """
+    checkout, prefix_sha = resolve_prefix_sha(
+        cache, str(annotation["repo"]), annotation["fix_commit"]
+    )
+    if not contributing_hashes_present(checkout, prefix_sha, annotation):
+        raise _DropRecord("broken", "contributing commit missing at prefix_sha")
+    co = co_resident_cves(
+        annotation,
+        siblings,
+        # Default-arg capture pins THIS iteration's checkout/prefix into the
+        # predicate (B023-clean); it is invoked synchronously inside the helper.
+        is_assembled=lambda other, ck=checkout, ps=prefix_sha: chain_assembled_at(ck, ps, other),
+    )
+    if co:
+        raise _DropRecord("ancestry", f"co-resident CVE(s) {', '.join(co)} at {prefix_sha[:12]}")
+    record, banned_row = build_record(annotation, prefix_sha)
+    record["metadata"]["fix_commit_date"] = _git(
+        checkout, "show", "-s", "--format=%cs", annotation["fix_commit"]
+    )
+    return record, banned_row
+
+
 def main(argv: list[str]) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if len(argv) != 2:
@@ -181,35 +231,16 @@ def main(argv: list[str]) -> int:
     dropped_broken: list[str] = []
     for a in included:
         cve = a["cve_id"]
-        try:
-            checkout, prefix_sha = resolve_prefix_sha(cache, str(a["repo"]), a["fix_commit"])
-        except (RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            log.info("drop %s: prefix resolution failed (%s)", cve, exc)
+        try:  # gates 2/3 (design §5.2): the whole resolve→ancestry→finalize phase
+            record, banned_row = _resolve_and_build(cache, a, by_repo[repo_slug(a)])
+        except _DropRecord as drop:
+            log.info("drop %s: %s", cve, drop)
+            (dropped_ancestry if drop.category == "ancestry" else dropped_broken).append(cve)
+            continue
+        except _GIT_FAILURES as exc:  # widened guard: one bad repo never aborts the build
+            log.info("drop %s: git failure during resolution/ancestry (%s)", cve, exc)
             dropped_broken.append(cve)
             continue
-        if not contributing_hashes_present(checkout, prefix_sha, a):
-            log.info("drop %s: contributing commit missing at prefix_sha", cve)
-            dropped_broken.append(cve)
-            continue
-        # Bind this iteration's checkout/prefix_sha into the predicate (the
-        # lambda is invoked synchronously inside co_resident_cves, but the
-        # default-arg capture keeps the loop-variable binding explicit and lint
-        # -clean).
-        co = co_resident_cves(
-            a,
-            by_repo[repo_slug(a)],
-            is_assembled=lambda other, ck=checkout, ps=prefix_sha: chain_assembled_at(
-                ck, ps, other
-            ),
-        )
-        if co:  # gate 2 — co-resident ancestry DROP (design §5.2)
-            log.info("drop %s: co-resident CVE(s) %s at %s", cve, ", ".join(co), prefix_sha[:12])
-            dropped_ancestry.append(cve)
-            continue
-        record, banned_row = build_record(a, prefix_sha)
-        record["metadata"]["fix_commit_date"] = _git(
-            checkout, "show", "-s", "--format=%cs", a["fix_commit"]
-        )
         records.append(record)
         banned_rows.append(banned_row)
 
