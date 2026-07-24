@@ -10,7 +10,10 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
+
 from pydocs_eval.datasets._crosscommitvuln_build import assert_query_clean
+from pydocs_eval.datasets._repo_cache import RepoCache
 from pydocs_eval.datasets.base_dataset import Dataset
 from pydocs_eval.datasets.crosscommitvuln import CrossCommitVulnDataset
 from pydocs_eval.registries import dataset_registry
@@ -124,3 +127,35 @@ async def test_corpus_source_materializes_history_less_checkout() -> None:
     corpus = tasks[0].corpus_source()
     assert (corpus / "src/qibo/models/variational.py").exists()
     assert not (corpus / ".git").exists()  # §5.0: history-less snapshot
+
+
+def test_default_repo_cache_uses_bundle_dir_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Airgap: an EXISTING $PYDOCS_CCV_BUNDLE_DIR makes the default RepoCache
+    # bundle-aware, so the corpus materializes offline from prewarmed bundles.
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    monkeypatch.setenv("PYDOCS_CCV_BUNDLE_DIR", str(bundles))
+    ds = CrossCommitVulnDataset(fixture_path=_MINI)
+    assert isinstance(ds.repo_cache, RepoCache)
+    assert ds.repo_cache.bundle_dir == bundles
+
+
+def test_default_repo_cache_no_bundle_dir_when_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No prewarmed dir -> bundle_dir stays None -> unchanged lazy network clone.
+    monkeypatch.setenv("PYDOCS_CCV_BUNDLE_DIR", str(tmp_path / "does-not-exist"))
+    ds = CrossCommitVulnDataset(fixture_path=_MINI)
+    assert ds.repo_cache.bundle_dir is None
+
+
+def test_injected_repo_cache_overrides_bundle_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The test injection seam wins even when the env would pick a bundle dir.
+    monkeypatch.setenv("PYDOCS_CCV_BUNDLE_DIR", str(tmp_path))  # exists
+    fake = _FakeRepoCache()
+    ds = CrossCommitVulnDataset(fixture_path=_MINI, repo_cache=fake)
+    assert ds.repo_cache is fake

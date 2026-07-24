@@ -45,6 +45,12 @@ def _make_origin(tmp_path: Path) -> tuple[Path, str, str]:
     return origin, first_sha, second_sha
 
 
+def test_bundle_dir_defaults_to_none(tmp_path: Path) -> None:
+    # Back-compat: swe-qa / swe-qa-pro construct RepoCache() with no bundle_dir,
+    # so the airgap path stays dormant and the network clone path is unchanged.
+    assert RepoCache(root=tmp_path / "cache").bundle_dir is None
+
+
 def test_checkout_at_commit_materializes_and_caches(tmp_path: Path) -> None:
     origin, first_sha, _ = _make_origin(tmp_path)
     cache = RepoCache(root=tmp_path / "cache")

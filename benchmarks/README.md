@@ -367,6 +367,33 @@ taxonomy.
 The **pseudo-qrel caveat** above applies identically to this corpus —
 comparative, not absolute, IR quality.
 
+#### Airgapped corpus (prewarm)
+
+The `crosscommitvuln` dataset pins each task to one repo at one pre-fix commit and
+materializes that snapshot lazily via `RepoCache`
+([`datasets/_repo_cache.py`](src/pydocs_eval/datasets/_repo_cache.py)) — which
+normally needs **network at eval time**. To run the eval **offline** after a
+one-time prewarm:
+
+```bash
+# 1) ONCE, with network: build one <repo>.bundle per pinned repo into a local
+#    cache dir (default ~/.cache/pydocs-mcp/crosscommitvuln-bundles).
+PYTHONPATH=benchmarks/src \
+    python benchmarks/tools/prewarm_crosscommitvuln_corpus.py
+
+# 2) Thereafter the loader auto-detects that dir and runs OFFLINE — no network.
+#    Point elsewhere (or a second machine) with the env var if you moved it:
+export PYDOCS_CCV_BUNDLE_DIR=~/.cache/pydocs-mcp/crosscommitvuln-bundles
+python -m pydocs_eval.runner --dataset crosscommitvuln --configs benchmarks/configs/bm25.yaml
+```
+
+When `PYDOCS_CCV_BUNDLE_DIR` (or the default dir) **exists**, `CrossCommitVulnDataset`
+constructs a bundle-aware `RepoCache` that clones each base from its local bundle
+instead of the URL; when it is absent, behavior is unchanged (lazy network clone).
+The bundles live **only** in that user cache dir — no third-party repo source is
+ever committed or shipped in the wheel. `swe-qa` / `swe-qa-pro` are unaffected:
+they construct `RepoCache()` with no bundle dir and keep the network path.
+
 ### Agent track (paired agent-efficiency, manual — never CI)
 
 **What it measures.** Not retrieval quality, but *agent efficiency at answer
