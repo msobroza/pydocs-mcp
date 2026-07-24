@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 import pytest
 
@@ -13,6 +14,7 @@ from pydocs_eval.optimize.rubric.model import GateCheck
 _SHIPPED_KINDS = (
     "answer_regex",
     "gold_substring",
+    "gold_substring_all",
     "max_turns",
     "max_wall_seconds",
     "min_answer_chars",
@@ -48,7 +50,7 @@ def _check(kind: str, params: dict[str, object] | None = None) -> GateCheck:
     return GateCheck(name=kind, kind=kind, params=dict(params or {}))
 
 
-def test_registry_ships_exactly_the_six_kinds() -> None:
+def test_registry_ships_exactly_the_seven_kinds() -> None:
     assert gate_registry.names() == _SHIPPED_KINDS
 
 
@@ -97,6 +99,50 @@ class TestGoldSubstring:
 
     def test_task_without_gold_substrings_passes_vacuously(self) -> None:
         assert evaluate_gate(_check("gold_substring"), _task(), _Transcript(answer="anything"))
+
+
+class TestGoldSubstringAll:
+    """ALL-candidates exactness gate (design §6.5) — mirrors GoldSubstring."""
+
+    _GOLD: ClassVar[dict[str, object]] = {
+        "file_set": ("app/jobs.py", "app/sysutils.py"),
+        "extra": {"cve_id": "CVE-2099-0001", "cwe_id_0": "CWE-78"},
+    }
+
+    def test_all_candidates_present_passes(self) -> None:
+        task = _task(**self._GOLD)
+        answer = (
+            "CVE-2099-0001 (CWE-78): taint enters app/jobs.py and reaches "
+            "the shell wrapper in app/sysutils.py"
+        )
+        assert evaluate_gate(_check("gold_substring_all"), task, _Transcript(answer=answer))
+
+    def test_one_missing_candidate_fails(self) -> None:
+        task = _task(**self._GOLD)
+        answer = "CVE-2099-0001 (CWE-78): the flaw is in app/jobs.py"  # sysutils missing
+        assert not evaluate_gate(_check("gold_substring_all"), task, _Transcript(answer=answer))
+
+    def test_any_gate_would_pass_where_all_fails(self) -> None:
+        # The exactness contrast with the shipped ANY gate, pinned side by side.
+        task = _task(**self._GOLD)
+        transcript = _Transcript(answer="see app/jobs.py")
+        assert evaluate_gate(_check("gold_substring"), task, transcript)
+        assert not evaluate_gate(_check("gold_substring_all"), task, transcript)
+
+    def test_keys_param_restricts_candidates(self) -> None:
+        task = _task(**self._GOLD)
+        check = _check("gold_substring_all", {"keys": ["file_set", "cve_id"]})
+        answer = "CVE-2099-0001: app/jobs.py and app/sysutils.py"  # no CWE cited
+        assert evaluate_gate(check, task, _Transcript(answer=answer))
+        assert not evaluate_gate(check, task, _Transcript(answer="app/jobs.py only"))
+
+    def test_empty_candidates_pass_vacuously(self) -> None:
+        assert evaluate_gate(_check("gold_substring_all"), _task(), _Transcript(answer="anything"))
+
+    def test_non_list_keys_param_fails_loud(self) -> None:
+        check = _check("gold_substring_all", {"keys": "file_set"})
+        with pytest.raises(TypeError, match="file_set"):
+            evaluate_gate(check, _task(**self._GOLD), _Transcript())
 
 
 class TestUsedIndexedTools:
