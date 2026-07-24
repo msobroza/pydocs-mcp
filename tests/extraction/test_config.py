@@ -328,36 +328,85 @@ def test_path_under_excluded_covers_vendored_crosscommitvuln_records():
     assert not path_under_excluded("tests/fixtures/crosscommitvuln_mini.jsonl")
 
 
-def test_gold_bearing_jsonl_files_sit_under_crosscommitvuln_component():
-    """Repo invariant (design §6.6 fixture-placement rule): every JSONL file
-    shaped like a vendored gold record (task_id + prefix_sha + gold keys)
-    must live under a ``crosscommitvuln`` path component so the floor covers it."""
+def test_gold_bearing_json_files_sit_under_crosscommitvuln_component():
+    """Repo invariant (design §6.6 fixture-placement rule): every JSON/JSONL file
+    carrying gold-shaped rows must live under a ``crosscommitvuln`` path component
+    so the ``_EXCLUDED_DIRS`` floor makes it structurally un-indexable. TWO gold
+    shapes count: the vendored record (task_id + prefix_sha + gold) AND the
+    equally gold-bearing ``banned_tokens`` dump (task_id + banned) — a
+    ``banned`` row carries cve/cwe ids, gold paths, sink symbols, and dates, so
+    a misplaced dump leaks just as much. Globs ``*.json`` too and scans several
+    leading rows so a mixed-content file can't hide gold on a later line."""
     repo_root = Path(__file__).resolve().parents[2]
     skip = {".git", ".venv", "node_modules", "__pycache__", ".claude", "target"}
     offenders: list[str] = []
-    for path in repo_root.rglob("*.jsonl"):
-        parts = set(path.relative_to(repo_root).parts)
-        if parts & skip:
-            continue
-        first_line = _first_nonblank_line(path)
-        if first_line is None:
-            continue
+    for pattern in ("*.jsonl", "*.json"):
+        for path in repo_root.rglob(pattern):
+            parts = set(path.relative_to(repo_root).parts)
+            if parts & skip or "crosscommitvuln" in path.parts:
+                continue
+            if _any_line_is_gold_bearing(path):
+                offenders.append(str(path.relative_to(repo_root)))
+    assert not offenders, f"gold-bearing JSON/JSONL outside a crosscommitvuln dir: {offenders}"
+
+
+# Scan more than the first line: a mixed-content dump could hide a gold row
+# after benign leading rows. A small cap keeps the whole-repo sweep cheap.
+_GOLD_SCAN_LINES = 5
+
+
+def _any_line_is_gold_bearing(path) -> bool:
+    for line in _first_nonblank_lines(path, _GOLD_SCAN_LINES):
         try:
-            row = json.loads(first_line)
+            row = json.loads(line)
         except (json.JSONDecodeError, UnicodeDecodeError):
-            continue
-        is_gold_record = isinstance(row, dict) and {"task_id", "prefix_sha", "gold"} <= row.keys()
-        if is_gold_record and "crosscommitvuln" not in path.parts:
-            offenders.append(str(path.relative_to(repo_root)))
-    assert not offenders, f"gold-bearing JSONL outside a crosscommitvuln dir: {offenders}"
+            continue  # not a JSONL gold row (e.g. a pretty-printed .json object)
+        if _is_gold_row(row):
+            return True
+    return False
 
 
-def _first_nonblank_line(path):
+def _is_gold_row(row) -> bool:
+    if not isinstance(row, dict):
+        return False
+    keys = row.keys()
+    return {"task_id", "prefix_sha", "gold"} <= keys or {"task_id", "banned"} <= keys
+
+
+def _first_nonblank_lines(path, limit):
+    lines: list[str] = []
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 if line.strip():
-                    return line
-    except OSError:
-        return None
-    return None
+                    lines.append(line)
+                    if len(lines) >= limit:
+                        break
+    except OSError:  # unreadable / permission — nothing to classify, skip defensively
+        return []
+    return lines
+
+
+def test_gold_row_predicate_covers_both_record_and_banned_shapes():
+    """FINDING 3: the sweep predicate now matches the ``banned_tokens`` dump
+    shape (task_id + banned) in addition to the record shape — both are
+    gold-bearing. Non-gold dicts and non-dicts never match."""
+    assert _is_gold_row({"task_id": "x", "prefix_sha": "y", "gold": {}})
+    assert _is_gold_row({"task_id": "x", "banned": ["CVE-2099-1", "app/jobs.py"]})
+    assert not _is_gold_row({"task_id": "x", "query": "benign question"})
+    assert not _is_gold_row(["not", "a", "dict"])
+
+
+def test_sweep_scans_past_first_line(tmp_path):
+    """Bundled minor: a banned dump hidden after benign leading rows is still
+    caught — the old first-line-only classification would have missed it."""
+    hidden = tmp_path / "mixed.json"
+    hidden.write_text(
+        '{"note": "benign header row"}\n'
+        '{"another": "still benign"}\n'
+        '{"task_id": "cve-2099-1", "banned": ["CVE-2099-1", "app/jobs.py"]}\n'
+    )
+    assert _any_line_is_gold_bearing(hidden)
+    benign = tmp_path / "plain.json"
+    benign.write_text('{"name": "pkg", "version": "1.0"}\n')
+    assert not _any_line_is_gold_bearing(benign)
