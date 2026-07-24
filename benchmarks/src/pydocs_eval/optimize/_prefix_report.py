@@ -21,7 +21,7 @@ def task_id_prefix(task_id: str) -> str:
     runs degrade to one group instead of raising.
 
     Example:
-        >>> task_id_prefix("ccv/cve-2026-27602")
+        >>> task_id_prefix("ccv/cve-2099-0001")
         'ccv'
     """
     return task_id.split("/", 1)[0]

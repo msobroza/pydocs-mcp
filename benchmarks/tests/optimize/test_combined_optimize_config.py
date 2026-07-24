@@ -48,7 +48,7 @@ def test_combined_config_gates_include_exactness_and_grounding() -> None:
 
 
 def test_task_id_prefix_is_the_leading_slash_component() -> None:
-    assert task_id_prefix("ccv/cve-2026-27602") == "ccv"
+    assert task_id_prefix("ccv/cve-2099-0001") == "ccv"
     assert task_id_prefix("sweqapro/swe_qa_pro/0001") == "sweqapro"
     # Un-prefixed ids group under themselves (single-dataset runs degrade).
     assert task_id_prefix("swe-qa-pro:0001") == "swe-qa-pro:0001"
