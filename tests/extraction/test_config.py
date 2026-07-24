@@ -17,6 +17,9 @@ Invariants:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -31,6 +34,7 @@ from pydocs_mcp.extraction.config import (
     MembersConfig,
     NotebookConfig,
     _EXCLUDED_DIRS,
+    path_under_excluded,
 )
 
 # ADR 0021 T1: the widened DEFAULT include_extensions = existing + text/config.
@@ -306,3 +310,54 @@ def test_signature_max_chars_zero_rejected():
 
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         MembersConfig(signature_max_chars=0)
+
+
+def test_crosscommitvuln_in_excluded_dirs_floor():
+    """Design §6.6: the CrossCommitVuln QA dataset's vendored gold answers
+    (records.jsonl / banned_tokens.jsonl) live under a ``crosscommitvuln``
+    dir component; this floor entry makes them structurally un-indexable
+    regardless of how the extension ceiling moves."""
+    assert "crosscommitvuln" in _EXCLUDED_DIRS
+
+
+def test_path_under_excluded_covers_vendored_crosscommitvuln_records():
+    vendored = "benchmarks/src/pydocs_eval/datasets/data/crosscommitvuln/records.jsonl"
+    assert path_under_excluded(vendored, excluded=_EXCLUDED_DIRS)
+    # The naming gap the floor does NOT cover (design §6.6): a bare filename
+    # component is not a dir component — fixtures must sit under the dir.
+    assert not path_under_excluded("tests/fixtures/crosscommitvuln_mini.jsonl")
+
+
+def test_gold_bearing_jsonl_files_sit_under_crosscommitvuln_component():
+    """Repo invariant (design §6.6 fixture-placement rule): every JSONL file
+    shaped like a vendored gold record (task_id + prefix_sha + gold keys)
+    must live under a ``crosscommitvuln`` path component so the floor covers it."""
+    repo_root = Path(__file__).resolve().parents[2]
+    skip = {".git", ".venv", "node_modules", "__pycache__", ".claude", "target"}
+    offenders: list[str] = []
+    for path in repo_root.rglob("*.jsonl"):
+        parts = set(path.relative_to(repo_root).parts)
+        if parts & skip:
+            continue
+        first_line = _first_nonblank_line(path)
+        if first_line is None:
+            continue
+        try:
+            row = json.loads(first_line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        is_gold_record = isinstance(row, dict) and {"task_id", "prefix_sha", "gold"} <= row.keys()
+        if is_gold_record and "crosscommitvuln" not in path.parts:
+            offenders.append(str(path.relative_to(repo_root)))
+    assert not offenders, f"gold-bearing JSONL outside a crosscommitvuln dir: {offenders}"
+
+
+def _first_nonblank_line(path):
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.strip():
+                    return line
+    except OSError:
+        return None
+    return None
