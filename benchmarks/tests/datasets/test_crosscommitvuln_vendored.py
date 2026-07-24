@@ -62,6 +62,16 @@ def test_gold_always_non_empty_and_co_residence_cleared() -> None:
         assert rec["metadata"]["co_resident_cves"] == "", rec["task_id"]
 
 
+def test_every_vendored_gold_file_is_python() -> None:
+    # The model-visible corpus materializes ONLY .py files (design §5.3), so the
+    # build tool's gold-file gate must have left every gold path a .py file — a
+    # non-.py gold path would be structurally unanswerable. Enforced once real
+    # records are vendored; skips (like the count gate) until then.
+    for rec in _records():
+        for path in rec["gold"]["files"]:
+            assert path.endswith(".py"), (rec["task_id"], path)
+
+
 def test_notice_ships_with_the_vendored_data() -> None:
     notice = ir.files("pydocs_eval.datasets.data.crosscommitvuln").joinpath("NOTICE").read_text()
     for required in (

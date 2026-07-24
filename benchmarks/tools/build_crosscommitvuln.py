@@ -176,6 +176,35 @@ class _DropRecord(Exception):
 _GIT_FAILURES = (RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired)
 
 
+def apply_gold_file_gate(record: dict, tracked: tuple[str, ...]) -> None:
+    """Trim gold files to ``.py`` paths that actually exist at ``prefix_sha``.
+
+    WHY: the model-visible corpus materializes ONLY ``.py`` files
+    (``_repo_cache.read_checkout_files``), and the ``gold_substring_all`` gate
+    needs every gold path to be answerable — so a non-``.py`` gold path, or one
+    that was renamed/deleted before ``prefix_sha``, makes the task unwinnable and
+    silently deflates the ccv slice. Trim such paths in place; if NONE survive,
+    the whole record is unwinnable — drop it (loud + counted, design §5.2).
+    """
+    present = set(tracked)
+    files: list[str] = list(record["gold"]["files"])
+    kept = [f for f in files if f.endswith(".py") and f in present]
+    removed = [f for f in files if f not in kept]
+    if removed:
+        log.info(
+            "gold-file gate %s: removed %d non-.py/absent gold path(s) %s",
+            record["task_id"],
+            len(removed),
+            removed,
+        )
+    if not kept:
+        raise _DropRecord(
+            "nogold",
+            f"no .py gold file present at prefix_sha (gold was {files})",
+        )
+    record["gold"]["files"] = kept
+
+
 def _resolve_and_build(
     cache: RepoCache, annotation: dict, siblings: list[dict]
 ) -> tuple[dict, dict]:
@@ -201,6 +230,9 @@ def _resolve_and_build(
     if co:
         raise _DropRecord("ancestry", f"co-resident CVE(s) {', '.join(co)} at {prefix_sha[:12]}")
     record, banned_row = build_record(annotation, prefix_sha)
+    # Gold-file gate (design §5.3): keep only .py gold present at the snapshot the
+    # model actually sees; a record with no answerable gold left is dropped here.
+    apply_gold_file_gate(record, cache.file_tree(str(annotation["repo"]), prefix_sha))
     record["metadata"]["fix_commit_date"] = _git(
         checkout, "show", "-s", "--format=%cs", annotation["fix_commit"]
     )
@@ -229,13 +261,17 @@ def main(argv: list[str]) -> int:
     banned_rows: list[dict] = []
     dropped_ancestry: list[str] = []
     dropped_broken: list[str] = []
+    dropped_no_gold: list[str] = []
     for a in included:
         cve = a["cve_id"]
         try:  # gates 2/3 (design §5.2): the whole resolve→ancestry→finalize phase
             record, banned_row = _resolve_and_build(cache, a, by_repo[repo_slug(a)])
         except _DropRecord as drop:
             log.info("drop %s: %s", cve, drop)
-            (dropped_ancestry if drop.category == "ancestry" else dropped_broken).append(cve)
+            tally = {"ancestry": dropped_ancestry, "nogold": dropped_no_gold}.get(
+                drop.category, dropped_broken
+            )
+            tally.append(cve)
             continue
         except _GIT_FAILURES as exc:  # widened guard: one bad repo never aborts the build
             log.info("drop %s: git failure during resolution/ancestry (%s)", cve, exc)
@@ -247,12 +283,15 @@ def main(argv: list[str]) -> int:
     _write_jsonl(_VENDORED_DIR / "records.jsonl", records)
     _write_jsonl(_VENDORED_DIR / "banned_tokens.jsonl", banned_rows)
     log.info(
-        "vendored %d record(s); ancestry-dropped %d (%s); broken-dropped %d (%s)",
+        "vendored %d record(s); ancestry-dropped %d (%s); broken-dropped %d (%s); "
+        "no-py-gold-dropped %d (%s)",
         len(records),
         len(dropped_ancestry),
         ", ".join(dropped_ancestry) or "-",
         len(dropped_broken),
         ", ".join(dropped_broken) or "-",
+        len(dropped_no_gold),
+        ", ".join(dropped_no_gold) or "-",
     )
     log.info(
         "MANUAL REVIEW (hard v1 step, design §5.2): read every query in %s "

@@ -12,6 +12,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
+
 _TOOL = Path(__file__).parents[2] / "tools" / "build_crosscommitvuln.py"
 
 
@@ -86,17 +88,21 @@ class _FakeRepoCache:
     """Stand-in for ``RepoCache`` (mirrors the SWE-QA fake): no git, no network.
 
     ``checkout`` records the (url, sha) it was asked for and returns a per-sha
-    synthetic path; ``file_tree`` is unused by the build tool but present so the
-    fake satisfies the same shape as the production cache."""
+    synthetic path. ``file_tree`` now feeds the gold-file gate: ``trees`` maps a
+    prefix_sha to its canned tracked file listing, and ``default_tree`` answers
+    any sha not named — the default keeps every scenario's ``["m.py"]`` gold
+    answerable so survivors aren't gate-dropped unless a test opts in."""
 
     checked_out: list[tuple[str, str]] = field(default_factory=list)
+    trees: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    default_tree: tuple[str, ...] = ("m.py",)
 
     def checkout(self, url: str, sha: str) -> Path:
         self.checked_out.append((url, sha))
         return Path("/fake") / sha
 
     def file_tree(self, url: str, sha: str) -> tuple[str, ...]:
-        return ()
+        return self.trees.get(sha, self.default_tree)
 
 
 @dataclass
@@ -295,3 +301,80 @@ def test_main_git_timeout_in_ancestry_phase_drops_one_record_not_the_build(
     messages = "\n".join(rec.getMessage() for rec in caplog.records)
     assert "CVE-2099-0004" in messages and "git failure" in messages
     assert "broken-dropped 1 (CVE-2099-0004)" in messages
+
+
+# --- Gold-file gate: only .py gold present at prefix_sha is answerable -----------
+
+
+def test_gold_file_gate_trims_non_py_and_absent_paths(caplog) -> None:
+    tool = _load_tool()
+    # Canned file_tree: only app/jobs.py + app/util.py exist at the snapshot.
+    cache = _FakeRepoCache(trees={"p" * 40: ("app/jobs.py", "app/util.py")})
+    a = _scenario_annotation(
+        "CVE-2099-0009", "https://github.com/org/x", "fix", "chash", "CWE-78", "sh"
+    )
+    a["contributing_commits"][0]["files_changed"] = [
+        "app/jobs.py",  # .py AND present -> kept
+        "app/legacy.py",  # .py but absent at prefix_sha -> removed
+        "config/app.yaml",  # non-.py -> removed
+    ]
+    record, _ = tool.build_record(a, "p" * 40)
+    with caplog.at_level(logging.INFO, logger="build_crosscommitvuln"):
+        tool.apply_gold_file_gate(record, cache.file_tree("https://github.com/org/x", "p" * 40))
+    assert record["gold"]["files"] == ["app/jobs.py"]
+    assert any("removed 2" in r.getMessage() for r in caplog.records)
+
+
+def test_gold_file_gate_drops_record_when_no_py_gold_survives() -> None:
+    tool = _load_tool()
+    cache = _FakeRepoCache(trees={"p" * 40: ("app/present.py",)})
+    a = _scenario_annotation(
+        "CVE-2099-0010", "https://github.com/org/y", "fix", "chash", "CWE-89", "q"
+    )
+    a["contributing_commits"][0]["files_changed"] = ["config/only.yaml", "app/deleted.py"]
+    record, _ = tool.build_record(a, "p" * 40)
+    with pytest.raises(tool._DropRecord) as excinfo:
+        tool.apply_gold_file_gate(record, cache.file_tree("https://github.com/org/y", "p" * 40))
+    assert excinfo.value.category == "nogold"
+
+
+def test_main_gold_file_gate_trims_survivor_and_drops_no_py_gold(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    # design §5.3: gold paths not present as .py at prefix_sha are unwinnable (the
+    # corpus materializes only .py). One record keeps its lone present .py (the
+    # rest trimmed); the other, left with no answerable gold, is dropped with a
+    # counted summary line — same no-silent-caps style as the ancestry/broken drops.
+    tool = _load_tool()
+    source = tmp_path / "clone"
+    out = tmp_path / "out"
+    mixed = _scenario_annotation(
+        "CVE-2099-0011", "https://github.com/org/mixed", "fixA1", "c_a", "CWE-78", "sh"
+    )
+    mixed["contributing_commits"][0]["files_changed"] = [
+        "app/jobs.py",
+        "app/legacy.py",
+        "config/app.yaml",
+    ]
+    nogold = _scenario_annotation(
+        "CVE-2099-0012", "https://github.com/org/nogold", "fixB1", "c_b", "CWE-89", "q"
+    )
+    nogold["contributing_commits"][0]["files_changed"] = ["config/only.yaml", "app/deleted.py"]
+    _write_annotations(source, [mixed, nogold])
+
+    # Single-CVE repos -> no co-residence; each fix^ resolves to its own prefix.
+    parents = {"preA1": "c_a", "fixA1": "preA1", "preB1": "c_b", "fixB1": "preB1"}
+    trees = {"preA1": ("app/jobs.py", "app/util.py"), "preB1": ("app/present.py",)}
+    monkeypatch.setattr(tool, "_VENDORED_DIR", out)
+    monkeypatch.setattr(tool, "RepoCache", lambda: _FakeRepoCache(trees=trees))
+    monkeypatch.setattr(tool, "_git", _FakeGit(parent=parents))
+
+    with caplog.at_level(logging.INFO, logger="build_crosscommitvuln"):
+        rc = tool.main(["prog", str(source)])
+    assert rc == 0
+
+    records = [json.loads(line) for line in (out / "records.jsonl").read_text().splitlines()]
+    assert [r["task_id"] for r in records] == ["cve-2099-0011"]
+    assert records[0]["gold"]["files"] == ["app/jobs.py"]  # non-.py + absent trimmed
+    messages = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "no-py-gold-dropped 1 (CVE-2099-0012)" in messages
