@@ -62,6 +62,16 @@ def test_gold_always_non_empty_and_co_residence_cleared() -> None:
         assert rec["metadata"]["co_resident_cves"] == "", rec["task_id"]
 
 
+def test_vendored_queries_are_distinct_not_one_repeated_template() -> None:
+    # Queries are now LLM-generated per record (design §5.2 v3): each is a
+    # distinct natural-language security-audit request, gated by the banned-token
+    # leak-check with a deterministic template fallback. A single repeated string
+    # across all records would mean generation silently regressed to the fallback
+    # for every record. Skips (like the count gate) until the build populates them.
+    records = _records()
+    assert len({rec["query"] for rec in records}) == len(records)
+
+
 def test_every_vendored_gold_file_is_python() -> None:
     # The model-visible corpus materializes ONLY .py files (design §5.3), so the
     # build tool's gold-file gate must have left every gold path a .py file — a

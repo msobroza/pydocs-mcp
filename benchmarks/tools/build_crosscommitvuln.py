@@ -21,7 +21,7 @@ import json
 import logging
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from pydocs_eval.datasets._crosscommitvuln_build import (
@@ -46,6 +46,10 @@ _VENDORED_DIR = (
     / "crosscommitvuln"
 )
 _GIT_TIMEOUT = 600
+# Per-record LLM query generation (design §5.2 v3): bound the CLI call and the
+# regenerate-on-leak retries so the one-time build cannot hang or spin forever.
+_GEN_TIMEOUT = 120.0
+_GEN_ATTEMPTS = 3
 _SOURCE_ATTRIBUTION = "CrossCommitVuln-Bench (CC BY 4.0, Arunabh Majumdar); transformed to QA"
 
 
@@ -114,11 +118,116 @@ def co_resident_cves(
     )
 
 
-def build_record(annotation: dict, prefix_sha: str) -> tuple[dict, dict]:
-    """One annotation + pinned sha -> (vendored record, banned-token row)."""
-    query = build_query(annotation)
+def _query_prompt(annotation: dict) -> str:
+    """Build the LLM prompt that generates ONE varied, needle-hiding query (§5.2).
+
+    It MAY name the repo slug / ecosystem / severity a real reviewer would know,
+    but HARD-FORBIDS anything that reveals where the flaw is, what class it is, or
+    how it arose. This prompt only biases the model toward clean output; the
+    banned-token leak-check (:func:`generate_clean_query`) is the hard gate.
+    """
+    slug = repo_slug(annotation)
+    ecosystem = str(annotation.get("ecosystem", "PyPI"))
+    severity = str(annotation.get("severity_combined", "high")).lower()
+    return (
+        "Write ONE natural-sounding security-audit request, 2-4 sentences, asking a "
+        f"reviewer to audit the {ecosystem} project {slug} for a single "
+        f"{severity}-severity vulnerability. Ask them to locate the exploitable "
+        "condition: trace where untrusted input enters, follow it to the dangerous "
+        "operation it reaches, and classify the vulnerability by how it is exploited. "
+        "Vary the phrasing so it reads like a distinct human request.\n\n"
+        "The request MUST NOT name or hint at any of: a CWE id, a CVE id, a file name "
+        "or path, a function / API / method / sink name, the vulnerability-class word "
+        "(injection, traversal, deserialization, SSRF, XSS, etc.), any commit or commit "
+        "hash, any date, or how or when the flaw was introduced. Reveal neither where "
+        "the flaw is nor what class it belongs to.\n\n"
+        "Output ONLY the request text — no preamble, no quotes, no markdown."
+    )
+
+
+def _claude_generate(prompt: str) -> str:
+    """Generate one candidate query via the ``claude`` CLI (design §5.2).
+
+    Mirrors the coding-agent-playbook LLM judge's invocation. ``claude`` is a
+    trusted local binary and ``prompt`` is our own constructed audit request,
+    never free-form external text; ``check=False`` + the timeout keep a hung
+    CLI from stalling the one-time build. A timeout or empty stdout returns ``""``
+    so the caller treats it as a failed attempt (regenerate, then template fallback).
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["claude", "-p", prompt],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=_GEN_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
+    return result.stdout.strip()
+
+
+def generate_clean_query(
+    annotation: dict,
+    banned: Sequence[str],
+    generator: Callable[[dict], str],
+    attempts: int = _GEN_ATTEMPTS,
+) -> str:
+    """SAFETY CORE (design §5.2): a leak-free generated query, else the template.
+
+    Each candidate from ``generator`` is gated by :func:`assert_query_clean`
+    against ``banned``; an empty/blank candidate or one that leaks a banned token
+    is rejected and regenerated up to ``attempts`` times. If every attempt is
+    empty or leaks, return the deterministic :func:`build_query` template —
+    guaranteed clean — so a LEAKING QUERY CAN NEVER SHIP. ``generator`` is
+    injected so tests pass a fake; production passes :func:`_production_generator`.
+    """
+    cve = annotation.get("cve_id")
+    for _ in range(attempts):
+        query = generator(annotation)
+        if not query.strip():
+            continue  # empty/blank stdout = a failed attempt
+        try:
+            assert_query_clean(query, banned)
+        except ValueError as leak:
+            log.info("regenerating query for %s: %s", cve, leak)
+            continue
+        return query
+    log.info(
+        "query generation exhausted for %s after %d attempt(s); using deterministic "
+        "template fallback (design §5.2)",
+        cve,
+        attempts,
+    )
+    return build_query(annotation)
+
+
+def _production_generator(annotation: dict) -> str:
+    """The real per-record generator wired in :func:`main`: prompt -> ``claude`` CLI."""
+    return _claude_generate(_query_prompt(annotation))
+
+
+def build_record(
+    annotation: dict,
+    prefix_sha: str,
+    *,
+    generator: Callable[[dict], str] | None = None,
+) -> tuple[dict, dict]:
+    """One annotation + pinned sha -> (vendored record, banned-token row).
+
+    ``generator`` (injected LLM query generator) is optional: absent -> the
+    deterministic :func:`build_query` template (back-compat for the hermetic
+    tests); present -> a varied natural-language query, each candidate gated by
+    the banned-token leak-check with a template fallback (:func:`generate_clean_query`).
+    Either way the trailing :func:`assert_query_clean` is the final belt-and-suspenders
+    guard — both the gated generated query and the fallback already pass it.
+    """
     banned = mine_banned_tokens(annotation)
-    assert_query_clean(query, banned)  # build-failing leak check (design §5.2)
+    if generator is None:
+        query = build_query(annotation)
+    else:
+        query = generate_clean_query(annotation, banned, generator)
+    assert_query_clean(query, banned)  # build-failing final leak check (design §5.2)
     task_id = str(annotation["cve_id"]).lower()
     record = {
         "task_id": task_id,
@@ -206,14 +315,19 @@ def apply_gold_file_gate(record: dict, tracked: tuple[str, ...]) -> None:
 
 
 def _resolve_and_build(
-    cache: RepoCache, annotation: dict, siblings: list[dict]
+    cache: RepoCache,
+    annotation: dict,
+    siblings: list[dict],
+    *,
+    generator: Callable[[dict], str] | None = None,
 ) -> tuple[dict, dict]:
     """Resolve prefix_sha, run both ancestry gates, and build one vendored record.
 
     Raises :class:`_DropRecord` on a gate rejection; lets ``_GIT_FAILURES`` from any
     git call propagate so the caller drops only this record. The whole
     resolve → ancestry → finalize phase is ONE guarded unit — a git timeout/error
-    in the later ancestry calls must not abort the build (design §5.2).
+    in the later ancestry calls must not abort the build (design §5.2). ``generator``
+    is threaded down to :func:`build_record` (see its docstring).
     """
     checkout, prefix_sha = resolve_prefix_sha(
         cache, str(annotation["repo"]), annotation["fix_commit"]
@@ -229,7 +343,7 @@ def _resolve_and_build(
     )
     if co:
         raise _DropRecord("ancestry", f"co-resident CVE(s) {', '.join(co)} at {prefix_sha[:12]}")
-    record, banned_row = build_record(annotation, prefix_sha)
+    record, banned_row = build_record(annotation, prefix_sha, generator=generator)
     # Gold-file gate (design §5.3): keep only .py gold present at the snapshot the
     # model actually sees; a record with no answerable gold left is dropped here.
     apply_gold_file_gate(record, cache.file_tree(str(annotation["repo"]), prefix_sha))
@@ -257,6 +371,10 @@ def main(argv: list[str]) -> int:
         by_repo.setdefault(repo_slug(a), []).append(a)
 
     cache = RepoCache()
+    # Per-record LLM query generation (design §5.2 v3): wire the real generator
+    # once; each record's varied query is leak-gated with a template fallback, so
+    # a gen failure for one record falls back (never aborts the build).
+    generator = _production_generator
     records: list[dict] = []
     banned_rows: list[dict] = []
     dropped_ancestry: list[str] = []
@@ -265,7 +383,9 @@ def main(argv: list[str]) -> int:
     for a in included:
         cve = a["cve_id"]
         try:  # gates 2/3 (design §5.2): the whole resolve→ancestry→finalize phase
-            record, banned_row = _resolve_and_build(cache, a, by_repo[repo_slug(a)])
+            record, banned_row = _resolve_and_build(
+                cache, a, by_repo[repo_slug(a)], generator=generator
+            )
         except _DropRecord as drop:
             log.info("drop %s: %s", cve, drop)
             tally = {"ancestry": dropped_ancestry, "nogold": dropped_no_gold}.get(

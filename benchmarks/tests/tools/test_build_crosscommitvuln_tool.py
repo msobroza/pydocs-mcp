@@ -14,6 +14,12 @@ from pathlib import Path
 
 import pytest
 
+from pydocs_eval.datasets._crosscommitvuln_build import (
+    assert_query_clean,
+    build_query,
+    mine_banned_tokens,
+)
+
 _TOOL = Path(__file__).parents[2] / "tools" / "build_crosscommitvuln.py"
 
 
@@ -210,6 +216,10 @@ def test_main_drops_co_resident_and_broken_then_emits_survivors(
     monkeypatch, tmp_path, caplog
 ) -> None:
     tool = _load_tool()
+    # Hermetic: never call the real `claude` CLI. An empty generator forces
+    # generate_clean_query to fall back to the deterministic template (design §5.2),
+    # so these orchestration assertions stay on the same records as before.
+    monkeypatch.setattr(tool, "_claude_generate", lambda _prompt: "")
     source = tmp_path / "clone"
     out = tmp_path / "out"
     annotations = [
@@ -270,6 +280,10 @@ def test_main_git_timeout_in_ancestry_phase_drops_one_record_not_the_build(
     # ancestry calls (contributing_hashes_present) must drop THAT record and let
     # the build continue — previously it escaped the resolve-only guard.
     tool = _load_tool()
+    # Hermetic: never call the real `claude` CLI. An empty generator forces
+    # generate_clean_query to fall back to the deterministic template (design §5.2),
+    # so these orchestration assertions stay on the same records as before.
+    monkeypatch.setattr(tool, "_claude_generate", lambda _prompt: "")
     source = tmp_path / "clone"
     out = tmp_path / "out"
     annotations = [
@@ -346,6 +360,10 @@ def test_main_gold_file_gate_trims_survivor_and_drops_no_py_gold(
     # rest trimmed); the other, left with no answerable gold, is dropped with a
     # counted summary line — same no-silent-caps style as the ancestry/broken drops.
     tool = _load_tool()
+    # Hermetic: never call the real `claude` CLI. An empty generator forces
+    # generate_clean_query to fall back to the deterministic template (design §5.2),
+    # so these orchestration assertions stay on the same records as before.
+    monkeypatch.setattr(tool, "_claude_generate", lambda _prompt: "")
     source = tmp_path / "clone"
     out = tmp_path / "out"
     mixed = _scenario_annotation(
@@ -378,3 +396,129 @@ def test_main_gold_file_gate_trims_survivor_and_drops_no_py_gold(
     assert records[0]["gold"]["files"] == ["app/jobs.py"]  # non-.py + absent trimmed
     messages = "\n".join(rec.getMessage() for rec in caplog.records)
     assert "no-py-gold-dropped 1 (CVE-2099-0012)" in messages
+
+
+# --- LLM-generated queries: leak-gate + deterministic template fallback ----------
+# The query is now generated per record (design §5.2). A FAKE generator drives
+# these — the real `claude` CLI is NEVER called in a test. The SAFETY CORE
+# (generate_clean_query) gates every candidate through assert_query_clean and
+# falls back to the deterministic template, so a leaking query can never ship.
+
+
+@dataclass
+class _FakeQueryGen:
+    """Fake LLM query generator: returns queued responses in order, then repeats
+    the last one (so a single-element list means "always return this"). Records
+    each annotation it was asked about so tests can count attempts."""
+
+    responses: list[str]
+    calls: list[dict] = field(default_factory=list)
+
+    def __call__(self, annotation: dict) -> str:
+        response = self.responses[min(len(self.calls), len(self.responses) - 1)]
+        self.calls.append(annotation)
+        return response
+
+
+# A natural, varied query that names only the repo/ecosystem/severity a real
+# reviewer would know — carries NONE of the mined banned tokens for the CWE-78
+# _annotation fixture (no cve/cwe id, file, sink symbol, flaw-class word, date).
+_VARIED_CLEAN = (
+    "Please audit the PyPI project exampleorg/exampleproj for a hidden "
+    "high-severity security weakness. Trace how outside data flows into a risky "
+    "operation, and describe what an attacker could achieve and the exploit class."
+)
+# Leaks two banned tokens (the CWE id and the flaw-class phrase) -> must be rejected.
+_LEAKING = "Find the CWE-78 command injection in exampleorg/exampleproj and fix it."
+
+
+def test_generate_clean_query_returns_clean_varied_generated_query() -> None:
+    tool = _load_tool()
+    a = _annotation("CVE-2099-0001")
+    banned = mine_banned_tokens(a)
+    gen = _FakeQueryGen([_VARIED_CLEAN])
+    result = tool.generate_clean_query(a, banned, gen)
+    assert result == _VARIED_CLEAN
+    assert result != build_query(a)  # genuinely varied, not the template
+    assert_query_clean(result, banned)  # and clean
+    assert len(gen.calls) == 1  # accepted on the first attempt
+
+
+def test_generate_clean_query_rejects_leaking_attempt_then_accepts_clean() -> None:
+    tool = _load_tool()
+    a = _annotation("CVE-2099-0001")
+    banned = mine_banned_tokens(a)
+    gen = _FakeQueryGen([_LEAKING, _VARIED_CLEAN])
+    result = tool.generate_clean_query(a, banned, gen)
+    assert result == _VARIED_CLEAN  # the clean second attempt is returned
+    assert result != _LEAKING  # the leaking first attempt was rejected
+    assert len(gen.calls) == 2  # regenerated exactly once after the leak
+    assert_query_clean(result, banned)
+
+
+def test_generate_clean_query_falls_back_to_template_when_every_attempt_leaks() -> None:
+    tool = _load_tool()
+    a = _annotation("CVE-2099-0001")
+    banned = mine_banned_tokens(a)
+    gen = _FakeQueryGen([_LEAKING])  # always leaks
+    result = tool.generate_clean_query(a, banned, gen)
+    # A leaking query can NEVER ship: exhausted attempts -> the deterministic
+    # template, which is guaranteed clean.
+    assert result == build_query(a)
+    assert_query_clean(result, banned)
+    assert len(gen.calls) == tool._GEN_ATTEMPTS
+
+
+def test_generate_clean_query_falls_back_to_template_when_generator_empty() -> None:
+    tool = _load_tool()
+    a = _annotation("CVE-2099-0001")
+    banned = mine_banned_tokens(a)
+    gen = _FakeQueryGen(["   "])  # blank stdout every attempt (a failed generation)
+    result = tool.generate_clean_query(a, banned, gen)
+    assert result == build_query(a)
+    assert len(gen.calls) == tool._GEN_ATTEMPTS
+
+
+def test_build_record_uses_generated_query_when_generator_given() -> None:
+    tool = _load_tool()
+    a = _annotation("CVE-2099-0001")
+    record, banned_row = tool.build_record(a, "f" * 40, generator=_FakeQueryGen([_VARIED_CLEAN]))
+    assert record["query"] == _VARIED_CLEAN
+    assert record["query"] != build_query(a)
+    assert_query_clean(record["query"], banned_row["banned"])  # final guard re-passes
+
+
+def test_build_record_without_generator_still_uses_template_backcompat() -> None:
+    tool = _load_tool()
+    a = _annotation("CVE-2099-0001")
+    record, _ = tool.build_record(a, "f" * 40)  # no generator kwarg
+    assert record["query"] == build_query(a)
+
+
+def test_query_prompt_names_repo_and_hard_forbids_leaks() -> None:
+    tool = _load_tool()
+    prompt = tool._query_prompt(_annotation("CVE-2099-0001"))
+    assert "exampleorg/exampleproj" in prompt  # a real reviewer knows the repo
+    # The prompt must instruct the model to hide the needle (belt for the gate).
+    lowered = prompt.lower()
+    assert "must not" in lowered and "cwe" in lowered
+
+
+def test_claude_generate_strips_stdout_and_swallows_timeout_and_empty(monkeypatch) -> None:
+    tool = _load_tool()
+
+    @dataclass
+    class _Completed:
+        stdout: str
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *a, **k: _Completed("  a natural query \n"))
+    assert tool._claude_generate("p") == "a natural query"
+
+    monkeypatch.setattr(tool.subprocess, "run", lambda *a, **k: _Completed("   \n"))
+    assert tool._claude_generate("p") == ""  # empty stdout -> "" (a failed attempt)
+
+    def _timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
+
+    monkeypatch.setattr(tool.subprocess, "run", _timeout)
+    assert tool._claude_generate("p") == ""  # timeout -> "" (swallowed, never aborts)
