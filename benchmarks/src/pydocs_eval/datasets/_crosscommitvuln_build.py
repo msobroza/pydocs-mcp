@@ -36,6 +36,17 @@ _FRAMING_BANS: tuple[str, ...] = (
     "per-commit",
     "individually",
     "scanner",
+    # Inflected forms of the framing bans above — assert_query_clean matches on
+    # word boundaries, so the singular "scanner"/"commit"/"gradually" do NOT catch
+    # "scanners"/"committed"/"gradual". List the inflections explicitly (a
+    # generated query saying "our scanners flagged …" must still be regenerated).
+    "scanners",
+    "scanning",
+    "scans",
+    "committed",
+    "gradual",
+    "evasion",
+    "evade",
 )
 
 # CWE id -> flaw-class phrases banned from the query (design §5.2). Unknown

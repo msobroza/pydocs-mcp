@@ -101,7 +101,7 @@ def test_mine_banned_tokens_covers_ids_files_symbols_dates_and_framing() -> None
     # every commit date
     assert "2024-01-15" in tokens and "2024-11-23" in tokens
     # v2 framing vocabulary (design §5.2)
-    for expected in ("commit", "commits", "multi-commit", "benign", "sast", "scanner"):
+    for expected in ("commit", "commits", "multi-commit", "benign", "sast", "scanner", "scanners"):
         assert expected in tokens
 
 
