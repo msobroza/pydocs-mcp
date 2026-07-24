@@ -19,6 +19,12 @@ corpus materializes with NO network at eval time. ``bundle_dir is None`` (the
 default that swe-qa / swe-qa-pro use) keeps the original network path byte-for-
 byte, so those datasets are unaffected. Bundles live only in the user cache dir —
 nothing third-party ships in the wheel. See ``tools/prewarm_crosscommitvuln_corpus.py``.
+
+A bundle-sourced clone has its ``origin`` rebound to the real URL afterwards
+(:meth:`RepoCache._rebind_origin`): ``git clone`` would otherwise leave it
+pointing at the bundle file, turning the missing-sha fetch into a silent no-op.
+The base-clone cache root is shared with swe-qa / swe-qa-pro, so that rebinding
+is also what keeps this clone usable by the network-mode callers.
 """
 
 from __future__ import annotations
@@ -93,9 +99,14 @@ def resolve_bundle_dir() -> Path:
     Note this only RESOLVES the path (env override vs default); it does not
     check existence. Callers decide whether an absent dir means "network
     fallback" (the loader) or "create it" (the prewarm tool).
+
+    The result is always ABSOLUTE: a relative ``$PYDOCS_CCV_BUNDLE_DIR`` would
+    otherwise be interpreted against whatever cwd each consumer happens to have —
+    and ``git bundle create`` runs with ``cwd=<base clone>``, so the same relative
+    dir would mean two different places in one run.
     """
     env = os.environ.get(_ENV_BUNDLE_DIR)
-    return Path(env).expanduser() if env else _DEFAULT_BUNDLE_DIR
+    return (Path(env).expanduser() if env else _DEFAULT_BUNDLE_DIR).resolve()
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
@@ -164,6 +175,31 @@ class RepoCache:
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
                 f"git clone failed from {source!r} (url {url!r}): {_stderr_tail(exc)}"
+            ) from exc
+        if source != url:
+            self._rebind_origin(base, url)
+
+    def _rebind_origin(self, base: Path, url: str) -> None:
+        """Point a bundle-sourced clone's ``origin`` back at the real repo URL.
+
+        WHY: ``git clone <file>.bundle`` sets ``remote.origin.url`` to the bundle
+        FILE, which quietly disables the :meth:`_ensure_sha` repair path — a later
+        ``git fetch --all`` then talks to the bundle, **exits 0, and fetches
+        nothing**, so a sha the bundle happens to lack can never arrive and the
+        checkout dies on ``invalid reference`` even with full network access.
+
+        Rebinding keeps the clone itself offline (the objects already came from
+        the bundle) while making the fallback real; in a genuine airgap the fetch
+        now fails loudly with a network error instead of silently doing nothing.
+        It also keeps this shared base clone usable by the network-mode callers
+        that reuse the same cache root (the prewarm tool, swe-qa / swe-qa-pro).
+        """
+        try:
+            _git("remote", "set-url", "origin", url, cwd=base)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"git remote set-url origin failed for {url!r} after a bundle "
+                f"clone into {base}: {_stderr_tail(exc)}"
             ) from exc
 
     def checkout(self, url: str, sha: str) -> Path:

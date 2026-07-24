@@ -167,6 +167,137 @@ def test_bundle_carries_every_sha_for_a_multi_cve_repo(tmp_path: Path) -> None:
     assert (at_second / "a.py").exists() and (at_second / "b.py").exists()
 
 
+def _prewarm(tool, bundles: Path, records: Path, cache: Path, *extra: str) -> int:
+    """Run the tool with the four args every case here passes."""
+    return int(
+        tool.main(
+            [
+                "--bundle-dir",
+                str(bundles),
+                "--records",
+                str(records),
+                "--cache-root",
+                str(cache),
+                *extra,
+            ]
+        )
+    )
+
+
+def _bundle_refs(bundle: Path) -> set[str]:
+    """The ref names inside ``bundle`` (``git bundle list-heads`` runs repo-less)."""
+    listing = subprocess.run(
+        ["git", "bundle", "list-heads", str(bundle)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout
+    return {line.split()[-1] for line in listing.splitlines() if line.strip()}
+
+
+# --------------------------------------------------------------------------- #
+# The skip must be CONTENT-aware, not existence-only
+# --------------------------------------------------------------------------- #
+
+
+def test_prewarm_rebuilds_when_records_pin_a_new_sha_for_a_bundled_repo(tmp_path: Path) -> None:
+    """A repo gaining a second CVE must get its bundle rebuilt, not skipped.
+
+    The existence-only skip made this the silent-corruption case: prewarm logged
+    `skip`, printed AIRGAP READY and exited 0, and the eval only failed later —
+    with `git worktree add failed ... invalid reference` — for a sha the bundle
+    never carried. `sooperset/mcp-atlassian` already contributes two shas, so
+    "same repo, more shas later" is the documented norm for this corpus.
+    """
+    tool = _load_tool()
+    origin, first, second = _make_origin(tmp_path)
+    url = "file://" + str(origin)
+    bundles = tmp_path / "bundles"
+
+    one = _write_records(tmp_path, [{"task_id": "cve-a", "repo_url": url, "prefix_sha": first}])
+    assert _prewarm(tool, bundles, one, tmp_path / "c1") == 0
+    bundle = bundles / "origin.bundle"
+    assert _bundle_refs(bundle) == {f"refs/heads/ccv-{first}"}
+
+    # A later commit adds a second CVE on the SAME repo.
+    both = _write_records(
+        tmp_path,
+        [
+            {"task_id": "cve-a", "repo_url": url, "prefix_sha": first},
+            {"task_id": "cve-b", "repo_url": url, "prefix_sha": second},
+        ],
+    )
+    assert _prewarm(tool, bundles, both, tmp_path / "c2") == 0
+    assert _bundle_refs(bundle) == {f"refs/heads/ccv-{first}", f"refs/heads/ccv-{second}"}
+
+    # And the newly-pinned sha now materializes with the origin gone (airgap).
+    shutil.rmtree(origin)
+    cache = RepoCache(root=tmp_path / "eval-cache", bundle_dir=bundles)
+    assert (cache.checkout(url, second) / "b.py").exists()
+
+
+def test_prewarm_still_skips_when_the_bundle_already_carries_every_sha(tmp_path: Path) -> None:
+    """The content-aware skip must not cost idempotency: same shas => no rewrite."""
+    tool = _load_tool()
+    origin, first, second = _make_origin(tmp_path)
+    url = "file://" + str(origin)
+    bundles = tmp_path / "bundles"
+    records = _write_records(
+        tmp_path,
+        [
+            {"task_id": "cve-a", "repo_url": url, "prefix_sha": first},
+            {"task_id": "cve-b", "repo_url": url, "prefix_sha": second},
+        ],
+    )
+
+    assert _prewarm(tool, bundles, records, tmp_path / "c1") == 0
+    mtime = (bundles / "origin.bundle").stat().st_mtime_ns
+
+    assert _prewarm(tool, bundles, records, tmp_path / "c2") == 0
+    assert (bundles / "origin.bundle").stat().st_mtime_ns == mtime
+
+
+def test_prewarm_rebuilds_an_unreadable_bundle(tmp_path: Path) -> None:
+    """A truncated/corrupt bundle must be rebuilt, never trusted as complete."""
+    tool = _load_tool()
+    origin, first, _ = _make_origin(tmp_path)
+    url = "file://" + str(origin)
+    bundles = tmp_path / "bundles"
+    records = _write_records(tmp_path, [{"task_id": "cve-a", "repo_url": url, "prefix_sha": first}])
+
+    assert _prewarm(tool, bundles, records, tmp_path / "c1") == 0
+    bundle = bundles / "origin.bundle"
+    bundle.write_bytes(b"not a git bundle")
+
+    assert _prewarm(tool, bundles, records, tmp_path / "c2") == 0
+    assert _bundle_refs(bundle) == {f"refs/heads/ccv-{first}"}
+
+
+# --------------------------------------------------------------------------- #
+# A relative --bundle-dir must not resolve against two different cwds
+# --------------------------------------------------------------------------- #
+
+
+def test_relative_bundle_dir_is_resolved_against_the_process_cwd(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`git bundle create` runs with cwd=<base clone>, so a relative dir must be
+    made absolute first — otherwise the dir is created next to the process cwd
+    while git writes (and fails) relative to the clone."""
+    tool = _load_tool()
+    origin, first, _ = _make_origin(tmp_path)
+    url = "file://" + str(origin)
+    records = _write_records(tmp_path, [{"task_id": "cve-a", "repo_url": url, "prefix_sha": first}])
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    assert _prewarm(tool, Path("bundles"), records, tmp_path / "c1") == 0
+    assert (workdir / "bundles" / "origin.bundle").exists()
+
+
 def test_no_usable_records_returns_nonzero(tmp_path: Path) -> None:
     tool = _load_tool()
     records = _write_records(tmp_path, [{"task_id": "bad", "repo_url": "", "prefix_sha": ""}])

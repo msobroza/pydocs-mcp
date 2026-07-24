@@ -394,6 +394,14 @@ The bundles live **only** in that user cache dir — no third-party repo source 
 ever committed or shipped in the wheel. `swe-qa` / `swe-qa-pro` are unaffected:
 they construct `RepoCache()` with no bundle dir and keep the network path.
 
+**Re-run the prewarm after adding records.** The skip is content-aware: a repo is
+skipped only when its bundle already carries every commit the records pin for it,
+so a repo that gains a second CVE (or whose bundle is corrupt) is rebuilt rather
+than trusted. That step needs network again, for the changed repos only. A
+bundle-sourced clone keeps `origin` pointed at the real URL, so a commit the
+bundle happens to lack is still fetched normally on a networked machine — and in
+a true airgap that fetch fails loudly instead of silently doing nothing.
+
 ### Agent track (paired agent-efficiency, manual — never CI)
 
 **What it measures.** Not retrieval quality, but *agent efficiency at answer

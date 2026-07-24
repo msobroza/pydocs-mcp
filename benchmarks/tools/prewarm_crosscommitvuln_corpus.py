@@ -8,9 +8,16 @@ with several CVEs — e.g. mcp-atlassian — gets both shas in the same bundle).
 eval loader (``CrossCommitVulnDataset``) then materializes its corpus OFFLINE from
 these bundles. Nothing third-party ships in the wheel — bundles live only here.
 
-Idempotent: a bundle that already exists is skipped, not rewritten. Failures are
-logged per-repo and counted (no silent caps); the run exits non-zero if any repo
-failed so an operator notices.
+Idempotent, and **content-aware**: a repo is skipped only when its existing
+bundle already carries a ref for every sha the records pin for it. A bundle that
+predates a newly-pinned sha (a second CVE on an already-bundled repo), or one
+that is truncated/corrupt, is REBUILT — an existence-only skip would report
+success for a corpus that silently lacks a commit the eval later demands.
+Failures are logged per-repo and counted (no silent caps); the run exits non-zero
+if any repo failed so an operator notices.
+
+Re-running after adding records is therefore the supported way to extend the
+corpus; it needs network again for the repos that changed.
 
 Usage:
     cd <repo root>
@@ -83,6 +90,27 @@ def group_shas_by_repo(records: list[dict]) -> dict[str, set[str]]:
     return by_repo
 
 
+def bundle_carries(target: Path, shas: set[str]) -> bool:
+    """True when ``target`` is a readable bundle holding a ref for every ``sha``.
+
+    WHY not a bare ``target.exists()``: an existence-only skip silently accepts a
+    bundle built *before* ``records.jsonl`` pinned a new sha for that repo — the
+    "second CVE on an already-bundled repo" case, which this corpus already has
+    (``sooperset/mcp-atlassian``). The shortfall would not surface here at all;
+    it would surface much later at eval time as ``git worktree add ... invalid
+    reference``, long after this tool printed AIRGAP READY and exited 0.
+
+    Reading the bundle's own ref list also rejects a truncated or corrupt file,
+    which ``exists()`` would happily trust as complete.
+    """
+    try:
+        listing = _git("bundle", "list-heads", str(target))
+    except _BUNDLE_FAILURES:
+        return False  # unreadable or not a bundle -> rebuild it
+    have = {line.split()[-1] for line in listing.splitlines() if line.strip()}
+    return all(f"refs/heads/{_BUNDLE_REF_PREFIX}-{sha}" in have for sha in shas)
+
+
 def _mark_refs(base: Path, shas: set[str]) -> list[str]:
     """Point a branch ref at each sha in the base clone; return the ref names."""
     refs: list[str] = []
@@ -145,10 +173,21 @@ def run(bundle_dir: Path, by_repo: dict[str, set[str]], cache_root: Path | None)
     for url, shas in sorted(by_repo.items()):
         name = _repo_name(url)
         target = bundle_path(bundle_dir, url)
-        if target.exists():
-            log.info("skip %s: bundle already exists (%s)", name, target.name)
+        if bundle_carries(target, shas):
+            log.info(
+                "skip %s: bundle already carries all %d pinned commit(s) (%s)",
+                name,
+                len(shas),
+                target.name,
+            )
             skipped += 1
             continue
+        if target.exists():
+            log.info(
+                "rebuild %s: existing bundle is stale or unreadable (records now pin %d commit(s))",
+                name,
+                len(shas),
+            )
         try:
             path = prewarm_repo(bundle_dir, url, shas, cache_root)
         except _BUNDLE_FAILURES as exc:
@@ -193,7 +232,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--bundle-dir",
-        type=lambda s: Path(s).expanduser(),
+        # Resolved to an absolute path: `git bundle create` runs with
+        # cwd=<base clone>, so a relative dir would mean two different places.
+        type=lambda s: Path(s).expanduser().resolve(),
         default=None,
         help="destination for <repo>.bundle files "
         "(default: $PYDOCS_CCV_BUNDLE_DIR or ~/.cache/pydocs-mcp/crosscommitvuln-bundles)",
