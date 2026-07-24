@@ -57,19 +57,19 @@ async def test_registered_and_buildable_with_fixture() -> None:
 
 async def test_yields_tasks_with_gold_and_metadata() -> None:
     tasks = [t async for t in _dataset().tasks()]
-    assert [t.task_id for t in tasks] == ["cve-2026-27602", "cve-2026-26198"]
+    assert [t.task_id for t in tasks] == ["cve-2099-0001", "cve-2099-0002"]
     t0 = tasks[0]
     assert t0.gold.file_set == (
-        "modoboa/admin/jobs.py",
-        "modoboa/admin/models/mailbox.py",
-        "modoboa/lib/sysutils.py",
-        "modoboa/webmail/models.py",
+        "app/jobs.py",
+        "app/models/mailbox.py",
+        "app/sysutils.py",
+        "app/webmail/models.py",
     )
-    assert t0.gold.extra["cve_id"] == "CVE-2026-27602"
+    assert t0.gold.extra["cve_id"] == "CVE-2099-0001"
     assert t0.gold.extra["cwe_id_0"] == "CWE-78"
     assert t0.gold.ast_body and "shell" in t0.gold.ast_body
-    assert t0.metadata["intro_window"] == "2024-01-15..2024-11-23"
-    assert t0.metadata["fix_commit_date"] == "2025-01-08"
+    assert t0.metadata["intro_window"] == "2099-01-15..2099-11-23"
+    assert t0.metadata["fix_commit_date"] == "2100-01-08"
     assert t0.metadata["co_resident_cves"] == ""
 
 
