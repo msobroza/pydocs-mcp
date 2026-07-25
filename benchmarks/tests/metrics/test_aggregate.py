@@ -326,8 +326,8 @@ def test_signed_rank_beats_mcnemar_at_a_small_paired_effect() -> None:
     # 13 tasks, every one improves slightly, none crosses a 0.5 threshold.
     base = [0.30 + 0.01 * i for i in range(13)]
     cand = [b + 0.10 for b in base]
-    b_flips = sum(1 for x, y in zip(base, cand) if x < 0.5 <= y)
-    c_flips = sum(1 for x, y in zip(base, cand) if y < 0.5 <= x)
+    b_flips = sum(1 for x, y in zip(base, cand, strict=True) if x < 0.5 <= y)
+    c_flips = sum(1 for x, y in zip(base, cand, strict=True) if y < 0.5 <= x)
 
     assert mcnemar_exact_p_one_sided(b_flips, c_flips) > 0.05  # blind to it
-    assert wilcoxon_signed_rank_p_one_sided([y - x for x, y in zip(base, cand)]) <= 0.05
+    assert wilcoxon_signed_rank_p_one_sided([y - x for x, y in zip(base, cand, strict=True)]) <= 0.05
