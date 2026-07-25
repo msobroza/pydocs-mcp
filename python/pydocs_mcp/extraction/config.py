@@ -76,6 +76,13 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset(
         ".coverage",
         ".cache",
         "site-packages",
+        # eval gold-answer key — never index; data-leak guard for the
+        # CrossCommitVuln QA dataset. The vendored gold answers
+        # (cve/cwe/mechanism/files) must never enter any pydocs-mcp index or
+        # they would leak needle answers into retrieval results. ADR 0021
+        # keeps widening ALLOWED_EXTENSIONS, so the extension ceiling is not
+        # a durable guarantee — this floor is (design §6.6).
+        "crosscommitvuln",
     }
 )
 """The hardcoded, non-removable directory-exclusion FLOOR (spec decision

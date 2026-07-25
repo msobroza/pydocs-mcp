@@ -39,7 +39,15 @@ _GLOBAL_PINS = [
     (
         "pydocs_eval.registries",
         "dataset_registry",
-        ["ds1000", "repoqa", "repoqa-structural", "swe-qa", "swe-qa-pro"],
+        [
+            "crosscommitvuln",
+            "ds1000",
+            "repoqa",
+            "repoqa-structural",
+            "swe-qa",
+            "swe-qa-pro",
+            "swe-qa-pro+crosscommitvuln",
+        ],
     ),
     (
         "pydocs_eval.registries",

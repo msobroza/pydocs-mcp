@@ -1,0 +1,5 @@
+# sdist coverage for the vendored CrossCommitVuln QA corpus + its CC BY 4.0
+# NOTICE. setuptools does not reliably fold [tool.setuptools.package-data]
+# into the sdist without an explicit MANIFEST rule, and the sdist carrying
+# this data is a release gate (design §4.2).
+recursive-include src/pydocs_eval/datasets/data/crosscommitvuln *.jsonl NOTICE

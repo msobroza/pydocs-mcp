@@ -17,6 +17,9 @@ Invariants:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -31,6 +34,7 @@ from pydocs_mcp.extraction.config import (
     MembersConfig,
     NotebookConfig,
     _EXCLUDED_DIRS,
+    path_under_excluded,
 )
 
 # ADR 0021 T1: the widened DEFAULT include_extensions = existing + text/config.
@@ -306,3 +310,170 @@ def test_signature_max_chars_zero_rejected():
 
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         MembersConfig(signature_max_chars=0)
+
+
+def test_crosscommitvuln_in_excluded_dirs_floor():
+    """Design §6.6: the CrossCommitVuln QA dataset's vendored gold answers
+    (records.jsonl / banned_tokens.jsonl) live under a ``crosscommitvuln``
+    dir component; this floor entry makes them structurally un-indexable
+    regardless of how the extension ceiling moves."""
+    assert "crosscommitvuln" in _EXCLUDED_DIRS
+
+
+def test_path_under_excluded_covers_vendored_crosscommitvuln_records():
+    vendored = "benchmarks/src/pydocs_eval/datasets/data/crosscommitvuln/records.jsonl"
+    assert path_under_excluded(vendored, excluded=_EXCLUDED_DIRS)
+    # The naming gap the floor does NOT cover (design §6.6): a bare filename
+    # component is not a dir component — fixtures must sit under the dir.
+    assert not path_under_excluded("tests/fixtures/crosscommitvuln_mini.jsonl")
+
+
+def test_gold_bearing_json_files_sit_under_crosscommitvuln_component():
+    """Repo invariant (design §6.6 fixture-placement rule): every JSON/JSONL file
+    carrying gold-shaped rows must live under a ``crosscommitvuln`` path component
+    so the ``_EXCLUDED_DIRS`` floor makes it structurally un-indexable. TWO gold
+    shapes count: the vendored record (task_id + prefix_sha + gold) AND the
+    equally gold-bearing ``banned_tokens`` dump (task_id + banned) — a
+    ``banned`` row carries cve/cwe ids, gold paths, sink symbols, and dates, so
+    a misplaced dump leaks just as much. Globs ``*.json`` too and scans several
+    leading rows so a mixed-content file can't hide gold on a later line."""
+    repo_root = Path(__file__).resolve().parents[2]
+    skip = {".git", ".venv", "node_modules", "__pycache__", ".claude", "target"}
+    offenders: list[str] = []
+    for pattern in ("*.jsonl", "*.json"):
+        for path in repo_root.rglob(pattern):
+            parts = set(path.relative_to(repo_root).parts)
+            if parts & skip or "crosscommitvuln" in path.parts:
+                continue
+            if _any_line_is_gold_bearing(path):
+                offenders.append(str(path.relative_to(repo_root)))
+    assert not offenders, f"gold-bearing JSON/JSONL outside a crosscommitvuln dir: {offenders}"
+
+
+# Scan more than the first line: a mixed-content dump could hide a gold row
+# after benign leading rows. A small cap keeps the whole-repo sweep cheap.
+_GOLD_SCAN_LINES = 5
+
+
+def _any_line_is_gold_bearing(path) -> bool:
+    for line in _first_nonblank_lines(path, _GOLD_SCAN_LINES):
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue  # not a JSONL gold row (e.g. a pretty-printed .json object)
+        if _is_gold_row(row):
+            return True
+    return False
+
+
+def _is_gold_row(row) -> bool:
+    if not isinstance(row, dict):
+        return False
+    keys = row.keys()
+    return {"task_id", "prefix_sha", "gold"} <= keys or {"task_id", "banned"} <= keys
+
+
+def _first_nonblank_lines(path, limit):
+    lines: list[str] = []
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.strip():
+                    lines.append(line)
+                    if len(lines) >= limit:
+                        break
+    except OSError:  # unreadable / permission — nothing to classify, skip defensively
+        return []
+    return lines
+
+
+def test_gold_row_predicate_covers_both_record_and_banned_shapes():
+    """FINDING 3: the sweep predicate now matches the ``banned_tokens`` dump
+    shape (task_id + banned) in addition to the record shape — both are
+    gold-bearing. Non-gold dicts and non-dicts never match."""
+    assert _is_gold_row({"task_id": "x", "prefix_sha": "y", "gold": {}})
+    assert _is_gold_row({"task_id": "x", "banned": ["CVE-2099-1", "app/jobs.py"]})
+    assert not _is_gold_row({"task_id": "x", "query": "benign question"})
+    assert not _is_gold_row(["not", "a", "dict"])
+
+
+def test_sweep_scans_past_first_line(tmp_path):
+    """Bundled minor: a banned dump hidden after benign leading rows is still
+    caught — the old first-line-only classification would have missed it."""
+    hidden = tmp_path / "mixed.json"
+    hidden.write_text(
+        '{"note": "benign header row"}\n'
+        '{"another": "still benign"}\n'
+        '{"task_id": "cve-2099-1", "banned": ["CVE-2099-1", "app/jobs.py"]}\n'
+    )
+    assert _any_line_is_gold_bearing(hidden)
+    benign = tmp_path / "plain.json"
+    benign.write_text('{"name": "pkg", "version": "1.0"}\n')
+    assert not _any_line_is_gold_bearing(benign)
+
+
+#: Text formats pydocs-mcp will index. The JSON/JSONL sweep above cannot see
+#: these, which is how gold-bearing markdown shipped unnoticed (review H1).
+_INDEXABLE_TEXT = ("*.md", "*.rst", "*.txt")
+
+#: Files allowed to name a shipped CVE id: the review artifacts that must be
+#: able to discuss the leak, and the vendored corpus itself.
+_GOLD_MENTION_ALLOWED = ("docs/superpowers/reviews/",)
+
+
+def _shipped_cve_ids() -> set[str]:
+    """CVE ids read from the vendored corpus, never hardcoded here.
+
+    Deriving them means a record added later is covered automatically — and it
+    keeps this test file itself free of gold.
+    """
+    import json
+
+    repo_root = Path(__file__).resolve().parents[2]
+    corpus = repo_root / "benchmarks/src/pydocs_eval/datasets/data/crosscommitvuln/records.jsonl"
+    if not corpus.exists():  # pragma: no cover - corpus always ships
+        return set()
+    return {
+        str(json.loads(line)["gold"]["cve_id"])
+        for line in corpus.read_text().splitlines()
+        if line.strip()
+    }
+
+
+def test_no_shipped_cve_id_appears_in_an_indexable_text_file():
+    """Gold answers must not be retrievable from the docs (review H1).
+
+    The eval asks an agent to FIND a vulnerability, so a document naming the CVE
+    id — beside its CWE and gold paths — hands over the answer to anyone who
+    indexes this checkout. That is not hypothetical: the shipped combined
+    optimize config runs against ``~/pydocs-index``, documented as the same
+    index the interactive agent reads, and the ``used_indexed_tools``
+    anti-memorization gate still passes because a tool *was* used.
+
+    The existing sweep globs only ``*.json``/``*.jsonl``, so markdown was
+    invisible to it.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    # `.superpowers` holds gitignored, per-machine working notes: not shipped, so
+    # not this test's business. Residual risk worth knowing: an operator indexing
+    # a WORKING checkout still ingests whatever untracked notes they have locally.
+    # Only the tracked tree can be governed here.
+    skip = {".git", ".venv", "node_modules", "__pycache__", ".claude", "target", ".superpowers"}
+    cve_ids = _shipped_cve_ids()
+    assert cve_ids, "no shipped CVE ids found; the sweep would be vacuous"
+
+    offenders: list[str] = []
+    for pattern in _INDEXABLE_TEXT:
+        for path in repo_root.rglob(pattern):
+            rel = path.relative_to(repo_root)
+            if set(rel.parts) & skip or "crosscommitvuln" in path.parts:
+                continue
+            if any(str(rel).startswith(prefix) for prefix in _GOLD_MENTION_ALLOWED):
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            leaked = sorted(c for c in cve_ids if c in text)
+            if leaked:
+                offenders.append(f"{rel}: {leaked[:3]}")
+    assert not offenders, (
+        f"shipped CVE ids found in indexable text outside the crosscommitvuln floor: {offenders}"
+    )

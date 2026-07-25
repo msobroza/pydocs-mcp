@@ -1,0 +1,27 @@
+{
+  "task_id": "swe-qa-pro:0010",
+  "question": "swe-qa-pro:0010",
+  "answer": "dry-run probe answer for swe-qa-pro:0010 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "tool_calls": [
+    [
+      "search_codebase",
+      "dry"
+    ]
+  ],
+  "turns": 2,
+  "wall_seconds": 0.1,
+  "gates": {
+    "non_empty": true,
+    "grounded": true,
+    "exact_id": true,
+    "used_tools": true
+  },
+  "criteria": {
+    "correctness": 8.0,
+    "grounding": 8.0,
+    "completeness": 8.0,
+    "conciseness": 8.0
+  },
+  "verdict": 0.8599999999999999,
+  "discarded": null
+}

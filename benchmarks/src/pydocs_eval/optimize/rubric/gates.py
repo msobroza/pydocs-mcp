@@ -132,6 +132,48 @@ class GoldSubstring:
         return any(candidate in transcript.answer for candidate in candidates)
 
 
+@gate_registry.register("gold_substring_all")
+@dataclass(frozen=True, slots=True)
+class GoldSubstringAll:
+    """EVERY gold candidate appears verbatim in the answer (design §6.5).
+
+    Exact-identification sibling of :class:`GoldSubstring` (ANY): candidates
+    are ``gold.file_set`` plus every string value in ``gold.extra``. Optional
+    ``params["keys"]`` restricts tokenization — ``"file_set"`` selects the
+    file set, any other entry selects that ``gold.extra`` key. An empty
+    candidate set passes vacuously, mirroring the sibling (never reachable
+    for crosscommitvuln, whose gold is always non-empty).
+    """
+
+    def __call__(
+        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+    ) -> bool:
+        candidates = _all_gate_candidates(task, params.get("keys"))
+        return all(candidate in transcript.answer for candidate in candidates)
+
+
+def _all_gate_candidates(task: EvalTask, keys: object) -> list[str]:
+    """Resolve the gold_substring_all candidate list, honoring the keys filter."""
+    if keys is None:
+        candidates = list(task.gold.file_set)
+        candidates += [v for v in task.gold.extra.values() if isinstance(v, str)]
+        return candidates
+    if not isinstance(keys, (list, tuple)):
+        raise TypeError(
+            f"gold_substring_all params['keys']: got {keys!r}, expected a list "
+            "of gold keys ('file_set' or gold.extra key names)"
+        )
+    selected: list[str] = []
+    for key in keys:
+        if key == "file_set":
+            selected += list(task.gold.file_set)
+            continue
+        value = task.gold.extra.get(str(key))
+        if isinstance(value, str):
+            selected.append(value)
+    return selected
+
+
 @gate_registry.register("used_indexed_tools")
 @dataclass(frozen=True, slots=True)
 class UsedIndexedTools:

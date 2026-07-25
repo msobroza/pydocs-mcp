@@ -27,6 +27,7 @@ from typing import Literal
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.optimize import ask_binding
 from pydocs_eval.optimize._agent_track_binding import FakeAgentRunner, FakeJudge
+from pydocs_eval.optimize._prefix_report import count_by_task_prefix
 from pydocs_eval.optimize._split import partition_task_ids
 from pydocs_eval.optimize._types import (
     FitnessReport,
@@ -178,6 +179,23 @@ def _print_split_determinism(cfg: OptimizeRunConfig) -> None:
         f"  split: deterministic sha256 % 2 over {len(ids)} id(s) -> "
         f"train={len(train)}, holdout={len(holdout)}"
     )
+    _print_per_prefix_split(train, holdout)
+
+
+def _print_per_prefix_split(train: Sequence[str], holdout: Sequence[str]) -> None:
+    """Echo per-dataset-prefix split counts (design §6.4, small-N safety).
+
+    Combined datasets prefix every task_id (``sweqapro/…``, ``ccv/…``); the
+    ccv slice is small enough to skew silently, so both sides are broken
+    down by prefix whenever any id is actually prefixed. Silent for
+    single-dataset runs (no id carries a ``"/"``) — the plain counts above
+    already cover them.
+    """
+    if not any("/" in task_id for task_id in (*train, *holdout)):
+        return
+    train_counts = count_by_task_prefix(train)
+    holdout_counts = count_by_task_prefix(holdout)
+    print(f"  split by prefix: train={train_counts}, holdout={holdout_counts}")
 
 
 def _probe_task_ids(cfg: OptimizeRunConfig) -> Sequence[str]:
