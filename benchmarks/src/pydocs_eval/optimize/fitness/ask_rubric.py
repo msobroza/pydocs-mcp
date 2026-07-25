@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,9 +21,11 @@ from typing import Literal
 
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_RNG_SEED
+from pydocs_eval.optimize._prefix_report import task_id_prefix
 from pydocs_eval.optimize._split import partition_task_ids
 from pydocs_eval.optimize._types import _DEFAULT_MAX_JUDGE_CALLS, FitnessReport
 from pydocs_eval.optimize.ask_binding import AskRunner, AskTranscript
+from pydocs_eval.optimize.multitask.sampling import BatchSampler, UniformSampler
 from pydocs_eval.optimize.orchestrator import BudgetExhausted
 from pydocs_eval.optimize.protocols import OptimizableArtifact
 from pydocs_eval.optimize.registries import fitness_registry
@@ -65,6 +66,9 @@ class AskRubricFitness:
     # calls; resumed samples are free, so a rerun only counts new spend.
     max_judge_calls: int = _DEFAULT_MAX_JUDGE_CALLS
     rng_seed: int = DEFAULT_RNG_SEED
+    #: How the split is ORDERED before the budget cutoff truncates it. Defaults
+    #: to uniform — byte-identical to the seeded shuffle this replaced.
+    sampler: BatchSampler = field(default_factory=UniformSampler)
     name: str = "ask_rubric"
     cost_tier: Literal["free", "paid"] = "paid"
     _judge_calls: int = field(default=0, init=False)
@@ -113,10 +117,17 @@ class AskRubricFitness:
         train, _holdout = partition_task_ids([t.task_id for t in tasks])
         keep = set(train) if split == "train" else set(t.task_id for t in tasks) - set(train)
         selected = [t for t in tasks if t.task_id in keep]
-        # WHY seeded shuffle: task order decides WHICH samples a budget
-        # cutoff reaches; seeding pins it so a resumed run replays the order.
-        random.Random(self.rng_seed).shuffle(selected)
-        return tuple(selected)
+        # WHY the sampler: task order decides WHICH samples a budget cutoff
+        # reaches, and the cutoff takes a PREFIX. Under the default uniform
+        # sampler this is the seeded shuffle it has always been (identical
+        # output for a given seed). A stratified sampler instead puts every
+        # dataset at the head, so a truncated combined run cannot silently
+        # admit zero rows from the smaller member.
+        return tuple(
+            self.sampler.order(
+                selected, self.rng_seed, key=lambda task: task_id_prefix(task.task_id)
+            )
+        )
 
     async def _score_sample(
         self,
