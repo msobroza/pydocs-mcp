@@ -7,6 +7,7 @@ drive the cache over a ``file://`` URL — no network, fully hermetic.
 from __future__ import annotations
 
 import subprocess
+import shutil
 from pathlib import Path
 
 import pytest
@@ -216,3 +217,32 @@ def test_read_checkout_files_tolerates_non_utf8_symlinks_and_py_dirs(
     assert files["pkg.py/inner.py"] == "print('inner')\n"
     # keys are posix-relative to root.
     assert all("\\" not in key for key in files)
+
+
+def test_bundle_is_consulted_when_a_base_clone_already_exists(tmp_path: Path) -> None:
+    """The airgap must not depend on the cache being cold (review H4).
+
+    `_clone_source` is reachable only from `_clone`, which runs only when the base
+    directory is absent. A host that already has a base clone — from swe-qa-pro,
+    which shares this cache root, or from an earlier ccv release — never consulted
+    the bundle, so a newly-pinned sha attempted a NETWORK fetch and died offline.
+    """
+    origin, first, _ = _make_origin(tmp_path)
+    url = "file://" + str(origin)
+    root = tmp_path / "eval-cache"
+
+    # A swe-qa-pro-style run warms the base clone with NO bundle configured,
+    # while only `first` exists upstream.
+    RepoCache(root=root).checkout(url, first)
+
+    # Origin then gains a commit, and the owner prewarms a bundle carrying it.
+    (origin / "c.py").write_text("print('c')\n")
+    _run(origin, "add", "c.py")
+    _run(origin, "commit", "-q", "-m", "third")
+    third = _run(origin, "rev-parse", "HEAD")
+    bundles = _make_bundle(tmp_path, origin, third)
+
+    # TRUE airgap: the sha exists ONLY in the bundle.
+    shutil.rmtree(origin)
+    cache = RepoCache(root=root, bundle_dir=bundles)
+    assert (cache.checkout(url, third) / "c.py").exists()

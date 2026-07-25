@@ -234,6 +234,14 @@ class RepoCache:
             return
         except subprocess.CalledProcessError:
             pass  # unknown locally — try a fetch before giving up
+        # Try the local bundle BEFORE the network. `_clone_source` only runs when
+        # the base clone is ABSENT, so a cache warmed by swe-qa-pro (which shares
+        # this root) or by an earlier release never consulted the bundle at all —
+        # and a newly-pinned sha then went straight to a network fetch that an
+        # airgapped host cannot serve. Offline the bundle is the only source; on a
+        # networked host it is simply cheaper.
+        if self._fetch_from_bundle(base, url) and self._has_sha(base, sha):
+            return
         try:
             _git("fetch", "--all", cwd=base)
         except subprocess.CalledProcessError as exc:
@@ -253,6 +261,38 @@ class RepoCache:
                 f"(not reachable from the default refspec — force-pushed, "
                 f"PR-only, or fork-only commit?)"
             ) from exc
+
+    def _has_sha(self, base: Path, sha: str) -> bool:
+        """Whether ``sha`` is already an object in ``base``."""
+        try:
+            _git("cat-file", "-e", f"{sha}^{{commit}}", cwd=base)
+        except subprocess.CalledProcessError:
+            return False
+        return True
+
+    def _fetch_from_bundle(self, base: Path, url: str) -> bool:
+        """Fetch this repo's prewarmed bundle into ``base``; False when there is none.
+
+        The bundle's refs land under ``refs/remotes/bundle/*`` so they cannot
+        collide with origin's. A corrupt or unreadable bundle is not fatal here —
+        the caller still falls through to the network path, which produces the
+        better error message when both sources fail.
+        """
+        if self.bundle_dir is None:
+            return False
+        bundle = bundle_path(self.bundle_dir, url)
+        if not bundle.exists():
+            return False
+        try:
+            _git(
+                "fetch",
+                str(bundle),
+                "+refs/heads/*:refs/remotes/bundle/*",
+                cwd=base,
+            )
+        except subprocess.CalledProcessError:
+            return False
+        return True
 
     def _add_worktree(self, base: Path, target: Path, sha: str) -> None:
         """Add a detached worktree at ``sha``; re-raise bad SHAs with context."""
