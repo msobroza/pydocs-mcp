@@ -1,0 +1,11 @@
+{
+  "trajectory_id": "2ccc132b-b05a-4e2f-a0bf-f81a6d787918",
+  "used_files": [
+    "widgetlib/textutil.py"
+  ],
+  "wasted_reads": [],
+  "first_surface": {
+    "widgetlib/textutil.py": "search_codebase"
+  },
+  "notes": "search_codebase rendered the slugify() body with the buggy `return slug` (first surface). The model then Read the gold file and added `.lower()`. No wasted reads; resolved."
+}

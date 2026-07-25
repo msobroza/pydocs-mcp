@@ -1,0 +1,11 @@
+{
+  "trajectory_id": "fb179086-d0f4-4890-a201-732084a6930f",
+  "used_files": [
+    "widgetlib/textutil.py"
+  ],
+  "wasted_reads": [],
+  "first_surface": {
+    "widgetlib/textutil.py": "search_codebase"
+  },
+  "notes": "search_codebase rendered slugify() with the buggy `return slug` (first surface). The model Read widgetlib/textutil.py and added `.lower()`. No wasted reads; resolved."
+}

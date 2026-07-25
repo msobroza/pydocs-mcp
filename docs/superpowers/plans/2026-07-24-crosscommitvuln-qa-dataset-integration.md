@@ -1,4 +1,11 @@
 # CrossCommitVuln-Bench → QA Dataset Integration — Implementation Plan
+
+> **Redaction note.** Identifiers and gold file paths in this document are
+> SYNTHETIC. Real gold (CVE ids, contributing files) lives only under the
+> `crosscommitvuln` package dir, which the `_EXCLUDED_DIRS` floor makes
+> un-indexable — otherwise anyone indexing this checkout could retrieve the
+> answer to an eval task from the docs. See
+> `tests/extraction/test_config.py::test_no_shipped_cve_id_appears_in_an_indexable_text_file`.
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use `- [ ]` checkboxes.
 
 **Goal:** Integrate the CrossCommitVuln-Bench CVE annotation corpus as a QA-shaped needle-search dataset across two repositories — `pydocs-mcp-eval` (runtime loader, vendored records, combined dataset, optimizer config, leak guards, an exactness gate) and `coding-agent-playbook` (a non-ML-gated needle-search prompt plus paraphrase fixtures) — while keeping every model-facing string framing-free and the frozen nine-tool MCP surface untouched.
@@ -865,16 +872,16 @@ git commit -m "feat: add crosscommitvuln to the _EXCLUDED_DIRS floor — structu
 Create `benchmarks/tests/fixtures/crosscommitvuln/mini.jsonl` (one JSON object per line; `prefix_sha` values are fabricated fixture-only 40-hex — the fake repo cache never resolves them):
 
 ```jsonl
-{"task_id": "cve-2026-27602", "repo_url": "https://github.com/modoboa/modoboa", "prefix_sha": "82d64bb9c1e2a3b4d5e6f708192a3b4c5d6e7f80", "fix_commit": "27a7aa133d3608fe8c25ae39125d1012c333cbfa", "query": "This snapshot of the PyPI project modoboa/modoboa contains a high-severity security vulnerability. Locate the exploitable condition: identify where untrusted input enters, the dangerous operation it reaches, and classify the vulnerability by its exploit.", "gold": {"cve_id": "CVE-2026-27602", "cwe_ids": ["CWE-78"], "mechanism": "A user-controlled mailbox path / email address flows into a custom shell wrapper that executes string arguments via subprocess with shell enabled; additional user-controlled inputs are wired into that same wrapper, widening the tainted surface.", "files": ["modoboa/admin/jobs.py", "modoboa/admin/models/mailbox.py", "modoboa/lib/sysutils.py", "modoboa/webmail/models.py"]}, "metadata": {"ecosystem": "PyPI", "severity": "high", "commit_span_days": "313", "intro_window": "2024-01-15..2024-11-23", "fix_commit_date": "2025-01-08", "co_resident_cves": "", "source": "CrossCommitVuln-Bench (CC BY 4.0, Arunabh Majumdar); transformed to QA"}}
-{"task_id": "cve-2026-26198", "repo_url": "https://github.com/collerek/ormar", "prefix_sha": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567", "fix_commit": "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432", "query": "This snapshot of the PyPI project collerek/ormar contains a critical-severity security vulnerability. Locate the exploitable condition: identify where untrusted input enters, the dangerous operation it reaches, and classify the vulnerability by its exploit.", "gold": {"cve_id": "CVE-2026-26198", "cwe_ids": ["CWE-89"], "mechanism": "User-supplied filter values are interpolated into a raw query string instead of bound parameters, so tainted input reaches the database query executor unescaped.", "files": ["ormar/queryset.py"]}, "metadata": {"ecosystem": "PyPI", "severity": "critical", "commit_span_days": "120", "intro_window": "2023-05-02..2023-08-30", "fix_commit_date": "2023-11-12", "co_resident_cves": "", "source": "CrossCommitVuln-Bench (CC BY 4.0, Arunabh Majumdar); transformed to QA"}}
+{"task_id": "cve-2026-27602", "repo_url": "https://github.com/modoboa/modoboa", "prefix_sha": "82d64bb9c1e2a3b4d5e6f708192a3b4c5d6e7f80", "fix_commit": "27a7aa133d3608fe8c25ae39125d1012c333cbfa", "query": "This snapshot of the PyPI project modoboa/modoboa contains a high-severity security vulnerability. Locate the exploitable condition: identify where untrusted input enters, the dangerous operation it reaches, and classify the vulnerability by its exploit.", "gold": {"cve_id": "CVE-2099-00018", "cwe_ids": ["CWE-78"], "mechanism": "A user-controlled mailbox path / email address flows into a custom shell wrapper that executes string arguments via subprocess with shell enabled; additional user-controlled inputs are wired into that same wrapper, widening the tainted surface.", "files": ["examplepkg/admin/jobs.py", "examplepkg/admin/models/inbox.py", "examplepkg/lib/sysutils.py", "examplepkg/webmail/models.py"]}, "metadata": {"ecosystem": "PyPI", "severity": "high", "commit_span_days": "313", "intro_window": "2024-01-15..2024-11-23", "fix_commit_date": "2025-01-08", "co_resident_cves": "", "source": "CrossCommitVuln-Bench (CC BY 4.0, Arunabh Majumdar); transformed to QA"}}
+{"task_id": "cve-2026-26198", "repo_url": "https://github.com/collerek/ormar", "prefix_sha": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567", "fix_commit": "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432", "query": "This snapshot of the PyPI project collerek/ormar contains a critical-severity security vulnerability. Locate the exploitable condition: identify where untrusted input enters, the dangerous operation it reaches, and classify the vulnerability by its exploit.", "gold": {"cve_id": "CVE-2099-00016", "cwe_ids": ["CWE-89"], "mechanism": "User-supplied filter values are interpolated into a raw query string instead of bound parameters, so tainted input reaches the database query executor unescaped.", "files": ["ormar/queryset.py"]}, "metadata": {"ecosystem": "PyPI", "severity": "critical", "commit_span_days": "120", "intro_window": "2023-05-02..2023-08-30", "fix_commit_date": "2023-11-12", "co_resident_cves": "", "source": "CrossCommitVuln-Bench (CC BY 4.0, Arunabh Majumdar); transformed to QA"}}
 {"task_id": "cve-2099-9999", "repo_url": "https://github.com/example/broken", "prefix_sha": "deadbeef", "fix_commit": "deadbeef", "query": "malformed on purpose: short prefix_sha exercises the loader drop path", "gold": {"cve_id": "CVE-2099-9999", "cwe_ids": ["CWE-1"], "mechanism": "n/a", "files": ["a.py"]}, "metadata": {}}
 ```
 
 Create `benchmarks/tests/fixtures/crosscommitvuln/banned_tokens.jsonl`:
 
 ```jsonl
-{"task_id": "cve-2026-27602", "banned": ["CVE-2026-27602", "CWE-78", "78", "modoboa/admin/jobs.py", "jobs.py", "mailbox.py", "sysutils.py", "exec_cmd", "shell=True", "subprocess", "command injection", "27a7aa133d3608fe8c25ae39125d1012c333cbfa", "27a7aa13", "2024-01-15", "2024-11-23", "2025-01-08", "commit", "commits", "multiple", "multi-commit", "gradually", "over time", "across", "benign", "static analysis", "sast", "per-commit", "individually", "scanner"]}
-{"task_id": "cve-2026-26198", "banned": ["CVE-2026-26198", "CWE-89", "89", "ormar/queryset.py", "queryset.py", "sql injection", "filter_query", "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432", "9f8e7d6c", "2023-05-02", "2023-08-30", "2023-11-12", "commit", "commits", "multiple", "multi-commit", "gradually", "over time", "across", "benign", "static analysis", "sast", "per-commit", "individually", "scanner"]}
+{"task_id": "cve-2026-27602", "banned": ["CVE-2099-00018", "CWE-78", "78", "examplepkg/admin/jobs.py", "jobs.py", "mailbox.py", "sysutils.py", "exec_cmd", "shell=True", "subprocess", "command injection", "27a7aa133d3608fe8c25ae39125d1012c333cbfa", "27a7aa13", "2024-01-15", "2024-11-23", "2025-01-08", "commit", "commits", "multiple", "multi-commit", "gradually", "over time", "across", "benign", "static analysis", "sast", "per-commit", "individually", "scanner"]}
+{"task_id": "cve-2026-26198", "banned": ["CVE-2099-00016", "CWE-89", "89", "ormar/queryset.py", "queryset.py", "sql injection", "filter_query", "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432", "9f8e7d6c", "2023-05-02", "2023-08-30", "2023-11-12", "commit", "commits", "multiple", "multi-commit", "gradually", "over time", "across", "benign", "static analysis", "sast", "per-commit", "individually", "scanner"]}
 ```
 
 - [ ] **Step 2: Write the failing loader tests** (mirrors `test_swe_qa_loaders.py`, incl. `_FakeRepoCache`; `asyncio_mode="auto"` — no decorator needed)
@@ -946,12 +953,12 @@ async def test_yields_tasks_with_gold_and_metadata() -> None:
     assert [t.task_id for t in tasks] == ["cve-2026-27602", "cve-2026-26198"]
     t0 = tasks[0]
     assert t0.gold.file_set == (
-        "modoboa/admin/jobs.py",
-        "modoboa/admin/models/mailbox.py",
-        "modoboa/lib/sysutils.py",
-        "modoboa/webmail/models.py",
+        "examplepkg/admin/jobs.py",
+        "examplepkg/admin/models/inbox.py",
+        "examplepkg/lib/sysutils.py",
+        "examplepkg/webmail/models.py",
     )
-    assert t0.gold.extra["cve_id"] == "CVE-2026-27602"
+    assert t0.gold.extra["cve_id"] == "CVE-2099-00018"
     assert t0.gold.extra["cwe_id_0"] == "CWE-78"
     assert t0.gold.ast_body and "shell" in t0.gold.ast_body
     assert t0.metadata["intro_window"] == "2024-01-15..2024-11-23"
@@ -2225,16 +2232,16 @@ The ten fixture ids this group authors (task-id convention `find-injected-vuln-<
 
 | Fixture id | CVE | CWE |
 |---|---|---|
-| `find-injected-vuln-modoboa-cmdi` | CVE-2026-27602 | CWE-78 |
-| `find-injected-vuln-ormar-sqli` | CVE-2026-26198 | CWE-89 |
+| `find-injected-vuln-modoboa-cmdi` | CVE-2099-00018 | CWE-78 |
+| `find-injected-vuln-ormar-sqli` | CVE-2099-00016 | CWE-89 |
 | `find-injected-vuln-changedetection-ssrf` | CVE-2026-27696 | CWE-918 |
-| `find-injected-vuln-langroid-codeinj` | CVE-2025-46724 | CWE-94 |
-| `find-injected-vuln-pytorch-deserial` | CVE-2025-32434 | CWE-502 |
-| `find-injected-vuln-changedetection-pathtraversal` | CVE-2026-29065 | CWE-22 |
-| `find-injected-vuln-authlib-sigbypass` | CVE-2026-27962 | CWE-347 |
+| `find-injected-vuln-langroid-codeinj` | CVE-2099-00004 | CWE-94 |
+| `find-injected-vuln-pytorch-deserial` | CVE-2099-00003 | CWE-502 |
+| `find-injected-vuln-changedetection-pathtraversal` | CVE-2099-00023 | CWE-22 |
+| `find-injected-vuln-authlib-sigbypass` | CVE-2099-00022 | CWE-347 |
 | `find-injected-vuln-graphiti-queryinj` | CVE-2026-32247 | CWE-943 |
-| `find-injected-vuln-pydash-massassign` | CVE-2025-58367 | CWE-915 |
-| `find-injected-vuln-aiplatform-xss` | CVE-2026-2472 | CWE-79 |
+| `find-injected-vuln-pydash-massassign` | CVE-2099-00008 | CWE-915 |
+| `find-injected-vuln-aiplatform-xss` | CVE-2099-00014 | CWE-79 |
 
 So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 must equal the number actually authored** — if any fixture is dropped (spec §7.2: drop any whose real chain resists faithful small-fixture paraphrase), lower the expected count and the `eval_tasks:` list in lock-step.
 
@@ -2388,7 +2395,7 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
 
 **Interfaces**
 - Consumes: `evals/loader.py::load_eval_task_from_dir`, `evals/runner.py::{materialize, capture}`, `evals/scoring.py::score`, `evals/judge.py::StubJudge`, the `fake` runner (`evals/fake_runner.py`), `[gate].file_unchanged` check, `[rubric]` `{fail: float, rubric: [{judge, weight}]}`.
-- Produces: the worked-example fixture referenced by the C1 prompt's first `eval_tasks:` entry. Authored **solely from CVE-2026-27602's CC BY annotation/reproduction — upstream modoboa source NOT consulted** (spec §7.4 binding authorship rule); files are original paraphrase, not copies.
+- Produces: the worked-example fixture referenced by the C1 prompt's first `eval_tasks:` entry. Authored **solely from CVE-2099-00018's CC BY annotation/reproduction — upstream modoboa source NOT consulted** (spec §7.4 binding authorship rule); files are original paraphrase, not copies.
 
 - [ ] **Step 1: Write the failing hermetic run test.** Create `tests/integration/test_modoboa_cmdi_fixture.py`:
 
@@ -2461,7 +2468,7 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
   ```python
   """System utilities: thin wrappers around shell command execution.
 
-  Derived (paraphrased) from CVE-2026-27602 (CrossCommitVuln-Bench, CC BY 4.0,
+  Derived (paraphrased) from CVE-2099-00018 (CrossCommitVuln-Bench, CC BY 4.0,
   A. Majumdar). Original fixture code; upstream project source was not consulted.
   """
 
@@ -2491,7 +2498,7 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
   ```python
   """Background maintenance jobs for mailbox storage.
 
-  Derived (paraphrased) from CVE-2026-27602 (CrossCommitVuln-Bench, CC BY 4.0,
+  Derived (paraphrased) from CVE-2099-00018 (CrossCommitVuln-Bench, CC BY 4.0,
   A. Majumdar). Original fixture code; upstream project source was not consulted.
   """
 
@@ -2535,7 +2542,7 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
   ```toml
   id = "find-injected-vuln-modoboa-cmdi"
   prompt_id = "find-injected-vulnerability"
-  description = "OS command injection paraphrase; derived from CVE-2026-27602 (CrossCommitVuln-Bench, CC BY 4.0, A. Majumdar). See resources/eval_tasks/ATTRIBUTIONS.md."
+  description = "OS command injection paraphrase; derived from CVE-2099-00018 (CrossCommitVuln-Bench, CC BY 4.0, A. Majumdar). See resources/eval_tasks/ATTRIBUTIONS.md."
   version = 1
 
   [setup]
@@ -2578,7 +2585,7 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
   ```
   git add src/coding_agent_playbook/resources/eval_tasks/find-injected-vuln-modoboa-cmdi \
           tests/integration/test_modoboa_cmdi_fixture.py
-  git commit -m "feat(playbook): add worked find-injected-vuln-modoboa-cmdi fixture (CWE-78, CVE-2026-27602 paraphrase)"
+  git commit -m "feat(playbook): add worked find-injected-vuln-modoboa-cmdi fixture (CWE-78, CVE-2099-00018 paraphrase)"
   ```
 
 ---
@@ -2654,16 +2661,16 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
 
   | Fixture | CVE | CWE |
   |---|---|---|
-  | find-injected-vuln-modoboa-cmdi | CVE-2026-27602 | CWE-78 |
-  | find-injected-vuln-ormar-sqli | CVE-2026-26198 | CWE-89 |
+  | find-injected-vuln-modoboa-cmdi | CVE-2099-00018 | CWE-78 |
+  | find-injected-vuln-ormar-sqli | CVE-2099-00016 | CWE-89 |
   | find-injected-vuln-changedetection-ssrf | CVE-2026-27696 | CWE-918 |
-  | find-injected-vuln-langroid-codeinj | CVE-2025-46724 | CWE-94 |
-  | find-injected-vuln-pytorch-deserial | CVE-2025-32434 | CWE-502 |
-  | find-injected-vuln-changedetection-pathtraversal | CVE-2026-29065 | CWE-22 |
-  | find-injected-vuln-authlib-sigbypass | CVE-2026-27962 | CWE-347 |
+  | find-injected-vuln-langroid-codeinj | CVE-2099-00004 | CWE-94 |
+  | find-injected-vuln-pytorch-deserial | CVE-2099-00003 | CWE-502 |
+  | find-injected-vuln-changedetection-pathtraversal | CVE-2099-00023 | CWE-22 |
+  | find-injected-vuln-authlib-sigbypass | CVE-2099-00022 | CWE-347 |
   | find-injected-vuln-graphiti-queryinj | CVE-2026-32247 | CWE-943 |
-  | find-injected-vuln-pydash-massassign | CVE-2025-58367 | CWE-915 |
-  | find-injected-vuln-aiplatform-xss | CVE-2026-2472 | CWE-79 |
+  | find-injected-vuln-pydash-massassign | CVE-2099-00008 | CWE-915 |
+  | find-injected-vuln-aiplatform-xss | CVE-2099-00014 | CWE-79 |
   ```
 
 - [ ] **Step 2: Author each of the nine fixtures** by applying the checklist above with its row's parameters. Every `task.toml` follows the exact C2 shape; only `id`, `description`, `[setup].files`, the `[gate.bind]` handles/paths, and the three rubric `judge=` strings change per fixture. Example — `find-injected-vuln-ormar-sqli/task.toml`:
@@ -2671,7 +2678,7 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
   ```toml
   id = "find-injected-vuln-ormar-sqli"
   prompt_id = "find-injected-vulnerability"
-  description = "SQL injection paraphrase; derived from CVE-2026-26198 (CrossCommitVuln-Bench, CC BY 4.0, A. Majumdar). See resources/eval_tasks/ATTRIBUTIONS.md."
+  description = "SQL injection paraphrase; derived from CVE-2099-00016 (CrossCommitVuln-Bench, CC BY 4.0, A. Majumdar). See resources/eval_tasks/ATTRIBUTIONS.md."
   version = 1
 
   [setup]
@@ -2708,7 +2715,7 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
   ```python
   """Minimal raw-SQL execution helper.
 
-  Derived (paraphrased) from CVE-2026-26198 (CrossCommitVuln-Bench, CC BY 4.0,
+  Derived (paraphrased) from CVE-2099-00016 (CrossCommitVuln-Bench, CC BY 4.0,
   A. Majumdar). Original fixture code; upstream project source was not consulted.
   """
 
@@ -2730,7 +2737,7 @@ So `N = 10` and the C4 count bump is `10 → 20`. **The count assertion in C4 mu
   ```python
   """User-facing query builders.
 
-  Derived (paraphrased) from CVE-2026-26198 (CrossCommitVuln-Bench, CC BY 4.0,
+  Derived (paraphrased) from CVE-2099-00016 (CrossCommitVuln-Bench, CC BY 4.0,
   A. Majumdar). Original fixture code; upstream project source was not consulted.
   """
 

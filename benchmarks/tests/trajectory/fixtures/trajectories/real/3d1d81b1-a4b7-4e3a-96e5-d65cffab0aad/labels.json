@@ -1,0 +1,11 @@
+{
+  "trajectory_id": "3d1d81b1-a4b7-4e3a-96e5-d65cffab0aad",
+  "used_files": [
+    "widgetlib/pricing.py"
+  ],
+  "wasted_reads": [],
+  "first_surface": {
+    "widgetlib/pricing.py": "search_codebase"
+  },
+  "notes": "search_codebase surfaced the buggy apply_discount() body (first surface); the model's first Edit used a wrong parameter schema and errored, then Read+Edit landed `price * (1 - pct)`. No wasted reads; resolved."
+}

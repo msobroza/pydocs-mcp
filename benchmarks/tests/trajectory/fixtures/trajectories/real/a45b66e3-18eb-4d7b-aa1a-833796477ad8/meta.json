@@ -1,0 +1,10 @@
+{
+  "instance_id": "widgetlib__calculator-average",
+  "workspace_root": "/var/folders/k4/j07ld9p97c95csgxwlj_bldw0000gn/T/tmp.L2P0ldvlU5",
+  "gold_files": [
+    "widgetlib/calculator.py"
+  ],
+  "final_patch_files": [
+    "widgetlib/calculator.py"
+  ]
+}

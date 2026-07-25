@@ -437,7 +437,7 @@ def test_generate_clean_query_returns_clean_varied_generated_query() -> None:
     a = _annotation("CVE-2099-0001")
     banned = mine_banned_tokens(a)
     gen = _FakeQueryGen([_VARIED_CLEAN])
-    result = tool.generate_clean_query(a, banned, gen)
+    result, result_source = tool.generate_clean_query(a, banned, gen)
     assert result == _VARIED_CLEAN
     assert result != build_query(a)  # genuinely varied, not the template
     assert_query_clean(result, banned)  # and clean
@@ -449,7 +449,7 @@ def test_generate_clean_query_rejects_leaking_attempt_then_accepts_clean() -> No
     a = _annotation("CVE-2099-0001")
     banned = mine_banned_tokens(a)
     gen = _FakeQueryGen([_LEAKING, _VARIED_CLEAN])
-    result = tool.generate_clean_query(a, banned, gen)
+    result, result_source = tool.generate_clean_query(a, banned, gen)
     assert result == _VARIED_CLEAN  # the clean second attempt is returned
     assert result != _LEAKING  # the leaking first attempt was rejected
     assert len(gen.calls) == 2  # regenerated exactly once after the leak
@@ -461,7 +461,7 @@ def test_generate_clean_query_falls_back_to_template_when_every_attempt_leaks() 
     a = _annotation("CVE-2099-0001")
     banned = mine_banned_tokens(a)
     gen = _FakeQueryGen([_LEAKING])  # always leaks
-    result = tool.generate_clean_query(a, banned, gen)
+    result, result_source = tool.generate_clean_query(a, banned, gen)
     # A leaking query can NEVER ship: exhausted attempts -> the deterministic
     # template, which is guaranteed clean.
     assert result == build_query(a)
@@ -474,7 +474,7 @@ def test_generate_clean_query_falls_back_to_template_when_generator_empty() -> N
     a = _annotation("CVE-2099-0001")
     banned = mine_banned_tokens(a)
     gen = _FakeQueryGen(["   "])  # blank stdout every attempt (a failed generation)
-    result = tool.generate_clean_query(a, banned, gen)
+    result, result_source = tool.generate_clean_query(a, banned, gen)
     assert result == build_query(a)
     assert len(gen.calls) == tool._GEN_ATTEMPTS
 
@@ -522,3 +522,56 @@ def test_claude_generate_strips_stdout_and_swallows_timeout_and_empty(monkeypatc
 
     monkeypatch.setattr(tool.subprocess, "run", _timeout)
     assert tool._claude_generate("p") == ""  # timeout -> "" (swallowed, never aborts)
+
+
+def test_corpus_write_refuses_to_shrink_an_existing_file(tmp_path) -> None:
+    """A degraded build must not erase the reviewed corpus (review M2).
+
+    Every resolution step needs GitHub; offline, all records drop and the old
+    unconditional write truncated records.jsonl to empty — with CI green,
+    because the vendored-pin tests skip on an empty file.
+    """
+    tool = _load_tool()
+    target = tmp_path / "records.jsonl"
+    tool._write_corpus(target, [{"task_id": f"r{i}"} for i in range(25)])
+    assert len(target.read_text().splitlines()) == 25
+
+    with pytest.raises(SystemExit, match="refusing to shrink"):
+        tool._write_corpus(target, [])
+    assert len(target.read_text().splitlines()) == 25  # untouched
+
+
+def test_corpus_write_allows_growth_and_a_first_build(tmp_path) -> None:
+    tool = _load_tool()
+    target = tmp_path / "records.jsonl"
+    tool._write_corpus(target, [{"task_id": "a"}])  # first build: no floor
+    tool._write_corpus(target, [{"task_id": "a"}, {"task_id": "b"}])  # growth: fine
+    assert len(target.read_text().splitlines()) == 2
+
+
+def test_generate_clean_query_reports_its_provenance() -> None:
+    """`(query, source)` is what makes a dead LLM path assertable (review M3).
+
+    A broken generator degrades EVERY record to the deterministic template, and
+    the distinctness test cannot see it because the template interpolates the
+    repo name and stays unique per record.
+    """
+    tool = _load_tool()
+    a = _annotation("CVE-2099-0001")
+    banned = tool.mine_banned_tokens(a)
+
+    _q, source = tool.generate_clean_query(a, banned, lambda _a: "A clean generated question.")
+    assert source == "llm"
+
+    _q, source = tool.generate_clean_query(a, banned, lambda _a: "")
+    assert source == "template"
+
+
+def test_build_record_stamps_query_source_into_metadata() -> None:
+    tool = _load_tool()
+    a = _annotation("CVE-2099-0001")
+    llm, _ = tool.build_record(a, "b" * 40, generator=lambda _a: "A clean generated question.")
+    assert llm["metadata"]["query_source"] == "llm"
+
+    fallback, _ = tool.build_record(a, "b" * 40, generator=lambda _a: "")
+    assert fallback["metadata"]["query_source"] == "template"

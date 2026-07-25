@@ -44,7 +44,12 @@ def test_combined_config_gates_include_exactness_and_grounding() -> None:
     assert "used_indexed_tools" in kinds
     exact = next(g for g in cfg.ask_rubric.gates if g.kind == "gold_substring_all")
     assert exact.name == "exact_id"
-    assert exact.params == {}
+    # Scoped to the identifiers, NOT the file set. crosscommitvuln gold takes the
+    # raw union of each contributing commit's files_changed (one record carries
+    # 128 paths), so an unscoped gate demanded every one verbatim, was
+    # unwinnable, and sank every ccv sample to 0.0 via fail_fast. Satisfiability
+    # itself is pinned by test_exact_id_gate_satisfiable.py.
+    assert exact.params == {"keys": ["cve_id", "cwe_id_0"]}
 
 
 def test_task_id_prefix_is_the_leading_slash_component() -> None:

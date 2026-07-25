@@ -58,11 +58,16 @@ _CWE_CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
     "CWE-79": ("cross-site scripting", "xss"),
     "CWE-89": ("sql injection",),
     "CWE-94": ("code injection",),
+    "CWE-125": ("out-of-bounds read", "buffer over-read", "out of bounds read"),
+    "CWE-287": ("improper authentication", "authentication bypass"),
     "CWE-306": ("missing authentication",),
     "CWE-321": ("hard-coded key", "hardcoded key"),
+    "CWE-345": ("insufficient verification", "data authenticity"),
     "CWE-347": ("signature bypass", "signature verification"),
+    "CWE-352": ("cross-site request forgery", "csrf"),
     "CWE-502": ("deserialization", "unsafe deserialization"),
     "CWE-770": ("resource exhaustion",),
+    "CWE-798": ("hard-coded credentials", "hardcoded credentials", "embedded credentials"),
     "CWE-915": ("mass assignment",),
     "CWE-918": ("server-side request forgery", "ssrf"),
     "CWE-943": ("query injection", "nosql injection"),
@@ -261,7 +266,17 @@ def _flaw_class_tokens(annotation: dict) -> list[str]:
     summary = str(annotation.get("summary", "")).lower()
     tokens: list[str] = []
     for cwe in annotation.get("cwe_ids") or []:
-        tokens += _CWE_CLASS_KEYWORDS.get(str(cwe), ())
+        # Fail loud, not silently: an unmapped CWE contributes NO phrases, so the
+        # query leak-gate becomes a no-op for that record and a generated query
+        # may name the vulnerability class outright. A build-time KeyError is far
+        # cheaper than a leaked needle nobody notices.
+        key = str(cwe)
+        if key not in _CWE_CLASS_KEYWORDS:
+            raise KeyError(
+                f"no flaw-class words for {key}; add it to _CWE_CLASS_KEYWORDS or "
+                "the query leak-gate silently stops covering records that carry it"
+            )
+        tokens += _CWE_CLASS_KEYWORDS[key]
     for phrases in _CWE_CLASS_KEYWORDS.values():
         tokens += [p for p in phrases if p in summary]
     return tokens

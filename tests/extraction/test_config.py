@@ -410,3 +410,70 @@ def test_sweep_scans_past_first_line(tmp_path):
     benign = tmp_path / "plain.json"
     benign.write_text('{"name": "pkg", "version": "1.0"}\n')
     assert not _any_line_is_gold_bearing(benign)
+
+
+#: Text formats pydocs-mcp will index. The JSON/JSONL sweep above cannot see
+#: these, which is how gold-bearing markdown shipped unnoticed (review H1).
+_INDEXABLE_TEXT = ("*.md", "*.rst", "*.txt")
+
+#: Files allowed to name a shipped CVE id: the review artifacts that must be
+#: able to discuss the leak, and the vendored corpus itself.
+_GOLD_MENTION_ALLOWED = ("docs/superpowers/reviews/",)
+
+
+def _shipped_cve_ids() -> set[str]:
+    """CVE ids read from the vendored corpus, never hardcoded here.
+
+    Deriving them means a record added later is covered automatically — and it
+    keeps this test file itself free of gold.
+    """
+    import json
+
+    repo_root = Path(__file__).resolve().parents[2]
+    corpus = repo_root / "benchmarks/src/pydocs_eval/datasets/data/crosscommitvuln/records.jsonl"
+    if not corpus.exists():  # pragma: no cover - corpus always ships
+        return set()
+    return {
+        str(json.loads(line)["gold"]["cve_id"])
+        for line in corpus.read_text().splitlines()
+        if line.strip()
+    }
+
+
+def test_no_shipped_cve_id_appears_in_an_indexable_text_file():
+    """Gold answers must not be retrievable from the docs (review H1).
+
+    The eval asks an agent to FIND a vulnerability, so a document naming the CVE
+    id — beside its CWE and gold paths — hands over the answer to anyone who
+    indexes this checkout. That is not hypothetical: the shipped combined
+    optimize config runs against ``~/pydocs-index``, documented as the same
+    index the interactive agent reads, and the ``used_indexed_tools``
+    anti-memorization gate still passes because a tool *was* used.
+
+    The existing sweep globs only ``*.json``/``*.jsonl``, so markdown was
+    invisible to it.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    # `.superpowers` holds gitignored, per-machine working notes: not shipped, so
+    # not this test's business. Residual risk worth knowing: an operator indexing
+    # a WORKING checkout still ingests whatever untracked notes they have locally.
+    # Only the tracked tree can be governed here.
+    skip = {".git", ".venv", "node_modules", "__pycache__", ".claude", "target", ".superpowers"}
+    cve_ids = _shipped_cve_ids()
+    assert cve_ids, "no shipped CVE ids found; the sweep would be vacuous"
+
+    offenders: list[str] = []
+    for pattern in _INDEXABLE_TEXT:
+        for path in repo_root.rglob(pattern):
+            rel = path.relative_to(repo_root)
+            if set(rel.parts) & skip or "crosscommitvuln" in path.parts:
+                continue
+            if any(str(rel).startswith(prefix) for prefix in _GOLD_MENTION_ALLOWED):
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            leaked = sorted(c for c in cve_ids if c in text)
+            if leaked:
+                offenders.append(f"{rel}: {leaked[:3]}")
+    assert not offenders, (
+        f"shipped CVE ids found in indexable text outside the crosscommitvuln floor: {offenders}"
+    )

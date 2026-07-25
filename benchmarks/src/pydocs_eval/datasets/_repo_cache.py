@@ -29,6 +29,7 @@ is also what keeps this clone usable by the network-mode callers.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -74,13 +75,29 @@ _NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def _repo_name(url: str) -> str:
-    """Derive a filesystem-safe base-clone dir name from a repo URL."""
-    tail = url.rstrip("/").rsplit("/", 1)[-1]
-    tail = tail[:-4] if tail.endswith(".git") else tail
+    """A filesystem-safe cache key for ``url``: ``<tail>-<8 hex of sha256>``.
+
+    The tail alone collided: ``github.com/orgA/utils`` and
+    ``github.com/orgB/utils`` mapped to ONE base clone and ONE ``<repo>.bundle``,
+    so the second repo silently reused the first's objects and the prewarm tool
+    reported a force-push/fork error that never mentioned the real cause. The
+    digest disambiguates while the tail keeps a cache dir identifiable by eye.
+
+    Normalized first, so ``…/name``, ``…/name.git`` and ``…/name/`` are one repo
+    and share a cache rather than cloning three times.
+
+    NOTE: this changes every cache dir and bundle filename. Existing caches are
+    orphaned, not corrupted — they are re-cloned on next use, and stale bundles
+    should be re-prewarmed (see benchmarks/README.md).
+    """
+    normalized = url.rstrip("/")
+    normalized = normalized[:-4] if normalized.endswith(".git") else normalized
+    tail = normalized.rsplit("/", 1)[-1]
     name = _NAME_RE.sub("-", tail).strip("-")
     if not name:
         raise ValueError(f"cannot derive a repo name from url: {url!r}")
-    return name
+    digest = hashlib.sha256(normalized.encode()).hexdigest()[:8]
+    return f"{name}-{digest}"
 
 
 def bundle_path(bundle_dir: Path, url: str) -> Path:
@@ -234,6 +251,14 @@ class RepoCache:
             return
         except subprocess.CalledProcessError:
             pass  # unknown locally — try a fetch before giving up
+        # Try the local bundle BEFORE the network. `_clone_source` only runs when
+        # the base clone is ABSENT, so a cache warmed by swe-qa-pro (which shares
+        # this root) or by an earlier release never consulted the bundle at all —
+        # and a newly-pinned sha then went straight to a network fetch that an
+        # airgapped host cannot serve. Offline the bundle is the only source; on a
+        # networked host it is simply cheaper.
+        if self._fetch_from_bundle(base, url) and self._has_sha(base, sha):
+            return
         try:
             _git("fetch", "--all", cwd=base)
         except subprocess.CalledProcessError as exc:
@@ -253,6 +278,38 @@ class RepoCache:
                 f"(not reachable from the default refspec — force-pushed, "
                 f"PR-only, or fork-only commit?)"
             ) from exc
+
+    def _has_sha(self, base: Path, sha: str) -> bool:
+        """Whether ``sha`` is already an object in ``base``."""
+        try:
+            _git("cat-file", "-e", f"{sha}^{{commit}}", cwd=base)
+        except subprocess.CalledProcessError:
+            return False
+        return True
+
+    def _fetch_from_bundle(self, base: Path, url: str) -> bool:
+        """Fetch this repo's prewarmed bundle into ``base``; False when there is none.
+
+        The bundle's refs land under ``refs/remotes/bundle/*`` so they cannot
+        collide with origin's. A corrupt or unreadable bundle is not fatal here —
+        the caller still falls through to the network path, which produces the
+        better error message when both sources fail.
+        """
+        if self.bundle_dir is None:
+            return False
+        bundle = bundle_path(self.bundle_dir, url)
+        if not bundle.exists():
+            return False
+        try:
+            _git(
+                "fetch",
+                str(bundle),
+                "+refs/heads/*:refs/remotes/bundle/*",
+                cwd=base,
+            )
+        except subprocess.CalledProcessError:
+            return False
+        return True
 
     def _add_worktree(self, base: Path, target: Path, sha: str) -> None:
         """Add a detached worktree at ``sha``; re-raise bad SHAs with context."""
