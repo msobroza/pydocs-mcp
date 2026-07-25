@@ -14,7 +14,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from pydocs_eval.datasets._repo_cache import RepoCache, read_checkout_files
+from pydocs_eval.datasets._repo_cache import RepoCache, bundle_path, read_checkout_files
 
 _TOOL = Path(__file__).parents[2] / "tools" / "prewarm_crosscommitvuln_corpus.py"
 
@@ -81,7 +81,7 @@ def test_prewarm_builds_bundle_and_is_idempotent(tmp_path: Path) -> None:
         ]
     )
     assert rc == 0
-    bundle = bundles / "origin.bundle"
+    bundle = bundle_path(bundles, url)
     assert bundle.exists() and bundle.stat().st_size > 0
     first_mtime = bundle.stat().st_mtime_ns
 
@@ -157,7 +157,7 @@ def test_bundle_carries_every_sha_for_a_multi_cve_repo(tmp_path: Path) -> None:
         )
         == 0
     )
-    assert list(bundles.glob("*.bundle")) == [bundles / "origin.bundle"]  # one bundle, both shas
+    assert list(bundles.glob("*.bundle")) == [bundle_path(bundles, url)]  # one bundle, both shas
 
     shutil.rmtree(origin)  # offline proof
     cache = RepoCache(root=tmp_path / "eval-cache", bundle_dir=bundles)
@@ -217,7 +217,7 @@ def test_prewarm_rebuilds_when_records_pin_a_new_sha_for_a_bundled_repo(tmp_path
 
     one = _write_records(tmp_path, [{"task_id": "cve-a", "repo_url": url, "prefix_sha": first}])
     assert _prewarm(tool, bundles, one, tmp_path / "c1") == 0
-    bundle = bundles / "origin.bundle"
+    bundle = bundle_path(bundles, url)
     assert _bundle_refs(bundle) == {f"refs/heads/ccv-{first}"}
 
     # A later commit adds a second CVE on the SAME repo.
@@ -252,10 +252,10 @@ def test_prewarm_still_skips_when_the_bundle_already_carries_every_sha(tmp_path:
     )
 
     assert _prewarm(tool, bundles, records, tmp_path / "c1") == 0
-    mtime = (bundles / "origin.bundle").stat().st_mtime_ns
+    mtime = bundle_path(bundles, url).stat().st_mtime_ns
 
     assert _prewarm(tool, bundles, records, tmp_path / "c2") == 0
-    assert (bundles / "origin.bundle").stat().st_mtime_ns == mtime
+    assert bundle_path(bundles, url).stat().st_mtime_ns == mtime
 
 
 def test_prewarm_rebuilds_an_unreadable_bundle(tmp_path: Path) -> None:
@@ -267,7 +267,7 @@ def test_prewarm_rebuilds_an_unreadable_bundle(tmp_path: Path) -> None:
     records = _write_records(tmp_path, [{"task_id": "cve-a", "repo_url": url, "prefix_sha": first}])
 
     assert _prewarm(tool, bundles, records, tmp_path / "c1") == 0
-    bundle = bundles / "origin.bundle"
+    bundle = bundle_path(bundles, url)
     bundle.write_bytes(b"not a git bundle")
 
     assert _prewarm(tool, bundles, records, tmp_path / "c2") == 0
@@ -295,7 +295,7 @@ def test_relative_bundle_dir_is_resolved_against_the_process_cwd(
     monkeypatch.chdir(workdir)
 
     assert _prewarm(tool, Path("bundles"), records, tmp_path / "c1") == 0
-    assert (workdir / "bundles" / "origin.bundle").exists()
+    assert bundle_path(workdir / "bundles", url).exists()
 
 
 def test_airgap_ready_banner_is_withheld_when_a_repo_failed(tmp_path: Path, caplog) -> None:

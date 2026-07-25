@@ -29,6 +29,7 @@ is also what keeps this clone usable by the network-mode callers.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -74,13 +75,29 @@ _NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def _repo_name(url: str) -> str:
-    """Derive a filesystem-safe base-clone dir name from a repo URL."""
-    tail = url.rstrip("/").rsplit("/", 1)[-1]
-    tail = tail[:-4] if tail.endswith(".git") else tail
+    """A filesystem-safe cache key for ``url``: ``<tail>-<8 hex of sha256>``.
+
+    The tail alone collided: ``github.com/orgA/utils`` and
+    ``github.com/orgB/utils`` mapped to ONE base clone and ONE ``<repo>.bundle``,
+    so the second repo silently reused the first's objects and the prewarm tool
+    reported a force-push/fork error that never mentioned the real cause. The
+    digest disambiguates while the tail keeps a cache dir identifiable by eye.
+
+    Normalized first, so ``…/name``, ``…/name.git`` and ``…/name/`` are one repo
+    and share a cache rather than cloning three times.
+
+    NOTE: this changes every cache dir and bundle filename. Existing caches are
+    orphaned, not corrupted — they are re-cloned on next use, and stale bundles
+    should be re-prewarmed (see benchmarks/README.md).
+    """
+    normalized = url.rstrip("/")
+    normalized = normalized[:-4] if normalized.endswith(".git") else normalized
+    tail = normalized.rsplit("/", 1)[-1]
     name = _NAME_RE.sub("-", tail).strip("-")
     if not name:
         raise ValueError(f"cannot derive a repo name from url: {url!r}")
-    return name
+    digest = hashlib.sha256(normalized.encode()).hexdigest()[:8]
+    return f"{name}-{digest}"
 
 
 def bundle_path(bundle_dir: Path, url: str) -> Path:

@@ -59,7 +59,10 @@ def _make_bundle(tmp_path: Path, origin: Path, sha: str, name: str = "origin") -
     work = tmp_path / f"work-{sha[:8]}"
     _run(tmp_path, "clone", "-q", str(origin), str(work))
     _run(work, "branch", "-f", f"ccv-{sha}", sha)
-    _run(work, "bundle", "create", str(bundles / f"{name}.bundle"), f"ccv-{sha}")
+    from pydocs_eval.datasets._repo_cache import bundle_path
+
+    url = "file://" + str(origin)
+    _run(work, "bundle", "create", str(bundle_path(bundles, url)), f"ccv-{sha}")
     return bundles
 
 
@@ -77,7 +80,9 @@ def test_bundle_clone_leaves_origin_pointing_at_the_real_url(tmp_path: Path) -> 
     cache = RepoCache(root=tmp_path / "eval-cache", bundle_dir=bundles)
     cache.checkout(url, first)
 
-    base = tmp_path / "eval-cache" / "origin"
+    from pydocs_eval.datasets._repo_cache import _repo_name
+
+    base = tmp_path / "eval-cache" / _repo_name(url)
     assert _run(base, "remote", "get-url", "origin") == url
 
 
@@ -98,8 +103,10 @@ def test_an_already_poisoned_base_clone_is_repaired_on_reuse(tmp_path: Path) -> 
     cache.checkout(url, first)
 
     # Simulate the pre-fix on-disk state: origin bound to the bundle file.
-    base = root / "origin"
-    _run(base, "remote", "set-url", "origin", str(bundles / "origin.bundle"))
+    from pydocs_eval.datasets._repo_cache import _repo_name, bundle_path
+
+    base = root / _repo_name(url)
+    _run(base, "remote", "set-url", "origin", str(bundle_path(bundles, url)))
 
     # Reusing the cache must repair it, so the missing sha is fetchable again.
     assert (cache.checkout(url, second) / "b.py").exists()
@@ -246,3 +253,29 @@ def test_bundle_is_consulted_when_a_base_clone_already_exists(tmp_path: Path) ->
     shutil.rmtree(origin)
     cache = RepoCache(root=root, bundle_dir=bundles)
     assert (cache.checkout(url, third) / "c.py").exists()
+
+
+def test_repos_sharing_a_url_tail_get_distinct_cache_dirs(tmp_path: Path) -> None:
+    """Two orgs, one repo name, must not share a base clone or a bundle (L2).
+
+    `_repo_name` keyed off the URL tail only, so github.com/orgA/utils and
+    github.com/orgB/utils mapped to one cache dir AND one <repo>.bundle. The
+    second repo would silently reuse the first's objects, and the prewarm tool
+    would report a confusing force-push/fork error rather than a collision.
+    """
+    from pydocs_eval.datasets._repo_cache import _repo_name, bundle_path
+
+    a = "https://github.com/orgA/utils"
+    b = "https://github.com/orgB/utils"
+    assert _repo_name(a) != _repo_name(b)
+    assert bundle_path(tmp_path, a) != bundle_path(tmp_path, b)
+    # Still readable: the tail survives so a cache dir is identifiable by eye.
+    assert _repo_name(a).startswith("utils-")
+
+
+def test_repo_name_is_stable_across_url_spellings(tmp_path: Path) -> None:
+    """`.git` and a trailing slash are the same repo, so they must share a cache."""
+    from pydocs_eval.datasets._repo_cache import _repo_name
+
+    base = "https://github.com/org/name"
+    assert _repo_name(base) == _repo_name(base + ".git") == _repo_name(base + "/")

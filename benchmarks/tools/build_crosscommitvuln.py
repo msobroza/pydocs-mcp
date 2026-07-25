@@ -172,7 +172,7 @@ def generate_clean_query(
     banned: Sequence[str],
     generator: Callable[[dict], str],
     attempts: int = _GEN_ATTEMPTS,
-) -> str:
+) -> tuple[str, str]:
     """SAFETY CORE (design §5.2): a leak-free generated query, else the template.
 
     Each candidate from ``generator`` is gated by :func:`assert_query_clean`
@@ -181,6 +181,12 @@ def generate_clean_query(
     empty or leaks, return the deterministic :func:`build_query` template —
     guaranteed clean — so a LEAKING QUERY CAN NEVER SHIP. ``generator`` is
     injected so tests pass a fake; production passes :func:`_production_generator`.
+
+    Returns ``(query, source)`` where ``source`` is ``"llm"`` or ``"template"``.
+    WHY the second value: a broken generator degrades EVERY record to the
+    template, and the distinctness test cannot see it (the template interpolates
+    the repo name, so it stays unique per record). Recording provenance makes the
+    silent-death case assertable (review M3).
     """
     cve = annotation.get("cve_id")
     for _ in range(attempts):
@@ -192,14 +198,14 @@ def generate_clean_query(
         except ValueError as leak:
             log.info("regenerating query for %s: %s", cve, leak)
             continue
-        return query
+        return query, "llm"
     log.info(
         "query generation exhausted for %s after %d attempt(s); using deterministic "
         "template fallback (design §5.2)",
         cve,
         attempts,
     )
-    return build_query(annotation)
+    return build_query(annotation), "template"
 
 
 def _production_generator(annotation: dict) -> str:
@@ -227,9 +233,9 @@ def build_record(
     # which must be banned BEFORE the query is generated and leak-checked.
     banned = tuple(mine_banned_tokens(annotation)) + tuple(t for t in extra_banned if t)
     if generator is None:
-        query = build_query(annotation)
+        query, query_source = build_query(annotation), "template"
     else:
-        query = generate_clean_query(annotation, banned, generator)
+        query, query_source = generate_clean_query(annotation, banned, generator)
     assert_query_clean(query, banned)  # build-failing final leak check (design §5.2)
     task_id = str(annotation["cve_id"]).lower()
     record = {
@@ -244,7 +250,7 @@ def build_record(
             "mechanism": build_mechanism(annotation),
             "files": list(build_file_set(annotation)),
         },
-        "metadata": _metadata(annotation),
+        "metadata": _metadata(annotation) | {"query_source": query_source},
     }
     return record, {"task_id": task_id, "banned": list(banned)}
 
