@@ -267,3 +267,69 @@ def test_mcnemar_from_pairs_key_mismatch_raises() -> None:
 def test_mcnemar_from_pairs_non_binary_value_raises() -> None:
     with pytest.raises(ValueError, match="2"):
         mcnemar_from_pairs({"i1": 2}, {"i1": 1})
+
+
+# --------------------------------------------------------------------------- #
+# Wilcoxon signed-rank — the paired test for CONTINUOUS outcomes
+# --------------------------------------------------------------------------- #
+
+
+def test_signed_rank_all_improvements_is_significant() -> None:
+    from pydocs_eval.metrics.aggregate import wilcoxon_signed_rank_p_one_sided
+
+    assert wilcoxon_signed_rank_p_one_sided([0.1] * 6) <= 0.05
+
+
+def test_signed_rank_no_difference_is_not_significant() -> None:
+    from pydocs_eval.metrics.aggregate import wilcoxon_signed_rank_p_one_sided
+
+    assert wilcoxon_signed_rank_p_one_sided([0.0] * 8) == 1.0
+
+
+def test_signed_rank_is_directional() -> None:
+    """Uniform regressions must never look significant (one-sided, like McNemar)."""
+    from pydocs_eval.metrics.aggregate import wilcoxon_signed_rank_p_one_sided
+
+    assert wilcoxon_signed_rank_p_one_sided([-0.2] * 6) > 0.5
+
+
+def test_signed_rank_uses_MAGNITUDE_not_just_sign() -> None:
+    """The whole point: one large gain outweighs several trivial losses.
+
+    A sign test (or McNemar over thresholded outcomes) sees 3-vs-2 and shrugs;
+    the signed-rank sees that the gains are an order of magnitude larger.
+    """
+    from pydocs_eval.metrics.aggregate import wilcoxon_signed_rank_p_one_sided
+
+    big_gains = [0.5, 0.4, 0.45, -0.01, -0.02]
+    tiny_edge = [0.02, 0.01, 0.015, -0.01, -0.02]
+    assert wilcoxon_signed_rank_p_one_sided(big_gains) < wilcoxon_signed_rank_p_one_sided(tiny_edge)
+
+
+def test_signed_rank_ignores_exact_ties() -> None:
+    """Zero differences carry no information and must not dilute the statistic."""
+    from pydocs_eval.metrics.aggregate import wilcoxon_signed_rank_p_one_sided
+
+    assert wilcoxon_signed_rank_p_one_sided([0.1] * 6) == wilcoxon_signed_rank_p_one_sided(
+        [0.1] * 6 + [0.0] * 5
+    )
+
+
+def test_signed_rank_beats_mcnemar_at_a_small_paired_effect() -> None:
+    """The measured motivation (see the review discussion): thresholding a
+    continuous outcome discards most of the power at small n."""
+    from pydocs_eval.metrics.aggregate import (
+        mcnemar_exact_p_one_sided,
+        wilcoxon_signed_rank_p_one_sided,
+    )
+
+    # 13 tasks, every one improves slightly, none crosses a 0.5 threshold.
+    base = [0.30 + 0.01 * i for i in range(13)]
+    cand = [b + 0.10 for b in base]
+    b_flips = sum(1 for x, y in zip(base, cand, strict=True) if x < 0.5 <= y)
+    c_flips = sum(1 for x, y in zip(base, cand, strict=True) if y < 0.5 <= x)
+
+    assert mcnemar_exact_p_one_sided(b_flips, c_flips) > 0.05  # blind to it
+    assert (
+        wilcoxon_signed_rank_p_one_sided([y - x for x, y in zip(base, cand, strict=True)]) <= 0.05
+    )

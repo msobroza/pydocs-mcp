@@ -43,8 +43,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pydocs_eval.metrics.aggregate import mcnemar_exact_p_one_sided
-from pydocs_eval.trajectory.eval_report import GroundTruthOutcome
+from pydocs_eval.metrics.aggregate import (
+    mcnemar_exact_p_one_sided,
+    wilcoxon_signed_rank_p_one_sided,
+)
+from pydocs_eval.trajectory.eval_report import GroundTruthOutcome, soft_resolve_fraction
 from pydocs_eval.trajectory.gate import GateDecision
 
 
@@ -65,8 +68,18 @@ class AcceptanceConfig:
 
     alpha: float
     c_sel: float
+    #: Which paired test decides acceptance. ``"mcnemar"`` (the default) is the
+    #: original binary-resolve rule; ``"signed_rank"`` keeps the ground-truth
+    #: partial credit (`soft_resolve_fraction`) that a binary test discards.
+    #: Pre-registered like alpha/c_sel — switching it mid-campaign would be a
+    #: forking path, which is why it lives here and not in a call argument.
+    statistic: str = "mcnemar"
 
     def __post_init__(self) -> None:
+        if self.statistic not in {"mcnemar", "signed_rank"}:
+            raise ValueError(
+                f"statistic must be 'mcnemar' or 'signed_rank', got {self.statistic!r}"
+            )
         if not 0.0 < self.alpha < 1.0:
             raise ValueError(
                 f"alpha must be in (0, 1), got {self.alpha!r}; it is a significance level"
@@ -120,7 +133,23 @@ def decide_acceptance(
         False
     """
     b, c = _discordant_counts(candidate, incumbent)
-    p_value = mcnemar_exact_p_one_sided(b, c)
+    if config.statistic == "signed_rank":
+        # Partial-credit resolve keeps the magnitude McNemar discards. At the
+        # corpus sizes this harness runs that is decisive: n=13 with a +0.10
+        # shift gives McNemar ~3% power against the signed-rank's ~95%, because
+        # every improvement that does not cross the resolve boundary is invisible
+        # to a binary test.
+        #
+        # The lock holds: `soft_resolve_fraction` is derived from the eval
+        # report's own F2P/P2P test-name sets — the same ground-truth inputs
+        # `run_gate` consumes — NOT from a shaped or projected score. Feeding a
+        # shaped score here would be exactly what ADR 0017 §Decision 8 forbids.
+        paired = _paired(candidate, incumbent)
+        p_value = wilcoxon_signed_rank_p_one_sided(
+            [soft_resolve_fraction(cand) - soft_resolve_fraction(inc) for cand, inc in paired]
+        )
+    else:
+        p_value = mcnemar_exact_p_one_sided(b, c)
     cost_within_c_sel = candidate_gate.cost_usd <= config.c_sel
     accepted = (
         p_value <= config.alpha
@@ -131,6 +160,26 @@ def decide_acceptance(
     return AcceptanceDecision(
         accepted=accepted, b=b, c=c, p_value=p_value, cost_within_c_sel=cost_within_c_sel
     )
+
+
+def _paired(
+    candidate: Sequence[GroundTruthOutcome], incumbent: Sequence[GroundTruthOutcome]
+) -> list[tuple[GroundTruthOutcome, GroundTruthOutcome]]:
+    """Pair outcomes on ``instance_id`` in a stable order, enforcing identical keys.
+
+    Same contract as :func:`_discordant_counts` — a key-set mismatch is a bug in
+    the campaign, not data — but yields the outcomes themselves so a continuous
+    statistic can read their test-name sets.
+    """
+    cand = {o.instance_id: o for o in candidate}
+    inc = {o.instance_id: o for o in incumbent}
+    if cand.keys() != inc.keys():
+        diff = sorted(set(cand) ^ set(inc))
+        raise ValueError(
+            f"incumbent/candidate instance-id key sets differ; symmetric difference: {diff}; "
+            "acceptance requires the identical paired instance list (ADR 0018)"
+        )
+    return [(cand[k], inc[k]) for k in sorted(cand)]
 
 
 def _discordant_counts(
