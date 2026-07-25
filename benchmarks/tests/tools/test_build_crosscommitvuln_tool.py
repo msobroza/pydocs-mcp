@@ -522,3 +522,28 @@ def test_claude_generate_strips_stdout_and_swallows_timeout_and_empty(monkeypatc
 
     monkeypatch.setattr(tool.subprocess, "run", _timeout)
     assert tool._claude_generate("p") == ""  # timeout -> "" (swallowed, never aborts)
+
+
+def test_corpus_write_refuses_to_shrink_an_existing_file(tmp_path) -> None:
+    """A degraded build must not erase the reviewed corpus (review M2).
+
+    Every resolution step needs GitHub; offline, all records drop and the old
+    unconditional write truncated records.jsonl to empty — with CI green,
+    because the vendored-pin tests skip on an empty file.
+    """
+    tool = _load_tool()
+    target = tmp_path / "records.jsonl"
+    tool._write_corpus(target, [{"task_id": f"r{i}"} for i in range(25)])
+    assert len(target.read_text().splitlines()) == 25
+
+    with pytest.raises(SystemExit, match="refusing to shrink"):
+        tool._write_corpus(target, [])
+    assert len(target.read_text().splitlines()) == 25  # untouched
+
+
+def test_corpus_write_allows_growth_and_a_first_build(tmp_path) -> None:
+    tool = _load_tool()
+    target = tmp_path / "records.jsonl"
+    tool._write_corpus(target, [{"task_id": "a"}])  # first build: no floor
+    tool._write_corpus(target, [{"task_id": "a"}, {"task_id": "b"}])  # growth: fine
+    assert len(target.read_text().splitlines()) == 2

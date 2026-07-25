@@ -212,6 +212,7 @@ def build_record(
     prefix_sha: str,
     *,
     generator: Callable[[dict], str] | None = None,
+    extra_banned: tuple[str, ...] = (),
 ) -> tuple[dict, dict]:
     """One annotation + pinned sha -> (vendored record, banned-token row).
 
@@ -222,7 +223,9 @@ def build_record(
     Either way the trailing :func:`assert_query_clean` is the final belt-and-suspenders
     guard — both the gated generated query and the fallback already pass it.
     """
-    banned = mine_banned_tokens(annotation)
+    # ``extra_banned`` carries tokens resolved from git (the fix-commit date),
+    # which must be banned BEFORE the query is generated and leak-checked.
+    banned = tuple(mine_banned_tokens(annotation)) + tuple(t for t in extra_banned if t)
     if generator is None:
         query = build_query(annotation)
     else:
@@ -264,6 +267,29 @@ def _metadata(annotation: dict) -> dict[str, str]:
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+
+def _write_corpus(path: Path, rows: list[dict]) -> None:
+    """Write the vendored corpus, refusing to SHRINK an existing one.
+
+    WHY: every resolution step needs GitHub. On a rate-limited or offline box
+    every record is tallied as broken and dropped, and an unconditional write
+    truncated the committed records.jsonl to EMPTY — with CI staying green,
+    because the vendored-pin tests skip on an empty file. The corpus is a
+    reviewed artifact, so a degraded build must fail loudly rather than erase it.
+
+    A monotonicity guard rather than an absolute floor: it needs no magic
+    number, it self-adjusts as the corpus grows, and a first build (or a build
+    redirected elsewhere for inspection) is unaffected.
+    """
+    existing = len(path.read_text().splitlines()) if path.exists() else 0
+    if len(rows) < existing:
+        raise SystemExit(
+            f"refusing to shrink {path} from {existing} to {len(rows)} record(s): "
+            "the build degraded, most likely no/rate-limited GitHub access. "
+            "Re-run with network access, or delete the file deliberately to rebuild."
+        )
+    _write_jsonl(path, rows)
 
 
 class _DropRecord(Exception):
@@ -320,6 +346,7 @@ def _resolve_and_build(
     siblings: list[dict],
     *,
     generator: Callable[[dict], str] | None = None,
+    extra_banned: tuple[str, ...] = (),
 ) -> tuple[dict, dict]:
     """Resolve prefix_sha, run both ancestry gates, and build one vendored record.
 
@@ -343,13 +370,18 @@ def _resolve_and_build(
     )
     if co:
         raise _DropRecord("ancestry", f"co-resident CVE(s) {', '.join(co)} at {prefix_sha[:12]}")
-    record, banned_row = build_record(annotation, prefix_sha, generator=generator)
+    # Resolve temporal metadata BEFORE build_record, so the fix date can join the
+    # banned-token list the query leak-check runs against (design §9.1). Resolved
+    # afterwards it was structurally unbannable, and a generated query naming the
+    # patch date passed both gates unchallenged.
+    fix_commit_date = _git(checkout, "show", "-s", "--format=%cs", annotation["fix_commit"])
+    record, banned_row = build_record(
+        annotation, prefix_sha, generator=generator, extra_banned=(fix_commit_date,)
+    )
     # Gold-file gate (design §5.3): keep only .py gold present at the snapshot the
     # model actually sees; a record with no answerable gold left is dropped here.
     apply_gold_file_gate(record, cache.file_tree(str(annotation["repo"]), prefix_sha))
-    record["metadata"]["fix_commit_date"] = _git(
-        checkout, "show", "-s", "--format=%cs", annotation["fix_commit"]
-    )
+    record["metadata"]["fix_commit_date"] = fix_commit_date
     return record, banned_row
 
 
@@ -400,7 +432,7 @@ def main(argv: list[str]) -> int:
         records.append(record)
         banned_rows.append(banned_row)
 
-    _write_jsonl(_VENDORED_DIR / "records.jsonl", records)
+    _write_corpus(_VENDORED_DIR / "records.jsonl", records)
     _write_jsonl(_VENDORED_DIR / "banned_tokens.jsonl", banned_rows)
     log.info(
         "vendored %d record(s); ancestry-dropped %d (%s); broken-dropped %d (%s); "

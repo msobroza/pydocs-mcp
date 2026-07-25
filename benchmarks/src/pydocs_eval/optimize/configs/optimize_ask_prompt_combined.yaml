@@ -21,7 +21,14 @@ ask_rubric:
   gates:
     - {name: non_empty, kind: min_answer_chars, params: {n: 40}}
     - {name: grounded, kind: gold_substring, params: {}}       # weak ANY-match screen
-    - {name: exact_id, kind: gold_substring_all, params: {}}   # ALL gold tokens verbatim (§6.5)
+    # Exact identification = the CVE id + its primary CWE, verbatim. NOT the
+    # file set: crosscommitvuln gold takes the raw union of each contributing
+    # commit's files_changed, so 10 of 25 records carry >5 gold paths and one
+    # carries 128. Demanding all of them verbatim made the gate unwinnable, so
+    # fail_fast short-circuited the judge and EVERY ccv sample scored 0.0 —
+    # the slice contributed no gradient. Pinned by
+    # tests/optimize/test_exact_id_gate_satisfiable.py.
+    - {name: exact_id, kind: gold_substring_all, params: {keys: [cve_id, cwe_id_0]}}
     - {name: used_tools, kind: used_indexed_tools, params: {n: 1}}  # anti-memorization (G7)
   criteria:
     - {name: correctness,  weight: 0.4, description: "Factually correct against the repository."}
