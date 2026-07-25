@@ -330,4 +330,6 @@ def test_signed_rank_beats_mcnemar_at_a_small_paired_effect() -> None:
     c_flips = sum(1 for x, y in zip(base, cand, strict=True) if y < 0.5 <= x)
 
     assert mcnemar_exact_p_one_sided(b_flips, c_flips) > 0.05  # blind to it
-    assert wilcoxon_signed_rank_p_one_sided([y - x for x, y in zip(base, cand, strict=True)]) <= 0.05
+    assert (
+        wilcoxon_signed_rank_p_one_sided([y - x for x, y in zip(base, cand, strict=True)]) <= 0.05
+    )
