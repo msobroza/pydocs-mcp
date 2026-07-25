@@ -1,0 +1,10 @@
+{
+  "instance_id": "widgetlib__textutil-slugify",
+  "workspace_root": "/var/folders/k4/j07ld9p97c95csgxwlj_bldw0000gn/T/tmp.NV50bvR1FC",
+  "gold_files": [
+    "widgetlib/textutil.py"
+  ],
+  "final_patch_files": [
+    "widgetlib/textutil.py"
+  ]
+}

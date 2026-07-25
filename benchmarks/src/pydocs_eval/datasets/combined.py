@@ -36,8 +36,26 @@ class CombinedDataset:
         return self._iter_tasks()
 
     async def _iter_tasks(self) -> AsyncIterator[EvalTask]:
-        for prefix, ds in self._members():
-            async for task in ds.tasks():
+        """Round-robin the members so ANY prefix of the stream is representative.
+
+        WHY not member-by-member: every consumer truncates. ``run_agent_track``
+        breaks at ``max_tasks`` (default 48) and the optimize fitness cuts on
+        budget, so draining swe-qa-pro (~260 tasks) before the first ccv task
+        made the smaller member invisible to any truncated run — which still
+        reported itself under the combined name. Interleaving costs nothing and
+        makes the head of the stream carry every member.
+
+        Members that run out simply drop out; the remainder keep yielding.
+        """
+        iterators = [(prefix, aiter(ds.tasks())) for prefix, ds in self._members()]
+        while iterators:
+            for entry in list(iterators):
+                prefix, iterator = entry
+                try:
+                    task = await anext(iterator)
+                except StopAsyncIteration:
+                    iterators.remove(entry)
+                    continue
                 yield replace(task, task_id=f"{prefix}/{task.task_id}")
 
     def _members(self) -> tuple[tuple[str, Dataset], ...]:

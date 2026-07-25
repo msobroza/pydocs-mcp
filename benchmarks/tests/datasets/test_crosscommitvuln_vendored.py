@@ -91,3 +91,67 @@ def test_notice_ships_with_the_vendored_data() -> None:
         "10.5281/zenodo.19338596",
     ):
         assert required in notice
+
+
+def test_every_shipped_cwe_has_flaw_class_words() -> None:
+    """An unmapped CWE makes the query leak-gate a NO-OP for that record (M1).
+
+    `mine_banned_tokens` looks each CWE up in `_CWE_CLASS_KEYWORDS`; a miss
+    contributes no phrases, so a generated query may name the vulnerability class
+    outright ("an authentication bypass in the certificate path") and pass both
+    `generate_clean_query` and the final `assert_query_clean` unchallenged.
+    A silent no-op is the worst failure mode a leak gate has.
+    """
+    from pydocs_eval.datasets._crosscommitvuln_build import _CWE_CLASS_KEYWORDS
+
+    shipped = {cwe for rec in _records() for cwe in rec["gold"]["cwe_ids"]}
+    unmapped = sorted(str(c) for c in shipped if str(c) not in _CWE_CLASS_KEYWORDS)
+    assert unmapped == [], (
+        f"no flaw-class words for {unmapped}; the query leak-gate is a no-op for "
+        "records carrying them"
+    )
+
+
+def test_mining_an_unmapped_cwe_fails_loudly() -> None:
+    """Adding a record with an unknown CWE must break the BUILD, not ship silently."""
+    from pydocs_eval.datasets._crosscommitvuln_build import mine_banned_tokens
+
+    with pytest.raises(KeyError, match="CWE-9999"):
+        mine_banned_tokens({"cve_id": "CVE-2099-1", "cwe_ids": ["CWE-9999"], "summary": ""})
+
+
+def test_no_shipped_query_is_a_template_fallback() -> None:
+    """Distinctness is a proxy; PROVENANCE is the invariant (review M3).
+
+    If `_claude_generate` breaks — the CLI is missing or renamed, or `_query_prompt`
+    starts tripping the leak gate on every attempt — `generate_clean_query` falls
+    back to the deterministic template for every record and the LLM-varied-query
+    feature is silently dead. The existing distinctness test still passes, because
+    the template interpolates the repo name and so stays unique per record.
+
+    Checked structurally against the LOCKED template, so it holds for the corpus
+    as shipped today rather than only after the next rebuild.
+    """
+    from pydocs_eval.datasets._crosscommitvuln_build import _QUERY_TEMPLATE
+
+    skeleton = re.escape(_QUERY_TEMPLATE)
+    for field in ("ecosystem", "repo_slug", "severity"):
+        skeleton = skeleton.replace(re.escape("{" + field + "}"), ".+")
+
+    fallbacks = [r["task_id"] for r in _records() if re.fullmatch(skeleton, r["query"], re.S)]
+    assert fallbacks == [], (
+        f"{len(fallbacks)} record(s) shipped the deterministic template instead of a "
+        f"generated query, so the LLM path was dead at build time: {fallbacks[:5]}"
+    )
+
+
+def test_shipped_records_record_their_query_provenance() -> None:
+    """Records built after M3 carry `query_source`; older ones are grandfathered.
+
+    The structural check above is the guard that works today; this one becomes
+    load-bearing after the next corpus rebuild.
+    """
+    for rec in _records():
+        source = rec["metadata"].get("query_source")
+        assert source in (None, "llm", "template"), f"{rec['task_id']}: {source!r}"
+        assert source != "template", f"{rec['task_id']} shipped a template fallback"

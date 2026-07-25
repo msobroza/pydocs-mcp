@@ -394,6 +394,13 @@ The bundles live **only** in that user cache dir — no third-party repo source 
 ever committed or shipped in the wheel. `swe-qa` / `swe-qa-pro` are unaffected:
 they construct `RepoCache()` with no bundle dir and keep the network path.
 
+> **Cache-key change.** Repo cache dirs and bundle filenames are now
+> `<repo>-<8 hex of sha256(url)>`, because the bare repo name collided across
+> orgs (`orgA/utils` and `orgB/utils` shared one base clone AND one bundle).
+> Existing caches and bundles are **orphaned, not corrupted**: base clones are
+> re-cloned on next use, and stale `.bundle` files should be re-prewarmed (or
+> deleted) since nothing reads them under the old names.
+
 **Re-run the prewarm after adding records.** The skip is content-aware: a repo is
 skipped only when its bundle already carries every commit the records pin for it,
 so a repo that gains a second CVE (or whose bundle is corrupt) is rebuilt rather

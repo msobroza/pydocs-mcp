@@ -1,0 +1,46 @@
+{
+  "cost_usd": 0.058223,
+  "final_patch_files": [
+    "widgetlib/pricing.py"
+  ],
+  "gold_f2p": [
+    "tests/test_pricing.py::test_apply_discount_quarter",
+    "tests/test_pricing.py::test_apply_discount_zero_is_noop"
+  ],
+  "gold_files": [
+    "widgetlib/pricing.py"
+  ],
+  "gold_p2p": [
+    "tests/test_pricing.py::test_apply_discount_rejects_out_of_range",
+    "tests/test_pricing.py::test_with_tax",
+    "tests/test_pricing.py::test_with_tax_rejects_negative"
+  ],
+  "instance_id": "widgetlib__pricing-discount",
+  "patch_bytes": 430,
+  "report": {
+    "widgetlib__pricing-discount": {
+      "patch_successfully_applied": true,
+      "resolved": true,
+      "tests_status": {
+        "FAIL_TO_PASS": {
+          "failure": [],
+          "success": [
+            "tests/test_pricing.py::test_apply_discount_quarter",
+            "tests/test_pricing.py::test_apply_discount_zero_is_noop"
+          ]
+        },
+        "PASS_TO_PASS": {
+          "failure": [],
+          "success": [
+            "tests/test_pricing.py::test_apply_discount_rejects_out_of_range",
+            "tests/test_pricing.py::test_with_tax",
+            "tests/test_pricing.py::test_with_tax_rejects_negative"
+          ]
+        }
+      }
+    }
+  },
+  "trajectory_id": "2f8a0295-cac2-4900-ad9c-d9f90746dfef",
+  "turn_cap": 15,
+  "workspace_root": "/var/folders/k4/j07ld9p97c95csgxwlj_bldw0000gn/T/tmp.UvWNXruA4x"
+}

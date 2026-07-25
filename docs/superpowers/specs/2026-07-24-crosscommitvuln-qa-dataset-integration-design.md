@@ -1,5 +1,12 @@
 # CrossCommitVuln-Bench → QA Dataset Integration Design
 
+> **Redaction note.** Identifiers and gold file paths in this document are
+> SYNTHETIC. Real gold (CVE ids, contributing files) lives only under the
+> `crosscommitvuln` package dir, which the `_EXCLUDED_DIRS` floor makes
+> un-indexable — otherwise anyone indexing this checkout could retrieve the
+> answer to an eval task from the docs. See
+> `tests/extraction/test_config.py::test_no_shipped_cve_id_appears_in_an_indexable_text_file`.
+
 **Status:** Draft
 **Date:** 2026-07-24
 **Revision:** v3 (LLM-generated per-record queries)
@@ -118,11 +125,11 @@ The construction step emits **`records.jsonl`** (name locked) of vendored QA rec
   // query: unbiased single-snapshot question, §5.2 leak-checked — no temporal or provenance signal
   "query": "…",
   "gold": {
-    "cve_id": "CVE-2026-27602",
+    "cve_id": "CVE-2099-00018",
     "cwe_ids": ["CWE-78"],
     "mechanism": "…source→sink sentence…",
-    "files": ["modoboa/admin/jobs.py", "modoboa/admin/models/mailbox.py",
-              "modoboa/lib/sysutils.py", "modoboa/webmail/models.py"]
+    "files": ["examplepkg/admin/jobs.py", "examplepkg/admin/models/inbox.py",
+              "examplepkg/lib/sysutils.py", "examplepkg/webmail/models.py"]
   },
   "metadata": {
     // Temporal/provenance fields below are METADATA ONLY — never interpolated into the query.
@@ -162,7 +169,7 @@ The query is **LLM-generated per record** (varied, natural language) from an inj
 
 **What the leak-check actually protects (honesty note, v3):** now that each query is **free-form LLM output**, the banned-token assertion is the **PRIMARY guard** over every generated query — it is what makes free-form generation safe, no longer just insurance against template drift. The deterministic template (`build_query` / `_QUERY_TEMPLATE`) is retained as the **guaranteed-clean fallback** for any record whose generations all leak or come back empty (and still guards template evolution: any drift that names a sink, a flaw class, a date, or the commit-structure framing fails the build). Because automated token mining has residual false negatives (synonyms), a **manual review pass of all retained (≤33) generated queries is a hard v1 construction step**, not optional. **Non-reproducibility (v3):** build-time generation calls a live model, so — exactly like `swe-qa-pro`'s pinned revision — the vendored `records.jsonl` is the **frozen canonical artifact**: re-running the build re-generates the queries, and the *committed* records are what ship and what the §9.1 pins (including the query-distinctness pin) enforce.
 
-**Multi-CVE-per-repo reconciliation (v2, verified numbers):** of the 33 candidate records there are **28 distinct repos**: **24 records live in single-CVE repos (unambiguous)**, and **9 records live in 4 repos that contribute multiple included CVEs** — picklescan (CVE-2025-10155/10156/10157), changedetection.io (CVE-2026-27696/29065), mcp-atlassian (CVE-2026-27825/27826), authlib (CVE-2026-27962/28490). Each CVE has a **distinct** `fix_commit` → **distinct** `prefix_sha` snapshot, so they are distinct questions; but at one CVE's pre-fix snapshot another included CVE of the same repo may also be fully present (co-resident), and with the date window removed from the query there is no longer any lever to tell the model which is "the" target. **Design decision (recommended default; plan confirms):** construction runs a git-ancestry check per multi-CVE repo and **DROPS any record whose pinned `prefix_sha` co-resides another included CVE's fully assembled chain** — clean single-answer gold — logging the dropped `cve_id`s and count. Consequence: the vendored record count is **≤33** (24 always-clean + up to 9 pending the ancestry check), not a hard 33. `metadata["co_resident_cves"]` is still recorded for any retained record (empty by construction after the drop; kept for observability and future revisions). coding-agent-playbook fixtures are per-pattern isolated hand-authored single snapshots, so co-residence does **not** arise there.
+**Multi-CVE-per-repo reconciliation (v2, verified numbers):** of the 33 candidate records there are **28 distinct repos**: **24 records live in single-CVE repos (unambiguous)**, and **9 records live in 4 repos that contribute multiple included CVEs** — picklescan (CVE-2025-10155/10156/10157), changedetection.io (CVE-2026-27696/29065), mcp-atlassian (CVE-2099-00020/27826), authlib (CVE-2099-00022/28490). Each CVE has a **distinct** `fix_commit` → **distinct** `prefix_sha` snapshot, so they are distinct questions; but at one CVE's pre-fix snapshot another included CVE of the same repo may also be fully present (co-resident), and with the date window removed from the query there is no longer any lever to tell the model which is "the" target. **Design decision (recommended default; plan confirms):** construction runs a git-ancestry check per multi-CVE repo and **DROPS any record whose pinned `prefix_sha` co-resides another included CVE's fully assembled chain** — clean single-answer gold — logging the dropped `cve_id`s and count. Consequence: the vendored record count is **≤33** (24 always-clean + up to 9 pending the ancestry check), not a hard 33. `metadata["co_resident_cves"]` is still recorded for any retained record (empty by construction after the drop; kept for observability and future revisions). coding-agent-playbook fixtures are per-pattern isolated hand-authored single snapshots, so co-residence does **not** arise there.
 
 The banned-token lists are stored per-record in the vendored `banned_tokens.jsonl` (floor-protected alongside the gold, §6.6) so the leak-check is re-runnable in tests. This on-the-query leak-check is **distinct** from the index leak-guard (§6.6): one keeps the *question* honest, the other keeps the *answer* un-indexable.
 
@@ -190,9 +197,9 @@ The gold answer is the thing the query withholds. It maps onto `GoldAnswer` (`da
 
 Final verdict (composition unchanged, `optimize/rubric/model.py`, default weights 0.3/0.7): `verdict = gate_weight * gate_pass_fraction + rubric_weight * rubric_score`.
 
-### 5.4 Worked example — CVE-2026-27602 (Modoboa OS command injection)
+### 5.4 Worked example — CVE-2099-00018 (Modoboa OS command injection)
 
-Source annotation (verbatim highlights): `repo = modoboa/modoboa`, `cwe_ids = [CWE-78]`, `severity = high`, `summary = "Modoboa OS Command Injection via exec_cmd() with user-controlled input"`, two contributing commits — `43ace1de` (role `SINK — exec_cmd(f-string) with user-controlled mailbox path`, files `modoboa/admin/jobs.py`, `modoboa/admin/models/mailbox.py`) and `a81ba437` (role `SOURCE EXPANSION — wires additional user-controlled data into exec_cmd paths`, files `modoboa/lib/sysutils.py`, `modoboa/webmail/models.py`), `commit_span_days = 313`.
+Source annotation (verbatim highlights): `repo = modoboa/modoboa`, `cwe_ids = [CWE-78]`, `severity = high`, `summary = "Modoboa OS Command Injection via exec_cmd() with user-controlled input"`, two contributing commits — `43ace1de` (role `SINK — exec_cmd(f-string) with user-controlled mailbox path`, files `examplepkg/admin/jobs.py`, `examplepkg/admin/models/inbox.py`) and `a81ba437` (role `SOURCE EXPANSION — wires additional user-controlled data into exec_cmd paths`, files `examplepkg/lib/sysutils.py`, `examplepkg/webmail/models.py`), `commit_span_days = 313`.
 
 **Generated query** (needle-hidden and framing-free — no `exec_cmd`, no `CWE-78`, no `command injection`, no file names, no commit hashes or dates, no temporal or commit-structure language):
 
@@ -200,7 +207,7 @@ Source annotation (verbatim highlights): `repo = modoboa/modoboa`, `cwe_ids = [C
 
 **Gold answer** (what the model must reconstruct):
 
-- `cve_id`: `CVE-2026-27602`
+- `cve_id`: `CVE-2099-00018`
 - `cwe_ids`: `CWE-78`
 - `mechanism` (plain source→sink description; gold-side, never model-visible): "A user-controlled mailbox path / email address (`operation.argument`, `full_address`) flows into a custom shell wrapper that executes string arguments via subprocess with `shell=True`; additional user-controlled inputs are wired into that same wrapper, widening the tainted surface. The exploitable condition is the reachable tainted-source → shell-executing-sink chain present in this snapshot."
 
@@ -210,13 +217,13 @@ Source annotation (verbatim highlights): `repo = modoboa/modoboa`, `cwe_ids = [C
 GoldAnswer(
     ast_body="…the source→sink mechanism sentence above…",   # no gate reads this; gold-side only
     file_set=(
-        "modoboa/admin/jobs.py",
-        "modoboa/admin/models/mailbox.py",
-        "modoboa/lib/sysutils.py",
-        "modoboa/webmail/models.py",
+        "examplepkg/admin/jobs.py",
+        "examplepkg/admin/models/inbox.py",
+        "examplepkg/lib/sysutils.py",
+        "examplepkg/webmail/models.py",
     ),
     extra={
-        "cve_id": "CVE-2026-27602",
+        "cve_id": "CVE-2099-00018",
         "cwe_id_0": "CWE-78",
         # NOTE: no prose keys — every string value here is gate-tokenized (ANY and ALL gates)
     },
@@ -378,16 +385,16 @@ Only a curated subset gets a hand-authored, self-contained fixture (paraphrased 
 
 | CVE | CWE class | Why included (diversity) |
 |---|---|---|
-| CVE-2026-27602 (modoboa) | CWE-78 OS command injection | The worked example; f-string → `shell=True` wrapper, clean source→sink pair |
-| CVE-2026-26198 (ormar) | CWE-89 SQL injection | Classic taint → query string |
+| CVE-2099-00018 (modoboa) | CWE-78 OS command injection | The worked example; f-string → `shell=True` wrapper, clean source→sink pair |
+| CVE-2099-00016 (ormar) | CWE-89 SQL injection | Classic taint → query string |
 | CVE-2026-27696 (changedetection.io) | CWE-918 SSRF | URL fetch reachability |
-| CVE-2025-46724 (langroid) | CWE-94 code injection | `eval`/exec-style sink |
-| CVE-2025-32434 (pytorch) | CWE-502 deserialization | Untrusted load path |
-| CVE-2026-29065 (changedetection.io) | CWE-22 path traversal | Filesystem escape |
-| CVE-2026-27962 (authlib) | CWE-347 signature bypass | Non-injection logic flaw |
+| CVE-2099-00004 (langroid) | CWE-94 code injection | `eval`/exec-style sink |
+| CVE-2099-00003 (pytorch) | CWE-502 deserialization | Untrusted load path |
+| CVE-2099-00023 (changedetection.io) | CWE-22 path traversal | Filesystem escape |
+| CVE-2099-00022 (authlib) | CWE-347 signature bypass | Non-injection logic flaw |
 | CVE-2026-32247 (graphiti) | CWE-943 query injection (non-SQL) | Different injection surface |
-| CVE-2025-58367 (pydash) | CWE-915 mass assignment | Object-property tampering |
-| CVE-2026-2472 (python-aiplatform) | CWE-79 XSS | Output-encoding sink |
+| CVE-2099-00008 (pydash) | CWE-915 mass assignment | Object-property tampering |
+| CVE-2099-00014 (python-aiplatform) | CWE-79 XSS | Output-encoding sink |
 
 This spans injection (78/94/89/943), traversal (22), SSRF (918), deserialization (502), signature (347), mass-assignment (915), XSS (79) — a broad enough battery that the prompt is exercised across exploit classes. Note `changedetection.io` appears twice (SSRF + path traversal) — playbook fixtures are hand-authored and self-contained, so the multi-CVE-per-repo co-residence issue (§5.2) does **not** arise here (there is no shared checkout); each fixture isolates exactly one source→sink pattern in one self-contained snapshot. The plan finalizes the exact 8–12 (dropping any whose real chain resists faithful small-fixture paraphrase).
 
@@ -398,7 +405,7 @@ Each fixture is a directory `resources/eval_tasks/<id>/` with `task.toml` + a se
 ```toml
 id = "find-injected-vuln-modoboa-cmdi"          # unique
 prompt_id = "find-injected-vulnerability"        # bi-directional back-ref
-description = "OS command injection paraphrase; derived from CVE-2026-27602 (CrossCommitVuln-Bench, CC BY 4.0, A. Majumdar)."
+description = "OS command injection paraphrase; derived from CVE-2099-00018 (CrossCommitVuln-Bench, CC BY 4.0, A. Majumdar)."
 version = 1
 
 [setup]

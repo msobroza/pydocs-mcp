@@ -1,9 +1,10 @@
 """Agreement-measurement tests (ADR 0011 validation gate, action item 7).
 
 Exercises the pure agreement math against small synthetic labels and runs the
-``validate_directory`` orchestrator over the six committed attribution fixtures
-— the same one-command path the real validation will take once
-``fixtures/real/labels`` exists.
+``validate_directory`` orchestrator over BOTH committed corpora: the six
+synthetic attribution fixtures and the 12 real captured rollouts — the latter
+pins the exact gate result that dropped ADR 0011's status qualifier, so the
+documented local gate (the benchmarks suite) re-verifies it on every run.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from pydocs_eval.trajectory.compare_labels import (
 from pydocs_eval.trajectory.schema import TrajectorySchemaError
 
 _ATTR = Path(__file__).parent / "fixtures" / "trajectories" / "attribution"
+_REAL = Path(__file__).parent / "fixtures" / "trajectories" / "real"
 
 
 def _attr_for(case: str):
@@ -92,6 +94,21 @@ def test_macro_average_and_threshold() -> None:
     assert aggregate.first_surface_agreement == pytest.approx(5.5 / 6)
     assert aggregate.meets_threshold
     assert aggregate.budget_elided_credit == 1
+
+
+def test_real_corpus_gate_is_suite_enforced() -> None:
+    # The ADR 0011 validation gate over the 12 committed real trajectories —
+    # the run that filled the ADR's Validation results and dropped its status
+    # qualifier (2026-07-21). Fixtures and labels are immutable and attribution
+    # is deterministic (R6), so the exact 1.000/1.000 result is pinned rather
+    # than just the >= 0.90 bar: any drop is a real attributor/normalizer
+    # regression (e.g. un-folding the macOS firmlink fix), never noise.
+    aggregate = validate_directory(_REAL)
+    assert aggregate.trajectories == 12
+    assert aggregate.used_file_agreement == 1.0
+    assert aggregate.first_surface_agreement == 1.0
+    assert aggregate.budget_elided_credit == 0
+    assert aggregate.meets_threshold
 
 
 def test_validate_trajectory_dir_matches_committed_label() -> None:

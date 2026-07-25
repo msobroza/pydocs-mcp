@@ -1,0 +1,48 @@
+{
+  "cost_usd": 0.047908,
+  "final_patch_files": [
+    "widgetlib/textutil.py"
+  ],
+  "gold_f2p": [
+    "tests/test_textutil.py::test_slugify_mixed_case"
+  ],
+  "gold_files": [
+    "widgetlib/textutil.py"
+  ],
+  "gold_p2p": [
+    "tests/test_textutil.py::test_slugify_already_lowercase",
+    "tests/test_textutil.py::test_slugify_strips_symbols",
+    "tests/test_textutil.py::test_truncate_short",
+    "tests/test_textutil.py::test_truncate_long",
+    "tests/test_textutil.py::test_truncate_negative_raises"
+  ],
+  "instance_id": "widgetlib__textutil-slugify",
+  "patch_bytes": 372,
+  "report": {
+    "widgetlib__textutil-slugify": {
+      "patch_successfully_applied": true,
+      "resolved": true,
+      "tests_status": {
+        "FAIL_TO_PASS": {
+          "failure": [],
+          "success": [
+            "tests/test_textutil.py::test_slugify_mixed_case"
+          ]
+        },
+        "PASS_TO_PASS": {
+          "failure": [],
+          "success": [
+            "tests/test_textutil.py::test_slugify_already_lowercase",
+            "tests/test_textutil.py::test_slugify_strips_symbols",
+            "tests/test_textutil.py::test_truncate_long",
+            "tests/test_textutil.py::test_truncate_negative_raises",
+            "tests/test_textutil.py::test_truncate_short"
+          ]
+        }
+      }
+    }
+  },
+  "trajectory_id": "fb179086-d0f4-4890-a201-732084a6930f",
+  "turn_cap": 15,
+  "workspace_root": "/var/folders/k4/j07ld9p97c95csgxwlj_bldw0000gn/T/tmp.NV50bvR1FC"
+}

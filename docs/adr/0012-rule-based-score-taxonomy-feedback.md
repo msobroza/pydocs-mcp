@@ -1,6 +1,6 @@
 # ADR 0012 — Shaped score, failure taxonomy, and feedback generation: fully rule-based; gate isolated by construction
 
-**Status:** Accepted — fixture rule-ambiguity findings pending · **Date:** 2026-07-18 · **Phase:** 2
+**Status:** Accepted · **Date:** 2026-07-18 (real-trajectory findings 2026-07-21) · **Phase:** 2
 
 - **Decision area:** D4 of the Phase 2 owner spec ("instrumentation & derived
   metrics" — the score/label/feedback layer computed from raw traces)
@@ -261,11 +261,11 @@ reflector is the interpreter (R5). Bounded at 2000 chars by default
 never raises. Any richer string strictly improves on the DSPy score-only floor
 (`gepa.py:537-541`).
 
-## Fixture findings (to be completed)
+## Fixture findings
 
-*Filled from the D3/D4 fixture-labeling exercise (10–20 hand-labeled
-trajectories, ADR 0011) before this ADR's status drops the "pending"
-qualifier. It must report:*
+*Filled from the D3/D4 fixture-labeling exercise (12 hand-labeled real
+trajectories, ADR 0011). The status qualifier is now dropped — see the
+real-trajectory subsection for the disposition. Required reporting:*
 
 - Which taxonomy boundaries the rules separated cleanly, and which (if any)
   were ambiguous on real trajectories — in particular `found_but_misdiagnosed`
@@ -282,14 +282,81 @@ qualifier. It must report:*
 - The verdict on option (b): remains shelved, or a concrete ambiguous boundary
   justifies proposing the flag-gated assist in Phase 3.
 
-### Synthetic-only findings (Phase 2, PARTIAL — real-trajectory findings pending)
+### Real-trajectory findings (2026-07-21) — qualifier dropped
 
-**Status qualifier stands.** The findings below are from SYNTHETIC fixtures
-only (`benchmarks/tests/trajectory/fixtures/trajectories/`); real hand-labeled
-trajectories do not exist yet — headless `claude` is usage-limited until the
-**2026-07-21 claude-CLI reset**. These partial findings do NOT drop the
-"pending" qualifier; they record what the rules provably do on constructed
-data, so the real-trajectory pass has a baseline to confirm or break.
+The taxonomy, both versioned detectors, and the eval-report parser were run
+over all 12 captured real rollouts + traces
+(`benchmarks/tests/trajectory/fixtures/trajectories/real/`,
+`claude-haiku-4-5-20251001`, `--max-turns 15`). **All 12 rollouts `resolved`**
+(F2P all-pass ∧ P2P no-regress, patch applied); the taxonomy label
+distribution is `{resolved: 12}`, 0 infra-excluded, aggregate soft 0.8728.
+
+- **Boundary separation — the success terminal is validated on real data; the
+  failure-side pairs were not exercised.** Because every real rollout resolved,
+  the first-match tree stopped at the `resolved` terminal in all 12 cases and
+  no failure branch was reached — so `found_but_misdiagnosed` vs
+  `right_idea_broken_edit` and `budget_exhausted` vs `never_ran_tests` did not
+  blur, because neither pair was entered. This is NOT synthetic-style vacuity:
+  the real runs stress the one ordering decision the reconciler added at
+  implementation time — **`resolved` is checked before `never_ran_tests`** — and
+  it held on real data. All 12 resolved *without the model ever running tests
+  in-trajectory* (see the detector finding below), yet none was mislabeled
+  `never_ran_tests`; the success terminal correctly won first. The failure-pair
+  ambiguity question remains answerable only with failing rollouts, which the
+  Phase 2 corpus (12 successes) does not contain — deferred to Phase 3 dataset
+  work, consistent with this ADR's standing Phase 3 deferrals.
+- **Test-runner detector — held vacuously; no test execution occurred.** Across
+  all 12 traces there is exactly ONE loop-side Bash `tool_use`
+  (`find . -type f -name "*.py" | head -20`, in `3c63ee67…`) and no other shell
+  invocation. Zero test executions means the pattern set had nothing to catch
+  and, correctly, matched nothing — no `pytest`/`unittest`/`tox` invocation
+  appears. No unlisted runner was observed, so **no pattern-set addition and no
+  `taxonomy_version` bump are warranted** (`taxonomy_version` stays 1). The
+  detector's real-data contribution here is negative evidence: it did not
+  false-positive on the `find` command.
+- **Budget predicate — turn cap live and inert; token/wall clauses inert.**
+  Max in-trajectory turn ranged 8–11 against the recorded `--max-turns 15`; no
+  run approached the cap, so the turn-cap clause correctly never fired, and the
+  `null` token/wall caps kept their clauses inert as specified. The predicate
+  stayed total on every trace. `budget_exhausted` fired on zero real
+  trajectories, matching the all-resolved outcome.
+- **Patch-apply boundary — not exercised; no apply failure occurred.** All 12
+  model patches applied (`patch_successfully_applied: true`, `patch_applies`
+  component 1.0); zero `patch_apply_failed`, zero `infra_error`. The
+  marker-based `patch_apply_failed`↔`infra_error` split therefore had no real
+  apply failure to classify — it remains validated on synthetic fixtures only
+  (the `>>>>> Patch Apply Failed` vs `>>>>> Tests Errored` routing). The
+  model-vs-infra attribution residual under Costs is consequently **unobserved,
+  not resolved**, on real data: no apply failure of either origin occurred.
+  (Corroborating the residual's stated shape — an infra-caused apply failure
+  would hit a run's rollouts uniformly — the real run shows the opposite: a
+  uniform *success* pattern, no apply anomaly.) Real failing-patch evidence is
+  Phase 3 work.
+- **Option (b) verdict — remains shelved.** No boundary blurred on real data
+  (the failure pairs were not entered; the success terminal separated cleanly),
+  so nothing demonstrates a boundary the rules cannot separate. The flag-gated
+  LLM assist stays unbuilt; reopening it is a Phase 3 proposal contingent on a
+  concrete ambiguous boundary from a corpus that includes real failures.
+
+**Qualifier disposition.** The "pending" qualifier is dropped. Its trigger was a
+demonstrated rule-ambiguous boundary (the option-(b) evidence gate); the real
+pass demonstrates none, and every required item above is reported against real
+data. The one genuine real-data limitation — the failure-side branches are
+untestable on an all-success Phase 2 corpus — is not a *pending finding* but a
+Phase 3 dataset dependency, recorded here and in the deferrals. The status is
+plain Accepted.
+
+### Synthetic-only findings (Phase 2 — retained for the failure branches)
+
+**These remain the only validation of the failure-branch labels.** The findings
+below are from SYNTHETIC fixtures
+(`benchmarks/tests/trajectory/fixtures/trajectories/`). The real 2026-07-21 pass
+above (all 12 rollouts resolved) exercised the success terminal and both
+detectors on real data but entered no failure branch, so
+`patch_apply_failed`/`infra_error`, `found_but_misdiagnosed`/`right_idea_broken_edit`,
+and `budget_exhausted`/`never_ran_tests` are validated ONLY on the constructed
+data below — they are retained (not superseded) precisely because a Phase 2
+real corpus of successes cannot reach them.
 
 - **T5 degenerate synthetics — every declared label reproduced.** The four
   committed degenerate fixtures (`empty_trajectory`, `crash_before_first_tool`,
@@ -300,9 +367,10 @@ data, so the real-trajectory pass has a baseline to confirm or break.
   `>>>>> Patch Apply Failed` marker routes to `patch_apply_failed` (model fault,
   IN aggregates, `hard=0`) and `>>>>> Tests Errored` to `infra_error` (EXCLUDED
   from aggregates) — verified both via `classify_infra_marker` and via
-  `TaxonomyLabel.excluded_from_aggregates`. *Real-trajectory caveat:* whether
-  observed apply failures are truly model-authored vs infra-shaped (the Costs
-  residual) is not answerable on synthetic data and remains pending.
+  `TaxonomyLabel.excluded_from_aggregates`. *Real-trajectory outcome:* the
+  2026-07-21 pass produced zero apply failures of either origin, so the
+  model-vs-infra residual is unobserved (not resolved) on real data — real
+  failing-patch evidence is Phase 3 work.
 - **Versioned test-runner detector held on synthetic Bash events.** The shipped
   `test_runner_patterns` set (`configs/taxonomy.yaml`, `taxonomy_version: 1`)
   matched `pytest`, `python -m pytest`, `python -m unittest`, `tox`, and
@@ -311,24 +379,27 @@ data, so the real-trajectory pass has a baseline to confirm or break.
   via word-boundary anchoring. Run over a T6 merged stream
   (`search_surfaces_gold`), appending a `pytest` Bash event flips the label off
   `never_ran_tests` (`test_detector_over_t6_merged_stream_flips_never_ran_tests`).
-  No unlisted runner has been observed yet (no real traces), so no pattern-set
-  addition is warranted; a real invocation outside the set will force one + a
-  `taxonomy_version` bump before the qualifier drops.
+  No unlisted runner was observed on the real pass either (the 12 real traces
+  carry exactly one Bash call, a `find`, and zero test executions), so no
+  pattern-set addition is warranted and `taxonomy_version` stays 1; a future
+  real invocation outside the set will force one + a version bump.
 - **Budget predicate: turn cap live, token/wall clauses inert.** With the R2
   lockfile recording only `max_turns` (token/wall caps `null` +
   `unrecorded_by_client`), the predicate fired only on the recorded turn cap and
   the `null`-cap clauses never fired even at 10⁹ synthetic token/wall usage
   (`test_budget_null_caps_never_fire_even_at_huge_usage`); the predicate stayed
   total on every input regardless of which caps were present.
-- **Boundary ambiguity — not yet assessable.** On the constructed synthetics the
-  ambiguous pairs (`found_but_misdiagnosed` vs `right_idea_broken_edit`;
-  `budget_exhausted` vs `never_ran_tests`) each resolve to a distinct first-match
-  branch by construction, so no synthetic case blurred. This is a property of
-  hand-built inputs, NOT evidence about real trajectories — the real-trajectory
-  ambiguity verdict is pending the reset.
-- **Option (b) verdict — remains shelved (pending real evidence).** No synthetic
-  boundary blurred, so nothing yet justifies the flag-gated LLM assist. The
-  binding verdict awaits real hand-labeled trajectories.
+- **Boundary ambiguity — failure pairs distinct by construction on synthetics;
+  unentered on real data.** On the constructed synthetics the ambiguous pairs
+  (`found_but_misdiagnosed` vs `right_idea_broken_edit`; `budget_exhausted` vs
+  `never_ran_tests`) each resolve to a distinct first-match branch, so no
+  synthetic case blurred. The real pass (all 12 resolved) never entered these
+  branches, so real-data ambiguity for the failure pairs stays a Phase 3
+  question (needs failing rollouts) — see the real-trajectory subsection.
+- **Option (b) verdict — remains shelved (binding).** No boundary blurred on
+  synthetic or real data, so nothing justifies the flag-gated LLM assist;
+  reopening it is a Phase 3 proposal contingent on a demonstrated ambiguous
+  boundary from a corpus that includes real failures.
 
 ## Consequences
 
