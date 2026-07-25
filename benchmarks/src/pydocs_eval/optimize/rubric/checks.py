@@ -150,6 +150,7 @@ def score_checks(
     Renormalizing over the applicable weight sum is what keeps task types with
     different check sets comparable on one 0-1 scale.
     """
+    _require_unique_names(checks)
     task_type = task_id_prefix(task.task_id)
     applicable = [c for c in checks if c.applicable(task_type)]
     outcomes = {c.name: evaluate_check(c, task, transcript) for c in applicable}
@@ -181,8 +182,19 @@ def validate_checks(checks: Sequence[Check], *, known_task_types: Sequence[str])
             a task type with no required applicable check, or one whose
             applicable checks all carry zero weight.
     """
+    _require_unique_names(checks)
     known = set(known_task_types)
     for check in checks:
+        # A "required" check that cannot fail is a no-op wearing a gate's name.
+        # `passed` is unconditionally True when `fail is None`, and `score >= 0.0`
+        # holds for every 0-1 score — so both spellings would certify a config
+        # whose judge-avoidance guarantee silently does not exist.
+        if check.required and (check.fail is None or check.fail <= 0.0):
+            raise ValueError(
+                f"check {check.name!r} is required but can never fail "
+                f"(fail={check.fail!r}); a required check needs a cutoff above 0, "
+                "otherwise it blocks nothing and the judge is always paid"
+            )
         for field_name, names in (
             ("applies_to", tuple(check.applies_to)),
             ("weight_by_type", tuple(check.weight_by_type)),
@@ -207,6 +219,23 @@ def validate_checks(checks: Sequence[Check], *, known_task_types: Sequence[str])
                 f"task type {task_type!r} has no applicable check with weight > 0, so "
                 "its deterministic composite carries no signal"
             )
+
+
+def _require_unique_names(checks: Sequence[Check]) -> None:
+    """Reject duplicate check names, mirroring the gate config's own rule.
+
+    Outcomes are keyed by name, so a duplicate would silently drop a check —
+    including a required screen, which would take the judge-avoidance guarantee
+    with it. ``model._require_unique_gate_names`` enforces the same rule for
+    gates at config-load time; this is its sibling.
+    """
+    names = [c.name for c in checks]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise ValueError(
+            f"check names must be unique; duplicated: {duplicates} — outcomes are "
+            "keyed by name, so a duplicate silently drops one of the checks"
+        )
 
 
 def _predicate(kind: str) -> CheckPredicate:

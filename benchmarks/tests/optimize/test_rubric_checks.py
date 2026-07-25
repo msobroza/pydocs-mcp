@@ -311,3 +311,47 @@ def test_a_valid_multitask_config_passes() -> None:
         ),
     )
     validate_checks(checks, known_task_types=("ccv", "sweqapro"))
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes: the judge-avoidance guarantee must actually hold
+# --------------------------------------------------------------------------- #
+
+
+def test_required_check_that_can_never_fail_is_rejected() -> None:
+    """`required=True, fail=None` reads like a gate but can never block.
+
+    `passed` is unconditionally True when `fail is None`, so validate_checks
+    would have certified a config whose "required" check is a no-op — exactly
+    the guarantee it exists to enforce.
+    """
+    checks = (Check(name="r", kind="gold_recall", required=True, fail=None),)
+    with pytest.raises(ValueError, match="can never fail"):
+        validate_checks(checks, known_task_types=("ccv",))
+
+
+def test_required_check_with_a_zero_cutoff_is_rejected() -> None:
+    """`score >= 0.0` holds for every 0-1 score, so this gate can never fire."""
+    checks = (Check(name="r", kind="gold_recall", required=True, fail=0.0),)
+    with pytest.raises(ValueError, match="can never fail"):
+        validate_checks(checks, known_task_types=("ccv",))
+
+
+def test_duplicate_check_names_are_rejected_at_load() -> None:
+    """Mirrors the gate path, which rejects duplicate names in the config."""
+    checks = (
+        Check(name="grounded", kind="min_answer_chars"),
+        Check(name="grounded", kind="max_turns"),
+    )
+    with pytest.raises(ValueError, match="grounded"):
+        validate_checks(checks, known_task_types=("ccv",))
+
+
+def test_score_checks_refuses_duplicate_names_instead_of_dropping_one() -> None:
+    """Keying outcomes by name silently lost a check — including a required screen."""
+    checks = (
+        Check(name="grounded", kind="min_answer_chars", params={"n": 1000}, weight=0.0),
+        Check(name="grounded", kind="min_answer_chars", params={"n": 1}, weight=1.0),
+    )
+    with pytest.raises(ValueError, match="grounded"):
+        score_checks(checks, _task(), _Transcript())
