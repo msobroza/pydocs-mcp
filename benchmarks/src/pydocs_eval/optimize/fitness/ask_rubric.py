@@ -42,6 +42,24 @@ from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
 _JUDGE_SCALE = 10.0
 
 
+def verdict_when_judge_skipped(rubric: RubricConfig, gate_pass_fraction: float) -> float:
+    """The verdict for a sample whose judge fail_fast skipped.
+
+    Historically 0.0 — defensible while gates were pure screens, since a failed
+    gate meant "do not score this". Once the deterministic layer carries a graded
+    score that cliff discards real measurement: a sample satisfying most of its
+    checks scored identically to one satisfying none, after the harness had
+    already paid to compute both.
+
+    With ``keep_deterministic_on_skip`` the deterministic layer still counts, but
+    only for its own weight — the rubric weight is unearned, not redistributed —
+    so a skipped-judge sample can never match a judged one.
+    """
+    if not rubric.keep_deterministic_on_skip:
+        return 0.0
+    return rubric.gate_weight * gate_pass_fraction
+
+
 @fitness_registry.register("ask_rubric")
 @dataclass(slots=True)
 class AskRubricFitness:
@@ -161,7 +179,7 @@ class AskRubricFitness:
                     c.weight * criteria[c.name] / _JUDGE_SCALE for c in self.rubric.criteria
                 )
         verdict_score = (
-            0.0
+            verdict_when_judge_skipped(self.rubric, gate_pass_fraction)
             if judge_skipped
             else self.rubric.gate_weight * gate_pass_fraction
             + self.rubric.rubric_weight * rubric_score

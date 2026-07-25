@@ -385,3 +385,51 @@ def mcnemar_from_pairs(
     n = len(ids)
     delta = (b - c) / n if n else 0.0
     return (b, c, n, delta, mcnemar_exact_p(b, c), paired_bootstrap_ci(a, bs, seed=seed))
+
+
+def wilcoxon_signed_rank_p_one_sided(differences: Sequence[float]) -> float:
+    """One-sided exact Wilcoxon signed-rank p-value for paired differences.
+
+    The continuous sibling of :func:`mcnemar_exact_p_one_sided`. McNemar reduces
+    each pair to a binary flip, so it can only see a change that crosses a
+    threshold; every improvement *within* a band is invisible to it. The
+    signed-rank keeps the MAGNITUDE, which at the corpus sizes this harness runs
+    is the difference between detecting a real effect and not: at n=13 with a
+    +0.10 shift, McNemar's power is ~3% against the signed-rank's ~95%.
+
+    Directional, matching McNemar's convention: positive ``differences`` favour
+    the candidate, so a uniformly worse candidate returns ``p > 0.5`` and can
+    never be significant. Exact null (enumerates all sign assignments), so no
+    normal approximation and no scipy — the harness stays stdlib-only.
+
+    Zero differences are dropped before ranking (they carry no directional
+    information); all-zero input returns ``1.0``.
+
+    Example:
+        >>> round(wilcoxon_signed_rank_p_one_sided([0.1] * 6), 4)
+        0.0156
+        >>> wilcoxon_signed_rank_p_one_sided([0.0, 0.0])
+        1.0
+    """
+    nonzero = [d for d in differences if d != 0.0]
+    n = len(nonzero)
+    if n == 0:
+        return 1.0
+
+    order = sorted(range(n), key=lambda i: abs(nonzero[i]))
+    ranks = [0] * n
+    for rank, index in enumerate(order, start=1):
+        ranks[index] = rank
+    observed = sum(ranks[i] for i in range(n) if nonzero[i] > 0)
+
+    # Exact null: every sign assignment is equally likely, so count the tail.
+    # Ranks are 1..n regardless of the data, so the distribution is data-free.
+    reachable = {0: 1}
+    for rank in range(1, n + 1):
+        nxt: dict[int, int] = {}
+        for total, ways in reachable.items():
+            nxt[total] = nxt.get(total, 0) + ways
+            nxt[total + rank] = nxt.get(total + rank, 0) + ways
+        reachable = nxt
+    tail = sum(ways for total, ways in reachable.items() if total >= observed)
+    return tail / 2**n

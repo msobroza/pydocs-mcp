@@ -62,6 +62,12 @@ class RubricConfig:
     fail_fast: bool = _DEFAULT_FAIL_FAST
     gate_weight: float = _DEFAULT_GATE_WEIGHT
     rubric_weight: float = _DEFAULT_RUBRIC_WEIGHT
+    #: When fail_fast skips the judge, keep the deterministic layer's score
+    #: instead of zeroing the verdict. The cliff was defensible while gates were
+    #: pure screens; once the deterministic layer carries a graded score it
+    #: discards real measurement the harness already paid for. Default False
+    #: keeps the objective byte-identical.
+    keep_deterministic_on_skip: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +115,7 @@ def rubric_config_hash(config: RubricConfig, *, architecture: str) -> str:
         "fail_fast": config.fail_fast,
         "gate_weight": config.gate_weight,
         "rubric_weight": config.rubric_weight,
+        "keep_deterministic_on_skip": config.keep_deterministic_on_skip,
         "gates": [
             {"name": g.name, "kind": g.kind, "params": dict(sorted(g.params.items()))}
             for g in config.gates

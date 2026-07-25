@@ -214,3 +214,41 @@ def _degenerate(
         p2p_failed=empty,
         upstream_resolved=None,
     )
+
+
+def soft_resolve_fraction(outcome: GroundTruthOutcome) -> float:
+    """Partial-credit resolve for one instance, from GROUND TRUTH only.
+
+    :attr:`GroundTruthOutcome.resolved` is strict all-or-nothing (every gold F2P
+    *and* every gold P2P must pass), which throws away the difference between
+    "fixed 7 of 8 failing tests" and "fixed none". This is the same quantity
+    softened: the fraction of F2P tests observed passing.
+
+    Deliberately derived from the eval report's own test-name sets — the exact
+    inputs :func:`~pydocs_eval.trajectory.gate.run_gate` consumes — so it is NOT
+    a shaped score and stays inside the acceptance lock (ADR 0017 §Decision 8).
+    A shaped/projected score would break that lock; this does not.
+
+    A P2P regression scores ``0.0``, mirroring the strict rule's refusal to trade
+    new breakage for fixed tests. An instance with no observed F2P tests scores
+    ``0.0`` — nothing was demonstrated.
+
+    Example:
+        >>> o = GroundTruthOutcome(
+        ...     instance_id="i1", resolved=False, patch_applied=True,
+        ...     infra_error=False, patch_apply_failed=False,
+        ...     f2p_passed=frozenset({"a", "b", "c"}), f2p_failed=frozenset({"d"}),
+        ...     p2p_passed=frozenset(), p2p_failed=frozenset(),
+        ...     upstream_resolved=False,
+        ... )
+        >>> soft_resolve_fraction(o)
+        0.75
+    """
+    if outcome.infra_error or outcome.patch_apply_failed or not outcome.patch_applied:
+        return 0.0
+    if outcome.p2p_failed:  # a regression forfeits credit, as `resolved` does
+        return 0.0
+    observed = len(outcome.f2p_passed) + len(outcome.f2p_failed)
+    if observed == 0:
+        return 0.0
+    return len(outcome.f2p_passed) / observed
