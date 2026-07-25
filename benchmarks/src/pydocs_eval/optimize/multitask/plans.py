@@ -185,6 +185,16 @@ class CurriculumPlan:
                 f"curriculum order names task type(s) {unknown} absent from the pool; "
                 f"present types are {list(present)}"
             )
+        # An order that omits a present type trains on a strict subset of the pool
+        # while still being reported as a curriculum result — the arm would look
+        # like it covered both datasets when it silently dropped one.
+        omitted = sorted(set(present) - set(sequence))
+        if omitted:
+            raise ValueError(
+                f"curriculum order omits task type(s) {omitted} present in the pool; "
+                "list every type explicitly (order fixes the sequence, not the "
+                "membership) or those rows are silently never trained on"
+            )
 
         runs: list[TrainResult] = []
         skill = seed_skill

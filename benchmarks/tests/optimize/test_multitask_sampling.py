@@ -158,3 +158,76 @@ def test_every_sampler_handles_a_pool_smaller_than_the_batch(name: str) -> None:
 @pytest.mark.parametrize("name", _SHIPPED)
 def test_every_sampler_returns_nothing_for_a_non_positive_count(name: str) -> None:
     assert build_sampler(name).sample(_IMBALANCED, 0, 0) == []
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes: the arms must not silently collapse, and weights must bind
+# --------------------------------------------------------------------------- #
+
+#: EXACTLY what the generated SkillOpt env adapter inlines today
+#: (skillopt.py: `{"task_id": t, "question": q, "gold": g}`) — no task_type key.
+_REAL_POOL = tuple(
+    {"task_id": f"{t}/{i}", "question": "q", "gold": "g"}
+    for t, n in (("sweqapro", 260), ("ccv", 12))
+    for i in range(n)
+)
+
+
+def test_task_type_falls_back_to_the_task_id_prefix() -> None:
+    """The real pipeline sets no `task_type`, so it must be derived, not defaulted.
+
+    Defaulting to "other" bucketed all 272 rows as one type and made all three
+    arms bit-identical — the module was inert against the only pool that matters.
+    """
+    assert type_counts(_REAL_POOL) == {"sweqapro": 260, "ccv": 12}
+
+
+def test_arms_actually_differ_on_the_real_untagged_pool() -> None:
+    """The regression guard: uniform starves ccv, stratified does not."""
+    uniform = [
+        type_counts(build_sampler("uniform").sample(_REAL_POOL, 12, s)).get("ccv", 0)
+        for s in range(50)
+    ]
+    stratified = [
+        type_counts(build_sampler("stratified").sample(_REAL_POOL, 12, s)).get("ccv", 0)
+        for s in range(50)
+    ]
+    assert uniform.count(0) > 10  # most uniform batches see no ccv row
+    assert stratified.count(0) == 0  # stratified always includes one
+    assert fmean(stratified) > fmean(uniform)
+
+
+def test_an_untypeable_row_is_rejected_rather_than_bucketed_as_other() -> None:
+    """No `task_type` AND no prefixed `task_id` is unanswerable — fail loud."""
+    with pytest.raises(ValueError, match="task_type"):
+        type_counts([{"task_id": "bare-id", "question": "q"}])
+
+
+def test_partial_weights_are_rejected():
+    """A weight is a ratio; mixing one with another type's raw ROW COUNT is
+    meaningless. `weights={"ccv": 10.0}` silently did nothing because sweqapro
+    defaulted to 260 — the caller asked for a 10x boost and got the 1-row floor.
+    """
+    with pytest.raises(ValueError, match="sweqapro"):
+        build_sampler("stratified", weights={"ccv": 10.0}).sample(_REAL_POOL, 12, 0)
+
+
+def test_negative_weight_is_rejected() -> None:
+    """A negative share produced a NEGATIVE quota and a 24-row batch for count=12."""
+    with pytest.raises(ValueError, match="negative"):
+        build_sampler("stratified", weights={"ccv": -1.0, "sweqapro": 2.0}).sample(
+            _REAL_POOL, 12, 0
+        )
+
+
+def test_all_zero_weights_are_rejected() -> None:
+    """All-zero shares left only the per-type floor — 2 rows for a batch of 12."""
+    with pytest.raises(ValueError, match="positive"):
+        build_sampler("stratified", weights={"ccv": 0.0, "sweqapro": 0.0}).sample(_REAL_POOL, 12, 0)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_stratified_never_returns_more_than_count(seed: int) -> None:
+    """The invariant a negative quota broke."""
+    picked = build_sampler("stratified").sample(_REAL_POOL, 12, seed)
+    assert len(picked) == 12

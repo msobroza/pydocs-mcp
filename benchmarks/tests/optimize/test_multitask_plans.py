@@ -114,6 +114,17 @@ def test_curriculum_order_is_configurable_and_changes_the_result() -> None:
     assert [r.label for r in trainer.requests] == ["sweqapro", "ccv"]
 
 
+def test_curriculum_order_omitting_a_present_type_is_rejected() -> None:
+    """`order` fixes the SEQUENCE, not the membership.
+
+    An order of ("ccv",) over a ccv+sweqapro pool trained on a strict subset while
+    still reporting a curriculum result — the sweqapro rows were silently never
+    trained on.
+    """
+    with pytest.raises(ValueError, match="sweqapro"):
+        build_plan("curriculum", order=("ccv",)).execute("SEED", _rows(), _FakeTrainer())
+
+
 def test_curriculum_rejects_an_order_naming_an_absent_type() -> None:
     with pytest.raises(ValueError, match="nope"):
         build_plan("curriculum", order=("nope",)).execute("SEED", _rows(), _FakeTrainer())

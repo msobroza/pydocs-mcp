@@ -26,11 +26,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from pydocs_eval.optimize._prefix_report import task_id_prefix
 from pydocs_eval.registries import _Registry
 
 __all__ = [
     "BatchSampler",
     "build_sampler",
+    "row_type",
     "sampler_registry",
     "type_counts",
 ]
@@ -57,11 +59,39 @@ def build_sampler(name: str, **kwargs: object) -> BatchSampler:
     return sampler_registry.build(name, **kwargs)
 
 
+def row_type(row: Row) -> str:
+    """A row's task type: explicit ``task_type``, else its ``task_id`` prefix.
+
+    WHY the fallback: the generated SkillOpt env adapter inlines rows as
+    ``{"task_id", "question", "gold"}`` with **no** ``task_type`` key. Defaulting
+    the missing key to ``"other"`` bucketed every row as one type, which made all
+    three arms bit-identical — the module was inert against the only pool that
+    matters, and silently so. ``CombinedDataset`` already prefixes its ids
+    (``ccv/…``, ``sweqapro/…``), so the type is recoverable without touching the
+    adapter.
+
+    Raises:
+        ValueError: the row carries neither key, so its type is genuinely
+            unknowable — better to say so than to collapse the arms.
+    """
+    explicit = row.get("task_type")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    task_id = row.get("task_id")
+    if isinstance(task_id, str) and "/" in task_id:
+        return task_id_prefix(task_id)
+    raise ValueError(
+        f"cannot determine a task type for row {task_id!r}: it has no 'task_type' "
+        "key and its 'task_id' carries no '<dataset>/' prefix. Without a type "
+        "every sampler degrades to uniform, so this is refused rather than guessed"
+    )
+
+
 def type_counts(rows: Sequence[Row]) -> dict[str, int]:
     """Rows per task type — the comparison payload for every sampler test."""
     counts: dict[str, int] = {}
     for row in rows:
-        key = str(row.get("task_type", "other"))
+        key = row_type(row)
         counts[key] = counts.get(key, 0) + 1
     return counts
 
@@ -69,8 +99,40 @@ def type_counts(rows: Sequence[Row]) -> dict[str, int]:
 def _by_type(pool: Sequence[Row]) -> dict[str, list[Row]]:
     grouped: dict[str, list[Row]] = {}
     for row in pool:
-        grouped.setdefault(str(row.get("task_type", "other")), []).append(row)
+        grouped.setdefault(row_type(row), []).append(row)
     return grouped
+
+
+def _resolve_shares(weights: Mapping[str, float], sizes: Mapping[str, int]) -> dict[str, float]:
+    """Explicit ``weights`` (all types, all non-negative) or proportional sizes.
+
+    A weight is a RATIO between types, so mixing one type's weight with another
+    type's raw row count compares incommensurable quantities: ``{"ccv": 10.0}``
+    against 260 sweqapro rows silently yielded the 1-row floor, i.e. exactly what
+    passing no weights at all would do. Partial weights are therefore refused.
+    """
+    if not weights:
+        return {t: float(sizes[t]) for t in sizes}
+    missing = sorted(set(sizes) - set(weights))
+    if missing:
+        raise ValueError(
+            f"stratified weights must cover every task type present; missing "
+            f"{missing}. A partial weight is compared against the other types' raw "
+            "row counts, so it silently has no effect"
+        )
+    negative = sorted(t for t in weights if weights[t] < 0)
+    if negative:
+        raise ValueError(
+            f"stratified weights must be non-negative; negative for {negative}. "
+            "A negative share produces a negative quota and a batch larger than count"
+        )
+    shares = {t: float(weights[t]) for t in sizes}
+    if sum(shares.values()) <= 0:
+        raise ValueError(
+            "stratified weights must include at least one positive value; all-zero "
+            "shares leave only the per-type floor, so the batch comes back short"
+        )
+    return shares
 
 
 @sampler_registry.register("uniform")
@@ -113,8 +175,7 @@ class StratifiedSampler:
             rng.shuffle(rows)
 
         sizes = {t: len(rows) for t, rows in grouped.items()}
-        shares = {t: float(self.weights.get(t, sizes[t])) for t in sizes}
-        quota = _allocate(count, sizes, shares)
+        quota = _allocate(count, sizes, _resolve_shares(self.weights, sizes))
 
         picked = [row for t in sorted(grouped) for row in grouped[t][: quota[t]]]
         rng.shuffle(picked)
