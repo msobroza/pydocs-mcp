@@ -1,6 +1,6 @@
 import pytest
 
-# agent.py imports the [ask-your-docs] langchain/langgraph stack at module level;
+# agent.py imports the [harness-ask-your-docs] langchain/langgraph stack at module level;
 # that extra is not on the core CI matrix. Skip (don't fail) when it is absent.
 pytest.importorskip("langchain_core")
 

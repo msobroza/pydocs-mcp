@@ -60,7 +60,7 @@ pinned project / package / code scope, so retrieval stays inside the chosen
 slice no matter what the model asks for.
 
 <!-- agent-graph.png is the compiled agent's own graph, regenerated with
-     agent.get_graph().draw_mermaid_png() (see pydocs_mcp.ask_your_docs.agent).
+     agent.get_graph().draw_mermaid_png() (see pydocs_mcp.harness.ask_your_docs.agent).
      Every registered architecture (text_react / inline / vision_subagent /
      auto) builds a graph exposing get_graph(), so the picture can be
      regenerated per architecture by selecting it in YAML first. -->
@@ -79,7 +79,7 @@ The agent works out of the box with the default fastembed embedder. For the
 Qwen3 GPU-index / CPU-serve recipe below, also install the embedder extras:
 
 ```bash
-pip install "pydocs-mcp[ask-your-docs,sentence-transformers,openvino]"
+pip install "pydocs-mcp[harness-ask-your-docs,sentence-transformers,openvino]"
 ```
 
 ## 1. Index your repos (GPU, once per repo)
@@ -98,7 +98,7 @@ workspace directory.
 harness-ask-your-docs --workspace ~/pydocs-index --config configs/serve_cpu_openvino.yaml
 ```
 
-`ask-your-docs` launches the Streamlit UI. Flags (`--workspace`, `--model`,
+`harness-ask-your-docs` launches the Streamlit UI. Flags (`--workspace`, `--model`,
 `--base-url`, `--config`, `--port`) prefill the sidebar; anything after `--`
 is forwarded to `streamlit run` (e.g. `-- --server.headless true`). You can
 also set `PYDOCS_WORKSPACE`, `LLM_MODEL`, `OPENAI_BASE_URL`, `PYDOCS_CONFIG`

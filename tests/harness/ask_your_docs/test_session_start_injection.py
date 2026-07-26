@@ -1,7 +1,7 @@
 """ADR 0008 agent-prompt injection: ``build_session_start_context_for_agent_prompt`` (core-only imports).
 
 The helper is deliberately langgraph-free so the flag gate + pack build are
-testable without the ``[ask-your-docs]`` extra; ``agent.build_agent`` calls it
+testable without the ``[harness-ask-your-docs]`` extra; ``agent.build_agent`` calls it
 at the single prompt-assembly site (covered langgraph-gated in
 ``test_prompt_seam.py``).
 """

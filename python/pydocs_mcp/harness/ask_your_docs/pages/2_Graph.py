@@ -16,7 +16,11 @@ import streamlit.components.v1 as components
 from pydocs_mcp.harness.ask_your_docs.bundle import SqliteBundleReader
 from pydocs_mcp.harness.ask_your_docs.catalog import CatalogService
 from pydocs_mcp.harness.ask_your_docs.graph_service import GraphService, type_of
-from pydocs_mcp.harness.ask_your_docs.theme import current_palette, render_appearance_toggle, theme_css
+from pydocs_mcp.harness.ask_your_docs.theme import (
+    current_palette,
+    render_appearance_toggle,
+    theme_css,
+)
 from streamlit_agraph import Config, agraph
 from streamlit_agraph import Edge as AEdge
 from streamlit_agraph import Node as ANode

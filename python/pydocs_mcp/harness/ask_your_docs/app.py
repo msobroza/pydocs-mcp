@@ -24,7 +24,11 @@ from pydocs_mcp.harness.ask_your_docs.attachments import (
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
 from pydocs_mcp.harness.ask_your_docs.multimodal import detect_capabilities
-from pydocs_mcp.harness.ask_your_docs.theme import current_palette, render_appearance_toggle, theme_css
+from pydocs_mcp.harness.ask_your_docs.theme import (
+    current_palette,
+    render_appearance_toggle,
+    theme_css,
+)
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 
 st.set_page_config(

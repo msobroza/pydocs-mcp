@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-# The Streamlit UI ships only with the [ask-your-docs] extra, which the core CI
+# The Streamlit UI ships only with the [harness-ask-your-docs] extra, which the core CI
 # matrix does not install. Skip (don't fail) when streamlit is absent.
 pytest.importorskip("streamlit")
 

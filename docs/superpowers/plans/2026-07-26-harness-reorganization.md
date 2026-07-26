@@ -324,10 +324,10 @@ All `pydocs_mcp.ask_your_docs.…` → `pydocs_mcp.harness.ask_your_docs.…`:
 
 ### Step 7 — Lockfile
 
-- [ ] Relock with `~/.local/bin/uv lock` **only** (anaconda uv churns markers; trap T10).
+- [x] Relock with `~/.local/bin/uv lock` **only** (anaconda uv churns markers; trap T10).
       This regenerates the 7 derived `uv.lock` hits (:3391,:3460–3462,:3474–3475,:3488 —
       the generated `provides-extras` union). Never hand-edit `uv.lock`.
-- [ ] `uv lock --check` green afterward.
+- [x] `uv lock --check` green afterward.
 
 ## Verification gates (commands + expected results)
 
@@ -379,6 +379,36 @@ print(pydocs_mcp.__file__)"` resolves to THIS worktree first).
       `retrieval/prompts/*.j2`.
 - [ ] `git log --follow python/pydocs_mcp/harness/ask_your_docs/agent.py` shows pre-move
       history (proves `git mv` rename detection held).
+
+### Execution status (2026-07-26 session — steps 0–7 executed on the PR #220 branch)
+
+Decisions taken on the recorded recommendations: Open 1 → `harness-ask-your-docs`
+(script + extra); Open 2 → config test stays put; Open 3 → logger renamed to
+`pydocs-mcp.harness.ask-your-docs`.
+
+**Gates green locally** (root venv + `PYTHONPATH=python`, worktree resolution
+verified): ruff check + format (incl. two import-sort fixes the rename caused in
+`app.py` / `pages/2_Graph.py`), mypy (231 files), complexipy (snapshot restored
+from HEAD after the run), vulture, product suite `3690 passed / 0 failed /
+96.38% coverage`, doc-conformance + moved harness tests `226 passed`,
+`scripts/smoke_check_benchmark_imports.py` (87 imports across 183 files),
+`uv lock` regenerated + `uv lock --check`, completion greps (a) empty and
+(b) sanctioned-survivors-only, `git log --follow` reaches pre-move history,
+prompts glob proven to resolve all 6 `.j2` templates via `glob.glob(...,
+recursive=True)`.
+
+**Known-environment failures (not rename defects):** 2 of 1658 benchmarks tests
+(`test_registry_population.py`) spawn a fresh subprocess whose `PYTHONPATH` is
+deliberately overwritten to `benchmarks/src` only (line 33), so it resolves
+`pydocs_mcp` from the MAIN checkout's editable install (old layout) — the T1/T2
+shadowing trap. They pass once the worktree (or CI) has a real
+`pip install -e .` of the renamed tree.
+
+**Deferred to CI / next session:** functional smoke (`pip install -e
+".[harness-ask-your-docs]"` + script-on-PATH launch; the entry-point target
+module imports cleanly from the worktree), wheel spot-check (`unzip -l` on a
+built wheel — glob proven at the filesystem level instead), Sphinx docs build,
+pip-audit, cargo trio (Rust untouched).
 
 ## Definition of done
 

@@ -1,5 +1,5 @@
 """AC5 (spec 2026-07-11-cli-mcp-docs-audit): `harness.ask_your_docs.cli._build_parser`
-is callable core-only — no [ask-your-docs] extra needed for help-level parsing;
+is callable core-only — no [harness-ask-your-docs] extra needed for help-level parsing;
 `main()` still gates execution on `_require_extra`."""
 
 from __future__ import annotations
