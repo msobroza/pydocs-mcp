@@ -1,0 +1,341 @@
+"""The ask-your-docs `HarnessRunner` binding (run-contract design §9 stage 2).
+
+The ONLY module that knows this harness's concrete settings type: generic
+callers hold a dotted path to :func:`make_harness_runner`, pass a plain
+settings mapping, and get back the port. Heavy toolkit imports stay
+function-local behind the ``[harness-ask-your-docs]`` extra, exactly like
+``agent.py``.
+
+Delivery map (constraint C2 / design §4): guidance sections route to this
+harness's channels — ``SYSTEM_PROMPT``/``REWRITE_PROMPT`` through the
+prompt-override seam, the skill artifact's sections through the
+``system_prompt_suffix`` skill block at the single assembly site. External
+heads are RECOGNIZED but undelivered here (they are other harnesses' slices
+of the same candidate); anything else raises
+:class:`~pydocs_mcp.harness.core.run_contract.UndeliverableGuidanceError`.
+The map's digest folds into the arm cell fingerprint (delivery mode is a
+first-order variable).
+
+Trace lifecycle: the ADR 0009 env channel rides the serve connection's
+explicit env map (children start from a MINIMAL default environment, so
+parent-environ mutation would never reach them — and would race concurrent
+runs). The per-trajectory directory persists under ``settings.trace_root``
+and the candidate skill document is written next to it for provenance.
+KNOWN STAGE-3 ITEM (the run-contract spec §3 assigns it): the MCP stdio
+client opens a session per tool call, so a REAL traced run needs the
+session held open for the run's lifetime (or the id-reuse guard fires on
+the second spawn) — the orchestration shape here is validated with fakes,
+and real-rollout trace validation is stage 3's first owned question.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+import uuid
+from collections.abc import Mapping
+from pathlib import Path
+from types import MappingProxyType
+
+from pydantic import BaseModel, ConfigDict
+
+from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.core.prompt_override import PromptOverrides
+from pydocs_mcp.harness.core.run_contract import (
+    Trajectory,
+    TurnBudgetExceededError,
+    UndeliverableGuidanceError,
+    missing_sample_keys,
+)
+from pydocs_mcp.harness.core.skill_artifact_loader import (
+    SKILL_ARTIFACT_HEADERS,
+    parse_skill_artifact,
+)
+from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
+from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
+from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
+
+_CANDIDATE_SKILL_FILENAME = "candidate_skill.md"
+
+# WHY 2: a LangGraph "super-step" alternates model turn / tool execution, so
+# one agent turn costs two graph steps — the recursion limit mirrors the
+# eval runner's established mapping.
+_SUPER_STEPS_PER_TURN = 2
+
+# Section → channel. The two prompt sections ride the existing override
+# seam; the skill sections compose into the skill block at the single
+# assembly site. External heads are the same candidate's slices for OTHER
+# harnesses: recognized, undelivered, never an error.
+DELIVERED_SECTION_CHANNELS: Mapping[str, str] = MappingProxyType(
+    {
+        "SYSTEM_PROMPT": "prompt_override.system_prompt",
+        "REWRITE_PROMPT": "prompt_override.rewrite_prompt",
+        "ADAPTER": "system_prompt_suffix.skill_block",
+        "HEAD: ask_your_docs.sweqapro": "system_prompt_suffix.skill_block",
+        "HEAD: ask_your_docs.ccv": "system_prompt_suffix.skill_block",
+    }
+)
+RECOGNIZED_UNDELIVERED_SECTIONS = ("HEAD: external.sweqapro", "HEAD: external.ccv")
+
+
+def delivery_map_digest() -> str:
+    """SHA-256 of the canonical delivery map — folded into the arm cell
+    fingerprint so a delivery change is a recorded configuration change."""
+    payload = json.dumps(
+        {
+            "delivered": dict(DELIVERED_SECTION_CHANNELS),
+            "recognized_undelivered": list(RECOGNIZED_UNDELIVERED_SECTIONS),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class AskSampleContractError(PydocsMCPError, ValueError):
+    """A sample row missing the run contract's required keys (rule 6)."""
+
+    def __init__(self, *, missing: tuple[str, ...]) -> None:
+        self.missing = missing
+        super().__init__(
+            f"sample is missing required key(s) {list(missing)} — the run "
+            "contract requires record_id, task_name, rendered_prompt, gold"
+        )
+
+
+class AskTraceMissingError(PydocsMCPError, RuntimeError):
+    """A trace-enabled run came back traceless (contract rule 4).
+
+    Phase 2's silently-disabled-capture incident is the motivating scar: a
+    traceless run must never be scored.
+    """
+
+    def __init__(self, *, trace_dir: Path) -> None:
+        self.trace_dir = trace_dir
+        super().__init__(
+            f"no server trace at {trace_dir} after a trace-enabled run — "
+            "refusing to return a scoreable trajectory (ADR 0009 correlation "
+            "contract; check the serve subprocess env wiring)"
+        )
+
+
+class AskYourDocsRunnerSettings(BaseModel):
+    """This harness's private settings — validated HERE, nowhere upstream."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace: str
+    model: str
+    trace_root: str
+    base_url: str | None = None
+    pydocs_config: str | None = None
+    architecture: str | None = None
+    tool_names: tuple[str, ...] | None = None
+    max_agent_turns: int = 12
+    harness: AskYourDocsConfig = AskYourDocsConfig()
+
+
+def _partition_guidance(
+    guidance_sections: Mapping[str, str],
+) -> tuple[PromptOverrides, dict[str, str]]:
+    """Split a candidate into this harness's channels, failing loud on the rest.
+
+    Returns the prompt overrides and the skill-document sections (which
+    include the recognized external heads — the skill grammar requires the
+    full section set, so the document travels whole).
+    """
+    accepted = tuple(DELIVERED_SECTION_CHANNELS) + RECOGNIZED_UNDELIVERED_SECTIONS
+    unknown = tuple(key for key in guidance_sections if key not in accepted)
+    if unknown:
+        # deliverable names only the truly DELIVERED channels; the external
+        # heads are accepted-but-undelivered and must not be advertised as
+        # covered (they are other harnesses' slices).
+        raise UndeliverableGuidanceError(
+            sections=unknown, deliverable=tuple(DELIVERED_SECTION_CHANNELS)
+        )
+    overrides = PromptOverrides(
+        system_prompt=guidance_sections.get("SYSTEM_PROMPT"),
+        rewrite_prompt=guidance_sections.get("REWRITE_PROMPT"),
+    )
+    skill_sections = {
+        key: text for key, text in guidance_sections.items() if key in SKILL_ARTIFACT_HEADERS
+    }
+    return overrides, skill_sections
+
+
+def _write_candidate_skill(skill_sections: Mapping[str, str], trace_dir: Path) -> Path:
+    """Validate + persist the candidate skill document beside its trajectory.
+
+    Validation delegates to the product loader (one validator, both sides —
+    the parity rule by identity); persisting beside the trace makes "what
+    text ran" auditable from the trajectory directory alone.
+    """
+    from pydocs_mcp.application.description_source import render_sections
+
+    ordered = {key: skill_sections[key] for key in SKILL_ARTIFACT_HEADERS if key in skill_sections}
+    text = render_sections(ordered)
+    parse_skill_artifact(text, origin="arm candidate (fix the candidate, not the seed)")
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    path = trace_dir / _CANDIDATE_SKILL_FILENAME
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _trace_subprocess_env(trace_root: Path, trajectory_id: str) -> dict[str, str]:
+    """The ADR 0009 correlation identity, as the serve connection's env map."""
+    return {
+        "PYDOCS_TRACE__ENABLED": "true",
+        "PYDOCS_TRACE__DIR": str(trace_root),
+        "PYDOCS_TRACE__TRAJECTORY_ID": trajectory_id,
+    }
+
+
+def _client_only_records(messages: list, server_call_counts: dict[str, int]) -> tuple:
+    """CLIENT-observed calls: message tool calls the server never saw.
+
+    Matches by name multiset against the trace — an agent-local tool
+    (``reinspect_images``) never reaches the server, so its calls surface
+    here with ``observed_by=CLIENT``.
+    """
+    from pydocs_mcp.harness.core.run_contract import ToolCallObservation, ToolCallRecord
+
+    remaining = dict(server_call_counts)
+    records = []
+    for message in messages:
+        for call in getattr(message, "tool_calls", ()) or ():
+            name = call.get("name", "")
+            if remaining.get(name, 0) > 0:
+                remaining[name] -= 1
+                continue
+            records.append(
+                ToolCallRecord(
+                    tool_name=name,
+                    args_digest=tool_args_digest(call.get("args", {})),
+                    observed_by=ToolCallObservation.CLIENT,
+                )
+            )
+    return tuple(records)
+
+
+async def run_task(
+    sample: Mapping[str, object],
+    guidance_sections: Mapping[str, str],
+    settings: AskYourDocsRunnerSettings,
+) -> Trajectory:
+    """One sample through this harness, returning its trajectory.
+
+    Serve-per-run: each call spawns a trace-enabled server, executes the
+    sample's rendered prompt, and joins the client observations with the
+    server trace. The all-empty-guidance, default-settings path is
+    byte-identical to a plain ``build_agent`` + invoke.
+    """
+    missing = missing_sample_keys(sample)
+    if missing:
+        raise AskSampleContractError(missing=missing)
+    overrides, skill_sections = _partition_guidance(guidance_sections)
+
+    trajectory_id = uuid.uuid4().hex
+    trace_root = Path(settings.trace_root).expanduser()
+    trace_dir = trace_root / trajectory_id
+
+    skill_override: Path | None = None
+    task_name: str | None = None
+    if skill_sections:
+        skill_override = _write_candidate_skill(skill_sections, trace_dir)
+        task_name = str(sample["task_name"])
+
+    started = time.monotonic()
+    answer, messages = await _build_and_execute(
+        sample=sample,
+        settings=settings,
+        overrides=overrides,
+        skill_override=skill_override,
+        task_name=task_name,
+        trace_env=_trace_subprocess_env(trace_root, trajectory_id),
+    )
+    wall_seconds = time.monotonic() - started
+
+    if not (trace_dir / SERVER_EVENTS_FILENAME).exists():
+        raise AskTraceMissingError(trace_dir=trace_dir)
+    server_records = read_tool_call_records(trace_dir)
+    counts: dict[str, int] = {}
+    for record in server_records:
+        counts[record.tool_name] = counts.get(record.tool_name, 0) + 1
+
+    from langchain_core.messages import AIMessage
+
+    return Trajectory(
+        trajectory_id=trajectory_id,
+        trace_dir=trace_dir,
+        answer=answer,
+        tool_calls=(*server_records, *_client_only_records(messages, counts)),
+        turns=sum(isinstance(message, AIMessage) for message in messages),
+        # WHY 0.0: this toolkit path does not observe spend; documented in
+        # the contract (0.0 == unobserved, deliberately not None).
+        cost_usd=0.0,
+        wall_seconds=wall_seconds,
+    )
+
+
+async def _build_and_execute(
+    *,
+    sample: Mapping[str, object],
+    settings: AskYourDocsRunnerSettings,
+    overrides: PromptOverrides,
+    skill_override: Path | None,
+    task_name: str | None,
+    trace_env: Mapping[str, str],
+) -> tuple[str, list]:
+    """Build the agent and execute one prompt (monkeypatch seam for tests)."""
+    # WHY function-local: langgraph/langchain live behind the optional extra.
+    from langchain_core.messages import HumanMessage
+    from langgraph.errors import GraphRecursionError
+
+    from pydocs_mcp.harness.ask_your_docs.agent import build_agent
+
+    graph, _ = await build_agent(
+        settings.workspace,
+        settings.model,
+        base_url=settings.base_url,
+        pydocs_config=settings.pydocs_config,
+        architecture=settings.architecture,
+        config=settings.harness,
+        prompts=overrides if (overrides.system_prompt or overrides.rewrite_prompt) else None,
+        tool_names=settings.tool_names,
+        skill_override=skill_override,
+        task_name=task_name,
+        subprocess_env=dict(trace_env),
+    )
+    try:
+        result = await graph.ainvoke(
+            {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
+            {"recursion_limit": _SUPER_STEPS_PER_TURN * settings.max_agent_turns},
+        )
+    except GraphRecursionError as exc:
+        raise TurnBudgetExceededError(turn_limit=settings.max_agent_turns) from exc
+    messages = result["messages"]
+    return str(messages[-1].content), list(messages)
+
+
+class _AskHarnessRunner:
+    """The port object: conforms to ``HarnessRunner`` structurally AND
+    nominally (``isinstance`` via the runtime-checkable Protocol)."""
+
+    def __init__(self, settings: AskYourDocsRunnerSettings) -> None:
+        self._settings = settings
+
+    async def run(
+        self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
+    ) -> Trajectory:
+        return await run_task(sample, guidance_sections, self._settings)
+
+
+def make_harness_runner(settings: Mapping[str, object]) -> _AskHarnessRunner:
+    """Build this harness's ``HarnessRunner`` from a plain settings mapping.
+
+    The generic composition root resolves this function by dotted path and
+    never sees the concrete settings type — validation (``extra="forbid"``,
+    so typos fail loud) happens here, before any spend.
+    """
+    return _AskHarnessRunner(AskYourDocsRunnerSettings.model_validate(dict(settings)))

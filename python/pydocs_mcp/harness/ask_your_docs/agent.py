@@ -12,12 +12,14 @@ import asyncio
 import contextvars
 import logging
 import sys
+from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 from langchain_openai import ChatOpenAI
 
+from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.architectures import (
     AgentArchitectureError,
     AgentBuildContext,
@@ -81,6 +83,39 @@ _reinspect_state: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
 # ``scope`` (own vs deps) — search_codebase only. The interceptor forces a pin
 # only where the tool can honor it.
 _PACKAGE_TOOLS = frozenset({"search_codebase", "get_overview"})
+
+
+class ToolBindingError(PydocsMCPError, ValueError):
+    """A requested bound-tool set that the server does not advertise.
+
+    Silently binding zero (or fewer) tools would produce a fake experiment
+    arm, so an unknown name — or an empty request — fails loudly naming the
+    offending values and the advertised set (run-contract design §6/§9).
+    """
+
+    def __init__(self, *, unknown: tuple[str, ...], advertised: tuple[str, ...]) -> None:
+        self.unknown = unknown
+        self.advertised = advertised
+        super().__init__(
+            f"unknown bound tool name(s) {list(unknown)} — the server advertises "
+            f"{sorted(advertised)}; a tool surface may only narrow within it"
+        )
+
+
+def _select_bound_tools(tools: list, tool_names: tuple[str, ...]) -> list:
+    """Narrow the bound tool set WITHIN what the server advertises (fail-loud).
+
+    The bound set is DATA, never an architecture class: the §6 experiment
+    arms differ only in this tuple. Order follows ``tool_names`` so the arm's
+    tool ordering is deterministic and lockfile-describable.
+    """
+    if not tool_names:
+        raise ToolBindingError(unknown=("<empty>",), advertised=tuple(t.name for t in tools))
+    by_name = {tool.name: tool for tool in tools}
+    unknown = tuple(name for name in tool_names if name not in by_name)
+    if unknown:
+        raise ToolBindingError(unknown=unknown, advertised=tuple(by_name))
+    return [by_name[name] for name in tool_names]
 
 
 async def _intercept(request: MCPToolCallRequest, handler):
@@ -155,6 +190,7 @@ def _assemble_prompt(
     catalog: dict[str, list[str]],
     prompts: AskPrompts | None,
     session_start_context: str | None = None,
+    skill_block: str | None = None,
 ) -> str:
     """The ONE prompt-assembly site: candidate-or-shipped system + catalog.
 
@@ -164,16 +200,40 @@ def _assemble_prompt(
     assembly site is the one forbidden shape (single source of truth).
 
     ``session_start_context`` (ADR 0008) appends the harness-injected
-    session-start pack after the catalog; ``None`` — the shipped default,
-    ``serve.session_start_context.enabled: false`` — keeps the assembled
-    prompt byte-identical to the pre-injection shape.
+    session-start pack after the catalog; ``skill_block`` (run-contract
+    design §9 stage 2) appends the skill-artifact guidance after it.
+    ``None`` for either — the shipped defaults — keeps the assembled prompt
+    byte-identical to the pre-existing shape.
     """
     resolved_system = (
         prompts.system_prompt
         if prompts and prompts.system_prompt
         else prompts_for(name).render("system_v1")
     )
-    return assemble_system_prompt(resolved_system, render_catalog(catalog), session_start_context)
+    return assemble_system_prompt(
+        resolved_system, render_catalog(catalog), session_start_context, skill_block
+    )
+
+
+def _resolved_skill_block(skill_override: Path | None, task_name: str | None) -> str | None:
+    """The skill guidance for this build, or ``None`` — the byte-identity default.
+
+    The adapter folds whenever skill guidance is requested at all
+    (``skill_override`` or ``task_name`` given); the task head folds only
+    when ``task_name`` names the arm's task. An unknown task name fails
+    loudly in ``head_section_header`` (the enumerated v1 set); an invalid
+    override document fails loudly in the loader — never a silent fallback.
+    """
+    if skill_override is None and task_name is None:
+        return None
+    # WHY function-local: the loader pulls in the description grammar; the
+    # default build path (no skill) must not pay that import.
+    from pydocs_mcp.harness.core.skill_artifact_loader import load_skill_artifact
+
+    artifact = load_skill_artifact(skill_override)
+    if task_name is None:
+        return artifact.adapter
+    return f"{artifact.adapter}\n{artifact.head('ask_your_docs', task_name)}"
 
 
 async def build_agent(
@@ -188,6 +248,11 @@ async def build_agent(
     config: AskYourDocsConfig | None = None,
     capabilities: ModelCapabilities | None = None,
     prompts: AskPrompts | None = None,
+    tool_names: tuple[str, ...] | None = None,
+    skill_override: Path | None = None,
+    task_name: str | None = None,
+    scope_pin: bool = True,
+    subprocess_env: dict[str, str] | None = None,
 ):
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
@@ -204,16 +269,37 @@ async def build_agent(
     UI can detect once and share the result with its badge. ``prompts`` is the
     evaluation-harness seam (:class:`AskPrompts`) — the app and CLI never pass
     it, so product behavior is byte-identical by default.
+
+    The run-contract keywords (§9 stage 2, HARNESS-PRIVATE — the cross-repo
+    seam is the run contract, never this signature): ``tool_names`` narrows
+    the bound tool set within what the server advertises (fail-loud;
+    ``None`` — the default — binds everything, byte-identical to before);
+    ``skill_override`` / ``task_name`` fold the skill artifact's adapter
+    (+ this harness's task head) at the single assembly site; ``scope_pin``
+    ``False`` omits the corpus-pin interceptor (the searched dimension's
+    seam); ``subprocess_env`` extends the serve subprocess environment (the
+    binding's trace channel). All defaults together reproduce the pre-stage-2 build
+    byte-for-byte — the experiment's control arm is provable.
     """
     command, *prefix = pydocs_cmd or [sys.executable, "-m", "pydocs_mcp"]
     # --config is a root flag: it must come BEFORE the serve subcommand.
     config_args = ["--config", pydocs_config] if pydocs_config else []
     args = [*prefix, *config_args, "serve", "--workspace", workspace]
+    connection: dict = {"transport": "stdio", "command": command, "args": args}
+    # WHY an explicit env map: the MCP stdio spawn starts children from a
+    # MINIMAL default environment (not the parent's), so anything the serve
+    # subprocess must see — the ADR 0009 PYDOCS_TRACE__* channel above all —
+    # must ride the connection's env key, never a parent os.environ mutation
+    # (which the child would not inherit AND which races concurrent runs).
+    if subprocess_env is not None:
+        connection["env"] = dict(subprocess_env)
     client = MultiServerMCPClient(
-        {"pydocs": {"transport": "stdio", "command": command, "args": args}},
-        tool_interceptors=[_intercept],
+        {"pydocs": connection},
+        tool_interceptors=[_intercept] if scope_pin else [],
     )
     tools = await client.get_tools()
+    if tool_names is not None:
+        tools = _select_bound_tools(tools, tool_names)
 
     # Fold the full project/package catalog into the prompt so the model can
     # pick the right project= / package= filters itself. Built from the bundle
@@ -238,7 +324,8 @@ async def build_agent(
     session_start_pack = await build_session_start_context_for_agent_prompt(
         workspace, pydocs_config
     )
-    prompt = _assemble_prompt(name, catalog, prompts, session_start_pack)
+    skill_block = _resolved_skill_block(skill_override, task_name)
+    prompt = _assemble_prompt(name, catalog, prompts, session_start_pack, skill_block)
     caps = capabilities
     if caps is None:
         caps = await detect_capabilities(model, base_url, cfg.multimodal.detection)

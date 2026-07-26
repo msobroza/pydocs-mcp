@@ -31,14 +31,22 @@ def assemble_system_prompt(
     system: str,
     catalog_block: str,
     session_start_context: str | None = None,
+    skill_block: str | None = None,
 ) -> str:
-    """Compose the final system prompt: system + catalog (+ session pack).
+    """Compose the final system prompt: system + catalog (+ session pack)
+    (+ skill guidance).
 
     ``session_start_context`` (ADR 0008) appends the harness-injected
-    session-start pack after the catalog; ``None`` — the shipped default —
-    keeps the assembled prompt byte-identical to the pre-injection shape.
+    session-start pack after the catalog. ``skill_block`` (run-contract
+    design §9 stage 2) appends the skill-artifact guidance — the harness's
+    ``system_prompt_suffix`` delivery channel — after the session pack.
+    ``None`` for either — the shipped defaults — keeps the assembled prompt
+    byte-identical to the pre-existing shape (each optional component's
+    off-state is the ablation control arm).
     """
     assembled = f"{system}\nIndexed projects and packages:\n{catalog_block}"
-    if session_start_context is None:
-        return assembled
-    return f"{assembled}\n{session_start_context}"
+    if session_start_context is not None:
+        assembled = f"{assembled}\n{session_start_context}"
+    if skill_block is not None:
+        assembled = f"{assembled}\n{skill_block}"
+    return assembled

@@ -102,6 +102,10 @@ class UndeliverableGuidanceError(PydocsMCPError, ValueError):
 REQUIRED_SAMPLE_KEYS = ("record_id", "task_name", "rendered_prompt", "gold")
 
 
+class TurnBudgetExceededError(PydocsMCPError, RuntimeError):
+    """No final answer within the turn budget (contract rule 3's typed error)."""
+
+
 @runtime_checkable
 class HarnessRunner(Protocol):
     """One sample in, one Trajectory out. Settings bind at each harness's own
@@ -112,6 +116,13 @@ class HarnessRunner(Protocol):
         self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
     ) -> Trajectory: ...
 ```
+
+*Addendum (stage-2 implementation, 2026-07-27, matching the ADR amendment
+style): the module additionally ships two helpers the rules imply —
+`missing_sample_keys(sample)` (rule 6's executable check) and
+`Trajectory.server_tool_calls()` (the authoritative-slice filter gates
+read) — and `TurnBudgetExceededError` is the previously unnamed "typed
+error" of rule 3.*
 
 Contract rules (enforced by the shared contract-test suite every harness's
 tests subclass):
@@ -213,7 +224,7 @@ An evaluation arm is a run-config cell:
 
 ```yaml
 arms:
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:run_task   # lazy dotted path
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner  # factory path
     settings: {workspace: ~/pydocs-index, model: qwen3-4b}      # harness-private mapping
     tool_names: null            # null → the full nine; a tuple narrows within them
     dataset: ccv
@@ -250,8 +261,9 @@ the bound set (the dominant §6 confound, scheduled with its seed-parity cost).
 | Trace layer, `DerivedRecord`, projections, orchestrator, ledgers, acceptance, prereg | Untouched |
 
 **Created (the irreducible whole):** `run_contract.py` (two dataclasses, one
-enum, one protocol, one error, one constant), `observability/trace_reader.py`
-(one function), the `search_skill` artifact family, the `arms:` config block,
+enum, one protocol, two errors, one constant, two helpers),
+`observability/trace_reader.py` (the reader + the documented `args_digest`
+derivation), the `search_skill` artifact family, the `arms:` config block,
 the shared contract-test suite, and the stage-1 tripwires.
 
 **Deferred by design (C6):** `TaskEnvelope`/`HarnessTask`/capability
@@ -340,11 +352,9 @@ resolutions:
 
 ```python
 # harness/ask_your_docs/binding.py — the ONLY new harness-side module
-async def run_task(sample, guidance_sections) -> Trajectory: ...   # closes over settings
-
 def make_harness_runner(settings: Mapping[str, object]) -> HarnessRunner:
     parsed = AskYourDocsRunnerSettings.model_validate(settings)   # typed HERE only
-    ...
+    return _AskHarnessRunner(parsed)          # .run(sample, guidance_sections)
 ```
 
 `build_agent` keeps its own signature (harness-private); `_assemble_prompt`

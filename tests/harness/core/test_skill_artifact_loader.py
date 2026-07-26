@@ -202,3 +202,16 @@ def test_seed_ships_via_an_explicit_maturin_include() -> None:
 def test_seed_visible_via_importlib_resources() -> None:
     resource = resources.files("pydocs_mcp.harness.core.skills").joinpath("search_guidance_seed.md")
     assert resource.is_file()
+
+
+def test_parse_skill_artifact_is_the_public_in_memory_entrypoint(tmp_path: Path) -> None:
+    # The cross-package seam the search_skill family will delegate to
+    # (run-contract design §4/§9 stage 4) — no private import, no temp file.
+    text = ds.render_sections(_valid_skill_sections())
+    artifact = sal.parse_skill_artifact(text, origin="candidate")
+    assert artifact.adapter == "adapter policy text"
+    with pytest.raises(ds.HeaderCollisionError) as excinfo:
+        sal.parse_skill_artifact(
+            text + "=== SERVER_INSTRUCTIONS ===\nsmuggled\n", origin="candidate"
+        )
+    assert any("candidate" in note for note in excinfo.value.__notes__)

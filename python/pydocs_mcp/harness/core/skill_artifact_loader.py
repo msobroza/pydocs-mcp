@@ -145,6 +145,20 @@ def load_skill_artifact(override: Path | None = None) -> SkillArtifact:
     return _parse_and_validate_skill(text, origin=origin)
 
 
+def parse_skill_artifact(text: str, *, origin: str) -> SkillArtifact:
+    """Parse + validate in-memory skill-document text (the PUBLIC entrypoint).
+
+    The cross-package seam the benchmarks ``search_skill`` family delegates
+    to (run-contract design §4/§9 stage 4): one validator on the product
+    side means "firewall-accepts ⇒ product-accepts" holds by identity.
+    ``origin`` names the text's source in every failure note.
+
+    Example:
+        >>> parse_skill_artifact(candidate_text, origin="candidate")  # doctest: +SKIP
+    """
+    return _parse_and_validate_skill(text, origin=origin)
+
+
 def _parse_and_validate_skill(text: str, *, origin: str) -> SkillArtifact:
     try:
         sections = parse_sections(text, allowed=SKILL_ARTIFACT_HEADERS)
