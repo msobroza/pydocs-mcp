@@ -51,7 +51,7 @@ _ASK_REWRITE_TOKEN_BUDGET = 300
 _BUDGETS = {_SYSTEM_KEY: _ASK_SYSTEM_TOKEN_BUDGET, _REWRITE_KEY: _ASK_REWRITE_TOKEN_BUDGET}
 
 # Where a landed proposal applies; named in ``landing_note``.
-_PRODUCT_PROMPTS_DIR = "python/pydocs_mcp/harness/ask_your_docs/prompts/shared/"
+_PRODUCT_PROMPTS_DIR = "python/pydocs_mcp/harness/core/prompts/"
 
 
 def _seed_sections() -> dict[str, str]:

@@ -1,7 +1,8 @@
 """harness/ask_your_docs/prompts — per-architecture prompt namespaces.
 
 Convention over configuration: an architecture's prompts live in
-``prompts/<registry-name>/`` and fall back to ``prompts/shared/``; the
+``prompts/<registry-name>/`` and fall back to the harness-agnostic shared
+pool in ``harness/core/prompts/`` (owner decision 2026-07-26); the
 ``@register_architecture`` decorator binds the namespace to the registry
 name, so no architecture hardcodes a template path."""
 
@@ -41,7 +42,16 @@ def test_unknown_template_raises_listing_both_locations() -> None:
     with pytest.raises(FileNotFoundError) as excinfo:
         prompts.prompts_for("inline").render("nope_v1")
     msg = str(excinfo.value)
-    assert "inline" in msg and "shared" in msg
+    assert "inline" in msg and "harness/core/prompts" in msg
+
+
+def test_core_pool_is_the_shared_source() -> None:
+    """The shared pool lives in harness/core (harness-agnostic), and
+    render_shared is a thin view over it."""
+    from pydocs_mcp.harness.core.prompts import core_prompt_names, render_core_prompt
+
+    assert "system_v1" in core_prompt_names()
+    assert render_core_prompt("system_v1") == prompts.render_shared("system_v1")
 
 
 def test_namespace_names_are_the_union() -> None:

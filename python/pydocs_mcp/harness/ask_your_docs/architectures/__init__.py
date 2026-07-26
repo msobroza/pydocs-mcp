@@ -29,7 +29,7 @@ def register_architecture(name: str):
     """Register an architecture AND bind its prompt namespace in one decorator.
 
     ``name`` becomes both the registry key and the prompt directory
-    (``prompts/<name>/`` with ``prompts/shared/`` fallback) — convention over
+    (``prompts/<name>/`` with the ``harness/core/prompts/`` shared-pool fallback) — convention over
     configuration, so a new architecture never hardcodes template paths.
     Duplicate names raise ValueError at import time (ComponentRegistry).
     """
