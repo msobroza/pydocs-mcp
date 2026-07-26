@@ -4,9 +4,11 @@ Owner rule (2026-07-26): a template lives here only if a second harness or
 task could plausibly reuse it — today the retriever-guidance surface the
 optimizer seeds from (``system_v1``, ``rewrite_v1``). A single harness's
 feature machinery (e.g. ask-your-docs' vision/reinspect templates) lives in
-that harness's own ``prompts/shared/`` pool instead. Resolution order per
-architecture namespace: ``<harness>/prompts/<architecture>/`` →
-``<harness>/prompts/shared/`` → this pool (``prompt_namespace.py``).
+that harness's own ``prompts/freeze/`` pool instead — FROZEN, because
+optimizable tasks consume it as an experimental control (byte-pinned per
+harness via ``core/prompt_freeze.py``). Resolution order per architecture
+namespace: ``<harness>/prompts/<architecture>/`` →
+``<harness>/prompts/freeze/`` → this pool (``prompt_namespace.py``).
 
 Versioning rule (retrieval/prompts precedent): never edit a shipped ``_vN``
 in place — ship ``_vN+1``. jinja2 is a core dep — importing this is light.
