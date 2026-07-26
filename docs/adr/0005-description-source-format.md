@@ -232,3 +232,18 @@ All in this phase unless noted.
 6. Parameter-description creation: deferred with no owning phase; revisit only if the later
    optimization phase produces evidence that per-parameter text is a worthwhile search
    dimension.
+
+## Amendment (2026-07-26) — grammar widened for the harness skill artifact
+
+The header regex quoted in §Evidence is a point-in-time citation of the
+benchmarks-side prior art and has since widened twice under the
+header-widening protocol this ADR established: `SESSION_START_PREAMBLE`
+(the Phase 1 landing itself) and, on 2026-07-26, `ADAPTER` plus the dotted
+`HEAD: <harness>.<task_type>` shape for the harness skill artifact (spec
+§5.2 of `docs/superpowers/specs/2026-07-26-retriever-centric-harness-platform-design.md`).
+The product document's eleven-section set in §Decision is unchanged — the
+new kinds are firewalled out of it exactly like `SYSTEM_PROMPT` /
+`REWRITE_PROMPT`; their enumerated allowed set lives in
+`python/pydocs_mcp/harness/core/skill_artifact_loader.py`
+(`SKILL_ARTIFACT_HEADERS`). The live grammar reference is
+`docs/description-authoring.md` §8, not the regex quoted above.

@@ -80,7 +80,12 @@ class UsageSkillArtifact:
             f"Apply the diff to {_SEED_PATH} by hand. This skill text feeds the "
             "evaluated agent through task_prompt(skill=...), so rerun the "
             "optimization preflight (--dry-run) to confirm the edited seed still "
-            "validates before landing."
+            "validates before landing. Ownership note: the decomposition / "
+            "stop-rule / precision-budget policy also lives in the shared "
+            "ADAPTER section of the product skill artifact "
+            "(python/pydocs_mcp/harness/core/skills/search_guidance_seed.md); "
+            "when both texts reach one prompt, keep the two aligned — or delete "
+            "this seed's copy — rather than letting them drift."
         )
 
     @property

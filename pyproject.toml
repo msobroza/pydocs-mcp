@@ -208,6 +208,7 @@ include = [
   "python/pydocs_mcp/retrieval/prompts/*.j2",
   "python/pydocs_mcp/harness/ask_your_docs/prompts/**/*.j2",
   "python/pydocs_mcp/harness/core/prompts/*.j2",
+  "python/pydocs_mcp/harness/core/skills/*.md",
 ]
 
 [tool.pytest.ini_options]

@@ -47,6 +47,18 @@ def test_pipeline_load_error_inherits_from_root() -> None:
     assert issubclass(PipelineLoadError, ValueError)
 
 
+def test_skill_artifact_error_inherits_from_root() -> None:
+    """Preserves the DescriptionSourceError + ValueError lineage so one
+    ``except DescriptionSourceError`` catches every skill-artifact failure."""
+    from pydocs_mcp.application.description_source import DescriptionSourceError
+    from pydocs_mcp.exceptions import PydocsMCPError
+    from pydocs_mcp.harness.core.skill_artifact_loader import SkillArtifactError
+
+    assert issubclass(SkillArtifactError, PydocsMCPError)
+    assert issubclass(SkillArtifactError, DescriptionSourceError)
+    assert issubclass(SkillArtifactError, ValueError)
+
+
 def test_catch_any_pydocs_error_with_single_except() -> None:
     """The whole point of the root: callers can catch every pydocs-mcp
     failure with one handle without swallowing unrelated bugs."""

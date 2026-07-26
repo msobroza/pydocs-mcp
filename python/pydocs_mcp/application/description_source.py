@@ -20,14 +20,17 @@ call), never the raw input — hashing raw text makes equal surfaces compare
 unequal across passes.
 
 **Header-widening protocol.** The grammar is shared by every delimited
-artifact (this product document AND the benchmarks optimizer artifacts, which
-delegate here). Adding a new section kind requires: (1) widen the one
-``_HEADER_RE`` alternation below; (2) extend each artifact's *allowed* set —
-the product's ``CANONICAL_HEADERS`` here, the benchmarks artifacts' sets on
-their side. A key present in the regex but absent from an artifact's allowed
-set is parseable but rejected for that artifact — which is exactly how the
-product document firewalls the benchmarks-only ``SYSTEM_PROMPT`` /
-``REWRITE_PROMPT`` keys.
+artifact (this product document, the benchmarks optimizer artifacts, and the
+harness skill artifact — all delegate here). Adding a new section kind
+requires: (1) widen the one ``_HEADER_RE`` alternation below; (2) extend each
+artifact's *allowed* set — the product's ``CANONICAL_HEADERS`` here, the
+benchmarks artifacts' sets on their side, the skill artifact's
+``SKILL_ARTIFACT_HEADERS`` in ``harness/core/skill_artifact_loader.py``. A
+key present in the regex but absent from an artifact's allowed set is
+parseable but rejected for that artifact — which is exactly how the product
+document firewalls the benchmarks-only ``SYSTEM_PROMPT`` /
+``REWRITE_PROMPT`` keys and the skill-artifact-only ``ADAPTER`` /
+``HEAD: <harness>.<task_type>`` keys.
 """
 
 from __future__ import annotations
@@ -102,11 +105,21 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # collision check all read this one pattern, so the grammar cannot drift.
 # The header set is CLOSED: every legal section key across every delimited
 # artifact (this product document, the benchmarks tool_docs / ask_prompt
-# artifacts) is enumerated here, so a key smuggled into content is promoted
-# to a section and rejected as a collision. Widening it is a deliberate
-# event — see the header-widening protocol in the module docstring.
+# artifacts, the harness skill artifact) is enumerated here, so a key
+# smuggled into content is promoted to a section and rejected as a
+# collision. Widening it is a deliberate event — see the header-widening
+# protocol in the module docstring.
+# The ``HEAD: <harness>.<task_type>`` branch carries the SHAPE only (the
+# TOOL precedent): the v1-enumerated four keys live in the skill artifact's
+# allowed set (spec §5.2), so an unknown head is promoted-then-rejected
+# per artifact rather than riding silently as content.
+# The 2026-07-26 widening (ADAPTER + HEAD) did NOT bump RENDERER_VERSION:
+# render/normalize are key-agnostic, and no shipped or recorded document
+# contains the new header-shaped lines (verified repo-wide), so no existing
+# fingerprint changes meaning under the widened parser.
 _HEADER_RE = re.compile(
-    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|TOOL: [a-z_]+) ===$"
+    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|ADAPTER"
+    r"|TOOL: [a-z_]+|HEAD: [a-z_]+\.[a-z_]+) ===$"
 )
 
 
@@ -157,7 +170,12 @@ class MissingMarkerError(DescriptionSourceError):
 
 
 class TokenBudgetExceededError(DescriptionSourceError):
-    """A TOOL section (or the whole surface) exceeds its token budget."""
+    """A capped section (or a capped surface total) exceeds its token budget.
+
+    Raised for the product document's TOOL sections and nine-section total
+    here, and by the harness skill-artifact loader for its ADAPTER / HEAD
+    caps — the ``section`` field names which surface overflowed.
+    """
 
     def __init__(self, *, section: str | None, tokens: int, budget: int) -> None:
         self.section = section
