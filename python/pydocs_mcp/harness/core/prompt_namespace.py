@@ -1,9 +1,17 @@
 """Per-architecture prompt namespaces over a harness prompt package.
 
-Generalized from the ask-your-docs resolver: any harness ships a prompt
-package whose ``<architecture>/`` directories override by name, with the
-harness-agnostic shared pool (``harness/core/prompts``) serving everything
-not overridden. ``"shared"`` is the public source LABEL for the pool.
+Resolution is three-tier, most specific wins: the architecture's own
+``<architecture>/`` directory, then the harness-local ``shared/`` pool
+(harness-specific but architecture-independent machinery), then the
+cross-harness core pool (``harness/core/prompts``). Owner rule
+(2026-07-26): the core pool carries ONLY prompts plausibly shared across
+harnesses/tasks — a single harness's feature machinery lives in that
+harness's own ``shared/``.
+
+``"shared"`` labels the harness-local pool (it is also the directory
+name); ``"core"`` labels the cross-harness pool. Both label strings are
+therefore RESERVED — never register an architecture named ``shared`` or
+``core``.
 """
 
 from __future__ import annotations
@@ -19,7 +27,8 @@ from pydocs_mcp.harness.core.prompts import (
 )
 from pydocs_mcp.retrieval.prompts._loader import render_prompt_from
 
-SHARED_SOURCE_LABEL = "shared"
+HARNESS_POOL_LABEL = "shared"
+CORE_POOL_LABEL = "core"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,33 +44,39 @@ class HarnessPromptNamespace:
 
     def resolve_source(self, prompt_name: str) -> str:
         """Which source serves ``prompt_name`` — the architecture's own
-        directory or the ``shared`` core pool — raising with both searched
-        locations when neither has it."""
+        directory, the harness-local ``shared`` pool, or the ``core``
+        pool — raising with all three searched locations when none has
+        it."""
         pkg = resources.files(self.package)
         if pkg.joinpath(self.architecture, f"{prompt_name}.j2").is_file():
             return self.architecture
+        if pkg.joinpath(HARNESS_POOL_LABEL, f"{prompt_name}.j2").is_file():
+            return HARNESS_POOL_LABEL
         if has_core_prompt(prompt_name):
-            return SHARED_SOURCE_LABEL
+            return CORE_POOL_LABEL
+        package_dir = self.package.replace(".", "/")
         raise FileNotFoundError(
             f"prompt {prompt_name!r} not found for architecture "
             f"{self.architecture!r} — searched "
-            f"{self.package.replace('.', '/')}/{self.architecture}/ "
-            f"and the shared pool harness/core/prompts/."
+            f"{package_dir}/{self.architecture}/, "
+            f"{package_dir}/{HARNESS_POOL_LABEL}/, "
+            "and the core pool harness/core/prompts/."
         )
 
     def render(self, prompt_name: str, **variables: Any) -> str:
         source = self.resolve_source(prompt_name)
-        if source == SHARED_SOURCE_LABEL:
+        if source == CORE_POOL_LABEL:
             return render_core_prompt(prompt_name, **variables)
         return render_prompt_from(self.package, f"{source}/{prompt_name}", **variables)
 
     def names(self) -> tuple[str, ...]:
-        """Every prompt this architecture can render (own ∪ shared pool)."""
+        """Every prompt this architecture can render (own ∪ shared ∪ core)."""
         pkg = resources.files(self.package)
         found: set[str] = set(core_prompt_names())
-        directory = pkg.joinpath(self.architecture)
-        if directory.is_dir():
-            found |= {
-                entry.name[:-3] for entry in directory.iterdir() if entry.name.endswith(".j2")
-            }
+        for directory_name in (HARNESS_POOL_LABEL, self.architecture):
+            directory = pkg.joinpath(directory_name)
+            if directory.is_dir():
+                found |= {
+                    entry.name[:-3] for entry in directory.iterdir() if entry.name.endswith(".j2")
+                }
         return tuple(sorted(found))

@@ -1,8 +1,10 @@
 """harness/ask_your_docs/prompts — per-architecture prompt namespaces.
 
 Convention over configuration: an architecture's prompts live in
-``prompts/<registry-name>/`` and fall back to the harness-agnostic shared
-pool in ``harness/core/prompts/`` (owner decision 2026-07-26); the
+``prompts/<registry-name>/``, falling back to the harness-local ``shared/``
+pool (feature machinery like vision/reinspect), then to the cross-harness
+core pool in ``harness/core/prompts/`` — which carries ONLY prompts
+plausibly shared across harnesses (owner rule 2026-07-26). The
 ``@register_architecture`` decorator binds the namespace to the registry
 name, so no architecture hardcodes a template path."""
 
@@ -25,16 +27,18 @@ def test_shared_pool_renders() -> None:
 
 
 def test_architecture_namespace_resolves_own_then_shared() -> None:
-    """The core convention: prompts/<name>/ wins, shared/ is the fallback."""
+    """The core convention: prompts/<name>/ wins, then shared/, then core."""
     inline_ns = prompts.prompts_for("inline")
     assert "Image handling:" in inline_ns.render("system_suffix_v1")
     assert inline_ns.resolve_source("system_suffix_v1") == "inline"
-    # No override for system_v1 → shared serves it.
-    assert inline_ns.resolve_source("system_v1") == "shared"
+    # No override for system_v1 → the cross-harness core pool serves it.
+    assert inline_ns.resolve_source("system_v1") == "core"
     assert inline_ns.render("system_v1") == prompts.render_shared("system_v1")
-    # An architecture with no directory at all is pure fallback.
+    # An architecture with no directory at all is pure fallback; the
+    # harness-local shared/ pool serves the vision machinery.
     tr = prompts.prompts_for("text_react")
-    assert tr.resolve_source("system_v1") == "shared"
+    assert tr.resolve_source("system_v1") == "core"
+    assert tr.resolve_source("vision_extraction_v1") == "shared"
     assert tr.render("vision_extraction_v1", question="q")
 
 
@@ -46,11 +50,13 @@ def test_unknown_template_raises_listing_both_locations() -> None:
 
 
 def test_core_pool_is_the_shared_source() -> None:
-    """The shared pool lives in harness/core (harness-agnostic), and
-    render_shared is a thin view over it."""
+    """The cross-harness core pool serves the retriever-guidance prompts,
+    and render_shared falls through to it for anything the harness-local
+    shared/ pool does not carry."""
     from pydocs_mcp.harness.core.prompts import core_prompt_names, render_core_prompt
 
     assert "system_v1" in core_prompt_names()
+    assert "vision_extraction_v1" not in core_prompt_names()
     assert render_core_prompt("system_v1") == prompts.render_shared("system_v1")
 
 

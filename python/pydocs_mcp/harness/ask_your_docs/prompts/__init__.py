@@ -1,20 +1,23 @@
 """EVERY model-facing prompt for the ask-your-docs agent — per-architecture.
 
 Convention over configuration: an architecture registered as ``<name>`` gets
-its prompts from ``prompts/<name>/*.j2``, FALLING BACK to the harness-agnostic
-shared pool in ``pydocs_mcp/harness/core/prompts/`` — so adding or customizing
-an architecture's prompt is one dropped-in file named after the registry
+its prompts from ``prompts/<name>/*.j2``, falling back to the harness-local
+``shared/`` pool, then to the cross-harness core pool in
+``pydocs_mcp/harness/core/prompts/`` — so adding or customizing an
+architecture's prompt is one dropped-in file named after the registry
 entry, never a code edit. The ``@register_architecture`` decorator
 (architectures/base.py) binds the namespace to the registry name.
 
-Layout:
+Layout (owner rule 2026-07-26: the CORE pool carries only prompts plausibly
+shared across harnesses/tasks — this harness's feature machinery stays here):
 
-- ``harness/core/prompts/`` — the shared pool (owner decision 2026-07-26:
-                  shared prompts live in ``harness/core``, not in any single
-                  harness): ``system_v1`` (base ReAct system prompt),
-                  ``rewrite_v1`` (follow-up → standalone), ``vision_extraction_v1``
-                  (image-fact extraction — vision node + reinspect tool),
-                  ``reinspect_description_v1`` / ``reinspect_budget_message_v1``.
+- ``harness/core/prompts/`` — cross-harness pool: ``system_v1`` (base ReAct
+                  system prompt) and ``rewrite_v1`` (follow-up → standalone) —
+                  the retriever-guidance surface the optimizer seeds from.
+- ``shared/``   — harness-local pool (architecture-independent ask-your-docs
+                  machinery): ``vision_extraction_v1`` (image-fact extraction —
+                  vision node + reinspect tool), ``reinspect_description_v1`` /
+                  ``reinspect_budget_message_v1``.
 - ``inline/``   — ``system_suffix_v1`` (image-analysis section appended to the
                   system prompt) — harness-local architecture namespace.
 - ``<name>/``   — any future architecture's overrides/additions (harness-local).
@@ -26,10 +29,12 @@ agent auto-optimization work. jinja2 is a core dep — importing this is light.
 
 from __future__ import annotations
 
+from importlib import resources
 from typing import Any
 
-from pydocs_mcp.harness.core.prompt_namespace import HarnessPromptNamespace
+from pydocs_mcp.harness.core.prompt_namespace import HARNESS_POOL_LABEL, HarnessPromptNamespace
 from pydocs_mcp.harness.core.prompts import render_core_prompt
+from pydocs_mcp.retrieval.prompts._loader import render_prompt_from
 
 _PACKAGE = "pydocs_mcp.harness.ask_your_docs.prompts"
 
@@ -44,7 +49,12 @@ def prompts_for(architecture: str) -> HarnessPromptNamespace:
 
 
 def render_shared(prompt_name: str, **variables: Any) -> str:
-    """Render an architecture-independent prompt from the shared core pool."""
+    """Render an architecture-independent prompt: the harness-local
+    ``shared/`` pool wins; anything it does not carry falls back to the
+    cross-harness core pool."""
+    local = resources.files(_PACKAGE).joinpath(HARNESS_POOL_LABEL, f"{prompt_name}.j2")
+    if local.is_file():
+        return render_prompt_from(_PACKAGE, f"{HARNESS_POOL_LABEL}/{prompt_name}", **variables)
     return render_core_prompt(prompt_name, **variables)
 
 
