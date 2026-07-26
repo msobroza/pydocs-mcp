@@ -1,4 +1,4 @@
-"""``ask-your-docs`` — launch the Streamlit chat UI.
+"""``harness-ask-your-docs`` — launch the Streamlit chat UI.
 
 A thin wrapper over ``streamlit run app.py`` that forwards connection settings
 as env vars (the sidebar prefills from them) and pins the dark theme base so
@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pydocs_mcp.ask_your_docs.theme import streamlit_theme_flags
+from pydocs_mcp.harness.ask_your_docs.theme import streamlit_theme_flags
 
 _ENV = {
     "workspace": "PYDOCS_WORKSPACE",
@@ -35,8 +35,8 @@ def _require_extra() -> None:
     missing = [m for m in _EXTRA_MODULES if find_spec(m) is None]
     if missing:
         raise SystemExit(
-            f"ask-your-docs needs the optional agent stack (missing: {', '.join(missing)}). "
-            "Install it with:  pip install 'pydocs-mcp[ask-your-docs]'"
+            f"harness-ask-your-docs needs the optional agent stack (missing: {', '.join(missing)}). "
+            "Install it with:  pip install 'pydocs-mcp[harness-ask-your-docs]'"
         )
 
 
@@ -45,10 +45,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     Kept as a named helper (mirroring ``pydocs_mcp.__main__._build_parser``)
     so doc-conformance tests can help-level-validate documented
-    ``ask-your-docs`` invocations without the ``[ask-your-docs]`` extra
+    ``ask-your-docs`` invocations without the ``[harness-ask-your-docs]`` extra
     installed; ``main`` still gates execution on ``_require_extra``.
     """
-    parser = argparse.ArgumentParser(prog="ask-your-docs", description=__doc__)
+    parser = argparse.ArgumentParser(prog="harness-ask-your-docs", description=__doc__)
     parser.add_argument("--workspace", help="folder of pydocs-mcp .db/.tq index bundles")
     parser.add_argument("--model", help="OpenAI-protocol model name (default: gpt-4o-mini)")
     parser.add_argument("--base-url", help="OpenAI-compatible base URL (vLLM/Ollama/LiteLLM)")

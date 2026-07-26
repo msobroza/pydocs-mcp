@@ -83,17 +83,17 @@ identifier inside it changes.
 
 ### Step 0 — Pre-flight (verify the inventory still holds)
 
-- [ ] **Owner has confirmed the literal identifier string** (recorded lean:
+- [x] **Owner has confirmed the literal identifier string** (recorded lean:
       `harness-ask-your-docs` for both script and extra — §Open 1) and ruled on the
       log-channel name (§Open 3). Do not begin Step 1 without both.
-- [ ] Fresh branch off up-to-date `main`; working tree clean.
-- [ ] Confirm counts: `git ls-files python/pydocs_mcp/ask_your_docs | wc -l` → **28**;
+- [x] Fresh branch off up-to-date `main`; working tree clean.
+- [x] Confirm counts: `git ls-files python/pydocs_mcp/ask_your_docs | wc -l` → **28**;
       `git ls-files tests/ask_your_docs | wc -l` → **18** (**19** if trap T12's
       file-watcher branch landed first — see T12);
       `git ls-files examples/ask_your_docs_agent | wc -l` → **7**.
-- [ ] Confirm parents do not exist yet: `ls python/pydocs_mcp/ | grep harness` (empty),
+- [x] Confirm parents do not exist yet: `ls python/pydocs_mcp/ | grep harness` (empty),
       same for `tests/` and `examples/`.
-- [ ] Confirm zero core-import blast radius:
+- [x] Confirm zero core-import blast radius:
       `grep -rn 'ask_your_docs\|ask-your-docs' python/pydocs_mcp/ --exclude-dir=ask_your_docs`
       — expect exactly 6 files / 11 hits:
       `retrieval/config/ask_your_docs_models.py` (:7 extra name — **edited**, Step 3; :36
@@ -106,23 +106,23 @@ identifier inside it changes.
       `retrieval/prompts/_loader.py:27` (product prose, no edit),
       `__main__.py:998` (product prose, no edit).
       Any other hit = stale inventory; halt and re-survey.
-- [ ] Check for concurrent open PRs and branches touching `ask_your_docs`,
+- [x] Check for concurrent open PRs and branches touching `ask_your_docs`,
       `pyproject.toml`, or `uv.lock` (`gh pr list` + `git branch -a`) — standing rule:
       survey before touching shared files. Known at plan time:
       `fix/ask-your-docs-file-watcher-default` (trap T12).
-- [ ] Build/verify the per-worktree venv (trap T1/T2) BEFORE trusting any test run.
+- [x] Build/verify the per-worktree venv (trap T1/T2) BEFORE trusting any test run.
 
 ### Step 1 — `git mv` the three trees + create package inits
 
-- [ ] `mkdir python/pydocs_mcp/harness tests/harness examples/harness`
-- [ ] `git mv python/pydocs_mcp/ask_your_docs python/pydocs_mcp/harness/ask_your_docs`
-- [ ] `git mv tests/ask_your_docs tests/harness/ask_your_docs`
-- [ ] `git mv examples/ask_your_docs_agent examples/harness/ask_your_docs_agent`
-- [ ] Create `python/pydocs_mcp/harness/__init__.py` (one-line docstring; `pydocs_mcp` is a
+- [x] `mkdir python/pydocs_mcp/harness tests/harness examples/harness`
+- [x] `git mv python/pydocs_mcp/ask_your_docs python/pydocs_mcp/harness/ask_your_docs`
+- [x] `git mv tests/ask_your_docs tests/harness/ask_your_docs`
+- [x] `git mv examples/ask_your_docs_agent examples/harness/ask_your_docs_agent`
+- [x] Create `python/pydocs_mcp/harness/__init__.py` (one-line docstring; `pydocs_mcp` is a
       regular package, not a namespace package — every subpackage has an `__init__.py`).
-- [ ] Create `tests/harness/__init__.py` (`tests/__init__.py` exists; without the new init,
+- [x] Create `tests/harness/__init__.py` (`tests/__init__.py` exists; without the new init,
       `tests.harness.ask_your_docs._fixture` will not import).
-- [ ] `git status` — expect 53 renames (R) + 2 new files (54 renames if T12's
+- [x] `git status` — expect 53 renames (R) + 2 new files (54 renames if T12's
       file-watcher branch landed first); **stage individually, never
       `git add -A`** (trap T5).
 
@@ -132,29 +132,29 @@ All `from pydocs_mcp.ask_your_docs.…` → `from pydocs_mcp.harness.ask_your_do
 docstrings/log names. Files with hit counts (paths post-move under
 `python/pydocs_mcp/harness/ask_your_docs/`):
 
-- [ ] `agent.py` (10) · `app.py` (8) · `cli.py` (6) · `architectures/base.py` (4) ·
+- [x] `agent.py` (10) · `app.py` (8) · `cli.py` (6) · `architectures/base.py` (4) ·
       `pages/2_Graph.py` (4)
-- [ ] `architectures/__init__.py` (3) · `architectures/inline.py` (3) ·
+- [x] `architectures/__init__.py` (3) · `architectures/inline.py` (3) ·
       `architectures/text_react.py` (3) · `attachments.py` (3) · `graph_service.py` (3) ·
       `multimodal.py` (3)
-- [ ] `__main__.py` (2 — incl. the `python -m pydocs_mcp.ask_your_docs` docstring →
+- [x] `__main__.py` (2 — incl. the `python -m pydocs_mcp.ask_your_docs` docstring →
       `python -m pydocs_mcp.harness.ask_your_docs`) · `architectures/auto.py` (2) ·
       `architectures/vision_subagent.py` (2) · `catalog.py` (2) · `prompts/__init__.py` (2) ·
       `reinspect.py` (2) · `session_start_injection.py` (2)
-- [ ] `__init__.py` (1) · `theme.py` (1)
-- [ ] **CRITICAL (trap T3):** `prompts/__init__.py:33` `_PACKAGE =
+- [x] `__init__.py` (1) · `theme.py` (1)
+- [x] **CRITICAL (trap T3):** `prompts/__init__.py:33` `_PACKAGE =
       "pydocs_mcp.ask_your_docs.prompts"` → `"pydocs_mcp.harness.ask_your_docs.prompts"`.
       This is a string fed to `importlib.resources.files()` — no import/lint/mypy error if
       missed; fails only at first prompt render.
-- [ ] `cli.py:1` module docstring `` ``ask-your-docs`` — launch the Streamlit chat UI. ``
+- [x] `cli.py:1` module docstring `` ``ask-your-docs`` — launch the Streamlit chat UI. ``
       → new script name. **User-visible, not cosmetic**: `_build_parser` passes
       `description=__doc__` at `:51`, so a miss keeps the old name in `--help`, and
       `tests/test_doc_conformance.py:212/:251` help-validates that exact parser.
-- [ ] `cli.py:48` docstring naming both the ``ask-your-docs`` command and the
+- [x] `cli.py:48` docstring naming both the ``ask-your-docs`` command and the
       ``[ask-your-docs]`` extra → new names.
-- [ ] `cli.py:51` `prog="ask-your-docs"` → new script name; `cli.py:38–39` missing-extra
+- [x] `cli.py:51` `prog="ask-your-docs"` → new script name; `cli.py:38–39` missing-extra
       message `pip install 'pydocs-mcp[ask-your-docs]'` → new extra name.
-- [ ] **Dash-form identifier lines inside the moved tree** (the rename-scope rule decides
+- [x] **Dash-form identifier lines inside the moved tree** (the rename-scope rule decides
       each; per-file counts above already include these lines): edit `__init__.py:5` and
       `session_start_injection.py:4` (`[ask-your-docs]` extra brackets),
       `architectures/text_react.py:27` (`[ask-your-docs]`-extra WHY-comment),
@@ -164,7 +164,7 @@ docstrings/log names. Files with hit counts (paths post-move under
       Leave alone (product prose): `theme.py:1`, `multimodal.py:1`, `attachments.py:1`,
       `app.py:1`, `prompts/__init__.py:1`, `session_start_injection.py:1`,
       `architectures/__init__.py:1`.
-- [ ] Zero-hit files move untouched: `bundle.py`, `model.py`, `prompts/inline/*.j2`,
+- [x] Zero-hit files move untouched: `bundle.py`, `model.py`, `prompts/inline/*.j2`,
       `prompts/shared/*.j2` (5), the `pages/` dir (no `__init__.py` — keep it adjacent to
       `app.py`, Streamlit discovers it by filesystem adjacency; trap T7).
 

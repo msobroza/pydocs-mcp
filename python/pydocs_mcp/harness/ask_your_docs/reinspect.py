@@ -34,8 +34,8 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int) -> Any:
     from langchain_core.messages import HumanMessage
     from langchain_core.tools import StructuredTool
 
-    from pydocs_mcp.ask_your_docs.agent import _active_image_store, _reinspect_state
-    from pydocs_mcp.ask_your_docs.prompts import (
+    from pydocs_mcp.harness.ask_your_docs.agent import _active_image_store, _reinspect_state
+    from pydocs_mcp.harness.ask_your_docs.prompts import (
         BUDGET_MESSAGE,
         REINSPECT_DESCRIPTION,
         render_shared,

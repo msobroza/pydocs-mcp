@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 
@@ -42,7 +42,7 @@ def effective_tools(ctx: AgentBuildContext) -> tuple:
     """
     if not ctx.capabilities.multimodal:
         return tuple(ctx.tools)
-    from pydocs_mcp.ask_your_docs.reinspect import build_reinspect_tool
+    from pydocs_mcp.harness.ask_your_docs.reinspect import build_reinspect_tool
 
     return (
         *ctx.tools,
@@ -70,7 +70,7 @@ class AgentArchitecture(ABC):
     def prompts(cls):
         """This architecture's prompt namespace (convention: its registry
         name IS its prompt directory; shared/ serves everything else)."""
-        from pydocs_mcp.ask_your_docs.prompts import prompts_for
+        from pydocs_mcp.harness.ask_your_docs.prompts import prompts_for
 
         return prompts_for(cls.architecture_name)
 

@@ -19,7 +19,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 from langchain_openai import ChatOpenAI
 
-from pydocs_mcp.ask_your_docs.architectures import (
+from pydocs_mcp.harness.ask_your_docs.architectures import (
     AgentArchitectureError,
     AgentBuildContext,
     agent_registry,
@@ -27,19 +27,19 @@ from pydocs_mcp.ask_your_docs.architectures import (
 
 # weave_attachments moved to attachments.py (spec 2026-07-11-multimodal-image-
 # agent §3.1); re-exported so app.py and existing tests keep this import path.
-from pydocs_mcp.ask_your_docs.attachments import weave_attachments  # noqa: F401
-from pydocs_mcp.ask_your_docs.catalog import render_catalog, workspace_catalog
-from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities, detect_capabilities
+from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments  # noqa: F401
+from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_catalog
+from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities, detect_capabilities
 
 # ALL prompt text is centralized under ask_your_docs/prompts/ (versioned .j2
 # templates, one directory per architecture with a shared/ fallback).
 # SYSTEM_PROMPT is re-exported here for its existing import path.
-from pydocs_mcp.ask_your_docs.prompts import (
+from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
     prompts_for,
     rewrite_prompt,
 )
-from pydocs_mcp.ask_your_docs.session_start_injection import (
+from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig

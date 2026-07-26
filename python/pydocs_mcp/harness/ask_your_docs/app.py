@@ -1,6 +1,6 @@
 """Streamlit chat UI for the ask-your-docs agent.
 
-Launched by the ``ask-your-docs`` CLI (``ask_your_docs.cli``). Connection
+Launched by the ``harness-ask-your-docs`` CLI (``harness.ask_your_docs.cli``). Connection
 settings prefill from env: PYDOCS_WORKSPACE, LLM_MODEL, OPENAI_BASE_URL,
 PYDOCS_CONFIG.
 """
@@ -15,16 +15,16 @@ from pathlib import Path
 
 import streamlit as st
 
-from pydocs_mcp.ask_your_docs.agent import ask, build_agent, reformulate, weave_attachments
-from pydocs_mcp.ask_your_docs.attachments import (
+from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, reformulate, weave_attachments
+from pydocs_mcp.harness.ask_your_docs.attachments import (
     ImageAttachment,
     text_only_policy,
     update_image_store,
     validate_attachment,
 )
-from pydocs_mcp.ask_your_docs.catalog import workspace_catalog
-from pydocs_mcp.ask_your_docs.multimodal import detect_capabilities
-from pydocs_mcp.ask_your_docs.theme import current_palette, render_appearance_toggle, theme_css
+from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
+from pydocs_mcp.harness.ask_your_docs.multimodal import detect_capabilities
+from pydocs_mcp.harness.ask_your_docs.theme import current_palette, render_appearance_toggle, theme_css
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 
 st.set_page_config(

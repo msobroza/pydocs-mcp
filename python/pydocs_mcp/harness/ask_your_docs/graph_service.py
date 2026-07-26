@@ -1,7 +1,7 @@
 """Application/domain layer for the graph explorer.
 
 ``GraphService`` turns a bundle's raw rows (read through an injected
-:class:`~pydocs_mcp.ask_your_docs.bundle.BundleReader`) into the ``Node`` / ``Edge``
+:class:`~pydocs_mcp.harness.ask_your_docs.bundle.BundleReader`) into the ``Node`` / ``Edge``
 / ``Graph`` value objects the UI renders. It contains all the domain logic —
 module-name reconciliation, namespace navigation, edge collapsing, filtering —
 and NO SQL and NO Streamlit, so it unit-tests against a fake reader.
@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydocs_mcp.ask_your_docs.bundle import BundleReader
-from pydocs_mcp.ask_your_docs.model import Edge, Graph, Node, NodeMeta
+from pydocs_mcp.harness.ask_your_docs.bundle import BundleReader
+from pydocs_mcp.harness.ask_your_docs.model import Edge, Graph, Node, NodeMeta
 
 MAX_NEIGHBORS = 50
 _STRUCTURAL = frozenset({"contains", "documents", "concerns"})

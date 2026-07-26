@@ -2,7 +2,7 @@
 
 Re-exports are lazy (PEP 562 ``__getattr__``) so importing a light submodule
 like ``graph`` or ``catalog`` never drags in the heavy agent stack (langgraph /
-streamlit), which only ships with the ``[ask-your-docs]`` extra.
+streamlit), which only ships with the ``[harness-ask-your-docs]`` extra.
 """
 
 from __future__ import annotations

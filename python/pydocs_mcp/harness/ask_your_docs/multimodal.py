@@ -17,7 +17,7 @@ from typing import Literal
 
 from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalDetectionConfig
 
-log = logging.getLogger("pydocs-mcp.ask-your-docs")
+log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
 DetectionSource = Literal["override", "static", "endpoint", "probe", "default"]
 

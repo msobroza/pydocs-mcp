@@ -12,13 +12,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pydocs_mcp.ask_your_docs.architectures import register_architecture
-from pydocs_mcp.ask_your_docs.architectures.base import (
+from pydocs_mcp.harness.ask_your_docs.architectures import register_architecture
+from pydocs_mcp.harness.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
     effective_tools,
 )
-from pydocs_mcp.ask_your_docs.prompts import prompts_for
+from pydocs_mcp.harness.ask_your_docs.prompts import prompts_for
 
 # Back-compat alias — the text lives at prompts/inline/system_suffix_v1.j2,
 # resolved by the architecture-name convention.

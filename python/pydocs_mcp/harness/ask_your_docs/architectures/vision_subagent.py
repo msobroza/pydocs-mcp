@@ -13,8 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pydocs_mcp.ask_your_docs.architectures import register_architecture
-from pydocs_mcp.ask_your_docs.architectures.base import (
+from pydocs_mcp.harness.ask_your_docs.architectures import register_architecture
+from pydocs_mcp.harness.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
     effective_tools,

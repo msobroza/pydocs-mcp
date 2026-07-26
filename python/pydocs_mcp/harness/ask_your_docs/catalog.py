@@ -1,7 +1,7 @@
 """Application layer for reading a workspace of bundles (the project catalog).
 
 ``CatalogService`` scans a directory of pre-built ``*.db`` bundles through the
-read-only :class:`~pydocs_mcp.ask_your_docs.bundle.SqliteBundleReader` (no SQL
+read-only :class:`~pydocs_mcp.harness.ask_your_docs.bundle.SqliteBundleReader` (no SQL
 here, no migrate/rebuild path). ``workspace_catalog`` / ``render_catalog`` are
 thin module-level wrappers the agent prompt uses.
 """
@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydocs_mcp.ask_your_docs.bundle import BundleReader, SqliteBundleReader
+from pydocs_mcp.harness.ask_your_docs.bundle import BundleReader, SqliteBundleReader
 
 
 @dataclass(frozen=True, slots=True)

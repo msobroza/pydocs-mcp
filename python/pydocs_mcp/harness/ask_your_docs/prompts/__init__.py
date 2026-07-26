@@ -30,7 +30,7 @@ from typing import Any
 
 from pydocs_mcp.retrieval.prompts._loader import render_prompt_from
 
-_PACKAGE = "pydocs_mcp.ask_your_docs.prompts"
+_PACKAGE = "pydocs_mcp.harness.ask_your_docs.prompts"
 _SHARED = "shared"
 
 

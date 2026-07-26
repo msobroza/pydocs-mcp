@@ -1,7 +1,7 @@
 """Builds the session-start pack injected into the ask-your-docs agent prompt (ADR 0008 §Decision 5.i).
 
 Core-only imports (no langgraph / streamlit): the enabled-flag check and the
-pack build are testable without the ``[ask-your-docs]`` extra, keeping the
+pack build are testable without the ``[harness-ask-your-docs]`` extra, keeping the
 lazy-import contract of this subpackage. ``agent.build_agent`` calls this once
 at its single prompt-assembly site.
 """

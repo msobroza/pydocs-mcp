@@ -10,8 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pydocs_mcp.ask_your_docs.architectures import register_architecture
-from pydocs_mcp.ask_your_docs.architectures.base import (
+from pydocs_mcp.harness.ask_your_docs.architectures import register_architecture
+from pydocs_mcp.harness.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentBuildContext,
     effective_tools,
@@ -24,7 +24,7 @@ class TextReactArchitecture(AgentArchitecture):
     requires_multimodal: ClassVar[bool] = False
 
     def build(self, ctx: AgentBuildContext) -> Any:
-        # WHY lazy import: langgraph is [ask-your-docs]-extra weight; the
+        # WHY lazy import: langgraph is [harness-ask-your-docs]-extra weight; the
         # registry module must stay importable core-only. create_react_agent
         # is deprecated-but-working in the locked langgraph-prebuilt (moved
         # upstream to langchain.agents); migrating is out of scope — the repo

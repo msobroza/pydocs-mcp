@@ -15,7 +15,7 @@ decorator, (3) one side-effect import below, (4) selecting the name in YAML.
 No call-site edits in app.py / agent.py.
 """
 
-from pydocs_mcp.ask_your_docs.architectures.base import (
+from pydocs_mcp.harness.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentArchitectureError,
     AgentBuildContext,
@@ -45,7 +45,7 @@ def register_architecture(name: str):
 # Side-effect imports populate the registry. Heavy langgraph imports live
 # INSIDE these modules' build() methods, which only run when the extra is
 # installed and an agent is actually built.
-from pydocs_mcp.ask_your_docs.architectures import (  # noqa: E402,F401
+from pydocs_mcp.harness.ask_your_docs.architectures import (  # noqa: E402,F401
     auto,
     inline,
     text_react,
