@@ -52,4 +52,4 @@ def test_freeze_covers_every_harness_local_template() -> None:
     assert "freeze/reinspect_description_v1" in live
     assert "freeze/reinspect_budget_message_v1" in live
     assert "inline/system_suffix_v1" in live
-    assert not any(key.split("/")[1] in ("system_v1", "rewrite_v1") for key in live)
+    assert not any(key.rsplit("/", 1)[-1] in ("system_v1", "rewrite_v1") for key in live)
