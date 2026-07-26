@@ -26,66 +26,21 @@ agent auto-optimization work. jinja2 is a core dep — importing this is light.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from importlib import resources
 from typing import Any
 
-from pydocs_mcp.harness.core.prompts import (
-    core_prompt_names,
-    has_core_prompt,
-    render_core_prompt,
-)
-from pydocs_mcp.retrieval.prompts._loader import render_prompt_from
+from pydocs_mcp.harness.core.prompt_namespace import HarnessPromptNamespace
+from pydocs_mcp.harness.core.prompts import render_core_prompt
 
 _PACKAGE = "pydocs_mcp.harness.ask_your_docs.prompts"
-# Public source LABEL for the shared pool — the pool itself lives in
-# pydocs_mcp.harness.core.prompts (cross-package fallback).
-_SHARED = "shared"
+
+# Back-compat export: the resolver class is the harness-generic core seam.
+ArchitecturePrompts = HarnessPromptNamespace
 
 
-@dataclass(frozen=True, slots=True)
-class ArchitecturePrompts:
-    """The prompt namespace of one registered architecture."""
-
-    architecture: str
-
-    def resolve_source(self, prompt_name: str) -> str:
-        """Which source serves ``prompt_name`` — the architecture's own
-        directory or the ``shared`` core pool — raising with both searched
-        locations when neither has it."""
-        pkg = resources.files(_PACKAGE)
-        if pkg.joinpath(self.architecture, f"{prompt_name}.j2").is_file():
-            return self.architecture
-        if has_core_prompt(prompt_name):
-            return _SHARED
-        raise FileNotFoundError(
-            f"prompt {prompt_name!r} not found for architecture "
-            f"{self.architecture!r} — searched prompts/{self.architecture}/ "
-            f"and the shared pool harness/core/prompts/."
-        )
-
-    def render(self, prompt_name: str, **variables: Any) -> str:
-        source = self.resolve_source(prompt_name)
-        if source == _SHARED:
-            return render_core_prompt(prompt_name, **variables)
-        return render_prompt_from(_PACKAGE, f"{source}/{prompt_name}", **variables)
-
-    def names(self) -> tuple[str, ...]:
-        """Every prompt this architecture can render (own ∪ shared pool)."""
-        pkg = resources.files(_PACKAGE)
-        found: set[str] = set(core_prompt_names())
-        directory = pkg.joinpath(self.architecture)
-        if directory.is_dir():
-            found |= {
-                entry.name[:-3] for entry in directory.iterdir() if entry.name.endswith(".j2")
-            }
-        return tuple(sorted(found))
-
-
-def prompts_for(architecture: str) -> ArchitecturePrompts:
+def prompts_for(architecture: str) -> HarnessPromptNamespace:
     """The namespace for ``architecture`` (a registry name); a missing
-    directory simply means pure shared fallback."""
-    return ArchitecturePrompts(architecture)
+    directory simply means pure shared-pool fallback."""
+    return HarnessPromptNamespace(_PACKAGE, architecture)
 
 
 def render_shared(prompt_name: str, **variables: Any) -> str:

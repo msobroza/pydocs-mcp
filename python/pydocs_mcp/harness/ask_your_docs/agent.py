@@ -12,7 +12,6 @@ import asyncio
 import contextvars
 import logging
 import sys
-from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -32,8 +31,9 @@ from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_c
 from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities, detect_capabilities
 
 # ALL prompt text is centralized under ask_your_docs/prompts/ (versioned .j2
-# templates, one directory per architecture with a shared/ fallback).
-# SYSTEM_PROMPT is re-exported here for its existing import path.
+# templates, one directory per architecture, falling back to the shared pool
+# in harness/core/prompts/). SYSTEM_PROMPT is re-exported here for its
+# existing import path.
 from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
     prompts_for,
@@ -42,6 +42,7 @@ from pydocs_mcp.harness.ask_your_docs.prompts import (
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
+from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 logger = logging.getLogger(__name__)
@@ -144,20 +145,9 @@ def _build_architecture(
     return arch_cls().build(ctx)
 
 
-@dataclass(frozen=True, slots=True)
-class AskPrompts:
-    """Prompt overrides for evaluation harnesses. ``None`` → shipped templates.
-
-    ``system_prompt`` substitutes the system *component* at the one assembly
-    site inside :func:`build_agent` (the catalog listing and any
-    architecture-appended sections stay outside the override).
-    ``rewrite_prompt`` is a ``str.format`` template with ``{history}`` /
-    ``{question}`` placeholders consumed by :func:`reformulate` — the harness
-    threads it into its own reformulate call; ``build_agent`` never reads it.
-    """
-
-    system_prompt: str | None = None
-    rewrite_prompt: str | None = None
+# Back-compat name: the override type is the harness-generic core seam
+# (consumed by the eval binding and the UI through this import site).
+AskPrompts = PromptOverrides
 
 
 def _assemble_prompt(
@@ -183,10 +173,7 @@ def _assemble_prompt(
         if prompts and prompts.system_prompt
         else prompts_for(name).render("system_v1")
     )
-    assembled = f"{resolved_system}\nIndexed projects and packages:\n{render_catalog(catalog)}"
-    if session_start_context is None:
-        return assembled
-    return f"{assembled}\n{session_start_context}"
+    return assemble_system_prompt(resolved_system, render_catalog(catalog), session_start_context)
 
 
 async def build_agent(

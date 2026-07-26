@@ -30,14 +30,13 @@ _DEFAULT_PORT = 8501
 
 
 def _require_extra() -> None:
-    from importlib.util import find_spec
+    # Thin wrapper (kept as the stable monkeypatch target for tests): the
+    # guard itself is the harness-generic core seam.
+    from pydocs_mcp.harness.core.extra_guard import require_extra_modules
 
-    missing = [m for m in _EXTRA_MODULES if find_spec(m) is None]
-    if missing:
-        raise SystemExit(
-            f"harness-ask-your-docs needs the optional agent stack (missing: {', '.join(missing)}). "
-            "Install it with:  pip install 'pydocs-mcp[harness-ask-your-docs]'"
-        )
+    require_extra_modules(
+        _EXTRA_MODULES, extra="harness-ask-your-docs", command="harness-ask-your-docs"
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
