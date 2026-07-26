@@ -247,3 +247,24 @@ new kinds are firewalled out of it exactly like `SYSTEM_PROMPT` /
 `python/pydocs_mcp/harness/core/skill_artifact_loader.py`
 (`SKILL_ARTIFACT_HEADERS`). The live grammar reference is
 `docs/description-authoring.md` §8, not the regex quoted above.
+
+## Amendment (2026-07-27) — the bound tool set is a harness fact, never a section-set fact
+
+Experiment arms may grant a subset of the nine tools (ADR 0016 drop-one cells;
+the harness-platform arms bind `tool_names` as data), and the harness renders
+its system-prompt tool catalogue from that **bound** set to remove the
+catalogue-vs-grant confound.
+
+This has **no effect on the description document.** Its eleven-section set is
+unconditional: all nine `TOOL:` sections are present and validate in every
+candidate and every deployment, whatever an arm grants. Rendering the catalogue
+from the bound set happens at harness prompt-assembly time by selecting among
+already-validated sections; it MUST NOT be implemented by omitting a section
+from the served document, by relaxing `validate_sections`, or by adding an
+arm-conditional universe to the firewall (ADR 0019 §Decision 5's closed grammar
+and §Decision 6's parity rule both depend on the section set being
+arm-independent).
+
+Corollary for ADR 0016's injection pin test: it compares injection-on vs
+injection-off **within one arm**, where the bound set is constant, so it holds
+unchanged.

@@ -346,3 +346,29 @@ SERVER block is corrected (a deliberate widening, re-pinned in the tests). The
 firewall-parity battery now asserts firewall-accepts ⇒ product-accepts for BOTH
 views, and the extra section-order invariant remains the sole (safe) over-strict
 direction on each.
+
+## Amendment (2026-07-27) — the skill-artifact family and the parity rule
+
+A sixth optimizable artifact family, `search_skill`, joins the
+description-document families. It uses the harness skill grammar (`ADAPTER` +
+dotted `HEAD: <harness>.<task_name>`, enumerated by `SKILL_ARTIFACT_HEADERS` in
+`python/pydocs_mcp/harness/core/skill_artifact_loader.py`; ADR 0005 §Amendment
+2026-07-26) — a header universe deliberately **firewalled out of** the product's
+eleven `CANONICAL_HEADERS`.
+
+The 2026-07-20 "two firewalls are now one engine" statement is scoped to the
+*description-document* views (`CANDIDATE_UNIVERSE`, `OVERLAY_UNIVERSE`) and is
+unchanged for them. For `search_skill`:
+
+- **Validation delegates to the product `skill_artifact_loader`.** The
+  benchmarks side owns no second grammar, so §Decision 6's parity implication
+  (firewall-accepts ⇒ product-accepts) holds by identity rather than by test —
+  and the parity battery records that fact explicitly once the family lands rather than asserting it
+  over generated documents.
+- **§Decision 5's zero-cost-before-spend invariant applies unchanged:** a
+  `search_skill` proposal is parsed, validated, normalized, and hashed before
+  any rollout; a rejection costs zero rollouts and still gets a ledger entry
+  with its violations (R3).
+- **§Decision 7's monotonic-growth guard applies per family.** The 500/3600
+  budgets are the description document's; the skill artifact's own bound is
+  pinned by its loader and is likewise not re-tuned mid-campaign (R7).

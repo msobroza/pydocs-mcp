@@ -319,3 +319,32 @@ All Phase 2 (this phase) unless noted:
 9. Deferred to Phase 3/4: datasets and ablation runs over traces, optimizer
    integration, any per-call `_meta` correlation upgrade, non-git workspace
    snapshotting.
+
+## Amendment (2026-07-27) — shared run-contract types and the base-install floor
+
+The §Decision loop-side note ("not a product-side import: the eval base install
+keeps its zero-pydocs-mcp-dependency floor") stands **for lockfile hashing** and
+is now generalized rather than widened. The harness run contract
+(`python/pydocs_mcp/harness/core/run_contract.py`: `Trajectory`,
+`ToolCallRecord`, `HarnessRunner`, `UndeliverableGuidanceError`,
+`REQUIRED_SAMPLE_KEYS`), which lands with stage 2 of
+`docs/superpowers/specs/2026-07-27-harness-run-contract-design.md`, is a
+product-owned abstract seam that the eval side ADAPTS to. Consuming it requires
+one of:
+
+1. **Move the consuming module behind an extra.** Any eval module importing
+   `pydocs_mcp.harness.core.run_contract` declares the coupling in
+   `benchmarks/pyproject.toml` (`[retrieval]` or a successor extra) and guards
+   the import with the `_retrieval_extra`-style actionable hint. `agent_track/`
+   and `trajectory/` may only take this route if their console scripts move
+   behind the same extra — which contradicts the black-box track's CLI-only
+   premise and therefore requires an explicit owner decision, not a silent
+   import.
+2. **Or keep the base module format-coupled, not type-coupled** — the ADR 0010
+   blob precedent: the base module reads/writes the documented shape and never
+   imports the product type.
+
+Until that decision lands, the base-install floor is the binding constraint:
+**no base-install eval module may import `pydocs_mcp`**, and
+`pydocs-eval-agent-track` / `pydocs-eval-compute-metrics` remain base scripts.
+Lockfile hashing continues to use the eval-local canonical-JSON precedent.

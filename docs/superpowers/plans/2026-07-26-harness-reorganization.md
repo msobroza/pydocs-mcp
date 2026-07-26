@@ -17,6 +17,13 @@ lives in the companion design spec
 `docs/superpowers/specs/2026-07-26-retriever-centric-harness-platform-design.md`; this plan
 remains normative for every P0 literal (globs, names, paths).
 
+Scope note for a session reading this after the fact: P0 is the tree move only. `harness/core/`
+is **not** complete when this PR merges — the shared prompt pool, the skill-artifact loader and
+its packaged seed, and next the run contract (`run_contract.py`, stage 2 of
+`docs/superpowers/specs/2026-07-27-harness-run-contract-design.md`) land in P1+ under the spec,
+and each may add package data or gates of its own. Do not read Step 3's include list or the
+wheel spot-check below as the final inventory.
+
 **The MCP surface is FROZEN at nine task-shaped tools** (`docs/tool-contracts.md`, ADRs
 0001–0004). This refactor adds **zero MCP tools and zero MCP parameters**; nothing here
 touches `server.py`'s tool signatures. Any behavior tuning stays in YAML via `AppConfig` —
@@ -250,6 +257,13 @@ All `pydocs_mcp.ask_your_docs.…` → `pydocs_mcp.harness.ask_your_docs.…`:
 
 - [x] `benchmarks/src/pydocs_eval/optimize/ask_binding.py:32,113,123` — three
       `from pydocs_mcp.ask_your_docs.agent import …` → new path.
+      Forward note — not part of this PR: `ask_binding.py` is the eval side's product-import
+      surface and it grows next, adding
+      `from pydocs_mcp.harness.core.run_contract import HarnessRunner, ToolCallRecord, Trajectory`
+      once that module lands (stage 2); the local `ToolCallRecord` (`:50-55`) and `AskTranscript`
+      (`:58-66`) are *promoted into* / *replaced by* that module rather than duplicated.
+      `scripts/smoke_check_benchmark_imports.py` (last bullet of this step) is the drift gate
+      that must see the new dotted path once it lands.
 - [x] `benchmarks/src/pydocs_eval/optimize/artifacts/ask_prompt.py:30` (import), `:54`
       (`_PRODUCT_PROMPTS_DIR = "python/pydocs_mcp/ask_your_docs/prompts/shared/"` — rendered
       into `landing_note()`), `:110` (`"tests/ask_your_docs/test_prompts_package.py."` path
@@ -264,6 +278,14 @@ All `pydocs_mcp.ask_your_docs.…` → `pydocs_mcp.harness.ask_your_docs.…`:
       current floor 0.5.2 names a release that will never exist (`pyproject.toml:7` is
       `0.5.1` and the next release is 0.6.0). **No-edit confirmation:** `pyproject.toml:7`
       stays `version = "0.5.1"` in this PR — the 0.6.0 bump is a release-time action.
+      **Floor rationale is now two-part.** Besides the rename, the eval package is about to
+      depend on a *second* product seam — `pydocs_mcp.harness.core.run_contract`
+      (`Trajectory`, `HarnessRunner`, the promoted `ToolCallRecord`), which replaces
+      `AskTranscript` / `AskRunner` outright. Under the publish-gate rule the floor names
+      whichever product release ships **both**: keep `>=0.6.0` if they land in the same
+      release, and raise it together with the PUBLISH GATE comment at `:92-98` if the run
+      contract slips to a later one. Do not bump this floor for the rename alone and consider
+      the matter closed.
 - [x] Rewrite the PUBLISH GATE comment at `benchmarks/pyproject.toml:92–98` to name
       **0.6.0** instead of 0.5.2 (same posture: eval 0.2.0 must not publish before the
       product release carrying the seam AND this rename exists — the `[ask]` extra stays
@@ -375,8 +397,12 @@ print(pydocs_mcp.__file__)"` resolves to THIS worktree first).
       missing-dep `SystemExit` naming the NEW extra when deps are absent).
 - [ ] **Wheel spot-check** for trap T4: `maturin build` (or `python -m build`), then
       `unzip -l dist/*.whl | grep '\.j2'` — expect all 6 harness prompt templates
-      (`prompts/shared/*.j2` ×5, `prompts/inline/system_suffix_v1.j2`) plus
-      `retrieval/prompts/*.j2`.
+      (`prompts/shared/*.j2` ×5, `prompts/inline/system_suffix_v1.j2`),
+      `retrieval/prompts/*.j2`, **and `harness/core/prompts/*.j2`** (the shared pool). Then a
+      second, separate check for the non-`.j2` package data a `.j2` grep structurally cannot
+      see: `unzip -l dist/*.whl | grep 'core/skills/'` — expect the packaged seed
+      `harness/core/skills/search_guidance_seed.md`. `run_contract.py` needs no include
+      (Python source, swept by `python-source = "python"`).
 - [ ] `git log --follow python/pydocs_mcp/harness/ask_your_docs/agent.py` shows pre-move
       history (proves `git mv` rename detection held).
 
@@ -469,7 +495,12 @@ pip-audit, cargo trio (Rust untouched).
 - **T8 — Namespace ambiguity.** "harness" elsewhere in this repo means the *eval* harness
   (`benchmarks/`, `pydocs_eval`). The PR body should state explicitly that
   `pydocs_mcp.harness` is the product-side agent-harness namespace, distinct from
-  `pydocs-mcp-eval`.
+  `pydocs-mcp-eval`. The ambiguity sharpens once `harness/core/run_contract.py` (stage 2)
+  exports deliberately harness-*neutral* names (`Trajectory`, `HarnessRunner`,
+  `ToolCallRecord`). Rule to state alongside T8: neutral names are permitted **only** on the
+  abstract seam; every concrete implementation keeps its harness name inside its own package
+  (`LangGraphAskRunner`, `AskBuildRequest`, `AskRunnerSettings`), so a bare `HarnessRunner` in
+  a traceback or an import line is always the port, never an implementation.
 - **T9 — Unreleased eval 0.2.0 is the only exposure — no published package breaks.**
   No published eval version references the harness package: the latest release
   (`eval-v0.1.1`) predates both the `[ask]` extra and `optimize/ask_binding.py` (verified

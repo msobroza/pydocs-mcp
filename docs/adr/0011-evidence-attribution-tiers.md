@@ -374,3 +374,26 @@ All Phase 2 (this phase) unless noted:
 8. **Deferred to Phase 3/4:** weighted multi-tool credit (only if item 7
    surfaces first-touch misassignment), large-scale labeled validation,
    weight calibration, dataset changes addressing live-vs-indexed span skew.
+
+## Amendment (2026-07-27) — the derived tool-call view is not an attribution input
+
+`Trajectory.tool_calls` (specified in `harness/core/run_contract.py`, which
+lands with stage 2 of
+`docs/superpowers/specs/2026-07-27-harness-run-contract-design.md`) is a
+deliberately lossy projection: name + args digest + `observed_by`, with no
+`seq`, no `result_ids`, no `hit_count`, no blob ref. Its purpose is that
+set-membership predicates ("did this rollout call an indexed tool?") work
+uniformly across harnesses, including external-CLI arms that attach no MCP
+server.
+
+**The tier attributor and first-touch credit continue to read the ADR 0010
+merged `events.jsonl` and nothing else.** Ordering stays server-`seq`-
+authoritative; surfacing stays judged from `result_ids` + the text side of the
+blob. Re-pointing either onto `Trajectory.tool_calls` is forbidden — it would
+silently replace the ordering key with an unordered projection and re-open the
+credit-misassignment question the 2026-07-21 validation closed at 1.000/1.000.
+
+A contract test pins the compatibility direction that IS safe: the SERVER slice
+of `Trajectory.tool_calls` equals the ordered tool-name sequence of the trace's
+server events, so a set predicate over the view and over the trace can never
+disagree.

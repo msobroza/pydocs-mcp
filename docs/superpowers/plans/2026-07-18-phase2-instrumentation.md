@@ -187,3 +187,13 @@ regenerate identical); gate-isolation test; consumer-shape golden tests.
 - Stale doc nits found during evidence (CLAUDE.md `mcp>=1.0` vs pinned
   `>=1.28.1`; server.py error-docstring inaccuracy): follow-up chore, not
   Phase 2 scope.
+
+## Amendment (2026-07-27) — superseded contracts (harness run contract ratification)
+
+The run-contract design (`2026-07-27-harness-run-contract-design.md`) supersedes
+the following statements of this document; the original text stands as the
+historical record.
+
+- "Placement summary (ADR 0009): server-side recorder in `python/pydocs_mcp/observability/` …; everything else in `benchmarks/src/pydocs_eval/trajectory/`" → the product package owns **capture and read-back**: `python/pydocs_mcp/observability/` holds the recorder (stdlib-only, default off) **and, from stage 2, `trace_reader.py`, whose `read_tool_call_records(trace_dir) -> tuple[ToolCallRecord, ...]` is the single supported way to obtain the SERVER slice of a trajectory's tool calls** (returned records carry `observed_by=SERVER`). The trace stays the single source of truth; contract tests pin the reader's output against the raw trace events. Everything downstream of read-back — merging, metrics, attribution, scoring, feedback, gates — stays in `benchmarks/src/pydocs_eval/trajectory/`.
+- "`schema.py`: frozen dataclasses for header / tool event / loop event / machinery event" → these are the **trace/stream event** dataclasses only. The run-level contract types — `Trajectory`, `ToolCallRecord`, `ToolCallObservation`, `HarnessRunner`, `UndeliverableGuidanceError`, `REQUIRED_SAMPLE_KEYS` — live product-side in `pydocs_mcp.harness.core.run_contract` (stage 2) and are **imported**, never redefined here; `trajectory/schema.py` must not declare a type named `Trajectory`.
+- "`trajectory/gate.py`: … no import path from shaped_score/metrics into gate (import-graph test)" → **scope of this rule:** it constrains the *ground-truth outcome gate* in `trajectory/gate.py` only. The benchmarks-side **rubric** gates (`optimize/rubric/gates.py`) are a different layer: they are per-sample deterministic predicates over `(task, trajectory, params)` and DO read `trajectory.tool_calls` (filtered to `observed_by == ToolCallObservation.SERVER`) — that access is required, not a violation of gate isolation.
