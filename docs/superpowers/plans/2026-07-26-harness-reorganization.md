@@ -248,73 +248,73 @@ All `pydocs_mcp.ask_your_docs.…` → `pydocs_mcp.harness.ask_your_docs.…`:
 
 ### Step 5 — Benchmarks (in-repo eval harness)
 
-- [ ] `benchmarks/src/pydocs_eval/optimize/ask_binding.py:32,113,123` — three
+- [x] `benchmarks/src/pydocs_eval/optimize/ask_binding.py:32,113,123` — three
       `from pydocs_mcp.ask_your_docs.agent import …` → new path.
-- [ ] `benchmarks/src/pydocs_eval/optimize/artifacts/ask_prompt.py:30` (import), `:54`
+- [x] `benchmarks/src/pydocs_eval/optimize/artifacts/ask_prompt.py:30` (import), `:54`
       (`_PRODUCT_PROMPTS_DIR = "python/pydocs_mcp/ask_your_docs/prompts/shared/"` — rendered
       into `landing_note()`), `:110` (`"tests/ask_your_docs/test_prompts_package.py."` path
       string) → new paths.
-- [ ] `benchmarks/tests/optimize/test_ask_prompt_artifact.py:8` and
+- [x] `benchmarks/tests/optimize/test_ask_prompt_artifact.py:8` and
       `benchmarks/tests/optimize/test_ask_binding.py:59`
       (`pytest.importorskip("pydocs_mcp.ask_your_docs.architectures")`) → new paths.
-- [ ] `benchmarks/pyproject.toml:99` — `ask = ["pydocs-mcp[ask-your-docs]>=0.5.2"]` →
+- [x] `benchmarks/pyproject.toml:99` — `ask = ["pydocs-mcp[ask-your-docs]>=0.5.2"]` →
       **exactly** `ask = ["pydocs-mcp[harness-ask-your-docs]>=0.6.0"]` (with the owner-
       confirmed extra name from §Open 1). The floor is **0.6.0**: the rename ships in the
       already-open `## [0.6.0] — Unreleased` CHANGELOG section (`CHANGELOG.md:8`); the
       current floor 0.5.2 names a release that will never exist (`pyproject.toml:7` is
       `0.5.1` and the next release is 0.6.0). **No-edit confirmation:** `pyproject.toml:7`
       stays `version = "0.5.1"` in this PR — the 0.6.0 bump is a release-time action.
-- [ ] Rewrite the PUBLISH GATE comment at `benchmarks/pyproject.toml:92–98` to name
+- [x] Rewrite the PUBLISH GATE comment at `benchmarks/pyproject.toml:92–98` to name
       **0.6.0** instead of 0.5.2 (same posture: eval 0.2.0 must not publish before the
       product release carrying the seam AND this rename exists — the `[ask]` extra stays
       unresolvable until then, which is expected, not a regression; trap T9).
-- [ ] The `all` union deliberately excludes `[ask]` (WHY-comment at :100–105) — no edit to the
+- [x] The `all` union deliberately excludes `[ask]` (WHY-comment at :100–105) — no edit to the
       union itself, but **append a one-line forward note** to its WHY-comment: when
       `[ask]` is re-added to `all` after the product release exists, it must use the
       harness-scoped extra name.
-- [ ] `benchmarks/AGENT_TRACK.md:338,340` — path + config-block prose (the `ask_your_docs:`
+- [x] `benchmarks/AGENT_TRACK.md:338,340` — path + config-block prose (the `ask_your_docs:`
       YAML name at :340 stays; only the directory path at :338 changes).
-- [ ] `benchmarks/src/pydocs_eval/optimize/run_config.py:76` — WHY-comment naming the CLI →
+- [x] `benchmarks/src/pydocs_eval/optimize/run_config.py:76` — WHY-comment naming the CLI →
       new script name.
-- [ ] No-edit confirmations: `ask_architecture.py:97` references the `ask_your_docs` YAML
+- [x] No-edit confirmations: `ask_architecture.py:97` references the `ask_your_docs` YAML
       block (unchanged); `benchmarks/configs/` and `benchmarks/data/` have zero hits.
-- [ ] `scripts/smoke_check_benchmark_imports.py` (runs in CI at `ci.yml:157`) imports every
+- [x] `scripts/smoke_check_benchmark_imports.py` (runs in CI at `ci.yml:157`) imports every
       `pydocs_mcp.*` module named in benchmarks source — it is the drift gate that catches
       a half-done rename; only its `:69` comment needs an edit (the `[ask-your-docs]`
       extra name).
 
 ### Step 6 — Docs and root files
 
-- [ ] `CLAUDE.md:45` (extra name), `:46` (fenced bash: command name AND
+- [x] `CLAUDE.md:45` (extra name), `:46` (fenced bash: command name AND
       `examples/harness/ask_your_docs_agent/configs/serve_cpu_openvino.yaml` — this line is
       doc-conformance-harvested, both must change together), `:126` (tree entry →
       `harness/ask_your_docs/`), `:148` (extra name + path).
-- [ ] `README.md:295` (extra name), `:298–299` (fenced bash, harvested:
+- [x] `README.md:295` (extra name), `:298–299` (fenced bash, harvested:
       `pip install 'pydocs-mcp[…]'` + command), `:306`, `:637` (example-dir links).
-- [ ] `DOCUMENTATION.md:955` (tree entry → `harness/ask_your_docs/`). `:820` ("into the
+- [x] `DOCUMENTATION.md:955` (tree entry → `harness/ask_your_docs/`). `:820` ("into the
       ask-your-docs agent prompt") is product-name prose — **no edit** (rename-scope rule).
-- [ ] `SPEC.md:525` (extra-name list).
-- [ ] `.env.example:22,24` (extra name + `pydocs_mcp/harness/ask_your_docs/cli.py` path).
-- [ ] `docs/description-authoring.md:265` ("into the ask-your-docs agent prompt") is
+- [x] `SPEC.md:525` (extra-name list).
+- [x] `.env.example:22,24` (extra name + `pydocs_mcp/harness/ask_your_docs/cli.py` path).
+- [x] `docs/description-authoring.md:265` ("into the ask-your-docs agent prompt") is
       product-name prose — **no edit** (rename-scope rule).
-- [ ] `examples/harness/ask_your_docs_agent/README.md` — 8 hit lines
+- [x] `examples/harness/ask_your_docs_agent/README.md` — 8 hit lines
       (:6,:36,:63,:71,:73,:82,:98,:101 — four are fenced bash) → new extra/command/paths.
       `:108` names the `ask_your_docs:` YAML block — **unchanged** (§Decided 6). Same for
       `configs/index_gpu.yaml:21` and `configs/serve_cpu_openvino.yaml:24` (the
       commented-out `# ask_your_docs:` key). `configs/index_gpu.yaml:19` and
       `configs/serve_cpu_openvino.yaml:22` ("the ask-your-docs UI reads this same file")
       are product prose — no edit (rename-scope rule).
-- [ ] `.github/workflows/ci.yml:102–106` — comment block only (extra name +
+- [x] `.github/workflows/ci.yml:102–106` — comment block only (extra name +
       `tests/harness/ask_your_docs/…` path + package name). No workflow step installs or
       path-filters the extra; `docs.yml` does not trigger on `examples/**`.
-- [ ] `CHANGELOG.md` — append the breaking-rename bullet **under the EXISTING
+- [x] `CHANGELOG.md` — append the breaking-rename bullet **under the EXISTING
       `## [0.6.0] — Unreleased` section at `:8`** (Keep-a-Changelog `### Changed` with
       explicit breaking wording: old → new script and extra names, module path, no shim).
       Do NOT create a new version heading (no `[0.5.2]`, no `[0.6.1]`), do NOT touch
       `pyproject.toml:7` (the version bump is release-time), and do NOT rewrite historical
       entries (:69,:182–184,:244,…). The PR body notes the rename ships in 0.6.0 — the
       same floor the benchmarks `[ask]` extra names (Step 5).
-- [ ] Leave alone: `docs/adr/**` (15 lines across 5 files — ADRs 0002, 0005, 0007, 0008,
+- [x] Leave alone: `docs/adr/**` (15 lines across 5 files — ADRs 0002, 0005, 0007, 0008,
       0016; dated historical records whose file:line pointers may go stale, acceptable),
       `docs/superpowers/**` (333 hits — internal
       planning record), the two frozen research artifacts

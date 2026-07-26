@@ -335,7 +335,7 @@ prerequisite for optimizing that half against measurements.
 **Landing procedure.** As with the text artifacts, a run emits a *proposal*:
 
 - `ask_prompt` winners land as NEW versioned templates under
-  `python/pydocs_mcp/ask_your_docs/prompts/` (`_vN+1`, never editing a
+  `python/pydocs_mcp/harness/ask_your_docs/prompts/` (`_vN+1`, never editing a
   shipped `_vN`), then rerun the prompts-package tests.
 - `ask_architecture` winners are deployment pins (the `ask_your_docs:` YAML
   block + the serve `--config` overlay + harness turn cap) — nothing lands in

@@ -73,7 +73,7 @@ from pydocs_eval.optimize.rubric.model import (
 # YAML restates it for clarity; this constant is the single Python source.
 _DEFAULT_DATASET_NAME = "swe-qa-pro"
 
-# WHY: mirrors the ask-your-docs CLI default workspace so a run config that
+# WHY: mirrors the harness-ask-your-docs CLI default workspace so a run config that
 # omits the key scores against the same index the interactive agent reads.
 _DEFAULT_ASK_WORKSPACE = Path("~/pydocs-index")
 

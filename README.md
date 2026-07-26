@@ -298,19 +298,19 @@ freshness (`cross-repo links: fresh | stale(...)`).
 
 The first in-tree harness on the retrieval backbone: a LangGraph ReAct agent
 plus a Streamlit chat UI over the MCP server, for asking questions across your
-indexed repos in natural language. Install the `ask-your-docs` extra and run
+indexed repos in natural language. Install the `harness-ask-your-docs` extra and run
 its command:
 
 ```bash
-pip install 'pydocs-mcp[ask-your-docs]'
-ask-your-docs --workspace ~/pydocs-index
+pip install 'pydocs-mcp[harness-ask-your-docs]'
+harness-ask-your-docs --workspace ~/pydocs-index
 ```
 
 Sidebar pickers pin a project / package / own-code-vs-dependency slice (enforced
 on every tool call, not left to the model), and answers cite `project` +
 `package.module` with a runnable usage snippet. Configuration and the
 GPU-index / CPU-serve recipe live in
-[examples/ask_your_docs_agent](examples/ask_your_docs_agent/README.md).
+[examples/harness/ask_your_docs_agent](examples/harness/ask_your_docs_agent/README.md).
 
 ### Fast dependency indexing (selective embedding)
 
@@ -395,7 +395,7 @@ backbone: **one shared retrieval system, many task-specific consumers.**
   free to improve behind it.
 - **The backbone plugs into any harness.** Anything that speaks MCP can mount
   it as-is — no code changes on either side. The bundled
-  [ask-your-docs](#ask-your-docs--chat-agent-optional) chat agent is the first
+  [harness-ask-your-docs](#ask-your-docs--chat-agent-optional) chat agent is the first
   harness that ships in-tree and the reference for how a harness plugs in;
   further harnesses share the same backbone instead of re-implementing search.
 - **Search guidance is trainable.** How an agent decides *which* tool to reach
@@ -669,7 +669,7 @@ structuring); read-side output bounds live under `decisions.output`.
 
 ## Learn more
 
-- **[examples/ask_your_docs_agent/](examples/ask_your_docs_agent/)** — a
+- **[examples/harness/ask_your_docs_agent/](examples/harness/ask_your_docs_agent/)** — a
   minimal LangGraph ReAct chat agent (terminal or notebook) that answers
   questions about your indexed repos through the task-shaped MCP tools.
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval

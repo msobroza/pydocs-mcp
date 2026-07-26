@@ -29,7 +29,7 @@ from pydocs_eval.registries import (
 )
 
 if TYPE_CHECKING:
-    from pydocs_mcp.ask_your_docs.agent import AskPrompts
+    from pydocs_mcp.harness.ask_your_docs.agent import AskPrompts
 
 # WHY: prompt campaigns pin every candidate to ONE architecture (the
 # no-joint-search rule, spec §3.3.2/§4.2). "text_react" is the product
@@ -110,7 +110,7 @@ def _require_ask_extra() -> None:
 
 def _resolve_build_agent() -> Callable[..., Coroutine[object, object, object]]:
     """Lazily import the product ``build_agent`` (behind the extras guard)."""
-    from pydocs_mcp.ask_your_docs.agent import build_agent
+    from pydocs_mcp.harness.ask_your_docs.agent import build_agent
 
     return build_agent
 
@@ -120,7 +120,7 @@ def make_ask_prompts(
 ) -> AskPrompts:
     """Construct the product ``AskPrompts`` override bundle (lazy import)."""
     _require_ask_extra()
-    from pydocs_mcp.ask_your_docs.agent import AskPrompts
+    from pydocs_mcp.harness.ask_your_docs.agent import AskPrompts
 
     return AskPrompts(system_prompt=system_prompt, rewrite_prompt=rewrite_prompt)
 

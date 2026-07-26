@@ -79,6 +79,19 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Changed
 
+- **BREAKING: the ask-your-docs harness moved under the `harness/` namespace
+  with harness-scoped install names.** The console script `ask-your-docs` is
+  now **`harness-ask-your-docs`**, the extra `[ask-your-docs]` is now
+  **`[harness-ask-your-docs]`** (`pip install
+  'pydocs-mcp[harness-ask-your-docs]'`), and the module path
+  `pydocs_mcp.ask_your_docs` is now `pydocs_mcp.harness.ask_your_docs`.
+  There is **no compatibility shim**: the old script name vanishes from PATH,
+  and pip treats an unknown extra as a warning, so an old install command
+  silently yields an agent-less install — update install scripts and MCP/CLI
+  wrappers together. The `ask_your_docs:` YAML config block and its env-var
+  prefix are **unchanged**. Wheels now really ship the agent's prompt
+  templates: the packaging include was a flat glob that matched none of the
+  nested `prompts/**/*.j2` files; it is now recursive.
 - **`structuredContent` is now the typed envelope `{text, items, meta}`**,
   with a matching `outputSchema` advertised per tool at registration.
   Previously the SDK auto-wrapped the markdown string as

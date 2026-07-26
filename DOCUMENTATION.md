@@ -952,7 +952,7 @@ pydocs-mcp/
     ├── storage/                # SQLite + TurboQuant adapters, Protocols, UnitOfWork
     ├── retrieval/              # RetrieverStep ABC + RetrieverPipeline + steps/
     ├── serve/                  # File watcher (pydocs-mcp watch / serve --watch)
-    ├── ask_your_docs/          # Optional [ask-your-docs] extra: LangGraph agent + Streamlit UI
+    ├── ask_your_docs/          # Optional [harness-ask-your-docs] extra: LangGraph agent + Streamlit UI
     ├── defaults/               # Shipped default_config.yaml
     ├── pipelines/              # Built-in pipeline YAML blueprints
     └── server.py               # MCP server (nine task-shaped tools)

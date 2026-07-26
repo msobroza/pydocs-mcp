@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib.resources import files
 
 from pydocs_mcp.application.tool_docs import TOOL_DOCS
-from pydocs_mcp.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
+from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
 
 from pydocs_eval.optimize.artifacts._delimited import parse_delimited, render_delimited
 from pydocs_eval.optimize.artifacts.ask_prompt import (

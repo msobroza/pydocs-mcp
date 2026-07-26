@@ -3,7 +3,7 @@
 A **LangGraph ReAct** conversational agent that uses **pydocs-mcp** as its tool
 server to answer questions about the documentation and code of your indexed
 projects, with a **Streamlit** chat UI. It ships inside pydocs-mcp behind the
-`ask-your-docs` extra, so installing it adds the `ask-your-docs` command.
+`harness-ask-your-docs` extra, so installing it adds the `harness-ask-your-docs` command.
 
 <p align="center">
   <img src="screenshot-chat.png" width="860"
@@ -33,7 +33,7 @@ What it demonstrates:
 - **GPU indexing, CPU serving**: embed the corpus once on GPU
   (Qwen3-Embedding-4B, torch), then serve queries on CPU via OpenVINO.
 
-The code lives in `pydocs_mcp/ask_your_docs/`; this directory holds the two
+The code lives in `pydocs_mcp/harness/ask_your_docs/`; this directory holds the two
 embedding configs and this guide.
 
 ## Architecture
@@ -68,9 +68,9 @@ slice no matter what the model asks for.
 ## Setup
 
 ```bash
-pip install "pydocs-mcp[ask-your-docs]"          # from PyPI
+pip install "pydocs-mcp[harness-ask-your-docs]"          # from PyPI
 # ...or from a checkout of this repo:
-#   pip install -e ".[ask-your-docs]"
+#   pip install -e ".[harness-ask-your-docs]"
 
 export OPENAI_API_KEY=sk-...   # any placeholder works for local servers
 ```
@@ -95,7 +95,7 @@ workspace directory.
 ## 2. Chat
 
 ```bash
-ask-your-docs --workspace ~/pydocs-index --config configs/serve_cpu_openvino.yaml
+harness-ask-your-docs --workspace ~/pydocs-index --config configs/serve_cpu_openvino.yaml
 ```
 
 `ask-your-docs` launches the Streamlit UI. Flags (`--workspace`, `--model`,

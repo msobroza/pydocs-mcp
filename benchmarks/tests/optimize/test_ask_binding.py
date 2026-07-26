@@ -56,7 +56,7 @@ class TestRegistry:
 
     def test_registry_names_match_the_product_registry(self) -> None:
         pytest.importorskip("langgraph")
-        product = pytest.importorskip("pydocs_mcp.ask_your_docs.architectures")
+        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.architectures")
         assert ask_architecture_registry.names() == product.agent_registry.names()
 
     async def test_bridge_delegates_to_product_build_agent(self, monkeypatch) -> None:
