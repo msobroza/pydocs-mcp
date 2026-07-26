@@ -1,4 +1,4 @@
-"""AC5 (spec 2026-07-11-cli-mcp-docs-audit): `ask_your_docs.cli._build_parser`
+"""AC5 (spec 2026-07-11-cli-mcp-docs-audit): `harness.ask_your_docs.cli._build_parser`
 is callable core-only — no [ask-your-docs] extra needed for help-level parsing;
 `main()` still gates execution on `_require_extra`."""
 
@@ -8,7 +8,7 @@ import sys
 
 
 def test_build_parser_core_only() -> None:
-    from pydocs_mcp.ask_your_docs.cli import _DEFAULT_PORT, _build_parser
+    from pydocs_mcp.harness.ask_your_docs.cli import _DEFAULT_PORT, _build_parser
 
     args = _build_parser().parse_args(["--workspace", "w", "--config", "c"])
     assert args.workspace == "w"
@@ -27,7 +27,7 @@ def test_module_import_stays_lazy() -> None:
 
     code = (
         "import sys\n"
-        "import pydocs_mcp.ask_your_docs.cli\n"
+        "import pydocs_mcp.harness.ask_your_docs.cli\n"
         "assert 'streamlit' not in sys.modules\n"
         "assert 'langgraph' not in sys.modules\n"
     )

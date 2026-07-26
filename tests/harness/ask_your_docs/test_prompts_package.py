@@ -1,4 +1,4 @@
-"""ask_your_docs/prompts — per-architecture prompt namespaces.
+"""harness/ask_your_docs/prompts — per-architecture prompt namespaces.
 
 Convention over configuration: an architecture's prompts live in
 ``prompts/<registry-name>/`` and fall back to ``prompts/shared/``; the
@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("jinja2")
 
-from pydocs_mcp.ask_your_docs import prompts
+from pydocs_mcp.harness.ask_your_docs import prompts
 
 
 def test_shared_pool_renders() -> None:
@@ -53,7 +53,7 @@ def test_namespace_names_are_the_union() -> None:
 def test_decorator_binds_namespace_to_registry_name() -> None:
     """@register_architecture registers AND wires prompts() by name."""
     pytest.importorskip("langgraph")
-    from pydocs_mcp.ask_your_docs.architectures import agent_registry
+    from pydocs_mcp.harness.ask_your_docs.architectures import agent_registry
 
     for name in agent_registry.names():
         cls = agent_registry.get(name)
@@ -66,7 +66,7 @@ def test_system_prompt_identical_across_architectures_today() -> None:
     deliberately identical everywhere (the AC3 anchor); an override is one
     dropped-in prompts/<name>/system_v1.j2 away."""
     pytest.importorskip("langgraph")
-    from pydocs_mcp.ask_your_docs.architectures import agent_registry
+    from pydocs_mcp.harness.ask_your_docs.architectures import agent_registry
 
     rendered = {prompts.prompts_for(n).render("system_v1") for n in agent_registry.names()}
     assert len(rendered) == 1
@@ -75,8 +75,8 @@ def test_system_prompt_identical_across_architectures_today() -> None:
 
 def test_backcompat_exports_still_work() -> None:
     pytest.importorskip("langgraph")
-    from pydocs_mcp.ask_your_docs import agent
-    from pydocs_mcp.ask_your_docs.architectures import inline
+    from pydocs_mcp.harness.ask_your_docs import agent
+    from pydocs_mcp.harness.ask_your_docs.architectures import inline
 
     assert agent.SYSTEM_PROMPT is prompts.SYSTEM_PROMPT
     assert "Image handling:" in inline._IMAGE_ANALYSIS_PROMPT_SECTION

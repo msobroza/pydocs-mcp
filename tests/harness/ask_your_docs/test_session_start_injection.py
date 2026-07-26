@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pydocs_mcp.ask_your_docs.session_start_injection import (
+from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
 

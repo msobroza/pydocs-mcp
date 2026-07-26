@@ -44,7 +44,7 @@ def _chunk(title: str, text: str, qualified_name: str = "") -> Chunk:
         ("pkg.README.md", True),  # dotted identifiers — README/md are valid segments
         ("", False),  # non-empty required (bare _TARGET_RE admits empty)
         (_INVALID_TARGET, False),
-        ("ask-your-docs", False),  # console-script name, dash
+        ("harness-ask-your-docs", False),  # console-script name, dash
         ("0001.intro", False),  # leading digit
     ],
 )

@@ -12,9 +12,9 @@ pytest.importorskip("langgraph")
 
 from langchain_core.messages import HumanMessage
 
-from pydocs_mcp.ask_your_docs.agent import _active_image_store, ask
-from pydocs_mcp.ask_your_docs.attachments import ImageAttachment
-from pydocs_mcp.ask_your_docs.reinspect import build_reinspect_tool
+from pydocs_mcp.harness.ask_your_docs.agent import _active_image_store, ask
+from pydocs_mcp.harness.ask_your_docs.attachments import ImageAttachment
+from pydocs_mcp.harness.ask_your_docs.reinspect import build_reinspect_tool
 
 from ._agent_fakes import FakeVisionLlm
 
@@ -97,8 +97,8 @@ def test_architectures_expose_reinspect_tool_on_vision_models() -> None:
     zero MCP tools); text-only builds don't."""
     from langgraph.graph import MessagesState
 
-    from pydocs_mcp.ask_your_docs.architectures import AgentBuildContext, agent_registry
-    from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+    from pydocs_mcp.harness.ask_your_docs.architectures import AgentBuildContext, agent_registry
+    from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
     from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
     def build(name: str, multimodal: bool):
@@ -118,13 +118,13 @@ def test_architectures_expose_reinspect_tool_on_vision_models() -> None:
 
 def _pin_turn_state(store):
     """Set the per-turn contextvars the way ask() does."""
-    from pydocs_mcp.ask_your_docs.agent import _active_image_store, _reinspect_state
+    from pydocs_mcp.harness.ask_your_docs.agent import _active_image_store, _reinspect_state
 
     return _active_image_store.set(store), _reinspect_state.set({"calls": 0, "memo": {}})
 
 
 def _reset_turn_state(tokens):
-    from pydocs_mcp.ask_your_docs.agent import _active_image_store, _reinspect_state
+    from pydocs_mcp.harness.ask_your_docs.agent import _active_image_store, _reinspect_state
 
     _active_image_store.reset(tokens[0])
     _reinspect_state.reset(tokens[1])
@@ -199,8 +199,8 @@ def test_empty_names_returns_guidance_without_vision_call() -> None:
 def test_vision_subagent_react_node_carries_the_tool() -> None:
     """AC28 completion: the flagship architecture's nested react subgraph has
     a tools node on vision models (xray expands subgraphs)."""
-    from pydocs_mcp.ask_your_docs.architectures import AgentBuildContext, agent_registry
-    from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+    from pydocs_mcp.harness.ask_your_docs.architectures import AgentBuildContext, agent_registry
+    from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
     from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
     ctx = AgentBuildContext(

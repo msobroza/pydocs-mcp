@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from pydocs_mcp.ask_your_docs.multimodal import (
+from pydocs_mcp.harness.ask_your_docs.multimodal import (
     ModelCapabilities,
     clear_detection_cache,
     detect_capabilities,
@@ -88,7 +88,7 @@ def test_unknown_model_conservative_default() -> None:
 def test_endpoint_probe_positive_absent_and_error(monkeypatch) -> None:
     """AC13: a vision hint decides positive; absence and errors fall through
     (never decide text-only); errors are retried ≤3 times."""
-    from pydocs_mcp.ask_your_docs import multimodal as mm
+    from pydocs_mcp.harness.ask_your_docs import multimodal as mm
 
     monkeypatch.setattr(mm, "_PROBE_BACKOFF_SECONDS", (0.0, 0.0))
     cfg = MultimodalDetectionConfig(static_table=False, endpoint_probe=True)

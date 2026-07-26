@@ -170,61 +170,61 @@ docstrings/log names. Files with hit counts (paths post-move under
 
 ### Step 3 — `pyproject.toml` (key-by-key; current → new)
 
-- [ ] `:138` extra name: `ask-your-docs = […]` → `harness-ask-your-docs = […]`
+- [x] `:138` extra name: `ask-your-docs = […]` → `harness-ask-your-docs = […]`
       (dependency list unchanged). Update the comment at `:134–135`
       (`pydocs_mcp/ask_your_docs/` path + command name).
-- [ ] `:181` script: `ask-your-docs = "pydocs_mcp.ask_your_docs.cli:main"` →
+- [x] `:181` script: `ask-your-docs = "pydocs_mcp.ask_your_docs.cli:main"` →
       `harness-ask-your-docs = "pydocs_mcp.harness.ask_your_docs.cli:main"`. Update the
       comment at `:180` (extra name).
-- [ ] `:208` maturin include: `"python/pydocs_mcp/ask_your_docs/prompts/*.j2"` →
+- [x] `:208` maturin include: `"python/pydocs_mcp/ask_your_docs/prompts/*.j2"` →
       `"python/pydocs_mcp/harness/ask_your_docs/prompts/**/*.j2"` — **also fixes the
       latent glob bug**: the `.j2` files live in `prompts/shared/` and `prompts/inline/`,
       so the current flat glob matches nothing and shipped wheels omit the agent prompts
       (trap T4; nothing tests glob resolution — `tests/test_repository_hygiene.py:68–82`
       only checks `py.typed`).
-- [ ] `:232` coverage omit: `omit = ["*/pydocs_mcp/ask_your_docs/*"]` →
+- [x] `:232` coverage omit: `omit = ["*/pydocs_mcp/ask_your_docs/*"]` →
       `["*/pydocs_mcp/harness/ask_your_docs/*"]` (do not rely on `*` crossing `/`;
       treat as must-update — a miss collapses the 90% coverage gate on the core matrix
       where the extra is not installed). Update comments `:224` (extra name) and `:230`
       (`tests/ask_your_docs/test_graph_service.py` path).
-- [ ] `:290` mypy exclude: `['^python/pydocs_mcp/ask_your_docs/']` →
+- [x] `:290` mypy exclude: `['^python/pydocs_mcp/ask_your_docs/']` →
       `['^python/pydocs_mcp/harness/ask_your_docs/']` (anchored regex; a miss makes mypy
       discover the langgraph/streamlit stack and fail the typecheck job). Update comment
       `:286`.
-- [ ] The new parent `python/pydocs_mcp/harness/__init__.py` (Step 1) sits **inside both
+- [x] The new parent `python/pydocs_mcp/harness/__init__.py` (Step 1) sits **inside both
       gates on purpose**: it is outside the coverage omit and the mypy exclude, so it must
       be mypy-clean (a one-line docstring is) and it registers as covered transitively via
       `tests/harness/ask_your_docs/test_graph_service.py`'s import of
       `pydocs_mcp.harness.ask_your_docs.graph_service`. Do not widen either pattern to
       `*/pydocs_mcp/harness/*`.
-- [ ] Two extra-name strings OUTSIDE `pyproject.toml` ship in the wheel and change with
+- [x] Two extra-name strings OUTSIDE `pyproject.toml` ship in the wheel and change with
       the extra rename (files stay put): `defaults/default_config.yaml:330`
       (`([ask-your-docs] extra)` comment) and
       `retrieval/config/ask_your_docs_models.py:7` (``` ``[ask-your-docs]`` extra ```
       docstring line).
-- [ ] Confirmed no-edits: no all-extras union, no `[project.entry-points]`, no ruff
+- [x] Confirmed no-edits: no all-extras union, no `[project.entry-points]`, no ruff
       per-file-ignores, no vulture whitelist, no complexipy-snapshot entries, pytest
       `testpaths = ["tests"]` unaffected.
 
 ### Step 4 — Tests outside the moved directory
 
-- [ ] `tests/test_doc_conformance.py:41` — `_DOC_FILES` path
+- [x] `tests/test_doc_conformance.py:41` — `_DOC_FILES` path
       `"examples/ask_your_docs_agent/README.md"` → `"examples/harness/ask_your_docs_agent/README.md"`.
-- [ ] `tests/test_doc_conformance.py:46` — `_ENTRY_POINTS = ("pydocs-mcp", "ask-your-docs")`
+- [x] `tests/test_doc_conformance.py:46` — `_ENTRY_POINTS = ("pydocs-mcp", "ask-your-docs")`
       → new script name. **A miss here is a false-green**: the harvester silently stops
       validating every renamed-command line in docs (trap T6).
-- [ ] `tests/test_doc_conformance.py:212` — `from pydocs_mcp.ask_your_docs.cli import
+- [x] `tests/test_doc_conformance.py:212` — `from pydocs_mcp.ask_your_docs.cli import
       _build_parser as _ayd_parser` → new module path.
-- [ ] `tests/test_doc_conformance.py:251` — `walk(_parser_for("ask-your-docs"))` → new name.
-- [ ] `tests/test_structured_envelope.py:40` — hand-written fixture line
+- [x] `tests/test_doc_conformance.py:251` — `walk(_parser_for("ask-your-docs"))` → new name.
+- [x] `tests/test_structured_envelope.py:40` — hand-written fixture line
       `"- \`pydocs-mcp\` (script) - \`ask-your-docs\` (script) \n"` → new script name.
       The real value flows from `[project.scripts]` via `deps.parse_project_scripts` →
       `storage/factories.py:286` → `application/overview_service.py` →
       `application/formatting.py:984`, so `get_overview` output really changes; update the
       fixture in lockstep.
-- [ ] `tests/application/test_pointer_target_validity.py:47` —
+- [x] `tests/application/test_pointer_target_validity.py:47` —
       `("ask-your-docs", False),  # console-script name, dash` → new name.
-- [ ] `tests/test_config_ask_your_docs.py` — stays put (§Open 2); update only prose
+- [x] `tests/test_config_ask_your_docs.py` — stays put (§Open 2); update only prose
       mentions of the extra name. Its imports target `retrieval.config.ask_your_docs_models`
       and the `ask_your_docs:` YAML block, both unchanged.
 
@@ -232,19 +232,19 @@ docstrings/log names. Files with hit counts (paths post-move under
 
 All `pydocs_mcp.ask_your_docs.…` → `pydocs_mcp.harness.ask_your_docs.…`:
 
-- [ ] `test_agent_registry.py` (:9,:13,:14,:25,:61,:62,:77) ·
+- [x] `test_agent_registry.py` (:9,:13,:14,:25,:61,:62,:77) ·
       `test_app_attachment.py` (:6,:14) · `test_app_image_attachment.py` (:15) ·
       `test_architectures.py` (:13–:16) · `test_attachment.py` (:3,:9,:16)
-- [ ] `test_cli_parser.py` (:1,:2,:11, **:30** — subprocess string
+- [x] `test_cli_parser.py` (:1,:2,:11, **:30** — subprocess string
       `"import pydocs_mcp.ask_your_docs.cli\n"`, invisible to import-rename tooling)
-- [ ] `test_graph_service.py` (:13–:17; **:27–:28** subprocess strings; :17
+- [x] `test_graph_service.py` (:13–:17; **:27–:28** subprocess strings; :17
       `from tests.ask_your_docs._fixture import make_bundle` →
       `tests.harness.ask_your_docs._fixture`)
-- [ ] `test_image_attachment.py` (23 hits) · `test_multimodal_detection.py` (:12,:17,:91) ·
+- [x] `test_image_attachment.py` (23 hits) · `test_multimodal_detection.py` (:12,:17,:91) ·
       `test_prompt_seam.py` (8 hits) · `test_prompt_seed_parity.py` (:22) ·
       `test_prompts_package.py` (:1,:14,:56,:69,:78,:79) · `test_reinspect_tool.py` (11 hits) ·
       `test_session_start_injection.py` (:4,:17) · `test_theme.py` (:12)
-- [ ] `_fixture.py`, `_agent_fakes.py` — zero hits, move only.
+- [x] `_fixture.py`, `_agent_fakes.py` — zero hits, move only.
 
 ### Step 5 — Benchmarks (in-repo eval harness)
 

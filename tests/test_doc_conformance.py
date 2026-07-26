@@ -38,12 +38,12 @@ _DOC_FILES: tuple[str, ...] = (
     "CLAUDE.md",
     "SPEC.md",
     "EXTENSIONS.md",
-    "examples/ask_your_docs_agent/README.md",
+    "examples/harness/ask_your_docs_agent/README.md",
 )
 
 _SKIP_MARKER = "<!-- doc-conformance: skip -->"
 _SHELL_LANGS = frozenset({"bash", "sh", "shell", "console", ""})
-_ENTRY_POINTS = ("pydocs-mcp", "ask-your-docs")
+_ENTRY_POINTS = ("pydocs-mcp", "harness-ask-your-docs")
 _TOOL_NAMES = (
     "get_overview",
     "search_codebase",
@@ -209,7 +209,7 @@ def _parser_for(entry_point: str) -> argparse.ArgumentParser:
         from pydocs_mcp.__main__ import _build_parser
 
         return _build_parser()
-    from pydocs_mcp.ask_your_docs.cli import _build_parser as _ayd_parser
+    from pydocs_mcp.harness.ask_your_docs.cli import _build_parser as _ayd_parser
 
     return _ayd_parser()
 
@@ -248,7 +248,7 @@ def _all_option_strings() -> set[str]:
                     walk(sub)
 
     walk(_parser_for("pydocs-mcp"))
-    walk(_parser_for("ask-your-docs"))
+    walk(_parser_for("harness-ask-your-docs"))
     return found
 
 

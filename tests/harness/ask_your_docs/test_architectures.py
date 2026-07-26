@@ -10,9 +10,9 @@ pytest.importorskip("langgraph")
 
 from langchain_core.messages import HumanMessage
 
-from pydocs_mcp.ask_your_docs.architectures import AgentBuildContext, agent_registry
-from pydocs_mcp.ask_your_docs.architectures.inline import _IMAGE_ANALYSIS_PROMPT_SECTION
-from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.architectures import AgentBuildContext, agent_registry
+from pydocs_mcp.harness.ask_your_docs.architectures.inline import _IMAGE_ANALYSIS_PROMPT_SECTION
+from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 from ._agent_fakes import FakeLlm, FakeVisionLlm

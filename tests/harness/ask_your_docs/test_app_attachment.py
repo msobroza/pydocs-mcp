@@ -11,7 +11,7 @@ pytest.importorskip("streamlit")
 def test_attached_symbols_render_as_chips():
     from streamlit.testing.v1 import AppTest
 
-    import pydocs_mcp.ask_your_docs.app as appmod
+    import pydocs_mcp.harness.ask_your_docs.app as appmod
 
     os.environ["PYDOCS_WORKSPACE"] = str(Path("~/pydocs-index").expanduser())
     at = AppTest.from_file(appmod.__file__, default_timeout=180)

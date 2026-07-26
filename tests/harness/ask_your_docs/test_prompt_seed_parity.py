@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
+from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
 
 _SEED_PATH = (
     Path(__file__).resolve().parents[2]

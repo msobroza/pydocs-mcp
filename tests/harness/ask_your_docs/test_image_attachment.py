@@ -10,7 +10,7 @@ import base64
 
 import pytest
 
-from pydocs_mcp.ask_your_docs.attachments import (
+from pydocs_mcp.harness.ask_your_docs.attachments import (
     _ALLOWED_IMAGE_TYPES,
     ImageAttachment,
     validate_attachment,
@@ -55,8 +55,8 @@ def test_weave_attachments_reexported_from_agent() -> None:
     """AC16 guard: the import path used by app.py and the existing tests
     survives the move into attachments.py."""
     pytest.importorskip("langchain_core")
-    from pydocs_mcp.ask_your_docs.agent import weave_attachments as via_agent
-    from pydocs_mcp.ask_your_docs.attachments import weave_attachments as via_attachments
+    from pydocs_mcp.harness.ask_your_docs.agent import weave_attachments as via_agent
+    from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments as via_attachments
 
     assert via_agent is via_attachments
 
@@ -87,7 +87,7 @@ def test_ask_without_images_sends_plain_str() -> None:
     pytest.importorskip("langgraph")
     import asyncio
 
-    from pydocs_mcp.ask_your_docs.agent import ask
+    from pydocs_mcp.harness.ask_your_docs.agent import ask
 
     agent = _RecordingAgent()
     history: list = []
@@ -102,7 +102,7 @@ def test_ask_with_image_sends_text_then_image_blocks() -> None:
     pytest.importorskip("langgraph")
     import asyncio
 
-    from pydocs_mcp.ask_your_docs.agent import ask
+    from pydocs_mcp.harness.ask_your_docs.agent import ask
 
     agent = _RecordingAgent()
     asyncio.run(ask(agent, [], "what is this?", images=(_att(),)))
@@ -118,7 +118,7 @@ def test_ask_history_stays_text_with_placeholder_and_trims() -> None:
     pytest.importorskip("langgraph")
     import asyncio
 
-    from pydocs_mcp.ask_your_docs.agent import ask
+    from pydocs_mcp.harness.ask_your_docs.agent import ask
 
     agent = _RecordingAgent()
     history: list = []
@@ -136,7 +136,7 @@ def test_reformulate_history_lines_never_show_list_reprs() -> None:
     pytest.importorskip("langgraph")
     from langchain_core.messages import HumanMessage
 
-    from pydocs_mcp.ask_your_docs.agent import _history_line
+    from pydocs_mcp.harness.ask_your_docs.agent import _history_line
 
     plain = HumanMessage("plain")
     blocks = HumanMessage(
@@ -156,8 +156,8 @@ def test_reformulate_history_lines_never_show_list_reprs() -> None:
 
 def test_reject_policy_blocks_before_any_llm_call() -> None:
     """AC21: reject → actionable message naming model, source, override path."""
-    from pydocs_mcp.ask_your_docs.attachments import text_only_policy
-    from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+    from pydocs_mcp.harness.ask_your_docs.attachments import text_only_policy
+    from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
     from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalConfig
 
     verdict = text_only_policy(
@@ -174,8 +174,8 @@ def test_reject_policy_blocks_before_any_llm_call() -> None:
 
 def test_describe_policy_prefixes_and_drops_blocks() -> None:
     """AC22: describe → cannot-see note with names; images NOT attached."""
-    from pydocs_mcp.ask_your_docs.attachments import text_only_policy
-    from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+    from pydocs_mcp.harness.ask_your_docs.attachments import text_only_policy
+    from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
     from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalConfig
 
     verdict = text_only_policy(
@@ -189,8 +189,8 @@ def test_describe_policy_prefixes_and_drops_blocks() -> None:
 
 
 def test_policy_none_when_capable_or_no_images() -> None:
-    from pydocs_mcp.ask_your_docs.attachments import text_only_policy
-    from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+    from pydocs_mcp.harness.ask_your_docs.attachments import text_only_policy
+    from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
     from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalConfig
 
     vision = ModelCapabilities(multimodal=True, source="static")
@@ -203,7 +203,7 @@ def test_policy_none_when_capable_or_no_images() -> None:
 
 
 def test_update_image_store_appends_and_evicts_oldest() -> None:
-    from pydocs_mcp.ask_your_docs.attachments import update_image_store
+    from pydocs_mcp.harness.ask_your_docs.attachments import update_image_store
 
     store: dict[str, ImageAttachment] = {}
     for i in range(5):
@@ -212,7 +212,7 @@ def test_update_image_store_appends_and_evicts_oldest() -> None:
 
 
 def test_update_image_store_reattach_refreshes_position() -> None:
-    from pydocs_mcp.ask_your_docs.attachments import update_image_store
+    from pydocs_mcp.harness.ask_your_docs.attachments import update_image_store
 
     store: dict[str, ImageAttachment] = {}
     update_image_store(store, (_att("a.png"), _att("b.png")), retention=3)
@@ -222,7 +222,7 @@ def test_update_image_store_reattach_refreshes_position() -> None:
 
 
 def test_update_image_store_zero_retention_disables() -> None:
-    from pydocs_mcp.ask_your_docs.attachments import update_image_store
+    from pydocs_mcp.harness.ask_your_docs.attachments import update_image_store
 
     store: dict[str, ImageAttachment] = {}
     update_image_store(store, (_att("a.png"),), retention=0)
@@ -236,7 +236,7 @@ def test_describe_note_rides_transient_note_not_history() -> None:
     pytest.importorskip("langgraph")
     import asyncio
 
-    from pydocs_mcp.ask_your_docs.agent import ask
+    from pydocs_mcp.harness.ask_your_docs.agent import ask
 
     agent = _RecordingAgent()
     history: list = []
@@ -252,7 +252,7 @@ def test_describe_note_rides_transient_note_not_history() -> None:
 def test_update_image_store_zero_retention_purges_existing() -> None:
     """'0 disables' must also empty an already-populated store (an operator
     flipping the knob mid-session revokes reinspectability)."""
-    from pydocs_mcp.ask_your_docs.attachments import update_image_store
+    from pydocs_mcp.harness.ask_your_docs.attachments import update_image_store
 
     store: dict[str, ImageAttachment] = {}
     update_image_store(store, (_att("a.png"),), retention=3)

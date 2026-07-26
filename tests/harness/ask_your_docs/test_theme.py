@@ -9,7 +9,7 @@ with no way to bring the sidebar back. Only the narrower chrome pieces
 
 from __future__ import annotations
 
-from pydocs_mcp.ask_your_docs.theme import THEMES, theme_css
+from pydocs_mcp.harness.ask_your_docs.theme import THEMES, theme_css
 
 # Full selector strings: '[data-testid="stToolbar"]' cannot false-match inside
 # '[data-testid="stToolbarActions"]' because of the closing quote-bracket.

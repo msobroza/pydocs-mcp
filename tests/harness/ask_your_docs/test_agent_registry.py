@@ -6,11 +6,11 @@ import pytest
 
 pytest.importorskip("langchain_core")
 
-from pydocs_mcp.ask_your_docs.architectures import (
+from pydocs_mcp.harness.ask_your_docs.architectures import (
     AgentArchitecture,
     agent_registry,
 )
-from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 from pydocs_mcp.retrieval.serialization import ComponentRegistry
 
@@ -22,7 +22,7 @@ def test_registry_names_exactly_the_four() -> None:
 
 def test_get_unknown_returns_none_and_build_raises_listing_names() -> None:
     """AC1: unknown-name failure modes."""
-    from pydocs_mcp.ask_your_docs.agent import _build_architecture
+    from pydocs_mcp.harness.ask_your_docs.agent import _build_architecture
 
     assert agent_registry.get("nope") is None
     with pytest.raises(ValueError, match="text_react"):
@@ -58,8 +58,8 @@ def test_duplicate_registration_raises_at_decoration_time() -> None:
 def test_multimodal_required_raises_actionable_error() -> None:
     """AC9: requires_multimodal + text-only detection → AgentArchitectureError
     naming the model, the source, and the override YAML path."""
-    from pydocs_mcp.ask_your_docs.agent import _build_architecture
-    from pydocs_mcp.ask_your_docs.architectures import AgentArchitectureError
+    from pydocs_mcp.harness.ask_your_docs.agent import _build_architecture
+    from pydocs_mcp.harness.ask_your_docs.architectures import AgentArchitectureError
 
     with pytest.raises(AgentArchitectureError) as excinfo:
         _build_architecture(

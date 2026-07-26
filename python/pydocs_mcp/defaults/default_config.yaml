@@ -327,7 +327,7 @@ search_backend:
 #   pool_factor: 1
 #   device: cpu
 
-# Ask-your-docs chat agent ([ask-your-docs] extra): which agent architecture
+# Ask-your-docs chat agent ([harness-ask-your-docs] extra): which agent architecture
 # answers questions, and how image attachments are handled. `architecture:
 # auto` routes by the detected model capability — text-only models get the
 # classic text agent, vision models get `multimodal.preferred_architecture`.

@@ -10,11 +10,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pydocs_mcp.ask_your_docs import graph_service as gs
-from pydocs_mcp.ask_your_docs.bundle import SqliteBundleReader
-from pydocs_mcp.ask_your_docs.graph_service import GraphService
-from pydocs_mcp.ask_your_docs.model import Edge, Graph, Node
-from tests.ask_your_docs._fixture import make_bundle
+from pydocs_mcp.harness.ask_your_docs import graph_service as gs
+from pydocs_mcp.harness.ask_your_docs.bundle import SqliteBundleReader
+from pydocs_mcp.harness.ask_your_docs.graph_service import GraphService
+from pydocs_mcp.harness.ask_your_docs.model import Edge, Graph, Node
+from tests.harness.ask_your_docs._fixture import make_bundle
 
 
 def _svc(db: Path) -> GraphService:
@@ -24,8 +24,8 @@ def _svc(db: Path) -> GraphService:
 def test_service_layer_imports_without_agent_stack():
     # graph_service / bundle / catalog must import without langgraph/streamlit.
     code = (
-        "import sys; import pydocs_mcp.ask_your_docs.graph_service; "
-        "import pydocs_mcp.ask_your_docs.bundle, pydocs_mcp.ask_your_docs.catalog; "
+        "import sys; import pydocs_mcp.harness.ask_your_docs.graph_service; "
+        "import pydocs_mcp.harness.ask_your_docs.bundle, pydocs_mcp.harness.ask_your_docs.catalog; "
         "assert 'langgraph' not in sys.modules and 'streamlit' not in sys.modules; "
         "print('lean')"
     )

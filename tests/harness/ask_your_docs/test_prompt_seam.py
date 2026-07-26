@@ -17,15 +17,15 @@ pytest.importorskip("langgraph")
 
 from langchain_core.messages import HumanMessage
 
-from pydocs_mcp.ask_your_docs.agent import (
+from pydocs_mcp.harness.ask_your_docs.agent import (
     AskPrompts,
     _assemble_prompt,
     build_agent,
     reformulate,
 )
-from pydocs_mcp.ask_your_docs.architectures import agent_registry
-from pydocs_mcp.ask_your_docs.catalog import render_catalog
-from pydocs_mcp.ask_your_docs.prompts import SYSTEM_PROMPT, prompts_for, rewrite_prompt
+from pydocs_mcp.harness.ask_your_docs.architectures import agent_registry
+from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog
+from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, prompts_for, rewrite_prompt
 
 from ._agent_fakes import FakeLlm
 
@@ -65,8 +65,8 @@ class TestSystemPromptSeam:
         builder (AgentBuildContext.prompt) carries the candidate system
         section — asserted at the boundary, not on the helper, so a future
         re-wiring of the build path cannot silently drop the injection."""
-        from pydocs_mcp.ask_your_docs import agent as agent_mod
-        from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+        from pydocs_mcp.harness.ask_your_docs import agent as agent_mod
+        from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
 
         class _FakeMcpClient:
             def __init__(self, *args, **kwargs) -> None:
@@ -125,8 +125,8 @@ class TestSessionStartInjection:
         ``None``
         (flag off) leaves the assembled prompt byte-identical, a pack string
         is appended verbatim — asserted at the graph-builder boundary."""
-        from pydocs_mcp.ask_your_docs import agent as agent_mod
-        from pydocs_mcp.ask_your_docs.multimodal import ModelCapabilities
+        from pydocs_mcp.harness.ask_your_docs import agent as agent_mod
+        from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
 
         class _FakeMcpClient:
             def __init__(self, *args, **kwargs) -> None:
