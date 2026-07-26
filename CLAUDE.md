@@ -236,6 +236,17 @@ own sections.
   `Manager`, `Service`, `utils`. Aim for <5 grep hits repo-wide (grep is the
   agent's navigation API). Name behavior, not mechanism: prefer
   `build_session_start_context_for_agent_prompt` over a vague "gate"/"helper" name.
+- All naming is plain English (owner rule 2026-07-26) — identifiers, enum
+  values, directory names, docs. Avoid borrowed/non-English or
+  French-derived terms when a plain-English word exists: `inactive`, not
+  `dormant`. Follow the existing naming conventions of the module you touch.
+- Closed string vocabularies (statuses, kinds, modes) are `enum.StrEnum`
+  classes with UPPER_SNAKE members (the `models.py` precedent — e.g.
+  `PromptSurfaceStatus` in `harness/core/prompt_surfaces.py`), never bare
+  `Literal["a", "b"]` type aliases (owner rule 2026-07-26): enums are
+  greppable, iterable, and exhaustiveness-checkable. `Literal` stays
+  acceptable only for narrow per-parameter shapes in Protocols (the
+  `FilterAdapter.adapt(target_field=...)` precedent).
 - Error messages carry the offending value and the expected shape:
   `f"invalid target: got {target!r}, expected dotted identifier"`, never a bare
   `"invalid input"`. Exception text is a debugging signal.
