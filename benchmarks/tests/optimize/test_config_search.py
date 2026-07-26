@@ -26,12 +26,10 @@ def pipelines_dir(tmp_path: Path) -> Path:
 
 _DIMS = {
     "architecture": ("text_react",),
-    "rewrite_enabled": (True, False),
-    "scope_pin": (True,),
     "retrieval_config": ("exp_a", "exp_b"),
     "max_agent_turns": (8, 12),
 }
-_CELLS = 1 * 2 * 1 * 2 * 2  # 8
+_CELLS = 1 * 2 * 2  # 4
 
 
 @dataclass(slots=True)
@@ -47,7 +45,9 @@ class _CountingFitness:
         import yaml
 
         parsed = yaml.safe_load(artifact.render())
-        score = float(parsed["max_agent_turns"]) + (1.0 if parsed["rewrite_enabled"] else 0.0)
+        score = float(parsed["max_agent_turns"]) + (
+            1.0 if parsed["retrieval_config"] == "exp_b" else 0.0
+        )
         return FitnessReport(score=score, components={}, cost_usd=0.0, n_samples=1)
 
 
@@ -118,7 +118,7 @@ async def test_best_is_the_final_rung_argmax(pipelines_dir: Path) -> None:
     import yaml
 
     winner = yaml.safe_load(result.best.render())
-    assert winner["max_agent_turns"] == 12 and winner["rewrite_enabled"] is True
+    assert winner["max_agent_turns"] == 12 and winner["retrieval_config"] == "exp_b"
 
 
 async def test_invalid_cells_are_never_scored(pipelines_dir: Path) -> None:

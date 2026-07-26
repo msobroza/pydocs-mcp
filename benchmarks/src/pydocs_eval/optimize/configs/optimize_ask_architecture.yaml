@@ -2,8 +2,8 @@
 # The dimensions are the enumerate_space grid. architecture lists only
 # text_react in v1: auto routes to it on text models, and inline /
 # vision_subagent need a vision model + an image task set before they can be
-# measured — the grid stays meaningful via rewrite_enabled x retrieval_config
-# x max_agent_turns.
+# measured — the grid stays meaningful via retrieval_config x max_agent_turns
+# (6 cells; rewrite_enabled/scope_pin were deleted as seamless no-ops).
 artifact: ask_architecture
 optimizer: config_search
 config_search:
@@ -11,8 +11,6 @@ config_search:
   seed: 0
   dimensions:
     architecture: [text_react]
-    rewrite_enabled: [true, false]
-    scope_pin: [true]
     retrieval_config: [exp_hybrid_rrf_k60, exp_dense_graph, exp_li]
     max_agent_turns: [8, 12]
 ladder:

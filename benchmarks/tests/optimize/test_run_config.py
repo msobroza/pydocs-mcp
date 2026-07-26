@@ -123,8 +123,6 @@ def test_shipped_ask_configs_load_typed() -> None:
     assert arch_cfg.config_search.strategy == "halving"
     assert set(arch_cfg.config_search.dimensions) == {
         "architecture",
-        "rewrite_enabled",
-        "scope_pin",
         "retrieval_config",
         "max_agent_turns",
     }
@@ -163,7 +161,7 @@ def test_shipped_architecture_dims_resolve_against_real_pipelines() -> None:
     cells = AskArchitectureArtifact.enumerate_space(
         cfg.config_search.dimensions, pipelines_dir=pipelines
     )
-    assert len(cells) == 1 * 2 * 1 * 3 * 2
+    assert len(cells) == 1 * 3 * 2
     for cell in cells:
         assert cell.validate() == (), cell.render()
 

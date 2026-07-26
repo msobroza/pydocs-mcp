@@ -1,8 +1,7 @@
 """The ``ask_architecture`` structured discrete artifact (spec §3.2.2).
 
 A canonical-YAML document selecting one value per named dimension of the
-ask-architecture search space: which registry entry answers, whether the
-rewrite interceptor runs, whether the scope pin stays, which retrieval
+ask-architecture search space: which registry entry answers, which retrieval
 overlay serves, and the agent-turn cap. ``render()`` emits sorted-key YAML so
 fingerprints are stable across key-order permutations; ``enumerate_space``
 yields the cross-product for the grid/random/halving optimizer.
@@ -40,10 +39,14 @@ _DEFAULT_PIPELINES_DIR = Path("benchmarks/configs/pipelines")
 
 # The searchable dimensions IN CANONICAL ORDER — enumerate_space iterates
 # this tuple (never the caller's dict order) so cell order is deterministic.
+# rewrite_enabled and scope_pin were DELETED (run-contract design §9 stage 1,
+# docs/superpowers/specs/2026-07-27-harness-run-contract-design.md, 2026-07-27): neither had a product seam in the headless path (reformulate
+# is never called by the runner; the scope interceptor has no off switch),
+# so sweeping them multiplied the grid with duplicate rollouts. scope_pin
+# returns ONLY together with its build_agent seam (design stage 2);
+# test_dimension_seams.py enforces the seam rule from here on.
 _DIMENSION_FIELDS = (
     "architecture",
-    "rewrite_enabled",
-    "scope_pin",
     "retrieval_config",
     "max_agent_turns",
 )
@@ -55,8 +58,6 @@ class AskArchitectureArtifact:
     """One cell of the ask-architecture search space (spec §3.2.2)."""
 
     architecture: str = _DEFAULT_ASK_ARCHITECTURE
-    rewrite_enabled: bool = True
-    scope_pin: bool = True
     retrieval_config: str = ""
     max_agent_turns: int = _DEFAULT_MAX_AGENT_TURNS
     pipelines_dir: Path = _DEFAULT_PIPELINES_DIR
@@ -179,10 +180,6 @@ def _value_violations(parsed: Mapping[str, object], *, pipelines_dir: Path) -> t
     violations += _architecture_violations(parsed)
     violations += _overlay_violations(parsed, pipelines_dir)
     violations += _turns_violations(parsed)
-    for flag in ("rewrite_enabled", "scope_pin"):
-        value = parsed.get(flag)
-        if flag in parsed and not isinstance(value, bool):
-            violations.append(f"{flag} must be a boolean, got {value!r}")
     return tuple(violations)
 
 

@@ -23,8 +23,6 @@ def pipelines_dir(tmp_path: Path) -> Path:
 def _artifact(pipelines_dir: Path, **overrides: object) -> AskArchitectureArtifact:
     fields: dict[str, object] = {
         "architecture": "text_react",
-        "rewrite_enabled": True,
-        "scope_pin": True,
         "retrieval_config": "exp_hybrid_rrf_k60",
         "max_agent_turns": 12,
         "pipelines_dir": pipelines_dir,
@@ -79,8 +77,6 @@ def test_unparseable_candidate_never_raises(pipelines_dir: Path) -> None:
 
 _DIMS = {
     "architecture": ("text_react",),
-    "rewrite_enabled": (True, False),
-    "scope_pin": (True,),
     "retrieval_config": ("exp_hybrid_rrf_k60", "exp_dense_graph"),
     "max_agent_turns": (8, 12),
 }
@@ -89,7 +85,7 @@ _DIMS = {
 class TestEnumerateSpace:
     def test_yields_exactly_the_cross_product(self, pipelines_dir: Path) -> None:
         cells = AskArchitectureArtifact.enumerate_space(_DIMS, pipelines_dir=pipelines_dir)
-        assert len(cells) == 1 * 2 * 1 * 2 * 2
+        assert len(cells) == 1 * 2 * 2
         assert len({c.fingerprint for c in cells}) == len(cells)
 
     def test_deterministic_order(self, pipelines_dir: Path) -> None:
@@ -119,29 +115,39 @@ class TestEnumerateSpace:
 def test_null_and_wrong_typed_values_are_violations(pipelines_dir: Path) -> None:
     # The pre-spend firewall: mutated candidates with null / wrong-typed
     # dimensions must never pass (they would spend budget or crash mid-run).
-    doc = (
-        "architecture: null\nrewrite_enabled: true\nscope_pin: true\n"
-        'retrieval_config: null\nmax_agent_turns: "999"\n'
-    )
+    doc = 'architecture: null\nretrieval_config: null\nmax_agent_turns: "999"\n'
     violations = _artifact(pipelines_dir).with_content(doc).validate()
     assert any("architecture" in v for v in violations)
     assert any("retrieval_config" in v for v in violations)
     assert any("max_agent_turns" in v for v in violations)
 
 
-def test_bool_turns_and_non_bool_flags_are_violations(pipelines_dir: Path) -> None:
+def test_bool_turns_are_a_violation(pipelines_dir: Path) -> None:
     doc = yaml.safe_dump(
         {
             "architecture": "text_react",
-            "rewrite_enabled": "yes please",
-            "scope_pin": True,
             "retrieval_config": "exp_hybrid_rrf_k60",
             "max_agent_turns": True,
         }
     )
     violations = _artifact(pipelines_dir).with_content(doc).validate()
-    assert any("rewrite_enabled" in v for v in violations)
     assert any("max_agent_turns" in v for v in violations)
+
+
+def test_deleted_dimensions_are_unknown_keys(pipelines_dir: Path) -> None:
+    # Stage-1 subtraction pin (run-contract design §9 stage 1): the two seamless
+    # dimensions are gone, and an old candidate carrying them is firewalled
+    # as unknown keys rather than silently swept as no-ops.
+    doc = yaml.safe_dump(
+        {
+            "architecture": "text_react",
+            "rewrite_enabled": True,
+            "retrieval_config": "exp_hybrid_rrf_k60",
+            "max_agent_turns": 8,
+        }
+    )
+    violations = _artifact(pipelines_dir).with_content(doc).validate()
+    assert any("rewrite_enabled" in v for v in violations)
 
 
 def test_empty_stem_is_the_sanctioned_no_overlay_sentinel(pipelines_dir: Path) -> None:
